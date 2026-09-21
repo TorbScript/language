@@ -41,6 +41,10 @@ error: `torb build` needs one entry file. Name the file, or a project with a `bu
 
 Only what the entry file reaches is emitted - a function nothing calls from `main` never becomes C.
 
+A program may have **more than one entry file**, and `torb test` is the one command that builds one: every `*.test.trb`
+of a directory is an entry of one binary, and the generated `main` runs them in the order of their paths with the name
+of each file printed in front of its tests. `build` itself always takes exactly one.
+
 ### What the back end does not lower yet
 
 Not every declaration `torb check` accepts lowers to C yet; `torb ir --statistics` on the same path answers what

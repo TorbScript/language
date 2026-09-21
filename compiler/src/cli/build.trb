@@ -23,7 +23,7 @@ use verifyOwnedProgram from "../ir/ownership-verify"
 use Lowering from "../ir/lower/context"
 use lowerWorkspace, pathsOfModules from "../ir/lower/lower"
 use entryNameOf from "../ir/lower/function"
-use emitProgram from "../backend/c/emit"
+use emitProgram, ProgramEntry from "../backend/c/emit"
 use emittedText from "../backend/c/emission"
 use renderDiagnostic from "./render"
 
@@ -37,6 +37,12 @@ public type BuildOptions {
   onlyC: Bool = false
   /** `--output <file>`: the binary. The C is written next to it, so both are in one place. */
   output: String = ""
+  /**
+   * `torb test`: **every** `*.test.trb` of what was named is an entry of one binary, and each one prints its file in
+   * front of its tests. One binary per file is not an option - every test file imports the harness and through it the
+   * whole compiler, so it would be one C compile the size of the compiler's own per file (BACKEND 6.3).
+   */
+  isTestRun: Bool = false
 }
 
 /** Exit codes of `torb build`. */
@@ -55,7 +61,7 @@ public fn build(options: BuildOptions): Result<Int, IoError> {
     printError "{reported} problems, nothing was built"
     return Ok buildFailedCode
   }
-  const module = match entryModuleOf(checked) {
+  const modules = match entryModulesOf(checked, tree, options) {
     Some(found) => found
     None => {
       printError "error: `torb build` needs one entry file. Name the file, or a project with a `build` input"
@@ -64,25 +70,25 @@ public fn build(options: BuildOptions): Result<Int, IoError> {
   }
   const paths = pathsOfModules checked
   const checker = checked.checker
-  // Only what the entry file reaches: nothing unreachable is emitted
-  var lowering = lowerWorkspace checker, paths, [module], false
+  // Only what the entry files reach: nothing unreachable is emitted
+  var lowering = lowerWorkspace checker, paths, modules, false
   // The IR both back ends read is phase one plus ownership: the `Retain`s, `Release`s and `Move`s of BACKEND 2 are what
   // makes the emitted C free what it allocates, so the pipeline is lower, own, verify, emit
   insertOwnership lowering.program
-  const entry = entryNameOf lowering, module
-  const found = reportLowering checked, tree, lowering, entry
+  const entries = programEntriesOf lowering, checked, tree, modules, options
+  const found = reportLowering checked, tree, lowering, entries
   if found > 0 {
     printError "{found} problems the native back end cannot compile yet, nothing was built"
     return Ok buildFailedCode
   }
-  const emission = emitProgram lowering.program, entry
+  const emission = emitProgram lowering.program, entries
   if !emission.unsupported.isEmpty() {
     for what in emission.unsupported {
       printError "error: {what}"
     }
     return Ok buildFailedCode
   }
-  const binary = outputPathOf checked, module, options
+  const binary = outputPathOf checked, modules[0], options
   const directory = parentPath binary
   File.createDirectory(directory)?
   const source = joinPath directory, "program.c"
@@ -92,7 +98,9 @@ public fn build(options: BuildOptions): Result<Int, IoError> {
     print "wrote {source}"
     return Ok 0
   }
-  compile source, binary
+  // A test run says nothing about the binary it built: its output is the report, and `torb test` compares that report
+  // with the other implementation's line by line
+  compile(source, binary, !options.isTestRun)
 }
 
 // --- What was wrong with the program --------------------------------------------------------------------------------
@@ -122,7 +130,7 @@ fn reportChecked(checked: Checked): Int {
  * the runtime does not represent yet, and anything the verifier says - which is an internal error, because a malformed
  * body is a bug of the compiler.
  */
-fn reportLowering(checked: Checked, tree: SourceTree, lowering: Lowering, entry: String): Int {
+fn reportLowering(checked: Checked, tree: SourceTree, lowering: Lowering, entries: List<ProgramEntry>): Int {
   var found = 0
   for problem in lowering.problems {
     const module = checked.program.graph.at problem.module
@@ -147,7 +155,15 @@ fn reportLowering(checked: Checked, tree: SourceTree, lowering: Lowering, entry:
     printError "internal error: {problem}"
     found = found + 1
   }
-  if !hasEntryFunction(lowering, entry) {
+  // A test run has one entry per file and a file without tests simply runs nothing; a build has exactly one, and a
+  // program whose entry file has no top-level code has nothing to run at all
+  var runnable = 0
+  for entry in entries {
+    if !entry.name.isEmpty() {
+      runnable = runnable + 1
+    }
+  }
+  if runnable == 0 {
     printError "error: the entry file has no top-level code, so the program has nothing to run"
     found = found + 1
   }
@@ -164,6 +180,70 @@ fn hasEntryFunction(lowering: Lowering, entry: String): Bool {
 }
 
 // --- Where the output goes ------------------------------------------------------------------------------------------
+
+/**
+ * The modules whose top-level code the generated `main` runs, in the order it runs them.
+ *
+ * A build has exactly one - the entry file. A **test run** has one per `*.test.trb` of what was named, sorted by the
+ * path the way it is written on the command line, which is the order `torb test` reports files in
+ * (docs/tooling/the-torb-command.md). A module of the directory that is not a test file - a harness, a fixture - is
+ * not an entry and is compiled in only where a test file imports it.
+ */
+fn entryModulesOf(checked: Checked, tree: SourceTree, options: BuildOptions): List<ModuleId>? {
+  if !options.isTestRun {
+    const only: List<ModuleId> = [entryModuleOf(checked)?]
+    return Some only
+  }
+  var byPath: Map<String, ModuleId> = [:]
+  var paths: List<String> = []
+  for module in checked.requested {
+    const shown = tree.display checked.program.graph.at(module).path
+    if !shown.endsWith(".test.trb") {
+      continue
+    }
+    paths.add shown
+    byPath.set shown, module
+  }
+  paths.sort({ _ })
+  var found: List<ModuleId> = []
+  for path in paths {
+    if const Some(module) = byPath.get(path) {
+      found.add module
+    }
+  }
+  if found.isEmpty() {
+    return None
+  }
+  Some found
+}
+
+/**
+ * One [ProgramEntry] per module: its entry function, plus - in a test run - the file that entry is the top-level code
+ * of, which is the line `torb test` prints in front of that file's tests.
+ *
+ * A test file that declares things and runs nothing has no entry function at all. Its name is still printed, because
+ * that is what stage 0 does for a file with no tests in it, and nothing is called for it.
+ */
+fn programEntriesOf(
+  var lowering: Lowering,
+  checked: Checked,
+  tree: SourceTree,
+  modules: List<ModuleId>,
+  options: BuildOptions,
+): List<ProgramEntry> {
+  var entries: List<ProgramEntry> = []
+  for module in modules {
+    const name = entryNameOf lowering, module
+    if !options.isTestRun {
+      entries.add ProgramEntry(name)
+      continue
+    }
+    const file = tree.display checked.program.graph.at(module).path
+    const called = if hasEntryFunction(lowering, name) { name } else { "" }
+    entries.add ProgramEntry(called, file)
+  }
+  entries
+}
 
 /**
  * The entry file: the one requested module, or the `build { input }` of the project that was named. A workspace with
@@ -292,7 +372,7 @@ fn runtimeSourcesOf(directory: String): Result<List<String>, IoError> {
   Ok sources
 }
 
-fn compile(source: String, binary: String): Result<Int, IoError> {
+fn compile(source: String, binary: String, saysWhatItWrote: Bool): Result<Int, IoError> {
   const compiler = match findCompiler() {
     Some(found) => found
     None => {
@@ -323,10 +403,12 @@ fn compile(source: String, binary: String): Result<Int, IoError> {
   if output.exitCode == 0 {
     // A C compiler on Windows appends `.exe` to an output name without an extension, so the path that is reported is
     // the one that is really there
-    if File.exists(binary) {
-      print "wrote {binary}"
-    } else {
-      print "wrote {binary}.exe"
+    if saysWhatItWrote {
+      if File.exists(binary) {
+        print "wrote {binary}"
+      } else {
+        print "wrote {binary}.exe"
+      }
     }
     return Ok 0
   }

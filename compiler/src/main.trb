@@ -19,6 +19,7 @@ use check, Checked from "./semantics/check"
 use Lowering from "./ir/lower/context"
 use lowerChecked, loweredText, loweredProblems, statisticsLines from "./ir/lower/lower"
 use BuildOptions, build from "./cli/build"
+use TestOptions, runTests from "./cli/test"
 use insertOwnership from "./ir/ownership"
 use verifyOwnedProgram from "./ir/ownership-verify"
 use nativeEntries, renderNativesHeader from "./backend/c/natives"
@@ -37,6 +38,8 @@ fn printUsage() {
   printError "  torb build [path]      Compile an entry file to a native binary through C"
   printError "                         --emit-c: write the C and stop, which needs no C compiler"
   printError "                         --output <file>: where the binary goes (the C is written next to it)"
+  printError "  torb test [path]       Build every *.test.trb below the path into one binary and run it"
+  printError "                         --jobs N: accepted and ignored - one binary is one process"
   printError "  torb ir <path>...      Print the typed IR of what the back end lowers, and what it does not yet"
   printError "                         --statistics: only the counts, without the IR itself"
   printError "                         --no-ownership: the IR the lowering writes, before the ownership pass"
@@ -253,6 +256,31 @@ fn buildOptionsOf(arguments: List<String>): BuildOptions {
 }
 
 /**
+ * `torb test [path] [--jobs N]`. `--jobs` is the one flag stage 0 has that means nothing here: one binary holds every
+ * test file, so there is one process whatever the number says. It is accepted so that a command line written for
+ * stage 0 still runs, and ignored.
+ */
+fn testOptionsOf(arguments: List<String>): TestOptions {
+  var paths: List<String> = []
+  var wantsJobs = false
+  for argument in arguments {
+    if wantsJobs {
+      wantsJobs = false
+      continue
+    }
+    if argument == "--jobs" {
+      wantsJobs = true
+      continue
+    }
+    if argument.startsWith("--jobs=") {
+      continue
+    }
+    paths.add argument
+  }
+  TestOptions(paths.first() ?? "tests")
+}
+
+/**
  * `torb natives --header [directory]`: the generated half of the contract between the lowering and the runtime
  * (BACKEND 3.7). The header is a pure function of the manifest, so writing it is reading one table and one `writeText` -
  * and `compiler/tests/natives.test.trb` asserts that the file on disk is what this writes, which is what keeps the two
@@ -294,6 +322,12 @@ match Process.arguments() {
   }
   ["build", ...more] => {
     const code = build(buildOptionsOf(more))?
+    if code != 0 {
+      Process.exit code
+    }
+  }
+  ["test", ...more] => {
+    const code = runTests(testOptionsOf(more))?
     if code != 0 {
       Process.exit code
     }

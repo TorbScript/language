@@ -79,7 +79,8 @@ static TORB_NORETURN void torb_finish_panic(const char *message, torb_location a
   if (torb_hook != NULL) {
     torb_hook(buffer);
   }
-  fprintf(stderr, "%s\n", buffer);
+  /* The same path `print` takes: a console sees the message as the text it is, a pipe sees exactly these bytes */
+  torb_write_line_error(buffer, strlen(buffer));
   fflush(stderr);
   TORB_EXIT_IMMEDIATELY(TORB_PANIC_EXIT_CODE);
 }

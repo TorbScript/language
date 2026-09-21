@@ -861,7 +861,7 @@ run against **stage 0, the C back end and later the VM** by the same runner.
 | **5.9a** | **Done.** `var` parameters and `var self` receivers: a place as an argument, interior projections through fields, assignment and property commands through a path, `MakeUnique` per counted owner of the path | `ir/lower/place.trb` | `compiler/tests/lower-places.test.trb` (23: the IR text, the pinned C, the verifier's invariants); `bootstrap/tests/native/{places,place-counted}.trb` run natively with zero live blocks | 5.4 |
 | **5.9b** | The rest of the `var` paths: index paths (`TakeOut`/`PutBack`), slices as windows, `if var`/`while var`, `shared type` objects with their headers and trace functions, `FixedArray`, `Close`/`using` | `ir/lower/place.trb`, `runtime/memory.c` | `01-bindings-and-values.trb`, `03-types.trb`, `08-control-flow.trb` | 5.9a, 5.7 |
 | **5.10** | **Done, except what needs a collection.** Text: interpolation, `print`/`printError`, `Show` for every shape in the format of gap 23, float formatting in both back ends, `?.`. **Still open:** `describe`, derived `Encode`/`Decode` and the `std/json` natives, which all wait for 5.7 (see the note below) | `ir/lower/text.trb`, `ir/lower/match.trb`, `runtime/text.c`, `bootstrap/crates/torb-interpreter` | `compiler/tests/lower-text.test.trb` (19); `bootstrap/tests/native/{interpolation,floats,optional-chain}.trb` run natively, compared with stage 0, zero live blocks | 5.6, 5.7 |
-| **5.11** | **Half done.** `assert` is lowered and `test`/`group` are functions of the runtime with a recovery point, so a test file compiled on its own runs natively and prints what stage 0 prints (58 findings `a quoted expression` in `compiler/tests/` became 0). **Still open:** an `Expression<Value>` as a value - the static tree, `value()`, `captures()` - and `torb test` from **one** binary over all 55 files. **Gate: `compiler/tests/*.test.trb` run from the native binary** | `ir/lower/quote.trb`, `runtime/test.c`, `runtime/panic.c`, `cli/test.trb` | `bootstrap/tests/native/{tests,test-failure}.trb` and `binary-only/assert-compound-capture.trb`; the compiler's own tests | 5.10 |
+| **5.11** | **The gate holds.** `assert` is lowered, `test`/`group` are functions of the runtime with a recovery point, `torb test <directory>` builds **one** binary for every test file and runs it, and `\n` is `\n` on both implementations. **Gate: `compiler/tests/*.test.trb` run from the native binary - 1482 passed, 0 failed (55 files), the same report as stage 0 line for line.** **Still open:** an `Expression<Value>` as a value - the static tree, `value()`, `captures()` - which nothing of `compiler/` needs | `ir/lower/quote.trb`, `ir/lower/match.trb`, `runtime/test.c`, `runtime/panic.c`, `runtime/console.c`, `cli/test.trb`, `backend/c/emit.trb` | `bootstrap/tests/native/{tests,test-failure,assert-values,nested-list-patterns}.trb`, `binary-only/assert-compound-capture.trb`, and `cargo test --release --test suite -- --ignored` | 5.10 |
 | **5.12** | **Done for what the compiler needs** (`File.createDirectory`, `Process.run`, `Clock.milliseconds` and the `.Fallible` shape of `std/fs`, see the note of 6.1's long tail). **Runtime half done.** The remaining std natives: `std/fs`, `std/io`, `std/process`, `std/time`, `std/math`, `std/environment`. **Gate: the tour runs** (01-09, 11, 12; `10-async` waits for 7.3) | `runtime/file.c`, `clock.c`, `environment.c`, `number.c` | `.expected` files for every tour module, run on stage 0 and natively | 5.3 (parallel with 5.8-5.11) |
 | **5.13** | The full driver: profiles, the content-hash cache, `torb run` as build-and-execute, `torb test`, output paths from `project.trb`, ICE reporting, `--emit-ir`, the `error:` report of a top-level `?` (it walks `cause()`) and `?` return traces in the debug profile | `cli/build.trb`, `cli/run.trb`, `project/manifest.trb` | Cache hit and miss, a deliberately broken emitter reports an ICE, an error chain of three prints three lines | 5.3 |
 | **5.14** | **Done.** Conformance: one runner over stage 0 and the C back end that compares standard output, standard error and the exit code with nothing exempt; the panic format and every recorded divergence closed; `--emit-c` twice byte identical; no absolute path in the output | `bootstrap/crates/torb-interpreter`, `runtime/text.c`, `bootstrap/tests/native/`, the runner | **57 gate programs**, each run twice and compared byte for byte (`cargo test --release --test native`) | 5.1-5.13 |
@@ -2981,7 +2981,8 @@ The accessor is what a read of the constant goes through and nothing else knows 
 
 **The fixpoint holds on it.** Stage 1 and stage 2 agree on **57289851 bytes** of C and stage 3 emits them again; stage 1
 takes 250.1 s for the build, stage 2 108.1 s and stage 3 22.0 s for the emit alone. 1453 tests, 98 runtime tests. (After
-5.11's first half: **57455864 bytes**, 279.2 s / 106.2 s / 21.9 s, 1469 tests, 108 runtime tests.)
+5.11's first half: **57455864 bytes**, 279.2 s / 106.2 s / 21.9 s, 1469 tests, 108 runtime tests. After 5.11's second
+half: **57944973 bytes**, 274.4 s / 123.4 s / 26.2 s, 1482 tests, 121 runtime tests.)
 
 **A body lowered inside another body is one mechanism now.** The initializer is lowered where the constant is first read
 and not through the worklist, because a construct the back end does not translate yet has to abandon the body that
@@ -3138,7 +3139,7 @@ already takes a **list** of entry modules (`lowerWorkspace ... modules`); what i
 module's entry function with the file's name printed in front of it, and `emitProgram` taking more than one entry name.
 The counts of the summary line belong in `runtime/` next to `test` itself, so that both back ends print one format.
 
-### What 5.11 decided: `assert` is the back end's, `test` is the runtime's
+### What 5.11 decided: `assert` is the back end's, `test` is the runtime's, and a run is one binary
 
 **`assert` is lowered and the quotation behind it is never built.** `assert(condition)` needs three things - whether the
 condition held, what the reader wrote, and what the condition read from around it - and an `Expression<Bool>` value
@@ -3191,29 +3192,102 @@ failure, character for character what `natives.rs` writes on stage 0, for the sa
 runtime: two implementations of one format are two chances to disagree, and `torb test` compares the two line by line.
 `bootstrap/tests/native/{tests,test-failure}.trb` are the two gate programs, byte equal on both sides.
 
-**What 5.11 did not do, and what it costs.** Two halves are open and neither is blocked by anything this round decided:
+**`torb test <directory>` is one binary, and the generated `main` is where the files are a list.** Every test file
+imports its harness and through it whatever it tests, so one binary per file would be one C compile of a translation
+unit that size per file - and 6.3 measured that the C compiler is where a build's time goes. The whole suite together
+is about **77 MB** of C, a third more than the compiler's own 58 MB, and one gcc of it. So `emitProgram` takes
+a list of `ProgramEntry` (a mangled entry name, and the file it is the top-level code of) instead of one name, and the
+`main` it writes is
+
+```c
+torb_process_start(argument_count, argument_values);
+torb_test_file("../compiler/tests/adts.test.trb", 34);
+t_torbscript_x2f_compiler_tests_x2f_adts_x2e_test();
+...
+int code = torb_test_finish();
+torb_process_finish();
+return code;
+```
+
+`torb_test_file` and `torb_test_finish` are in `runtime/test.c`, beside the line of a single test, for the reason the
+line itself is there: **one format in one place**. The counts of the run, the blank line, `N passed, M failed (K files)`
+and the exit code are the runtime's, so the two implementations of `torb test` cannot drift apart. The order is the
+order of the files' paths, and a file that declares things and runs nothing still prints its name and calls nothing.
+
+**A failing file does not stop the run**, which is what makes one binary behave like fifty-five processes: a test whose
+body panics lands in the recovery point of `runtime/panic.c`, is reported, and the next test - in that file or in the
+next one - runs.
+
+**`--jobs` is accepted and ignored.** Inside one process there is nothing to spread over cores: the files share one
+heap, the report is one stream of lines in the order of the files, and threads would buy a run nothing that the one C
+compile in front of it did not already dominate. Rejecting the flag would only break a command line written for stage 0.
+`docs/tooling/torb-test.md` says so.
+
+**What the run forwards, and what that costs today.** The driver runs the binary as a child and writes what it wrote.
+`Process.start`, which hands out the two pipes apart, is 7.3's, so `Process.run` collects both streams as one text: the
+report arrives when the run is over rather than while it happens, and a panic that escaped every recovery point - a
+file whose *top level* panicked - lands on standard output with the rest. Everything the report itself is goes to
+standard output anyway, so nothing of the comparison is affected.
+
+**Measured**, from `bootstrap/` on 16 cores with gcc 13.2, all of it in one run of
+`cargo test --release --test suite -- --ignored` (808.08 s): stage 0 builds the compiler in **294.2 s**; the built
+`torb` builds the whole suite and runs it in **208.5 s**, almost all of which is the one gcc - the binary itself runs
+all 1482 tests in **under a second**; stage 0 runs the same suite in **305.4 s**, one process per file on as many
+cores as there are. The slow way for comparison: the same build driven by the interpreter
+(`torb run ../compiler test ../compiler/tests`) takes **358 s**. That test is the gate: it builds the compiler, runs
+`<the binary> test ../compiler/tests`, and compares the whole report with stage 0's line by line, plus the exit code.
+
+**`\n` is `\n` everywhere, and that is the runtime's job.** On Windows the C runtime opens `stdout` and `stderr` in
+*text* mode, so every `\n` a compiled program wrote into a pipe or a file became `\r\n` - the same program producing
+different bytes on two platforms, and a conformance runner that had to fold them away before comparing anything.
+`torb_process_start` puts both streams into **binary mode** instead, and the normalisation is gone from
+`bootstrap/crates/torb-cli/tests/native.rs`: what a program wrote is compared as it wrote it, and a `\r` that turns up
+is a difference the suite is meant to catch. The expectation *files* are still folded, because git may check one out
+with either ending. The console path is untouched by the stream mode - `WriteConsoleW` takes UTF-16 straight to the
+console handle - and a console still breaks lines correctly because its own processed-output mode is what turns a `\n`
+into a new line there.
+
+**The runtime's own two reports go through the path `print` goes through.** A panic report and the lines of the test
+report are rendered into fixed buffers and are never a `torb_text` - a report that has to allocate is a report that
+cannot be written when the heap is gone - so they used to go straight to `fprintf`, which on a live Windows console
+writes UTF-8 bytes through the console's own code page and turns every non-ASCII character of a message or a test name
+into noise. `torb_write_line` in `console.c` is the same dispatch `print` uses, with a console path that converts on the
+**stack** so that the no-allocation promise holds; a line too long for that buffer, or one that is not valid UTF-8,
+falls back to the raw bytes exactly as `print` does. A pipe gets byte-identical output either way, which is what the
+suite compares.
+
+**A list pattern inside another pattern is lowered**, which was the last finding in the compiler's own tests. A list has
+no layout, so the container a `length()` or an `at(index)` runs on cannot be read off the layouts the way a field can;
+`containerTypeOf` walks the subject's type step by step instead and asks the checker the questions the pattern check
+asked on the way in - `caseNamed` for a case field, `fieldsOf` for a field, the type's form for a tuple position, and
+`itemOfSubject` for an item of an `Iterable`. The subject is substituted first, so a nested list inside an instance of a
+generic reaches that instance's type arguments. `torb ir --statistics ../compiler/tests` lowers **12375 of 12375**
+functions.
+
+**What 5.11 did not do, and what it costs.** One half is open and nothing this round decided blocks it:
 
 - **An `Expression<Value>` as a value.** `Expression.value` and `Expression.captures` are still `.Planned("5.11")` and a
   quotation that is not the argument of `assert` is still `a quoted expression`. What it needs is written above under
   "What 5.11 needs": drop `Expression` from the primitive table of `ir/instantiate.trb` so it gets the record layout of
   its own declaration, append the memo cell and the captures to it, and build the static `ExpressionNode` tree through
   the immortal counted static - one `FunctionKind.ConstantCell` per quotation site, which exists now and is what makes
-  the tree a build-once. Nothing of `compiler/src/` and nothing of `compiler/tests/` needs it.
-- **`torb test` from one native binary.** The lowering already takes a list of entry modules; what is missing is an
-  entry that calls each module's entry with the file's name printed in front of it, `emitProgram` taking more than one
-  entry name, and the counts of the summary line next to `test` in `runtime/`. A test file compiled **on its own** runs
-  natively today and prints what stage 0 prints - which is what the two gate programs are - so what is left is the
-  driver and not the language.
+  the tree a build-once. Nothing of `compiler/src/` and nothing of `compiler/tests/` needs it, which is why the gate of
+  this milestone holds without it.
 
 **What the VM of 7.x has to know from this round.**
 
 - **A recovery point is part of the ABI of a panic.** A VM that runs `std/test` has to let a panic land in the frame that
   runs the test, and it may not release anything on the way there: a recovered panic unwinds nothing, which is the same
   promise an ordinary panic makes.
-- **The report of a test is the runtime's, not a back end's.** One format in one place, or the two implementations drift
-  apart line by line.
+- **The report of a test is the runtime's, not a back end's** - the line, the counts and the summary. One format in one
+  place, or the two implementations drift apart line by line.
+- **A program has a list of entry functions and not one.** `torb test` is the first thing that builds one, and the VM
+  needs the same shape: the entries run in order, each one is the top-level code of one module, and the tail of the run
+  answers the exit code.
 - **What a failed `assert` shows is one function of the lowering.** A VM that shows more than a scalar by value pays the
   per-captured-type cost this round measured; it is a decision about the binary and not about the language.
+- **`\n` is `\n`.** Whatever a back end writes a line through, the bytes that reach a pipe are the bytes the program
+  wrote. A platform's text mode is a property of the machine and never of the program.
 
 ### What 5.14 decided: one observable behaviour
 

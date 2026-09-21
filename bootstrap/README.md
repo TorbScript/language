@@ -119,6 +119,18 @@ it can move up one directory - and `binary-only/` is the other side, where the t
 **deliberately** differently and the runner builds and runs the program as a binary alone. `cargo test --release --test
 native` runs all three.
 
+Two more runners take minutes and need a C compiler, so both are `#[ignore]`d and are run by name:
+
+```text
+cargo test --release --test fixpoint -- --ignored --nocapture   # the compiler compiles itself to the same C twice
+cargo test --release --test suite    -- --ignored --nocapture   # the compiler's own tests run from the binary
+```
+
+`suite.rs` is the headline gate of milestone 5.11: it builds the compiler with stage 0, runs
+`<the binary> test ../compiler/tests` - one C translation unit for all 55 test files, with a generated `main` that runs
+each file's entry with the file's name in front of it - and compares the whole report line by line with
+`torb test ../compiler/tests` on stage 0, plus the exit code.
+
 `bootstrap/tests/scripts/` is the other half: long programs that run on stage 0 alone and are compared with their
 `.expected` by `crates/torb-cli/tests/self_hosted.rs`. A behaviour both back ends have to agree on belongs in
 `tests/native/` instead. It is a workspace of its own too, and it is checked by the same second `check`.

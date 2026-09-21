@@ -103,15 +103,27 @@ rest of stage 0.
 
 ### `test`
 
-Runs every `*.test.trb` file of a directory, one process per file, as many at a time as the machine has cores. `--jobs 1`
-runs them one after another in one process, which is what you want when the output order of a crash matters. The output is
-passed on in the order of the files, so it never depends on which finished first.
+Runs every `*.test.trb` file of a directory. The output is the name of a file, then one line per test of it, then the
+next file - **in the order of the files**, which is the order their paths sort in - and at the end a blank line and
+`N passed, M failed (K files)`. The command leaves with 0 where nothing failed and 1 otherwise.
+
+The two implementations get there differently, and that is the only thing that differs:
+
+| | How the files are run | `--jobs N` |
+|---|---|---|
+| The self-hosted compiler | **One binary for all of them**, built and run | Accepted and ignored |
+| Stage 0's `torb test` | One process per file | How many at a time; the default is the number of cores, `--jobs 1` is one after another |
+
+One binary and not one per file, because every test file imports its harness and through it whatever it tests: one
+binary per file would be one C compile of a translation unit that size per file, and the C compiler is where the time
+of a build goes. The whole suite together is about the size of one such translation unit. That is also why `--jobs`
+means nothing there - one binary is one process - and it is accepted rather than rejected so that a command line
+written for stage 0 still runs.
 
 `test` and `group` themselves are not a command's: they are ordinary functions of `std/test`, and both the interpreter
 and the compiled binary write the report from the same place - one line per test, `  ok      ` or `  FAILED  ` with the
-group names in front of it. So a test file that is **built** (`torb build one.test.trb`) runs its tests the same way,
-which is what the language's own conformance suite compares. The command itself still runs on stage 0: driving all the
-files of a directory from one native binary is the half of milestone 5.11 that is not built yet.
+group names in front of it, and the counts of the summary. So a test file that is **built** on its own
+(`torb build one.test.trb`) runs its tests the same way, which is what the language's own conformance suite compares.
 
 ### `docs`
 

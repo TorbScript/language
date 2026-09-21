@@ -25,7 +25,7 @@ use Layout, FieldLayout, containsCountedType from "../../ir/layout"
 use typeOfReference from "../../ir/verify"
 use hexDigits, objectTypeName, payloadLayoutName from "../../ir/mangle"
 use nativeEntries from "./natives"
-use CExpression, CStatement, CSwitchCase, CDeclaration, declarationOf from "./writer"
+use CExpression, CStatement, CSwitchCase, CDeclaration, declarationOf, cStringOf from "./writer"
 use Emission, write, reportUnsupported, emittedText from "./emission"
 use cTypeOf, whyNoCType, hasStructDefinition, memberNameOf, variantMemberNameOf from "./type"
 use structDeclarationOf, layoutDefinitionOrder, objectDeclarationOf from "./type"
@@ -36,8 +36,24 @@ use retainChildrenFunctionOf from "./body"
 use variantInitializerParts, boxedLayoutOf, countedFormOf, inlineCountedLayoutOf from "./body"
 use retainStatement, releaseStatement, describeCounted from "./body"
 
+/**
+ * One entry function the generated `main` calls, and what it is called for.
+ *
+ * An ordinary program has exactly one, whose `file` is empty: `main` runs it and leaves with zero. A **test run** has
+ * one per test file - the whole suite is one binary, because every test file imports the harness and through it the
+ * whole compiler, so one binary per file would be one C compile of that size per file. `file` is then the name
+ * `torb test` prints in front of that file's tests, and `main` ends in the summary of `runtime/test.c` and the exit
+ * code it answers instead of in a plain zero.
+ */
+public type ProgramEntry {
+  /** The mangled name of the entry function of one module. */
+  name: String
+  /** The file the entry is the top-level code of, where the run is a test run. */
+  file: String = ""
+}
+
 /** Everything one translation unit is: the C, and what the back end could not emit. */
-public fn emitProgram(program: IrProgram, entry: String): Emission {
+public fn emitProgram(program: IrProgram, entries: List<ProgramEntry>): Emission {
   var emission = Emission()
   const functions = emittedFunctionsOf program
   const layouts = usedLayoutsOf program, functions
@@ -58,13 +74,13 @@ public fn emitProgram(program: IrProgram, entry: String): Emission {
   emitWitnessTables emission, program
   emitClosureThunks emission, program, functions
   emitDefinitions emission, program, functions, prototypes
-  emitMain emission, entry
+  emitMain emission, entries
   emission
 }
 
-/** The whole C of a program, for `--emit-c` and for the snapshot tests. */
+/** The whole C of a program with one entry and no test report, for `--emit-c` and for the snapshot tests. */
 public fn emittedProgramText(program: IrProgram, entry: String): String {
-  const emission = emitProgram program, entry
+  const emission = emitProgram program, [ProgramEntry(entry)]
   emittedText emission
 }
 
@@ -1712,19 +1728,45 @@ fn commentOf(program: IrProgram, function: IrFunction): String {
 /**
  * The `main` of the program: the runtime first, then the top-level code of the entry file, then exit code zero. A
  * program that ends in `Process.exit` never reaches the `return`.
+ *
+ * A **test run** is the same `main` with one entry per test file: the name of the file goes out in front of its tests
+ * through `torb_test_file`, and the tail is `torb_test_finish`, which writes the summary line and answers the exit
+ * code. A test that fails or panics is reported by `runtime/test.c` and does not end the process, so the file after it
+ * still runs - which is what makes one binary for the whole suite behave like one process per file.
  */
-fn emitMain(var emission: Emission, entry: String) {
-  if entry.isEmpty() {
+fn emitMain(var emission: Emission, entries: List<ProgramEntry>) {
+  if entries.isEmpty() {
     return
   }
-  write(emission, CDeclaration.Fixed("""
-    int main(int argument_count, char **argument_values) \{
-      torb_process_start(argument_count, argument_values);
-      {entry}();
-      torb_process_finish();
-      return 0;
-    \}
-    """))
+  var lines = ["torb_process_start(argument_count, argument_values);"]
+  var isTestRun = false
+  for entry in entries {
+    // A test file that declares things and runs nothing has no entry function; its name is still printed
+    if !entry.file.isEmpty() {
+      isTestRun = true
+      lines.add "torb_test_file({cStringOf(entry.file)}, {entry.file.byteLength()});"
+    }
+    if !entry.name.isEmpty() {
+      lines.add "{entry.name}();"
+    }
+  }
+  if lines.length() == 1 {
+    return
+  }
+  // The summary of the run is written before the leak report, so the two reports read in the order they happened
+  if isTestRun {
+    lines.add "int code = torb_test_finish();"
+    lines.add "torb_process_finish();"
+    lines.add "return code;"
+  } else {
+    lines.add "torb_process_finish();"
+    lines.add "return 0;"
+  }
+  var body = ""
+  for line in lines {
+    body = body + "  " + line + "\n"
+  }
+  write emission, CDeclaration.Fixed("int main(int argument_count, char **argument_values) \{\n" + body + "\}")
 }
 
 // --- The prototypes of the runtime ----------------------------------------------------------------------------------

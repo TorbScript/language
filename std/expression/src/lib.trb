@@ -178,14 +178,27 @@ public fn nameOf<Value>(expression: Expression<Value>): String {
 }
 
 /**
- * Panics if `condition` is `false`. There are no matchers: the message names the source text and every captured
- * value instead, e.g. `Assertion failed: adults.length() > limit   (adults = [...], limit = 5)   at main.trb:12:1`.
+ * Panics if `condition` is `false`. There are no matchers: the message names the source text of the condition and
+ * every value the condition read from around it, one per line, and then the site:
+ *
+ *     panic: Assertion failed: count < limit
+ *       count = the Int 7
+ *       limit = the Int 5
+ *       at acme/app/src/main.trb:12:1
+ *
+ * A **scalar** - every integer type, every float, `Bool`, `Char` and `String` - is shown as `the <kind> <value>`,
+ * where the word is the language's name for the *kind* of value and not the name of its type, so `Int` for an `Int64`
+ * and `Float` for a `Float64`. Everything else is shown by its name and its type, `found: Point`: a value of the
+ * program shown in full needs the whole `Show` machinery of its type and of every type under it in the binary, and
+ * one type that has none would refuse the whole build. Until a capture carries its own encoded value, that is the
+ * one thing the two implementations word differently - the interpreter writes `a value of type List` where a
+ * compiled binary writes the name and the type.
  *
  * # Examples
  *
  *     const limit = 5
- *     const adults = [1, 2, 3]
- *     assert(adults.length() < limit)
+ *     const count = 7
+ *     assert(count < limit)
  *
  * # Panics
  *

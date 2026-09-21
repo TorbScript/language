@@ -22,9 +22,11 @@
 
 /* Defined in console.c, not declared in torb.h - see the file comment above. */
 void torb_write_parts(FILE *stream, const torb_text *parts, size_t count);
+void torb_write_line(FILE *stream, const char *bytes, size_t length);
 #if defined(_WIN32)
 size_t torb_console_chunk_length(const wchar_t *text, size_t length, size_t limit);
 bool torb_write_parts_console(HANDLE handle, const torb_text *parts, size_t count);
+bool torb_write_line_console(HANDLE handle, const char *bytes, size_t length);
 #endif
 
 /* --------------------------------------------------------------------------------- the raw-byte path, both OSes --- */
@@ -62,6 +64,32 @@ TORB_TEST(a_file_receives_the_raw_bytes_of_the_join) {
 
   torb_text_release(first);
   torb_text_release(second);
+}
+
+/**
+ * `torb_write_line` against a `FILE *` that is neither `stdout` nor `stderr`: the bytes it was given and one `\n`, and
+ * a `\n` the caller put inside the line stays where it is - the panic report is two lines written as one call.
+ */
+TORB_TEST(a_file_receives_the_raw_bytes_of_a_line) {
+  const char *path = "torb-runtime-test-console-line.bin";
+  const char *expected = "panic: grüße\n  at src/main.trb:1:1\n";
+  FILE *file;
+  uint8_t read_back[64];
+  size_t read_length;
+
+  file = fopen(path, "wb");
+  TORB_CHECK(file != NULL);
+  torb_write_line(file, "panic: grüße\n  at src/main.trb:1:1", strlen("panic: grüße\n  at src/main.trb:1:1"));
+  fclose(file);
+
+  file = fopen(path, "rb");
+  TORB_CHECK(file != NULL);
+  read_length = fread(read_back, 1u, sizeof read_back, file);
+  fclose(file);
+  remove(path);
+
+  TORB_CHECK_INTEGER(read_length, strlen(expected));
+  TORB_CHECK(memcmp(read_back, expected, read_length) == 0);
 }
 
 /* ============================================================================================ Windows only ===== */
@@ -137,10 +165,27 @@ TORB_TEST(a_text_over_the_chunk_limit_is_still_reported_convertible) {
   torb_text_release(emoji);
 }
 
+/** A line the runtime writes itself converts on the stack, so valid UTF-8 that fits is reported convertible. */
+TORB_TEST(a_line_of_raw_bytes_is_convertible) {
+  const char *line = "  FAILED  grüße > 日本";
+  TORB_CHECK(torb_write_line_console(INVALID_HANDLE_VALUE, line, strlen(line)));
+  TORB_CHECK(torb_write_line_console(INVALID_HANDLE_VALUE, NULL, 0u));
+}
+
+/** Invalid UTF-8 has no UTF-16 form, and a line longer than the stack buffer has nowhere to go: both fall back. */
+TORB_TEST(a_line_that_cannot_be_converted_falls_back) {
+  char *long_line = (char *)torb_raw_allocate(9000u);
+  memset(long_line, 'a', 9000u);
+  TORB_CHECK(!torb_write_line_console(INVALID_HANDLE_VALUE, "\x80", 1u));
+  TORB_CHECK(!torb_write_line_console(INVALID_HANDLE_VALUE, long_line, 9000u));
+  torb_raw_free(long_line, 9000u);
+}
+
 #endif
 
 void torb_register_console_tests(void) {
   TORB_ADD(a_file_receives_the_raw_bytes_of_the_join);
+  TORB_ADD(a_file_receives_the_raw_bytes_of_a_line);
 #if defined(_WIN32)
   TORB_ADD(a_short_text_is_one_chunk);
   TORB_ADD(a_cut_away_from_any_surrogate_is_exactly_the_limit);
@@ -151,5 +196,7 @@ void torb_register_console_tests(void) {
   TORB_ADD(invalid_utf8_is_reported_as_not_convertible);
   TORB_ADD(an_empty_join_is_convertible);
   TORB_ADD(a_text_over_the_chunk_limit_is_still_reported_convertible);
+  TORB_ADD(a_line_of_raw_bytes_is_convertible);
+  TORB_ADD(a_line_that_cannot_be_converted_falls_back);
 #endif
 }

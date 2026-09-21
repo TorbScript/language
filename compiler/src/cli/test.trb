@@ -1,0 +1,70 @@
+/**
+ * `torb test`: every `*.test.trb` below a directory, as **one** native binary, built and run.
+ *
+ * One binary and not one per file. Every test file imports its harness and through it the whole compiler, so one
+ * binary per file would be one C compile of a translation unit the size of the compiler's own per file - and the C
+ * compiler is where the time of a build goes (BACKEND 6.3). The whole suite together is about the size of one such
+ * translation unit, so it is one `gcc` instead of fifty-five.
+ *
+ * What that costs is `--jobs`. Inside one process there is nothing to spread over cores: the files share one heap,
+ * the report is one stream of lines in the order of the files, and threads would buy the run nothing that the one C
+ * compile did not already dominate. The flag is accepted and ignored, so that a command line written for stage 0 still
+ * runs, and `docs/tooling/the-torb-command.md` says so.
+ *
+ * The report itself is not written here at all - `runtime/test.c` writes every line of it, including the counts and
+ * the summary, which is what keeps the two implementations of `torb test` printing one format.
+ */
+
+use File, IoError from "std/fs"
+use Process from "std/process"
+use normalizePath, joinPath from "../project/path"
+use BuildOptions, build, buildTarget, buildFailedCode from "./build"
+
+/**
+ * What `torb test` needs from the command line, which is the directory alone: `--jobs N` is read off the arguments
+ * and dropped there, because one binary is one process and there is nothing here for it to say.
+ */
+public type TestOptions {
+  /** The directory the test files are looked for below. */
+  path: String = "tests"
+}
+
+/** The exit code of the whole command: what the test binary answered, or what went wrong before it ran. */
+public fn runTests(options: TestOptions): Result<Int, IoError> {
+  const output = joinPath normalizePath(options.path), "build/{buildTarget}/tests"
+  const built = build(BuildOptions([options.path], false, output, true))?
+  if built != 0 {
+    return Ok built
+  }
+  // A C compiler on Windows appends `.exe` to an output name without an extension
+  const binary = if File.exists(output) { output } else { "{output}.exe" }
+  const ran = match Process.run(binary, []) {
+    Ok(found) => found
+    Fail(problem) => {
+      printError "error: the test binary `{binary}` could not be started: {problem.message}"
+      return Ok buildFailedCode
+    }
+  }
+  forward ran.standardOutput
+  Ok ran.exitCode
+}
+
+/**
+ * What the test binary wrote, written on again as the bytes it wrote. It ends in exactly one `\n` - every line of the
+ * report goes through `torb_write_line_out` - and `print` appends one of its own, so the last one is taken off first.
+ *
+ * Both of the binary's streams arrive here as one text: `Process.run` collects them together, and `Process.start`,
+ * which hands out the two pipes apart, is not written yet. Everything the report is goes to standard output, so what
+ * this merges is a panic that escaped every recovery point - a file whose *top level* panicked - and that is worth
+ * seeing in place rather than being dropped.
+ */
+fn forward(text: String) {
+  if text.isEmpty() {
+    return
+  }
+  if text.endsWith("\n") {
+    print text[0..text.byteLength() - 1]
+    return
+  }
+  print text
+}

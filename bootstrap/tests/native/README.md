@@ -12,6 +12,10 @@ can be observed doing:
 | the exit code    | `<program>.exit`         |
 | whether the leak gate applies | `<program>.leaks`, which holds the reason it does not |
 
+**`\n` is `\n`.** Nothing about what a program wrote is normalised - the runtime puts standard output and standard
+error into binary mode on Windows (`torb_process_start`), so the bytes a binary writes into a pipe are the bytes stage
+0 writes. Only the expectation *files* are read with `\r\n` folded, because git may check one out with either ending.
+
 Plus two things that are checked on the compiled side alone, because there is nothing to compare them with:
 
 - **Zero live blocks.** The binary is run a second time with `TORB_REPORT_LEAKS=1`, and the runtime's block counter has
@@ -52,8 +56,10 @@ panicked only had to *fail* on stage 0 - and closing it is what that milestone w
 3. End it in `Process.exit <code>` where the exit code is part of what is pinned, and compute the code from what the
    program measured where that is possible: a program whose answer is wrong then fails on the code as well as on the
    output.
-4. Run it both ways and write the three expectation files from the **compiled** run, with `\r\n` folded to `\n` and a
-   `std/` position replaced by `_:_`. Then read them: an expectation nobody read is a bug that was written down.
+4. Run it both ways and write the three expectation files from the **compiled** run, with a `std/` position replaced by
+   `_:_`. Nothing else is folded: the runtime puts standard output and standard error into binary mode on Windows, so
+   what a binary writes into a pipe is `\n` exactly as stage 0 writes it. Then read them: an expectation nobody read is
+   a bug that was written down.
 5. `cargo test --release --test native`. A program that is wrong about the language fails on both sides at once, which
    is the one case this suite cannot catch - that is what `compiler/tests/` and the pages under `docs/language/` are
    for.
@@ -105,6 +111,7 @@ expectation files. The leak gate does not run on them, because every one of them
 | `matching.trb` | Everything a decision tree decides besides a case: literals, ranges, tuples, guards, bindings |
 | `match-order.trb` | The first arm that matches wins, a false guard falls through, and a guard runs only for its own arm |
 | `list-patterns.trb` | `[]`, `[only]`, `[first, second]`, `[first, ...rest]`, `[first, ..., last]`, a literal item |
+| `nested-list-patterns.trb` | A list pattern **inside** another one: in a case field, in a record field, in a tuple, inside another list, with a rest, under a guard, and in an instance of a generic |
 | `states.trb` | A state machine over unit cases, `if const` and `while const` |
 | `adts.trb` | A recursive algebraic data type and the decision trees over it |
 | `optional-chain.trb` | `?.`: the member on the payload, or `None` without touching the member |

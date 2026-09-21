@@ -722,6 +722,17 @@ void torb_print_error_parts(const torb_text *parts, size_t count);
 /** `readLine(): String?`: false at end of input. The trailing `\n` (and a `\r` before it) is removed. */
 bool torb_read_line(torb_text *out);
 
+/**
+ * One line of raw UTF-8 bytes plus a `\n`, through the same dispatch `print` goes through: a live Windows console
+ * sees the text, and a pipe or a file sees exactly these bytes. `bytes` may hold `\n` of its own.
+ *
+ * This is what the runtime's *own* reports use - a panic and the lines of the test report - because those are
+ * rendered into fixed buffers and are never a `torb_text`: a report that has to allocate is a report that cannot be
+ * written when the heap is gone. `bytes` borrowed.
+ */
+void torb_write_line_out(const char *bytes, size_t length);
+void torb_write_line_error(const char *bytes, size_t length);
+
 /* ------------------------------------------------------------------------------------------------- the tests --- */
 
 /**
@@ -734,6 +745,17 @@ bool torb_read_line(torb_text *out);
  */
 void torb_test_case(torb_text name, torb_closure body);
 void torb_test_group(torb_text name, torb_closure body);
+
+/**
+ * `torb test <directory>` is **one binary for every test file**, so the counts of a whole run live here too.
+ *
+ * The generated `main` calls `torb_test_file` with the name of the file whose tests come next - which is the line
+ * `torb test` prints in front of them - and `torb_test_finish` at the end, which writes the blank line and
+ * `N passed, M failed (K files)` and answers the exit code of the run: 0 where nothing failed and 1 otherwise.
+ * `path` borrowed.
+ */
+void torb_test_file(const char *path, size_t length);
+int torb_test_finish(void);
 
 /** Called by the generated `main` before anything else. `argument_values` borrowed for the whole run. */
 void torb_process_start(int argument_count, char **argument_values);

@@ -13,6 +13,11 @@
  * `WriteConsoleW` instead, in chunks that never split a surrogate pair. A pipe or a file never takes that path, so its
  * bytes stay exactly what they are. Reading a line follows the same split: a console is read with `ReadConsoleW`
  * and converted back, everything else with `fgetc`.
+ *
+ * `torb_write_line` is the same dispatch for the two reports the runtime writes itself - a panic and the line of a
+ * test - which are rendered as plain bytes and not as a `torb_text`, so that a panic still works when the heap is
+ * exhausted. Its console path converts on the **stack** for the same reason, and a line too long for that buffer falls
+ * back to the raw bytes exactly as invalid UTF-8 does.
  */
 
 #include "torb.h"
@@ -35,6 +40,13 @@
  * prints, so this is not tuned any tighter than that.
  */
 #define TORB_CONSOLE_CHUNK_LIMIT 4096u
+
+/**
+ * The longest line `torb_write_line` converts for a console, in UTF-16 units. A panic renders into a fixed buffer of
+ * 2048 bytes and a line of the test report is a name and a message, so nothing the runtime writes itself comes near
+ * this; a line that does is written as its raw bytes instead, which is what a pipe gets anyway.
+ */
+#define TORB_CONSOLE_LINE_LIMIT 4096u
 
 /**
  * How many of the first `length` units of `text` may be handed to one `WriteConsoleW` call without exceeding `limit`
@@ -145,6 +157,38 @@ bool torb_write_parts_console(HANDLE handle, const torb_text *parts, size_t coun
 }
 
 /**
+ * `bytes` plus one `\n` to the console behind `handle`, converted on the stack so that nothing allocates: the panic
+ * path renders its message into a fixed buffer for exactly that reason, and a report that allocates is a report that
+ * cannot be written when the heap is gone. False where the line does not fit the buffer or is not valid UTF-8, and
+ * the caller then writes the raw bytes - the path a pipe or a file always takes. Not `static`:
+ * `runtime/tests/console_test.c` reaches the fallback through it without opening a console.
+ */
+bool torb_write_line_console(HANDLE handle, const char *bytes, size_t length) {
+  wchar_t wide[TORB_CONSOLE_LINE_LIMIT];
+  int units = 0;
+  size_t total;
+  size_t written = 0u;
+  if (length + 1u >= TORB_CONSOLE_LINE_LIMIT) {
+    return false;
+  }
+  if (length > 0u) {
+    units = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, bytes, (int)length, wide,
+                                (int)(TORB_CONSOLE_LINE_LIMIT - 1u));
+    if (units <= 0) {
+      return false;
+    }
+  }
+  wide[units] = L'\n';
+  total = (size_t)units + 1u;
+  while (written < total) {
+    size_t chunk = torb_console_chunk_length(wide + written, total - written, TORB_CONSOLE_CHUNK_LIMIT);
+    WriteConsoleW(handle, wide + written, (DWORD)chunk, NULL, NULL);
+    written += chunk;
+  }
+  return true;
+}
+
+/**
  * `readLine` where standard input is a live console: `fgetc` would read the console's own code page, the input side
  * of the same mismatch `print` has on the way out, so the line is read as UTF-16 with `ReadConsoleW` and converted
  * back with `torb_platform_utf8`. The console's line mode only hands back a whole line once Enter is pressed and
@@ -249,6 +293,40 @@ static void torb_print_to(FILE *stream, const torb_text *parts, size_t count) {
   }
 #endif
   torb_write_parts(stream, parts, count);
+}
+
+/**
+ * One line of raw UTF-8 bytes, through the same dispatch `print` goes through: `WriteConsoleW` where the stream is a
+ * live console, the bytes themselves everywhere else. This is what the runtime's own two reports use - the panic
+ * report of `panic.c` and the lines of `test.c` - so that a message with a non-ASCII character in it reads correctly
+ * on a console while a pipe keeps exactly the bytes the conformance suite compares. `bytes` may hold `\n` of its own:
+ * the whole line goes out in one call, and the one `\n` this appends is the end of it.
+ */
+void torb_write_line(FILE *stream, const char *bytes, size_t length) {
+#if defined(_WIN32)
+  if (stream == stdout || stream == stderr) {
+    HANDLE handle;
+    if (torb_std_is_console(stream == stdout ? STD_OUTPUT_HANDLE : STD_ERROR_HANDLE, &handle)) {
+      fflush(stream);
+      if (torb_write_line_console(handle, bytes, length)) {
+        return;
+      }
+    }
+  }
+#endif
+  if (length > 0u && bytes != NULL) {
+    fwrite(bytes, 1u, length, stream);
+  }
+  fputc('\n', stream);
+}
+
+/** The two standard streams of `torb_write_line`, which is how `torb.h` names it without naming `FILE *`. */
+void torb_write_line_out(const char *bytes, size_t length) {
+  torb_write_line(stdout, bytes, length);
+}
+
+void torb_write_line_error(const char *bytes, size_t length) {
+  torb_write_line(stderr, bytes, length);
 }
 
 void torb_print(torb_text text) {

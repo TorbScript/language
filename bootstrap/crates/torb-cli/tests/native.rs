@@ -7,6 +7,10 @@
 //! of `std/`, because a line of the standard library moves whenever a comment above it is edited and what a program
 //! promises is which file panicked; `without_library_positions` below says exactly how.
 //!
+//! **`\n` is `\n`.** Nothing normalises line endings of what a program wrote: the runtime puts `stdout` and `stderr`
+//! into binary mode on Windows, so a compiled binary writes the same bytes into a pipe that stage 0 writes. Only the
+//! expectation *files* are folded, because git may check one out with either ending.
+//!
 //! `bootstrap/tests/native/README.md` is the contract this test enforces, and how a program is added to it. The one
 //! subdirectory, `stage-0-only/`, is a waiting room rather than an exception: a program lands there when the back end
 //! cannot produce the behaviour yet and stage 0 already answers what the language says, and the second test below runs
@@ -51,13 +55,18 @@ fn programs(directory: &Path) -> Vec<PathBuf> {
     found
 }
 
+/// An expectation **file**, whose `\r\n` is folded: git may check one out with either line ending, and what the file
+/// holds is the text of the expectation and not its bytes on this machine.
 fn expected_file(program: &Path, extension: &str) -> Option<String> {
     let path = program.with_extension(extension);
     std::fs::read_to_string(path).ok().map(|text| text.replace("\r\n", "\n"))
 }
 
+/// What a program **wrote**, as it wrote it. Nothing is folded here: `\n` is `\n` on both implementations, because the
+/// runtime puts `stdout` and `stderr` into binary mode on Windows (`torb_process_start`) and stage 0 writes what Rust
+/// writes. A `\r` that turns up in this text is a difference the suite is meant to catch.
 fn text(bytes: &[u8]) -> String {
-    String::from_utf8_lossy(bytes).replace("\r\n", "\n")
+    String::from_utf8_lossy(bytes).to_string()
 }
 
 /// A scratch directory of this test process, which is what keeps two runs at once from disturbing each other.

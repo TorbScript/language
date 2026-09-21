@@ -12,6 +12,8 @@
 #include <string.h>
 
 #if defined(_WIN32)
+#  include <fcntl.h> /* _O_BINARY */
+#  include <io.h>    /* _setmode, _fileno */
 #  include <process.h> /* _exit */
 #  define TORB_EXIT_IMMEDIATELY(code) _exit(code)
 #elif defined(__unix__) || defined(__APPLE__)
@@ -32,9 +34,20 @@ static bool torb_reports_leaks = false;
  *
  * A panic is not one of the two ends: it aborts without running anything (decided gap 9), so what it leaves behind is
  * not a leak - it is a program that is over.
+ *
+ * **`\n` is `\n` everywhere.** On Windows the C runtime opens `stdout` and `stderr` in *text* mode, which turns every
+ * `\n` a program writes into `\r\n` on the way into a pipe or a file - so the same program would produce different
+ * bytes on two platforms, and the conformance suite would be comparing the platform rather than the program. Both
+ * streams go into binary mode here instead. The console path of `console.c` is untouched by this: `WriteConsoleW`
+ * takes UTF-16 straight to the console handle and never sees a stream mode at all, and the console host's own
+ * processed-output mode is what turns a `\n` into a new line there.
  */
 void torb_process_start(int argument_count, char **argument_values) {
   const char *given = getenv("TORB_REPORT_LEAKS");
+#if defined(_WIN32)
+  _setmode(_fileno(stdout), _O_BINARY);
+  _setmode(_fileno(stderr), _O_BINARY);
+#endif
   torb_argument_count = argument_count;
   torb_argument_values = argument_values;
   torb_reports_leaks = given != NULL && given[0] == '1' && given[1] == '\0';

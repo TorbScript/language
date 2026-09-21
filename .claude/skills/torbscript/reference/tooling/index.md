@@ -29,7 +29,7 @@ design, which is in [internals](../internals/index.md). A page here is about wha
 - **[torb check](torb-check.md)** - torb check resolves every module, import and name in a type position, types every expression, and reports one block per diagnostic - the gate every other command trusts.
 - **[torb run](torb-run.md)** - torb run executes a file directly, or src/main.trb of a project directory, and passes the rest of the command line to the program as Process.arguments().
 - **[torb build](torb-build.md)** - torb build type checks a program, lowers it to C, and hands the C to whatever compiler it finds - one file in, one native binary out, nothing to configure.
-- **[torb test](torb-test.md)** - torb test runs every *.test.trb file below a directory, one process per file by default, and prints ok or FAILED for every test call it sees.
+- **[torb test](torb-test.md)** - torb test runs every *.test.trb file below a directory - one binary for all of them, or one process per file on stage 0 - and prints ok or FAILED for every test call it sees.
 - **[torb canon](torb-canon.md)** - torb canon rewrites sources into the formatter canon over the syntax tree, checks every edit against a second parse, and drops anything that would change what the program means.
 - **[torb docs source](torb-docs-source.md)** - torb docs source checks the doc comments of the code itself - a module comment on every file, a comment on every construct that needs one, six headings, links that resolve, and examples that compile.
 - **[The formatter canon](the-formatter-canon.md)** - The one way every TorbScript source is written - a command wherever the grammar allows it, and a multi-line string indented two spaces deeper than the line it starts on.

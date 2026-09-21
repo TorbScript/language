@@ -1,0 +1,99 @@
+use Process from "std/process"
+
+/**
+ * A list pattern **inside** another pattern: in the field of a case, in the field of a record, in a tuple, inside
+ * another list, with a rest, under a guard, and inside an instance of a generic.
+ *
+ * A list has no layout, so an item is no step of a path and the container a `length()` or an `at(index)` runs on cannot
+ * be read off the layouts the way a field can. The type of the value halfway down a pattern is the checker's answer -
+ * the fields of a case with the receiver's arguments filled in, the fields of a record, a position of a tuple, and the
+ * `Item` of the `Iterable<Item>` a list is - and following those steps is what makes a nested list pattern ordinary.
+ */
+type Tree {
+  case Leaf(value: Int)
+  case Branch(children: List<Int>)
+}
+
+type Row {
+  label: String
+  cells: List<Int>
+}
+
+/** The list is the field of a case: `[]`, `[only]` and a rest, each one reached through the case field. */
+fn inCase(tree: Tree): String {
+  match tree {
+    .Leaf(value) => "leaf {value}"
+    .Branch([]) => "branch of nothing"
+    .Branch([only]) => "branch of {only}"
+    .Branch([first, ...more]) => "branch of {first} and {more.length()} more"
+  }
+}
+
+/** The same in the field of a record, which is the other shape of a field step. */
+fn inField(row: Row): String {
+  match row {
+    Row(label, []) => "{label}: nothing"
+    Row(label, [only]) => "{label}: {only}"
+    Row(label, [first, ..., last]) => "{label}: {first}..{last}"
+    Row(label, _) => "{label}: ?"
+  }
+}
+
+/** The list is one position of a tuple. */
+fn inTuple(pair: (List<Int>, String)): String {
+  match pair {
+    ([], label) => "{label} over nothing"
+    ([only], label) => "{label} over {only}"
+    ([first, ..., last], label) => "{label} over {first}..{last}"
+    (_, label) => "{label} over ?"
+  }
+}
+
+/** A list pattern inside a list pattern: the outer one opens the column the inner one tests. */
+fn inList(rows: List<List<Int>>): String {
+  match rows {
+    [[single]] => "one row of one: {single}"
+    [[first, second], ...more] => "{first},{second} then {more.length()} rows"
+    [_, ...] => "other rows"
+    [] => "no rows"
+  }
+}
+
+/** A guard over an arm whose pattern is a nested list: the names are bound before the guard reads them. */
+fn guarded(tree: Tree): String {
+  match tree {
+    .Branch([first, second]) if first > second => "falling {first} {second}"
+    .Branch([first, second]) => "rising {first} {second}"
+    _ => "no pair"
+  }
+}
+
+/** The subject of an instance of a generic, so that the walk reaches the type arguments of the instance. */
+fn widest<Item>(rows: List<List<Item>>): Int {
+  match rows {
+    [] => 0
+    [[], ...more] => widest more
+    [only, ...more] => only.length().max(widest(more))
+  }
+}
+
+print inCase(Tree.Leaf(7))
+print inCase(Tree.Branch([]))
+print inCase(Tree.Branch([3]))
+print inCase(Tree.Branch([3, 4, 5]))
+print inField(Row("empty", []))
+print inField(Row("one", [9]))
+print inField(Row("many", [1, 2, 3]))
+print inTuple(([], "count"))
+print inTuple(([4], "count"))
+print inTuple(([4, 5, 6], "count"))
+print inList([])
+print inList([[8]])
+print inList([[1, 2], [3, 4], [5, 6]])
+print inList([[1, 2, 3]])
+print guarded(Tree.Branch([5, 2]))
+print guarded(Tree.Branch([2, 5]))
+print guarded(Tree.Leaf(1))
+print widest([["a"], ["b", "c"], []])
+
+Process.exit(widest([["a"], ["b", "c"], []]) * 10 + inCase(Tree.Branch([3, 4, 5])).chars().count() % 7)

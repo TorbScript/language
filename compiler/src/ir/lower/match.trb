@@ -28,6 +28,8 @@ use instanceOfSymbol from "../instances"
 use emitCall, lowerConstruct, lowerDispatched from "./call"
 use dispatchedOn, resultTypeOf from "./generic"
 use traitsOf from "../../semantics/checker/implementation"
+use fieldsOf, caseNamed from "../../semantics/checker/member"
+use itemOfSubject from "../../semantics/checker/pattern"
 use traitMemberNamed from "../witness"
 use Lowering, reportUnsupported, locationOf, irTypeOf, booleanTypeOf, isVoidType from "./context"
 use irTypeOfClosed, substituted from "./context"
@@ -566,17 +568,58 @@ fn emitLengthTest(
 }
 
 /**
- * The type of the container a list test or an item step works on, which is the **subject** of the plan.
+ * The type of the container a list test or an item step works on: the **subject** of the plan with the steps of `path`
+ * followed one at a time.
  *
- * A list *inside* another pattern (`.Wrapped([first])`) would need the checker type halfway down a path, and a plan says
- * nothing about one - only the layouts do, and a list has no layout. It is a clean finding, and the repository has none.
+ * A list *inside* another pattern (`.Wrapped([first])`) needs the checker's type halfway down a path, and a plan says
+ * nothing about one - only the layouts do, and **a list has no layout**. So the walk asks the checker the same questions
+ * the pattern check asked on the way in: a case field and a field are `caseNamed`/`fieldsOf` with the receiver's
+ * arguments filled in, a tuple position is a field of its form, and an item is the `Item` of the `Iterable<Item>` the
+ * container is. The subject is substituted first, so a nested list inside an instance of a generic reaches the type
+ * arguments of that instance.
+ *
+ * A `.Rest` step is never *passed through*: a rest pattern binds a name and matches nothing below it, so it is only ever
+ * the last step of a binding's path.
  */
 fn containerTypeOf(var lowering: Lowering, plan: MatchPlan, path: List<PatternStep>, at: Span): TypeId? {
-  if !path.isEmpty() {
-    reportUnsupported lowering, "a list pattern inside another pattern", at
-    return None
+  var current = substituted lowering, plan.subject
+  for step in path {
+    const inner = match stepTypeOf(lowering, current, step) {
+      Some(found) => found
+      None => {
+        const shown = lowering.checker.describe current
+        reportUnsupported lowering, "a list pattern under a step of `{shown}` the back end cannot follow", at
+        return None
+      }
+    }
+    current = inner
   }
-  Some substituted(lowering, plan.subject)
+  Some current
+}
+
+/** One step from a value towards the value inside it, as the checker's own type of what is reached. */
+fn stepTypeOf(var lowering: Lowering, owner: TypeId, step: PatternStep): TypeId? {
+  match step {
+    .CaseField(_, variant, index, _) => {
+      const name = lowering.checker.symbolAt(variant).name
+      const found = match caseNamed(lowering.checker, owner, name) {
+        Some(one) => one
+        None => {
+          return None
+        }
+      }
+      found.fields.get(index)?.annotation
+    }
+    .Field(_, index, _) => fieldsOf(lowering.checker, owner).get(index)?.annotation
+    .TupleField(_, index) => {
+      match lowering.checker.types.form(owner) {
+        .Tuple(fields) => fields.get(index)?.annotation
+        _ => None
+      }
+    }
+    .Item(_) | .ItemFromEnd(_) => Some itemOfSubject(lowering.checker, owner)
+    .Rest(_) => None
+  }
 }
 
 /**

@@ -115,10 +115,21 @@ fn test(path: &str, jobs: usize) -> ExitCode {
     }
 }
 
+/// The path of a test file as the report writes it: the toolchain has **one** path form, with forward slashes, so the
+/// two implementations of `torb test` print the same line in front of the same file. Joining a path the way the
+/// platform does would make the report a fact about the machine instead of about the run.
+fn shown(file: &Path) -> String {
+    let text = file.to_string_lossy().to_string();
+    if std::path::MAIN_SEPARATOR == '/' {
+        return text;
+    }
+    text.replace(std::path::MAIN_SEPARATOR, "/")
+}
+
 fn test_one_after_another(files: &[PathBuf]) -> (usize, usize) {
     let (mut passed, mut failed) = (0, 0);
     for file in files {
-        println!("{}", file.display());
+        println!("{}", shown(file));
         match torb_interpreter::run(file, Vec::new()) {
             torb_interpreter::Outcome::Finished(tests) => {
                 passed += tests.passed;
@@ -160,8 +171,8 @@ fn test_in_parallel(files: &[PathBuf], jobs: usize) -> (usize, usize) {
     for (file, output) in files.iter().zip(outputs) {
         let output = output.into_inner().expect("no thread fails while it holds the lock");
         let Some(output) = output.filter(|output| counts_of(&String::from_utf8_lossy(&output.stdout)).is_some()) else {
-            println!("{}", file.display());
-            eprintln!("error: {}: the process that runs this file did not report its tests", file.display());
+            println!("{}", shown(file));
+            eprintln!("error: {}: the process that runs this file did not report its tests", shown(file));
             failed += 1;
             continue;
         };

@@ -2331,3 +2331,86 @@ Wenn nicht, was bedeutet, bewirkt es?
     `cargo test --release --test native` (die ganze Konformitätssuite, drei Tests, 1688,6 s) grün, und
     **der Fixpoint hält**: Stage 1 und Stage 2 sind sich über 57455864 Bytes C einig (279,2 s / 106,2 s),
     Stage 3 emittiert sie noch einmal (21,9 s). Nicht gelaufen: die volle `cargo test --release`.
+
+- **Erledigt (5.11, zweite Hälfte: die Compiler-Tests laufen aus dem kompilierten Binary, 2026-09-21)** - das
+  Kopf-Gate des Meilensteins hält: `<das gebaute torb> test ../compiler/tests` schreibt **1482 passed, 0 failed
+  (55 files)** und Zeile für Zeile denselben Report wie Stage 0, mit demselben Exit-Code.
+  - **Ein Listenmuster *in* einem anderen Muster wird gelowert** - das letzte Finding in den Compiler-eigenen Tests.
+    Eine Liste hat kein Layout, also kann der Container, auf dem ein `length()` oder ein `at(index)` läuft, nicht wie
+    ein Feld aus den Layouts gelesen werden. `containerTypeOf` in `ir/lower/match.trb` läuft stattdessen den Typ des
+    Subjekts Schritt für Schritt ab und stellt dem Checker die Fragen, die die Musterprüfung auf dem Hinweg gestellt
+    hat: `caseNamed` für ein Case-Feld, `fieldsOf` für ein Feld, die Form des Typs für eine Tupelposition,
+    `itemOfSubject` für ein Item eines `Iterable`. Das Subjekt wird zuerst substituiert, also erreicht ein
+    geschachteltes Listenmuster in einer Instanz einer Generic deren Typargumente.
+    `torb ir --statistics ../compiler/tests` lowert jetzt **12375 von 12375** Funktionen. Neues Gate-Programm:
+    `bootstrap/tests/native/nested-list-patterns.trb` (Case-Feld, Record-Feld, Tupel, Liste in Liste, Rest, Guard,
+    Instanz einer Generic), byte-gleich auf beiden Seiten.
+  - **`torb test <verzeichnis>` ist *ein* Binary für alle Dateien.** Ein Binary pro Datei ist keine Option: jede
+    Testdatei importiert ihren Harness und darüber den ganzen Compiler, das wäre ein C-Compile einer
+    Übersetzungseinheit dieser Größe *pro Datei* - und 6.3 hat gemessen, dass der C-Compiler die Zeit eines Builds
+    ist. Die ganze Suite zusammen sind rund **77 MB** C, etwa ein Drittel mehr als die 58 MB des Compilers selbst,
+    und ein `gcc`. Neu: `compiler/src/cli/test.trb`; `emitProgram` nimmt eine Liste von `ProgramEntry` (Entry-Name
+    plus die Datei, deren Top-Level-Code er ist) statt eines Namens, und das erzeugte `main` ruft pro Datei
+    `torb_test_file(...)` und dann die Entry auf und endet in `torb_test_finish()`.
+  - **Die Zähler und die Summenzeile stehen in `runtime/test.c`**, neben der Zeile eines einzelnen Tests, aus
+    demselben Grund: *ein* Format an *einer* Stelle. Eine Datei, die nur deklariert und nichts ausführt, hat keine
+    Entry-Funktion - ihr Name wird trotzdem gedruckt und nichts aufgerufen, genau wie bei Stage 0.
+  - **Ein Fehlschlag hält den Lauf nicht an**, und das ist es, was ein Binary sich wie 55 Prozesse verhalten lässt:
+    ein Test, dessen Rumpf paniked, landet im Wiedereinstiegspunkt aus `runtime/panic.c`, wird gemeldet, und der
+    nächste Test - in derselben Datei und in jeder danach - läuft.
+  - **`--jobs` wird angenommen und ignoriert.** In einem Prozess gibt es nichts über Kerne zu verteilen: die Dateien
+    teilen sich einen Heap, der Report ist ein Strom von Zeilen in Dateireihenfolge, und Threads brächten dem Lauf
+    nichts, was das eine C-Compile davor nicht ohnehin dominiert. Abgelehnt würde die Flagge nur eine Kommandozeile
+    kaputtmachen, die für Stage 0 geschrieben wurde. `docs/tooling/torb-test.md` sagt es.
+  - **`\n` ist überall `\n`.** Unter Windows öffnet die C-Laufzeit `stdout` und `stderr` im *Textmodus*, also wurde
+    jedes `\n` eines kompilierten Programms auf dem Weg in eine Pipe zu `\r\n` - dasselbe Programm mit anderen Bytes
+    auf zwei Plattformen, und ein Konformitätsrunner, der das erst wegfalten musste. `torb_process_start` schaltet
+    beide Ströme jetzt in den **Binärmodus**, und die Normalisierung ist aus
+    `bootstrap/crates/torb-cli/tests/native.rs` verschwunden: was ein Programm *geschrieben* hat, wird verglichen, wie
+    es geschrieben wurde. Nur die Erwartungs*dateien* werden weiter gefaltet, weil git sie mit beiden Zeilenenden
+    auschecken kann. Der Konsolenpfad bleibt davon unberührt - `WriteConsoleW` nimmt UTF-16 direkt am Handle -, und
+    eine Konsole bricht Zeilen weiter richtig um, weil ihr eigener "processed output"-Modus aus einem `\n` eine neue
+    Zeile macht. **Verifiziert:** die 72 Programme der Konformitätssuite sind ohne Faltung byte-gleich mit Stage 0.
+    **Nicht verifiziert:** eine echte Windows-Konsole (der Agent hat keine); das Verhalten ist dokumentiert und aus
+    der Win32-Dokumentation begründet, nicht gemessen.
+  - **Die beiden Reports der Runtime gehen denselben Weg wie `print`.** Ein Panik-Report und die Zeilen des
+    Test-Reports werden in feste Puffer gerendert und sind nie ein `torb_text` - ein Report, der allozieren muss, ist
+    ein Report, der bei erschöpftem Heap nicht mehr geschrieben werden kann -, also gingen sie bisher direkt an
+    `fprintf`, was auf einer Konsole UTF-8-Bytes durch deren Codepage schickt. `torb_write_line` in `console.c` ist
+    dieselbe Verteilung, die `print` nimmt, mit einem Konsolenpfad, der **auf dem Stack** konvertiert, damit das
+    Allokationsversprechen hält; eine Zeile, die nicht hineinpasst oder kein gültiges UTF-8 ist, fällt auf die rohen
+    Bytes zurück. Drei neue Runtime-Tests, `sh runtime/build.sh` sind jetzt **121**.
+  - **`compiler/tests/natives.test.trb` prüft die *Form* der Zähler** (`ready + planned == length()`, jedes geteilte
+    Runtime-Symbol einmal, `symbols < ready`) statt dreier absoluter Zahlen, die jede neue Native bearbeiten müsste.
+  - **Der Doc-Kommentar von `assert` in `std/expression`** beschreibt jetzt, was beide Implementierungen drucken:
+    `the <Art> <Wert>` für einen Skalar, Name und Typ für alles andere im Binary, und `a value of type List` im
+    Interpreter.
+  - **Gemessen**, aus `bootstrap/`, 16 Kerne, gcc 13.2, alles in einem Lauf von
+    `cargo test --release --test suite -- --ignored` (808,08 s insgesamt): Stage 0 baut den Compiler in **294,2 s**;
+    das gebaute `torb` baut die ganze Suite und lässt sie laufen in **208,5 s** (davon ist fast alles das eine gcc -
+    das Binary selbst läuft alle 1482 Tests in unter einer Sekunde); Stage 0 läuft dieselbe Suite in **305,4 s**, ein
+    Prozess pro Datei auf allen Kernen. Zum Vergleich der langsame Weg: derselbe Build über den Interpreter
+    (`torb run ../compiler test ../compiler/tests`) braucht **358 s**.
+  - **Nicht geschafft, mit exaktem Stand:** ein `Expression<Value>` als **Wert** (Schritt 4 des Auftrags) - der
+    statische `ExpressionNode`-Baum, `value()`, `captures()`. Die beiden Einträge sind weiter `.Planned("5.11")`, und
+    eine Quotierung, die nicht das Argument von `assert` ist, ist weiter `a quoted expression`. Der Entwurf steht
+    unverändert in BACKEND ("What 5.11 needs"), der unsterbliche Static, den der Baum braucht, ist da, und **nichts
+    von `compiler/` braucht es** - deshalb hält das Kopf-Gate ohne. Damit auch Schritt 5 nicht (`cause()`-Kette eines
+    Top-Level-`?`, `Show` eines Funktionswerts), der ausdrücklich erst danach drankommen sollte. Der Grund ist
+    Umfang: die Layout-Chirurgie (Memo-Zelle und Captures an das Record-Layout anhängen), ein `ConstantCell` pro
+    Quotierungsstelle für einen rekursiven, geboxten Baum und der Umbau von `capturePlansOf` sind zusammen eine eigene
+    Runde in der Größe der ersten Hälfte, und ein halb gebauter Schritt im Baum ist schlechter als keiner.
+  - **Nebenbei aufgefallen, nicht angefasst:** `std/linear/tests` lowert 112 von 114 Funktionen - zweimal
+    `a generic function or a member of a generic type is not supported by the native back end yet`, zuerst bei
+    `transforms.test.trb:48:12` -, also läuft diese Suite noch nicht nativ. `std/geometry/tests` lowert 424 von 424
+    und könnte.
+  - **Gates (alle nach dem Merge von `master`):** `cargo build --release`, `check ..` **319** Dateien "no problems",
+    `check tests/native tests/scripts` 75 Dateien, `check --statistics ..` **197712 von 197712** Ausdrücken,
+    0 deferred, `canon --check` 0 von 396 Dateien, `torb test ../compiler/tests` **1482**,
+    `torb test ../std/linear/tests` 93, `torb test ../std/geometry/tests` 71, `docs check` 222 Seiten,
+    `docs index --check` 24 Indizes, `docs source` über `ir`/`backend`/`cli`/`std/test`/`std/expression` 46 Dateien,
+    531 Deklarationen, "no problems", `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`,
+    `sh runtime/build.sh` **121** Tests, die **volle `cargo test --release`** grün (mit der ganzen Konformitätssuite
+    darin), `cargo test --release --test suite -- --ignored` grün (das neue Kopf-Gate, 808,08 s), und **der Fixpoint
+    hält**: Stage 1 und Stage 2 sind sich über **57944973 Bytes** C einig (274,4 s / 123,4 s), Stage 3 emittiert sie
+    noch einmal (26,2 s).
