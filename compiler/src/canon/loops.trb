@@ -1,0 +1,48 @@
+/**
+ * Rule `loops`, **off by default**: `while true {` becomes `loop {`.
+ *
+ * The endless loop has its own word, so "never ends" is a property of the syntax and not of a condition. The rule
+ * changes the *tree* of a file (`While` becomes `Loop`), so it stays out of the default run and out of the safety
+ * net that compares syntax trees; what it does is pinned by its own text-in, text-out tests.
+ *
+ * Only the head is touched: `while` and the `true` after it are replaced by `loop`, and everything from the `{` on
+ * stays byte-identical. `while false` is left alone - it is not an endless loop, and the checker has nothing
+ * against it.
+ */
+
+use Statement, StatementKind, Condition from "../syntax/ast"
+use Edit, EditKind, Replacement from "./edit"
+
+/** One edit per `while true`, from the `w` of `while` to the end of the `true` that follows it. */
+public fn loopEdits(source: String, endless: List<Statement>): List<Edit> {
+  var edits: List<Edit> = []
+  for statement in endless {
+    match editForLoop(source, statement) {
+      Some(edit) => edits.add edit
+      None => {}
+    }
+  }
+  edits.sort({ _.position })
+  edits
+}
+
+fn editForLoop(source: String, statement: Statement): Edit? {
+  match statement.kind {
+    .While(condition, _) => {
+      match condition {
+        .Test(test) => {
+          const start = statement.span.start
+          const end = test.span.end
+          // The head has to read exactly `while` ... `true`: anything else is not this rule's business
+          const head = source[start..end]
+          if !head.startsWith("while") || !head.endsWith("true") {
+            return None
+          }
+          Some Edit(EditKind.EndlessLoop, start, [Replacement(start, end, "loop")])
+        }
+        .Bind(_, _, _) => None
+      }
+    }
+    _ => None
+  }
+}

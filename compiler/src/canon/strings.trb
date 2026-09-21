@@ -1,0 +1,209 @@
+/**
+ * Rule `strings`: a multi-line `"""` or `r"""` string is written in the indented form.
+ *
+ * The opening `"""` stays where it is, every content line is indented two spaces deeper than the line the string
+ * starts on, a blank line is empty, and a closing `"""` that stands alone is aligned with the content. The **value**
+ * is untouched: the lexer takes the indentation of the first content line as the reference and subtracts it from
+ * every line, so shifting all of them by the same amount changes nothing. `\{` and interpolations are never looked
+ * at - only the whitespace at the start of a line is replaced.
+ *
+ * A string whose content starts on the line of the opening `"""` gets a line break of its own: the whitespace
+ * between the quotes and the content is that string's reference, so putting the content on the next line at the
+ * target indentation keeps the value as well.
+ */
+
+use Token, TokenKind from "../syntax/token"
+use Edit, EditKind, Replacement from "./edit"
+
+/** How much deeper than the line it starts on the content of a string is indented. */
+const step = "  "
+
+/** What the rule did not do, with the reason, for the report. */
+public type Skipped {
+  offset: Int
+  reason: String
+}
+
+public fn stringEdits(source: String, tokens: List<Token>): (edits: List<Edit>, skipped: List<Skipped>) {
+  var edits: List<Edit> = []
+  var skipped: List<Skipped> = []
+  for token in tokens {
+    match token.kind {
+      .TextLiteral(_) => {
+        match editForString(source, token) {
+          .Found(edit) => edits.add edit
+          .Skip(reason) => skipped.add Skipped(token.span.start, reason)
+          .Nothing => {}
+        }
+      }
+      _ => {}
+    }
+  }
+  (edits: edits, skipped: skipped)
+}
+
+type EditOutcome {
+  case Found(edit: Edit)
+  case Skip(reason: String)
+  case Nothing
+}
+
+fn editForString(source: String, token: Token): EditOutcome {
+  const start = token.span.start
+  const literal = source[start..token.span.end]
+  const quoteLength = match quotePrefixLength(literal) {
+    Some(length) => length
+    None => {
+      return EditOutcome.Nothing
+    }
+  }
+  // A one-line `"""text"""` is not dedented by the lexer and keeps its form
+  if !literal.contains("\n") {
+    return EditOutcome.Nothing
+  }
+  const close = token.span.end - 3
+  // Without a line break behind the opening quotes the content starts on that line, and the whitespace between the
+  // quotes and it is the reference of this string. It moves to the next line, where the target becomes the reference.
+  const bodyStart = start + quoteLength
+  const leading = afterTheLeadingLineBreak source, bodyStart
+  const body = leading ?? bodyStart
+  const missingLineBreak = leading.isNone()
+  const target = indentationOfTheLineAt(source, start) + step
+  const usesCrLf = source[body..close].contains("\r\n")
+  const opening = (if usesCrLf { "\r\n" } else { "\n" }) + target
+  const lines = linesOf source, body, close
+  // The indentation of the first line that has content is what the lexer subtracts from every line
+  const reference = match lines.find({ _.hasContent }) {
+    Some(line) => source[line.start..line.content]
+    None => {
+      return EditOutcome.Nothing
+    }
+  }
+  if missingLineBreak && !lines[0].hasContent {
+    return EditOutcome.Skip "the string is not in a form the canon knows"
+  }
+  const replacements = match replacementsFor(source, lines, missingLineBreak, reference, target, opening) {
+    Some(found) => found
+    None => {
+      return EditOutcome.Skip "a content line is indented less than the first one"
+    }
+  }
+  if replacements.isEmpty() {
+    return EditOutcome.Nothing
+  }
+  EditOutcome.Found Edit(EditKind.IndentedString, token.span.start, replacements)
+}
+
+fn quotePrefixLength(literal: String): Int? {
+  if literal.startsWith("\"\"\"") {
+    return Some 3
+  }
+  if literal.startsWith("r\"\"\"") {
+    return Some 4
+  }
+  None
+}
+
+/** One replacement per line, or `None` when a content line is indented less than the reference - the whole string is then left alone. */
+fn replacementsFor(source: String, lines: List<Line>, missingLineBreak: Bool, reference: String, target: String, opening: String): List<Replacement>? {
+  var replacements: List<Replacement> = []
+  for (index, line) in lines.indexed() {
+    const isTheFirst = index == 0 && missingLineBreak
+    if line.isTheClosingQuotes {
+      addIfChanged replacements, source, line.start, line.content, target
+      continue
+    }
+    if !line.hasContent {
+      addIfChanged replacements, source, line.start, line.content, ""
+      continue
+    }
+    if !source[line.start..line.end].startsWith(reference) {
+      return None
+    }
+    const end = line.start + reference.byteLength()
+    const replacement = if isTheFirst { opening } else { target }
+    addIfChanged replacements, source, line.start, end, replacement
+  }
+  Some replacements
+}
+
+fn addIfChanged(var replacements: List<Replacement>, source: String, start: Int, end: Int, replacement: String) {
+  if source[start..end] != replacement {
+    replacements.add Replacement(start, end, replacement)
+  }
+}
+
+/** One physical line inside of a multi-line string. */
+type Line {
+  start: Int
+  /** Where the whitespace at the start of the line ends */
+  content: Int
+  /** Behind the line break, or at the closing quotes for the last one */
+  end: Int
+  /** `false` for a blank line and for the line of a closing `"""` that stands alone: what the lexer calls a line without content and strips whole */
+  hasContent: Bool
+  isTheClosingQuotes: Bool
+}
+
+/**
+ * The lines from `body` (the first byte behind the line break that follows the opening `"""`) up to `close` (the
+ * closing quotes). The last one ends in front of the closing quotes: it is empty when the quotes stand alone on
+ * their line, and holds content when they follow it (`  last"""`).
+ */
+fn linesOf(source: String, body: Int, close: Int): List<Line> {
+  var lines: List<Line> = []
+  var start = body
+  loop {
+    const lineBreak = source[start..close].indexOf("\n")
+    const end = match lineBreak {
+      Some(length) => start + length + 1
+      None => close
+    }
+    const text = source[start..end]
+    const content = start + (indexOfFirstNonSpaceOrTab(text) ?? text.byteLength())
+    const rest = source[content..source.byteLength()]
+    const hasContent = !(rest.startsWith("\n") || rest.startsWith("\r") || content == close)
+    lines.add Line(start, content, end, hasContent, isTheClosingQuotes: content == close)
+    if lineBreak.isNone() {
+      return lines
+    }
+    start = end
+  }
+}
+
+fn indexOfFirstNonSpaceOrTab(text: String): Int? {
+  var index = 0
+  for character in text.chars() {
+    if character != ' ' && character != '\t' {
+      return Some index
+    }
+    index = index + character.byteLength()
+  }
+  None
+}
+
+/** Rule 1 of multi-line strings: a line break directly behind the opening quotes (after trailing spaces) is not part of the string. `None` if the content starts on that line instead. */
+fn afterTheLeadingLineBreak(source: String, behindTheQuotes: Int): Int? {
+  const rest = source[behindTheQuotes..source.byteLength()]
+  const length = indexOfFirstNonSpaceOrTab(rest)?
+  const after = rest[length..rest.byteLength()]
+  if after.startsWith("\r\n") {
+    return Some(behindTheQuotes + length + 2)
+  }
+  if after.startsWith("\n") {
+    return Some(behindTheQuotes + length + 1)
+  }
+  None
+}
+
+/** The whitespace at the start of the line that `offset` is on: the line the statement with the string starts on. */
+fn indentationOfTheLineAt(source: String, offset: Int): String {
+  const before = source[0..offset]
+  const start = match before.lastIndexOf("\n") {
+    Some(index) => index + 1
+    None => 0
+  }
+  const lineStart = source[start..offset]
+  const length = indexOfFirstNonSpaceOrTab(lineStart) ?? (offset - start)
+  source[start..(start + length)]
+}

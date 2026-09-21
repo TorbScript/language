@@ -1,0 +1,101 @@
+/**
+ * Text replacements in the coordinates of the original source, and the document they are applied to one at a time.
+ */
+
+/** One replacement of a byte range of the **original** source. Nothing outside of the range is touched, which is why line endings, comments and everything else stay byte-identical. */
+public type Replacement {
+  start: Int
+  end: Int
+  text: String
+}
+
+/** What an edit does, for the counts of the report. */
+public type EditKind {
+  /** `f(a)` becomes `f a` */
+  case ToCommand
+  /** `f a` becomes `f(a)` */
+  case ToParentheses
+  /** A `"""` string is written in the indented form */
+  case IndentedString
+  /** `.None` becomes `None` */
+  case CasePattern
+  /** A binding of a refutable pattern that nobody reads becomes `_` */
+  case UnusedBinding
+  /** `while true {` becomes `loop {` */
+  case EndlessLoop
+
+  /**
+   * Whether the syntax tree has to come out the same (modulo spans and `CallStyle`). Three rules change the tree on
+   * purpose - that is the point of them - so those are checked by parsing alone.
+   */
+  fn preservesTheTree(): Bool {
+    match self {
+      .CasePattern | .UnusedBinding | .EndlessLoop => false
+      _ => true
+    }
+  }
+}
+
+/**
+ * One edit of the canon: the replacements that only make sense together (the `(` and the `)` of a call are one
+ * edit), and where it is about, for the report and for a deterministic order.
+ */
+public type Edit {
+  kind: EditKind
+  position: Int
+  replacements: List<Replacement>
+}
+
+/**
+ * The source with the edits that were accepted so far. Edits keep the offsets of the original source; the document
+ * remembers what every accepted replacement shifted and translates them.
+ */
+public type Document {
+  var text: String
+  /** `(end of a replaced range in the original source, how much the text grew there)` */
+  var shifts: List<(Int, Int)>
+
+  static fn of(source: String): Document {
+    Document text: source, shifts: []
+  }
+
+  fn intoText(): String {
+    text
+  }
+
+  /** Where an offset of the original source sits in the current text. */
+  fn offset(original: Int): Int {
+    var shift = 0
+    for (end, delta) in shifts {
+      if end <= original {
+        shift = shift + delta
+      }
+    }
+    original + shift
+  }
+
+  /**
+   * What the edit would produce, without keeping it. The replacements of one edit never overlap, so applying them
+   * from the last to the first keeps the offsets of the ones that are still to come.
+   */
+  fn preview(edit: Edit): String {
+    var replacements = edit.replacements
+    replacements.sort({ _.start })
+    var candidate = text
+    for replacement in replacements.reversed() {
+      const start = offset replacement.start
+      const end = offset replacement.end
+      candidate = candidate[0..start] + replacement.text + candidate[end..candidate.byteLength()]
+    }
+    candidate
+  }
+
+  /** Keeps what `with` produced and records the shifts of the edit. */
+  var fn accept(edit: Edit, newText: String) {
+    text = newText
+    for replacement in edit.replacements {
+      const shift = replacement.text.byteLength() - (replacement.end - replacement.start)
+      shifts.add((replacement.end, shift))
+    }
+  }
+}

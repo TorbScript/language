@@ -3379,3 +3379,22 @@ Wenn nicht, was bedeutet, bewirkt es?
     `build/release/torb[.exe]` und fällt auf Stage 0 zurück, solange es das noch gibt. **Nebenbei gefunden:** das
     native Back-End lowert ein Literal, das über `Set.from` gebaut wird, noch nicht, deshalb stehen die beiden
     Tabellenkonstanten des Highlighters als `List<String>` da.
+
+  - **Erledigt (Scheibe 3, `canon` portiert):** die fünf Regeln aus `bootstrap/crates/torb-cli/src/canon` stehen jetzt
+    in `compiler/src/canon` auf dem selbstgehosteten Parser, als Kommando von `torb` neben `check`, `test` und `docs`;
+    dieselbe Kommandozeile, dieselben fünf Regelnamen, dieselbe Zusammenfassungszeile, dieselben Exit-Codes. Das
+    Sicherheitsnetz (jede Änderung einzeln anwenden, neu parsen, nur behalten wenn der Baum bis auf `Span` und
+    `CallStyle` derselbe bleibt) braucht keinen zweiten Dumper: `"{parsed.file}"` (die generierte `Show`) liefert genau
+    den Text, den `torb ast` auch druckt, und eine Erasure-Funktion entfernt `Span(start: ..)` und `style: ..` daraus.
+    Der self-gehostete Syntaxbaum fehlte an keiner Stelle etwas - keine Erweiterung des Parsers nötig. Jeder Test aus
+    `canon/tests.rs` (561 Zeilen) steht jetzt in `compiler/tests/canon.test.trb` (41 `test`-Blöcke) und ist grün.
+    Gleichheit bewiesen: `torb canon --check` mit allen fünf Regeln meldet über das ganze Repository (432 `.trb`-Dateien)
+    auf beiden Seiten `0 von N Dateien`, und ein Schreib-Lauf (ohne `--check`) über eine Scratch-Kopie von
+    `std/core/src` und `examples/tour`, in der von Hand ein geklammerter Aufruf, ein linksbündiger mehrzeiliger String,
+    ein `while true`, zwei ungelesene Bindungen und ein qualifiziertes `.None`-Pattern eingebaut wurden, erzeugt auf
+    beiden Seiten byte-identische Dateien. **Gefunden dabei:** `canon --check` über das ganze Repository braucht nativ
+    rund 20 s gegen rund 1,4 s auf Stage 0 - ungewöhnlich, weil sonst überall die native Binärdatei vorne liegt. Der
+    Grund ist vermutlich, dass die generierte `Show` pro Kandidaten-Änderung den ganzen Baum einer Datei neu in Text
+    verwandelt (bei großen Dateien mit vielen Aufrufen entsprechend oft), und das im self-gehosteten Backend teurer
+    ist als Rusts abgeleitetes `Debug` - eine Folgearbeit für wer als Nächstes an der generierten `Show` sitzt, kein
+    Fehler dieser Portierung. `bootstrap/crates` bleibt unverändert, eingefroren, nur zum Vergleich.

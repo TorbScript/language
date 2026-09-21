@@ -2,8 +2,10 @@
 
 The compiler is written in TorbScript and **compiles itself**: `sh tools/bootstrap.sh` builds `torb` from a seed and
 then builds it again with itself. Stage 0 (`bootstrap/`), the **untyped** tree-walking interpreter in Rust, is what ran
-it until it could, and it is on its way out ([docs/RUST-EXIT.md](../docs/RUST-EXIT.md)) - it still owns `canon`, and its
-traps still apply to every line the compiler's own sources contain, because it still runs them.
+it until it could, and it is on its way out ([docs/RUST-EXIT.md](../docs/RUST-EXIT.md)) - its traps still apply to
+every line the compiler's own sources contain, because it still runs them. `canon` (`compiler/src/canon/`) and
+`highlight` (`compiler/src/highlight/`) are commands of the self-hosted `torb` alongside `check`, `test` and `docs`;
+stage 0 keeps its own copies, frozen, only for comparison.
 
 These are the rules of the code base and those traps.
 
@@ -83,11 +85,14 @@ sh tools/bootstrap.sh                                 # seed -> torb -> torb, an
 ./build/release/torb check --statistics .             # "0 deferred"
 ./build/release/torb test compiler/tests
 ./build/release/torb test std/<package>/tests
+./build/release/torb canon --check --rule calls --rule strings --rule imported-case-patterns --rule unused-bindings --rule loops .
 ./build/release/torb docs check docs
 ./build/release/torb docs index --check docs
 ```
 
-`canon` has no native form yet, so it stays stage 0's until slice 3 of the exit.
+`canon` is a command of the self-hosted `torb`, ported onto the self-hosted parser
+([compiler/src/canon](../compiler/src/canon)). Stage 0's own copy is frozen and kept only so the two can be compared;
+the gate is the native one above.
 
 **The fixpoint is not in the list above, and it is what says the compiler is correct about itself.** It builds the
 compiler with stage 1, builds it again with the binary that came out, compares the two `program.c` byte for byte and lets

@@ -28,8 +28,8 @@ suites beside it. Every use of it in the repository:
 | `torb run ../compiler <command>` - the driver for `check`, `ir`, `build`, `natives`, `parse`, `tokens`, `ast`, `docs` | The native `torb` binary, which **is** `compiler/src/main.trb` compiled | no - done |
 | `torb test ../compiler/tests` - the compiler's own 1538 tests | Native `torb test`, one binary for the whole suite | no - done |
 | `torb test` for any other package (`std/*/tests`, `examples/*/tests`) | Native `torb test <path>...`, several packages in one run | no - done |
-| `torb canon --check --rule ...` - the formatter canon, five rules, 1 341 lines of Rust with 561 more of tests | `canon` ported to TorbScript on the self-hosted parser (slice 3), then milestone 8's `torb format` | **yes** - it is a tier-A gate and there is no second implementation |
-| `torb canon ..` - writing the canon | the same | **yes** |
+| `torb canon --check --rule ...` - the formatter canon, five rules, 1 341 lines of Rust with 561 more of tests | `canon` ported to TorbScript on the self-hosted parser (slice 3, done), then milestone 8's `torb format` | no - done |
+| `torb canon ..` - writing the canon | the same | no - done |
 | `torb highlight --stdin` - the editor extension's semantic tokens | The native binary's own `highlight` (slice 4) | no - done |
 | `cargo test --test native` - the conformance suite, 74 programs run both ways and compared | A gate runner that builds and runs each program natively and compares it with `.expected`, `.stderr`, `.exit` and the leak count (slice 2) | **yes** - the gate has to keep running, though what it compares against changes |
 | `cargo test --test suite` - stage 0's test report against the binary's, line by line | Nothing. Its subject is the agreement of two implementations, and after the exit there is one | no |
@@ -48,9 +48,10 @@ suites beside it. Every use of it in the repository:
 | `docs/` front matter - ten pages carry `bootstrap/README.md` or a `bootstrap/crates/...` path in `source:`, and the docs gate asserts those paths exist | Repointed at the compiler's own sources (slice 6). `torb-run.md` and `torb-test.md` are already repointed | no |
 | `compiler/CONTRIBUTING.md`, `bootstrap/README.md`, `docs/ARCHITECTURE.md`, `docs/BACKEND.md` - the command lists and the description of the two-stage world | Rewritten in slice 6 | no |
 
-**Four things block the exit**, and two of them are one piece of work each: `canon` and the conformance runner. The
-third is one lowering gap (`error-chain.trb`). The fourth is not in the table because it is not a use of stage 0 at all
-but a property of it: stage 0 is what **produces** the first `torb` today, and section 4 is about replacing that.
+**Three things block the exit.** The conformance runner is one piece of work (slice 2). The second is one lowering gap
+(`error-chain.trb`). The third is not in the table because it is not a use of stage 0 at all but a property of it:
+stage 0 is what **produces** the first `torb` today, and section 4 is about replacing that. `canon` (slice 3) and
+`highlight` (slice 4) are ported.
 
 ---
 
@@ -296,16 +297,13 @@ Each slice is one agent, in order. The estimate is the work, not the machine tim
 |---|---|---|---|
 | 1 | **The seed and the native driver.** `torb run` (build into a cache keyed on the sources, then execute with the arguments, the streams and the exit code passed through), `torb test` for any test package and several at once, `tools/bootstrap.sh`, `seed/` ignored, `Process.runInheriting` in the runtime | Tier A on the native binary; the chain seed -> `torb` -> `torb` with byte-identical C | **this round** |
 | 2 | **The gates run on the native compiler.** A gate runner - TorbScript, or `sh` where it only sequences commands - that replaces the three `cargo test` suites: conformance compares a native run against `.expected`/`.stderr`/`.exit`/`.leaks` and no longer against stage 0; the fixpoint becomes `tools/bootstrap.sh`; `suite` and `self_hosted` are dropped with a note in this document saying what they defended | The conformance suite green from the runner, on the same 74 programs | 1 round |
-| 3 | **`canon` ported to TorbScript.** The five rules in `bootstrap/crates/torb-cli/src/canon` (1 341 lines plus 561 lines of tests) on the self-hosted parser, with the same rule flags, the same `--check`, and the same "apply one edit, parse again, keep it only if the tree is unchanged" safety | `torb canon --check ..` from the native binary reports the same files stage 0's reports - zero | 1-2 rounds. The rules are mechanical; the safety check needs the tree comparison that erases spans and call styles |
+| 3 | **`canon` ported to TorbScript, done.** The five rules of `bootstrap/crates/torb-cli/src/canon` on the self-hosted parser, in `compiler/src/canon`, with the same rule flags, the same `--check`, and the same "apply one edit, parse again, keep it only if the tree is unchanged" safety - the tree comparison reads the generated `Show` of the syntax tree with every span and `CallStyle` erased, so no second dumper was needed | `torb canon --check ..` from the native binary reports the same files stage 0's reports - zero | done |
 | 4 | **`highlight` ported.** `compiler/src/highlight/` - 1 717 lines of TorbScript, and 545 more for the 32 tests the Rust file carried inside it - and the extension looking for the native binary first | Both implementations answer with the same JSON over every `.trb` file of the repository | **done** |
 | 5 | **The one lowering gap.** `reportFailure` walks `cause()` and writes one `  caused by:` line per link, after which `bootstrap/tests/native/stage-0-only/error-chain.trb` moves up one directory | The conformance suite with 75 programs and no `stage-0-only/` | half a round |
 | 6 | **The deletion.** `bootstrap/tests/` moves to `tests/`, `bootstrap/crates` is deleted, and every reference is rewritten: `compiler/CONTRIBUTING.md`, `bootstrap/README.md` (what survives of it), `docs/ARCHITECTURE.md`, `docs/BACKEND.md`, the ten `source:` entries in `docs/`, `.vscode/tasks.json`, `benchmarks/run.sh`, and this document | Every gate green from the native binary alone, with no Rust toolchain on the machine | 1 round |
 
-**Four rounds after slice 1**, if nothing else is found. The one that could become two is 3, a port of code that exists
-and has tests, which is the cheapest kind of work there is.
-
-Slices 3 and 4 do not depend on each other and do not touch the same files, so they can run in parallel. Slice 5 is
-independent of all of them. Slice 6 needs 2, 3 and 5.
+**Slices 1, 3 and 4 are done.** What is left is 2, 5 and 6: two rounds that can run side by side, and the deletion
+after them. Slice 6 needs 2 and 5.
 
 ### 5.1 What slice 4 decided, and what it measured
 

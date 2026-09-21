@@ -1,0 +1,339 @@
+/**
+ * One walk over a syntax tree that collects what the rules of the canon need: every call, with whether it stands in
+ * _command position_ and whether its callee could be a field, and every pattern.
+ *
+ * Command position is where `parser/expressions.trb`'s `parseCommandExpression` reads a call as a command: the
+ * start of a statement, the right side of a binding or an assignment, after `return`, after `=>`, and the default
+ * of a field of a type. The default of a parameter is parsed as an ordinary expression, and the default of a field
+ * of a **case** is separated from the next field by a comma, which a command would swallow - neither counts here.
+ */
+
+use Span from "../syntax/source"
+use SourceFile, Statement, StatementKind, Declaration, DeclarationKind, Member, MemberKind from "../syntax/ast"
+use FunctionDeclaration, Binding, Condition, Block, Argument, Expression, ExpressionKind from "../syntax/ast"
+use Pattern, PatternKind from "../syntax/ast"
+
+/** One call of the tree: whether it stands in command position, and whether its callee could be a field. */
+public type CallSite {
+  call: Expression
+  isCommandPosition: Bool
+  /**
+   * The callee names a field or a constant of the `type`, `trait` or `extend` this call is in, so the parentheses
+   * decide what the call **means**: a command writes the field ("property commands"), and "calling a function in a
+   * field always needs parentheses". Such a call is left exactly as it is written.
+   */
+  calleeCouldBeAField: Bool
+}
+
+/**
+ * One **refutable** pattern and the text a use of what it binds may stand in: the guard and the body of a `match`
+ * arm, the body of an `if const`/`if var`, the body of a `while const`. Nothing else binds refutably.
+ */
+public type BindingSite {
+  pattern: Pattern
+  regions: List<Span>
+}
+
+/** Every call, pattern, refutable binding and endless loop of a file, for the rules of the canon to read. */
+public type Sites {
+  var calls: List<CallSite> = []
+  var patterns: List<Pattern> = []
+  var bindings: List<BindingSite> = []
+  /** Every `while true { ... }`: the statement the rule `loops` rewrites into a `loop { ... }` */
+  var endless: List<Statement> = []
+}
+
+public fn walk(file: SourceFile): Sites {
+  var sites = Sites()
+  walkStatements sites, [], file.statements
+  sites
+}
+
+fn walkStatements(var sites: Sites, fields: List<String>, items: List<Statement>) {
+  for item in items {
+    walkStatement sites, fields, item
+  }
+}
+
+fn walkStatement(var sites: Sites, fields: List<String>, item: Statement) {
+  match item.kind {
+    .Declare(inner) => walkDeclaration sites, fields, inner
+    .Bind(inner) => walkBinding sites, fields, inner
+    // A call is never the target of an assignment, so only the value is treated as command position
+    .Assign(target, value) => {
+      walkExpression sites, fields, target, isCommandPosition: false
+      walkExpression sites, fields, value, isCommandPosition: true
+    }
+    .For(pattern, iterable, body) => {
+      walkPattern sites, fields, pattern
+      walkExpression sites, fields, iterable, isCommandPosition: false
+      walkBlock sites, fields, body
+    }
+    .While(condition, body) => {
+      // `while true { ... }` is written `loop { ... }`, which is the rule `loops`
+      if isEndlessCondition(condition) {
+        sites.endless.add item
+      }
+      walkCondition sites, fields, condition
+      // `while const Some(item) = next()`: the body is where the binding has to be used
+      walkRefutable sites, condition, [body.span]
+      walkBlock sites, fields, body
+    }
+    .Loop(body) => walkBlock sites, fields, body
+    .Return(value) => {
+      match value {
+        Some(inner) => walkExpression sites, fields, inner, isCommandPosition: true
+        None => {}
+      }
+    }
+    .Break | .Continue => {}
+    .Evaluate(inner) => walkExpression sites, fields, inner, isCommandPosition: true
+  }
+}
+
+fn isEndlessCondition(condition: Condition): Bool {
+  match condition {
+    .Test(test) => match test.kind {
+      .BoolLiteral(true) => true
+      _ => false
+    }
+    .Bind(_, _, _) => false
+  }
+}
+
+fn walkDeclaration(var sites: Sites, fields: List<String>, item: Declaration) {
+  match item.kind {
+    .Use(_) | .Alias(_) => {}
+    .Function(inner) => walkFunction sites, fields, inner
+    .Type(inner) => walkMembers sites, inner.members
+    .Trait(inner) => walkMembers sites, inner.members
+    .Extend(inner) => walkMembers sites, inner.members
+    .Foreign(inner) => walkMembers sites, inner.members
+    .Constant(inner) => walkBinding sites, fields, inner
+  }
+}
+
+fn walkMembers(var sites: Sites, items: List<Member>) {
+  const innerFields = fieldNames items
+  for item in items {
+    match item.kind {
+      // The members of a type end at the end of their line: a command in a default has nothing to swallow
+      .Field(inner) => {
+        match inner.default {
+          Some(default) => walkExpression sites, innerFields, default, isCommandPosition: true
+          None => {}
+        }
+      }
+      .Constant(inner) => walkBinding sites, innerFields, inner
+      .Function(inner) => walkFunction sites, innerFields, inner
+      // The fields of a case are separated by commas, which a command call would read as its own arguments
+      .Case(inner) => {
+        for field in inner.fields {
+          match field.default {
+            Some(default) => walkExpression sites, innerFields, default, isCommandPosition: false
+            None => {}
+          }
+        }
+      }
+    }
+  }
+}
+
+fn walkFunction(var sites: Sites, fields: List<String>, item: FunctionDeclaration) {
+  for parameter in item.parameters {
+    match parameter.default {
+      Some(default) => walkExpression sites, fields, default, isCommandPosition: false
+      None => {}
+    }
+  }
+  match item.body {
+    Some(body) => walkBlock sites, fields, body
+    None => {}
+  }
+}
+
+fn walkBinding(var sites: Sites, fields: List<String>, item: Binding) {
+  walkPattern sites, fields, item.pattern
+  walkExpression sites, fields, item.value, isCommandPosition: true
+}
+
+fn walkCondition(var sites: Sites, fields: List<String>, item: Condition) {
+  match item {
+    .Test(inner) => walkExpression sites, fields, inner, isCommandPosition: false
+    .Bind(_, pattern, value) => {
+      walkPattern sites, fields, pattern
+      walkExpression sites, fields, value, isCommandPosition: false
+    }
+  }
+}
+
+fn walkBlock(var sites: Sites, fields: List<String>, item: Block) {
+  walkStatements sites, fields, item.statements
+}
+
+/** A pattern in the head of an `if` or a `while`, with the text its bindings may be used in. */
+fn walkRefutable(var sites: Sites, item: Condition, regions: List<Span>) {
+  match item {
+    .Bind(_, pattern, _) => sites.bindings.add BindingSite(pattern, regions)
+    .Test(_) => {}
+  }
+}
+
+fn walkArguments(var sites: Sites, fields: List<String>, items: List<Argument>) {
+  for item in items {
+    walkExpression sites, fields, item.value, isCommandPosition: false
+  }
+}
+
+fn walkExpression(var sites: Sites, fields: List<String>, node: Expression, isCommandPosition: Bool) {
+  match node.kind {
+    .IntegerLiteral(_) | .FloatLiteral(_) | .BoolLiteral(_) | .VoidLiteral | .CharLiteral(_) => {}
+    .Name(_) | .ImplicitMember(_) | .Invalid => {}
+    .TextLiteral(segments) => {
+      for segment in segments {
+        match segment {
+          .Interpolated(inner) => walkExpression sites, fields, inner, isCommandPosition: false
+          .Literal(_) => {}
+        }
+      }
+    }
+    .Generic(target, _) => walkExpression sites, fields, target, isCommandPosition: false
+    .TupleLiteral(items) | .ListLiteral(items) => walkArguments sites, fields, items
+    .MapLiteral(entries) => {
+      for (key, value) in entries {
+        walkExpression sites, fields, key, isCommandPosition: false
+        walkExpression sites, fields, value, isCommandPosition: false
+      }
+    }
+    .Member(target, _, _) => walkExpression sites, fields, target, isCommandPosition: false
+    .Index(target, index) => {
+      walkExpression sites, fields, target, isCommandPosition: false
+      walkExpression sites, fields, index, isCommandPosition: false
+    }
+    .Call(callee, arguments, _) => {
+      const calleeCouldBeAField = match fieldNameOf(callee) {
+        Some(name) => fields.contains name
+        None => false
+      }
+      sites.calls.add CallSite(node, isCommandPosition, calleeCouldBeAField)
+      walkExpression sites, fields, callee, isCommandPosition: false
+      walkArguments sites, fields, arguments
+    }
+    .Unary(_, operand) => walkExpression sites, fields, operand, isCommandPosition: false
+    .Binary(_, left, right) => {
+      walkExpression sites, fields, left, isCommandPosition: false
+      walkExpression sites, fields, right, isCommandPosition: false
+    }
+    .RangeLiteral(start, end, _) => {
+      match start {
+        Some(inner) => walkExpression sites, fields, inner, isCommandPosition: false
+        None => {}
+      }
+      match end {
+        Some(inner) => walkExpression sites, fields, inner, isCommandPosition: false
+        None => {}
+      }
+    }
+    .Try(inner) => walkExpression sites, fields, inner, isCommandPosition: false
+    .Closure(closure) => {
+      for parameter in closure.parameters {
+        walkPattern sites, fields, parameter.pattern
+      }
+      walkBlock sites, fields, closure.body
+    }
+    .If(condition, then, otherwise) => {
+      walkCondition sites, fields, condition
+      // `if const Some(user) = lookup()` binds for the body of the `if` and for nothing else, the `else` branch included
+      walkRefutable sites, condition, [then.span]
+      walkBlock sites, fields, then
+      match otherwise {
+        Some(inner) => walkExpression sites, fields, inner, isCommandPosition: false
+        None => {}
+      }
+    }
+    .Match(subject, arms) => {
+      walkExpression sites, fields, subject, isCommandPosition: false
+      for arm in arms {
+        walkPattern sites, fields, arm.pattern
+        const regions = match arm.guard {
+          Some(guard) => [guard.span, arm.body.span]
+          None => [arm.body.span]
+        }
+        sites.bindings.add BindingSite(arm.pattern, regions)
+        match arm.guard {
+          Some(guard) => walkExpression sites, fields, guard, isCommandPosition: false
+          None => {}
+        }
+        walkExpression sites, fields, arm.body, isCommandPosition: true
+      }
+    }
+    .Block(inner) => walkBlock sites, fields, inner
+  }
+}
+
+fn walkPattern(var sites: Sites, fields: List<String>, node: Pattern) {
+  sites.patterns.add node
+  match node.kind {
+    .Wildcard | .Binding(_) | .Invalid => {}
+    .Literal(value) => walkExpression sites, fields, value, isCommandPosition: false
+    .RangePattern(start, end, _) => {
+      walkExpression sites, fields, start, isCommandPosition: false
+      walkExpression sites, fields, end, isCommandPosition: false
+    }
+    .TuplePattern(items) | .Alternatives(items) => {
+      for item in items {
+        walkPattern sites, fields, item
+      }
+    }
+    .ListPattern(items, _) => {
+      for item in items {
+        walkPattern sites, fields, item
+      }
+    }
+    .Variant(_, variantFields) | .ImplicitVariant(_, variantFields) => {
+      for field in variantFields {
+        walkPattern sites, fields, field.pattern
+      }
+    }
+  }
+}
+
+/**
+ * The fields and the constants of a type, trait or extend: the names a command inside one of its functions writes
+ * instead of calls.
+ */
+fn fieldNames(members: List<Member>): List<String> {
+  var names: List<String> = []
+  for member in members {
+    match member.kind {
+      .Field(field) => names.add field.name.text
+      .Constant(binding) => {
+        match binding.pattern.kind {
+          .Binding(name) => names.add name
+          _ => {}
+        }
+      }
+      _ => {}
+    }
+  }
+  names
+}
+
+/**
+ * The field a callee could name: `step` and `self.step` inside of the type that has the field `step`. A field of
+ * somebody else's value (`config.port`) is not visible here - the type checker sees those.
+ */
+fn fieldNameOf(callee: Expression): String? {
+  match callee.kind {
+    .Name(name) => Some name
+    .Member(target, name, isOptional) if !isOptional && isSelfValue(target) => Some name.text
+    _ => None
+  }
+}
+
+fn isSelfValue(target: Expression): Bool {
+  match target.kind {
+    .Name(text) if text == "self" => true
+    _ => false
+  }
+}

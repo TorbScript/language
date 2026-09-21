@@ -1,0 +1,400 @@
+/**
+ * `torb canon`: rewrites TorbScript sources into the canon of the formatter, over the syntax tree and never with a
+ * regular expression.
+ *
+ * This is tooling for the bootstrap phase. Milestone 8's `torb format` enforces the same canon and replaces this
+ * command; until then this is how the canon is applied to a whole checkout. It stays small on purpose: it only
+ * moves parentheses and indentation, and it never reprints a file.
+ *
+ * ```text
+ * torb canon [--check] [--rule calls|strings|imported-case-patterns|unused-bindings|loops]... <path>...
+ * ```
+ *
+ * `calls` and `strings` run by default; `--rule` picks a set instead. `--check` writes nothing and leaves with a
+ * non-zero code if something would change. The command is idempotent: a second run over the same tree changes
+ * nothing.
+ *
+ * **The safety net.** Every edit is applied on its own and the file is parsed again. The edit only stays if the
+ * syntax tree is the one from before with every span and every `CallStyle` erased ([canonicalText]), and if the
+ * file still has no diagnostics; otherwise it is dropped and reported. A file that does not parse to begin with is
+ * skipped whole - `bootstrap/tests/parser-cases/` and `bootstrap/tests/lexer-cases/` hold files that are broken on
+ * purpose and are not even read. Nothing outside of an edited byte range is touched, so line endings and everything
+ * else stay byte-identical.
+ */
+
+use File, IoError from "std/fs"
+use SourceText, LineIndex from "../syntax/source"
+use lex from "../syntax/lexer"
+use parse from "../syntax/parser/parser"
+use walk from "./walk"
+use Edit, EditKind, Document from "./edit"
+use callEdits from "./calls"
+use stringEdits from "./strings"
+use patternEdits from "./patterns"
+use bindingEdits from "./bindings"
+use loopEdits from "./loops"
+
+/** `torb canon --help` */
+public fn canonUsage(): String {
+  [
+    "torb canon - write TorbScript sources in the canon of the formatter",
+    "",
+    "Usage:",
+    "  torb canon [--check] [--rule <rule>]... <path>...",
+    "",
+    "Rules (`calls` and `strings` by default):",
+    "  calls                    A call is a command where the grammar allows it, and has parentheses where it does not",
+    "  strings                  A multi-line `\"\"\"` string is indented one level deeper than the line it starts on",
+    "  imported-case-patterns   `.None` becomes `None` for a case a `use` imported (changes the tree, off by default)",
+    "  unused-bindings          A binding of a refutable pattern that nobody reads becomes `_` (changes the tree, off by default)",
+    "  loops                    `while true \{` becomes `loop \{` (changes the tree, off by default)",
+    "",
+    "  --check   Write nothing, list what would change, leave with a non-zero code",
+  ].joined(separator: "\n")
+}
+
+/** The five rules of the canon. `Calls` and `Strings` run by default. */
+public type Rule {
+  case Calls
+  case Strings
+  case ImportedCasePatterns
+  case UnusedBindings
+  case Loops
+
+  static fn fromText(text: String): Rule? {
+    match text {
+      "calls" => Some Rule.Calls
+      "strings" => Some Rule.Strings
+      "imported-case-patterns" => Some Rule.ImportedCasePatterns
+      "unused-bindings" => Some Rule.UnusedBindings
+      "loops" => Some Rule.Loops
+      _ => None
+    }
+  }
+}
+
+/** What the command line asked for. */
+public type CanonOptions {
+  check: Bool
+  rules: List<Rule>
+  paths: List<String>
+}
+
+const ruleFlag = "--rule="
+
+/** Parses `torb canon`'s arguments. `None` for a flag that is not one of these, an unknown rule, or no path at all - the caller prints [canonUsage] and exits with 2. */
+public fn canonOptionsOf(arguments: List<String>): CanonOptions? {
+  var check = false
+  var rules: List<Rule> = []
+  var paths: List<String> = []
+  var index = 0
+  while index < arguments.length() {
+    const argument = arguments[index]
+    if argument == "--check" {
+      check = true
+      index = index + 1
+      continue
+    }
+    if argument.startsWith(ruleFlag) {
+      rules.add(Rule.fromText(argument[ruleFlag.byteLength()..argument.byteLength()])?)
+      index = index + 1
+      continue
+    }
+    if argument == "--rule" {
+      rules.add(Rule.fromText(arguments.get(index + 1)?)?)
+      index = index + 2
+      continue
+    }
+    if argument.startsWith("-") {
+      return None
+    }
+    paths.add argument
+    index = index + 1
+  }
+  if paths.isEmpty() {
+    return None
+  }
+  const finalRules = if rules.isEmpty() { [Rule.Calls, Rule.Strings] } else { rules }
+  Some CanonOptions(check, finalRules, paths)
+}
+
+/** How many edits of each kind were made (or would be), for the summary line. */
+public type Counts {
+  var toCommand: Int = 0
+  var toParentheses: Int = 0
+  var strings: Int = 0
+  var patterns: Int = 0
+  var bindings: Int = 0
+  var endless: Int = 0
+
+  var fn add(kind: EditKind) {
+    match kind {
+      .ToCommand => {
+        toCommand = toCommand + 1
+      }
+      .ToParentheses => {
+        toParentheses = toParentheses + 1
+      }
+      .IndentedString => {
+        strings = strings + 1
+      }
+      .CasePattern => {
+        patterns = patterns + 1
+      }
+      .UnusedBinding => {
+        bindings = bindings + 1
+      }
+      .EndlessLoop => {
+        endless = endless + 1
+      }
+    }
+  }
+
+  var fn addAll(other: Counts) {
+    toCommand = toCommand + other.toCommand
+    toParentheses = toParentheses + other.toParentheses
+    strings = strings + other.strings
+    patterns = patterns + other.patterns
+    bindings = bindings + other.bindings
+    endless = endless + other.endless
+  }
+}
+
+/** The canon of one source text: the rewritten text, the counts, and what the safety net skipped or dropped. */
+public type Outcome {
+  var text: String
+  var counts: Counts = Counts()
+  /** Why a whole file, or one string inside of it, was left alone */
+  var skipped: List<String> = []
+  /** An edit the safety net threw away, with what it would have changed */
+  var dropped: List<String> = []
+}
+
+/** The whole run: every file, and the totals of every [Outcome]. */
+type Report {
+  var files: Int = 0
+  var changed: List<String> = []
+  var counts: Counts = Counts()
+  var dropped: List<String> = []
+  var skipped: List<String> = []
+}
+
+fn printCanonReport(report: Report, check: Bool) {
+  for file in report.changed {
+    print file
+  }
+  for reason in report.skipped {
+    print "skipped {reason}"
+  }
+  for reason in report.dropped {
+    print "dropped {reason}"
+  }
+  const verb = if check { "would change" } else { "changed" }
+  const counts = report.counts
+  print ""
+  print(
+    "{report.changed.length()} of {report.files} files {verb}: {counts.toCommand} calls became commands, "
+      + "{counts.toParentheses} got parentheses, {counts.strings} strings were indented, {counts.patterns} case patterns, "
+      + "{counts.bindings} unread bindings, {counts.endless} endless loops"
+  )
+  if !report.dropped.isEmpty() {
+    print "{report.dropped.length()} edits were dropped by the safety net"
+  }
+}
+
+/** `torb canon [--check] [--rule <rule>]... <path>...`. Returns the exit code. */
+public fn runCanon(options: CanonOptions): Result<Int, IoError> {
+  var files: List<String> = []
+  for path in options.paths {
+    collectCanonFiles(files, path)?
+  }
+  files.sort({ _ })
+
+  var report = Report()
+  for file in files {
+    const source = File.readText(file)?
+    report.files = report.files + 1
+    const outcome = rewrite source, options.rules
+    for reason in outcome.skipped {
+      report.skipped.add "{file}: {reason}"
+    }
+    for reason in outcome.dropped {
+      report.dropped.add "{file}: {reason}"
+    }
+    report.counts.addAll outcome.counts
+    if outcome.text == source {
+      continue
+    }
+    report.changed.add file
+    if options.check {
+      continue
+    }
+    File.writeText(file, outcome.text)?
+  }
+  printCanonReport report, options.check
+  if options.check && !report.changed.isEmpty() {
+    return Ok 1
+  }
+  Ok 0
+}
+
+/**
+ * Every `.trb` file below the paths, without the hidden directories, `target`, `node_modules` and the two
+ * directories of files that are broken on purpose - unlike a file that fails to parse, they are not even read.
+ */
+fn collectCanonFiles(var files: List<String>, path: String): Result<Void, IoError> {
+  if !File.isDirectory(path) {
+    if !File.exists(path) {
+      return Fail IoError(path, "The file does not exist")
+    }
+    files.add path
+    return Ok(void)
+  }
+  for entry in File.list(path)? {
+    const child = "{path}/{entry}"
+    if File.isDirectory(child) {
+      const isSkipped =
+        entry.startsWith(".") || entry == "target" || entry == "node_modules" || entry == "parser-cases" || entry == "lexer-cases"
+      if !isSkipped {
+        collectCanonFiles(files, child)?
+      }
+    } else if entry.endsWith(".trb") {
+      files.add child
+    }
+  }
+  Ok(void)
+}
+
+/** The canon of one source text. Public for the tests; every rule is here, so a test can ask for one of them alone. */
+public fn rewrite(source: String, rules: List<Rule>): Outcome {
+  var outcome = Outcome source
+  const baseline = match canonicalText(source) {
+    Some(found) => found
+    None => {
+      outcome.skipped.add "it does not parse"
+      return outcome
+    }
+  }
+  const text = SourceText.of source
+  const lexed = lex text
+  const parsed = parse text
+  const sites = walk parsed.file
+
+  var edits: List<Edit> = []
+  if rules.contains(Rule.Calls) {
+    edits.addAll callEdits(source, lexed.tokens, sites.calls)
+  }
+  if rules.contains(Rule.Strings) {
+    const found = stringEdits source, lexed.tokens
+    edits.addAll found.edits
+    const lines = LineIndex.of source
+    for skip in found.skipped {
+      const at = lines.lineAndColumn skip.offset
+      outcome.skipped.add "{at.line}:{at.column}: {skip.reason}"
+    }
+  }
+  edits.sort({ _.position })
+  // The rule that changes the tree comes last, so that it starts from a file the safety net has settled
+  if rules.contains(Rule.ImportedCasePatterns) {
+    edits.addAll patternEdits(source, parsed.file, sites.patterns)
+  }
+  if rules.contains(Rule.UnusedBindings) {
+    edits.addAll bindingEdits(source, sites.bindings)
+  }
+  if rules.contains(Rule.Loops) {
+    edits.addAll loopEdits(source, sites.endless)
+  }
+
+  var document = Document.of source
+  var expected = baseline
+  const lines = LineIndex.of source
+  for edit in edits {
+    const candidate = document.preview edit
+    const after = canonicalText candidate
+    const stays = if edit.kind.preservesTheTree() { after == Some(expected) } else { after.isSome() }
+    if !stays {
+      const at = lines.lineAndColumn edit.position
+      outcome.dropped.add "{at.line}:{at.column}: {edit.kind} would change more than the way it is written"
+      continue
+    }
+    if !edit.kind.preservesTheTree() {
+      expected = after.expect "just checked that it parses"
+    }
+    document.accept edit, candidate
+    outcome.counts.add edit.kind
+  }
+  outcome.text = document.intoText()
+  outcome
+}
+
+/**
+ * The syntax tree of a source as text, with every span and every `CallStyle` erased: what an edit of the canon must
+ * not change. `None` if the source does not parse cleanly.
+ *
+ * It works on the generated `Show` of the tree, the same text `torb ast` prints, because that prints every field of
+ * every node - a tree that is equal here is equal everywhere except in the two places the canon is allowed to
+ * touch.
+ */
+fn canonicalText(source: String): String? {
+  const parsed = parse SourceText.of(source)
+  if !parsed.diagnostics.isEmpty() {
+    return None
+  }
+  Some withoutSpansAndStyles("{parsed.file}")
+}
+
+const spanMarker = "Span(start: "
+const commandMarker = "style: Command"
+const parenthesesMarker = "style: Parentheses"
+
+fn withoutSpansAndStyles(dump: String): String {
+  var result = ""
+  var rest = dump
+  loop {
+    const spanAt = rest.indexOf spanMarker
+    const commandAt = rest.indexOf commandMarker
+    const parenthesesAt = rest.indexOf parenthesesMarker
+    match earliest([spanAt, commandAt, parenthesesAt]) {
+      None => {
+        return result + rest
+      }
+      Some(index) => {
+        result = result + rest[0..index]
+        if spanAt == Some(index) {
+          const afterPrefix = index + spanMarker.byteLength()
+          const end = match rest[afterPrefix..rest.byteLength()].indexOf(")") {
+            Some(length) => afterPrefix + length + 1
+            None => rest.byteLength()
+          }
+          result = result + "Span"
+          rest = rest[end..rest.byteLength()]
+        } else if commandAt == Some(index) {
+          result = result + "style: *"
+          rest = rest[(index + commandMarker.byteLength())..rest.byteLength()]
+        } else {
+          result = result + "style: *"
+          rest = rest[(index + parenthesesMarker.byteLength())..rest.byteLength()]
+        }
+      }
+    }
+  }
+}
+
+fn earliest(indices: List<Int?>): Int? {
+  var found: Int? = None
+  for index in indices {
+    match index {
+      None => {}
+      Some(value) => {
+        const isEarlier = match found {
+          Some(current) => value < current
+          None => true
+        }
+        if isEarlier {
+          found = Some value
+        }
+      }
+    }
+  }
+  found
+}

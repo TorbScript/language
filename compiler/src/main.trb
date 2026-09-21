@@ -32,6 +32,7 @@ use runHighlight from "./highlight/command"
 use documentationOptionsOf, printDocumentationUsage from "./documentation/command"
 use runCheck, runIndex, runSkill, runBundle from "./documentation/command"
 use sourceOptionsOf, runSource from "./documentation/source"
+use canonUsage, canonOptionsOf, runCanon from "./canon/command"
 
 /** What `torb` prints when it is called with no subcommand, or one it does not recognize. */
 fn printUsage() {
@@ -58,6 +59,8 @@ fn printUsage() {
   printError "  torb ast <file>        Print the syntax tree of a file"
   printError "  torb highlight <file>  Print the semantic tokens of a file as JSON, for an editor"
   printError "                         --stdin: read the source from standard input instead of a file"
+
+  printError "  torb canon <path>...   Write sources in the canon of the formatter (`torb canon --help`)"
   printDocumentationUsage()
 }
 
@@ -400,6 +403,22 @@ match Process.arguments() {
   ["ast", path] => printTree(path)?
   ["highlight", "--stdin"] => runHighlight None
   ["highlight", path] => runHighlight Some(path)
+
+  ["canon", "--help"] | ["canon", "help"] => print canonUsage()
+  ["canon", ...more] => {
+    match canonOptionsOf(more) {
+      Some(options) => {
+        const code = runCanon(options)?
+        if code != 0 {
+          Process.exit code
+        }
+      }
+      None => {
+        printError canonUsage()
+        Process.exit 2
+      }
+    }
+  }
   _ => {
     printUsage()
     Process.exit 2

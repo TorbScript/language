@@ -10,13 +10,16 @@ keywords:
   - safety net
   - imported-case-patterns
   - unused-bindings
+  - loops
 source:
-  - bootstrap/README.md
-  - bootstrap/crates/torb-cli/src/canon/mod.rs
+  - compiler/src/canon/command.trb
+  - compiler/src/canon/walk.trb
 ---
 
-`canon` is stage 0's own tool, not the self-hosted compiler's: it exists because milestone 8's `torb format` does not
-exist yet, and every file in the repository still has to be in the canon in the meantime.
+`canon` is a command of the self-hosted `torb`, ported onto the self-hosted parser and syntax tree
+(`compiler/src/canon`) from stage 0's own tool of the same name. It exists because milestone 8's `torb format` does
+not exist yet, and every file in the repository still has to be in the canon in the meantime. Stage 0 keeps a frozen
+copy for comparison; the two agree over the whole repository.
 
 ## Synopsis
 
@@ -28,6 +31,7 @@ Rules (calls and strings run by default):
   strings                  A multi-line """ string is indented one level deeper than the line it starts on
   imported-case-patterns   .None becomes None for a case a use imported (changes the tree, off by default)
   unused-bindings          A binding of a refutable pattern that nobody reads becomes _ (changes the tree, off by default)
+  loops                    while true { becomes loop { (changes the tree, off by default)
 
   --check   Write nothing, list what would change, leave with a non-zero code
 ```
@@ -50,16 +54,16 @@ $ cd bootstrap
 $ cargo run --release -q -- canon --check ../examples/tour/src/scratch.trb
 ../examples/tour/src/scratch.trb
 
-1 of 1 files would change: 2 calls became commands, 0 got parentheses, 0 strings were indented, 0 case patterns, 0 unread bindings
+1 of 1 files would change: 2 calls became commands, 0 got parentheses, 0 strings were indented, 0 case patterns, 0 unread bindings, 0 endless loops
 ```
 
 ```console
 $ cargo run --release -q -- canon ../examples/tour/src/scratch.trb
 ../examples/tour/src/scratch.trb
 
-1 of 1 files changed: 2 calls became commands, 0 got parentheses, 0 strings were indented, 0 case patterns, 0 unread bindings
+1 of 1 files changed: 2 calls became commands, 0 got parentheses, 0 strings were indented, 0 case patterns, 0 unread bindings, 0 endless loops
 $ cargo run --release -q -- canon --check ../examples/tour/src/scratch.trb
-0 of 1 files would change: 0 calls became commands, 0 got parentheses, 0 strings were indented, 0 case patterns, 0 unread bindings
+0 of 1 files would change: 0 calls became commands, 0 got parentheses, 0 strings were indented, 0 case patterns, 0 unread bindings, 0 endless loops
 ```
 
 A second run over an already-canonical file changes nothing, which is what makes `--check` a gate: a repository where
@@ -76,7 +80,7 @@ file explicitly imports the same way.
 $ cargo run --release -q -- canon --check --rule imported-case-patterns ../examples/tour/src/scratch.trb
 ../examples/tour/src/scratch.trb
 
-1 of 1 files would change: 0 calls became commands, 0 got parentheses, 0 strings were indented, 1 case patterns, 0 unread bindings
+1 of 1 files would change: 0 calls became commands, 0 got parentheses, 0 strings were indented, 1 case patterns, 0 unread bindings, 0 endless loops
 ```
 
 ### `unused-bindings`
@@ -91,7 +95,21 @@ dropping it is more than one token. Whatever is left after a run, the checker na
 
 ```console
 $ cargo run --release -q -- canon --check --rule unused-bindings ..
-0 of 293 files would change: 0 calls became commands, 0 got parentheses, 0 strings were indented, 0 case patterns, 0 unread bindings
+0 of 293 files would change: 0 calls became commands, 0 got parentheses, 0 strings were indented, 0 case patterns, 0 unread bindings, 0 endless loops
+```
+
+### `loops`
+
+Off by default for the same reason: `while true { ... }` becomes `loop { ... }`, so "never ends" is a property of the
+syntax and not of a condition that happens to be `true`. Only the head is touched - `while` and the `true` after it -
+and everything from the `{` on stays byte-identical, comments and line endings included. `while false` is not an
+endless loop and is left alone.
+
+```console
+$ cargo run --release -q -- canon --check --rule loops ../examples/tour/src/scratch.trb
+../examples/tour/src/scratch.trb
+
+1 of 1 files would change: 0 calls became commands, 0 got parentheses, 0 strings were indented, 0 case patterns, 0 unread bindings, 1 endless loops
 ```
 
 ### Exit codes
@@ -102,12 +120,20 @@ not recognize prints its usage and exits `2`.
 
 ## Examples
 
-The three commands `compiler/CONTRIBUTING.md` runs before every commit, over the whole repository:
+The gate `compiler/CONTRIBUTING.md` runs before every commit, with all five rules, over the whole repository:
 
 ```console
 $ cd bootstrap
-$ cargo run --release -q -- canon --check ..
-0 of 293 files would change: 0 calls became commands, 0 got parentheses, 0 strings were indented, 0 case patterns, 0 unread bindings
+$ cargo run --release -q -- canon --check --rule calls --rule strings --rule imported-case-patterns --rule unused-bindings --rule loops ..
+0 of 488 files would change: 0 calls became commands, 0 got parentheses, 0 strings were indented, 0 case patterns, 0 unread bindings, 0 endless loops
+```
+
+The native `torb`, built by [`sh tools/bootstrap.sh`](../ARCHITECTURE.md), answers the same over the same tree - that
+agreement is what let stage 0's copy of `canon` stay behind, frozen, while this one took over the gate:
+
+```console
+$ ./build/release/torb canon --check --rule calls --rule strings --rule imported-case-patterns --rule unused-bindings --rule loops .
+0 of 432 files would change: 0 calls became commands, 0 got parentheses, 0 strings were indented, 0 case patterns, 0 unread bindings, 0 endless loops
 ```
 
 ## Related

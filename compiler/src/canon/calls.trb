@@ -1,0 +1,314 @@
+/**
+ * Rule `calls`: the call canon **K2**. A call is written as a command - without parentheses - wherever the grammar
+ * allows it, and gets parentheses wherever it does not.
+ *
+ * A call is a command when all of this holds:
+ *
+ * 1. it stands in command position (see `walk.trb`),
+ * 2. the callee is a name or a member path (`Ok`, `Email.tryFrom`, `roles.map`; not `a?.b`, not `pair.0`, not
+ *    `load<Config>`),
+ * 3. it has at least one argument, and the first one is not a spread,
+ * 4. the first argument starts with a token the grammar accepted after the callee of a command at the time this
+ *    canon was written (`startsCommandArgument` below - a narrower set than the self-hosted parser's own
+ *    `startsCommandArgument`, which is kept in step with the language; see the note there),
+ * 5. no argument has an operator at its top level (`-`, `!`, `?`, `??`, ranges, comparisons, arithmetic, `&&`, and a
+ *    generic argument list),
+ * 6. the arguments are on one line (a trailing closure may go over several),
+ * 7. and there is no `{` between the parentheses: the `{` of a closure inside an argument would become the trailing
+ *    closure of the command.
+ *
+ * Everything else keeps or gets parentheses - which is why everything nested always has them (`Ok Some(x)`, never
+ * `Ok Some x`).
+ *
+ * On top of that, a call whose callee names a field of the type it stands in is not touched at all, in either
+ * direction: there the parentheses are not style but meaning (a command *writes* the field,
+ * `compiler/CONTRIBUTING.md`, "property commands").
+ */
+
+use Span from "../syntax/source"
+use Expression, ExpressionKind, Argument, CallStyle from "../syntax/ast"
+use Token, TokenKind, Keyword from "../syntax/token"
+use Edit, EditKind, Replacement from "./edit"
+use CallSite from "./walk"
+
+public fn callEdits(source: String, tokens: List<Token>, sites: List<CallSite>): List<Edit> {
+  var edits: List<Edit> = []
+  for site in sites {
+    match editForCall(source, tokens, site) {
+      Some(edit) => edits.add edit
+      None => {}
+    }
+  }
+  edits.sort({ _.position })
+  edits
+}
+
+fn editForCall(source: String, tokens: List<Token>, site: CallSite): Edit? {
+  match site.call.kind {
+    .Call(callee, arguments, style) => {
+      // A call whose callee could be a field of the enclosing type is written the way it is written: there the
+      // parentheses carry meaning, not style (see `CallSite.calleeCouldBeAField`)
+      if site.calleeCouldBeAField {
+        return None
+      }
+      match style {
+        .Parentheses => toCommand source, tokens, site, callee, arguments
+        .Command => toParentheses source, tokens, site, callee, arguments
+      }
+    }
+    _ => None
+  }
+}
+
+/** `f(a, b)` becomes `f a, b`, and `f(a) { ... }` becomes `f a { ... }`. */
+fn toCommand(source: String, tokens: List<Token>, site: CallSite, callee: Expression, arguments: List<Argument>): Edit? {
+  if !site.isCommandPosition || !isCommandPath(callee) || !isWrittenAsACommandPath(tokens, callee.span) {
+    return None
+  }
+  // `f { ... }` is a call with a trailing closure and no parentheses at all: there is nothing to take away. A `(`
+  // that does not sit directly behind the callee (`f (a)`, `f /* why */ (a)`) is left alone, so that no comment and
+  // no space outside of an edited range is ever lost.
+  const openIndex = indexOfTokenAt(tokens, callee.span.end).filter({ tokens[_].kind == TokenKind.ParenOpen })?
+  const closeIndex = matchingParenthesis(tokens, openIndex)?
+  const open = tokens[openIndex].span
+  const close = tokens[closeIndex].span
+
+  // A trailing closure stands behind the `)` and is not part of the argument list in the source
+  const plain = arguments[0..plainArguments(tokens, arguments, close.start)]
+  const first = plain.first()?
+  const last = plain.last()?
+  if first.isSpread || !startsCommandArgument(source, tokens, argumentStart(first)) {
+    return None
+  }
+  if plain.any({ hasTopLevelOperator _ }) {
+    return None
+  }
+  // A `{` inside the parentheses belongs to a closure, an `if` or a `match` there. Without the parentheses the
+  // parser would read it as the trailing closure of the command instead.
+  const hasBraceInside = tokens.any({ _.kind == TokenKind.BraceOpen && _.span.start > open.start && _.span.start < close.start })
+  if hasBraceInside {
+    return None
+  }
+  // Nothing between the last argument and the `)` (a trailing comma, a space, a comment), and all on one line
+  if close.start != last.value.span.end || source[callee.span.end..close.end].contains("\n") {
+    return None
+  }
+  // A command call swallows what follows a comma as another argument: the arms of a `match` on one line, a field of
+  // a case with a default. In command position but in front of a comma, the parentheses stay.
+  const isBeforeComma = match nextToken(tokens, site.call.span.end) {
+    Some(token) => token.kind == TokenKind.Comma
+    None => false
+  }
+  if isBeforeComma {
+    return None
+  }
+  const replacements = [Replacement(open.start, open.end, " "), Replacement(close.start, close.end, "")]
+  Some Edit(EditKind.ToCommand, site.call.span.start, replacements)
+}
+
+/** `f a, b` becomes `f(a, b)` where a condition of K2 does not hold: a nested call, an operator in an argument, or arguments over several lines. */
+fn toParentheses(source: String, tokens: List<Token>, site: CallSite, callee: Expression, arguments: List<Argument>): Edit? {
+  // A command call in the source has no `(` behind its callee, at least one argument, and a callee that is a path
+  const plain = arguments[0..plainArguments(tokens, arguments, callee.span.end)]
+  const first = plain.first()?
+  const last = plain.last()?
+  const argumentsEnd = last.value.span.end
+  const overSeveralLines = source[callee.span.end..argumentsEnd].contains("\n")
+  const hasOperator = plain.any({ hasTopLevelOperator _ })
+  if site.isCommandPosition && !hasOperator && !overSeveralLines {
+    return None
+  }
+  // Only whitespace stands between the callee and its first argument; a comment there would be lost
+  const between = source[callee.span.end..argumentStart(first)]
+  const isOnlySpaces = between.chars().all({ _ == ' ' || _ == '\t' })
+  if between.isEmpty() || !isOnlySpaces {
+    return None
+  }
+  const replacements = [Replacement(callee.span.end, argumentStart(first), "("), Replacement(argumentsEnd, argumentsEnd, ")")]
+  Some Edit(EditKind.ToParentheses, site.call.span.start, replacements)
+}
+
+/** `Ok`, `Email.parse`, `self.builder.add` - what `parseCommandPath` of the parser reads. `a?.b` is not one, and neither is `pair.0`: after the `.` the parser wants a name or a keyword. */
+fn isCommandPath(callee: Expression): Bool {
+  match callee.kind {
+    .Name(_) => true
+    .Member(target, name, isOptional) => !isOptional && startsWithNameCharacter(name.text) && isCommandPath(target)
+    _ => false
+  }
+}
+
+fn startsWithNameCharacter(text: String): Bool {
+  match text.chars().first() {
+    Some(character) => character == '_' || character.isLetter()
+    None => false
+  }
+}
+
+/**
+ * Whether the callee is also **written** as a command path: `(a).b` is the same tree as `a.b`, but the parser does
+ * not read a command there, because a command starts with a name. So the tokens of the callee have to be exactly
+ * what `parseCommandPath` reads: a name or `self`/`Self`, then any number of `.` and a name or a keyword.
+ */
+fn isWrittenAsACommandPath(tokens: List<Token>, span: Span): Bool {
+  const first = partitionPoint tokens, span.start
+  const behind = partitionPoint tokens, span.end
+  const path = tokens[first..behind]
+  if path.isEmpty() {
+    return false
+  }
+  const isHeadValid = match path[0].kind {
+    .Identifier | .Reserved(.SelfValue | .SelfType) => true
+    _ => false
+  }
+  if !isHeadValid {
+    return false
+  }
+  const rest = path[1..path.length()]
+  var index = 0
+  while index + 1 < rest.length() {
+    const isDot = rest[index].kind == TokenKind.Dot
+    const isNameOrKeyword = match rest[index + 1].kind {
+      .Identifier | .Reserved(_) => true
+      _ => false
+    }
+    if !isDot || !isNameOrKeyword {
+      return false
+    }
+    index = index + 2
+  }
+  index == rest.length()
+}
+
+/** Where an argument starts in the source: at its label, if it has one. */
+fn argumentStart(argument: Argument): Int {
+  match argument.label {
+    Some(label) => label.span.start
+    None => argument.value.span.start
+  }
+}
+
+/** An operator at the top level of an argument keeps the parentheses: `assert a == b` would read as `(assert a) == b`. A generic argument list counts too (`f List<Int>` is a comparison to the parser until it is not). */
+fn hasTopLevelOperator(argument: Argument): Bool {
+  match argument.value.kind {
+    .Unary(_, _) | .Binary(_, _, _) | .RangeLiteral(_, _, _) | .Try(_) | .Generic(_, _) => true
+    _ => false
+  }
+}
+
+/**
+ * How many arguments are written in the argument list. The parser appends the trailing closure of a call to its
+ * arguments, but in the source it stands behind the `)` (or behind the last argument of a command), so it is not
+ * part of what the parentheses have to enclose. A closure that is introduced by a comma is an ordinary argument
+ * (`f a, { x => x }`).
+ */
+fn plainArguments(tokens: List<Token>, arguments: List<Argument>, after: Int): Int {
+  match arguments.last() {
+    None => 0
+    Some(last) => {
+      const isClosure = last.label.isNone() && !last.isSpread && isClosureExpression(last.value)
+      const start = last.value.span.start
+      const afterAComma = match previousToken(tokens, start) {
+        Some(token) => token.kind == TokenKind.Comma
+        None => false
+      }
+      if isClosure && start > after && !afterAComma {
+        return arguments.length() - 1
+      }
+      arguments.length()
+    }
+  }
+}
+
+fn isClosureExpression(expression: Expression): Bool {
+  match expression.kind {
+    .Closure(_) => true
+    _ => false
+  }
+}
+
+/**
+ * The token grammar accepted after the callee of a command call when this rule was written: `(`, `[`, `-` and `!`
+ * cannot start one (`f [1]` is always indexing and `f -1` is always a subtraction). `if` and `match` are left out on
+ * purpose, like `void`: whatever the self-hosted parser's own `startsCommandArgument` accepts beyond this, check 7
+ * of `toCommand` (a `{` between the parentheses keeps them) already rejects, because every one of those brings a
+ * `{` with it - so keeping this rule at the same set stage 0 used is exact and never reached for a wider case.
+ */
+fn startsCommandArgument(source: String, tokens: List<Token>, offset: Int): Bool {
+  match indexOfTokenAt(tokens, offset) {
+    None => false
+    Some(index) => {
+      const nextIsColon = match tokens.get(index + 1) {
+        Some(token) => token.kind == TokenKind.Colon
+        None => false
+      }
+      match tokens[index].kind {
+        .Identifier => {
+          const text = source[tokens[index].span.start..tokens[index].span.end]
+          !(text == "as" || text == "by" || text == "from") || nextIsColon
+        }
+        .IntegerLiteral | .FloatLiteral | .CharLiteral(_) | .TextLiteral(_) => true
+        .Reserved(.True | .False | .SelfValue | .SelfType) => true
+        // A label that is a keyword: `move from: a, to: b`
+        .Reserved(_) => nextIsColon
+        _ => false
+      }
+    }
+  }
+}
+
+/** The index of the token that starts exactly at `offset`. The expressions inside of a string literal are lexed on their own, so an offset inside of an interpolation has no token here - and gets no edit. */
+fn indexOfTokenAt(tokens: List<Token>, offset: Int): Int? {
+  const index = partitionPoint tokens, offset
+  if index < tokens.length() && tokens[index].span.start == offset {
+    return Some index
+  }
+  None
+}
+
+/** The first token at or behind `offset`. */
+fn nextToken(tokens: List<Token>, offset: Int): Token? {
+  tokens.get partitionPoint(tokens, offset)
+}
+
+/** The last token in front of `offset`. */
+fn previousToken(tokens: List<Token>, offset: Int): Token? {
+  const index = partitionPoint tokens, offset
+  if index == 0 {
+    return None
+  }
+  Some tokens[index - 1]
+}
+
+/** The index of the first token whose span does not start before `offset`. */
+fn partitionPoint(tokens: List<Token>, offset: Int): Int {
+  var low = 0
+  var high = tokens.length()
+  while low < high {
+    const middle = (low + high) / 2
+    if tokens[middle].span.start < offset {
+      low = middle + 1
+    } else {
+      high = middle
+    }
+  }
+  low
+}
+
+fn matchingParenthesis(tokens: List<Token>, open: Int): Int? {
+  var depth = 0
+  for index in open..tokens.length() {
+    match tokens[index].kind {
+      .ParenOpen => {
+        depth = depth + 1
+      }
+      .ParenClose => {
+        depth = depth - 1
+        if depth == 0 {
+          return Some index
+        }
+      }
+      _ => {}
+    }
+  }
+  None
+}
