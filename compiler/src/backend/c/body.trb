@@ -453,9 +453,9 @@ fn instructionStatements(
     .ContainerNew(target, kind, elements) => {
       containerStatements emission, program, body, target, kind, elements
     }
-    .TakeOut(_, _, _, _) => reported emission, "a `var` path through a map (milestone 5.9b)"
-    .PutBack(_, _, _, _) => reported emission, "a `var` path through a map (milestone 5.9b)"
-    .Suspend(_, _) => reported emission, "a task that suspends (milestone 7.3)"
+    .TakeOut(_, _, _, _) => reported emission, "a `var` path through a map"
+    .PutBack(_, _, _, _) => reported emission, "a `var` path through a map"
+    .Suspend(_, _) => reported emission, "a task that suspends"
   }
 }
 
@@ -694,13 +694,13 @@ fn releaseStatements(var emission: Emission, program: IrProgram, id: IrTypeId, p
 /** What kind of counted value this is, in the words [retainStatements] and [releaseStatements] put into a finding. */
 public fn describeCounted(program: IrProgram, id: IrTypeId): String {
   match program.typeAt(countedFormOf(program, id)) {
-    .SharedObject(_) => "a `shared type` object (milestone 5.9b)"
-    .Box(_) => "a captured `var` binding (milestone 5.8)"
-    .Lazy(_) => "a `lazy` cell (milestone 5.8)"
+    .SharedObject(_) => "a `shared type` object"
+    .Box(_) => "a captured `var` binding"
+    .Lazy(_) => "a `lazy` cell"
     .Object(_) => "a trait-typed value without bounds"
-    .Closure(_) => "a closure (milestone 5.8)"
-    .FixedArray(_, _) => "an `Array<Item, Size>` (milestone 5.9b)"
-    _ => "a counted value the back end does not know (milestone 5.6)"
+    .Closure(_) => "a closure"
+    .FixedArray(_, _) => "an `Array<Item, Size>`"
+    _ => "a counted value the back end does not know"
   }
 }
 
@@ -774,7 +774,7 @@ fn makeUniqueStatements(
   if !isManagedType(program, annotation) {
     return []
   }
-  reported emission, "making a value of this type unique (milestone 5.9b)"
+  reported emission, "making a value of this type unique"
 }
 
 /**
@@ -873,7 +873,7 @@ fn callStatements(
   at: LocationId?,
 ): List<CStatement> {
   if !witnesses.isEmpty() {
-    return reported emission, "a call that passes a witness table (milestone 5.6)"
+    return reported emission, "a call that passes a witness table"
   }
   if !program.hasFunction(callee) {
     return reported emission, "a call of a function that is not in the program"
@@ -883,7 +883,7 @@ fn callStatements(
     return runtimeCallStatements emission, program, body, target, function, symbol, arguments, at
   }
   if const .TaskResume = function.kind {
-    return reported emission, "a call of a task (milestone 7.3)"
+    return reported emission, "a call of a task"
   }
   const written = argumentsOf emission, program, body, function.signature, arguments
   callStatementOf emission, body, target, function, function.name, written, ""
@@ -916,7 +916,7 @@ fn callStatementOf(
     }
     None => {
       if byPointer {
-        return reported emission, "a call whose big result nobody takes (milestone 5.4)"
+        return reported emission, "a call whose big result nobody takes"
       }
       [CStatement.Evaluate(CExpression.Call(CExpression.Name(symbol), given))]
     }
@@ -1126,7 +1126,7 @@ fn captureExpression(
     .Value(slot) => slotExpression body, slot
     .Boxed(slot) => slotExpression body, slot
     .Place(reference) => {
-      reportUnsupported emission, "a closure that captures a `var` parameter (milestone 5.9b)"
+      reportUnsupported emission, "a closure that captures a `var` parameter"
       CExpression.AddressOf placeExpression(emission, program, body, reference)
     }
   }
@@ -1182,7 +1182,7 @@ fn closureCallStatements(
   }
   const signature = program.signatureAt identifier
   if isByPointerSignature(signature) {
-    return reported emission, "a call of a closure whose result is written through a pointer (milestone 5.4)"
+    return reported emission, "a call of a closure whose result is written through a pointer"
   }
   const held = slotExpression body, callee
   var spellings = ["torb_environment *"]
@@ -1510,7 +1510,7 @@ fn intrinsicExpression(
       Some CExpression.Cast("int64_t", textCall("torb_text_compare", first, second))
     }
     .LazyForce => {
-      reportUnsupported emission, "forcing a `lazy` value (milestone 5.8)"
+      reportUnsupported emission, "forcing a `lazy` value"
       None
     }
     .Convert(to) => Some CExpression.Cast(numericTypeOf(to), first)
@@ -1626,7 +1626,7 @@ fn comparisonExpression(
   if isComparableInC(program, annotation) {
     return Some CExpression.Binary(first, operator, second)
   }
-  reportUnsupported emission, "a comparison of a value the C back end cannot compare directly (milestone 5.6)"
+  reportUnsupported emission, "a comparison of a value the C back end cannot compare directly"
   None
 }
 
@@ -2000,7 +2000,7 @@ public fn placeExpression(
         current = annotation
       }
       .Element(_, _) => {
-        reportUnsupported emission, "an element of a list as a place (milestone 5.7)"
+        reportUnsupported emission, "an element of a list as a place"
         return found
       }
     }

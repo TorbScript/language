@@ -844,7 +844,7 @@ run against **stage 0, the C back end and later the VM** by the same runner.
 | **5.14** | **Done.** Conformance: one runner over stage 0 and the C back end that compares standard output, standard error and the exit code with nothing exempt; the panic format and every recorded divergence closed; `--emit-c` twice byte identical; no absolute path in the output | `bootstrap/crates/torb-interpreter`, `runtime/text.c`, `bootstrap/tests/native/`, the runner | **57 gate programs**, each run twice and compared byte for byte (`cargo test --release --test native`) | 5.1-5.13 |
 | **6.1** | Compile `compiler/` with stage 1: every missing intrinsic, every crash, every construct the compiler uses and the lowering does not cover yet. **Gate: a `torb` binary exists** | wherever it hurts | `torb check ..` from the new binary gives the same output as stage 1 | 5.14 |
 | **6.2** | **Done.** The fixpoint: stage 2 compiles `compiler/` again, the two C files are compared byte for byte, stage 3 emits a third one. `bootstrap/` frozen | `std/iteration/src/concatenate.trb`, `runtime/platform.c`, `bootstrap/crates/torb-cli/tests/fixpoint.rs` | **The fixpoint gate** (`cargo test --release --test fixpoint -- --ignored`) | 6.1 |
-| **6.3** | **Measured, and one third of it done** (see "What 6.3 measured"): the flags stay, the translation unit is **not** sharded (4.3x faster to compile, 2.3x slower a binary), one witness thunk per member instead of per table entry (-13.3% of the C, -22% of the gcc), the module `const` of the lexer read once per file. **Left:** the mangled names (62.5% of the file), the element-type-blind collection defaults, `R_`/`D_` keyed on a layout's shape, `#line` behind a profile, the immortal counted static for a module `const`, a budget for `torb build` of the workspace | `backend/c/emit.trb`, `syntax/lexer.trb` | A timing test in the suite | 6.2 |
+| **6.3** | **Measured, and one third of it done** (see "What 6.3 measured"): the flags stay, the translation unit is **not** sharded (4.3x faster to compile, 2.3x slower a binary), one witness thunk per member instead of per table entry (-13.3% of the C, -22% of the gcc), the module `const` of the lexer read once per file. **Left:** the mangled names (62.5% of the file), the element-type-blind collection defaults, `R_`/`D_` keyed on a layout's shape, `#line` behind a profile, a budget for `torb build` of the workspace. **The immortal counted static is done** (see the note of its own) | `backend/c/emit.trb`, `syntax/lexer.trb` | A timing test in the suite | 6.2 |
 | **7.1** | Bytecode: the format, the emitter from the IR, a disassembler for the snapshots | `backend/bytecode/*.trb` | Disassembly snapshots next to the IR snapshots | 6.2 |
 | **7.2** | The interpreter loop, `torb run` through the VM, the conformance suite through the VM. **Gate: stage 0, C and the VM agree on every script** | `vm/*.trb` | The full suite, three back ends | 7.1 |
 | **7.3** | Tasks: the state-machine transformation in the lowering, `Task`/`spawn`/`await()`/`Channel`, the FIFO scheduler in C and in the VM. **Gate: `10-async.trb` in both back ends** | `ir/lower/task.trb`, `runtime/task.c`, `vm/task.trb` | `10-async.trb`, channel and ordering tests | 7.2 |
@@ -2892,8 +2892,8 @@ of that pass, and the pass is a third of `check`. One `const`, one call site.
 
 The shape that removes it everywhere is the one 6.1's long tail named: the value is built **once** into an immortal
 counted static (`TORB_IMMORTAL_COUNT`, which `torb_retain`, `torb_release` and `torb_make_unique` already treat as "never
-counted, never freed, a write copies"), and a read of the `const` retains that one block. It is not written yet - and the
-same piece of the emitter is what a static `ExpressionNode` tree needs (5.11 below), so the two are one round.
+counted, never freed, a write copies"), and a read of the `const` retains that one block. **It is written now** - see
+"What the immortal counted static decided" below, which also says what became of the field in the lexer.
 
 **What the VM of 7.x has to know from this round.**
 
@@ -2908,6 +2908,127 @@ same piece of the emitter is what a static `ExpressionNode` tree needs (5.11 bel
 - **A module `const` that is not static data is built where it is read in the VM too**, unless it holds the built value
   somewhere. The decided shape is one immortal block per `const` and a retain per read, and it is the same decision for
   both back ends because it is the *lowering* that inlines the initializer today.
+
+### What the immortal counted static decided
+
+**A module `const` whose value is no static data is built once, into a block that is never freed.** 6.3 measured the
+cost (a list of 35 tuples per punctuation character of every file the compiler reads) and named the shape; this is what
+the shape turned out to be, and the two decisions inside it that were open.
+
+**It is an accessor and an initializer, not a `StaticContents` case.** `FunctionKind.ConstantCell(initializer)` is a
+function with a signature and no blocks: a read of the constant is an ordinary `Call` of it, and the cell plus the flag
+that says the value was built are the **back end's** - two file-scope `static`s beside the function in C, a slot of the
+module's frame in the VM. The initializer is an ordinary function of no parameters whose body is the initializer
+expression. Nothing else in the IR changed: the ownership pass and its verifier already skip a function without blocks,
+and `finishProgram` decides the result mode of both halves like any other signature's.
+
+Why not read-only data, which is what "a list storage whose count is the immortal sentinel" would have been: an
+`ExpressionNode` tree is spellable as a `static const struct`, but `"a" + "b"` is a call of `Add.add` and a list literal
+is `torb_list_with_capacity` plus one `add` per item, so the general case has no C initializer at all. One mechanism that
+covers every shape beats two that cover one each.
+
+**Built at the first read, and that is what keeps the promise.** The language says there is **no module initialization,
+ever** (1.6), and a lazily built immortal keeps it exactly: nothing runs before `main`, the order in which the reads
+happen decides nothing, and a `const` no path reads is never built. An eager pass before `main` would have to be ordered
+somehow, and there is no order the language could name. What makes the laziness unobservable is the checker's own purity
+rule for a module constant (docs/TYPECHECKER.md, What exactly is "compile-time evaluable"?) - literals, the operators of
+the number types, interpolation, collection literals, constructor calls and other constants, and never a function call -
+so there is no side effect whose timing anything could see. In an entry file or a test file, where the rule does not
+apply, a top-level `const` is a **local of the entry function** and never reaches this at all, which is what closes the
+one hole the previous round recorded.
+
+**Immortal by construction, so the leak gate stays exact.** `torb_begin_immortal()`/`torb_end_immortal()` open a region
+around the call of the initializer, and every block `torb_allocate` hands out while one is open is born with
+`TORB_IMMORTAL_COUNT`: `torb_retain` and `torb_release` are no-ops on it, `torb_make_unique` copies it, and it is never
+freed. The region is what makes the *whole graph* immortal - the list storage, the texts inside it, the boxes of a case -
+where marking only the top block would have left its children in the live count. The temporaries the initializer made on
+the way become immortal too, which is a fixed number of blocks per program and not a leak that grows.
+
+The counter is split rather than the gate weakened: `torb_report_leaks` writes `live blocks at exit: 0` **and**
+`immortal blocks at exit: N`, both are asserted by `bootstrap/crates/torb-cli/tests/native.rs`, and `live blocks` keeps
+meaning "everything that was counted was freed". The alternative - one number with a note - would have made the gate
+unreadable the first time it went wrong.
+
+The accessor is what a read of the constant goes through and nothing else knows the constant is a cell:
+`lowerImmortalConstant` in `ir/lower/expression.trb` is that seam.
+
+**The fixpoint holds on it.** Stage 1 and stage 2 agree on **57289851 bytes** of C and stage 3 emits them again; stage 1
+takes 250.1 s for the build, stage 2 108.1 s and stage 3 22.0 s for the emit alone. 1453 tests, 98 runtime tests.
+
+**A body lowered inside another body is one mechanism now.** The initializer is lowered where the constant is first read
+and not through the worklist, because a construct the back end does not translate yet has to abandon the body that
+*reads* the constant - which a worklist entry drained later could not reach any more. That is the shape a closure body
+already had, so `savedFrame`/`enterBody`/`restoreFrame` in `ir/lower/closure.trb` are public and carry the module, the
+substitution and the captured variables as well: a `const` is lowered in the module it is written in, whoever reads it.
+
+**What it costs and what it buys.** The lexer's `punctuationTable` is the measurable case, and the previous round had
+worked around it with a field of `Lexer` that read the table once per file. With the general mechanism, `check --timings`
+of this repository from stage 2 (16 cores, gcc 13.2, `-O2`, three runs):
+
+| `check ..` from stage 2, three runs each | lexing, parsing and the module graph | all passes | `program.c` |
+|---|---|---|---|
+| the table in a field of `Lexer`, read once per file | 1790, 2023, 2020 ms | 7430, 7514, 7432 ms | 57270499 |
+| the `const` read directly, through the accessor | 1787, 1963, 1949 ms | 6928, 7492, 7247 ms | 57270002 |
+
+**So the field is gone.** The direct read is never slower - the medians are 1963 against 2020 ms - and the two numbers are
+inside each other's noise, which is the point: the general mechanism makes the workaround unnecessary, so what decides is
+that one field, one initializer and one comment about why they exist are no longer there. What the field bought was the
+read count; what the accessor costs is a call and a return of a value whose retain is a no-op, and the emitted C is 497
+bytes smaller without it.
+
+This is also the honest size of the win overall: 6.3 measured 14 to 23% of the lexing pass for **one** `const`, and the
+mechanism now covers every one of them - but the compiler has exactly one `const` that is read per token, so the rest of
+them buy correctness of the cost model and not a second half-second.
+
+**A trait member is looked up by name and shape, and a name alone is not enough.** `Show.showNested`'s "generated member
+without a receiver" at `std/core/src/convert.trb:113` was not about `showNested` at all: `WellKnown` of the compiler has a
+**field** `show: SymbolId?`, `providerOf` of the checker answers a field under the member's name, and the back end took it
+as the provider of `Show.show` - whose generated instance then had no receiver, because a field's signature takes no
+`self`. One finding refused the whole build, and with it every `Show` of a compound value of the compiler's own types: a
+probe that shows one `Checker` lowered 7951 of 7952 functions and now lowers 7965 of 7965.
+
+`declaredMemberOf` in `ir/witness.trb` asks the question the checker's own requirement check asks
+(`compareSignatures`: `required.takesSelf == given.takesSelf`), so the back end finds the very declaration that made the
+program legal, and a derived member is generated where the name belongs to something else. The checker does not run that
+check for a **derived** implementation at all - there is nothing the source wrote to compare - which is why nothing
+before the back end noticed.
+
+One divergence this found and did not close: on stage 0, `value.show()` where the value has a field `show` reads the
+**field**, because stage 0 has no type checker. So the gate program shows such a value through `print` and never through
+`.show()`, and the entry is on 5.14's list below.
+
+**A plan number never reaches a message a user sees.** Findings read `not supported by the back end yet: a quoted
+expression (milestone 5.11)` before this. Which sub-milestone will build a construct is a fact about this repository's
+plan and not about the program in front of the reader, and a plan that moves leaves the number wrong.
+`unsupportedMessage` in `ir/unsupported.trb` is the one place that words it - `<the construct> is not supported by the
+native back end yet`, with an optional `: <the reason>` for the four kinds whose reason is not part of the construct - and
+both halves go through it: the lowering's `reportUnsupported` for a construct of the program, the emitter's for one of the
+IR. The reason is a parameter and not a relative clause inside the construct because a clause that ends in a negation of
+its own reads as two sentences fighting each other (`` `Json.encode`, which the runtime does not provide yet is not
+supported ... ``). `torb build` prints the emitter's findings as `error: <message>` lines like the
+lowering's instead of a header plus an indented list that said the same thing twice, and `torb ir --statistics` still
+groups by construct. The manifest keeps `NativeState.Planned` with its milestone as an internal key, because the table
+has to say which entries are not written yet; a planned native reads `` `X`, which the runtime does not provide yet ``.
+
+**What the VM of 7.x has to know from this round.**
+
+- **A module `const` that is no static data is a function, not a datum.** The VM implements `FunctionKind.ConstantCell`
+  with a slot of its own and a flag, builds the value on the first call, and never frees it. The initializer it names is
+  an ordinary function of the program.
+- **An immortal region is part of the ABI of a constant, not an optimization.** A VM that counts references has to make
+  everything allocated inside one immortal as well, or a read of the constant that is released will free the value under
+  the next reader.
+- **A counter for immortal blocks is what keeps a leak report honest.** Two numbers, not one.
+- **A trait member is `(the name, whether it takes `self`)`.** A table entry resolved by name alone can land on a field
+  of the target that carries the member's name.
+
+**Two more entries for 5.14's list of differences between stage 0 and the binary**, both found here and neither fixed:
+
+- **A field that carries the name of a trait member shadows the member on stage 0.** `value.show()` on a value with a
+  field `show` reads the field there and calls `Show.show` in the front end. It is the last shape of "stage 0 has no type
+  checker" that a gate program can hit.
+- **A capture of a quotation that is not a scalar is shown by its name and type natively** (see the 5.11 note below),
+  which is a divergence in the text of a failing `assert` and in nothing else.
 
 ### What 5.11 needs, measured before it is written
 
@@ -2949,9 +3070,19 @@ the lowering appends what only it knows. The pieces already exist:
 
 So **how a capture is stored and how it is shown is one function of the lowering and nothing else may know it**, which is
 also what keeps ENCODING's redesign local when it lands (`captures()` answers `List<EncodedValue>` then, and `assert` reads
-`.show()` off one). The message a failing `assert` prints is what that function decides; the `_h`-free shape of it is the
-open question of the round, and the honest choices are (a) `Show` per capture, with the finding above fixed first and the
-instance cost paid, (b) the captures' names and types without their values, (c) a scalar shown and everything else named.
+`.show()` off one). The message a failing `assert` prints is what that function decides.
+
+**Decided: (c), a scalar by value and everything else by name and type.** A failing `assert` shows a capture that is an
+`Int*`, a `UInt*`, a `Float*`, a `Bool`, a `String` or a `Char` by its value, and every other capture as
+`found: LoweredProgram`. It keeps two things out of the test binary that (a) would put in it: the per-captured-type
+instance cost (1731 instances for one `Checker`), and the "one unshowable type refuses the whole build" problem, which is
+what 2801 asserts over the compiler's own types would mean. Full values come with ENCODING's redesign, where a capture
+*is* an `EncodedValue` and needs monomorphized generic trait methods. It is a **recorded divergence from stage 0 in the
+text of a failing `assert` and in nothing else**, so it is on 5.14's list; and it lives behind the one function of the
+lowering above, which is the seam that makes the redesign local.
+
+The finding that blocked (a) is fixed anyway, and for a reason that had nothing to do with quotations: see "A trait
+member is looked up by name and shape" in the note above.
 
 **The tree is static data of a counted type, which the emitter does not have yet.** `StaticContents.Aggregate` of a
 `Boxed` layout reports `a constant of a counted type` (`emit.trb`), an `ExpressionNode` is recursive and therefore boxed,
@@ -3034,7 +3165,8 @@ directory. A problem of *loading* keeps the path of the machine, because it is e
 **What still differs, and why.**
 
 - **`Show` of a function value.** The owner decided the source spelling of its type (`(Int64) => Int64`); stage 0 prints
-  `<function>` and the back end reports "not supported by the back end yet: a generated `show` of `Closure(...)`". Both
+  `<function>` and the back end reports "a generated `show` of `Closure(...)` is not supported by the native back end yet".
+  Both
   halves are real work - stage 0 has no types and would have to spell one from the declaration's annotations, including
   `Int` to `Int64` - and neither is on the way to anything. No gate program can exist until the back end can emit one, so
   this is the one entry that moves to 6.3's list rather than being closed here.
@@ -3057,6 +3189,12 @@ directory. A problem of *loading* keeps the path of the machine, because it is e
   7.3, and `runtime/README.md` records the difference.
 - **`tls(port == 8443)` in `dsl.trb`** is written `tls true`, because stage 0 reads the parenthesized form as a call of
   the field. A limitation of stage 0's parser-free property commands, and the program says so.
+- **A field that carries the name of a trait member shadows the member on stage 0.** `value.show()` on a value with a
+  field `show` reads the field there, where the front end resolves `Show.show`. Stage 0 has no type checker, so there is
+  nothing to decide; `show-compound.trb` shows such a value through `print` alone and says why.
+- **A capture of a quotation that is not a scalar is shown by its name and type in a failing `assert` natively** and by
+  its value on stage 0 (see "What 5.11 needs"). It is a divergence in the text of a failing assertion and in nothing
+  else, and it closes when ENCODING's `EncodedValue` lands.
 
 **Three language decisions this needed** - each of them a question the language had not answered, decided the simplest
 consistent way and written into CONCEPT:

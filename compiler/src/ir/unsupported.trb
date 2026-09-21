@@ -1,0 +1,35 @@
+/**
+ * How the back ends say that they do not translate a construct yet. One sentence, built in one place, for both halves of
+ * the pipeline: the lowering finds a construct of the program (`reportUnsupported` in `ir/lower/context.trb`), the C
+ * emitter finds one of the IR (`reportUnsupported` in `backend/c/emission.trb`), and a user reads the same wording either
+ * way.
+ *
+ * **A message a user sees carries no number of this repository's plan.** Which part of the plan will build a construct
+ * is a fact about the plan and not about the program in front of the reader, and a plan that moves leaves the number
+ * wrong. The manifest of natives keeps `NativeState.Planned` with its own number as an internal key, because the table
+ * has to say which entries are not written yet - it just never reaches the output.
+ */
+
+/**
+ * `a quoted expression` becomes `a quoted expression is not supported by the native back end yet`.
+ *
+ * `what` names the construct as a noun phrase, so that the sentence reads as one: `a list pattern`,
+ * `` `if var`, which binds a path into its subject ``, `an `Array<Item, Size>` value`. `because` says why, after a
+ * colon, where the reason is not part of the construct - a relative clause that ends in a negation of its own would read
+ * as two sentences fighting each other.
+ *
+ * The whole message is the key both halves group their findings by (`torb ir --statistics`, `torb build`), so two
+ * occurrences of one construct are one line.
+ *
+ * # Examples
+ *
+ *     print unsupportedMessage("a quoted expression")
+ *     print unsupportedMessage("`Json.encode`", because: "the runtime does not provide it")
+ */
+public fn unsupportedMessage(what: String, because: String = ""): String {
+  const sentence = "{what} is not supported by the native back end yet"
+  if because.isEmpty() {
+    return sentence
+  }
+  "{sentence}: {because}"
+}

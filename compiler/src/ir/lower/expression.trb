@@ -13,18 +13,22 @@
  */
 
 use Span from "../../syntax/source"
-use Expression, Argument, TextSegment, Condition, Block from "../../syntax/ast"
+use Expression, Argument, TextSegment, Condition, Block, Binding from "../../syntax/ast"
 use PrefixOperator, InfixOperator from "../../syntax/ast"
 use SymbolId from "../../semantics/symbols"
+use ModuleId from "../../semantics/module"
 use TypeId, LiteralValue from "../../semantics/checker/type"
 use Adaptation, BindingId from "../../semantics/checker/context"
 use IrTypeId, IrType, Slot, BlockId, LocationId, Instruction, Terminator, Reference, PathStep from "../ir"
+use FunctionId, FunctionKind, IrSignature, WitnessSource, borrowed from "../ir"
 use Intrinsic, IntrinsicOperation, NumericKind, StaticContents, LayoutId from "../ir"
-use FunctionBuilder, addTemporary, addBlock, emit from "../build"
+use FunctionBuilder, addTemporary, addBlock, emit, newFunction, finishFunction, setBlockLocation from "../build"
 use numericKindOf, layoutOfType from "../verify"
 use describeIrType from "../print"
-use bindingOfSite from "../../semantics/checker/signature"
+use bindingOfSite, signatureOf from "../../semantics/checker/signature"
 use evaluateConstant, staticOfConstant from "../constant"
+use functionName, mangledName from "../mangle"
+use symbolPathOf from "../instantiate"
 use Lowering, reportUnsupported, locationOf, typeAtSpan, voidTypeOf from "./context"
 use internStatic, isNeverType, isVoidType, finishBlock, continueIn, irTypeOfClosed from "./context"
 use lowerCall, lowerOperator, lowerConstruct, lowerCaseValue from "./call"
@@ -34,6 +38,7 @@ use lowerListLiteral, lowerMapLiteral, lowerIndexRead from "./collection"
 use lowerMatch, lowerIfBinding, lowerTry, lowerCoalesce, lowerOptionalMember from "./match"
 use variantLayoutOfType from "./match"
 use lowerClosureValue, lowerNamedFunctionValue, lowerForcedRead, bindingReferenceOf from "./closure"
+use savedFrame, restoreFrame, enterBody from "./closure"
 use lowerConstructorValue from "./closure"
 use lowerTextLiteral, showsHere from "./text"
 
@@ -281,8 +286,9 @@ public fn unsupportedSlot(
   destination: Slot?,
   what: String,
   at: Span,
+  because: String = "",
 ): Slot {
-  reportUnsupported lowering, what, at
+  reportUnsupported lowering, what, at, because
   abandonedSlot lowering, builder, destination
 }
 
@@ -324,7 +330,7 @@ fn canReplayAdaptations(var lowering: Lowering, expression: Expression): Bool {
       .ShowValue(_) => if isShown { "" } else { "a value shown outside of an interpolation" }
       .Delegate(_) => "`by` delegation"
       .Lazy => if inlinesThunk { "" } else { "a `lazy` argument" }
-      .Quote(_) => "a quoted expression (milestone 5.11)"
+      .Quote(_) => "a quoted expression"
       .Spread => ""
       .Variadic(_, _) => ""
       _ => ""
@@ -556,7 +562,7 @@ fn lowerConstantReference(
   const identifier = match staticOfConstant(lowering, symbol) {
     Some(found) => found
     None => {
-      return lowerConstantInitializer lowering, builder, destination, symbol, at
+      return lowerImmortalConstant lowering, builder, destination, symbol, at
     }
   }
   const annotation = lowering.program.staticAt(identifier).annotation
@@ -566,62 +572,168 @@ fn lowerConstantReference(
 }
 
 /**
- * A top-level `const` whose value is **not static data**, lowered where it is read.
+ * A top-level `const` whose value is **not static data**, as one **immortal counted static**: one block per constant,
+ * built once by an initializer of its own, never freed, and a read of the constant is a call of the accessor.
  *
  * Static data is what has an immortal C spelling: a number, a `Bool`, a `Char`, a text, and an inline aggregate of
  * those. A collection literal is a counted heap block, a case of a `Boxed` variant type is a counted heap block, and
  * `"a" + "b"` is a call of `Add.add` - so `const knownFields: List<String> = [...]`, `CExpression.Literal "NULL"` and a
- * source built out of pieces have no static value they could become, whatever the evaluator does.
+ * source built out of pieces have no static value the emitter could write, whatever the evaluator does.
  *
- * The answer is the one the language already gives for a **default** (BACKEND 1.6: a field default and a parameter
- * default are lowered at the *call site*, at every call): the initializer is lowered here, in the module it is written
- * in. It is sound because a `const` of a module is **pure** by the checker's own rule - literals, the operators of the
- * number types, interpolation, collection literals, constructor calls and other constants, and never a function call
- * (docs/TYPECHECKER.md, What exactly is "compile-time evaluable"?) - and because values have no identity, so a reader
- * cannot tell one list from an equal one. And it keeps the
- * promise of the table in 1.6: *there is no module initialization, ever*, not even for a list.
+ * **Built once, at the first read.** The language says there is no module initialization, ever, and a lazily built
+ * immortal keeps that promise: nothing runs before `main`, the order of the reads decides nothing, and a `const` no path
+ * reads is never built at all. What makes it unobservable is the checker's own rule (docs/TYPECHECKER.md, What exactly is
+ * "compile-time evaluable"?): the initializer is **pure** - literals, the operators of the number types, interpolation,
+ * collection literals, constructor calls and other constants, and never a function call - so it has no side effect whose
+ * order anything could see, and values have no identity, so no reader can tell one list from an equal one.
  *
- * What it costs is one build per read rather than one per program, which for `punctuationTable.find(...)` in the lexer is
- * a list of 35 tuples per punctuation token. That is the one place in the compiler where it is measurable, and it is
- * 6.3's ("cut the obvious waste"): the shape that would fix it is an immortal *counted* static - a list storage in
- * read-only data whose count is the immortal sentinel, so that a retain and a release of it are no-ops and a write copies
- * - which is a new `StaticContents` case plus its C spelling plus the VM's, and no program needs it to be correct.
+ * **Immortal, and what that costs.** The value is built inside an immortal region (`torb_begin_immortal`), so every block
+ * it is made of - and every temporary the initializer made on the way - is born with the immortal count: a retain and a
+ * release of it are no-ops, a write to it copies, and none of them is ever freed. That is a fixed number of blocks per
+ * program, counted apart from the live ones, which is what keeps `live blocks at exit: 0` exact.
  *
- * In an entry file or a test file a top-level `const` is ordinary code and the checker's rule does not apply, so an
- * initializer with a **side effect** would run once per read there where stage 0 runs it once. Every one in the
- * repository is a text or a list built out of literals; a call is what would make it observable, and a call is exactly
- * what no module may write.
+ * Two constructs need exactly this shape, so they are one mechanism: a module `const` here, and the static
+ * `ExpressionNode` tree of a quotation.
+ *
+ * In an entry file or a test file a top-level `const` is a **local of the entry function** and never reaches this, so the
+ * purity rule not applying there costs nothing.
  */
-fn lowerConstantInitializer(
+fn lowerImmortalConstant(
   var lowering: Lowering,
   var builder: FunctionBuilder,
   destination: Slot?,
   symbol: SymbolId,
   at: Span,
 ): Slot {
+  const accessor = match constantAccessorOf(lowering, symbol, at) {
+    Some(found) => found
+    None => {
+      return abandonedSlot lowering, builder, destination
+    }
+  }
+  const annotation = lowering.program.functionAt(accessor).signature.result
+  const target = valueSlot lowering, builder, destination, annotation
+  const location = locationOf lowering, at
+  const empty: List<WitnessSource> = []
+  emit builder, Instruction.Call(Some(target), accessor, [], empty, Some(location))
+  target
+}
+
+/**
+ * The accessor of one constant, built the first time the constant is read. One per declaration, however many modules
+ * read it: the cell is the value of the constant and not of the read.
+ *
+ * The initializer is lowered **here** rather than through the worklist, because a construct the back end does not
+ * translate yet has to abandon the body that reads the constant - which is what the reader's `isSupported` carries, and
+ * what a worklist entry drained later could not reach any more.
+ */
+fn constantAccessorOf(var lowering: Lowering, symbol: SymbolId, at: Span): FunctionId? {
+  if const Some(known) = lowering.constantCells.get(symbol.value) {
+    return Some known
+  }
   const site = match lowering.checker.siteOf(symbol) {
     Some(found) => found
     None => {
-      return unsupportedSlot lowering, builder, destination, "a constant the checker did not declare", at
+      reportUnsupported lowering, "a constant the checker did not declare", at
+      return None
     }
   }
   const binding = match bindingOfSite(site) {
     Some(found) => found
     None => {
-      return unsupportedSlot lowering, builder, destination, "a constant without an initializer", at
+      reportUnsupported lowering, "a constant without an initializer", at
+      return None
     }
   }
   // A constant in terms of itself is a cycle the checker reports; stopping here keeps the lowering from recursing on one
   if lowering.inlinedConstants.containsKey(symbol.value) {
-    return unsupportedSlot lowering, builder, destination, "a constant that names itself", at
+    reportUnsupported lowering, "a constant that names itself", at
+    return None
   }
+  const declared = match constantTypeOf(lowering, symbol) {
+    Some(found) => found
+    None => {
+      reportUnsupported lowering, "a constant whose type the checker did not decide", at
+      return None
+    }
+  }
+  const path = symbolPathOf lowering.checker, symbol
+  const noArguments: List<IrTypeId> = []
+  const accessorName = functionName lowering.program, path, noArguments
+  const initializerName = mangledName "t", ["constant"], accessorName
+  const shape = LoweredConstant symbol, binding, site.module, initializerName, declared
+  const initializer = match loweredConstantInitializer(lowering, shape) {
+    Some(found) => found
+    None => {
+      return None
+    }
+  }
+  const produced = lowering.program.functionAt(initializer).signature.result
+  var accessor = newFunction accessorName, Some(symbol), IrSignature([], produced), "constant"
+  const empty = accessor.function
+  accessor.function = empty.copy blocks: [], kind: FunctionKind.ConstantCell(initializer)
+  const added = finishFunction lowering.program, accessor
+  lowering.constantCells.set symbol.value, added
+  Some added
+}
+
+/**
+ * The initializer, as a function of its own with no parameters. The frame of the body that is being lowered is saved and
+ * restored around it, exactly as it is around a closure - a lowering has one of everything a body needs - and the module
+ * becomes the one the constant is written in, because that is whose tables say what its initializer means.
+ *
+ * The signature is finished **after** the body: what the initializer produces is the type of the slot it returns, and
+ * asking the declaration instead would let a coercion at the annotation and the IR disagree.
+ */
+fn loweredConstantInitializer(var lowering: Lowering, constant: LoweredConstant): FunctionId? {
+  const symbol = constant.symbol
+  const value = constant.binding.value
+  var inner = newFunction constant.name, Some(symbol), IrSignature([], constant.declared), "constant"
+  const saved = savedFrame lowering
+  enterBody lowering, constant.name
+  lowering.module = constant.module
+  lowering.substitution = [:]
+  lowering.capturedVariables = [:]
   lowering.inlinedConstants.set symbol.value, true
-  const outer = lowering.module
-  lowering.module = site.module
-  const slot = lowerExpression lowering, builder, binding.value, destination
-  lowering.module = outer
+  const location = locationOf lowering, value.span
+  setBlockLocation inner, BlockId(0), Some(location)
+  const slot = lowerExpression lowering, inner, value, None
+  const produced = inner.function.typeOfSlot slot
+  if lowering.isSupported && !lowering.isDiverged {
+    finishBlock lowering, inner, Terminator.Return(Some(borrowed(slot)))
+  }
+  const isSupported = lowering.isSupported
   const _ = lowering.inlinedConstants.remove symbol.value
-  slot
+  restoreFrame lowering, saved
+  if !isSupported {
+    lowering.isSupported = false
+    return None
+  }
+  const written = inner.function
+  inner.function = written.copy signature: IrSignature([], produced)
+  Some finishFunction(lowering.program, inner)
+}
+
+/** What the initializer of one constant is built from: everything that is known before its body is walked. */
+type LoweredConstant {
+  symbol: SymbolId
+  binding: Binding
+  /** The module the constant is written in, which is whose tables say what its initializer means. */
+  module: ModuleId
+  /** The mangled name of the initializer, which is the accessor's with `constant` in front of it. */
+  name: String
+  /** The declared type, which the signature starts out as until the body says what it really produces. */
+  declared: IrTypeId
+}
+
+/** The declared type of a constant, which is what the initializer's signature starts out as. */
+fn constantTypeOf(var lowering: Lowering, symbol: SymbolId): IrTypeId? {
+  const identifier = signatureOf lowering.checker, symbol
+  const declared = lowering.checker.signature(identifier).form.result
+  if lowering.checker.isBroken(declared) {
+    return None
+  }
+  Some irTypeOfClosed(lowering, declared)
 }
 
 /**

@@ -15,7 +15,9 @@ Plus two things that are checked on the compiled side alone, because there is no
 
 - **Zero live blocks.** The binary is run a second time with `TORB_REPORT_LEAKS=1`, and the runtime's block counter has
   to be zero where the program ends. A program that panics is exempt, because a panic runs nothing (CONCEPT, "A panic
-  is output") and what it leaves behind is not a leak.
+  is output") and what it leaves behind is not a leak. The report has a second line, `immortal blocks at exit: N`: the
+  value of a module constant is built once into a block that is never freed by construction, and counting those apart is
+  what keeps the first number exact. Both lines are asserted.
 - **The emitted C is a pure function of the program.** `--emit-c` twice gives the same bytes, and no absolute path of
   any machine is in it.
 
@@ -141,7 +143,8 @@ exist for it to move up one directory, and moving it is the whole change.
 | `generics.trb` | A generic type with methods, a generic function with a bound, a generic `extend` |
 | `derived.trb` | The generated `Show`, `Equals` and `Hash` of a record, a case and a tuple |
 | `case-defaults.trb` | A case constructor whose field takes its default |
-| `constants.trb` | Top-level `const`s of every shape, from a function and from the top level |
+| `constants.trb` | Top-level `const`s of every shape, from a function and from the top level, and the mutated copy of one |
+| `show-compound.trb` | `Show` of everything compound, and of a type whose field carries the name of a member |
 | `tuple-compare.trb` | The generated `compare` of a tuple: lexicographic, each field through its own `Compare` |
 
 **Errors**

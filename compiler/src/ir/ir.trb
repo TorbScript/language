@@ -329,6 +329,16 @@ public type FunctionKind {
    * needs a second way to reach the runtime.
    */
   case Runtime(symbol: String)
+  /**
+   * The accessor of a module `const` whose value is no static data: one **immortal** block per constant, built once by
+   * `initializer` and never freed, and a read of the constant is a call of this (BACKEND, the immortal counted static).
+   *
+   * It has no blocks of its own. The two back ends write the cell and the flag that says it was built, because where
+   * that state lives is a property of the back end and not of the program: in C it is two file-scope `static`s beside the
+   * function, in the VM a slot of the module's own frame. The value is born inside an immortal region, so a retain and a
+   * release of it are no-ops, a write to it copies, and the leak gate counts it apart from the live blocks.
+   */
+  case ConstantCell(initializer: FunctionId)
 }
 
 /** One basic block: the instructions that run in it, in order, and how it ends. */

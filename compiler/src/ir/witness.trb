@@ -166,7 +166,7 @@ public fn memberFunctionOf(
   if signature.hasBody {
     const built = instanceFor lowering, provider, mapping
     if built.isNone() {
-      reportUnsupported lowering, "`{name}`, a member the back end cannot build an instance of", at
+      reportUnsupported lowering, "`{name}`", at, "no instance of that member can be built"
     }
     return built
   }
@@ -197,6 +197,9 @@ public fn memberFunctionOf(
  *
  * Where none of the three has a body the member has no source at all and the manifest or a derived implementation
  * answers for it, which is what the caller does next.
+ *
+ * Step one asks by **name and shape**, not by name alone: `declaredMemberOf` drops a declaration that cannot be the
+ * member, which is what keeps a field of the target that happens to carry the name out.
  */
 public fn providerOfMember(
   var lowering: Lowering,
@@ -205,7 +208,7 @@ public fn providerOfMember(
   member: SymbolId,
   name: String,
 ): SymbolId {
-  if const Some(found) = memberOfImplementation(lowering.checker, implementation, name) {
+  if const Some(found) = declaredMemberOf(lowering, implementation, Some(member), name) {
     return found
   }
   const identifier = signatureOf lowering.checker, member
@@ -269,15 +272,57 @@ public fn memberOfType(
       return None
     }
   }
-  const declared = memberOfImplementation lowering.checker, implementation, name
-  const member = match declared {
+  const required = traitMemberNamed lowering, bound, name
+  const member = match declaredMemberOf(lowering, implementation, required, name) {
     Some(found) => found
     None => {
-      const found = traitMemberNamed(lowering, bound, name)?
+      const found = required?
       found
     }
   }
   memberFunctionOf lowering, subject, bound, implementation, member, at
+}
+
+/**
+ * What the implementation writes under the name, where that declaration can *be* the member the trait requires.
+ *
+ * `providerOf` of the checker answers by name, and a name alone is not enough: a **field** of the target may carry the
+ * name of a member. `WellKnown` of the compiler has a field `show: SymbolId?` where `Show.show` is
+ * `fn show(self): String`, so showing one asked for a generated member whose signature has no receiver at all.
+ */
+fn declaredMemberOf(
+  var lowering: Lowering,
+  implementation: ImplementationId,
+  required: SymbolId?,
+  name: String,
+): SymbolId? {
+  const found = memberOfImplementation(lowering.checker, implementation, name)?
+  const wanted = match required {
+    Some(inner) => inner
+    None => {
+      return Some found
+    }
+  }
+  if providesMember(lowering, wanted, found) {
+    return Some found
+  }
+  None
+}
+
+/**
+ * Whether one declaration can be one member of a trait. The question is the one the checker's own requirement check
+ * asks (`compareSignatures` in `semantics/checker/implementation.trb`): the two have to agree about `self`, and a field
+ * takes none. Asking it here is what makes the back end find the very declaration that made the program legal.
+ */
+public fn providesMember(var lowering: Lowering, member: SymbolId, provider: SymbolId): Bool {
+  if member == provider {
+    return true
+  }
+  const wanted = signatureOf lowering.checker, member
+  const given = signatureOf lowering.checker, provider
+  const wantsSelf = lowering.checker.signature(wanted).takesSelf
+  const givesSelf = lowering.checker.signature(given).takesSelf
+  wantsSelf == givesSelf
 }
 
 /**
@@ -293,8 +338,8 @@ public fn generatedKindOf(
 ): Generated? {
   const name = lowering.checker.symbolAt(member).name
   if const Some(entry) = nativeNamed(lowering, owner, name) {
-    if const .Planned(milestone) = entry.state {
-      reportUnsupported lowering, "`{entry.name}`, which the runtime provides from milestone {milestone} on", at
+    if const .Planned(_) = entry.state {
+      reportUnsupported lowering, "`{entry.name}`", at, "the runtime does not provide it"
       return None
     }
     match entry.target {
@@ -364,12 +409,12 @@ fn generatedForDerived(var lowering: Lowering, name: String, at: Span): Generate
     return Some Generated.Compare
   }
   if name == "encode" {
-    const what = "a derived `encode`, whose `Encoder` is all `var self` members (milestone 5.7)"
+    const what = "a derived `encode`, whose `Encoder` is all `var self` members"
     reportUnsupported lowering, what, at
     return None
   }
   if name == "decode" {
-    const what = "a derived `decode`, whose `Decoder` has generic members no table can hold (milestone 5.7)"
+    const what = "a derived `decode`, whose `Decoder` has generic members no table can hold"
     reportUnsupported lowering, what, at
     return None
   }

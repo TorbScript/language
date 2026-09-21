@@ -40,6 +40,25 @@ public fn verifyFunction(program: IrProgram, function: IrFunction): List<String>
     }
     return found
   }
+  // The accessor of an immortal constant is a signature plus the initializer it names: the cell and the flag are the
+  // back end's, so there is no body here either
+  if const .ConstantCell(initializer) = function.kind {
+    if !function.blocks.isEmpty() {
+      found.add "{function.name}: the accessor of a constant has no body"
+    }
+    if !program.hasFunction(initializer) {
+      found.add "{function.name}: the initializer of the constant is not in the program"
+      return found
+    }
+    const built = program.functionAt initializer
+    if built.signature.result != function.signature.result {
+      found.add "{function.name}: the initializer of the constant produces another type"
+    }
+    if !built.signature.parameters.isEmpty() {
+      found.add "{function.name}: the initializer of the constant takes arguments"
+    }
+    return found
+  }
   verifyGraph program, function, found
   // A dataflow over a graph with a dangling edge says nothing useful, so the shape has to be right first
   if !found.isEmpty() {

@@ -1,0 +1,117 @@
+use Process from "std/process"
+
+/**
+ * `Show` of everything compound, natively: a record in a record, a case with fields, a tuple, a collection of records,
+ * an `Option` and a `Result` of one - and a type whose **field carries the name of a member**.
+ *
+ * That last one is why this program exists. A trait member is looked up by name, and a name alone does not say that the
+ * declaration under it can be the member: `WellKnown` of the compiler has a field `show: SymbolId?` where `Show.show` is
+ * `fn show(self): String`, so showing one asked for a generated member with no receiver at all and refused the whole
+ * program. Every `Show` of a compound value of the compiler's own types went with it.
+ */
+
+type Point {
+  x: Int
+  y: Int
+}
+
+/** A field that carries the name of a member of `Show`, and one that carries the name of a member of `Equals`. */
+type Named {
+  show: Int
+  equals: String
+  point: Point
+}
+
+type Line {
+  from: Point
+  to: Point
+  label: String
+}
+
+type Shape {
+  case Circle(radius: Int)
+  case Rectangle(width: Int, height: Int)
+  case Nothing
+}
+
+fn records() {
+  print Point(1, 2)
+  print Line(Point(1, 2), Point(3, 4), "top")
+  print Named(7, "yes", Point(8, 9))
+}
+
+fn cases() {
+  print Shape.Circle(3)
+  print Shape.Rectangle(2, 3)
+  print Shape.Nothing
+  const shapes: List<Shape> = [Shape.Circle(1), Shape.Nothing]
+  print shapes
+}
+
+fn tuples() {
+  const pair = (Point(1, 2), "a")
+  print pair
+  const labeled = (lowest: Point(0, 0), highest: Point(9, 9))
+  print labeled
+}
+
+fn collections() {
+  const points: List<Point> = [Point(1, 2), Point(3, 4)]
+  print points
+  const lines: List<Line> = [Line(Point(1, 2), Point(3, 4), "a")]
+  print lines
+  const byName: Map<String, Point> = ["first": Point(1, 2), "second": Point(3, 4)]
+  print byName
+  const nested: List<List<Point>> = [[Point(1, 2)], []]
+  print nested
+}
+
+fn wrapped() {
+  const found: Point? = Some Point(5, 6)
+  print found
+  const missing: Point? = None
+  print missing
+  const answer: Result<Point, String> = Ok Point(7, 8)
+  print answer
+  const failed: Result<Point, String> = Fail "no point"
+  print failed
+}
+
+/** The same values through a bound and through a trait-typed value, so a witness table reaches the generated body too. */
+fn shown<Value: Show>(value: Value): String {
+  value.show()
+}
+
+fn shownDynamically(value: Show): String {
+  value.show()
+}
+
+/*
+ * `Named` is shown through `print` alone and never through `value.show()`: stage 0 has no type checker, so `.show` on a
+ * value with a field of that name reads the field where the front end resolves the member (one more entry on the list of
+ * differences between stage 0 and the binary).
+ */
+fn indirect() {
+  print shown(Line(Point(1, 2), Point(3, 4), "label"))
+  print shown(Shape.Circle(4))
+  print shownDynamically(Line(Point(5, 6), Point(7, 8), "other"))
+  print shownDynamically(Point(9, 10))
+}
+
+/** The exit code is measured from the shown texts, so a `Show` that is wrong fails on the code as well as on the output. */
+fn checksum(): Int {
+  var total = 0
+  for text in [shown(Point(1, 2)), shown(Line(Point(1, 2), Point(3, 4), "top")), shown(Shape.Nothing)] {
+    total = total + text.byteLength()
+  }
+  total % 251
+}
+
+records()
+cases()
+tuples()
+collections()
+wrapped()
+indirect()
+
+Process.exit checksum()

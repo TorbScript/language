@@ -206,10 +206,11 @@ group "What a constant may name" {
   }
 
   /**
-   * A `const` whose value is no static data is **no declaration of the back end at all**: it is lowered where it is
-   * read, the way a default is (BACKEND 1.6), so nothing is counted for it and nothing is stubbed.
+   * A `const` whose value is no static data is an **immortal counted static**: an accessor that a read calls, and an
+   * initializer of its own that builds the value once. It is no declaration of the back end either, so nothing is
+   * counted for it and nothing is stubbed.
    */
-  test "a `const` that is not static data is lowered where it is read, and is no finding" {
+  test "a `const` that is not static data becomes an accessor a read calls" {
     const source = r"""
       fn twice(value: Int): Int {
         value + value
@@ -227,8 +228,12 @@ group "What a constant may name" {
       shown.add entry.what
     }
     assert(shown == [])
-    const text = irOf source, "t_acme_x2f_app_main_read"
-    assert text.contains("call t_acme_x2f_app_main_twice")
+    const read = irOf source, "t_acme_x2f_app_main_read"
+    assert read.contains("call t_acme_x2f_app_main_answer")
+    const accessor = irOf source, "t_acme_x2f_app_main_answer"
+    assert accessor.contains("constant fn t_acme_x2f_app_main_answer")
+    const initializer = irOf source, "t_constant__t_acme_x2f_app_main_answer"
+    assert initializer.contains("call t_acme_x2f_app_main_twice")
   }
 
   /**
@@ -267,7 +272,9 @@ group "What a constant may name" {
       shown.add entry.what
     }
     assert(shown == [])
-    const text = irOf source, "t_acme_x2f_app_main_read"
-    assert text.contains("construct T_acme_x2f_app_main_Shape.Circle")
+    const read = irOf source, "t_acme_x2f_app_main_read"
+    assert read.contains("call t_acme_x2f_app_main_circle")
+    const initializer = irOf source, "t_constant__t_acme_x2f_app_main_circle"
+    assert initializer.contains("construct T_acme_x2f_app_main_Shape.Circle")
   }
 }

@@ -64,6 +64,11 @@ fn functionLines(program: IrProgram, function: IrFunction): List<String> {
   if const .Runtime(symbol) = function.kind {
     return ["runtime fn {function.name}{head} = {symbol}"]
   }
+  // The accessor of an immortal constant is its initializer and nothing else: the cell and the flag are the back end's
+  if const .ConstantCell(initializer) = function.kind {
+    const built = if program.hasFunction(initializer) { program.functionAt(initializer).name } else { "?" }
+    return ["constant fn {function.name}{head} = {built}"]
+  }
   const prefix = match function.kind {
     .TaskResume => "task "
     _ => ""

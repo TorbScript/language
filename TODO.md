@@ -2006,3 +2006,85 @@ Wenn nicht, was bedeutet, bewirkt es?
     `cargo test --release --test fixpoint -- --ignored` einmal laufen lassen. Ein Blanket über JEDEN Typ ist genau
     die Form, die in BACKEND.md einmal die Instanzliste zum Wachsen gebracht hat (`Iterable.indexed`); hier steht in
     keinem Repository-Programm ein `tryInto()`, also erwarte ich nichts - geprüft ist es nicht.
+
+- (**Erledigt: der unsterbliche gezählte Static, `Show` von allem Zusammengesetzten, und Plannummern raus aus den
+  Meldungen**, 2026-09-21)
+  - **Ein Modul-`const`, dessen Wert keine statischen Daten sind, wird genau einmal gebaut.** 6.3 hatte die Kosten
+    gemessen (35 Tupel pro Interpunktionszeichen jeder Datei, die der Compiler liest) und die Form benannt; das ist, was
+    die Form geworden ist. `FunctionKind.ConstantCell(initializer)` ist eine Funktion mit Signatur und **ohne Blöcke**:
+    ein Lesen des `const` ist ein gewöhnlicher `Call` darauf, und die Zelle plus das Flag "ist gebaut" gehören dem
+    Back-End (in C zwei `static` neben der Funktion, in der VM ein Slot des Modul-Frames). Der Initialisierer ist eine
+    gewöhnliche Funktion ohne Parameter.
+    - **Nicht read-only-Daten**, wie "eine Listen-Storage mit unsterblichem Zähler" gewesen wäre: ein `ExpressionNode`-Baum
+      ließe sich als `static const struct` buchstabieren, aber `"a" + "b"` ist ein Aufruf von `Add.add` und ein
+      Listenliteral ist `torb_list_with_capacity` plus ein `add` pro Element. Ein Mechanismus, der jede Form abdeckt, ist
+      besser als zwei, die je eine abdecken.
+    - **Beim ersten Lesen gebaut, und genau das hält das Versprechen.** Die Sprache sagt: es gibt **niemals** eine
+      Modul-Initialisierung. Ein faul gebauter Unsterblicher hält das exakt: vor `main` läuft nichts, die Reihenfolge der
+      Lesezugriffe entscheidet nichts, und ein `const`, das kein Pfad liest, wird nie gebaut. Unbeobachtbar ist es, weil
+      die Reinheitsregel des Checkers für ein Modul-`const` gilt - Literale, Operatoren der Zahlentypen, Interpolation,
+      Sammlungsliterale, Konstruktoraufrufe, andere Konstanten, **nie** ein Funktionsaufruf. In einer Entry- oder
+      Testdatei ist ein Top-Level-`const` eine **lokale Variable der Entry-Funktion** und kommt hier gar nicht an - das
+      schließt das eine Loch, das die letzte Runde notiert hatte.
+    - **Unsterblich durch Konstruktion, damit das Leak-Gate exakt bleibt.**
+      `torb_begin_immortal()`/`torb_end_immortal()` öffnen eine Region um den Aufruf des Initialisierers, und **jeder**
+      Block, den `torb_allocate` darin herausgibt, wird mit `TORB_IMMORTAL_COUNT` geboren: retain und release sind
+      No-Ops, `torb_make_unique` kopiert, und keiner wird je freigegeben. Die Region ist es, die den *ganzen Graphen*
+      unsterblich macht - die Listen-Storage, die Texte darin, die Boxen eines Case -, wo ein Markieren nur des obersten
+      Blocks dessen Kinder im Live-Zähler gelassen hätte. Die Temporaries, die der Initialisierer unterwegs macht, werden
+      mit unsterblich; das ist eine feste Zahl Blöcke pro Programm und kein wachsendes Leck.
+    - **Der Zähler wird geteilt, nicht das Gate geschwächt:** `torb_report_leaks` schreibt `live blocks at exit: 0`
+      **und** `immortal blocks at exit: N`, `native.rs` prüft beide Zeilen, und `live blocks` heißt weiter "alles, was
+      gezählt wurde, wurde freigegeben".
+    - **Ein Body, der in einem anderen Body gelowert wird, ist jetzt ein Mechanismus.** Der Initialisierer wird dort
+      gelowert, wo das `const` zuerst gelesen wird, und nicht über die Worklist: ein Konstrukt, das das Back-End noch
+      nicht übersetzt, muss den Body abbrechen, der das `const` *liest*, und ein später abgearbeiteter Worklist-Eintrag
+      erreicht den nicht mehr. Das ist die Form, die ein Closure-Body schon hatte, also sind
+      `savedFrame`/`enterBody`/`restoreFrame` jetzt `public` und tragen Modul, Substitution und `capturedVariables` mit.
+    - **Der Workaround im Lexer ist raus**, gemessen auf Stage 2, `check --timings ..`, je drei Läufe: mit dem Feld
+      1790/2023/2020 ms für "lexing, parsing and the module graph", ohne 1787/1963/1949 ms; alle Pässe 7430/7514/7432
+      gegen 6928/7492/7247 ms; `program.c` 57270499 gegen 57270002 Bytes. Der direkte Zugriff ist **nie langsamer**, und
+      beide Zahlen liegen im Rauschen der anderen - genau der Punkt: der allgemeine Mechanismus macht den Workaround
+      unnötig, also entscheidet, dass ein Feld, ein Initialisierer und ein Kommentar darüber weg sind.
+    - Gate: `bootstrap/tests/native/constants.trb` (Konstanten jeder Form, eine Tabelle von Tupeln, eine Liste aus
+      anderen Konstanten, Lesen in einer Schleife, eine **mutierte Kopie**), byte-gleich mit Stage 0, `live blocks 0`,
+      13 unsterbliche. 98 Runtime-Tests (drei neue in `memory_test.c`).
+  - **Ein Trait-Member wird nach Name *und Form* gesucht, und ein Name allein reicht nicht.** Das
+    "a generated member without a receiver" bei `std/core/src/convert.trb:113` ging nie um `showNested`: `WellKnown` des
+    Compilers hat ein **Feld** `show: SymbolId?`, `providerOf` des Checkers antwortet ein Feld unter dem Namen des
+    Members, und das Back-End nahm es als Provider von `Show.show` - dessen generierte Instanz dann keinen Receiver
+    hatte, weil die Signatur eines Feldes kein `self` nimmt. Ein Finding verweigerte den ganzen Build und mit ihm **jedes
+    `Show` eines zusammengesetzten Werts der Compiler-eigenen Typen**: eine Probe, die einen `Checker` zeigt, lowerte
+    7951 von 7952 Funktionen und lowert jetzt 7965 von 7965. `declaredMemberOf` stellt die Frage, die die
+    Anforderungsprüfung des Checkers selbst stellt (`compareSignatures`: `required.takesSelf == given.takesSelf`) - für
+    eine **abgeleitete** Implementierung läuft die Prüfung gar nicht, darum hat es vorher niemand gesehen.
+    Gate: `show-compound.trb`. Eine neue notierte Abweichung: auf Stage 0 liest `value.show()` bei einem Wert mit Feld
+    `show` das **Feld** (kein Typchecker), also zeigt das Gate so einen Wert nur über `print`.
+  - **Keine Plannummer erreicht mehr eine Meldung, die ein Nutzer liest.** Findings lasen
+    `not supported by the back end yet: a quoted expression (milestone 5.11)`. Welche Teil-Meilenstein-Nummer ein
+    Konstrukt baut, ist eine Tatsache über den Plan dieses Repositories und nicht über das Programm vor dem Leser, und
+    ein Plan, der sich verschiebt, lässt die Nummer falsch stehen. `unsupportedMessage` in `ir/unsupported.trb` ist die
+    **eine** Stelle, die den Satz formt - `<das Konstrukt> is not supported by the native back end yet` - und beide
+    Hälften gehen durch sie: das `reportUnsupported` des Lowerings für ein Konstrukt des Programms, das des Emitters für
+    eines der IR. `torb build` schreibt die Findings des Emitters als `error: <Meldung>`-Zeilen wie die des Lowerings,
+    statt einer Kopfzeile plus eingerückter Liste, die dasselbe zweimal sagte. Das Manifest behält
+    `NativeState.Planned` mit seinem Meilenstein als **internen Schlüssel** - die Tabelle muss sagen, welche Einträge
+    noch nicht geschrieben sind -, und er kommt nirgends heraus: ein geplanter Native liest
+    `` `X`, which the runtime does not provide yet ``. 16 gepinnte Strings der Lowering-Tests und zwei
+    Dokumentationsseiten mit Exact-Match-Skripten neu gepinnt.
+  - **Entschieden (Koordinator, notiert in BACKEND 5.11 und auf 5.14s Liste):** ein fehlschlagendes `assert` zeigt
+    nativ eine Capture, die ein Skalar ist (`Int*`/`UInt*`/`Float*`, `Bool`, `String`, `Char`), **nach Wert**, und jede
+    andere nach **Name und Typ** (`found: LoweredProgram`). Das hält die Instanzkosten pro gefangenem Typ (1731
+    Instanzen für einen `Checker`) und das Problem "ein nicht zeigbarer Typ verweigert den ganzen Test-Build" aus dem
+    Testbinary. Volle Werte kommen mit `docs/ENCODING.md`.
+  - **Nicht geschafft, mit Stand:** 5.11 selbst (quotierte Ausdrücke, `test`/`group` als Runtime-Funktionen,
+    `main.exe test ../compiler/tests` als **ein** Binary für alle 55 Dateien), die kurzen C-Symbole (6.3s größter Hebel,
+    62,5% der Datei), und die zwei Punkte aus 5.14: die `cause()`-Kette eines Top-Level-`?` nativ und `Show` eines
+    Funktionswerts. Die Entwürfe dafür stehen unverändert in BACKEND ("What 5.11 needs" und 6.3s Liste); der
+    unsterbliche Static, den 5.11 für den statischen `ExpressionNode`-Baum braucht, ist jetzt da.
+  - **Gates:** `cargo build --release`, `check ..` 281 Dateien "no problems", `check tests/native tests/scripts`
+    63 Dateien, `check --statistics ..` 0 deferred, `canon --check` 0 von 348 Dateien, `docs check` 219 Seiten,
+    `docs index --check` 24 Indizes, `docs source` über `ir`/`backend`/`cli`/`std/test`/`std/expression` 43 Dateien
+    "no problems", `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `sh runtime/build.sh` 98 Tests,
+    `torb test ../compiler/tests` 1453 Tests, volle `cargo test --release`, und **der Fixpoint hält**: Stage 1 und
+    Stage 2 sind sich über 57289851 Bytes C einig (250,1 s / 108,1 s), Stage 3 emittiert sie noch einmal (22,0 s).

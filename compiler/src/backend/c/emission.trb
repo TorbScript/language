@@ -12,6 +12,7 @@
 
 use IrProgram, IrFunction, Slot, LocationId, Location from "../../ir/ir"
 use escapedComponent from "../../ir/mangle"
+use unsupportedMessage from "../../ir/unsupported"
 use CExpression, CStatement, CDeclaration from "./writer"
 use declarationLines, needsBlankLine, cStringOf from "./writer"
 
@@ -44,15 +45,19 @@ public fn write(var emission: Emission, declaration: CDeclaration) {
 }
 
 /**
- * One construct the C back end does not emit yet, with what it would take to add it. The same construct is recorded
- * once however often it occurs, because one root cause gets one message - the rule the diagnostics follow everywhere.
+ * One construct the C back end does not emit yet. The same construct is recorded once however often it occurs, because
+ * one root cause gets one message - the rule the diagnostics follow everywhere.
+ *
+ * `what` names the construct as a noun phrase and never a plan number: the sentence a user reads is
+ * [unsupportedMessage]'s, which is the very one the lowering's own findings go through.
  */
-public fn reportUnsupported(var emission: Emission, what: String) {
-  if emission.unsupportedIndex.containsKey(what) {
+public fn reportUnsupported(var emission: Emission, what: String, because: String = "") {
+  const message = unsupportedMessage what, because
+  if emission.unsupportedIndex.containsKey(message) {
     return
   }
-  emission.unsupportedIndex.set what, true
-  emission.unsupported.add what
+  emission.unsupportedIndex.set message, true
+  emission.unsupported.add message
 }
 
 /** The finished translation unit, one line per entry of [Emission.lines]. */

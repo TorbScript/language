@@ -232,10 +232,25 @@ void *torb_make_unique(void *block,
 /** Turn a heap block into static data: never retained, never released, never freed. `block` consumed. */
 void torb_make_immortal(void *block);
 
-/** How many blocks (including raw side buffers) are live. The leak test asserts this is zero at the end. */
+/**
+ * Opens an immortal region: every block `torb_allocate` hands out until the matching `torb_end_immortal` is born
+ * immortal - never retained, never released, never freed, and a write to it copies.
+ *
+ * It is what a module constant whose value is no static data is built in, exactly once, so that reading the constant
+ * costs one load instead of one build (BACKEND, the immortal counted static). The temporaries the initializer made on
+ * the way are immortal too, which is why a region is opened around a value that is built once and never around
+ * ordinary code. Regions nest, because one constant may read another.
+ */
+void torb_begin_immortal(void);
+void torb_end_immortal(void);
+
+/** How many counted blocks (including raw side buffers) are live. The leak test asserts this is zero at the end. */
 size_t torb_live_block_count(void);
 
-/** `torb build --report-leaks`: writes the live block count to stderr. */
+/** How many blocks are immortal. They are never freed by construction, so they are no part of the live count. */
+size_t torb_immortal_block_count(void);
+
+/** `torb build --report-leaks`: writes the live and the immortal block count to stderr, one line each. */
 void torb_report_leaks(void);
 
 /* ---------------------------------------------------------------------------------------- element descriptors --- */

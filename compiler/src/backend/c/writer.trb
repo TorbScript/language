@@ -324,6 +324,13 @@ public type CDeclaration {
    * a name cannot be broken.
    */
   case StaticData(annotation: String, name: String, value: CExpression, isWrapped: Bool = false)
+  /**
+   * `static torb_text t_main_table_cell;`: a mutable static of the translation unit, zero initialized by C.
+   *
+   * The cell of an immortal constant and the flag that says it was built are the only two, and both are deliberately
+   * without an initializer: a `{ 0 }` would have to be spelled per type, and static storage starts out zero anyway.
+   */
+  case Variable(annotation: String, name: String)
   /** A comment of its own, which is how the sections of the file are named. */
   case Comment(text: String)
   /** A fixed block of C the emitter wrote as a `"""` string: the head of the unit, `main`. Written as it is. */
@@ -364,6 +371,7 @@ fn writeDeclaration(var writer: CWriter, declaration: CDeclaration) {
   match declaration {
     .Typedef(target, name) => writeLine writer, "typedef {target} {name};"
     .Prototype(head) => writeLine writer, "{head};"
+    .Variable(annotation, name) => writeLine writer, "{declarationOf(annotation, name)};"
     .Comment(text) => writeLine writer, "/* {text} */"
     .Fixed(text) => writeFixed writer, text
     .Struct(name, members) => {

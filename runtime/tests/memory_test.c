@@ -116,10 +116,45 @@ TORB_TEST(raw_buffers_are_counted_too) {
 
 TORB_TEST(making_a_block_immortal_takes_it_out_of_the_live_count) {
   size_t before = torb_live_block_count();
+  size_t immortal = torb_immortal_block_count();
   void *block = torb_allocate(32u, TORB_BLOCK_RECORD);
   torb_make_immortal(block);
   TORB_CHECK_INTEGER(torb_live_block_count(), before);
+  TORB_CHECK_INTEGER(torb_immortal_block_count(), immortal + 1u);
   /* Deliberately not freed: an immortal block never is. */
+}
+
+TORB_TEST(a_block_of_an_immortal_region_is_born_immortal) {
+  size_t before = torb_live_block_count();
+  size_t immortal = torb_immortal_block_count();
+  void *block;
+  void *copy;
+  torb_begin_immortal();
+  block = torb_allocate(32u, TORB_BLOCK_RECORD);
+  torb_end_immortal();
+  TORB_CHECK_INTEGER(torb_live_block_count(), before);
+  TORB_CHECK_INTEGER(torb_immortal_block_count(), immortal + 1u);
+  /* Retaining and releasing one are no-ops, and a write to one copies. */
+  torb_retain(block);
+  torb_release(block, NULL);
+  TORB_CHECK(!torb_is_unique(block));
+  copy = torb_make_unique(block, 32u, NULL, NULL);
+  TORB_CHECK(copy != block);
+  TORB_CHECK_INTEGER(torb_live_block_count(), before + 1u);
+  torb_release(copy, NULL);
+  TORB_CHECK_INTEGER(torb_live_block_count(), before);
+}
+
+TORB_TEST(immortal_regions_nest) {
+  size_t immortal = torb_immortal_block_count();
+  torb_begin_immortal();
+  torb_begin_immortal();
+  (void)torb_allocate(32u, TORB_BLOCK_RECORD);
+  torb_end_immortal();
+  /* Still inside the outer region, so this one is immortal as well. */
+  (void)torb_allocate(32u, TORB_BLOCK_RECORD);
+  torb_end_immortal();
+  TORB_CHECK_INTEGER(torb_immortal_block_count(), immortal + 2u);
 }
 
 /** A closure environment in the shape the C emitter writes: the header, the drop function, then the captures. */
@@ -201,6 +236,8 @@ void torb_register_memory_tests(void) {
   TORB_ADD(a_null_block_is_a_unique_no_op);
   TORB_ADD(raw_buffers_are_counted_too);
   TORB_ADD(making_a_block_immortal_takes_it_out_of_the_live_count);
+  TORB_ADD(a_block_of_an_immortal_region_is_born_immortal);
+  TORB_ADD(immortal_regions_nest);
   TORB_ADD(releasing_an_environment_runs_the_drop_function_it_carries);
   TORB_ADD(releasing_the_environment_of_a_closure_without_captures_is_a_no_op);
   TORB_ADD(a_copied_closure_shares_its_environment);

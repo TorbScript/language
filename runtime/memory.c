@@ -1,5 +1,10 @@
 /*
- * memory.c - the block header, reference counting, make-unique, immortal values, the live-block counter.
+ * memory.c - the block header, reference counting, make-unique, immortal values, the block counters.
+ *
+ * There are two counters, because there are two kinds of block. A counted block is freed when its last owner releases
+ * it, and `live blocks at exit: 0` says every one of them was. An **immortal** block is never freed by construction:
+ * it is born inside an immortal region (`torb_begin_immortal`), which is what the value of a module constant and the
+ * tree of a quoted expression are built in, and it is reported on its own line so the leak gate stays exact.
  *
  * Counts are plain integers: every task owns its heap, so nothing has to be atomic (BACKEND 2.5). The heap is libc's
  * for now; the bump allocator with size-class free lists that section 2.5 describes is a replacement behind these six
@@ -15,6 +20,15 @@
 #include <string.h>
 
 static size_t torb_live_blocks = 0;
+static size_t torb_immortal_blocks = 0;
+
+/*
+ * How many immortal regions are open. Everything `torb_allocate` hands out while one is (the value of a module
+ * constant, the tree of a quoted expression, and every temporary the initializer made on the way) is born immortal:
+ * retaining and releasing it are no-ops, it is never freed, and a write to it copies. It is counted apart from the
+ * live blocks, so `live blocks at exit: 0` keeps meaning "everything that was counted was freed".
+ */
+static unsigned torb_immortal_depth = 0;
 
 static void *torb_payload(void *block) {
   return (void *)((uint8_t *)block + sizeof(torb_header));
@@ -31,9 +45,14 @@ void *torb_allocate(size_t size, torb_block_kind kind) {
   if (header == NULL) {
     torb_panic_out_of_memory(size);
   }
-  header->count = 1;
   header->kind = (uint16_t)kind;
   header->color = (uint16_t)TORB_COLOR_NONE;
+  if (torb_immortal_depth > 0) {
+    header->count = TORB_IMMORTAL_COUNT;
+    torb_immortal_blocks += 1;
+    return header;
+  }
+  header->count = 1;
   torb_live_blocks += 1;
   return header;
 }
@@ -145,14 +164,31 @@ void torb_make_immortal(void *block) {
     return;
   }
   header->count = TORB_IMMORTAL_COUNT;
-  /* The block is never freed again, so it leaves the live count right away. */
+  /* The block is never freed again, so it leaves the live count and joins the immortal one. */
   torb_live_blocks -= 1;
+  torb_immortal_blocks += 1;
+}
+
+void torb_begin_immortal(void) {
+  torb_immortal_depth += 1;
+}
+
+void torb_end_immortal(void) {
+  if (torb_immortal_depth == 0) {
+    torb_panic_text("internal error: ended an immortal region that was never begun", torb_location_unknown);
+  }
+  torb_immortal_depth -= 1;
 }
 
 size_t torb_live_block_count(void) {
   return torb_live_blocks;
 }
 
+size_t torb_immortal_block_count(void) {
+  return torb_immortal_blocks;
+}
+
 void torb_report_leaks(void) {
   fprintf(stderr, "live blocks at exit: %lu\n", (unsigned long)torb_live_blocks);
+  fprintf(stderr, "immortal blocks at exit: %lu\n", (unsigned long)torb_immortal_blocks);
 }

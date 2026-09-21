@@ -24,6 +24,7 @@ use FunctionId, Intrinsic, RuntimeKind from "../ir"
 use substitute from "../../semantics/checker/unify"
 use Instantiation, newInstantiation, instantiateType from "../instantiate"
 use canonicalType, canonicalLiteral, escapedComponent, mangledName from "../mangle"
+use unsupportedMessage from "../unsupported"
 use FunctionBuilder, terminate, switchTo from "../build"
 
 /** One construct the lowering does not translate yet, with where it was first seen and how often it blocked a function. */
@@ -256,6 +257,11 @@ public type Lowering {
    * own guard - and a cycle is a diagnostic of the checker, so hitting this one is a clean finding and never a hang.
    */
   var inlinedConstants: Map<Int, Bool> = [:]
+  /**
+   * The accessor of every constant whose value is an **immortal counted static**, by `SymbolId.value`: one cell and one
+   * initializer per declaration, however many modules read it (`lowerImmortalConstant` in `ir/lower/expression.trb`).
+   */
+  var constantCells: Map<Int, FunctionId> = [:]
 }
 
 /** A lowering for one checked program. `paths` holds one path per module, in the order of `program.graph.modules`. */
@@ -281,13 +287,16 @@ public fn newLowering(checker: Checker, paths: List<String>): Lowering {
  *
  * Only the *first* one per function is recorded: everything after it walks a body whose slots were abandoned, and one
  * root cause gets one message - the same rule the checker's diagnostics follow.
+ *
+ * `what` names the construct as a noun phrase and never a plan number: the sentence a user reads is
+ * [unsupportedMessage]'s, and the C emitter's findings go through the same one.
  */
-public fn reportUnsupported(var lowering: Lowering, what: String, at: Span) {
+public fn reportUnsupported(var lowering: Lowering, what: String, at: Span, because: String = "") {
   if lowering.isSilent || !lowering.isSupported {
     return
   }
   lowering.isSupported = false
-  const message = "not supported by the back end yet: {what}"
+  const message = unsupportedMessage what, because
   if const Some(index) = lowering.unsupportedIndex.get(message) {
     const entry = lowering.unsupported[index]
     lowering.unsupported.set index, entry.copy(count: entry.count + 1)

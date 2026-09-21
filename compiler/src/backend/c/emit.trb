@@ -30,6 +30,7 @@ use Emission, write, reportUnsupported, emittedText from "./emission"
 use cTypeOf, whyNoCType, hasStructDefinition, memberNameOf, variantMemberNameOf from "./type"
 use structDeclarationOf, layoutDefinitionOrder, objectDeclarationOf from "./type"
 use bodyOf, bodyStatements, signatureHeadOf, valueTypeOf, emptyNicheExpression, resultTypeOf from "./body"
+use resultPointerName from "./body"
 use dropFunctionOf, pointerTo, closureThunkNameOf, environmentLayoutOfFunction from "./body"
 use retainChildrenFunctionOf from "./body"
 use variantInitializerParts, boxedLayoutOf, countedFormOf, inlineCountedLayoutOf from "./body"
@@ -49,6 +50,7 @@ public fn emitProgram(program: IrProgram, entry: String): Emission {
   emitTypeDefinitions emission, program, layouts
   emitCountedHelpers emission, program, functions, layouts
   emitStaticData emission, program, functions
+  emitConstantCellStorage emission, program, functions
   emitPrototypes emission, program, functions
   // The descriptors and the tables come between the prototypes and the bodies: their initializers name a thunk, and a
   // body names one of them
@@ -673,7 +675,7 @@ fn closureTargetsOf(program: IrProgram, functions: List<IrFunction>): List<IrFun
 fn thunkHeadOfFunction(var emission: Emission, program: IrProgram, function: IrFunction): String? {
   const signature = function.signature
   if const .ByPointer = signature.resultMode {
-    reportUnsupported emission, "a closure whose result is written through a pointer (milestone 5.4)"
+    reportUnsupported emission, "a closure whose result is written through a pointer"
     return None
   }
   const first = if environmentLayoutOfFunction(program, function).isSome() { 1 } else { 0 }
@@ -746,7 +748,7 @@ fn checkProgramTypes(var emission: Emission, program: IrProgram, functions: List
       checkType emission, program, slot.annotation
     }
     if const .TaskResume = function.kind {
-      reportUnsupported emission, "a function whose body is a state machine over `Task` (milestone 7.3)"
+      reportUnsupported emission, "a function whose body is a state machine over `Task`"
     }
   }
   for descriptor in program.elements {
@@ -1490,7 +1492,7 @@ fn staticValueOf(var emission: Emission, program: IrProgram, value: StaticValue)
     .VoidValue => CExpression.Literal "0"
     .Aggregate(layout, variant, fields) => aggregateOf emission, program, layout, variant, fields
     .Items(_, _) => {
-      reportUnsupported emission, "a static `Array<Item, Size>` (milestone 5.9)"
+      reportUnsupported emission, "a static `Array<Item, Size>`"
       zeroInitializer
     }
   }
@@ -1560,7 +1562,7 @@ fn aggregateOf(
   }
   match shape.representation {
     .Boxed => {
-      reportUnsupported emission, "a constant of a counted type (milestone 5.4)"
+      reportUnsupported emission, "a constant of a counted type"
       zeroInitializer
     }
     .Niche(payload, _) => {
@@ -1597,6 +1599,10 @@ fn emitDefinitions(
   prototypes: Map<String, String>,
 ) {
   for function in functions {
+    if const .ConstantCell(initializer) = function.kind {
+      emitConstantCell emission, program, function, initializer
+      continue
+    }
     const body = bodyOf program, function, prototypes
     const statements = bodyStatements emission, program, body
     const declaration = CDeclaration.Definition(
@@ -1605,6 +1611,93 @@ fn emitDefinitions(
       statements,
     )
     write emission, declaration
+  }
+}
+
+/**
+ * The accessor of an **immortal counted static**: the cell that holds the value, the flag that says it was built, and a
+ * function that builds it on the first call and hands it over on every one.
+ *
+ * The value is built inside an immortal region, so every block it is made of carries the immortal count: the caller owns
+ * what it gets by the ABI, and retaining, releasing and dropping it are all no-ops - which is why the cell is handed over
+ * without a retain and why a write to a copy of it makes the copy unique first.
+ *
+ * # Open
+ *
+ * The `.ByPointer` half is written and no program reaches it. A constant whose value is no static data is a collection, a
+ * boxed record or a text, and all three are one word wide; an **inline** aggregate above the by-pointer limit would need
+ * an initializer the purity rule of a module constant does not allow (`Array.filled` is a call). It stays because the
+ * result mode is `finishProgram`'s decision and not this function's, so an accessor that reads it wrongly would be a
+ * silent miscompilation the day a layout changes.
+ */
+fn emitConstantCell(
+  var emission: Emission,
+  program: IrProgram,
+  function: IrFunction,
+  initializer: FunctionId,
+) {
+  if !program.hasFunction(initializer) {
+    reportUnsupported emission, "a constant whose initializer is not in the program"
+    return
+  }
+  const built = program.functionAt initializer
+  const cell = cellNameOf function
+  const ready = readyNameOf function
+  const isByPointer = match function.signature.resultMode {
+    .ByPointer => true
+    .ByValue => false
+  }
+  const call = if isByPointer {
+    CExpression.Call CExpression.Name(built.name), [CExpression.AddressOf(CExpression.Name(cell))]
+  } else {
+    CExpression.Call CExpression.Name(built.name), []
+  }
+  var building: List<CStatement> = []
+  building.add CStatement.Evaluate(CExpression.Call(CExpression.Name("torb_begin_immortal"), []))
+  if isByPointer {
+    building.add CStatement.Evaluate(call)
+  } else {
+    building.add CStatement.Assignment(CExpression.Name(cell), call)
+  }
+  building.add CStatement.Evaluate(CExpression.Call(CExpression.Name("torb_end_immortal"), []))
+  building.add CStatement.Assignment(CExpression.Name(ready), CExpression.Literal("true"))
+  var statements: List<CStatement> = []
+  statements.add CStatement.If(CExpression.Unary("!", CExpression.Name(ready)), building)
+  if isByPointer {
+    statements.add CStatement.Assignment(CExpression.Dereference(CExpression.Name(resultPointerName)), CExpression.Name(cell))
+  } else {
+    statements.add CStatement.Return(Some(CExpression.Name(cell)))
+  }
+  const comment = "{function.name}: built once, immortal, never freed"
+  write emission, CDeclaration.Definition(comment, signatureHeadOf(program, function), statements)
+}
+
+fn cellNameOf(function: IrFunction): String {
+  "{function.name}_cell"
+}
+
+fn readyNameOf(function: IrFunction): String {
+  "{function.name}_ready"
+}
+
+/**
+ * The cell and the flag of every immortal constant, in one section above the prototypes: the value, and whether it has
+ * been built. They are the only mutable statics of the translation unit.
+ */
+fn emitConstantCellStorage(var emission: Emission, program: IrProgram, functions: List<IrFunction>) {
+  var written = false
+  for function in functions {
+    if const .ConstantCell(_) = function.kind {
+      if !written {
+        write(emission, CDeclaration.Comment(
+          "The value of every module constant that is no static data: built once, immortal, never freed."
+        ))
+        written = true
+      }
+      const spelling = valueTypeOf program, function.signature.result
+      write emission, CDeclaration.Variable("static {spelling}", cellNameOf(function))
+      write emission, CDeclaration.Variable("static bool", readyNameOf(function))
+    }
   }
 }
 

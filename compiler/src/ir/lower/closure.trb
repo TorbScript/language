@@ -20,7 +20,8 @@
 use Span from "../../syntax/source"
 use Statement, Block, Expression, Condition, Argument, MatchArm, Closure from "../../syntax/ast"
 use SymbolId from "../../semantics/symbols"
-use TypeId, Signature, ParameterMode from "../../semantics/checker/type"
+use ModuleId from "../../semantics/module"
+use TypeId, ParameterId, Signature, ParameterMode from "../../semantics/checker/type"
 use signatureOf from "../../semantics/checker/signature"
 use IrProgram, IrTypeId, IrType, IrSignature, IrSignatureId, IrParameter, Ownership from "../ir"
 use Slot, BlockId, LayoutId, FunctionId from "../ir"
@@ -455,7 +456,7 @@ public fn lowerNamedFunctionValue(
   const signature = lowering.checker.signature identifier
   if signature.takesSelf {
     const name = lowering.checker.symbolAt(symbol).name
-    const what = "`{name}` used as a function value, which would have to bind its receiver (milestone 5.11)"
+    const what = "`{name}` used as a function value, which would have to bind its receiver"
     return unsupportedSlot lowering, builder, destination, what, expression.span
   }
   const mapping = lowering.substitution
@@ -727,7 +728,7 @@ fn capturePlansOf(var lowering: Lowering, var builder: FunctionBuilder, at: Span
       }
     }
     if isReferenceParameterSlot(builder, slot) {
-      const what = "a closure that captures a `var` parameter or `var self` (milestone 5.9b)"
+      const what = "a closure that captures a `var` parameter or `var self`"
       reportUnsupported lowering, what, at
       return []
     }
@@ -928,8 +929,15 @@ fn bindClosureParameters(
 
 // --- The frame of one function --------------------------------------------------------------------------------------
 
-/** Everything about one function body the lowering holds exactly one of, saved while a closure inside it is lowered. */
-type SavedFrame {
+/**
+ * Everything about one function body the lowering holds exactly one of, saved while a body **inside** it is lowered.
+ *
+ * Two constructs need one: a closure, whose body is a function of its own, and the initializer of a module `const`,
+ * which becomes the initializer of an immortal cell (`lowerImmortalConstant` in `ir/lower/expression.trb`). The module,
+ * the substitution and the captured variables are in it because the second one crosses a module: a `const` is lowered in
+ * the module it is written in, whoever reads it.
+ */
+public type SavedFrame {
   slots: Map<Span, Slot>
   entryLocals: Map<Int, Slot>
   boxes: Map<Span, Slot>
@@ -944,9 +952,20 @@ type SavedFrame {
   owner: String
   closureCount: Int
   closureAt: Span?
+  module: ModuleId
+  substitution: Map<ParameterId, TypeId>
+  capturedVariables: Map<Span, Bool>
 }
 
-fn savedFrame(var lowering: Lowering): SavedFrame {
+/**
+ * The frame of the body that is being lowered, to be put back by [restoreFrame]. Every body that is lowered **inside**
+ * another one takes one first: the lowering has one of everything a body needs.
+ *
+ * # Related
+ *
+ * - [enterBody] - what the inner body starts from once the frame is saved.
+ */
+public fn savedFrame(var lowering: Lowering): SavedFrame {
   SavedFrame(
     lowering.slots,
     lowering.entryLocals,
@@ -962,6 +981,9 @@ fn savedFrame(var lowering: Lowering): SavedFrame {
     lowering.owner,
     lowering.closureCount,
     lowering.closureAt,
+    lowering.module,
+    lowering.substitution,
+    lowering.capturedVariables,
   )
 }
 
@@ -971,6 +993,15 @@ fn savedFrame(var lowering: Lowering): SavedFrame {
  * `capturedVariables` stays: it is keyed by a span of the file and a closure's body is part of the same body.
  */
 fn enterClosure(var lowering: Lowering, name: String, at: Span) {
+  enterBody lowering, name
+  lowering.closureAt = Some at
+}
+
+/**
+ * The frame of a body that is lowered inside another one, with nothing of the frame around it left. `capturedVariables`
+ * stays whatever the caller set: a closure's body is part of the same body, while the initializer of a `const` is not.
+ */
+public fn enterBody(var lowering: Lowering, name: String) {
   lowering.slots = [:]
   lowering.entryLocals = [:]
   lowering.boxes = [:]
@@ -984,10 +1015,15 @@ fn enterClosure(var lowering: Lowering, name: String, at: Span) {
   lowering.inlinedThunks = [:]
   lowering.owner = name
   lowering.closureCount = 0
-  lowering.closureAt = Some at
+  lowering.closureAt = None
 }
 
-fn restoreFrame(var lowering: Lowering, saved: SavedFrame) {
+/**
+ * The frame [savedFrame] took, put back. Everything the inner body wrote into the lowering is gone with it, which is what
+ * lets the enclosing body go on as if nothing had happened - except for `isSupported`, which the caller carries over on
+ * purpose: a construct the back end does not translate yet abandons the body that needed the inner one too.
+ */
+public fn restoreFrame(var lowering: Lowering, saved: SavedFrame) {
   lowering.slots = saved.slots
   lowering.entryLocals = saved.entryLocals
   lowering.boxes = saved.boxes
@@ -1002,6 +1038,9 @@ fn restoreFrame(var lowering: Lowering, saved: SavedFrame) {
   lowering.owner = saved.owner
   lowering.closureCount = saved.closureCount
   lowering.closureAt = saved.closureAt
+  lowering.module = saved.module
+  lowering.substitution = saved.substitution
+  lowering.capturedVariables = saved.capturedVariables
 }
 
 // --- Types ----------------------------------------------------------------------------------------------------------
