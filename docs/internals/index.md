@@ -14,6 +14,7 @@ documents:
   - ../ENCODING.md
   - ../LINEAR.md
   - ../ECS.md
+  - ../CONCURRENCY.md
 
   - ../PATH.md
   - ../PROJECT.md
@@ -56,6 +57,7 @@ a rule nothing holds either side to.
 - **[Encoding](../ENCODING.md)**
 - **[Linear Algebra and Geometry](../LINEAR.md)**
 - **[Entities, Components and Scenes](../ECS.md)**
+- **[Concurrency and Parallelism](../CONCURRENCY.md)**
 - **[File Paths](../PATH.md)**
 - **[The Project File](../PROJECT.md)**
 - **[Resources](../RESOURCES.md)**

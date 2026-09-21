@@ -3232,3 +3232,64 @@ Wenn nicht, was bedeutet, bewirkt es?
     gebraucht wird, was nativ fehlt, Tempo-Vergleich), Seed-Entscheidung + `tools/bootstrap.sh`, nativer Treiber
     (`torb run` = bauen + ausführen, `torb test` für jedes Testpaket). Fehlend danach: `canon` und `highlight` nach
     TorbScript portieren, Gates auf den nativen Compiler umstellen, `bootstrap/crates` löschen.
+
+- (Nebenläufigkeit und Parallelität, 2026-09-22) `docs/CONCURRENCY.md` beantwortet die drei Fragen des Nutzers
+  (Event-Loop/Threads/Green Threads? Schnittstellen für CPU-Zahl? PLINQ?) und ist im Internals-Index registriert.
+  - **Das Modell:** stapellose Zustandsautomaten (kommen aus dem Lowering, also in beiden Back Ends gleich) auf einem
+    FESTEN Pool von OS-Threads, ein Worker pro Kern, jeder Worker mit eigenem Heap, eigener FIFO-Queue, eigener
+    Timer-Uhr und eigenem IO-Poller. Ein Task verlässt seinen Worker nie, sobald er gestartet ist - daraus folgt
+    alles andere (Zähler bleiben einfache Integer, keine Locks, Atomics nur bei Channel-Transfer und Ready-Flag).
+    Keine Green Threads (Stack pro Task, nichts für ein JavaScript-Backend), kein Thread pro Task.
+  - **Entschieden:** Worker-Zahl auf vier Ebenen - `tasks { workers 4, blocking 8 }` in `project.trb` (nicht
+    statisch, neben `profile`/`test`), `TORB_WORKERS`/`TORB_BLOCKING` ohne Rebuild, `limits(workers: 1)` im Sandbox
+    (Default 1), und `.parallel(workers:)` pro Operation. Lesbar per `Workers.count()`, KEIN `Workers.set` - die Zahl
+    steht beim Start fest, weil jeder Worker einen Heap besitzt (einen wegnehmen hiesse einen Heap räumen).
+  - **Entschieden - `parallel()`:** dasselbe Vokabular wie `Iterable`/`Source`, Terminal antwortet `Task`, IMMER
+    geordnet (kein `AsOrdered`/`AsUnordered`). Chunk-Grenzen hängen nur an der Länge: `chunkCount = chunk ??
+    minimum(length, 64)`, Chunk `i` deckt `[i*length/n, (i+1)*length/n)`. `workers:` verschiebt keine Grenze, also ist
+    eine `Float`-Summe auf jeder Maschine bitgleich - aber NICHT gleich `numbers.sum()` ohne `parallel()`, weil
+    Gleitkomma-Addition nicht assoziativ ist. Zwei stabile Zahlen, das steht so im Dokument.
+  - **Entschieden - `Merge`:** verbindet zwei fertige *Outputs*, nicht zwei Akkumulatoren. Grund per Probe belegt:
+    `var fn combine(other: Self)` auf einem trait-typisierten Wert ist ein Fehler ("two values of a trait type need
+    not have the same type"), Javas Combiner-Form ist in dieser Sprache nicht schreibbar. `Merge` liegt in
+    `std/iteration` neben `Collector`; alle Collectors bekommen eine Implementierung ausser `averaging` (der Zähler
+    ist im `Float?` weg).
+  - **Entschieden - der Kern (Kopieren vermeiden):** strukturierte Parallelität. Der Aufrufer steckt für die ganze
+    Region im Aufruf, also darf ein Worker einen ZEIGER in den fremden Heap halten, ohne den Zähler anzufassen. Vier
+    Regeln machen das dicht: (R1) das Fenster ist ein `var`-Parameter und überlebt die Region nicht, (R2) der
+    Elementtyp enthält nichts Referenzgezähltes (`Item: Plain`, genau das `containsCounted == false` des IR),
+    (R3) was ein Worker anlegt, legt er im eigenen Heap an und gibt es wie eine Channel-Nachricht zurück,
+    (R4) `Window<Item>` hat `length()` und `[i]` und kein `add` - ein Resize würde fremden Speicher neu allozieren.
+    EIN Runtime-Primitiv darunter: eine Fork-Join-Barriere; `parallel()` ist die plus Chunking plus `Merge`,
+    `windows` die plus Fensterrechnung.
+  - **Verengung, die der Nutzer sehen sollte:** damit ist ECS-Lücke 8 als DATEN-Parallelität in EINEM System gelöst
+    (eine Spalte in Fenster geteilt), nicht als zwei verschiedene Systeme gleichzeitig über disjunkte Felder. Der
+    Feld-Fall ist Frage 7 unten.
+  - **Entschieden - IO:** completion-basiert wo die Plattform es hat (IOCP), sonst readiness-basiert (epoll, kqueue),
+    hinter EINER Schnittstelle in `runtime/io.c`; ein Poller PRO Worker (der Frame liegt in dessen Heap, also muss die
+    Completion dort aufwachen); dahinter ein kleiner Blocking-Pool für das, was keine Plattform asynchron macht, und
+    `offload` ist genau dieser Pool für Nutzercode. Die VM implementiert nichts davon ein zweites Mal, sie ruft
+    dasselbe C. Deterministisch bleibt: ein Programm ohne echtes IO druckt in jedem Back End dieselben Bytes.
+  - **Entschieden - Abbrechen:** kein `task.cancel()` (kein Punkt, an dem der Frame ohne Destruktoren abgebaut werden
+    kann); Abbruch ist ein Channel-Close, wie `Source.produce` es schon macht. `within(limit)` stoppt das WARTEN, nicht
+    die Arbeit, und sagt das auch so. Ein Panic in einem Task beendet den Prozess (101), er wird nicht zum `Result` des
+    Wartenden. `Task.all` wartet auf alle und klappt über die vorhandene `Result`-Konversion zusammen.
+  - **Entschieden - lange Rechnung:** `pause(): Task<Void>` (eine Zustandsteilung, sonst nichts) - bewusst NICHT
+    `yield`, damit das Wort für Generatoren frei bleibt. Keine Preemption, die bräuchte einen Stack.
+  - **Entschieden - Lastverteilung:** `spawn` legt den Task als Nachricht in einen Worker-Eingang und der Zielworker
+    kopiert die Captures beim ERSTEN Lauf - dann darf ein noch nicht gestarteter Task von jedem freien Worker geholt
+    werden. Das ist echtes Stealing genau dort, wo es gratis ist, und eine kleine Änderung an BACKEND 5.3.
+  - **GEFUNDEN, und das ist der wichtigste Befund:** die drei Regeln, auf denen "Data Races sind per Konstruktion
+    unmöglich" steht, prüft der Checker HEUTE alle drei nicht - per Probe belegt, jeweils "no problems":
+    (1) `await()`-Platzierung (`tasks.map { _.await() }` in einer `Int`-Funktion), (2) eine `spawn`-Closure DARF ein
+    `var` fangen (zwei `spawn`-Blöcke schreiben dieselbe Variable), (3) ein `shared type` wandert ungeprüft in eine
+    `spawn`-Closure. Alle drei sind Checker-Arbeit ohne Back End und können VOR der VM landen.
+  - **Erfreulicher Befund:** die Disjunktheits-Prüfung für zwei `var`-Argumente EXISTIERT schon
+    ("While a `var` access runs, the same path cannot be reached a second time") - zwei verschiedene Felder eines
+    Werts sind erlaubt, ein Pfad und sein Präfix nicht. Zwei Index-Pfade in dieselbe Liste kann sie nicht
+    unterscheiden, deshalb rechnet die Bibliothek die Fenstergrenzen und nicht der Aufrufer.
+  - **Offen für den Nutzer (nur Geschmack/Richtung):** 1. `std/parallel` als eigenes Paket statt in `std/task`?
+    2. `parallel()` bleibt aus dem Prelude? 3. Name `Plain` für "nichts Gezähltes drin"? 4. `pause()` statt `yield()`?
+    5. 64 als Default-Chunk-Zahl (später nicht mehr änderbar, ohne aufgezeichnete `Float`-Ergebnisse zu ändern)?
+    6. Soll `parallel()` je ungeordnet sein dürfen (PLINQ, rayon und Java machen es andersherum)? 7. Ist der Feld-Fall
+    von ECS-Lücke 8 überhaupt gewollt? 8. Soll ein `Task` in v1 abbrechbar sein?
