@@ -345,6 +345,20 @@ fn traitMember(var checker: Checker, receiver: TypeId, name: String, isStatic: B
   Some first.copy(needsArguments: true, overloads: found)
 }
 
+/**
+ * One member, reached through **one applied bound** and not through the whole overload set: what an operator needs
+ * once the type carries its trait more than once (`Board with Multiply<Scale, Board>` next to `Multiply<Board, Board>`)
+ * and the expression has decided which one is meant.
+ */
+public fn boundMember(var checker: Checker, receiver: TypeId, bound: TypeId, name: String): Candidate? {
+  memberOfTrait checker, receiver, bound, name, false
+}
+
+/** [dispatchOf] for a bound that is already applied: which of the three ways the chosen implementation is reached. */
+public fn dispatchOfBound(var checker: Checker, receiver: TypeId, capability: SymbolId, bound: TypeId): Dispatch {
+  dispatchOf checker, receiver, capability, bound
+}
+
 fn memberOfTrait(
   var checker: Checker,
   receiver: TypeId,

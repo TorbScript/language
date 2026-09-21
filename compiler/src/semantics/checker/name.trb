@@ -522,6 +522,15 @@ public fn reportUnknownMember(
         + " (`<{shown}: Length>`)"
     )
   }
+  // `print (0..4).length()` is `print(0..4)` and then `.length()` on what it produced: a parenthesis right after the
+  // callee is a parenthesized call whatever stands before it, so the member access lands on the call's result
+  if const .VoidType = checker.types.form(receiver) {
+    problem = problem.withNote(
+      "A call that produces nothing has the type `Void`. A `(` right after the name of a call is its argument list,"
+        + " whatever whitespace stands in between, so `f (x).{text}()` reads as `f(x).{text}()`: write"
+        + " `f((x).{text}())`, or bind the value first"
+    )
+  }
   // `level .Debug` lexes as `level.Debug`: whitespace never changes what a token sequence means, so `.` is one of the
   // tokens a first command argument must not start with
   if caseNamed(checker, receiver, text).isSome() {
@@ -646,6 +655,10 @@ public fn isFullyKnown(var checker: Checker, of: TypeId): Bool {
   }
   match checker.types.form(of) {
     .Parameter(_) => true
+    // `Void` is the type with exactly one value, and its members are the ones the standard library declares on it: a
+    // member it has not is an ordinary mistake, and saying nothing left `print(x).round()` with no type at all and the
+    // reader with "this is a bug of the compiler"
+    .VoidType => true
     .Nominal(_, _) | .Tuple(_) | .Literals(_, _) | .Traits(_) => isConcrete checker, of
     _ => false
   }

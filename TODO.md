@@ -2502,6 +2502,155 @@ Wenn nicht, was bedeutet, bewirkt es?
     Code sieht, ohne die Signatur zu kennen. Gehört in `torb highlight` (der Modifier, den `var`-Felder schon
     tragen) und in die VS-Code-Extension.
 
+- (**Erledigt: der Typprüfer-Durchgang - zwei Soundness-Löcher, Überladung über einen Trait-Parameter, Blanket-Lookup
+  und vier kleine Lücken**, 2026-09-21)
+  - **Ein Wert vom Trait-Typ wird nicht mehr für einen Typparameter genommen.** `fn bare<Value>(shape: Area): Value {
+    shape }` prüfte sauber durch und zerbrach im IR-Verifier ("the function returns `Record(Square)` and `return`
+    carries `Object(Area)`"). `checkValue` ließ jedes Paar durch, bei dem eine Seite "unentschieden" war, und ein
+    generischer Parameter stand auf dieser Liste. Die vier Konversionen der Sprache laufen alle **zum** Trait-Typ hin;
+    innerhalb des Körpers, der ihn deklariert, ist ein Parameter undurchsichtig, also ist das Paar "hier ein Trait-Typ,
+    dort ein Parameter" jetzt der gewöhnliche Fehler, mit einer Notiz, die sagt warum. `traitForParameter` läuft durch
+    beide Typen parallel, `Box<Area>` für ein `Box<Value>` ist dieselbe Meldung eine Ebene tiefer. "Unentschieden"
+    behält seine Bedeutung für alles andere - ein Literal (`Pair 0`), ein `const`-Parameter als Wert (`0..Rows`), ein
+    noch offener `Task`. Nichts im Repository hing am Loch.
+  - **`spawn` nimmt keine `var`-Bindung mit.** CONCEPT sagt es zweimal, der Checker akzeptierte eine, und zwei
+    `spawn`s auf derselben Variablen auch. Die Erfassung selbst ist der Fehler - ein Task, der sich eine Variable mit
+    dem Gültigkeitsbereich teilt, ist bereits das Rennen -, also gibt es kein Zählen und kein "in GENAU einen Task
+    verschoben": zwei `spawn`s sind zwei Meldungen, eine an jeder Closure. `requireTaskCaptures` liest die Erfassungen,
+    die die Closure selbst notiert hat, und hängt am **Symbol** der Prelude, nicht am Namen. Eine Bibliothek, die eine
+    Closure für dich spawnt (`Source.produce`), ist nicht erfasst - dieselbe Grenze, die Lücke 58 für `await()` zieht.
+  - **Überladung über einen Trait-Parameter, vervollständigt - EIN Mechanismus.** Aufgelöst wurde bisher nur, wo das
+    Trait-Argument der Typ des ERSTEN Parameters war. `chooseOverload` folgert jetzt jedes geschriebene Argument einmal
+    (eine Closure und ein Spread sagen nichts: eine Closure wird AUS dem Parameter gelesen, den sie füllt), behält die
+    Kandidaten, zu denen jedes Argument passt, und engt, wo mehr als einer bleibt, über den erwarteten Typ des Aufrufs
+    ein. Genau einer ist die Antwort, mehrere sind eine Mehrdeutigkeit, die sie aufzählt, keiner ist die Meldung mit
+    dem, was es gibt. Damit gehen: `game.attachAt true, "eight"` (späterer Parameter), `const named: String? =
+    game.valueOf()` (nur im Ergebnis), eine Schranke mit zwei Instanziierungen (`World: Store<Int> & Store<String>`),
+    und `Int.tryFrom(text)` neben `Int.tryFrom(wide)` bleibt, wie es war.
+    - **Der Operatorpfad stellt dieselben zwei Fragen.** `board * Scale(2)` meldete "`Board` does not implement
+      `Multiply`", weil `traitArgumentsOf` bei zwei Implementierungen `Ambiguous` antwortet. `appliedTraitsOf` gibt die
+      Liste, die dabei verlorenging, `operatorBound` wählt über den rechten Operanden und den erwarteten Typ, und die
+      gewählte **Schranke** geht an `recordTraitCall` - Member und Dispatch kommen beide aus ihr. Ein Operand, den
+      keine nimmt, hört "`Board` does not multiply a `String`" und welche es gibt.
+    - **Zwei Rümpfe zweier Instanziierungen in EINEM `type`-Körper bleiben ein Fehler** (ein Namensraum pro Typ), und
+      die Meldung sagt jetzt die Form: "`Sketch` comes with `Draw` more than once, and one body per instantiation is
+      one `extend` per instantiation".
+    - **NICHT geschafft, mit exaktem Stand:** ein **Nutzer**typ, der `TryFrom<String, _>` von einem Trait bekommt, mit
+      dem er kommt, und ein eigenes `TryFrom` schreibt, erreicht weiter die falsche Implementierung (BACKEND.md, "One
+      conversion, one implementation"). Der Member, den der Typ schreibt, wird von Regel 2 des Lookups gefunden, also
+      wird die Überladungsmenge aus Regel 5 nie gebaut. Beide Listen zu verschmelzen heißt, `traitsOf` **während** des
+      Member-Lookups zu fragen - und diese Antwort ist eine Closed-World-Antwort und wird gemerkt: zu früh gefragt,
+      merkt sie sich einen Abschluss ohne die Implementierungen, die erst bei der ersten Benutzung abgeleitet werden,
+      und die Witness-Tabellen eines völlig anderen Programms kommen anders heraus (gemessen: die `Equals`-Instanz von
+      `Ordering` verschwindet aus dem Lowering von `syntax/source.trb`, 118 Funktionen werden 117). Den Index statt
+      `traitsOf` zu lesen, umgeht das und läuft in die zweite Hälfte: die Signatur eines Traits kann gebaut werden,
+      WÄHREND dieses Lookup läuft, und `typeSignatureOf` paniked. **Die Reparatur ist eins von zwei Dingen, und beide
+      sind eine eigene Runde:** ein `traitsOf`, dessen Cache ungültig wird, wenn eine abgeleitete Implementierung
+      dazukommt, oder eine Überladungsmenge, die an der Aufrufstelle statt im Lookup verschmolzen wird.
+  - **Member-Lookup durch eine Blanket-Implementierung.** `extend<World: Query> World with Pairs { fn doubled(self) }`
+    und dann `game.doubled()` meldete "`Game` has no member `doubled`", obwohl `resolveTrait(Game, Pairs)` genau diese
+    Implementierung findet: `traitsOf` übersprang jede Implementierung, deren Ziel ein blanker Parameter ist.
+    `addBlanketTrait` nimmt sie auf, wenn das Ziel passt und die Schranken der Implementierung halten - **nur für einen
+    konkreten Empfänger** (was ein Parameter hat, sagen seine Schranken; sonst bekäme `Target` von
+    `fn to<Target: From<Iterable<Item>>>` ein zweites `From`) und **nur, wo der Typ die Argumente des Traits selbst
+    entscheidet** (`Into<Target>` mit offenem `Target` gehört nicht auf jeden Typ).
+    - **Die inhärente Blanket-Form gibt es nicht, und das ist jetzt eine Meldung.** CONCEPT definiert eine
+      Blanket-Implementierung als eine, *deren Ziel ein blanker Typparameter ist*, und erlaubt sie, "wenn das Paket das
+      **Trait** besitzt". Ohne Trait gibt es nichts, was die Kohärenzregel erlauben könnte, nichts, was die
+      Implementierung eindeutig hält, und nichts, was eine benutzende Datei benennen könnte - ein Erweiterungsmember
+      eines fremden Typs wird über den **Kopf** seines Ziels importiert, und ein blanker Parameter hat keinen.
+    - `Never` absorbiert in `fitsType` nicht mehr: es konvertiert in alles und nichts konvertiert in es, also darf das
+      `From<Never>`, das jeder Typ jetzt hat, nicht zu jedem Argument von `Type.from(...)` passen - und es steht auch
+      nicht in der Liste, die eine Meldung anbietet.
+  - **Vier kleine Lücken aus LINEAR 12 - zwei waren noch da, zwei nicht** (beide Hälften notiert, weil eine veraltete
+    Lücke die nächste Runde einen Tag kostet):
+    - **Lücke 4 (der Default eines Typparameters erreicht einen Member eines konkreten `extend`)** war da.
+      `withDeclaredDefaults` setzt die deklarierten Defaults dort ein, wo die eigenen Variablen des Checkers stehen -
+      ein Memberzugriff auf einen blanken Typnamen hat nichts anderes. Ein Parameter ohne Default füllt nichts, dann
+      ist "`Box` has no member `zero`" die richtige Meldung.
+    - **Lücke 13 (`print(x).round()`)** war da. `isFullyKnown` zählte `Void` nicht als bekannten Typ, also schwieg
+      `reportUnknownMember` und der Ausdruck blieb ungetypt. Jetzt: "`Void` has no member `round`", mit der Notiz zur
+      Falle, die die Zeile fast immer ist - **eine `(` direkt nach dem Namen eines Aufrufs ist seine Argumentliste, was
+      für Leerraum auch dazwischen steht**, also ist `print (0..4).length()` erst `print(0..4)` und dann `.length()`
+      auf dem, was herauskam. Beide Schreibweisen nennen jetzt `Void`, und die Notiz sagt `print((0..4).length())`.
+    - **Lücke 7 (statischer Member über einen Typparameter) geht im Checker.** `Scalar.zero()` in
+      `fn total<Scalar: Zero & Add>` löst auf und notiert `Dispatch.Forwarded`; was LINEAR zitiert
+      (`Unknown name Scalar`) ist **Stage 0**, nicht dieser Pass. Die Lowering findet den Zeugen in
+      `Witness.Forwarded(parameter, bound)`.
+    - **Lücke 11 (Member-`where` auf einer Methode eines generischen `type`) geht auch.** `fn length(self): Int where
+      Item: Absolute` in `type Pair<Item: Counted>` erreicht `absolute()` im eigenen Rumpf, und ein `Pair`, dessen
+      `Item` kein `Absolute` ist, hört es an der Aufrufstelle. `addBound` schreibt das `where` eines Members wie eine
+      Inline-Schranke in `parameterBounds`.
+  - **Ein echter Fund nebenbei:** dass `Void` als bekannter Typ zählt, deckte eine ältere Regel auf, die für einen
+    `Void`-Rumpf geschwiegen hatte - `?` braucht eine Stelle für den Fehlschlag in der umgebenden Funktion. Zwei
+    Schnipsel auf `docs/language/concurrency-and-streams/streams.md` schrieben
+    `fn printAll(var source: Source<Int, Never>): Task<Void>` mit einem `?` im Schleifenkopf; sie antworten jetzt
+    `Task<Result<Void, Never>>` und enden auf `Ok void`. In `std/` und `compiler/` war nichts in dieser Form.
+  - **Nachgezogen aus dem Back-End-Bericht: ein Typparameter ist jetzt gegen JEDEN Typ starr.** Eintrag 66 schloss die
+    Trait-Hälfte, der Rest hing an derselben Zeile: `isUndecided` zählte einen generischen Parameter als Typ, der
+    nichts darüber sagt, was bei ihm ankommen darf. `fn textOf<Item: Numeric>(): Item { "x" }`,
+    `fn boundless<Item>(): Item { 1 }` und `const value: Item = 1` prüften sauber durch, und nur der IR-Verifier fing
+    sie. Zwei Regeln, die daran wirklich hingen, sind jetzt ausgeschrieben:
+    - **Ein `const`-Parameter bleibt unentschieden.** `<const Size: Int>` ist ein WERT und kein Typ, also ist
+      `for row in 0..Rows` gewöhnlicher Code.
+    - **Ein numerisches Literal passt sich dem Parameter selbst an** (vom Koordinator entschieden, und CONCEPT sagt es
+      unter "No `default` keyword": das neutrale Element eines Algorithmus über ein `Scalar: Numeric` ist das
+      LITERAL). `boundImplies` fragt, ob die Schranken des Parameters `Numeric` (Ganzzahl) bzw. `Real` (Dezimalzahl)
+      implizieren - gelesen aus der Deklaration und ihren Obertraits, NICHT über `traitsOf`, weil das an jedem Literal
+      jedes Programms liefe und der Abschluss Implementierungen bei der ersten Benutzung ableitet. Notiert wird
+      `Adaptation.Literal(<der Parameter>)`. `Real` wird dafür aus `std/prelude` re-exportiert. Was das für eine
+      nicht-primitive Instanziierung heißt, ist die Folgefrage der Lowering.
+    - **EINE Stelle im Repository hing am Loch:** `Source.toList`, `Source.count` und `Source.fold` in
+      `std/stream/src/source.trb` schrieben `collect listing()` als Rumpf einer `Task<Result<...>>`-Funktion. Der
+      Rumpf einer solchen Funktion erzeugt den WERT des `Task`, es war also ein `Task<Result<...>>`, wo ein
+      `Result<...>` hingehört; die Parameter `Item`/`Failure` in den Typen hielten es still. Alle drei `await()` jetzt.
+  - **`From` IST reflexiv, und CONCEPT hat das schon entschieden** ("Conversions"): *"Every type has `From<Self>`, and
+    that conversion is the value itself. It is not written down anywhere and could not be."* `std/core` bekommt also
+    KEIN Blanket (es überlappte mit jedem anderen `From`), und der Checker nimmt zu Recht ein `Path` für einen
+    Parameter vom Typ `Into<Path>`: `canDerive` sagt ja, `deriveFor` notiert
+    `DerivedImplementation(Path, From<Path>, ["from"])` wie jede andere erzeugte. Was das Back-End meldet - eine
+    `Path -> Path`-Instanz des Blankets, deren Rumpf das geschriebene `Path.from(String)` mit einem `Path` aufruft -
+    ist die Lowering, die die geschriebene Implementierung nimmt, wo der Zeuge die abgeleitete nennt: **die erzeugte
+    reflexive `From` braucht einen eigenen Rumpf, und der ist der Wert.** Nichts daran ist eine Checker-Änderung.
+  - **`==` auf manchen Instanziierungen eines generischen Records: hier NICHT reproduzierbar.** In beiden Formen, die
+    der Bericht nennt (`type Pair<Item: Numeric>` mit `extend Pair<Float64>`, dessen Rumpf den Typ einmal als `const`
+    und einmal in einem `fn` konstruiert), lösen `Pair<Float64> == Pair<Float64>` und `Pair<Int64> == Pair<Int64>`
+    beide auf `call equals` mit `implementation Pair<Float64>: Equals` bzw. `implementation Pair<Int64>: Equals` auf.
+    Eine dritte Probe mit der echten Form von `std/linear`s `Vector2` (derselbe Parameter-Default, zwei konkrete
+    `extend`s mit konstruierenden `const`s, der Alias `Float` in Default und `extend`) antwortet dasselbe. Die Form,
+    die die Auflösung verliert, ist also eine andere - **und der erste Verdacht ist die Memoisierung, dieselbe, die
+    schon Eintrag 68 benennt:** `findMember` merkt sich auch eine NEGATIVE Antwort pro
+    `(Modul, Empfänger, statisch, Name)`, und `traitsOf` merkt sich den Abschluss pro Typ - beides Antworten über eine
+    geschlossene Welt, die noch WÄCHST, weil `Equals`, `Hash`, `Show` und die reflexive `From` bei der ersten
+    Benutzung abgeleitet werden. Eine Anfrage nach `Vector2<Float>.equals`, die vor dieser Ableitung kommt, merkt sich
+    "gibt es nicht" für den Rest des Laufs, und `Vector2<Int>` behält seinen Eintrag, weil seine erste Anfrage danach
+    kam. Das erklärt auch, warum die Reproduktion am ganzen Programm hängt und nicht an der Deklaration. **Ein
+    `traitsOf`/`memberMissing`, das ungültig wird, wenn eine abgeleitete Implementierung dazukommt, schlösse das,
+    die offene Hälfte von Eintrag 68 UND das `TryFrom`-Loch in einer Änderung** - das ist die nächste Runde hier.
+  - **Ein Befund für `ir/`, den das `suite`-Gate gefangen hat: `x = f(x)`, wo `f` sein `x` nur LIEST, baut nicht.**
+    `var target = resolveTarget ...` und danach `target = chooseOverload(checker, target, ...)` stand so schon immer da
+    und ging - weil das alte `chooseOverload` auf einem Pfad genau das `target` zurückgab, das es bekam, und der
+    Parameter damit `owned` ist. Das neue gibt es nie zurück, der Parameter ist `borrowed`, und dann schreibt der
+    Aufrufer in einen Slot, den der Aufruf noch liest: der Ownership-Verifier meldet *"%7 is overwritten while it still
+    owns a value"* über die ganze Funktion (22 Findings, der Compiler baut nicht). Im Checker ist es eine Zeile
+    (`const chosen = ...`, dann `target = chosen`) und so steht es jetzt da. **Die Reparatur in `ir/`:** bei `x = f(x)`
+    mit borrowendem `f` muss der alte Wert NACH dem Aufruf freigegeben werden, nicht davor.
+  - **Korrektur an mir selbst: ein `where`, dessen SUBJEKT ein konkreter Typ ist, geht weiter nicht.** Mein erster
+    Test dafür war grün, weil er am Loch hing, das ich danach geschlossen habe. `fn open<Source>(path: Source): Path
+    where Path: From<Source> { Path.from path }` meldet jetzt ehrlich "Expected `String`, found `Source`" und der Test
+    pinnt das. Die Fakten eines `where` gelten pro Rumpf, "welche Traits ein Typ hat" ist eine programmweit gemerkte
+    Antwort - die beiden passen ohne eine eigene Tabelle nicht zusammen, und das ist eine eigene Runde.
+  - **NICHT angefasst: `var` vor einem Closure-Parameter** (`{ var position => ... }`, ECS-Lücke 4). Das ist eine
+    Lücke in BEIDEN Parsern (`compiler/src/syntax/parser/` und `bootstrap/crates/torb-syntax/`), die der
+    Differenztest identisch hält, plus Checker, Stage 0 und ein natives Gate-Programm - in einem grünen Schritt war
+    das in dieser Runde nicht mehr unterzubringen. Der Auftrag stand ausdrücklich als "zuletzt, und nur ganz".
+  - **Neue Einträge:** `docs/TYPECHECKER.md` 66-73. Dokumentationsseiten:
+    `language/concurrency-and-streams/tasks.md` (Regel 4 mit einem Fehler-Schnipsel), `language/traits/traits.md`
+    (Regel 13), `language/traits/operators.md` (Regel 3), `language/types/conversions.md` (Regel 3),
+    `explanation/where-are-my-overloads.md` (was entscheidet, welche Implementierung ein Aufruf meint),
+    `language/concurrency-and-streams/streams.md` (die zwei `?`-Schnipsel), `language/generics/*` (das Literal am
+    Parameter).
+
 - (Zahlliteral im generischen Rumpf, 2026-09-22) **Befund der Back-End-Runde:** nicht das Lowering fehlt, sondern
   der Checker passt das Literal gar nicht an den Parameter an (`integerLiteralType` fällt bei einem Typparameter auf
   `Int64` zurück) - und akzeptiert es dann trotzdem gegen `Item`. Dahinter steckt das breiteste der Soundness-Löcher:

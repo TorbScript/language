@@ -110,6 +110,37 @@ A call or a construction that writes the arguments out uses the same angle brack
    implementing type; a trait can use it as an ordinary type, including as an argument to another trait
    (`Accumulator<Item, Self>`).
 
+6. **Inside the body that declares it, a type parameter is opaque: it stands for the one type the call site chose, and
+   nothing else is that type.** A `String`, a `List<Int>` or a value of a trait type where an `Item` is expected is the
+   ordinary mismatch a named type gets.
+
+   ```trb error
+   fn textOf<Item>(): Item {
+     "x"
+   }
+   // error: Expected `Item`, found `String`
+   ```
+
+7. **The one exception is a numeric literal, and only where the bound says the parameter is a number.** The neutral
+   element of an algorithm over a `Scalar: Numeric` is the literal itself, so `0` and `1` *become* the parameter. An
+   integer literal needs a bound that implies `Numeric`, a decimal one needs `Real` - without such a bound the literal
+   is an `Int64` or a `Float64` and then does not fit.
+
+   ```trb check
+   fn oneOf<Scalar: Numeric>(): Scalar {
+     1
+   }
+
+   print oneOf<Int>()
+   ```
+
+   ```trb error
+   fn halfOf<Scalar: Numeric>(): Scalar {
+     0.5
+   }
+   // error: Expected `Scalar`, found `Float64`
+   ```
+
 ## What this is not
 
 **A type parameter is not a value, and a value is not a type parameter.** A parameter declared without `const` fills

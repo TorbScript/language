@@ -14,13 +14,15 @@ use Expression, Argument, CallStyle, TextSegment, Condition, Block, Statement fr
 use MatchArm, PrefixOperator, InfixOperator, Closure, TypeReference from "../../syntax/ast"
 use SymbolId from "../symbols"
 use TypeId, TypeForm, TupleField, LiteralValue, FunctionForm, ParameterForm, ParameterMode, Witness from "./type"
-use Checker, Expectation, Resolution, Adaptation, Dispatch, CollectionLiteral from "./context"
+use Checker, Expectation, Resolution, Adaptation, Dispatch, CollectionLiteral, TypeScope from "./context"
 use Target, deferredTarget, resolveName, symbolTarget, targetOfCandidate from "./name"
 use formOf, reportUnknownMember, isFullyKnown from "./name"
 use lookupMember, lookupStaticMember, recordDelegation, traitDispatchOf, requireObjectSafe from "./member"
+use boundMember, dispatchOfBound from "./member"
 use traitArgumentsOf, witnessFor, isConcrete, implementsBound, iterableSourceOf from "./implementation"
-use fallibleFailuresOf from "./implementation"
+use fallibleFailuresOf, appliedTraitsOf, appliedArgumentsOf, fitsType from "./implementation"
 use typeFromReference, integerLiteral from "./lowering"
+use typeSignatureOf from "./signature"
 use sameType, unify, resolveType, resolveTypes, hasVariable, openVariableOf, suppressVariables from "./unify"
 use checkCall, instantiateTarget, checkBounds, withInstantiation from "./call"
 use checkClosure from "./closure"
@@ -238,6 +240,15 @@ fn memberTarget(
         return found.copy arguments: explicit
       }
       None => {
+        // `Vector2.zero` where `zero` lives in `extend Vector2<Float>`: a bare type name has nothing else to go on, so
+        // what the declaration says its parameters are by default is what the name means
+        if const Some(defaulted) = withDeclaredDefaults(checker, own) {
+          if const Some(candidate) = lookupStaticMember(checker, defaulted, text, Some(at)) {
+            const _ = unify checker, own, defaulted
+            const found = targetOfCandidate checker, candidate, text
+            return found.copy arguments: explicit
+          }
+        }
         const _ = reportUnknownMember checker, own, text, at, isTypeName: true
         return Target Resolution.Deferred, checker.deferredType, name: text
       }
@@ -395,6 +406,56 @@ fn implicitMemberTarget(var checker: Checker, text: String, expected: TypeId?, a
   }
 }
 
+/**
+ * A type name whose generic arguments the call site did not write, with the **declared defaults** put in where the
+ * checker's own variables stand: `type Vector2<Scalar: Numeric = Float>` makes the bare `Vector2` mean
+ * `Vector2<Float>`, which is what reaches the members of `extend Vector2<Float>`.
+ *
+ * `None` where there is nothing to fill in or where one parameter has no default: then the name really says nothing
+ * about its arguments, and the message about the member is the right one.
+ */
+fn withDeclaredDefaults(var checker: Checker, own: TypeId): TypeId? {
+  const (symbol, arguments) = match checker.types.form(own) {
+    .Nominal(found, given) => (found, given)
+    _ => {
+      return None
+    }
+  }
+  if arguments.isEmpty() {
+    return None
+  }
+  const shape = checker.typeSignature typeSignatureOf(checker, symbol)
+  if shape.generics.length() != arguments.length() {
+    return None
+  }
+  var filled: List<TypeId> = []
+  var isChanged = false
+  for index in 0..arguments.length() {
+    const argument = arguments[index]
+    if openVariableOf(checker, argument).isNone() {
+      filled.add argument
+      continue
+    }
+    const declaration = checker.types.parameter shape.generics[index]
+    const written = match declaration.default {
+      Some(found) => found
+      None => {
+        return None
+      }
+    }
+    const annotation = typeFromReference checker, written, TypeScope(declaration.module).forType()
+    if checker.absorbs(annotation) {
+      return None
+    }
+    filled.add annotation
+    isChanged = true
+  }
+  if !isChanged {
+    return None
+  }
+  Some checker.types.intern(TypeForm.Nominal(symbol, filled))
+}
+
 fn reportCaseWithoutType(var checker: Checker, text: String, at: Span) {
   checker.reportHere(
     Diagnostic.error("`.{text}` needs a type, and nothing here says which one", at)
@@ -510,14 +571,31 @@ fn requireIndexInBounds(var checker: Checker, receiver: TypeId, index: Expressio
  * Which implementation and which member an operator, an index or an interpolation reached. The lowering reads this
  * instead of looking a trait up again: the choice between monomorphizing and passing a table is made here.
  */
-fn recordTraitCall(var checker: Checker, at: Span, receiver: TypeId, capability: SymbolId, name: String) {
-  const candidate = match lookupMember(checker, receiver, name) {
-    Some(found) => found
+fn recordTraitCall(
+  var checker: Checker,
+  at: Span,
+  receiver: TypeId,
+  capability: SymbolId,
+  name: String,
+  bound: TypeId? = None,
+) {
+  // Where the type carries the trait more than once, the **applied** bound is what was chosen, and the member and the
+  // implementation both have to come from it: `lookupMember` would answer the first of the overload set
+  const chosen = match bound {
+    Some(applied) => boundMember checker, receiver, applied, name
+    None => None
+  }
+  const found = if chosen.isSome() { chosen } else { lookupMember checker, receiver, name }
+  const candidate = match found {
+    Some(inner) => inner
     None => {
       return
     }
   }
-  const dispatch = traitDispatchOf checker, receiver, capability
+  const dispatch = match bound {
+    Some(applied) => dispatchOfBound checker, receiver, capability, applied
+    None => traitDispatchOf checker, receiver, capability
+  }
   if const .Method(_, symbol) = candidate.kind {
     checker.resolved at, Resolution.Callable(symbol, [], dispatch)
     recordDelegation checker, at, candidate.copy(dispatch: dispatch)
@@ -623,7 +701,69 @@ fn integerLiteralType(var checker: Checker, text: String, isNegative: Bool, expe
   if isLiteralTypeOf(checker, annotation, LiteralValue.Integer(value)) {
     return adapt checker, at, annotation
   }
+  // `0` and `1` adapt to a `Scalar: Numeric` inside a generic body, and the **parameter** is what the literal becomes
+  if boundImplies(checker, annotation, "Numeric") {
+    return adapt checker, at, annotation
+  }
   adapt checker, at, fallback
+}
+
+/**
+ * Whether a **type parameter**'s bounds imply a trait, by name: what makes a numeric literal adapt to the parameter
+ * itself. CONCEPT ("No `default` keyword and no `Default` trait") says the neutral element of an algorithm over a
+ * `Scalar: Numeric` is the **literal**, so `0` and `1` have to mean the parameter and not `Int64` - the back end
+ * reported *"the function returns `Float64` and `return` carries `Int64`"* for every instance that was not `Int64`.
+ *
+ * The bounds are read from the declaration and its supertraits, not through `traitsOf`: this runs at every literal of
+ * every program, and the closure of "every trait a type has" derives implementations on first use.
+ */
+fn boundImplies(var checker: Checker, annotation: TypeId, capability: String): Bool {
+  const parameter = match checker.types.form(annotation) {
+    .Parameter(found) => found
+    _ => {
+      return false
+    }
+  }
+  // A `const` parameter is a value and not a type: `<const Size: Int>` has `Int` in its bounds, and a literal that
+  // stands where `Size` is expected is an ordinary `Int64`
+  if checker.types.parameter(parameter).isConst {
+    return false
+  }
+  const wanted = match checker.wellKnown.symbolNamed(capability) {
+    Some(found) => found
+    None => {
+      return false
+    }
+  }
+  for bound in checker.parameterBounds.get(parameter.value) ?? [] {
+    if traitImplies(checker, bound, wanted, 0) {
+      return true
+    }
+  }
+  false
+}
+
+/** Whether an applied bound is a trait, or has it as a supertrait: `Real` implies `Signed` implies `Numeric`. */
+fn traitImplies(var checker: Checker, bound: TypeId, capability: SymbolId, depth: Int): Bool {
+  if depth > 8 {
+    return false
+  }
+  const symbol = match checker.types.form(bound) {
+    .Nominal(found, _) => found
+    _ => {
+      return false
+    }
+  }
+  if symbol == capability {
+    return true
+  }
+  const shape = checker.typeSignature typeSignatureOf(checker, symbol)
+  for supertrait in shape.traits {
+    if traitImplies(checker, supertrait.capability, capability, depth + 1) {
+      return true
+    }
+  }
+  false
 }
 
 /** The text as it was written, unless it was written in another base - then the value says more. */
@@ -647,6 +787,10 @@ fn floatLiteralType(var checker: Checker, expected: TypeId?, at: Span): TypeId {
       if name == "Float32" || name == "Float64" || name == "Decimal" {
         return adapt checker, at, annotation
       }
+    }
+    // A decimal literal needs more of its parameter than an integer one: `Numeric` has no fractions
+    if boundImplies(checker, annotation, "Real") {
+      return adapt checker, at, annotation
     }
   }
   adapt checker, at, fallback
@@ -1622,23 +1766,144 @@ fn arithmeticType(
     deferExpression checker, right
     return checker.deferredType
   }
-  // `Other` and `Output` come from the implementation of the trait, so `Meters + Float` is a mistake
-  const arguments = match traitArgumentsOf(checker, found, capability) {
-    Some(given) => given
+  // `Other` and `Output` come from the implementation of the trait, so `Meters + Float` is a mistake. A type may carry
+  // the trait **several times** - `Board with Multiply<Scale, Board>` next to `Multiply<Board, Board>` - and then the
+  // right operand and the expected type say which one is meant, exactly as they do at the named call
+  const bound = match operatorBound(checker, found, capability, operator, right, expected, at) {
+    Some(inner) => inner
     None => {
       deferExpression checker, right
-      reportMissingOperator checker, found, traitNameOf(operator), operatorOf(operator), at
       return checker.deferredType
     }
   }
+  const arguments = appliedArgumentsOf checker, bound
   if arguments.length() != 2 {
     deferExpression checker, right
     return checker.deferredType
   }
   const inner = expectationOf checker, arguments[0]
   const _ = checkExpression checker, right, inner
-  recordTraitCall checker, at, found, capability, memberOfOperator(operator)
+  recordTraitCall checker, at, found, capability, memberOfOperator(operator), Some(bound)
   arguments[1]
+}
+
+/**
+ * Which implementation of an operator's trait `a * b` reaches. One is the ordinary answer; several are the overload
+ * form the decision log keeps (a trait with a **parameter**), and then the type of the right operand and the type the
+ * expression is expected to produce are what tell them apart - the same two questions the named call `a.multiply(b)`
+ * asks. None is the missing-operator message.
+ */
+fn operatorBound(
+  var checker: Checker,
+  found: TypeId,
+  capability: SymbolId,
+  operator: InfixOperator,
+  right: Expression,
+  expected: TypeId?,
+  at: Span,
+): TypeId? {
+  if const Some(given) = traitArgumentsOf(checker, found, capability) {
+    return Some checker.nominal(capability, given)
+  }
+  const candidates = appliedTraitsOf checker, found, capability
+  if candidates.isEmpty() {
+    reportMissingOperator checker, found, traitNameOf(operator), operatorOf(operator), at
+    return None
+  }
+  // The right operand decides, so it is inferred once here and checked against the chosen `Other` afterwards - the same
+  // order an overloaded call reads its arguments in
+  const other = inferExpression checker, right
+  var fitting: List<TypeId> = []
+  for candidate in candidates {
+    const arguments = appliedArgumentsOf checker, candidate
+    if arguments.length() != 2 {
+      continue
+    }
+    if fitsType(checker, other, arguments[0]) {
+      fitting.add candidate
+    }
+  }
+  if fitting.isEmpty() {
+    reportNoOperator checker, found, candidates, other, operator, at
+    return None
+  }
+  if fitting.length() == 1 {
+    return fitting.first()
+  }
+  var narrowed: List<TypeId> = []
+  if const Some(wanted) = expected {
+    for candidate in fitting {
+      const arguments = appliedArgumentsOf checker, candidate
+      if fitsType(checker, arguments[1], wanted) {
+        narrowed.add candidate
+      }
+    }
+  }
+  if narrowed.length() == 1 {
+    return narrowed.first()
+  }
+  reportAmbiguousOperator checker, found, fitting, operator, at
+  fitting.first()
+}
+
+/** `Board * Colour` where `Board` multiplies by a `Scale` and by a `Board`: the operand fits none of them. */
+fn reportNoOperator(
+  var checker: Checker,
+  found: TypeId,
+  candidates: List<TypeId>,
+  other: TypeId,
+  operator: InfixOperator,
+  at: Span,
+) {
+  if !isFullyKnown(checker, found) || !isFullyKnown(checker, other) {
+    return
+  }
+  const receiver = checker.describe found
+  const written = checker.describe other
+  const shown = describeOperands checker, candidates
+  checker.reportHere(
+    Diagnostic.error("`{receiver}` does not {operatorNameOf(operator)} a `{written}`", at)
+      .withNote("`{operatorOf(operator)}` exists on `{receiver}` for {shown}")
+  )
+}
+
+/** Two implementations fit, and nothing the expression says tells them apart. */
+fn reportAmbiguousOperator(
+  var checker: Checker,
+  found: TypeId,
+  fitting: List<TypeId>,
+  operator: InfixOperator,
+  at: Span,
+) {
+  const receiver = checker.describe found
+  const shown = describeOperands checker, fitting
+  checker.reportHere(
+    Diagnostic.error("`{operatorOf(operator)}` fits more than one implementation of `{receiver}`", at)
+      .withNote("It exists for {shown}: write the type that is expected of this expression")
+  )
+}
+
+fn describeOperands(var checker: Checker, candidates: List<TypeId>): String {
+  var shown: List<String> = []
+  for candidate in candidates {
+    const arguments = appliedArgumentsOf checker, candidate
+    if const Some(operand) = arguments.first() {
+      shown.add checker.describe(operand)
+    }
+  }
+  shown.joined separator: ", "
+}
+
+/** The verb of an operator, for a message about an operand it does not take: "`Board` does not multiply a `Colour`". */
+fn operatorNameOf(operator: InfixOperator): String {
+  match operator {
+    .Add => "add"
+    .Subtract => "subtract"
+    .Multiply => "multiply"
+    .Divide => "divide"
+    .Remainder => "take the remainder of"
+    _ => "combine with"
+  }
 }
 
 fn operatorOf(operator: InfixOperator): String {
@@ -2277,7 +2542,8 @@ public fn checkValue(var checker: Checker, found: TypeId, expected: TypeId, at: 
   if const .Traits(bounds) = checker.types.form(wanted) {
     return coerceToTraits checker, given, bounds, at
   }
-  if isUndecided(checker, given) || isUndecided(checker, wanted) {
+  const isTraitForParameter = traitForParameter checker, given, wanted
+  if !isTraitForParameter && (isUndecided(checker, given) || isUndecided(checker, wanted)) {
     return true
   }
   const shown = checker.describe wanted
@@ -2286,8 +2552,69 @@ public fn checkValue(var checker: Checker, found: TypeId, expected: TypeId, at: 
   if numericNameOf(checker, given).isSome() && numericNameOf(checker, wanted).isSome() {
     problem = problem.withNote "There are no implicit conversions: `{shown}.tryFrom(value)?`"
   }
+  if isTraitForParameter {
+    problem = problem.withNote(
+      "A type parameter is opaque inside the body that declares it: it stands for one type the call site chose, and a "
+        + "trait-typed value is any of them. Take the value as the parameter (`value: Value`) or answer the trait"
+    )
+  }
   checker.reportHere problem
   false
+}
+
+/**
+ * A trait-typed value handed to a **type parameter**, anywhere inside the two types. The four coercions of the design
+ * all run towards a trait type and none of them runs back: a `Value` inside the body that declares it is one type the
+ * call site chose, and an `Area` is any type that implements `Area`, so the one is never the other. Without this the
+ * pair would fall into [isUndecided] - a parameter says nothing about what may arrive at it - and `fn bare<Value>(shape:
+ * Area): Value { shape }` would check clean and break in the back end's verifier.
+ *
+ * Where the parameter *was* instantiated with that trait type, substitution has already put the trait type in both
+ * places and `unify` answered before this is asked.
+ */
+fn traitForParameter(var checker: Checker, given: TypeId, wanted: TypeId): Bool {
+  traitForParameterDeep checker, given, wanted, 0
+}
+
+fn traitForParameterDeep(var checker: Checker, given: TypeId, wanted: TypeId, depth: Int): Bool {
+  if depth > 24 {
+    return false
+  }
+  if const .Parameter(_) = checker.types.form(wanted) {
+    if const .Traits(_) = checker.types.form(given) {
+      return true
+    }
+    return false
+  }
+  match checker.types.form(wanted) {
+    .Nominal(symbol, arguments) => {
+      if const .Nominal(otherSymbol, otherArguments) = checker.types.form(given) {
+        if symbol != otherSymbol || arguments.length() != otherArguments.length() {
+          return false
+        }
+        for index in 0..arguments.length() {
+          if traitForParameterDeep(checker, otherArguments[index], arguments[index], depth + 1) {
+            return true
+          }
+        }
+      }
+      false
+    }
+    .Tuple(fields) => {
+      if const .Tuple(otherFields) = checker.types.form(given) {
+        if fields.length() != otherFields.length() {
+          return false
+        }
+        for index in 0..fields.length() {
+          if traitForParameterDeep(checker, otherFields[index].annotation, fields[index].annotation, depth + 1) {
+            return true
+          }
+        }
+      }
+      false
+    }
+    _ => false
+  }
 }
 
 /**
@@ -2360,7 +2687,9 @@ fn matchedBound(var checker: Checker, found: TypeId, wanted: TypeId): TypeId {
  */
 fn isUndecided(var checker: Checker, annotation: TypeId): Bool {
   match checker.types.form(annotation) {
-    .Parameter(_) => true
+    // A **`const`** parameter is a value, not a type: `<const Size: Int>` read as a value is an `Int` that the call
+    // site fills in, and `0..Rows` has to keep working. A type parameter is rigid and says exactly one thing
+    .Parameter(parameter) => checker.types.parameter(parameter).isConst
     .Variable(_) => true
     // A type that carries one of these anywhere inside of it says as little as the type itself would
     .Invalid => true

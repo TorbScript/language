@@ -327,6 +327,104 @@ group "Trait-typed values and object safety (gap 7)" {
   }
 }
 
+/**
+ * The four coercions all run **towards** a trait type. A type parameter inside the body that declares it stands for the
+ * one type the call site chose, so a value of the trait type is not one of them - the same mismatch a named type
+ * reports, and for the same reason.
+ */
+group "A trait-typed value never becomes a type parameter" {
+  const shapes = "trait Area \{\n  fn area(self): Int\n\}\n\n"
+    + "type Round with Area \{\n  radius: Int\n\n  fn area(self): Int \{\n    radius * radius\n  \}\n\}\n\n"
+
+  test "the result of a generic function is not a place for a trait value" {
+    const source = "{shapes}fn bare<Value>(shape: Area): Value \{\n  shape\n\}"
+    assert(problems(source) == ["Expected `Value`, found `Area`"])
+    assert(
+      notes(source) == [
+        "A type parameter is opaque inside the body that declares it: it stands for one type the call site chose, "
+          + "and a trait-typed value is any of them. Take the value as the parameter (`value: Value`) or answer the "
+          + "trait",
+      ]
+    )
+  }
+
+  test "a named type rejects the very same line, which is the shape the message copies" {
+    const source = "{shapes}fn named(shape: Area): Round \{\n  shape\n\}"
+    assert(problems(source) == ["Expected `Round`, found `Area`"])
+  }
+
+  test "it is the same mismatch one level down, inside a generic argument" {
+    const source = "{shapes}type Box<Item> \{\n  item: Item\n\}\n\n"
+      + "fn bare<Value>(box: Box<Area>): Box<Value> \{\n  box\n\}"
+    assert(problems(source) == ["Expected `Box<Value>`, found `Box<Area>`"])
+  }
+
+  test "an argument of a generic call is refused the same way" {
+    const source = "{shapes}fn keep<Value>(value: Value): Value \{\n  value\n\}\n\n"
+      + "fn probe(shape: Area): Round \{\n  keep<Round>(shape)\n\}"
+    assert(problems(source) == ["Expected `Round`, found `Area`"])
+  }
+
+  test "and no other type becomes one either: a parameter is rigid inside its own body" {
+    assert(problems("fn textOf<Item: Numeric>(): Item \{\n  \"x\"\n\}") == ["Expected `Item`, found `String`"])
+    assert(problems("fn boundless<Item>(): Item \{\n  1\n\}") == ["Expected `Item`, found `Int64`"])
+    // A list literal is checked item by item, so the message stands at each item and not at the list
+    assert(
+      problems("fn listOf<Item>(): List<Item> \{\n  [1, 2]\n\}")
+        == ["Expected `Item`, found `Int64`", "Expected `Item`, found `Int64`"]
+    )
+  }
+
+  /**
+   * The exception the decision log names: **the neutral element of an algorithm over a `Scalar: Numeric` is the
+   * literal** (CONCEPT, "No `default` keyword and no `Default` trait"), so `0` and `1` adapt to the parameter itself.
+   * An integer literal needs a bound that implies `Numeric`, a decimal one needs `Real`.
+   */
+  test "a numeric literal adapts to a parameter whose bound implies `Numeric`" {
+    const source = "fn oneOf<Item: Numeric>(): Item \{\n  1\n\}"
+    assert problems(source).isEmpty()
+    const found = probe source
+    assert(found.typeOf("1") == "Item")
+    assert(found.adaptationsOf("1") == ["literal Item"])
+  }
+
+  test "a decimal literal needs more than `Numeric`, because `Numeric` has no fractions" {
+    assert(problems("fn halfOf<Item: Numeric>(): Item \{\n  0.5\n\}") == ["Expected `Item`, found `Float64`"])
+  }
+
+  test "an annotation of the parameter's type adapts the literal the same way" {
+    const source = "fn viaBinding<Item: Numeric>(): Item \{\n  const value: Item = 1\n  value\n\}"
+    assert problems(source).isEmpty()
+    const found = probe source
+    assert(found.typeOf("1") == "Item")
+  }
+
+  /**
+   * `<const Size: Int>` is a **value** and not a type: `Size` read as a value is an `Int` the call site fills in, so
+   * the rule above is about type parameters and this one has to keep working.
+   */
+  test "a `const` parameter read as a value is its declared type" {
+    const source = "type Grid<const Rows: Int> \{\n  name: String\n\n"
+      + "  fn total(self): Int \{\n    var sum = 0\n    for row in 0..Rows \{\n      sum = sum + row\n    \}\n"
+      + "    sum\n  \}\n\}"
+    assert problems(source).isEmpty()
+  }
+
+  test "the other direction still holds: a parameter with the bound becomes the trait value" {
+    const source = "{shapes}fn draw<Value: Area>(value: Value): Int \{\n  show(value)\n\}\n\n"
+      + "fn show(shape: Area): Int \{\n  shape.area()\n\}"
+    assert problems(source).isEmpty()
+  }
+
+  test "and a parameter the call site instantiated with the trait type is that trait type" {
+    const source = "{shapes}fn keep<Value>(value: Value): Value \{\n  value\n\}\n\n"
+      + "fn probe(shape: Area): Int \{\n  keep<Area>(shape).area()\n\}"
+    assert problems(source).isEmpty()
+    const found = probe source
+    assert(found.typeOf("keep<Area>(shape)") == "Area")
+  }
+}
+
 group "`using` and other generic functions of the prelude" {
   test "`using` with a temporary checks: a temporary is a valid argument for a `var` parameter (gap 2)" {
     const source = "type File with Close \{\n  path: String\n\n"
@@ -373,5 +471,37 @@ group "an unknown static member of a generic type" {
   test "an instance access on a value whose type is genuinely open stays silent" {
     const source = "fn probe() \{\n  const empty = []\n  print(empty.nothingLikeThis())\n\}"
     assert(problems(source) == ["Cannot infer the type of this collection"])
+  }
+}
+
+/**
+ * `Vector2.zero` where `zero` lives in `extend Vector2<Float>` and the declaration says `Scalar: Numeric = Float`: a
+ * member access on a bare type name has nothing else to go on, so the declared defaults are what the name means
+ * (LINEAR gap 4).
+ */
+group "A type parameter's default reaches a member of a concrete `extend`" {
+  const pair = "type Pair<Item: Numeric = Float64> \{\n  first: Item\n  second: Item\n\}\n\n"
+    + "extend Pair<Float64> \{\n  const zero: Pair<Float64> = Pair(0.0, 0.0)\n\n"
+    + "  fn unit(): Pair<Float64> \{\n    Pair(1.0, 1.0)\n  \}\n\}\n\n"
+
+  test "a constant of the concrete `extend`" {
+    const source = "{pair}fn probe() \{\n  const origin: Pair<Float64> = Pair.zero\n  print origin.first\n\}"
+    assert problems(source).isEmpty()
+    const found = probe source
+    assert(found.typeOf("Pair.zero") == "Pair<Float64>")
+  }
+
+  test "a static function of it, without an annotation to go on" {
+    const source = "{pair}fn probe() \{\n  const one = Pair.unit()\n  print one.first\n\}"
+    assert problems(source).isEmpty()
+    const found = probe source
+    assert(found.typeOf("Pair.unit()") == "Pair<Float64>")
+  }
+
+  test "a parameter without a default still says which member is missing" {
+    const source = "type Box<Item> \{\n  item: Item\n\}\n\n"
+      + "extend Box<Int64> \{\n  const zero: Box<Int64> = Box(0)\n\}\n\n"
+      + "fn probe() \{\n  const origin: Box<Int64> = Box.zero\n  print origin.item\n\}"
+    assert(problems(source) == ["`Box` has no member `zero`"])
   }
 }

@@ -199,6 +199,62 @@ group "Captures" {
   }
 }
 
+/**
+ * A task gets copies of everything, and a captured `var` binding is the one value of the language that is shared
+ * (CONCEPT, "Concurrency"). So the capture itself is the error: one `spawn` is already too many, and two that read the
+ * same variable are two messages, one at each closure.
+ */
+group "`spawn` takes no `var` binding with it" {
+  test "one `spawn` that captures a `var` is already the error" {
+    const source = "fn probe(): Task<Int> \{\n  var total = 0\n  total = 1\n"
+      + "  const first = spawn \{ total + 1 \}\n  first.await()\n\}"
+    assert(problems(source) == ["`spawn` cannot take the `var` binding `total` with it"])
+    assert(
+      notes(source) == [
+        "A task gets copies, so there is nothing to race for - and a captured `var` binding is the one value the "
+          + "language shares. Read it into a `const` before the closure (`const totalNow = total`), or pass the "
+          + "changes through a `Channel`",
+      ]
+    )
+  }
+
+  test "two `spawn`s that read the same `var` are two messages, one per capture site" {
+    const source = "fn probe(): Task<Int> \{\n  var total = 0\n  total = 1\n"
+      + "  const first = spawn \{ total + 1 \}\n  const second = spawn \{ total + 2 \}\n"
+      + "  first.await() + second.await()\n\}"
+    assert(
+      problems(source) == [
+        "`spawn` cannot take the `var` binding `total` with it",
+        "`spawn` cannot take the `var` binding `total` with it",
+      ]
+    )
+  }
+
+  test "a `const` capture is a copy and is what the rule asks for" {
+    const source = "fn probe(): Task<Int> \{\n  const total = 1\n"
+      + "  const first = spawn \{ total + 1 \}\n  const second = spawn \{ total + 2 \}\n"
+      + "  first.await() + second.await()\n\}"
+    assert problems(source).isEmpty()
+  }
+
+  test "a `var` parameter of the enclosing function is a reference, and `spawn` names it too" {
+    // The second message is the older rule about a `var` parameter and a `Task` result, and both are about this line
+    const source = "fn probe(var total: Int): Task<Int> \{\n  total = 1\n"
+      + "  const first = spawn \{ total + 1 \}\n  first.await()\n\}"
+    assert(
+      problems(source) == [
+        "`probe` changes `total` and answers a `Task`, and `Int64` is a value",
+        "`spawn` cannot take the `var` binding `total` with it",
+      ]
+    )
+  }
+
+  test "a closure that is not handed to `spawn` keeps its shared box" {
+    const source = "fn probe() \{\n  var seen = 0\n  const found = apply \{ \"\{seen + _\}\" \}\n\}\n{apply}"
+    assert problems(source).isEmpty()
+  }
+}
+
 group "Control flow inside a closure" {
   test "`return` returns from the closure and decides its result" {
     const source = "fn probe() \{\n  const found = run \{ return 1 \}\n\}\n{run}"

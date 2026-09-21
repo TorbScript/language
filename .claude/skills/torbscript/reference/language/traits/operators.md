@@ -75,18 +75,78 @@ a ?? b       OrElse.orElse(a, b)         "{a}"   Show.show(a)
    (`trait Add<Other = Self, Output = Self>`), so `with Add` alone means "adds to itself, returns itself". Writing
    `Multiply<Float>` picks a different `Other` - `Vector2 * Float`, not `Vector2 * Vector2`.
 
-3. **`a[i]` is `Indexed.at`, which panics if the key does not exist; `a.get(i)` is the same lookup, returning an
+3. **A type may carry one operator's trait more than once, and the right operand says which implementation the
+   operator reaches.** That is the overload form the language keeps - a trait with a **parameter** - and the operator
+   asks the same question the named call asks: a matrix that multiplies by a vector and by a number is two
+   implementations of `Multiply`, and `matrix * vector` finds the one whose `Other` is a vector. Where the operand fits
+   more than one, the type the expression is expected to produce decides; where it fits none, the operands that exist
+   are named.
+
+   ```trb check
+   type Scale {
+     factor: Int
+   }
+
+   type Board {
+     size: Int
+   }
+
+   extend Board with Multiply<Scale, Board> {
+     fn multiply(self, other: Scale): Board {
+       Board(size * other.factor)
+     }
+   }
+
+   extend Board with Multiply<Board, Board> {
+     fn multiply(self, other: Board): Board {
+       Board(size * other.size)
+     }
+   }
+
+   const board = Board 2
+   const scaled = board * Scale(3)
+   const squared = board * board
+   print "{scaled.size} {squared.size}"
+   ```
+
+   ```trb error
+   type Scale {
+     factor: Int
+   }
+
+   type Board {
+     size: Int
+   }
+
+   extend Board with Multiply<Scale, Board> {
+     fn multiply(self, other: Scale): Board {
+       Board(size * other.factor)
+     }
+   }
+
+   extend Board with Multiply<Board, Board> {
+     fn multiply(self, other: Board): Board {
+       Board(size * other.size)
+     }
+   }
+
+   const wrong = Board(2) * "two"
+   print wrong.size
+   // error: `Board` does not multiply a `String`
+   ```
+
+4. **`a[i]` is `Indexed.at`, which panics if the key does not exist; `a.get(i)` is the same lookup, returning an
    `Option` instead.** `at` has a default body that calls `get`, so a type only ever has to write `get`.
 
-4. **`a[i] = v` needs `MutableIndexed`, a supertrait of `Indexed`.** It also makes `a[i]` a `var` path:
+5. **`a[i] = v` needs `MutableIndexed`, a supertrait of `Indexed`.** It also makes `a[i]` a `var` path:
    `enemies[0].health = 5` and `groups[key].add(value)` take the element out, change it and put it back, without a
    copy.
 
-5. **`a[from..to]` is `Slice.slice` and shares the storage of `a`, starting at index `0` again.**
+6. **`a[from..to]` is `Slice.slice` and shares the storage of `a`, starting at index `0` again.**
    `a[from..to] = v` needs `MutableSlice`, a supertrait of `Slice`, and also makes the range a `var` path:
    `samples[0..100].sort()` works on that part of `samples` in place.
 
-6. **`a ?? b` is `OrElse.orElse`, whose fallback is `lazy`.** `Option<Value>` and `Result<Value, Failure>` come with
+7. **`a ?? b` is `OrElse.orElse`, whose fallback is `lazy`.** `Option<Value>` and `Result<Value, Failure>` come with
    it, and so can a type of your own:
 
    ```trb check
@@ -101,7 +161,7 @@ a ?? b       OrElse.orElse(a, b)         "{a}"   Show.show(a)
    print(Setting("") ?? "default")
    ```
 
-7. **Three operators are no method call, and therefore no trait.** `&&`, `||` and `!` are built into `Bool` and
+8. **Three operators are no method call, and therefore no trait.** `&&`, `||` and `!` are built into `Bool` and
    short-circuit their second operand, which a trait method - which always evaluates its argument - cannot do. `?.` is
    `Option.map`, or `flatMap` when the member answers an `Option`, so which method it is depends on the *result* type; a
    trait for it would need `Self<Output>`, the higher-kinded form this language does not have. And `?` leaves the

@@ -61,7 +61,34 @@ Task.all(tasks: Iterable<Task<Value>>): Task<List<Value>>
 
 4. **`spawn` gets a copy of everything its closure captures, and cannot capture a `var` binding.** Values are passed
    freely between tasks because a task never shares storage with the scope it was spawned from; only `Task` and
-   `Channel` connect two tasks.
+   `Channel` connect two tasks. A captured `var` binding is the one value the language shares - a box that the closure
+   and the scope around it both reach - so a task that took one with it would be the data race this design does not
+   have. The checker rejects the capture itself, so one `spawn` is already too many and two are two messages:
+
+   ```trb error
+   fn counted(): Int {
+     var total = 0
+     const first = spawn { total + 1 }
+     const second = spawn { total + 2 }
+     total
+   }
+   // error: `spawn` cannot take the `var` binding `total` with it
+   ```
+
+   Read the value into a `const` before the closure, and every task gets its own copy:
+
+   ```trb check
+   fn counted(): Task<Int> {
+     var total = 0
+     total = 1
+     const now = total
+     const first = spawn { now + 1 }
+     const second = spawn { now + 2 }
+     first.await() + second.await()
+   }
+
+   print counted().await()
+   ```
 
 5. **`all` waits for two tasks of different types at once; `Task.all` waits for a list of tasks of the same type.**
    Both answer their values in the order of the tasks, which is the order they were given in, not the order they

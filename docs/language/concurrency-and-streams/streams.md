@@ -60,10 +60,11 @@ while const Some(item) = source.next().await()? { ... }
    needs, so the loop is a `while` that names both `await()` and `?`:
 
    ```trb check
-   fn printAll(var source: Source<Int, Never>): Task<Void> {
+   fn printAll(var source: Source<Int, Never>): Task<Result<Void, Never>> {
      while const Some(item) = source.next().await()? {
        print item
      }
+     Ok void
    }
    ```
 
@@ -85,10 +86,11 @@ while const Some(item) = source.next().await()? { ... }
 form because its pull can fail.
 
 ```trb check
-fn printAll(var source: Source<Int, Never>): Task<Void> {
+fn printAll(var source: Source<Int, Never>): Task<Result<Void, Never>> {
   while const Some(item) = source.next().await()? {
     print item
   }
+  Ok void
 }
 ```
 

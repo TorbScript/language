@@ -184,7 +184,80 @@ print "{mid.red} {mid.green} {mid.blue}"
 
 **One implementation per argument type, in an `extend` of its own.** The two `draw` members above cannot stand in one
 `type` body: a type has one namespace of members, so two members called `draw` are a duplicate name however they differ.
-One `extend` per instantiation of the trait is the form, and it is what `std/core` does with `From`.
+One `extend` per instantiation of the trait is the form, and it is what `std/core` does with `From`. Writing them in the
+body says so:
+
+```trb error
+trait Draw<Shape> {
+  fn draw(self, shape: Shape): String
+}
+
+type Circle {
+  radius: Float
+}
+
+type Square {
+  side: Float
+}
+
+type Canvas with Draw<Circle> & Draw<Square> {
+  scale: Float
+
+  fn draw(self, shape: Circle): String {
+    "circle"
+  }
+
+  fn draw(self, shape: Square): String {
+    "square"
+  }
+}
+// error: `draw` is already declared in `Canvas`
+```
+
+### What decides which implementation a call means
+
+Everything the call says: **every argument, and the type the call is expected to produce.** The trait's argument does
+not have to be the first parameter, and it does not have to be a parameter at all.
+
+```trb check
+trait Store<Component> {
+  fn valueOf(self): Component?
+  fn attachAt(self, slot: Bool, value: Component): Int
+}
+
+type Game {
+  number: Int
+  text: String
+}
+
+extend Game with Store<Int> {
+  fn valueOf(self): Int? {
+    Some number
+  }
+
+  fn attachAt(self, slot: Bool, value: Int): Int {
+    value
+  }
+}
+
+extend Game with Store<String> {
+  fn valueOf(self): String? {
+    Some text
+  }
+
+  fn attachAt(self, slot: Bool, value: String): Int {
+    value.byteLength()
+  }
+}
+
+const game = Game 1, "one"
+print game.attachAt(true, "eight")          // the later parameter decides
+const named: String? = game.valueOf()       // the expected type decides
+print named
+```
+
+Where nothing tells them apart, the checker says so instead of taking the first one: `` `valueOf` fits more than one
+implementation here ``, with the list of what exists. Write the type that is expected of the call.
 
 ## Related
 

@@ -425,7 +425,7 @@ fn declaredVoidOf(var checker: Checker, annotation: TypeId): TypeId? {
 
 /** What the bounds of a trait-typed value or of a generic parameter say about one trait. */
 /** The arguments a bound was written with: `From<Iterable<Int>>` gives `[Iterable<Int>]`, a bare `Show` gives `[]`. */
-fn appliedArgumentsOf(checker: Checker, bound: TypeId): List<TypeId> {
+public fn appliedArgumentsOf(checker: Checker, bound: TypeId): List<TypeId> {
   match checker.types.form(bound) {
     .Nominal(_, arguments) => arguments
     _ => []
@@ -1011,7 +1011,12 @@ fn addImplementorTraits(var checker: Checker, var found: List<TypeId>, annotatio
     }
     const head = match targetShapeOf(checker, implementation.target) {
       .Bounded(inner) => inner
-      // A blanket target binds nothing from the type alone, so it is no trait the type simply has
+      // `extend<World: Query> World with Pairs`: the target is a bare parameter, so it binds nothing on its own - and
+      // then the **bound on that parameter** is the whole condition, which is the question `boundsHold` answers
+      .Blanket => {
+        addBlanketTrait checker, found, index, annotation, declared
+        continue
+      }
       _ => {
         continue
       }
@@ -1046,6 +1051,117 @@ fn addImplementorTraits(var checker: Checker, var found: List<TypeId>, annotatio
       }
       break
     }
+  }
+}
+
+/**
+ * Whether a value of `given` may stand where `wanted` is asked for - the question `checkValue` answers, asked **without
+ * reporting anything**, because a candidate of an overload set that does not fit is not a mistake but the wrong
+ * candidate.
+ *
+ * It is deliberately generous where it cannot see: a generic parameter, a variable or anything not settled yet fits, so
+ * a candidate is ruled out only by a type that says so.
+ */
+public fn fitsType(var checker: Checker, given: TypeId, wanted: TypeId): Bool {
+  // `Never` is the one absorbing type that does **not** absorb here: it coerces to everything and nothing coerces to
+  // it, so the `From<Never>` every type has must not fit every argument of `Type.from(...)`
+  if wanted == checker.neverType {
+    return given == checker.neverType
+  }
+  if checker.absorbs(given) || checker.absorbs(wanted) {
+    return true
+  }
+  if sameType(checker.types, given, wanted) {
+    return true
+  }
+  if !isConcrete(checker, given) || !isConcrete(checker, wanted) {
+    return true
+  }
+  // A value becomes a trait-typed value it implements: `Store<Show>` takes a `Square` like any other parameter does
+  if const .Traits(bounds) = checker.types.form(wanted) {
+    for bound in bounds {
+      if !implementsBound(checker, given, bound) {
+        return false
+      }
+    }
+    return true
+  }
+  false
+}
+
+/**
+ * Every **applied** bound of one trait a type has: `[Multiply<Scale, Board>, Multiply<Board, Board>]`, in the order
+ * they were found. [traitArgumentsOf] answers one of them and says `Ambiguous` for a type that implements the trait
+ * more than once; this is the list that the operators and the overload set are decided from, and it is the same list
+ * member lookup builds its candidates from.
+ */
+public fn appliedTraitsOf(var checker: Checker, annotation: TypeId, capability: SymbolId): List<TypeId> {
+  var found: List<TypeId> = []
+  for bound in traitsOf(checker, annotation) {
+    if hasHead(checker, bound, capability) && !found.contains(bound) {
+      found.add bound
+    }
+  }
+  found
+}
+
+/**
+ * One blanket implementation, for one type: `extend<World: Query> World with Pairs` gives `Pairs` to every type that
+ * has `Query`, so `game.doubled()` is a member of `Game` like any other. A blanket whose own arguments the type does
+ * not decide (`extend<Source, Target> Source with Into<Target>`) is **not** added: it would put `Into<Target>` with an
+ * open `Target` on every type at all, and what that means is decided at a call and not by the type.
+ */
+fn addBlanketTrait(
+  var checker: Checker,
+  var found: List<TypeId>,
+  index: Int,
+  annotation: TypeId,
+  declared: TypeId,
+) {
+  // Only for a **concrete** type. What a generic parameter has is what its bounds say and nothing else - a blanket
+  // would give `Target` of `fn to<Target: From<Iterable<Item>>>` a second `From` (`From<Never>`, which every type has)
+  // and turn `Target.from(self)` into an ambiguity that no call site can resolve
+  if !isConcrete(checker, annotation) {
+    return
+  }
+  const implementation = checker.implementations.all[index]
+  var mapping: Map<ParameterId, TypeId> = [:]
+  if !matchTarget(checker, implementation, annotation, mapping) {
+    return
+  }
+  if !boundsHold(checker, implementation, mapping) {
+    return
+  }
+  const applied = substitute checker.types, declared, mapping
+  if hasParameter(checker, applied) {
+    return
+  }
+  if !found.contains(applied) {
+    found.add applied
+  }
+}
+
+/** Whether a type still mentions a generic parameter anywhere: what "the type did not decide this" means here. */
+fn hasParameter(checker: Checker, annotation: TypeId): Bool {
+  match checker.types.form(annotation) {
+    .Parameter(_) => true
+    .Nominal(_, arguments) => {
+      for argument in arguments {
+        if hasParameter(checker, argument) {
+          return true
+        }
+      }
+      false
+    }
+    .Traits(bounds) => {
+      for bound in bounds {
+        if hasParameter(checker, bound) {
+          return true
+        }
+      }
+      false
+    }
+    _ => false
   }
 }
 

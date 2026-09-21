@@ -170,6 +170,32 @@ group "Members" {
     assert(found.typeOf("Point.area") == "(self: Point) => Int64")
   }
 
+  /**
+   * `Void` is the type with exactly one value, so a member it has not is an ordinary mistake. It used to say nothing at
+   * all, which left the expression untyped and the reader with "this is a bug of the compiler" (LINEAR gap 13).
+   */
+  test "a member `Void` has not is named, with the command-call trap the line usually is" {
+    const source = "fn probe() \{\n  print(1).round()\n\}"
+    assert(problems(source) == ["`Void` has no member `round`"])
+    assert(
+      notes(source) == [
+        "A call that produces nothing has the type `Void`. A `(` right after the name of a call is its argument list, "
+          + "whatever whitespace stands in between, so `f (x).round()` reads as `f(x).round()`: write "
+          + "`f((x).round())`, or bind the value first",
+      ]
+    )
+  }
+
+  test "and the spelling with a space says the same thing, because whitespace decides nothing" {
+    const source = "fn probe() \{\n  print (0..4).length()\n\}"
+    assert(problems(source) == ["`Void` has no member `length`"])
+  }
+
+  test "the way to write it checks" {
+    const source = "{point}fn probe() \{\n  print((Point(1, 2)).area())\n\}"
+    assert problems(source).isEmpty()
+  }
+
   test "a field of `self` is reachable by its bare name, and the receiver is recorded" {
     const found = probe point
     assert(found.typeOf("(x) * y") == "Int64")

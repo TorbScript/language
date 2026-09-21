@@ -110,7 +110,30 @@ extend <Foreign> with From<Mine> { ... }   // Your type into somebody else's
 3. **A conversion from text is a `TryFrom<String, Failure>` like any other.** `Int.tryFrom "42"` and
    `Email.tryFrom "info@example.test"` both answer a `Result`, and there is no `parse` on a type: a function named
    `parse` belongs to a **format** (`Json.parse`), never to a value. A type may implement `TryFrom` once per source,
-   and the argument decides which one a call means.
+   and the call decides which one it means: the **argument**, and where the argument leaves several standing, the
+   `Result` the call is expected to produce.
+
+   ```trb check
+   type Port {
+     number: Int
+   }
+
+   extend Port with TryFrom<String, String> {
+     fn tryFrom(value: String): Result<Port, String> {
+       Ok Port(1)
+     }
+   }
+
+   extend Port with TryFrom<Int, String> {
+     fn tryFrom(value: Int): Result<Port, String> {
+       Ok Port(value)
+     }
+   }
+
+   const fromText = Port.tryFrom "8080"
+   const fromNumber = Port.tryFrom 8080
+   print "{fromText.isOk()} {fromNumber.isOk()}"
+   ```
 
 4. **Converting your own type into a foreign one is `extend Foreign with From<Mine>`.** A package owns an
    implementation when it owns the type, the trait, **or** a type named as an argument of the trait - so the package

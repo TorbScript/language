@@ -2794,3 +2794,206 @@ _Decision:_ accepted (`rangeLiteralType` and `isRange` in `expression.trb`, `Wel
 `Slice.slice` declares - so a range of anything but an `Int` is reported there and the witness the back ends call
 `lowest`/`highest` through is recorded on the index expression. `inclusive` stays a `Bool` field of `Range` and
 `RangeTo`: the type answers "which ends", not "which ends and whether the last one counts", which would be six types.
+
+**66. May a trait-typed value stand where a type parameter is expected?**
+`fn bare<Value>(shape: Area): Value { shape }` checked clean: `checkValue` gives up on a pair it cannot unify when
+either side is "undecided", and a generic parameter was on that list. Stage 0 printed the `Square`, and the IR verifier
+answered *"the function returns `Record(Square)` and `return` carries `Object(Area)`"*. A named type rejected the same
+line.
+_Proposal:_ a trait type handed to a type parameter is a mismatch, checked before the undecided pair is let through and
+reported as the ordinary `` Expected `Value`, found `Area` `` with a note that says why. The check walks both types in
+parallel (`traitForParameter` in `expression.trb`), so `Box<Area>` for a `Box<Value>` is the same message one level
+down.
+_Reason:_ the language has four coercions and every one of them runs **towards** a trait type. Inside the body that
+declares it a type parameter is opaque: it stands for the one type the call site chose, and a trait-typed value is any
+type that implements the trait, so the one is never the other. Where the call site *did* instantiate the parameter with
+that trait type, substitution has put the trait type in both places long before this is asked and `unify` answers.
+
+_Decision:_ accepted. "Undecided" keeps its meaning for everything else - a parameter still says nothing about a
+literal (`Pair 0` inside `fn oneOf<Item: Numeric>`), about a `const` parameter used as a value (`0..Rows`) and about a
+`Task` the checker has not settled - because only the *pair* "a trait type here, a parameter there" is decided, and only
+that pair is reported. Nothing in the repository depended on the hole (`check ..` stays at 319 files, no problems).
+
+**67. What may a closure handed to `spawn` capture?**
+CONCEPT ("Concurrency", and again under the mutation rules) says it plainly: *"Closures passed to `spawn` cannot
+capture `var` bindings."* The checker accepted one, and accepted two `spawn`s reading the same variable, which is the
+data race the design says cannot happen - a captured `var` binding is not a copy but a **shared box**, the one value of
+the language that two scopes reach.
+_Proposal:_ `requireTaskCaptures` in `call.trb` runs after the arguments of a call are checked, on a call whose target
+is the `spawn` of the prelude (`WellKnown.spawn`). For every closure argument it reads the captures the closure itself
+recorded and reports each `var` one, naming the variable and pointing at the closure that would take it.
+_Reason:_ the capture is what is wrong, not the second one: one task that shares a variable with the scope that spawned
+it is already a race with that scope. So there is no counting and no "moved into one task" bookkeeping - two `spawn`s
+give two messages, one at each closure, which is also the pair of sites a reader has to see.
+
+_Decision:_ accepted. It keys on the **symbol** and not on the name, so a local `fn spawn` of a program is not this
+rule; a library that spawns a closure on your behalf (`Source.produce`) is not covered, which is the same boundary gap
+58 already draws for `await()`. Nothing in the repository depended on the hole: `std/stream`s one `spawn` captures two
+`const`s.
+
+**68. What decides which implementation an overloaded call means?**
+The language keeps one overload form - a trait with a **parameter**, implemented more than once on one type - and the
+checker resolved only the case where the trait argument was the type of the **first** parameter. `game.attachAt true,
+"eight"` took the first-declared implementation, `const named: String? = game.valueOf()` took it too, a bound with two
+instantiations (`World: Store<Position> & Store<Velocity>`) type checked and printed the same value twice, and the
+operator path reported `` `Board` does not implement `Multiply` `` where the named call `board.multiply(Scale(2))`
+resolved.
+_Proposal:_ **one mechanism, asked of everything the call says.** `chooseOverload` infers every written argument once
+(a closure and a spread say nothing - a closure is read *from* the parameter it fills), keeps the candidates each
+argument fits, and where more than one is left narrows by the type the call is expected to produce. Exactly one is the
+answer; several are an ambiguity that lists them; none is the message that lists what exists. The operator path asks
+the same two questions of `appliedTraitsOf(receiver, Multiply)` - the list `traitArgumentsOf` collapses into
+`Ambiguous` - and hands the chosen **bound** to `recordTraitCall`, so the member and the dispatch both come from it.
+_Reason:_ the first parameter was never the rule, only the case the old code could see. "Which implementation" and
+"which argument" are one question, and the expected type is the half of it that a call with no arguments at all
+consists of.
+
+_Decision:_ accepted (`chooseOverload`, `fitsArguments`, `narrowByResult` in `call.trb`; `fitsType` and
+`appliedTraitsOf` in `implementation.trb`; `operatorBound` in `expression.trb`; `boundMember`/`dispatchOfBound` in
+`member.trb`). Two details the repository decided:
+
+- **An exact fit beats one that cannot be ruled out.** `fitsType` is generous where it cannot see - a generic
+  parameter, a variable, anything unsettled fits - so a blanket candidate fits every call. Where some candidate matches
+  the written types by `sameType`, only those are considered: without it `toList().encode(encoder)` in `std/encoding`
+  became an ambiguity between the `Encoder` of `Encode` and the `Target` of a blanket.
+- **The ambiguity is reported and the first candidate is still used.** One root cause, one message, and everything
+  after it is checked against a signature rather than against nothing.
+
+**Not done, and exactly where it stands:** a **user** type that gets `TryFrom<String, _>` from a trait it comes `with`
+and writes another `TryFrom` of its own still reaches the wrong implementation (docs/BACKEND.md, "One conversion, one
+implementation"). The member the type writes is found by rule 2 of the lookup, so the overload set of rule 5 is never
+built, and merging the two lists means asking `traitsOf` **during** member lookup. That answer is a closed-world one
+and it is memoized: asked before the run has derived the implementations it generates on first use, it caches a closure
+without them, and the witness tables of an unrelated program come out different - measured, the `Equals` instance of
+`std/core`s `Ordering` disappears from the lowering of `syntax/source.trb` (118 functions become 117). Reading the
+implementation index instead of `traitsOf` avoids that and runs into the second half: the signature of a trait may be
+built while this very member lookup is running, and `typeSignatureOf` panics. **The fix is one of two things, and both
+are their own round:** a `traitsOf` whose cache is invalidated when a derived implementation is added, or an overload
+set that is merged at the call site instead of in the lookup.
+
+**69. Does member lookup see a blanket implementation, and is there an inherent one?**
+`extend<World: Query> World with Pairs { fn doubled(self): Int { ... } }` and then `game.doubled()` answered `` `Game`
+has no member `doubled` ``, although `resolveTrait(Game, Pairs)` finds that very implementation: `traitsOf` - the list
+member lookup walks - skipped every implementation whose target is a bare parameter, because "a blanket target binds
+nothing from the type alone". The inherent form `extend<World: Query> World { ... }` checked clean and answered
+"cannot extend `World`: it is not a type" when it ran.
+_Proposal:_ `addBlanketTrait` adds a blanket to the list of traits a type has when the target matches and the
+implementation`s own bounds hold, which is the whole condition a blanket has. And the inherent form is rejected: CONCEPT
+defines a blanket as an implementation *whose target is a bare type parameter* and allows one "when the package owns the
+**trait**".
+_Reason:_ without a trait there is nothing the coherence rule could license, nothing that keeps the implementation
+unique, and nothing a using file could name - an extension member of a foreign type is imported by the **head** of its
+target, and a bare parameter has no head.
+
+_Decision:_ accepted, with two limits that the repository measured:
+
+- **Only for a concrete receiver.** What a generic parameter has is what its bounds say. Adding blankets to a
+  parameter gives `Target` of `fn to<Target: From<Iterable<Item>>>` a second `From` - the `From<Never>` every type has
+  - and `Target.from(self)` becomes an ambiguity no call site can resolve.
+- **Only where the type decides the trait`s own arguments.** `extend<Source, Target> Source with Into<Target>` would
+  put `Into<Target>` with an open `Target` on every type at all, and what that means is decided at a call.
+
+`Never` also stopped absorbing in `fitsType`: it coerces to everything and nothing coerces to it, so the `From<Never>`
+every type now has must not fit every argument of `Type.from(...)` - and it is left out of the list a message offers,
+because nobody writes it and nobody can call it.
+
+**70. Four smaller gaps of `docs/LINEAR.md` section 12, and which of them were still there.**
+_Decision:_ two were, two were not, and both halves are recorded because a stale gap costs the next round a day.
+
+- **A type parameter`s default reaches a member of a concrete `extend` (gap 4).** `Vector2.zero` where `zero` lives in
+  `extend Vector2<Float>` reported "Cannot infer `Scalar` of `Vector2`" although the declaration says
+  `Scalar: Numeric = Float`. A member access on a bare type name has nothing else to go on, so `withDeclaredDefaults`
+  in `expression.trb` puts the declared defaults in where the checker`s own variables stand, and the variables are
+  unified with them so the rest of the statement agrees. A parameter without a default fills in nothing: then the name
+  really says nothing about its arguments, and `` `Box` has no member `zero` `` is the right message.
+- **`Void` has no member (gap 13).** `print(x).round()` answered "The checker did not work out the type of this
+  expression - this is a bug of the compiler". `isFullyKnown` did not count `Void` as a known type, so
+  `reportUnknownMember` said nothing and the expression stayed untyped. `Void` is the type with exactly one value and
+  its members are the ones the standard library declares on it, so a member it has not is an ordinary mistake.
+  The note is the trap the line almost always is: **a `(` right after the name of a call is its argument list,
+  whatever whitespace stands in between**, so `print (0..4).length()` is `print(0..4)` and then `.length()` on what it
+  produced. Both spellings now name `Void`, and the note says to write `print((0..4).length())`.
+- **A static member through a type parameter (gap 7) works in the checker.** `Scalar.zero()` inside
+  `fn total<Scalar: Zero & Add>` resolves and records `Dispatch.Forwarded`, and `generics.test.trb` has pinned it
+  since 4.9 ("`Target.from(value)` reaches a static member of a bound"). What LINEAR quotes - `Unknown name `Scalar`` -
+  is **stage 0**, not this pass; the lowering finds the witness in `Witness.Forwarded(parameter, bound)`.
+- **A member-level `where` on a method of a generic `type` (gap 11) works too.** `fn length(self): Int where Item:
+  Absolute` inside `type Pair<Item: Counted>` reaches `absolute()` in its own body, and a `Pair(Plain(1), Plain(2))`
+  whose `Item` is not `Absolute` hears `` `Plain` does not implement `Absolute` `` at the call. `addBound` writes a
+  member`s `where` into `parameterBounds` like an inline bound, which is what makes it visible in the body.
+
+Counting `Void` as a known type also **unmasked a true positive** of an older rule: `?` needs the enclosing function
+to have a place for a failure, and `requireTryResult` was silent for a body that produces `Void` for the same reason.
+Two snippets of `docs/language/concurrency-and-streams/streams.md` wrote `fn printAll(var source: Source<Int, Never>):
+Task<Void>` with a `?` in the loop head; they answer `Task<Result<Void, Never>>` and end in `Ok void` now, which is
+what the rule has always said. Nothing in `std/` or `compiler/` was in that shape.
+
+**71. Is a type parameter rigid against *every* type, and what happens to a numeric literal then?**
+Entry 66 closed the trait-typed half of the hole and left the rest: `fn textOf<Item: Numeric>(): Item { "x" }`,
+`fn boundless<Item>(): Item { 1 }` and `fn viaBinding<Item: Numeric>(): Item { const value: Item = 1 }` all checked
+clean, and only the IR verifier caught them. The reason is one line: `isUndecided` counted a generic parameter as a
+type that says nothing about what may arrive at it.
+_Proposal:_ a type parameter is decided, and the two things that really depended on the hole get the rules they need:
+
+- **A `const` parameter stays undecided.** `<const Size: Int>` is a **value** and not a type: `Size` read as a value is
+  an `Int` the call site fills in, and `for row in 0..Rows` of `examples/tour` is ordinary code.
+- **A numeric literal adapts to the parameter itself.** CONCEPT ("No `default` keyword and no `Default` trait") says
+  the neutral element of an algorithm over a `Scalar: Numeric` is the **literal**, so `0` and `1` have to *be* the
+  parameter. `boundImplies` in `expression.trb` asks whether the parameter`s bounds imply `Numeric` (an integer
+  literal) or `Real` (a decimal one), reading the declaration and its supertraits rather than `traitsOf` - this runs at
+  every literal of every program, and the closure of "every trait a type has" derives implementations on first use.
+  What the literal becomes is recorded as `Adaptation.Literal(<the parameter>)`; what that means for a non-primitive
+  instantiation is the lowering`s question.
+
+_Reason:_ inside the body that declares it a parameter stands for the one type the call site chose. `"x"` is not that
+type, `1` is not either - unless the bound says the parameter is a number, which is the one exception the decision log
+writes down.
+
+_Decision:_ accepted. `Real` is exported from `std/prelude` for it, because a decimal literal needs a bound that
+implies it and the prelude is where the language looks its traits up. **One place in the repository depended on the
+hole:** `Source.toList`, `Source.count` and `Source.fold` in `std/stream/src/source.trb` wrote `collect listing()` as
+the body of a `Task<Result<...>>` - the body of such a function produces the **value** of the `Task`, so it was a
+`Task<Result<...>>` where a `Result<...>` was wanted, and the parameters `Item`/`Failure` in the types were what kept
+it quiet. All three `await()` now.
+
+**72. Is `From` reflexive, and may an `Into<Path>` parameter take a `Path`?**
+_Decision:_ **yes, and CONCEPT already decided it** ("Conversions"): *"Every type has `From<Self>`, and that conversion
+is the value itself. It is not written down anywhere and could not be: a blanket `extend<Value> Value with
+From<Value>` would overlap with every other implementation of `From`."* So `std/core` must **not** get that blanket,
+and the checker is right to accept a `Path` for a parameter of type `Into<Path>`: `canDerive` in `derive.trb` answers
+yes for a `From` whose source is its target, and `deriveFor` records a `DerivedImplementation(Path, From<Path>,
+["from"])` like any other generated one. What the back end reported - a `Path -> Path` instance of the **blanket**
+`Into` whose body calls the written `Path.from(String)` with a `Path` - is the lowering picking the written
+implementation where the witness names the derived one: **the generated reflexive `From` needs a body of its own, and
+that body is the value.** Nothing about it is a checker change.
+
+**73. `==` on some instantiations of a generic record - not reproduced here.**
+The back-end round reports that `recordTraitCall` records no member for `==` on a generic type with a concrete
+`extend`. Probed in both shapes the report names - `type Pair<Item: Numeric>` with `extend Pair<Float64>` holding a
+`const` that constructs the type, and with a `fn` that constructs it - `Pair<Float64> == Pair<Float64>` and
+`Pair<Int64> == Pair<Int64>` both resolve to `call equals` with `implementation Pair<Float64>: Equals` and
+`implementation Pair<Int64>: Equals`. A third probe with the real shape of `std/linear`'s `Vector2` - the same
+parameter default, two concrete `extend`s holding `const`s that construct it, the alias `Float` in both the default and
+the `extend` - answers the same thing. So the shape that loses the resolution is a different one, and the record is
+still owed (LINEAR 15).
+
+**The mechanism to look at first is the memoization, and it is the one entry 68 already names.** `findMember` keeps a
+*negative* answer per `(module, receiver, isStatic, name)` in `memberMissing`, and `traitsOf` keeps the closure of
+"every trait a type has" per type - both of them answers about a **closed world that still grows**, because `Equals`,
+`Hash`, `Show` and the reflexive `From` are derived on first use. A query for `Vector2<Float>.equals` that happens
+before the `Equals` of that instantiation was derived caches "there is none" for the rest of the run, and
+`Vector2<Int>` keeps its record because its first query happened after. That also explains why the reproduction depends
+on the whole program rather than on the declaration: which query comes first does. A `traitsOf`/`memberMissing` that is
+invalidated when a derived implementation is added would close this, entry 68's remaining half **and** the
+`traitsDeclaring` route to the `TryFrom` hole in one change, and it is the round to do next.
+
+One line of `checkCall` is written the way it is because of the **native** back end, and the reason belongs here:
+`var target = resolveTarget ...` followed by `target = chooseOverload(checker, target, ...)` does not build. Whether a
+parameter is `owned` or `borrowed` in the IR is decided by the callee: the old `chooseOverload` returned the very
+`target` it was given on one path, which makes the parameter `owned` and the assignment a hand-over; the new one never
+returns it, so the parameter is `borrowed` and the caller still owns the slot it is writing into. The ownership
+verifier then answers *"%7 is overwritten while it still owns a value"* over the whole function (22 findings, and the
+compiler does not build - the `suite` gate is what catches it). Binding the answer first (`const chosen = ...` and then
+`target = chosen`) is correct and builds. **The finding for `ir/`:** `x = f(x)` where `f` borrows `x` has to release
+the old value after the call instead of before it; today the shape only works when the callee happens to take its
+argument over.

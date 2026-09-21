@@ -675,7 +675,13 @@ fn checkTypeShape(
   for member in typeDeclaration.members {
     checkMemberShape checker, module, member, false, isNative
   }
-  requireOneNamespace checker, module, typeDeclaration.members, typeDeclaration.name.text
+  requireOneNamespace(
+    checker,
+    module,
+    typeDeclaration.members,
+    typeDeclaration.name.text,
+    repeatedTraitOf(typeDeclaration.traits),
+  )
   if declaration.modifiers.isShared {
     requireSharedTraits checker, module, typeDeclaration.name, typeDeclaration.traits
   }
@@ -695,7 +701,7 @@ fn checkTraitShape(
   for member in traitDeclaration.members {
     checkMemberShape checker, module, member, true, isNative
   }
-  requireOneNamespace checker, module, traitDeclaration.members, traitDeclaration.name.text
+  requireOneNamespace checker, module, traitDeclaration.members, traitDeclaration.name.text, None
   if isPublic {
     checkExposedTrait checker, module, traitDeclaration
   }
@@ -706,7 +712,13 @@ fn checkTraitShape(
  * so two of them may not share a name. Without the rule the first one the lookup order reaches wins and the other is
  * unreachable - `report.title` was the field and `report.title()` was nothing anybody could call.
  */
-fn requireOneNamespace(var checker: Checker, module: ModuleId, members: List<Member>, owner: String) {
+fn requireOneNamespace(
+  var checker: Checker,
+  module: ModuleId,
+  members: List<Member>,
+  owner: String,
+  repeated: String?,
+) {
   var declared: Map<String, Bool> = [:]
   for member in members {
     const name = memberNameOf member
@@ -714,14 +726,54 @@ fn requireOneNamespace(var checker: Checker, module: ModuleId, members: List<Mem
       continue
     }
     if declared.containsKey(name.text) {
-      checker.report(
-        module,
-        Diagnostic.error("`{name.text}` is already declared in `{owner}`", name.span)
-          .withNote("A type has one namespace of members: a field, a `const`, a `fn` and a case cannot share a name")
-      )
+      var problem = Diagnostic.error("`{name.text}` is already declared in `{owner}`", name.span)
+        .withNote("A type has one namespace of members: a field, a `const`, a `fn` and a case cannot share a name")
+      // `type Sketch with Draw<Paper> & Draw<Screen>` writing two `draw`s: the two members belong to two
+      // implementations and not to one body, and the form that has a body per implementation is `extend`
+      if const Some(capability) = repeated {
+        problem = problem.withNote(
+          "`{owner}` comes with `{capability}` more than once, and one body per instantiation is one `extend` per "
+            + "instantiation: `extend {owner} with {capability}<...> \{ fn {name.text}(...) \}`"
+        )
+      }
+      checker.report module, problem
       continue
     }
     declared.set name.text, true
+  }
+}
+
+/** The trait a `with` list names twice with different arguments, if there is one: `Draw<Paper> & Draw<Screen>`. */
+fn repeatedTraitOf(traits: List<TraitClause>): String? {
+  var seen: Map<String, Bool> = [:]
+  for clause in traits {
+    for name in traitHeadsOf(clause.capability) {
+      if seen.containsKey(name) {
+        return Some name
+      }
+      seen.set name, true
+    }
+  }
+  None
+}
+
+/** The head names one `with` element writes: `Add & Subtract` is two, `Draw<Paper>` is one. */
+fn traitHeadsOf(reference: TypeReference): List<String> {
+  match reference.kind {
+    .Named(path, _) => {
+      match path.last() {
+        Some(name) => [name.text]
+        None => []
+      }
+    }
+    .Intersection(parts) => {
+      var found: List<String> = []
+      for part in parts {
+        found.addAll traitHeadsOf(part)
+      }
+      found
+    }
+    _ => []
   }
 }
 
@@ -822,6 +874,7 @@ public fn isSharedTrait(var checker: Checker, symbol: SymbolId): Bool {
 fn checkExtendShape(var checker: Checker, module: ModuleId, extension: ExtendDeclaration) {
   const isNative = false
   requireExtendableTarget checker, module, extension.target
+  requireTraitForBlanket checker, module, extension
   for member in extension.members {
     match member.kind {
       .Field(field) => {
@@ -840,6 +893,33 @@ fn checkExtendShape(var checker: Checker, module: ModuleId, extension: ExtendDec
       }
       _ => checkMemberShape checker, module, member, false, isNative
     }
+  }
+}
+
+/**
+ * **A blanket `extend` needs a trait.** CONCEPT ("Traits"): a blanket implementation is one *whose target is a bare
+ * type parameter*, it covers every type, and it "is allowed when the package owns the **trait**" - so without a trait
+ * there is nothing the rule could license, nothing coherence could keep unique, and nothing a using file could name:
+ * an extension member of a foreign type is imported by the head of its target, and a bare parameter has no head.
+ *
+ * `extend<World: Query> World { fn doubled(self): Int { ... } }` checked clean and answered *"cannot extend `World`: it
+ * is not a type"* when it ran. The form that means what it was written for is `extend<World: Query> World with Pairs`.
+ */
+fn requireTraitForBlanket(var checker: Checker, module: ModuleId, extension: ExtendDeclaration) {
+  if !extension.traits.isEmpty() {
+    return
+  }
+  const annotation = typeFromReference checker, extension.target, TypeScope(module).forType()
+  if const .Parameter(_) = checker.types.form(annotation) {
+    const shown = checker.describe annotation
+    checker.report(
+      module,
+      Diagnostic.error("`{shown}` is a type parameter, so this `extend` needs a trait", extension.target.span)
+        .withNote(
+          "An `extend` over every type is a blanket implementation, and a blanket implementation is allowed because"
+            + " its package owns the trait: write `extend<...> {shown} with SomeTrait \{ ... \}`"
+        )
+    )
   }
 }
 

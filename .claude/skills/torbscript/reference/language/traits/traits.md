@@ -145,7 +145,52 @@ fn sum<Item: Add>(values: List<Item>)       a bound
     why `with Add` means `Add<Self, Self>` and nobody writes it out. A `fn` has no such defaults: its type arguments come
     from the call.
 
-13. **`by` delegates a trait to the one field of a single-field type**, and it binds to the element of the `with` list
+13. **One type may carry a trait with a parameter several times, and each of them is one `extend`.** That is the
+    overload form the language has ([Where are my overloads](../../explanation/where-are-my-overloads.md)), and which
+    one a call means is decided by **everything the call says**: every argument that is not a closure, and the type the
+    call is expected to produce. Two bodies of two instantiations cannot stand in one `type` body, because a type has
+    one namespace of members.
+
+    ```trb check
+    trait Store<Component> {
+      fn valueOf(self): Component?
+      fn attach(self, value: Component): Int
+    }
+
+    type Game {
+      number: Int
+      text: String
+    }
+
+    extend Game with Store<Int> {
+      fn valueOf(self): Int? {
+        Some number
+      }
+
+      fn attach(self, value: Int): Int {
+        value
+      }
+    }
+
+    extend Game with Store<String> {
+      fn valueOf(self): String? {
+        Some text
+      }
+
+      fn attach(self, value: String): Int {
+        value.byteLength()
+      }
+    }
+
+    const game = Game 1, "one"
+    const named: String? = game.valueOf()
+    print "{game.attach(7)} {named}"
+    ```
+
+    Where nothing in the call tells them apart, the checker names them instead of taking the first:
+    `` `valueOf` fits more than one implementation here ``.
+
+14. **`by` delegates a trait to the one field of a single-field type**, and it binds to the element of the `with` list
     directly in front of it - which may be an `&` group - never to the whole list.
 
     ```trb
@@ -161,14 +206,14 @@ fn sum<Item: Add>(values: List<Item>)       a bound
     delegated nor written by hand is not available, which is the point: `Seconds * Seconds` does not compile, because that
     would be square seconds.
 
-14. **`by` needs a type with exactly one field**, and the name after `by` names that field. A type with two fields cannot
+15. **`by` needs a type with exactly one field**, and the name after `by` names that field. A type with two fields cannot
     delegate `Add` to either one, and a type with cases has no field of its own to name.
 
-15. **`Trait.member` reads the trait's own members first, then the members of implementations whose target is the trait
+16. **`Trait.member` reads the trait's own members first, then the members of implementations whose target is the trait
     itself.** That is what makes `List.of(1, 2)` and `List.from(iterable)` work. Two such implementations are an ambiguity
     error, and the fix is to name a type.
 
-16. **A `shared type` can only implement a `shared trait`.** So a value of a trait type is always a value: nobody changes
+17. **A `shared type` can only implement a `shared trait`.** So a value of a trait type is always a value: nobody changes
     it while you hold it, and it can be passed to another task.
 
 ## What this is not

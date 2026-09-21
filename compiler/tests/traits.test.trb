@@ -104,6 +104,136 @@ group "Members through traits" {
   }
 }
 
+/**
+ * **The one overload form the language has** (CONCEPT: "a name per receiver, and a trait with a parameter"). Which
+ * implementation a call means is decided by everything the call says - every argument, and the type the call is
+ * expected to produce - and not by the first parameter alone.
+ */
+group "A trait with a parameter, implemented more than once" {
+  /** The `Store<Component>` of `docs/ECS.md` section 1, which is what the whole design of that package rests on. */
+  const store = "trait Store<Component> \{\n"
+    + "  fn valueOf(self): Component?\n"
+    + "  fn attach(var self, value: Component)\n"
+    + "  fn attachAt(var self, slot: Bool, value: Component)\n\}\n\n"
+    + "type Game \{\n  var number: Int\n  var text: String\n\}\n\n"
+    + "extend Game with Store<Int> \{\n"
+    + "  fn valueOf(self): Int? \{\n    Some number\n  \}\n\n"
+    + "  fn attach(var self, value: Int) \{\n    number = value\n  \}\n\n"
+    + "  fn attachAt(var self, slot: Bool, value: Int) \{\n    number = value\n  \}\n\}\n\n"
+    + "extend Game with Store<String> \{\n"
+    + "  fn valueOf(self): String? \{\n    Some text\n  \}\n\n"
+    + "  fn attach(var self, value: String) \{\n    text = value\n  \}\n\n"
+    + "  fn attachAt(var self, slot: Bool, value: String) \{\n    text = value\n  \}\n\}\n\n"
+
+  test "the trait's argument in the first parameter, which always worked" {
+    const source = "{store}fn probe() \{\n  var game = Game(1, \"one\")\n"
+      + "  game.attach \"eight\"\n  print game.text\n\}"
+    assert problems(source).isEmpty()
+    const found = probe source
+    assert(found.dispatchOf("game.attach") == "implementation Game: Store<String>")
+  }
+
+  test "the trait's argument in a later parameter" {
+    const source = "{store}fn probe() \{\n  var game = Game(1, \"one\")\n"
+      + "  game.attachAt true, \"eight\"\n  print game.text\n\}"
+    assert problems(source).isEmpty()
+    const found = probe source
+    assert(found.dispatchOf("game.attachAt") == "implementation Game: Store<String>")
+  }
+
+  test "the trait's argument only in the result, which the expected type decides" {
+    const source = "{store}fn probe() \{\n  const game = Game(1, \"one\")\n"
+      + "  const named: String? = game.valueOf()\n  print named\n\}"
+    assert problems(source).isEmpty()
+    const found = probe source
+    assert(found.typeOf("game.valueOf()") == "Option<String>")
+    assert(found.dispatchOf("game.valueOf") == "implementation Game: Store<String>")
+  }
+
+  test "nothing that tells them apart is an ambiguity that names them" {
+    const source = "{store}fn probe() \{\n  const game = Game(1, \"one\")\n"
+      + "  const named = game.valueOf()\n  print named\n\}"
+    assert(problems(source) == ["`valueOf` fits more than one implementation here"])
+    assert(
+      notes(source) == [
+        "It exists for Option<Int64>, Option<String>: write the type that is expected of this call, or name it with a "
+          + "type argument",
+      ]
+    )
+  }
+
+  test "through a bound with two instantiations, the expected type picks the right one" {
+    const source = "{store}fn probe<World: Store<Int> & Store<String>>(world: World) \{\n"
+      + "  const named: String? = world.valueOf()\n  const number: Int? = world.valueOf()\n"
+      + "  print \"\{named\} \{number\}\"\n\}"
+    assert problems(source).isEmpty()
+    const found = probe source
+    assert(found.typeOf("world.valueOf()") == "Option<String>")
+  }
+}
+
+/**
+ * The operator path of the same question. `a * b` is `Multiply.multiply`, and a type may carry `Multiply` more than
+ * once - which used to report that the type does not implement it at all, while `a.multiply(b)` resolved.
+ */
+group "An operator whose trait is implemented more than once" {
+  const board = "type Scale \{\n  factor: Int\n\}\n\n"
+    + "type Board \{\n  size: Int\n\}\n\n"
+    + "extend Board with Multiply<Scale, Board> \{\n"
+    + "  fn multiply(self, other: Scale): Board \{\n    Board(size * other.factor)\n  \}\n\}\n\n"
+    + "extend Board with Multiply<Board, Board> \{\n"
+    + "  fn multiply(self, other: Board): Board \{\n    Board(size * other.size)\n  \}\n\}\n\n"
+
+  test "the right operand says which implementation the operator reaches" {
+    const source = "{board}fn probe() \{\n  const board = Board(2)\n"
+      + "  const scaled = board * Scale(3)\n  print scaled.size\n\}"
+    assert problems(source).isEmpty()
+    const found = probe source
+    assert(found.typeOf("board * Scale(3)") == "Board")
+    assert(found.dispatchOf("board * Scale(3)") == "implementation Board: Multiply<Scale, Board>")
+  }
+
+  test "and the other one reaches the other" {
+    const source = "{board}fn probe() \{\n  const board = Board(2)\n"
+      + "  const squared = board * board\n  print squared.size\n\}"
+    assert problems(source).isEmpty()
+    const found = probe source
+    assert(found.dispatchOf("board * board") == "implementation Board: Multiply<Board, Board>")
+  }
+
+  test "an operand none of them takes names the ones that exist" {
+    const source = "{board}fn probe() \{\n  const board = Board(2)\n"
+      + "  const wrong = board * \"two\"\n  print wrong.size\n\}"
+    assert(problems(source) == ["`Board` does not multiply a `String`"])
+    assert(notes(source) == ["`a * b` exists on `Board` for Scale, Board"])
+  }
+
+  test "two bodies of two instantiations cannot stand in one `type` body, and the message says the form" {
+    const source = "trait Draw<Surface> \{\n  fn draw(self, on: Surface): Int\n\}\n\n"
+      + "type Paper \{\n  weight: Int\n\}\n\n"
+      + "type Screen \{\n  pixels: Int\n\}\n\n"
+      + "type Sketch with Draw<Paper> & Draw<Screen> \{\n  ink: Int\n\n"
+      + "  fn draw(self, on: Paper): Int \{\n    ink\n  \}\n\n"
+      + "  fn draw(self, on: Screen): Int \{\n    ink\n  \}\n\}\n"
+    assert(problems(source) == ["`draw` is already declared in `Sketch`"])
+    assert(
+      notes(source) == [
+        "A type has one namespace of members: a field, a `const`, a `fn` and a case cannot share a name",
+        "`Sketch` comes with `Draw` more than once, and one body per instantiation is one `extend` per instantiation: "
+          + "`extend Sketch with Draw<...> \{ fn draw(...) \}`",
+      ]
+    )
+  }
+
+  test "the named form keeps answering the same thing" {
+    const source = "{board}fn probe() \{\n  const board = Board(2)\n"
+      + "  const scaled = board.multiply(Scale(3))\n  print scaled.size\n\}"
+    assert problems(source).isEmpty()
+    const found = probe source
+    assert(found.typeOf("board.multiply(Scale(3))") == "Board")
+  }
+}
+
 group "Traits as a namespace" {
   test "`Trait.member` reads the trait's own members first" {
     const source = "trait Shape \{\n  fn area(self): Int\n\n  fn unit(): Int \{\n    1\n  \}\n\}\n\n"

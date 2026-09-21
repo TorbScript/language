@@ -440,3 +440,58 @@ group "The visibility of an `extend`" {
     assert problemsIn(bounded).isEmpty()
   }
 }
+
+/**
+ * A blanket implementation - one whose **target** is a bare type parameter - covers every type whose bound it holds
+ * for, so its members are members of that type. CONCEPT allows one "when the package owns the trait", which is also
+ * why there is no inherent blanket: without a trait there is nothing to own and nothing a using file could name.
+ */
+group "Member lookup through a blanket implementation" {
+  const query = "trait Query \{\n  fn size(self): Int\n\}\n\n"
+    + "trait Pairs \{\n  fn doubled(self): Int\n\}\n\n"
+    + "type Game with Query \{\n  count: Int\n\n  fn size(self): Int \{\n    count\n  \}\n\}\n\n"
+
+  test "a concrete type that satisfies the bound has the member" {
+    const source = "{query}extend<World: Query> World with Pairs \{\n"
+      + "  fn doubled(self): Int \{\n    size() * 2\n  \}\n\}\n\n"
+      + "fn probe() \{\n  const game = Game(2)\n  print game.doubled()\n\}"
+    assert problems(source).isEmpty()
+    const found = probe source
+    assert(found.typeOf("game.doubled()") == "Int64")
+  }
+
+  test "a type that does not satisfy it does not" {
+    const source = "{query}extend<World: Query> World with Pairs \{\n"
+      + "  fn doubled(self): Int \{\n    size() * 2\n  \}\n\}\n\n"
+      + "type Other \{\n  count: Int\n\}\n\n"
+      + "fn probe() \{\n  const other = Other(2)\n  print other.doubled()\n\}"
+    assert(problems(source) == ["`Other` has no member `doubled`"])
+  }
+
+  test "an inherent blanket `extend` is not a form of the language" {
+    const source = "{query}extend<World: Query> World \{\n"
+      + "  fn doubled(self): Int \{\n    size() * 2\n  \}\n\}\n\n"
+      + "fn probe() \{\n  const game = Game(2)\n  print game.doubled()\n\}"
+    assert(problems(source) == ["`World` is a type parameter, so this `extend` needs a trait"])
+    assert(
+      notes(source) == [
+        "An `extend` over every type is a blanket implementation, and a blanket implementation is allowed because its "
+          + "package owns the trait: write `extend<...> World with SomeTrait \{ ... \}`",
+      ]
+    )
+  }
+
+  /**
+   * **Still open, pinned so that the next round sees it move.** A `where` clause whose *subject* is a concrete type is
+   * a fact about that type inside the body, and the checker does not know it: `Path` has the `From<String>` that is
+   * written and not the `From<Source>` the clause promises. The facts of a `where` live per body, while "every trait a
+   * type has" is a program-wide memoized answer, so the two do not fit together without a table of their own.
+   */
+  test "a `where` clause whose subject is a concrete type is not a fact the body may use yet" {
+    const source = "type Path \{\n  text: String\n\}\n\n"
+      + "extend Path with From<String> \{\n  fn from(value: String): Path \{\n    Path(value)\n  \}\n\}\n\n"
+      + "fn open<Source>(path: Source): Path where Path: From<Source> \{\n  Path.from path\n\}\n\n"
+      + "fn probe() \{\n  print open(\"a\").text\n\}"
+    assert(problems(source) == ["Expected `String`, found `Source`"])
+  }
+}

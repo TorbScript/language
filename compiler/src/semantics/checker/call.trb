@@ -20,7 +20,7 @@ use Target, targetOfCandidate from "./name"
 use checkExpression, inferExpression, deferExpression, deferArguments from "./expression"
 use resolveTarget, expectationOf from "./expression"
 use substituteFunction, substituteBounds, sameType, unify, resolveType, resolveTypes, openVariableOf from "./unify"
-use witnessFor, isConcrete, traitArgumentsOf from "./implementation"
+use witnessFor, isConcrete, traitArgumentsOf, fitsType from "./implementation"
 use propertyWrite from "./command"
 use openReceiverAccess, openArgumentAccess, closeAccessesTo, checkCallReads from "./place"
 use noteArgumentClosures from "./mutation"
@@ -65,7 +65,11 @@ public fn checkCall(
   const wanted = expected.annotationOf()
   var target = resolveTarget checker, callee, wanted
   if !target.overloads.isEmpty() {
-    target = chooseOverload checker, target, arguments, expression.span
+    // The chosen one is bound first and assigned after: `chooseOverload` reads the target it is given rather than
+    // taking it over, so writing its answer straight back into the same binding would overwrite a value the call is
+    // still reading
+    const chosen = chooseOverload checker, target, arguments, wanted, expression.span
+    target = chosen
   }
   // `port 8080`, `onStart { ... }`, `database { ... }`: a call of a member that is not callable writes it
   if const Some(written) = propertyWrite(checker, expression, callee, target, arguments, style) {
@@ -115,6 +119,8 @@ public fn checkCall(
   // A `var` field with an identity needs a `var` path, wherever the constructor is called from. After the
   // arguments, because the paths it asks about are the ones checking them recorded
   requireSharedFields checker, target, arguments
+  // `spawn { ... }` takes no `var` binding with it, and the captures it would take are recorded by now
+  requireTaskCaptures checker, target, arguments
   checkCallReads checker, callee, arguments, plan.targets, inner.parameters, isVarReceiver
   closeAccessesTo checker, openAccesses
   const witnesses = checkBounds checker, instantiation.bounds, target.name, expression.span
@@ -223,51 +229,212 @@ fn matchResult(var checker: Checker, result: TypeId, expected: TypeId) {
 }
 
 /**
- * `Int.from(value)`: `Int64` implements `From<Int32>`, `From<UInt8>`, `From<UInt16>`, `From<UInt32>` and `From<Char>`,
- * so one name has five signatures and the argument says which one is meant. That is the only overload set the language
- * has, and it only ever has one argument.
+ * **The one overload form the language has** (CONCEPT, "No overloading by parameter type"): a trait with a parameter,
+ * implemented several times on one type. `Int64` implements `From<Int32>`, `From<UInt8>` and three more, so `Int.from`
+ * is one name with five signatures; `Game` implements `Store<Position>` and `Store<Velocity>`, so `attach`, `attachAt`
+ * and `valueOf` each are two.
+ *
+ * Which one is meant is decided by **everything the call says**: every argument that is not a closure, and - where the
+ * arguments leave more than one standing - the type the call is expected to produce, which is the only thing that tells
+ * `const named: String? = game.valueOf()` from the `Int` one. Exactly one candidate is the answer, several are an
+ * ambiguity that names them, and none is the message that lists what exists.
  */
-fn chooseOverload(var checker: Checker, target: Target, arguments: List<Argument>, at: Span): Target {
-  if arguments.length() != 1 {
-    return target
+fn chooseOverload(
+  var checker: Checker,
+  target: Target,
+  arguments: List<Argument>,
+  expected: TypeId?,
+  at: Span,
+): Target {
+  // What every written argument is, inferred once. A closure and a spread say nothing: a closure is read *from* the
+  // parameter it fills, so reading it here would decide the candidate by a guess
+  var given: List<TypeId?> = []
+  for argument in arguments {
+    if argument.isSpread || isClosureArgument(argument) {
+      given.add None
+      continue
+    }
+    const found = inferExpression checker, argument.value
+    given.add(if checker.absorbs(found) { None } else { Some found })
   }
-  const first = arguments[0]
-  if first.isSpread || isClosureArgument(first) {
-    return target
-  }
-  const given = inferExpression checker, first.value
-  if checker.absorbs(given) {
-    return target
-  }
+  var fitting: List<Candidate> = []
+  var exact: List<Candidate> = []
   for candidate in target.overloads {
-    if const Some(form) = candidate.form {
-      if form.parameters.length() == 1 {
-        if sameType(checker.types, form.parameters[0].annotation, given) {
-          return targetOfCandidate checker, candidate, target.name
-        }
-      }
+    if fitsArguments(checker, candidate, arguments, given, isExact: false) {
+      fitting.add candidate
+    }
+    if fitsArguments(checker, candidate, arguments, given, isExact: true) {
+      exact.add candidate
     }
   }
-  reportNoOverload checker, target, given, at
-  // One root cause, one message: the argument is checked against nothing after this, and the call is `Invalid`
-  const broken = checker.invalidType
-  target.copy form: Some(FunctionForm([ParameterForm(None, ParameterMode.Value, broken)], broken))
+  // A candidate whose parameters *are* the types that were written beats one that only cannot be ruled out: an argument
+  // of a generic parameter's type fits every candidate, and that is not what "it fits" is supposed to mean
+  if !exact.isEmpty() {
+    fitting = exact
+  }
+  if fitting.isEmpty() {
+    reportNoOverload checker, target, given, at
+    // One root cause, one message: the argument is checked against nothing after this, and the call is `Invalid`
+    const broken = checker.invalidType
+    return target.copy form: Some(FunctionForm([ParameterForm(None, ParameterMode.Value, broken)], broken))
+  }
+  if fitting.length() == 1 {
+    return targetOfCandidate checker, fitting[0], target.name
+  }
+  const narrowed = narrowByResult checker, fitting, expected
+  if narrowed.length() == 1 {
+    return targetOfCandidate checker, narrowed[0], target.name
+  }
+  // Nothing in the call tells them apart, so it is named: taking the first one silently is how a `Store<Position>`
+  // answers where a `Store<Velocity>` is meant, and the IR verifier is then what finds it
+  reportAmbiguousOverload checker, target, narrowed, at
+  targetOfCandidate checker, narrowed[0], target.name
 }
 
-fn reportNoOverload(var checker: Checker, target: Target, given: TypeId, at: Span) {
-  var offered: List<String> = []
-  for candidate in target.overloads {
+/**
+ * The candidates whose result may stand where the call is expected to produce one. A call with no expected type, or one
+ * whose expectation is still open, narrows nothing - and a filter that leaves nothing standing is no filter at all, so
+ * the list comes back unchanged and the ambiguity is reported over all of them.
+ */
+fn narrowByResult(var checker: Checker, fitting: List<Candidate>, expected: TypeId?): List<Candidate> {
+  const wanted = match expected {
+    Some(found) => found
+    None => {
+      return fitting
+    }
+  }
+  if checker.absorbs(wanted) || !isConcrete(checker, wanted) {
+    return fitting
+  }
+  var narrowed: List<Candidate> = []
+  for candidate in fitting {
     if const Some(form) = candidate.form {
-      if const Some(parameter) = form.parameters.first() {
-        offered.add checker.describe(parameter.annotation)
+      if fitsType(checker, form.result, wanted) {
+        narrowed.add candidate
       }
     }
   }
-  const shown = checker.describe given
+  if narrowed.isEmpty() {
+    return fitting
+  }
+  narrowed
+}
+
+/**
+ * Whether one candidate of the overload set can be what was written: every argument fills a parameter it fits, and the
+ * call writes no more arguments than the candidate has parameters. An argument the call says nothing about - a closure,
+ * a spread, something already broken - fits every candidate, because it is not what tells them apart.
+ */
+fn fitsArguments(
+  var checker: Checker,
+  candidate: Candidate,
+  arguments: List<Argument>,
+  given: List<TypeId?>,
+  isExact: Bool,
+): Bool {
+  const form = match candidate.form {
+    Some(found) => found
+    None => {
+      return false
+    }
+  }
+  const parameters = form.parameters
+  if arguments.length() > parameters.length() {
+    return false
+  }
+  var index = 0
+  for argument in arguments {
+    const position = match argument.label {
+      Some(label) => indexOfParameter parameters, label.text
+      None => index
+    }
+    if position < 0 || position >= parameters.length() {
+      return false
+    }
+    if const Some(found) = given[index] {
+      const wanted = parameters[position].annotation
+      const fits = if isExact {
+        sameType checker.types, found, wanted
+      } else {
+        fitsType checker, found, wanted
+      }
+      if !fits {
+        return false
+      }
+    } else if isExact {
+      return false
+    }
+    index = index + 1
+  }
+  true
+}
+
+fn reportNoOverload(var checker: Checker, target: Target, given: List<TypeId?>, at: Span) {
+  var offered: List<String> = []
+  for candidate in target.overloads {
+    if takesNever(checker, candidate) {
+      continue
+    }
+    offered.add describeOverload(checker, candidate)
+  }
+  const shown = describeWritten checker, given
   checker.reportHere(
     Diagnostic.error("`{target.name}` takes none of these from a `{shown}`", at)
       .withNote("`{target.name}` exists for {offered.joined(separator: ", ")}")
   )
+}
+
+fn reportAmbiguousOverload(var checker: Checker, target: Target, fitting: List<Candidate>, at: Span) {
+  var offered: List<String> = []
+  for candidate in fitting {
+    offered.add describeOverload(checker, candidate)
+  }
+  const shown = offered.joined separator: ", "
+  checker.reportHere(
+    Diagnostic.error("`{target.name}` fits more than one implementation here", at)
+      .withNote(
+        "It exists for {shown}: write the type that is expected of this call, or name it with a type argument"
+      )
+  )
+}
+
+/**
+ * `extend<Target> Target with From<Never>`: the total conversion every type has, because there is no value of `Never`.
+ * Nobody writes it and nobody can call it, so it is left out of the list a message offers.
+ */
+fn takesNever(checker: Checker, candidate: Candidate): Bool {
+  if const Some(form) = candidate.form {
+    if const Some(parameter) = form.parameters.first() {
+      return parameter.annotation == checker.neverType
+    }
+  }
+  false
+}
+
+/** One entry of the list a message shows: the parameters a candidate takes, or its result when it takes none. */
+fn describeOverload(var checker: Checker, candidate: Candidate): String {
+  const form = match candidate.form {
+    Some(found) => found
+    None => {
+      return checker.describe candidate.annotation
+    }
+  }
+  if const Some(parameter) = form.parameters.first() {
+    return checker.describe parameter.annotation
+  }
+  checker.describe form.result
+}
+
+/** What the call wrote, for the message: one type reads as itself, several read as a list. */
+fn describeWritten(var checker: Checker, given: List<TypeId?>): String {
+  var written: List<String> = []
+  for found in given {
+    match found {
+      Some(annotation) => written.add checker.describe(annotation)
+      None => written.add "_"
+    }
+  }
+  written.joined separator: ", "
 }
 
 /**
@@ -570,6 +737,54 @@ fn requireAwaitAllowed(var checker: Checker, callee: Expression, name: String, a
           + " entry file or a script may wait for one"
       )
   )
+}
+
+/**
+ * What a closure handed to `spawn` may take with it (CONCEPT, "Concurrency"): copies, and nothing else. A `const`
+ * binding is captured as a copy, and so is every value; a **captured `var` binding is a shared box** - the one place of
+ * the language where a variable is shared - and sharing one between two tasks is the data race the design says cannot
+ * happen. So one `spawn` closure that captures one `var` is already the error, and two of them are two errors.
+ *
+ * The captures of the closure are recorded under its own span while its body is checked, so this asks the same list the
+ * lowering builds the environment from.
+ */
+fn requireTaskCaptures(var checker: Checker, target: Target, arguments: List<Argument>) {
+  const spawn = match checker.wellKnown.spawn {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  if const .Callable(symbol, _, _) = target.resolution {
+    if symbol != spawn {
+      return
+    }
+  } else {
+    return
+  }
+  for argument in arguments {
+    if !isClosureArgument(argument) {
+      continue
+    }
+    const captures = checker.capturesAt(checker.module, argument.value.span) ?? []
+    for capture in captures {
+      if !capture.isVar {
+        continue
+      }
+      const binding = checker.bindings[capture.binding.value]
+      checker.reportHere(
+        Diagnostic.error(
+          "`spawn` cannot take the `var` binding `{binding.name}` with it",
+          argument.value.span,
+        )
+          .withNote(
+            "A task gets copies, so there is nothing to race for - and a captured `var` binding is the one value the"
+              + " language shares. Read it into a `const` before the closure (`const {binding.name}Now ="
+              + " {binding.name}`), or pass the changes through a `Channel`"
+          )
+      )
+    }
+  }
 }
 
 /** `...expression` spreads any `Iterable<Item>` into a variadic parameter; a collection is never spread implicitly. */
