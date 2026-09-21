@@ -2414,3 +2414,28 @@ Wenn nicht, was bedeutet, bewirkt es?
     darin), `cargo test --release --test suite -- --ignored` grün (das neue Kopf-Gate, 808,08 s), und **der Fixpoint
     hält**: Stage 1 und Stage 2 sind sich über **57944973 Bytes** C einig (274,4 s / 123,4 s), Stage 3 emittiert sie
     noch einmal (26,2 s).
+
+- (`static` und `var fn`, 2026-09-22) **Anlass (Nutzer):** lokal sind `const x`/`var x` dasselbe bis auf die
+  Veränderbarkeit, im Typ-Körper ist `const x` plötzlich ein statisches Mitglied und `var x` ein Feld; und statisch
+  ist eine Funktion dadurch, dass sie `self` NICHT deklariert. **Entschieden (Nutzer: "Ja, setz das so um"):**
+  - `static` heißt "gehört dem Typ": `static origin = Point(0, 0)`, `static fn square(size: Int): Self`, im Trait
+    `static fn from(source: Source): Self` und (neu möglich) `static pi: Self` als Anforderung ohne Wert (LINEAR
+    Lücke 10).
+  - `var` heißt überall "darf ändern": `var`-Bindung, `var`-Feld, **`var fn translate(deltaX: Int)`** statt
+    `fn translate(var self, ...)`. Eine Methode listet `self` nicht mehr; ihre Parameterliste ist, was der Aufrufer
+    schreibt. `self` bleibt als Ausdruck im Rumpf. **Funktionstypen behalten `self`** (`(self: Point) => Int`,
+    `(var self: Config) => Void`) - das ist der Receiver-Closure, und eine Methode als Wert ist weiter genau das.
+  - **`const` ist optional** bei Feldern UND bei statischen Werten (`x: Int` ist `const x: Int`,
+    `static origin = ...` ist `static const origin = ...`). Im Repository schreiben wir die kurze Form. `static var`
+    ist ein Fehler (kein globaler veränderlicher Zustand). Ein `const name = wert` OHNE `static` im Typ-Körper ist
+    damit ein Feld mit Default - die `canon`-Regel stellt deshalb ALLE heutigen Typ-Konstanten auf `static` um,
+    bevor die neue Lesart gilt.
+  - Auf Modulebene gibt es kein `static`: freie Funktionen und Modul-Konstanten haben keine Instanz.
+  - Aufruf einer `static fn` auf einem Wert bzw. einer Methode auf dem Typnamen: Fehler, der die andere Form nennt.
+  - **Wird gelöst - eigene Runde, ALLEIN, sobald die drei laufenden Runden (Checker, Back-End generische Zahlen,
+    `std/path` Slice 1) gelandet sind**, weil sie praktisch jede `.trb`-Datei anfasst (rund 1500 Methoden, davon 565
+    mit `var self`): beide Parser bilden die neue Form auf den heutigen AST ab (`self` ist dort schon ein Parameter
+    mit `var`-Flag - Checker, IR und Back-End merken nichts), dazu Meldungen ("declares `var self`" → "is a
+    `var fn`"), Stage 0, `torb canon --rule members` für die Umstellung, CONCEPT, Doku, Skill, VS-Code-Grammatik.
+  - Offen gelassen, falls du es willst: `const` auch vor einem PARAMETER zuzulassen (heute nur `value: Int` und
+    `var value: Int`) - der Symmetrie wegen, ohne Nutzen. Ich baue es nicht, solange du es nicht sagst.

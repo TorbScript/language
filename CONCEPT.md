@@ -2523,7 +2523,15 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
   that stay coherent: a name per **receiver** (`List.first`, `Queue.first` - methods and `extend`) and a trait with a
   **parameter** (`From<Source>`, `Multiply<Other, Output>`: `Int.from(small)`, `matrix * vector`, `matrix * 2.0`).
   Arity is a default parameter, and a second constructor is a named static function (`Color.hex("...")`).
-- No `default` keyword and no `Default` trait. A value of a type comes from its constructor and from nowhere else:
+- **Decided, being migrated:** a member of a type says two things with two words. `static` says it belongs to the
+  type and not to a value (`static origin = Point(0, 0)`, `static fn square(size: Int): Self`); `var` says it may
+  change (`var y: Int`, `var fn translate(deltaX: Int)`). A method no longer lists `self`: its parameter list is what
+  the caller writes, `self` is still an expression inside the body, and a function *type* keeps it
+  (`(self: Point) => Int`, `(var self: Config) => Void`), which is what a receiver closure is. `const` is optional on
+  a field and on a static value (`x: Int` is `const x: Int`), exactly as a parameter is constant unless it says `var`;
+  `static var` does not exist, because there is no global mutable state. Before this, `const` in a type body meant
+  "of the type" while `var` meant "a mutable field", and a function was static by *not* declaring `self` - two
+  questions answered by one word, and one question answered in two ways.- No `default` keyword and no `Default` trait. A value of a type comes from its constructor and from nowhere else:
   a zeroed value (`default(T)` of C#) skips the constructor, which breaks every validated type and is `null` under
   another name. A `Default` trait puts five meanings under one word, and each has its own: a configuration is
   **field defaults** (`Config(port: 1)`), a replacement is written where it is used (`value ?? 0`,
