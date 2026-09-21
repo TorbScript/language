@@ -2928,3 +2928,11 @@ Wenn nicht, was bedeutet, bewirkt es?
     der Abhängigkeits-Teil ändert sich wie bisher nur durch `torb add`/`torb update`. Pitfall für die Doku: was aus
     der Umgebung in eine Einstellung fließt, wird mit dem Paket veröffentlicht.
   - **Wird gelöst:** Überarbeitung von `docs/PROJECT.md` (Design-Agent fortgesetzt).
+  - **Entschieden (Nutzer, 2026-09-22) - die sechs offenen Fragen aus `docs/PROJECT.md`/`docs/RESOURCES.md`:**
+    (1) `torb build` baut per Default das Profil `dev`, `release` ist ausdrücklich. (2) Eine Mindestversions-
+    Einstellung: ja - der NAME ist offen ("wieso `toolchain`?"); mein Vorschlag: der Name des Werkzeugs selbst,
+    `torb "0.3.0"`. (3) `project.trb` UND `project.lock.trb` reisen beide im Paket mit (wie bei Bun/npm); das Lock
+    wird deterministisch geschrieben (gleiche Eingaben, byte-identische Datei). (4) Zwei Einbettungstypen:
+    `EmbeddedBytes` und `EmbeddedText`. (5) `Task<X>` ist KEINE Funktionsfarbe - "ein Return Value wie jeder andere,
+    wir haben keine Async-Keywords"; `Resource.bytes()` liefert also ein `Task`. (6) Einbettungsgröße: ZWEI Ebenen,
+    Warnung und Fehler, beide in der Projektdatei einstellbar (Vokabular und Defaults schlägt das Dokument vor).
