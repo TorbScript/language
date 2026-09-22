@@ -4079,3 +4079,9 @@ Wenn nicht, was bedeutet, bewirkt es?
   nativ läuft, und sechs Namen. **Testfall für die Encoding-Neugestaltung (Nutzer):** ein Feld `snake_case`, der
   Rest `MACRO_CASE` - muss eine Zeile bleiben (Format-Option + `map<Config> { field { _.userName }, as: "user_name" }`);
   Stufe 4 der Leiter muss `skip`/`flatten`/`default`/`alias`/Varianten können, sonst rutscht alles auf Stufe 5.
+- (Rumexperimentieren, 2026-09-22) Nutzer fragt, ob er schon einfach experimentieren kann. **Antwort:** ja, mit einer
+  Datei IM Repo (`tests/language/x.trb` oder `examples/x/`) und `build/release/torb run <datei>`; kalt ~4 s, warm <1 s.
+  - **Wird gelöst - Toolchain-Runde:** `torb run` außerhalb des Repos findet `std/prelude` nicht (sucht relativ zum
+    Projekt, nicht zum Binary) - Fallback auf `<binary>/../../std`, plus ein `torb new <name>` für ein leeres Projekt.
+  - Beobachtet: `print list.map { _.x }.sum()` braucht Klammern (Command-Block-Regel, Meldung sagt es); Felder stehen
+    zeilenweise, `type P { x: Int, y: Int }` parst nicht - prüfen, ob die Einzeiler-Form erlaubt werden soll.
