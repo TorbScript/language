@@ -53,7 +53,7 @@ false positive of the checker is a bug of the checker.
 
 ```text
 sh tools/gates.sh a    # every round
-sh tools/gates.sh b    # a round that touches the IR, a back end or runtime/ - once, not again on master
+sh tools/gates.sh b    # a round that touches the IR, a back end or runtime/ - once, not again on main
 ```
 
 One line per gate, with its time; the first red gate stops the run there and shows its output, so nothing after it
@@ -76,7 +76,7 @@ builds only to run it once is built with the `dev` profile.
 are its own flags), `tools/bootstrap.sh` (the fixpoint: seed -> `torb` -> `torb`, byte-identical C), and
 `sh runtime/build.sh` (the C runtime's own tests, built into `build/runtime/`).
 
-On master tier B runs at most once per batch of merges, in the background, and a red result is **fixed forward** rather
+On main tier B runs at most once per batch of merges, in the background, and a red result is **fixed forward** rather
 than reverted: the batch is already in and the failing piece is named and repaired in the next round.
 
 **Numbers are recorded, not enforced**: allocation counts, the benchmark ratios of

@@ -2,7 +2,7 @@
 # Tier A and tier B of `compiler/CONTRIBUTING.md`, run with the native binary.
 #
 #   sh tools/gates.sh a     # every round
-#   sh tools/gates.sh b     # a round that touches the IR, a back end or runtime/ - once, not again on master
+#   sh tools/gates.sh b     # a round that touches the IR, a back end or runtime/ - once, not again on main
 #
 # One line per gate, with its time. The first red gate stops the run and shows its output; nothing after it runs.
 #
