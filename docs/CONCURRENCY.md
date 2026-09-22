@@ -1241,12 +1241,17 @@ document above carries it.
    true about *waiting*. The alternative is a rule that `?` on a `Cancelled` with no conversion available stops the
    waiting task instead of converting, which keeps `Never` and makes `?` mean two things; this document rejects it for
    the second reason and names it here because the first reason is real.
+   **Decided:** yes — `Never` leaves the asynchronous side. `Cancelled` is the floor of every asynchronous failure:
+   one `?`, one world, the same place Swift's `async throws` lands once it is everywhere.
 10. **The name `outcome`** for "wait, and fold a cancellation into the task's own failure". It is the one member the
     `Task<Result<Value, Failure>>` shape needs, `(task.await()?)?` is what it replaces, and a postfix `?` on an
     `await()` runs into an operator that starts with the same character twice over: `await()??` is a parse error
     because `??` is the fallback, and `await()?.into()` is `?.`, the optional chain. `outcome` was chosen over
     `awaited` (one letter from `await`, and the language spends that distance on the value/mutating pair) and over
     `value` (which says nothing about the failure).
+    **Decided:** `outcome()` stays.
 11. **`cancel()` and `within` as `var fn`s**, so that the right to stop a task is visible at the binding
     (`var worker = spawn { … }`) and a `const` handle is the read-only view. The cost is that a `Task` somebody may
     cancel cannot be held in a `const`, including inside a collection somebody else reads.
+    **Decided:** `var fn`s, both of them — the same rule `source.next()` has: the right to change is held as `var`,
+    and a `const` handle is the read-only view.

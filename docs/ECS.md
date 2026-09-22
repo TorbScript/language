@@ -2,17 +2,17 @@
 
 An open set of component types that **packages bring with them**, dense typed storage, queries that are ordinary
 pipelines, a behaviour tree of trait values above the data, and scenes that are TorbScript. This is the specification
-of `std/ecs`, `std/node` and `std/scene`, of what they expect from the value packages under them, and of the one thing
+of `std/ecs` and `std/scene`, of what they expect from the value packages under them, and of the one thing
 they refuse to do: forget the type of a value.
 
 ```text
   a package owns its components          a program admits it with one field     two layers, separable
 
   package acme/sprite                    type World {                           data      Column<Sprite>   plain
-    type Sprite                            var places: Places                             query2<A, B>     a pipeline
-    type Sprites                           var sprites: Sprites                 behaviour Node              a trait
-      var sprites: Column<Sprite>          var behaviours: Column<Node>                   process(delta)    a method
-    extend Sprites with Store<Sprite>    }                                      bridge    Column<Node>      one column
+    type Sprite                            var places: Places                             pairs<A, B>      a pipeline
+    type Sprites                           var sprites: Sprites                 behaviour SceneNode          a trait
+      var sprites: Column<Sprite>          var behaviours: Column<SceneNode>              process(delta)    a method
+    extend Sprites with Store<Sprite>    }                                      bridge    Column<SceneNode>  one column
     fn render<W: Store<Sprite>>(w: W)
   ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
   the set of components is open          the world is a value, so a snapshot    no reflection anywhere
@@ -24,7 +24,7 @@ they refuse to do: forget the type of a value.
   carries over
 - **[2. The decision: an open component set without `Any`](#2-the-decision-an-open-component-set-without-any)** — four
   designs, seven probes, and what each showed
-- **[3. The data layer](#3-the-data-layer)** — component, entity, column, group, and the program's world
+- **[3. The data layer](#3-the-data-layer)** — component, entity, column, columns, and the program's world
 - **[4. Queries](#4-queries)** — arity without variadic type parameters, and five systems written out
 - **[5. Structural change while a query runs](#5-structural-change-while-a-query-runs)** — and why there is no command
   buffer
@@ -43,9 +43,9 @@ they refuse to do: forget the type of a value.
 Two packages carry the capability claims below. [`examples/ecs-probe`](../examples/ecs-probe) is the storage, five
 systems, a structural change during a query, a snapshot, a rollback and a name-to-installer registry.
 [`examples/ecs-probe-2`](../examples/ecs-probe-2) is the composition this document decides on: two packages that each
-own a component type and a column group, a package system bounded by both, two systems over two disjoint groups in one
-call, and a behaviour tree stored in a column. Both check, run and build, and the four designs that were probed and
-rejected are recorded with their diagnostics in `examples/ecs-probe-2/README.md`.
+own a component type and its columns, a package system bounded by both, two systems over two packages' disjoint
+columns in one call, and a behaviour tree stored in a column. Both check, run and build, and the four designs that
+were probed and rejected are recorded with their diagnostics in `examples/ecs-probe-2/README.md`.
 
 **The code blocks of this document are not checked by `docs check`**, because a design document describes a library
 that does not exist yet. Every block below was written into a probe package and put through `torb check` by hand, and
@@ -256,8 +256,8 @@ design writes one slot. The erased design is not only broader, it is slower at t
 
 ### (b) The world composed from packages, statically
 
-**Decided.** A package owns three things: its component types, a **column group** that holds one `Column<Component>`
-per component the package owns, and its systems, each bounded by the components it touches.
+**Decided.** A package owns three things: its component types, its **columns** — one `Column<Component>` per
+component the package owns — and its systems, each bounded by the components it touches.
 
 ```trb fragment
 // package acme/sprite
@@ -296,9 +296,9 @@ public type World {
 public fn render<Space, Art>(space: Space, art: Art) where Space: Store<GlobalTransform2>, Art: Store<Sprite>
 ```
 
-**This works today, end to end.** `examples/ecs-probe-2` is two packages, each with its own component types and column
-group, a system `movement<Space, Motion>` generic over `Store<Position>` and `Store<Velocity>`, and a program that
-names the two groups and nothing else. It checks, runs and builds, and the snapshot and the rollback hold:
+**This works today, end to end.** `examples/ecs-probe-2` is two packages, each with its own component types and
+columns, a system `movement<Space, Motion>` generic over `Store<Position>` and `Store<Velocity>`, and a program that
+names the two packages' columns and nothing else. It checks, runs and builds, and the snapshot and the rollback hold:
 
 ```text
 moved: Some(GlobalPosition(value: Vector2(x: 0.5, y: 0.0))) Some(GlobalPosition(value: Vector2(x: 0.75, y: 0.0)))
@@ -353,14 +353,14 @@ program would edit an engine type to add its own component, which is the opposit
 
 ### (d) Godot's way, typed
 
-**Decided, for the behaviour layer.** Nodes are values in a tree, `Node` is a trait, each package's node type
-implements it, and a tree is a `List<Node>` or a field of a node. Trait types are the openness, and the language has
-them: a trait can be used as a type, a trait-typed value carries a witness table per bound, and a `List<Show & Hash>`
-is legal.
+**Decided, for the behaviour layer.** Nodes are values in a tree, `SceneNode` is a trait, each package's node type
+implements it, and a tree is a `List<SceneNode>` or a field of a node. Trait types are the openness, and the language
+has them: a trait can be used as a type, a trait-typed value carries a witness table per bound, and a `List<Show &
+Hash>` is legal.
 
 **It works today, including in-place mutation through a trait-typed element.** The probe is a `Ship` whose children
-are `List<Node>`, mutated through `mounted[index].process(elapsed)`, held in a `List<Node>` and stepped through
-`tree[0].process(0.5)`:
+are `List<SceneNode>`, mutated through `mounted[index].process(elapsed)`, held in a `List<SceneNode>` and stepped
+through `tree[0].process(0.5)`:
 
 ```text
 ["ship", "hull", "turret"]
@@ -375,9 +375,9 @@ would need exactly the cast of (a). It is not needed, and the replacement is not
   (`var turret: Turret`), rather than through a path and a cast. That is the same information, minus the run-time
   failure.
 - **The changing walk is written by the node**, because the node knows its own children by name. `var fn process` on
-  `Ship` calls `process` on its own fields and on its `List<Node>`.
-- **The reading walk is generic**, over `fn children(): List<Node>`, and is written once for every node type there
-  will ever be.
+  `Ship` calls `process` on its own fields and on its `List<SceneNode>`.
+- **The reading walk is generic**, over `fn children(): List<SceneNode>`, and is written once for every node type
+  there will ever be.
 - **Everything cross-cutting goes through the columns**, not through the tree. A renderer does not ask the tree which
   nodes are sprites; it runs a query over `Column<Sprite>`.
 
@@ -386,13 +386,13 @@ column. [Section 8](#8-the-behaviour-layer) is the design.
 
 ### The decision in one paragraph
 
-**The data layer is (b): the program's own world type, composed from the column groups that packages ship, with every
+**The data layer is (b): the program's own world type, composed from the columns that packages ship, with every
 system bounded by `Store<Component>` for the components it touches.** Nothing in it is erased, everything in it is
-monomorphized, and a world is a value. **The behaviour layer is (d): a `Node` trait whose implementations packages
-bring, a tree of values, and dispatch through a witness table.** The two meet in `Column<Node>` — a column whose
-component type is a trait — which the probe runs. **(a) is refused** because it costs two rules of the language and
-buys one field per package, and because the checker already closed it. **(c) is refused** because a package cannot add
-a case.
+monomorphized, and a world is a value. **The behaviour layer is (d): a `SceneNode` trait whose implementations
+packages bring, a tree of values, and dispatch through a witness table.** The two meet in `Column<SceneNode>` — a
+column whose component type is a trait — which the probe runs. **(a) is refused** because it costs two rules of the
+language and buys one field per package, and because the checker already closed it. **(c) is refused** because a
+package cannot add a case.
 
 The prior this document was written to test held, with one correction: the data layer does **not** need variadic type
 parameters or a type list to let packages add components. It needs one name per package group and one fix in the
@@ -483,7 +483,7 @@ What it costs is the thing archetypes are good at: a query over *many* columns p
 an archetype iterates one contiguous block. That is the trade, it is written down here, and it is revisitable the day
 the language can move a value it cannot name.
 
-### The column group, and what a package ships
+### Columns, and what a package ships
 
 ```trb fragment
 /** What a package asks of a world: a column of one component type the package owns. */
@@ -494,15 +494,15 @@ public trait Store<Component> {
 }
 ```
 
-A **column group** is an ordinary type with one `Column<Component>` field per component type the package owns, and one
-`Store<Component>` implementation per field. It is the unit a program names, the unit a system takes, and the unit a
-schedule hands to a worker.
+A package's **columns** are an ordinary type with one `Column<Component>` field per component type the package owns,
+and one `Store<Component>` implementation per field. It is the unit a program names, the unit a system takes, and the
+unit a schedule hands to a worker.
 
 **The price is three members per component type**, mechanical and identical every time. It is the price until the
 compiler derives them from the fields, under exactly the rule `Encode` uses ("the constructor is usable from outside"):
-a field of type `Column<Component>` in a type that says `with Group` is an implementation of `Store<Component>`. A
+a field of type `Column<Component>` in a type that says `with Columns` is an implementation of `Store<Component>`. A
 second derivation removes the rest: a field whose *type* carries `Store<Component>` lends it upward, so a program's
-world carries every bound its groups carry and a system can take one world.
+world carries every bound its columns carry and a system can take one world.
 [Gap 12](#12-what-the-language-and-the-compiler-must-provide) is both derivations, and
 [gap 1](#12-what-the-language-and-the-compiler-must-provide) is what has to land first for a single type to carry more
 than one of them.
@@ -573,9 +573,9 @@ A query answers an `Iterable` of tuples. That is the whole shape:
 
 ```trb fragment
 public fn query<Space, Component>(space: Space): Iterable<(Entity, Component)>
-public fn query2<Space, First, Second>(space: Space): Iterable<(Entity, First, Second)>
-public fn query3<Space, First, Second, Third>(space: Space): Iterable<(Entity, First, Second, Third)>
-public fn query4<Space, First, Second, Third, Fourth>(space: Space): Iterable<(Entity, First, Second, Third, Fourth)>
+public fn pairs<Space, First, Second>(space: Space): Iterable<(Entity, First, Second)>
+public fn triples<Space, First, Second, Third>(space: Space): Iterable<(Entity, First, Second, Third)>
+public fn quadruples<Space, First, Second, Third, Fourth>(space: Space): Iterable<(Entity, First, Second, Third, Fourth)>
 ```
 
 ### Four arities, because variadic type parameters are the honest answer and do not exist
@@ -597,10 +597,11 @@ No indexing into the pack, no arithmetic on its length, no mapping a type functi
 const parameters already live under, and enough for every query anybody writes. It would also serve `all(taskA, taskB)`
 and `zip`, which are the other two places the standard library writes one function four times.
 
-Until it exists there are four names. The digit is the arity the way `Vector2`'s digit is the width, and the day the
-pack lands three of the four disappear and `query` stays. Four is where it stops: a system that reads five component
-types is a system that wants two queries. **This is an ergonomic gap and not a structural one** — nothing about
-packages bringing components depends on it.
+Until it exists there are four names: `query`, `pairs`, `triples`, `quadruples` — readable at the call site
+(`for (entity, position, velocity) in pairs(space, motion)`), with no digit to parse the way `query2` needed one, and
+the day the pack lands three of the four disappear anyway and `query` stays. Four is where it stops: a system that
+reads five component types is a system that wants two queries. **This is an ergonomic gap and not a structural
+one** — nothing about packages bringing components depends on it.
 
 ### Reading and writing
 
@@ -613,7 +614,7 @@ exists in Bevy so the *scheduler* can read the access set out of the signature, 
 ```trb fragment
 public fn movement<Space, Motion>(var space: Space, motion: Motion, elapsed: Duration)
   where Space: Store<Position>, Motion: Store<Velocity> {
-  for (entity, position, velocity) in query2(space, motion) {
+  for (entity, position, velocity) in pairs(space, motion) {
     space.attach entity, Position(position.value + velocity.value * elapsed.seconds())
   }
 }
@@ -647,8 +648,8 @@ named function cannot capture, so a system that needs the frame time cannot use 
 
 | What an ECS calls it | What is written |
 |----------------------|-----------------|
-| `With<Other>` | `query3(space, motion, other)` — the join *is* the with-filter |
-| `Without<Other>` | `query2(space, motion).filter({ !other.column().has(_.0) })` |
+| `With<Other>` | `triples(space, motion, other)` — the join *is* the with-filter |
+| `Without<Other>` | `pairs(space, motion).filter({ !other.column().has(_.0) })` |
 | `Changed<A>` | `space.column().changedSince(stamp)` |
 | `Added<A>` | the same, against the stamp the entity's row got when it was created |
 | an enableable component | a `Bool` field of the component, tested in a `filter` — no structural change, which is what DOTS added enableable components for |
@@ -669,7 +670,7 @@ The probe runs it: `changed since the frame began: 1`.
 ```trb fragment
 public fn movement<Space, Motion>(var space: Space, motion: Motion, elapsed: Duration)
   where Space: Store<Position>, Motion: Store<Velocity> {
-  for (entity, position, velocity) in query2(space, motion) {
+  for (entity, position, velocity) in pairs(space, motion) {
     space.attach entity, Position(position.value + velocity.value * elapsed.seconds())
   }
 }
@@ -680,7 +681,7 @@ public fn movement<Space, Motion>(var space: Space, motion: Motion, elapsed: Dur
 ```trb fragment
 fn collisions<Space, Bodies>(space: Space, bodies: Bodies): List<(Entity, Entity)>
   where Space: Store<GlobalPosition>, Bodies: Store<Collider> {
-  const all = query2(space, bodies).toList()
+  const all = pairs(space, bodies).toList()
   var touching: List<(Entity, Entity)> = []
   for first in 0..all.length() {
     for second in (first + 1)..all.length() {
@@ -716,7 +717,7 @@ var fn propagate() {
 ```trb fragment
 fn fire<Space, Motion>(var space: Space, var motion: Motion, var entities: Entities)
   where Space: Store<Position>, Motion: Store<Velocity> & Store<Lifetime> {
-  for (_shooter, position, velocity) in query2(space, motion) {
+  for (_shooter, position, velocity) in pairs(space, motion) {
     const bullet = entities.spawn()
     space.attach bullet, position
     motion.attach bullet, Velocity(velocity.value * 4.0)
@@ -956,21 +957,21 @@ class registry and the run-time cast.
 
 ```trb fragment
 /** A node is a value. A tree is a value. Dispatch is a witness-table call. */
-public trait Node {
+public trait SceneNode {
   fn name(): String
   var fn ready(var world: World)
   var fn process(var world: World, elapsed: Duration)
-  fn children(): List<Node>
+  fn children(): List<SceneNode>
 }
 ```
 
-A package declares its node types and says `with Node`. That is the whole registration, and it is checked: there is no
-`ClassDB`, no name lookup, and no class that exists only in a string.
+A package declares its node types and says `with SceneNode`. That is the whole registration, and it is checked: there
+is no `ClassDB`, no name lookup, and no class that exists only in a string.
 
 ### One tree
 
 The tree is a value, held wherever the program wants it, and the probe runs a heterogeneous one — a `Ship` whose
-children are `List<Node>`, holding two `Sprite`s — walked, dispatched and **changed in place**:
+children are `List<SceneNode>`, holding two `Sprite`s — walked, dispatched and **changed in place**:
 
 ```text
 ["ship", "hull", "turret"]
@@ -983,7 +984,7 @@ The two walks are different on purpose:
 - **The changing walk is written by the node.** `var fn process` calls `process` on the node's own fields, because a
   node knows its own children by name. `mounted[index].process(elapsed)` is a `var` path through an index into a
   trait-typed element, and it compiles and runs.
-- **The reading walk is written once**, over `fn children(): List<Node>`, for every node type there will ever be.
+- **The reading walk is written once**, over `fn children(): List<SceneNode>`, for every node type there will ever be.
 
 **There is no `node as Sprite`.** A parent that needs a child of a type it cares about holds it in a field of that
 type (`var turret: Turret`), which is the same information Godot puts in a path, minus the run-time failure. This is
@@ -991,12 +992,12 @@ the one place where the design is strictly better than the engine it is taken fr
 
 ### One system, and how it meets the columns
 
-**A behaviour is a component whose type is a trait.** `Column<Node>` works — the probe stores a `Ship` and a `Sprite`
-in one column, steps both and reads both back:
+**A behaviour is a component whose type is a trait.** `Column<SceneNode>` works — the probe stores a `Ship` and a
+`Sprite` in one column, steps both and reads both back:
 
 ```trb fragment
 /** One frame of the behaviour layer: a system of the data layer, like any other. */
-public fn step(var behaviours: Column<Node>, var world: World, elapsed: Duration) {
+public fn step(var behaviours: Column<SceneNode>, var world: World, elapsed: Duration) {
   for entity in world.places.depthOrder() {
     behaviours.run entity, world, elapsed
   }
@@ -1028,7 +1029,8 @@ about, and the events are values, which means a replay replays them.
 ### The two layers are separable
 
 **A game may use the data layer alone**, and `examples/ecs-probe` does: columns, queries, systems, a schedule, and no
-`Node` anywhere. Nothing in `std/ecs` names `Node`, and `std/node` depends on `std/ecs` and not the other way round.
+`SceneNode` anywhere. Nothing in `std/ecs` names `SceneNode`, and `std/scene` depends on `std/ecs` and not the other
+way round.
 
 **A game may use both**, and then the split is the one Godot users already draw by hand: scripted, few, per-object
 behaviour goes in nodes; uniform, many, per-frame work goes in systems over columns. The price of a node is a witness
@@ -1260,14 +1262,12 @@ arities, `System`, `Stage`, `Schedule`, `Parent`, `depthOrder`, `Events<Event>`,
 that knew what a position is would be a game engine. Every type in it is a value; there is no `shared type` in the
 package.
 
-**`std/node`.** The `Node` trait, the reading walk, `Column<Node>` and the frame step of
-[section 8](#8-the-behaviour-layer). It depends on `std/ecs` and on `std/time`, and `std/ecs` does not depend on it,
-which is what makes the two layers separable.
-
-**`std/scene`.** `Scene<World>`, `EntityBuilder`, the loader over `Sandbox`, the writer that emits TorbScript, the
-name-to-entity resolution, instancing with overrides, and `Registry<World>`. It depends on `std/ecs`, `std/sandbox`
-and `std/encoding`. It is a separate package because loading a scene needs the sandbox and therefore the VM, while
-`std/ecs` runs in a binary that embeds nothing.
+**`std/scene`.** One package for two things that meet at the same tree: the `SceneNode` trait, the reading walk,
+`Column<SceneNode>` and the frame step of [section 8](#8-the-behaviour-layer); and `Scene<World>`, `EntityBuilder`,
+the loader over `Sandbox`, the writer that emits TorbScript, the name-to-entity resolution, instancing with
+overrides, and `Registry<World>`. It depends on `std/ecs`, `std/time`, `std/sandbox` and `std/encoding`, and
+`std/ecs` does not depend on it, which is what makes the two layers separable and lets `std/ecs` run in a binary
+that embeds nothing.
 
 What stays out, and what the ECS expects from each:
 
@@ -1325,19 +1325,20 @@ internal error: the generated C did not compile. This is a bug in torb, please r
 ```
 
 **Smallest change:** a mangled name carries the implementation's own trait arguments, in `compiler/src/ir/mangle.trb`.
-This is item 16 of [LINEAR.md](LINEAR.md) section 12, met there as two `From`s on one `Path`. Without it a column group
-holds one component type and a package with three components is three arguments at every call site; with it a
-program's world carries every bound its groups carry and a system takes one world.
+This is item 16 of [LINEAR.md](LINEAR.md) section 12, met there as two `From`s on one `Path`. Without it a package's
+columns hold one component type and a package with three components is three arguments at every call site; with it a
+program's world carries every bound its columns carry and a system takes one world.
 
 **2. No variadic type parameters.** `fn tuples<...Components>()` is five parse errors, the first *"Expected a name,
 found `...`"*. **Smallest change:** a type-parameter pack that expands in exactly two positions — as the element list
 of a tuple type, and as the subject of a bound — with no indexing, no length arithmetic and no mapping. It costs
-`query2`/`query3`/`query4` in this package, `all` in `std/task` and `zip` in `std/iteration`. **It is an ergonomic gap
-and not a structural one:** [section 2](#2-the-decision-an-open-component-set-without-any) needs none of it.
+`pairs`/`triples`/`quadruples` in this package, `all` in `std/task` and `zip` in `std/iteration`. **It is an
+ergonomic gap and not a structural one:** [section 2](#2-the-decision-an-open-component-set-without-any) needs none
+of it.
 
 **3. ~~A blanket implementation's member is not found on a concrete type.~~ Closed.**
 `extend<Subject: Query> Subject with Pairs { fn doubled(): Int { size() * 2 } }` on a `type Game with Query` checks and
-answers `6`, natively. So every verb of `std/ecs` may be a member, and `group.query2<Position, Velocity>()` is
+answers `6`, natively. So every verb of `std/ecs` may be a member, and `group.pairs<Position, Velocity>()` is
 writable.
 
 **4. A closure cannot bind a `var` parameter.**
@@ -1397,9 +1398,9 @@ an import both check and run, so a scene file may declare a helper type and `std
 …`. What remains of the old item is the `Array` literal, which is part of gap 9.
 
 **12. `Store<Component>` derived, and lent through a field.** Two derivations, under the rule that derives `Encode`.
-A field of type `Column<Component>` in a type that says `with Group` derives `Store<Component>` — three members per
+A field of type `Column<Component>` in a type that says `with Columns` derives `Store<Component>` — three members per
 component type saved. And a field whose type carries `Store<Component>` **lends** it upward unless the enclosing type
-declares its own, so a program's world carries every bound its groups carry without a line per component.
+declares its own, so a program's world carries every bound its columns carry without a line per component.
 **Smallest change:** one derivation in the checker for the first, and one delegation rule for the second; both need
 gap 1 first, because both put several `Store`s on one type.
 
@@ -1438,8 +1439,9 @@ the delegation line per group, and it is the difference between "declare your wo
 **Slice 4 — `componentKey` and the access sets.** Needs gap 6. The schedule reports a conflicting pair, and the keys
 stop being strings a package types.
 
-**Slice 5 — `std/node`.** The `Node` trait, the reading walk, `Column<Node>` and the frame step. **Needs nothing from
-the compiler** — the probe runs all of it — and it comes after slice 2 only so that a node is handed one world.
+**Slice 5 — `std/scene`, the tree.** The `SceneNode` trait, the reading walk, `Column<SceneNode>` and the frame step.
+**Needs nothing from the compiler** — the probe runs all of it — and it comes after slice 2 only so that a node is
+handed one world.
 Gate: a tree of three node types stepped for ten frames, identical in both back ends, plus a test that a node's write
 is visible to a query in the next stage.
 
@@ -1487,26 +1489,43 @@ direction.
    of the four names disappear when the pack lands. The alternative is `query`, `pairs`, `triples`, `quadruples`,
    which reads better at a call site (`for (entity, position, velocity) in pairs(space, motion)`) and stops saying
    "query".
+   **Decided:** `pairs`, `triples`, `quadruples` — readable at the call site, and the digit disappears with
+   variadics anyway. The one-column form keeps the name it has: `query`.
 2. **`Store<Component>` and "column group", or other words?** A package ships a `Places`, a `Sprites`, a `Motions`;
    the other candidates are `Storage`, `Columns` and Bevy's own `Plugin`. The word is going to be in every package's
    public surface, so it is worth one look.
+   **Decided:** `Store<Component>` stays; a package's column group is called `Columns` — `Places` and `Sprites` are
+   examples of one, and the concept word in running prose is "columns".
 3. **Does `std/ecs` ever ship a `World` of its own?** The set of component types is the program's, so no. But the
    first thing a newcomer asks for is a `World()` that works without declaring anything, and the only way to give them
    one is a fixed set of components in the package.
-4. **Is `std/node` its own package, or a module of `std/ecs`?** Separate here, so that a game can use the data layer
-   alone and so that nothing in `std/ecs` names `Node`. The cost is a third name in a game's dependencies.
+   **Decided:** no — `std/ecs` ships no `World`. The newcomer gets `examples/ecs-starter`, a copyable template
+   instead of a fixed set of components baked into the package.
+4. **Is `std/scene` its own package, or a module of `std/ecs`?** Separate here, so that a game can use the data
+   layer alone and so that nothing in `std/ecs` names `SceneNode`. The cost is one more name in a game's
+   dependencies.
+   **Decided:** `std/scene` is its own package.
 5. **May a scene file name `std/linear` and `std/time`?** [Section 9](#9-scenes) says yes, because `Vector2(1.0, 2.0)`
    has to be writable. It also means a scene file can compute, loop and call trigonometry, which is the point of
    choosing a language and also the reason a scene can be slow to load.
+   **Decided:** yes — a scene may name both. A scene that loads slowly is what PROJECT.md's resource size warning
+   is for.
 6. **Does the ECS get events at all, or does a program write its own?** `Events<Event>` is thirty lines and every game
    writes it; putting it in the package makes the package bigger and the decision harder to reverse. It is also what
    [section 8](#8-the-behaviour-layer) puts in place of Godot's signals, which argues for keeping it.
+   **Decided:** `Events<Event>` is in the package — it replaces Godot's signals.
 7. **Is `GlobalTransform2` a component or a field?** Separate here, so that "what the author set" and "what the frame
    computed" cannot be confused. It costs a second column and a second lookup per entity.
+   **Decided:** `GlobalTransform2` is its own component.
 8. **Where does the frame loop live?** `Schedule.run` steps a world once. Who calls it, how the fixed accumulator is
    fed, and whether `std/ecs` ships a loop at all is a question about `std/render` and the platform, not about the ECS
    — but it is the first thing a program needs and it is currently nobody's.
-9. **Does a node see the whole world, or the groups it declares?** [Section 8](#8-the-behaviour-layer) hands
-   `var world: World` to `process`, which is one type parameter on `Node` and total access. The alternative is a node
-   that names bounds the way a system does, which is more honest and makes `Node` harder to implement and a tree
-   harder to type.
+   **Decided:** the frame loop lives in `std/scene` — `ready`/`process` with a fixed accumulator; `std/ecs` knows
+   only `Schedule.run`. A pure-ECS game writes its own ten-line loop, the way a Bevy game without `DefaultPlugins`
+   does.
+9. **Does a node see the whole world, or the columns it declares?** [Section 8](#8-the-behaviour-layer) hands
+   `var world: World` to `process`, which is one type parameter on `SceneNode` and total access. The alternative is
+   a node that names bounds the way a system does, which is more honest and makes `SceneNode` harder to implement
+   and a tree harder to type.
+   **Decided:** a node sees the whole world (`var world: World` in `process`); access sets belong to systems, where
+   they buy parallelism, and a node stays sequential.
