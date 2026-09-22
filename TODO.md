@@ -3621,3 +3621,17 @@ Wenn nicht, was bedeutet, bewirkt es?
     `Result`. Engine in TorbScript mit RE2-Semantik (linear, keine Backreferences), Unicode, identisch in
     Interpreter und nativ; Named Groups über `Decode` in Typen. Reihenfolge: Encoding-Neugestaltung → yaml → regex
     → markdown. **Offen (Nutzer):** einverstanden mit "kein Literal"?
+  - **Entschieden (Nutzer): Regex als compiler-gestützter String** (Literal beim Bauen geprüft, kein Syntax-Literal).
+- (URIs als Kern, Identifikatoren, 2026-09-22) **Entschieden (Nutzer):** URIs sind Kernbestandteil - "die neuen Pfade".
+  FS-Abstraktionen und alles, was Sinn ergibt, nehmen URIs an (Vorbild Bun); `Url`/`Urn` wo sinnvoll. Außerdem
+  `Uid`/`Uuid`/`Ulid`-Abstraktionen planen.
+  - **Meine Position (der Agent prüft sie):** `std/uri` im Prelude, `Uri` als Kapsel nach RFC 3986; `Url`/`Urn` eher
+    als Sichten (`isUrl()`/`asUrl()`) denn als eigene Typen - Probe entscheidet. Dieselbe Compiler-Regel wie Regex und
+    Ressourcen: ein String-LITERAL an einem `Uri`-Parameter wird beim Bauen geparst (Fehler = Compile-Fehler), ein
+    `String`-Wert gibt `Result` - damit wird aus drei Anwendern eine Sprachregel ("ein Literal adaptiert sich an einen
+    Typ mit `TryFrom<String>`, geprüft beim Bauen"). `Path` bleibt eigener Typ (plattformabhängig), `file:`-URI ↔
+    `Path` ist das Konversionspaar; `std/fs`, `std/http`, `Sandbox.load`, Ressourcen und Package-Quellen nehmen `Uri`.
+    `std/identifier`: `Uuid` (v4, v7), `Ulid`, Trait `Identifier`, `urn:uuid:` verbindet mit `Uri`; braucht
+    `std/random` und die Uhr (Sandbox/Determinismus beachten).
+  - **Wird gelöst - läuft:** Design-Dokument `docs/URI.md` (Opus) mit Probes, Auswirkungen auf PATH/RESOURCES/PROJECT/
+    http/fs, Scheiben. Danach Umsetzung nach der Encoding-Neugestaltung.
