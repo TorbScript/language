@@ -58,8 +58,15 @@ static void torb_list_storage_drop(void *block) {
 }
 
 static torb_list_storage *torb_list_storage_new(const torb_element *element, uint32_t capacity) {
-  size_t bytes = torb_list_storage_data_offset(element) + (size_t)capacity * (size_t)element->size;
-  torb_list_storage *storage = (torb_list_storage *)torb_allocate(bytes, TORB_BLOCK_LIST_STORAGE);
+  size_t offset = torb_list_storage_data_offset(element);
+  size_t bytes;
+  torb_list_storage *storage;
+  /* The capacity is checked in elements; in bytes it can only wrap where `size_t` is 32 bits wide */
+  if (element->size != 0u && (size_t)capacity > (SIZE_MAX - offset) / (size_t)element->size) {
+    torb_panic_text("a list that large is not supported", torb_location_unknown);
+  }
+  bytes = offset + (size_t)capacity * (size_t)element->size;
+  storage = (torb_list_storage *)torb_allocate(bytes, TORB_BLOCK_LIST_STORAGE);
   storage->element = element;
   storage->length = 0u;
   storage->capacity = capacity;

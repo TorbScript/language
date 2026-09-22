@@ -208,7 +208,12 @@ static bool torb_read_line_console(HANDLE handle, torb_text *out) {
     DWORD read = 0u;
     /* One unit stays free for the terminator that is written after the loop */
     if (length + 1u >= capacity) {
-      wchar_t *grown = (wchar_t *)torb_raw_allocate(capacity * 2u * sizeof(wchar_t));
+      wchar_t *grown;
+      /* A line past the limit of a text can never become one, and doubling the buffer could wrap */
+      if (capacity > (size_t)UINT32_MAX || capacity > SIZE_MAX / 2u / sizeof(wchar_t)) {
+        torb_panic_text("a text longer than 4 GiB is not supported", torb_location_unknown);
+      }
+      grown = (wchar_t *)torb_raw_allocate(capacity * 2u * sizeof(wchar_t));
       memcpy(grown, buffer, capacity * sizeof(wchar_t));
       torb_raw_free(buffer, capacity * sizeof(wchar_t));
       buffer = grown;
@@ -372,7 +377,12 @@ bool torb_read_line(torb_text *out) {
         break;
       }
       if (length + 1u > capacity) {
-        uint8_t *grown = (uint8_t *)torb_raw_allocate(capacity * 2u);
+        uint8_t *grown;
+        /* A line past the limit of a text can never become one, and doubling the buffer could wrap */
+        if (capacity > (size_t)UINT32_MAX || capacity > SIZE_MAX / 2u) {
+          torb_panic_text("a text longer than 4 GiB is not supported", torb_location_unknown);
+        }
+        grown = (uint8_t *)torb_raw_allocate(capacity * 2u);
         memcpy(grown, buffer, length);
         torb_raw_free(buffer, capacity);
         buffer = grown;

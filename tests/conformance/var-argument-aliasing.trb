@@ -1,0 +1,56 @@
+use Process from "std/process"
+
+/**
+ * One binding handed to the same call twice: once as a `var` argument and once as a value, or as the `var fn` receiver
+ * and as a value argument of that member.
+ *
+ * Reading the path a `var` argument names is allowed as another argument of the same call, and a value is a copy, so
+ * the value argument is the value **before** the call: whatever the callee writes through the place, the value it was
+ * handed stays what it was. A replaced list, a cleared list and a replaced field are the three ways the callee can write
+ * through the place, and each of them has to leave the value argument alone and free the old storage exactly once -
+ * the gate is `live blocks at exit: 0` under `TORB_REPORT_LEAKS=1`.
+ */
+
+type Bag {
+  var items: List<String>
+
+  /** Replaces its own items and then reads the other bag, which is the bag this was called on. */
+  var fn merge(other: Bag) {
+    items = ["fresh{0}"]
+    for value in other.items {
+      items.add value
+    }
+  }
+}
+
+/** Replaces the list and then reads the value argument. */
+fn resetThenRead(var target: List<String>, other: List<String>): Int {
+  target = ["z{1}"]
+  var total = 0
+  for value in other {
+    total = total + value.byteLength()
+  }
+  total
+}
+
+/** Clears the list in place and then reads the value argument. */
+fn absorbAll(var target: List<String>, other: List<String>) {
+  target.clear()
+  for value in other {
+    target.add "{value}*"
+  }
+}
+
+var list = ["m{1}", "n{2}", "o{3}"]
+const total = resetThenRead list, list
+print "{list} {total}"
+
+var absorbed = ["p{1}", "q{2}"]
+absorbAll absorbed, absorbed
+print absorbed
+
+var bag = Bag(["a{1}", "b{2}"])
+bag.merge bag
+print bag
+
+Process.exit(total + absorbed.length() + bag.items.length())

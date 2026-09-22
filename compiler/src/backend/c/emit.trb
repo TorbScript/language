@@ -23,6 +23,7 @@ use Slot, Instruction, WitnessTable, WitnessTableId, Ownership from "../../ir/ir
 use ElementId, ElementDescriptor from "../../ir/ir"
 use Layout, FieldLayout, containsCountedType from "../../ir/layout"
 use typeOfReference from "../../ir/verify"
+use keepingOf from "../../ir/kept"
 use hexDigits, objectTypeName, payloadLayoutName from "../../ir/mangle"
 use nativeEntries from "./natives"
 use CExpression, CStatement, CSwitchCase, CDeclaration, declarationOf, cStringOf from "./writer"
@@ -1627,12 +1628,14 @@ fn emitDefinitions(
   functions: List<IrFunction>,
   prototypes: Map<String, String>,
 ) {
+  // Which parameters every callee may keep, once for the whole program: it decides where a closure environment lives
+  const keeping = keepingOf program
   for function in functions {
     if const .ConstantCell(initializer) = function.kind {
       emitConstantCell emission, program, function, initializer
       continue
     }
-    const body = bodyOf program, function, prototypes
+    const body = bodyOf program, function, prototypes, keeping
     const statements = bodyStatements emission, program, body
     const declaration = CDeclaration.Definition(
       commentOf(program, function),

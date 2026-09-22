@@ -1,0 +1,339 @@
+/**
+ * Which parameters a function may **keep**: hand on to anything that outlives the call, so that what the caller passed
+ * there has to outlive the caller's frame as well.
+ *
+ * It is the question a closure environment on the frame asks (docs/PERFORMANCE.md, finding 7): a closure written
+ * straight as the argument of a call may keep its environment on the frame only if the callee cannot keep it. The
+ * ownership summary (`ownership.trb`) does not answer that. It says which parameters take the *count*, and a borrowed
+ * parameter may still be kept by a callee that retains it on its own - an argument of a witness call or of a closure
+ * call is borrowed whatever the member at the other end does with it (`operand.trb`), and `actions.add action` on a
+ * trait-typed `List` stores the closure through exactly such a call. A frame environment kept that way is a pointer
+ * into a frame that is gone.
+ *
+ * So this is a summary of its own, and a conservative one: a slot is kept when it reaches anything that is not provably
+ * a borrow of a callee that keeps nothing - a store, a `Construct`, a capture, a `Copy`, a `Return`, a place argument,
+ * every argument of a closure call, and a parameter of a callee that is kept itself. Only the callee of a `CallClosure`,
+ * which only calls what it is handed, and the frame's own `Retain` and `Release` are not.
+ *
+ * A **witness call** is answered by every member it can reach. The program is closed - a trait-typed value can only
+ * carry one of the witness tables of `IrProgram.witnessTables` - so the member at the call's index in every table of
+ * the value's trait is the whole set of callees, and an argument is kept when any one of them keeps it. That is what
+ * leaves `names.contains(name)` on a `List<String>` its frame environment: every `find` of a `List` table only calls
+ * its predicate. A witness whose tables cannot be named (one a generic function was handed) keeps every argument.
+ *
+ * It is the least fixpoint over the call graph, exactly as the ownership summary is: a function whose answer grew wakes
+ * its callers - the direct ones and the ones that reach it through a table - and recursion needs no special case.
+ *
+ * # Related
+ *
+ * - [keepingOf] - the summary of a whole program.
+ * - [keepingSlotsOf] - what one instruction may keep, under that summary.
+ */
+
+use IrProgram, IrFunction, Ownership, Slot, Instruction, Argument, FunctionId from "./ir"
+use WitnessSource, WitnessTableId from "./ir"
+use usedSlots, typeOfReference from "./verify"
+use filledFlags from "./liveness"
+
+/** What a program's functions may keep, and what [keepingSlotsOf] needs to answer a witness call with it. */
+public type Keeping {
+  /** Per function, by `FunctionId`, and per parameter: whether the function may keep what it is handed there. */
+  var parameters: List<List<Bool>>
+  /** Every witness table of the program, by the `TraitId` it implements. */
+  tablesByTrait: Map<Int, List<WitnessTableId>>
+}
+
+/**
+ * What every function of the program may keep, as the least fixpoint over the call graph.
+ *
+ * A function of the runtime has no body to read, so the natives manifest is its answer: it keeps exactly the parameters
+ * it takes the count of. A function without blocks that is not one of the runtime's is assumed to keep everything.
+ */
+public fn keepingOf(program: IrProgram): Keeping {
+  const count = program.functions.length()
+  var parameters: List<List<Bool>> = []
+  var queue: List<Int> = []
+  var isQueued = filledFlags count, false
+  for index in 0..count {
+    const function = program.functions[index]
+    var flags: List<Bool> = []
+    const isOpaque = function.blocks.isEmpty() && !isRuntime(function)
+    for parameter in function.signature.parameters {
+      flags.add(isOpaque || parameter.ownership == Ownership.Owned)
+    }
+    parameters.add flags
+    if !function.blocks.isEmpty() {
+      queue.add index
+      isQueued.set index, true
+    }
+  }
+  var keeping = Keeping parameters, tablesByTraitOf(program)
+  if queue.isEmpty() {
+    return keeping
+  }
+  const callers = callersOf program, keeping
+  var cursor = 0
+  while cursor < queue.length() {
+    const index = queue[cursor]
+    cursor = cursor + 1
+    isQueued.set index, false
+    const function = program.functions[index]
+    const found = keptSlotsOf program, keeping, function
+    var flags = keeping.parameters[index]
+    var isChanged = false
+    for position in 0..flags.length() {
+      if flags[position] || position >= found.length() || !found[position] {
+        continue
+      }
+      flags.set position, true
+      isChanged = true
+    }
+    if !isChanged {
+      continue
+    }
+    keeping.parameters.set index, flags
+    for caller in callers[index] {
+      if isQueued[caller] {
+        continue
+      }
+      isQueued.set caller, true
+      queue.add caller
+    }
+  }
+  keeping
+}
+
+fn isRuntime(function: IrFunction): Bool {
+  if const .Runtime(_) = function.kind {
+    return true
+  }
+  false
+}
+
+fn tablesByTraitOf(program: IrProgram): Map<Int, List<WitnessTableId>> {
+  var found: Map<Int, List<WitnessTableId>> = [:]
+  for index in 0..program.witnessTables.length() {
+    const applied = program.witnessTables[index].applied.value
+    var tables = found.get(applied) ?? []
+    tables.add WitnessTableId(index)
+    found.set applied, tables
+  }
+  found
+}
+
+/**
+ * Which functions call which: a direct `Call`, and a `CallWitness` for every member it can reach, so that a summary that
+ * grew wakes exactly the call sites it can change.
+ */
+fn callersOf(program: IrProgram, keeping: Keeping): List<List<Int>> {
+  const count = program.functions.length()
+  var callers: List<List<Int>> = []
+  for _ in 0..count {
+    callers.add([])
+  }
+  for index in 0..count {
+    const function = program.functions[index]
+    for block in function.blocks {
+      for instruction in block.instructions {
+        var callees: List<FunctionId> = []
+        if const .Call(_, callee, _, _, _) = instruction {
+          callees.add callee
+        }
+        if const .CallWitness(_, witness, member, _) = instruction {
+          if const Some(tables) = reachableTables(program, keeping, function, witness) {
+            callees.addAll membersAt(program, tables, member)
+          }
+        }
+        for callee in callees {
+          if callee.value < 0 || callee.value >= count || callers[callee.value].contains(index) {
+            continue
+          }
+          callers[callee.value].add(index)
+        }
+      }
+    }
+  }
+  callers
+}
+
+/** Which slots of one function may be kept, under the summary so far: every slot an instruction or a `Return` keeps. */
+fn keptSlotsOf(program: IrProgram, keeping: Keeping, function: IrFunction): List<Bool> {
+  var found = filledFlags function.slots.length(), false
+  for block in function.blocks {
+    for instruction in block.instructions {
+      for slot in keepingSlotsOf(program, keeping, function, instruction) {
+        if slot.value >= 0 && slot.value < found.length() {
+          found.set slot.value, true
+        }
+      }
+    }
+    if const .Return(value) = block.terminator {
+      if const Some(argument) = value {
+        if argument.slot.value >= 0 && argument.slot.value < found.length() {
+          found.set argument.slot.value, true
+        }
+      }
+    }
+  }
+  found
+}
+
+/**
+ * Which slots an instruction of `function` may hand on to something that outlives the frame, under the summary
+ * `keeping`: everything that is not provably a borrow of a callee that keeps nothing.
+ *
+ * A `Return` is not an instruction, so a caller asks the terminator on its own.
+ */
+public fn keepingSlotsOf(program: IrProgram, keeping: Keeping, function: IrFunction, instruction: Instruction): List<Slot> {
+  match instruction {
+    // A `Release` is this frame's own, and the callee of a closure call only calls what it is handed
+    .Release(_) => []
+    .Retain(_) => []
+    .CallClosure(_, _, arguments) => argumentSlotsOf arguments
+    .Call(_, callee, arguments, _, _) => keptCallSlots program, keeping, callee, arguments
+    .CallWitness(_, witness, member, arguments) => {
+      keptWitnessSlots program, keeping, function, instruction, witness, member, arguments
+    }
+    _ => usedSlots instruction
+  }
+}
+
+/**
+ * The arguments of a direct call the callee may keep: a parameter the summary says it keeps, and every place, because
+ * the callee can read the value out of a place and keep that.
+ */
+fn keptCallSlots(program: IrProgram, keeping: Keeping, callee: FunctionId, arguments: List<Argument>): List<Slot> {
+  if !program.hasFunction(callee) || callee.value >= keeping.parameters.length() {
+    return argumentSlotsOf arguments
+  }
+  const flags = keeping.parameters[callee.value]
+  var found: List<Slot> = []
+  for index in 0..arguments.length() {
+    const argument = arguments[index]
+    if argument.place.isSome() || index >= flags.length() || flags[index] {
+      found.add argument.slot
+    }
+  }
+  found
+}
+
+/**
+ * The arguments of a witness call any member it can reach may keep. The receiver is not among the arguments: every
+ * member takes it first, so argument `i` is parameter `i + 1` of each of them. Where the tables cannot be named, every
+ * slot the call uses is kept.
+ */
+fn keptWitnessSlots(
+  program: IrProgram,
+  keeping: Keeping,
+  function: IrFunction,
+  instruction: Instruction,
+  witness: WitnessSource,
+  member: Int,
+  arguments: List<Argument>,
+): List<Slot> {
+  const tables = match reachableTables(program, keeping, function, witness) {
+    Some(found) => found
+    None => {
+      return usedSlots instruction
+    }
+  }
+  var found: List<Slot> = []
+  if const .Value(place, _) = witness.root {
+    found.add place.base
+  }
+  for index in 0..arguments.length() {
+    const argument = arguments[index]
+    if argument.place.isSome() || isKeptByAny(program, keeping, tables, member, index + 1) {
+      found.add argument.slot
+    }
+  }
+  found
+}
+
+/** Whether the member at `member` of any of the tables may keep its parameter at `position`. */
+fn isKeptByAny(program: IrProgram, keeping: Keeping, tables: List<WitnessTableId>, member: Int, position: Int): Bool {
+  for table in tables {
+    const members = program.witnessTableAt(table).members
+    if member < 0 || member >= members.length() {
+      return true
+    }
+    const callee = members[member]
+    if !program.hasFunction(callee) || callee.value >= keeping.parameters.length() {
+      return true
+    }
+    const flags = keeping.parameters[callee.value]
+    if position >= flags.length() || flags[position] {
+      return true
+    }
+  }
+  false
+}
+
+/** The member at one index of every table, where the table has one. */
+fn membersAt(program: IrProgram, tables: List<WitnessTableId>, member: Int): List<FunctionId> {
+  var found: List<FunctionId> = []
+  for table in tables {
+    const members = program.witnessTableAt(table).members
+    if member >= 0 && member < members.length() {
+      found.add members[member]
+    }
+  }
+  found
+}
+
+/**
+ * Every witness table a witness source can name at run time: the one static table, or every table of the trait a
+ * trait-typed value is bounded by, and then the same `nested` steps down each of them. `None` where that cannot be
+ * named - a table a generic function was handed, or a value whose type is no trait-typed one.
+ */
+fn reachableTables(
+  program: IrProgram,
+  keeping: Keeping,
+  function: IrFunction,
+  witness: WitnessSource,
+): List<WitnessTableId>? {
+  var current: List<WitnessTableId> = []
+  match witness.root {
+    .Table(table) => current.add table
+    .Value(place, bound) => {
+      var problems: List<String> = []
+      const annotation = typeOfReference(program, function, problems, "", place)?
+      const bounds = match program.typeAt(annotation) {
+        .Object(found) => found
+        _ => {
+          return None
+        }
+      }
+      if bound < 0 || bound >= bounds.length() {
+        return None
+      }
+      current = keeping.tablesByTrait.get(bounds[bound].value) ?? []
+    }
+    .Parameter(_) => {
+      return None
+    }
+  }
+  for step in witness.steps {
+    var next: List<WitnessTableId> = []
+    for table in current {
+      const nested = program.witnessTableAt(table).nested
+      if step < 0 || step >= nested.length() {
+        return None
+      }
+      // A hole is a table that could not be built, and a narrowing through it is reported where it is written
+      if const Some(inner) = nested[step] {
+        next.add inner
+      }
+    }
+    current = next
+  }
+  Some current
+}
+
+fn argumentSlotsOf(arguments: List<Argument>): List<Slot> {
+  var found: List<Slot> = []
+  for argument in arguments {
+    found.add argument.slot
+  }
+  found
+}

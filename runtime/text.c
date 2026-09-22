@@ -33,10 +33,18 @@ static torb_bytes *torb_storage_of(const void *block) {
   return (torb_bytes *)(void *)(uintptr_t)block;
 }
 
-static void torb_check_text_length(size_t length) {
-  if (length > (size_t)UINT32_MAX) {
-    torb_panic_text("a text longer than 4 GiB is not supported", torb_location_unknown);
+/*
+ * The one size limit of a text. A length is summed or multiplied in 64 bits before it gets here, and every product is
+ * checked before it is formed (`torb_text_repeat`), so no wrapped length can pass as a small one.
+ */
+static void torb_check_text_length_at(uint64_t length, torb_location at) {
+  if (length > (uint64_t)UINT32_MAX) {
+    torb_panic_text("a text longer than 4 GiB is not supported", at);
   }
+}
+
+static void torb_check_text_length(uint64_t length) {
+  torb_check_text_length_at(length, torb_location_unknown);
 }
 
 torb_text torb_text_from_storage(const void *storage, uint32_t offset, uint32_t length) {
@@ -274,14 +282,14 @@ torb_text torb_text_from_cstring(const char *text) {
 /* ------------------------------------------------------------------------------- building, slicing, comparing --- */
 
 torb_text torb_text_concat(const torb_text *parts, size_t count) {
-  size_t total = 0u;
+  uint64_t total = 0u;
   size_t index;
   uint8_t *data;
   torb_text result;
   for (index = 0u; index < count; index += 1u) {
-    total += (size_t)parts[index].length;
+    total += (uint64_t)parts[index].length;
+    torb_check_text_length(total);
   }
-  torb_check_text_length(total);
   if (total == 0u) {
     return torb_text_empty();
   }
@@ -519,7 +527,7 @@ torb_text torb_text_to_lower_case(torb_text text) {
 
 torb_text torb_text_replace(torb_text text, torb_text part, torb_text replacement) {
   uint32_t position = 0u;
-  size_t total = 0u;
+  uint64_t total = 0u;
   uint32_t occurrences = 0u;
   uint8_t *data;
   torb_text result;
@@ -537,8 +545,9 @@ torb_text torb_text_replace(torb_text text, torb_text part, torb_text replacemen
   if (occurrences == 0u) {
     return torb_text_retained(text);
   }
-  total = (size_t)text.length + (size_t)occurrences * (size_t)replacement.length
-          - (size_t)occurrences * (size_t)part.length;
+  /* Each product is below 2^64: both factors are below 2^32 */
+  total = (uint64_t)text.length + (uint64_t)occurrences * (uint64_t)replacement.length
+          - (uint64_t)occurrences * (uint64_t)part.length;
   torb_check_text_length(total);
   result = torb_text_allocate((uint32_t)total, &data);
   position = 0u;
@@ -567,8 +576,11 @@ torb_text torb_text_repeat(torb_text text, int64_t times, torb_location at) {
   if (times < 0) {
     torb_panic_index_out_of_bounds(times, 0, at);
   }
+  /* Before the product, which wraps for a count near 2^63 and would then allocate a few bytes and copy past them */
+  if (text.length != 0u && (uint64_t)times > (uint64_t)UINT32_MAX / (uint64_t)text.length) {
+    torb_check_text_length_at((uint64_t)UINT32_MAX + 1u, at);
+  }
   total = (size_t)text.length * (size_t)times;
-  torb_check_text_length(total);
   if (total == 0u) {
     return torb_text_empty();
   }
@@ -1009,15 +1021,15 @@ static size_t torb_part_write(const torb_text_part *part, uint8_t *out) {
 }
 
 torb_text torb_text_concat_parts(const torb_text_part *parts, size_t count) {
-  size_t capacity = 0u;
+  uint64_t capacity = 0u;
   size_t written = 0u;
   size_t index;
   uint8_t *data;
   torb_text result;
   for (index = 0u; index < count; index += 1u) {
-    capacity += torb_part_capacity(&parts[index]);
+    capacity += (uint64_t)torb_part_capacity(&parts[index]);
+    torb_check_text_length(capacity);
   }
-  torb_check_text_length(capacity);
   if (capacity == 0u) {
     return torb_text_empty();
   }

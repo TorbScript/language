@@ -144,11 +144,18 @@ static void torb_map_reserve(torb_map_storage *storage, uint32_t wanted) {
   uint8_t *entries;
   uint32_t index;
   uint32_t target = 0u;
+  /*
+   * 2^30 entries at most: the buckets are twice as many and an unsigned 32-bit count, and a bucket holds an entry index
+   * as an `int32_t`. A larger capacity wrapped `capacity * 2u` to zero and left eight buckets for all of them.
+   */
   while (capacity < wanted) {
-    if (capacity > UINT32_MAX / 2u) {
+    if (capacity >= (1u << 30)) {
       torb_panic_text("a map that large is not supported", torb_location_unknown);
     }
     capacity *= 2u;
+  }
+  if ((size_t)capacity > SIZE_MAX / (size_t)storage->entry_stride) {
+    torb_panic_text("a map that large is not supported", torb_location_unknown);
   }
   entries = (uint8_t *)torb_raw_allocate_zeroed((size_t)capacity * (size_t)storage->entry_stride);
   for (index = 0u; index < storage->entry_count; index += 1u) {

@@ -324,6 +324,10 @@ bool torb_file_read_all(torb_file *self, torb_text *out, torb_text *error) {
       }
       break;
     }
+    /* A full buffer past the limit of a text can never become one, and doubling it could wrap */
+    if (capacity > (size_t)UINT32_MAX || capacity > SIZE_MAX / 2u) {
+      torb_panic_text("a text longer than 4 GiB is not supported", torb_location_unknown);
+    }
     {
       uint8_t *grown = (uint8_t *)torb_raw_allocate(capacity * 2u);
       memcpy(grown, buffer, filled);

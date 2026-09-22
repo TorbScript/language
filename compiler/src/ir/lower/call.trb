@@ -29,7 +29,7 @@ use RuntimeKind from "../ir"
 use CallOperands, PlacePath, TakenElement from "./place"
 use referenceParametersOf, parameterTypeAt, receiverReference, argumentReference from "./place"
 use collidesWithPlace, writtenResult, lowerPropertyWrite, makeOwnersUnique, putBackElements from "./place"
-use FunctionBuilder, emit from "../build"
+use FunctionBuilder, emit, addTemporary from "../build"
 use layoutOfType, conversionKindOf from "../verify"
 use describeIrType from "../print"
 use memberInValue, derivedKindOf, generatedKindOf from "../witness"
@@ -220,7 +220,7 @@ public fn lowerDispatched(
   destination: Slot?,
   at: Span,
   dispatched: Dispatched,
-  operands: List<Slot>,
+  written: List<Slot>,
   places: List<Reference?>,
   annotation: IrTypeId,
 ): Slot {
@@ -231,8 +231,9 @@ public fn lowerDispatched(
   const name = memberNameOf lowering, member
   // `native fn panic(message): Never` is the one native with an instruction of its own
   if owner.isEmpty() && name == "panic" {
-    return lowerPanic lowering, builder, destination, operands, at
+    return lowerPanic lowering, builder, destination, written, at
   }
+  const operands = separatedFromPlaces builder, written, places
   if dispatched.isDynamic {
     return lowerWitnessCall lowering, builder, destination, at, dispatched, operands, annotation, places
   }
@@ -257,6 +258,43 @@ public fn lowerDispatched(
     }
   }
   emitCall lowering, builder, destination, function, operands, annotation, at, places
+}
+
+/**
+ * The operands of a call, where a **value** argument that names the base of a place argument of the same call is a copy
+ * of its own: `resetThenRead(list, list)` with `var target` first, and `bag.merge bag` with a `var fn` receiver.
+ *
+ * The value argument is the value *before* the call - reading the path a `var` argument names is allowed as another
+ * argument of the same call - and it is handed over borrowed, so without the copy the callee would read it through the
+ * very storage it writes: a write through the place releases what was there, and the value argument then points at a
+ * freed block. The copy is one retain, which also makes the storage shared, so a `MakeUnique` in the callee copies it
+ * before the first write, and the ownership pass releases the copy after the call. A call where no value argument names
+ * the base of a place gets its operands back as they are and costs nothing.
+ */
+fn separatedFromPlaces(var builder: FunctionBuilder, operands: List<Slot>, places: List<Reference?>): List<Slot> {
+  var bases: List<Slot> = []
+  for place in places {
+    if const Some(found) = place {
+      bases.add found.base
+    }
+  }
+  if bases.isEmpty() {
+    return operands
+  }
+  var separated = operands
+  for index in 0..operands.length() {
+    if const Some(Some(_)) = places.get(index) {
+      continue
+    }
+    const slot = operands[index]
+    if !bases.contains(slot) {
+      continue
+    }
+    const copy = addTemporary builder, builder.typeOfSlot(slot)
+    emit builder, Instruction.Copy(copy, slot)
+    separated.set index, copy
+  }
+  separated
 }
 
 /**

@@ -21,8 +21,8 @@ use IrProgram, IrFunction, IrSignature, IrTypeId, LayoutId, FunctionId from "../
 use Slot, SlotDeclaration, BlockId, Instruction, Terminator, Argument, WitnessSource from "../../ir/ir"
 use Reference, LocationId, RuntimeKind, WitnessRoot, WitnessTableId, Capture from "../../ir/ir"
 use ElementId, IrParameter, StaticId, ElementDescriptor from "../../ir/ir"
-use Intrinsic, IntrinsicOperation, NumericKind, Ownership from "../../ir/ir"
-use usedSlots from "../../ir/verify"
+use Intrinsic, IntrinsicOperation, NumericKind from "../../ir/ir"
+use Keeping, keepingSlotsOf from "../../ir/kept"
 use Layout, isManagedType, containsCountedType, TextPartKind, textPartKindOf from "../../ir/layout"
 use isEnvironmentLayout from "../../ir/capture"
 use suffixOfNumeric from "../../ir/print"
@@ -54,7 +54,12 @@ public const resultPointerName = "torb_result"
  * Walks every block once to mark which slots are read and which labels are jumped to, so [bodyStatements] never has
  * to ask an instruction twice what it does with a slot.
  */
-public fn bodyOf(program: IrProgram, function: IrFunction, prototypes: Map<String, String>): Body {
+public fn bodyOf(
+  program: IrProgram,
+  function: IrFunction,
+  prototypes: Map<String, String>,
+  keeping: Keeping,
+): Body {
   var reads: List<Bool> = []
   for _ in 0..function.slots.length() {
     reads.add false
@@ -69,7 +74,7 @@ public fn bodyOf(program: IrProgram, function: IrFunction, prototypes: Map<Strin
     }
     markTerminator reads, labels, block.terminator
   }
-  const framed = framedClosures program, function
+  const framed = framedClosures program, function, keeping
   Body function, prototypes, reads, labels, isByPointerResult(function), framed
 }
 
@@ -79,18 +84,20 @@ public fn bodyOf(program: IrProgram, function: IrFunction, prototypes: Map<Strin
  * Two answers have to agree, and this is the second one. The checker says the closure is **`local`**: it is written
  * straight as the argument of a call, so it cannot outlive that call (`ir/lower/closure.trb`, and BACKEND's decision
  * 14, "A closure that captures a `var` reference may not escape"). The IR says the callee does not **keep** it: the
- * slot the `Closure` wrote is used only as a `borrowed` argument of a direct call - which the ownership summary makes
- * exactly the parameters the callee does not store or return - as the callee of a `CallClosure`, or by the `Release`
- * this frame itself emitted.
+ * slot the `Closure` wrote is used only as an argument of a call no callee of which may keep that parameter
+ * (`keeping`, the summary of `ir/kept.trb`), as the callee of a `CallClosure`, or by the `Release` this frame itself
+ * emitted.
  *
  * Both halves are needed, and BACKEND's decision names both: "conservatively, when it is written directly as an
  * argument of a call **and is not stored by the callee**". A closure handed to `Iterable.map` is `local` and is kept -
- * the `Mapped` record it lands in is answered to this frame and may be answered on - so it is an `owned` argument and
- * this says no. Everything that cannot be proved is proved false: an argument of a witness call, whose member modes
- * the IR does not carry (`ir/operand.trb`), an argument of a `CallClosure`, whose callee is erased, a `Copy`, a
- * `Return`, a capture, and a store are all a heap environment.
+ * the `Mapped` record it lands in is answered to this frame and may be answered on - so this says no. So does a callee
+ * that hands the closure on to a witness call or a closure call, however deep: `holder.keep { ... }` whose body is
+ * `actions.add action` on a trait-typed `List` stores it although the ownership summary calls the parameter
+ * borrowed. Everything that cannot be proved is proved false: an argument of a witness call whose tables cannot be
+ * named, an argument of a `CallClosure`, a place, a `Copy`, a `Return`, a capture, and a store are all a heap
+ * environment.
  */
-fn framedClosures(program: IrProgram, function: IrFunction): List<Bool> {
+fn framedClosures(program: IrProgram, function: IrFunction, keeping: Keeping): List<Bool> {
   var found: List<Bool> = []
   for _ in 0..function.slots.length() {
     found.add false
@@ -106,7 +113,7 @@ fn framedClosures(program: IrProgram, function: IrFunction): List<Bool> {
   }
   for block in function.blocks {
     for instruction in block.instructions {
-      for slot in keepingSlotsOf(program, instruction) {
+      for slot in keepingSlotsOf(program, keeping, function, instruction) {
         if slot.value >= 0 && slot.value < found.length() {
           found.set slot.value, false
         }
@@ -119,48 +126,6 @@ fn framedClosures(program: IrProgram, function: IrFunction): List<Bool> {
         }
       }
     }
-  }
-  found
-}
-
-/**
- * Which slots an instruction may hand on to something that outlives this frame. It is the conservative half of
- * [framedClosures]: everything that is not provably a borrow of a callee that keeps nothing is in here.
- */
-fn keepingSlotsOf(program: IrProgram, instruction: Instruction): List<Slot> {
-  match instruction {
-    // A `Release` is this frame's own, and the callee of a closure call only calls what it is handed
-    .Release(_) => []
-    .Retain(_) => []
-    .CallClosure(_, _, arguments) => argumentSlotsOf arguments
-    .Call(_, callee, arguments, _, _) => keptCallSlots program, callee, arguments
-    _ => usedSlots instruction
-  }
-}
-
-/** The arguments of a direct call the callee's signature does **not** call `Owned`, which is what it keeps. */
-fn keptCallSlots(program: IrProgram, callee: FunctionId, arguments: List<Argument>): List<Slot> {
-  if !program.hasFunction(callee) {
-    return argumentSlotsOf arguments
-  }
-  const parameters = program.functionAt(callee).signature.parameters
-  var found: List<Slot> = []
-  for index in 0..arguments.length() {
-    if index >= parameters.length() {
-      found.add arguments[index].slot
-      continue
-    }
-    if parameters[index].ownership == Ownership.Owned {
-      found.add arguments[index].slot
-    }
-  }
-  found
-}
-
-fn argumentSlotsOf(arguments: List<Argument>): List<Slot> {
-  var found: List<Slot> = []
-  for argument in arguments {
-    found.add argument.slot
   }
   found
 }

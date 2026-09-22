@@ -574,15 +574,20 @@ written directly as an argument of a call **and is not stored by the callee**".
 
 - The checker says `local`, which is the first half: the closure stands straight as a call argument
   (`compiler/src/ir/lower/closure.trb`).
-- The IR says the callee does not keep it, which is the second: the slot the `Closure` wrote is used only as a
-  `borrowed` argument of a **direct** call - and the ownership summary makes a parameter `Owned` exactly when the callee
-  stores or returns it - as the callee of a `CallClosure`, or by the `Release` this frame emitted
-  (`framedClosures` in `compiler/src/backend/c/body.trb`).
+- The IR says the callee does not keep it, which is the second: the slot the `Closure` wrote is used only as an
+  argument of a call no callee of which may keep that parameter, as the callee of a `CallClosure`, or by the `Release`
+  this frame emitted (`framedClosures` in `compiler/src/backend/c/body.trb`).
 
-Everything that cannot be proved is proved false. An argument of a **witness** call is one of them, because the IR
-borrows every argument of a witness call whatever the member's own modes are (`compiler/src/ir/operand.trb`) - so
-`items.filter { ... }` on a `List<Item>` value keeps a block until finding 2 makes that call direct. So does an argument
-of a `CallClosure`, whose callee is erased, and a `Copy`, a `Return`, a capture and a store.
+"May keep" is a summary of its own (`compiler/src/ir/kept.trb`) and not the ownership summary. A parameter can be
+`borrowed` and still be kept: an argument of a witness call or of a closure call is borrowed whatever the member at
+the other end does with it (`compiler/src/ir/operand.trb`), so a callee whose body is `actions.add action` on a
+trait-typed `List` stores the closure behind a borrowed parameter. The summary is a least fixpoint over the call graph:
+a parameter is kept when it reaches a store, a `Construct`, a capture, a `Copy`, a `Return`, a place, an argument of a
+`CallClosure`, or a parameter of a callee that keeps it. A witness call asks every member it can reach - the member at
+its index in every table of the value's trait, which is the whole set because the program is closed - so
+`names.contains(name)` on a `List<String>` keeps its frame environment: no `find` of a `List` table keeps its
+predicate. A witness whose tables cannot be named keeps every argument. Everything that cannot be proved is proved
+false.
 
 `Iterable.map` is the case that shows why the second half is needed: the closure is `local`, and `map` builds it into a
 `Mapped` record it answers, which the frame may answer on. Its parameter is `Owned`, so the environment is a block.
@@ -593,6 +598,8 @@ a closure is made inside one.
 
 **What holds it.** `closure-frame.trb` of the conformance suite makes a closure with a counted capture inside a loop,
 two at once, and one the callee keeps and calls after the call has ended, with the leak gate on;
+`closure-kept-by-callee.trb` has callees that keep it through a trait-typed `List`, a closure call, a bound and a
+trait-typed value;
 `compiler/tests/lower-closures.test.trb` pins both halves of the C; `runtime/tests/memory_test.c` pins that a frame
 environment costs no block and still drops its captures.
 

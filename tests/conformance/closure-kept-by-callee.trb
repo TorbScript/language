@@ -1,0 +1,107 @@
+use Process from "std/process"
+
+/**
+ * A closure written straight as the argument of a call whose callee keeps it - not itself, but by handing it on to
+ * something that stores it - and which is called after the call that made it has ended.
+ *
+ * The callee stores it through a member of a trait-typed `List`, through a closure it was handed, through a `var fn`
+ * of a type parameter's bound, and through a trait-typed value whose one implementation keeps it. In each of them the
+ * closure has to work after its maker has returned and another call has used the stack, with what it captured intact,
+ * and every capture is released exactly once: the gate is `live blocks at exit: 0` under `TORB_REPORT_LEAKS=1`.
+ */
+
+type Holder {
+  var actions: List<(value: Int) => Int> = []
+
+  var fn keep(action: (value: Int) => Int) {
+    actions.add action
+  }
+}
+
+trait Sink {
+  var fn accept(action: (value: Int) => Int)
+  fn applied(value: Int): Int
+}
+
+type Collector with Sink {
+  var actions: List<(value: Int) => Int> = []
+
+  var fn accept(action: (value: Int) => Int) {
+    actions.add action
+  }
+
+  fn applied(value: Int): Int {
+    var total = 0
+    for action in actions {
+      total = total + action(value)
+    }
+    total
+  }
+}
+
+/** Keeps the closure through `actions.add` on a trait-typed `List`. */
+fn held(label: String): Holder {
+  var holder = Holder()
+  holder.keep { _ + label.byteLength() }
+  holder
+}
+
+/** Hands the closure on to another closure, which keeps it. */
+fn forward(sink: (action: (value: Int) => Int) => Int, action: (value: Int) => Int): Int {
+  sink action
+}
+
+fn forwarded(label: String): List<(value: Int) => Int> {
+  var kept: List<(value: Int) => Int> = []
+  const _ = forward({ action =>
+    kept.add action
+    0
+  }, { _ + label.byteLength() })
+  kept
+}
+
+/** Keeps the closure through a `var fn` of the bound of a type parameter. */
+fn feed<Target: Sink>(var target: Target, label: String) {
+  target.accept { _ + label.byteLength() }
+}
+
+/** Keeps the closure through a trait-typed value. */
+fn fed(label: String): Sink {
+  var sink: Sink = Collector()
+  sink.accept { _ + label.byteLength() }
+  sink
+}
+
+/** Uses the stack where the makers had their frames. */
+fn clobber(label: String): Int {
+  var total = 0
+  for index in 0..5 {
+    const text = "{label}{index}{index}{index}"
+    total = total + text.byteLength()
+  }
+  total
+}
+
+var total = 0
+
+const holder = held "abc{1}"
+const actions = forwarded "defg{2}"
+var collector = Collector()
+feed collector, "hijkl{3}"
+const sink = fed "mnopqr{4}"
+print clobber("zzzzzzzzzzzzzzzz")
+
+for action in holder.actions {
+  total = total + action(100)
+}
+for action in actions {
+  total = total + action(200)
+}
+for action in collector.actions {
+  total = total + action(300)
+}
+total = total + sink.applied(400)
+
+print "closure kept by callee {total}"
+
+Process.exit(total % 200)
