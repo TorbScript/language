@@ -24,7 +24,7 @@ over time, `Source` and `Sink`, which are in
 - **[The collection traits](collection-traits.md)** - Every kind of collection is a trait - List, Set, Map, Stack, Queue - so a signature names what a value can do, and only its construction names the data structure behind it.
 - **[Lists](lists.md)** - List is the ordered, indexable sequence behind the literal [1, 2, 3], with ArrayList as the default implementation and a verb paired with a participle for every change.
 - **[Maps and sets](maps-and-sets.md)** - The literal ["a": 1] builds a Map, a Set is built from a list literal instead of having one of its own, and both iterate in insertion order while comparing regardless of it.
-- **[Stacks and queues](stacks-and-queues.md)** - Stack is LIFO with push and pop, Queue is FIFO with enqueue and dequeue, and Collection.add reaches whichever end the kind chooses.
+- **[Stacks and queues](stacks-and-queues.md)** - Stack is LIFO and Queue is FIFO, both spend the two words add and remove, and the type name says which end they reach.
 - **[Slices](slices.md)** - list[from..to] answers a List that shares storage and starts at index 0 again; as a var path the same expression is a window into the original instead.
 - **[Iterating](iterating.md)** - for pulls from Iterator.next() through Iterable.iterator(), and the subject of a for is evaluated once into a temporary, so changing it inside the loop does not affect what is walked.
 - **[Pipelines](pipelines.md)** - A pipeline is a source, zero or more lazy stages and exactly one terminal operation, and nothing runs until the terminal operation pulls a value through.

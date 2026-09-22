@@ -17,6 +17,12 @@ an ordinary trait and every implementation is an ordinary type.
            + Indexed      + Slice
 ```
 
+**Where the family stands.** Slices C1, C2, C3 and C6 are in: `Stack` and `Queue` spend `add`/`remove` and their
+participles, `Collection` owns `clear`, `compact`, `count`, `contains` and the participles and declares `add` nowhere,
+`List.sorted` answers `Self`, and the checker rejects both holes of section 4. Sections 1 and 2 are the survey the
+design was argued from and are kept as written; section 3 is the design, and section 5 says which slices are still
+open.
+
 - **[1. The inventory](#1-the-inventory)** — every trait and type, who uses it, and what it costs
 - **[2. Where the others are](#2-where-the-others-are)** — Rust, Swift, Kotlin, Scala, Clojure, Java
 - **[3. The target design](#3-the-target-design)** — the tree, the words, construction, iteration, indexing, ergonomics
@@ -33,6 +39,9 @@ them and nothing more; that is why the probes exist.
 ---
 
 ## 1. The inventory
+
+*The survey the design of section 3 was argued from, with the greps and the probes that produced it. Where a slice of
+section 5 is marked done, section 3 and section 4 say what the family spends instead.*
 
 ### 1.1 The tree as it is
 
@@ -698,24 +707,47 @@ it — the instance already exists, since the same default called on the trait t
 instead of asking the table for a static member.
 *Blocks:* `List.of` and `Set.of` under section 3.5.
 
-**Gap 3. A trait may require a supertrait that nothing implements for every parameter.**
-`trait Mound<Item> with From<Iterable<Item>>` whose only implementation is `extend<Item: Hash> Mound<Item> with From<…>`
-is accepted, and `Mound.from([Opaque("a")])` for an `Opaque` with no `Hash` **type checks** — there is no
-implementation for it. It fails at the back end with gap 2's message, which is the wrong message at the wrong time.
-*Smallest fix:* when a trait names a supertrait in its own `with` list, check the `extend`s of the trait type against
-its own parameters, the way an implementation's `with` list is checked.
-*This is the probe that was accepted and should not have been.*
+**Gap 3. Closed.** A trait's own `with` list is a promise about **every** instantiation, because it is what member
+lookup reads — so an implementation of that supertrait *for the trait type* may not be narrower than the promise. The
+checker rejects `extend<Item: Hash> Mound<Item> with From<Iterable<Item>>` beside
+`trait Mound<Item> with From<Iterable<Item>>` at the `extend`:
 
-**Gap 4. Two instantiations of one trait on one type are accepted and then resolve to nothing.**
-`type Twice with Indexed<Int, Int>, Indexed<Bounds<Int>, Twice>` is accepted at the declaration although one `get`
-cannot satisfy both, and afterwards `twice[0]` reports `` `Twice` does not implement `Indexed` `` — the first
-instantiation is lost too.
-*Smallest fix:* report the duplicate at the `with` list with the message the member namespace already has
-(``already declared``), naming both instantiations.
+```text
+error: `Mound` comes with `From` for every instantiation, and this implementation holds only for some
+  = A trait's own `with` list is what member lookup reads, so `From` resolves on every `Mound` while nothing
+    implements it for the rest: drop the bounds of this `extend`, or take `From` out of `trait Mound`'s `with` list
+    and ask for it at the member (`where Self: From<...>`)
+```
 
-**Gap 5. `list.sorted(by:)` answers `Iterable<Item>`.** Section 1.5.
-*Smallest fix:* a `List.sorted(by:)` override answering `Self`, written over `sort`. It is a change to `std` and not
-to the language.
+The note names the fix section 3.5 takes: the requirement belongs on the **member** (`where Self: From<Iterable<Item>>`)
+and not on the trait. A trait that bounds its own parameter said the same thing where the promise is read and is
+untouched, and so is an implementation of a trait the target does not name in its own `with` list.
+
+**Gap 4. Closed, and the rule is one body per instantiation.** Two instantiations of one trait on one type stay
+legal — `Multiply<Board, Board>` beside `Multiply<Int, Board>`, `From<A>` beside `From<B>` — because that is how a
+type overloads over a trait argument. What is not legal is writing the members **once** for two of them: a type has one
+namespace of members, so the body it writes is the implementation of one instantiation and of no other. The checker
+reports the second entry of the `with` list and names the first:
+
+```text
+error: `Twice` comes with `Indexed` more than once, and `at` is the body of the first one
+  = A type has one namespace of members, so one body per instantiation is one `extend` per instantiation:
+    `extend Twice with Indexed<...> { fn at(...) }`
+```
+
+A body that writes the member twice keeps the message the member namespace already has (``already declared``), so the
+two spellings of one mistake get one root cause each. The form the note names — one instantiation in the `with` list
+and the next in an `extend` — type checks and resolves.
+
+**Gap 5. Closed.** `List.sorted(by:)` answers `Self`, written over `sort`, so
+`const ordered: List<Int> = numbers.sorted({ _ })` is a binding and not a conversion.
+
+It cost one line of the checker beside the `std` change, which the smallest fix did not foresee. `traitMembers` built
+an **overload set** out of `List.sorted` and `Iterable.sorted` — two candidates with the same parameter types and
+different results — and every call site became ambiguous. A subtrait's member **overrides** the one it inherits
+instead of standing beside it, and only two traits of which neither is the other's supertrait are an overload set
+(`From<Int8>` beside `From<Char>`). `traitsOf` lists a bound before its supertraits, so the overriding declaration is
+the one already found.
 
 **Gap 6. `Buffer<Item>`** — ECS gap 9 and [BACKEND](BACKEND.md)'s heap kernel: an in-place write where the storage has
 one owner, two disjoint `var` windows, and `swapRemove` without a shift. Section 3.7 depends on it for `Bytes` and for
@@ -738,24 +770,23 @@ a PowerShell array has destroyed files here before — and every slice leaves th
 `torb canon --check --rule calls --rule strings --rule imported-case-patterns --rule unused-bindings --rule loops .`
 reporting zero files.
 
-**C1 — the words of `Stack` and `Queue`.** Delete `push`, `pop`, `enqueue`, `dequeue`, `pushed`, `popped`,
-`enqueued`, `dequeued` and `peek`; declare `remove(): Item?` and `removed(): (Item, Self)?`. Files:
-`std/collections/src/stack.trb`, `queue.trb`, `examples/tour/src/07-collections.trb`, CONCEPT.md's verb table and
-collection tree, and the `standard-library` and `language` pages that name the old words.
-*Gate:* the four above, plus `torb test compiler/tests` and the tour's own expected output.
-*Estimate:* small — the grep of section 1.2 says there are fourteen call sites in the whole repository.
+**C1 — the words of `Stack` and `Queue`. Done.** Both traits are `Collection<Item>` plus `remove(): Item?` and
+`removed(): (Item, Self)?`; `add` and `added` come from `Collection`, and looking without taking is
+`Iterable.first()`. `ArrayStack` and `ArrayQueue` write `add` and `remove` directly, `ArrayQueue`'s own count field is
+`storedLength` so that it does not stand in the way of `Collection.count()`, and the tour keeps its stack and its
+queue in the new words.
 
-**C2 — `Collection`'s job.** Remove the re-declared `add`, add the `count` default, move `compact` in from
-`MutableSlice`, delete `Set.isSubsetOf`, delete `Map.merge` and `Map.merged`. Files:
-`std/collections/src/collection.trb`, `set.trb`, `map.trb`, `std/core/src/operators.trb`, and every caller of
-`merge`/`merged` (there are none outside `std/collections`).
-*Gate:* the four, plus an IR check that `Collection`'s witness table lost nothing it had.
-*Estimate:* small.
+**C2 — `Collection`'s job. Done.** `Collection` declares `clear`, `compact`, `count`, `addAll`, `added`, `addedAll`,
+`contains`, `containsAll` and `finish`, and `add` exactly once — in `Accumulator`. `compact` moved in from
+`MutableSlice`, which is now exactly `replace`; it is a **default that does nothing**, because a storage without spare
+room has nothing to hand back, and `ArrayList`, `TrieList`, `ArrayStack` and `ArrayQueue` override it. `count()`
+answers `length()`. `Set.isSubsetOf`, `Map.merge` and `Map.merged` are gone; the one caller outside `std` was
+`compiler/src/highlight/scope.trb`, which writes `addAll`.
 
-**C3 — `List.sorted`, and the participle rule written down.** Gap 5, plus one paragraph in
-`docs/language/` stating when a participle answers `Self` and when it answers the pair.
-*Gate:* the four, plus a conformance program in `tests/conformance/` that sorts a `List` and keeps it a `List`.
-*Estimate:* small.
+**C3 — `List.sorted`, and the participle rule written down. Done.** Gap 5 above, the rule in
+`docs/language/types/verbs-and-participles.md` (a participle answers `Self`; where the verb also answers a value the
+copy cannot get back, it answers the pair) and in CONCEPT's verb table, and
+`tests/conformance/collection-words.trb` as the program that runs it.
 
 **C4 — the back end, gaps 1 and 2.** `compiler/src/ir/lower/generic.trb` and `compiler/src/ir/witness.trb`: a trait's
 `static fn` default monomorphized through an implementation type, and a static member of a trait type resolved to a
@@ -771,10 +802,11 @@ implementation and on a second implementation.
 `List.of(1, 2)` is an `ArrayList`.
 *Estimate:* small once C4 has landed.
 
-**C6 — the checker, gaps 3 and 4.** Two diagnostics, both in
-`compiler/src/semantics/checker/implementation.trb`. They are independent of everything above.
-*Gate:* the four, plus a compiler test per diagnostic pinning its exact text.
-*Estimate:* small.
+**C6 — the checker, gaps 3 and 4. Done.** The wording and the rule of each are under gap 3 and gap 4 above. The
+promise check is `checkTraitPromise` in `compiler/src/semantics/checker/implementation.trb`, run per implementation
+beside the orphan rule; the one-body check is `requireOneBodyPerInstantiation` in `declaration.trb`, beside the member
+namespace rule it defers to. `compiler/tests/implementations.test.trb` and `traits.test.trb` pin both texts and the
+cases that stay silent.
 
 **C7 — the implementations that make the traits worth having.** `RingList` (a `List` with O(1) at both ends),
 `ConsStack`, `BankersQueue`, `Ordered`. Each is plain TorbScript over a `List` and each needs one benchmark against
@@ -788,7 +820,7 @@ than one implementation.
 *Gate:* the four.
 *Estimate:* small, and it must run after C2 so that two agents do not edit `std/iteration` at once.
 
-The order is C1, C2, C3 and C6 in parallel; then C4; then C5; C7 and C8 whenever there is room. Only C4 touches the
+What is left is C4, then C5, then C7 and C8 whenever there is room. C4 is the one of those that touches the
 compiler, and only C7 adds a type.
 
 ## 6. Open, for the owner

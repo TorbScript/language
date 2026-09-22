@@ -68,6 +68,39 @@ type <Name> with <Trait> { ... }        satisfies <Trait> and every one of its s
 4. **A missing supertrait member is reported against the trait that asked for it, not the one the type wrote
    `with`.** The message names both traits, so the fix is clear even when the supertrait was never written out.
 
+5. **A trait's own `with` list is a promise about every instantiation of it, so an implementation of a supertrait
+   *for the trait type* may not be narrower than the promise.** Member lookup reads the `with` list, so
+   `trait Mound<Item> with From<Iterable<Item>>` makes `Mound.from` resolve for every `Item` at all - and an
+   `extend<Item: Hash> Mound<Item> with From<Iterable<Item>>` beside it would leave the rest of them with a supertrait
+   and nothing behind it. Where the capability really is conditional, it belongs on the member instead
+   (`static fn of(...items: Item): Self where Self: From<Iterable<Item>>`), which is where a bound can be checked at
+   the call.
+
+   ```trb error
+   trait Mound<Item> with From<Iterable<Item>> {
+     fn size(): Int
+   }
+
+   type Heap<Item: Hash> with Mound<Item>, From<Iterable<Item>> {
+     stored: Int
+
+     static fn from(values: Iterable<Item>): Heap<Item> {
+       Self(0)
+     }
+
+     fn size(): Int {
+       stored
+     }
+   }
+
+   extend<Item: Hash> Mound<Item> with From<Iterable<Item>> {
+     static fn from(values: Iterable<Item>): Mound<Item> {
+       Heap.from(values)
+     }
+   }
+   // error: `Mound` comes with `From` for every instantiation, and this implementation holds only for some
+   ```
+
 ## What this is not
 
 **A supertrait is not satisfied by writing `with` alone.** The trait still needs every one of the supertrait's

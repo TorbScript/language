@@ -148,7 +148,65 @@ extend<Source, Target> Source with <Trait><Target> where <bounds> { ... }   a bl
    // error: `Into` comes from `From` for every type
    ```
 
-8. **Coherence decides which implementation exists; the file decides which member names it can write.** An
+8. **One trait may stand twice in a `with` list, and then each instantiation needs a body of its own.** Two
+   instantiations do not overlap - `Multiply<Board, Board>` beside `Multiply<Int, Board>` is how a type overloads over
+   a trait argument - but a type has one namespace of members, so the body the type writes is the implementation of
+   one of them and of no other. The form that has a body per implementation is `extend`.
+
+   ```trb error
+   trait Draw<Surface> {
+     fn draw(on: Surface): Int
+   }
+
+   type Paper {
+     weight: Int
+   }
+
+   type Screen {
+     pixels: Int
+   }
+
+   type Sketch with Draw<Paper>, Draw<Screen> {
+     ink: Int
+
+     fn draw(on: Paper): Int {
+       ink
+     }
+   }
+   // error: `Sketch` comes with `Draw` more than once, and `draw` is the body of the first one
+   ```
+
+   ```trb check
+   trait Draw<Surface> {
+     fn draw(on: Surface): Int
+   }
+
+   type Paper {
+     weight: Int
+   }
+
+   type Screen {
+     pixels: Int
+   }
+
+   type Sketch with Draw<Paper> {
+     ink: Int
+
+     fn draw(on: Paper): Int {
+       ink
+     }
+   }
+
+   extend Sketch with Draw<Screen> {
+     fn draw(on: Screen): Int {
+       ink * 2
+     }
+   }
+
+   print Sketch(1).ink
+   ```
+
+9. **Coherence decides which implementation exists; the file decides which member names it can write.** An
    implementation is unique in the program either way, and nothing about dispatch depends on an import - but the members
    a trait puts on a type it does not own are only *nameable* where the trait itself is a name of the file, and a
    trait-less `extend` of a foreign type is nameable only where the file imported the member. See

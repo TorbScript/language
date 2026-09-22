@@ -24,7 +24,7 @@ use FieldSignature, CaseSignature, TypeSignature, Signature, SignatureId from ".
 use Checker, Resolution, Dispatch, Adaptation, Candidate, CandidateKind from "./context"
 use signatureOf, typeSignatureOf from "./signature"
 use substitute, substituteFunction, substituteBounds, sameType, hasVariable from "./unify"
-use resolveTrait, resolveBound, traitsOf, traitArgumentsOf from "./implementation"
+use resolveTrait, resolveBound, traitsOf, traitArgumentsOf, isSupertraitOfBound from "./implementation"
 use requiresTraitName, isNamedHere from "./implementation"
 use inherentExtensionsOf, extensionMemberOf, mappingOfImplementation, buildImplementations from "./implementation"
 use importPathOf from "./implementation"
@@ -377,10 +377,18 @@ fn declarationOf(candidate: Candidate): Int {
   }
 }
 
-/** The candidates one name has among the traits of a type, one per distinct signature, in the order they were found. */
+/**
+ * The candidates one name has among the traits of a type, one per distinct signature, in the order they were found.
+ *
+ * Two traits of one receiver that declare one name are an overload set only where neither is the other's supertrait
+ * (`From<Int8>` beside `From<Char>`). Where one is - `List.sorted` answering `Self` over `Iterable.sorted` answering a
+ * lazy stage - the subtrait's declaration **overrides** the one it inherits, and the inherited one is not a second
+ * candidate. `traitsOf` lists a bound before its supertraits, so the overriding one is always the one already found.
+ */
 fn traitMembers(var checker: Checker, receiver: TypeId, name: String, isStatic: Bool): List<Candidate> {
   const bounds = traitsOf checker, receiver
   var found: List<Candidate> = []
+  var through: List<TypeId> = []
   for bound in bounds {
     const candidate = match memberOfTrait(checker, receiver, bound, name, isStatic) {
       Some(inner) => inner
@@ -394,8 +402,14 @@ fn traitMembers(var checker: Checker, receiver: TypeId, name: String, isStatic: 
         isKnown = true
       }
     }
+    for earlier in through {
+      if isSupertraitOfBound(checker, earlier, bound, receiver) {
+        isKnown = true
+      }
+    }
     if !isKnown {
       found.add candidate
+      through.add bound
     }
   }
   found

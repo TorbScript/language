@@ -51,8 +51,9 @@ print numbers.reversed()
 public trait Collection<Item>
   with Iterable<Item>, Length, Accumulator<Item, Self>
 {
-  var fn add(value: Item)
   var fn clear()
+  var fn compact()
+  fn count(): Int
   var fn addAll(values: Iterable<Item>)
   fn added(value: Item): Self
   fn addedAll(values: Iterable<Item>): Self
@@ -61,10 +62,11 @@ public trait Collection<Item>
 }
 ```
 
-Only `add`, `clear`, `length` and `iterator` are required; everything else is a default. A collection already is an
-`Accumulator` - it has `add`, and it is its own result - so every collection can be the target of a collector, a
-channel or an event stream. `added`/`addedAll` are the participles of `add`/`addAll`: a changed copy, usable through a
-`const` binding.
+Only `clear`, `length` and `iterator` are required beside the `add` of `Accumulator`; everything else is a default.
+`add` is declared once, where it belongs, and a collection already is an `Accumulator` - it has `add`, and it is its
+own result - so every collection can be the target of a collector, a channel or an event stream. `added`/`addedAll`
+are the participles of `add`/`addAll`: a changed copy, usable through a `const` binding. `count()` answers `length()`
+rather than walking, and `compact()` hands back whatever storage a container holds beyond its length.
 
 ### List
 
@@ -78,6 +80,7 @@ public trait List<Item>
   var fn removeAt(index: Int): Item?
   var fn reverse()
   var fn sort<Key: Compare>(by: (value: Item) => Key)
+  fn sorted<Key: Compare>(by: (value: Item) => Key): Self
   var fn remove(value: Item): Bool where Item: Equals
   var fn swapAt(first: Int, second: Int)
   var fn update(index: Int, change: (var element: Item) => Void)
@@ -89,7 +92,8 @@ public trait List<Item>
 
 An ordered sequence, addressable by index - the type of the literal `[1, 2, 3]`. Every verb (`insert`, `removeAt`,
 `reverse`, `sort`, `remove`, `swapAt`, `update`) needs a `var` path and has a participle that returns a changed copy
-(`inserted`, `removed`, `reversed`, ...). `ArrayList` is the default implementation, a contiguous growable buffer shared
+(`inserted`, `removed`, `reversed`, ...). `sorted` is one of them: it overrides the lazy `Iterable.sorted` stage and
+answers a list of the same kind. `ArrayList` is the default implementation, a contiguous growable buffer shared
 between copies and slices until one of them is written to; `TrieList` is a bit-partitioned trie for a list kept in many
 versions at once, and is a documented alias of `ArrayList` until the trie exists.
 
@@ -101,7 +105,6 @@ public trait Map<Key, Value>
 {
   static fn of(...entries: (Key, Value)): Map<Key, Value> where Key: Hash
   var fn remove(key: Key): Value?
-  var fn merge(other: Iterable<(Key, Value)>)
   var fn getOrInsert(key: Key, fallback: lazy Value): Value
   var fn update(key: Key, fallback: lazy Value, change: (var Value) => Void)
   fn containsKey(key: Key): Bool
@@ -112,7 +115,7 @@ public trait Map<Key, Value>
 ```
 
 Mapping from keys to values, consisting of `(Key, Value)` tuples as a collection (`add((key, value))` is
-`set(key, value)`). The trait asks nothing of `Key`; what a key has to be able to do is a matter of the implementation
+`set(key, value)`, and putting one map into another is `addAll`/`addedAll`). The trait asks nothing of `Key`; what a key has to be able to do is a matter of the implementation
 (`TrieMap` and `HashMap` need `Hash`). **Every implementation iterates in insertion order**, and removing an entry does
 not reorder the rest; an empty map shows as `[:]`. `TrieMap` is the default (a hash array mapped trie, cheap to keep in
 many versions); `HashMap` is a flat hash table with the fastest lookups and writes, at the cost of copying all of a
@@ -132,12 +135,12 @@ public trait Set<Item>
   fn union(other: Iterable<Item>): Self
   fn intersection(other: Set<Item>): Self
   fn difference(other: Iterable<Item>): Self
-  fn isSubsetOf(other: Set<Item>): Bool
 }
 ```
 
 A collection without duplicates; `add` of a value already present does nothing. The set operations (`union`,
-`intersection`, `difference`) are nouns and never change anything, unlike the verbs above them. `{a, b}` is the literal
+`intersection`, `difference`) are nouns and never change anything, unlike the verbs above them; "is every value of
+mine in yours" is `other.containsAll(self)` and needs no word of its own. `{a, b}` is the literal
 - braces, so a set is never mistaken for a list, and `{}` is empty. `TrieSet` and `HashSet` mirror `TrieMap` and
 `HashMap`.
 
@@ -147,26 +150,26 @@ A collection without duplicates; `add` of a value already present does nothing. 
 public trait Stack<Item>
   with Collection<Item>
 {
-  var fn push(value: Item)
-  var fn pop(): Item?
-  fn popped(): (Item, Self)?
-  fn peek(): Item?
+  static fn of(...items: Item): Stack<Item>
+  var fn remove(): Item?
+  fn removed(): (Item, Self)?
 }
 
 public trait Queue<Item>
   with Collection<Item>
 {
-  var fn enqueue(value: Item)
-  var fn dequeue(): Item?
-  fn dequeued(): (Item, Self)?
-  fn peek(): Item?
+  static fn of(...items: Item): Queue<Item>
+  var fn remove(): Item?
+  fn removed(): (Item, Self)?
 }
 ```
 
-`Stack` is LIFO (`add` is `push`, and iterates from top to bottom); `Queue` is FIFO (`add` is `enqueue`, and iterates in
-the order of `dequeue`). `popped()`/`dequeued()` are the participle form for a `const` binding: the top or next element
-together with the rest, or `None` when empty. `ArrayStack` is a `List` underneath; `ArrayQueue` is a ring buffer that
-grows only when it is full. Both are `Equals` and `Hash` wherever `Item` is, order-dependent like a `List`.
+Two words for both: `add` comes from `Collection` and puts an item in, `remove` takes out the one the structure hands
+over next. `Stack` is LIFO and iterates from top to bottom; `Queue` is FIFO and iterates front to back; the type name
+says which end `add` and `remove` reach, and `first()` looks without taking. `removed()` is the participle form for a
+`const` binding: the item together with the rest, or `None` when empty. `ArrayStack` is a `List` underneath;
+`ArrayQueue` is a ring buffer that grows only when it is full. Both are `Equals` and `Hash` wherever `Item` is,
+order-dependent like a `List`.
 
 <!-- torb:declarations:end -->
 

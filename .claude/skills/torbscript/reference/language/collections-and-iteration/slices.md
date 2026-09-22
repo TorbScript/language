@@ -37,7 +37,7 @@ print samples
 value[from..to]                          Slice.slice: a new value, storage shared, indices start at 0
 value[from..to] = other                  MutableSlice.replace: changes this part of value in place
 value[from..to].verb(...)                a var path: verb runs on this part of value, in place
-value[from..to].compact()                gives the slice storage of its own, sized exactly
+value[from..to].compact()                Collection.compact: gives the slice storage of its own, sized exactly
 ```
 
 ## Rules

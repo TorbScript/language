@@ -1,13 +1,13 @@
 /**
  * LIFO: [Stack], with [ArrayStack] as its only implementation.
  *
- * `push` and `pop` both work on the top, and `Collection.add` is `push` - so `addAll`, a collector or a channel fill
+ * `add` and `remove` both work on the top, and `add` is [Collection.add] - so `addAll`, a collector or a channel fill
  * a `Stack` from that same end. There is no index: the only way to see an item is to remove it or to iterate the
  * whole stack.
  *
  * # Related
  *
- * - [Queue] - the FIFO sibling; `add` reaches the back instead of the top.
+ * - [Queue] - the FIFO sibling; `add` and `remove` reach the front instead of the top.
  */
 
 use Equals, Hash, combineHashes from "std/core"
@@ -15,26 +15,29 @@ use From from "std/core"
 use Collection from "./collection"
 
 /**
- * LIFO stack. Iterates from top to bottom. `add` is `push`.
+ * LIFO stack. Iterates from top to bottom, which is the order it hands items out in.
+ *
+ * Two words, and the type name carries which end they mean: `add` puts an item on top, `remove` takes the top one
+ * off. `add` and its participle `added` come from [Collection]; looking without taking is [Iterable.first].
  *
  * # Examples
  *
  *     var pending = Stack.of 1, 2, 3
- *     pending.push 4
- *     print pending.pop()
+ *     pending.add 4
+ *     print pending.remove()
  *     print pending.toList()
  *
  * A `const` stack, or one whose old version is still needed, uses the participles instead:
  *
- *     const stack = Stack.of(1, 2).pushed(3)
- *     if const Some((top, rest)) = stack.popped() {
+ *     const stack = Stack.of(1, 2).added(3)
+ *     if const Some((top, rest)) = stack.removed() {
  *       print "top: {top}, remaining: {rest.length()}"
  *     }
  *
  * # Related
  *
- * - [Queue] - the FIFO sibling, with the same `add`/`peek` shape.
- * - [Collection] - `add`, `contains`, `length`, `iterator`, which `Stack` builds on.
+ * - [Queue] - the FIFO sibling, with the same two words at the other end.
+ * - [Collection] - `add`, `added`, `contains`, `length`, `iterator`, which `Stack` builds on.
  */
 public trait Stack<Item>
   with Collection<Item>
@@ -46,34 +49,21 @@ public trait Stack<Item>
 
   // --- In place ------------------------------------------------------------------------------------
 
-  /** Adds an item on top, in place. */
-  var fn push(value: Item)
-
-  /** Removes and answers the top item, or `None` if the stack is empty. */
-  var fn pop(): Item?
-
-  /** The same as `push`; see [Collection.add]. */
-  var fn add(value: Item) {
-    push value
-  }
+  /** Removes the item the stack gives next - the top one - and answers it, or `None` if the stack is empty. */
+  var fn remove(): Item?
 
   // --- Changed copies --------------------------------------------------------------------------------
 
-  /** The participle of [Stack.push]: a changed copy with the item on top. */
-  fn pushed(value: Item): Self {
-    added value
-  }
-
-  /** The top element and the remaining stack, or `None` if the stack is empty. */
-  fn popped(): (Item, Self)? {
+  /**
+   * The participle of [Stack.remove]: the top item and the rest, or `None` if the stack is empty.
+   *
+   * It answers the pair and not `Self` alone, because a stack has no index: the item is gone once the copy is made,
+   * so the copy has to carry it.
+   */
+  fn removed(): (Item, Self)? {
     var rest = self
-    const top = rest.pop()?
+    const top = rest.remove()?
     Some((top, rest))
-  }
-
-  /** The top item without removing it, or `None` if the stack is empty. */
-  fn peek(): Item? {
-    first()
   }
 }
 
@@ -124,12 +114,12 @@ public type ArrayStack<Item> with Stack<Item>, From<Iterable<Item>> {
   }
 
   /** Adds `value` on top, in place. */
-  var fn push(value: Item) {
+  var fn add(value: Item) {
     items.add value
   }
 
   /** Removes and answers the top item, or `None` if empty. */
-  var fn pop(): Item? {
+  var fn remove(): Item? {
     const last = items.length() - 1
     items.removeAt last
   }
@@ -137,6 +127,11 @@ public type ArrayStack<Item> with Stack<Item>, From<Iterable<Item>> {
   /** Removes every item, in place. */
   var fn clear() {
     items.clear()
+  }
+
+  /** Hands back what the list underneath holds beyond its length; see [Collection.compact]. */
+  var fn compact() {
+    items.compact()
   }
 
   /** How many items there are. */

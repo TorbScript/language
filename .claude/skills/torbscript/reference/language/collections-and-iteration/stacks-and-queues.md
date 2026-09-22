@@ -1,6 +1,6 @@
 ---
 title: Stacks and queues
-summary: Stack is LIFO with push and pop, Queue is FIFO with enqueue and dequeue, and Collection.add reaches whichever end the kind chooses.
+summary: Stack is LIFO and Queue is FIFO, both spend the two words add and remove, and the type name says which end they reach.
 kind: reference
 status: stable
 order: 40
@@ -9,27 +9,27 @@ keywords:
   - Queue
   - ArrayStack
   - ArrayQueue
-  - push
-  - dequeue
+  - remove
+  - removed
 source:
   - std/collections/src/queue.trb
   - std/collections/src/stack.trb
 ---
 
-`Stack<Item>` is last-in-first-out: `push` and `pop` both work on the top. `Queue<Item>` is first-in-first-out:
-`enqueue` adds at the back, `dequeue` removes from the front. Neither has an index; the only way to look inside one is
-to remove from it, or to iterate it.
+`Stack<Item>` is last-in-first-out and `Queue<Item>` is first-in-first-out, and both spend the same two words:
+`add` puts an item in, `remove` takes out the one the structure hands over next - the top of a stack, the front of a
+queue. Neither has an index; the only way to look inside one is to remove from it, or to iterate it.
 
 ## Example
 
 ```trb check
 var pending = Queue.of 1
-pending.enqueue 2
-print pending.dequeue()
+pending.add 2
+print pending.remove()
 
 var brackets = Stack<Char>.of()
-brackets.push '('
-print brackets.pop()
+brackets.add '('
+print brackets.remove()
 ```
 
 ## Syntax
@@ -38,36 +38,39 @@ print brackets.pop()
 Stack.of(...items)          the last argument ends up on top
 Queue.of(...items)          the first argument ends up at the front
 
-stack.push(value)   stack.pop(): Item?           in place
-queue.enqueue(value)   queue.dequeue(): Item?     in place
+stack.add(value)    stack.remove(): Item?          in place
+queue.add(value)    queue.remove(): Item?          in place
 
-stack.pushed(value): Self             queue.enqueued(value): Self
-stack.popped(): (Item, Self)?         queue.dequeued(): (Item, Self)?
+stack.added(value): Self              queue.added(value): Self
+stack.removed(): (Item, Self)?        queue.removed(): (Item, Self)?
+
+stack.first()   queue.first()         look without taking
 ```
 
 ## Rules
 
-1. **`Collection.add` is `push` for a `Stack` and `enqueue` for a `Queue`.** Both traits give `add` as a one-line
-   default over their own verb, which is what lets `addAll` and a collector target either kind without knowing which
-   one it got.
+1. **The type name carries the word, so one verb is enough for both ends.** `add` comes from
+   [Collection](collection-traits.md) and `remove` is declared by each trait, and `stack.remove()` and
+   `queue.remove()` read correctly because the receiver says which end is meant. That is also what lets `addAll`, a
+   collector or a channel fill either kind without knowing which one it got.
 
-2. **A `Stack` iterates from top to bottom; a `Queue` iterates in the order of `dequeue`, front to back.** `peek()` on
-   either one answers `first()` without removing anything, which is why it agrees with what the next `pop()` or
-   `dequeue()` would return.
+2. **A `Stack` iterates from top to bottom; a `Queue` iterates front to back.** Both iterate in the order they hand
+   items out, so `first()` is what the next `remove()` would answer, without removing anything.
 
    ```trb check
    const stack = Stack.of 1, 2, 3
-   print stack.peek()
+   print stack.first()
    print stack.toList()
    ```
 
-3. **The participle of `push`/`pop`/`enqueue`/`dequeue` returns a tuple, not a bare value, because removing loses
-   information a copy has to keep.** `popped()` and `dequeued()` answer `(Item, Self)?`: the removed item next to the
-   stack or queue it came from, or `None` when there was nothing to remove.
+3. **The participle answers a pair, not a bare value, because removing loses information a copy has to keep.**
+   `removed()` answers `(Item, Self)?`: the removed item next to the stack or queue it came from, or `None` when there
+   was nothing to remove. A list's `removedAt(index)` answers `Self` alone, because `list[index]` is there to be read
+   first; a stack has no index.
 
    ```trb check
-   const stack = Stack.of(1, 2).pushed(3)
-   if const Some((top, rest)) = stack.popped() {
+   const stack = Stack.of(1, 2).added(3)
+   if const Some((top, rest)) = stack.removed() {
      print "top: {top}, remaining: {rest.length()}, before: {stack.length()}"
    }
    ```
@@ -103,8 +106,13 @@ print stack[0]
 // error: `Stack<Int64>` does not implement `Indexed`, so `a[key]` has no meaning for it
 ```
 
+**`remove()` here and `remove(value)` on a `List` or a `Set` are not the same member**, and they never meet: a type has
+one namespace of members, so a type is a stack or a set and never both. Which one a call means is decided by the
+receiver's type, not by the number of arguments.
+
 ## Related
 
 - [The collection traits](collection-traits.md) - `Collection` and `Iterable`, which both traits sit on top of.
 - [Lists](lists.md) - the `List` each default implementation is built from.
-- [Option](../values-and-types/option.md) - the `Item?` that `pop()`, `dequeue()`, `first()` and `last()` all answer.
+- [Verbs and participles](../types/verbs-and-participles.md) - why `removed()` answers the pair and `removedAt` does not.
+- [Option](../values-and-types/option.md) - the `Item?` that `remove()`, `first()` and `last()` all answer.

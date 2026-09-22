@@ -20,7 +20,7 @@ second name to learn, so this page argues for why the two words earn their keep.
 ## The decision
 
 **A verb changes its receiver in place and is a `var fn`; its participle reads its receiver and returns a changed
-copy, under a different name.** `add`/`added`, `sort`/`sorted`, `remove`/`removed`, `push`/`pushed`.
+copy, under a different name.** `add`/`added`, `sort`/`sorted`, `remove`/`removed`, `insert`/`inserted`.
 
 - The participles are default members of the collection traits, written once in terms of the verb: copy, change the
   copy, return it. An implementation only has to write the verb.
@@ -77,7 +77,8 @@ nobody writes the copy-and-call-through logic twice.
 ## Consequences
 
 **Every collection member that could mutate has two names to choose between, and the table is fixed rather than
-invented per type.** `merge`/`merged`, `push`/`pushed`, `enqueue`/`dequeue` next to `enqueued`/`dequeued` - see
+invented per type.** `add`/`added`, `remove`/`removed`, `sort`/`sorted`, `insert`/`inserted` - one pair per meaning,
+spelled the same on every collection, and a participle answers `Self` so it can be chained. See
 [Verbs and participles](../language/types/verbs-and-participles.md) for the complete table.
 
 **A type built on the collection traits writes the verb once and gets the participle for free**, which is what keeps

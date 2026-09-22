@@ -1,0 +1,80 @@
+/**
+ * The words the collection family spends, checked where they run: a participle answers `Self`, a collection counts
+ * without walking, and a stack and a queue say `add` and `remove` at the end their own name points at.
+ *
+ * `sorted` is the interesting one. On an `Iterable` it is a lazy stage that answers `Iterable<Item>`, on a `List` it
+ * answers a list - so `const ordered: List<Int> = numbers.sorted({ _ })` is a binding and not a conversion, and the
+ * receiver it was called on is untouched. The two spellings of the same order are compared here so that a back end
+ * cannot make the participle and the verb disagree.
+ */
+
+/** A key that is not the value, so that a stable sort has something to be stable about. */
+type Entry with Show {
+  name: String
+  weight: Int
+
+  fn show(): String {
+    "{name}/{weight}"
+  }
+}
+
+fn sortedAnswersAList() {
+  const numbers = [3, 1, 2]
+  const ordered: List<Int> = numbers.sorted({ _ })
+  print ordered
+  print numbers
+  var inPlace = numbers
+  inPlace.sort({ _ })
+  print(inPlace == ordered)
+  // A participle on a `const` binding, and the pipeline still runs on what comes out
+  print numbers.sorted({ 0 - _ }).map({ _ * 10 }).toList()
+}
+
+fn sortedIsStable() {
+  const entries = [Entry("a", 2), Entry("b", 1), Entry("c", 2), Entry("d", 1)]
+  const byWeight: List<Entry> = entries.sorted({ _.weight })
+  print byWeight
+}
+
+fn countDoesNotWalk() {
+  const numbers = [1, 2, 3, 4]
+  print numbers.count()
+  print numbers.length()
+  const names: Set<String> = ["a", "b"].toSet()
+  print names.count()
+  const ages: Map<String, Int> = ["ada": 36]
+  print ages.count()
+}
+
+fn stackAndQueueSpendTwoWords() {
+  var pile = Stack<Int>.of()
+  pile.add 1
+  pile.add 2
+  print pile.first()
+  print pile.remove()
+  print pile.toList()
+
+  var pending = Queue<Int>.of()
+  pending.add 1
+  pending.add 2
+  print pending.first()
+  print pending.remove()
+  print pending.toList()
+}
+
+fn theParticiplesKeepTheOldVersion() {
+  const stack = Stack.of(1, 2).added(3)
+  if const Some((top, rest)) = stack.removed() {
+    print "{top} {rest.length()} {stack.length()}"
+  }
+  const queue = Queue.of(1, 2).added(3)
+  if const Some((next, rest)) = queue.removed() {
+    print "{next} {rest.length()} {queue.length()}"
+  }
+}
+
+sortedAnswersAList()
+sortedIsStable()
+countDoesNotWalk()
+stackAndQueueSpendTwoWords()
+theParticiplesKeepTheOldVersion()

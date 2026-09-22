@@ -43,7 +43,8 @@ print "{counter.value} {next.value}"
 
 ```text
 var fn <verb>(<parameters>)                          // Changes in place, answers nothing
-fn <participle>(<parameters>): <Type>                // Answers a changed copy, leaves the receiver alone
+fn <participle>(<parameters>): Self                  // Answers the changed copy, leaves the receiver alone
+fn <participle>(<parameters>): (Item, Self)?         // ...and the value, where the verb answered one
 ```
 
 ## Rules
@@ -54,7 +55,32 @@ fn <participle>(<parameters>): <Type>                // Answers a changed copy, 
 2. **A participle answers a changed copy and is an ordinary `fn`.** `incremented` never needs a `var` path, because
    `counter` itself is untouched - `copy` already does the work of building the new value.
 
-3. **Calling a verb through a `const` path is an error that names the participle**, when the compiler can build one
+3. **A participle answers `Self`.** That is the rule and not a convention: `list.added(x)`, `list.removedAt(index)`,
+   `list.reversed()` and `list.sorted(by:)` all answer a list of the same kind, so a participle can be chained and a
+   `const` binding needs no conversion after it. Where a supertrait declares the same word for something wider -
+   `Iterable.sorted` is a lazy stage answering `Iterable<Item>` - the collection that knows better overrides it, and
+   the more derived declaration is the one a call reaches.
+
+   ```trb check
+   const numbers = [3, 1, 2]
+   const ordered: List<Int> = numbers.sorted({ _ })
+   print ordered
+   print numbers
+   ```
+
+4. **Where the verb also answers a value the copy cannot get back, the participle answers the pair.**
+   `list.removedAt(index)` answers `Self` alone, because `list[index]` is there to be read first; `stack.removed()`
+   answers `(Item, Self)?`, because a stack has no index and the item would be lost. The pair is the exception the
+   rule names, not a second convention.
+
+   ```trb check
+   const stack = Stack.of(1, 2).added(3)
+   if const Some((top, rest)) = stack.removed() {
+     print "{top} {rest.length()}"
+   }
+   ```
+
+5. **Calling a verb through a `const` path is an error that names the participle**, when the compiler can build one
    for the method's name. This is the one message of the language that suggests the member a caller probably wanted.
 
    ```trb error
@@ -71,11 +97,11 @@ fn <participle>(<parameters>): <Type>                // Answers a changed copy, 
    // error: `increment` needs a `var`
    ```
 
-4. **A noun never changes anything.** `union` and `intersection` read as operations, not as verbs, so neither one
+6. **A noun never changes anything.** `union` and `intersection` read as operations, not as verbs, so neither one
    is a `var fn` - a name that could be misread as a verb is a naming mistake independent of what the member
    actually does.
 
-5. **A verb is picked so that its participle is a different word.** The standard library avoids `put`, `cut` and
+7. **A verb is picked so that its participle is a different word.** The standard library avoids `put`, `cut` and
    `reset` as mutator names, because none of them has a distinct participle to pair with; `set` pairs with `updated`
    instead of a participle of its own.
 

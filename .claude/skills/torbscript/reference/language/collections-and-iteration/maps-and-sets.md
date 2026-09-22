@@ -82,7 +82,9 @@ Set.of(1, 2, 3)                          from arguments, needs Item: Hash
    hashes its keys would not.
 
 5. **A `Map`'s verb for writing a key is `set`, and its participle is `updated` rather than `setted`.** `remove`/
-   `removed` and `merge`/`merged` follow the usual pattern. A `Set`'s in-place
+   `removed` follows the usual pattern, and putting one map into another is `addAll`/`addedAll` of
+   [Collection](collection-traits.md) - a map is a `Collection<(Key, Value)>` and needs no word of its own for it. A
+   `Set`'s in-place
    verbs are `add`/`remove`/`addAll`/`removeAll`/`retainAll`; its set operations - `union`, `intersection`,
    `difference` - are nouns and never change either operand.
 

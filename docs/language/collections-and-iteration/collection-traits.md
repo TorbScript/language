@@ -37,8 +37,9 @@ print describe(index)
 ## Syntax
 
 ```text
-Iterable<Item>
-└─ Collection<Item>              length, isEmpty, contains, add, addAll, clear
+Iterable<Item>   Length   Accumulator<Item, Self>
+└────────────────────┴─────────────┘
+Collection<Item>                 clear, compact, count, the participles, contains
    ├─ List<Item>                 ArrayList (default), TrieList
    ├─ Set<Item>                  TrieSet (default), HashSet
    ├─ Map<Key, Value>            TrieMap (default), HashMap        a Collection<(Key, Value)>
@@ -52,15 +53,24 @@ Iterable<Item>
    list; a `const` binding is the read-only list, a `var` binding is the same type with `add`, `remove` and the rest
    of the verbs available. See [Bindings](../values-and-types/bindings.md) for what decides that.
 
-2. **`Collection<Item>` requires only `add`, `clear`, `length` and `iterator`.** `addAll`, `added`, `addedAll`,
-   `contains` and `containsAll` are default methods every implementation gets for free, from `std/collections`'s own
-   `Collection` trait.
+2. **`Collection<Item>` requires only `clear`, `length` and `iterator` beside the `add` of `Accumulator`.** `addAll`,
+   `added`, `addedAll`, `contains`, `containsAll`, `count` and `compact` are default methods every implementation gets
+   for free, from `std/collections`'s own `Collection` trait. `add` is declared once, by `Accumulator`, and not a
+   second time here.
 
-3. **Every `Collection` is also an `Accumulator`, so it is a valid target for a collector, a channel, or a stream's
+3. **`count()` answers `length()`.** `Iterable.count()` walks every value, which is the wrong answer to give a reader
+   of a collection that knows its size, so `Collection` overrides it - a subtrait's member overrides the one it
+   inherits rather than standing beside it.
+
+4. **Every `Collection` is also an `Accumulator`, so it is a valid target for a collector, a channel, or a stream's
    `into`.** Its `finish()` answers `self`, which is what makes `list.collect(...)`-shaped code and
    `channel.sink().fill(list)`-shaped code use the same vocabulary.
 
-4. **A trait asks nothing of its type parameters; the implementations and the factories do.** `Map<Key, Value>` places
+5. **`Collection` is not the bound to reach for.** A signature asks for the smallest thing it uses: `Iterable<Item>` to
+   read, `Iterable<Item> & Length` to read and to size, `Accumulator<Item, Self>` to fill, and `Collection<Item>` where
+   it really needs both ends and the participles.
+
+6. **A trait asks nothing of its type parameters; the implementations and the factories do.** `Map<Key, Value>` places
    no bound on `Key`, but `TrieMap<Key: Hash, Value>` and `Map.of(...)` need `Key: Hash`, because only a data structure
    and a factory that actually hash the key have to say so.
 
@@ -72,7 +82,7 @@ Iterable<Item>
    print lookup(["Ada": 36], "Ada")
    ```
 
-5. **An implementation is named after its data structure, and a hand-written one is a type `with` the trait.** A type
+7. **An implementation is named after its data structure, and a hand-written one is a type `with` the trait.** A type
    that declares `with Map<Key, Value>` and the members the trait requires works everywhere a `Map` is expected,
    without a change anywhere else in the program.
 

@@ -989,6 +989,23 @@ public fn supertraitsOfBound(var checker: Checker, bound: TypeId, own: TypeId): 
   found
 }
 
+/**
+ * Whether `supertrait` is one of `bound`'s, transitively - the question member lookup asks when one name is declared
+ * by two traits of one receiver.
+ *
+ * `List<Item>` comes `with Collection<Item>` and `Collection` with `Iterable`, and both `List` and `Iterable` declare
+ * `sorted`: the one in `List` answers `Self` and the one in `Iterable` answers a lazy stage. They are not two
+ * signatures of one overload set, they are a member and the member it overrides, so the more derived one wins.
+ */
+public fn isSupertraitOfBound(var checker: Checker, bound: TypeId, supertrait: TypeId, own: TypeId): Bool {
+  if bound == supertrait {
+    return false
+  }
+  var closure: List<TypeId> = []
+  addClosure checker, closure, bound, own, 0
+  closure.contains supertrait
+}
+
 /** Every trait a type implements, transitively over supertraits. What member lookup walks. */
 public fn traitsOf(var checker: Checker, annotation: TypeId): List<TypeId> {
   buildImplementations checker
@@ -1826,8 +1843,66 @@ public fn checkCoherence(var checker: Checker) {
   const total = checker.implementations.all.length()
   for index in 0..total {
     checkOrphan checker, index
+    checkTraitPromise checker, index
   }
   checkOverlaps checker
+}
+
+/**
+ * `trait Mound<Item> with From<Iterable<Item>>` promises `From` for **every** `Item`, because a trait's own `with`
+ * list is what member lookup reads - so `Mound.from(values)` resolves for any `Item` at all. An implementation of that
+ * supertrait for the trait type may therefore not be narrower than the promise:
+ * `extend<Item: Hash> Mound<Item> with From<Iterable<Item>>` delivers it for some `Item` and nothing delivers it for
+ * the rest, and `Mound.from([Opaque("a")])` type checked with no implementation behind it.
+ *
+ * Only the plain case is reported: an implementation that carries bounds for a trait whose own generics carry none. A
+ * trait that bounds its parameters itself is the author saying the same thing in the place the promise is read.
+ */
+fn checkTraitPromise(var checker: Checker, index: Int) {
+  const implementation = checker.implementations.all[index]
+  if isGenerated(implementation) || implementation.bounds.isEmpty() {
+    return
+  }
+  const capability = match capabilitySymbolOf(checker, implementation.capability) {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  const head = match headSymbolOf(checker, implementation.target) {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  if const .Trait = checker.symbolAt(head).kind {
+    const shape = checker.typeSignature typeSignatureOf(checker, head)
+    if !shape.bounds.isEmpty() {
+      return
+    }
+    var promised = false
+    for supertrait in shape.traits {
+      if headSymbolOf(checker, supertrait.capability) == Some(capability) {
+        promised = true
+      }
+    }
+    if !promised {
+      return
+    }
+    const owner = checker.symbolAt(head).name
+    const named = checker.symbolAt(capability).name
+    checker.report(
+      implementation.module,
+      Diagnostic.error(
+        "`{owner}` comes with `{named}` for every instantiation, and this implementation holds only for some",
+        implementation.at,
+      ).withNote(
+        "A trait's own `with` list is what member lookup reads, so `{named}` resolves on every `{owner}` while nothing"
+          + " implements it for the rest: drop the bounds of this `extend`, or take `{named}` out of"
+          + " `trait {owner}`'s `with` list and ask for it at the member (`where Self: {named}<...>`)"
+      )
+    )
+  }
 }
 
 /**

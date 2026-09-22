@@ -3734,6 +3734,33 @@ Wenn nicht, was bedeutet, bewirkt es?
     (nach der Struktur wie ArrayList/TrieList). 6 Tour behält Stack/Queue. **Wird gelöst:** Scheiben C1-C8 nach P5
     und der Checker-Runde; dazu die zwei Checker-Löcher (Supertrait ohne Implementierung; zwei Instanzen eines
     Traits auf einem Typ) und der O(n)-`removeAt 0` in staged.trb/source.trb.
+  - **Erledigt (C1-C3, C6):** Die vier parallelen Scheiben sind drin, alle Gates grün, Fixpunkt und
+    Konformanz-Suite gelaufen. **C1:** `push`/`pop`/`enqueue`/`dequeue`/`pushed`/`popped`/`enqueued`/`dequeued`/`peek`
+    gelöscht - `Stack` und `Queue` haben `remove(): Item?` und `removed(): (Item, Self)?`, `add`/`added` kommen aus
+    `Collection`, Hingucken ist `Iterable.first()`. 9 Trait-Member weg, 9 Aufrufstellen umgeschrieben (Tour 7, Doku-
+    Snippets 13); `ArrayQueue`s Feld `count` heißt `storedLength`, sonst hätte es das neue `Collection.count()`
+    verdeckt. **C2:** `Collection` deklariert `add` nicht mehr selbst (kommt aus `Accumulator`), bekommt `count()`
+    = `length()` und `compact` aus `MutableSlice` (das damit genau `replace` ist); `compact` ist ein Default, der
+    NICHTS tut - ein Speicher ohne Reserve hat nichts zurückzugeben -, und `ArrayList`/`TrieList`/`ArrayStack`/
+    `ArrayQueue` überschreiben ihn. `Set.isSubsetOf`, `Map.merge`, `Map.merged` gelöscht (3 Member, 1 Aufrufstelle
+    außerhalb von `std`: `compiler/src/highlight/scope.trb` schreibt jetzt `addAll`). **C3:** `List.sorted`
+    antwortet `Self`; die Partizip-Regel steht in `docs/language/types/verbs-and-participles.md` und in CONCEPTs
+    Verbtabelle, das Programm dazu ist `tests/conformance/collection-words.trb`. **C6:** zwei Diagnosen, beide mit
+    Test je Zweig. Lücke 3 meldet am `extend`: "`Mound` comes with `From` for every instantiation, and this
+    implementation holds only for some" - das `with` eines Traits ist ein Versprechen über JEDE Instanziierung, also
+    darf eine Implementierung für den Trait-Typ nicht enger sein; die Note nennt den Ausweg, den Abschnitt 3.5
+    ohnehin nimmt (`where Self: From<...>` am Member). Lücke 4 meldet am zweiten `with`-Eintrag: "`Twice` comes with
+    `Indexed` more than once, and `at` is the body of the first one". **Die Regel, die ich dafür festgelegt habe:**
+    zwei Instanziierungen EINES Traits an einem Typ bleiben erlaubt (`Multiply<Board, Board>` neben
+    `Multiply<Int, Board>`, `From<A>` neben `From<B>` - das ist die Überladung über das Trait-Argument aus der
+    Zahlen-Runde); verboten ist, die Member für zwei davon NUR EINMAL zu schreiben, denn ein Typ hat einen
+    Namensraum. Ein Rumpf pro Instanziierung, und die Form mit einem Rumpf pro Implementierung ist `extend`.
+    **Ungeplant, aber nötig:** `List.sorted` allein reichte nicht - der Member-Lookup baute aus `List.sorted` und
+    `Iterable.sorted` eine Überladungsmenge und machte jede Aufrufstelle mehrdeutig. Jetzt gilt: ein Member eines
+    Subtraits ÜBERSCHREIBT den geerbten, eine Überladungsmenge sind nur Traits, von denen keiner Supertrait des
+    anderen ist. Nebenwirkung, gemessen: die Fußabdruck-Stolperdrähte in `lower.test.trb`/`ownership.test.trb` gehen
+    von 118 auf 115 gelowerte Deklarationen und von 166 auf 160 Funktionen - weniger Defaults in der geschlossenen
+    Welt, Witness-Tabellen unverändert bei 39.
 
   - **Erledigt:** `docs/URI.md` steht (15 Abschnitte), registriert in `docs/internals/index.md`; `docs/PATH.md`
     ("Not a URL") und `docs/RESOURCES.md` (stabiler Name) zeigen darauf. Probe-Paket `examples/uri-probe` - Parser,

@@ -1415,7 +1415,7 @@ if const Some(user) = findUser(id) {
   print user.name
 }
 
-while const Some((next, rest)) = queue.dequeue() { ... }
+while const Some((next, rest)) = queue.removed() { ... }
 
 if var Some(iterator) = current { iterator.next() }     // `var` instead of `const`: the binding is mutable
 
@@ -1732,8 +1732,9 @@ implementation is only named where something is constructed. Collections are val
 decides whether they can be changed.
 
 ```text
-Iterable<Item>
-└─ Collection<Item>           length, isEmpty, contains, add, addAll, clear
+Iterable<Item>   Length   Accumulator<Item, Self>
+└──────────────────┴────────────┘
+Collection<Item>              clear, compact, count, contains, addAll, the participles
    ├─ List<Item>              ArrayList (literal [1, 2]), TrieList
    ├─ Set<Item>               TrieSet, HashSet
    ├─ Map<Key, Value>      TrieMap (literal ["a": 1]), HashMap           a Collection<(Key, Value)>
@@ -1772,9 +1773,9 @@ var index: Map<String, Int> = HashMap()                 // Trait as the type, im
   | `add`, `addAll`, `insert`                   | `added`, `addedAll`, `inserted`                        |
   | `remove`, `removeAt`                        | `removed`, `removedAt`                                 |
   | `list[i] = v`, `map[key] = v` (`set`)       | `updated(i, v)`, `updated(key, v)`                     |
-  | `sort(by:)`, `reverse`                      | `sorted(by:)` (lazy stage of every Iterable), `reversed` |
-  | `push`, `pop`, `enqueue`, `dequeue`         | `pushed`, `popped`, `enqueued`, `dequeued` (the last two pairs return `(element, rest)?`) |
-  | `merge`, `removeAll`, `retainAll`           | `merged`, `union`, `intersection`, `difference`        |
+  | `sort(by:)`, `reverse`                      | `sorted(by:)` (a `List` again; lazy on a bare Iterable), `reversed` |
+  | `add`, `remove` of a `Stack`/`Queue`        | `added`, `removed` (which returns `(element, rest)?`)  |
+  | `removeAll`, `retainAll`                    | `union`, `intersection`, `difference`                  |
 
   The participles are default methods of the traits (copy, change the copy, return it), an implementation only
   writes the verbs.
@@ -1782,7 +1783,8 @@ var index: Map<String, Int> = HashMap()                 // Trait as the type, im
   window: later changes of the original are not visible in it. As a `var` path it _is_ a window:
   `samples[0..100].sort { _ }`, `fill(buffer[offset..])`. The same holds for `String` and `Array`.
   A slice keeps the storage of the original alive. Implementations copy small slices of big storage on their own;
-  `header.compact()` does it explicitly (it gives the value a storage of its own that is exactly as big as needed).
+  `header.compact()` does it explicitly (`Collection.compact`: it gives the value a storage of its own that is exactly
+  as big as needed).
 - The traits do not constrain their type parameters, the implementations do: `TrieMap<Key: Hash, Value>`, a sorted
   map needs `Key: Compare`. Only the factories (`Map.of`, `Map.from`, literals) ask for `Hash`, because they pick `TrieMap`.
 - Implementations are named after their data structure. Defaults: `ArrayList` (contiguous - the fastest for the

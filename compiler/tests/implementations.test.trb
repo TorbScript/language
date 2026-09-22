@@ -232,6 +232,56 @@ group "Coherence" {
   }
 }
 
+/**
+ * A trait's own `with` list is a promise about **every** instantiation, because it is what member lookup reads. An
+ * implementation of that supertrait for the trait type may therefore not be narrower than the promise: the rest of the
+ * instantiations would have the supertrait and nothing behind it.
+ */
+group "A supertrait a trait promises for itself" {
+  /** A trait, an implementor and an implementation for the trait type, with the bounds written where `bounds` says. */
+  fn mound(onTrait: String, onHeap: String, onExtension: String): String {
+    "trait Mound<Item{onTrait}> with From<Iterable<Item>> \{\n  fn size(): Int\n\}\n\n"
+      + "type Heap<Item{onHeap}> with Mound<Item>, From<Iterable<Item>> \{\n  stored: Int\n\n"
+      + "  static fn from(values: Iterable<Item>): Heap<Item> \{\n    Self(0)\n  \}\n\n"
+      + "  fn size(): Int \{\n    stored\n  \}\n\}\n\n"
+      + "extend<Item{onExtension}> Mound<Item> with From<Iterable<Item>> \{\n"
+      + "  static fn from(values: Iterable<Item>): Mound<Item> \{\n    Heap.from(values)\n  \}\n\}\n"
+  }
+
+  test "an implementation for the trait type that holds only under bounds is refused" {
+    const source = mound "", ": Hash", ": Hash"
+    assert(
+      problems(source)
+        == ["`Mound` comes with `From` for every instantiation, and this implementation holds only for some"]
+    )
+    assert(
+      notes(source) == [
+        "A trait's own `with` list is what member lookup reads, so `From` resolves on every `Mound` while nothing"
+          + " implements it for the rest: drop the bounds of this `extend`, or take `From` out of `trait Mound`'s"
+          + " `with` list and ask for it at the member (`where Self: From<...>`)",
+      ]
+    )
+  }
+
+  test "the same implementation without bounds keeps the promise" {
+    assert problems(mound("", "", "")).isEmpty()
+  }
+
+  test "a trait that bounds its own parameter said the same thing where the promise is read" {
+    assert problems(mound(": Hash", ": Hash", ": Hash")).isEmpty()
+  }
+
+  test "a supertrait the trait does not name is an implementation like any other" {
+    const source = "trait Mound<Item> \{\n  fn size(): Int\n\}\n\n"
+      + "type Heap<Item: Hash> with Mound<Item>, From<Iterable<Item>> \{\n  stored: Int\n\n"
+      + "  static fn from(values: Iterable<Item>): Heap<Item> \{\n    Self(0)\n  \}\n\n"
+      + "  fn size(): Int \{\n    stored\n  \}\n\}\n\n"
+      + "extend<Item: Hash> Mound<Item> with From<Iterable<Item>> \{\n"
+      + "  static fn from(values: Iterable<Item>): Mound<Item> \{\n    Heap.from(values)\n  \}\n\}\n"
+    assert problems(source).isEmpty()
+  }
+}
+
 group "Delegation with `by`" {
   test "`by field` forwards every required member, and the default members come from the trait (gap 14)" {
     const source = "type Meters with Add<Meters, Meters> & Compare by value \{\n  value: Float\n\}\n\n"

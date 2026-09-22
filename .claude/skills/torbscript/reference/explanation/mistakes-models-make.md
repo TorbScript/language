@@ -603,6 +603,7 @@ and a function *type* still names it: `(self: Point) => Int` and `(var self: Con
 | `#[derive(...)]`, `@Annotation` | nothing | there are no annotations; what can be generated is |
 | `list[i]` for a possibly missing index | `list.get(i)` | `list[i]` panics out of bounds |
 | `a.iter().map(...)` | `a.map(...)` | there is one pipeline and no `iter()` step |
+| `stack.push(x)`, `stack.pop()`, `queue.enqueue(x)`, `queue.dequeue()` | `add(x)`, `remove()` | one word per meaning; the type name says which end |
 | `assert sum == 3` | `assert(sum == 3)` | an operator at the top level of an argument needs parentheses |
 | `Ok Some x` | `Ok Some(x)` | commands do not nest |
 | `print list.map { _ * 2 }` | `print list.map({ _ * 2 })` | the `{` would belong to the outer command |

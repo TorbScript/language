@@ -1,8 +1,9 @@
 /**
  * The collection traits. These are the types that signatures, fields and bindings talk about:
  *
- *     Iterable<Item>
- *     └─ Collection<Item>              a finite number of values that can be filled
+ *     Iterable<Item>   Length   Accumulator<Item, Self>
+ *     └──────────────────┴───────────┘
+ *     Collection<Item>                 a finite number of values that can be filled
  *        ├─ List<Item>                 ArrayList (literal `[1, 2]`), TrieList
  *        ├─ Set<Item>                  TrieSet, HashSet
  *        ├─ Map<Key, Value>            TrieMap (literal `["a": 1]`), HashMap
@@ -26,11 +27,16 @@ use Iterable, Length from "std/iteration"
 use Accumulator from "std/iteration"
 
 /**
- * A finite number of values that can be filled. Only `add`, `clear`, `length` and `iterator` are required;
- * `addAll`, `added`, `addedAll`, `contains` and `containsAll` are defaults built on top of them.
+ * A finite number of values that can be filled, and the home of the participles. Only `clear`, `length` and
+ * `iterator` are required beside the `add` of [Accumulator]; `addAll`, `added`, `addedAll`, `contains`,
+ * `containsAll`, `count` and `compact` are defaults built on top of them.
  *
  * A collection already is an `Accumulator`: it has `add`, and it is its own result. So every collection can be the
  * target of a collector, a channel or an event stream, with the same `add`/`finish` vocabulary either way.
+ *
+ * It is not the bound to reach for. A signature asks for the smallest thing it uses: `Iterable<Item>` to read,
+ * `Iterable<Item> & Length` to read and to size, `Accumulator<Item, Self>` to fill, and `Collection<Item>` where it
+ * really needs both ends and the participles.
  *
  * # Examples
  *
@@ -42,15 +48,30 @@ use Accumulator from "std/iteration"
  *
  * - [List], [Map], [Set], [Stack], [Queue] - the traits built on top of it, one per kind.
  * - [Iterable] - the pipeline vocabulary (`map`, `filter`, `fold`, ...) every `Collection` inherits.
+ * - [Accumulator] - where `add` comes from, so that one declaration of the verb is enough.
  */
 public trait Collection<Item>
   with Iterable<Item>, Length, Accumulator<Item, Self>
 {
-  /** Adds a value. The one verb every other member of this trait is built from. Needs a `var` path. */
-  var fn add(value: Item)
-
   /** Removes every value, in place. */
   var fn clear()
+
+  /**
+   * Gives the value storage of its own, sized exactly to its length. For the small part of something big that is
+   * kept for a long time: `var header = file[0..64]`, then `header.compact()`.
+   *
+   * The default does nothing, which is the honest answer for a storage that keeps no spare room; an implementation
+   * that holds capacity beyond its length - a growable buffer, a ring - hands it back here.
+   */
+  var fn compact() {}
+
+  /**
+   * How many values there are. A collection knows its size, so counting it does not walk it: this is [Length.length],
+   * under the word a pipeline uses.
+   */
+  fn count(): Int {
+    length()
+  }
 
   /** Adds every value of `values`, in order. The default for a collection that only implements `add`. */
   var fn addAll(values: Iterable<Item>) {

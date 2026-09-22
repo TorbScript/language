@@ -831,6 +831,7 @@ fn checkTypeShape(
     typeDeclaration.name.text,
     repeatedTraitOf(typeDeclaration.traits),
   )
+  requireOneBodyPerInstantiation checker, module, typeDeclaration
   if declaration.modifiers.isShared {
     requireSharedTraits checker, module, typeDeclaration.name, typeDeclaration.traits
   }
@@ -909,6 +910,75 @@ fn isFunctionMember(member: Member): Bool {
     .Function(_) => true
     _ => false
   }
+}
+
+/**
+ * **One body per instantiation.** A type may come `with` one trait more than once - `Multiply<Board, Board>` beside
+ * `Multiply<Int, Board>` is how a type overloads an operator over the trait's own argument - but a type has one
+ * namespace of members, so the members it writes in its body can be the implementation of one instantiation and of no
+ * other. Every further one needs a body of its own, and the form that has one is `extend`.
+ *
+ * Without the rule the second instantiation is silently satisfied by the first one's body, and afterwards neither of
+ * them resolves: `type Twice with Indexed<Int, Int>, Indexed<Bounds<Int>, Twice>` writing one `get` was accepted, and
+ * then `twice[0]` reported that `Twice` does not implement `Indexed`.
+ *
+ * A body that writes the member **twice** is [requireOneNamespace]'s message and not this one, so that the two
+ * spellings of one mistake get one root cause each.
+ */
+fn requireOneBodyPerInstantiation(var checker: Checker, module: ModuleId, typeDeclaration: TypeDeclaration) {
+  var written: Map<String, Int> = [:]
+  for member in typeDeclaration.members {
+    const name = memberNameOf member
+    written.set(name.text, (written.get(name.text) ?? 0) + 1)
+  }
+  var seen: Map<String, Bool> = [:]
+  for clause in typeDeclaration.traits {
+    for reference in traitReferencesOf(clause.capability) {
+      const symbol = match traitSymbolOf(checker, module, reference) {
+        Some(found) => found
+        None => {
+          continue
+        }
+      }
+      const name = checker.symbolAt(symbol).name
+      if !seen.containsKey(name) {
+        seen.set name, true
+        continue
+      }
+      const identifier = typeSignatureOf checker, symbol
+      const shape = checker.typeSignature identifier
+      for member in typeDeclaration.members {
+        const only = memberNameOf member
+        if !shape.members.containsKey(only.text) || (written.get(only.text) ?? 0) > 1 {
+          continue
+        }
+        const owner = typeDeclaration.name.text
+        checker.report(
+          module,
+          Diagnostic.error(
+            "`{owner}` comes with `{name}` more than once, and `{only.text}` is the body of the first one",
+            reference.span,
+          ).withNote(
+            "A type has one namespace of members, so one body per instantiation is one `extend` per instantiation:"
+              + " `extend {owner} with {name}<...> \{ fn {only.text}(...) \}`"
+          )
+        )
+        return
+      }
+    }
+  }
+}
+
+/** The trait references one `with` element writes: `Add & Subtract` is two, `Draw<Paper>` is one. */
+fn traitReferencesOf(reference: TypeReference): List<TypeReference> {
+  if const .Intersection(parts) = reference.kind {
+    var found: List<TypeReference> = []
+    for part in parts {
+      found.addAll traitReferencesOf(part)
+    }
+    return found
+  }
+  [reference]
 }
 
 /** The trait a `with` list names twice with different arguments, if there is one: `Draw<Paper> & Draw<Screen>`. */

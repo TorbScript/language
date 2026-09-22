@@ -258,6 +258,46 @@ group "An operator whose trait is implemented more than once" {
     )
   }
 
+  test "one body cannot be the implementation of two instantiations, and the message names the first" {
+    const source = "type Twice with Indexed<Int, Int>, Indexed<Bounds<Int>, Twice> \{\n"
+      + "  fn at(key: Int): Int \{\n    key\n  \}\n\}\n"
+    assert(
+      problems(source) == ["`Twice` comes with `Indexed` more than once, and `at` is the body of the first one"]
+    )
+    assert(
+      notes(source) == [
+        "A type has one namespace of members, so one body per instantiation is one `extend` per instantiation: "
+          + "`extend Twice with Indexed<...> \{ fn at(...) \}`",
+      ]
+    )
+  }
+
+  test "an `&` group is the same `with` list, so it is read the same way" {
+    const source = "type Twice with Indexed<Int, Int> & Indexed<Bounds<Int>, Twice> \{\n"
+      + "  fn at(key: Int): Int \{\n    key\n  \}\n\}\n"
+    assert(
+      problems(source) == ["`Twice` comes with `Indexed` more than once, and `at` is the body of the first one"]
+    )
+  }
+
+  test "the form the note names - one instantiation in the `with` list, the next in an `extend` - is silent" {
+    const source = "type Twice with Indexed<Int, Int> \{\n  size: Int\n\n"
+      + "  fn at(key: Int): Int \{\n    key\n  \}\n\}\n\n"
+      + "extend Twice with Indexed<Bounds<Int>, Twice> \{\n"
+      + "  fn at(key: Bounds<Int>): Twice \{\n    self\n  \}\n\}\n"
+    assert problems(source).isEmpty()
+  }
+
+  test "a body that writes none of the repeated trait's members is nothing to attribute, so the plain rule speaks" {
+    const source = "type Twice with Indexed<Int, Int>, Indexed<Bounds<Int>, Twice> \{\n  size: Int\n\}\n"
+    assert(problems(source) == ["`Twice` implements `Indexed<Int64, Int64>` but has no `at`"])
+  }
+
+  test "one instantiation in the `with` list and one in an `extend` is the ordinary overload and stays silent" {
+    const source = "{board}fn probe() \{\n  print Board(2).size\n\}"
+    assert problems(source).isEmpty()
+  }
+
   test "the named form keeps answering the same thing" {
     const source = "{board}fn probe() \{\n  const board = Board(2)\n"
       + "  const scaled = board.multiply(Scale(3))\n  print scaled.size\n\}"

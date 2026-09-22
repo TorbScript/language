@@ -105,7 +105,7 @@ Every page of the reference, with what it answers. Open the one page that answer
 - `language/collections-and-iteration/maps-and-sets.md` - **Maps and sets** (reference): The literal ["a": 1] builds a Map, a Set is built from a list literal instead of having one of its own, and both iterate in insertion order while comparing regardless of it.
 - `language/collections-and-iteration/pipelines.md` - **Pipelines** (reference): A pipeline is a source, zero or more lazy stages and exactly one terminal operation, and nothing runs until the terminal operation pulls a value through.
 - `language/collections-and-iteration/slices.md` - **Slices** (reference): list[from..to] answers a List that shares storage and starts at index 0 again; as a var path the same expression is a window into the original instead.
-- `language/collections-and-iteration/stacks-and-queues.md` - **Stacks and queues** (reference): Stack is LIFO with push and pop, Queue is FIFO with enqueue and dequeue, and Collection.add reaches whichever end the kind chooses.
+- `language/collections-and-iteration/stacks-and-queues.md` - **Stacks and queues** (reference): Stack is LIFO and Queue is FIFO, both spend the two words add and remove, and the type name says which end they reach.
 
 ## language/concurrency-and-streams
 

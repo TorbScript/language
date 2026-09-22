@@ -1,13 +1,13 @@
 /**
  * FIFO: [Queue], with [ArrayQueue] as its only implementation.
  *
- * `enqueue` adds at the back and `dequeue` removes from the front, and `Collection.add` is `enqueue` - so `addAll`, a
- * collector or a channel fill a `Queue` at the back. There is no index: the only way to see an item is to remove it
+ * `add` puts an item at the back and `remove` takes the one at the front, and `add` is [Collection.add] - so `addAll`,
+ * a collector or a channel fill a `Queue` at the back. There is no index: the only way to see an item is to remove it
  * or to iterate the whole queue.
  *
  * # Related
  *
- * - [Stack] - the LIFO sibling; `add` reaches the top instead of the back.
+ * - [Stack] - the LIFO sibling; `add` and `remove` reach the top instead of the two ends.
  */
 
 use Equals, Hash, combineHashes from "std/core"
@@ -15,26 +15,30 @@ use From from "std/core"
 use Collection from "./collection"
 
 /**
- * FIFO queue. Iterates in the order of `dequeue`. `add` is `enqueue`.
+ * FIFO queue. Iterates from front to back, which is the order it hands items out in.
+ *
+ * Two words, and the type name carries which end they mean: `add` puts an item at the back, `remove` takes the one
+ * at the front off. `add` and its participle `added` come from [Collection]; looking without taking is
+ * [Iterable.first].
  *
  * # Examples
  *
  *     var pending = Queue.of 1, 2, 3
- *     pending.enqueue 4
- *     print pending.dequeue()
+ *     pending.add 4
+ *     print pending.remove()
  *     print pending.toList()
  *
  * A `const` queue, or one whose old version is still needed, uses the participles instead:
  *
- *     const queue = Queue.of(1, 2).enqueued(3)
- *     if const Some((next, rest)) = queue.dequeued() {
+ *     const queue = Queue.of(1, 2).added(3)
+ *     if const Some((next, rest)) = queue.removed() {
  *       print "next: {next}, remaining: {rest.length()}"
  *     }
  *
  * # Related
  *
- * - [Stack] - the LIFO sibling, with the same `add`/`peek` shape.
- * - [Collection] - `add`, `contains`, `length`, `iterator`, which `Queue` builds on.
+ * - [Stack] - the LIFO sibling, with the same two words at one end.
+ * - [Collection] - `add`, `added`, `contains`, `length`, `iterator`, which `Queue` builds on.
  */
 public trait Queue<Item>
   with Collection<Item>
@@ -46,34 +50,21 @@ public trait Queue<Item>
 
   // --- In place ------------------------------------------------------------------------------------
 
-  /** Adds an item at the back, in place. */
-  var fn enqueue(value: Item)
-
-  /** Removes and answers the item at the front, or `None` if the queue is empty. */
-  var fn dequeue(): Item?
-
-  /** The same as `enqueue`; see [Collection.add]. */
-  var fn add(value: Item) {
-    enqueue value
-  }
+  /** Removes the item the queue gives next - the one at the front - and answers it, or `None` if it is empty. */
+  var fn remove(): Item?
 
   // --- Changed copies --------------------------------------------------------------------------------
 
-  /** The participle of [Queue.enqueue]: a changed copy with the item added at the back. */
-  fn enqueued(value: Item): Self {
-    added value
-  }
-
-  /** The next element and the remaining queue, or `None` if the queue is empty. */
-  fn dequeued(): (Item, Self)? {
+  /**
+   * The participle of [Queue.remove]: the item at the front and the rest, or `None` if the queue is empty.
+   *
+   * It answers the pair and not `Self` alone, because a queue has no index: the item is gone once the copy is made,
+   * so the copy has to carry it.
+   */
+  fn removed(): (Item, Self)? {
     var rest = self
-    const next = rest.dequeue()?
+    const next = rest.remove()?
     Some((next, rest))
-  }
-
-  /** The item at the front without removing it, or `None` if the queue is empty. */
-  fn peek(): Item? {
-    first()
   }
 }
 
@@ -114,7 +105,7 @@ extend<Item: Hash> Queue<Item> with Hash {
 public type ArrayQueue<Item> with Queue<Item>, From<Iterable<Item>> {
   private var slots: List<Item?> = List.filled 16, None
   private var head: Int = 0
-  private var count: Int = 0
+  private var storedLength: Int = 0
 
   /** Builds the queue from `items`, with the first one at the front. */
   static fn from(items: Iterable<Item>): ArrayQueue<Item> {
@@ -124,20 +115,20 @@ public type ArrayQueue<Item> with Queue<Item>, From<Iterable<Item>> {
   }
 
   /** Adds `value` at the back, in place; grows the buffer first if it is full. */
-  var fn enqueue(value: Item) {
-    if count == slots.length() {
+  var fn add(value: Item) {
+    if storedLength == slots.length() {
       grow()
     }
-    slots[slot(count)] = Some value
-    count = count + 1
+    slots[slot(storedLength)] = Some value
+    storedLength = storedLength + 1
   }
 
   /** Removes and answers the item at the front, or `None` if empty. */
-  var fn dequeue(): Item? {
+  var fn remove(): Item? {
     const next = slots[head]?            // Empty queue: the slot is `None`
     slots[head] = None                   // Release the value
     head = slot 1
-    count = count - 1
+    storedLength = storedLength - 1
     Some next
   }
 
@@ -145,17 +136,28 @@ public type ArrayQueue<Item> with Queue<Item>, From<Iterable<Item>> {
   var fn clear() {
     slots = List.filled 16, None
     head = 0
-    count = 0
+    storedLength = 0
   }
 
   /** How many items there are. */
   fn length(): Int {
-    count
+    storedLength
   }
 
-  /** A cursor from front to back: the order of `dequeue`. */
+  /** A cursor from front to back: the order the queue hands items out in. */
   fn iterator(): Iterator<Item> {
-    (0..count).filterMap { slots[slot(_)] }.iterator()
+    (0..storedLength).filterMap { slots[slot(_)] }.iterator()
+  }
+
+  /** Shrinks the ring to the items it holds; see [Collection.compact]. */
+  var fn compact() {
+    // At least one slot, because every index goes through `% slots.length()`
+    var tight: List<Item?> = List.filled storedLength.max(1), None
+    for offset in 0..storedLength {
+      tight[offset] = slots[slot(offset)]
+    }
+    slots = tight
+    head = 0
   }
 
   private fn slot(offset: Int): Int {
@@ -164,7 +166,7 @@ public type ArrayQueue<Item> with Queue<Item>, From<Iterable<Item>> {
 
   private var fn grow() {
     var larger: List<Item?> = List.filled(slots.length() * 2, None)
-    for offset in 0..count {
+    for offset in 0..storedLength {
       larger[offset] = slots[slot(offset)]
     }
     slots = larger
