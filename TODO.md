@@ -3544,3 +3544,6 @@ Wenn nicht, was bedeutet, bewirkt es?
     8: der Frame-Loop lebt in `std/node`; `std/ecs` kennt nur `Schedule.run`. 9: ein Node sieht die ganze Welt
     (Zugriffsmengen kaufen nur bei parallelen Systemen etwas).
   - **Wird gelöst:** beide Dokumente Abschnitt 15 auf "Decided" setzen (Doku-Runde, klein).
+  - **Korrektur (Nutzer, 2026-09-22):** `std/node` / `Node` ist zu generisch (Baum-Primitive sollen später frei
+    bleiben, Verwechslung mit Node.js); der Engine-Knoten gehört zur Engine. **Entschieden:** Package `std/scene`,
+    Trait `SceneNode` (Godots Wort; zugleich der Name des Szenen-Dateiformats, das diesen Baum beschreibt).
