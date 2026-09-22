@@ -3533,3 +3533,14 @@ Wenn nicht, was bedeutet, bewirkt es?
     `std/node` ein eigenes Package ist, ob eine Szenendatei `std/linear` nennen darf, ob `Events` ins Package
     gehören, `GlobalTransform2` als Komponente oder Feld, wo die Frame-Schleife lebt, und ob ein Knoten die ganze
     Welt sieht oder nur die Gruppen, die er nennt.
+- (Geschmacksfragen aus CONCURRENCY 9-11 und ECS 1-9, 2026-09-22) **Nutzer: "beantworte sie so gut es geht auf
+  Basis meiner bisherigen Antworten und dem Design der Sprache". Entschieden (ich):**
+  - CONCURRENCY 9: `Never` verlässt die asynchrone Seite, `Cancelled` ist der Boden (keine zwei Welten, `?` bedeutet
+    eins). 10: `outcome()`. 11: `cancel()`/`within` sind `var fn` (dieselbe Regel wie `source.next()`).
+  - ECS 1: `pairs`/`triples`/`quadruples` statt `query2/3/4` (Lesbarkeit an der Aufrufstelle, wie `isCloseTo`).
+    2: `Store<Component>` bleibt, die Gruppe heißt `Columns`. 3: kein `World` in `std/ecs`, dafür
+    `examples/ecs-starter`. 4: `std/node` eigenes Package. 5: Szenen dürfen `std/linear`/`std/time` nennen.
+    6: `Events<Event>` gehört ins Package (ersetzt Godots Signale). 7: `GlobalTransform2` eigene Komponente.
+    8: der Frame-Loop lebt in `std/node`; `std/ecs` kennt nur `Schedule.run`. 9: ein Node sieht die ganze Welt
+    (Zugriffsmengen kaufen nur bei parallelen Systemen etwas).
+  - **Wird gelöst:** beide Dokumente Abschnitt 15 auf "Decided" setzen (Doku-Runde, klein).
