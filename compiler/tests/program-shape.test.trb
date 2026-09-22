@@ -11,7 +11,7 @@
  */
 
 use test, group from "std/test"
-use problems, notes, problemsOf, notesOf from "./harness"
+use problems, notes, problemsOf, notesOf, problemsAt from "./harness"
 
 const importsHelper = r"""
   use value from "./helper"
@@ -50,6 +50,18 @@ group "Top-level code (gap 28)" {
           "An imported module consists of declarations only, so a module has no initialization order and a cyclic"
             + " import is harmless",
         ]
+    )
+  }
+
+  test "checking the entry file alone checks what it imports through a relative path, and reports it" {
+    const files = withHelper(r"""
+      public const value = 1
+
+      print value
+      """)
+    assert(
+      problemsAt(files, ["app/src/main.trb"])
+        == ["Top-level code is only allowed in entry files. `app/src/helper.trb` is imported"]
     )
   }
 

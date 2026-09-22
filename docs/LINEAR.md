@@ -454,7 +454,7 @@ would say so if they came back. The rest quote the diagnostic that is the reprod
     overload forms the decision log keeps, so a call should find it. **Partly closed (2026-09-22):** the checker now
     resolves the operator form (`scale * vector` beside `scale * scale` type checks), while the method form
     `scale.multiply(vector)` is still refused, because one member name reaches the first instantiation
-    (`docs/COLLECTIONS.md` gap 4); natively the two bodies still collide on one mangled name, which is item 16.
+    (`docs/COLLECTIONS.md` gap 4). Natively the two bodies are two functions since item 16 closed.
 13. **Two small checker reports.** `const size = self.length()` inside a conditional `extend` does not infer the
     parameter although the annotation form does; and `print(x).round()` answers "The checker did not work out the type of
     this expression — this is a bug of the compiler" where it means "`Void` has no member `round`".
@@ -473,11 +473,12 @@ would say so if they came back. The rest quote the diagnostic that is the reprod
     one. The smallest reproduction is a generic type plus a concrete `extend` of it whose body constructs the type. The
     lowering answers it the way it answers a tuple's structural comparison - it asks `dispatchedOn` itself - so no
     program is blocked by it, and the missing record is still a record the checker owes.
-16. **Two `From` implementations on one type collide in the back end. Still open (2026-09-22)**, and the same collision
-    is what stops item 12 natively. `extend Path with From<String>` next to
-    `extend Path with From<Name>` are two declarations with one mangled name (`Path.from` carries no arguments of its
-    own), and the C compiler rejects the second prototype. It is the same shape as item 12 seen from the emitter's end,
-    and `compiler/src/ir/mangle.trb` is where a name would have to carry the implementation's own arguments.
+16. ~~**Two `From` implementations on one type collide in the back end.**~~ **Closed (2026-09-22).** The name of a
+    member of an `extend` whose trait has arguments carries the applied trait as one more owner
+    (`symbolPathOf` in `compiler/src/ir/instantiate.trb`), so `extend Path with From<String>` next to
+    `extend Path with From<Name>` are two functions, and so are `Board * Scale` beside `Board * Board`
+    (`tests/conformance/implementation-trait-arguments.trb`). What it said: both were one mangled name, `Path.from`
+    carried no arguments of its own, and the C compiler rejected the second prototype.
 
 ## 13. The package cut for what follows
 

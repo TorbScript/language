@@ -77,8 +77,8 @@ Six things about the mechanics of a page.
 
 4. **Every rule is testable.** A sentence that cannot be turned into a program that passes or fails is not a rule, it is
    a feeling. Number the rules of a reference page so that a reader, a reviewer and an error message can name one.
-5. **State defaults and limits as numbers.** `The default frame limit is 100 000 frames per task`, not `the frame limit
-   is high`.
+5. **State defaults and limits as numbers.** `The stack check keeps 128 KiB of the stack in reserve`, not `the stack
+   check keeps some room`.
 6. **No hedges.** The words `usually`, `simply`, `obviously`, `basically`, `easily`, `of course`, `as mentioned`,
    `see above`, `and so on`, `please note` and `etc.` are rejected by the checker. If something holds under a condition,
    name the condition. If it holds always, say always.

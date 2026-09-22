@@ -51,6 +51,7 @@
 #else
 #  include <dirent.h>
 #  include <fcntl.h>
+#  include <sys/resource.h>
 #  include <sys/stat.h>
 #  include <sys/wait.h>
 #  include <time.h>
@@ -404,6 +405,21 @@ void torb_platform_sleep(int64_t nanoseconds) {
 }
 
 /**
+ * The bottom of the stack of the calling thread: the start of the region the stack was reserved in, which is the one
+ * the address of a local of this very function lies in. Every Windows since the first one with threads answers it, and
+ * it is the reservation and not what is committed so far - the stack grows into it page by page.
+ */
+bool torb_platform_stack_low(uintptr_t *low) {
+  MEMORY_BASIC_INFORMATION region;
+  char here = 0;
+  if (VirtualQuery(&here, &region, sizeof region) == 0u || region.AllocationBase == NULL) {
+    return false;
+  }
+  *low = (uintptr_t)region.AllocationBase;
+  return true;
+}
+
+/**
  * The program's own arguments, from `GetCommandLineW` - because the `argv` of `main` is **not** UTF-8 on this platform.
  * The C runtime builds it from the wide command line through the code page of the machine, which turns `ü` into one
  * byte 0xFC (not UTF-8 at all) and `日` into a question mark (measured on a machine with code page 1252). The wide
@@ -615,6 +631,25 @@ void torb_platform_sleep(int64_t nanoseconds) {
   /* A signal cuts the sleep short and leaves what is left in `span`. */
   while (nanosleep(&span, &span) != 0 && errno == EINTR) {
   }
+}
+
+/**
+ * The bottom of the stack of the calling thread, for the main thread: the limit of `RLIMIT_STACK` below an address near
+ * its top, which is how far the kernel lets that stack grow. An unlimited stack is taken as 8 MiB, the usual default -
+ * a check that fires too early is a panic with a message, one that never fires is the crash it is there to prevent.
+ */
+bool torb_platform_stack_low(uintptr_t *low) {
+  struct rlimit limit;
+  char top;
+  uintptr_t size = (uintptr_t)8u * 1024u * 1024u;
+  if (getrlimit(RLIMIT_STACK, &limit) != 0) {
+    return false;
+  }
+  if (limit.rlim_cur != RLIM_INFINITY && (uintptr_t)limit.rlim_cur < (uintptr_t)&top) {
+    size = (uintptr_t)limit.rlim_cur;
+  }
+  *low = (uintptr_t)&top - size;
+  return true;
 }
 
 /** The `argv` of `main` is what there is here, and it is bytes - which is what a path and a `String` both are. */
@@ -870,6 +905,56 @@ static char *torb_windows_command(const char *command, size_t *capacity) {
 }
 
 /**
+ * Everything that can still be read from a handle, into a buffer that grows in doublings. Owned: freed with
+ * `torb_raw_free(*bytes, *capacity)`. Ends at the end of a pipe or a file, and at the first failed read.
+ */
+static void torb_read_handle(HANDLE handle, uint8_t **bytes, size_t *length, size_t *capacity) {
+  size_t bufferCapacity = 65536u;
+  size_t filled = 0u;
+  uint8_t *buffer = (uint8_t *)torb_raw_allocate(bufferCapacity);
+  for (;;) {
+    DWORD read = 0u;
+    if (filled == bufferCapacity) {
+      uint8_t *grown = (uint8_t *)torb_raw_allocate(bufferCapacity * 2u);
+      memcpy(grown, buffer, filled);
+      torb_raw_free(buffer, bufferCapacity);
+      buffer = grown;
+      bufferCapacity *= 2u;
+    }
+    if (!ReadFile(handle, buffer + filled, (DWORD)(bufferCapacity - filled), &read, NULL) || read == 0u) {
+      break;
+    }
+    filled += (size_t)read;
+  }
+  *bytes = buffer;
+  *length = filled;
+  *capacity = bufferCapacity;
+}
+
+/**
+ * A temporary file a child can inherit as its standard error, deleted by the system when the last handle to it is
+ * closed - so nothing is left behind whichever way this process ends. `INVALID_HANDLE_VALUE` where none can be made.
+ */
+static HANDLE torb_errors_file(SECURITY_ATTRIBUTES *inheritable) {
+  wchar_t directory[MAX_PATH + 1];
+  wchar_t path[MAX_PATH + 1];
+  HANDLE file;
+  const DWORD length = GetTempPathW(MAX_PATH + 1, directory);
+  if (length == 0u || length > MAX_PATH) {
+    return INVALID_HANDLE_VALUE;
+  }
+  if (GetTempFileNameW(directory, L"trb", 0u, path) == 0u) {
+    return INVALID_HANDLE_VALUE;
+  }
+  file = CreateFileW(path, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                     inheritable, CREATE_ALWAYS, FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE, NULL);
+  if (file == INVALID_HANDLE_VALUE) {
+    DeleteFileW(path);
+  }
+  return file;
+}
+
+/**
  * A child process, run to its end, with its two output streams collected - through `CreateProcessW` and a pipe, and
  * through **no shell at all**.
  *
@@ -888,8 +973,10 @@ static char *torb_windows_command(const char *command, size_t *capacity) {
  * The **wide** call is what carries the command line, so a program name and an argument may hold any character a
  * `String` can - the narrow one would hand them to the code page of the machine and lose them.
  *
- * Both output streams still go into **one** pipe, because a `ProcessOutput` is what a caller gets and `Process.start`
- * with three real pipes is 7.3's.
+ * Standard output goes into a pipe and standard error into a temporary file that is deleted when it is closed. Two
+ * pipes would need two readers at once - a child that fills the one nobody is reading waits forever - and a file never
+ * makes the child wait, so it is read after the child has ended. Where no temporary file can be made, both streams go
+ * into the pipe and the errors come back empty, which is what a `ProcessOutput` said before it kept them apart.
  */
 bool torb_platform_run_process(
   const char *command,
@@ -899,6 +986,9 @@ bool torb_platform_run_process(
   uint8_t **output,
   size_t *length,
   size_t *capacity,
+  uint8_t **errors,
+  size_t *errorsLength,
+  size_t *errorsCapacity,
   const char **message
 ) {
   size_t lineCapacity = 512u;
@@ -907,14 +997,12 @@ bool torb_platform_run_process(
   size_t wideCapacity = 0u;
   wchar_t *wideLine;
   size_t index;
-  size_t outputCapacity = 65536u;
-  size_t outputFilled = 0u;
-  uint8_t *buffer;
   SECURITY_ATTRIBUTES inheritable;
   STARTUPINFOW startup;
   PROCESS_INFORMATION child;
   HANDLE readEnd = NULL;
   HANDLE writeEnd = NULL;
+  HANDLE errorsFile = INVALID_HANDLE_VALUE;
   DWORD status = 0u;
   size_t nameCapacity = 0u;
   char *name = torb_windows_command(command, &nameCapacity);
@@ -950,34 +1038,24 @@ bool torb_platform_run_process(
   if (startup.hStdInput == INVALID_HANDLE_VALUE) {
     startup.hStdInput = NULL;
   }
+  errorsFile = torb_errors_file(&inheritable);
   startup.hStdOutput = writeEnd;
-  startup.hStdError = writeEnd;
+  startup.hStdError = errorsFile != INVALID_HANDLE_VALUE ? errorsFile : writeEnd;
   /* No application name, so Windows searches PATH and appends `.exe` to a name without an extension */
   if (!CreateProcessW(NULL, wideLine, NULL, NULL, TRUE, 0u, NULL, NULL, &startup, &child)) {
     *message = "the program could not be started";
     CloseHandle(readEnd);
     CloseHandle(writeEnd);
+    if (errorsFile != INVALID_HANDLE_VALUE) {
+      CloseHandle(errorsFile);
+    }
     torb_raw_free(wideLine, wideCapacity);
     return false;
   }
   torb_raw_free(wideLine, wideCapacity);
   /* And our copy of the write end has to go too, for the same reason */
   CloseHandle(writeEnd);
-  buffer = (uint8_t *)torb_raw_allocate(outputCapacity);
-  for (;;) {
-    DWORD read = 0u;
-    if (outputFilled == outputCapacity) {
-      uint8_t *grown = (uint8_t *)torb_raw_allocate(outputCapacity * 2u);
-      memcpy(grown, buffer, outputFilled);
-      torb_raw_free(buffer, outputCapacity);
-      buffer = grown;
-      outputCapacity *= 2u;
-    }
-    if (!ReadFile(readEnd, buffer + outputFilled, (DWORD)(outputCapacity - outputFilled), &read, NULL) || read == 0u) {
-      break;
-    }
-    outputFilled += (size_t)read;
-  }
+  torb_read_handle(readEnd, output, length, capacity);
   CloseHandle(readEnd);
   WaitForSingleObject(child.hProcess, INFINITE);
   if (!GetExitCodeProcess(child.hProcess, &status)) {
@@ -985,10 +1063,17 @@ bool torb_platform_run_process(
   }
   CloseHandle(child.hProcess);
   CloseHandle(child.hThread);
+  if (errorsFile != INVALID_HANDLE_VALUE) {
+    /* The child wrote through the same file position, so what it wrote starts at the beginning */
+    SetFilePointer(errorsFile, 0, NULL, FILE_BEGIN);
+    torb_read_handle(errorsFile, errors, errorsLength, errorsCapacity);
+    CloseHandle(errorsFile);
+  } else {
+    *errorsCapacity = 16u;
+    *errors = (uint8_t *)torb_raw_allocate(*errorsCapacity);
+    *errorsLength = 0u;
+  }
   *code = (int64_t)(int32_t)status;
-  *output = buffer;
-  *length = outputFilled;
-  *capacity = outputCapacity;
   return true;
 }
 
@@ -1054,6 +1139,33 @@ bool torb_platform_run_inheriting(
 #else
 
 /**
+ * Everything that can still be read from a stream, into a buffer that grows in doublings. Owned: freed with
+ * `torb_raw_free(*bytes, *capacity)`. Ends at the end of the stream and at the first failed read.
+ */
+static void torb_read_stream(FILE *stream, uint8_t **bytes, size_t *length, size_t *capacity) {
+  size_t bufferCapacity = 65536u;
+  size_t filled = 0u;
+  uint8_t *buffer = (uint8_t *)torb_raw_allocate(bufferCapacity);
+  for (;;) {
+    const size_t read = fread(buffer + filled, 1u, bufferCapacity - filled, stream);
+    filled += read;
+    if (filled < bufferCapacity) {
+      break;
+    }
+    {
+      uint8_t *grown = (uint8_t *)torb_raw_allocate(bufferCapacity * 2u);
+      memcpy(grown, buffer, filled);
+      torb_raw_free(buffer, bufferCapacity);
+      buffer = grown;
+      bufferCapacity *= 2u;
+    }
+  }
+  *bytes = buffer;
+  *length = filled;
+  *capacity = bufferCapacity;
+}
+
+/**
  * One argument for `/bin/sh`, in single quotes, which is the one quoting a POSIX shell does not interpret at all. A
  * single quote inside the argument ends the run and is written as `'\''`.
  */
@@ -1083,7 +1195,9 @@ static void torb_quote_argument(const char *argument, char **into, size_t *fille
  * `fork` plus `execvp` would keep the promise of `std/process` exactly, and single quotes keep it in practice, because
  * nothing inside them is interpreted. It is `Process.start`'s job (7.3) to make both platforms shell free.
  *
- * Both output streams go into one pipe: `popen` has one, and a `ProcessOutput` is what a caller gets.
+ * Standard output comes through `popen`'s pipe and standard error goes into a temporary file the shell redirects it to,
+ * read and removed once the child has ended: two pipes would need two readers at once, and a file never makes the child
+ * wait. Where no temporary file can be made, both streams go into the pipe and the errors come back empty.
  */
 bool torb_platform_run_process(
   const char *command,
@@ -1093,6 +1207,9 @@ bool torb_platform_run_process(
   uint8_t **output,
   size_t *length,
   size_t *capacity,
+  uint8_t **errors,
+  size_t *errorsLength,
+  size_t *errorsCapacity,
   const char **message
 ) {
   size_t lineCapacity = 512u;
@@ -1100,16 +1217,21 @@ bool torb_platform_run_process(
   char *line = (char *)torb_raw_allocate(lineCapacity);
   size_t index;
   FILE *pipe;
-  size_t outputCapacity = 65536u;
-  size_t outputFilled = 0u;
-  uint8_t *buffer;
   int status;
+  char errorsPath[] = "/tmp/torb-errors-XXXXXX";
+  const int errorsFile = mkstemp(errorsPath);
   line[0] = '\0';
   torb_quote_argument(command, &line, &filled, &lineCapacity);
   for (index = 0u; index < count; index++) {
     torb_quote_argument(arguments[index], &line, &filled, &lineCapacity);
   }
-  {
+  if (errorsFile >= 0) {
+    close(errorsFile);
+    torb_reserve_line(3u, &line, filled, &lineCapacity);
+    memcpy(line + filled, " 2>", 4u);
+    filled += 3u;
+    torb_quote_argument(errorsPath, &line, &filled, &lineCapacity);
+  } else {
     const char *tail = " 2>&1";
     torb_reserve_line(strlen(tail), &line, filled, &lineCapacity);
     memcpy(line + filled, tail, strlen(tail) + 1u);
@@ -1119,24 +1241,27 @@ bool torb_platform_run_process(
   if (pipe == NULL) {
     *message = strerror(errno);
     torb_raw_free(line, lineCapacity);
+    if (errorsFile >= 0) {
+      unlink(errorsPath);
+    }
     return false;
   }
-  buffer = (uint8_t *)torb_raw_allocate(outputCapacity);
-  for (;;) {
-    size_t read = fread(buffer + outputFilled, 1u, outputCapacity - outputFilled, pipe);
-    outputFilled += read;
-    if (outputFilled < outputCapacity) {
-      break;
+  torb_read_stream(pipe, output, length, capacity);
+  status = pclose(pipe);
+  {
+    FILE *written = errorsFile >= 0 ? fopen(errorsPath, "rb") : NULL;
+    if (written != NULL) {
+      torb_read_stream(written, errors, errorsLength, errorsCapacity);
+      fclose(written);
+    } else {
+      *errorsCapacity = 16u;
+      *errors = (uint8_t *)torb_raw_allocate(*errorsCapacity);
+      *errorsLength = 0u;
     }
-    {
-      uint8_t *grown = (uint8_t *)torb_raw_allocate(outputCapacity * 2u);
-      memcpy(grown, buffer, outputFilled);
-      torb_raw_free(buffer, outputCapacity);
-      buffer = grown;
-      outputCapacity *= 2u;
+    if (errorsFile >= 0) {
+      unlink(errorsPath);
     }
   }
-  status = pclose(pipe);
   if (status != -1) {
     /* The exit code is in the high byte of `wait`'s status, and a child killed by a signal has none at all */
     if (WIFEXITED(status)) {
@@ -1148,13 +1273,11 @@ bool torb_platform_run_process(
   torb_raw_free(line, lineCapacity);
   if (status == -1) {
     *message = strerror(errno);
-    torb_raw_free(buffer, outputCapacity);
+    torb_raw_free(*output, *capacity);
+    torb_raw_free(*errors, *errorsCapacity);
     return false;
   }
   *code = (int64_t)status;
-  *output = buffer;
-  *length = outputFilled;
-  *capacity = outputCapacity;
   return true;
 }
 

@@ -141,7 +141,7 @@ that answers the question. A page marked (planned) describes a feature that does
 - `language/execution/index.md` - **Execution** (index): The parts of running a program that are a rule of the language rather than an implementation detail - evaluation order, what a copy costs, the tail-call guarantee, and when a destructor runs.
 - `language/execution/loops.md` - **Loops** (reference): for walks an Iterate, while repeats while a condition holds, and loop is the endless one - with the type Never until a break gives it a Void. while true is an error, because never ending is a property of the syntax here.
 - `language/execution/no-destructors.md` - **Destructors - close() runs at the last release** (reference, planned): A shared type's close() is its destructor - the runtime runs it exactly once when the last reference goes away, user code never calls it, and using pins that moment to the end of a block.
-- `language/execution/tail-calls.md` - **Tail calls and the frame limit** (reference): Direct self-recursion in tail position is guaranteed to run without growing the stack, and every other call counts against a per-task frame limit of 100000 that panics with stack overflow when it is reached.
+- `language/execution/tail-calls.md` - **Tail calls and stack overflow** (reference): Direct self-recursion in tail position is guaranteed to run without growing the stack, and every other call uses a frame of its task's stack; a recursion that runs out of stack panics with stack overflow instead of crashing.
 
 ## language/extensibility
 

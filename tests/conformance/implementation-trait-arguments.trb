@@ -1,0 +1,48 @@
+/**
+ * **Two implementations of one generic trait for one type are two functions.** `Board * Scale` and `Board * Board` both
+ * declare `multiply` on `Board`, and two `From`s both declare `from`: the owner and the member are the same, and only the
+ * arguments of the trait tell the bodies apart. So the name a back end gives a member of an `extend` carries those
+ * arguments, and each operator and each conversion runs its own body.
+ */
+
+type Board {
+  cells: Int
+}
+
+type Scale {
+  factor: Int
+}
+
+extend Board with Multiply<Scale> {
+  fn multiply(other: Scale): Board {
+    Board(cells * other.factor)
+  }
+}
+
+extend Board with Multiply<Board> {
+  fn multiply(other: Board): Board {
+    Board(cells * other.cells + 1)
+  }
+}
+
+extend Board with From<Int> {
+  static fn from(value: Int): Board {
+    Board value
+  }
+}
+
+extend Board with From<String> {
+  static fn from(value: String): Board {
+    Board value.byteLength()
+  }
+}
+
+const board = Board 3
+const scaled = board * Scale(4)
+print scaled.cells
+const squared = board * Board(5)
+print squared.cells
+const counted: Board = Board.from 7
+print counted.cells
+const measured: Board = Board.from "four"
+print measured.cells

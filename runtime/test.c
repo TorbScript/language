@@ -137,8 +137,8 @@ void torb_test_file(const char *path, size_t length) {
 
 int torb_test_finish(void) {
   char summary[128];
-  snprintf(summary, sizeof summary, "\n%lld passed, %lld failed (%lld files)", (long long)torb_test_passed,
-           (long long)torb_test_failed, (long long)torb_test_files);
+  snprintf(summary, sizeof summary, "\n%lld passed, %lld failed (%lld %s)", (long long)torb_test_passed,
+           (long long)torb_test_failed, (long long)torb_test_files, torb_test_files == 1 ? "file" : "files");
   torb_write_line_out(summary, strlen(summary));
   fflush(stdout);
   return torb_test_failed == 0 ? 0 : 1;

@@ -51,6 +51,7 @@ void torb_process_start(int argument_count, char **argument_values) {
   torb_argument_count = argument_count;
   torb_argument_values = argument_values;
   torb_reports_leaks = given != NULL && given[0] == '1' && given[1] == '\0';
+  torb_set_stack_limit();
 }
 
 void torb_process_finish(void) {
@@ -94,7 +95,8 @@ static char *torb_argument_bytes(torb_text text, size_t *capacity) {
 }
 
 /**
- * `Process.run(command, arguments)`: the arguments out of the list, the platform layer, and the output as one text.
+ * `Process.run(command, arguments)`: the arguments out of the list, the platform layer, and the two output streams as
+ * two texts - standard error in `*failure`, which only says why nothing ran where the result is -1.
  *
  * The list holds `torb_text`, which is not NUL terminated - so every argument is copied into a C string for the call
  * and freed right after. Nothing here interprets an argument; the quoting the command line needs is the platform
@@ -112,6 +114,9 @@ int64_t torb_process_run(torb_text command, torb_list arguments, torb_text *outp
   uint8_t *bytes = NULL;
   size_t length = 0u;
   size_t bytesCapacity = 0u;
+  uint8_t *errors = NULL;
+  size_t errorsLength = 0u;
+  size_t errorsCapacity = 0u;
   bool ran;
   for (index = 0u; index < (size_t)count; index++) {
     torb_text argument = { NULL, 0u, 0u };
@@ -130,6 +135,9 @@ int64_t torb_process_run(torb_text command, torb_list arguments, torb_text *outp
     &bytes,
     &length,
     &bytesCapacity,
+    &errors,
+    &errorsLength,
+    &errorsCapacity,
     &message
   );
   for (index = 0u; index < (size_t)count; index++) {
@@ -147,12 +155,22 @@ int64_t torb_process_run(torb_text command, torb_list arguments, torb_text *outp
   /* What a program writes is not always UTF-8, and a `String` always is: what is not decodable is an `IoError` */
   {
     size_t bad = 0u;
+    torb_text written = torb_text_empty();
     const bool decoded = torb_text_try_from_bytes(bytes, length, output, &bad);
+    const bool errorsDecoded = decoded && torb_text_try_from_bytes(errors, errorsLength, &written, &bad);
     torb_raw_free(bytes, bytesCapacity);
+    torb_raw_free(errors, errorsCapacity);
     if (!decoded) {
       *failure = torb_text_from_cstring("the output of the program is not valid UTF-8");
       return -1;
     }
+    if (!errorsDecoded) {
+      torb_text_release(*output);
+      *output = torb_text_empty();
+      *failure = torb_text_from_cstring("the standard error of the program is not valid UTF-8");
+      return -1;
+    }
+    *failure = written;
   }
   return code;
 }

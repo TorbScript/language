@@ -322,6 +322,14 @@ group "Mangling" {
     assert(layoutName(program, matrix, [float64, sixteen]) == "T_main_Matrix__Float64_16")
   }
 
+  test "the smallest `Int64` as a const argument is spelled without negating it" {
+    var program = IrProgram()
+    const int64 = program.internType IrType.Integer(64, true)
+    const smallest = 0 - 9223372036854775807 - 1
+    const argument = program.internType IrType.ConstantValue(LiteralValue.Integer(smallest), int64)
+    assert(canonicalType(program, argument) == "minus9223372036854775808")
+  }
+
   test "a name that is not a C identifier becomes one, byte by byte" {
     assert(escapedComponent("Größe") == "Gr_xc3__xb6__xc3__x9f_e")
     assert(escapedComponent("plain99") == "plain99")

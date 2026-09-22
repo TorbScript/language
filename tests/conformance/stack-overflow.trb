@@ -1,0 +1,20 @@
+/**
+ * **A recursion deeper than the stack is a panic, not a crash.** Every call that is not a guaranteed tail call uses a
+ * frame of the stack of its task, and where the stack is nearly used up the next such call panics with `stack overflow`:
+ * the message and the function that could not be entered go to standard error, and the exit code is 101 like every other
+ * panic's. Without the check the operating system ends the program on its guard page, with a code of its own and no
+ * message at all.
+ *
+ * `depth` is not a tail call - the addition runs after it returns - so every level is a frame, and a hundred million of
+ * them do not fit into any stack a platform gives a program.
+ */
+
+fn depth(remaining: Int): Int {
+  if remaining == 0 {
+    return 0
+  }
+  depth(remaining - 1) + 1
+}
+
+print "before"
+print depth(100_000_000)

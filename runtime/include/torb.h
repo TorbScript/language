@@ -171,13 +171,34 @@ TORB_NORETURN void torb_panic_out_of_memory(size_t size);
 TORB_NORETURN void torb_panic_stack_overflow(torb_location at);
 
 /**
- * The frame counter of decided gap 8: the only portable way to make the C binary and the VM agree on when a
- * recursion is too deep. The emitter calls `torb_enter_frame` at the top of every function that is not a leaf and
- * `torb_leave_frame` before every return.
+ * The stack check. `TORB_CHECK_STACK(at)` is the first statement of every emitted function that calls program code, and
+ * it panics with `stack overflow` where the stack of the running thread has come closer to its end than a reserve: the
+ * room the panic itself and a leaf below the check need. So a recursion that is too deep is a panic with exit code 101
+ * and a site, and never the crash the operating system answers when a frame lands on its guard page.
+ *
+ * `torb_stack_limit` is that address, worked out once by `torb_process_start` from the real bounds of the stack of the
+ * main thread (`torb_platform_stack_low`). Zero - a runtime test, or a platform that says nothing about its stack -
+ * never fires.
+ *
+ * One comparison of an address with a global and no write, which is cheaper than a frame counter: a counter needs a
+ * decrement on every way out of a function and a reset on every recovered panic, and it still crashes where frames are
+ * bigger than it assumed, because a count says nothing about bytes (docs/PERFORMANCE.md, F9).
  */
-extern uint32_t torb_frame_limit;
-void torb_enter_frame(torb_location at);
-void torb_leave_frame(void);
+extern uintptr_t torb_stack_limit;
+#if defined(__GNUC__) || defined(__clang__)
+#  define TORB_STACK_EXHAUSTED(address) __builtin_expect((address) < torb_stack_limit, 0)
+#else
+#  define TORB_STACK_EXHAUSTED(address) ((address) < torb_stack_limit)
+#endif
+#define TORB_CHECK_STACK(at)                                     \
+  do {                                                           \
+    char torb_stack_probe;                                       \
+    if (TORB_STACK_EXHAUSTED((uintptr_t)&torb_stack_probe)) {    \
+      torb_panic_stack_overflow(at);                             \
+    }                                                            \
+  } while (0)
+/** What `torb_process_start` calls: `torb_stack_limit` for the stack of the thread that calls it. */
+void torb_set_stack_limit(void);
 
 /**
  * A test build replaces what a panic does with this. The hook receives the whole message as it would have been
@@ -837,12 +858,13 @@ torb_list torb_process_arguments(void);
 TORB_NORETURN void torb_process_exit(int64_t code);
 /**
  * `Process.runCollecting(command, arguments, var output, var failure)`: a program run to its end. The result is its
- * exit code, and everything it wrote is in `*output` (owned). **-1** means the program could not be started at all,
- * and then `*failure` says why (owned) - a program that ran and failed is an exit code and not a failure of `run`,
- * which is what lets `torb build` tell "there is no C compiler" from "the C compiler said no".
+ * exit code, what it wrote to standard output is in `*output` and what it wrote to standard error in `*failure` (both
+ * owned). **-1** means the program could not be started at all, and then `*failure` says why (owned) - a program that
+ * ran and failed is an exit code and not a failure of `run`, which is what lets `torb build` tell "there is no C
+ * compiler" from "the C compiler said no".
  *
- * The two output streams come back as **one** text: `popen` has one pipe, and `Process.start` with three real pipes
- * is 7.3's. `arguments` borrowed; what `*output` and `*failure` held before is the caller's and is not released here,
+ * `*failure` carries two things because the exit code says which one it is, and because a native's parameters are
+ * fixed by the manifest: the reason where nothing ran, the standard error where something did. `arguments` borrowed; what `*output` and `*failure` held before is the caller's and is not released here,
  * which is what a `var` parameter of a native means (the wrapper passes a fresh empty text).
  */
 int64_t torb_process_run(torb_text command, torb_list arguments, torb_text *output, torb_text *failure);
@@ -961,10 +983,10 @@ bool torb_platform_write_file(const char *path, const uint8_t *bytes, size_t len
 /** `mkdir -p`. False on failure with a libc message in `*message` (borrowed, static). */
 bool torb_platform_create_directory(const char *path, const char **message);
 /**
- * A child process, run to its end. `*code` is its exit code and `*output` its two output streams as one block, owned
- * and freed with `torb_raw_free(*output, *capacity)` - the capacity and not the length, because the buffer grows in
- * doublings and the allocator is told the size it gave out. False only where the process could not be started at all,
- * with a libc message in `*message`.
+ * A child process, run to its end. `*code` is its exit code, `*output` what it wrote to standard output and `*errors`
+ * what it wrote to standard error, each owned and freed with `torb_raw_free(*output, *capacity)` - the capacity and not
+ * the length, because the buffer grows in doublings and the allocator is told the size it gave out. False only where
+ * the process could not be started at all, with a libc message in `*message`, and then neither buffer is handed out.
  */
 bool torb_platform_run_process(
   const char *command,
@@ -974,6 +996,9 @@ bool torb_platform_run_process(
   uint8_t **output,
   size_t *length,
   size_t *capacity,
+  uint8_t **errors,
+  size_t *errorsLength,
+  size_t *errorsCapacity,
   const char **message
 );
 /**
@@ -996,6 +1021,11 @@ int64_t torb_platform_monotonic_nanoseconds(void);
  * when its run queue is empty and a timer is pending; it reads the clock again afterwards, so waking early is harmless.
  */
 void torb_platform_sleep(int64_t nanoseconds);
+/**
+ * The lowest address the stack of the calling thread can grow down to, in `*low`. False where the platform does not
+ * say, and then the stack check stays off.
+ */
+bool torb_platform_stack_low(uintptr_t *low);
 /**
  * The program's own arguments, without the program's name, appended to `*out` as texts - where the platform has a
  * source for them of its own. False where it has none and the `argv` of `main` is what there is, and then **nothing was

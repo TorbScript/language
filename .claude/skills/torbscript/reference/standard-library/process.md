@@ -64,9 +64,9 @@ public type ProcessOutput {
 }
 ```
 
-`Process.run` collects **both** streams of the child into `standardOutput`, in the order it wrote them, and leaves
-`standardError` empty. A caller that needs the two apart starts the child with `Process.start` and reads
-`errors()`.
+`Process.run` collects the two streams of the child apart: `standardOutput` is what it wrote to standard output and
+`standardError` what it wrote to standard error. The order in which it interleaved the two is lost; a caller that
+needs the output while it arrives starts the child with `Process.start` and reads `output()` and `errors()`.
 
 What a program run with `Process.run` left behind. `isSuccess()` is the usual question about a child process: did it do
 what it was asked (`exitCode == 0`).

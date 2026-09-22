@@ -126,7 +126,10 @@ public type Layout {
    */
   size: Int = 0
   alignment: Int = 1
-  /** Drives the `spawn`/`Channel` rules and the trace functions of the cycle collector. */
+  /**
+   * Whether a value of the layout can reach a `shared` object or a `Box`: what the `spawn`/`Channel` rules ask. There
+   * is no cycle collector to drive with it and there never will be (docs/DESTRUCTORS.md, section 9).
+   */
   containsShared: Bool = false
   containsCounted: Bool = false
   /** On a cycle of the field graph: every layout of the cycle is `Boxed`, which is what makes a tree work. */
@@ -399,8 +402,8 @@ public fn containsCountedType(program: IrProgram, id: IrTypeId): Bool {
 }
 
 /**
- * Whether the value can *reach* a `shared` object or a `Box` - the two things that can be part of a cycle. A trace
- * function is emitted for a layout where this is true and is `NULL` everywhere else, which is most layouts.
+ * Whether the value can *reach* a `shared` object or a `Box` - the two kinds of block that are shared rather than
+ * copied, which is what the `spawn`/`Channel` rules ask about a value that crosses to another task.
  */
 public fn containsSharedType(program: IrProgram, id: IrTypeId): Bool {
   match program.typeAt(id) {

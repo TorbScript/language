@@ -23,7 +23,9 @@ Code rules, gates and repository operations: `compiler/CONTRIBUTING.md`.
 ## Seed and breaking changes
 
 - `seed/` is not in git and exists only in the main checkout. Never delete it; refresh it with `sh tools/refresh-seed.sh`
-  (archives the old one to `../torbscript-seeds/`) only after a merge whose tier A is green.
+  (archives the old one to `../torbscript-seeds/`, the five newest kept) only after a merge whose tier A is green -
+  never by copying files into `seed/`, which skips the archive. Never delete an archive. A missing or broken seed makes
+  `tools/bootstrap.sh` fall back to the newest archived seed that still builds the compiler.
 - A syntax change, a new native, a new driver flag the build uses, or renaming a std name the compiler looks up by
   string (`semantics/checker/wellknown.trb`, operator traits in `checker/expression.trb`, member lookups in
   `ir/lower/collection.trb`) takes two commits: teach both forms and refresh the seed, then migrate

@@ -22,7 +22,7 @@ syntax, then numbered rules, then what the construct is not.
 - **[Loops](loops.md)** - for walks an Iterate, while repeats while a condition holds, and loop is the endless one - with the type Never until a break gives it a Void. while true is an error, because never ending is a property of the syntax here.
 - **[Evaluation order](evaluation-order.md)** - Evaluation order is source order - the receiver first, then the arguments as they are written, then the parameter defaults - so a side effect in an argument is exactly as predictable as reading the line.
 - **[What a copy costs](copies.md)** - A copy always behaves the same way, but what it costs depends on the shape of the type - inline for a small fixed-size value, copy-on-write for heap-backed storage, and never for a shared type.
-- **[Tail calls and the frame limit](tail-calls.md)** - Direct self-recursion in tail position is guaranteed to run without growing the stack, and every other call counts against a per-task frame limit of 100000 that panics with stack overflow when it is reached.
+- **[Tail calls and stack overflow](tail-calls.md)** - Direct self-recursion in tail position is guaranteed to run without growing the stack, and every other call uses a frame of its task's stack; a recursion that runs out of stack panics with stack overflow instead of crashing.
 - **[Destructors - close() runs at the last release](no-destructors.md)** _(planned)_ - A shared type's close() is its destructor - the runtime runs it exactly once when the last reference goes away, user code never calls it, and using pins that moment to the end of a block.
 
 <!-- torb:index:end -->

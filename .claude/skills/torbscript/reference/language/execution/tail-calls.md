@@ -1,13 +1,13 @@
 ---
-title: Tail calls and the frame limit
-summary: Direct self-recursion in tail position is guaranteed to run without growing the stack, and every other call counts against a per-task frame limit of 100000 that panics with stack overflow when it is reached.
+title: Tail calls and stack overflow
+summary: Direct self-recursion in tail position is guaranteed to run without growing the stack, and every other call uses a frame of its task's stack; a recursion that runs out of stack panics with stack overflow instead of crashing.
 kind: reference
 status: stable
 order: 30
 keywords:
   - tail call
   - stack overflow
-  - frame limit
+  - stack limit
   - recursion
 source:
   - CONCEPT.md#execution-model
@@ -50,12 +50,16 @@ fn <name>(...): <Type> {
 3. **Both back ends implement it as the same jump to the entry block.** The interpreter and the compiled binary
    agree on this because a tail call to oneself is compiled the same way a loop would be, not as a nested call.
 
-4. **Every task has a frame limit, 100,000 by default.** `--stack-limit` changes it; a call that is not a guaranteed
-   tail call counts against it the same way in the interpreter and in a compiled binary, because a counter is the
-   only thing a frame list and a C stack can agree on.
+4. **Every other call uses a frame of the stack of its task, and the stack is the limit.** How deep a recursion can
+   go depends on how big its frames are and how big the stack is: the main thread of a program gets the stack its
+   platform gives it, 1 MiB to 8 MiB, which is tens of thousands of frames of a small function. There is no frame count
+   and no flag that sets one, because a count says nothing about bytes: a hundred thousand small frames fit where ten
+   thousand big ones do not, so a count either stops a recursion that would fit or lets one crash that does not.
 
-5. **Reaching the limit panics with `stack overflow`.** This is a `panic` like any other: it prints the message and
-   the site to standard error, exits with **101**, and nothing runs on the way out (see
+5. **Running out of stack panics with `stack overflow`.** Every function that calls another checks, when it is
+   entered, that the stack still has room, and where it has not the call panics instead of running into the
+   operating system's guard page. This is a `panic` like any other: it prints the message and the function that could
+   not be entered to standard error, exits with **101**, and nothing runs on the way out (see
    [Result](../errors/result.md) for what a panic does and does not do).
 
 ## What this is not
@@ -94,7 +98,7 @@ print isEven(1_000_000)
 ```
 
 The second pair type checks and runs correctly for a small `n`; nothing about it is a compile error, because the
-frame limit is a resource a program can run into, not a rule the checker enforces. A large `n` panics with
+stack is a resource a program can run into, not a rule the checker enforces. A large `n` panics with
 `stack overflow` instead of finishing - rewriting one function to call the other directly, in a loop, is what avoids
 that, exactly as the accumulator pattern of `sum` above does for a single function.
 

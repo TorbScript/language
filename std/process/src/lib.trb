@@ -14,9 +14,9 @@ use Source, Sink, Bytes from "std/stream"
 public type ProcessOutput {
   /** `0` for success, anything else for the code the program exited with. */
   exitCode: Int
-  /** Everything the program wrote to either stream, in the order it wrote it; see [Process.run]'s pitfall. */
+  /** Everything the program wrote to its standard output. */
   standardOutput: String
-  /** Always empty for a program run with [Process.run]; see its pitfall about why. */
+  /** Everything the program wrote to its standard error, kept apart from [ProcessOutput.standardOutput]. */
   standardError: String
 
   /** The usual question about a child process: did it do what it was asked. */
@@ -101,9 +101,9 @@ public native type Process {
    *
    * # Pitfalls
    *
-   * Both output streams arrive in [ProcessOutput.standardOutput], in the order the program wrote them, and
-   * [ProcessOutput.standardError] is always empty. A caller that needs the two streams kept apart reaches for
-   * [Process.start] instead, which hands out real pipes.
+   * The two streams arrive apart, so the order in which the program interleaved them is lost: a line of
+   * [ProcessOutput.standardError] cannot be placed between two lines of [ProcessOutput.standardOutput]. A caller that
+   * needs the output while it arrives reaches for [Process.start] instead, which hands out real pipes.
    */
   static fn run(command: String, arguments: List<String>): Result<ProcessOutput, IoError> {
     var output = ""
@@ -115,12 +115,12 @@ public native type Process {
     if code < 0 {
       return Fail IoError(command, failure)
     }
-    Ok ProcessOutput(code, output, "")
+    Ok ProcessOutput(code, output, failure)
   }
 
   /**
-   * The exit code of the program, with everything it wrote in `output` - or **-1** where it could not be started at
-   * all, and then `failure` says why. The one shape a runtime function can have for this: a `Result` and a
+   * The exit code of the program, with what it wrote to standard output in `output` and what it wrote to standard
+   * error in `failure` - or **-1** where it could not be started at all, and then `failure` says why. The one shape a runtime function can have for this: a `Result` and a
    * `ProcessOutput` are types of the program, and starting a process is the operating system.
    */
   native static fn runCollecting(

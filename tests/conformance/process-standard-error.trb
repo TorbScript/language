@@ -1,0 +1,36 @@
+/**
+ * **`Process.run` keeps the two streams of a child apart.** What the child writes to standard output arrives in
+ * `standardOutput` and what it writes to standard error in `standardError`, each without a line of the other - which is
+ * what lets a driver show a C compiler's diagnostics and nothing else.
+ *
+ * The child is the shell of the platform, writing one word to each stream. What `cmd` writes ends in `\r\n`, so each
+ * answer is trimmed before it is printed.
+ */
+use IoError from "std/fs"
+use Process from "std/process"
+use Environment from "std/environment"
+
+fn run(): Result<Int, IoError> {
+  const outcome = Process.run(shell(), bothStreams())?
+  print outcome.isSuccess()
+  print outcome.standardOutput.trim()
+  print outcome.standardError.trim()
+  Ok outcome.exitCode
+}
+
+/** `COMSPEC` is what says this is a Windows machine. */
+fn shell(): String {
+  if Environment.get("COMSPEC").isSome() { "cmd" } else { "/bin/sh" }
+}
+
+fn bothStreams(): List<String> {
+  if Environment.get("COMSPEC").isSome() { ["/c", "echo out& echo err>&2"] } else { ["-c", "echo out; echo err >&2"] }
+}
+
+match run() {
+  Ok(code) => Process.exit code
+  Fail(problem) => {
+    printError "error: {problem}"
+    Process.exit 1
+  }
+}

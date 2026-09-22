@@ -226,7 +226,9 @@ bool torb_file_absolute_path(torb_text path, torb_text *out, torb_text *error) {
     result[1] = ':';
     result[2] = '/';
     result_length = 3u;
-    position = joined[2] == '/' ? 3u : 2u;
+    /* `C:` alone ends here, and `C:foo` is read as `C:/foo` (docs/PATH.md section 2): past the colon only a separator
+       that is really there is skipped. */
+    position = joined_length >= 3u && joined[2] == '/' ? 3u : 2u;
   } else {
     result[0] = '/';
     result_length = 1u;

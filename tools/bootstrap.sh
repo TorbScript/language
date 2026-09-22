@@ -92,6 +92,22 @@ if [ -z "$seed" ] && [ -f "seed/program.c" ]; then
   [ -n "$seed" ] || fail "the C compiler wrote no binary"
 fi
 
+# The archives `tools/refresh-seed.sh` keeps, newest first: what a missing or broken seed falls back to. An explicit
+# $TORB_SEED never falls back - it names the one seed to use.
+archives=${TORB_SEED_ARCHIVE:-$(dirname "$root")/torbscript-seeds}
+archived_seeds() {
+  [ -z "${TORB_SEED-}" ] || return 0
+  [ -d "$archives" ] || return 0
+  ls -1t "$archives" | while IFS= read -r archive; do
+    binary_of "$archives/$archive/torb"
+  done
+}
+
+if [ -z "$seed" ]; then
+  seed=$(archived_seeds | head -n 1)
+  [ -z "$seed" ] || say "seed/ has no seed: falling back to the newest archive, $seed"
+fi
+
 if [ -z "$seed" ]; then
   say "bootstrap.sh: there is no seed."
   say ""
@@ -116,7 +132,22 @@ trap 'if [ "$succeeded" -eq 1 ]; then rm -rf "$staging"; fi' EXIT
 
 # No `--profile`: `torb build` builds `release` unless told otherwise, and a seed may be older than the flag
 say "step 1: the seed builds the compiler"
-"$seed" build ./compiler --output "./$staging/bootstrap/torb"
+if ! "$seed" build ./compiler --output "./$staging/bootstrap/torb"; then
+  # A seed that cannot build the sources is broken or too old; an archived one may still do it. The seed in seed/ is
+  # left as it is - `tools/refresh-seed.sh` replaces it once a bootstrap is green.
+  built=0
+  for candidate in $(archived_seeds); do
+    [ "$candidate" != "$seed" ] || continue
+    say "step 1 failed with $seed: trying the archived seed $candidate"
+    if "$candidate" build ./compiler --output "./$staging/bootstrap/torb"; then
+      seed=$candidate
+      built=1
+      break
+    fi
+  done
+  [ "$built" -eq 1 ] || fail "step 1 failed with the seed and with every archived seed in $archives"
+  say "seed: $seed (an archive - refresh seed/ with sh tools/refresh-seed.sh once this is green)"
+fi
 first=$(binary_of "$staging/bootstrap/torb")
 [ -n "$first" ] || fail "step 1 wrote no binary"
 

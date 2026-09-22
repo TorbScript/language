@@ -26,6 +26,7 @@ use SourceFile, Declaration, Member, Pattern, Visibility from "../syntax/ast"
 use lex from "../syntax/lexer"
 use parse from "../syntax/parser/parser"
 use collectSourceFiles from "../cli/files"
+use counted from "../cli/render"
 use readSourceTree, absolutePaths from "../project/read"
 use normalizePath, parentPath, pathName from "../project/path"
 use SourceTree from "../project/source-tree"
@@ -656,7 +657,7 @@ fn reportSource(
   }
   if !sorted.isEmpty() {
     printError ""
-    printError "{sorted.length()} problems in {files} files"
+    printError "{counted(sorted.length(), "problem")} in {counted(files, "file")}"
     return sorted.length()
   }
   for example in examples {
@@ -664,7 +665,8 @@ fn reportSource(
       print "skipped: {example.path}:{example.line}: {example.reason}"
     }
   }
-  print "{files} files, {declarations} declarations, {examples.length()} examples, no problems"
+  const counts = "{counted(files, "file")}, {counted(declarations, "declaration")}"
+  print "{counts}, {counted(examples.length(), "example")}, no problems"
   0
 }
 

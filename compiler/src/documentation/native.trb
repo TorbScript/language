@@ -246,7 +246,9 @@ fn compileProgram(source: String, binary: String, runtime: String): Result<Strin
   if output.exitCode == 0 {
     return Ok ""
   }
-  const first = linesOf(output.standardOutput).take(5).toList().joined(separator: " | ")
+  // A C compiler says what is wrong on standard error, and some say part of it on standard output
+  const said = if output.standardError.trim().isEmpty() { output.standardOutput } else { output.standardError }
+  const first = linesOf(said).take(5).toList().joined(separator: " | ")
   Ok "internal error: the C of the `trb run` blocks did not compile ({source}): {first}"
 }
 

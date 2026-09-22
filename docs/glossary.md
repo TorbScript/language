@@ -481,8 +481,8 @@ implementor of the smaller trait implements it too. See [Supertraits](language/t
 ### Tail call
 
 A call in tail position of a function that calls itself directly. Guaranteed not to grow the stack; every other call
-uses a stack frame and counts against the per-task frame limit. See
-[Tail calls and the frame limit](language/execution/tail-calls.md).
+uses a frame of its task's stack, and running out of stack panics with `stack overflow`. See
+[Tail calls and stack overflow](language/execution/tail-calls.md).
 
 ### Task
 

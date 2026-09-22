@@ -32,8 +32,15 @@ const torb_location torb_location_unknown = { NULL, 0, 0 };
 #define TORB_PANIC_BUFFER_SIZE 2048
 #define TORB_MESSAGE_BUFFER_SIZE 1024
 
-uint32_t torb_frame_limit = 100000;
-static uint32_t torb_frame_count = 0;
+/**
+ * How much of the stack the check leaves over: the panic renders into two buffers of a few kilobytes and writes through
+ * `stdio` or `WriteConsoleW`, and a function without the check - a leaf, a function of the runtime, a call of the
+ * operating system - may still run below the last one that has it. A tenth of the smallest main thread stack a C
+ * toolchain gives (1 MiB with MSVC, 2 MiB with MinGW, 8 MiB on Linux and macOS).
+ */
+#define TORB_STACK_RESERVE ((uintptr_t)128u * 1024u)
+
+uintptr_t torb_stack_limit = 0u;
 static torb_panic_hook torb_hook = NULL;
 static torb_recovery *torb_recovery_point = NULL;
 
@@ -67,7 +74,6 @@ static TORB_NORETURN void torb_finish_panic(const char *message, torb_location a
     torb_recovery_point = NULL;
     snprintf(point->message, sizeof point->message, "%s", message);
     point->at = at;
-    torb_frame_count = 0;
     longjmp(point->destination, 1);
   }
   if (at.path != NULL) {
@@ -75,7 +81,6 @@ static TORB_NORETURN void torb_finish_panic(const char *message, torb_location a
   } else {
     snprintf(buffer, sizeof buffer, "panic: %s", message);
   }
-  torb_frame_count = 0;
   if (torb_hook != NULL) {
     torb_hook(buffer);
   }
@@ -167,20 +172,12 @@ void torb_panic_out_of_memory(size_t size) {
 }
 
 void torb_panic_stack_overflow(torb_location at) {
-  char text[TORB_MESSAGE_BUFFER_SIZE];
-  snprintf(text, sizeof text, "stack overflow: more than %lu frames", (unsigned long)torb_frame_limit);
-  torb_finish_panic(text, at);
+  torb_finish_panic("stack overflow: the recursion is deeper than the stack of the thread", at);
 }
 
-void torb_enter_frame(torb_location at) {
-  torb_frame_count += 1;
-  if (torb_frame_count > torb_frame_limit) {
-    torb_panic_stack_overflow(at);
-  }
-}
-
-void torb_leave_frame(void) {
-  if (torb_frame_count > 0) {
-    torb_frame_count -= 1;
+void torb_set_stack_limit(void) {
+  uintptr_t low = 0u;
+  if (torb_platform_stack_low(&low)) {
+    torb_stack_limit = low + TORB_STACK_RESERVE;
   }
 }

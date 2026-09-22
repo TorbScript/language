@@ -15,7 +15,7 @@ use lex from "./syntax/lexer"
 use parse from "./syntax/parser/parser"
 use dumpTokens from "./syntax/dump"
 use collectSourceFiles from "./cli/files"
-use renderDiagnostic, renderProblem from "./cli/render"
+use renderDiagnostic, renderProblem, counted from "./cli/render"
 use readSourceTree, absolutePaths from "./project/read"
 use SourceTree from "./project/source-tree"
 use check, Checked from "./semantics/check"
@@ -106,9 +106,9 @@ fn checkSyntax(paths: List<String>): Result<Int, IoError> {
     }
   }
   if problems == 0 {
-    print "{files.length()} files, no problems"
+    print "{counted(files.length(), "file")}, no problems"
   } else {
-    printError "{problems} problems in {filesWithProblems} of {files.length()} files"
+    printError "{counted(problems, "problem")} in {filesWithProblems} of {counted(files.length(), "file")}"
   }
   Ok problems
 }
@@ -154,9 +154,10 @@ fn checkProjects(paths: List<String>, withStatistics: Bool, withTimings: Bool): 
     return Ok(problems + 1)
   }
   if problems == 0 {
-    print "{checked.files.length()} files, no problems"
+    print "{counted(checked.files.length(), "file")}, no problems"
   } else {
-    printError "{problems} problems in {filesWithProblems} of {checked.files.length()} files"
+    const total = counted checked.files.length(), "file"
+    printError "{counted(problems, "problem")} in {filesWithProblems} of {total}"
   }
   Ok problems
 }

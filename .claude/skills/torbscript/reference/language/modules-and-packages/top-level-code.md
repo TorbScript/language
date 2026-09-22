@@ -39,7 +39,9 @@ const <name> = <compile-time expression>    a module's only top-level statement
 
 1. **Whether a file may have top-level code depends on being imported, not on its name.** `src/main.trb`, a receiver
    script, and every file of `examples/tour` qualify because nothing imports them; `src/lib.trb` of a named package
-   never does, because it is what other packages import.
+   never does, because it is what other packages import. `torb check src/main.trb` checks the files that file imports
+   through a relative path as well, so top-level code in one of them is reported even when only the entry file is
+   named, and `torb build` refuses the program.
 
 2. **A `tests/*.test.trb` file consists of nothing but top-level `group` and `test` calls.** The test framework is
    ordinary functions, so a test file is a script like any other.
@@ -82,7 +84,19 @@ const <name> = <compile-time expression>    a module's only top-level statement
    const (a, b) = (1, 2)
    ```
 
-8. **`public const` exports the constant; there is no `public var` at the top level of a module.** A module has no
+8. **The top-level code of the entry file is the program, and no function is called for it.** `fn main()` is an
+   ordinary function: nothing calls it unless the top-level code does. An entry file with no top-level code at all -
+   declarations and `const`s only - has nothing to run.
+
+   ```trb run
+   fn main() {
+     print "main runs because the top-level code calls it"
+   }
+
+   main()   // prints main runs because the top-level code calls it
+   ```
+
+9. **`public const` exports the constant; there is no `public var` at the top level of a module.** A module has no
    mutable state, so nothing a top-level `var` could export exists in the first place - see
    [Visibility](visibility.md).
 

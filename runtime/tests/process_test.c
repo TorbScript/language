@@ -48,6 +48,34 @@ TORB_TEST(a_program_that_ran_answers_its_code_and_its_output) {
   torb_text_release(failure);
 }
 
+/** The two streams of the child come back apart: standard output in `output`, standard error in `failure`. */
+TORB_TEST(the_two_streams_of_a_program_come_back_apart) {
+#if defined(_WIN32)
+  torb_text command = torb_text_from_cstring("cmd");
+  torb_list arguments = argument_list("/c", "echo out& echo err>&2");
+#else
+  torb_text command = torb_text_from_cstring("/bin/sh");
+  torb_list arguments = argument_list("-c", "echo out; echo err >&2");
+#endif
+  torb_text output = torb_text_empty();
+  torb_text failure = torb_text_empty();
+  torb_text out = torb_text_from_cstring("out");
+  torb_text err = torb_text_from_cstring("err");
+
+  TORB_CHECK_INTEGER(torb_process_run(command, arguments, &output, &failure), 0);
+  TORB_CHECK(torb_text_contains(output, out));
+  TORB_CHECK(!torb_text_contains(output, err));
+  TORB_CHECK(torb_text_contains(failure, err));
+  TORB_CHECK(!torb_text_contains(failure, out));
+
+  torb_text_release(out);
+  torb_text_release(err);
+  torb_text_release(output);
+  torb_list_release(arguments);
+  torb_text_release(command);
+  torb_text_release(failure);
+}
+
 /** A program that ran and failed is an **exit code** and not a failure of `run`: that is the whole point of it. */
 TORB_TEST(a_program_that_failed_is_an_exit_code_and_not_an_error) {
 #if defined(_WIN32)
@@ -149,6 +177,7 @@ TORB_TEST(an_argument_with_a_space_arrives_as_one_argument) {
 
 void torb_register_process_tests(void) {
   TORB_ADD(a_program_that_ran_answers_its_code_and_its_output);
+  TORB_ADD(the_two_streams_of_a_program_come_back_apart);
   TORB_ADD(a_program_that_failed_is_an_exit_code_and_not_an_error);
   TORB_ADD(a_command_that_is_nowhere_cannot_be_started);
   TORB_ADD(a_command_on_the_path_with_one_argument_runs);

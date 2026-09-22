@@ -12,7 +12,7 @@ use SourceTree from "../project/source-tree"
 use Workspace, Package, findWorkspace from "../project/workspace"
 use ModuleId from "./module"
 use SymbolId from "./symbols"
-use buildGraph from "./graph"
+use Graph, buildGraph, resolveImport from "./graph"
 use Program, resolveNames, checkNames from "./scope"
 use resolveTypes from "./resolve-types"
 use Checker, Timing from "./checker/context"
@@ -93,20 +93,25 @@ public fn check(
     }
   }
   before.append Timing("names in type positions", clock.taken())
+  const reported = withRelativeImports graph, workspace, requested
   const resolvedProgram = program.copy symbols: symbols
   // A lowering may reach the body of any module - a default member of a trait of `std/prelude`, a generic function of
   // another package - and a body whose tables were never filled cannot be lowered at all. What is *reported* stays what
   // was asked for either way, because `files` below is filtered by the request and not by this
-  const bodies = if checksEveryBody { everything } else { requested }
+  const bodies = if checksEveryBody { everything } else { reported }
   var checked = checkTypes resolvedProgram, resolutions, bodies, withTimings
   // The passes before the checker existed cannot be recorded on it as they run, so they are put in front here
   if withTimings {
     checked.timings = before.appendedAll checked.timings
   }
 
+  var isReported: Set<Int> = Set.of()
+  for module in reported {
+    isReported.insert module.value
+  }
   var files: List<CheckedFile> = []
   for module in graph.modules {
-    if !isRequested(targets, module.path) {
+    if !isReported.contains(module.id.value) {
       continue
     }
     var diagnostics = module.diagnostics
@@ -128,6 +133,43 @@ public fn check(
   }
   files.sort({ _.path })
   Checked resolvedProgram.copy(symbols: checked.symbols), files, problems, resolutions, requested, checked
+}
+
+/**
+ * The requested modules plus every module they import through a relative path, transitively: the files of the program
+ * itself. `torb check main.trb` checks and reports `./helper.trb` too, because a problem there - top-level code in a
+ * file that is imported, a body that does not type check - is a problem of the program that was named. An import of
+ * another package, `std/` included, is loaded and not reported: that package is checked on its own.
+ */
+fn withRelativeImports(graph: Graph, workspace: Workspace, requested: List<ModuleId>): List<ModuleId> {
+  var found = requested
+  var known: Set<Int> = Set.of()
+  for module in requested {
+    known.insert module.value
+  }
+  var index = 0
+  while index < found.length() {
+    const module = graph.at found[index]
+    index = index + 1
+    for statement in module.file.statements {
+      if const .Declare(declaration) = statement.kind {
+        if const .Use(usage) = declaration.kind {
+          if const .Module(path) = usage.source {
+            if !path.startsWith("./") && !path.startsWith("../") {
+              continue
+            }
+            if const .Found(target) = resolveImport(graph, workspace, module.id, path) {
+              if !known.contains(target.value) {
+                known.insert target.value
+                found.append target
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  found
 }
 
 /** Only what the command line pointed at is reported; the rest is loaded because the imports lead there. */

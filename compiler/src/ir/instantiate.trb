@@ -11,7 +11,7 @@ use relativePath, joinPath, pathName, isInside from "../project/path"
 use ModuleId from "../semantics/module"
 use SymbolId, SymbolKind from "../semantics/symbols"
 use TypeId, TypeForm, TupleField, FunctionForm, ParameterForm, ParameterMode from "../semantics/checker/type"
-use ParameterId, LiteralValue, TypeSignature from "../semantics/checker/type"
+use ParameterId, LiteralValue, TypeSignature, describeType from "../semantics/checker/type"
 use Checker from "../semantics/checker/context"
 use typeSignatureOf from "../semantics/checker/signature"
 use substitute from "../semantics/checker/unify"
@@ -506,6 +506,10 @@ public fn symbolPathOf(checker: Checker, symbol: SymbolId): SymbolPath {
     }
     break
   }
+  const implemented = implementedTraitOf checker, symbol
+  if !implemented.isEmpty() {
+    owners.append implemented
+  }
   match declared.module {
     Some(module) => {
       const inside = checker.program.graph.at module
@@ -515,6 +519,59 @@ public fn symbolPathOf(checker: Checker, symbol: SymbolId): SymbolPath {
     // `Void`, `Never`: names of the language, declared in no file
     None => SymbolPath "", "", owners, declared.name
   }
+}
+
+/**
+ * `Multiply<Scale>` for a member of `extend Board with Multiply<Scale>`: the applied trait, as one more owner of the
+ * member's name, where the trait has arguments and the member is written in an `extend`. Empty for everything else.
+ *
+ * `extend Board with Multiply<Scale>` and `extend Board with Multiply<Board>` both declare `multiply` on `Board`, and
+ * two `From`s on one type both declare `from`: the owner and the name are the same, and only the arguments of the trait
+ * tell the two bodies apart. A member of the body of a `type` needs nothing, because one body cannot declare a name
+ * twice. `extend Board with A<X>, B<Y>` is one set of members for both, named after the first.
+ */
+fn implementedTraitOf(checker: Checker, symbol: SymbolId): String {
+  const site = match checker.siteOf(symbol) {
+    Some(found) => found
+    None => {
+      return ""
+    }
+  }
+  const owner = match site.kind {
+    .Owned(Some(found), _, _) => found
+    _ => {
+      return ""
+    }
+  }
+  const name = checker.symbolAt(symbol).name
+  const table = checker.implementations
+  var candidates = table.declaredFor symbolOfOwnerType(checker, owner)
+  candidates.appendAll table.open
+  for index in candidates {
+    const implementation = table.all[index]
+    const capability = match implementation.capability {
+      Some(found) => found
+      None => {
+        continue
+      }
+    }
+    if const .Nominal(_, arguments) = checker.types.form(capability) {
+      if arguments.isEmpty() {
+        continue
+      }
+    } else {
+      continue
+    }
+    if implementation.members.get(name) != Some(symbol) {
+      continue
+    }
+    // Only an `extend` is remembered by where it is written; the `with` list of a `type` shares the body's members
+    if !table.bySpan.containsKey("{implementation.module.value}:{implementation.at.start}") {
+      continue
+    }
+    return describeType checker.types, checker.symbols, capability
+  }
+  ""
 }
 
 /** `list` for `std/collections/src/list.trb`; `main` for a script that belongs to no project. */

@@ -173,7 +173,30 @@ type OptionalChain {
 
 /** The value of an expression that nothing has a slot for yet. */
 public fn lowerValue(var lowering: Lowering, var builder: FunctionBuilder, expression: Expression): Slot {
-  lowerExpression lowering, builder, expression, None
+  const destination = valueDestinationOf lowering, builder, expression
+  lowerExpression lowering, builder, expression, destination
+}
+
+/**
+ * Where the value of an expression goes when a caller asks for its value and names no slot: nowhere in particular,
+ * except for a `Void`. A construct without a destination takes that to mean the value is not needed - a call of a
+ * `Void` function in statement position defines no slot at all - so where the `void` is read after all, in
+ * `print setUp()`, a slot to write it into is named here and the construct defines it.
+ */
+fn valueDestinationOf(var lowering: Lowering, var builder: FunctionBuilder, expression: Expression): Slot? {
+  // A name and the literal are a slot already, and a slot of their own would only be a copy of it
+  match expression.kind {
+    .Name(_) | .VoidLiteral => {
+      return None
+    }
+    _ => {}
+  }
+  if const Some(annotation) = typeAtSpan(lowering, expression.span) {
+    if isVoidType(lowering, annotation) {
+      return Some addTemporary(builder, annotation)
+    }
+  }
+  None
 }
 
 /**
@@ -197,7 +220,8 @@ public fn lowerUncoercedValue(var lowering: Lowering, var builder: FunctionBuild
   if !canReplayAdaptations(lowering, expression) {
     return abandonedSlot lowering, builder, None
   }
-  lowerInnerExpression lowering, builder, expression, None, annotation
+  const destination = valueDestinationOf lowering, builder, expression
+  lowerInnerExpression lowering, builder, expression, destination, annotation
 }
 
 /** The bounds `Adaptation.ToTraitValue` recorded at an expression, or an empty list where it recorded none. */

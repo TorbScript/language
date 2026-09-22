@@ -43,6 +43,11 @@ group "Lexer" {
     assert(tokens[0] == TokenKind.TextLiteral(expected))
   }
 
+  test "a byte order mark in front of the first character is skipped, and only there" {
+    assert(kinds("\u{FEFF}const x") == [.Reserved(Keyword.Const), .Identifier, .EndOfFile])
+    assert(!messages("const \u{FEFF}x").isEmpty())
+  }
+
   test "escapes" {
     assert(kinds("'\\n'")[0] == TokenKind.CharLiteral('\n'))
     assert(kinds("'\\u\{1F44B\}'")[0] == TokenKind.CharLiteral('👋'))

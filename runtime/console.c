@@ -338,7 +338,11 @@ void torb_print(torb_text text) {
   torb_print_to(stdout, &text, 1u);
 }
 
+/* Standard output is buffered when it is a pipe or a file and standard error is not, so a line to stderr flushes stdout
+   first: the two streams of a program that reports a failure then arrive in the order the program wrote them, the way
+   they do for a panic (panic.c). */
 void torb_print_error(torb_text text) {
+  fflush(stdout);
   torb_print_to(stderr, &text, 1u);
   fflush(stderr);
 }
@@ -348,6 +352,7 @@ void torb_print_parts(const torb_text *parts, size_t count) {
 }
 
 void torb_print_error_parts(const torb_text *parts, size_t count) {
+  fflush(stdout);
   torb_print_to(stderr, parts, count);
   fflush(stderr);
 }

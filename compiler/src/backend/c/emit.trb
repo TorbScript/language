@@ -27,7 +27,7 @@ use keepingOf from "../../ir/kept"
 use hexDigits, objectTypeName, payloadLayoutName from "../../ir/mangle"
 use nativeEntries from "./natives"
 use CExpression, CStatement, CSwitchCase, CDeclaration, declarationOf, cStringOf from "./writer"
-use Emission, write, reportUnsupported, emittedText from "./emission"
+use Emission, write, reportUnsupported, emittedText, locationExpression from "./emission"
 use cTypeOf, whyNoCType, hasStructDefinition, memberNameOf, variantMemberNameOf from "./type"
 use structDeclarationOf, layoutDefinitionOrder, objectDeclarationOf from "./type"
 use bodyOf, bodyStatements, signatureHeadOf, valueTypeOf, emptyNicheExpression, resultTypeOf from "./body"
@@ -75,7 +75,7 @@ public fn emitProgram(program: IrProgram, entries: List<ProgramEntry>): Emission
   emitWitnessTables emission, program
   emitClosureThunks emission, program, functions
   emitDefinitions emission, program, functions, prototypes
-  emitMain emission, entries
+  emitMain emission, entries, functions
   emission
 }
 
@@ -1636,7 +1636,12 @@ fn emitDefinitions(
       continue
     }
     const body = bodyOf program, function, prototypes, keeping
-    const statements = bodyStatements emission, program, body
+    var statements = bodyStatements emission, program, body
+    if callsProgramCode(program, function) {
+      var checked = [stackCheckOf(program, function)]
+      checked.appendAll statements
+      statements = checked
+    }
     const declaration = CDeclaration.Definition(
       commentOf(program, function),
       signatureHeadOf(program, function),
@@ -1644,6 +1649,54 @@ fn emitDefinitions(
     )
     write emission, declaration
   }
+}
+
+/**
+ * `TORB_CHECK_STACK(TORB_LOCATION(...));`, the first statement of a function that calls program code: the panic
+ * `stack overflow` where the stack of the thread is nearly used up, instead of the crash the operating system would
+ * answer a few frames later (`runtime/include/torb.h`). The location is where the function is written, because that is
+ * the call that did not fit.
+ */
+fn stackCheckOf(program: IrProgram, function: IrFunction): CStatement {
+  const location = match function.blocks.first() {
+    Some(entry) => {
+      match entry.at {
+        Some(at) => locationExpression program, at
+        None => CExpression.Name "torb_location_unknown"
+      }
+    }
+    None => CExpression.Name "torb_location_unknown"
+  }
+  CStatement.Evaluate CExpression.Call(CExpression.Name("TORB_CHECK_STACK"), [location])
+}
+
+/**
+ * Whether a function can be part of a recursion: whether it calls a function of the program, a closure or a member of
+ * a witness table. One that only calls the runtime, or nothing, is a leaf - it adds one frame of bounded size, which the
+ * reserve of the stack check covers, and it goes without the check. A call of itself in tail position is a jump and no
+ * call at all, so the self-recursion the language guarantees costs one check and not one per round.
+ */
+fn callsProgramCode(program: IrProgram, function: IrFunction): Bool {
+  for block in function.blocks {
+    for instruction in block.instructions {
+      match instruction {
+        .CallClosure(_, _, _) | .CallWitness(_, _, _, _) => {
+          return true
+        }
+        .Call(_, callee, _, _, _) => {
+          if !program.hasFunction(callee) {
+            continue
+          }
+          if const .Runtime(_) = program.functionAt(callee).kind {
+            continue
+          }
+          return true
+        }
+        _ => {}
+      }
+    }
+  }
+  false
 }
 
 /**
@@ -1749,24 +1802,33 @@ fn commentOf(program: IrProgram, function: IrFunction): String {
  * through `torb_test_file`, and the tail is `torb_test_finish`, which writes the summary line and answers the exit
  * code. A test that fails or panics is reported by `runtime/test.c` and does not end the process, so the file after it
  * still runs - which is what makes one binary for the whole suite behave like one process per file.
+ *
+ * An entry file of declarations alone - `const million = 1_000_000`, or a `fn main()` that nothing calls - has no entry
+ * function, because nothing in it runs. Its `main` starts and finishes the runtime and calls nothing, so the program
+ * is one that does nothing rather than C that names a function it never defines.
  */
-fn emitMain(var emission: Emission, entries: List<ProgramEntry>) {
+fn emitMain(var emission: Emission, entries: List<ProgramEntry>, functions: List<IrFunction>) {
   if entries.isEmpty() {
     return
   }
   var lines = ["torb_process_start(argument_count, argument_values);"]
   var isTestRun = false
+  var isNamed = false
   for entry in entries {
     // A test file that declares things and runs nothing has no entry function; its name is still printed
     if !entry.file.isEmpty() {
       isTestRun = true
       lines.append "torb_test_file({cStringOf(entry.file)}, {entry.file.byteLength()});"
     }
-    if !entry.name.isEmpty() {
+    if entry.name.isEmpty() {
+      continue
+    }
+    isNamed = true
+    if functions.any({ _.name == entry.name }) {
       lines.append "{entry.name}();"
     }
   }
-  if lines.length() == 1 {
+  if lines.length() == 1 && !isNamed {
     return
   }
   // The summary of the run is written before the leak report, so the two reports read in the order they happened

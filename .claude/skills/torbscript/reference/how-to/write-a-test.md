@@ -59,7 +59,7 @@ when it fails.
    my-project/tests/vector2.test.trb
      ok      Vector2 > adds component-wise
 
-   1 passed, 0 failed (1 files)
+   1 passed, 0 failed (1 file)
    ```
 
 ## Pitfalls

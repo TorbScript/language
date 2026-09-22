@@ -23,6 +23,7 @@ use NativeOptions from "./native"
 use generateIndexes, writeIndexes, staleIndexes from "./index"
 use buildSkill, writeSkill, staleSkillFiles, installationHint, skillName from "./skill"
 use bundleDocumentation, writeBundle from "./bundle"
+use counted from "../cli/render"
 
 /** The options every `torb docs` command is called with, parsed once by [documentationOptionsOf]. */
 public type DocumentationOptions {
@@ -119,10 +120,11 @@ public fn runCheck(options: DocumentationOptions): Result<Int, IoError> {
   const count = reportProblems problems
   if count > 0 {
     printError ""
-    printError "{count} problems in {checked.pages} pages"
+    printError "{counted(count, "problem")} in {counted(checked.pages, "page")}"
     return Ok count
   }
-  print "{checked.pages} pages, {checked.folders} folders, {checked.snippets} snippets, no problems"
+  const folders = counted checked.folders, "folder"
+  print "{counted(checked.pages, "page")}, {folders}, {counted(checked.snippets, "snippet")}, no problems"
   for skipped in checked.skipped {
     print "skipped: {skipped}"
   }
@@ -182,8 +184,8 @@ public fn runSkill(options: DocumentationOptions): Result<Int, IoError> {
     return Ok stale.length()
   }
   writeSkill(options.out, skill)?
-  print "{skillName}: {skill.files.length()} files, SKILL.md has {skill.bodyLines} lines"
-  print "{skill.included} pages, {skill.excluded} left out by `skill: omit`"
+  print "{skillName}: {counted(skill.files.length(), "file")}, SKILL.md has {counted(skill.bodyLines, "line")}"
+  print "{counted(skill.included, "page")}, {skill.excluded} left out by `skill: omit`"
   print installationHint(options.out)
   Ok 0
 }

@@ -192,6 +192,7 @@ worth, what it risks, and the test that pins it.
 | 12 | Witness members that nothing calls | 24 thunks in a three-line program, and every table emitted | whole-program member liveness | large |
 | 13 | Reference counts cannot be inlined | measured: -14% to +9%, no decision | nothing yet | - |
 | 14 | A module `const` rebuilt where it is read | 63% of a read, already fixed | recorded, not open | - |
+| 15 | The stack check | 1-3% on a recursion of three operations; a frame counter was 1.74x | one comparison with the stack limit at entry | **done** |
 
 ### F1. `x = f(x)` is a move, because the assignment defines the slot
 
@@ -851,6 +852,39 @@ Already found, already fixed, and recorded here because it is the shape that kee
 [BACKEND 6.3](BACKEND.md) measured `punctuationTable` in the lexer at **1.43 microseconds per read against 0.83 for the
 walk alone** before the value became one immortal block. The rule that follows from it is in section 6: a `const` whose
 initializer is not static data is built once and read with a retain, in both back ends.
+
+### F15. A recursion that is too deep is a panic, for one comparison per call
+
+**Pattern.** Every function that calls program code - a function of the program, a closure, a member of a witness
+table - begins with `TORB_CHECK_STACK(TORB_LOCATION(...))`: the address of a local against `torb_stack_limit`, which
+`torb_process_start` works out once from the real bounds of the main thread's stack plus a reserve of 128 KiB for the
+panic itself. A leaf, and the self-recursion in tail position that is a jump, pay nothing.
+
+**What it costs.** On `benchmarks/call-depth`, a recursion whose whole body is a comparison, two subtractions and a
+checked addition, which is the worst case there is. The same C built four ways, nine runs each, wall time with the
+process start included (fastest, then median):
+
+| Variant | fastest | median |
+|---------|---------|--------|
+| No check | 436 ms | 464 ms |
+| The stack check, through the runtime's global | 441 ms | 481 ms |
+| The stack check, through a `static` copy of the limit | 454 ms | 479 ms |
+| A frame counter, `static`, incremented and compared at the entry and decremented before each return | 709 ms | 724 ms |
+
+The check is four instructions - two loads, a `lea` and a compare - and a branch nothing takes, and it is inside this
+machine's band; `run.sh` put the binary at 373-394 ms without it and 393-413 ms with it over four sessions. The
+`static` copy saves nothing, so the check reads the runtime's global. A counter is **1.74x** on the same program: it
+writes memory twice per call and has to be undone on every way out of a function.
+
+**Why not the counter the design first asked for** (decided gap 8 of BACKEND.md): besides the cost, a count cannot
+keep a C stack from overflowing. The same probe (`tests/conformance/stack-overflow.trb`) panics between 20 000 and 40 000 frames of a
+two-slot function on this machine's 2 MiB main thread stack, so a limit of 100 000 frames would never have been
+reached - the program crashed on the guard page first, with no message and an exit code of the operating system. The
+comparison with the real limit is what turns that crash into a panic with exit code 101.
+
+**What it risks.** A leaf or a function of the runtime below the last check that needs more than the reserve still
+reaches the guard page, and so does a recursion inside the runtime itself (a `D_` drop function over a very deep
+value). A thread other than the main one needs its own limit when tasks get threads of their own.
 
 ---
 

@@ -11,6 +11,11 @@
  * header keeps.
  */
 
+/* `dup`, `dup2`, `fileno` and `lseek`, which the ordering test below points the standard streams away with */
+#if !defined(_WIN32) && !defined(_POSIX_C_SOURCE)
+#  define _POSIX_C_SOURCE 200809L
+#endif
+
 #include "harness.h"
 
 #include <stdio.h>
@@ -18,6 +23,19 @@
 #if defined(_WIN32)
 #  define WIN32_LEAN_AND_MEAN
 #  include <windows.h>
+#  include <io.h>
+#  define TORB_TEST_DUP _dup
+#  define TORB_TEST_DUP2 _dup2
+#  define TORB_TEST_FILENO _fileno
+#  define TORB_TEST_LSEEK _lseek
+#  define TORB_TEST_CLOSE _close
+#else
+#  include <unistd.h>
+#  define TORB_TEST_DUP dup
+#  define TORB_TEST_DUP2 dup2
+#  define TORB_TEST_FILENO fileno
+#  define TORB_TEST_LSEEK lseek
+#  define TORB_TEST_CLOSE close
 #endif
 
 /* Defined in console.c, not declared in torb.h - see the file comment above. */
@@ -90,6 +108,48 @@ TORB_TEST(a_file_receives_the_raw_bytes_of_a_line) {
 
   TORB_CHECK_INTEGER(read_length, strlen(expected));
   TORB_CHECK(memcmp(read_back, expected, read_length) == 0);
+}
+
+/**
+ * A line to standard error writes out what standard output still holds first, so the two streams of a program that
+ * reports a failure arrive in the order it wrote them (`torb_print_error`). Both standard streams point at files for the
+ * length of the test, and what had reached the output file when the error line went out is what is asserted: without
+ * the flush, `before` is still in the buffer of `stdout` at that moment.
+ */
+TORB_TEST(a_line_to_standard_error_writes_standard_output_out_first) {
+  const char *output_path = "torb-runtime-test-console-order-output.bin";
+  const char *error_path = "torb-runtime-test-console-order-error.bin";
+  FILE *captured_output = fopen(output_path, "w+b");
+  FILE *captured_error = fopen(error_path, "w+b");
+  torb_text line = torb_text_from_cstring("after");
+  int saved_output;
+  int saved_error;
+  long written;
+  TORB_CHECK(captured_output != NULL);
+  TORB_CHECK(captured_error != NULL);
+  fflush(stdout);
+  fflush(stderr);
+  saved_output = TORB_TEST_DUP(TORB_TEST_FILENO(stdout));
+  saved_error = TORB_TEST_DUP(TORB_TEST_FILENO(stderr));
+  TORB_TEST_DUP2(TORB_TEST_FILENO(captured_output), TORB_TEST_FILENO(stdout));
+  TORB_TEST_DUP2(TORB_TEST_FILENO(captured_error), TORB_TEST_FILENO(stderr));
+
+  fputs("before", stdout);
+  torb_print_error(line);
+  written = (long)TORB_TEST_LSEEK(TORB_TEST_FILENO(captured_output), 0, SEEK_END);
+
+  fflush(stdout);
+  fflush(stderr);
+  TORB_TEST_DUP2(saved_output, TORB_TEST_FILENO(stdout));
+  TORB_TEST_DUP2(saved_error, TORB_TEST_FILENO(stderr));
+  TORB_TEST_CLOSE(saved_output);
+  TORB_TEST_CLOSE(saved_error);
+  fclose(captured_output);
+  fclose(captured_error);
+  remove(output_path);
+  remove(error_path);
+  torb_text_release(line);
+  TORB_CHECK_INTEGER(written, 6);
 }
 
 /* ============================================================================================ Windows only ===== */
@@ -186,6 +246,7 @@ TORB_TEST(a_line_that_cannot_be_converted_falls_back) {
 void torb_register_console_tests(void) {
   TORB_ADD(a_file_receives_the_raw_bytes_of_the_join);
   TORB_ADD(a_file_receives_the_raw_bytes_of_a_line);
+  TORB_ADD(a_line_to_standard_error_writes_standard_output_out_first);
 #if defined(_WIN32)
   TORB_ADD(a_short_text_is_one_chunk);
   TORB_ADD(a_cut_away_from_any_surrogate_is_exactly_the_limit);

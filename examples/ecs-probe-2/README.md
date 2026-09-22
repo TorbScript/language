@@ -34,8 +34,9 @@ one frame: ["ship at 0.5", "free frame 1 at 0.25"]
 Four forms were probed as packages of their own and are recorded here rather than kept, because a package that does
 not build proves nothing.
 
-**1. Two `Store<Component>` implementations on one type: the checker resolves them, the mangler does not.** This is
-what would let a program's own `World` carry `Store<Position>` *and* `Store<Velocity>`, so that a package system takes
+**1. ~~Two `Store<Component>` implementations on one type: the checker resolves them, the mangler does not.~~ Closed
+(2026-09-22):** the name of a member of an `extend` now carries the applied trait, and the form below builds and
+runs. This is what would let a program's own `World` carry `Store<Position>` *and* `Store<Velocity>`, so that a package system takes
 one world instead of one group per package.
 
 ```trb
@@ -58,8 +59,8 @@ internal error: the generated C did not compile. This is a bug in torb, please r
   gcc: note: previous declaration of 't_..._World_attach' with type 'void(T_..._World *, T_..._Position)'
 ```
 
-`World.attach` carries no arguments of its own in the mangled name. This is gap 1 of `docs/ECS.md` and item 16 of
-`docs/LINEAR.md` section 12, and it is one change in `compiler/src/ir/mangle.trb`.
+`World.attach` carried no arguments of its own in the mangled name. That was gap 1 of `docs/ECS.md` and item 16 of
+`docs/LINEAR.md` section 12.
 
 **2. A world generic over a list of component types.** `type World<Components>` and `const world: World<(Position,
 Velocity)> = World()` both check and run, and a system `fn describe<Components>(world: World<Components>) where

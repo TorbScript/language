@@ -324,10 +324,9 @@ internal error: the generated C did not compile. This is a bug in torb, please r
   gcc: note: previous declaration of 't_..._World_attach' with type 'void(T_..._World *, T_..._Position)'
 ```
 
-`World.attach` carries no arguments of its own in the mangled name. That is
-[gap 1](#12-what-the-language-and-the-compiler-must-provide), it is one change in `compiler/src/ir/mangle.trb`, and
-until it lands a package with two component types is one group with one `Store` each, passed as two arguments. The
-design is reachable now and comfortable after one fix.
+`World.attach` carried no arguments of its own in the mangled name. That was
+[gap 1](#12-what-the-language-and-the-compiler-must-provide), and it is closed: the name of a member of an `extend` now
+carries the applied trait, so one world can carry `Store<Position>` and `Store<Velocity>` at once.
 
 **The form this design is *not*.** The obvious reading of "a world generic over a component list" is
 `World<(Position, Velocity, Sprite)>` with a bound `Has<Position>` over the tuple. That was probed and it is dead
@@ -1316,8 +1315,10 @@ In the order it hurts, each with the smallest change and a reproduction. The rep
 [`examples/ecs-probe-2`](../examples/ecs-probe-2); the red ones are recorded in its README, because a package that does
 not build proves nothing.
 
-**1. Two implementations of one trait with different arguments collide in the mangler.** The checker's half of this is
-closed: `extend World with Store<Position>` next to `extend World with Store<Velocity>` checks, `world.attach entity,
+**1. ~~Two implementations of one trait with different arguments collide in the mangler.~~ Closed (2026-09-22):** the
+name of a member of an `extend` whose trait has arguments carries the applied trait (`Store<Position>`), so the two
+`attach`es are two functions (`tests/conformance/implementation-trait-arguments.trb` pins it with two `From`s and two
+`Multiply`s on one type). What it said: the checker's half of this was closed: `extend World with Store<Position>` next to `extend World with Store<Velocity>` checks, `world.attach entity,
 Position(…)` resolves by the argument type, and `const column: Column<Velocity> = world.column()` resolves by the
 expected type, both confirmed by a negative probe. The back end then answers:
 

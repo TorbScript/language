@@ -2435,10 +2435,11 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
   short-circuit, and `??` evaluates its right side only when it is needed. "Left to right" can only mean the order a
   reader sees; anything else makes a side effect in an argument unpredictable.
 - **Tail calls are guaranteed for direct self-recursion in tail position,** which is what `retry` and every fold need,
-  and which both back ends implement as the same jump to the entry block. Every other call uses the stack, and a
-  per-task frame limit (100 000 by default, `--stack-limit`) panics with "stack overflow" - a counter is the only way
-  the VM, which has a frame list, and a native binary, which has a C stack, can agree on when that happens. An
-  unspecified crash is not a semantics.
+  and which both back ends implement as the same jump to the entry block. Every other call uses the stack of its
+  task, and a call that finds the stack nearly used up panics with "stack overflow": a function that calls another
+  compares the stack pointer with a limit worked out once from the real bounds of the stack. An unspecified crash is
+  not a semantics. There is no frame count and no `--stack-limit`: a count says nothing about how many bytes a frame
+  takes, so it cannot keep a C stack from overflowing, and the check that can is one comparison per call.
 - Memory: reference counting, and nothing else - no tracing collector and no cycle collector, now or later. Values
   cannot form cycles, and a closure that captures a `var` binding may not escape its scope, so only `shared type`
   objects can; [docs/DESTRUCTORS.md](docs/DESTRUCTORS.md) section 9 is how they are kept out: trees and graphs hold
@@ -2877,9 +2878,11 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
   was hit or that the script panicked, and a sandbox whose failures abort the host is not a sandbox.
 - A parameter default is evaluated at the call site, at every call, in the scope of the declaration - the same rule as
   for a field default. One rule for both kinds of default, and a default cannot depend on an invisible argument order.
-- Tail calls are guaranteed for direct self-recursion in tail position only, and a per-task frame limit panics with
+- Tail calls are guaranteed for direct self-recursion in tail position only, and running out of stack panics with
   "stack overflow". Portable C cannot guarantee a general tail call; the guarantee that can be kept is the one `retry`
-  and every fold need, and a counter is the only way a frame list and a C stack agree on when the stack is full.
+  and every fold need. The limit is the stack itself, checked against its real bounds at the entry of every function
+  that calls another (decided 2026-09-22, instead of the frame counter of 100 000 that was never built: a count cannot
+  keep frames of unknown size inside a C stack).
 - Multi-line strings are dedented by their first line: the indentation of the first line with content is stripped
   from every line, a lesser or mismatched indentation is a lexer error, and a leading line break right after `"""`
   is never part of the string. This lets a code block sit at the indentation of the call around it instead of at

@@ -239,16 +239,21 @@ TORB_TEST(a_panic_hook_catches_a_panic_and_the_suite_goes_on) {
   TORB_CHECK_PANIC_CONTAINS("at src/main.trb:12:5");
 }
 
-TORB_TEST(the_frame_counter_panics_at_the_limit) {
-  uint32_t saved = torb_frame_limit;
-  uint32_t index;
-  torb_frame_limit = 8u;
-  for (index = 0u; index < 8u; index += 1u) {
-    torb_enter_frame(torb_location_unknown);
-  }
-  TORB_EXPECT_PANIC(torb_enter_frame(in_deep));
+/**
+ * The stack check fires once the stack is below the limit, and not before. A limit above every address stands for a
+ * stack that is used up; the real one, from the bounds of this thread's stack, lies below where a test runs.
+ */
+TORB_TEST(the_stack_check_panics_below_the_limit) {
+  const uintptr_t saved = torb_stack_limit;
+  torb_stack_limit = 0u;
+  TORB_CHECK_STACK(in_deep);
+  torb_set_stack_limit();
+  TORB_CHECK(torb_stack_limit > 0u);
+  TORB_CHECK_STACK(in_deep);
+  torb_stack_limit = UINTPTR_MAX;
+  TORB_EXPECT_PANIC(TORB_CHECK_STACK(in_deep));
   TORB_CHECK_PANIC_CONTAINS("stack overflow");
-  torb_frame_limit = saved;
+  torb_stack_limit = saved;
 }
 
 void torb_register_memory_tests(void) {
@@ -267,5 +272,5 @@ void torb_register_memory_tests(void) {
   TORB_ADD(releasing_the_environment_of_a_closure_without_captures_is_a_no_op);
   TORB_ADD(a_copied_closure_shares_its_environment);
   TORB_ADD(a_panic_hook_catches_a_panic_and_the_suite_goes_on);
-  TORB_ADD(the_frame_counter_panics_at_the_limit);
+  TORB_ADD(the_stack_check_panics_below_the_limit);
 }

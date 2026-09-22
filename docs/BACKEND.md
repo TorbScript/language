@@ -3819,7 +3819,9 @@ with a limit (default 100 000, `--stack-limit`) panics with "stack overflow" - t
 which has its own frame list, and the C binary, which has a C stack, agree on when it happens. _Reason:_ an
 unspecified crash is not a semantics, and the guarantee that can be kept is the one that `retry` and every fold need.
 
-_Decision:_ accepted.
+_Decision:_ accepted. The counter was never built, and 2026-09-22 replaced it: a function that calls another compares
+the stack pointer with a limit worked out once from the real bounds of the stack, because a count cannot keep frames of
+unknown size inside a C stack and the comparison costs less (docs/PERFORMANCE.md F15). There is no `--stack-limit`.
 
 **9. What a panic prints, what it runs, and the exit code.** Error Handling: "`panic "unreachable"` - Bugs. Not
 catchable, aborts the task." Nothing about the message format, the exit code, whether `Close` runs, or what "the
