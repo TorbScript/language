@@ -1,17 +1,17 @@
 # The Exit of Stage 0
 
-`bootstrap/crates` is 14 435 lines of Rust in three crates, and the goal of this document is that the directory can be
-**deleted**. What stays is the C back end and the C runtime: a C compiler remains the one external tool a checkout
-needs, and everything above it - the front end, the checker, the lowering, the emitter, the driver, the formatter, the
-highlighter - is TorbScript compiled by TorbScript.
+`bootstrap/crates` was 14 560 lines of Rust in three crates, and this document is the record of removing it. What
+stays is the C back end and the C runtime: a C compiler is the one external tool a checkout needs, and everything
+above it - the front end, the checker, the lowering, the emitter, the driver, the formatter, the highlighter - is
+TorbScript compiled by TorbScript.
 
-The interpreter requirement of the language is not met by keeping stage 0. It is met by the bytecode VM of milestone 7,
-which is written in TorbScript and reads the same IR the C back end reads, so "the same program runs interpreted and
-compiles to a native executable" survives the deletion intact.
+The interpreter requirement of the language is met by the bytecode VM of milestone 7, which is written in TorbScript
+and reads the same IR the C back end reads, so "the same program runs interpreted and compiles to a native
+executable" survives the deletion intact.
 
-This document is the inventory: what stage 0 is used for, what replaces each of those, what the native path cannot do
-yet and whether that blocks the exit, what the two implementations cost, how a checkout without Rust gets its first
-compiler, and the slices that get there.
+Below is the inventory it was decided on: what stage 0 was used for and what replaced each of those, what the native
+path could not do and whether that blocked the exit, what the two implementations cost, how a checkout gets its first
+compiler, the six slices, and what the exit came to (section 7).
 
 Every number below was measured on one machine (Windows 11, gcc 13.2.0 from MinGW-W64), under the load of other work
 on the same machine, and is there to be compared with the number beside it rather than with another machine's.
@@ -37,21 +37,20 @@ suites beside it. Every use of it in the repository:
 | `cargo test --test fixpoint` - stage 1 -> stage 2 -> stage 3, byte-identical C | `tools/bootstrap.sh`: seed -> `torb` -> `torb`, byte-identical C. The same comparison from one step fewer | no - done |
 | `cargo test -p torb-syntax --test examples` - every `.trb` in the repository parses | `torb parse ..` | no |
 | `cargo test -p torb-syntax --test grammar` - 347 lines of grammar unit tests in Rust | The self-hosted parser's own tests in `compiler/tests` | no, but the cases have to be **read** before the file goes, and the ones that are not covered moved |
-| `bootstrap/tests/native/` - the programs of the conformance suite | Moves to `tests/conformance/` (slice 6). The programs are TorbScript and outlive the runner | no |
-| `bootstrap/tests/scripts/` - two long programs (370 lines) run on stage 0 alone | `torb run`, natively. They are a smoke test of the language, not of stage 0 | no |
+| `bootstrap/tests/native/` - the programs of the conformance suite | Moved to `tests/conformance/` (slice 6). The programs are TorbScript and outlive the runner | no - done |
+| `bootstrap/tests/scripts/` - two long programs (370 lines) run on stage 0 alone | `torb run`, natively, from `tests/language/` (slice 6). They are a smoke test of the language, not of stage 0 | no - done |
 | `bootstrap/tests/native/stage-0-only/` - one program whose behaviour only stage 0 produced | The C back end lowers the `cause()` loop of a top-level `?` (slice 5); the program moved up one directory and the now-empty `stage-0-only/` is gone | no - done |
-| `bootstrap/tests/lexer-cases/`, `parser-cases/` | Fixtures of the Rust front end; they go with it after the grammar cases are read | no |
-| `.vscode/tasks.json` - two tasks that run `cargo run --release -q -- ...` | The same two commands on the native binary | no |
-| `.vscode/extensions/torbscript` - `torb highlight --stdin`, and a search for the binary | The search looks under `build/release/` first and keeps the two old locations behind it (slice 4) | no - done |
-| `benchmarks/run.sh` - `$torb` is `bootstrap/target/release/torb`, used to build each program | The native binary or the seed | no |
+| `bootstrap/tests/lexer-cases/`, `parser-cases/` | Deliberately broken sources; they moved to `tests/lexer-cases/` and `tests/parser-cases/` (slice 6) and are what the recovery of the self-hosted parser is read against | no - done |
+| `.vscode/tasks.json` - two tasks that run `cargo run --release -q -- ...` | The same two commands on the native binary (slice 6) | no - done |
+| `.vscode/extensions/torbscript` - `torb highlight --stdin`, and a search for the binary | The search looks under `build/release/` and nowhere else (slices 4 and 6) | no - done |
+| `benchmarks/run.sh` - `$torb` is `bootstrap/target/release/torb`, used to build each program | `build/release/torb`, called directly (slice 6) | no - done |
 | `runtime/build.sh` - checks `torb_natives.h` against the headers, and names `torb natives --header` in a comment | Already independent: the check is C against C. Only the comment mentions the command | no |
-| `docs/` front matter - ten pages carry `bootstrap/README.md` or a `bootstrap/crates/...` path in `source:`, and the docs gate asserts those paths exist | Repointed at the compiler's own sources (slice 6). `torb-run.md` and `torb-test.md` are already repointed | no |
-| `compiler/CONTRIBUTING.md`, `bootstrap/README.md`, `docs/ARCHITECTURE.md`, `docs/BACKEND.md` - the command lists and the description of the two-stage world | Rewritten in slice 6 | no |
+| `docs/` front matter - ten pages carry `bootstrap/README.md` or a `bootstrap/crates/...` path in `source:`, and the docs gate asserts those paths exist | Repointed at the compiler's own sources, at `tools/bootstrap.sh` and at `tools/gates.sh` (slice 6) | no - done |
+| `compiler/CONTRIBUTING.md`, `bootstrap/README.md`, `docs/ARCHITECTURE.md`, `docs/BACKEND.md` - the command lists and the description of the two-stage world | Rewritten in slice 6; `bootstrap/README.md` is gone and what it said lives in `compiler/CONTRIBUTING.md` and section 7 | no - done |
 
-**Nothing in this table blocks the exit any more.** The one lowering gap (`error-chain.trb`, slice 5) is closed, and
-the other thing that was never a use of stage 0 at all but a property of it - stage 0 is what **produced** the first
-`torb` - is answered by section 4's seed. `canon` (slice 3), `highlight` (slice 4) and the conformance runner (slice
-2) are done. What is left is slice 6, the deletion itself.
+**Nothing in this table blocked the exit.** The one lowering gap (`error-chain.trb`, slice 5) is closed, and the
+other thing that was never a use of stage 0 at all but a property of it - stage 0 is what **produced** the first
+`torb` - is answered by section 4's seed. All six slices are done.
 
 ---
 
@@ -101,7 +100,7 @@ one exception is in section 2.3.
 **Found while measuring this, and it is a bug rather than a gap:** `torb ir --statistics std` (and therefore over the
 whole repository) leaves with `panic: arithmetic overflow in `-`` at `compiler/src/ir/mangle.trb:251`. That is
 `canonicalLiteral` writing `minus{0 - inner}` for a negative integer literal in a mangled name, and the smallest
-`Int64` has no positive counterpart - the very case `bootstrap/tests/native/negate-overflow.trb` pins for the
+`Int64` has no positive counterpart - the very case `tests/conformance/negate-overflow.trb` pins for the
 *language*. The mangled form of that one literal needs to be written without negating it. It does not block a build
 (`torb build`, which lowers only what an entry reaches, is not affected), and it belongs to the lowering follow-up.
 
@@ -210,8 +209,8 @@ section 4.
 
 ## 4. The seed
 
-A checkout without `bootstrap/` has no way to compile `compiler/`, because the only thing that compiles TorbScript is
-written in TorbScript. Something that already exists has to compile it once. The options:
+A checkout has no way to compile `compiler/` on its own, because the only thing that compiles TorbScript is written
+in TorbScript. Something that already exists has to compile it once. The options:
 
 | Option | What it costs | What it buys |
 |---|---|---|
@@ -240,17 +239,18 @@ seed is not a fact about this commit: it is whatever compiler a person happens t
 
 `tools/bootstrap.sh` is POSIX `sh` and runs in Git Bash on Windows. It does two steps and not one, because one says
 nothing: the seed compiles the current sources, so what comes out was built by an older compiler; that binary compiles
-the sources again, and the two `program.c` are compared byte for byte. That is the same comparison the fixpoint gate
-makes, from one step fewer - the third stage of the current gate exists only because stage 0 is not a `torb` and its
-output has to be shown to be a fixed point separately.
+the sources again, and the two `program.c` are compared byte for byte. A seed older than the code generation it built
+gets a third step, so that two builds of the *same* compiler are what is compared.
 
-The seed for this commit was produced by stage 0, which is the last thing stage 0 is needed for in the build, and the
-chain was run:
+**Where a seed comes from.** From the first release on it is a download: a release publishes a `torb` per platform
+and the compiler's own `program.c` as one file, and `tools/bootstrap.sh` takes whichever of the two is under
+`seed/`. Until then it is whatever `torb` was built last - `torb build ./compiler --output ./seed/torb` for the
+binary and `torb build ./compiler --emit-c --output ./seed/torb` for `seed/program.c` - which is the maintainer's
+`seed/` directory. `README.md` says this under "Building".
+
+The chain, run:
 
 ```console
-$ ./bootstrap/target/release/torb run ./compiler build ./compiler --output ./seed/torb
-wrote seed/torb.exe
-
 $ sh tools/bootstrap.sh
 seed: seed/torb
 step 1: the seed builds the compiler
@@ -263,9 +263,9 @@ torb: build/release/torb
 ```
 
 That is the whole claim of this section, demonstrated: a checkout with a seed and a C compiler produces a `torb` that
-is a fixed point of itself, with no Rust involved after the seed exists.
+is a fixed point of itself.
 
-### 4.2 A breaking change once stage 0 is gone
+### 4.2 A breaking change
 
 This matters because the language still changes weekly, and it is the one thing a seed-based bootstrap makes harder.
 **The seed compiles the old syntax**, so a commit that changes the syntax cannot be compiled by the seed that came
@@ -282,10 +282,10 @@ A person who is further back than one step rebuilds forward: the seed of step 1 
 `seed/program.c` of that commit. This is the same dance `rustc` does with its `cfg(bootstrap)` and Go did when it
 stopped compiling itself with C; naming it here is what keeps the second commit from being attempted as the first.
 
-The same dance is what **a new native** costs, and this round is an example of it. `Process.runInheriting` was added to
-`runtime/`, to the manifest in `compiler/src/backend/c/natives.trb` and to `std/process`, and a seed built before it
-cannot compile a compiler that calls it, because the emitter's manifest is compiled into the seed. Stage 0 is still
-here, so this round simply produced a new seed with stage 0; after the exit it is step 1 and step 2 above.
+The same dance is what **a new native** costs. A native is declared in `std/`, entered in the manifest of
+`compiler/src/backend/c/natives.trb` and implemented in `runtime/`, and a seed built before it cannot compile a
+compiler that calls it, because the emitter's manifest is compiled into the seed. So a new native is step 1 and step
+2 above: the commit that teaches, a fresh seed from it, then the commit that uses it.
 
 ---
 
@@ -299,11 +299,10 @@ Each slice is one agent, in order. The estimate is the work, not the machine tim
 | 2 | **The gates run on the native compiler.** `tools/conformance.sh` (POSIX `sh`) replaces the three `cargo test` suites: conformance compares a native run against `.expected`/`.stderr`/`.exit`/`.leaks` and no longer against stage 0; `tools/gates.sh a`/`b` sequence tier A and tier B; the fixpoint is `tools/bootstrap.sh`; `suite` and `self_hosted` are dropped, and section 6 says what they defended | The conformance suite green from `tools/conformance.sh`, on the same 74 programs (75 with `binary-only/`, one `stage-0-only/` skipped) | **done** |
 | 3 | **`canon` ported to TorbScript, done.** The five rules of `bootstrap/crates/torb-cli/src/canon` on the self-hosted parser, in `compiler/src/canon`, with the same rule flags, the same `--check`, and the same "apply one edit, parse again, keep it only if the tree is unchanged" safety - the tree comparison reads the generated `Show` of the syntax tree with every span and `CallStyle` erased, so no second dumper was needed | `torb canon --check ..` from the native binary reports the same files stage 0's reports - zero | done |
 | 4 | **`highlight` ported.** `compiler/src/highlight/` - 1 717 lines of TorbScript, and 545 more for the 32 tests the Rust file carried inside it - and the extension looking for the native binary first | Both implementations answer with the same JSON over every `.trb` file of the repository | **done** |
-| 5 | **The one lowering gap.** `reportFailure` walks `cause()` and writes one `  caused by:` line per link, after which `bootstrap/tests/native/stage-0-only/error-chain.trb` moved up one directory and the now-empty `stage-0-only/` is gone | The conformance suite with `error-chain.trb` built and run natively like every other program | **done** |
-| 6 | **The deletion.** `bootstrap/tests/` moves to `tests/`, `bootstrap/crates` is deleted, and every reference is rewritten: `compiler/CONTRIBUTING.md`, `bootstrap/README.md` (what survives of it), `docs/ARCHITECTURE.md`, `docs/BACKEND.md`, the ten `source:` entries in `docs/`, `.vscode/tasks.json`, `benchmarks/run.sh`, and this document | Every gate green from the native binary alone, with no Rust toolchain on the machine | 1 round |
+| 5 | **The one lowering gap.** `reportFailure` walks `cause()` and writes one `  caused by:` line per link, after which `tests/conformance/stage-0-only/error-chain.trb` moved up one directory and the now-empty `stage-0-only/` is gone | The conformance suite with `error-chain.trb` built and run natively like every other program | **done** |
+| 6 | **The deletion.** `bootstrap/tests/` moves to `tests/`, `bootstrap/` is deleted, and every reference is rewritten: `compiler/CONTRIBUTING.md`, `docs/ARCHITECTURE.md`, `docs/BACKEND.md`, the `source:` entries in `docs/`, `.vscode/`, `benchmarks/`, and this document. Section 7 is what it came to | Every gate green from the native binary alone, with no Rust toolchain on the machine | **done** |
 
-**Slices 1 through 5 are done.** What is left is 6, the deletion: `bootstrap/crates` still exists (frozen, and no
-longer needed to produce a seed or run a gate), and it is what this last slice removes.
+**All six slices are done.** Section 7 records what the last one moved, deleted and rewrote.
 
 ### 5.1 What slice 4 decided, and what it measured
 
@@ -345,7 +344,7 @@ damaged sources - each file cut at three fractions of its length, plus fifteen h
 
 ---
 
-## 6. The gate policy until the exit
+## 6. The gate policy
 
 Written into `compiler/CONTRIBUTING.md` as the rule in force; repeated here because it is a decision of this plan and
 not of that file.
@@ -358,17 +357,77 @@ not of that file.
   and the C runtime's own tests. On master tier B runs at most once per batch of merges, in the background, and a red
   result is fixed forward.
 - **`suite` and `self_hosted` are dropped, not replaced** (slice 2). Both compared stage 0's own answer with the
-  binary's - the compiler's tests run from the interpreter against the same tests run from the binary, and the
-  self-hosted front end against the Rust one over every `.trb` of the repository - and with one of the two
-  implementations leaving, there is nothing left for either to compare. What each one defended survives elsewhere:
-  the compiler's tests are `torb test compiler/tests` on its own, and the self-hosted parser accepting the whole
-  repository is `torb parse ..` plus the parser's own tests in `compiler/tests`.
-- **Stage 0 is frozen.** It gets a language feature only where the compiler's own sources or tests need one to build,
-  and a native only where the compiler needs one. Parity of *messages* between the two checkers is no longer a goal.
-  `cargo fmt` and `cargo clippy` run where Rust files changed.
+  binary's, and with one of the two implementations gone there is nothing left for either to compare. What each one
+  defended survives elsewhere: the compiler's tests are `torb test compiler/tests` on its own, and the parser
+  accepting the whole repository is `torb parse .` plus the parser's own tests in `compiler/tests`.
 - **Performance numbers are recorded, not enforced**: allocation counts, the benchmark ratios of
   [docs/PERFORMANCE.md](PERFORMANCE.md) and the size of the emitted C go into a round's report so a regression is
-  visible, and none of them fails a gate by itself until the exit is done.
+  visible, and none of them fails a gate by itself.
 
-The reason for the two tiers is section 3. Tier A on the native binary is seconds plus one build; tier B is most of an
-hour and measures, among other things, the agreement of two implementations, one of which is being removed.
+The reason for the two tiers is section 3. Tier A on the native binary is seconds plus one build; tier B is most of
+an hour.
+
+---
+
+## 7. After the exit
+
+`bootstrap/` is gone. **45 files and 14 947 lines** left the repository: 14 560 lines of Rust in 37 `.rs` files, the
+interpreter's `prelude.trb` (121 lines), `bootstrap/README.md` (182 lines), four `Cargo.toml`, `rustfmt.toml` and
+`Cargo.lock`. Nothing in a checkout names Rust or Cargo, and the toolchain builds with a C compiler alone.
+
+### 7.1 Where the tests are
+
+| Was | Is | Why the name |
+|---|---|---|
+| `bootstrap/tests/native/` | **`tests/conformance/`** | What it is: one program per behaviour, compared against what is written down beside it. `tests/conformance/README.md` is the contract |
+| `bootstrap/tests/scripts/` | **`tests/language/`** | Two long programs that exercise many constructs at once, run with `torb run` and compared with their `.expected`. Not conformance programs, which each pin one thing |
+| `bootstrap/tests/lexer-cases/` | **`tests/lexer-cases/`** | Kept the name: `compiler/src/canon/command.trb` skips both directories by it, and they are the deliberately broken sources the parser's recovery is read against |
+| `bootstrap/tests/parser-cases/` | **`tests/parser-cases/`** | the same |
+
+`tests/conformance/` and `tests/language/` are each a workspace of their own whose only members are `../../std/*`,
+and each is checked on its own (`torb check tests/conformance tests/language`). `tests/` itself carries a
+`project.trb` that holds no files, so it is a package rather than a hole. The root workspace names none of them, so
+`torb check .` does not sweep them in - the programs are inputs of a test rather than parts of the toolchain - and the
+two case directories are checked by nothing, because what is in them is wrong on purpose.
+
+**The root `project.trb` had to say that it has no tests.** `testInput` defaults to `"tests"`, and the root manifest
+said nothing about it, so a directory called `tests/` at the root became the root package's test directory and
+`torb check .` read every program below it as a module of that package. The two deliberately broken `errors.trb`
+then collided with the standard library ("`Option<Value>` already implements `Show`") and `check .` reported 179
+problems in 50 files. The root manifest now writes `test { input "no-tests" }` - it has no tests of its own, every
+test belongs to a member - and `check .` answers `370 files, no problems` again. This is a trap for any package that
+keeps a `tests/` directory that does not belong to it, not a property of this move.
+
+The move cost the conformance programs one directory level, so the 33 imports that reach into the standard library by
+path (`std/linear`, `std/geometry`, `std/path`) read `../../std/...` where they read `../../../std/...`. The package
+is named `torbscript/conformance` after its directory, and a runtime path is **the package name plus the file below
+its directory** - so nine expectation files carry that name in a panic site and were rewritten with it.
+
+### 7.2 Where the words went
+
+`bootstrap/README.md` said three things, and each one has a home:
+
+- **The command list** is `compiler/CONTRIBUTING.md`, "Commands", on the native binary.
+- **How a program ends** - a panic is two lines and exit code 101, a top-level `?` is `error:` and exit code 1 - is
+  `tests/conformance/README.md` and the pages under `docs/language/errors/`. The third kind, a failure of the
+  interpreter, has no counterpart: the type checker rejects every program that would have reached one.
+- **What stage 0 could not do** was a table of approximations of rules the language decides by type. There is nothing
+  left to approximate, so the rule is what the language says and the page that says so is the language reference.
+
+**"Stage 0" still stands in the history sections** of `docs/BACKEND.md` (the "What 5.x decided" notes, the milestone
+table's gate column and its measurements), in section 3 of this document, in `CONCEPT.md`'s record of decided gaps,
+and in the milestone list of `docs/ARCHITECTURE.md`. Those describe how a milestone was gated at the time it was
+gated, and rewriting them would make the record wrong. Everywhere a sentence says what *is*, the word is gone.
+
+### 7.3 What still names stage 0 in the code
+
+**64 doc comments** in `compiler/src/`, `compiler/tests/`, `std/`, `examples/` and `tests/conformance/` still name
+stage 0 as a live implementation ("stage 0 takes the `var` argument first", "what stage 0 cannot do"). None of them
+costs a gate - `torb docs source` is not one yet - and they belong to the next documentation wave, together with the
+hoists that trap 1 of stage 0 forced and that the language never required: `f(checker, checker.something)` is legal
+TorbScript, and the `const` in front of it can go.
+
+### 7.4 What a round runs
+
+Tier A is `sh tools/gates.sh a` and tier B is `sh tools/gates.sh b`, both with `build/release/torb`, and section 6 is
+the policy. `gates.sh` has no fallback: `canon --check` is the native binary's, with the five rules.

@@ -11,13 +11,13 @@ keywords:
   - line length
 source:
   - CONCEPT.md#formatter-canon
-  - bootstrap/README.md
+  - compiler/src/canon/command.trb
 ---
 
 > **Planned.** This feature is designed but not implemented. Nothing on this page works today.
 
-`torb format`, written in TorbScript, is milestone 8's replacement for [`torb canon`](torb-canon.md), the stage 0
-tool that stands in for it until then.
+`torb format`, written in TorbScript, is milestone 8's replacement for [`torb canon`](torb-canon.md), the tool that
+stands in for it until then.
 
 ## Synopsis
 
@@ -46,22 +46,21 @@ every line "lets a code block sit at the indentation of the call around it inste
 ### Why it waits
 
 `torb canon`'s two rules moved parentheses and indentation only, which the safety net can verify by parsing the
-result again and comparing syntax trees. Layout is a bigger surface with no such cheap proof, so it is planned for
-after the compiler compiles itself rather than added to stage 0's own tool.
+result again and comparing syntax trees. Layout is a bigger surface with no such cheap proof, so it belongs to
+`torb format` rather than to `canon`.
 
 ## Examples
 
 None: there is no command line to run yet. What is checked in its place until `torb format` exists:
 
 ```console
-$ cd bootstrap
-$ cargo run --release -q -- canon --check ..
+$ torb canon --check .
 0 of 282 files would change: 0 calls became commands, 0 got parentheses, 0 strings were indented, 0 case patterns
 ```
 
 ## Related
 
-- [torb canon](torb-canon.md) - the stage 0 tool that enforces the same two rules today.
+- [torb canon](torb-canon.md) - the command that enforces the same two rules today.
 - [The formatter canon](the-formatter-canon.md) - every rule of the canon in one place.
 - [Multi-line strings](../language/syntax/multi-line-strings.md) - the dedent whose layout `torb format` will own.
 - [The torb command](the-torb-command.md) - every subcommand, and which are still planned.

@@ -13,7 +13,7 @@ keywords:
 source:
   - CONCEPT.md#command-calls-calls-without-parentheses
   - CONCEPT.md#formatter-canon
-  - bootstrap/README.md
+  - compiler/src/canon/calls.trb
 ---
 
 Both `print("hello")` and `print "hello"` parse. Which one to write is decided rather than left open: a call is a command

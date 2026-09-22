@@ -354,7 +354,7 @@ IDENTICAL apart from line endings
 ```
 
 The line endings are the compiled binary's `printf` on Windows and nothing to do with paths; the conformance runner
-normalizes them itself (`bootstrap/crates/torb-cli/tests/native.rs:60`). So **every table in this document is measured
+normalizes them itself (the conformance runner). So **every table in this document is measured
 rather than asserted**, and the type needs nothing the back ends do not already have. The one thing `std/text` is
 missing for it: there is no `lastIndexOf`, so `extension` splits the name on `.` instead of finding the last one.
 
@@ -494,7 +494,7 @@ touching a single caller once the condition is in.
 
 **The `/` form crosses the boundary, and each back end converts it on the way in.** The natives of `std/fs` keep taking
 one text — what `show()` answers — and the platform's rules are applied in the two places that already exist for it:
-`runtime/file.c` and `bootstrap/crates/torb-interpreter/src/natives.rs`. There is no TorbScript-visible "native form",
+`runtime/file.c`. There is no TorbScript-visible "native form",
 because a member of `Path` whose text differs per platform is the one thing this type must not have.
 
 The C runtime is most of the way there already. `torb_file_absolute_path` (`runtime/file.c:161`) rewrites every `\` to
@@ -520,10 +520,10 @@ UTF-16, with **one** function that converts a shown path into what a call gets:
   and a normalized absolute `Path` satisfies the middle condition by construction, which is why the prefix is safe to
   add at all. A `Share` root becomes `\\?\UNC\server\share`.
 
-The same conversion exists in Rust for stage 0. Two copies of one rule drift, so **one conformance program per rule in
-`bootstrap/tests/native/`** is what holds them together — that suite runs a program on stage 0 and as a binary and
-compares standard output, standard error and the exit code byte for byte, and it is the repository's answer to "two
-implementations, one behaviour". The programs to add: a shown path on every root; an absolute path built from a
+A rule that lives in more than one place drifts, so **one conformance program per rule in `tests/conformance/`** is
+what holds them together — that suite builds and runs a program and compares its standard output, its standard error
+and its exit code byte for byte with what is written down beside it, and it is the repository's answer to "one
+behaviour, whichever back end runs it". The programs to add: a shown path on every root; an absolute path built from a
 relative one; a long path written and read back; a non-ASCII name written, listed and read back; a directory entry
 whose name is not UTF-8.
 
@@ -647,7 +647,7 @@ signature removes even that from the critical path.**
 | # | Slice | Files | Risk |
 |---|-------|-------|------|
 | 1 | **The package.** `Path`, `Root`, `PathError`, every member, `From<String>`, `Show`, `Equals`, `Hash`, `Compare`. The checker condition of section 5, or the interim signature | `std/path/{project.trb,src/lib.trb,tests/}`, the root `project.trb` is unchanged (`std/*` is a member pattern), `compiler/src/semantics/checker/expression.trb` | **Low.** No native, nothing depends on it yet. The risk is the checker condition, and its blast radius is every `.into()` in the repository, so it needs checker tests with exact messages |
-| 2 | **The boundary.** `std/fs` takes `Into<Path>`, `list` answers `List<Path>`, `IoError.path` becomes a `Path`, `systemPath`; the Windows half of `runtime/platform.c` goes wide-character; stage 0's natives match; the conformance programs of section 6 | `std/fs/src/lib.trb`, `std/io`, `runtime/{file.c,platform.c,include/torb.h}`, `compiler/src/backend/c/natives.trb`, `bootstrap/crates/torb-interpreter/src/natives.rs`, `bootstrap/tests/native/` | **Highest of the six.** It changes the type of a field that six places construct positionally (`IoError(path, message)`), it touches the runtime and both sets of natives, and it is where the two implementations can silently disagree. It is also the slice that fixes two live bugs (non-ASCII paths, `to_string_lossy`) |
+| 2 | **The boundary.** `std/fs` takes `Into<Path>`, `list` answers `List<Path>`, `IoError.path` becomes a `Path`, `systemPath`; the Windows half of `runtime/platform.c` goes wide-character; the conformance programs of section 6 | `std/fs/src/lib.trb`, `std/io`, `runtime/{file.c,platform.c,include/torb.h}`, `compiler/src/backend/c/natives.trb`, `tests/conformance/` | **Highest of the six.** It changes the type of a field that six places construct positionally (`IoError(path, message)`), and it touches the runtime and the manifest of natives. It is also the slice that fixes two live bugs (non-ASCII paths, `to_string_lossy`) |
 | 3 | **The sandbox and processes.** `SandboxCapabilities.files` takes `List<Path>`, `SandboxError` gains a path, `Process.run`/`start` gain `workingDirectory` | `std/sandbox/src/lib.trb`, `std/process/src/lib.trb`, `compiler/src/backend/c/natives.trb`, `runtime/platform.c` | **Low.** Every sandbox native is `.Planned` for 7.4, so this slice writes signatures the runtime does not implement yet. `workingDirectory` is new behaviour in `torb_process_run` |
 | 4 | **`compiler/src/project/path.trb` is deleted.** `SourceTree`, `Workspace`, `Package`, `Graph`, `Module.path`, `Checked`, the IR's stable path and every CLI subcommand carry a `Path`. `pathDepth` disappears into `parent()`, `isInside` into `startsWith`, `relativePath` into `relativeTo` | `compiler/src/project/*`, `compiler/src/semantics/{graph,check,scope}.trb`, `compiler/src/semantics/checker/{implementation,declaration,receiver,wellknown}.trb`, `compiler/src/ir/{instantiate.trb,lower/lower.trb}`, `compiler/src/cli/*`, `compiler/src/main.trb`, `compiler/tests/project.test.trb` and the four test files that walk up to the repository root | **Highest for the fixpoint.** `stablePathOf` (`ir/lower/lower.trb:197`) and Rust's `stable_path` (`program.rs:341`) have to stay byte-identical, because that text is in every panic site of every compiled program and in every `.expected` file. Run the fixpoint test for this slice |
 | 5 | **The second path vocabulary.** `documentation/tree.trb`'s `fileName`, `folderOf`, `lastSlash` and `joinDocumentationPath` go; the bare `"{a}/{b}"` interpolations in `cli/files.trb`, `documentation/{snippets,index,skill,bundle,command}.trb` and `main.trb` become `joined` | `compiler/src/documentation/*`, `compiler/src/cli/files.trb`, `compiler/src/main.trb` | **Medium.** The documentation gates compare generated text, so a changed join changes output. `command.trb:75` builds `"{root}/../std"` by interpolation and never normalizes it — that one changes meaning for the better and needs a look |

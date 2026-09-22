@@ -48,8 +48,7 @@ script the way `project.trb` itself is - it is invisible to `torb check` entirel
 module:
 
 ```console
-$ cd bootstrap
-$ cargo run --release -q -- run ../compiler check --statistics ../examples/tour
+$ torb check --statistics examples/tour
 ../examples/tour/project.trb: 6 typed, 0 deferred
 14 files, no problems
 ```

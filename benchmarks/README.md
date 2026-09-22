@@ -4,7 +4,7 @@ One small program per pattern, and beside every one of them the C a careful C pr
 `run.sh` builds both with the same C compiler and the same flags, runs each of them a few times and prints the ratio.
 The numbers behind [docs/PERFORMANCE.md](../docs/PERFORMANCE.md) come from here.
 
-This is a **measurement and not a gate**. Nothing here is wired into `cargo test`: a number that moves with the machine,
+This is a **measurement and not a gate**. Nothing here runs under `tools/gates.sh`: a number that moves with the machine,
 the load and the C compiler does not belong in a test. What belongs in a test is a ratio with a budget, and
 `docs/PERFORMANCE.md` section 6 says which ones those should be.
 
@@ -16,13 +16,13 @@ sh run.sh                    # everything
 sh run.sh list-index         # one program
 RUNS=9 sh run.sh             # more repetitions; the fastest of them is what is printed
 sh run.sh --allocations      # also count how often each side called malloc
-TORB=../seed/torb.exe TORB_COMPILER= sh run.sh    # build the programs with a `torb` binary directly
+TORB=../seed/torb.exe sh run.sh    # build the programs with another `torb` binary
 ```
 
-It needs a compiler and a C compiler on the `PATH` (`$TORB_CC`, then `clang`, `gcc`, `cc` - the order `torb build`
-uses). `$TORB` is the compiler and `$TORB_COMPILER` the package it runs; stage 0 (`cargo build --release` in
-`bootstrap/`) is the default for both. An **empty** `$TORB_COMPILER` says `$TORB` is a `torb` binary already and is
-called directly, which is how two builds of the compiler are measured against each other. Everything it writes lands in `out/`, which is not checked in:
+It needs a `torb` and a C compiler on the `PATH` (`$TORB_CC`, then `clang`, `gcc`, `cc` - the order `torb build`
+uses). `$TORB` is the compiler, `../build/release/torb` by default, and it is called directly, which is how two
+builds of the compiler are measured against each other; `$TORB_COMPILER` names a compiler *package* for a `$TORB`
+that is a driver rather than a compiler. Everything it writes lands in `out/`, which is not checked in:
 `out/<program>/program.c` is the C the back end emitted, `out/<program>/build.log` is what `torb build` said.
 
 ## Reading the table
@@ -75,7 +75,7 @@ and `docs/PERFORMANCE.md` section 4 says so where the numbers are read.
 ## Adding one
 
 1. Write `<name>.trb` next to this file, with a doc comment that says which cost it isolates. It is checked
-   (`torb run ../compiler check ../benchmarks` from `bootstrap/`), so it is ordinary TorbScript in the formatter canon.
+   (`torb check benchmarks` from the repository root), so it is ordinary TorbScript in the formatter canon.
 2. Write `c/<name>.c` that does the **same work** and prints the **same line**. It is what a careful C programmer would
    write, not a transliteration of the TorbScript and not a hand-tuned kernel.
 3. Add the name to `programs` in `run.sh`, in the place where it reads best: the cheap patterns first.

@@ -52,10 +52,10 @@ when it fails.
    `Expression<Bool>`, so a failure already shows the source text of the condition and the values it closed over -
    there is nothing to add by writing a message.
 
-5. **Run the tests with the toolchain, from `bootstrap/` until the compiler compiles itself:**
+5. **Run the tests with `torb test`:**
 
    ```console
-   $ cargo run --release -q -- test ../my-project/tests
+   $ torb test my-project/tests
    my-project/tests/vector2.test.trb
      ok      Vector2 > adds component-wise
 

@@ -26,10 +26,10 @@ torb docs source <path>...                 The doc comments of every .trb file b
     --tree <std|compiler|examples|tests>    Judge every file by these rules instead of deriving them from the path
 ```
 
-It exits with 1 when it reports a finding and with 0 when it does not. From `bootstrap/`, where stage 0 lives:
+It exits with 1 when it reports a finding and with 0 when it does not. From the repository root:
 
 ```console
-cargo run --release -q -- run ../compiler docs source ../std ../compiler ../examples
+torb docs source std compiler examples
 ```
 
 Hidden directories, `target`, `node_modules` and `build` are skipped, and a `project.trb` is a manifest and not a
@@ -102,15 +102,14 @@ becomes mandatory once the writing is done.
 A clean file names its numbers, so a change in them is visible in a diff:
 
 ```console
-$ cd bootstrap
-$ cargo run --release -q -- run ../compiler docs source ../std/core/src/option.trb
+$ torb docs source std/core/src/option.trb
 1 files, 15 declarations, 6 examples, no problems
 ```
 
 A finding names the file, the line and what to do about it:
 
 ```console
-$ cargo run --release -q -- run ../compiler docs source ../std/text
+$ torb docs source std/text
 ../std/text/src/lib.trb:2: `used to`: a comment says what the code does now, not what it did before
 ../std/text/src/lib.trb:12: `fn isDigit` has no doc comment. Say what it does, then what it is for
 
@@ -120,7 +119,7 @@ $ cargo run --release -q -- run ../compiler docs source ../std/text
 The progress of every tree, one line each:
 
 ```console
-$ cargo run --release -q -- run ../compiler docs source ../std ../compiler ../examples --statistics --no-examples
+$ torb docs source std compiler examples --statistics --no-examples
 std: 32 of 48 files, 360 of 897 declarations (40%), 9 examples (0 skipped), 7 history words
 compiler: 8 of 106 files, 854 of 1009 declarations (84%), 0 examples (0 skipped), 395 history words
 examples: 3 of 25 files, 10 of 156 declarations (6%), 0 examples (0 skipped), 0 history words

@@ -20,7 +20,7 @@ checked in both directions, never only against parentheses.
 ## Synopsis
 
 ```text
-torb canon [--check] <path>...     Write, or report, the canon of the syntax tree (stage 0, today)
+torb canon [--check] <path>...     Write, or report, the canon of the syntax tree
 torb format [path]...              The formatter that replaces it (planned)
 ```
 
@@ -93,8 +93,7 @@ canon a file has to be in - they are sweeps for a rule of the *language*, and th
 documentation to the call rule, so a snippet in the wrong style is caught the same way a wrong type is:
 
 ```console
-$ cd bootstrap
-$ cargo run --release -q -- run ../compiler docs check ../docs
+$ torb docs check docs
 178 pages, 24 folders, 484 snippets, no problems
 ```
 

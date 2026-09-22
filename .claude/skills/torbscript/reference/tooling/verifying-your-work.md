@@ -13,7 +13,7 @@ keywords:
   - verify
 source:
   - compiler/CONTRIBUTING.md
-  - bootstrap/README.md
+  - tools/gates.sh
 ---
 
 Never hand over TorbScript you have not run through the compiler. The language has a type checker, an exhaustiveness
@@ -22,17 +22,16 @@ was not checked is the most expensive thing you can produce.
 
 ## Synopsis
 
-All of these run from `bootstrap/`, which is where stage 0 lives.
+All of these run from the repository root, with the `torb` that `sh tools/bootstrap.sh` wrote.
 
 ```text
-cargo build --release                                      Rebuild stage 0 after a change to its Rust sources
-cargo run --release -q -- run ../compiler check <path>      Type check: "no problems", or a line and a caret
-cargo run --release -q -- run ../compiler check --statistics <path>   Every expression has a type: "0 deferred"
-cargo run --release -q -- run ../compiler parse <path>      Syntax only, recursively
-cargo run --release -q -- canon --check <path>              Is it in the formatter canon?
-cargo run --release -q -- canon <path>                      ...write it
-cargo run --release -q -- test ../compiler/tests            The TorbScript tests
-cargo run --release -q -- run ../compiler docs check ../docs   The documentation gate
+torb check <path>                   Type check: "no problems", or a line and a caret
+torb check --statistics <path>      Every expression has a type: "0 deferred"
+torb parse <path>                   Syntax only, recursively
+torb canon --check <path>           Is it in the formatter canon?
+torb canon <path>                   ...write it
+torb test compiler/tests            The TorbScript tests
+torb docs check docs                The documentation gate
 ```
 
 ## What it does
@@ -81,10 +80,9 @@ Write it to a file and check the file. A `.trb` file that nothing imports is a s
 needs no `fn main`:
 
 ```console
-$ cd bootstrap
-$ cargo run --release -q -- run ../compiler parse ../scratch.trb
+$ torb parse scratch.trb
 1 files, no problems
-$ cargo run --release -q -- run scratch.trb
+$ torb run scratch.trb
 ```
 
 To type check it against the standard library, put it in a package: a directory with a `project.trb` that has a `name`, and
@@ -95,21 +93,20 @@ To type check it against the standard library, put it in a package: a directory 
 A clean run over the whole repository:
 
 ```console
-$ cd bootstrap
-$ cargo run --release -q -- run ../compiler check ..
+$ torb check .
 255 files, no problems
-$ cargo run --release -q -- run ../compiler check --statistics ..
+$ torb check --statistics .
 149982 of 149982 expressions typed (100%), 0 deferred
-$ cargo run --release -q -- canon --check ..
-$ cargo run --release -q -- test ../compiler/tests
+$ torb canon --check .
+$ torb test compiler/tests
 ```
 
 A run that found something:
 
 ```console
-$ cargo run --release -q -- run ../compiler check ../scratch
+$ torb check scratch
 error: `add` needs a `var`. Did you mean `added`?
- --> ../scratch/src/main.trb:3:7
+ --> scratch/src/main.trb:3:7
   |
 3 | fixed.add 3
   |       ^^^
@@ -119,21 +116,16 @@ error: `add` needs a `var`. Did you mean `added`?
 
 ### Before a commit
 
-The full list, from `compiler/CONTRIBUTING.md`, in the order it is written there:
+One script runs the whole of it, the tier A gate of `compiler/CONTRIBUTING.md`:
 
 ```console
-cargo build --release
-cargo run --release -q -- run ../compiler check ..
-cargo run --release -q -- run ../compiler check --statistics ..
-cargo run --release -q -- test ../compiler/tests
-cargo run --release -q -- canon --check --rule calls --rule strings --rule imported-case-patterns --rule unused-bindings ..
-cargo fmt --check
-cargo clippy --all-targets -- -D warnings
-cargo test --release
+sh tools/gates.sh a
 ```
 
-The last one includes the differential tests, which compare stage 0 against the self-hosted front end, and it takes
-minutes.
+It builds `build/release/torb` where that is missing or older than the compiler sources, then runs `check .`,
+`check --statistics .`, `test compiler/tests`, the test packages of `std/` and `examples/`, the two docs gates and
+`canon --check` with the five rules, one line per gate with its time. A round that touches the IR, a back end or
+`runtime/` runs `sh tools/gates.sh b` once besides: the conformance suite, the fixpoint and the C runtime tests.
 
 ## Related
 

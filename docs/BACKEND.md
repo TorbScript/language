@@ -851,7 +851,7 @@ bytecode) and the VM into any binary that uses it. Nothing else does - the compi
 
 Each is one agent session: roughly 600-1500 lines of TorbScript or C plus tests. Tests are IR text snapshots
 (section 1.7), and C output that is compiled and run against expected stdout. The runnable conformance suite is
-`bootstrap/tests/scripts/*.trb` with their `.expected` files, extended by `.expected` files for the tour, and it is
+`tests/language/*.trb` with their `.expected` files, extended by `.expected` files for the tour, and it is
 run against **stage 0, the C back end and later the VM** by the same runner.
 
 | # | Scope | Files | Tests | Depends on |
@@ -859,21 +859,21 @@ run against **stage 0, the C back end and later the VM** by the same runner.
 | **5.1** | **Done.** IR data types, layouts, the representation classes, the layout model, mangling, instantiation from a checker type, the builder, the verifier, the text format | `ir/ir.trb`, `ir/layout.trb`, `ir/mangle.trb`, `ir/instantiate.trb`, `ir/build.trb`, `ir/verify.trb`, `ir/print.trb` | Hand-built IR to text; mangling is stable and collision free; layouts and instantiation by table | M4.1 |
 | **5.R1** | **Done.** Runtime skeleton and the manifest format: header, heap, retain/release/make-unique, `torb_text`, panic, overflow, console, the manifest with the header it renders, the C test harness | `runtime/*`, `backend/c/natives.trb` | `runtime/tests` (67, zero live blocks after each); the generated header compiles against the runtime and the table's shape is pinned | - |
 | **5.2** | **Done.** Lowering: functions, slots, blocks, literals, locals, arithmetic intrinsics, calls of top-level functions and concrete methods, fields, constructors, tuples, `if`, `while`, `for` over `Range<Int>`, `return`, blocks, the const evaluator, static values | `ir/lower/*.trb`, `ir/instances.trb`, `ir/constant.trb` | IR snapshots for ~15 small programs | 5.1, M4.4 |
-| **5.3** | **Done.** The C emitter, minimum path. Types, functions, blocks and gotos, `#line`, slot declarations, static data, `main`, the driver's minimum (`torb build`, compiler discovery, `--emit-c`). **Gate: a program of monomorphic functions becomes a native binary and behaves like it does on stage 0** (`print` needs the witness tables of 5.6) | `backend/c/type.trb`, `emission.trb`, `prototype.trb`, `body.trb`, `emit.trb`, `cli/build.trb` | `compiler/tests/emit-c.test.trb` (20); `bootstrap/tests/native/*` compiled, run and compared with stage 0 by `bootstrap/crates/torb-cli/tests/native.rs`; `--emit-c` twice is byte identical | 5.2, 5.R1 |
+| **5.3** | **Done.** The C emitter, minimum path. Types, functions, blocks and gotos, `#line`, slot declarations, static data, `main`, the driver's minimum (`torb build`, compiler discovery, `--emit-c`). **Gate: a program of monomorphic functions becomes a native binary and behaves like it does on stage 0** (`print` needs the witness tables of 5.6) | `backend/c/type.trb`, `emission.trb`, `prototype.trb`, `body.trb`, `emit.trb`, `cli/build.trb` | `compiler/tests/emit-c.test.trb` (20); `tests/conformance/*` compiled, run and compared with stage 0 by the conformance runner; `--emit-c` twice is byte identical | 5.2, 5.R1 |
 | **5.4** | **Done.** Ownership: the summary pass, liveness, `Copy`/`Move`/`Retain`/`Release` insertion, edge splitting, `MakeUnique`, and the verifier's ownership invariants | `ir/liveness.trb`, `ir/operand.trb`, `ir/ownership.trb`, `ir/ownership-verify.trb` | IR snapshots pinning every insertion point (45 tests in `ownership`, `liveness`, `operand`, `make-unique` and `ownership-verify`); hand-built wrong IR against every message of the verifier; the live-block counter is zero after every conformance script (from 5.3 on) | 5.2 |
-| **5.5** | **Done.** ADTs: variant layouts, the niche, `MatchPlan` to decision trees, guards and fallbacks, case constructors, `Option`/`Result`, `?` with its conversion, `??`, `if const`/`while const`, destructuring bindings | `ir/decision.trb`, `ir/lower/match.trb` | `compiler/tests/decision.test.trb` (6 decision trees as text), `lower-match.test.trb` (10 IR snapshots, every one through `verifyOwnedProgram`), `emit-c` additions; `bootstrap/tests/native/{adts,errors,matching,states}.trb` run natively with zero live blocks | 5.2, 5.4 |
-| **5.6** | **Done.** Generics: instance keys with type arguments, the worklist, witness tables, trait-typed values, per-bound sharing, derived `Show`/`Equals`/`Hash`/`compare`, trait defaults and overrides. **Gate: `bootstrap/tests/native/{traits,generics,derived}.trb`** - `basics.trb` needs 5.7 to 5.10 as well (see the note below) | `ir/witness.trb`, `ir/lower/generic.trb`, `ir/lower/derive.trb`, `backend/c/emit.trb` | `compiler/tests/lower-generics.test.trb` (8, instance counts among them), `emit-c` additions (5 pinned C snippets), three native gate programs with zero live blocks | 5.5 |
-| **5.7** | **The lists run.** The ABI of the containers, `var fn` members of a **trait-typed value**, the witness of a value as a *place*, element descriptors, `ContainerNew`, the list literal, `a[key]` reads, `for` over a collection, a range as a value; then **the bound on the instance set** (a default nothing overrides is no slot of a table), **nested tables**, `ArrayList.from` and `Range.iterator`/`length`/`show` as TorbScript. **Still open:** the map/set cursor (one new runtime function plus a `bool`-plus-two-outs convention, which also blocks every map and set literal), index paths, variadics and the spread. **Done in the long tail of 6.1:** list patterns, `String.chars`/`bytes`/`from` and `String.slice` (see the note at the end). **Gate: `bootstrap/tests/native/{collections,ranges,collection-index}.trb}` - `language.trb` is a stage-0 script and not a checked program (see the note)** | `ir/element.trb`, `ir/lower/{native,collection}.trb`, `ir/witness.trb`, `backend/c/{natives,emit}.trb`, `std/collections/src/list.trb`, `std/core/src/range.trb` | `bootstrap/tests/native/{natives,reassignment,trait-values,collections,ranges,collection-index}.trb`, `compiler/tests/{lower-natives,ir-elements,lower-generics}.test.trb`; `07-collections.trb` is two index-path findings away | 5.3, 5.6, 5.8 |
-| **5.8** | **Done.** Closures: closure conversion, environments, escaping or not, boxes for captured `var` bindings, `lazy` cells, function values, receiver closures, property commands. **Gate: `bootstrap/tests/native/{closures,counted-closures,dsl}.trb`** - `examples/config-dsl` loads a receiver *script* (7.4) and needs 5.7 and 5.10 besides (see the note below) | `ir/lower/closure.trb`, `ir/capture.trb` | `compiler/tests/lower-closures.test.trb` (19: the IR text, the pinned C, the findings); three native gate programs with zero live blocks | 5.6 |
-| **5.9a** | **Done.** `var` parameters and `var fn` receivers: a place as an argument, interior projections through fields, assignment and property commands through a path, `MakeUnique` per counted owner of the path | `ir/lower/place.trb` | `compiler/tests/lower-places.test.trb` (23: the IR text, the pinned C, the verifier's invariants); `bootstrap/tests/native/{places,place-counted}.trb` run natively with zero live blocks | 5.4 |
+| **5.5** | **Done.** ADTs: variant layouts, the niche, `MatchPlan` to decision trees, guards and fallbacks, case constructors, `Option`/`Result`, `?` with its conversion, `??`, `if const`/`while const`, destructuring bindings | `ir/decision.trb`, `ir/lower/match.trb` | `compiler/tests/decision.test.trb` (6 decision trees as text), `lower-match.test.trb` (10 IR snapshots, every one through `verifyOwnedProgram`), `emit-c` additions; `tests/conformance/{adts,errors,matching,states}.trb` run natively with zero live blocks | 5.2, 5.4 |
+| **5.6** | **Done.** Generics: instance keys with type arguments, the worklist, witness tables, trait-typed values, per-bound sharing, derived `Show`/`Equals`/`Hash`/`compare`, trait defaults and overrides. **Gate: `tests/conformance/{traits,generics,derived}.trb`** - `basics.trb` needs 5.7 to 5.10 as well (see the note below) | `ir/witness.trb`, `ir/lower/generic.trb`, `ir/lower/derive.trb`, `backend/c/emit.trb` | `compiler/tests/lower-generics.test.trb` (8, instance counts among them), `emit-c` additions (5 pinned C snippets), three native gate programs with zero live blocks | 5.5 |
+| **5.7** | **The lists run.** The ABI of the containers, `var fn` members of a **trait-typed value**, the witness of a value as a *place*, element descriptors, `ContainerNew`, the list literal, `a[key]` reads, `for` over a collection, a range as a value; then **the bound on the instance set** (a default nothing overrides is no slot of a table), **nested tables**, `ArrayList.from` and `Range.iterator`/`length`/`show` as TorbScript. **Still open:** the map/set cursor (one new runtime function plus a `bool`-plus-two-outs convention, which also blocks every map and set literal), index paths, variadics and the spread. **Done in the long tail of 6.1:** list patterns, `String.chars`/`bytes`/`from` and `String.slice` (see the note at the end). **Gate: `tests/conformance/{collections,ranges,collection-index}.trb}` - `language.trb` is a stage-0 script and not a checked program (see the note)** | `ir/element.trb`, `ir/lower/{native,collection}.trb`, `ir/witness.trb`, `backend/c/{natives,emit}.trb`, `std/collections/src/list.trb`, `std/core/src/range.trb` | `tests/conformance/{natives,reassignment,trait-values,collections,ranges,collection-index}.trb`, `compiler/tests/{lower-natives,ir-elements,lower-generics}.test.trb`; `07-collections.trb` is two index-path findings away | 5.3, 5.6, 5.8 |
+| **5.8** | **Done.** Closures: closure conversion, environments, escaping or not, boxes for captured `var` bindings, `lazy` cells, function values, receiver closures, property commands. **Gate: `tests/conformance/{closures,counted-closures,dsl}.trb`** - `examples/config-dsl` loads a receiver *script* (7.4) and needs 5.7 and 5.10 besides (see the note below) | `ir/lower/closure.trb`, `ir/capture.trb` | `compiler/tests/lower-closures.test.trb` (19: the IR text, the pinned C, the findings); three native gate programs with zero live blocks | 5.6 |
+| **5.9a** | **Done.** `var` parameters and `var fn` receivers: a place as an argument, interior projections through fields, assignment and property commands through a path, `MakeUnique` per counted owner of the path | `ir/lower/place.trb` | `compiler/tests/lower-places.test.trb` (23: the IR text, the pinned C, the verifier's invariants); `tests/conformance/{places,place-counted}.trb` run natively with zero live blocks | 5.4 |
 | **5.9b** | The rest of the `var` paths: index paths (`TakeOut`/`PutBack`), slices as windows, `if var`/`while var`, `shared type` objects with their headers and trace functions, `FixedArray`, `Close`/`using` | `ir/lower/place.trb`, `runtime/memory.c` | `01-bindings-and-values.trb`, `03-types.trb`, `08-control-flow.trb` | 5.9a, 5.7 |
-| **5.10** | **Done, except what needs a collection.** Text: interpolation, `print`/`printError`, `Show` for every shape in the format of gap 23, float formatting in both back ends, `?.`. **Still open:** `describe`, derived `Encode`/`Decode` and the `std/json` natives, which all wait for 5.7 (see the note below) | `ir/lower/text.trb`, `ir/lower/match.trb`, `runtime/text.c`, `bootstrap/crates/torb-interpreter` | `compiler/tests/lower-text.test.trb` (19); `bootstrap/tests/native/{interpolation,floats,optional-chain}.trb` run natively, compared with stage 0, zero live blocks | 5.6, 5.7 |
-| **5.11** | **The gate holds.** `assert` is lowered, `test`/`group` are functions of the runtime with a recovery point, `torb test <directory>` builds **one** binary for every test file and runs it, and `\n` is `\n` on both implementations. **Gate: `compiler/tests/*.test.trb` run from the native binary - 1482 passed, 0 failed (55 files), the same report as stage 0 line for line.** **Still open:** an `Expression<Value>` as a value - the static tree, `value()`, `captures()` - which nothing of `compiler/` needs | `ir/lower/quote.trb`, `ir/lower/match.trb`, `runtime/test.c`, `runtime/panic.c`, `runtime/console.c`, `cli/test.trb`, `backend/c/emit.trb` | `bootstrap/tests/native/{tests,test-failure,assert-values,nested-list-patterns}.trb`, `binary-only/assert-compound-capture.trb`, and `cargo test --release --test suite -- --ignored` | 5.10 |
+| **5.10** | **Done, except what needs a collection.** Text: interpolation, `print`/`printError`, `Show` for every shape in the format of gap 23, float formatting in both back ends, `?.`. **Still open:** `describe`, derived `Encode`/`Decode` and the `std/json` natives, which all wait for 5.7 (see the note below) | `ir/lower/text.trb`, `ir/lower/match.trb`, `runtime/text.c` | `compiler/tests/lower-text.test.trb` (19); `tests/conformance/{interpolation,floats,optional-chain}.trb` run natively, compared with stage 0, zero live blocks | 5.6, 5.7 |
+| **5.11** | **The gate holds.** `assert` is lowered, `test`/`group` are functions of the runtime with a recovery point, `torb test <directory>` builds **one** binary for every test file and runs it, and `\n` is `\n` on both implementations. **Gate: `compiler/tests/*.test.trb` run from the native binary - 1482 passed, 0 failed (55 files), the same report as stage 0 line for line.** **Still open:** an `Expression<Value>` as a value - the static tree, `value()`, `captures()` - which nothing of `compiler/` needs | `ir/lower/quote.trb`, `ir/lower/match.trb`, `runtime/test.c`, `runtime/panic.c`, `runtime/console.c`, `cli/test.trb`, `backend/c/emit.trb` | `tests/conformance/{tests,test-failure,assert-values,nested-list-patterns}.trb`, `binary-only/assert-compound-capture.trb`, and the suite gate that compared the two reports | 5.10 |
 | **5.12** | **Done for what the compiler needs** (`File.createDirectory`, `Process.run`, `Clock.milliseconds` and the `.Fallible` shape of `std/fs`, see the note of 6.1's long tail). **Runtime half done.** The remaining std natives: `std/fs`, `std/io`, `std/process`, `std/time`, `std/math`, `std/environment`. **Gate: the tour runs** (01-09, 11, 12; `10-async` waits for 7.3) | `runtime/file.c`, `clock.c`, `environment.c`, `number.c` | `.expected` files for every tour module, run on stage 0 and natively | 5.3 (parallel with 5.8-5.11) |
 | **5.13** | The full driver: profiles, the content-hash cache, `torb run` as build-and-execute, `torb test`, output paths from `project.trb`, ICE reporting, `--emit-ir`, the `error:` report of a top-level `?` (it walks `cause()`) and `?` return traces in the debug profile | `cli/build.trb`, `cli/run.trb`, `project/manifest.trb` | Cache hit and miss, a deliberately broken emitter reports an ICE, an error chain of three prints three lines | 5.3 |
-| **5.14** | **Done.** Conformance: one runner over stage 0 and the C back end that compares standard output, standard error and the exit code with nothing exempt; the panic format and every recorded divergence closed; `--emit-c` twice byte identical; no absolute path in the output | `bootstrap/crates/torb-interpreter`, `runtime/text.c`, `bootstrap/tests/native/`, the runner | **57 gate programs**, each run twice and compared byte for byte (`cargo test --release --test native`) | 5.1-5.13 |
+| **5.14** | **Done.** Conformance: one runner over stage 0 and the C back end that compares standard output, standard error and the exit code with nothing exempt; the panic format and every recorded divergence closed; `--emit-c` twice byte identical; no absolute path in the output | `runtime/text.c`, `tests/conformance/`, the runner | **57 gate programs**, each run twice and compared byte for byte | 5.1-5.13 |
 | **6.1** | Compile `compiler/` with stage 1: every missing intrinsic, every crash, every construct the compiler uses and the lowering does not cover yet. **Gate: a `torb` binary exists** | wherever it hurts | `torb check ..` from the new binary gives the same output as stage 1 | 5.14 |
-| **6.2** | **Done.** The fixpoint: stage 2 compiles `compiler/` again, the two C files are compared byte for byte, stage 3 emits a third one. `bootstrap/` frozen | `std/iteration/src/concatenate.trb`, `runtime/platform.c`, `bootstrap/crates/torb-cli/tests/fixpoint.rs` | **The fixpoint gate** (`cargo test --release --test fixpoint -- --ignored`) | 6.1 |
+| **6.2** | **Done.** The fixpoint: stage 2 compiles `compiler/` again, the two C files are compared byte for byte, stage 3 emits a third one. `bootstrap/` frozen | `std/iteration/src/concatenate.trb`, `runtime/platform.c` | **The fixpoint gate** | 6.1 |
 | **6.3** | **Measured, and one third of it done** (see "What 6.3 measured"): the flags stay, the translation unit is **not** sharded (4.3x faster to compile, 2.3x slower a binary), one witness thunk per member instead of per table entry (-13.3% of the C, -22% of the gcc), the module `const` of the lexer read once per file. **Left:** the mangled names (62.5% of the file), the element-type-blind collection defaults, `R_`/`D_` keyed on a layout's shape, `#line` behind a profile, a budget for `torb build` of the workspace. **The immortal counted static is done** (see the note of its own) | `backend/c/emit.trb`, `syntax/lexer.trb` | A timing test in the suite | 6.2 |
 | **7.1** | Bytecode: the format, the emitter from the IR, a disassembler for the snapshots | `backend/bytecode/*.trb` | Disassembly snapshots next to the IR snapshots | 6.2 |
 | **7.2** | The interpreter loop, `torb run` through the VM, the conformance suite through the VM. **Gate: stage 0, C and the VM agree on every script** | `vm/*.trb` | The full suite, three back ends | 7.1 |
@@ -1151,7 +1151,7 @@ can run, the code won and this is the list. Everything else is as written.
   needs the element descriptors of 5.7 and the witness tables of 5.6 - the emitter cannot reach it from here, and
   special-casing it in the compiler would let the two back ends disagree about what `print` does. The gate is therefore
   a program that computes with everything 5.2 lowers and ends in `Process.exit` with a computed code, plus one program
-  per panic (`panic`, overflow, division by zero). They are in `bootstrap/tests/native/`, each with its `.expected`
+  per panic (`panic`, overflow, division by zero). They are in `tests/conformance/`, each with its `.expected`
   (stdout), `.exit` and, where it panics, its `.stderr`.
 - **Stage 0 and a compiled binary do not agree about a panic yet.** The interpreter prints `error: <message>` with an
   absolute path and leaves with 1, the binary prints `panic: <message>` with a path relative to the workspace root and
@@ -1296,7 +1296,7 @@ accepts, the code won and this is the list. Everything else is as written.
   checker and the language and not one of the back end, and it is named as one.
 - **Stage 0's `?` does not convert the error.** It hands the failure on as it is instead of going through the generated
   `From` of a wrapper case, so a gate program that needs one cannot be compared with the interpreter. The conversion is
-  pinned by an IR snapshot in `lower-match.test.trb` instead, and `bootstrap/tests/native/errors.trb` uses `?` where the
+  pinned by an IR snapshot in `lower-match.test.trb` instead, and `tests/conformance/errors.trb` uses `?` where the
   two error types agree. Unifying stage 0 and the binary is 5.14's, and this is the second entry on its list after the
   panic format.
 - **The gate programs still end in `Process.exit`.** `File.writeText` would give a real output comparison, but its
@@ -1411,7 +1411,7 @@ portable C can express, the code won and this is the list. Everything else is as
   `Show`), so the file is a stage-0 script and not a checked program. What is left of it after that is blocked by 5.7
   (list and map literals, `a[key]`, `for` over a collection, the variadic list of `print`), 5.8 (closures), 5.9
   (a `var fn` receiver, `var` parameters, assignment to a place) and 5.10 (string interpolation). The gate of this sub-milestone is
-  therefore `bootstrap/tests/native/traits.trb`, `generics.trb` and `derived.trb`, each compiled, run, compared with
+  therefore `tests/conformance/traits.trb`, `generics.trb` and `derived.trb`, each compiled, run, compared with
   stage 0 and asserted to leave zero live blocks.
 
 ### What 5.8 does differently
@@ -1541,7 +1541,7 @@ allows, the code won and this is the list. Everything else is as written.
   loads a receiver **script** through `Sandbox.load` (`Script` and `SandboxCapabilities` are milestone 7.4, and the body of
   a receiver script is applied by the sandbox and by nothing else), `ServerConfig` has a variadic parameter and a
   `Set`/`Map`/`List` field (5.7), and every line of its output is interpolated (5.10). What is left of the vocabulary is
-  `bootstrap/tests/native/closures.trb` (a closure over a captured `var`, one returned and called later, one in a record
+  `tests/conformance/closures.trb` (a closure over a captured `var`, one returned and called later, one in a record
   field, function values of a named function, a constructor and a case, a `lazy` forced zero times and once),
   `counted-closures.trb` (the same with `String`s, a trait-typed value and closures in environments - the leak gate) and
   `dsl.trb` (receiver closures and all three property commands). Each is compiled, run, compared with stage 0 and asserted
@@ -1675,7 +1675,7 @@ after both.
   An assignment to a counted local is now a `Write` **through** the slot, which releases before it stores - the contract
   section 2 wrote down for a write. Only `containsCountedType` slots go through it, so the arithmetic half of a program
   is byte for byte what it was, and it removes the read-and-write prepass from `total = total + part` (one instruction
-  fewer). `bootstrap/tests/native/reassignment.trb` is the gate.
+  fewer). `tests/conformance/reassignment.trb` is the gate.
 - **One bug of the *dispatch*, found on the way.** What stands in front of the dot of `Int.tryFrom(text)` is a **type**,
   and the checker records the type of its *constructor* there (`() => Int64`). That function type was accepted as a
   receiver, so the `Self` of the conversion trait was bound to it, the trait's own arguments were not found for it and
@@ -1958,7 +1958,7 @@ written.
     value at an `Owned` position: retain, and say `owned` without `last`. A frame that holds no counted value at all is
     still not walked, so the arithmetic half of a program is byte for byte what the lowering wrote - and the three shapes
     it took (answering the parameter, building it into a record, answering a capture) are pinned in
-    `lower-closures.test.trb` plus `bootstrap/tests/native/closure-counts.trb`, whose values are all built at run time
+    `lower-closures.test.trb` plus `tests/conformance/closure-counts.trb`, whose values are all built at run time
     because the storage of a *literal* is immortal and would hide a missing retain.
   - **The out parameter of a `.Optional` wrapper is owned on one path only.** `torb_list_get` writes nothing past the end,
     so liveness released a slot the runtime never wrote - which for a trait-typed element is `NULL->drop`. Both the drop
@@ -1972,7 +1972,7 @@ written.
   captures the receiver `self` in a closure that may outlive the call, `print counters.map({ _.count })` asks `Iterable<Int>` for
   `Show`, `samples[1..4].sort()` calls `sort` without its `by`, `Seconds` implements none of `Add`, `Compare` or
   `Subtract`, `match` does not handle `[_, _, ...]`, and `visit`/`seen`/`limit`/`toMap` are names that are not there. So
-  5.7's row needs a gate that is a program: `bootstrap/tests/native/{collections,ranges,collection-index}.trb` are it -
+  5.7's row needs a gate that is a program: `tests/conformance/{collections,ranges,collection-index}.trb` are it -
   the literals of every element shape, `for` over a list and over a trait-typed `Iterable` with `break` and `continue`,
   `a[key]` and its panic (exit 101, the message of `Indexed.at` and therefore the language's own), growth over the
   doubling of the buffer, copy on write through a local, a field and a `var` parameter, the closure pipelines, and a range
@@ -2030,7 +2030,7 @@ path *is*.
 - **Copy on write needs no rule of its own,** which is the test of the design. The element the frame holds shares its
   storage with the copy the container still has, so the access - a `Write` through the element's slot, or a `var fn` receiver
   callee writing through the pointer it was handed - makes it unique for the ordinary reason, and `set` releases what the
-  container had there. `bootstrap/tests/native/collection-places.trb` proves it: the copy of a list taken before
+  container had there. `tests/conformance/collection-places.trb` proves it: the copy of a list taken before
   `numbers[0] = 9` still reads `[1, 2, 3]`, and the same for a list of counted elements and for a nested one.
 - **The gate found nothing, and that is worth writing down**: the program was byte identical to stage 0 and left zero live
   blocks the first time it ran, which is what building an index path out of ordinary calls buys - there is no new
@@ -2087,7 +2087,7 @@ that were all one missing cursor.
   contract between the two implementations (the `Range` of the fourth round was the same kind of divergence), a set has no
   literal of its own so nothing about the braces is a spelling of the source, and the standard library is the side that
   decides - so the interpreter changed, not the library.
-- **The gate is `bootstrap/tests/native/maps-and-sets.trb`**: the literals over number, `String` and record keys and over a
+- **The gate is `tests/conformance/maps-and-sets.trb`**: the literals over number, `String` and record keys and over a
   collection as the value, insertion order (including a key that is set again), `for (key, value) in map`, `keys()` and
   `values()`, membership, a removal followed by a walk over the tombstone, `a[key]` as a value and as a path
   (`counters["a"].increment()`), copy on write through two copies taken at different times, and `toSet`/`groupBy`/
@@ -2182,7 +2182,7 @@ parameter that every positional argument from its position on fills; it is a **`
   changed is that `PrintParts` is a **fast path** and not the only path: every other variadic call builds its list, so
   nothing of the language waits for it. `print(...parts)` is the one shape the fast path cannot take (the number of
   operands would be a run-time question) and is a clean finding.
-- **The gate is `bootstrap/tests/native/variadics.trb`**: a variadic read with `for` and with `joined`, a variadic after an
+- **The gate is `tests/conformance/variadics.trb`**: a variadic read with `for` and with `joined`, a variadic after an
   ordinary parameter, a trait-typed element (`...values: Show`, every argument coerced where it is written), the list
   answered as a value, zero/one/many arguments, a spread alone and mixed with written arguments and twice in one call, a
   spread of a pipeline, a spread in a literal, and `List.of`/`Set.of`/`Map.of`/`List.filled`. Byte identical to stage 0,
@@ -2256,7 +2256,7 @@ or what the two back ends can *both* write, the code won and this is the list. E
   `(Int, Int)` are one layout and the labels are not in it. A compiled back end therefore *cannot* write them, whatever
   the format says, and the interpreter must not either - `Show` is the contract between two implementations. The
   resolution is the one both can keep: no labels. Gap 23's sentence is superseded by gap 17 on this point, and
-  `bootstrap/tests/scripts/language.expected` changed with it (`(1, 9)` where it said `(lowest: 1, highest: 9)`).
+  `tests/language/language.expected` changed with it (`(1, 9)` where it said `(lowest: 1, highest: 9)`).
 - **The panic format is the one divergence this sub-milestone did *not* close, and the binary is the right side.**
   Decided gap 9 spells it out - `panic: <message>`, then `  at src/file.trb:12:5`, exit code **101** - and that is what the
   binary does, while stage 0 prints `error: <message>` with an absolute path and leaves with 1 (and the messages of the
@@ -2268,9 +2268,7 @@ or what the two back ends can *both* write, the code won and this is the list. E
   panic is exempt from the comparison any more.
 - **One escape table, in three languages.** A nested `String` and `Char` are escaped the way a literal writes them:
   `\n`, `\r`, `\t`, `\\`, the quote, and `\u{h}` below `0x20` and at `0x7F`. It is `torb_escape_char` in
-  `runtime/text.c`, `escape_char` in `bootstrap/crates/torb-interpreter/src/interpreter.rs` and `escaped` in
-  `bootstrap/crates/torb-syntax/src/dump.rs` - the last one because the differential test of `docs/ARCHITECTURE.md`
-  compares the Rust dump with the one the generated `Show` produces, character by character.
+  `runtime/text.c` and `escaped` in `compiler/src/syntax/dump.trb`, and the two agree character by character.
 - **Stage 0's float formatting is the notation of gap 4 now, not Rust's `to_string`.** It printed `NaN`, never used the
   exponent form (`1e21` came out with 21 zeros) and dropped the `.0` above `1e16`. Rust's `{:e}` already gives the
   shortest round-tripping digits, so only the *notation* is decided in `show_float` - and it is decided the way
@@ -2335,7 +2333,7 @@ or what the two back ends can *both* write, the code won and this is the list. E
   shows and nothing else does: `a == b` on two `JsonValue`s records **no resolution at all**, because a `JsonValue`
   carries a `List<JsonValue>` and a `Map<String, JsonValue>` and the standard library has no `Equals` for its collections
   - which TYPECHECKER 4.3 deliberately does not report. That is a gap of `std/`, not of the back end. The gate of this
-  sub-milestone is therefore `bootstrap/tests/native/interpolation.trb` (every shape of gap 23,
+  sub-milestone is therefore `tests/conformance/interpolation.trb` (every shape of gap 23,
   nested quoting, escapes, a multi-line string, a long text built in a loop, `print` with several arguments and with
   none), `floats.trb` (the table of `runtime/tests/text_test.c` plus what only a program can compute) and
   `optional-chain.trb` (`map`, `flatMap`, a field, a method, a chain of two, `??` behind one). Each is compiled, run,
@@ -2389,7 +2387,7 @@ declarations).
   there), so an initializer with a **side effect** would run once per read where stage 0 runs it once. Every one in the
   repository is a text or a list built out of literals, and a *call* is what would make it observable - which is exactly
   what no module may write. Recorded rather than hidden; the shape that closes it is the immortal static above.
-- The gate is `bootstrap/tests/native/constants.trb`: a folded number, a concatenated text, a list, a `Boxed` record, a
+- The gate is `tests/conformance/constants.trb`: a folded number, a concatenated text, a list, a `Boxed` record, a
   `const` that names another `const`, each read from a function and from the top-level code, and one read twice in one
   body. Compiled, run, compared with stage 0 byte for byte, `live blocks at exit: 0`.
 
@@ -2435,7 +2433,7 @@ declarations).
   files that walk a text now reach `Characters`, `CharacterIterator`, their `Iterable<Char>` and `Iterator<Char>` tables
   and the payload boxes of both - one set for the whole program, not one per call - which is the same trade 5.7 made when
   `ArrayList.from` and `Range.iterator` became TorbScript. Its comment in `lower.test.trb` says so.
-- The gate is `bootstrap/tests/native/characters.trb`: every width of UTF-8 (one to four bytes) so that a cursor moving
+- The gate is `tests/conformance/characters.trb`: every width of UTF-8 (one to four bytes) so that a cursor moving
   by the wrong amount is a wrong character and not a slower loop, a cursor over a **slice** (which may not read the
   storage in front of it), `charAt` past the end, `String.from`, and `Int.from(byte)`. Compiled, run, compared with stage
   0 byte for byte, `live blocks at exit: 0`.
@@ -2465,7 +2463,7 @@ line).
 - **A list *inside* another pattern (`.Wrapped([first])`) is a clean finding.** The container's checker type is what the
   bound is computed from, and a `MatchPlan` carries the type of the **subject** only - nothing says what a value halfway
   down a path is, and for a list there is no layout to ask either. There is no such pattern in the repository.
-- The gate is `bootstrap/tests/native/list-patterns.trb` (every shape, a rest that is walked, and a recursion over one),
+- The gate is `tests/conformance/list-patterns.trb` (every shape, a rest that is walked, and a recursion over one),
   compiled, run, compared with stage 0 byte for byte, `live blocks at exit: 0`. With this, `compiler/src/main.trb` lowers
   as far as the **top-level `?`** of 5.13, which is what its command line waited for.
 
@@ -2496,7 +2494,7 @@ line).
   coerce it with `TraitValue` and the table of `(ArrayList<String>, List<String>)`. It is the same two steps for an
   argument, the other way round. That is the next step of this row, and `text.lines()` is on the compiler's own critical
   path, so it is the first thing to do after the driver.
-- The gate is `bootstrap/tests/native/files.trb`: a directory that is created twice, a file written and read, `exists`,
+- The gate is `tests/conformance/files.trb`: a directory that is created twice, a file written and read, `exists`,
   `isDirectory`, `absolutePath`, the environment, the clock, and a **child process** that really runs. Compiled, run,
   compared with stage 0 byte for byte, `live blocks at exit: 0`. The C side is `runtime/tests/process_test.c` (four tests,
   new) plus two more in `file_test.c` and one in `clock_test.c`: 91 runtime tests now.
@@ -2518,7 +2516,7 @@ function).
   ring buffer of locations that the report prints under the chain, it needs the profiles the driver does not have yet, and
   it changes no error type - so it belongs in exactly this block later.
 - **`?` on an `Option` at the top level reports the prefix alone** (`error: `), because a `None` carries nothing to show.
-- The gate is `bootstrap/tests/native/top-level-error.trb`, whose error is a type of the *program* and not an `IoError`:
+- The gate is `tests/conformance/top-level-error.trb`, whose error is a type of the *program* and not an `IoError`:
   the message of an operating system is localized, and what is under test is the report and not `strerror`. Compiled, run,
   stdout and stderr and the exit code compared; `live blocks at exit: 0` checked by hand, because `native.rs` skips the
   leak gate for a program with a `.stderr` file (a panic leaves nothing to count, and this one is not a panic).
@@ -2546,7 +2544,7 @@ that binary, and of what the round found out on the way.
   `ArrayList<String>` its symbol takes, and the two that would (`Process.start`, `Task.all`) are `.Planned` for 7.3.
   Reading the storage back *out* of a trait-typed value is a step into its boxed payload, which is no `PathStep` the
   emitter has - the first hop is a `.data` member and not a dereference.
-- The gate is `bootstrap/tests/native/collection-natives.trb`.
+- The gate is `tests/conformance/collection-natives.trb`.
 
 **A case constructor whose field takes its default.** A case is a function from its fields to the type it belongs to, and
 what declares it is a `case` and not a `fn` - so looking for a `FunctionDeclaration` answered "no defaults at all" and a
@@ -2689,7 +2687,7 @@ does it again.** Milestone 6.2 is one bug wide, and the bug was not in the back 
 - **A leading empty piece used to swallow its separator.** `result.isEmpty()` cannot tell "nothing yet" from "the empty
   text", so `["", "b"].joined(separator: ",")` came out as `b` where stage 0 answers `,b`. A list of pieces has no such
   ambiguity, so the bug went with the fold. It is what makes the gate program fail before the fix.
-- Gate: `bootstrap/tests/native/joined.trb` - every count of pieces (the even/odd carry of the tree), an empty piece in
+- Gate: `tests/conformance/joined.trb` - every count of pieces (the even/odd carry of the tree), an empty piece in
   every position, a multi-byte separator, non-`String` items, a lazy pipeline, `String.from`, and 40000 pieces so that a
   regression to the square shows in the time the file takes. Byte-equal with stage 0, `live blocks at exit: 0`.
   `concatenated` and `joining` have no program of their own: **stage 0 does not load `std/` at all** (its world is
@@ -2704,10 +2702,10 @@ program with a `Float64` in a tuple could be built, and `torb ir` never noticed 
 is the same override at position -1 that a coerced collection already uses for its storage. The body is built by
 `orderingOutOfSign`, which the generated `compare` of a `String` uses over the sign of `torb_text_compare`, so which case
 a negative sign stands for is decided once for both back ends. It covers `Instant.compare` and `Duration.compare` too.
-The `Float64` field is back in `bootstrap/tests/native/tuple-compare.trb`.
+The `Float64` field is back in `tests/conformance/tuple-compare.trb`.
 
 **Everything else about the emitter already agreed.** Before the fix was written, all 41 gate programs of
-`bootstrap/tests/native/` were emitted by stage 1 and by stage 2 and compared byte for byte: **41 of 41 identical**. So
+`tests/conformance/` were emitted by stage 1 and by stage 2 and compared byte for byte: **41 of 41 identical**. So
 there was no iteration order, no uninitialized slot, no address-dependent hash and no float formatting to find - the
 emitter was already a pure function of the program, and the one thing between 6.1 and the same `program.c` was the cost
 of `joined`.
@@ -2728,18 +2726,18 @@ the C and then reported `no C compiler found` where stage 1 found gcc on the sam
   as well, and it is `Process.start`'s job at 7.3; the difference is recorded in `runtime/README.md`.
 - **Why no round before this one noticed:** the only gate that runs a child process ran `cmd /c "echo torb"`, and a
   command with **two** quoted arguments happened to survive the rule that a command with one does not. Both shapes are in
-  `runtime/tests/process_test.c` and in `bootstrap/tests/native/files.trb` now.
+  `runtime/tests/process_test.c` and in `tests/conformance/files.trb` now.
 
-**The fixpoint test is `bootstrap/crates/torb-cli/tests/fixpoint.rs`,** `#[ignore]`d because it takes minutes and needs a
-C compiler:
+**The fixpoint gate is `tools/bootstrap.sh`,** which takes minutes and needs a C compiler:
 
 ```text
-cargo test --release --test fixpoint -- --ignored --nocapture
+sh tools/bootstrap.sh
 ```
 
-It builds the compiler with stage 1, builds it again with the binary that came out, compares the two `program.c` byte for
-byte, and lets stage 3 emit a third one. A difference is reported as the **first differing byte with the 300 bytes around
-it in both files**, because "the files differ" says nothing about 66 megabytes.
+It builds the compiler with the seed, builds it again with the binary that came out, and compares the two `program.c`
+byte for byte; a seed older than the code generation it built gets a third step, so that two builds of the *same*
+compiler are what is compared. A difference is reported as the **first differing byte with the text around it in both
+files**, because "the files differ" says nothing about 66 megabytes.
 
 **What the two stages cost.** One machine (16 cores, gcc 13.2, `-O2`), the whole repository or the compiler's own
 package, wall time and peak working set of the one process:
@@ -2889,7 +2887,7 @@ well:
 
 A name that two keys would share is a **collision and not a merge**: the keys of a base name are sorted and numbered, so
 which one keeps the bare name is a function of the program and not of the order the tables were built in. The gate is the
-one every emitter change has - every program of `bootstrap/tests/native/` byte-equal with stage 0, zero live blocks, and
+one every emitter change has - every program of `tests/conformance/` byte-equal with stage 0, zero live blocks, and
 the fixpoint, which **holds on the smaller file**: stage 1 and stage 2 agree on 56994748 bytes and stage 3 emits them
 again. Stage 2 builds the compiler in 112 s on the machine these numbers come from.
 
@@ -2920,7 +2918,7 @@ again. Stage 2 builds the compiler in 112 s on the machine these numbers come fr
 measurable case is `punctuationTable` in `compiler/src/syntax/lexer.trb`, 35 pairs of a text and a case. The emitted
 `punctuationAt` is the proof: it declares 105 slots and builds all 35 tuples and the whole list **inside its own body**,
 and it is called once per punctuation character of every file the compiler reads. A compiled probe over the same shape
-(10 pairs, 200000 reads, `bootstrap/tests/probe/` and deleted again) measures **1.43 microseconds per read** against
+(10 pairs, 200000 reads, `tests/probe/` and deleted again) measures **1.43 microseconds per read** against
 0.83 for the walk alone, so the build is 63% of what such a read costs.
 
 **And it is worth half a second of a `check` of this repository.** `Lexer` reads the table into a field of its own once
@@ -2983,7 +2981,7 @@ where marking only the top block would have left its children in the live count.
 the way become immortal too, which is a fixed number of blocks per program and not a leak that grows.
 
 The counter is split rather than the gate weakened: `torb_report_leaks` writes `live blocks at exit: 0` **and**
-`immortal blocks at exit: N`, both are asserted by `bootstrap/crates/torb-cli/tests/native.rs`, and `live blocks` keeps
+`immortal blocks at exit: N`, both are asserted by `tools/conformance.sh`, and `live blocks` keeps
 meaning "everything that was counted was freed". The alternative - one number with a note - would have made the gate
 unreadable the first time it went wrong.
 
@@ -3177,7 +3175,7 @@ changes. Today it answers
 - everything else as `found: Point` - its name and its type.
 
 The second one is a **divergence from stage 0 in the text of a failing assertion and in nothing else**, so no gate
-program of the byte-compared suite can hold one: `bootstrap/tests/native/binary-only/` is where it is pinned instead,
+program of the byte-compared suite can hold one: `tests/conformance/binary-only/` is where it is pinned instead,
 built and run as a binary alone, with the README naming what differs and why.
 
 **Stage 0's `assert` panics.** It failed as the *interpreter* before - `error:` and exit code 1 - which is a kind of
@@ -3194,14 +3192,14 @@ reported is an ordinary panic and never a jump into a frame that is gone.
 
 **A run that recovers leaks, and the gate says so rather than being loosened.** A recovered panic runs nothing on the way
 out - no release, no `Close`, no destructor - exactly as an ordinary panic runs nothing, so everything the aborted frames
-held stays allocated. `bootstrap/tests/native/test-failure.trb` reports `live blocks at exit: 1` and carries a
+held stays allocated. `tests/conformance/test-failure.trb` reports `live blocks at exit: 1` and carries a
 `.leaks` file beside it that holds that sentence; the runner reads the file and skips the leak gate for that one
 program. An exemption that has to be written down next to the program is not a hole in the gate.
 
 **The report is one format in one place.** `runtime/test.c` writes `  ok      <group> > <name>` and the four lines of a
 failure, character for character what `natives.rs` writes on stage 0, for the same reason `print` joins its parts in the
 runtime: two implementations of one format are two chances to disagree, and `torb test` compares the two line by line.
-`bootstrap/tests/native/{tests,test-failure}.trb` are the two gate programs, byte equal on both sides.
+`tests/conformance/{tests,test-failure}.trb` are the two gate programs, byte equal on both sides.
 
 **`torb test <directory>` is one binary, and the generated `main` is where the files are a list.** Every test file
 imports its harness and through it whatever it tests, so one binary per file would be one C compile of a translation
@@ -3240,8 +3238,7 @@ report arrives when the run is over rather than while it happens, and a panic th
 file whose *top level* panicked - lands on standard output with the rest. Everything the report itself is goes to
 standard output anyway, so nothing of the comparison is affected.
 
-**Measured**, from `bootstrap/` on 16 cores with gcc 13.2, all of it in one run of
-`cargo test --release --test suite -- --ignored` (808.08 s): stage 0 builds the compiler in **294.2 s**; the built
+**Measured** on 16 cores with gcc 13.2, all of it in one run of the suite gate (808.08 s): stage 0 builds the compiler in **294.2 s**; the built
 `torb` builds the whole suite and runs it in **208.5 s**, almost all of which is the one gcc - the binary itself runs
 all 1482 tests in **under a second**; stage 0 runs the same suite in **305.4 s**, one process per file on as many
 cores as there are. The slow way for comparison: the same build driven by the interpreter
@@ -3251,8 +3248,8 @@ cores as there are. The slow way for comparison: the same build driven by the in
 **`\n` is `\n` everywhere, and that is the runtime's job.** On Windows the C runtime opens `stdout` and `stderr` in
 *text* mode, so every `\n` a compiled program wrote into a pipe or a file became `\r\n` - the same program producing
 different bytes on two platforms, and a conformance runner that had to fold them away before comparing anything.
-`torb_process_start` puts both streams into **binary mode** instead, and the normalisation is gone from
-`bootstrap/crates/torb-cli/tests/native.rs`: what a program wrote is compared as it wrote it, and a `\r` that turns up
+`torb_process_start` puts both streams into **binary mode** instead, and the conformance runner normalises nothing:
+what a program wrote is compared as it wrote it, and a `\r` that turns up
 is a difference the suite is meant to catch. The expectation *files* are still folded, because git may check one out
 with either ending. The console path is untouched by the stream mode - `WriteConsoleW` takes UTF-16 straight to the
 console handle - and a console still breaks lines correctly because its own processed-output mode is what turns a `\n`
@@ -3305,7 +3302,7 @@ functions.
 **The conformance suite compares everything a program can be observed doing, and nothing is exempt.** Before this
 sub-milestone `native.rs` knew about one allowed difference - a program that panicked only had to *fail* on stage 0 - and
 that hole is closed: standard output, standard error and the exit code are compared byte for byte for all 57 programs of
-`bootstrap/tests/native/`, and a program with no `.stderr` file promises to write nothing there at all. `bootstrap/tests/native/README.md` is the contract, and it names which program pins which
+`tests/conformance/`, and a program with no `.stderr` file promises to write nothing there at all. `tests/conformance/README.md` is the contract, and it names which program pins which
 behaviour.
 
 **The one thing read loosely is the position inside a frame of `std/`.** A `.stderr` file writes
@@ -3364,7 +3361,7 @@ directory. A problem of *loading* keeps the path of the machine, because it is e
 - **A top-level `?` whose error carries `Error` walks `cause()` on stage 0 and not in the binary.** CONCEPT shows the
   `  caused by:` lines and the interpreter writes them now; `reportFailure` in `ir/lower/match.trb` writes the first line
   and exits, and says at the function that the loop over `cause()` is one loop on top of it. Found by a gate program
-  written for this milestone, so the program waits in `bootstrap/tests/native/stage-0-only/error-chain.trb` - run and
+  written for this milestone, so the program waits in `tests/conformance/stage-0-only/error-chain.trb` - run and
   compared on stage 0, and it moves up one directory the day the loop exists. **That subdirectory is the waiting room,
   not an exception**: the runner has a second test for it and the README says what is in it and why.
 - **A range of anything but `Int`.** Stage 0's `Range` holds two integers, so `"a".."c"` is a value it cannot build.
@@ -3386,7 +3383,7 @@ directory. A problem of *loading* keeps the path of the machine, because it is e
 - **A capture of a quotation that is not a scalar is shown by its name and type in a failing `assert` natively** and by
   its value on stage 0 (see "What 5.11 decided"). It is a divergence in the text of a failing assertion and in nothing
   else, and it closes when ENCODING's `EncodedValue` lands. Pinned since 5.11 by
-  `bootstrap/tests/native/binary-only/assert-compound-capture.trb`, which is built and run as a binary alone.
+  `tests/conformance/binary-only/assert-compound-capture.trb`, which is built and run as a binary alone.
 
 **Three language decisions this needed** - each of them a question the language had not answered, decided the simplest
 consistent way and written into CONCEPT:
@@ -3400,8 +3397,7 @@ consistent way and written into CONCEPT:
    holds one code point, so `'ß'.toUpperCase()` is `'ß'`: its upper case is `SS`, answering `'S'` would be wrong, and
    answering a `String` would make the type of the result depend on the value. `'ÿ'` to `'Ÿ'` is the one pair that
    reaches out of Latin-1; `×` and `÷` are symbols. `String.toUpperCase` is that mapping per character, so a mapped text
-   is exactly as many bytes as it was. `runtime/text.c` and
-   `bootstrap/crates/torb-interpreter/src/characters.rs` are the same five functions in two languages, and each says so.
+   is exactly as many bytes as it was. `runtime/text.c` holds those five functions, and `character-case.trb` pins them.
 3. **A failure of the *interpreter* is its own kind of ending,** neither a panic nor a top-level `?`, and it keeps stage
    0's own report with the calls it came through. Without the third kind, making stage 0 conform would have meant either
    printing `panic:` for every crash of the toolchain (and leaving with 101) or losing the frames.
@@ -3414,8 +3410,8 @@ inside a block turned into a top-level function with parameters (a `fn` in a blo
 loop instead of a `toMap` that does not exist, a closure that no longer captures the receiver `self`, and the three hand-written
 operator traits deleted in favour of the prelude's - which is why `Add`, `Subtract`, `Multiply`, `Divide`, `Remainder`,
 `Negate` and `Compare` are in stage 0's `prelude.trb` now: `a + b` means the *prelude's* `Add`, and a script that
-declares a trait of its own name does not get the operator. `bootstrap/tests/scripts/` and `bootstrap/tests/native/` are
-each a workspace of their own, and `torb run ../compiler check tests/native tests/scripts` is the second `check` of the
+declares a trait of its own name does not get the operator. `tests/language/` and `tests/conformance/` are
+each a workspace of their own, and `torb check tests/conformance tests/language` is the second `check` of the
 gate list. The only TorbScript left outside a `check` is `tests/parser-cases/`, `tests/lexer-cases/` (deliberate errors)
 and `.vscode/extensions/torbscript/samples/tokens.trb`, which is not a program at all and only has to parse.
 
@@ -3622,11 +3618,10 @@ wide command line and splits it with `CommandLineToArgvW`, by exactly the rule `
 it builds a command line for a child; POSIX has no source of its own and `argv` is what `Process.arguments()` answers
 there.
 
-**`File.absolutePath` answers one form in both implementations**: forward slashes, an upper-cased drive letter, `.` and
-`..` resolved as text, no prefix of the operating system's own. `torb_file_absolute_path` is the definition and
-`absolute_path_of` in `bootstrap/crates/torb-interpreter/src/natives.rs` mirrors it; nothing in Rust's `std::path`
-answers it, because `absolute` keeps `..` on POSIX, keeps the separators of the platform and spells the drive letter the
-way the working directory happens to, and `canonicalize` needs the file to exist and answers `\\?\`.
+**`File.absolutePath` answers one form**: forward slashes, an upper-cased drive letter, `.` and `..` resolved as text,
+no prefix of the operating system's own. `torb_file_absolute_path` is the definition, and no platform call gives that
+form: the usual one keeps `..` on POSIX, keeps the separators of the platform and spells the drive letter the way the
+working directory happens to, and the one that resolves needs the file to exist and answers `\\?\`.
 
 **A directory entry whose name has no UTF-8 spelling is an `IoError`** that names the directory, on both sides: a
 `String` is always valid UTF-8, so there is no value for such a name and no replacement character is invented.
@@ -3642,7 +3637,7 @@ chunks that never split a surrogate pair, and `readLine` converts the other way 
 and text that turns out not to be valid UTF-8 all still get the raw bytes exactly as before - the conversion only ever
 runs on the one target whose own code page was never going to render a `String`'s bytes correctly.
 
-`bootstrap/tests/native/non-ascii-paths.trb`, `long-paths.trb`, `absolute-path-form.trb` and
+`tests/conformance/non-ascii-paths.trb`, `long-paths.trb`, `absolute-path-form.trb` and
 `process-non-ascii-argument.trb` are what hold the two implementations to all of it, and
 `runtime/tests/platform_test.c` is what holds the two conversions and the one threshold; `runtime/tests/console_test.c`
 holds the console's own chunk boundary and its fallback, the parts of this that do not need a console to test.
@@ -3693,7 +3688,7 @@ are bound, the body `Target.from self` is the ordinary static call `Path.from(te
   `String` value in hand says nothing about whether a `Path` or something else is wanted - and an untyped interpreter
   has no other source for it, so it answers ``the String "a/b.txt" has no method `into` ``. It is not a bug that can be
   fixed in the interpreter; it closes when the VM runs the compiler's own instances.
-  `bootstrap/tests/native/binary-only/blanket-into.trb` pins the compiled side.
+  `tests/conformance/binary-only/blanket-into.trb` pins the compiled side.
 - **Stage 0 keeps one cell per `const` declaration and not one per type argument.** It has no types, so
   `Box<Int>.empty` and `Box<String>.empty` are one value there - which is the same cause as `extend Vector2<Float>` and
   `extend Vector2<Int>` being indistinguishable for it (docs/LINEAR.md, section 12). `generic-constants.trb` stays a
@@ -3746,7 +3741,7 @@ leaves its range.
 
 **4. `Show` of a `Float` is unspecified beyond "a decimal point".** Gap 23 of TYPECHECKER.md: "a `Float` always
 carries a decimal point". Stage 0 prints Rust's `to_string` (`[3.141592653589793, 6.0, 0.0]` in
-`bootstrap/tests/scripts/basics.expected`), which is the shortest round-tripping decimal.
+`tests/language/basics.expected`), which is the shortest round-tripping decimal.
 _Proposal:_ the shortest decimal string that parses back to the same `Float64`, with `.0` appended when the result
 contains neither `.` nor `e`; `nan`, `inf`, `-inf`, and `-0.0` prints `-0.0`. _Reason:_ two implementations compare
 their output through `Show`, and `printf("%.17g")` is neither shortest nor identical across libcs - so the runtime

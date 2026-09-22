@@ -2367,8 +2367,7 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
 - `torb run` type checks the whole program before it starts. The IR is cached.
 - `torb build` compiles the typed IR ahead of time. The first back end prints C, a back end that emits machine code
   can follow behind the same IR. Nothing in the language depends on which one it is.
-- **The toolchain is written in TorbScript** (`compiler/`), the VM included. A small interpreter in Rust
-  (`bootstrap/`) runs it until it compiles itself and is thrown away afterwards
+- **The toolchain is written in TorbScript** (`compiler/`), the VM included, and it compiles itself from a seed
   (see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)). So the language is its own first big program: what is awkward
   to write in it shows up in the compiler first.
 - Binaries that use `Sandbox.load` embed the front end and the VM. Interpreted code calls compiled methods through a
@@ -2599,9 +2598,9 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
   default in `project.trb`. So `"std/fs"` is an ordinary `owner/name` and no special case of the import rules, and
   capabilities stay visible per import. Workspaces (one root, many projects, one lock file) because the toolchain is
   the first project that needs them.
-- Self-hosting: the toolchain is a TorbScript project, bootstrapped by a throwaway interpreter in Rust that has no
-  type checker. Everything that lasts (type checker, IR, back ends, VM, tools) is written once, in TorbScript. The
-  first native back end emits C, because the shortest path to "the compiler compiles itself" wins.
+- Self-hosting: the toolchain is a TorbScript project that compiles itself from a seed. Everything that lasts (type
+  checker, IR, back ends, VM, tools) is written once, in TorbScript. The first native back end emits C, because the
+  shortest path to "the compiler compiles itself" wins.
 - Cases are `Type.Case` or `.Case`, never bare (Swift). Before, a bare name in a pattern was a case if one was in
   scope and a binding otherwise, and inside of a type its cases shadowed types of the same name
   (`case Keyword(keyword: Keyword)`). Now names mean one thing. The price is a rule for line breaks: a leading `.`

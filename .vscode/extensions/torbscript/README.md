@@ -50,7 +50,7 @@ ln -s "$PWD/.vscode/extensions/torbscript" ~/.vscode/extensions/torbscript
   property command and not a call. Both are colored as calls.
 
 The grammar follows `CONCEPT.md`. When the syntax changes, change `trb.tmLanguage.json` and the keyword lists in
-`extension.js` - both are derived from `bootstrap/crates/torb-syntax/src/token.rs`'s `Keyword` enum, so that is
+`extension.js` - both are derived from `compiler/src/syntax/token.trb`'s `TokenKind`, so that is
 where to check what changed.
 
 ## Semantic highlighting
@@ -82,7 +82,7 @@ reasonable) is what shows.
 
 | Setting                                       | Default | Meaning |
 |------------------------------------------------|---------|---------|
-| `torbscript.executablePath`                    | `""`    | Path to `torb`. Empty searches `build/release/torb[.exe]` first, then `bootstrap/target/release/torb[.exe]` and `bootstrap/target/debug/torb[.exe]`, under every open workspace folder, then falls back to `torb` on `PATH`. |
+| `torbscript.executablePath`                    | `""`    | Path to `torb`. Empty searches `build/release/torb[.exe]` under every open workspace folder, then falls back to `torb` on `PATH`. |
 | `torbscript.semanticHighlighting.enabled`      | `true`  | Turn semantic highlighting off entirely (only the TextMate grammar's colors show). Also what happens automatically if `torb` cannot be found or run - never an error popup, only one line in the "TorbScript" output channel (View > Output). |
 
 ### The legend
@@ -151,27 +151,28 @@ already used for comments in most themes, including this grammar's).
 
 ## Tasks
 
-`.vscode/tasks.json` has two tasks (Terminal > Run Task...), both run from `bootstrap/` on stage 0:
+`.vscode/tasks.json` has two tasks (Terminal > Run Task...), both run from the workspace root with
+`build/release/torb`:
 
-| Task                       | Runs                                                | Problem matcher |
-|-----------------------------|-----------------------------------------------------|------------------|
-| `torb: check workspace`    | `cargo run --release -q -- run ../compiler check ..` | `$torb`, so every diagnostic becomes an entry in the Problems panel with a click-through location |
-| `torb: test compiler`      | `cargo run --release -q -- test ../compiler/tests`   | none - the pass/fail counts are read from the terminal |
+| Task                       | Runs                        | Problem matcher |
+|-----------------------------|-----------------------------|------------------|
+| `torb: check workspace`    | `torb check .`              | `$torb`, so every diagnostic becomes an entry in the Problems panel with a click-through location |
+| `torb: test compiler`      | `torb test compiler/tests`  | none - the pass/fail counts are read from the terminal |
 
 The `torb` problem matcher (contributed by this extension) reads the two-line diagnostics of `torb check`/`parse`
 (`compiler/src/cli/render.trb`):
 
 ```text
 error: Comparisons do not chain. Use `&&`: `a < b && b < c`
- --> ../compiler/src/example.trb:12:19
+ --> compiler/src/example.trb:12:19
   |
 12 | const chained = a < b > c
   |                       ^
 ```
 
 The first line is the message, the second the location; `torb`'s diagnostics show the path relative to where the
-toolchain was started (here `bootstrap/`, which is why the task's problem matcher resolves file locations against
-`bootstrap/` rather than the workspace root).
+toolchain was started, which is the workspace root, and that is what the task's problem matcher resolves them
+against.
 
 There is no language server yet (milestone 8): these tasks are the whole IDE integration for now, and the reason
 `torb check`/`torb test` do not need their own terminal habits memorized.

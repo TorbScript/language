@@ -419,6 +419,12 @@ the same name, each answering a `Task`. See [Streams](language/concurrency-and-s
 The Agent Skill derived from this documentation by `torb docs skill`: a folder whose `SKILL.md` has a `name` and a
 `description` and whose `reference/` holds the pages. See [The Agent Skill](contributing/the-skill.md).
 
+### Seed
+
+A `torb` binary that already exists, which `sh tools/bootstrap.sh` compiles the current compiler sources with. The
+compiler is written in TorbScript, so something that already compiles TorbScript has to build it once. See
+[the architecture](ARCHITECTURE.md).
+
 ### Snippet
 
 A fenced code block of this documentation. A `trb` snippet is verified by the compiler's own front end; the marker in the
@@ -433,11 +439,6 @@ The reading end of a stream, `Source<Item, Failure>`, with `next` in place of an
 
 The synchronous middle of a pipeline, `Stage<Input, Output>`, written once and driven by both an `Iterable` and a
 `Source`. See [Pipelines](language/collections-and-iteration/pipelines.md).
-
-### Stage 0
-
-The Rust interpreter in `bootstrap/` that runs the self-hosted toolchain until it can compile itself. It has no type
-checker and is thrown away afterwards.
 
 ### Static member
 

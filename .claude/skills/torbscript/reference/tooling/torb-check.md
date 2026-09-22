@@ -46,8 +46,7 @@ for - the files of the standard library and of other workspace members that had 
 counted, even though they were type checked too.
 
 ```console
-$ cd bootstrap
-$ cargo run --release -q -- run ../compiler check ../examples/tour
+$ torb check examples/tour
 14 files, no problems
 ```
 
@@ -55,7 +54,7 @@ A problem is one block per diagnostic: the file, the line and column, a caret un
 same rendering `torb build` uses for a program that does not check.
 
 ```console
-$ cargo run --release -q -- run ../compiler check ../scratch.trb
+$ torb check scratch.trb
 error: Expected `Int64`, found `String`
  --> ../scratch.trb:1:20
   |
@@ -74,7 +73,7 @@ Prints how many expressions of every requested file have a type and how many are
 milestone of the checker - then the total across every requested file.
 
 ```console
-$ cargo run --release -q -- run ../compiler check --statistics ../examples/tour
+$ torb check --statistics examples/tour
 ../examples/tour/src/01-bindings-and-values.trb: 84 typed, 0 deferred
 ../examples/tour/src/02-functions.trb: 260 typed, 0 deferred
 ../examples/tour/project.trb: 6 typed, 0 deferred
@@ -92,7 +91,7 @@ whole workspace the target belongs to, not only the files the run reports on, wh
 a target that is a small part of a large workspace.
 
 ```console
-$ cargo run --release -q -- run ../compiler check --timings ..
+$ torb check --timings .
 finding the workspace: 53 ms
 name resolution: 415 ms
 names in type positions: 453 ms
@@ -113,8 +112,7 @@ most often produce a diagnostic worth reading twice before assuming it is wrong.
 The whole repository, workspace and all, checked in one run:
 
 ```console
-$ cd bootstrap
-$ cargo run --release -q -- run ../compiler check ..
+$ torb check .
 255 files, no problems
 ```
 

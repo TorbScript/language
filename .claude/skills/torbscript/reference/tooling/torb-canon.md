@@ -16,10 +16,9 @@ source:
   - compiler/src/canon/walk.trb
 ---
 
-`canon` is a command of the self-hosted `torb`, ported onto the self-hosted parser and syntax tree
-(`compiler/src/canon`) from stage 0's own tool of the same name. It exists because milestone 8's `torb format` does
-not exist yet, and every file in the repository still has to be in the canon in the meantime. Stage 0 keeps a frozen
-copy for comparison; the two agree over the whole repository.
+`canon` is a command of `torb`, over the parser and the syntax tree of `compiler/src/canon`. It exists because
+milestone 8's `torb format` does not exist yet, and every file in the repository has to be in the canon in the
+meantime.
 
 ## Synopsis
 
@@ -50,19 +49,18 @@ tree from before with every span and every call style erased - so an edit that w
 dropped and reported instead of applied. A file that does not parse to begin with is skipped whole.
 
 ```console
-$ cd bootstrap
-$ cargo run --release -q -- canon --check ../examples/tour/src/scratch.trb
+$ torb canon --check examples/tour/src/scratch.trb
 ../examples/tour/src/scratch.trb
 
 1 of 1 files would change: 2 calls became commands, 0 got parentheses, 0 strings were indented, 0 case patterns, 0 unread bindings, 0 endless loops
 ```
 
 ```console
-$ cargo run --release -q -- canon ../examples/tour/src/scratch.trb
+$ torb canon examples/tour/src/scratch.trb
 ../examples/tour/src/scratch.trb
 
 1 of 1 files changed: 2 calls became commands, 0 got parentheses, 0 strings were indented, 0 case patterns, 0 unread bindings, 0 endless loops
-$ cargo run --release -q -- canon --check ../examples/tour/src/scratch.trb
+$ torb canon --check examples/tour/src/scratch.trb
 0 of 1 files would change: 0 calls became commands, 0 got parentheses, 0 strings were indented, 0 case patterns, 0 unread bindings, 0 endless loops
 ```
 
@@ -77,7 +75,7 @@ payload-less case that a `use` brought into the file counts, which today is `Non
 file explicitly imports the same way.
 
 ```console
-$ cargo run --release -q -- canon --check --rule imported-case-patterns ../examples/tour/src/scratch.trb
+$ torb canon --check --rule imported-case-patterns examples/tour/src/scratch.trb
 ../examples/tour/src/scratch.trb
 
 1 of 1 files would change: 0 calls became commands, 0 got parentheses, 0 strings were indented, 1 case patterns, 0 unread bindings, 0 endless loops
@@ -94,7 +92,7 @@ leave the binding exactly as it is. `_name` is never touched, and the name of a 
 dropping it is more than one token. Whatever is left after a run, the checker names, and a person fixes it.
 
 ```console
-$ cargo run --release -q -- canon --check --rule unused-bindings ..
+$ torb canon --check --rule unused-bindings .
 0 of 293 files would change: 0 calls became commands, 0 got parentheses, 0 strings were indented, 0 case patterns, 0 unread bindings, 0 endless loops
 ```
 
@@ -106,7 +104,7 @@ and everything from the `{` on stays byte-identical, comments and line endings i
 endless loop and is left alone.
 
 ```console
-$ cargo run --release -q -- canon --check --rule loops ../examples/tour/src/scratch.trb
+$ torb canon --check --rule loops examples/tour/src/scratch.trb
 ../examples/tour/src/scratch.trb
 
 1 of 1 files would change: 0 calls became commands, 0 got parentheses, 0 strings were indented, 0 case patterns, 0 unread bindings, 1 endless loops
@@ -120,21 +118,15 @@ not recognize prints its usage and exits `2`.
 
 ## Examples
 
-The gate `compiler/CONTRIBUTING.md` runs before every commit, with all five rules, over the whole repository:
+The gate runs before every commit, with all five rules, over the whole repository:
 
 ```console
-$ cd bootstrap
-$ cargo run --release -q -- canon --check --rule calls --rule strings --rule imported-case-patterns --rule unused-bindings --rule loops ..
+$ torb canon --check --rule calls --rule strings --rule imported-case-patterns --rule unused-bindings --rule loops .
 0 of 488 files would change: 0 calls became commands, 0 got parentheses, 0 strings were indented, 0 case patterns, 0 unread bindings, 0 endless loops
 ```
 
-The native `torb`, built by [`sh tools/bootstrap.sh`](../ARCHITECTURE.md), answers the same over the same tree - that
-agreement is what let stage 0's copy of `canon` stay behind, frozen, while this one took over the gate:
-
-```console
-$ ./build/release/torb canon --check --rule calls --rule strings --rule imported-case-patterns --rule unused-bindings --rule loops .
-0 of 432 files would change: 0 calls became commands, 0 got parentheses, 0 strings were indented, 0 case patterns, 0 unread bindings, 0 endless loops
-```
+That is the tier A gate of [compiler/CONTRIBUTING.md](../../compiler/CONTRIBUTING.md), and `sh tools/gates.sh a` runs
+it with exactly those five rules.
 
 ## Related
 

@@ -1,8 +1,7 @@
 # TorbScript Implementation Architecture
 
-**TorbScript is written in TorbScript.** The toolchain in [`compiler/`](../compiler) is the real one. The Rust code in
-[`bootstrap/`](../bootstrap) exists for a single reason: something has to run the compiler until the compiler can
-compile itself. It is temporary, deliberately small, and gets no feature the compiler does not need.
+**TorbScript is written in TorbScript.** The toolchain in [`compiler/`](../compiler) is the whole of it, and it
+compiles itself. The one external tool a checkout needs is a C compiler.
 
 The language itself is specified in [CONCEPT.md](../CONCEPT.md).
 
@@ -13,37 +12,31 @@ The language itself is specified in [CONCEPT.md](../CONCEPT.md).
 | `compiler/`  | The toolchain: front end, type checker, back ends, tools. A normal TorbScript project        | TorbScript |
 | `std/`       | The standard library: one package per directory (`std/core`, `std/fs`, `std/io`, ...). `std/prelude` declares nothing: it re-exports | TorbScript |
 | `runtime/`   | What every compiled binary links against: counts, `String`, the collections, panics, IO      | C11        |
-| `examples/`  | Tour, example projects. With `std/` and `compiler/` the conformance suite of every stage     | TorbScript |
-| `bootstrap/` | Stage 0: parser and tree-walking interpreter. Thrown away after the compiler compiles itself | Rust       |
+| `examples/`  | Tour, example projects. With `std/` and `compiler/` the conformance suite of every back end  | TorbScript |
+| `tests/`     | The conformance suite (`tests/conformance/`) and the language smoke programs (`tests/language/`), each a workspace of its own | TorbScript |
 | `docs/`      | This file                                                                                    |            |
 
-The root `project.trb` makes the repository a workspace of `std/*`, `compiler` and `examples/*`. That is how the
-compiler finds the standard library: `"std/fs"` is a member of the workspace it runs in.
+The root `project.trb` makes the repository a workspace of `std/*`, `compiler`, `examples/*` and `benchmarks`. That is
+how the compiler finds the standard library: `"std/fs"` is a member of the workspace it runs in. It also writes
+`test { input "no-tests" }`, because it has no tests of its own and `tests/` belongs to other workspaces.
 
-## Stages
+## The Bootstrap
 
 ```text
-stage 0   bootstrap (Rust)          runs compiler/ from source, without type checking
-stage 1   compiler/ on stage 0      type checks and compiles compiler/ to a native `torb`
-stage 2   that `torb`               compiles compiler/ again. Same output as stage 1: the fixpoint test
+seed          a `torb` that already exists: a release binary, or seed/program.c compiled once
+step 1        the seed compiles compiler/ into build/bootstrap/torb
+step 2        that binary compiles compiler/ again into build/release/torb
 ```
 
-After stage 2 works, a release of `torb` builds the next one (as Go and Rust do it). `bootstrap/` is then frozen: it
-stays only as the way to build the very first binary from source, and it never has to understand language features
-that came later, because the path from it is "bootstrap builds version N, N builds N+1".
+`sh tools/bootstrap.sh` runs both steps and compares the two `program.c` byte for byte. They agree exactly when the
+compiler is a fixed point of itself, which is what says the compiler is correct about the language it is written in.
+`build/release/torb` is the compiler that comes out.
 
-### What Stage 0 Is, and Is Not
-
-- A hand-written lexer and recursive descent parser (`torb-syntax`). It was written first and is the **reference for
-  the port**: `compiler/src/syntax` is tested against it token by token (and later tree by tree) on every `.trb` file
-  in the repository.
-- A tree-walking interpreter without a type checker (`torb-interpreter`). Values are reference counted and copied on
-  write, `var` paths are "take out, change, put back" - the memory model of the language, without any optimization.
-- It implements the part of the standard library the compiler needs natively and does **not** load `std/`.
-- Where the language lets types decide something, stage 0 approximates it with what it sees at runtime
-  (see [bootstrap/README.md](../bootstrap/README.md) for the list). The compiler sources stay inside of what both
-  agree on. That subset is ordinary, valid TorbScript - nothing in `compiler/` is written "for the bootstrap".
-- It will not get a type checker, a bytecode VM, tasks, the sandbox or FFI. Those are written once, in TorbScript.
+`seed/` is outside git, because a seed is a build artifact of an earlier commit and not a fact about this one. A
+release publishes a binary per platform and the compiler's own C as one file, and between releases the seed is
+whatever `torb` was built last. A commit that changes the syntax therefore comes in two: one that teaches the compiler
+the new form beside the old one, and one that switches the sources over
+([docs/RUST-EXIT.md](RUST-EXIT.md) section 4.2).
 
 ## Pipeline of the Compiler
 
@@ -58,7 +51,7 @@ binary" rests on: both back ends consume the same, fully resolved program, and e
 
 | Module (`compiler/src/`) | Contains                                                              | State    |
 |--------------------------|-----------------------------------------------------------------------|----------|
-| `syntax/`                | Source text, spans, diagnostics, tokens, lexer, AST, parser           | done, verified against stage 0 |
+| `syntax/`                | Source text, spans, diagnostics, tokens, lexer, AST, parser           | done     |
 | `project/`               | Paths, the source tree, `project.trb`, workspaces and their members   | done     |
 | `semantics/`             | Modules, symbols, visibility, names in type positions (`torb check`)  | done     |
 | `semantics/checker/`     | The type checker ([docs/TYPECHECKER.md](TYPECHECKER.md))              | started: see the table in section 8 of TYPECHECKER.md for what is done |
@@ -162,22 +155,18 @@ The language has value semantics; identity is the marked exception (`shared type
 - No tracing garbage collector, and no destructors: releasing storage never runs user code. What is deterministic in
   the language is the cleanup that is written down (`using`, `Close`), not when a count reaches zero.
 
-(Stage 0 does the same with `Rc::make_mut` and moves values out of their path for the duration of a change. It has no
-last-use analysis; the patterns the compiler relies on - building lists and maps in `var` fields - are in place
-regardless.)
-
 ## Quality
 
-- **Differential tests while both implementations exist.** `cargo test` in `bootstrap/` runs the TorbScript lexer on
-  and parser on every `.trb` file of the repository (and on files full of errors) and compares tokens, syntax trees,
-  diagnostics and their rendering with the Rust implementation. The tree is compared through the generated `Show` of
-  the TorbScript AST, which stage 0 prints for its own tree (`torb ast`). Neither side can drift.
-- The tests of the compiler are TorbScript (`compiler/tests/*.test.trb`, `torb test`), so they move to stage 1 and 2
-  unchanged.
-- `examples/`, `std/` and `compiler/` are the conformance suite: every file parses and resolves today (`torb check`
-  over the repository is a test in `bootstrap/`); later every file type checks, and the runnable ones produce the
-  same output in every stage and back end.
-- Stage 0: `#![forbid(unsafe_code)]`, `clippy -D warnings`, `rustfmt`, no dependencies.
+- **The conformance suite is the behaviour of the language, written down.** `tests/conformance/` holds one small
+  program per behaviour, built and run with `torb build`, compared against its `.expected`, `.stderr` and `.exit` byte
+  for byte, and asked to free everything it allocated. `tools/conformance.sh` is the runner and
+  [tests/conformance/README.md](../tests/conformance/README.md) is the contract.
+- The tests of the compiler are TorbScript (`compiler/tests/*.test.trb`, `torb test`), so a back end that comes later
+  inherits them unchanged.
+- `examples/`, `std/` and `compiler/` are checked as one: every file parses, resolves and type checks
+  (`torb check .` over the repository), and the runnable ones produce the same output in every back end.
+- **The fixpoint is the gate on the compiler itself**: the seed builds it, it builds itself, and the two `program.c`
+  are identical.
 
 ## Milestones
 
@@ -193,7 +182,7 @@ regardless.)
 4. Type checker: inference, traits, generics, exhaustiveness, `var` paths, exclusivity, dead changes - and the names
    in _expressions_. They cannot be resolved earlier: what `port` means in `server { port 8080 }` depends on the type
    of the parameter the closure is passed to (design principle 1), so resolving names and checking types is one pass.
-   From here on the compiler checks itself, which stage 0 never could. The plan and the state of its ten steps are in
+   From here on the compiler checks itself. The plan and the state of its ten steps are in
    [docs/TYPECHECKER.md](TYPECHECKER.md); **4.1 to 4.4 are done**: every type position of the repository becomes a
    type, every declaration a signature, and every expression a type - traits and their implementations included, so the
    operators, `for`, indexing, interpolation, `?`, `??`, `?.` and `into()` all resolve through the trait they mean, and
@@ -218,12 +207,12 @@ regardless.)
    `std/` and `compiler/` are at 100%. The first thing it found by checking the compiler itself was that
    `compiler/src/ir/mangle.trb` mixed the `UInt8` of a byte with `Int64` arithmetic; checking the generic code found
    `Set.new()`, which the standard library never had.
-5. Typed IR and the C back end. The tour runs natively, with the same output as under stage 0. The plan and the state
+5. Typed IR and the C back end. The tour runs natively. The plan and the state
    of its sub-milestones are in [docs/BACKEND.md](BACKEND.md); **5.1 is done**: the IR's data model, the layouts and
    their representation classes, the mangling, a builder, a verifier and the text format. **5.R1 is done**: the C
    runtime ([`runtime/`](../runtime)) with counts, `String`, one list, one ordered hash table, panics and the minimum
    of file IO, and the manifest of natives that is the contract between it and the lowering.
-6. The compiler compiles itself, stage 1 and stage 2 agree. `bootstrap/` is frozen.
+6. **Done:** the compiler compiles itself. The seed builds it, it builds itself again, and the two emit the same C.
 7. Bytecode and VM, tasks, channels, the sandbox (`Sandbox.load`, receiver scripts, `project.trb`). The runtime half
    of streams comes with it: the specification and the declarations are in [docs/STREAMS.md](STREAMS.md) and
    `std/stream`, and section 14 there lists what 7 and 10 have to build.

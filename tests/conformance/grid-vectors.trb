@@ -1,0 +1,76 @@
+/**
+ * The whole-number half of `std/linear` and `std/geometry` compiled to a native binary: `Vector2<Int>`, `Vector3<Int>`
+ * and `Rectangle<Int>`, which is the pixel and tile side of the same two packages.
+ *
+ * `Vector2<Int>` and `Vector2<Float>` are one type declaration, so this program and `linear.trb` are the same generic
+ * code built twice - once over a scalar the machine adds as an integer and once over one it adds as a double. What is
+ * printed here is therefore also the answer to "is the layout of a generic record decided by its type argument": every
+ * number below is whole, and none of them went through a float on the way.
+ *
+ * The other thing it pins down is the half-open rule, cell by cell: two tiles side by side, and every column of the row
+ * they share belonging to exactly one of them.
+ */
+
+use Vector2 from "../../std/linear/src/vector2"
+use Vector3 from "../../std/linear/src/vector3"
+use Rectangle from "../../std/geometry/src/rectangle"
+use Segment2 from "../../std/geometry/src/segment2"
+use Triangle2 from "../../std/geometry/src/triangle2"
+use Polygon from "../../std/geometry/src/polygon"
+use Box from "../../std/geometry/src/box"
+
+// The grid vector: everything `Numeric` and `Signed` promise, and nothing that needs a root
+const tile = Vector2(3, -4)
+print "{tile} {tile + tile} {tile - Vector2(1, 1)} {tile * 3} {tile / 2}"
+print "{tile.dot(tile)} {tile.lengthSquared()} {tile.cross(Vector2(1, 0))} {-tile}"
+print "{tile.absolute()} {tile.manhattanLength()} {tile.manhattanDistanceTo(Vector2(0, 0))}"
+print "{tile.perpendicular()} {tile.perpendicular().dot(tile)} {tile.isZero()} {Vector2(0, 0).isZero()}"
+print "{tile.min(Vector2(0, 0))} {tile.max(Vector2(0, 0))} {tile.clamped(Vector2(0, 0), Vector2(2, 2))}"
+print "{tile.scaled(by: Vector2(2, 3))} {tile.divided(by: Vector2(3, 2))} {tile.sum()}"
+print "{tile.withX(9)} {tile.withY(9)} {tile.largestComponent()} {tile.smallestComponent()}"
+
+// Crossing the scalar happens on purpose and in one direction at a time
+print "{tile.toFloat()} {tile.toFixed()}"
+print "{Vector2(1.5, -1.5).rounded()} {Vector2(1.5, -1.5).floored()} {Vector2(1.5, -1.5).ceiling()}"
+
+const cube = Vector3 1, 2, 3
+print "{cube} {cube.cross(Vector3(0, 1, 0))} {cube.dot(cube)} {cube.toVector2()} {cube.sum()}"
+print "{cube.manhattanLength()} {cube.withZ(9)} {cube.toFloat()} {cube.largestComponent()}"
+
+// The half-open rule, cell by cell
+const first = Rectangle Vector2(0, 0), Vector2(8, 8)
+const second = Rectangle Vector2(8, 0), Vector2(8, 8)
+print "{first} {first.area()} {first.minimum()} {first.maximum()}"
+print "{first.intersects(second)} {first.intersection(second).isEmpty()} {first.combined(second)}"
+var column = 0
+var owned = ""
+loop {
+  if column >= 16 {
+    break
+  }
+  const cell = Vector2 column, 0
+  owned = "{owned}{if first.contains(cell) { "a" } else { "b" }}"
+  column = column + 1
+}
+print owned
+
+print "{first.contains(Vector2(0, 0))} {first.contains(Vector2(8, 8))} {first.encloses(second)}"
+print "{first.closestPoint(to: Vector2(-5, 3))} {first.manhattanDistanceTo(Vector2(-5, 3))}"
+print "{first.translated(by: Vector2(1, 1))} {first.grown(by: Vector2(1, 1))} {first.withSize(Vector2(2, 2))}"
+print "{Rectangle.between(Vector2(4, 4), Vector2(1, 2))} {first.covering(Vector2(12, 1)).maximum()}"
+
+// The whole-number shapes: a side test, a doubled area and a crossing count, none of them needing a division
+const wall = Segment2 Vector2(0, 0), Vector2(4, 0)
+print "{wall.step()} {wall.sideOf(Vector2(2, 1))} {wall.manhattanLength()} {wall.bounds()}"
+print "{wall.intersects(Segment2(Vector2(2, -1), Vector2(2, 1)))} {wall.intersects(Segment2(Vector2(9, 0), Vector2(9, 1)))}"
+
+const face = Triangle2 Vector2(0, 0), Vector2(4, 0), Vector2(0, 4)
+print "{face.signedArea()} {face.doubledArea()} {face.bounds()} {face.contains(Vector2(1, 1))}"
+
+const square = Polygon([Vector2(0, 0), Vector2(6, 0), Vector2(3, 3), Vector2(6, 6), Vector2(0, 6)])
+print "{square.isConvex()} {square.signedDoubledArea()} {square.bounds()}"
+print "{square.contains(Vector2(1, 3))} {square.contains(Vector2(5, 3))} {square.edges().length()}"
+
+const cell = Box Vector3(0, 0, 0), Vector3(4, 4, 4)
+print "{cell} {cell.volume()} {cell.contains(Vector3(4, 0, 0))} {cell.closestPoint(to: Vector3(9, 1, 1))}"
+print "{cell.intersection(Box(Vector3(2, 2, 2), Vector3(4, 4, 4)))} {cell.manhattanDistanceTo(Vector3(9, 1, 1))}"

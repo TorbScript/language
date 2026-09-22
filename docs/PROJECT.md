@@ -230,7 +230,7 @@ them, and the static reader (section 10) is what tells it. Section 4 says what h
 **The one rule that is not local stays.** CONCEPT says top-level code is about being *imported*, not about the file
 name, and the checker implements the fallback: a file nothing imports may hold top-level code. That fallback is what
 makes the thirteen chapters of `examples/tour/src/` and the seventy-three conformance programs of
-`bootstrap/tests/native/` legal, and neither of them is a *product* — they are scripts that happen to live in a
+`tests/conformance/` legal, and neither of them is a *product* — they are scripts that happen to live in a
 package. Keeping the fallback costs a whole-workspace analysis (`isImported` resolves every `use` of every module
 before it can answer about one file), which an editor cannot do incrementally and which makes a file become illegal
 because of an edit somewhere else. The trade is worth it, because the alternative is seventy-three directories, and
@@ -239,7 +239,7 @@ is that it is written down as what it is: **a script is a file, not a product.**
 builds one, and no `program` line names one.
 
 **`build { input }` and `test { input }` disappear.** Nothing is left for them to say. What they do say today is
-wrong in three of the four ways section 1 lists, and their one real use — `bootstrap/tests/native/project.trb`'s
+wrong in three of the four ways section 1 lists, and their one real use — `tests/conformance/project.trb`'s
 `test { input "." }`, which pulls flat `.trb` files into the package — is served better by widening what belongs to a
 package:
 
@@ -363,7 +363,7 @@ torb build --output <file>      one program, somewhere else
   make the command useless at the one place it is worth having.
 - **`torb run <file.trb>` and `torb build <file.trb>`** name a file directly, which is how a script is run and how a
   program that is not a product of any package is built. Nothing here changes that, and it is what keeps
-  `examples/tour` and `bootstrap/tests/native/` legal: they declare no `program` at all, so they have no products,
+  `examples/tour` and `tests/conformance/` legal: they declare no `program` at all, so they have no products,
   and `torb run ../compiler check ..` still checks every one of their files as the script it is (section 3's
   fallback).
 
@@ -390,7 +390,7 @@ version "0.1.0"
 program "torb"
 ```
 
-`bootstrap/tests/native/project.trb` and `examples/tour/project.trb` lose `test { input "." }` and `build { }`
+`tests/conformance/project.trb` and `examples/tour/project.trb` lose `test { input "." }` and `build { }`
 respectively, and gain nothing: section 3's "a package is its whole directory" covers what `test { input "." }` was
 for.
 
@@ -1132,7 +1132,7 @@ every `.trb` file and nothing should be rebased across it.
 |---|-------|-------|------|
 | 1 | **The names decide.** `isEntryFile` stops reading `buildInput` and reads the file name; `isLibraryModule` and it stop disagreeing; `packageAt` takes the whole package directory instead of `src/` plus `testInput`; `torb build` picks its entry from the programs; `torb test` collects `*.test.trb` below the package. `Manifest` loses `buildInput` and `testInput` | `compiler/src/project/{manifest,workspace}.trb`, `compiler/src/semantics/graph.trb`, `compiler/src/semantics/checker/declaration.trb`, `compiler/src/cli/{build,test}.trb`, `compiler/tests/project.test.trb` | **Medium.** Probe 18 says the thirty-two `build { input "src/lib.trb" }` blocks are currently switching a rule off; removing them turns that rule back on, so every `src/lib.trb` in the repository is checked for top-level code for the first time |
 | 2 | **The manifests.** The `build { }` and `test { input }` blocks go out of all thirty-five `project.trb` files; `Build` is deleted from `std/project` and `Test` keeps only `coverageThreshold` | `std/project/src/lib.trb`, every `project.trb`, `docs/standard-library/project.md` | **Low**, and it is the slice that proves slice 1, because nothing may change behaviour |
-| 3 | **Programs.** `Program` and `Project.program` in `std/project`; the static reader reads `program` lines; `torb run <name>`, `torb build <name>`, the "name one" diagnostic, the library-only "nothing to build"; the ten diagnostics of section 4; `"owner/name/main"` and an imported `entry` become errors; `compiler/project.trb` writes `program "torb"` | `std/project/src/lib.trb`, `compiler/src/project/manifest.trb`, `compiler/src/cli/{build,run,test}.trb`, `compiler/src/semantics/graph.trb`, `compiler/project.trb` | **Low.** No file moves and no import changes. The one thing to watch is stage 0's hardcoded `src/main.trb` for a directory argument (`bootstrap/crates/torb-cli/src/main.rs`), which has to learn the `program` lines so that `torb run <dir>` of a renamed default still finds it |
+| 3 | **Programs.** `Program` and `Project.program` in `std/project`; the static reader reads `program` lines; `torb run <name>`, `torb build <name>`, the "name one" diagnostic, the library-only "nothing to build"; the ten diagnostics of section 4; `"owner/name/main"` and an imported `entry` become errors; `compiler/project.trb` writes `program "torb"` | `std/project/src/lib.trb`, `compiler/src/project/manifest.trb`, `compiler/src/cli/{build,run,test}.trb`, `compiler/src/semantics/graph.trb`, `compiler/project.trb` | **Low.** No file moves and no import changes. The one thing to watch is the hardcoded `src/main.trb` for a directory argument in the driver, which has to learn the `program` lines so that `torb run <dir>` of a renamed default still finds it |
 | 4 | **Profiles and targets.** `--profile`, `--release`, `--target`, with `dev` as the default; `build/<profile>/<program>`; the `profile` block in the vocabulary and in the static reader; `output` on a `program` taken literally | `compiler/src/cli/build.trb`, `std/project/src/lib.trb`, `compiler/src/project/manifest.trb` | **Low.** `buildTarget = "release"` is one constant today, and the layout already has the shape |
 | 5 | **The specifier grammar.** One function that takes a specifier apart, with a message per shape: a dot in a relative component, a `scheme:`, a host-qualified owner, a `..` inside a package path, a climb out of the package | `compiler/src/semantics/graph.trb`, `compiler/src/semantics/scope.trb`, `compiler/tests/check.test.trb` | **Low**, and it is the slice with the most new diagnostics, so it is mostly tests with exact messages |
 | 6 | **Sources and the static subset.** `source` in `std/project` and in the static reader; a plain-string rule with a diagnostic for the nine static settings; `language`, `description`, `license`, `repository` | `std/project/src/lib.trb`, `compiler/src/project/manifest.trb`, `compiler/tests/project.test.trb` | **Low** on its own. It does not resolve anything — resolution needs the registry protocol, which is CONCEPT's open question |

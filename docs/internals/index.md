@@ -24,10 +24,9 @@ documents:
   - ../URI.md
 ---
 
-The toolchain is written in TorbScript and lives in `compiler/`. It compiles itself; stage 0, the untyped tree-walking
-interpreter written in Rust in `bootstrap/`, is what ran it until it could, and
-[the exit of stage 0](../RUST-EXIT.md) is the plan for deleting it. These are the design documents of that work, in
-plain Markdown without front matter, linked here where they are instead of being copied.
+The toolchain is written in TorbScript and lives in `compiler/`, and it compiles itself from a seed. These are the
+design documents of that work, in plain Markdown without front matter, linked here where they are instead of being
+copied.
 
 ## What belongs here
 
@@ -39,15 +38,15 @@ What does not belong here: anything a user of the language needs. That is in [th
 and in [the toolchain pages](../tooling/index.md). This section is marked `skill: omit`, because an agent writing
 TorbScript has no use for the internals of the compiler that compiles it.
 
-## What holds the two implementations to one behaviour
+## What holds every back end to one behaviour
 
 The language must be interpretable **and** compilable, and that is a design goal rather than a fact about a
-code base - so there is a test that holds both implementations to it. The **conformance suite** in
-`bootstrap/tests/native/` is one small program per behaviour, run by the interpreter and as a compiled binary, with the
-standard output, the standard error and the exit code compared byte for byte. `bootstrap/tests/native/README.md` states
-that contract, says how a program is added, and names what each program pins; nothing about what a program *does* is
-exempt from it. A rule of the language reference that has observable run-time behaviour and no program in that suite is
-a rule nothing holds either side to.
+code base - so there is a test that holds every back end to it. The **conformance suite** in
+`tests/conformance/` is one small program per behaviour, built and run, with the standard output, the standard error
+and the exit code compared byte for byte against what is written down beside it, and the binary asked to free
+everything it allocated. `tests/conformance/README.md` states that contract, says how a program is added, and names
+what each program pins; nothing about what a program *does* is exempt from it. A rule of the language reference that
+has observable run-time behaviour and no program in that suite is a rule nothing holds a back end to.
 
 <!-- torb:index:begin -->
 

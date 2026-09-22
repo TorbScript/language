@@ -109,8 +109,8 @@ normalized.
 ## Pitfalls
 
 - **A POSIX file name that literally contains a backslash cannot be named as a `Path` at all.** Both `/` and `\`
-  separate on every platform, so that the same program behaves the same on stage 0, in a compiled binary and on every
-  platform, and `Path.from` is the one way in. Reach such a file through `std/fs` with its text.
+  separate on every platform, so that the same program behaves the same in every back end and on every platform, and
+  `Path.from` is the one way in. Reach such a file through `std/fs` with its text.
 - **`String.from(path)` written out does not resolve.** `String` carries `From<Iterable<Char>>` as well, so that name
   picks the other implementation and reports that `Path` does not implement it. Write `path.show()`, or ask for the
   conversion through a bound (`fn textOf<Value>(value: Value): String where String: From<Value>`).

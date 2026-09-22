@@ -24,7 +24,7 @@ an ordinary trait and every implementation is an ordinary type.
 - **[5. Slices](#5-slices)** — one agent each, with gates
 - **[6. Open, for the owner](#6-open-for-the-owner)**
 
-Every declaration below was written into a probe file under `bootstrap/tests/scripts/` — where the workspace makes
+Every declaration below was written into a probe file under `tests/language/` — where the workspace makes
 `std` resolve — and run through `build/release/torb check`. A snippet marked **type checks today** was accepted as
 written; where one is not, the prose names the gap of section 4 that stands in its way, and every diagnostic quoted is
 the compiler's own, word for word. The fenced blocks of this page are not type checked by `docs check`, which lexes
@@ -754,7 +754,7 @@ collection tree, and the `standard-library` and `language` pages that name the o
 
 **C3 — `List.sorted`, and the participle rule written down.** Gap 5, plus one paragraph in
 `docs/language/` stating when a participle answers `Self` and when it answers the pair.
-*Gate:* the four, plus a conformance program in `bootstrap/tests/native/` that sorts a `List` and keeps it a `List`.
+*Gate:* the four, plus a conformance program in `tests/conformance/` that sorts a `List` and keeps it a `List`.
 *Estimate:* small.
 
 **C4 — the back end, gaps 1 and 2.** `compiler/src/ir/lower/generic.trb` and `compiler/src/ir/witness.trb`: a trait's
@@ -779,7 +779,7 @@ implementation and on a second implementation.
 **C7 — the implementations that make the traits worth having.** `RingList` (a `List` with O(1) at both ends),
 `ConsStack`, `BankersQueue`, `Ordered`. Each is plain TorbScript over a `List` and each needs one benchmark against
 the array implementation.
-*Gate:* the four, plus `bootstrap/tests/native/` programs and a row in `benchmarks/`.
+*Gate:* the four, plus `tests/conformance/` programs and a row in `benchmarks/`.
 *Estimate:* medium, and it is the slice that proves the owner's fixed point — a trait exists so that there can be more
 than one implementation.
 

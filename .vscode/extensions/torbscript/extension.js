@@ -1,8 +1,8 @@
 // Highlights ```trb code blocks in the Markdown PREVIEW.
 // (The editor is handled by the TextMate grammars in ./syntaxes, the preview uses highlight.js classes instead.)
 //
-// This keyword list must stay in sync with `bootstrap/crates/torb-syntax/src/token.rs`'s `Keyword` enum (the
-// lexer's source of truth) plus its three contextual words (`from`, `as`, `by` - ordinary identifiers to the
+// This keyword list must stay in sync with `compiler/src/syntax/token.trb`'s `TokenKind` (the lexer's source of
+// truth) plus its three contextual words (`from`, `as`, `by` - ordinary identifiers to the
 // lexer, keywords only in the positions this list's caller already restricts them to).
 
 const KEYWORDS = new Set([
@@ -124,8 +124,8 @@ function highlight(code) {
 //
 // The TextMate grammar in ./syntaxes is a heuristic; it cannot know whether a name is a field or a local, a case
 // or a plain type, a method or a function - that needs the syntax tree, which only the `torb` binary has (there is
-// no language server yet, see bootstrap/README.md). This provider is the bridge: one process per request, its
-// stdout is one JSON document (`bootstrap/crates/torb-cli/src/highlight/mod.rs` documents the exact shape), and if
+// no language server yet; milestone 8 brings one behind this same JSON). This provider is the bridge: one process
+// per request, its stdout is one JSON document (`compiler/src/highlight/` documents the exact shape), and if
 // the binary is missing, fails, or answers late, this provider gives VS Code no tokens at all - the TextMate
 // grammar's colors stand on their own, and the only trace is one line in the "TorbScript" output channel, never a
 // popup. See README.md for the settings and the color palette this feeds through `configurationDefaults`.
@@ -143,12 +143,9 @@ function log(vscode, message) {
   outputChannel.appendLine(message);
 }
 
-// Where a `torb` is looked for under a workspace folder, in the order it is preferred: the self-hosted compiler
-// `sh tools/bootstrap.sh` writes first, then the two profiles of the Rust bootstrap while that still exists.
+// Where a `torb` is looked for under a workspace folder: the compiler that `sh tools/bootstrap.sh` writes.
 const EXECUTABLE_CANDIDATES = [
   ['build', 'release'],
-  ['bootstrap', 'target', 'release'],
-  ['bootstrap', 'target', 'debug'],
 ];
 
 /** `torbscript.executablePath`, or the first `torb`/`torb.exe` of `EXECUTABLE_CANDIDATES` that exists under an open

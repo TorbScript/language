@@ -340,7 +340,7 @@ is what BACKEND 1.6 writes down - replaces the read-copy-write round trip with a
 exclusivity already guarantees (BACKEND 2.3) - so the risk is that the lowering forms the pointer *before* the arguments
 have been evaluated. That is the `items.removeAt(items.length() - 1)` case, and it is already written down.
 
-**The test.** A native program in `bootstrap/tests/native/` with a `.leaks`-style companion and an IR snapshot that
+**The test.** A native program in `tests/conformance/` with a `.leaks`-style companion and an IR snapshot that
 asserts no `makeUnique` stands on a row the container still holds.
 
 ### F4. A field of a record in a list is a read-copy-write round trip
@@ -781,8 +781,7 @@ Four things this table does not say on its own:
   and the torb side of the same row between 883 725 and 1 070 142. A run that shares the machine with another build
   moves both sides and moves them by different amounts. Read the allocation column first; the microseconds are there so
   a later run can be compared against the same shape of number, measured the same way.
-- **Nothing here is run under `cargo test`.** Section 6 says which of these numbers should become a gate and in which
-  shape.
+- **Nothing here is a gate.** Section 6 says which of these numbers should become one and in which shape.
 
 ---
 
@@ -846,7 +845,7 @@ The three that matter most:
 - No `makeUnique` stands on a container the surrounding frame still holds - the "no copy on a shared row" rule.
 - No loop head holds a `makeUnique`.
 
-**An allocation budget per conformance program.** `bootstrap/tests/native/` already runs every program a second time
+**An allocation budget per conformance program.** `tests/conformance/` already runs every program a second time
 with `TORB_REPORT_LEAKS=1` and asserts that the live block count is zero. A **second number in the same report** - how
 many blocks the program allocated in total - turns the same run into a budget: a program that starts allocating per
 element where it used to allocate per loop fails the suite instead of being noticed a year later. It is one counter in

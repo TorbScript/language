@@ -34,12 +34,12 @@ torb docs bundle <root> <out>              Write llms.txt and llms-full.txt
 torb docs source <path>...                 Check the doc comments of the code itself
 ```
 
-Every command exits with 1 when it reports a problem and with 0 when it does not. From `bootstrap/`, where stage 0
-lives:
+Every command exits with 1 when it reports a problem and with 0 when it does not, and both run from the repository
+root:
 
 ```console
-cargo run --release -q -- run ../compiler docs check ../docs
-cargo run --release -q -- run ../compiler docs index --check ../docs
+torb docs check docs
+torb docs index --check docs
 ```
 
 The first two are gates of every change. `docs source` is about the doc comments of `std/`, `compiler/` and `examples/`
@@ -150,14 +150,14 @@ folder, and `## Design documents` for what the `documents` field names. A child 
 A green run names the numbers, so a change in them is visible in a diff:
 
 ```console
-$ cargo run --release -q -- run ../compiler docs check ../docs
+$ torb docs check docs
 42 pages, 15 folders, 80 snippets, no problems
 ```
 
 A problem names the file, the line and the rule:
 
 ```console
-$ cargo run --release -q -- run ../compiler docs check ../docs
+$ torb docs check docs
 ../docs/language/types/values.md:31: A call is a command wherever the grammar allows it. Write `Ok ...` without parentheses
 ../docs/language/types/values.md:52: `soon` is not a status. One of: stable, draft, planned
 

@@ -1,45 +1,37 @@
 # Working on the Compiler
 
 The compiler is written in TorbScript and **compiles itself**: `sh tools/bootstrap.sh` builds `torb` from a seed and
-then builds it again with itself. Stage 0 (`bootstrap/`), the **untyped** tree-walking interpreter in Rust, is what ran
-it until it could, and it is on its way out ([docs/RUST-EXIT.md](../docs/RUST-EXIT.md)) - its traps still apply to
-every line the compiler's own sources contain, because it still runs them. `canon` (`compiler/src/canon/`) and
-`highlight` (`compiler/src/highlight/`) are commands of the self-hosted `torb` alongside `check`, `test` and `docs`;
-stage 0 keeps its own copies, frozen, only for comparison.
+then builds it again with itself. A C compiler is the one external tool a checkout needs; everything above it - the
+front end, the checker, the lowering, the emitter, the driver, `canon` (`compiler/src/canon/`) and `highlight`
+(`compiler/src/highlight/`) - is TorbScript compiled by TorbScript.
 
-These are the rules of the code base and those traps.
+These are the rules of the code base and its traps.
 
-## Commands (from `bootstrap/`)
+## Commands
+
+`torb` below is `build/release/torb`, and every command is run from the repository root.
 
 ```text
-cargo build --release                                   # Stage 0. Rebuild after every change of the Rust sources
-cargo run --release -q -- test ../compiler/tests        # The TorbScript tests of the compiler (one process per file)
-cargo run --release -q -- test ../compiler/tests --jobs 1   # ...one after another, when output order of a crash matters
-cargo run --release -q -- run ../compiler check ..      # The compiler checks the whole repository: "no problems"
-cargo run --release -q -- run ../compiler check tests/native tests/scripts   # ...and the two test workspaces of stage 0
-cargo run --release -q -- run ../compiler check --statistics ..    # Every expression has a type: "0 deferred"
-cargo run --release -q -- run ../compiler check --timings ..       # The wall time of every pass, in the order they ran
-cargo fmt --check
-cargo clippy --all-targets -- -D warnings
-cargo test --release                                    # Everything, including the differential tests (minutes)
-cargo test --release --test fixpoint -- --ignored --nocapture   # The fixpoint of 6.2 (a quarter of an hour, see below)
-sh ../runtime/build.sh                                  # The C runtime and its tests (gcc or clang)
-cargo run --release -q -- canon --check --rule calls --rule strings --rule imported-case-patterns --rule unused-bindings --rule loops ..
-cargo run --release -q -- canon ../std ../compiler ../examples ../bootstrap/tests    # ...write it (a minute)
-cargo run --release -q -- run ../compiler docs source ../std ../compiler ../examples   # The doc comments (not a gate yet)
-cargo run --release -q -- run ../compiler docs check ../docs         # The documentation: schema, links, every snippet
-cargo run --release -q -- run ../compiler docs index --check ../docs # Is the generated part of every index.md current?
-cargo run --release -q -- run ../compiler docs index ../docs         # ...write it
+sh tools/bootstrap.sh                                   # Build it: seed -> torb -> torb, and compare the two program.c
+torb test compiler/tests                                # The TorbScript tests of the compiler
+torb test compiler/tests/calls.test.trb                 # ...one file
+torb check .                                            # The compiler checks the whole repository: "no problems"
+torb check tests/conformance tests/language             # ...and the two test workspaces, which stand outside it
+torb check --statistics .                               # Every expression has a type: "0 deferred"
+torb check --timings .                                  # The wall time of every pass, in the order they ran
+sh runtime/build.sh                                     # The C runtime and its tests (gcc or clang)
+torb canon --check --rule calls --rule strings --rule imported-case-patterns --rule unused-bindings --rule loops .
+torb canon std compiler examples tests                  # ...write it (a minute)
+torb docs source std compiler examples                  # The doc comments (not a gate yet)
+torb docs check docs                                    # The documentation: schema, links, every snippet
+torb docs index --check docs                            # Is the generated part of every index.md current?
+torb docs index docs                                    # ...write it
 ```
 
 A change is done when the gates of its tier are green (below) and the repository still checks with "no problems". A
 false positive of the checker is a bug of the checker.
 
 ## The Gates, and Which of Them a Round Runs
-
-**The goal is that `bootstrap/crates` can be deleted** ([docs/RUST-EXIT.md](../docs/RUST-EXIT.md)). Until that is done
-the gates are the two tiers below rather than the whole list, because the list costs more than half an hour a round and
-most of it re-measures the Rust implementation that is being removed. They tighten again once the exit is done.
 
 **`tools/gates.sh` runs both tiers with the native binary**, from the repository root:
 
@@ -51,49 +43,32 @@ sh tools/gates.sh b    # a round that touches the IR, a back end or runtime/ - o
 One line per gate, with its time; the first red gate stops the run there and shows its output, so nothing after it
 runs.
 
-**Tier A**: bootstraps `build/release/torb` with `sh tools/bootstrap.sh` if it is missing or older than the compiler's
-sources, then `check ..` ("no problems"), `check --statistics ..` ("0 deferred"), `test compiler/tests`, `test` of
-every std/example test package that builds natively (four do not yet - [docs/RUST-EXIT.md](../docs/RUST-EXIT.md)
-section 2.4 names the back-end gap each one is blocked on, and `gates.sh` prints the same reason and skips them), the
-two docs gates, and `canon --check` with the five rules. `canon` is a command of the self-hosted `torb`
-([compiler/src/canon](../compiler/src/canon)); `gates.sh` calls `build/release/torb canon` when `canon --help` works
-there and falls back to stage 0's frozen copy otherwise, so a checkout between slices needs nothing special.
+**Tier A is `sh tools/gates.sh a`**: it bootstraps `build/release/torb` with `sh tools/bootstrap.sh` if that is missing
+or older than the compiler's sources, then `check .` ("no problems"), `check --statistics .` ("0 deferred"),
+`test compiler/tests`, `test` of every std/example test package that builds natively (four do not -
+[docs/RUST-EXIT.md](../docs/RUST-EXIT.md) section 2.4 names the back-end gap each one is blocked on, and `gates.sh`
+prints the same reason and skips them), the two docs gates, and `canon --check` with the five rules.
 
-**Tier B**: `tools/conformance.sh` (the conformance suite - every program under `bootstrap/tests/native/`, and
-`binary-only/`, built and run natively and compared against its `.expected`/`.stderr`/`.exit`/`.leaks`; `--jobs`,
-`--filter` and `--update` are its own flags), `tools/bootstrap.sh` (the fixpoint: seed -> `torb` -> `torb`,
-byte-identical C), and `sh runtime/build.sh` (the C runtime's own tests).
+**Tier B is `sh tools/gates.sh b`**: `tools/conformance.sh` (the conformance suite - every program under
+`tests/conformance/`, and `binary-only/`, built and run natively and compared against its
+`.expected`/`.stderr`/`.exit`/`.leaks`; `--jobs`, `--filter` and `--update` are its own flags), `tools/bootstrap.sh`
+(the fixpoint: seed -> `torb` -> `torb`, byte-identical C), and `sh runtime/build.sh` (the C runtime's own tests).
 
 On master tier B runs at most once per batch of merges, in the background, and a red result is **fixed forward** rather
 than reverted: the batch is already in and the failing piece is named and repaired in the next round.
 
-**`cargo test --test suite` and `cargo test --test self_hosted` are dropped, not replaced.** Both compared stage 0's
-own answer with the binary's - the compiler's tests run from the interpreter against the same tests run from the
-binary, and the front end written in TorbScript against the Rust one over every `.trb` of the repository - and with
-one of the two implementations leaving, there is nothing left for either to compare. What each one defended survives
-elsewhere: the compiler's tests are `torb test compiler/tests` on its own, native and interpreted messages have not
-needed to agree since the gate policy below ("Stage 0 is frozen"), and the self-hosted parser accepting the whole
-repository is `torb parse ..` plus the parser's own tests in `compiler/tests`.
-
-**Stage 0 is frozen.** It receives a language feature only where the compiler's own sources or tests need it to build,
-and a native only where the compiler needs one. Parity of *messages* between the two checkers is no longer a goal: the
-self-hosted checker's message is the language's, and stage 0's is whatever it was. `cargo fmt --check` and
-`cargo clippy` are run where Rust files changed and not otherwise.
-
-**Numbers are recorded, not enforced**, until the exit is done: allocation counts, the benchmark ratios of
+**Numbers are recorded, not enforced**: allocation counts, the benchmark ratios of
 [docs/PERFORMANCE.md](../docs/PERFORMANCE.md) and the size of the emitted C go into the round's report so that a
 regression is visible, and none of them fails a gate by itself.
 
 **The fixpoint is what says the compiler is correct about itself.** `tools/bootstrap.sh` builds the compiler with the
-seed, builds it again with the binary that came out, and compares the two `program.c` byte for byte - the same
-comparison the earlier three-stage `cargo test --test fixpoint` made, one step fewer because a seed is already a
-`torb`. A difference is reported as the first differing byte with the text around it in both files. `docs/BACKEND.md`
-("What 6.2 decided") says what it has caught.
+seed, builds it again with the binary that came out, and compares the two `program.c` byte for byte. A difference is
+reported as the first differing byte with the text around it in both files. `docs/BACKEND.md` ("What 6.2 decided")
+says what it has caught.
 
-**A cost that stage 0 hides is a cost only a compiled program pays.** Everything `natives.rs` answers with Rust while
-`std/` carries a TorbScript body for the same declaration is invisible to every test that runs on stage 0 - that is how a
-quadratic `joined` sat in `std/iteration` until the binary tried to join the 786457 lines of its own `program.c`. When a
-`std/` body loops over something that grows, measure it with a **compiled** probe and never on stage 0.
+**Measure a `std/` body with a compiled probe.** A body that loops over something that grows costs what the binary
+pays for it, and a quadratic `joined` sat in `std/iteration` until the binary tried to join the 786457 lines of its own
+`program.c`. The probe is a program that is built and run, never a snippet read by eye.
 
 `docs/` is the user-facing documentation of the language and has its own rules and its own gate
 ([docs/contributing](../docs/contributing/index.md)): every page carries front matter, the body of every `index.md` is
@@ -131,13 +106,12 @@ language *means* changes the page that says so - `docs check` names the page who
   `isStatic`, `isPublic`, `isNative`, `isShared`, `isConst` - `var: Bool` is not a name), so each one needs its own
   decision (another word, or better a type instead of a flag: `Visibility` exists). That runs after the fixpoint,
   with the method conversion and a checked rename instead of a text replacement.
-- Cases: `.Case` in patterns, `Type.Case` in expressions unless stage 0 can see the expected type (the table in
-  `bootstrap/README.md`). An **imported** case needs nothing in front of it, in an expression and in a pattern
-  (`Some(found) =>`, `None =>`); a pattern name that starts with a lowercase letter binds, an uppercase one never does.
-  Positional arguments come before named ones.
-- Prefer the short form where the type is expected and stage 0 can see it: `addNode(graph, .SwitchCase(path))` for a
-  parameter of a declared function, `const kind: TokenKind = .Dot`, `kinds == [.Dot, .Name]`. Write `Type.Case` only
-  where stage 0 cannot (trap 8).
+- Cases: `.Case` in patterns, `Type.Case` in an expression where no expected type says which type is meant. An
+  **imported** case needs nothing in front of it, in an expression and in a pattern (`Some(found) =>`, `None =>`); a
+  pattern name that starts with a lowercase letter binds, an uppercase one never does. Positional arguments come before
+  named ones.
+- Prefer the short form where the expected type says which type is meant: `addNode(graph, .SwitchCase(path))` for a
+  parameter of a declared function, `const kind: TokenKind = .Dot`, `kinds == [.Dot, .Name]`.
 - **A literal that sets an option is labeled.** `true`, `false` and `None` have no name of their own, so where one is
   passed to a parameter that is *declared* as `Bool` or as an optional, the label is the only thing that says what it
   means: `listEntries entries, "ArrayList", hasCapacity: false`, never `listEntries entries, "ArrayList", false`. Two
@@ -234,36 +208,21 @@ first line - `// fragment` for a signature or a shape that only has to lex, `// 
 by nothing and counted in the report.
 
 **`torb docs source` is not in the list above yet.** The repository does not pass it while the writing waves are
-running; `torb run ../compiler docs source ../std ../compiler ../examples --statistics` is what measures how far they
-have come. It becomes a mandatory gate when they are done, and from then on it is run like every other gate.
+running; `torb docs source std compiler examples --statistics` is what measures how far they have come. It becomes a
+mandatory gate when they are done, and from then on it is run like every other gate.
 
-## Traps of Stage 0
+## Traps of the Code Base
 
-Stage 0 has no type checker: a mistake is found when the line runs, so **every function must be run by a test**. What it
-prints when that happens is in [bootstrap/README.md](../bootstrap/README.md) ("How a Program Ends"): a failure of the
-interpreter carries the calls it came through, and a **panic** prints two lines and no more unless `TORB_FRAMES=1` asks
-for them - which is what to set when a panic inside the toolchain has to be found.
+A **panic** prints `panic: <message>` and the site it happened at, two lines and no more, and leaves with 101. A
+panic inside the toolchain is found by narrowing what is compiled, not by a stack trace.
 
-1. **A `var` argument is taken before the other arguments are evaluated.** `f(checker, checker.something)`,
-   `f(checker, g(checker, x))` and `checker.method(g(checker, x))` read a place that was moved out, and fail far away
-   ("Void has no method ...", "a value of type Function has no method ..."). Hoist the inner read or call into a
-   `const` first. `grep -nE "\(checker, [^)]*checker\."` finds most of them. **This is a limitation of stage 0, not a
-   rule of the language:** exclusivity begins the `var` access of a call after all of its arguments have been evaluated
-   (CONCEPT, `var` Paths), so all three lines above are legal TorbScript. The hoists stay until stage 0 is gone.
-2. The same one level down: `checker.list.add(Item(checker.other.length()))` has to be two statements, and a
-   `var fn` method must not hand a field of `self` to another `var fn` method.
-3. **Copy on write is O(n).** Never hold a second live copy of a big table across a write. Big tables live in one
+1. **Copy on write is O(n).** Never hold a second live copy of a big table across a write. Big tables live in one
    `var` owner and are passed as `var` parameters. Interning is a `Map` lookup, never a scan.
-4. Directly inside of the braces of a `match`, a line that starts with `.` is a new arm. A chain over several lines
+2. Directly inside of the braces of a `match`, a line that starts with `.` is a new arm. A chain over several lines
    as the value of an arm goes into a block.
-5. A function that returns `Value?` writes `Some(value)` explicitly when the value comes out of a binding.
-6. A brace inside of a string of a test source needs `\{`: the test file interpolates first.
-7. `harness.trb`'s `spanOf` finds the first occurrence of a text. Put the use in front of the declaration.
-8. `.Case` in an expression only works where stage 0 sees the type (annotation, parameter, field, result,
-   assignment, `==`). Elsewhere write `Type.Case`.
-9. **A failing `assert` evaluates its expression a second time** to show the values in it. A call inside one that takes a
-   `var` argument therefore *runs twice*, and a pass that is written to run once is then reported as if it had run twice.
-   Hoist it into a `const` first, or let the question take its argument by value.
+3. A function that returns `Value?` writes `Some(value)` explicitly when the value comes out of a binding.
+4. A brace inside of a string of a test source needs `\{`: the test file interpolates first.
+5. `harness.trb`'s `spanOf` finds the first occurrence of a text. Put the use in front of the declaration.
 
 **Natives stay few.** Every `native` declaration has to be rebuilt by every back end (C today, the VM, later
 JavaScript and PHP). Do not add a `native` to `std/` or a function to `runtime/` for something that can be written in
@@ -271,6 +230,6 @@ TorbScript on top of the natives that exist; a new one needs a reason (the opera
 operation) in its doc comment. After the fixpoint the runtime shrinks to a small kernel of intrinsics, and everything
 else becomes TorbScript with an optional native fast path.
 
-If the compiler legitimately needs a native that stage 0 lacks, add it minimally in
-`bootstrap/crates/torb-interpreter/src/natives.rs` **and** declare it in `std/`. Stage 0 gets no language features
-and no type checker.
+A native the compiler legitimately needs is declared in `std/`, entered in the manifest
+(`compiler/src/backend/c/natives.trb`) and implemented in `runtime/`. A new native is compiled into the binary that
+emits it, so the seed a checkout builds from has to be one that already knows it (docs/RUST-EXIT.md section 4.2).

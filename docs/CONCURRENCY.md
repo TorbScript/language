@@ -35,7 +35,7 @@ value like any other, and there are no async keywords.
 - **[14. Slices](#14-slices)** — what fits 7.3, what waits for 7.7
 - **[15. Open, for the owner](#15-open-for-the-owner)**
 
-Every snippet below was run against the checker, in `bootstrap/tests/scripts/` so that `std` resolves, with the
+Every snippet below was run against the checker, in `tests/language/` so that `std` resolves, with the
 proposed declarations written out in the probe file. A snippet marked **type checks today** was accepted as written;
 where one is not, the prose names the gap of section 13 that is in its way. The four probes of section 12 are the ones
 that were accepted and should not have been.

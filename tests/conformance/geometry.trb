@@ -1,0 +1,107 @@
+/**
+ * `std/geometry` compiled to a native binary: what contains a point, what two shapes share, how far apart they are, and
+ * what a ray hits, in the plane and in space.
+ *
+ * The scalar is `Fixed` throughout, for two reasons: every answer is then integer arithmetic and therefore the same
+ * bits in the interpreter and in the binary, and it is the implementor of `Real` whose body lives in `std/linear` rather
+ * than in `std/number` - which is the half the interpreter can load at all.
+ *
+ * What this pins down beyond the arithmetic is the **generic value inside a generic value**: a `Rectangle<Fixed>` holds
+ * two `Vector2<Fixed>`, a `Polygon<Fixed>` holds a `List` of them, and a `Ray3<Fixed>` hit answers an `Option<Fixed>` -
+ * three layers of instances the back end has to build from one declaration each.
+ */
+
+use Fixed from "../../std/linear/src/fixed"
+use Vector2 from "../../std/linear/src/vector2"
+use Vector3 from "../../std/linear/src/vector3"
+use Rectangle from "../../std/geometry/src/rectangle"
+use Circle from "../../std/geometry/src/circle"
+use Segment2 from "../../std/geometry/src/segment2"
+use Ray2 from "../../std/geometry/src/ray2"
+use Triangle2 from "../../std/geometry/src/triangle2"
+use Polygon from "../../std/geometry/src/polygon"
+use Box from "../../std/geometry/src/box"
+use Sphere from "../../std/geometry/src/sphere"
+use Plane from "../../std/geometry/src/plane"
+use Triangle3 from "../../std/geometry/src/triangle3"
+use Ray3 from "../../std/geometry/src/ray3"
+
+/** A deterministic scalar from a whole number. */
+fn exact(value: Int): Fixed {
+  Fixed.from value
+}
+
+/** A deterministic point of two whole numbers. */
+fn flat(x: Int, y: Int): Vector2<Fixed> {
+  Vector2 exact(x), exact(y)
+}
+
+/** A deterministic point of three whole numbers. */
+fn deep(x: Int, y: Int, z: Int): Vector3<Fixed> {
+  Vector3 exact(x), exact(y), exact(z)
+}
+
+// The rectangle, and the half-open rule its tiling rests on
+const tile = Rectangle flat(0, 0), flat(8, 8)
+print "{tile} {tile.minimum()} {tile.maximum()} {tile.area()} {tile.center()}"
+print "{tile.contains(flat(0, 0))} {tile.contains(flat(8, 0))} {tile.contains(flat(7, 7))}"
+const next = Rectangle flat(8, 0), flat(8, 8)
+print "{tile.intersects(next)} {tile.intersection(next)} {tile.combined(next)}"
+print "{tile.closestPoint(to: flat(-5, 3))} {tile.distanceTo(flat(-5, 3))} {tile.manhattanDistanceTo(flat(-5, 3))}"
+print "{tile.grown(by: flat(1, 1))} {tile.covering(flat(12, 1))} {tile.encloses(next)}"
+print "{Rectangle.between(flat(4, 4), flat(1, 2))} {Rectangle.centered(at: flat(0, 0), size: flat(4, 4))}"
+
+// The disc: closed where the rectangle is half-open
+const disc = Circle flat(0, 0), Fixed.one
+print "{disc} {disc.contains(flat(1, 0))} {disc.intersects(Circle(flat(2, 0), Fixed.one))}"
+print "{disc.intersectsRectangle(Rectangle(flat(1, -1), flat(2, 2)))} {disc.bounds()}"
+print "{disc.closestPoint(to: flat(4, 0))} {disc.distanceTo(flat(4, 0))}"
+print "{disc.area()} {disc.circumference()}"
+
+// The segment and the ray
+const wall = Segment2 flat(0, 0), flat(4, 0)
+print "{wall.step()} {wall.length()} {wall.center()} {wall.direction()} {wall.bounds()}"
+print "{wall.sideOf(flat(2, 1))} {wall.closestPoint(to: flat(2, 3))} {wall.distanceTo(flat(2, 3))}"
+const across = Segment2 flat(2, -1), flat(2, 1)
+print "{wall.intersects(across)} {wall.intersection(across)}"
+
+const look = Ray2 flat(0, 0), flat(1, 0)
+print "{look.hits(Circle(flat(5, 0), Fixed.one))} {look.hits(Circle(flat(-5, 0), Fixed.one))}"
+print "{look.hitsRectangle(Rectangle(flat(2, -1), flat(2, 2)))} {look.hitsSegment(across)}"
+print "{look.at(exact(3))} {Ray2.towards(flat(0, 0), to: flat(0, 4)).direction}"
+
+// The triangle and the polygon
+const face = Triangle2 flat(0, 0), flat(4, 0), flat(0, 4)
+print "{face.signedArea()} {face.area()} {face.center()} {face.bounds()}"
+print "{face.contains(flat(1, 1))} {face.contains(flat(3, 3))} {face.closestPoint(to: flat(-3, 1))}"
+
+const square = Polygon([flat(0, 0), flat(4, 0), flat(4, 4), flat(0, 4)])
+print "{square.isConvex()} {square.signedDoubledArea()} {square.area()} {square.bounds()}"
+print "{square.containsConvex(flat(2, 2))} {square.contains(flat(2, 2))} {square.contains(flat(5, 2))}"
+const shifted = Polygon([flat(2, 2), flat(6, 2), flat(6, 6), flat(2, 6)])
+print "{square.intersectsConvex(shifted)} {square.edges().length()}"
+
+// The box and the ball
+const cell = Box deep(0, 0, 0), deep(4, 4, 4)
+print "{cell} {cell.volume()} {cell.center()} {cell.contains(deep(4, 0, 0))}"
+print "{cell.intersection(Box(deep(2, 2, 2), deep(4, 4, 4)))} {cell.closestPoint(to: deep(9, 1, 1))}"
+print "{cell.distanceTo(deep(9, 1, 1))} {cell.covering(deep(9, 1, 1)).maximum()}"
+
+const ball = Sphere deep(0, 0, 0), Fixed.one
+print "{ball.contains(deep(1, 0, 0))} {ball.intersects(Sphere(deep(2, 0, 0), Fixed.one))} {ball.bounds()}"
+print "{ball.intersectsBox(Box(deep(1, -1, -1), deep(2, 2, 2)))} {Sphere.around(cell)}"
+print ball.combined(Sphere(deep(4, 0, 0), Fixed.one))
+
+// The plane and the triangle in space
+const ground = Plane deep(0, 1, 0), Fixed.zero
+print "{ground.signedDistanceTo(deep(0, 2, 0))} {ground.closestPoint(to: deep(3, 2, 0))} {ground.mirrored(deep(3, 2, 0))}"
+print "{ground.isInFront(deep(0, 2, 0))} {ground.flipped()}"
+
+const wedge = Triangle3 deep(0, 0, 0), deep(4, 0, 0), deep(0, 4, 0)
+print "{wedge.normal()} {wedge.area()} {wedge.bounds()} {wedge.contains(deep(1, 1, 0))}"
+print "{wedge.weightsOf(deep(1, 1, 0))} {wedge.plane().distance}"
+
+const shot = Ray3 deep(0, 0, -5), deep(0, 0, 1)
+print "{shot.hits(Sphere(deep(0, 0, 0), Fixed.one))} {shot.hitsPlane(Plane(deep(0, 0, 1), exact(2)))}"
+print "{shot.hitsBox(Box(deep(-1, -1, 0), deep(2, 2, 2)))} {shot.at(exact(5))}"
+print shot.hitsTriangle(Triangle3(deep(-1, -1, 4), deep(3, -1, 4), deep(-1, 3, 4)))

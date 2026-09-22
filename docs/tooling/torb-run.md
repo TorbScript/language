@@ -12,7 +12,7 @@ keywords:
 source:
   - compiler/src/cli/run.trb
   - compiler/src/cli/build.trb
-  - bootstrap/README.md
+  - tools/bootstrap.sh
 ---
 
 `run` is [`build`](torb-build.md) plus starting what came out. There is no second implementation of the language behind
@@ -67,14 +67,6 @@ A build that **fails** says so, on standard error, in the form [`check`](torb-ch
 
 The program's own, unchanged. A `panic` leaves with `101`, the number `CONCEPT.md` specifies; an uncaught `Fail` at the
 top level leaves with `1`; a program that could not be built leaves with `1` and one that found no C compiler with `3`.
-
-### Stage 0's `run`
-
-While `bootstrap/` is still there, stage 0 has a `run` of its own that **interprets** the file instead of building it,
-and it is how the compiler is run before it has been compiled (`torb run ../compiler check ..`). It has no type checker
-and does not load `std/`, so a mistake that [`check`](torb-check.md) would catch is found when the line runs or not at
-all, and it exits a panic with `1` rather than `101`. It goes away with the rest of stage 0
-([docs/RUST-EXIT.md](../RUST-EXIT.md)).
 
 ## Examples
 

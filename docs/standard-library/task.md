@@ -105,10 +105,10 @@ producer that is no longer needed should stop, not crash.
 
 The example above type checks against the real standard library, which is what `torb docs check` verifies - so `spawn`,
 `Task.await`, `Channel` and `all` are all accepted by the type checker today. What is missing is a back end that gives
-any of them a value: the interpreter (stage 0) does not load `std/` at all yet, and the native back end's manifest
-marks `spawn`, every `Task` member and both `Channel` members as work for a future milestone, listed under "What
-milestones 7 and 10 have to build" in [`docs/STREAMS.md`](../STREAMS.md). Until then, a program that calls `spawn`
-or `await()` type checks and cannot be run to completion by any current back end - the same gap `Decimal` documents for
+any of them a value: the native back end's manifest marks `spawn`, every `Task` member and both `Channel` members as
+work for a future milestone, listed under "What milestones 7 and 10 have to build" in
+[`docs/STREAMS.md`](../STREAMS.md), and the bytecode VM that would run them is milestone 7. Until then, a program that
+calls `spawn` or `await()` type checks and cannot be run to completion - the same gap `Decimal` documents for
 arithmetic, described in [Decimal](../language/values-and-types/decimal.md).
 
 ## Related

@@ -53,13 +53,12 @@ one of the places the formatter canon requires them, even inside a command call'
 `torb check` type checks a whole project or a single file and answers `no problems`, or points at the exact line:
 
 ```console
-$ cargo run --release -q -- run ../compiler check ../examples/tour
+$ torb check examples/tour
 14 files, no problems
 ```
 
-Run it from `bootstrap/`, which is where the interpreter that runs the self-hosted toolchain lives until the toolchain
-compiles itself - see [Run your first program](installing-and-running.md). `torb check` is the gate: a false positive
-of it is a bug in the checker, never a reason to change a correct program.
+Run it from the repository root - see [Run your first program](installing-and-running.md). `torb check` is the gate:
+a false positive of it is a bug in the checker, never a reason to change a correct program.
 
 ## Formatting
 
@@ -67,7 +66,7 @@ of it is a bug in the checker, never a reason to change a correct program.
 and gets parentheses everywhere else - and `--check` reports the files that are not in it without writing anything:
 
 ```console
-$ cargo run --release -q -- canon --check ../examples/tour
+$ torb canon --check examples/tour
 0 of 14 files would change: 0 calls became commands, 0 got parentheses, 0 strings were indented, 0 case patterns
 ```
 

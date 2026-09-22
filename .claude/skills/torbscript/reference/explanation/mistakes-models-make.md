@@ -620,11 +620,11 @@ and a function *type* still names it: `(self: Point) => Int` and `(var self: Con
 
 ### How to check yourself
 
-Do not trust the list. Run the compiler, from `bootstrap/`:
+Do not trust the list. Run the compiler, from the repository root:
 
 ```console
-cargo run --release -q -- run ../compiler check <path>
-cargo run --release -q -- canon --check <path>
+torb check <path>
+torb canon --check <path>
 ```
 
 `check` answers `no problems` or points at the line. `canon --check` reports every file that is not in the formatter canon,

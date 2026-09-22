@@ -385,7 +385,7 @@ type checks and which `torb build` rejects; the rest quote the diagnostic that i
    Negate` names a target that still holds a parameter, while the value in front of the operator carries the enclosing
    instance's arguments. `operandTypeOf` in `compiler/src/ir/lower/call.trb` therefore prefers the written operand
    wherever the target is not closed, and the operator form and the method form of one call are the same function -
-   inside a generic body as well. `bootstrap/tests/native/generic-operators.trb` is the gate.
+   inside a generic body as well. `tests/conformance/generic-operators.trb` is the gate.
 2. **A numeric literal in a generic body is never adapted to the parameter.** `fn oneOf<Scalar: Numeric>(): Scalar
    { 1 }` type checks, the checker records `Int64` for the literal, and the back end then reports "the function returns
    `Float64` and `return` carries `Int64`" for the `Float64` instance. The substitution is not what is missing - there
@@ -397,7 +397,7 @@ type checks and which `torb build` rejects; the rest quote the diagnostic that i
    `Box<Int>.empty` and `Box<String>.empty` are one declaration and two values, and a binary keeps one cell per
    instance, named after the arguments the read decided. The interpreter still answers the same value for every scalar,
    which is item 6 seen from another side and is why the constants of this library live in concrete `extend`s.
-   `bootstrap/tests/native/generic-constants.trb` is the gate.
+   `tests/conformance/generic-constants.trb` is the gate.
 4. **A type parameter's default is not used to reach a member of a concrete `extend`.** `Vector2.zero` where `zero` is
    declared in `extend Vector2<Float>` reports "Cannot infer `Scalar` of `Vector2`" *even with the annotation*
    `const origin: Vector2<Float> = Vector2.zero`; `Vector2<Float>.zero` works. Since the declaration says
@@ -406,7 +406,7 @@ type checks and which `torb build` rejects; the rest quote the diagnostic that i
    `examples/generic-scalar/src/main.trb`, `extend Pair<Float>`.
 5. **The interpreter resolves no package import.** `use Vector2 from "std/linear"` answers `Unknown name Vector2` there,
    because stage 0 replaces `std/` with its own natives. Everything of `std/` that has to run in the interpreter — a test
-   under `torb test`, a program of `bootstrap/tests/native/` — therefore imports **by path**, and a `std/` package can
+   under `torb test`, a program of `tests/conformance/` — therefore imports **by path**, and a `std/` package can
    only call functions from its own directory. That is why `zeroOf` is one line in `std/linear/src/scalar.trb` and one
    line in `std/geometry/src/scalar.trb` instead of living once in `std/number`, and why `std/geometry` reaches
    `std/linear` as `"../../linear/src/vector2"`.

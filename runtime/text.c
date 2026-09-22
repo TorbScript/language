@@ -648,8 +648,8 @@ bool torb_char_is_whitespace(torb_char character) {
  * A `Char` is one code point and answers one, so only a mapping that is one-to-one applies: `ß` has no single uppercase
  * code point (its uppercase is `SS`) and is answered unchanged, and so is every code point the mapping does not cover.
  * `ÿ` is the one Latin-1 letter whose partner lies above Latin-1 (`Ÿ`, U+0178). `×` and `÷` are symbols and not
- * letters. `bootstrap/crates/torb-interpreter/src/characters.rs` is the same mapping in Rust, and a change to one is a
- * change to the other - `Char.toUpperCase` is compared by the conformance suite.
+ * letters. `tests/conformance/character-case.trb` pins the mapping from the language side, so a change to this table
+ * is a change to that program.
  */
 torb_char torb_char_to_upper_case(torb_char character) {
   if (character >= 'a' && character <= 'z') {

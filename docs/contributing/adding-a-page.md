@@ -39,11 +39,11 @@ index it belongs to updates itself.
    it through the toolchain before you write a word about it. Never write a snippet from memory: a wrong example is the
    one thing a reader and a model both copy without checking.
 
-6. **Run the two commands**, from `bootstrap/`:
+6. **Run the two commands**, from the repository root:
 
    ```console
-   cargo run --release -q -- run ../compiler docs index ../docs
-   cargo run --release -q -- run ../compiler docs check ../docs
+   torb docs index docs
+   torb docs check docs
    ```
 
    The first one writes the generated part of every index, so the new page appears in its folder's index. The second one

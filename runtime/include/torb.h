@@ -195,7 +195,7 @@ void torb_set_panic_hook(torb_panic_hook hook);
  * **A recovered panic runs nothing on the way out** - no release, no `Close`, no destructor, exactly as an ordinary
  * panic runs nothing - so everything the aborted frames held stays allocated. A program that recovers therefore leaks
  * by construction and the leak gate of the conformance suite does not apply to a run with a failed test
- * (`bootstrap/tests/native/README.md`).
+ * (`tests/conformance/README.md`).
  *
  * `message` and `at` are filled in before the jump. The message is the panic's own, without the `panic: ` in front of
  * it, so a runner can print it in its own format.
@@ -516,7 +516,7 @@ typedef struct torb_text_part {
  * and every part is written into it, so an interpolation of any number of parts is **one** allocation. Result owned.
  *
  * The formatting is the same as the matching `torb_show_*` writes, byte for byte, because the conformance suite
- * compares the two back ends on exactly these strings (`bootstrap/tests/native/interpolation.trb`, `floats.trb`).
+ * compares the two back ends on exactly these strings (`tests/conformance/interpolation.trb`, `floats.trb`).
  */
 torb_text torb_text_concat_parts(const torb_text_part *parts, size_t count);
 

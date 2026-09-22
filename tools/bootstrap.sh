@@ -81,9 +81,9 @@ if [ -z "$seed" ]; then
   say "    seed/torb          a binary for this platform, from a release or from \`torb build compiler\`"
   say "    seed/program.c     the compiler's own generated C, which builds anywhere a C compiler does"
   say ""
-  say "  With a checkout that still has \`bootstrap/\`, stage 0 writes one:"
-  say "    cd bootstrap && cargo build --release"
-  say "    ./bootstrap/target/release/torb run ./compiler build ./compiler --output ./seed/torb"
+  say "  A \`torb\` that is already on this machine writes both:"
+  say "    torb build ./compiler --output ./seed/torb"
+  say "    torb build ./compiler --emit-c --output ./seed/torb"
   exit 1
 fi
 

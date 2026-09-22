@@ -1,15 +1,15 @@
 # The TorbScript Toolchain
 
-TorbScript, written in TorbScript. Until it compiles itself it is run by the bootstrap interpreter:
+TorbScript, written in TorbScript, compiled by itself. `sh tools/bootstrap.sh` writes `build/release/torb`, and
+every command below is run from the repository root:
 
 ```text
-cd ../bootstrap
-cargo run --release -- run ../compiler check ..
-cargo run --release -- run ../compiler parse ../compiler ../std ../examples
-cargo run --release -- run ../compiler ast ../examples/tour/src/01-bindings-and-values.trb
-cargo run --release -- run ../compiler ir ../examples/tour/src/01-bindings-and-values.trb
-cargo run --release -- run ../compiler build ../bootstrap/tests/native/arithmetic.trb
-cargo run --release -- test ../compiler/tests
+torb check .
+torb parse compiler std examples
+torb ast examples/tour/src/01-bindings-and-values.trb
+torb ir examples/tour/src/01-bindings-and-values.trb
+torb build tests/conformance/arithmetic.trb
+torb test compiler/tests
 ```
 
 `torb check <path>...` takes a workspace root (then all of its members), a single project, or one script file. Every
@@ -98,13 +98,13 @@ tests/
 
 Rules for this code:
 
-- It is ordinary, idiomatic TorbScript. Nothing is written in a special way for the bootstrap; what the bootstrap
-  cannot do is simply not used yet (the list is in [bootstrap/README.md](../bootstrap/README.md)).
+- It is ordinary, idiomatic TorbScript, in the style [CONTRIBUTING.md](CONTRIBUTING.md) sets out. Nothing is written
+  in a special way for the compiler that compiles it.
 - **IO happens at the edge.** `project/read.trb` reads every file that could matter into a `SourceTree`, and
   everything after that - workspaces, the module graph, symbols, name resolution - is a pure function of that value.
   So the tests build whole projects in memory, and a language server can hand in text that is newer than the disk.
 - **Program-wide things are ids, not references.** Values have no identity in TorbScript, so modules and symbols live
   in lists and are referred to by `ModuleId` and `SymbolId`.
-- Every part that is a port of `bootstrap/crates/torb-syntax` is tested against it on all `.trb` files of the
-  repository (`cargo test` in `bootstrap/`), until the original is retired.
+- The front end is held to the whole repository: `torb parse .` accepts every `.trb` file of it, and the tests of
+  `compiler/tests` pin the tokens, the tree and every diagnostic.
 - The plan and the state are in [docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md).

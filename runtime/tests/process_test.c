@@ -6,7 +6,7 @@
  * that a program which cannot be started at all is a failure and not an exit code.
  *
  * `Process.arguments` and `Process.exit` are not testable in process: the first is what `main` handed over and the
- * second ends the process. The conformance suite covers both through `bootstrap/tests/native/`.
+ * second ends the process. The conformance suite covers both through `tests/conformance/`.
  */
 
 #include "harness.h"

@@ -2,7 +2,7 @@
 
 One pass over the syntax trees of a workspace that decides everything the back ends must not decide: the type of
 every expression, the target of every call, and every rule of the language that is not syntax. It is written in
-TorbScript, in `compiler/src/semantics/checker/`, and it first runs on stage 0.
+TorbScript, in `compiler/src/semantics/checker/`.
 
 Its input is the syntax tree ([`compiler/src/syntax/ast.trb`](../compiler/src/syntax/ast.trb)) plus what milestone 3
 produced: packages, modules with ids, symbols, file scopes, exports, and a side table that resolves every name in a
@@ -29,7 +29,7 @@ depends on the type of the parameter the closure is passed to, so resolving and 
 
 Constraints that shape every decision below:
 
-- **Stage 0 has no identity.** Program-wide data lives in lists addressed by integer ids, and one `var checker: Checker`
+- **A value has no identity.** Program-wide data lives in lists addressed by integer ids, and one `var checker: Checker`
   value is threaded through the pass, exactly as `var parser: Parser` is threaded through the grammar.
 - **Near-linear.** Checking `compiler/` (~6000 lines) plus `std/` must take well under a minute on a tree walker.
   Every lookup goes through a map or an index; trait resolution memoizes; nothing is quadratic in the program size.
@@ -156,7 +156,7 @@ public type TypeTable {
   level deep, so interning is O(size of the form), not O(size of the type).
 - Every other table follows the same shape: `ParameterId`, `SignatureId`, `ImplementationId`, `VariableId`,
   `BindingId` are single-field types over an index into a `List` in the `Checker`. This is the only way to have
-  program-wide graphs on stage 0, and it survives to stage 1 unchanged.
+  program-wide graphs in a language whose values have no identity.
 - Ids are append-only and never renumbered. That is what keeps incremental use possible (section 7.3).
 
 ### 1.3 From declarations to signatures

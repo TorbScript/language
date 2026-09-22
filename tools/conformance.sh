@@ -1,25 +1,20 @@
 #!/bin/sh
 # The conformance suite, run with the native compiler alone.
 #
-# Every program under `bootstrap/tests/native/` (and `binary-only/`) is built with `build/release/torb build`, run,
+# Every program under `tests/conformance/` (and `binary-only/`) is built with `build/release/torb build`, run,
 # and compared against its expectation files - `.expected` (standard output), `.stderr` (standard error, folded so a
 # line of `std/` reads `path:_:_` instead of its real position), `.exit` (the exit code) and `.leaks` (why the leak
 # gate does not apply). A file that is missing means "nothing to check" for `.expected`/`.exit`, and "must be empty"
-# for `.stderr` - the same rule `bootstrap/crates/torb-cli/tests/native.rs` used, and `bootstrap/tests/native/README.md`
-# is still the contract.
+# for `.stderr`. `tests/conformance/README.md` is the contract.
 #
-# Two more things are asserted per program, both native-only and therefore unaffected by stage 0 leaving:
+# Two more things are asserted per program:
 #   - the generated C names no absolute path of this machine
 #   - `--emit-c` twice gives byte-identical C (a pure function of the program)
 # and, unless a `.stderr` or `.leaks` file exempts the program, that the binary frees everything it allocated
 # (`TORB_REPORT_LEAKS=1`, "live blocks at exit: 0").
 #
-# What is NOT checked here, and was checked by `native.rs`: that stage 0's interpreted run agrees with the binary's.
-# That comparison dies with stage 0 (CONTRIBUTING's gate policy: "parity of messages ... is no longer a goal"); what
-# survives it is the recorded expectation, which is what this script compares against.
-#
 # A behaviour the native back end cannot produce yet has no program here at all - it belongs in `compiler/tests/` as
-# an IR snapshot until the back end gap is closed (`bootstrap/tests/native/README.md`, "Adding a program").
+# an IR snapshot until the back end gap is closed (`tests/conformance/README.md`, "Adding a program").
 #
 # POSIX sh. Runs in Git Bash on Windows and on Linux/macOS.
 #
@@ -151,7 +146,7 @@ $(cat "$work/stderr.folded")"
   fi
 
   # The leak gate: a program that has a `.stderr` or a `.leaks` file already promises that it panics or recovers one,
-  # and a panic frees nothing on the way out - the file is the exemption, `bootstrap/tests/native/README.md` says why.
+  # and a panic frees nothing on the way out - the file is the exemption, `tests/conformance/README.md` says why.
   # Every program of `binary-only/` ends in a recovered panic as well (a failing test), reported on standard output
   # rather than standard error, so the README exempts the whole directory instead of one file at a time.
   case "$program" in
@@ -267,7 +262,7 @@ torb=$(binary_of "build/release/torb")
 [ -n "$torb" ] || fail "no native compiler at build/release/torb - run: sh tools/bootstrap.sh"
 torb=$(cd "$(dirname "$torb")" && pwd)/$(basename "$torb")
 
-directory="bootstrap/tests/native"
+directory="tests/conformance"
 [ -d "$directory" ] || fail "no $directory"
 
 list=$(mktemp)
@@ -332,8 +327,8 @@ $file: no result was written (the runner crashed?)"
   fi
 done <"$list"
 
-# Nothing is skipped any more: every program under `bootstrap/tests/native/` builds natively (RUST-EXIT slice 5). The
-# count stays in the summary line below so a future waiting-room program has somewhere to report itself again.
+# Every program under `tests/conformance/` builds natively, so nothing is skipped. The count stays in the summary
+# line below so a program that waits for a back-end gap has somewhere to report itself.
 skipped=0
 
 if [ -n "$failures" ]; then

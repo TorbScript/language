@@ -26,10 +26,10 @@ TorbScript can write it correctly.
 torb docs skill <root> <out>
 ```
 
-From `bootstrap/`, writing into the build directory, which is not in version control:
+From the repository root, writing into the build directory, which is not in version control:
 
 ```console
-cargo run --release -q -- run ../compiler docs skill ../docs ../build/skill/torbscript
+torb docs skill docs build/skill/torbscript
 ```
 
 The output directory has to be named `torbscript`, because the format requires the directory name and the `name` field
@@ -114,11 +114,10 @@ context of every request and not only of the ones that use it.
 Build the skill and install it for yourself:
 
 ```console
-$ cd bootstrap
-$ cargo run --release -q -- run ../compiler docs skill ../docs ../build/skill/torbscript
+$ torb docs skill docs build/skill/torbscript
 torbscript: 33 files, SKILL.md has 323 lines
 32 pages, 10 left out (planned or omitted)
-Copy `../build/skill/torbscript` to `~/.claude/skills/torbscript` for yourself, or to `.claude/skills/torbscript` of a project to share it
+Copy `build/skill/torbscript` to `~/.claude/skills/torbscript` for yourself, or to `.claude/skills/torbscript` of a project to share it
 ```
 
 The two places a skill is installed:

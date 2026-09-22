@@ -442,7 +442,7 @@ TORB_TEST(character_classification) {
   TORB_CHECK_INTEGER(torb_char_to_lower_case('A'), 'a');
   /* The simple case mapping, over ASCII and the letters of Latin-1: one code point in, one out, and a code point
    * whose partner is not a single one (0xDF, which upper-cases to "SS") is answered unchanged. The same table is
-   * `bootstrap/crates/torb-interpreter/src/characters.rs`, and the conformance suite compares the two. */
+   * `tests/conformance/character-case.trb`, which pins the mapping from the language side. */
   TORB_CHECK_INTEGER(torb_char_to_upper_case(0xE4u), 0xC4u);
   TORB_CHECK_INTEGER(torb_char_to_lower_case(0xC4u), 0xE4u);
   TORB_CHECK_INTEGER(torb_char_to_upper_case(0xFEu), 0xDEu);

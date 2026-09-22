@@ -3539,6 +3539,50 @@ Wenn nicht, was bedeutet, bewirkt es?
     `From`/`Into`-Umwandlung als Adaptation existiert im Backend noch nirgends; `?` baut seine Umwandlung von Hand
     (`ir/lower/match.trb`s `convertedError`), sonst niemand. Alle vier Diagnosen mit exakter Fundstelle stehen jetzt
     in `docs/RUST-EXIT.md` Abschnitt 2.4.
+  - **Erledigt (Scheibe 6, die Löschung):** `bootstrap/` ist weg. **45 Dateien und 14 947 Zeilen** sind aus dem
+    Repository verschwunden: 14 560 Zeilen Rust in 37 `.rs`-Dateien, die `prelude.trb` des Interpreters (121 Zeilen),
+    `bootstrap/README.md` (182 Zeilen), vier `Cargo.toml`, `rustfmt.toml` und `Cargo.lock`. Nichts in einem Checkout
+    nennt noch Rust oder Cargo; die Werkzeugkette baut mit einem C-Compiler allein.
+  - **Wohin die Tests gezogen sind:** `bootstrap/tests/native/` → **`tests/conformance/`** (Wunsch des Nutzers),
+    `bootstrap/tests/scripts/` → **`tests/language/`** (zwei lange Programme, die viele Konstrukte auf einmal
+    ausüben - keine Konformanzprogramme, von denen jedes genau eine Sache festnagelt), und
+    `bootstrap/tests/{lexer,parser}-cases/` → **`tests/{lexer,parser}-cases/`** mit unverändertem Namen, weil
+    `compiler/src/canon/command.trb` sie an genau diesem Namen überspringt. `tests/conformance/` und
+    `tests/language/` sind je ein eigener Workspace mit `../../std/*` als einzigen Mitgliedern, `tests/` selbst
+    bekommt ein `project.trb` ohne Dateien, und `torb check tests/conformance` antwortet "85 files, no problems".
+    Der Umzug kostete die Konformanzprogramme eine Verzeichnisebene, also lesen die 33 Importe, die per Pfad in die
+    Standardbibliothek greifen, jetzt `../../std/...` statt `../../../std/...`. Das Paket heißt nach seinem
+    Verzeichnis `torbscript/conformance`, und ein Laufzeitpfad ist **der Paketname plus die Datei unter dem
+    Paketverzeichnis** - neun Erwartungsdateien tragen ihn in einer Panic-Stelle und wurden mitgeschrieben.
+  - **Ein Fund, den der Umzug ausgelöst hat:** `testInput` einer `project.trb` ist standardmäßig `"tests"`, und das
+    Wurzel-`project.trb` sagte nichts dazu - also wurde `tests/` das Testverzeichnis des Wurzelpakets, und `torb
+    check .` zog jedes Programm darunter als Modul davon herein. Die beiden `errors.trb` (absichtlich kaputt)
+    kollidierten dann mit `std/`: "`Option<Value>` already implements `Show` (in tests/parser-cases/errors.trb)" und
+    178 weitere Meldungen in 50 Dateien. Das Wurzel-`project.trb` sagt jetzt `test { input "no-tests" }` - es hat
+    keine eigenen Tests, jeder Test gehört einem Mitglied -, und `torb check .` antwortet wieder
+    "370 files, no problems". Das ist keine Eigenheit des Umzugs, sondern eine Falle für jedes Paket, das ein
+    `tests/` hat, das ihm nicht gehört.
+  - **Umgeschriebene Verweise:** 70 Dateien außerhalb der verschobenen Tests, plus die vier `project.trb`/READMEs der
+    Tests selbst. 107 Pfadvorkommen (`bootstrap/tests/...`), 16 `bootstrap/crates/...`-Verweise, 74
+    `cargo run --release -q -- ...`-Aufrufe in `docs/` (jetzt `torb ...` aus dem Repository-Wurzelverzeichnis), sechs
+    `source:`-Einträge im Frontmatter (auf `tools/bootstrap.sh`, `tools/gates.sh`, `compiler/src/canon/calls.trb`,
+    `compiler/src/canon/command.trb` und `compiler/src/cli/run.trb` umgehängt - `torb docs check` prüft, dass es die
+    Pfade gibt). `gates.sh` hat keinen Stage-0-Rückfall mehr, `benchmarks/run.sh` nimmt `../build/release/torb`
+    direkt, und die Editor-Erweiterung sucht nur noch unter `build/release/`.
+  - **Das Wort "Stage 0" bleibt** in den Geschichtsabschnitten von `docs/BACKEND.md` ("Was 5.x entschieden hat", die
+    Gate-Spalte der Meilensteintabelle, die Messungen), in Abschnitt 3 von `docs/RUST-EXIT.md`, in der Liste
+    entschiedener Lücken in `CONCEPT.md` und in der Meilensteinliste von `docs/ARCHITECTURE.md` - das ist der
+    Bericht, wie ein Meilenstein damals abgesichert war. Überall, wo ein Satz sagt, was *ist*, ist es weg.
+  - **`docs/RUST-EXIT.md` ist jetzt der Bericht**, mit einem neuen Abschnitt 7 ("After the exit"): wohin die Tests
+    gezogen sind, wohin die drei Dinge gewandert sind, die `bootstrap/README.md` sagte, und wo das Wort noch steht.
+    `README.md` (Wurzel) hat einen Abschnitt "Building": ein Seed ist ab der ersten Veröffentlichung ein Download
+    (eine Binärdatei pro Plattform und `program.c` als eine Datei), bis dahin das, was zuletzt gebaut wurde.
+  - **Noch nicht angefasst, weil diese Runde Verschieben und Löschen war und kein Refactoring:** rund 70
+    Doc-Kommentare (64 Fundstellen) in `compiler/src/`, `compiler/tests/`, `std/`, `examples/` und
+    `tests/conformance/` nennen Stage 0
+    noch als lebende Implementierung ("Stage 0 nimmt das `var`-Argument zuerst", "was Stage 0 nicht kann"). Sie
+    kosten kein Gate (`torb docs source` ist noch keins) und gehören in die nächste Dokumentationswelle, zusammen mit
+    den Hoists, die Falle 1 von Stage 0 erzwungen hat und die die Sprache nie verlangt hat.
 - (Antworten des Nutzers auf alle offenen Fragen, 2026-09-22) **Entschieden (Nutzer):**
   - CONCURRENCY 1: `std/parallel` eigenes Package - ja. 2: **doch ins Prelude** ("cooles und wichtiges Tool für
     schnellen Parallelismus, in C# gern unterschätzt; `Parallel.For`/`Parallel.ForEach` sind toll") - also auch

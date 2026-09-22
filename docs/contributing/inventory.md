@@ -321,7 +321,7 @@ because the failure is not ignorance but the habits of a language it does know.
 | `tooling/torb-run.md` | torb run | Running a project and a single file | `compiler/src/main.trb` |
 | `tooling/torb-build.md` | torb build | The C back end, the flags, the output | `compiler/src/cli/build.trb` |
 | `tooling/torb-test.md` | torb test | Where tests live and how they run | `std/test` |
-| `tooling/torb-canon.md` | torb canon | The canon, and the rules it can write | `bootstrap/README.md` |
+| `tooling/torb-canon.md` | torb canon | The canon, and the rules it can write | `compiler/src/canon/command.trb` |
 | `tooling/the-formatter-canon.md` | The formatter canon | Every rule of the canon in one place | `CONCEPT.md#formatter-canon` |
 | `tooling/project-trb.md` | project.trb | Every field of the manifest | `std/project` |
 | `tooling/project-lock-trb.md` | project.lock.trb | What is pinned, and who may write it | `CONCEPT.md#packages-and-the-supply-chain` |

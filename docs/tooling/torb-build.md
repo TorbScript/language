@@ -54,8 +54,7 @@ parameter of a function you declare is one of the constructs still missing (`pri
 back-end intrinsic and builds regardless):
 
 ```console
-$ cd bootstrap
-$ cargo run --release -q -- run ../compiler build ../my-project
+$ torb build my-project
 error: a variadic argument list is not supported by the native back end yet (at my-project/src/main.trb:5:7)
 1 problems the native back end cannot compile yet, nothing was built
 ```
@@ -64,7 +63,7 @@ A program that only uses what the back end already lowers - functions, types, co
 string interpolation, `Process.exit` - builds and runs like any other native binary:
 
 ```console
-$ cargo run --release -q -- run ../compiler build ../my-project --output ../build/dev/my-project
+$ torb build my-project --output build/dev/my-project
 wrote ../build/dev/my-project.exe
 ```
 
@@ -91,10 +90,9 @@ which is always a bug of `build` and never the program's fault.
 Look at the C before trusting it, then build the binary from the same source:
 
 ```console
-$ cd bootstrap
-$ cargo run --release -q -- run ../compiler build ../examples/tour/src/scratch.trb --emit-c --output ../build/dev/scratch
+$ torb build examples/tour/src/scratch.trb --emit-c --output build/dev/scratch
 wrote ../build/dev/program.c
-$ cargo run --release -q -- run ../compiler build ../examples/tour/src/scratch.trb --output ../build/dev/scratch
+$ torb build examples/tour/src/scratch.trb --output build/dev/scratch
 wrote ../build/dev/scratch.exe
 ```
 

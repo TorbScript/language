@@ -20,10 +20,10 @@ the part of the language the native back end already covers.
 
 ## Steps
 
-1. **Point `torb build` at the entry file**, from `bootstrap/` until the compiler compiles itself:
+1. **Point `torb build` at the entry file:**
 
    ```console
-   $ cargo run --release -q -- run ../compiler build ../my-project
+   $ torb build my-project
    ```
 
    A path to a project with a `build { input "src/main.trb" }` works the same way; `torb build` reads that project's
@@ -33,14 +33,14 @@ the part of the language the native back end already covers.
    next to where the binary would go and stops - no C compiler needed for this step at all.
 
    ```console
-   $ cargo run --release -q -- run ../compiler build ../my-project --emit-c
+   $ torb build my-project --emit-c
    ```
 
 3. **Choose where the binary goes with `--output <path>`.** The C file is written next to it, so both ends of the
    build are in one place.
 
    ```console
-   $ cargo run --release -q -- run ../compiler build ../my-project --output ../build/my-project
+   $ torb build my-project --output build/my-project
    ```
 
 4. **Make sure a C compiler is reachable.** `torb build` tries, in order, `$TORB_CC`, `clang`, `gcc`, `cc`, then `cl`.
@@ -56,7 +56,7 @@ the part of the language the native back end already covers.
    grows.
 
    ```console
-   $ cargo run --release -q -- run ../compiler ir --statistics ../examples/tour
+   $ torb ir --statistics examples/tour
    374 of 600 functions lowered (62%), 226 not supported yet
    ```
 

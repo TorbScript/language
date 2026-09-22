@@ -15,7 +15,7 @@ keywords:
 source:
   - compiler/src/main.trb
   - compiler/src/highlight/command.trb
-  - bootstrap/README.md
+  - compiler/src/cli/run.trb
   - CONCEPT.md#toolchain
 ---
 
@@ -33,21 +33,20 @@ torb parse <path>...   Check the syntax of files or directories
 torb tokens <file>     Print the tokens of a file
 torb ast <file>        Print the syntax tree of a file
 torb highlight <file>  Print the semantic tokens of a file as JSON, for an editor
+torb natives --header  Write runtime/include/torb_natives.h from the manifest of natives
 torb docs <command>    Check, index, and derive the documentation
 torb canon [path]...   Write the formatter canon over the syntax tree
 torb test [path]...    Run the *.test.trb files below the paths
 ```
 
-Until the compiler compiles itself, the self-hosted commands run through stage 0. From `bootstrap/`:
+`torb` is `build/release/torb`, what [`sh tools/bootstrap.sh`](../ARCHITECTURE.md) writes, and every command below is
+run from the repository root:
 
 ```console
-cargo run --release -q -- run ../compiler check ..
-cargo run --release -q -- test ../compiler/tests
-cargo run --release -q -- canon --check ..
+torb check .
+torb test compiler/tests
+torb canon --check .
 ```
-
-The first form runs a command **of the self-hosted toolchain**; `test` and `canon` are commands **of stage 0** and need no
-`run ../compiler` in front of them.
 
 ## What it does
 
@@ -59,10 +58,7 @@ an unchanged program is not rebuilt. A script may hold top-level code because no
 
 There is no second implementation of the language behind `run`: what it starts is the binary
 [`build`](torb-build.md) would have written, with the program's three streams and its exit code passed through.
-
-Stage 0 has a `run` of its own while it is there, which **interprets** the file - it has no type checker and does not
-load `std/` - and it is how the compiler is run before it has been compiled (`torb run ../compiler check ..`). See
-[torb run](torb-run.md) for the difference.
+Milestone 7's bytecode VM is what will start a small script without building it, over the same typed IR.
 
 ### `check`
 
@@ -86,9 +82,9 @@ the C is written next to it. Nothing observable differs between a binary and the
 ### `parse`, `tokens`, `ast` and `ir`
 
 The four windows into the front end. `parse` checks syntax only, recursively over directories. `tokens` and `ast` print the
-lexer and parser output of one file in a deterministic format - the same format stage 0 prints, which is what the
-differential tests compare. `ir` prints the typed intermediate representation the back end lowers, with `--statistics` for
-the counts alone.
+lexer and parser output of one file in a deterministic format - the one `compiler/src/syntax/dump.trb` and the
+generated `Show` of the syntax tree define. `ir` prints the typed intermediate representation the back end lowers,
+with `--statistics` for the counts alone.
 
 ### `highlight`
 
@@ -126,8 +122,7 @@ erased, so a run cannot change what a program means.
 | `--rule imported-case-patterns` | `.None` becomes `None`. Has to be asked for |
 | `--rule unused-bindings` | A binding of a refutable pattern that nobody reads becomes `_`. Has to be asked for |
 
-`canon` is temporary. Milestone 8's `torb format`, written in TorbScript, enforces the same canon and goes away with the
-rest of stage 0.
+`canon` is temporary. Milestone 8's `torb format` enforces the same canon and takes over from it.
 
 ### `test`
 
@@ -136,23 +131,16 @@ still one binary and one report. The output is the name of a file, then one line
 **in the order of the files**, which is the order their paths sort in - and at the end a blank line and
 `N passed, M failed (K files)`. The command leaves with 0 where nothing failed and 1 otherwise.
 
-The two implementations get there differently, and that is the only thing that differs:
+**One binary for all of them**, and not one per file, because every test file imports its harness and through it
+whatever it tests: one binary per file would be one C compile of a translation unit that size per file, and the C
+compiler is where the time of a build goes. The whole suite together is about the size of one such translation unit.
+That is also why `--jobs` means nothing here - one binary is one process - and it is accepted and ignored rather than
+rejected.
 
-| | How the files are run | `--jobs N` |
-|---|---|---|
-| The self-hosted compiler | **One binary for all of them**, built and run | Accepted and ignored |
-| Stage 0's `torb test` | One process per file | How many at a time; the default is the number of cores, `--jobs 1` is one after another |
-
-One binary and not one per file, because every test file imports its harness and through it whatever it tests: one
-binary per file would be one C compile of a translation unit that size per file, and the C compiler is where the time
-of a build goes. The whole suite together is about the size of one such translation unit. That is also why `--jobs`
-means nothing there - one binary is one process - and it is accepted rather than rejected so that a command line
-written for stage 0 still runs.
-
-`test` and `group` themselves are not a command's: they are ordinary functions of `std/test`, and both the interpreter
-and the compiled binary write the report from the same place - one line per test, `  ok      ` or `  FAILED  ` with the
-group names in front of it, and the counts of the summary. So a test file that is **built** on its own
-(`torb build one.test.trb`) runs its tests the same way, which is what the language's own conformance suite compares.
+`test` and `group` themselves are not a command's: they are ordinary functions of `std/test`, and the report comes
+from one place - one line per test, `  ok      ` or `  FAILED  ` with the group names in front of it, and the counts
+of the summary. So a test file that is **built** on its own (`torb build one.test.trb`) runs its tests the same way,
+which is what the language's own conformance suite compares.
 
 ### `docs`
 
@@ -177,10 +165,9 @@ These are in the design and not in the binary. A page about one of them carries 
 Check the whole repository and see that every expression has a type:
 
 ```console
-$ cd bootstrap
-$ cargo run --release -q -- run ../compiler check ..
+$ torb check .
 255 files, no problems
-$ cargo run --release -q -- run ../compiler check --statistics ..
+$ torb check --statistics .
 149982 of 149982 expressions typed (100%), 0 deferred
 ```
 
@@ -188,9 +175,9 @@ Build a native binary, and look at the C first - see [torb build](torb-build.md)
 lower yet:
 
 ```console
-$ cargo run --release -q -- run ../compiler build ../examples/tour/src/scratch.trb --emit-c --output ../build/dev/scratch
+$ torb build examples/tour/src/scratch.trb --emit-c --output build/dev/scratch
 wrote ../build/dev/program.c
-$ cargo run --release -q -- run ../compiler build ../examples/tour/src/scratch.trb --output ../build/dev/scratch
+$ torb build examples/tour/src/scratch.trb --output build/dev/scratch
 wrote ../build/dev/scratch.exe
 ```
 

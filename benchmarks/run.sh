@@ -7,22 +7,23 @@
 #   RUNS=9 sh run.sh          more repetitions; the fastest of them is what is printed
 #   sh run.sh --allocations   also link a counted copy of each binary and print how often it allocated
 #
-# $TORB is the compiler that builds the programs and $TORB_COMPILER the package it runs. An **empty**
-# $TORB_COMPILER means $TORB is a `torb` binary already and is called directly, which is what compares two builds of
-# the compiler against each other:
+# $TORB is the compiler that builds the programs, `../build/release/torb` by default, and it is called directly.
+# $TORB_COMPILER names a compiler *package* for $TORB to run instead, for a $TORB that is a driver rather than a
+# compiler; an empty value, which is the default, means $TORB is a `torb` binary already. Two builds of the compiler
+# are compared against each other this way:
 #
-#   TORB=../seed/torb.exe TORB_COMPILER= sh run.sh
+#   TORB=../seed/torb.exe sh run.sh
 #
-# It is POSIX sh and works under Git Bash on Windows. Nothing here is wired into `cargo test`: these are measurements,
-# not gates, and a number that moves with the machine does not belong in a test.
+# It is POSIX sh and works under Git Bash on Windows. Nothing here is a gate: these are measurements, and a number
+# that moves with the machine does not belong in a test.
 
 set -u
 
 here=$(dirname "$0")
 cd "$here" || exit 1
 
-torb=${TORB:-../bootstrap/target/release/torb.exe}
-compiler=${TORB_COMPILER-../compiler}
+torb=${TORB:-../build/release/torb.exe}
+compiler=${TORB_COMPILER-}
 runs=${RUNS:-5}
 out=${OUT:-out}
 
@@ -62,7 +63,7 @@ if [ -z "$compiler_command" ]; then
   exit 3
 fi
 if [ ! -x "$torb" ]; then
-  echo "run.sh: $torb is not there. Build stage 0 first: cargo build --release in bootstrap/." >&2
+  echo "run.sh: $torb is not there. Build the compiler first: sh tools/bootstrap.sh from the repository root." >&2
   exit 3
 fi
 

@@ -11,13 +11,12 @@ keywords:
   - hello world
 source:
   - README.md
-  - bootstrap/README.md
+  - tools/bootstrap.sh
   - CONCEPT.md#project-layout
 ---
 
 The toolchain is one binary called `torb`. It runs a file directly, without a build step, and it compiles the same file
-to a native executable. Until the compiler compiles itself, `torb` is the stage 0 interpreter in `bootstrap/`, and every
-command goes through it.
+to a native executable.
 
 ## Goal
 
@@ -26,16 +25,21 @@ commands you will use most.
 
 ## Build the toolchain
 
-TorbScript is self-hosted: the compiler is written in TorbScript, and a small Rust interpreter runs it until it can
-compile itself. Build that interpreter once, from the repository:
+TorbScript is self-hosted: the compiler is written in TorbScript and compiles itself from a seed - a `torb` that
+already exists. Put one under `seed/` and build it once, from the repository root:
 
 ```console
-$ cd bootstrap
-$ cargo build --release
+$ sh tools/bootstrap.sh
+seed: seed/torb
+step 1: the seed builds the compiler
+step 2: that compiler builds the compiler again
+
+the fixpoint holds: both steps emitted the same C.
+torb: build/release/torb
 ```
 
-Everything below is run from `bootstrap/`. The pattern is `cargo run --release -q -- <command>` for the interpreter's own
-commands, and `cargo run --release -q -- run ../compiler <command>` for the self-hosted toolchain.
+`build/release/torb` is the compiler that comes out, and `torb` below is that binary. A C compiler on the `PATH` is
+what it needs (`$TORB_CC`, or `clang`, `gcc`, `cc`).
 
 ## Run a single file
 
@@ -49,7 +53,7 @@ print "Hello, {name}!"
 And run it:
 
 ```console
-$ cargo run --release -q -- run hello.trb
+$ torb run hello.trb
 Hello, World!
 ```
 
@@ -97,7 +101,7 @@ print greeting("World")
 Run the project by naming its directory:
 
 ```console
-$ cargo run --release -q -- run hello
+$ torb run hello
 Hello, World!
 ```
 
@@ -105,7 +109,7 @@ Hello, World!
 
 A test file is a script made of `test` and `group` calls, and the only assertion is `assert`:
 
-```trb skip std/test is not loaded by stage 0 yet, so this file cannot run today
+```trb skip it imports the `src/main.trb` of the project this page creates, which one snippet of this documentation cannot provide
 use greeting from "../src/main"
 
 test "greets by name" {
@@ -123,9 +127,9 @@ conditions: an operator at the top level of an argument is one of the places whe
 The two commands you will run most often:
 
 ```console
-$ cargo run --release -q -- run ../compiler check ..
+$ torb check .
 144 files, no problems
-$ cargo run --release -q -- canon --check ..
+$ torb canon --check .
 ```
 
 `check` type checks everything and answers `no problems` or points at a line. `canon` writes the formatter canon over
