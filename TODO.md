@@ -485,6 +485,7 @@ Falls wir das hier _nicht_ automatisch deriven, sollten wir vielleicht ein impli
   - **Wird gelöst:** Konzept-Absatz "Formatter canon" + Umstellung der ganzen Codebase per Werkzeug über den
     Syntaxbaum (zusammen mit dem Umformatieren der mehrzeiligen Strings), sobald die drei laufenden Zweige
     (Emitter, Prelude, `by`) gemergt sind - vorher würde es mit jedem davon kollidieren.
+  - **Erledigt (fb3b2c6):** die Formatter-Canon steht im Konzept (`18bf180`) und ist per Werkzeug über den Syntaxbaum auf die Codebase angewendet - Kommandos wo die Grammatik es erlaubt, ausgerückte mehrzeilige Strings, nacktes `None` in Patterns.
 
 - In
 
@@ -911,6 +912,7 @@ Wenn nicht, was bedeutet, bewirkt es?
   - Phase 2: mehrere günstigere Schreib-Agents füllen die Ordner nach Vorlage und Inventar; danach der Skill
     (`SKILL.md` mit Denkmodell, Syntax-Spickzettel, den typischen Fehlgriffen von Rust-/Swift-/Kotlin-geprägten
     Modellen, Prüfkommandos, Navigation in die Referenz).
+  - **Erledigt (88e7701):** das Dokumentationssystem (Seitenformat, generierte Indexe, geprüfte Snippets, `torb docs`, der abgeleitete Agent Skill) steht; Phase 2 hat den Baum danach in mehreren Wellen gefüllt.
 
 - (Fund der Streams-Runde, 2026-09-20) Ein in TorbScript geschriebener `shared type` kann sich aus einer Methode mit
   `self` nicht ändern; asynchrone Methoden hatten `self`, also musste jeder Zustand in Closures mit gefangenen
@@ -1012,6 +1014,7 @@ Wenn nicht, was bedeutet, bewirkt es?
     leicht auf kursiv umzustellen). Farben als Defaults der Extension in C#/Dark+-Anmutung, sprachgebunden (`:trb`),
     ohne dass du Settings anfassen musst. TextMate-Grammatik und Markdown-Vorschau bekommen die fehlenden Keywords
     (aus dem Lexer abgeleitet), `void`, `Fail`, Generics, `.Case`.
+  - **Erledigt (ca8728d):** anders als geplant gelöst - `torb highlight` liefert semantische Tokens für die VS-Code-Extension (`DocumentSemanticTokensProvider`) statt einer erweiterten TextMate-Grammatik; `var fn` ist unterstrichen.
 
 - (Fund des Streams-Nachzugs, 2026-09-20) "Eine Nur-Lese-Sicht auf ein Shared-Objekt lässt sich nicht wieder
   erweitern" wird nur an zwei von vier Stellen durchgesetzt (nicht bei Trait-Werten eines `shared trait`, nicht bei
@@ -1062,6 +1065,7 @@ Wenn nicht, was bedeutet, bewirkt es?
     `extend` eines Literal-Typs, Default an `fn`-Typparametern, `NaN`/`nan`).
   - **Wird gelöst:** "Checker-Konformitätsrunde 1" (Opus-Agent) reproduziert jede Stelle einzeln, behebt sie mit
     Tests und exakten Meldungen und meldet, welche Doku-Sätze danach veraltet sind.
+  - **Erledigt (bb4203b):** die Checker-Konformitätsrunde ist gemergt, die gefundenen Divergenzen sind einzeln repariert.
 
 - (Fund aus 5.10 und der Streams-Runde, 2026-09-20) Ein Member mit EIGENEN Typparametern kann nie in einer
   Witness-Tabelle stehen: `Decoder.record<Output>`, `SequenceDecoder.next<Item>`, `RecordDecoder.field<Value>`,
@@ -1154,6 +1158,7 @@ Wenn nicht, was bedeutet, bewirkt es?
   - **Läuft (zwei Opus-Agents parallel):** "Collection-Kern" (Index-Pfade, Map-/Set-Cursor, `sort`/`slice`,
     Varargs/Spread → `print`-Sonderfall weg) und "langer Schwanz" (interner Fehler, Konstanten, `String.chars`,
     Listen-Patterns, CLI-Natives 5.12, Treiber 5.13, quotierte Ausdrücke 5.11).
+  - **Erledigt (e9db188):** "Collection-Kern" ist gemergt (Index-Pfade, Map-/Set-Cursor, `sort`/`slice`, Varargs/Spread); der "lange Schwanz" ist ebenfalls gemergt (siehe den Eintrag "Langer Schwanz").
 
 - (Patterns und Schreibweise, 2026-09-21) **Entschieden (Nutzer):** Die Schreibweise wird Sprachregel. Typen, Traits,
   Cases und Typparameter beginnen mit einem Großbuchstaben; Funktionen, Methoden, Felder, Parameter, Locals und
@@ -1173,6 +1178,7 @@ Wenn nicht, was bedeutet, bewirkt es?
     volles Unicode. **Wird gelöst:** eine Runde (Opus-Agent) - beide Lexer, Schreibregel im Checker, Fehler für die
     ungenutzte Pattern-Bindung samt `torb canon --rule unused-bindings` für die Repo-Korrektur, CONCEPT, Doku, Skill,
     VS-Code-Grammatik.
+  - **Erledigt (3889e38, 6579ad3):** die Schreibregel ist Compiler-Regel in beiden Lexern/Checkern, die ungenutzte Pattern-Bindung ist ein Fehler, und `torb canon --rule unused-bindings` existiert.
 
 - (Extensions, 2026-09-21) **Entschieden (Nutzer):** Nichts Fremdes ist mehr implizit sichtbar. Grundsatz: ein Member
   ist überall sichtbar, wenn das Paket des TYPS ihn angebracht hat (`type Circle with Shape`, `extend` auf den eigenen
@@ -1424,6 +1430,7 @@ Wenn nicht, was bedeutet, bewirkt es?
     `File.list`), Feld-Defaults von Case-Konstruktoren, `Equals` der Collections, Closure über `var self`,
     `parser.trb:197`, quotierte Ausdrücke 5.11 (für `torb test` nativ), die drei internen Fehler außerhalb des
     Compilers. Notiert für 5.14: `Char.toUpperCase` ist in der Runtime nur ASCII.
+  - **Erledigt (6b52b89):** "Schwanz 2" ist gemergt, u. a. die Collection-Natives (`String.split` u. a.) und `Equals` der Collections.
 
 - (Schreibregel, ASCII-Namen, ungelesene Pattern-Bindung, 2026-09-21)
   - **Erledigt:** Beide Lexer lesen ein Wort als ganzen Lauf und melden **einen** Fehler dafür ("A name is written in
@@ -1499,6 +1506,7 @@ Wenn nicht, was bedeutet, bewirkt es?
     gerade keine Code-Runde anfasst (stream, io, fs, iteration, http, task, process, environment, console, number,
     math, time, test, expression, sandbox, project). `core`, `collections`, `prelude`, `text` nach den laufenden
     Code-Runden; `encoding`, `json` nach dem Encoding-Design; Compiler = Welle 2.
+  - **Erledigt (e2ab074):** Welle 1 ist in vier Teilen gemergt.
 
 - (Collection-Kern, 2026-09-22) **Erledigt, gemergt (`e9db188`), volle Gates grün** (1428 Tests, 94 Runtime-Tests,
   volle `cargo test`): Compiler **99 % gelowert (12680 von 12745), 0 interne Fehler**; `torb build ../compiler` meldet
@@ -1534,6 +1542,7 @@ Wenn nicht, was bedeutet, bewirkt es?
   gefragt statt über das Programm. **Entschieden (ich):** die geschlossene Welt ist das Programm (die vom
   Wurzelmodul aus erreichbaren Module), nie ein Paket, von dem es nicht abhängt - ein Nachbarpaket darf dein Binary
   nicht verändern. Liegt als erster Punkt bei "Schwanz 2".
+  - **Erledigt (cc5fedf3):** die geschlossene Welt ist jetzt das Programm (`programPackagesOf` in `compiler/src/ir/lower/lower.trb`), nicht mehr der ganze Workspace.
 
 - (Sichtbarkeit, `loop`, `??`, Kleinigkeiten, 2026-09-22) **Erledigt, im Zweig grün** (1446 Tests, `check ..` ohne
   Probleme, `docs check`/`docs index --check` grün). Die vier Regeln stehen in CONCEPT (Entscheidungslog),
@@ -1678,6 +1687,7 @@ Wenn nicht, was bedeutet, bewirkt es?
   **Wird gelöst:** kleine Runde zusammen mit den notierten Kleinigkeiten (`indexed()` mit Labels, `reportHere`
   verschluckt die zweite Meldung, Gate-Fehlalarm bei `...` in Backticks, toter Schutz in `mutation.trb`, Erklärseite
   "Where are my overloads?").
+  - **Erledigt (514a007):** die kleine Runde ist gemergt - `indexed()` mit Labels, ein Diagnose statt zwei pro Fundstelle, und die Erklärseite "Where are my overloads?" stehen.
   - **Ergänzt (Nutzerfrage "gehört Array eher in den core?", 2026-09-23) - Entschieden (ich): ja.** `std/core` hält,
     was die Sprache selbst kennt (`Option` hinter `T?`, `Result` hinter `?`, `Range` hinter `a..b`) - und `Array` ist
     das Inline-Speicherprimitiv, an das sich ein Listen-Literal anpasst (der Checker kennt es beim Namen).
@@ -1697,6 +1707,7 @@ Wenn nicht, was bedeutet, bewirkt es?
     darüber erfüllt. (b) Wer einen Trait mit Blanket von Hand implementiert, bekommt eine gezielte Meldung, gebildet
     aus der `where`-Klausel des Blankets ("`Into` comes from `From` ...: write `extend Float64 with From<Celsius>`");
     der Pitfall im Docblock entfällt damit. **Wird gelöst:** in der laufenden kleinen Checker-Runde.
+  - **Erledigt (514a007):** die Besitzregel zählt jetzt auch einen als Trait-Argument genannten eigenen Typ, und eine von Hand geschriebene Blanket-Implementierung bekommt die gezielte Meldung.
   - **Ergänzt (Nutzerfrage "was ist mit `TryInto`? `Parse` streichen?", 2026-09-23) - Entschieden (Nutzer: "machen
     wir so"):** `TryInto<Target, Failure>` kommt mit Blanket über `TryFrom` dazu (Symmetrie zu `Into`; man
     implementiert `TryFrom`, nie `TryInto`; kein Blanket "jedes `From` ist ein `TryFrom`", das überlappte jedes
@@ -1878,6 +1889,7 @@ Wenn nicht, was bedeutet, bewirkt es?
   - **Wird gelöst (mit den Slices):** `File.list` und `File.absolutePath` weichen zwischen Stage 0 und C-Runtime ab
     (lossy Namen bzw. Backslashes) - Slice 2 macht beide zu `Path`-Antworten mit EINER Form; `SandboxError` trägt
     keinen Pfad (Slice 3); `Process.run(workingDirectory:)` existiert noch nicht (Slice 3).
+  - **Stand 2026-09-22:** nur `std/path` Slice 1 ist gelandet; `File.list`/`File.absolutePath` antworten in `std/fs` weiterhin `String` statt `Path` (Slice 2/3 fehlen noch).
   - **Erledigt:** Wide-Char-Runtime für Windows (die eigene Runde vor Slice 2). Die Windows-Hälfte von
     `runtime/platform.c` ruft durchgehend die Wide-API (`_wfopen`, `_wmkdir`, `GetFileAttributesW`, `FindFirstFileW`,
     `CreateProcessW`, `_wgetenv`, `GetCurrentDirectoryW`, `DeleteFileW`/`RemoveDirectoryW`), zwei Helfer konvertieren an
@@ -1924,6 +1936,7 @@ Wenn nicht, was bedeutet, bewirkt es?
       - **Wird gelöst (nach Schwanz 5, das gerade in `runtime/` arbeitet):** der Panic-Report schreibt mit
         `fprintf(stderr, ...)` an `console.c` vorbei, erscheint in einer Konsole also weiter in der Codepage; er geht
         dann durch denselben Weg wie `print`.
+      - **Erledigt (aa20ba0):** der Panic-Report läuft über `torb_write_line_error`/`torb_write_line`, denselben Weg wie `print` - die WriteConsoleW-Umstellung deckt damit auch die Panic-Zeile ab.
       - **Bitte einmal von dir prüfen (ich sehe keine echte Konsole):** in `cmd` `chcp 850`, dann ein mit
         `torb build` gebautes Programm mit `print "grüße 日本"` starten.
   - **Erledigt (Slice 1):** das Paket selbst, in einem eigenen Arbeitsbaum. `std/path/{project.trb,
@@ -2680,6 +2693,7 @@ Wenn nicht, was bedeutet, bewirkt es?
     Lowering-Hälfte (`Scalar.from(literal)`, konstant gefaltet) danach; dann fallen `unit`/`halved`/`doubled`/`zeroOf`
     und `examples/generic-scalar` baut. Dazu aus derselben Runde: zwei `From`-Implementierungen an einem Typ ergeben
     EIN C-Symbol (`ir/mangle.trb` muss die Argumente der Implementierung tragen) - LINEAR Punkt 16.
+  - **Erledigt (d96c428):** ein Ganzzahl-Literal passt sich jetzt an einen Typparameter mit `Numeric`-Bound an.
 
 - (Lesbarkeit generischer `extend`-Köpfe, 2026-09-22) **Anlass (Nutzer):**
   `extend<Value, Target: From<Iterable<Value>>> Option<Target> with From<Iterable<Value?>>` ist schwer lesbar (Rust
@@ -3135,6 +3149,7 @@ Wenn nicht, was bedeutet, bewirkt es?
   - **Wird gelöst (Checker-Folgerunde):** der Checker erzwingt die `await()`-Regel nicht - das alte Snippet lief als
     `trb check` durch. Regel: `await()` nur in Task-Funktion, `spawn`-Closure, Top-Level; sonst Fehler mit Hinweis
     auf `Task.all` / `Task.map`.
+  - **Erledigt (053195c):** der Checker erzwingt die `await()`-Regel jetzt (nur in einer Task-Funktion, einer `spawn`-Closure oder auf Top-Level, mit Hinweis auf `Task.all`/`Task.map`).
 - (Kapsel - Sichtbarkeit des Konstruktors, 2026-09-22) Frage des Nutzers zu `std/path`: warum `storedRoot` + `root()`
   statt öffentlicher Felder, und kann man `Path` nicht einfach von überall konstruieren?
   - **Antwort:** nein - ein privates Feld kann von außen weder an den Konstruktor noch an `copy` übergeben noch
@@ -3156,6 +3171,7 @@ Wenn nicht, was bedeutet, bewirkt es?
   - **Wird gelöst - Checker-Folgerunde:** beide Checker, die drei Meldungen (`is private to`, `cannot be passed from
     here`, `this pattern cannot read it`), `fields.md` Regel 5, `visibility.md` Regel 4, `data-or-capsule.md`, CONCEPT
     (Regel + Entscheidungslog). Nicht jetzt, weil die Konstruktor-Runde gerade `checker/declaration.trb` anfasst.
+  - **Erledigt (053195c):** `private` wirkt jetzt dateiweit in beiden Checkern, mit den drei Meldungen und den nachgezogenen Doku-Regeln.
 - (Verschachteltes Schreiben kopiert die innere Liste, 2026-09-22) Frage des Nutzers: wird
   `var a = x[1][1]` / `a = a * 2` / `x[1][1] = a` auf `x[1][1] = x[1][1] * 2` reduziert?
   - **Antwort:** `a` ist ein `Int` und wird ein Register - beide Formen geben dieselbe IR, da gibt es nichts zu
@@ -3166,6 +3182,7 @@ Wenn nicht, was bedeutet, bewirkt es?
     die Zeile per Move herausnehmen und zurücklegen, oder über die Elementadresse schreiben
     (`torb_list_element_reference` gibt es in `runtime/list.c` schon). Gate: ein natives Programm mit `.leaks`-Datei
     und ein IR-Test, der zeigt, dass kein `makeUnique` auf einer geteilten Zeile übrig bleibt.
+  - **Erledigt (284d74b):** ein Schreiben durch einen verschachtelten Platz geht jetzt über die Elementadresse, ohne die Zeile herauszunehmen und zurückzulegen.
   - **Idee, zurückgestellt:** Diagnose/Profiler-Hinweis "hier wird eine geteilte Liste beschrieben (O(n)-Kopie)" -
     die einzige echte Schwäche von Copy-on-Write ist, dass man die Kopie nicht sieht.
 - (Performance als Ziel, 2026-09-22) **Entschieden (Nutzer):** die Sprache soll performant und speicherschonend sein,
@@ -3377,8 +3394,10 @@ Wenn nicht, was bedeutet, bewirkt es?
     `list[i]` bleibt das Versprechen, `get` die Frage (Panic-Regel der std/core-Runde).
   - **Wird gelöst - Checker-Folgerunde:** ein konstanter Index außerhalb eines Literals oder eines
     `Array<Item, Size>` ist ein Compile-Fehler statt ein Panic.
+  - **Erledigt (053195c):** ein konstanter Index außerhalb ist jetzt ein Compile-Fehler (auch negativ).
   - **Wird gelöst - Performance-Runde P8 (Bereichsanalyse):** in `for index in 0..list.count()` ist `list[index]`
     beweisbar gültig, solange der Rumpf die Liste nicht verändert - Wertsemantik macht den Beweis leicht.
+  - **Erledigt (4aabcb1):** die Bereichsanalyse (`compiler/src/ir/ranges.trb`) entfernt genau die Prüfungen, die nachweislich nie feuern können.
   - **Zu prüfen nach dem Audit:** welche indexfreien Helfer fehlen (`windows`, `chunks`, `zip`, `enumerate`, `splitAt`).
 - (Rust raus, leichtere Gates, 2026-09-22) **Entschieden (Nutzer):** der Rust-Bootstrap soll so schnell wie möglich
   raus, TorbScript soll "rein" sein (der selbst-gehostete Compiler geht allein von der IR zum nativen Programm). Die
@@ -3398,6 +3417,7 @@ Wenn nicht, was bedeutet, bewirkt es?
     gebraucht wird, was nativ fehlt, Tempo-Vergleich), Seed-Entscheidung + `tools/bootstrap.sh`, nativer Treiber
     (`torb run` = bauen + ausführen, `torb test` für jedes Testpaket). Fehlend danach: `canon` und `highlight` nach
     TorbScript portieren, Gates auf den nativen Compiler umstellen, `bootstrap/crates` löschen.
+  - **Erledigt (23f63f1):** Scheibe 1 ist gemergt - `docs/RUST-EXIT.md`, die Seed-Entscheidung, `tools/bootstrap.sh` und der native Treiber.
 
 - (Nebenläufigkeit und Parallelität, 2026-09-22) `docs/CONCURRENCY.md` beantwortet die drei Fragen des Nutzers
   (Event-Loop/Threads/Green Threads? Schnittstellen für CPU-Zahl? PLINQ?) und ist im Internals-Index registriert.
@@ -3770,6 +3790,7 @@ Wenn nicht, was bedeutet, bewirkt es?
     8: der Frame-Loop lebt in `std/node`; `std/ecs` kennt nur `Schedule.run`. 9: ein Node sieht die ganze Welt
     (Zugriffsmengen kaufen nur bei parallelen Systemen etwas).
   - **Wird gelöst:** beide Dokumente Abschnitt 15 auf "Decided" setzen (Doku-Runde, klein).
+  - **Stand 2026-09-22:** Abschnitt 15 heißt in `docs/design/CONCURRENCY.md` und `docs/design/ECS.md` weiterhin "Open, for the owner".
   - **Korrektur (Nutzer, 2026-09-22):** `std/node` / `Node` ist zu generisch (Baum-Primitive sollen später frei
     bleiben, Verwechslung mit Node.js); der Engine-Knoten gehört zur Engine. **Entschieden:** Package `std/scene`,
     Trait `SceneNode` (Godots Wort; zugleich der Name des Szenen-Dateiformats, das diesen Baum beschreibt).
@@ -3781,6 +3802,7 @@ Wenn nicht, was bedeutet, bewirkt es?
     `static fn of(...items: Item): Self { Self.from(items) }`, `From<Iterable<Item>>` als Anforderung von `List`;
     dasselbe für `filled` und die Gegenstücke bei `Map`/`Set`. `List.of` am Trait selbst wird damit unaufrufbar
     (wer keine Liste nennt, schreibt das Literal). Alle statischen Defaults in Traits prüfen, ob sie `Self` liefern.
+  - **Erledigt (c84a108):** `of`/`filled` auf `List`, `Set`, `Map`, `Stack`, `Queue` antworten jetzt `Self` über `Self.from(...)` mit `where Self: From<Iterable<Item>>` am Member.
 - (Collection-Familie, 2026-09-22) Anlass (Nutzer): `Stack.add`/`push` und `Queue.add`/`enqueue` tun dasselbe. Ich
   hatte vorgeschlagen, `Collection` zu streichen und Stack/Queue zu Typen zu machen. **Nutzer: Stack und Queue bleiben
   Traits** - man soll mit Implementierungen experimentieren können. Auftrag: "Lege die komplette
@@ -3791,6 +3813,7 @@ Wenn nicht, was bedeutet, bewirkt es?
     `Stack`/`Queue` + Implementierungen, `Indexed`/`Slice`, `Array`, `Buffer`, `Source`/`Sink`), Doppelwörter, was
     `Collection` leistet, Vergleich mit Rust/Swift/Kotlin/Scala/Clojure, Zielentwurf mit Probes, Migrationsscheiben.
     Fest: ein Wort pro Bedeutung; Konstruktor-Defaults über `Self`; Stack/Queue als Traits.
+  - **Erledigt (39dfa36):** `docs/COLLECTIONS.md` steht.
 - (Regex und YAML, 2026-09-22) **Nutzer:** Regular Expressions einplanen, vielleicht als natives Konstrukt wie in JS;
   YAML für Frontmatter, also noch vor `std/markdown`.
   - **Entschieden (ich): `std/yaml` vor `std/markdown`**, als Format-Package auf `Encode`/`Decode` (braucht die
@@ -3844,6 +3867,7 @@ Wenn nicht, was bedeutet, bewirkt es?
     (nach der Struktur wie ArrayList/TrieList). 6 Tour behält Stack/Queue. **Wird gelöst:** Scheiben C1-C8 nach P5
     und der Checker-Runde; dazu die zwei Checker-Löcher (Supertrait ohne Implementierung; zwei Instanzen eines
     Traits auf einem Typ) und der O(n)-`removeAt 0` in staged.trb/source.trb.
+  - **Stand 2026-09-22:** die acht Scheiben C1-C8 sind fertig (zuletzt C2c mit `4ae940b`), der notierte O(n)-`removeAt 0` in `std/stream/src/source.trb` ist aber weiterhin offen.
   - **Erledigt (C1-C3, C6):** Die vier parallelen Scheiben sind drin, alle Gates grün, Fixpunkt und
     Konformanz-Suite gelaufen. **C1:** `push`/`pop`/`enqueue`/`dequeue`/`pushed`/`popped`/`enqueued`/`dequeued`/`peek`
     gelöscht - `Stack` und `Queue` haben `remove(): Item?` und `removed(): (Item, Self)?`, `add`/`added` kommen aus
@@ -3963,6 +3987,7 @@ Wenn nicht, was bedeutet, bewirkt es?
     als Packages; Registrierung ist ein WERT, den das Programm baut (`Storage.registry([FileStorage.driver, ...])`),
     keine Selbstanmeldung (keine Reflexion, Top-Level nie importierbar); unbekanntes Schema = `Result`-Fehler mit
     Liste; `Show` einer Uri blendet das Passwort im `userInfo` aus. **Wird gelöst:** Abschnitt in `docs/URI.md`.
+  - **Erledigt (d2f953f):** Abschnitt 11 in `docs/design/URI.md` - Schemes wählen Treiber, eine Registry ist ein Wert, `show()` blendet ein Passwort aus.
 - (Checker-Folgerunde, 2026-09-22) **Erledigt:** alle sieben Punkte, `check .` (362 Dateien) und
   `check tests/native tests/scripts` (88) sauber, 1665 Compiler-Tests grün, Fixpunkt hält.
   1. **Die drei Concurrency-Regeln** (`docs/CONCURRENCY.md` Abschnitt 12): (a) `await()` in einer gewöhnlichen
@@ -4136,5 +4161,6 @@ Wenn nicht, was bedeutet, bewirkt es?
   Datei IM Repo (`tests/language/x.trb` oder `examples/x/`) und `build/release/torb run <datei>`; kalt ~4 s, warm <1 s.
   - **Wird gelöst - Toolchain-Runde:** `torb run` außerhalb des Repos findet `std/prelude` nicht (sucht relativ zum
     Projekt, nicht zum Binary) - Fallback auf `<binary>/../../std`, plus ein `torb new <name>` für ein leeres Projekt.
+  - **Stand 2026-09-22:** die `std/prelude`-Suche außerhalb des Repos ist repariert (`2222b40`), aber `torb new` gibt es weiterhin nicht.
   - Beobachtet: `print list.map { _.x }.sum()` braucht Klammern (Command-Block-Regel, Meldung sagt es); Felder stehen
     zeilenweise, `type P { x: Int, y: Int }` parst nicht - prüfen, ob die Einzeiler-Form erlaubt werden soll.
