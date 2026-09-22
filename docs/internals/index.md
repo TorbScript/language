@@ -23,6 +23,7 @@ documents:
   - ../PROJECT.md
   - ../RESOURCES.md
   - ../URI.md
+  - ../DESTRUCTORS.md
 ---
 
 The toolchain is written in TorbScript and lives in `compiler/`, and it compiles itself from a seed. These are the
@@ -69,5 +70,6 @@ has observable run-time behaviour and no program in that suite is a rule nothing
 - **[The Project File](../PROJECT.md)**
 - **[Resources](../RESOURCES.md)**
 - **[Uniform Resource Identifiers](../URI.md)**
+- **[Destructors, `close()` and `using`](../DESTRUCTORS.md)**
 
 <!-- torb:index:end -->
