@@ -3855,3 +3855,14 @@ Wenn nicht, was bedeutet, bewirkt es?
   beide Formen zählen. Meine Empfehlung: nicht bauen, Regel 2 lassen ("das Ziel implementiert `From`" ohne Ausnahme).
   Auch offen dabei: Regel 2 ganz streichen (jede Implementierung hat genau einen Autor; Preis: `Float64.from(celsius)`
   nur noch über eine Fabrik).
+- (Schleifen als Ausdrücke, 2026-09-22) **Nutzer:** `for` (und `while`, `loop`) als Ausdruck vom Typ `Iterable<Body>`:
+  Body-Wert = Element (map), `continue` = filter, `break` = Ende; die Schleife ist Zucker für das ganze
+  Iterator-Protokoll inkl. Kontrollfluss. Generatoren/Coroutinen müssen da hineinspielen.
+  - **Meine Einordnung:** lazy (sonst ist es keine Pipeline); dann ist es `yield` ohne das Wort und schließt CONCEPTs
+    offene Frage; `loop` = unendlicher Generator, `while` = `loop` + takeWhile. Dieselbe Zustandsmaschine wie Tasks
+    (7.3): Block an Suspendierpunkten teilen, Lokale in einen Frame, `resume(state)`; ein Schleifen-Ausdruck mit
+    `await()` ist ein asynchroner Generator = `Source` (schließt auch "for über Source"). Untiefen: Body läuft erst
+    beim Ziehen (print überrascht); `return`/`?` im Body eines genutzten Ausdrucks = Fehler (Hinweis auf
+    `Source.produce`); kein äußeres `var` ändern (spawn-Regel); `if` ohne `else` als letzter Ausdruck.
+  - **Wird gelöst - läuft:** Design-Dokument `docs/LOOPS.md` (Opus) mit Probes, vor 7.3, damit die Transformation
+    einmal gebaut wird.
