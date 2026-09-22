@@ -1,7 +1,8 @@
 # Concurrency and Parallelism
 
-**Status: partly implemented** — the checker rules of section 13 (gaps 1, 2, 3 and 17) are in; tasks, workers,
-`parallel()`, borrowing and cancellation with its back-edge checks are designed and not built (section 14).
+**Status: partly implemented** — the checker rules of section 13 (gaps 1, 2, 3 and 17) are in, and so is the runtime
+half of 7.3: the task ABI, the single-worker scheduler, timers, channels, cancellation and `within` in C
+(section 16). The state-machine lowering, workers, `parallel()` and borrowing are designed and not built (section 14).
 
 Many things waiting is one problem; one thing going faster is another. This is the specification of both: what a task
 is and what runs it, how many cores a program uses and who decides, how a pipeline is spread over them without copying
@@ -37,6 +38,7 @@ value like any other, and there are no async keywords.
 - **[13. What the language, the IR and the runtime must provide](#13-what-the-language-the-ir-and-the-runtime-must-provide)**
 - **[14. Slices](#14-slices)** — what fits 7.3, what waits for 7.7
 - **[15. Open, for the owner](#15-open-for-the-owner)**
+- **[16. Runtime ABI, as built](#16-runtime-abi-as-built)** — what the compiler lowers a task to, and what 7.7 changes
 
 Every snippet below was run against the checker, in `tests/language/` so that `std` resolves, with the
 proposed declarations written out in the probe file. A snippet marked **type checks today** was accepted as written;
@@ -1180,6 +1182,11 @@ they close the four probes of section 12, and they can land at any time. Gate: e
 with its diagnostic, plus a checker test per rule. **Gap 17 comes first of the four**, because gap 16's migration is
 only verifiable once `?` asks the bound.
 
+*(Runtime half built, 2026-09-22: `runtime/task.c` runs everything of slices A and A2 that is not the lowering - the
+flag, three of the four suspension points (the IO wait is slice G's), the parent link, `pause`, and `within` with a
+real timer rather than only its type - driven by hand-written state machines in `runtime/tests/task_test.c`. Section
+16 is the contract the lowering is written against.)*
+
 **With 7.3 (one worker, one heap).** The state machine, `Task`, `spawn`, `await`, `Channel` and the FIFO queue are
 7.3's own scope. Added here:
 
@@ -1290,3 +1297,76 @@ document above carries it.
     cancel cannot be held in a `const`, including inside a collection somebody else reads.
     **Decided:** `var fn`s, both of them — the same rule `source.next()` has: the right to change is held as `var`,
     and a `const` handle is the read-only view.
+
+## 16. Runtime ABI, as built
+
+The runtime half of 7.3 is `runtime/include/torb_task.h` (the contract, with a lowered example in its header
+comment), `runtime/task.c` (one worker) and `runtime/tests/task_test.c` (twenty-one tests over state machines written
+by hand, the way the lowering will write them). This section is the summary; the header is the reference.
+
+**A task is one counted block**: the runtime's part (resume function, state index, cancellation flag, waiter list,
+parent link), then the frame, then the result slot placed by the `torb_element` of `Value`. Its count is the handles
+plus one reference the scheduler holds until the task completes, so dropping the last handle of a running task stops
+nothing (section 8).
+
+**A resume function** is `torb_poll resume(torb_task *task)`: a switch over `task->state`, the only field the machine
+writes. It answers `TORB_POLL_SUSPENDED` (registered where it waits), `TORB_POLL_FINISHED` (the value is in the result
+slot) or `TORB_POLL_STOPPED` (no value; every `await()` answers `Fail(Cancelled)`). A suspension primitive
+(`torb_task_await`, `torb_task_await_until`, `torb_channel_send`, `torb_channel_receive`, `torb_task_pause`,
+`torb_task_sleep_until`) answers `TORB_WAIT_SUSPENDED` - return now - or `TORB_WAIT_READY` - go on at once; either way
+the machine then calls `torb_task_outcome` once.
+
+**Cancellation is the machine's own check.** Every resume, every point after a ready wait and every loop back-edge
+starts with `torb_task_cancelled(task)`; where it is set, the machine releases what is live at that point, exactly as
+at a `return`, and answers `STOPPED`. The runtime releases nothing of a frame, because only the lowering knows which
+slots are live - it takes a cancelled waiter out of where it waits and queues it, which is the table of section 7 for
+the one worker there is. The one thing the runtime does release is what a wait handed over and the machine never took:
+a channel item a stopped receiver did not accept, and the item of a sender cancelled while it waited.
+
+**The runtime never builds a `Result`.** `torb_task_result(task, &out)` is the `.Fallible` convention - `true` and a
+retained copy of the value, or `false` - and the lowering builds `Ok(value)` or `Fail(Cancelled())` in its own layout.
+`within` is the one native that has to put a `Result` into a task, so it takes a `torb_within_shape`: the descriptor of
+`Result<Value, TimedOut>` and two adapters (`finished`, `timed_out`) the lowering emits per instance, as it emits a
+`torb_element` per type.
+
+**Decisions this round made**, each with its reason in the header: the scheduler panics on a deadlock instead of
+hanging; `torb_scheduler_finish` at the end of `main` cancels every task still running and runs it to its stop, so the
+leak gate stays exact (the program ends, as tokio's and Go's do, and every frame's `close()` runs on the way); a
+negative or `nan` `sleep` is zero; a task that stops without the flag ends as cancelled, which is how `within` - and
+later `Task.map` - passes on a cancellation it observed; a parent that finishes hands its running children to its own
+parent, so cancelling the grandparent still reaches them.
+
+### What the compiler round does
+
+1. Lower a function whose result is a `Task` (and a `spawn` closure) to a resume function plus a constructor:
+   `torb_task_new(resume, sizeof(frame), &descriptor)`, move the parameters or captures into `torb_task_frame`,
+   `torb_task_start`. `spawn` is that constructor, not a call of the runtime.
+2. `await()` becomes `state = K`, `torb_task_await`, the label of state K, the check, `torb_task_outcome`,
+   `torb_task_result`. `pause().await()` may use `torb_task_pause` directly; `pause()` as a value is `torb_pause`.
+3. A stop path per state and per back-edge, releasing that point's live set - the liveness the split already computes.
+4. `torb_task_release` / `torb_channel_release` as the `Release` of a `Task` / `Channel` slot.
+5. The entry file of a program that uses tasks becomes the main task: `torb_task_new`, `torb_task_start`,
+   `torb_scheduler_run(main)`, `torb_scheduler_finish()` before `torb_process_finish()`.
+6. `enter_frame`/`leave_frame` balanced per resume, because the C stack is gone after every return.
+
+### Manifest rows that change
+
+| Row | Today | As built |
+|---|---|---|
+| `Task.await` | `.Planned` `torb_task_await` | not a call: the `Suspend` lowering over `torb_task_await` + `torb_task_result` (`.Fallible`, `Cancelled` has no fields) |
+| `spawn` | `.Planned` `torb_spawn` | not a call: the lowering over `torb_task_new`/`torb_task_start`; no `torb_spawn` exists |
+| `sleep` | `.Planned` `torb_sleep` | `torb_task *torb_sleep(double seconds);` |
+| `pause`, `Task.cancel`, `Task.within` | missing | `torb_pause(void)`, `torb_task_cancel(torb_task *)`, `torb_task_within(torb_task *, torb_duration, const torb_within_shape *)` - the last with a generated shape argument |
+| `Channel.source`, `Channel.sink` | `.Planned` | TorbScript shared types in `std/task` implementing `Source`/`Sink` (witness tables the runtime cannot build) over new rows `torb_channel_new`, `_send`, `_receive`, `_end`, `_close` |
+| `Task.map`, `Task.flatMap`, `Task.all`, `all` | `.Planned` natives | TorbScript over `await` (BACKEND 5.3 already says so): the runtime cannot call a closure of an unknown signature. Each needs a way to end as cancelled - `TORB_POLL_STOPPED` without the flag, reached from a `Never`-returning intrinsic of the lowering |
+| `standardInput`/`Output`/`Error`, `Process.start`, `Child.*`, `File.create`/`chunks`/`add`/`finish` | `.Planned` 7.3 | stay planned, for slice G: they are `Source`/`Sink` objects over real IO, which needs `runtime/io.c` and its poller |
+
+### What waits for the thread pool (7.7)
+
+`task.c`'s `torb_scheduler` and memory.c's `torb_heap` are everything a worker owns, each reached through one
+function (`torb_scheduler_current`, `torb_heap_current`) that answers the process's single instance today and a
+thread-local pointer then - a change of two functions, and the reason it is not made now is that thread-local storage
+is an emulated call on MinGW. The live-block count then sums the heaps; the frame counter of `panic.c` becomes per
+thread. Not built at all, and each named in `task.c`: waking a waiter on another worker (an atomic flag and the owner's
+inbox), the inbox and the stealing of unstarted tasks, a channel whose ends are on two workers (a lock, and transfer or
+copy of the item, BACKEND 2.5), the blocking pool, and the poller. The `worker` field of a task is 0 until then.

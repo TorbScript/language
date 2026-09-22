@@ -87,8 +87,8 @@ typedef enum torb_block_kind {
   TORB_BLOCK_LAZY = 7,
   TORB_BLOCK_OBJECT = 8,         /**< The boxed payload of a trait-typed value. */
   TORB_BLOCK_ENVIRONMENT = 9,    /**< A closure environment on the heap. */
-  TORB_BLOCK_TASK = 10,          /**< Milestone 7.3. */
-  TORB_BLOCK_CHANNEL = 11,       /**< Milestone 7.3. */
+  TORB_BLOCK_TASK = 10,          /**< `torb_task`: a `Task`, its frame and its result (torb_task.h). */
+  TORB_BLOCK_CHANNEL = 11,       /**< `torb_channel`: a `Channel` (torb_task.h). */
   /**
    * A closure environment that lives on the frame of the function that made it.
    *
@@ -919,7 +919,7 @@ void torb_file_drop(void *block);
 /* ---------------------------------------------------------------------------------------- the platform layer --- */
 
 /**
- * Windows and POSIX behind thirteen functions. `runtime/platform.c` is the only file with an `#ifdef _WIN32`.
+ * Windows and POSIX behind fourteen functions. `runtime/platform.c` is the only file with an `#ifdef _WIN32`.
  *
  * Every path and every text here is **UTF-8**, on both platforms. On Windows the file converts to UTF-16 and calls the
  * wide API, because the narrow one reads the code page of the machine and a `String` is UTF-8 (`docs/PATH.md`,
@@ -991,6 +991,11 @@ bool torb_platform_run_inheriting(
 );
 /** A monotonic clock reading, in nanoseconds, from an unspecified origin. Never goes backwards within one process. */
 int64_t torb_platform_monotonic_nanoseconds(void);
+/**
+ * Blocks the calling thread for at least this many nanoseconds, and for none at zero or less. What the scheduler does
+ * when its run queue is empty and a timer is pending; it reads the clock again afterwards, so waking early is harmless.
+ */
+void torb_platform_sleep(int64_t nanoseconds);
 /**
  * The program's own arguments, without the program's name, appended to `*out` as texts - where the platform has a
  * source for them of its own. False where it has none and the `argv` of `main` is what there is, and then **nothing was
@@ -1112,5 +1117,6 @@ uint64_t torb_hash_char(torb_char character);
 uint64_t torb_hash_combine(uint64_t first, uint64_t second);
 
 #include "torb_number.h"
+#include "torb_task.h"
 
 #endif /* TORB_H */

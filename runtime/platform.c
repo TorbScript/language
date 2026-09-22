@@ -1,10 +1,10 @@
 /*
  * platform.c - the only file in the runtime with an `#ifdef _WIN32`.
  *
- * Thirteen functions: what kind of thing a path is, the working directory, the entries of a directory, creating one
+ * Fourteen functions: what kind of thing a path is, the working directory, the entries of a directory, creating one
  * directory and everything above it, opening a file, removing one, reading and writing a whole file, running a child
- * process to its end, a monotonic clock reading, the program's own arguments, and reading and setting an environment
- * variable. Everything above this file is portable, and what it hands out and takes in is always UTF-8.
+ * process to its end, a monotonic clock reading, sleeping until a timer is due, the program's own arguments, and
+ * reading and setting an environment variable. Everything above this file is portable, and what it hands out and takes in is always UTF-8.
  *
  * On Windows that last sentence is the whole point of the file. A `String` of the language is UTF-8, every call of the
  * operating system comes in a narrow and a wide form, and the narrow one reads the **code page of the machine** (1252 on
@@ -22,6 +22,11 @@
  * (`torb_platform_wide`, `torb_platform_utf8`) and one function deciding what form a path is handed over in
  * (`torb_platform_system_path`). The POSIX half needs none of it: a path is bytes there and a UTF-8 `String` is bytes.
  */
+
+/* The POSIX half calls POSIX 2008 (`clock_gettime`, `nanosleep`, `popen`, `setenv`), which a strict `-std=c11` hides. */
+#if !defined(_WIN32) && !defined(_POSIX_C_SOURCE)
+#  define _POSIX_C_SOURCE 200809L
+#endif
 
 #include "torb.h"
 
@@ -385,6 +390,19 @@ int64_t torb_platform_monotonic_nanoseconds(void) {
   return seconds * 1000000000LL + remainder_nanoseconds;
 }
 
+/* `Sleep` counts milliseconds, so the span is rounded up: the scheduler reads the clock afterwards either way. */
+void torb_platform_sleep(int64_t nanoseconds) {
+  int64_t milliseconds;
+  if (nanoseconds <= 0) {
+    return;
+  }
+  milliseconds = nanoseconds / 1000000LL + (nanoseconds % 1000000LL != 0 ? 1 : 0);
+  if (milliseconds > 0x7FFFFFFFLL) {
+    milliseconds = 0x7FFFFFFFLL;
+  }
+  Sleep((DWORD)milliseconds);
+}
+
 /**
  * The program's own arguments, from `GetCommandLineW` - because the `argv` of `main` is **not** UTF-8 on this platform.
  * The C runtime builds it from the wide command line through the code page of the machine, which turns `ü` into one
@@ -585,6 +603,18 @@ int64_t torb_platform_monotonic_nanoseconds(void) {
   struct timespec now;
   clock_gettime(CLOCK_MONOTONIC, &now);
   return (int64_t)now.tv_sec * 1000000000LL + (int64_t)now.tv_nsec;
+}
+
+void torb_platform_sleep(int64_t nanoseconds) {
+  struct timespec span;
+  if (nanoseconds <= 0) {
+    return;
+  }
+  span.tv_sec = (time_t)(nanoseconds / 1000000000LL);
+  span.tv_nsec = (long)(nanoseconds % 1000000000LL);
+  /* A signal cuts the sleep short and leaves what is left in `span`. */
+  while (nanosleep(&span, &span) != 0 && errno == EINTR) {
+  }
 }
 
 /** The `argv` of `main` is what there is here, and it is bytes - which is what a path and a `String` both are. */
