@@ -148,16 +148,35 @@ TORB_TEST(adding_to_a_slice_does_not_reach_the_parent) {
 TORB_TEST(an_element_reference_makes_the_storage_unique_first) {
   torb_list first = torb_list_new(&torb_element_int64);
   torb_list second;
+  torb_text missing = torb_text_from_cstring("Key does not exist");
   int64_t *reference;
   add_whole(&first, 5);
   second = torb_list_retained(first);
-  reference = (int64_t *)torb_list_element_reference(&second, 0, somewhere);
+  reference = (int64_t *)torb_list_element_reference(&second, 0, missing, somewhere);
   *reference = 6;
   TORB_CHECK_INTEGER(whole_at(first, 0), 5);
   TORB_CHECK_INTEGER(whole_at(second, 0), 6);
-  TORB_EXPECT_PANIC(torb_list_element_reference(&second, 3, somewhere));
   torb_list_release(first);
   torb_list_release(second);
+  torb_text_release(missing);
+}
+
+/*
+ * The panic of an index out of range is the caller's, word for word: the element step carries the message `Indexed.at`
+ * would have handed to `expect`, so the same program says the same thing whether the write went through a copy or
+ * through the interior pointer.
+ */
+TORB_TEST(an_element_reference_out_of_range_panics_with_the_message_it_was_given) {
+  torb_list list = torb_list_new(&torb_element_int64);
+  torb_text missing = torb_text_from_cstring("Key does not exist");
+  add_whole(&list, 5);
+  TORB_EXPECT_PANIC(torb_list_element_reference(&list, 3, missing, somewhere));
+  TORB_CHECK_PANIC_CONTAINS("Key does not exist");
+  TORB_CHECK_PANIC_CONTAINS("src/list.trb:11:2");
+  TORB_EXPECT_PANIC(torb_list_element_reference(&list, -1, missing, somewhere));
+  TORB_CHECK_PANIC_CONTAINS("Key does not exist");
+  torb_list_release(list);
+  torb_text_release(missing);
 }
 
 TORB_TEST(insert_remove_and_replace) {
@@ -304,6 +323,7 @@ void torb_register_list_tests(void) {
   TORB_ADD(a_slice_shares_the_storage_and_keeps_it_alive);
   TORB_ADD(adding_to_a_slice_does_not_reach_the_parent);
   TORB_ADD(an_element_reference_makes_the_storage_unique_first);
+  TORB_ADD(an_element_reference_out_of_range_panics_with_the_message_it_was_given);
   TORB_ADD(insert_remove_and_replace);
   TORB_ADD(reverse_clear_and_compact);
   TORB_ADD(sorting_is_stable_and_deterministic);

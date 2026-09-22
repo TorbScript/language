@@ -464,18 +464,16 @@ group "What the back end does not lower yet" {
 
   /**
    * `a[key]` itself is lowered since 5.7 (`lower-collections.test.trb`), and the `ArrayList` of the prelude of
-   * `harness.trb` provides neither `iterator` nor `get` - which is what these two report. The real chain over `std/` is
-   * what the repository-wide test below asserts, by what is *not* in its list of blocking constructs.
+   * `harness.trb` provides no `iterator`, which is what the one that is left reports. Its `at` is written out like
+   * the default of `std/core`, because `ir/elements.trb` reads the panic of `a[key]` out of that body - so an index
+   * on a list lowers here as it does over the real standard library.
    */
   test "a list literal says which construct it is" {
     assert(
       unsupportedIn("fn items(): Int \{\n  const found = [1, 2]\n  1\n\}")
         == ["`iterator`, which neither the source nor the natives manifest provides is not supported by the native back end yet"]
     )
-    assert(
-      unsupportedIn("fn first(items: ArrayList<Int>): Int \{\n  items[0]\n\}")
-        == ["`at`, which neither the source nor the natives manifest provides is not supported by the native back end yet"]
-    )
+    assert(unsupportedIn("fn first(items: ArrayList<Int>): Int \{\n  items[0]\n\}") == [])
     // A `?` at the top level of an entry file is lowered to `error: <the error through Show>` and exit code 1
     // (`lower-match.test.trb`, and `tests/conformance/top-level-error.trb`). In a *function* whose result is
     // neither an `Option` nor a `Result` the checker reports it, so no body of one reaches the back end at all

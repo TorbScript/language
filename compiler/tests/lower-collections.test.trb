@@ -7,9 +7,9 @@
  *
  * `a[key]` on the real `ArrayList` goes through the **default** of `Indexed` (`get(key).expect("Key does not exist")`),
  * so what an index out of range does is decided in `std/core` and is the same in every back end - the back end has no
- * rule of its own for it. The prelude of `harness.trb` is a simplification that declares `at` as required, so the tests
- * here write the implementation out; that the real chain works is what the repository-wide test of `lower.test.trb`
- * asserts, by no longer listing `a[key]` among the constructs that block a function.
+ * rule of its own for it. The prelude of `harness.trb` declares `at` as required and writes the same body out on its
+ * `ArrayList`, and the types of the tests here provide one of their own, which is what makes the `at` in these
+ * snapshots the program's and not the standard library's.
  */
 
 use test, group from "std/test"
@@ -107,7 +107,7 @@ group "`a[key]`" {
   }
 }
 
-/** The container these tests index into: `harness.trb` declares `at` as required and its `ArrayList` provides none. */
+/** The container these tests index into: a type of the program, so the `at` and the `set` in the IR are its own. */
 const indexedContainer = r"""
   type Cell {
     var value: Int
@@ -140,7 +140,11 @@ fn indexedProgram(body: String): String {
  * `Instruction.TakeOut` could reach: a witness table says which members a value has and never that it is a `torb_list`.
  */
 group "a `var` path through `a[key]`" {
-  /** The element is read out of the container into a slot of the frame, written there, and put back. */
+  /**
+   * The element is read out of the container into a slot of the frame, written there, and put back - and the **value**
+   * of the assignment is lowered before any of that, because the take-out is part of the access and an access begins
+   * once everything the assignment needs has been evaluated (BACKEND 2.3).
+   */
   test "a field of an element is a write to a slot of the frame, between the `at` and the `set`" {
     const source = indexedProgram(r"""
       fn writeField(var row: Row) {
@@ -152,17 +156,17 @@ group "a `var` path through `a[key]`" {
         fn t_acme_x2f_app_main_writeField(var row: Record(T_acme_x2f_app_main_Row) borrowed) -> Void {
           slot %0 parameter row: Record(T_acme_x2f_app_main_Row)
           slot %1 temporary: Int64
-          slot %2 temporary: Record(T_acme_x2f_app_main_Row)
-          slot %3 temporary: Record(T_acme_x2f_app_main_Cell)
-          slot %4 temporary: Int64
+          slot %2 temporary: Int64
+          slot %3 temporary: Record(T_acme_x2f_app_main_Row)
+          slot %4 temporary: Record(T_acme_x2f_app_main_Cell)
           slot %5 temporary: Void
         b0: # acme/app/src/main.trb:17 body
           %1 = constant s_literal__Int64_0
-          %2 = read %0
-          %3 = call t_acme_x2f_app_main_Row_at(%2 borrowed, %1 borrowed) at acme/app/src/main.trb:18:3
-          %4 = constant s_literal__Int64_5
-          write %3.value = %4 borrowed
-          call t_acme_x2f_app_main_Row_set(&%0 borrowed, %1 borrowed, %3 borrowed) at acme/app/src/main.trb:18:3
+          %2 = constant s_literal__Int64_5
+          %3 = read %0
+          %4 = call t_acme_x2f_app_main_Row_at(%3 borrowed, %1 borrowed) at acme/app/src/main.trb:18:3
+          write %4.value = %2 borrowed
+          call t_acme_x2f_app_main_Row_set(&%0 borrowed, %1 borrowed, %4 borrowed) at acme/app/src/main.trb:18:3
           return
         }"""
     )
@@ -202,8 +206,9 @@ group "a `var` path through `a[key]`" {
   }
 
   /**
-   * `grid[y][x] = v`: **both keys are lowered before the access begins**, in source order, and the put-backs run
-   * innermost first - the row has to be back in the sheet after the cell is back in the row, or the change would be lost.
+   * `grid[y][x] = v`: **both keys are lowered first**, in source order, then the value, and only then does the access
+   * begin - the take-out of the row is part of it (BACKEND 2.3). The put-backs run innermost first: the row has to be
+   * back in the sheet after the cell is back in the row, or the change would be lost.
    */
   test "the nested case evaluates every key first and puts the elements back innermost first" {
     const source = r"""
@@ -245,20 +250,20 @@ group "a `var` path through `a[key]`" {
           slot %0 parameter sheet: Record(T_acme_x2f_app_main_Sheet)
           slot %1 temporary: Int64
           slot %2 temporary: Int64
-          slot %3 temporary: Record(T_acme_x2f_app_main_Sheet)
-          slot %4 temporary: Record(T_acme_x2f_app_main_Row)
-          slot %5 temporary: Int64
-          slot %6 temporary: Record(T_acme_x2f_app_main_Cell)
+          slot %3 temporary: Int64
+          slot %4 temporary: Record(T_acme_x2f_app_main_Cell)
+          slot %5 temporary: Record(T_acme_x2f_app_main_Sheet)
+          slot %6 temporary: Record(T_acme_x2f_app_main_Row)
           slot %7 temporary: Void
         b0: # acme/app/src/main.trb:29 body
           %1 = constant s_literal__Int64_1
           %2 = constant s_literal__Int64_2
-          %3 = read %0
-          %4 = call t_acme_x2f_app_main_Sheet_at(%3 borrowed, %1 borrowed) at acme/app/src/main.trb:30:3
-          %5 = constant s_literal__Int64_3
-          %6 = construct T_acme_x2f_app_main_Cell (%5 borrowed)
-          call t_acme_x2f_app_main_Row_set(&%4 borrowed, %2 borrowed, %6 borrowed) at acme/app/src/main.trb:30:3
-          call t_acme_x2f_app_main_Sheet_set(&%0 borrowed, %1 borrowed, %4 borrowed) at acme/app/src/main.trb:30:3
+          %3 = constant s_literal__Int64_3
+          %4 = construct T_acme_x2f_app_main_Cell (%3 borrowed)
+          %5 = read %0
+          %6 = call t_acme_x2f_app_main_Sheet_at(%5 borrowed, %1 borrowed) at acme/app/src/main.trb:30:3
+          call t_acme_x2f_app_main_Row_set(&%6 borrowed, %2 borrowed, %4 borrowed) at acme/app/src/main.trb:30:3
+          call t_acme_x2f_app_main_Sheet_set(&%0 borrowed, %1 borrowed, %6 borrowed) at acme/app/src/main.trb:30:3
           return
         }"""
     )

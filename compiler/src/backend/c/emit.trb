@@ -30,7 +30,7 @@ use Emission, write, reportUnsupported, emittedText from "./emission"
 use cTypeOf, whyNoCType, hasStructDefinition, memberNameOf, variantMemberNameOf from "./type"
 use structDeclarationOf, layoutDefinitionOrder, objectDeclarationOf from "./type"
 use bodyOf, bodyStatements, signatureHeadOf, valueTypeOf, emptyNicheExpression, resultTypeOf from "./body"
-use resultPointerName from "./body"
+use resultPointerName, keptFunctions from "./body"
 use dropFunctionOf, pointerTo, closureThunkNameOf, environmentLayoutOfFunction from "./body"
 use retainChildrenFunctionOf from "./body"
 use variantInitializerParts, boxedLayoutOf, countedFormOf, inlineCountedLayoutOf from "./body"
@@ -87,11 +87,20 @@ public fn emittedProgramText(program: IrProgram, entry: String): String {
 /**
  * Every function that has a body, sorted by mangled name. A `native fn` the runtime provides is not emitted: it is a
  * symbol the linker finds, declared by `torb_natives.h`.
+ *
+ * A **copy** the devirtualization made and that nothing calls any more is not emitted either ([keptFunctions]): it
+ * would be a `static` function no reference reaches, which is an error under `-Wunused-function -Werror` and not
+ * merely a wasted body.
  */
 public fn emittedFunctionsOf(program: IrProgram): List<IrFunction> {
+  const kept = keptFunctions program
   var found: List<IrFunction> = []
-  for function in program.functions {
+  for index in 0..program.functions.length() {
+    const function = program.functions[index]
     if const .Runtime(_) = function.kind {
+      continue
+    }
+    if !kept[index] {
       continue
     }
     found.add function

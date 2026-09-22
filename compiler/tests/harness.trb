@@ -173,6 +173,14 @@ public const preludeSource = r"""
       }
     }
 
+    /** What `a[key]` panics through, which is why the lists below reach it: the message is the caller's, not a rule. */
+    fn expect(message: String): Value {
+      match self {
+        Some(value) => value
+        .None => panic message
+      }
+    }
+
     fn orElse(fallback: lazy Value): Value {
       match self {
         Some(value) => value
@@ -340,13 +348,29 @@ public const preludeSource = r"""
     }
   }
 
+  /**
+   * `get` and `at` are written out here, where `std/collections` inherits `at` from the default of `Indexed`: this
+   * prelude declares `at` as required, and the body is what matters to the tests - `a[key]` out of range panics with
+   * the message the *caller* wrote and at the site inside `expect`, which is what the `Element` path step of
+   * `ir/elements.trb` carries over when it replaces the round trip.
+   */
   public native type ArrayList<Item> with List<Item>, From<Iterable<Item>> {
     native static fn from(items: Iterable<Item>): ArrayList<Item>
+    native fn get(index: Int): Item?
+
+    fn at(key: Int): Item {
+      get(key).expect("Key does not exist")
+    }
   }
 
   /** The trie, whose `from` waits for milestone 8: what a **planned** native looks like to the back end. */
   public native type TrieList<Item> with List<Item>, From<Iterable<Item>> {
     native static fn from(items: Iterable<Item>): TrieList<Item>
+    native fn get(index: Int): Item?
+
+    fn at(key: Int): Item {
+      get(key).expect("Key does not exist")
+    }
   }
 
   /**

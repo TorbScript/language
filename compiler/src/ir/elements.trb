@@ -1,0 +1,813 @@
+/**
+ * The element step: a write through `a[key]` goes into the container's own storage instead of through a copy.
+ *
+ * `grid[row][column] = value`, `points[index].y = value`, `rows[index].add(value)` are all lowered the same way
+ * (`ir/lower/place.trb`): the element is **taken out** of the container with `Indexed.at`, changed in a slot of the
+ * frame, and **put back** with `MutableIndexed.set`. That is the concept's own model of an index path, and it is what
+ * a trait-typed container can do - but the container still holds a count of the element while the frame changes it,
+ * so the `MakeUnique` in the middle copies. `benchmarks/nested-write` pays two allocations and a whole row per write
+ * for it (docs/PERFORMANCE.md, finding 3).
+ *
+ * This pass answers the question the IR contains once the devirtualization has run: where the container is the
+ * runtime's own contiguous list, the round trip is a `PathStep.Element` into that list and the change goes through an
+ * interior pointer. Nothing is taken out, nothing is put back, and the element never has a second owner.
+ *
+ * **It is not a change of the lowering.** `takenElement` runs while the container is still `Object(List<Int>)`;
+ * `devirtualizeProgram` is what makes it a `Runtime(ListStorage, Item)`, and that is two passes later. So this is a
+ * peephole over the IR after it, and a container that stayed boxed - two implementations meet in it, it sits in a
+ * field - keeps the copy it always had.
+ *
+ * **The panic is the language's.** `a[key]` out of range panics `Key does not exist` at `std/core/src/option.trb`,
+ * because `Indexed.at` is `get(key).expect("Key does not exist")`. The step carries that static and that site
+ * ([missingKeyOf]), read out of the very body the call would have run, so the two shapes of the same program say the
+ * same thing. A reader whose body does not say it is not rewritten at all.
+ *
+ * # Related
+ *
+ * - [rewriteElementPlaces] - the pass.
+ * - [elementWriteAt] - the shape it looks for, and every reason it refuses one.
+ * - [PathStep.Element] - what it writes.
+ */
+
+use IrProgram, IrFunction, IrTypeId, Slot, StaticId, LocationId, FunctionId from "./ir"
+use Instruction, Reference, PathStep, Argument, WitnessSource, WitnessRoot from "./ir"
+use RuntimeKind, Capture from "./ir"
+use typeOfReference, usedSlots, usedByTerminator, definedSlot from "./verify"
+use isManagedType from "./layout"
+use isSharedStorage from "./capture"
+
+/**
+ * Every read-change-write round trip through a concrete list, rewritten into one `Element` path step.
+ *
+ * It runs after `devirtualizeProgram` and before `insertOwnership`: the container is concrete by then, and the counts
+ * are not inserted yet, so what this reads is the shape the lowering wrote and nothing else. The block is rewritten
+ * until nothing more matches, which is what makes a nested path fall out of one rule - `grid[row][column].field = v`
+ * matches innermost first, and the container of that match is the element the outer match then replaces.
+ */
+public fn rewriteElementPlaces(var program: IrProgram) {
+  if program.elementReaders.isEmpty() {
+    return
+  }
+  for index in 0..program.functions.length() {
+    const function = program.functions[index]
+    for block in 0..function.blocks.length() {
+      var instructions = function.blocks[block].instructions
+      var isChanged = false
+      var more = true
+      while more {
+        more = false
+        if const Some(found) = elementWriteIn(program, function, block, instructions) {
+          instructions = rewritten program, function, instructions, found
+          isChanged = true
+          more = true
+        }
+      }
+      if isChanged {
+        program.functions[index].blocks[block].instructions = instructions
+      }
+    }
+  }
+}
+
+/** One take-out and the put-back that closes it, with everything the rewrite needs decided. */
+type ElementWrite {
+  /** The `Read` of the container, which the take-out needed because `at` takes `self` by value. */
+  read: Int
+  /** The `Indexed.at` that took the element out. */
+  take: Int
+  /** The `MutableIndexed.set` that put it back. */
+  putBack: Int
+  /** Whether the instruction in front of the put-back is the `MakeUnique` of the container it needed. */
+  hasOwnerUnique: Bool
+  container: Reference
+  key: Slot
+  element: Slot
+  item: IrTypeId
+  missing: StaticId
+  at: LocationId
+}
+
+/** The first rewritable round trip of a block, or `None` where the block holds none. */
+fn elementWriteIn(
+  program: IrProgram,
+  function: IrFunction,
+  block: Int,
+  instructions: List<Instruction>,
+): ElementWrite? {
+  for at in 0..instructions.length() {
+    if const Some(found) = elementWriteAt(program, function, block, instructions, at) {
+      return Some found
+    }
+  }
+  None
+}
+
+/**
+ * The round trip that ends in the put-back at `at`, or `None` for every reason it may not be rewritten.
+ *
+ * Everything that cannot be proved is proved false, because a wrong answer here is a wrong program: the element may
+ * have no owner but the container, the container and the key may not move while the access runs, and every use of the
+ * element in between has to be a **place** - a value read of it would read a slot that is not written any more.
+ */
+fn elementWriteAt(
+  program: IrProgram,
+  function: IrFunction,
+  block: Int,
+  instructions: List<Instruction>,
+  at: Int,
+): ElementWrite? {
+  const arguments = match putBackArguments(program, instructions[at]) {
+    Some(found) => found
+    None => {
+      return None
+    }
+  }
+  const container = match arguments[0].place {
+    Some(found) => found
+    None => {
+      return None
+    }
+  }
+  if arguments[0].slot != container.base || hasPlace(arguments[1]) || hasPlace(arguments[2]) {
+    return None
+  }
+  const key = arguments[1].slot
+  const element = arguments[2].slot
+  const take = definitionOf instructions, at, element
+  if take < 1 {
+    return None
+  }
+  const receiver = match takenReceiver(program, instructions[take], element, key) {
+    Some(found) => found
+    None => {
+      return None
+    }
+  }
+  if !readsContainerInto(instructions[take - 1], receiver, container) {
+    return None
+  }
+  const item = match elementTypeOf(program, function, container) {
+    Some(found) => found
+    None => {
+      return None
+    }
+  }
+  if item != function.typeOfSlot(element) {
+    return None
+  }
+  const panic = match missingKeyOf(program, instructions[take]) {
+    Some(found) => found
+    None => {
+      return None
+    }
+  }
+  if !isConfined(function, block, instructions, take, at, receiver, element) {
+    return None
+  }
+  if !isUndisturbed(instructions, take, at, container, key) {
+    return None
+  }
+  const hasOwnerUnique = isMakeUniqueOf instructions[at - 1], container
+  Some ElementWrite(take - 1, take, at, hasOwnerUnique, container, key, element, item, panic.missing, panic.at)
+}
+
+/**
+ * The three arguments of a put-back: a `MutableIndexed.set` on the runtime's own list, answering nothing.
+ *
+ * The **native symbol** decides it and not a name of the source: `torb_list_set` is what `ArrayList.set` and
+ * `TrieList.set` both are, and a function of the program that merely looks like one is not one.
+ */
+fn putBackArguments(program: IrProgram, instruction: Instruction): List<Argument>? {
+  match instruction {
+    .Call(target, callee, arguments, witnesses, _) => {
+      if const Some(_) = target {
+        return None
+      }
+      if !witnesses.isEmpty() || arguments.length() != 3 {
+        return None
+      }
+      if !isListSetter(program, callee) {
+        return None
+      }
+      Some arguments
+    }
+    _ => None
+  }
+}
+
+/**
+ * Whether a callee is the runtime's `torb_list_set`, which is what every `a[key] = value` on a list becomes.
+ *
+ * A `native fn` of `std/` does not reach the runtime directly: the lowering gives it a **wrapper** whose one body
+ * forwards its own parameters to the function the natives manifest named, so that the declaration's modes are what a
+ * caller reads. So this looks through exactly one such body - a single block, a single call, every argument the
+ * parameter in its own position - and through nothing else.
+ */
+fn isListSetter(program: IrProgram, callee: FunctionId): Bool {
+  if isRuntimeSymbol(program, callee, "torb_list_set") {
+    return true
+  }
+  if !program.hasFunction(callee) {
+    return false
+  }
+  match forwardedCallee(program.functionAt(callee)) {
+    Some(inner) => isRuntimeSymbol program, inner, "torb_list_set"
+    None => false
+  }
+}
+
+/** Whether a function is the runtime function of this symbol. */
+fn isRuntimeSymbol(program: IrProgram, callee: FunctionId, symbol: String): Bool {
+  if !program.hasFunction(callee) {
+    return false
+  }
+  if const .Runtime(found) = program.functionAt(callee).kind {
+    return found == symbol
+  }
+  false
+}
+
+/** The callee of a body that is one call forwarding every parameter of this function, in its own position. */
+fn forwardedCallee(function: IrFunction): FunctionId? {
+  if function.blocks.length() != 1 {
+    return None
+  }
+  const instructions = function.blocks[0].instructions
+  if instructions.length() != 1 {
+    return None
+  }
+  const parts = match instructions[0] {
+    .Call(target, callee, arguments, witnesses, _) => {
+      if const Some(_) = target {
+        return None
+      }
+      if !witnesses.isEmpty() || arguments.length() != function.signature.parameters.length() {
+        return None
+      }
+      Forwarded callee, arguments
+    }
+    _ => {
+      return None
+    }
+  }
+  for index in 0..parts.arguments.length() {
+    const argument = parts.arguments[index]
+    if argument.slot != Slot(index) {
+      return None
+    }
+    if const Some(place) = argument.place {
+      if !isSameReference(place, Reference(Slot(index))) {
+        return None
+      }
+    }
+  }
+  Some parts.callee
+}
+
+/** One forwarding call: what it calls, and with what. */
+type Forwarded {
+  callee: FunctionId
+  arguments: List<Argument> = []
+}
+
+/**
+ * The slot the container was read into, where the instruction is the `Indexed.at` that defines the element from it.
+ *
+ * `program.elementReaders` is what says it is one: the lowering wrote the symbol of the member it dispatched there,
+ * so a copy `specializeFrozenCallees` made answers the same question and a two-argument call that only looks like an
+ * index read does not.
+ */
+fn takenReceiver(program: IrProgram, instruction: Instruction, element: Slot, key: Slot): Slot? {
+  match instruction {
+    .Call(target, callee, arguments, witnesses, _) => {
+      if target != Some(element) || !witnesses.isEmpty() || arguments.length() != 2 {
+        return None
+      }
+      if !isElementReader(program, callee) {
+        return None
+      }
+      if arguments[1].slot != key || hasPlace(arguments[0]) || hasPlace(arguments[1]) {
+        return None
+      }
+      Some arguments[0].slot
+    }
+    _ => None
+  }
+}
+
+/** Whether a callee is a member an index path takes its element out through, by the symbol the lowering recorded. */
+fn isElementReader(program: IrProgram, callee: FunctionId): Bool {
+  if !program.hasFunction(callee) {
+    return false
+  }
+  match program.functionAt(callee).origin {
+    Some(symbol) => program.elementReaders.contains symbol.value
+    None => false
+  }
+}
+
+/** Whether the instruction is the `Read` of exactly this container into exactly this slot. */
+fn readsContainerInto(instruction: Instruction, receiver: Slot, container: Reference): Bool {
+  if const .Read(target, reference) = instruction {
+    return target == receiver && isSameReference(reference, container)
+  }
+  false
+}
+
+/** The item type of a container that is the runtime's contiguous list, and `None` for everything else. */
+fn elementTypeOf(program: IrProgram, function: IrFunction, container: Reference): IrTypeId? {
+  var ignored: List<String> = []
+  const annotation = typeOfReference(program, function, ignored, "", container)?
+  if const .Runtime(kind, arguments) = program.typeAt(annotation) {
+    if kind == RuntimeKind.ListStorage && arguments.length() == 1 {
+      return Some arguments[0]
+    }
+  }
+  None
+}
+
+/** The message and the site an index out of range panics with. */
+type MissingKey {
+  missing: StaticId
+  at: LocationId
+}
+
+/**
+ * The panic `Indexed.at` would have produced, read out of its own body: the static it hands to `Option.expect`, and
+ * the site of the `panic` inside `expect`.
+ *
+ * It is read rather than written down because the message belongs to `std/core` and the back end may not decide it -
+ * `tests/conformance/collection-index.trb` pins it word for word, and the two shapes of the same write have to agree
+ * to the character. A body that does not have this shape answers `None`, and the round trip stays.
+ */
+fn missingKeyOf(program: IrProgram, instruction: Instruction): MissingKey? {
+  const reader = match instruction {
+    .Call(_, callee, _, _, _) => callee
+    _ => {
+      return None
+    }
+  }
+  if !program.hasFunction(reader) {
+    return None
+  }
+  const body = program.functionAt reader
+  for block in body.blocks {
+    for step in block.instructions {
+      if const .Call(_, callee, arguments, _, _) = step {
+        if arguments.length() != 2 {
+          continue
+        }
+        const missing = match staticBefore(body, arguments[1].slot) {
+          Some(found) => found
+          None => {
+            continue
+          }
+        }
+        if const Some(site) = panicSiteOf(program, callee) {
+          return Some MissingKey(missing, site)
+        }
+      }
+    }
+  }
+  None
+}
+
+/** The static a slot holds, where a `Constant` of this body is its only definition. */
+fn staticBefore(function: IrFunction, slot: Slot): StaticId? {
+  var found: StaticId? = None
+  for block in function.blocks {
+    for instruction in block.instructions {
+      if const .Constant(target, value) = instruction {
+        if target == slot {
+          if const Some(_) = found {
+            return None
+          }
+          found = Some value
+          continue
+        }
+      }
+      if definedSlot(instruction) == Some(slot) {
+        return None
+      }
+    }
+  }
+  found
+}
+
+/** Where `Option.expect` panics: the one `Panic` of its body, whose message is its own `message` parameter. */
+fn panicSiteOf(program: IrProgram, callee: FunctionId): LocationId? {
+  if !program.hasFunction(callee) {
+    return None
+  }
+  const body = program.functionAt callee
+  var found: LocationId? = None
+  for block in body.blocks {
+    for instruction in block.instructions {
+      if const .Panic(message, at) = instruction {
+        if message.slot != Slot(1) {
+          return None
+        }
+        if const Some(_) = found {
+          return None
+        }
+        found = Some at
+      }
+    }
+  }
+  found
+}
+
+/**
+ * Whether the container and the element belong to this one access and to nothing else: the container was read into a
+ * slot that only the take-out sees, the element is defined once and used only in between, and every use of it there
+ * is a **place**.
+ *
+ * A value read of the element is what this refuses. After the rewrite the slot is not written any more, so anything
+ * that reads it as a value would read a zero - and a pass that answered "close enough" would be a wrong program.
+ */
+fn isConfined(
+  function: IrFunction,
+  block: Int,
+  instructions: List<Instruction>,
+  take: Int,
+  putBack: Int,
+  receiver: Slot,
+  element: Slot,
+): Bool {
+  if touchesOutsideBlock(function, block, receiver) || touchesOutsideBlock(function, block, element) {
+    return false
+  }
+  for at in 0..instructions.length() {
+    const instruction = instructions[at]
+    if at != take - 1 && definedSlot(instruction) == Some(receiver) {
+      return false
+    }
+    if at != take && definedSlot(instruction) == Some(element) {
+      return false
+    }
+    if at != take && occurrences(usedSlots(instruction), receiver) > 0 {
+      return false
+    }
+    const used = occurrences usedSlots(instruction), element
+    if used == 0 {
+      continue
+    }
+    if at <= take || at > putBack {
+      return false
+    }
+    // The put-back reads it as the value it writes back, and that instruction goes away with the round trip
+    const allowed = if at == putBack { 1 } else { 0 }
+    if used != occurrences(referenceBasesOf(instruction), element) + allowed {
+      return false
+    }
+  }
+  true
+}
+
+/**
+ * Whether the path stays the path while the access runs: nothing between the take-out and the put-back defines the
+ * container's base or the key, and nothing writes through the container except the `MakeUnique` the put-back needed.
+ *
+ * Exclusivity already says no second access to the container is open (BACKEND 2.3). This asks the IR the same
+ * question, because that is what the rewrite depends on and it costs one walk.
+ */
+fn isUndisturbed(
+  instructions: List<Instruction>,
+  take: Int,
+  putBack: Int,
+  container: Reference,
+  key: Slot,
+): Bool {
+  var guarded = [container.base, key]
+  for step in container.steps {
+    if const .Element(_, index, _, _) = step {
+      guarded.add index
+    }
+  }
+  var at = take + 1
+  while at < putBack {
+    const instruction = instructions[at]
+    for slot in guarded {
+      if definedSlot(instruction) == Some(slot) {
+        return false
+      }
+    }
+    if at == putBack - 1 && isMakeUniqueOf(instruction, container) {
+      at = at + 1
+      continue
+    }
+    for reference in writtenReferencesOf(instruction) {
+      if reference.base == container.base {
+        return false
+      }
+    }
+    at = at + 1
+  }
+  true
+}
+
+/** Whether an instruction is exactly the `MakeUnique` of this place. */
+fn isMakeUniqueOf(instruction: Instruction, container: Reference): Bool {
+  if const .MakeUnique(reference) = instruction {
+    return isSameReference reference, container
+  }
+  false
+}
+
+// --- The rewrite ------------------------------------------------------------------------------------------------------
+
+/**
+ * The block with the round trip replaced by one `Element` step: the `Read`, the take-out, the put-back and the
+ * `MakeUnique` the put-back needed are gone, and every place that stood on the element now stands on the container.
+ *
+ * A `MakeUnique` of the element becomes the whole chain of owners the new path has, outermost first, which is what
+ * `makeOwnersUnique` emits for a path the lowering forms - the storage at the end of the path needs it as much as the
+ * container does, and only the instruction that writes knows that it writes.
+ */
+fn rewritten(
+  program: IrProgram,
+  function: IrFunction,
+  instructions: List<Instruction>,
+  found: ElementWrite,
+): List<Instruction> {
+  const step = PathStep.Element found.item, found.key, found.missing, found.at
+  var steps = found.container.steps
+  steps.add step
+  const prefix = Reference found.container.base, steps
+  var kept: List<Instruction> = []
+  for at in 0..instructions.length() {
+    if at == found.read || at == found.take || at == found.putBack {
+      continue
+    }
+    if at == found.putBack - 1 && found.hasOwnerUnique {
+      continue
+    }
+    const instruction = instructions[at]
+    if at <= found.take || at > found.putBack {
+      kept.add instruction
+      continue
+    }
+    if const .MakeUnique(reference) = instruction {
+      if reference.base == found.element {
+        kept.addAll ownersMadeUnique(program, function, substitutedReference(reference, found.element, prefix))
+        continue
+      }
+    }
+    kept.add substituted(instruction, found.element, prefix)
+  }
+  kept
+}
+
+/**
+ * Every `MakeUnique` a write through a path needs: one per counted owner along it, outermost first, the place itself
+ * last. It is `makeOwnersUnique` of `ir/lower/place.trb`, asked once the representations are final, so what it answers
+ * here is exact rather than conservative.
+ */
+fn ownersMadeUnique(program: IrProgram, function: IrFunction, reference: Reference): List<Instruction> {
+  var found: List<Instruction> = []
+  var ignored: List<String> = []
+  for count in 0..reference.steps.length() {
+    const owner = Reference reference.base, reference.steps[0..count]
+    if const Some(annotation) = typeOfReference(program, function, ignored, "", owner) {
+      // A box and a `lazy` cell are shared on purpose: copying one is exactly what must not happen
+      if isSharedStorage(program, annotation) {
+        continue
+      }
+      if isManagedType(program, annotation) {
+        found.add Instruction.MakeUnique(owner)
+      }
+    }
+  }
+  found.add Instruction.MakeUnique(reference)
+  found
+}
+
+/** One instruction with every place that stood on the element standing on the container's element instead. */
+fn substituted(instruction: Instruction, element: Slot, prefix: Reference): Instruction {
+  match instruction {
+    .MakeUnique(reference) => Instruction.MakeUnique substitutedReference(reference, element, prefix)
+    .Read(target, reference) => Instruction.Read target, substitutedReference(reference, element, prefix)
+    .Write(reference, value) => {
+      Instruction.Write substitutedReference(reference, element, prefix), value
+    }
+    .Call(target, callee, arguments, witnesses, at) => {
+      Instruction.Call(
+        target,
+        callee,
+        substitutedArguments(arguments, element, prefix),
+        substitutedWitnesses(witnesses, element, prefix),
+        at,
+      )
+    }
+    .CallClosure(target, callee, arguments) => {
+      Instruction.CallClosure target, callee, substitutedArguments(arguments, element, prefix)
+    }
+    .CallWitness(target, witness, member, arguments) => {
+      Instruction.CallWitness(
+        target,
+        substitutedWitness(witness, element, prefix),
+        member,
+        substitutedArguments(arguments, element, prefix),
+      )
+    }
+    .Construct(target, layout, variant, fields) => {
+      Instruction.Construct target, layout, variant, substitutedArguments(fields, element, prefix)
+    }
+    .TraitValue(target, value, tables) => {
+      Instruction.TraitValue target, value, substitutedWitnesses(tables, element, prefix)
+    }
+    _ => instruction
+  }
+}
+
+fn substitutedReference(reference: Reference, element: Slot, prefix: Reference): Reference {
+  if reference.base != element {
+    return reference
+  }
+  var steps = prefix.steps
+  steps.addAll reference.steps
+  Reference prefix.base, steps
+}
+
+fn substitutedArguments(arguments: List<Argument>, element: Slot, prefix: Reference): List<Argument> {
+  var found: List<Argument> = []
+  for argument in arguments {
+    match argument.place {
+      Some(place) => {
+        const moved = substitutedReference place, element, prefix
+        found.add argument.copy(slot: moved.base, place: Some(moved))
+      }
+      None => found.add argument
+    }
+  }
+  found
+}
+
+fn substitutedWitnesses(
+  witnesses: List<WitnessSource>,
+  element: Slot,
+  prefix: Reference,
+): List<WitnessSource> {
+  var found: List<WitnessSource> = []
+  for witness in witnesses {
+    found.add substitutedWitness(witness, element, prefix)
+  }
+  found
+}
+
+fn substitutedWitness(witness: WitnessSource, element: Slot, prefix: Reference): WitnessSource {
+  if const .Value(place, bound) = witness.root {
+    const moved = substitutedReference place, element, prefix
+    return witness.copy root: WitnessRoot.Value(moved, bound)
+  }
+  witness
+}
+
+// --- Reading the shape ------------------------------------------------------------------------------------------------
+
+/** The index of the one instruction before `at` that defines the slot, or -1 where there is none. */
+fn definitionOf(instructions: List<Instruction>, at: Int, slot: Slot): Int {
+  var found = -1
+  for index in 0..at {
+    if definedSlot(instructions[index]) == Some(slot) {
+      found = index
+    }
+  }
+  found
+}
+
+/** Whether an argument names a place, which is what makes it a `var` parameter rather than a value. */
+fn hasPlace(argument: Argument): Bool {
+  if const Some(_) = argument.place {
+    return true
+  }
+  false
+}
+
+/** Two places are the same place: the same base and the same steps, index slots included. */
+fn isSameReference(first: Reference, second: Reference): Bool {
+  if first.base != second.base || first.steps.length() != second.steps.length() {
+    return false
+  }
+  for index in 0..first.steps.length() {
+    if first.steps[index] != second.steps[index] {
+      return false
+    }
+  }
+  true
+}
+
+/** Every place an instruction names, whatever it does with it: the bases are what a substitution moves. */
+fn referenceBasesOf(instruction: Instruction): List<Slot> {
+  var found: List<Slot> = []
+  for reference in referencesOf(instruction) {
+    found.add reference.base
+  }
+  found
+}
+
+/** The places an instruction **writes** through, which is what may not touch a container while an access runs. */
+fn writtenReferencesOf(instruction: Instruction): List<Reference> {
+  match instruction {
+    .Write(reference, _) => [reference]
+    .MakeUnique(reference) => [reference]
+    .TakeOut(_, container, _, _) => [container]
+    .PutBack(container, _, _, _) => [container]
+    .Call(_, _, arguments, _, _) => placesOfArguments arguments
+    .CallClosure(_, _, arguments) => placesOfArguments arguments
+    .CallWitness(_, witness, _, arguments) => {
+      var found = placesOfArguments arguments
+      found.addAll placeOfWitness(witness)
+      found
+    }
+    _ => []
+  }
+}
+
+fn referencesOf(instruction: Instruction): List<Reference> {
+  match instruction {
+    .MakeUnique(reference) => [reference]
+    .Read(_, reference) => [reference]
+    .Write(reference, _) => [reference]
+    .TakeOut(_, container, _, _) => [container]
+    .PutBack(container, _, _, _) => [container]
+    .Call(_, _, arguments, witnesses, _) => {
+      var found = placesOfArguments arguments
+      for witness in witnesses {
+        found.addAll placeOfWitness(witness)
+      }
+      found
+    }
+    .CallClosure(_, _, arguments) => placesOfArguments arguments
+    .CallWitness(_, witness, _, arguments) => {
+      var found = placeOfWitness witness
+      found.addAll placesOfArguments(arguments)
+      found
+    }
+    .Construct(_, _, _, fields) => placesOfArguments fields
+    .TraitValue(_, _, tables) => {
+      var found: List<Reference> = []
+      for table in tables {
+        found.addAll placeOfWitness(table)
+      }
+      found
+    }
+    .Closure(_, _, captures, _) => {
+      var found: List<Reference> = []
+      for capture in captures {
+        if const .Place(reference) = capture {
+          found.add reference
+        }
+      }
+      found
+    }
+    _ => []
+  }
+}
+
+fn placesOfArguments(arguments: List<Argument>): List<Reference> {
+  var found: List<Reference> = []
+  for argument in arguments {
+    if const Some(place) = argument.place {
+      found.add place
+    }
+  }
+  found
+}
+
+fn placeOfWitness(witness: WitnessSource): List<Reference> {
+  if const .Value(place, _) = witness.root {
+    return [place]
+  }
+  []
+}
+
+/** How often a slot stands in a list of slots. */
+fn occurrences(slots: List<Slot>, slot: Slot): Int {
+  var count = 0
+  for found in slots {
+    if found == slot {
+      count = count + 1
+    }
+  }
+  count
+}
+
+/** Whether any block but this one, or any terminator at all, reads or defines the slot. */
+fn touchesOutsideBlock(function: IrFunction, block: Int, slot: Slot): Bool {
+  for index in 0..function.blocks.length() {
+    const found = function.blocks[index]
+    if occurrences(usedByTerminator(found.terminator), slot) > 0 {
+      return true
+    }
+    if index == block {
+      continue
+    }
+    for instruction in found.instructions {
+      if occurrences(usedSlots(instruction), slot) > 0 || definedSlot(instruction) == Some(slot) {
+        return true
+      }
+    }
+  }
+  false
+}

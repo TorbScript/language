@@ -1,0 +1,146 @@
+/**
+ * The element step: a write through `a[key]` that goes into the container's own storage instead of through a copy.
+ *
+ * The lowering writes every index on a `var` path as "take the element out with `Indexed.at`, change it, put it back
+ * with `MutableIndexed.set`" - the one form that works for a **trait-typed** container. Where the devirtualization has
+ * made the container the runtime's own list, `ir/elements.trb` replaces that round trip with one `PathStep.Element`,
+ * and what is asked here is both halves: the shapes that lose the round trip, and the shapes that may not.
+ *
+ * The `ArrayList` of `harness.trb` provides `get` and an `at` written like the default of `std/core`
+ * (`get(key).expect("Key does not exist")`), because the message and the site of that panic are what the step carries
+ * over - a container whose `at` does not say them keeps its copy.
+ */
+
+use test, group from "std/test"
+use irOf, ownedIrOf from "./lower-harness"
+
+const point = r"""
+  type Point {
+    var x: Int
+    var y: Int
+  }
+  """
+
+group "what loses the round trip" {
+  /**
+   * `points[index].y = value`: finding 4. The record never leaves the list - one `makeUnique` of the list, which is the
+   * ordinary one every write through a counted owner gets, and one store through the element's address.
+   */
+  test "a field of an element of a concrete list is a write through one step into the list" {
+    const source = "{point}\n\nfn write(var points: ArrayList<Point>) \{\n  points[0].y = 5\n\}"
+    assert(
+      ownedIrOf(source, "t_acme_x2f_app_main_write") == r"""
+        fn t_acme_x2f_app_main_write(var points: List(Record(T_acme_x2f_app_main_Point)) borrowed) -> Void {
+          slot %0 parameter points: List(Record(T_acme_x2f_app_main_Point))
+          slot %1 temporary: Int64
+          slot %2 temporary: Int64
+          slot %3 temporary: List(Record(T_acme_x2f_app_main_Point))
+          slot %4 temporary: Record(T_acme_x2f_app_main_Point)
+          slot %5 temporary: Void
+        b0: # acme/app/src/main.trb:7 body
+          %1 = constant s_literal__Int64_0
+          %2 = constant s_literal__Int64_5
+          makeUnique %0
+          write %0[%1].y = %2 borrowed
+          return
+        }"""
+    )
+  }
+
+  /**
+   * `grid[row][column] = value`: finding 3. The row is the grid's own storage, so the `set` writes through the address
+   * of the element and no row is ever read out, made unique or put back.
+   */
+  test "a nested index write is one step into the outer list and the `set` through it" {
+    const source = "fn write(var grid: ArrayList<ArrayList<Int>>) \{\n  grid[0][1] = 5\n\}"
+    assert(
+      ownedIrOf(source, "t_acme_x2f_app_main_write") == r"""
+        fn t_acme_x2f_app_main_write(var grid: List(List(Int64)) borrowed) -> Void {
+          slot %0 parameter grid: List(List(Int64))
+          slot %1 temporary: Int64
+          slot %2 temporary: Int64
+          slot %3 temporary: Int64
+          slot %4 temporary: List(List(Int64))
+          slot %5 temporary: List(Int64)
+          slot %6 temporary: Void
+        b0: # acme/app/src/main.trb:1 body
+          %1 = constant s_literal__Int64_0
+          %2 = constant s_literal__Int64_1
+          %3 = constant s_literal__Int64_5
+          makeUnique %0
+          call n_std_x2f_prelude_types_MutableIndexed_set__List_Int64_Int64_Int64(&%0[%1] borrowed, %2 borrowed, %3 borrowed) at acme/app/src/main.trb:2:3
+          return
+        }"""
+    )
+  }
+
+  /** A `var fn` of the inner container, reached through the path: the receiver is the element's own address. */
+  test "a method on an element writes through the element's address" {
+    const source = "fn grow(var rows: ArrayList<ArrayList<Int>>) \{\n  rows[0].add 7\n\}"
+    assert(
+      ownedIrOf(source, "t_acme_x2f_app_main_grow") == r"""
+        fn t_acme_x2f_app_main_grow(var rows: List(List(Int64)) borrowed) -> Void {
+          slot %0 parameter rows: List(List(Int64))
+          slot %1 temporary: Int64
+          slot %2 temporary: List(List(Int64))
+          slot %3 temporary: List(Int64)
+          slot %4 temporary: Int64
+          slot %5 temporary: Void
+        b0: # acme/app/src/main.trb:1 body
+          %1 = constant s_literal__Int64_0
+          %4 = constant s_literal__Int64_7
+          makeUnique %0
+          call n_std_x2f_prelude_types_List_add__List_Int64_Int64(&%0[%1] borrowed, %4 borrowed) at acme/app/src/main.trb:2:3
+          return
+        }"""
+    )
+  }
+}
+
+group "what keeps the copy" {
+  /**
+   * Two implementations meet in one place, so the container is a trait-typed value and its `at` and `set` are calls
+   * through the table it carries - which no `Element` step can reach, because a witness table says which members a
+   * value has and never that its payload is a `torb_list`. The element is read out, written in a slot of the frame and
+   * put back, exactly as it always was.
+   */
+  test "a container two implementations meet in keeps the take-out and the put-back" {
+    const source = "{point}\n\nfn chosen(flag: Bool, first: ArrayList<Point>, second: TrieList<Point>): List<Point> \{\n"
+      + "  if flag \{\n    first\n  \} else \{\n    second\n  \}\n\}\n\n"
+      + "fn write(flag: Bool, first: ArrayList<Point>, second: TrieList<Point>) \{\n"
+      + "  var points = chosen(flag, first, second)\n  points[0].y = 5\n  print points[0].y\n\}"
+    assert(
+      irOf(source, "t_acme_x2f_app_main_write") == r"""
+        fn t_acme_x2f_app_main_write(flag: Bool borrowed, first: List(Record(T_acme_x2f_app_main_Point)) borrowed, second: List(Record(T_acme_x2f_app_main_Point)) borrowed) -> Void {
+          slot %0 parameter flag: Bool
+          slot %1 parameter first: List(Record(T_acme_x2f_app_main_Point))
+          slot %2 parameter second: List(Record(T_acme_x2f_app_main_Point))
+          slot %3 local points: Object(List<Record(T_acme_x2f_app_main_Point)>)
+          slot %4 temporary: Int64
+          slot %5 temporary: Int64
+          slot %6 temporary: Object(List<Record(T_acme_x2f_app_main_Point)>)
+          slot %7 temporary: Record(T_acme_x2f_app_main_Point)
+          slot %8 temporary: Void
+          slot %9 temporary: Int64
+          slot %10 temporary: Record(T_acme_x2f_app_main_Point)
+          slot %11 temporary: Int64
+          slot %12 temporary: String
+        b0: # acme/app/src/main.trb:15 body
+          %3 = call t_acme_x2f_app_main_chosen(%0 borrowed, %1 borrowed, %2 borrowed) at acme/app/src/main.trb:16:16
+          %4 = constant s_literal__Int64_0
+          %5 = constant s_literal__Int64_5
+          %6 = read %3
+          %7 = callWitness value %6 bound 0 member 5(%4 borrowed)
+          write %7.y = %5 borrowed
+          makeUnique %3
+          callWitness value %3 bound 0 member 4(%4 borrowed, %7 borrowed)
+          %9 = constant s_literal__Int64_0
+          %10 = callWitness value %3 bound 0 member 5(%9 borrowed)
+          %11 = read %10.y
+          %12 = call t_std_x2f_prelude_types_Show_show__Int64(%11 borrowed) at acme/app/src/main.trb:18:9
+          intrinsic printParts %12 at acme/app/src/main.trb:18:3
+          return
+        }"""
+    )
+  }
+}

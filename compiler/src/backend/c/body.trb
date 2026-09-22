@@ -20,7 +20,7 @@
 use IrProgram, IrFunction, IrSignature, IrTypeId, LayoutId, FunctionId from "../../ir/ir"
 use Slot, SlotDeclaration, BlockId, Instruction, Terminator, Argument, WitnessSource from "../../ir/ir"
 use Reference, LocationId, RuntimeKind, WitnessRoot, WitnessTableId, Capture from "../../ir/ir"
-use ElementId, IrParameter from "../../ir/ir"
+use ElementId, IrParameter, StaticId, ElementDescriptor from "../../ir/ir"
 use Intrinsic, IntrinsicOperation, NumericKind, Ownership from "../../ir/ir"
 use usedSlots from "../../ir/verify"
 use Layout, isManagedType, containsCountedType, TextPartKind, textPartKindOf from "../../ir/layout"
@@ -198,7 +198,7 @@ fn markWitness(var reads: List<Bool>, witness: WitnessSource) {
 fn markReference(var reads: List<Bool>, reference: Reference) {
   markRead reads, reference.base
   for step in reference.steps {
-    if const .Element(_, index) = step {
+    if const .Element(_, index, _, _) = step {
       markRead reads, index
     }
   }
@@ -354,6 +354,91 @@ public fn signatureHeadOf(program: IrProgram, function: IrFunction): String {
   const written = if parameters.isEmpty() { "void" } else { parameters.joined separator: ", " }
   const result = returnTypeOf program, function
   "{qualifiersOf(program, function)}{declarationOf(result, "{function.name}({written})")}"
+}
+
+/**
+ * Which functions the emitter leaves out: a **copy** `specializeFrozenCallees` made that nothing in the program names
+ * any more.
+ *
+ * A copy exists for the direct call sites that could peel its signature, and nothing but a `Call` the devirtualization
+ * wrote ever points at one (`ir/devirtualize.trb`). `ir/elements.trb` removes the put-back of every index path it
+ * rewrites, and where that was the last call of a copy the copy is dead - and a `static` function a C compiler sees no
+ * reference to is an error under `-Wunused-function -Werror`, not merely a wasted body. So it is not emitted at all,
+ * which is also what the second ledger of finding 12 asks for.
+ *
+ * The answer is a **fixpoint**: a copy a kept function calls is kept, and a copy only another dead copy calls is not.
+ * Everything that is not a copy is kept whatever names it, because the emitter decides nothing about those.
+ */
+public fn keptFunctions(program: IrProgram): List<Bool> {
+  var kept: List<Bool> = []
+  for index in 0..program.functions.length() {
+    kept.add(!program.specializedFunctions.contains(index))
+  }
+  if program.specializedFunctions.isEmpty() {
+    return kept
+  }
+  // A table, a descriptor and a constant cell hold a function id the emitter writes out whatever calls it
+  for table in program.witnessTables {
+    for member in table.members {
+      keep kept, member
+    }
+  }
+  for descriptor in program.elements {
+    for member in descriptorFunctionsOf(descriptor) {
+      keep kept, member
+    }
+  }
+  var more = true
+  while more {
+    more = false
+    for index in 0..program.functions.length() {
+      if !kept[index] {
+        continue
+      }
+      for called in calledFunctionsOf(program.functions[index]) {
+        if called.value >= 0 && called.value < kept.length() && !kept[called.value] {
+          kept.set called.value, true
+          more = true
+        }
+      }
+    }
+  }
+  kept
+}
+
+/** Every function one body names: what it calls, what a  points at, and a constant cell's initializer. */
+fn calledFunctionsOf(function: IrFunction): List<FunctionId> {
+  var found: List<FunctionId> = []
+  if const .ConstantCell(initializer) = function.kind {
+    found.add initializer
+  }
+  for block in function.blocks {
+    for instruction in block.instructions {
+      match instruction {
+        .Call(_, callee, _, _, _) => found.add callee
+        .Closure(_, callee, _, _) => found.add callee
+        _ => {}
+      }
+    }
+  }
+  found
+}
+
+/** The functions an element descriptor names, each of which the emitter may call from the descriptor's helpers. */
+fn descriptorFunctionsOf(descriptor: ElementDescriptor): List<FunctionId> {
+  var found: List<FunctionId> = []
+  for candidate in [descriptor.retain, descriptor.release, descriptor.equals, descriptor.hash] {
+    if const Some(function) = candidate {
+      found.add function
+    }
+  }
+  found
+}
+
+fn keep(var kept: List<Bool>, callee: FunctionId) {
+  if callee.value >= 0 && callee.value < kept.length() {
+    kept.set callee.value, true
+  }
 }
 
 /**
@@ -2339,13 +2424,64 @@ public fn placeExpression(
         found = CExpression.Dereference found
         current = annotation
       }
-      .Element(_, _) => {
-        reportUnsupported emission, "an element of a list as a place"
-        return found
+      .Element(item, index, missing, location) => {
+        found = elementReferenceOf emission, program, body, found, current, item, index, missing, location
+        current = item
       }
     }
   }
   found
+}
+
+/**
+ * One `Element` step: the writable interior pointer to an element of a contiguous list, dereferenced, so that the
+ * rest of the path steps on from the element itself.
+ *
+ * `torb_list_element_reference` makes the storage unique before it answers, which is what makes the pointer safe to
+ * write through, and it panics with the message and the site the step carries - the language's own
+ * `Key does not exist` at `std/core/src/option.trb` and not a message of the runtime's (docs/PERFORMANCE.md,
+ * finding 3).
+ *
+ * # Pitfalls
+ *
+ * The expression holds a **call**, and a statement that names the same place twice - a write that releases what was
+ * there first, a `MakeUnique` of a boxed payload - calls it twice. Both calls answer the same pointer, because the
+ * first one already left the storage unique, so it is a cost and never a difference.
+ */
+fn elementReferenceOf(
+  var emission: Emission,
+  program: IrProgram,
+  body: Body,
+  container: CExpression,
+  annotation: IrTypeId,
+  item: IrTypeId,
+  index: Slot,
+  missing: StaticId,
+  location: LocationId,
+): CExpression {
+  if !isListStorage(program, annotation) {
+    reportUnsupported emission, "an element of a value that is no list as a place"
+    return container
+  }
+  const spelling = valueTypeOf program, item
+  const found = CExpression.Call(CExpression.Name("torb_list_element_reference"), [
+    CExpression.AddressOf(container),
+    slotExpression(body, index),
+    CExpression.Name(program.staticAt(missing).name),
+    locationExpression(program, location),
+  ])
+  CExpression.Dereference CExpression.Cast("{spelling} *", found)
+}
+
+/** Whether a type is the runtime's contiguous list, which is the one container an `Element` step steps into. */
+fn isListStorage(program: IrProgram, annotation: IrTypeId): Bool {
+  if !program.hasType(annotation) {
+    return false
+  }
+  if const .Runtime(kind, _) = program.typeAt(annotation) {
+    return kind == RuntimeKind.ListStorage
+  }
+  false
 }
 
 /** `->` where the value is the pointer to its counted block, `.` where the value is the block. */
@@ -2373,7 +2509,7 @@ public fn placeTypeOf(program: IrProgram, body: Body, reference: Reference): IrT
       .Contents(annotation) => {
         current = annotation
       }
-      .Element(item, _) => {
+      .Element(item, _, _, _) => {
         current = item
       }
     }

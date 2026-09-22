@@ -662,8 +662,13 @@ bool torb_list_get(torb_list list, int64_t index, void *out);
 /**
  * Make unique and answer a writable interior pointer to the element at `index`. This is the `Element` path step: the
  * pointer is valid for exactly the duration of the access that formed it (BACKEND 2.3).
+ *
+ * `missing` is the message an index out of range panics with, and `at` the site it is reported at. Both are the
+ * **language's**: `a[key]` is `Indexed.at`, whose body is `get(key).expect("Key does not exist")`, so the step hands
+ * over the very static that `expect` would have been given. A runtime message of its own would make the same program
+ * say two different things depending on whether the write went through a copy or through this pointer.
  */
-void *torb_list_element_reference(torb_list *list, int64_t index, torb_location at);
+void *torb_list_element_reference(torb_list *list, int64_t index, torb_text missing, torb_location at);
 
 /** Make the list's storage unique so a write may go through in place. */
 void torb_list_make_unique(torb_list *list);

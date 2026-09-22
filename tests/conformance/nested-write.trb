@@ -1,0 +1,162 @@
+use Process from "std/process"
+
+/**
+ * A write through `a[key]` that goes into the container's own storage: the `Element` path step of round P7
+ * (docs/PERFORMANCE.md, findings 3 and 4).
+ *
+ * Every write here is one the compiler rewrites from "take the element out, change it, put it back" into one step into
+ * the container, so what this program checks is that nothing about the **meaning** moved: the copy taken before a write
+ * still reads what it read, an element that carries a count is released exactly once, the element of a nested container
+ * is the container's own storage and not a copy of it, and a read-modify-write through a local is still a copy of the
+ * element and changes nothing.
+ *
+ * It ends with the leak gate on, which is the other half: an interior pointer that skips a release leaves a live block
+ * at exit.
+ */
+
+type Point with Show {
+  var x: Int
+  var y: Int
+
+  var fn shift(byX: Int) {
+    x = x + byX
+  }
+}
+
+/** A counted element, so that a write through the path has something to release. */
+type Label with Show {
+  var text: String
+  var hits: Int
+
+  var fn hit() {
+    hits = hits + 1
+  }
+}
+
+/** The grid comes out of a function, exactly as `benchmarks/nested-write` builds it. */
+fn grid(side: Int): List<List<Int>> {
+  var rows: List<List<Int>> = []
+  for _row in 0..side {
+    var cells: List<Int> = []
+    for _column in 0..side {
+      cells.add 0
+    }
+    rows.add cells
+  }
+  rows
+}
+
+/** `grid[row][column] = grid[row][column] + 1`: the shape the whole round is about. */
+fn nested() {
+  var rows = grid 3
+  for round in 0..2 {
+    for row in 0..3 {
+      for column in 0..3 {
+        rows[row][column] = rows[row][column] + row + column + round
+      }
+    }
+  }
+  print rows
+  print rows[2][2]
+}
+
+/** The same write, with a copy of the whole grid taken before it: the copy may not see the change. */
+fn kept() {
+  var rows = grid 2
+  const before = rows
+  rows[0][0] = 9
+  rows[1][1] = 8
+  print before
+  print rows
+}
+
+/** A nested container of counted elements: the inner list holds `String`s, so a lost release shows up as a leak. */
+fn counted() {
+  var rows = [["a", "b"], ["c", "d"]]
+  const before = rows
+  rows[0][1] = "zz"
+  rows[1][0] = rows[0][0] + "!"
+  print before
+  print rows
+}
+
+/** `points[index].y = v` and `points[index].shift(...)`: a field of an element, and a `var fn` on one. */
+fn records() {
+  var points = [Point(1, 2), Point(3, 4)]
+  const before = points
+  points[0].y = 100
+  points[1].shift 7
+  points[1].x = points[0].y + 1
+  print before
+  print points
+  var labels = [Label("a", 0), Label("bb", 0)]
+  const untouched = labels
+  labels[0].text = "ccc"
+  labels[1].hit()
+  labels[1].hit()
+  print untouched
+  print labels
+}
+
+/** `rows[index].add(value)`: a `var fn` of the inner container, reached through the path. */
+fn grown() {
+  var rows = [[1], [2]]
+  const before = rows
+  rows[0].add 10
+  rows[1].add 20
+  rows[0].add rows[1][0]
+  print before
+  print rows
+  var words = [["a"], ["b"]]
+  words[0].add "c"
+  print words
+}
+
+/**
+ * The read-modify-write through a local **stays a copy**, and that is the semantics and not a gap: `row` is a value of
+ * its own the moment it is bound, so what is written back is what this frame changed and the container is untouched in
+ * between.
+ */
+fn throughALocal() {
+  var rows = [[1, 2], [3, 4]]
+  var row = rows[0]
+  row.add 99
+  print rows
+  rows[0] = row
+  print rows
+}
+
+/** A `var` parameter whose argument is an element of a nested container. */
+fn bumped(var value: Int) {
+  value = value + 1
+}
+
+fn arguments() {
+  var rows = [[1, 2], [3, 4]]
+  bumped rows[1][0]
+  print rows
+  var points = [Point(1, 2)]
+  bumped points[0].y
+  print points
+}
+
+/** The last index of an empty-ended path: `a[key] = value` on a list of counted elements releases what was there. */
+fn released() {
+  var words = ["one", "two", "three"]
+  const before = words
+  words[1] = "TWO"
+  words[2] = words[0] + words[1]
+  print before
+  print words
+}
+
+nested()
+kept()
+counted()
+records()
+grown()
+throughALocal()
+arguments()
+released()
+
+Process.exit 0

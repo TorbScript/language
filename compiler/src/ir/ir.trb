@@ -396,8 +396,15 @@ public type PathStep {
   case Field(layout: LayoutId, index: Int)
   case Variant(layout: LayoutId, variant: Int, index: Int)
   case TupleField(layout: LayoutId, index: Int)
-  /** `Array<Item, Size>` and the contiguous list: an interior pointer after `MakeUnique`. */
-  case Element(item: IrTypeId, index: Slot)
+  /**
+   * `Array<Item, Size>` and the contiguous list: an interior pointer after `MakeUnique`.
+   *
+   * It carries the panic an index out of range produces, because that panic belongs to the **language** and not to a
+   * back end: `a[key]` is `Indexed.at`, whose body is `get(key).expect("Key does not exist")`, so `missing` is the
+   * very static that `expect` would have been handed and `at` the site of the `panic` inside it. A step that could not
+   * name both is never formed, and the read-copy-write stays (`ir/elements.trb`).
+   */
+  case Element(item: IrTypeId, index: Slot, missing: StaticId, at: LocationId)
   /** Dereference a boxed layout, a `Box`, a `Lazy` cell or a `shared` object. */
   case Contents(annotation: IrTypeId)
 }
@@ -663,6 +670,23 @@ public type IrProgram {
   private var elementIdentifiers: Map<String, ElementId> = [:]
   var statics: List<StaticValue> = []
   var locations: List<Location> = []
+  /**
+   * The members an index on a `var` path takes its element out through - `Indexed.at` - by the **symbol** of the
+   * declaration and not by the instance, so that a copy `specializeFrozenCallees` made answers the same question.
+   *
+   * `ir/elements.trb` reads it: a `Call` of one of these is an element read of the path the lowering formed and not
+   * an ordinary two-argument call that happens to look like one, which is what lets that pass replace the round trip
+   * with an `Element` step and keep the answer.
+   */
+  var elementReaders: Set<Int> = Set.of()
+  /**
+   * The functions `specializeFrozenCallees` copied, by index: a body no witness table, no closure and no descriptor
+   * names, which only a direct call the devirtualization wrote ever reaches.
+   *
+   * A back end reads it to leave out the ones that nothing calls any more - `ir/elements.trb` removes the put-back of
+   * every index path it rewrites, and that can be the last call a copy had.
+   */
+  var specializedFunctions: Set<Int> = Set.of()
   /** An instance key to the function it became: the memo of the monomorphization worklist. */
   var instances: Map<String, FunctionId> = [:]
   /** Instances that are known to be needed and not lowered yet. */

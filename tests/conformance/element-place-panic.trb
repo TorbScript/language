@@ -1,0 +1,23 @@
+use Process from "std/process"
+
+/**
+ * A **write** through `a[key]` whose index is out of range, which panics with the language's own message - the same one
+ * `tests/conformance/collection-index.trb` pins for a read.
+ *
+ * That is the whole point of the pairing: the write goes through an `Element` path step into the container's storage
+ * (docs/PERFORMANCE.md, finding 3) and the read goes through `Indexed.at`, and the two shapes may not say different
+ * things. `Indexed.at` is `get(key).expect("Key does not exist")`, so the step carries that static and the site of the
+ * `panic` inside `expect`, and this file is what says so out loud.
+ *
+ * The lines before it have to run, so the file also shows that the panic happens where it is written and not earlier.
+ */
+
+var rows = [[1, 2], [3, 4]]
+
+rows[1][0] = 9
+print rows
+rows[2][0] = 5
+print rows
+print "not reached"
+
+Process.exit 0

@@ -3273,6 +3273,56 @@ Wenn nicht, was bedeutet, bewirkt es?
     (`torb_list_element_reference` sagt etwas anderes), und `PathStep.Element` hat im C-Backend noch gar keine
     Umsetzung (`reportUnsupported`). Ebenso offen: die **zweite Hälfte von Befund 8**, die Bereichsprüfung von
     `a[index]`, denn die ist ein `Option`, das die Standardbibliothek baut, und kein `Intrinsic` mit einem Flag.
+  - **Erledigt (P7):** Befunde 3 und 4, der **Element-Schritt** - die letzte Runde vor der VM, damit sind P1 bis P8
+    fertig. Neu ist `compiler/src/ir/elements.trb`, ein Guckloch **nach** der Devirtualisierung und vor dem
+    Ownership-Pass: die Senkung schreibt jeden Index auf einem `var`-Pfad als "Element mit `Indexed.at` herausnehmen,
+    ändern, mit `MutableIndexed.set` zurücklegen" (die einzige Form, die auch für einen trait-typisierten Container
+    funktioniert), und wo der Container inzwischen die kontinuierliche Liste der Runtime ist, wird aus diesem Viergespann
+    **ein `PathStep.Element`** in den Speicher des Containers. Nichts wird mehr herausgenommen, nichts zurückgelegt, und
+    das Element hat nie einen zweiten Besitzer - also kopiert das `makeUnique` in der Mitte auch nichts mehr.
+    **Wie er entscheidet:** das Zurücklegen muss `torb_list_set` der Runtime sein (durch den Wrapper, über den jedes
+    `native fn` von `std/` sie erreicht), das Herausnehmen ein Member, das die **Senkung als Index-Leser vermerkt hat**
+    (`IrProgram.elementReaders`, über das Symbol, damit eine Kopie aus `specializeFrozenCallees` dasselbe Member ist),
+    der Container ein `Runtime(ListStorage, Item)`, das Element ohne anderen Besitzer, jede Verwendung dazwischen ein
+    **Platz** und kein Wertlesen, und dazwischen darf nichts den Container oder den Schlüssel anfassen. Was sich nicht
+    beweisen lässt, gilt als widerlegt; was der Pass ablehnt, behält die Kopie, die es immer hatte.
+    **Der Panic bleibt der der Sprache:** `a[key]` außerhalb des Bereichs sagt `Key does not exist` an
+    `std/core/src/option.trb`, weil `Indexed.at` `get(key).expect("Key does not exist")` ist - also trägt
+    `PathStep.Element` eine `StaticId` und eine `LocationId`, und der Pass liest **beide aus dem Rumpf, den der Aufruf
+    ausgeführt hätte** (die Konstante, die `at` an `expect` gibt, und die Stelle des `panic` in `expect`).
+    `torb_list_element_reference` nimmt die zwei entgegen; ein `at`, dessen Rumpf das nicht sagt, wird gar nicht erst
+    umgeschrieben. Zwei Dinge kamen dazu: der **Wert einer Zuweisung wird jetzt vor dem Pfad gesenkt** (die Schlüssel
+    zuerst in Quelltextreihenfolge, dann der Wert, dann der Zugriff - genau das, was BACKEND 2.3 über den Beginn eines
+    `var`-Zugriffs sagt; sonst erreichte `grid[r][c] = kaputt()` den Aufruf je nach Schreibform an zwei verschiedenen
+    Stellen), und eine Funktion, die in der Übersetzungseinheit **niemand nennt**, bekommt externe Bindung statt
+    `static` - sonst wäre die `_x24_direct`-Kopie, deren einzigen Aufruf dieser Pass entfernt, ein Fehler unter
+    `-Wunused-function -Werror`. **Die Map behält den Umweg:** ein `Element`-Schritt geht in kontinuierlichen Speicher,
+    und der Innenzeiger einer Tabelle ist `torb_map_slot` aus Runde P9 (Befund 10 sagt das jetzt ausdrücklich).
+    **Gemessen** mit `benchmarks/run.sh --allocations`, bestes aus je neun Läufen, vorher mit dem Compiler des vorigen
+    Commits: `nested-write` 926 913 -> **330 684** (-64%) und **7 688 813 -> 8 813 Allokationen**, 31,65 GB -> 13,3 MB
+    kopiert - die 8 813, die bleiben, sind der **Aufbau** des Gitters (800 Zeilen, die wachsen), das Schreiben selbst
+    allokiert gar nichts mehr; `record-write` 958 398 -> **394 118** (-59%) bei unveränderten 23 Allokationen, denn dort
+    war nie ein Block im Spiel, sondern das Lesen, das Kopieren des Records in beide Richtungen und der zweite
+    bereichsgeprüfte Aufruf pro Schreibzugriff. `map-count`, `list-index`, `list-iterate` und `pipeline` unverändert in
+    der Allokationsspalte (+3% bis +9% Zeit, das ist die Maschine zwischen zwei Sweeps - keines von ihnen schreibt durch
+    einen Index-Pfad). **Was übrig bleibt:** die Zeile eines `List<List<Int>>` ist weiterhin eine `Object`-Box, weil sie
+    *in* die äußere Liste geht und die Devirtualisierung einem Wert, der in einen Container gebaut wird, nicht folgen
+    darf - also ist ein Schreibzugriff ein `makeUnique` dieser Box an der Adresse des Elements plus ein indirekter
+    Aufruf, ohne Kopie und ohne Allokation. Das Einpacken **an der Verwendung statt an der Klasse** (Befund 2) wäre der
+    Rest. Ebenfalls Absicht: das Lesen-Ändern-Zurückschreiben über eine lokale Bindung (`var row = x[i] ... x[i] = row`)
+    **bleibt eine Kopie** - `row` ist in dem Moment ein eigener Wert, und das ist die Semantik und keine Lücke;
+    `tests/conformance/nested-write.trb` schreibt das ausdrücklich fest. **Neu an Tests:**
+    `compiler/tests/elements.test.trb` (beide Hälften: was den Umweg verliert, und ein Container, in dem zwei
+    Implementierungen zusammentreffen, der ihn behält), `tests/conformance/nested-write.trb` (jede Schreibform mit
+    Leak-Gate, plus der Beweis für Copy-on-Write: die vor dem Schreiben genommene Kopie liest weiter, was sie las) und
+    `tests/conformance/element-place-panic.trb` (ein **Schreibzugriff** außerhalb des Bereichs sagt wörtlich dasselbe wie
+    ein Lesezugriff, den `collection-index.trb` festhält - das ist unverändert grün). Die Miniatur-Prelude von
+    `compiler/tests/harness.trb` hat dafür `Option.expect` und ein `get`/`at` wie das echte bekommen. Das C des
+    Compilers selbst: **65 974 198** Bytes gegen 65 511 893 auf master (+0,7%, praktisch nur die neue Quelle - im
+    Compiler selbst feuert der Pass kaum, weil seine Tabellen in **Feldern** von Records liegen und darum boxed
+    bleiben). Gates: Tier A grün, Tier B grün (Konformanzsuite mit Leak-Gate, Fixpunkt hält in drei Schritten,
+    Runtime-Tests inklusive zweier neuer für `torb_list_element_reference`). **Offen bleibt** die zweite Hälfte von
+    Befund 8 (die Bereichsprüfung von `a[index]`), Befund 9/2 (ein trait-typisierter Wert in einem Feld) und P9 bis P12.
 
 - (Performance-Audit, 2026-09-22) Der obige Befund war der Anlass für eine systematische Messung: wo tut der erzeugte
   Code vermeidbare Arbeit? Ergebnis sind `docs/PERFORMANCE.md` (Kostenmodell, Zero-Cost-Vertrag mit hält/hält-nicht,
@@ -4021,3 +4071,11 @@ Wenn nicht, was bedeutet, bewirkt es?
   - **Nutzer: nicht `Sequence`** - Set und Map sind keine Sequenzen. Umbenennungsziel ist **`Iterate`** (Grundwort-Regel:
     `Hash` für `hash()`, also `Iterate` für `iterator()`); Alternative: `Iterable` als die eine benannte Ausnahme
     behalten. An die Runde weitergegeben; Nutzer kann noch widersprechen.
+- (Encoding - Reflection mit Umwegen?, 2026-09-22) **Nutzer:** das Encoding/Describe-Zeug klingt nach Reflection mit
+  Umwegen; wie machen es Scala/Rust, wo ist es am saubersten? **Antwort:** es ist das serde-Modell (Besucher-Paar,
+  vom Compiler pro Typ generiert, monomorphisiert, kein Laufzeit-Typ) plus die dritte Form `Describe`, die serde
+  fehlt und ZIO Schema als Laufzeit-Wert hat. Am saubersten: serde in der Trennung, ZIO Schema in der
+  Vollständigkeit; unser Design kombiniert beides. Was riecht: die Anpassungsleiter (Umbenennen usw.), dass nichts
+  nativ läuft, und sechs Namen. **Testfall für die Encoding-Neugestaltung (Nutzer):** ein Feld `snake_case`, der
+  Rest `MACRO_CASE` - muss eine Zeile bleiben (Format-Option + `map<Config> { field { _.userName }, as: "user_name" }`);
+  Stufe 4 der Leiter muss `skip`/`flatten`/`default`/`alias`/Varianten können, sonst rutscht alles auf Stufe 5.

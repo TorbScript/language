@@ -113,7 +113,9 @@ question about a width. Finding 8 has the numbers and says what is still on the 
 | `{ _ * factor }` stored, returned or kept by the callee | a code pointer and a heap environment | 1 release | **1** |
 | `numbers[index]` on a literal list | a direct call, `get`, an `Option`, `expect` | 0 | 0 |
 | `numbers[index] = v` | `MakeUnique`, a direct call | 1 per write | 0 |
-| `grid[row][column] = v` | read the row (retain), `MakeUnique` (**copies it**), write it back | 4 per write | **2 per write** |
+| `grid[row][column] = v` | `MakeUnique` of the grid, an `Element` step into it, the write through that address | 2 per write | 0 |
+| `points[index].y = v` | `MakeUnique` of the list, an `Element` step, one store | 1 per write | 0 |
+| `grid[row][column] = v` where the row is boxed at some other use | the same, plus one `MakeUnique` of the box at the element's address | 3 per write | 0 |
 | `for value in numbers` | a concrete cursor on the frame, a direct `next`, an `Option` per turn | 0 | 0 |
 | `for value in x` where two implementations meet in `x` | a boxed iterator, then `MakeUnique` and an indirect call per turn | 1 per turn | 1 per loop |
 | `"{a} and {b}"` of numbers, `Bool`, `Char` or text | one concatenation over the values themselves | 0 | **1** |
@@ -154,16 +156,16 @@ same machine code. Each row says **holds** or **does not hold** and names the ev
 | **A list literal, used as a list** | **does not hold** | The dispatch is gone and the rest is not: `numbers[index]` is still a bounds check, an `Option` and an `expect` per element against a load, and the C twin vectorizes its sum. `benchmarks/list-index` lost **31%** of its time (28.56x to 19.70x against its twin in one session) |
 | **The cursor of `for value in collection`** | **holds** | `slot %2 local iterator: Record(T_..._ListIterator__Int64)` and `%4 = call t_..._ListIterator_next__Int64(&%2 borrowed)`: no box, no `makeUnique` in the head, no indirect call. A list, a map, a set and a `String` all do this, and so does a user `Iterable`. `benchmarks/list-iterate` allocates **24 blocks** for 40 loops where it allocated 64 - the same 24 `benchmarks/list-index` allocates for the same data |
 | **`for value in collection` as a whole** | **does not hold** | The `Option` per turn and the cross-unit `torb_list_get` are what is left, and gcc cannot see through either: `list-iterate` is **44x** against a pointer walk that vectorizes, which is 1.9x the counted index loop over the same list. Round P11 (a `for` over a concrete list as a counted loop over `Element` steps) is what removes the rest |
-| **A field of a record in a list** | **does not hold** | `points[index].y = v` still reads the element out, writes the temporary and writes it back - two direct calls now instead of two indirect ones. `benchmarks/record-write` lost **31%** of its time |
-| **A nested index write** | **does not hold** | `grid[row][column] = v` copies the whole row, because the grid still holds it: **7 688 813 allocations and 31.7 GB copied** where the C twin does 803 and 5.1 MB. The element of a `List<List<Int>>` is storage the container owns, so it keeps its box |
+| **A field of a record in a list** | **does not hold**, and it is the *read* that is left | `points[index].y = v` is `makeUnique` of the list and one store through an `Element` step; the record never moves. `benchmarks/record-write` lost **59%** of its time for it and is **12.61x**, and what is left of the ratio is the `Indexed.at` on the right-hand side - a call, a bounds check and a copy of the record for one field |
+| **A nested index write** | **does not hold**, and no allocation is left | `grid[row][column] = v` writes into the grid's own storage: **7 688 813 allocations became 8 813** - all of them the construction of the grid - and 31.65 GB of copying became 13.3 MB. What is left is that the row of a `List<List<Int>>` is still an `Object` box - it goes *into* the outer list, which the devirtualization may not follow - so the write is one `makeUnique` of that box at the element's address and one indirect call |
 | **A pipeline of `map` and `filter`** | **does not hold** | Three allocations per pipeline instead of four, and one indirect call per stage per element: the stages are built around a trait-typed `self` in a **field**, which the devirtualization may not follow, so their cursors are still boxed although the outermost one is not. `benchmarks/pipeline` is **21.77x** |
 
 Every row that does not hold **used to** have one cause: a value whose concrete type the compiler knows, boxed behind a
-trait anyway. Round P5 removed that cause wherever the program decides the payload and round P6 removed the last of it
-that was a *signature* rather than a value, and what the rows above are now is what is underneath both: the `Option`
-round trip of every `next` and every `get` (a standard library question), the bounds check of an index (the half of
-finding 8 that is still open), the read-copy-write of an element (findings 3 and 4, round P7), and a trait-typed value
-in a **field**, which is what the stages of a pipeline are built around.
+trait anyway. Round P5 removed that cause wherever the program decides the payload, round P6 removed the last of it
+that was a *signature* rather than a value, and round P7 removed the read-copy-write of an element. What the rows above
+are now is what is underneath all three: the `Option` round trip of every `next` and every `get` (a standard library
+question), the bounds check of an index (the half of finding 8 that is still open), and a trait-typed value in a
+**field** - which is what the stages of a pipeline are built around and what the row of a `List<List<Int>>` still is.
 
 ---
 
@@ -176,14 +178,14 @@ worth, what it risks, and the test that pins it.
 |---|---------|------|-----|--------|
 | 1 | `x = f(x)` at the last use | was >231x, 120 006 allocations, 20 GB copied | a `Write` with no steps defines its base | **done, round P1** |
 | 2 | A collection literal is a trait-typed value | was 13x to 48x, one box per literal, one indirect call per access | a whole-program devirtualization over the IR | **done, round P5** |
-| 3 | A nested index write copies the row | >451x, 2 allocations per write | an `Element` path step into the concrete list | medium |
-| 4 | A field of a record in a list | 52x | the same `Element` path step | small, waits on 3 |
+| 3 | A nested index write copies the row | was >451x, 2 allocations per write | an `Element` path step into the concrete list | **done, round P7** |
+| 4 | A field of a record in a list | was 52x | the same `Element` path step | **done, round P7** |
 | 5 | `for` over a collection | was one box per loop and a `makeUnique` per turn | a copy of the frozen `iterator()` for the direct call sites | **done, round P6** |
 | 6 | String interpolation | was 3 allocations per interpolation | a text part that is still a number | **done, round P4** |
 | 7 | A non-escaping closure environment | was one allocation per closure made | the environment on the frame | **done, round P3** |
 | 8 | Overflow checks that cannot fire | was 2.37x on call-heavy code | a local range analysis over the IR | **done, round P8** for the arithmetic; the bounds check is open |
 | 9 | A pipeline of stages | 22x, three allocations per pipeline | a trait-typed value in a field | large |
-| 10 | A map read-modify-write, and `map[key].field = v` | 6.4x, the key hashed twice | `TakeOut`/`PutBack` on the map | medium |
+| 10 | A map read-modify-write, and `map[key].field = v` | 6.4x, the key hashed twice, and the value still copied | `TakeOut`/`PutBack` on the map | medium |
 | 11 | A `Release` of a literal text | was one call per list index read | a dead-count rule in the ownership pass | **done, round P2** |
 | 12 | Witness members that nothing calls | 24 thunks in a three-line program, and every table emitted | whole-program member liveness | large |
 | 13 | Reference counts cannot be inlined | measured: -14% to +9%, no decision | nothing yet | - |
@@ -318,12 +320,12 @@ implementations in one parameter keep the dispatch, and a member of a witness ta
 calls. `compiler/tests/lower-collections.test.trb` pins the loop whose cursor is concrete, and the conformance suite
 runs all 84 programs with the leak gate on.
 
-### F3. A nested index write copies the inner container
+### F3. A nested index write goes into the grid's own storage
 
 **Pattern.** `grid[row][column] = value`, `world.entities[id].health = 1`, `rows[i].add(x)`.
 
-**What is generated.** After round P5 the **outer** list is concrete and its `set` is a direct call; the row is an
-element of a container and therefore still a trait-typed value, so the copy is unchanged.
+**What was generated.** The **outer** list was concrete after round P5 and its `set` a direct call; the row is an
+element of a container and therefore a value the frame had a count of, so the `MakeUnique` in the middle copied it.
 
 ```text
 %10 = read %0
@@ -336,49 +338,62 @@ makeUnique %0
 call n_std_x2f_collections_list_ArrayList_set__...(&%0 borrowed, %4 borrowed, %11 owned last)
 ```
 
-**The cost.** O(width of the row) per write. `benchmarks/nested-write` writes 3 840 000 cells of an 800 x 800 grid and
-pays **7 688 813 allocations and 31.7 GB copied** for it, against 803 allocations and 5.1 MB in C: **two allocations per
-write** - the object box of the row and the row's storage - and two to three orders of magnitude of the time.
+**What is generated now.** `compiler/src/ir/elements.trb`, a peephole after `devirtualizeProgram`:
 
-**The fix.** `compiler/src/ir/lower/place.trb` says why it could not be done before round P5, in the doc comment of
-`TakenElement`: "the container of a path is almost always a **trait-typed** value ... whose payload the back end may not
-index". It is a concrete `Runtime(ListStorage, Item)` now, so the existing `Instruction.TakeOut` /
-`Instruction.PutBack` with `RuntimeKind.List` - or a `PathStep.Element` after one `MakeUnique` on the outer list, which
-is what BACKEND 1.6 writes down - replaces the read-copy-write round trip with an interior pointer.
-`torb_list_element_reference` is already in `runtime/list.c`.
+```text
+makeUnique %0
+makeUnique %0[%4]
+callWitness value %0[%4] bound 0 member 8(%7 borrowed, %13 borrowed)
+```
 
-**Three things a round that does it has to answer**, found while P6 and P8 were being written and recorded here so that
-the next one does not find them again:
+Nothing is taken out and nothing is put back. `%0[%4]` is a `PathStep.Element` into the grid's own storage, so the
+`makeUnique` on it finds a count of one - the grid is the only owner of the row - and copies nothing.
 
-1. **It is not a change of the lowering.** `takenElement` runs while the container is still `Object(List<Int>)`; the
-   devirtualization is what makes it concrete, and that is two passes later. So the rewrite is a peephole over the IR
-   *after* `devirtualizeProgram` - find the `Read` / `Indexed.at` / ... / `MutableIndexed.set` quadruple on one
-   concrete container in one block, and replace it with a `MakeUnique` plus a `PathStep.Element`.
-2. **The panic message is the language's, not the back end's.** `a[key]` out of range panics
-   `panic: Key does not exist` at `std/core/src/option.trb`, because `Indexed.at` is `get(key).expect("...")` and
-   `tests/conformance/collection-index.trb` pins it word for word. `torb_list_element_reference` panics
-   `index out of bounds` from `runtime/list.c` instead, so the element step may not simply call it: either the runtime
-   gains a form that takes the message and the location the `expect` carries, or the rewrite emits the bounds check
-   itself in the IR and keeps the `Panic` the lowering already built.
-3. **`PathStep.Element` is not emitted by the C back end yet.** `placeExpressionOf` in
-   `compiler/src/backend/c/body.trb` answers `an element of a list as a place` to `reportUnsupported`, so the step
-   exists in the IR, has a type rule in `placeTypeOf`, and has no C behind it.
+**How it decides.** The round trip the lowering writes is a `Read` of the container, `Indexed.at` into a slot of the
+frame, the access, and `MutableIndexed.set` back. The pass looks for exactly that quadruple inside one block and
+rewrites it only when all of this holds: the put-back is the runtime's own `torb_list_set` (through the wrapper that
+every `native fn` of `std/` reaches it by), the take-out is a member the **lowering recorded** as an index read
+(`IrProgram.elementReaders`, by symbol, so a copy `specializeFrozenCallees` made is the same member), the container is
+a `Runtime(ListStorage, Item)`, the element has no owner but the container, every use of the element in between is a
+**place** and not a value read, and nothing in between touches the container or the key. Everything that cannot be
+proved is proved false, and what the pass refuses keeps the copy it always had.
 
-**The gain.** The whole of it: from O(row) per write to one store, and from two allocations per write to none.
+**It is not a change of the lowering**, which is what the P6/P8 round wrote down here: `takenElement` runs while the
+container is still `Object(List<Int>)`, and the devirtualization is two passes later. One thing in the lowering did
+move: the **value of an assignment is lowered before the path is formed**, because a take-out is part of the *access*
+and BACKEND 2.3 says an access begins once everything the assignment needs has been evaluated - the keys first, in
+source order, then the value, then the access. Without it `grid[row][column] = failing()` would reach `failing()` at
+two different moments depending on whether the write went through the taken-out element or through the step.
 
-**The risk.** An interior pointer is only valid while no other write to the container can happen, which is exactly what
-exclusivity already guarantees (BACKEND 2.3) - so the risk is that the lowering forms the pointer *before* the arguments
-have been evaluated. That is the `items.removeAt(items.length() - 1)` case, and it is already written down.
+**The panic is the language's.** `a[key]` out of range panics `Key does not exist` at `std/core/src/option.trb`,
+because `Indexed.at` is `get(key).expect("Key does not exist")`. So `PathStep.Element` carries a `StaticId` and a
+`LocationId`, and the pass reads both **out of the body the call would have run**: the static that `at` hands to
+`expect`, and the site of the `panic` inside `expect`. `torb_list_element_reference` takes the two and panics with
+them, and a reader whose body does not say them is not rewritten at all.
 
-**The test.** A native program in `tests/conformance/` with a `.leaks`-style companion and an IR snapshot that
-asserts no `makeUnique` stands on a row the container still holds.
+**The cost it removed.** `benchmarks/nested-write` writes 3 840 000 cells of an 800 x 800 grid. It paid
+**7 688 813 allocations and 31.7 GB copied** for it, against 803 allocations and 5.1 MB in C. Section 4 has what it
+pays now: **8 813 allocations**, every one of them the construction of the grid, and 64% of the time gone.
 
-### F4. A field of a record in a list is a read-copy-write round trip
+**What is left.** The row of a `List<List<Int>>` is still an `Object` box, because it goes *into* the outer list and
+the devirtualization poisons a value that is built into a container. So a write is one `makeUnique` of that box at the
+element's address and one witness call through it - no copy and no allocation, and one indirect call. Boxing **at the
+use instead of at the class** (finding 2, "what is left on the table") is what would take the rest.
+
+**The risk.** An interior pointer is valid only while no other write to the container can happen, which is what
+exclusivity guarantees (BACKEND 2.3); the pass asks the IR the same question once more over the window it rewrites.
+
+**The test.** `compiler/tests/elements.test.trb` pins both halves: the shapes that lose the round trip, and a
+container two implementations meet in, which keeps it. `tests/conformance/nested-write.trb` runs every shape of the
+write with the leak gate on and proves copy on write - a copy taken before a write still reads what it read - and
+`tests/conformance/element-place-panic.trb` pins that a **write** out of range says what a read says.
+
+### F4. A field of a record in a list is one store through the list
 
 **Pattern.** `points[index].y = value` - how every entity-component loop is written.
 
-**What is generated.** `Indexed.at` into a temporary, `write %8.y`, then `MutableIndexed.set` back - both of them a
-direct call since round P5, and still a round trip:
+**What was generated.** `Indexed.at` into a temporary, `write %8.y`, then `MutableIndexed.set` back - both of them a
+direct call since round P5, and still a round trip that copies the record in each direction:
 
 ```text
 %8 = call t_std_..._Indexed_at__...(%7 borrowed last, %4 borrowed)
@@ -387,14 +402,28 @@ makeUnique %0
 call n_std_x2f_collections_list_ArrayList_set__...(&%0 borrowed, %4 borrowed, %8 borrowed)
 ```
 
-**The cost.** Two calls, two bounds checks and a copy of the record in each direction, for what is one store.
-`benchmarks/record-write` lost **31%** of its time when the two calls became direct (75.60x to 52.43x against its twin
-in one session); what is left is the round trip itself.
+**What is generated now.** The same `Element` step as finding 3, and the record never moves:
 
-**The fix.** The same as finding 3: an `Element` path step into the concrete list, so the write goes through an interior
-pointer and the record never moves.
+```text
+%7 = call t_std_..._Indexed_at__...(%0 borrowed, %4 borrowed)
+%8 = read %7.x
+%9 = constant s_literal__Int64_1
+%10 = intrinsic add.i64 %8, %9
+makeUnique %0
+write %0[%4].y = %10 borrowed
+```
 
-**The gain.** From about seventy times C to about one.
+The `makeUnique %0` is the ordinary one the ownership pass inserts for every counted owner on the path of a write; the
+element itself is an inline record and carries no count, so there is nothing else to make unique.
+
+**The cost it removed.** `benchmarks/record-write` writes 30 000 000 fields: **958 398 microseconds to 394 118**, a
+**59%** cut, with the same 23 allocations - what went away is not a block but the read, the copy and the second
+bounds-checked call per write. Against its C twin it is **12.61x**, where it was 28.71x before the round and 75.60x
+before round P5.
+
+**What is left.** The read on the right-hand side (`made[index].x`) is still `Indexed.at`, which is a call, a bounds
+check and a copy of the whole record for one field. That is the *read* half, and it is the open half of finding 8 plus
+the `Option` of `get` - not this finding.
 
 **The risk.** As finding 3.
 
@@ -681,7 +710,9 @@ one.
 ### F10. A map read-modify-write is two probes, and a write through `map[key]` is four
 
 **Pattern.** `const seen = counts.get(word) ?? 0` then `counts.set word, seen + 1` - the word counter every program
-has. And `byName[key].count = 5`.
+has. And `byName[key].count = 5`, which round P7 left here on purpose: an `Element` step reaches the contiguous list
+and nothing else, so a write through a **map** is still the take-out and the put-back of two members, with the value
+copied in each direction. The interior pointer a map needs is `torb_map_slot`, and that is this round.
 
 **What is generated.** The map is a concrete `Map(Key, Value)` since round P5 and both probes are direct calls of the
 runtime's own functions, so what is left is that there are **two** of them:
@@ -702,6 +733,11 @@ this and are reached by nothing - plus a `torb_map_slot` in `runtime/map.c` that
 the next write to the table. The receiver is concrete now, which is what the instructions needed. For the
 read-modify-write, a `Map` member that reaches the same mechanism (`getOrInsert`, or `update(key) { }`), so that a user
 who writes the two-step form keeps it and a user who writes the one-step form gets one probe.
+
+**What round P7 leaves for it.** The *shape* is written down now: `ir/elements.trb` recognizes the take-out and the
+put-back of an index path and replaces them with a place, and it refuses a map because a key is not an index and
+`PathStep.Element` steps into contiguous storage. A map wants its own step or the two instructions, and the pass that
+finds the round trip is the same walk either way.
 
 **The gain.** Half the probes of a map-heavy program, and the copy of the value in each direction.
 
@@ -816,27 +852,42 @@ initializer is not static data is built once and read with a retain, in both bac
 
 Windows 11, 16 cores, gcc 13.2.0 (MinGW-W64 x86_64-ucrt-posix-seh), `-std=c11 -O2 -g0 -Wall -Wextra`. Both sides are
 built by a `torb` binary directly (`TORB_COMPILER=`), **before** by the compiler of the previous commit and **after** by
-the compiler rounds P6 and P8 produced, so the two columns differ by these two rounds and by nothing else. Times are the
-fastest of **nine** runs, in microseconds, net of the process floor that `nothing.trb` measures.
+the compiler round P7 produced. Times are the fastest of **nine** runs, in microseconds, net of the process floor that
+`nothing.trb` measures.
+
+**Round P7 re-measured the six programs a place, an element or a collection is in**; the six that hold none - the whole
+top half of the table - were left at what the P6/P8 sweep measured, because nothing this round changed can reach them.
+A row whose before and after come from different sweeps says so in the last column.
 
 The **c** column is the after sweep's; the before sweep measured the same binaries and got numbers between 0.8x and 1.3x
 of these, which is what one machine does to itself between two sweeps. **Read the torb column and the allocation
 column**; the ratio says where a row stands today and not how it moved.
 
-| Program | torb before | torb after | c | ratio after | allocations before | after |
-|---------|------------:|-----------:|--:|------------:|-------------------:|------:|
-| `arithmetic` | 201 097 | 189 885 | 183 664 | **1.03x** | 3 | 3 |
-| `closure` | 156 926 | 143 397 | 160 362 | **0.89x** | 3 | 3 |
-| `wrapper` | 177 129 | 175 669 | 172 798 | **1.01x** | 3 | 3 |
-| `interpolation` | 280 192 | 270 840 | 163 574 | **1.65x** | 2 000 003 | 2 000 003 |
-| `call-depth` | 384 121 | 378 353 | 147 812 | **2.55x** | 3 | 3 |
-| `accumulate` | 4 255 | 1 347 | under 2 000 | **>0.67x** | 19 | 19 |
-| `map-count` | 321 215 | 315 487 | 59 758 | **5.27x** | 50 108 | **50 048** |
-| `list-index` | 319 127 | 285 693 | 19 008 | **15.03x** | 24 | 24 |
-| `pipeline` | 775 016 | 730 042 | 32 895 | **22.19x** | 105 | **85** |
-| `record-write` | 964 893 | 917 379 | 33 083 | **27.72x** | 23 | 23 |
-| `list-iterate` | 973 316 | 824 263 | 19 557 | **42.14x** | 64 | **24** |
-| `nested-write` | 1 037 760 | 937 333 | 4 114 | **227.83x** | 7 688 813 | 7 688 813 |
+| Program | torb before | torb after | c | ratio after | allocations before | after | sweep |
+|---------|------------:|-----------:|--:|------------:|-------------------:|------:|-------|
+| `arithmetic` | 201 097 | 189 885 | 183 664 | **1.03x** | 3 | 3 | P6/P8 |
+| `closure` | 156 926 | 143 397 | 160 362 | **0.89x** | 3 | 3 | P6/P8 |
+| `wrapper` | 177 129 | 175 669 | 172 798 | **1.01x** | 3 | 3 | P6/P8 |
+| `interpolation` | 280 192 | 270 840 | 163 574 | **1.65x** | 2 000 003 | 2 000 003 | P6/P8 |
+| `call-depth` | 384 121 | 378 353 | 147 812 | **2.55x** | 3 | 3 | P6/P8 |
+| `accumulate` | 4 255 | 1 347 | under 2 000 | **>0.67x** | 19 | 19 | P6/P8 |
+| `map-count` | 302 997 | 312 830 | 54 061 | **5.78x** | 50 048 | 50 048 | P7 |
+| `record-write` | 958 398 | **394 118** | 31 233 | **12.61x** | 23 | 23 | P7 |
+| `list-index` | 299 674 | 309 942 | 23 384 | **13.25x** | 24 | 24 | P7 |
+| `pipeline` | 749 717 | 814 379 | 35 514 | **22.93x** | 85 | 85 | P7 |
+| `list-iterate` | 877 448 | 901 738 | 23 066 | **39.09x** | 24 | 24 | P7 |
+| `nested-write` | 926 913 | **330 684** | 1 627 | **>165.34x** | 7 688 813 | **8 813** | P7 |
+
+What round P7 moved, in the column that is a property of the program and not of the machine:
+
+| Program | allocations | bytes copied | torb time | what the element step removed |
+|---------|------------:|-------------:|----------:|-------------------------------|
+| `nested-write` | 7 688 813 to **8 813** | 31.65 GB to **13.3 MB** | **-64%** | the copy of the whole row per write, and the object box that copy needed. What is left is the **construction** of the grid - 800 rows grown from nothing - so the writes themselves allocate nothing at all |
+| `record-write` | unchanged at 23 | 33.55 MB, unchanged | **-59%** | the read of the element, the copy of the record in each direction and the second bounds-checked call per write. No block was ever involved: a `Point` is inline |
+| `map-count`, `list-index`, `list-iterate`, `pipeline` | unchanged | unchanged | +3%, +3%, +3%, +9% | nothing - none of them writes through an index path. The moves are the machine between two sweeps, and the allocation column says so |
+
+The C twin of `nested-write` measured 1 627 microseconds in this sweep against 9 005 in the before sweep, which is the
+noise the section below warns about; the torb column and the allocation column are what this row says.
 
 What rounds P6 and P8 moved, in the column that is a property of the program and not of the machine:
 
@@ -901,7 +952,7 @@ Each round is one agent's work, in this order. A round names the files it touche
 | **P4** | F6: a text part that is still a number | `ir/layout.trb`, `ir/lower/text.trb`, `ir/verify.trb`, `backend/c/body.trb`, `runtime/text.c` | **done** | - |
 | **P5** | F2: the whole-program devirtualization | new `ir/devirtualize.trb`, `ir/lower/lower.trb`, `backend/c/body.trb`, `backend/c/emit.trb`, `runtime/map.c` | **done** | - |
 | **P6** | F5: a copy of the frozen `iterator()` for the direct call sites | `ir/devirtualize.trb` | **done** | - |
-| **P7** | F3 and F4: an `Element` path step into a concrete list | `ir/lower/place.trb` (as a peephole after the devirtualization), `backend/c/body.trb`, `runtime/list.c` | a native program with a `.leaks`-style companion, an IR snapshot, `benchmarks/nested-write` | yes |
+| **P7** | F3 and F4: an `Element` path step into a concrete list | new `ir/elements.trb`, `ir/ir.trb`, `ir/lower/place.trb`, `backend/c/body.trb`, `runtime/list.c` | **done** | - |
 | **P8** | F8: the range analysis that removes an overflow check that cannot fire | new `ir/ranges.trb`, `ir/ir.trb`, `ir/print.trb`, `backend/c/body.trb` | **done** for the arithmetic; the bounds check of `a[index]` is open | - |
 | **P9** | F10: `TakeOut`/`PutBack` on the map, and the member that reaches it | `ir/lower/place.trb`, `runtime/map.c`, `std/collections` | an IR snapshot, `benchmarks/map-count` | after the VM |
 | **P10** | F12: a witness member nothing calls is not emitted | `ir/witness.trb`, `ir/instances.trb`, `ir/verify.trb` | the fixpoint, a size budget | after the VM |
@@ -909,21 +960,24 @@ Each round is one agent's work, in this order. A round names the files it touche
 | **P12** | F13 again, on the code P5 to P7 leave behind | `runtime/include/torb.h` | the benchmark table | after the VM |
 
 **Before milestone 7** are P1 to P8: each of them is a property of the IR or of the runtime that the VM will read the
-same way, so doing them first means the VM is written against the shape that stays. P1 to P6 and P8 are done and the
-rows they moved are in section 4; **P7 is the one that is left** before the VM. **After** are P9 to P12: P9 and P11
-change what a construct lowers to and are better decided once there are two back ends to answer to, P10's whole-program
-dead-member scan is a code-size fix that only the C back end pays for, and P12 is a measurement whose answer changes
-once P7 has run.
+same way, so doing them first means the VM is written against the shape that stays. **All eight are done**, and the
+rows they moved are in section 4. **After** are P9 to P12: P9 and P11 change what a construct lowers to and are better
+decided once there are two back ends to answer to, P10's whole-program dead-member scan is a code-size fix that only
+the C back end pays for, and P12 is a measurement whose answer P7 has just changed - the copies it removed are what
+finding 13 was waiting on.
 
 Finding 9 (the pipeline) has no round of its own: what is left of it is a trait-typed value in a **field**, which is
 the one place the devirtualization may not go, and `benchmarks/pipeline` is how it is read.
 
-**What P6 and P8 left for P7.** P7 no longer waits on anything and is the last round before the VM. Its shape is
-unchanged and cheaper than it was - the outer container of `grid[row][column] = v` and of `points[index].y = v` is a
-concrete `Runtime(ListStorage, Item)`, which is exactly the receiver `Instruction.TakeOut`/`PutBack` and a
-`PathStep.Element` need - and finding 3 now names the three things it has to answer: the rewrite is a peephole *after*
-the devirtualization and not a change of the lowering, the panic of an index out of range belongs to `std/core` and has
-to stay `Key does not exist` at `option.trb`, and `PathStep.Element` has no C behind it yet.
+**What P7 built.** A new pass, `compiler/src/ir/elements.trb`, between the devirtualization and the ownership
+pass: it finds the take-out and the put-back of an index path on a concrete list and replaces them with one
+`PathStep.Element`, which the C back end now emits as `torb_list_element_reference`. The step carries the static and
+the site of the panic `Indexed.at` would have produced, read out of that body, so the message stays the one
+`std/core` decides. Two
+things came with it: the value of an assignment is lowered **before** its path is formed (BACKEND 2.3's own rule for
+when an access begins), and a function nothing in the translation unit names is emitted with external linkage, because
+a pass that removes the last call of one would otherwise make the C stop compiling. **A map keeps the round trip:** an
+`Element` step steps into contiguous storage, and the interior pointer a table needs is P9's `torb_map_slot`.
 
 **What is left of P8.** The **bounds check** half. The interval facts are there and the analysis is written down; what
 is missing is a second path through `Indexed.at`, because the check of `a[index]` is an `Option` the standard library

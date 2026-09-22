@@ -150,6 +150,39 @@ public fn referenceAt(
   target: Expression,
   what: String,
 ): PlacePath? {
+  const prelude = match pathPreludeAt(lowering, builder, target, what) {
+    Some(found) => found
+    None => {
+      return None
+    }
+  }
+  referenceFrom lowering, builder, prelude, what, target.span
+}
+
+/**
+ * The half of a path that is **evaluated**: where it starts, and the key of every `a[key]` on it, each lowered once
+ * and in source order.
+ *
+ * It is a half of its own because the two halves happen at different moments. The keys are subexpressions of the
+ * assignment and are evaluated with everything else it needs; the take-out of an element is part of the **access**,
+ * which begins once all of that is done (BACKEND 2.3). `lowerPlaceAssignment` is the one caller that needs the two
+ * apart, and it lowers the value in between.
+ */
+public type PathPrelude {
+  root: PlacePath
+  /** The steps the checker wrote down, which is what the second half walks. */
+  steps: List<PlaceStep> = []
+  /** One slot per `a[key]` on the path, outermost first. */
+  keys: List<Slot> = []
+}
+
+/** The root and the keys of the path the checker recorded under an expression. */
+public fn pathPreludeAt(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  target: Expression,
+  what: String,
+): PathPrelude? {
   const at = target.span
   const place = match placeRecordedAt(lowering, at) {
     Some(found) => found
@@ -170,7 +203,18 @@ public fn referenceAt(
       return None
     }
   }
-  steppedFrom lowering, builder, root, place.steps, keys, what, at
+  Some PathPrelude(root, place.steps, keys)
+}
+
+/** The other half: every step walked, and every `a[key]` on the way taken out of its container. */
+public fn referenceFrom(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  prelude: PathPrelude,
+  what: String,
+  at: Span,
+): PlacePath? {
+  steppedFrom lowering, builder, prelude.root, prelude.steps, prelude.keys, what, at
 }
 
 /** The path the checker wrote down under a span, or `None` where it wrote none. */
@@ -515,6 +559,9 @@ fn takenElement(
   if !lowering.isSupported {
     return None
   }
+  // Which member this was, so that `ir/elements.trb` can recognize the round trip once the container is concrete and
+  // replace it with one `Element` step - by the symbol, because a specialized copy of it is the same member
+  lowering.program.elementReaders.add reader.member.value
   Some TakenElement(container, key, element, setter, at)
 }
 
@@ -669,6 +716,12 @@ public fn collidesWithPlace(destination: Slot?, places: List<Reference?>): Bool 
  * the checker recorded. The write **releases what was there** before it stores the new value, which is the contract the
  * value operand of a write carries (BACKEND 5.4) and the reason an assignment through a `var` parameter may not simply
  * compute into its slot.
+ *
+ * The **value goes first**, and only then is the path formed. That is what BACKEND 2.3 says a `var` access is - the
+ * access begins once everything the call needs has been evaluated, "not when the path is formed" - and for a path with
+ * an index it is load bearing: `points[index].y = failing()` has to reach `failing()` at the same point whether the
+ * write goes through the taken-out element or through the `Element` step `ir/elements.trb` replaces it with. A path
+ * without an index evaluates nothing at all, so for `p.x = 1` the order is no order.
  */
 public fn lowerPlaceAssignment(
   var lowering: Lowering,
@@ -684,13 +737,24 @@ public fn lowerPlaceAssignment(
       return
     }
   }
-  const path = match referenceAt(lowering, builder, target, "an assignment") {
+  const what = "an assignment"
+  const prelude = match pathPreludeAt(lowering, builder, target, what) {
     Some(found) => found
     None => {
       return
     }
   }
-  writtenPlace lowering, builder, path, value
+  const written = lowerValue lowering, builder, value
+  if !lowering.isSupported {
+    return
+  }
+  const path = match referenceFrom(lowering, builder, prelude, what, target.span) {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  emit builder, Instruction.Write(path.reference, borrowed(written))
   putBackElements lowering, builder, path.taken
 }
 
@@ -711,7 +775,10 @@ fn isIndexedTarget(place: Place): Bool {
  * `set`, by the very machinery a `var` argument uses.
  *
  * The order is what evaluation order asks for (docs/BACKEND.md, Evaluation order is only half specified): the place's
- * own subexpressions first - every key, in source order, before the access begins - then the value, then the write.
+ * own subexpressions first - every key, in source order - then the value, and only then the access, which is where the
+ * take-out of every index in front of the last one belongs (BACKEND 2.3). So `grid[y][x] = failing()` reaches
+ * `failing()` before it reads the row, and the two shapes the write can take - the taken-out element and the `Element`
+ * step of `ir/elements.trb` - panic in the same order.
  */
 fn lowerIndexAssignment(
   var lowering: Lowering,
@@ -750,12 +817,6 @@ fn lowerIndexAssignment(
       return
     }
   }
-  const path = match steppedFrom(lowering, builder, root, steps[0..last], keys[0..keys.length() - 1], what, at) {
-    Some(found) => found
-    None => {
-      return
-    }
-  }
   const subject = substituted lowering, container
   const setter = match indexedMemberOf(lowering, subject, true, "set", what, at) {
     Some(found) => found
@@ -766,6 +827,12 @@ fn lowerIndexAssignment(
   const written = lowerValue lowering, builder, value
   if !lowering.isSupported {
     return
+  }
+  const path = match steppedFrom(lowering, builder, root, steps[0..last], keys[0..keys.length() - 1], what, at) {
+    Some(found) => found
+    None => {
+      return
+    }
   }
   const places: List<Reference?> = [Some(path.reference), None, None]
   const operands = [path.reference.base, key, written]
