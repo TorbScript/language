@@ -3683,3 +3683,11 @@ Wenn nicht, was bedeutet, bewirkt es?
     statisches Trait-Mitglied über eine Schranke (`Value.tryFrom(text)`) prüft UND baut nativ, anders als
     `docs/ENCODING.md` Abschnitt 13 nahelegt. Sieben Scheiben; Geschmacksfragen offen (u.a. ob ein universeller
     Öffner `open(uri)` gewollt ist - das Dokument lässt `std/fs` bei `Path`).
+  - **Zu URI.md Abschnitt 15 (ich, Nutzer kann widersprechen):** 2 `Uri` ins Prelude - ja, mit `Path`. 3 `Identifier`
+    (volles Wort). 4 UUIDv7 Default - ja. 5 `reference.resolved(against: base)`. 6 Nicht-ASCII-Host ablehnen bis
+    IDNA - ja. **Offen (Nutzer): Frage 1** - der Agent hält `std/fs` auf `Path` (nur http nimmt `Uri`); der Nutzer
+    hatte "FS-Abstraktionen nehmen URIs" gesagt. Mein Vorschlag B: `std/fs` nimmt `Uri` UND `Path` (Überladung;
+    Nicht-`file:`-Schema ist ein Fehler); ein universeller Öffner (C) wäre ein Package obendrauf.
+  - Befunde eingeplant: `std/random` fehlt; `UInt8` ohne Zahlkonversion (std/number); `fn main()` im Entry-Modul
+    erzeugt kaputtes C statt Meldung; `Into<Uri>` nativ zwei interne Fehler; Kapsel-Regel kann ihr Decode-Paar nicht
+    benennen (bricht, sobald IDNA `Path→Uri` unfehlbar macht - zusammen mit IDNA lösen).
