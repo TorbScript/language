@@ -3802,3 +3802,12 @@ Wenn nicht, was bedeutet, bewirkt es?
     dann nicht mehr verlustfrei), und ob std `Cache`/`Connection` schon vor dem ersten Treiber tragen soll.
   - **URI.md Fragen 7/8 (ich):** 7 redigierendes `show()` - ja (Passwort im Crash-Report ist der schlimmere Fehler,
     `text()` ist die volle Form). 8 `Cache`/`Connection` in std ohne Treiber - nein, erst mit zwei Treibern (wie Deque).
+- (`Into` von Hand, 2026-09-22) **Zurückgestellt (Nutzer): "nach den anderen offenen Themen noch mal drüber sprechen".**
+  Wunsch: `extend Celsius with From<F>` UND `extend Celsius with Into<F>` auf dem eigenen Typ statt
+  `extend F with From<Celsius>` (Kohärenz-Regel 2, eigener Typ als Trait-Argument). Baubar: `Into` wird
+  handschreibbar, die Blanket wird eine Zwei-Richtungs-Verbindung im Lookup (`x.into()` und `Target.from(x)` suchen
+  beide Formen), "nur eines von beiden" folgt aus Regel 4 (Überlappung mit der abgeleiteten Implementierung, Meldung
+  wie Regel 7). Kosten: zweite Schreibweise für dieselbe Konversion, zwei Lookups, Paarsuche der Kapsel-Regel muss
+  beide Formen zählen. Meine Empfehlung: nicht bauen, Regel 2 lassen ("das Ziel implementiert `From`" ohne Ausnahme).
+  Auch offen dabei: Regel 2 ganz streichen (jede Implementierung hat genau einen Autor; Preis: `Float64.from(celsius)`
+  nur noch über eine Fabrik).
