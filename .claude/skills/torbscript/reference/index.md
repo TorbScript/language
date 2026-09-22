@@ -1,6 +1,7 @@
 # The TorbScript documentation
 
-Every page of the reference, with what it answers. Open the one page that answers the question.
+Every page of the reference, with what it answers. Search this file for a word, then open the one page
+that answers the question. A page marked (planned) describes a feature that does not compile yet.
 
 ## Contents
 
@@ -109,13 +110,18 @@ Every page of the reference, with what it answers. Open the one page that answer
 
 ## language/concurrency-and-streams
 
+- `language/concurrency-and-streams/channels.md` - **Channels** (reference, planned): A Channel is a stream in memory whose one holder has both ends, handed out separately as a Source and a Sink so a producer never sees the reading end and a consumer never sees the writing one.
 - `language/concurrency-and-streams/index.md` - **Concurrency and streams** (index): Task, Channel, Source and Sink - asynchrony in the type system instead of a keyword - designed and type-checked today, but not yet run by any back end.
+- `language/concurrency-and-streams/streams.md` - **Streams** (reference, planned): Source and Sink are the asynchronous siblings of Iterator and Accumulator, with the same verbs, the same Stage values in between, and a failure that stands in the type on both ends.
+- `language/concurrency-and-streams/tasks.md` - **Tasks** (reference, planned): Task<Value> is what an asynchronous function answers, and await() unwraps it - but no back end runs one yet, so a program that spawns a task type checks and cannot finish running.
 
 ## language/configuration
 
 - `language/configuration/builders.md` - **Builders and DSLs** (reference): A builder is a function that creates a value, hands it to a receiver closure to configure, and returns it, which is what makes a configuration block a statically typed value instead of a string to parse.
 - `language/configuration/index.md` - **Configuration** (index): Receiver closures, the builder function around one, and the receiver script and sandbox that let a whole file play the same role - statically typed configuration without a second language.
 - `language/configuration/receiver-closures.md` - **Receiver closures** (reference): A receiver closure is a closure whose first parameter is called self, so names inside it resolve against that receiver first, exactly as inside a method.
+- `language/configuration/receiver-scripts.md` - **Receiver scripts** (reference, planned): A .trb file can be loaded as the body of a receiver closure and type checked against a receiver type before it runs, but nothing runs one yet - the sandboxed VM that would is still planned.
+- `language/configuration/the-sandbox.md` - **The sandbox** (reference, planned): A script has no IO, no network, no clock, no environment and no foreign functions by default, and only the caller of Sandbox.load can grant more, in a block that names exactly what is granted.
 
 ## language/errors
 
@@ -132,15 +138,16 @@ Every page of the reference, with what it answers. Open the one page that answer
 
 - `language/execution/copies.md` - **What a copy costs** (reference): A copy always behaves the same way, but what it costs depends on the shape of the type - inline for a small fixed-size value, copy-on-write for heap-backed storage, and never for a shared type.
 - `language/execution/evaluation-order.md` - **Evaluation order** (reference): Evaluation order is source order - the receiver first, then the arguments as they are written, then the parameter defaults - so a side effect in an argument is exactly as predictable as reading the line.
-- `language/execution/index.md` - **Execution** (index): The parts of running a program that are a rule of the language rather than an implementation detail - evaluation order, what a copy costs, the tail-call guarantee, and why there are no destructors.
+- `language/execution/index.md` - **Execution** (index): The parts of running a program that are a rule of the language rather than an implementation detail - evaluation order, what a copy costs, the tail-call guarantee, and when a destructor runs.
 - `language/execution/loops.md` - **Loops** (reference): for walks an Iterable, while repeats while a condition holds, and loop is the endless one - with the type Never until a break gives it a Void. while true is an error, because never ending is a property of the syntax here.
-- `language/execution/no-destructors.md` - **There are no destructors** (reference): Close is an ordinary method and using is an ordinary function, so the nesting of using blocks is the only destruction order the language ever promises - a value going out of scope runs no code at all.
+- `language/execution/no-destructors.md` - **Destructors - close() runs at the last release** (reference, planned): A shared type's close() is its destructor - the runtime runs it exactly once when the last reference goes away, user code never calls it, and using pins that moment to the end of a block.
 - `language/execution/tail-calls.md` - **Tail calls and the frame limit** (reference): Direct self-recursion in tail position is guaranteed to run without growing the stack, and every other call counts against a per-task frame limit of 100000 that panics with stack overflow when it is reached.
 
 ## language/extensibility
 
 - `language/extensibility/control-structures.md` - **Control structures are functions** (reference): do, unless, retry, using and test are ordinary functions with a closure or lazy parameter, so writing your own control structure is nothing more than writing a function that takes one and calling it with a trailing closure.
 - `language/extensibility/expression-trees.md` - **Reading code instead of running it** (reference): A query provider reads the typed tree of an Expression<Value> instead of running it, translates what it recognizes, and fails at its own runtime for a call it does not - the language cannot know in advance what a library can translate.
+- `language/extensibility/foreign-functions.md` - **Foreign functions** (reference, planned): foreign declares functions of a C library with the ABI as the contract, available to any package unlike native, but nothing links or calls one yet and its Pointer and CString types are not declared in std/ either.
 - `language/extensibility/index.md` - **Extensibility** (index): The language is extended by writing functions, not macros or annotations - control structures, DSLs and query providers are all ordinary functions, closures and Expression<Value> parameters.
 
 ## language/functions
@@ -240,6 +247,7 @@ Every page of the reference, with what it answers. Open the one page that answer
 - `language/values-and-types/arrays.md` - **Arrays and const parameters** (reference): Array<Item, const Size> carries its length in the type, a const parameter is a value rather than a type, and there is no arithmetic over one.
 - `language/values-and-types/bindings.md` - **Bindings** (reference): A const binding never changes and nothing below it changes; a var binding can be changed in place. That one rule replaces every mutable-and-immutable type pair.
 - `language/values-and-types/built-in-types.md` - **Built-in types** (reference): Every type a file has without an import - the sized numbers, Bool, Char, String, tuples, lists, maps, ranges, Option, function types, Void and Never.
+- `language/values-and-types/decimal.md` - **Decimal** (reference, planned): Decimal is designed for exact base-ten arithmetic such as money, and a decimal literal adapts to it the way it adapts to Float - but no back end implements it yet.
 - `language/values-and-types/distinct-types.md` - **Distinct types** (reference): A distinct type is an ordinary single-field type, and `by` forwards specific traits to that field so the wrapper costs no boilerplate - there is no separate opaque-alias feature.
 - `language/values-and-types/floating-point.md` - **Floating-point numbers** (reference): On a Float every operator is IEEE-754 and `compare` is a total order that disagrees with them on `nan` and `-0.0`, and neither Float type is Hash.
 - `language/values-and-types/index.md` - **Values and types** (index): Bindings, the built-in types, and the type forms that are about values rather than about behaviour.
@@ -276,6 +284,7 @@ Every page of the reference, with what it answers. Open the one page that answer
 - `standard-library/project.md` - **std/project** (package): The receiver type of project.trb - Project, Dependencies, Build, Test and Workspace.
 - `standard-library/sandbox.md` - **std/sandbox** (package): Sandbox and Script, which load a .trb file as a type-checked, capability-limited receiver closure.
 - `standard-library/stream.md` - **std/stream** (package): Source and Sink, the asynchronous ends of a stream, plus Bytes, Utf8Error and the stages between bytes and text.
+- `standard-library/task.md` - **std/task** (package, planned): Task and Channel, the two shared types that connect concurrent work, and spawn - designed, but not run by any back end yet.
 - `standard-library/test.md` - **std/test** (package): test and group, the two functions a .test.trb file calls, with assert doing all of the checking.
 - `standard-library/text.md` - **std/text** (package): Char, a Unicode scalar value, and String, always-valid UTF-8 text with no length() and no indexing by character.
 - `standard-library/time.md` - **std/time** (package): Instant and Duration, the two time values, plus Clock and sleep, which read and wait on the wall clock.
@@ -283,13 +292,17 @@ Every page of the reference, with what it answers. Open the one page that answer
 ## tooling
 
 - `tooling/index.md` - **The toolchain** (index): The torb command, the project files, and how to verify that what you wrote is correct and in the formatter canon.
+- `tooling/project-lock-trb.md` - **project.lock.trb** (tooling, planned): The file that is specified to pin the exact version, content hash and registry of every dependency, direct or transitive - no command reads or writes it yet.
 - `tooling/project-trb.md` - **project.trb** (tooling): The manifest of a project - name, dependencies, the workspace it belongs to, and what torb build and torb test read out of it today.
 - `tooling/the-formatter-canon.md` - **The formatter canon** (tooling): The one way every TorbScript source is written - a command wherever the grammar allows it, and a multi-line string indented two spaces deeper than the line it starts on.
 - `tooling/the-torb-command.md` - **The torb command** (tooling): Every subcommand of the toolchain, what it does today, and which of them are still planned.
 - `tooling/torb-build.md` - **torb build** (tooling): torb build type checks a program, lowers it to C, and hands the C to whatever compiler it finds - one file in, one native binary out, nothing to configure.
 - `tooling/torb-canon.md` - **torb canon** (tooling): torb canon rewrites sources into the formatter canon over the syntax tree, checks every edit against a second parse, and drops anything that would change what the program means.
 - `tooling/torb-check.md` - **torb check** (tooling): torb check resolves every module, import and name in a type position, types every expression, and reports one block per diagnostic - the gate every other command trusts.
+- `tooling/torb-doc.md` - **torb doc** (tooling, planned): torb doc will render every doc comment of a package into documentation, the same way the standard-library reference's Declarations sections are filled in by hand today.
 - `tooling/torb-docs-source.md` - **torb docs source** (tooling): torb docs source checks the doc comments of the code itself - a module comment on every file, a comment on every construct that needs one, six headings, links that resolve, and examples that compile.
+- `tooling/torb-format.md` - **torb format** (tooling, planned): torb format will take over the formatter canon from torb canon and own the layout the canon does not decide - line length, blank lines, and where a long call breaks.
+- `tooling/torb-lint.md` - **torb lint** (tooling, planned): torb lint will check the style rules the type checker does not - full words instead of abbreviations, is/has for a computed question, an adjective for a Bool field, an unused irrefutable binding - none of which is enforced today.
 - `tooling/torb-run.md` - **torb run** (tooling): torb run builds a file or a project into a cache and executes it, passing the rest of the command line, the three streams and the exit code through.
 - `tooling/torb-test.md` - **torb test** (tooling): torb test runs every *.test.trb file below the paths it is given - one binary for all of them - and prints ok or FAILED for every test call it sees.
 - `tooling/verifying-your-work.md` - **Verify your work** (tooling): The commands that decide whether TorbScript you wrote is correct and in the formatter canon, in the order to run them.

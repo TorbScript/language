@@ -43,13 +43,11 @@ test` runs `*.test.trb` files only, and reads nothing out of a doc comment.
 The comment itself parses and belongs to its declaration - that part of the front end is real, and is what
 [doc comments](../language/syntax/doc-comments.md) describes. What is missing is anything that turns it into a
 rendered page. Every [standard-library](../standard-library/index.md) page already has the place `torb doc` will
-fill: a `## Declarations` section between two markers, written by hand for now - [std/test](../standard-library/test.md)'s
+fill: a `## Declarations` section, written by hand for now, which the command will generate and mark as generated - [std/test](../standard-library/test.md)'s
 in full:
 
 ````md
 ## Declarations
-
-<!-- torb:declarations:begin -->
 
 ### `test`, `group`
 
@@ -61,7 +59,6 @@ public native fn group(name: String, body: () => Void)
 `group` names a closure of `test` calls; `test` names a closure whose body is the check. Both are ordinary calls in the
 `.test.trb` files of `tests`, and nest freely - a `group` inside a `group` is how a suite is organized.
 
-<!-- torb:declarations:end -->
 ````
 
 ## Examples

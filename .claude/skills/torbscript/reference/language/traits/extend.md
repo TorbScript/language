@@ -171,3 +171,4 @@ declaration, and two implementations of one trait may never overlap, even inside
 - [Coherence and blanket implementations](coherence.md) - which package may write an `extend`.
 - [Declaring a type](../types/declaring-a-type.md) - fields and cases, which only the declaration can add.
 - [use](../modules-and-packages/use.md) - every form of an import, including the path of a member.
+

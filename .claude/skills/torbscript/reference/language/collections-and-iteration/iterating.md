@@ -59,7 +59,7 @@ for (<name>, <name>) in <iterable of tuples> { ... }
 ## Rules
 
 1. **`Iterator<Item>` has exactly one member, `next(): Item?`, which answers `None` once there is nothing
-   left.** `Iterable<Item>` has exactly one required member, `iterator(self): Iterator<Item>`; every other method a
+   left.** `Iterable<Item>` has exactly one required member, `iterator(): Iterator<Item>`; every other method a
    collection has (`map`, `filter`, `fold`, `toList()`, ...) is a default method built from those two.
 
 2. **`for value in xs { ... }` calls `xs.iterator()` once and then `next()` until it answers `None`.** The loop
@@ -119,3 +119,4 @@ for value in Point(1, 2) {
 - [The collection traits](collection-traits.md) - `Collection`, built on top of `Iterable`.
 - [Pipelines](pipelines.md) - the lazy stages and terminal operations `Iterable` gives every collection for free.
 - [Bindings](../values-and-types/bindings.md) - why the loop variable is always a `const`.
+

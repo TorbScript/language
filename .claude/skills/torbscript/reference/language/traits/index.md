@@ -29,3 +29,4 @@ an example first, then the syntax, then numbered rules, then what the construct 
 - **[Object safety](object-safety.md)** - A member that mentions Self in a parameter or its result, or that has no self, cannot be called on a trait-typed value, even though the trait stays a legal type.
 
 <!-- torb:index:end -->
+

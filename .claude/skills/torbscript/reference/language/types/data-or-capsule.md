@@ -183,3 +183,4 @@ const wrong = Path(None, [])
 - [Fields](fields.md) - `private` and `private(var)`, the modifiers that decide this.
 - [Conversions](conversions.md) - `From` and `TryFrom`, which the conversion pair is made of.
 - [Copy and equality](copy-and-equality.md) - what stays generated for a capsule, and what does not.
+

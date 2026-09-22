@@ -43,8 +43,6 @@ print numbers.reversed()
 
 ## Declarations
 
-<!-- torb:declarations:begin -->
-
 ### Collection
 
 ```trb fragment
@@ -172,10 +170,9 @@ says which end `add` and `remove` reach, and `first()` looks without taking. `re
 `ArrayQueue` is a ring buffer that grows only when it is full. Both are `Equals` and `Hash` wherever `Item` is,
 order-dependent like a `List`.
 
-<!-- torb:declarations:end -->
-
 ## Related
 
 - [Mutation and var paths](../language/types/var-paths.md) - what has to be `var` for a verb like `add` or `sort`.
 - [std/iteration](iteration.md) - `Iterable`, the lazy stages and the collectors every collection works with.
 - [The standard library](index.md) - the other packages.
+

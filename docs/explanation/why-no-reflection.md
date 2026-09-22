@@ -14,6 +14,9 @@ source:
   - CONCEPT.md#types-values-and-reflection
 ---
 
+> **Not built natively yet.** The generated `encode` is not built by the native back end yet, so `torb run` refuses the
+> examples here that use it. `torb check` accepts them, and the rules are the language's.
+
 Reflection promises to answer "what is this, really?" at runtime, for any value, generically. TorbScript never lets
 that question be asked in the first place, and this page argues for closing the door instead of guarding it.
 

@@ -15,6 +15,9 @@ source:
   - examples/tour/src/05-traits.trb
 ---
 
+> **Not built natively yet.** `??` on a type of your own is not built by the native back end yet, so `torb run` refuses
+> the examples here that use it. `torb check` accepts them, and the rules are the language's.
+
 An operator on a value of your own type is a method call in disguise: `a + b` is `a.add(b)`, and `a.add` exists only
 where the type implements `Add`.
 
@@ -144,7 +147,7 @@ a ?? b       OrElse.orElse(a, b)         "{a}"   Show.show(a)
 
 6. **`a[from..to]` is `Slice.slice` and shares the storage of `a`, starting at index `0` again.**
    `a[from..to] = v` needs `MutableSlice`, a supertrait of `Slice`, and also makes the range a `var` path:
-   `samples[0..100].sort()` works on that part of `samples` in place.
+   `samples[0..100].sort { _ }` works on that part of `samples` in place.
 
 7. **`a ?? b` is `OrElse.orElse`, whose fallback is `lazy`.** `Option<Value>` and `Result<Value, Failure>` come with
    it, and so can a type of your own:
@@ -201,3 +204,4 @@ print mixed
 - [Trait intersections](intersections.md) - the other job of `&`, unrelated to arithmetic.
 - [Declaring a type](../types/declaring-a-type.md) - what `==` does without a hand-written `Equals`.
 - [Optional chaining](../errors/option-chaining.md) - `??` and `?.` in full, and where `?.` does not apply.
+

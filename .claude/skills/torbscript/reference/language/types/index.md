@@ -33,3 +33,4 @@ an example first, then the syntax, then numbered rules, then what the construct 
 - **[Property commands](property-commands.md)** - A command call on a field writes it instead of calling it, which is what lets a configuration block read like plain data without a single hand-written setter.
 
 <!-- torb:index:end -->
+

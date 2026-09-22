@@ -55,8 +55,6 @@ half-open rule is about tiling.
 
 ## Declarations
 
-<!-- torb:declarations:begin -->
-
 ### `Rectangle`, `Box`
 
 ```trb fragment
@@ -139,10 +137,9 @@ A flat surface in space, as the `normal` that points away from its front and the
 `signedDistanceTo` is positive in front and negative behind, and which of the two a program calls "outside" is the
 program's own business. `through`, `ofPoints`, `distanceTo`, `isInFront`, `closestPoint`, `mirrored` and `flipped`.
 
-<!-- torb:declarations:end -->
-
 ## Related
 
 - [std/linear](linear.md) - the vectors every shape is made of, and `Fixed`, the scalar that makes these tests
   bit-identical everywhere.
 - [std/number](number.md) - `Numeric` and `Real`, the two bounds the shapes layer along.
+

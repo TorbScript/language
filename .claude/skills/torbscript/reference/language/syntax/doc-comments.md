@@ -119,3 +119,4 @@ the links, the examples and the module comment over a whole tree of sources. `to
 - [Lexical structure](lexical-structure.md) - the other two comment forms, and where a statement ends.
 - [Declaring a type](../types/declaring-a-type.md) - fields and cases, which a doc comment can attach to.
 - [torb docs source](../../tooling/torb-docs-source.md) - the gate that reads what a doc comment says.
+

@@ -139,3 +139,4 @@ type Box with Compare {
 - [Traits](traits.md) - `with` at the declaration, and the naming rule for a single-method trait.
 - [Coherence and blanket implementations](coherence.md) - the other rule a `with` or `extend` has to satisfy.
 - [Declaring a type](../types/declaring-a-type.md) - when `Equals`, `Hash` and `Show` are generated.
+

@@ -18,10 +18,13 @@ source:
   - docs/STREAMS.md
 ---
 
+> **Not built natively yet.** A function whose body answers a `Task` is not built by the native back end yet, so `torb
+> run` refuses the examples here that use it. `torb check` accepts them, and the rules are the language's.
+
 "Stream" is the word for a flow in one direction, not a type: what a signature names is one of its two ends,
 `Source<Item, Failure>` to read from or `Sink<Item, Failure>` to write into. They are the asynchronous siblings of
-[std/iteration](iteration.md)'s `Iterator` and `Accumulator` and carry the same verbs. `Source` and `Sink` are in the
-prelude; `Bytes` and `Utf8Error` too.
+[std/iteration](iteration.md)'s `Iterator` and `Accumulator` and carry the same verbs. `Source`, `Sink` and `Bytes` are in
+the prelude; `Utf8Error`, `lines` and `textOf` are imported from here.
 
 ## Import
 
@@ -41,8 +44,6 @@ fn totalLength(channel: Channel<String>): Task<Result<Int, Never>> {
 ```
 
 ## Declarations
-
-<!-- torb:declarations:begin -->
 
 ### Source
 
@@ -139,8 +140,6 @@ A sequence that is still incomplete when the stream ends is reported as invalid 
 is no more input coming to complete it. `textOf` is the short form for a whole chunk that has already arrived;
 `encodedText` is the reverse, and needs no decision because a `String` already is UTF-8.
 
-<!-- torb:declarations:end -->
-
 ## What is missing
 
 The example above type checks against the real standard library, which is what `torb docs check` verifies. What does
@@ -156,3 +155,4 @@ does - over an `Iterable<Bytes>` in a test, for instance - which is why this pag
 - [std/task](task.md) - `Task` and `Channel`, which every `Source`/`Sink` verb rides on.
 - [std/fs](fs.md) - `File`, which is both a `Source` and a `Sink`.
 - [The standard library](index.md) - the other packages.
+

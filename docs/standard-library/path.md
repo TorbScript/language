@@ -38,8 +38,6 @@ print module.joined(Path.from("deeper"))
 
 ## Declarations
 
-<!-- torb:declarations:begin -->
-
 ### Path
 
 ```trb fragment
@@ -104,16 +102,11 @@ base it was given has no root, so "inside" has nothing to be measured against, a
 under the base if it is relative or judged on its own if it is absolute, does not start with the base once both are
 normalized.
 
-<!-- torb:declarations:end -->
-
 ## Pitfalls
 
 - **A POSIX file name that literally contains a backslash cannot be named as a `Path` at all.** Both `/` and `\`
   separate on every platform, so that the same program behaves the same in every back end and on every platform, and
   `Path.from` is the one way in. Reach such a file through `std/fs` with its text.
-- **`String.from(path)` written out does not resolve.** `String` carries `From<Iterable<Char>>` as well, so that name
-  picks the other implementation and reports that `Path` does not implement it. Write `path.show()`, or ask for the
-  conversion through a bound (`fn textOf<Value>(value: Value): String where String: From<Value>`).
 - **Comparison is lexical and case sensitive, on every platform, always.** `Path.from("A") == Path.from("a")` is
   `false` everywhere, including on a case-insensitive mount - a case-insensitive `==` would make a `Map<Path, _>`
   answer differently on two platforms, and it would still be wrong, because case folding is a property of the mount

@@ -61,6 +61,7 @@ value.field                       // Reads the field
 
    var server = Server()
    server.port 9090
+   print server
    // error: `port` never changes after construction
    ```
 
@@ -101,3 +102,4 @@ print workspace.memberPatterns
 - [Fields](fields.md) - `var`, `private` and `private(var)`, which decide whether a command may reach the field.
 - [Methods and `static fn`s](methods.md) - what the same command syntax does when the name is a method instead.
 - [Declaring a type](declaring-a-type.md) - the one namespace a property command and a method call share.
+

@@ -51,7 +51,9 @@ print config
    the top is an expected kind of ending, not a bug.
 
 4. **The chain is walked through `cause()`, one `  caused by: <...>` line per link.** A failure that wraps another one
-   through `Error.cause()` prints the whole chain, in order, the way [The Error trait](the-error-trait.md) builds it:
+   through `Error.cause()` is specified to print the whole chain, in order, the way
+   [The Error trait](the-error-trait.md) builds it - a program built today prints the first line only (see the end of
+   this page):
 
    ```text
    error: the server did not start
@@ -96,3 +98,4 @@ against.
 - [The question mark operator](question-mark.md) - `?` itself, inside a function and at the top level alike.
 - [panic](panic.md) - the other way a program ends, and why the two outputs must not be mistaken for each other.
 - [The Error trait](the-error-trait.md) - `cause()`, which the chain in rule 4 walks.
+

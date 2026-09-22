@@ -78,7 +78,7 @@ and their "copy in, copy out" meaning is never executed literally.
 **The copy trap is the price.** Taking an element out of a collection takes a copy, so the program below prints `1 0`:
 the copy changed and the list did not.
 
-```trb check
+```trb run
 type Counter {
   var count: Int = 0
 
@@ -91,6 +91,7 @@ var counters = [Counter(), Counter()]
 var first = counters[0]
 first.increment()
 print "{first.count} {counters[0].count}"
+// prints 1 0
 ```
 
 The rule that catches this is general: **a change that cannot have an effect is a compile error.** With value semantics

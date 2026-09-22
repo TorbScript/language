@@ -224,3 +224,4 @@ to another, only `Int.tryFrom("42")` written out. `Int` is an alias for `Int64`,
 - [Declaring a type](declaring-a-type.md) - where `Self` and `extend` are introduced.
 - [Result](../errors/result.md) - what every fallible conversion in this page answers with.
 - [Coherence](../traits/coherence.md) - which package may write which implementation, and the blanket message.
+

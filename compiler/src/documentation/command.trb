@@ -13,11 +13,13 @@
  */
 
 use File, IoError from "std/fs"
+use Environment from "std/environment"
 use DocumentationProblem from "./markdown"
 use Page, readDocumentation from "./tree"
 use PathExists from "./links"
 use readStandardLibrary from "./snippets"
-use checkDocumentation, checkSnippetTypes, sortedProblems from "./check"
+use checkDocumentation, checkSnippets, sortedProblems from "./check"
+use NativeOptions from "./native"
 use generateIndexes, writeIndexes, staleIndexes from "./index"
 use buildSkill, writeSkill, installationHint, skillName from "./skill"
 use bundleDocumentation, writeBundle from "./bundle"
@@ -29,17 +31,23 @@ public type DocumentationOptions {
   standardLibrary: String
   /** `--no-snippets`: skip the type check, which is the slow part */
   withoutSnippets: Bool
+  /** `--no-native`: skip what the native back end says about the blocks, for a machine without a C compiler */
+  withoutNative: Bool
   /** `--check` of `docs index` */
   onlyCheck: Bool
   /** The output directory of `skill` and `bundle` */
   out: String
 }
 
-/** Parses `torb docs`'s arguments. `--standard-library`, `--no-snippets` and `--check` are flags; everything else is a path. */
+/**
+ * Parses `torb docs`'s arguments. `--standard-library`, `--no-snippets`, `--no-native` and `--check` are flags;
+ * everything else is a path.
+ */
 public fn documentationOptionsOf(arguments: List<String>): DocumentationOptions {
   var paths: List<String> = []
   var standardLibrary = ""
   var withoutSnippets = false
+  var withoutNative = false
   var onlyCheck = false
   var wantsStandardLibrary = false
   for argument in arguments {
@@ -56,6 +64,10 @@ public fn documentationOptionsOf(arguments: List<String>): DocumentationOptions 
       withoutSnippets = true
       continue
     }
+    if argument == "--no-native" {
+      withoutNative = true
+      continue
+    }
     if argument == "--check" {
       onlyCheck = true
       continue
@@ -64,7 +76,7 @@ public fn documentationOptionsOf(arguments: List<String>): DocumentationOptions 
   }
   const root = paths.get(0) ?? "docs"
   const out = paths.get(1) ?? ""
-  DocumentationOptions root, standardLibrary, withoutSnippets, onlyCheck, out
+  DocumentationOptions root, standardLibrary, withoutSnippets, withoutNative, onlyCheck, out
 }
 
 /** Where the standard library is, for the type check of the snippets. */
@@ -73,6 +85,16 @@ fn standardLibraryPath(options: DocumentationOptions): String {
     return options.standardLibrary
   }
   "{options.root}/../std"
+}
+
+/**
+ * Where the `trb run` blocks are built: the C runtime is `$TORB_RUNTIME`, or the `runtime/` beside the standard library,
+ * and the program goes to `build/docs/` beside the documentation root - both are where a checkout has them.
+ */
+fn nativeOptionsOf(options: DocumentationOptions, standardLibrary: String): NativeOptions {
+  const given = Environment.get("TORB_RUNTIME") ?? ""
+  const runtime = if given.isEmpty() { "{standardLibrary}/../runtime" } else { given }
+  NativeOptions runtime, "{options.root}/../build/docs"
 }
 
 fn reportProblems(problems: List<DocumentationProblem>): Int {
@@ -91,7 +113,8 @@ public fn runCheck(options: DocumentationOptions): Result<Int, IoError> {
   if !options.withoutSnippets {
     const path = standardLibraryPath options
     const standardLibrary = readStandardLibrary(path)?
-    problems.addAll checkSnippetTypes(documentation, standardLibrary)
+    const nativeOptions = if options.withoutNative { None } else { Some nativeOptionsOf(options, path) }
+    problems.addAll(checkSnippets(documentation, standardLibrary, nativeOptions)?)
   }
   const count = reportProblems problems
   if count > 0 {
@@ -144,7 +167,7 @@ public fn runSkill(options: DocumentationOptions): Result<Int, IoError> {
   }
   writeSkill(options.out, skill)?
   print "{skillName}: {skill.files.length()} files, SKILL.md has {skill.bodyLines} lines"
-  print "{skill.included} pages, {skill.excluded} left out (planned or omitted)"
+  print "{skill.included} pages, {skill.excluded} left out by `skill: omit`"
   print installationHint(options.out)
   Ok 0
 }
@@ -188,6 +211,7 @@ public fn printDocumentationUsage() {
   printError "  torb docs check [root]  Check the documentation (default root: docs)"
   printError "                         --standard-library <path>: where std/ is, for the snippets"
   printError "                         --no-snippets: do not type check the snippets, which is the slow part"
+  printError "                         --no-native: do not build the snippets, for a machine without a C compiler"
   printError "  torb docs index [root]  Write the generated part of every index.md"
   printError "                         --check: report instead of writing, for the gate"
   printError "  torb docs skill <root> <out>   Write the Agent Skill of the language"

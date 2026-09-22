@@ -26,3 +26,4 @@ the syntax, then numbered rules, then what the construct is not.
 - **[Foreign functions](foreign-functions.md)** _(planned)_ - foreign declares functions of a C library with the ABI as the contract, available to any package unlike native, but nothing links or calls one yet and its Pointer and CString types are not declared in std/ either.
 
 <!-- torb:index:end -->
+

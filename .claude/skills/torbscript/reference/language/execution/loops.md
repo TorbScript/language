@@ -59,7 +59,7 @@ continue                                    starts the next round of the innermo
    checker and both back ends see it without evaluating anything.
 
    ```trb error
-   fn forever(): Int {
+   fn forever() {
      while true {
        print "on and on"
      }
@@ -98,7 +98,7 @@ continue                                    starts the next round of the innermo
    ```
 
 5. **`break` and `continue` only exist inside a loop, and neither leaves a closure.** A closure is a function, not a
-   block, so `items.each { break }` has no loop to leave; `do { ... }` is an ordinary function too and is no loop
+   block, so `items.forEach { break }` has no loop to leave; `do { ... }` is an ordinary function too and is no loop
    either.
 
    ```trb error
@@ -140,3 +140,4 @@ loop {
 - [Patterns in bindings and conditions](../pattern-matching/patterns-in-bindings.md) - `while const Some(x) = next()`.
 - [Void and Never](../values-and-types/void-and-never.md) - the two types a loop and a `break` have.
 - [Control structures](../extensibility/control-structures.md) - why everything else is a function instead.
+

@@ -33,8 +33,6 @@ print(first ?? "no input")
 
 ## Declarations
 
-<!-- torb:declarations:begin -->
-
 ### `readLine`
 
 ```trb fragment
@@ -65,8 +63,6 @@ public fn lines(): Source<String, IoError>
 The lines of standard input, as a stream - the same stage `File.lines` uses, over the same kind of source. Reading from
 a `Source` needs `.await()` on every `next()`, so `standardInput`, `standardOutput`, `standardError` and `lines` wait on
 the same milestone as [std/task](task.md), which is `status: planned`; `readLine()` does not touch `Task` at all.
-
-<!-- torb:declarations:end -->
 
 ## Related
 

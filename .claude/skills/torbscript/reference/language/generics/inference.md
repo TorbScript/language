@@ -115,3 +115,4 @@ next line, `numbers`, arrives one statement too late to help it.
 - [Type parameters](type-parameters.md) - where the type argument being inferred comes from.
 - [Bounds](bounds.md) - a bound restricts what an inferred type can be, it does not help infer it.
 - [Traits as types](../traits/trait-types.md) - the coercion that never solves an inference variable.
+

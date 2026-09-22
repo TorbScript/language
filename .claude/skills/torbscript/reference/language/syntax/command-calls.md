@@ -173,3 +173,4 @@ const value = (print "hello")
 - [Verify your work](../../tooling/verifying-your-work.md) - the command that checks the canon.
 - [What a model trained on other languages gets wrong](../../explanation/mistakes-models-make.md) - the canon is the
   mistake a model makes most often.
+

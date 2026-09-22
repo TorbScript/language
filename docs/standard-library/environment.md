@@ -32,8 +32,6 @@ print(home ?? "not set")
 
 ## Declarations
 
-<!-- torb:declarations:begin -->
-
 ### Environment
 
 ```trb fragment
@@ -45,8 +43,6 @@ public native type Environment {
 `get(name)` answers `None` if the variable is not set, or if the caller is not allowed to see it - the sandbox and a
 variable that does not exist look the same on purpose, so a script cannot tell a granted-but-empty capability from a
 capability it never had.
-
-<!-- torb:declarations:end -->
 
 ## Related
 

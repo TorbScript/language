@@ -104,3 +104,4 @@ that shadows `Int` this way is easy to misread.
 - [Distinct types](distinct-types.md) - a single-field type, for when an alias should not be interchangeable.
 - [Integers](integers.md) - why an integer literal's type does not follow an alias like `Int`.
 - [Literal types](literal-types.md) - `type Name = "a" | "b"`, the same declaration form for a different right side.
+

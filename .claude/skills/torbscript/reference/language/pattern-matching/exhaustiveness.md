@@ -27,7 +27,7 @@ type Shape {
 
 fn area(shape: Shape): Float {
   match shape {
-    .Circle(radius) => 1.0
+    .Circle(radius) => 3.14 * radius * radius
   }
 }
 print area(Shape.Empty)
@@ -163,3 +163,4 @@ than a lenient catch-all: the one place a program can genuinely ignore the rest 
 - [Pattern forms](pattern-forms.md) - every pattern, including the ones a range and a list pattern do not fully cover.
 - [Patterns in bindings and conditions](patterns-in-bindings.md) - `const`, `for`, `if const` and the irrefutable rule.
 - [Coming from Rust](../../explanation/coming-from-rust.md) - the wrapper type a library uses to stay free to add cases.
+

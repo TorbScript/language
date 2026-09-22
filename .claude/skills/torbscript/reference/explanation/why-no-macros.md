@@ -104,3 +104,4 @@ command calls has to change for that to be added later.
 - [Why a call is written as a command](why-commands.md) - the syntax that makes a function read like a keyword.
 - [Why there is no reflection](why-no-reflection.md) - the same "no code that runs ahead of the type checker" argument
   applied to values instead of syntax.
+

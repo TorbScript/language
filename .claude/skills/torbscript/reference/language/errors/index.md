@@ -26,3 +26,4 @@ an example first, then the syntax, then numbered rules, then what the construct 
 - **[Errors at the top level](top-level-errors.md)** - A ? at the top level of an entry file or a script is not a panic; it is specified to print the error and exit with 1, walking cause() one line per link.
 
 <!-- torb:index:end -->
+

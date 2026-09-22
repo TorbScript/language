@@ -41,7 +41,7 @@ print largest([3, 1, 2])
 fn <name><Item: <Trait>>(...)                 inline, one parameter
 fn <name><Item>(...) where Item: <Trait>      after where, same meaning
 fn <name><A, B>(...) where A: <Trait>, B: <Trait> & <Trait>   several parameters, `&` combines traits
-fn <name>(self, ...): <Type> where Item: <Trait>              a member's own bound
+fn <name>(...): <Type> where Item: <Trait>                    a member's own bound
 ```
 
 ## Rules
@@ -150,3 +150,4 @@ print describe(Silent(Robot()))
 - [Trait intersections](../traits/intersections.md) - the `&` a bound and a type position share.
 - [Traits as types](../traits/trait-types.md) - a bound compared to a trait used as a parameter's own type.
 - [Inference](inference.md) - what a bound does and does not help the compiler infer.
+

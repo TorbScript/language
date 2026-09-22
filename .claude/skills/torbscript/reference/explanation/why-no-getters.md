@@ -123,3 +123,4 @@ happen as a breaking change to existing callers who already wrote `.x()`.
 - [Visibility](../language/modules-and-packages/visibility.md) - members public by default, and what that assumes.
 - [Methods and `static fn`s](../language/types/methods.md) - the two words a member says about itself.
 - [Why a method is a constant](why-one-member-namespace.md) - the one namespace a field and a method share.
+

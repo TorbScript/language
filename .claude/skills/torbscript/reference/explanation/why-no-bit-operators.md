@@ -56,7 +56,7 @@ Removing the operators without adding the methods would have made those things `
 them writable in the language that has to write its own standard library.
 
 **Because keeping the wrapping pair off the signed types keeps "overflow panics" true wherever `+` is written.**
-[Design Principle 5](../../CONCEPT.md) and the built-in numeric types agree that overflow is a bug and panics rather
+Design Principle 5 and the built-in numeric types agree that overflow is a bug and panics rather
 than wrapping silently; `addedWrapping`/`multipliedWrapping` exist on `UInt64` alone; because a hash function cannot be
 written without wrapping arithmetic somewhere, and giving every integer type a wrapping escape hatch would have made
 "overflow panics" a claim with an asterisk on every one of them instead of a fact.
@@ -111,3 +111,4 @@ print Point(x: 3, y: 5).hash()
 - [Integers](../language/values-and-types/integers.md) - the full `Bits` method list and the overflow rules.
 - [What a model trained on other languages gets wrong](mistakes-models-make.md) - the bit-operator mistake, with the
   diagnostic.
+

@@ -14,6 +14,9 @@ source:
   - CONCEPT.md#traits
 ---
 
+> **Not built natively yet.** `by` delegation is not built by the native back end yet, so `torb run` refuses the
+> examples here that use it. `torb check` accepts them, and the rules are the language's.
+
 Class inheritance answers two questions with one mechanism: what data a type has, and what it can do. TorbScript
 answers them separately - fields for the first, traits for the second - and this page argues for why splitting them
 removes a whole family of design mistakes rather than merely renaming them.
@@ -125,3 +128,4 @@ type this package does not own, the way inheritance never could without wrapping
 - [Trait intersections](../language/traits/intersections.md) - `&`, the mechanism that replaces multiple inheritance.
 - [Why a method is a constant](why-one-member-namespace.md) - the one-namespace rule that rules out an inheritance-like
   call syntax.
+

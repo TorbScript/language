@@ -76,7 +76,7 @@ There is no `MutableList`, no `ImmutableList` and no read-only view. A `const` b
 
 ## Assigning is copying
 
-```trb
+```trb run
 type Point {
   var x: Int
   var y: Int
@@ -86,6 +86,7 @@ var first = Point 1, 2
 const second = first
 first.x = 99
 print "{first} {second}"
+// prints Point(x: 99, y: 2) Point(x: 1, y: 2)
 ```
 
 That prints `Point(x: 99, y: 2) Point(x: 1, y: 2)`. `second` is a copy, so nothing that happens through `first` can be
@@ -99,7 +100,7 @@ is "always a copy" and the cost is "only when it matters".
 
 This is the one mistake everybody makes once, and it is the price of value semantics:
 
-```trb check
+```trb run
 type Counter {
   var count: Int = 0
 
@@ -112,6 +113,7 @@ var counters = [Counter(), Counter()]
 var first = counters[0]
 first.increment()
 print "{first.count} {counters[0].count}"
+// prints 1 0
 ```
 
 That prints `1 0`. `var first = counters[0]` took a **copy** out of the list, so incrementing it left the list
@@ -170,3 +172,4 @@ says "this part of me is fixed".
 - [Why values instead of references](../explanation/why-values-instead-of-references.md) - the argument, and what it
   costs.
 - [Coming from Rust](../explanation/coming-from-rust.md) - if `&mut` is what you reach for.
+

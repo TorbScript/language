@@ -27,7 +27,7 @@ type Shape {
 
 fn area(shape: Shape): Float {
   match shape {
-    .Circle(radius) => 1.0
+    .Circle(radius) => 3.14 * radius * radius
   }
 }
 print area(Shape.Empty)

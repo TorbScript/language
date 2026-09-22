@@ -70,7 +70,7 @@ has to be one thing (see [Top-level code](../modules-and-packages/top-level-code
 4. **Assigning, passing and capturing is a copy.** Two bindings never refer to the same value, so a change through one is
    invisible through the other. The exception is a `shared type`, which has an identity.
 
-   ```trb
+   ```trb run
    type Point {
      var x: Int
      var y: Int
@@ -80,6 +80,7 @@ has to be one thing (see [Top-level code](../modules-and-packages/top-level-code
    const second = first
    first.x = 99
    print "{first} {second}"
+   // prints Point(x: 99, y: 2) Point(x: 1, y: 2)
    ```
 
    That prints `Point(x: 99, y: 2) Point(x: 1, y: 2)`.
@@ -147,7 +148,7 @@ prints `1`, the second prints `1 0`: the copy changed and the list did not. Rule
 compile error. The second program reads the copy in its last line, so there is nothing to report: a copy that is
 changed and then read is a legal program that does something else than was meant.
 
-```trb check
+```trb run
 type Counter {
   var count: Int = 0
 
@@ -159,6 +160,7 @@ type Counter {
 var counters = [Counter(), Counter()]
 counters[0].increment()
 print counters[0].count
+// prints 1
 ```
 
 ```trb check
@@ -186,3 +188,4 @@ place where a constant has to be evaluable at compile time is a top-level `const
 - [Values and bindings](../../guide/values-and-bindings.md) - the same material as a learning step.
 - [Why values instead of references](../../explanation/why-values-instead-of-references.md) - the argument behind rule 4.
 - [Coming from Rust](../../explanation/coming-from-rust.md) - if `let mut` and `&mut` are what you reach for.
+

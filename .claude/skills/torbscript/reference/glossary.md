@@ -19,8 +19,10 @@ gets a page instead, and keeps a one-line entry here that links it.
 
 ### Accumulator
 
-The state of one run of a [collector](#collector), held in a `var`, with `add` and `finish`. Every `Collection` is an
-accumulator out of the box.
+One run of a pipeline, `Accumulator<Item, Output>`, with `add`, `finish` and `isDone`: a value, so a copy of one is a
+fresh run and one accumulator is description and state at once. A collection is not an accumulator; what gathers a
+pipeline into one is a type beside it, such as `ListAccumulator`. See
+[Collectors](language/collections-and-iteration/collectors.md).
 
 ### Backpressure
 
@@ -61,6 +63,12 @@ What a package or a sandboxed script may reach beyond the pure part of the langu
 the clock, the environment, processes or foreign functions. Visible from the imports alone, because there is no
 reflection to grant one silently. See [The sandbox](language/configuration/the-sandbox.md).
 
+### Capsule
+
+A value type whose fields are `private` and whose values come from factories and go out through accessors, so its
+invariants hold - still a value, copied on assignment, never an identity like a [shared type](#shared-type). See
+[Data or capsule](language/types/data-or-capsule.md).
+
 ### Case
 
 A variant of a `type`, declared with `case`. Never called a variant or an enum case. See
@@ -73,8 +81,9 @@ What `Error.cause()` walks: an error that wraps another one hands it out, so a r
 
 ### Closure
 
-The one closure form, `{ ... }` in expression position, which captures a `const` binding as a copy and a `var`
-binding as a shared box. See [Closures](language/functions/closures.md).
+The one closure form, `{ ... }` in expression position, which captures a `const` binding as a copy and shares a `var`
+binding with its scope - and a closure that captures a `var` binding may not escape that scope (decided, not yet
+enforced). See [Closures](language/functions/closures.md).
 
 ### Coercion
 
@@ -88,8 +97,9 @@ of one trait may never overlap. See [Coherence and blanket implementations](lang
 
 ### Collector
 
-A reusable description of what to do with the values of a pipeline, which starts an [accumulator](#accumulator) per run.
-`counting()`, `summing { ... }` and `groupingBy { ... }` are collectors.
+What `counting()`, `summing { ... }` and `groupingBy { ... }` answer: an [accumulator](#accumulator) that says what to
+do with the values of a pipeline. The `Collector` trait and its `start()` were merged into `Accumulator`, so the word
+names these functions and not a type of its own.
 
 ### Command call
 
@@ -144,6 +154,12 @@ every type whose constructor is reachable from outside. See [Encode and Decode](
 
 Forwarding a trait's required members to the one field of a single-field type with `by`, such as
 `Add & Subtract by value`. See [Delegation with by](language/traits/delegation.md).
+
+### Destructor
+
+`close()` of a `shared type` that implements `Close`, run exactly once by the release of its last reference and never
+called by user code. Decided and not implemented yet; see
+[Destructors](language/execution/no-destructors.md).
 
 ### Distinct type
 
@@ -213,7 +229,7 @@ never sees a type of its own. See [std/encoding](standard-library/encoding.md).
 ### Front matter
 
 The block between the two `---` lines at the top of a documentation page, in a written subset of YAML. See
-[The front matter](contributing/front-matter.md).
+The front matter.
 
 ### Guard
 
@@ -226,6 +242,11 @@ counts towards exhaustiveness, because the guard could always be false. See
 A `fn` declaration is visible everywhere in its scope, including above the line it is written on, so two functions
 can call each other without a forward declaration. See
 [Declaring a function](language/functions/declaring-a-function.md).
+
+### Interpreter
+
+There is none today: `torb run` builds a native binary and runs it. The bytecode VM of milestone 7 is the planned
+interpreter, reading the same typed IR as the C back end; stage 0, the Rust interpreter, was deleted on 2026-09-22.
 
 ### Intersection
 
@@ -411,24 +432,25 @@ object. Handles to the outside world are shared types. See [Shared types](langua
 
 ### Sink
 
-The writing end of a stream, `Sink<Item, Failure>`, with `add` and `finish` in place of an `Accumulator`'s members of
-the same name, each answering a `Task`. See [Streams](language/concurrency-and-streams/streams.md).
+The writing end of a stream, `Sink<Item, Failure>`, with `add` in place of an `Accumulator`'s `add` and `end()` as its
+graceful end, each answering a `Task`; `close()` is the abrupt end. See
+[Streams](language/concurrency-and-streams/streams.md).
 
 ### Skill
 
 The Agent Skill derived from this documentation by `torb docs skill`: a folder whose `SKILL.md` has a `name` and a
-`description` and whose `reference/` holds the pages. See [The Agent Skill](contributing/the-skill.md).
+`description` and whose `reference/` holds the pages. See The Agent Skill.
 
 ### Seed
 
 A `torb` binary that already exists, which `sh tools/bootstrap.sh` compiles the current compiler sources with. The
 compiler is written in TorbScript, so something that already compiles TorbScript has to build it once. See
-[the architecture](ARCHITECTURE.md).
+the architecture.
 
 ### Snippet
 
 A fenced code block of this documentation. A `trb` snippet is verified by the compiler's own front end; the marker in the
-fence decides how hard. See [The docs commands](contributing/checks.md).
+fence decides how hard. See The docs commands.
 
 ### Source
 
@@ -478,6 +500,12 @@ parentheses; it always belongs to the outermost command call of the statement. S
 A list of members a type provides, given with `with` at the declaration or with `extend` afterwards. A trait with one
 required method is named after that method. See [Traits](language/traits/traits.md).
 
+### Trait-typed value
+
+A value whose static type is a trait, such as a `Shape` or an `Iterable<Int>`: it holds some implementation and is
+dispatched through a [witness table](#witness-table). Never called a trait object or an existential. See
+[Trait types](language/traits/trait-types.md).
+
 ### Type parameter
 
 A name standing for a type, filled in at each use of a `fn`, `type`, `trait` or `extend`, written out like a type
@@ -514,3 +542,4 @@ pointer per member of the trait. See [Witness tables](language/generics/witnesse
 
 A root `project.trb` naming several member projects, sharing one `project.lock.trb` so they resolve their
 dependencies together. See [Workspaces](language/modules-and-packages/workspaces.md).
+

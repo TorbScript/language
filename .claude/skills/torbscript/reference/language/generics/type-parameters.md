@@ -165,3 +165,4 @@ type Buffer<Size> {
 - [Inference](inference.md) - when a type argument can be left out.
 - [Traits](../traits/traits.md) - `with Add<Self, Self>` and where a trait's own parameters come from.
 - [No higher-kinded types](no-higher-kinded-types.md) - what a type parameter cannot be.
+

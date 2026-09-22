@@ -221,3 +221,4 @@ top-level declaration's visibility is a different question, spelled `public`.
 - [Traits](../traits/traits.md) - how a type comes `with` a capability.
 - [Types and methods](../../guide/values-and-bindings.md) - the same material as a learning step.
 - [Why there are no properties](../../explanation/why-values-instead-of-references.md) - the argument behind rule 11.
+

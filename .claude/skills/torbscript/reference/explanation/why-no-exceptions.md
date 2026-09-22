@@ -122,3 +122,4 @@ crashing with 101 - a `Result` reaching the top of the program is an expected ou
 - [The Error trait](../language/errors/the-error-trait.md) - `Result<Value, Error>` and `cause()`.
 - [panic](../language/errors/panic.md) - what a panic prints, and what does not run afterwards.
 - [Why there is no null](why-no-null.md) - the same argument applied to absence instead of failure.
+

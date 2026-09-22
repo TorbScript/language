@@ -14,6 +14,10 @@ source:
   - std/core/src/operators.trb
 ---
 
+> **Not built natively yet.** Changing a slice in place, through a `var` receiver or a `var` argument, is not built by
+> the native back end yet, so `torb run` refuses the examples here that use it. `torb check` accepts them, and the rules
+> are the language's.
+
 `list[from..to]` reads as a value: a new `List` that shares the original's storage and starts counting at 0, unaffected
 by anything the original does afterward. The same expression used as a `var` path is the other half of `Slice`'s
 contract, `MutableSlice`: it changes that part of the original in place, which is what other languages need a mutable
@@ -105,3 +109,4 @@ samples[1..4].sort { value => value }
 - [Lists](lists.md) - the type most slices are taken from.
 - [Ranges](../values-and-types/ranges.md) - the three range types, and what an open end means elsewhere.
 - [Mutation and var paths](../types/var-paths.md) - the rule that makes a slice a window instead of a copy.
+

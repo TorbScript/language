@@ -146,3 +146,4 @@ const squares: List<Square> = shapes
 - [Trait intersections](intersections.md) - `Show & Encode` as one trait type built from several.
 - [Object safety](object-safety.md) - which members a trait-typed value cannot call.
 - [Witness tables](../generics/witnesses.md) - how a generic member is called on a trait-typed value.
+

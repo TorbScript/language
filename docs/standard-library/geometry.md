@@ -55,8 +55,6 @@ half-open rule is about tiling.
 
 ## Declarations
 
-<!-- torb:declarations:begin -->
-
 ### `Rectangle`, `Box`
 
 ```trb fragment
@@ -138,8 +136,6 @@ public type Plane<Scalar: Real = Float>
 A flat surface in space, as the `normal` that points away from its front and the `distance` along that normal.
 `signedDistanceTo` is positive in front and negative behind, and which of the two a program calls "outside" is the
 program's own business. `through`, `ofPoints`, `distanceTo`, `isInFront`, `closestPoint`, `mirrored` and `flipped`.
-
-<!-- torb:declarations:end -->
 
 ## Related
 

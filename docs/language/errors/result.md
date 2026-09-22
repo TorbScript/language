@@ -113,8 +113,9 @@ Fail(error)    Fail problem     the failure case
     first `Fail`. That is what `traverse` or `sequence` is in a language with higher-kinded types, and it is an ordinary
     `From<Iterable<...>>` implementation rather than a language feature.
 
-11. **A top-level `?` is not a panic.** In an entry file or a script it prints `error: <the error through Show>`, walks
-    `cause()` with one `  caused by: <...>` line per link, and exits with **1**. A `panic` prints `panic: <message>` and
+11. **A top-level `?` is not a panic.** In an entry file or a script it prints `error: <the error through Show>` and
+    exits with **1** (the `  caused by:` lines of the chain are specified and not built yet, see
+    [Errors at the top level](top-level-errors.md)). A `panic` prints `panic: <message>` and
     the site, exits with **101**, and runs nothing on the way out - no `Close`, no `using` cleanup.
 
 ## What this is not

@@ -100,3 +100,4 @@ group "Vector2" {
 - [std/expression](../standard-library/expression.md) - `assert`, and what an `Expression<Bool>` captures.
 - [Verify your work](../tooling/verifying-your-work.md) - where `test` fits among `check` and `canon --check`.
 - [Top-level code](../language/modules-and-packages/top-level-code.md) - why a test file needs no `fn main`.
+

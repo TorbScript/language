@@ -61,8 +61,9 @@ index it belongs to updates itself.
   checks, so it could not contain placeholders. Copy the block.
 - **Do not edit the generated part of an index.** Everything between `<!-- torb:index:begin -->` and
   `<!-- torb:index:end -->` is overwritten. Write the introduction above the first marker.
-- **`docs check` is slow the first time** because it type checks every `trb check` block against the real standard
-  library in one run. `--no-snippets` skips that while you are still moving text around.
+- **`docs check` type checks every `trb check` block against the real standard library in one run, and builds every
+  `trb run` block into one program.** `--no-snippets` skips both while you are still moving text around, and
+  `--no-native` skips the building on a machine without a C compiler.
 
 ## Full example
 
@@ -303,13 +304,9 @@ use <Name> from "std/<name>"
 
 ## Declarations
 
-<!-- torb:declarations:begin -->
-
 ### <Name>
 
 <The doc comment of the declaration, and its signature.>
-
-<!-- torb:declarations:end -->
 
 ## Related
 

@@ -126,6 +126,7 @@ type connection {
   var Timeout: Int = 30
 }
 // error: A type starts with an uppercase letter: write `Connection`
+// error: A field starts with a lowercase letter: write `timeout`
 ```
 
 **The rule is not about the whole name, only about its first letter.** `HTTPServer`, `ioError` and `x2` all pass:

@@ -13,6 +13,9 @@ source:
   - CONCEPT.md#distinct-types-opaque-aliases
 ---
 
+> **Not built natively yet.** `by` delegation is not built by the native back end yet, so `torb run` refuses the
+> examples here that use it. `torb check` accepts them, and the rules are the language's.
+
 There is no separate concept for "a type that wraps another type but is not interchangeable with it" - that is a
 `type` with one field. `by` forwards specific traits to that field, one decision per trait, so the wrapper costs
 nothing to use.
@@ -67,10 +70,11 @@ type Name with Trait, Trait & Trait by field, Trait by field { ... }
      currency: String
    }
    // error: `by` needs a type with a single field: `Money` has `amount` and `currency`
+   // error: `Money` implements `Add<Money, Money>` but has no `add`
    ```
 
-4. **Where a forwarded signature mentions `Self`, arguments are unwrapped and results wrapped again.** `add(self,
-   other: Self): Self` on `Int` becomes `add(self, other: Seconds): Seconds` on `Seconds`, so the caller never sees
+4. **Where a forwarded signature mentions `Self`, arguments are unwrapped and results wrapped again.** `add(other:
+   Self): Self` on `Int` becomes `add(other: Seconds): Seconds` on `Seconds`, so the caller never sees
    the underlying `Int`.
 
 5. **A trait without `Self` in its signature can be delegated by a type of any field count**, because there is

@@ -34,8 +34,6 @@ fn firstArgument(): String? {
 
 ## Declarations
 
-<!-- torb:declarations:begin -->
-
 ### Process
 
 ```trb fragment
@@ -66,6 +64,10 @@ public type ProcessOutput {
 }
 ```
 
+`Process.run` collects **both** streams of the child into `standardOutput`, in the order it wrote them, and leaves
+`standardError` empty. A caller that needs the two apart starts the child with `Process.start` and reads
+`errors()`.
+
 What a program run with `Process.run` left behind. `isSuccess()` is the usual question about a child process: did it do
 what it was asked (`exitCode == 0`).
 
@@ -81,13 +83,11 @@ public native shared type Child with Close {
 }
 ```
 
-A child process that is still running, started with `Process.start`. `input().finish()` closes its standard input,
+A child process that is still running, started with `Process.start`. `input().end()` closes its standard input,
 which is how most filters learn that they are done. `close()` releases the pipes and stops waiting for the child; it
 does not kill it, because ending somebody else's program is a decision and not a cleanup. `wait()` and every use of a
 `Child`'s pipes need `.await()`, so `Process.start` and `Child` wait on the same milestone as [std/task](task.md),
 which is `status: planned`; `Process.run`, `Process.arguments` and `Process.exit` do not touch `Task` at all.
-
-<!-- torb:declarations:end -->
 
 ## Related
 

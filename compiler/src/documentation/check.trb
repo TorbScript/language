@@ -17,7 +17,9 @@ use DocumentationProblem from "./markdown"
 use Documentation from "./tree"
 use schemaProblems, skillRoleProblems, nameProblems from "./schema"
 use PathExists, linkProblems, shapeProblems from "./links"
-use Snippet, SnippetKind, collectSnippets, verifySyntax, verifyTypes from "./snippets"
+use IoError from "std/fs"
+use Snippet, SnippetKind, collectSnippets, verifySyntax, verifyTypes, typeCheckSnippets from "./snippets"
+use NativeOptions, nativeSnippetProblems from "./native"
 use generateIndexes, staleIndexes from "./index"
 
 /** What one run of `torb docs check` found and counted: the problems, and the numbers a green run prints. */
@@ -70,6 +72,29 @@ public fn checkSnippetTypes(documentation: Documentation, standardLibrary: Map<S
   const collected = collectSnippets documentation
   const clean = withoutBrokenSyntax collected.snippets
   verifyTypes standardLibrary, clean
+}
+
+/**
+ * [checkSnippetTypes], and then what the native back end says about the blocks: which ones it refuses, and what every
+ * `trb run` block prints. `None` leaves the native half out, for a machine without a C compiler.
+ */
+public fn checkSnippets(
+  documentation: Documentation,
+  standardLibrary: Map<String, String>,
+  nativeOptions: NativeOptions?,
+): Result<List<DocumentationProblem>, IoError> {
+  const collected = collectSnippets documentation
+  const clean = withoutBrokenSyntax collected.snippets
+  const options = match nativeOptions {
+    Some(found) => found
+    None => {
+      return Ok verifyTypes(standardLibrary, clean)
+    }
+  }
+  const typed = typeCheckSnippets standardLibrary, clean, true
+  var problems = typed.problems
+  problems.addAll(nativeSnippetProblems(typed, options)?)
+  Ok problems
 }
 
 /**

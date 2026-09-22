@@ -147,3 +147,4 @@ function.
 - [Trailing closures](trailing-closures.md) - writing the last closure parameter after the call.
 - [Quoted expressions](quoted-expressions.md) - what `Expression<Type>` hands the function beyond the value.
 - [Declaring a function](declaring-a-function.md) - the rest of a parameter's declaration.
+

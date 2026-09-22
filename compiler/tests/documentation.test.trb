@@ -9,6 +9,8 @@ use readPage, anchorOf, linesOf, DocumentationProblem from "../src/documentation
 use documentationOf, Documentation from "../src/documentation/tree"
 use PathExists from "../src/documentation/links"
 use checkDocumentation, checkSnippetTypes from "../src/documentation/check"
+use Snippet, SnippetKind, expectedOutputOf from "../src/documentation/snippets"
+use markerOf, outputProblems from "../src/documentation/native"
 use generateIndexes from "../src/documentation/index"
 use buildSkill from "../src/documentation/skill"
 use bundleDocumentation from "../src/documentation/bundle"
@@ -590,6 +592,67 @@ group "the snippets" {
     const found = check files
     assert(found.any({ _.contains "only means something in a `trb error` block" }))
   }
+
+  test "a run block needs the output it expects" {
+    var files = goodTree()
+    files.set "language/bindings.md", referencePage("Bindings").replace("```trb\n", "```trb run\n")
+    const found = check files
+    assert(found.any({ _.contains "`// prints <line>` comments" }))
+  }
+
+  test "a run block that says what it prints is fine" {
+    var files = goodTree()
+    const page = referencePage("Bindings").replace("```trb\n", "```trb run\n").replace("print answer", "print answer // prints 42")
+    files.set "language/bindings.md", page
+    assert check(files).isEmpty()
+  }
+
+  test "a prints comment outside a run block is reported" {
+    var files = goodTree()
+    files.set "language/bindings.md", referencePage("Bindings").replace("print answer", "print answer // prints 42")
+    const found = check files
+    assert(found.any({ _.contains "Mark the block `trb run`" }))
+  }
+}
+
+group "the output of a run block" {
+  test "one line per prints comment, behind a statement or on a line of its own" {
+    const text = "print 1 // prints 1\n// prints two words\nprint 3"
+    assert(expectedOutputOf(text) == ["1", "two words"])
+  }
+
+  test "an empty prints comment is an empty line" {
+    assert(expectedOutputOf("print \"\" // prints") == [""])
+  }
+
+  test "the output is cut at the markers and compared block by block" {
+    const first = runSnippet "first", ["1"]
+    const second = runSnippet "second", ["a", "b"]
+    const output = "{markerOf(first)}\n1\n{markerOf(second)}\na\nb\n\n0 passed, 0 failed (2 files)\n"
+    assert outputProblems([first, second], output, 0).isEmpty()
+    const windows = output.replace "\n", "\r\n"
+    assert outputProblems([first, second], windows, 0).isEmpty()
+  }
+
+  test "a block that prints something else is reported with both" {
+    const only = runSnippet "only", ["1"]
+    const found = outputProblems([only], "{markerOf(only)}\n2\n", 0)
+    assert(found.length() == 1)
+    assert found[0].message.contains("printed `2`")
+  }
+
+  test "a block that ends the program is reported, and the ones after it did not run" {
+    const first = runSnippet "first", ["1"]
+    const second = runSnippet "second", ["2"]
+    const found = outputProblems([first, second], "{markerOf(first)}\npanic: no\n", 101)
+    assert(found.length() == 2)
+    assert found[0].message.contains("exit code 101")
+    assert found[1].message.contains("did not run")
+  }
+}
+
+fn runSnippet(name: String, output: List<String>): Snippet {
+  Snippet "docs/page.md", 1, 2, SnippetKind.Running, "", [], output, name, "", "stable", false
 }
 
 group "the type check of a snippet" {
@@ -637,6 +700,28 @@ group "the type check of a snippet" {
     }
     assert(found.any({ _.contains "has no diagnostic at all" }))
   }
+
+  test "an error block that is also wrong for a reason it does not expect is reported" {
+    var files = goodTree()
+    const twice = "```trb error\nconst answer: Bool = 42\nconst other: Bool = missing\n// error: Expected `Bool`\n```"
+    const page = referencePage("Bindings").replace("```trb\nconst answer = 42\nprint answer\n```", twice)
+    files.set "language/bindings.md", page
+    const documentation = documentationOf "docs", files
+    var found: List<String> = []
+    for problem in checkSnippetTypes(documentation, standardLibrary()) {
+      found.add problem.show()
+    }
+    assert(found.any({ _.contains "none of its `// error:` lines expects" }))
+  }
+
+  test "an error block may expect several diagnostics, one line each" {
+    var files = goodTree()
+    const both = "```trb error\nconst answer: Bool = 42\nconst other: Bool = missing\n// error: Expected `Bool`\n// error: Cannot find `missing`\n```"
+    const page = referencePage("Bindings").replace("```trb\nconst answer = 42\nprint answer\n```", both)
+    files.set "language/bindings.md", page
+    const documentation = documentationOf "docs", files
+    assert checkSnippetTypes(documentation, standardLibrary()).isEmpty()
+  }
 }
 
 /** The small standard library the snippet checks run against: the prelude of the harness, as a package of `std`. */
@@ -680,7 +765,7 @@ group "the skill" {
     assert body.contains("### Goal")
   }
 
-  test "a planned page is not in the skill at all" {
+  test "a planned page is in the skill with its banner" {
     var files = skillTree()
     const planned = referencePage("Planned").replace("status: stable", "status: planned").replace(
       "One paragraph about the construct.",
@@ -689,8 +774,9 @@ group "the skill" {
     files.set "language/planned.md", planned
     const documentation = documentationOf "docs", files
     const skill = buildSkill documentation
-    assert(skill.excluded == 1)
-    assert(!skill.files.any({ _.path == "reference/language/planned.md" }))
+    assert(skill.excluded == 0)
+    const copied = skill.files.find({ _.path == "reference/language/planned.md" }).expect("the planned page")
+    assert copied.text.contains("> **Planned.**")
   }
 
   test "a page that says omit is not in the skill" {
@@ -699,6 +785,39 @@ group "the skill" {
     const documentation = documentationOf "docs", files
     const skill = buildSkill documentation
     assert(!skill.files.any({ _.path == "reference/language/omitted.md" }))
+  }
+
+  test "a link to what the skill does not carry keeps only its text" {
+    var files = skillTree()
+    files.set "language/omitted.md", referencePage("Omitted").replace("status: stable", "status: stable\nskill: omit")
+    const linking = referencePage("Linking").replace(
+      "It is not something else.",
+      "See [the omitted page](omitted.md), [the concept](../../CONCEPT.md) and [bindings](bindings.md#rules).",
+    )
+    files.set "language/linking.md", linking
+    const documentation = documentationOf "docs", files
+    const skill = buildSkill documentation
+    assert skill.problems.isEmpty()
+    const copied = skill.files.find({ _.path == "reference/language/linking.md" }).expect("the page").text
+    assert copied.contains("See the omitted page, the concept and [bindings](bindings.md#rules).")
+  }
+
+  test "a link of an inlined page is seen from the body, or keeps its text" {
+    var files = skillTree()
+    files.set "guide/model.md", guidePage().replace("One paragraph.", "See [the tooling](../tooling/index.md) and [the root](../../README.md).")
+    const documentation = documentationOf "docs", files
+    const skill = buildSkill documentation
+    const body = skill.files.find({ _.path == "SKILL.md" }).expect("the body").text
+    assert body.contains("See [the tooling](reference/tooling/index.md) and the root.")
+  }
+
+  test "a link inside code is left alone" {
+    var files = skillTree()
+    const linking = referencePage("Linking").replace("It is not something else.", "Write `[text](nowhere.md)` for a link.")
+    files.set "language/linking.md", linking
+    const documentation = documentationOf "docs", files
+    const skill = buildSkill documentation
+    assert skill.problems.isEmpty()
   }
 
   test "the reference index names every page with its summary" {

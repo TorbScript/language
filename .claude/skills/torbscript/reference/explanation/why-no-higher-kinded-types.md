@@ -114,3 +114,4 @@ implementing an interface.** A new asynchronous stream type gets a `map` that me
 - [Why there are no exceptions](why-no-exceptions.md) - `Result`, another of the four.
 - [Pipelines](../language/collections-and-iteration/pipelines.md) - `Iterable`'s lazy `map`, the one that differs from
   `Option`'s.
+

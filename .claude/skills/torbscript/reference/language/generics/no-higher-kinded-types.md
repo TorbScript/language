@@ -30,8 +30,8 @@ print(numbers.map { _ * 2 }.toList())
 ## Syntax
 
 ```text
-Option<Value>.map<Output>(self, transform: (value: Value) => Output): Output?
-Iterable<Item>.map<Output>(self, transform: (value: Item) => Output): Iterable<Output>
+Option<Value>.map<Output>(transform: (value: Value) => Output): Output?
+Iterable<Item>.map<Output>(transform: (value: Item) => Output): Iterable<Output>
 ```
 
 Same name, same shape of signature, two unrelated declarations - neither `extend`s a trait the other implements.
@@ -97,3 +97,4 @@ fn anyDoubled<Container: Functor>(value: Container): Container {
 - [Type parameters](type-parameters.md) - what a type parameter can stand for, and what it cannot.
 - [Witness tables](witnesses.md) - what does exist for calling a bound's members generically.
 - [Bounds](bounds.md) - what a bound can name, since it cannot name a shape like `Functor`.
+

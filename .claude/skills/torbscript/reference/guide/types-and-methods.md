@@ -130,3 +130,4 @@ See [Verbs and participles](../language/types/verbs-and-participles.md) for how 
 - [Cases and matching](cases-and-matching.md) - a type with more than one shape, and taking it apart.
 - [Declaring a type](../language/types/declaring-a-type.md) - fields, visibility and what is generated, in full.
 - [Mutation and var paths](../language/types/var-paths.md) - what has to be `var` from the binding down.
+

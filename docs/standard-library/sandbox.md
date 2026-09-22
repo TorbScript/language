@@ -14,6 +14,9 @@ source:
   - std/sandbox/src/lib.trb
 ---
 
+> **Not built natively yet.** `Script` and `Sandbox` are not built by the native back end yet, so `torb run` refuses the
+> examples here that use them. `torb check` accepts them, and the rules are the language's.
+
 `std/sandbox` loads `.trb` files as sandboxed receiver closures - the mechanism behind `project.trb` and every
 configuration script. What a script may do is granted at the call site of `Sandbox.load`, never in the script or its
 own project file, because a script that could grant itself capabilities would not be a sandbox. Left at the defaults, a
@@ -39,8 +42,6 @@ print script.isOk()
 ```
 
 ## Declarations
-
-<!-- torb:declarations:begin -->
 
 ### Sandbox
 
@@ -97,8 +98,6 @@ public type SandboxError with Show, Error {
 
 What went wrong loading a script: a syntax or type error against the receiver type, or a capability it does not have.
 `line` is `0` when the problem is not about one place in the script, such as the file not being readable at all.
-
-<!-- torb:declarations:end -->
 
 ## Related
 

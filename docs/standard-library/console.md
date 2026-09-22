@@ -30,8 +30,6 @@ printError "starting up"
 
 ## Declarations
 
-<!-- torb:declarations:begin -->
-
 ### `print`, `printError`
 
 ```trb fragment
@@ -41,8 +39,6 @@ public native fn printError(...values: Show)
 
 `print` writes its values to standard output, separated by spaces, followed by a line break. `printError` does the same
 to standard error, for diagnostics, progress and anything that is not the result of the program.
-
-<!-- torb:declarations:end -->
 
 ## Related
 

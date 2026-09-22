@@ -33,8 +33,6 @@ fn wordCount(path: String): Result<Int, IoError> {
 
 ## Declarations
 
-<!-- torb:declarations:begin -->
-
 ### IoError
 
 ```trb fragment
@@ -81,8 +79,6 @@ against the working directory (`.` and `..` resolved) and does not require the p
 links either. `chunks`, `lines`, `add`, `end` and `write` answer a `Task` and need `.await()`; see
 [std/task](task.md), which is `status: planned` because no back end gives a `Task` a value yet. `open`, `readAll`,
 `close`, `readText`, `writeText`, `exists`, `isDirectory`, `createDirectory` and `list` do not touch `Task` at all.
-
-<!-- torb:declarations:end -->
 
 ## Related
 

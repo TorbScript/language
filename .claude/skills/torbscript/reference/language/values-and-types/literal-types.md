@@ -13,6 +13,9 @@ source:
   - examples/tour/src/12-type-system.trb
 ---
 
+> **Not built natively yet.** `tryFrom` into a literal type is not built by the native back end yet, so `torb run`
+> refuses the examples here that use it. `torb check` accepts them, and the rules are the language's.
+
 A literal type is a union of literals of one base type - `String`, `Int` or `Char`. It is for "one of these exact
 values" in a signature, a configuration field or a wire format, and it is told apart from any other value of the same
 base type by generated members, the same way a declared type is.
@@ -104,3 +107,4 @@ other is expected needs an explicit `match` or a fresh literal.
 - [Type aliases](type-aliases.md) - `type Name = Other`, the syntax a literal type reuses.
 - [Distinct types](distinct-types.md) - a type for one case with data, when a literal type stops being enough.
 - [Bindings](bindings.md) - how a literal adapts to an expected type in general.
+

@@ -13,6 +13,9 @@ source:
   - CONCEPT.md#error-handling
 ---
 
+> **Not built natively yet.** A `?` that converts the error on the way out is not built by the native back end yet, so
+> `torb run` refuses the examples here that use it. `torb check` accepts them, and the rules are the language's.
+
 Every error type in this documentation so far has been precise: `ConfigError`, `IoError`, a type named for the one
 thing that can go wrong. `Error` exists for the layers above those, where the only thing left to do with a failure is
 hand it further up and eventually report it.
@@ -130,8 +133,6 @@ type ConfigError with Show, Error {
 fn start(): Result<Void, ConfigError> {
   try {
     Fail ConfigError.Missing("port")
-  } catch error {
-    print error
   }
 }
 print start()
@@ -151,3 +152,4 @@ compile.
 - [Result](result.md) - where a failure lives before it becomes an `Error` value.
 - [Declaring an error type](error-types.md) - building the precise error types `Error` sits above.
 - [std/core](../../standard-library/core.md) - the trait's declaration in full.
+

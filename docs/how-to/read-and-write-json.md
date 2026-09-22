@@ -14,6 +14,9 @@ source:
   - std/json/src/lib.trb
 ---
 
+> **Not built natively yet.** `Json.encode` is not built by the native back end yet, so `torb run` refuses the examples
+> here that use it. `torb check` accepts them, and the rules are the language's.
+
 `Json` reads and writes any type that implements `Encode`/`Decode`, and both are generated for an ordinary type - there
 is nothing to write for the common case. Writing the pair by hand is for the type whose constructor cannot express
 what a document may say, the same reason `parse` exists next to a plain constructor.

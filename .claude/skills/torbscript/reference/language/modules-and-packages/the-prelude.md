@@ -13,6 +13,9 @@ source:
   - CONCEPT.md#modules-and-packages
 ---
 
+> **Not built natively yet.** `Duration` and `Instant` are not built by the native back end yet, so `torb run` refuses
+> the examples here that use them. `torb check` accepts them, and the rules are the language's.
+
 A new file already has `Option`, `List`, `print` and every other name of [the glossary](../../glossary.md#prelude) in
 scope. `use` is for everything else: the prelude is what a project decided nobody should have to import.
 
@@ -92,3 +95,4 @@ reads the wall clock, which is a capability, and only an explicit `use` brings i
 - [use](use.md) - every form an import can take.
 - [Packages](packages.md) - what a package is, and how the prelude is one.
 - [Visibility](visibility.md) - `public`, which is what makes a name re-exportable at all.
+

@@ -137,3 +137,4 @@ fn tick(counter: Counter) {
 - [Declaring a type](declaring-a-type.md) - where a verb and its participle first appear, `translate`/`translated`.
 - [Mutation and var paths](var-paths.md) - what makes a path a `var` path in the first place.
 - [Methods and `static fn`s](methods.md) - `static` against a receiver, the more basic distinction.
+

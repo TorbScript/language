@@ -125,7 +125,7 @@ $ torb canon --check --rule calls --rule strings --rule imported-case-patterns -
 0 of 488 files would change: 0 calls became commands, 0 got parentheses, 0 strings were indented, 0 case patterns, 0 unread bindings, 0 endless loops
 ```
 
-That is the tier A gate of [compiler/CONTRIBUTING.md](../../compiler/CONTRIBUTING.md), and `sh tools/gates.sh a` runs
+That is the tier A gate of compiler/CONTRIBUTING.md, and `sh tools/gates.sh a` runs
 it with exactly those five rules.
 
 ## Related
@@ -135,3 +135,4 @@ it with exactly those five rules.
 - [Multi-line strings](../language/syntax/multi-line-strings.md) - the rule `strings` enforces.
 - [Pattern forms](../language/pattern-matching/pattern-forms.md) - the language rule `unused-bindings` sweeps for.
 - [Verify your work](verifying-your-work.md) - where `canon --check` sits among `check` and `test`.
+

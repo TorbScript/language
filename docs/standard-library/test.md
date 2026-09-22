@@ -39,8 +39,6 @@ test "compares equal to itself" {
 
 ## Declarations
 
-<!-- torb:declarations:begin -->
-
 ### `test`, `group`
 
 ```trb fragment
@@ -50,8 +48,6 @@ public native fn group(name: String, body: () => Void)
 
 `group` names a closure of `test` calls; `test` names a closure whose body is the check. Both are ordinary calls in the
 `.test.trb` files of `tests`, and nest freely - a `group` inside a `group` is how a suite is organized.
-
-<!-- torb:declarations:end -->
 
 ## Related
 

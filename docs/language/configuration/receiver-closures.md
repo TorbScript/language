@@ -13,6 +13,10 @@ source:
   - CONCEPT.md#configuration-dsl
 ---
 
+> **Not built natively yet.** A closure that captures a `var` parameter or `var self` is not built by the native back
+> end yet, so `torb run` refuses the examples here that use it. `torb check` accepts them, and the rules are the
+> language's.
+
 Inside a method, a bare name can mean a field or another method of `self` without writing `self.` in front of it. A
 [receiver closure](../../glossary.md#receiver-closure) gets the same treatment: a closure whose first parameter is
 named `self` reads and writes that receiver the same way a method body does.

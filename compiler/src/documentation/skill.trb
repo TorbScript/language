@@ -8,13 +8,17 @@
  * 1. `name` and `description` are always in the model's context (about 100 tokens). They decide whether the skill is
  *    used at all, so the description says what the skill is **and when to use it**, in the third person.
  * 2. `SKILL.md` is read when the skill triggers and stays under `longestSkillBody` lines: the mental model of the
- *    language, a syntax cheat sheet, the mistakes a model trained on other languages makes, how to verify work, and a
- *    table into the reference.
- * 3. `reference/` holds the pages. `reference/index.md` is the whole map with one summary per page, so the agent reads
- *    one file to decide which page to open instead of opening pages to find out.
+ *    language, how to verify work, and how to find the rest. It is the only file the skill asks to be read up front.
+ * 3. `reference/` holds the pages, and costs nothing until a file is opened. The body points at the section indexes and
+ *    at a search, never at "read this long file first", because every file read up front is paid for on every task.
  *
  * Nothing in the body is written here: every section is the body of a page that carries the matching `skill` role in
  * its front matter, so the skill cannot drift away from the documentation. What this file decides is the *shape*.
+ *
+ * A link of a copied page that points at something the skill does not carry - a page about the documentation itself,
+ * a design record, a file of the repository outside `docs/` - becomes its plain text, and after that every link of
+ * every file the skill holds has to resolve inside the skill: a dangling link is a problem of the build, never a file
+ * that is written anyway.
  *
  * [buildSkill] is the whole command, a pure function of the [Documentation] to a [BuiltSkill]; [writeSkill] is the one
  * place that touches disk.
@@ -54,7 +58,7 @@ public type BuiltSkill {
   problems: List<DocumentationProblem>
   /** The lines of `SKILL.md`, the number the size limit is about */
   bodyLines: Int
-  /** How many pages went into `reference/`, and how many were left out because they are planned */
+  /** How many pages went into `reference/`, and how many were left out because they say `skill: omit` */
   included: Int
   excluded: Int
 }
@@ -64,8 +68,12 @@ public fn buildSkill(documentation: Documentation): BuiltSkill {
   var problems: List<DocumentationProblem> = []
   const pages = includedPages documentation
   const excluded = documentation.pages.length() - pages.length()
+  var carried: List<String> = ["index.md"]
+  for page in pages {
+    carried.add page.path
+  }
   var files: List<SkillFile> = []
-  const body = skillBody documentation, pages
+  const body = skillBody documentation, pages, carried
   problems.addAll body.problems
   files.add SkillFile("SKILL.md", body.text)
   files.add SkillFile("reference/index.md", referenceIndex(documentation, pages))
@@ -74,8 +82,9 @@ public fn buildSkill(documentation: Documentation): BuiltSkill {
     if page.path == "index.md" {
       continue
     }
-    files.add SkillFile("reference/{page.path}", page.text)
+    files.add SkillFile("reference/{page.path}", carriedText(page, carried))
   }
+  problems.addAll danglingLinks(files)
   const lines = linesOf(body.text).length()
   if lines > longestSkillBody {
     const note = "`SKILL.md` has {lines} lines. A skill body stays under {longestSkillBody}: move material into a page"
@@ -85,16 +94,15 @@ public fn buildSkill(documentation: Documentation): BuiltSkill {
 }
 
 /**
- * Everything the skill carries. A `planned` page is left out completely - a model that reads a designed feature as an
- * available one writes code that cannot compile - and a page that says `skill: omit` is left out because its author
- * said so.
+ * Everything the skill carries: every page except the ones whose author said `skill: omit`. A `planned` page is
+ * carried with its banner, like a `draft` one: the pages of the features that exist link it for the rules of a
+ * construct they use (`spawn`, `.await()`), and a model reads the banner in the same file as the design.
  */
 fn includedPages(documentation: Documentation): List<Page> {
   var kept: List<Page> = []
   for page in documentation.pages {
-    const status = page.frontMatter.text("status") ?? "stable"
     const role = page.frontMatter.text("skill") ?? ""
-    if status == "planned" || role == "omit" {
+    if role == "omit" {
       continue
     }
     kept.add page
@@ -107,7 +115,7 @@ type WrittenBody {
   problems: List<DocumentationProblem>
 }
 
-fn skillBody(documentation: Documentation, pages: List<Page>): WrittenBody {
+fn skillBody(documentation: Documentation, pages: List<Page>, carried: List<String>): WrittenBody {
   var problems: List<DocumentationProblem> = []
   var lines: List<String> = ["---", "name: {skillName}"]
   lines.add "description: \"{skillDescription}\""
@@ -115,30 +123,30 @@ fn skillBody(documentation: Documentation, pages: List<Page>): WrittenBody {
   lines.add ""
   lines.add "# TorbScript"
   lines.add ""
+  lines.add "Paths below are relative to the directory of this file. Nothing but this file needs to be read up front:"
+  lines.add "every other file is opened when a question needs it."
+  lines.add ""
   // Two sections are needed on every task and are short, so they stand in the body. The two that are long lookup
-  // material are one `Read` away instead, which is what keeps the body inside the published budget of 500 lines.
-  const inlined = [("model", "The language in sixty seconds"), ("verify", "How to verify your work")]
+  // material are one `Read` away instead, which is what keeps the body inside the published budget of 500 lines -
+  // and they are named as lookup material, not as reading, because a file read up front is paid on every task
   const referenced = [
-    ("cheat-sheet", "Every form of the language, with its exact spelling"),
-    ("mistakes", "The mistakes a model trained on other languages makes, each with its diagnostic"),
+    ("cheat-sheet", "every form of the language with its exact spelling: how is this written?"),
+    ("mistakes", "the lines that look right and are not, each with its diagnostic: why does this not compile?"),
   ]
-  const first = pageWithRole documentation, "model"
-  match first {
+  match pageWithRole(documentation, "model") {
     Some(page) => {
-      problems.addAll danglingLinks(page, pages)
-      lines.addAll inlinedSection("The language in sixty seconds", page)
+      lines.addAll inlinedSection("The language in sixty seconds", page, carried)
     }
     None => {
       problems.add DocumentationProblem("SKILL.md", 0, "No page carries `skill: model`")
     }
   }
-  lines.add "## Read these two files before writing TorbScript"
+  lines.add "## Two files to look things up in"
   lines.add ""
   for (role, why) in referenced {
-    const source = pageWithRole documentation, role
-    match source {
+    match pageWithRole(documentation, role) {
       Some(page) => {
-        lines.add "- `reference/{page.path}` - {why}."
+        lines.add "- `reference/{page.path}` - {why}"
       }
       None => {
         problems.add DocumentationProblem("SKILL.md", 0, "No page carries `skill: {role}`")
@@ -146,59 +154,25 @@ fn skillBody(documentation: Documentation, pages: List<Page>): WrittenBody {
     }
   }
   lines.add ""
-  lines.add "They are lookup material, not background: the first one is the only place every form of the language is"
-  lines.add "written down, and the second one is the list of lines that look right and are not. Read both once at the start"
-  lines.add "of a task that writes TorbScript."
+  lines.add "Search them instead of reading them whole: `grep -n \"^###\" <file>` lists the sections of either one, and a"
+  lines.add "section is a few dozen lines. Before handing over code, scan the section headings of the second one."
   lines.add ""
-  const verify = pageWithRole documentation, "verify"
-  match verify {
+  match pageWithRole(documentation, "verify") {
     Some(page) => {
-      problems.addAll danglingLinks(page, pages)
-      lines.addAll inlinedSection("How to verify your work", page)
+      lines.addAll inlinedSection("How to verify your work", page, carried)
     }
     None => {
       problems.add DocumentationProblem("SKILL.md", 0, "No page carries `skill: verify`")
-    }
-  }
-  for (role, _) in inlined {
-    if pageWithRole(documentation, role).isNone() {
-      problems.add DocumentationProblem("SKILL.md", 0, "No page carries `skill: {role}`")
     }
   }
   lines.addAll navigation(documentation, pages)
   WrittenBody lines.joined(separator: "\n"), problems
 }
 
-/**
- * A page whose body stands in `SKILL.md` may only link pages the skill carries. A link into a page that was left out -
- * a planned one, or one about the documentation itself - would be a path that leads nowhere, which is the one thing an
- * agent cannot recover from.
- */
-fn danglingLinks(page: Page, pages: List<Page>): List<DocumentationProblem> {
-  var problems: List<DocumentationProblem> = []
-  for link in page.read.links {
-    const target = rewrittenTarget link.target, page.folder, false
-    if !target.startsWith("reference/") {
-      continue
-    }
-    const inside = target.slice(10..target.byteLength())
-    const path = match inside.indexOf("#") {
-      Some(at) => inside.slice(0..at)
-      None => inside
-    }
-    if pages.any({ _.path == path }) {
-      continue
-    }
-    const note = "`{link.target}` is not part of the skill, so a body that is inlined into `SKILL.md` cannot link it"
-    problems.add DocumentationProblem(page.path, link.line, note)
-  }
-  problems
-}
-
 /** One section of the body: the heading, the page's body one level deeper, and where it came from. */
-fn inlinedSection(heading: String, page: Page): List<String> {
+fn inlinedSection(heading: String, page: Page, carried: List<String>): List<String> {
   var lines = ["## {heading}", ""]
-  lines.addAll demoted(page)
+  lines.addAll demoted(page, carried)
   lines.add ""
   lines.add "Source: `reference/{page.path}`"
   lines.add ""
@@ -212,18 +186,24 @@ fn pageWithRole(documentation: Documentation, role: String): Page? {
 /**
  * The body of a page, one heading level deeper, so that its sections sit below the section of the skill they fill. The
  * body is copied verbatim otherwise: a condensed copy would be a second version of the same text, and two versions of
- * one rule is how a documentation starts to contradict itself.
+ * one rule is how a documentation starts to contradict itself. Its links are seen from `SKILL.md` instead of from the
+ * page, so a link that was relative to the page's folder becomes relative to the skill's root.
  */
-fn demoted(page: Page): List<String> {
+fn demoted(page: Page, carried: List<String>): List<String> {
   var lines: List<String> = []
-  var isInsideFence = false
+  var openFence = 0
+  var openIndent = 0
   for line in linesOf(page.read.body) {
-    if line.startsWith("```") {
-      isInsideFence = !isInsideFence
+    const fence = fenceAfter line, openFence, openIndent
+    if fence != openFence {
+      if openFence == 0 {
+        openIndent = indentOf line
+      }
+      openFence = fence
       lines.add line
       continue
     }
-    if isInsideFence {
+    if openFence > 0 {
       lines.add line
       continue
     }
@@ -231,23 +211,53 @@ fn demoted(page: Page): List<String> {
       lines.add "#{line}"
       continue
     }
-    lines.add withRewrittenLinks(line, page.folder)
+    lines.add withRewrittenLinks(line, page.folder, carried, "reference/")
   }
   trimmedBlankLines lines
 }
 
 /**
- * A link of an inlined body, seen from `SKILL.md` instead of from the page it was written on. The page itself is copied
- * into `reference/`, so a link that was relative to its folder has to become relative to the skill's root - otherwise
- * every link of the two inlined sections points nowhere.
+ * A copied page, whose links to what the skill carries stay as they are - the tree below `reference/` is the tree of
+ * the documentation, so a relative link still resolves - and whose links to anything else become their plain text.
  */
-fn withRewrittenLinks(line: String, folder: String): String {
+fn carriedText(page: Page, carried: List<String>): String {
+  var lines: List<String> = []
+  var openFence = 0
+  var openIndent = 0
+  for line in linesOf(page.text) {
+    const fence = fenceAfter line, openFence, openIndent
+    if fence != openFence {
+      if openFence == 0 {
+        openIndent = indentOf line
+      }
+      openFence = fence
+      lines.add line
+      continue
+    }
+    if openFence > 0 {
+      lines.add line
+      continue
+    }
+    lines.add withRewrittenLinks(line, page.folder, carried, "")
+  }
+  var text = lines.joined separator: "\n"
+  if page.text.endsWith("\n") {
+    text = text + "\n"
+  }
+  text
+}
+
+/**
+ * Every link of one line, seen from a file of the skill: a link to a page the skill carries is written relative to
+ * `prefix` (`reference/` from `SKILL.md`, nothing from a copied page, whose folder is the page's own), and a link to
+ * anything else keeps only its text. What stands between backticks is code and is left alone.
+ */
+fn withRewrittenLinks(line: String, folder: String, carried: List<String>, prefix: String): String {
   var rewritten = ""
   var rest = line
   var isInsideCode = false
   while !rest.isEmpty() {
-    const opening = rest.indexOf "]("
-    const at = match opening {
+    const opening = match rest.indexOf("](") {
       Some(found) => found
       None => {
         rewritten = rewritten + rest
@@ -255,26 +265,55 @@ fn withRewrittenLinks(line: String, folder: String): String {
         continue
       }
     }
-    const tail = rest.slice(at..rest.byteLength())
-    const closing = tail.indexOf ")"
-    const end = match closing {
-      Some(found) => at + found
+    const tail = rest.slice(opening..rest.byteLength())
+    const end = match tail.indexOf(")") {
+      Some(found) => opening + found
       None => {
         rewritten = rewritten + rest
         rest = ""
         continue
       }
     }
-    const head = rest.slice(0..(at + 2))
+    const head = rest.slice(0..opening)
+    const wasInsideCode = isInsideCode
     isInsideCode = hasOddBackticks head, isInsideCode
-    const target = rest.slice((at + 2)..end)
-    rewritten = rewritten + head + rewrittenTarget(target, folder, isInsideCode)
-    rest = rest.slice(end..rest.byteLength())
-    const kept = rest.slice(0..1)
-    rewritten = rewritten + kept
-    rest = rest.slice(1..rest.byteLength())
+    const target = rest.slice((opening + 2)..end)
+    const labelStart = labelStartOf head
+    const kept = keptTarget target, folder, carried, prefix
+    if wasInsideCode || isInsideCode || labelStart.isNone() {
+      rewritten = rewritten + head + "](" + target + ")"
+    } else {
+      match kept {
+        Some(written) => {
+          rewritten = rewritten + head + "](" + written + ")"
+        }
+        None => {
+          // A target the skill does not carry: the text of the link stays, the brackets and the target go
+          const start = labelStart.expect "checked above"
+          rewritten = rewritten + head.slice(0..start) + head.slice((start + 1)..head.byteLength())
+        }
+      }
+    }
+    rest = rest.slice((end + 1)..rest.byteLength())
   }
   rewritten
+}
+
+/** Where the `[` of the link that ends at the end of `head` stands, if it stands in `head` at all. */
+fn labelStartOf(head: String): Int? {
+  // The last `[` that no `]` closes, found walking forward: a byte offset in the middle of a character is no offset
+  var open: List<Int> = []
+  var at = 0
+  for character in head.chars() {
+    if character == '[' {
+      open.add at
+    }
+    if character == ']' && !open.isEmpty() {
+      open.removeAt(open.length() - 1)
+    }
+    at = at + character.byteLength()
+  }
+  open.last()
 }
 
 fn hasOddBackticks(text: String, before: Bool): Bool {
@@ -287,10 +326,14 @@ fn hasOddBackticks(text: String, before: Bool): Bool {
   isInside
 }
 
-fn rewrittenTarget(target: String, folder: String, isInsideCode: Bool): String {
+/**
+ * The target a link keeps in a file of the skill, or `None` when it points at something the skill does not carry. An
+ * external link and an anchor of the same page are kept as they are.
+ */
+fn keptTarget(target: String, folder: String, carried: List<String>, prefix: String): String? {
   const isExternal = target.startsWith("http://") || target.startsWith("https://") || target.startsWith("mailto:")
-  if isInsideCode || isExternal || target.isEmpty() || target.startsWith("#") {
-    return target
+  if isExternal || target.isEmpty() || target.startsWith("#") {
+    return Some target
   }
   const hash = target.indexOf "#"
   const path = match hash {
@@ -302,11 +345,48 @@ fn rewrittenTarget(target: String, folder: String, isInsideCode: Bool): String {
     None => ""
   }
   const resolved = normalizePath joinDocumentationPath(folder, path)
-  if resolved.startsWith("..") {
-    // A link that leaves the documentation cannot be followed from a skill either, so it keeps its text
-    return target
+  if !carried.contains(resolved) {
+    return None
   }
-  "reference/{resolved}{anchor}"
+  if prefix.isEmpty() {
+    return Some target
+  }
+  Some "{prefix}{resolved}{anchor}"
+}
+
+/**
+ * The length of the fence that is open after this line: `0` outside a block. A fence opens with three backticks or more
+ * and closes only with a line of at least as many and nothing else, indented no deeper than the line that opened it - so
+ * a block of four backticks can show one of three, and a block can show an indented one, the way the page reader reads
+ * them.
+ */
+fn fenceAfter(line: String, open: Int, indent: Int): Int {
+  const trimmed = line.trim()
+  var count = 0
+  for character in trimmed.chars() {
+    if character != '`' {
+      break
+    }
+    count = count + 1
+  }
+  if open == 0 {
+    return if count >= 3 { count } else { 0 }
+  }
+  if count >= open && count == trimmed.byteLength() && indentOf(line) <= indent {
+    return 0
+  }
+  open
+}
+
+fn indentOf(line: String): Int {
+  var count = 0
+  for character in line.chars() {
+    if character != ' ' {
+      break
+    }
+    count = count + 1
+  }
+  count
 }
 
 fn trimmedBlankLines(lines: List<String>): List<String> {
@@ -320,11 +400,90 @@ fn trimmedBlankLines(lines: List<String>): List<String> {
   kept
 }
 
-/** The table into the reference: one row per section, and the one file that holds the whole map. */
+/**
+ * Every link of every file of the skill that does not resolve to another file of it. The rewriting above is meant to
+ * leave none, and this is what makes that a promise: a link that leads nowhere is the one thing an agent cannot recover
+ * from, so the build fails instead of writing it.
+ */
+fn danglingLinks(files: List<SkillFile>): List<DocumentationProblem> {
+  var paths: List<String> = []
+  for file in files {
+    paths.add file.path
+  }
+  var problems: List<DocumentationProblem> = []
+  for file in files {
+    const folder = folderOf file.path
+    var openFence = 0
+    var openIndent = 0
+    var number = 0
+    for line in linesOf(file.text) {
+      number = number + 1
+      const fence = fenceAfter line, openFence, openIndent
+      if fence != openFence {
+        if openFence == 0 {
+          openIndent = indentOf line
+        }
+        openFence = fence
+        continue
+      }
+      if openFence > 0 {
+        continue
+      }
+      for target in linkTargetsOf(line) {
+        const hash = target.indexOf "#"
+        const path = match hash {
+          Some(at) => target.slice(0..at)
+          None => target
+        }
+        const isExternal = path.startsWith("http://") || path.startsWith("https://") || path.startsWith("mailto:")
+        if path.isEmpty() || isExternal {
+          continue
+        }
+        const resolved = normalizePath joinDocumentationPath(folder, path)
+        if !paths.contains(resolved) {
+          const note = "The link `{target}` leads to no file of the skill"
+          problems.add DocumentationProblem("{skillName}/{file.path}", number, note)
+        }
+      }
+    }
+  }
+  problems
+}
+
+/** The targets of the links of one line, leaving out what stands between backticks. */
+fn linkTargetsOf(line: String): List<String> {
+  var targets: List<String> = []
+  var rest = line
+  var isInsideCode = false
+  loop {
+    const opening = match rest.indexOf("](") {
+      Some(found) => found
+      None => {
+        break
+      }
+    }
+    const head = rest.slice(0..opening)
+    isInsideCode = hasOddBackticks head, isInsideCode
+    const tail = rest.slice((opening + 2)..rest.byteLength())
+    const end = match tail.indexOf(")") {
+      Some(found) => found
+      None => {
+        break
+      }
+    }
+    if !isInsideCode && labelStartOf(head).isSome() {
+      targets.add tail.slice(0..end)
+    }
+    rest = tail.slice((end + 1)..tail.byteLength())
+  }
+  targets
+}
+
+/** How to find the rest: the section indexes, a search, and the one map of every page. */
 fn navigation(documentation: Documentation, pages: List<Page>): List<String> {
   var lines: List<String> = ["## Where to look things up", ""]
-  lines.add "Read `reference/index.md` first: it is one file with every page of the documentation and a one-sentence"
-  lines.add "summary of each, so the right page can be chosen without opening any. The sections are:"
+  lines.add "Every section has an index that lists its pages with one sentence each. Open the index of the section a"
+  lines.add "question belongs to, then the one page that answers it:"
   lines.add ""
   lines.add "| Section | What is in it |"
   lines.add "|---------|---------------|"
@@ -344,21 +503,27 @@ fn navigation(documentation: Documentation, pages: List<Page>): List<String> {
     }
   }
   lines.add ""
-  lines.add "Every page is self-contained: it defines or links every term it uses, so one page is enough to answer one"
-  lines.add "question. A page marked `status: draft` may still be wrong; verify it against the compiler."
+  lines.add "To find a construct or a name directly, search: `grep -ril \"<word>\" reference/` names the pages, and"
+  lines.add "`reference/index.md` has every page's path and summary on one line each - search it, it is long:"
+  lines.add "`grep -i \"<word>\" reference/index.md`."
   lines.add ""
-  lines.add "There are {pages.length()} pages. Pages of features that are designed but not implemented are not part of"
-  lines.add "this skill at all, so everything in `reference/` is a feature that exists today."
+  lines.add "Every page is self-contained: it defines or links every term it uses, so one page is enough to answer one"
+  lines.add "question. A page marked `status: draft` may still be wrong, so verify it against the compiler. A page marked"
+  lines.add "`status: planned` describes a designed feature that does not compile yet, and its first line says so."
+  lines.add ""
+  lines.add "There are {pages.length()} pages."
   lines
 }
 
 /**
  * One file with every page: its path, its title and its summary, grouped by folder. This is the level between the body
- * of the skill and a page - an index of summaries costs a fraction of the pages it describes.
+ * of the skill and a page - an index of summaries costs a fraction of the pages it describes, and a search over it
+ * costs a fraction of the index.
  */
 fn referenceIndex(documentation: Documentation, pages: List<Page>): String {
   var lines: List<String> = ["# The TorbScript documentation", ""]
-  lines.add "Every page of the reference, with what it answers. Open the one page that answers the question."
+  lines.add "Every page of the reference, with what it answers. Search this file for a word, then open the one page"
+  lines.add "that answers the question. A page marked (planned) describes a feature that does not compile yet."
   lines.add ""
   lines.add "## Contents"
   lines.add ""
@@ -382,7 +547,9 @@ fn referenceIndex(documentation: Documentation, pages: List<Page>): String {
       const title = page.frontMatter.text("title") ?? ""
       const summary = page.frontMatter.text("summary") ?? ""
       const kind = page.frontMatter.text("kind") ?? ""
-      lines.add "- `{page.path}` - **{title}** ({kind}): {summary}"
+      const status = page.frontMatter.text("status") ?? "stable"
+      const marked = if status == "stable" { kind } else { "{kind}, {status}" }
+      lines.add "- `{page.path}` - **{title}** ({marked}): {summary}"
     }
     lines.add ""
   }

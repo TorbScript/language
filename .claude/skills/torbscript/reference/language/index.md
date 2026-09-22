@@ -23,7 +23,7 @@ What does not belong here: a learning order, which is [`guide/`](../guide/index.
 contents of a package, which is [`standard-library/`](../standard-library/index.md). A rule may carry one sentence of
 reason and a link to the explanation that carries the rest.
 
-Where the compiler and [`CONCEPT.md`](../../CONCEPT.md) disagree, the compiler is right and the page says so.
+Where the compiler and `CONCEPT.md` disagree, the compiler is right and the page says so.
 
 <!-- torb:index:begin -->
 
@@ -42,7 +42,8 @@ Where the compiler and [`CONCEPT.md`](../../CONCEPT.md) disagree, the compiler i
 - **[Modules and packages](modules-and-packages/index.md)** - How a file brings in names from elsewhere, what a package is, and the two rules - visibility and top-level code - that decide what a module may contain.
 - **[Reflection](reflection/index.md)** - Why there is no runtime reflection, the four syntactic bridges that connect a type to a value instead, and the generated Encode and Decode pair that covers serialization.
 - **[Configuration](configuration/index.md)** - Receiver closures, the builder function around one, and the receiver script and sandbox that let a whole file play the same role - statically typed configuration without a second language.
-- **[Execution](execution/index.md)** - The parts of running a program that are a rule of the language rather than an implementation detail - evaluation order, what a copy costs, the tail-call guarantee, and why there are no destructors.
+- **[Execution](execution/index.md)** - The parts of running a program that are a rule of the language rather than an implementation detail - evaluation order, what a copy costs, the tail-call guarantee, and when a destructor runs.
 - **[Extensibility](extensibility/index.md)** - The language is extended by writing functions, not macros or annotations - control structures, DSLs and query providers are all ordinary functions, closures and Expression<Value> parameters.
 
 <!-- torb:index:end -->
+

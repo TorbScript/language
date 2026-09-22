@@ -15,6 +15,9 @@ source:
   - std/number/src/lib.trb
 ---
 
+> **Not built natively yet.** `tryFrom` between number types is not built by the native back end yet, so `torb run`
+> refuses the examples here that use it. `torb check` accepts them, and the rules are the language's.
+
 An integer type always carries its width: `Int8` through `Int64` signed, `UInt8` through `UInt64` unsigned. There is
 no platform-dependent "the native integer size" - the same program overflows at the same value on every platform.
 
@@ -130,6 +133,7 @@ all, unlike `&`, which at least means something in a type position.
 ```trb error
 const flipped = 0b1010 ^ 0b0110
 // error: There is no `^` operator
+// error: Expected the end of the statement, found a number
 ```
 
 ## Related

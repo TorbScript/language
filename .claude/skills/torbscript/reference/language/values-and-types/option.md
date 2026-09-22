@@ -94,3 +94,4 @@ different types, each with its own `None`; a `None` never stands for "no value o
 - [Void and Never](void-and-never.md) - the other two types with no ordinary constructor.
 - [Bindings](bindings.md) - how `?` on a type annotation reads as `Option`.
 - [Result](../errors/result.md) - `Ok`/`Fail`, the type `Option.okOr` converts into.
+

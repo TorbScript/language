@@ -14,6 +14,10 @@ source:
   - CONCEPT.md#pipelines-and-collectors
 ---
 
+> **Not built natively yet.** An assignment to a top-level `var` from inside a function is not built by the native back
+> end yet, so `torb run` refuses the examples here that use it. `torb check` accepts them, and the rules are the
+> language's.
+
 Working with an `Iterable` has three parts: a source (anything `Iterable`), zero or more lazy stages (`map`, `filter`,
 `sorted`, `take`, ...) that describe a transformation without running it, and exactly one terminal operation that pulls
 the values through and decides where they end up.

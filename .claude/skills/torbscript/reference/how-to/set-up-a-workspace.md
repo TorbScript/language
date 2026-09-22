@@ -97,3 +97,4 @@ dependencies {
 - [Workspaces](../language/modules-and-packages/workspaces.md) - the member, root and lock-file rules in full.
 - [Add a dependency](add-a-dependency.md) - declaring what a project or a member depends on.
 - [Packages](../language/modules-and-packages/packages.md) - what an ordinary project is, member or not.
+

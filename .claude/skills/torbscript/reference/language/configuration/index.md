@@ -26,3 +26,4 @@ until the runtime has them.
 - **[The sandbox](the-sandbox.md)** _(planned)_ - A script has no IO, no network, no clock, no environment and no foreign functions by default, and only the caller of Sandbox.load can grant more, in a block that names exactly what is granted.
 
 <!-- torb:index:end -->
+

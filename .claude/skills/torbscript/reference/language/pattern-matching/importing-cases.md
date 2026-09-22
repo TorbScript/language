@@ -73,6 +73,7 @@ public use <Type>.<Case> from "<path>"               re-exported under the same 
      None
    }
    // error: Expected `from "..."`
+   // error: There is no package
    ```
 
 6. **`public use` re-exports what it imports, case included.** `public use Stack.Empty from "./collections/stack"`
@@ -149,3 +150,4 @@ print describe(None)
 - [The language reference](../index.md) - where the full grammar of `use` will live.
 - [std/core](../../standard-library/core.md) - `Option` and `Result`, whose cases the prelude imports this way.
 - [Naming](../syntax/naming.md) - how an alias is spelled, and why the first letter is a rule.
+

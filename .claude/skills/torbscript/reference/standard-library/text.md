@@ -30,8 +30,6 @@ print shout
 
 ## Declarations
 
-<!-- torb:declarations:begin -->
-
 ### Char
 
 ```trb fragment
@@ -87,10 +85,9 @@ boundary, `String.from(Iterable<Char>)` and a runtime function that validates, s
 quotes with escapes; `show()` (from `Show`) is the text unquoted. `String.from(characters)` and
 `characters.to<String>()` come from `extend String with From<Iterable<Char>>`.
 
-<!-- torb:declarations:end -->
-
 ## Related
 
 - [Strings](../language/values-and-types/strings.md) - why a `String` has no `length()` and no `text[i]`.
 - [std/core](core.md) - `Equals`, `Compare`, `Hash` and `Show`, which every type here carries.
 - [The standard library](index.md) - the other packages.
+

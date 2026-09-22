@@ -96,9 +96,11 @@ Six things about the mechanics of a page.
     shows the construct, before a word of explanation. Examples convey style and level of detail better than
     descriptions do.
 11. **Every `trb` block is verified by the compiler.** By default it has to parse and be in the formatter canon. Ask for
-    more or less in the info string: `trb check` type checks it against the real `std/`, `trb fragment` is a signature
-    rather than a program, `trb error` is wrong on purpose and names its diagnostic, `trb skip <reason>` is verified by
-    nothing and the reason is printed by the gate. See [the checks](checks.md).
+    more or less in the info string: `trb check` type checks it against the real `std/`, `trb run` also builds and runs
+    it and compares the output with its `// prints` comments, `trb fragment` is a signature rather than a program,
+    `trb error` is wrong on purpose and names every diagnostic it produces, `trb skip <reason>` is verified by nothing
+    and the reason is printed by the gate. A claim about what a program prints belongs in a `trb run` block, not in the
+    prose around it. See [the checks](checks.md).
 12. **A wrong example is always paired with the right one, and the right one comes first.** A bare prohibition loses
     against what a model already believes; a correct line next to the incorrect one does not. This is why
     `## What this is not` is a required section of every reference page.

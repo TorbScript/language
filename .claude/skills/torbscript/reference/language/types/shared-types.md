@@ -119,6 +119,7 @@ shared type <Name> {
      }
    }
    // error: `tick` changes `self` and answers a `Task`, and `Counter` is a value
+   // error: The result of `spawn` is not used
    ```
 
 ## What this is not
@@ -157,3 +158,4 @@ print isSame(a, b)
 - [Copy and equality](copy-and-equality.md) - `Equals`, `Hash` and `copy`, generated for a value and not for an
   object.
 - [Mutation and var paths](var-paths.md) - the `var` path rule a shared object still follows.
+

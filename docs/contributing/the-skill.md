@@ -26,10 +26,10 @@ TorbScript can write it correctly.
 torb docs skill <root> <out>
 ```
 
-From the repository root, writing into the build directory, which is not in version control:
+From the repository root, writing into the project skill of this repository, which is committed:
 
 ```console
-torb docs skill docs build/skill/torbscript
+torb docs skill docs .claude/skills/torbscript
 ```
 
 The output directory has to be named `torbscript`, because the format requires the directory name and the `name` field
@@ -43,8 +43,8 @@ to be equal.
 torbscript/
 ├ SKILL.md                     name, description, and the body
 └ reference/
-  ├ index.md                   Every page with its path, its kind and its summary: one file to navigate by
-  └ <the documentation tree>   Every page, copied unchanged
+  ├ index.md                   Every page with its path, its kind and its summary: one file to search
+  └ <the documentation tree>   Every page, copied with its links checked
 ```
 
 The three levels of the format are what the shape follows:
@@ -53,8 +53,10 @@ The three levels of the format are what the shape follows:
    skill is used at all.
 2. **`SKILL.md`** is read when the skill triggers. It stays under 500 lines, which is the published limit for the body,
    and the command fails when it does not.
-3. **`reference/`** costs nothing until a file is read. `reference/index.md` is the one file worth reading first,
-   because it holds every path and every summary.
+3. **`reference/`** costs nothing until a file is read, and `SKILL.md` asks for no file to be read up front. It points
+   at the section indexes and at a search (`grep -ril <word> reference/`, or over `reference/index.md`, which holds every
+   path and every summary). A file that an agent is told to read first is paid for on every task: the first version of
+   this skill asked for the cheat sheet, the list of mistakes and the 47 KB index before any work, about 24,000 tokens.
 
 ### What goes into the body
 
@@ -65,24 +67,29 @@ skill cannot drift away from the documentation, and a change to the documentatio
 | Part of `SKILL.md` | Comes from the page with | How |
 |--------------------|--------------------------|-----|
 | The language in sixty seconds | `skill: model` | the body, inlined one heading level deeper |
-| Read these two files first | `skill: cheat-sheet`, `skill: mistakes` | a path and one line each |
+| Two files to look things up in | `skill: cheat-sheet`, `skill: mistakes` | a path, one line each, and how to search them |
 | How to verify your work | `skill: verify` | the body, inlined one heading level deeper |
 | Where to look things up | the folder indexes | generated |
 
 Two of the four roles are **inlined** and two are **pointed at**, and the split is not arbitrary. The mental model and
 the verification loop are needed on every task and are short, so they belong in the body. The cheat sheet and the list of
 mistakes are long lookup material: together they are more than 500 lines, which is the whole budget of the body. They sit
-one `Read` away instead - one level deep from `SKILL.md`, which is what the format asks for - and `SKILL.md` says in one
-sentence why to read them.
+one `Read` away instead - one level deep from `SKILL.md`, which is what the format asks for - and `SKILL.md` says what
+each one answers and how to find a section in it without reading it whole.
 
 Each of the four roles belongs to exactly one page, and the checker enforces that. A missing role is reported by
 `docs skill`, so the skill cannot quietly lose a part.
 
 ### What is copied and what is condensed
 
-- **A page is copied unchanged, front matter included.** A condensed copy would be a second version of the same rules,
-  and two versions of one rule is how a documentation starts to contradict itself. The front matter stays because
-  `summary` and `status` are useful to a reader that arrives at a single file.
+- **A page is copied, front matter included, with one change: a link to something the skill does not carry keeps only
+  its text.** That is a page marked `skill: omit`, a design record of `docs/` that is not a page, or a file of the
+  repository outside `docs/` - a path that leads nowhere is the one thing an agent cannot recover from. Nothing else is
+  touched: a condensed copy would be a second version of the same rules, and two versions of one rule is how a
+  documentation starts to contradict itself. The front matter stays because `summary` and `status` are useful to a
+  reader that arrives at a single file.
+- **Every link of every file of the skill has to resolve inside the skill.** The builder checks it after writing the
+  files in memory, and `docs skill` fails on a dangling link instead of writing it.
 - **`reference/index.md` is generated, not copied.** It is one flat list of every page with its path, its kind and its
   summary, grouped by folder, with a table of contents at the top. A file longer than 100 lines needs one, so that a
   partial read still shows the whole scope. It takes the place of the documentation root index, whose body would say the
@@ -91,12 +98,12 @@ Each of the four roles belongs to exactly one page, and the checker enforces tha
 
 ### What is left out
 
-- **Every page with `status: planned`.** A model that reads a designed feature as an available one writes code that
-  cannot compile, so a planned page is not in the skill at all - not in `reference/`, not in the index, not counted.
 - **Every page with `skill: omit`.** That is how a page that is about the documentation itself, rather than about the
   language, stays out. All of `contributing/` is marked this way.
-- **A `status: draft` page stays in** and keeps its draft banner, so the model reads the warning in the same file as the
-  content.
+- **A `status: draft` or `status: planned` page stays in** and keeps its banner, so the model reads the warning in the
+  same file as the content, and `reference/index.md` marks it. A planned page used to be left out, and the pages of the
+  features that exist then linked into nothing: `spawn` and `.await()` are used on stable pages and their rules live on
+  planned ones.
 
 ### How the size limit is respected
 
@@ -111,13 +118,14 @@ context of every request and not only of the ones that use it.
 
 ## Examples
 
-Build the skill and install it for yourself:
+Rebuild the skill of this repository, from a clean directory so that no copy of a removed page stays behind:
 
 ```console
-$ torb docs skill docs build/skill/torbscript
-torbscript: 33 files, SKILL.md has 323 lines
-32 pages, 10 left out (planned or omitted)
-Copy `build/skill/torbscript` to `~/.claude/skills/torbscript` for yourself, or to `.claude/skills/torbscript` of a project to share it
+$ rm -rf .claude/skills/torbscript
+$ torb docs skill docs .claude/skills/torbscript
+torbscript: 215 files, SKILL.md has 327 lines
+214 pages, 10 left out by `skill: omit`
+Copy `.claude/skills/torbscript` to `~/.claude/skills/torbscript` for yourself, or to `.claude/skills/torbscript` of a project to share it
 ```
 
 The two places a skill is installed:
@@ -127,8 +135,11 @@ The two places a skill is installed:
 | Personal | `~/.claude/skills/torbscript/` | Every session of this machine |
 | A project | `<project>/.claude/skills/torbscript/` | Everybody who checks the project out |
 
-The generated skill is an **output**. It goes under `build/`, which `.gitignore` excludes, and it is never edited by
-hand: an edit there is lost on the next build. What is edited is the page the section came from.
+The generated skill is an **output**, and this repository commits it at `.claude/skills/torbscript`, so that every
+agent working here has it. It is never edited by hand: an edit there is lost on the next build. What is edited is the
+page the section came from, and a change of `docs/` regenerates the skill and commits both together. The command
+writes files and deletes none, so a page that was removed or renamed leaves its old copy behind: delete the directory
+before regenerating it.
 
 ## Related
 

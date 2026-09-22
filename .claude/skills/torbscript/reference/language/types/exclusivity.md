@@ -14,6 +14,10 @@ source:
   - std/collections/src/list.trb
 ---
 
+> **Not built natively yet.** A closure that changes a top-level `var` while a function holds another one as a `var`
+> parameter is not built by the native back end yet, so `torb run` refuses the examples here that use it. `torb check`
+> accepts them, and the rules are the language's.
+
 `CONCEPT.md` describes a rule beyond the single-path checks of [var paths](var-paths.md): two `var` accesses are never
 allowed to run at the same time against the same path, even when they belong to one call rather than to two nested
 ones. The checker enforces it, at the top level of a file included.
@@ -81,6 +85,41 @@ print items
    // error: `pair[...]` is being changed by `swap` right now
    ```
 
+4. **A closure argument runs inside the access of its call, so it may not reach the path the call is changing.**
+   The call's access has begun by the time the closure runs, which is what makes changing `list` inside
+   `apply list { ... }` an error while two different fields of one value are fine. The same holds for a closure
+   that captures a `var` binding: it may only be passed directly as an argument (see
+   [var paths](var-paths.md) rule 4), so the call it is passed to is where the checker sees every access it makes.
+
+   ```trb check
+   fn apply(var target: List<Int>, action: () => Void) {
+     action()
+     target.add 1
+   }
+
+   var list = [1, 2]
+   var log: List<String> = []
+   apply list {
+     log.add "applied"
+   }
+   print list
+   print log
+   ```
+
+   ```trb error
+   fn apply(var target: List<Int>, action: () => Void) {
+     action()
+     target.add 1
+   }
+
+   var list = [1, 2]
+   apply list {
+     list.add 3
+   }
+   print list
+   // error: `list` is being changed by `apply` right now
+   ```
+
 ## What this is not
 
 **`items.swapAt(i, j)` is not the same call as `swap(items[i], items[j])`.** `swapAt` takes both indices as plain
@@ -116,3 +155,4 @@ print items
 - [Declaring a type](declaring-a-type.md) - `var fn`, the receiver form this rule is meant to protect.
 - [Why values instead of references](../../explanation/why-values-instead-of-references.md) - the argument this rule
   serves.
+

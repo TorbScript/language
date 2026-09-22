@@ -28,3 +28,4 @@ own.
 - **[Streams](streams.md)** _(planned)_ - Source and Sink are the asynchronous siblings of Iterator and Accumulator, with the same verbs, the same Stage values in between, and a failure that stands in the type on both ends.
 
 <!-- torb:index:end -->
+

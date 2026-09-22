@@ -86,3 +86,4 @@ print visited.containsKey((1, 1))
   implementations `Key: Hash` chooses between.
 - [Tuples](../language/values-and-types/tuples.md) - the generated members a tuple gets the same way a `type` does.
 - [Shared types](../language/types/shared-types.md) - why one has no generated `Hash`, and `isSame` in its place.
+

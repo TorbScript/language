@@ -27,11 +27,12 @@ does not compile.
 There is one `Point`, not a `Point` and a `MutablePoint`. There is one `List`, not `List` and `MutableList`. A `const`
 binding never changes and nothing below it changes; a `var` binding can be changed in place.
 
-```trb
+```trb run
 const fixed = [1, 2]
 var buffer = fixed
 buffer.add 3
 print "{fixed} {buffer}"
+// prints [1, 2] [1, 2, 3]
 ```
 
 That prints `[1, 2] [1, 2, 3]`. Assigning, passing and capturing a value is a **copy**, so two bindings never point at
@@ -156,20 +157,11 @@ higher-kinded types. A closure is always `{ parameters => body }`, and `_`, `_2`
 
 ## What to carry over from other languages, and what not
 
-| Your habit | In TorbScript |
-|------------|---------------|
-| `let mut` / `mutating func` | `var`, on the binding or in front of the `fn` |
-| a borrow, `&mut` | a copy, or a `var` parameter for the duration of one call |
-| `null`, `nil`, `undefined` | `Option<Value>`, and there is no implicit `Some` |
-| `throw` / `try` / `catch` | `Result`, `?`, and `panic` only for bugs |
-| a bare enum case (`Circle`) | `Shape.Circle` or `.Circle`, bare only when imported |
-| `class`, inheritance | `type` plus traits, or `shared type` for identity |
-| `f(a, b)` everywhere | `f a, b` wherever the grammar allows it |
-| `;` at the end of a line | nothing |
-| `x.length` on a string | `text.chars().count()` or `text.byteLength()` |
-| a `for` loop that mutates elements | `items[index].field = value`, or `map` into a new collection |
-| `MAX_SIZE`, `type point`, `fn Distance` | `maxSize`, `type Point`, `fn distance` - the first letter is a rule |
-| `Some(_)` or `Some(x)`, whichever | `Some(x)` only where the arm reads `x`; `_` or `_x` otherwise |
+The habits that break are one list, each with the diagnostic it produces:
+[What a model trained on other languages gets wrong](../explanation/mistakes-models-make.md). In short: `var` instead
+of `let mut` and `mutating func`, a copy or a `var` parameter instead of a borrow, `Option` instead of `null`,
+`Result` and `?` instead of exceptions, `Shape.Circle` instead of a bare case, `type` and traits instead of classes,
+`f a, b` instead of `f(a, b)`, and no semicolons.
 
 ## Next
 
@@ -178,3 +170,4 @@ higher-kinded types. A closure is always `{ parameters => body }`, and `_`, `_2`
 - [What a model trained on other languages gets wrong](../explanation/mistakes-models-make.md) - the mistakes, with the
   diagnostics they produce.
 - [The language reference](../language/index.md) - one page per construct.
+

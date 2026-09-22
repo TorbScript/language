@@ -13,6 +13,9 @@ source:
   - std/expression/src/lib.trb
 ---
 
+> **Not built natively yet.** A quoted expression (`Expression<Value>`) is not built by the native back end yet, so
+> `torb run` refuses the examples here that use it. `torb check` accepts them, and the rules are the language's.
+
 An `Expression<Value>` hands a function two things: the ordinary value, and the typed tree of what was written (see
 [Quoted expressions](../functions/quoted-expressions.md)). A query provider is code that reads the second one
 instead of the first, to turn a condition into something that is not TorbScript at all - a SQL `WHERE` clause, a

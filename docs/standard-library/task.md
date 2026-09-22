@@ -44,8 +44,6 @@ print total
 
 ## Declarations
 
-<!-- torb:declarations:begin -->
-
 ### Task
 
 ```trb fragment
@@ -98,8 +96,6 @@ public type ChannelClosed with Show, Error {}
 
 The only way a `Channel`'s writing end fails: nobody is reading any more. A value rather than a panic, because a
 producer that is no longer needed should stop, not crash.
-
-<!-- torb:declarations:end -->
 
 ## What is missing
 

@@ -40,7 +40,7 @@ fn <name>(..., <parameter>: <Type> = <default expression>, ...): <ReturnType> { 
 2. **The default expression is evaluated at the call site, at every call that omits the argument.** It is not computed
    once when the function is declared, and a default with a side effect runs that side effect on every such call.
 
-   ```trb check
+   ```trb run
    fn defaultTimeout(): Int {
      print "computing the default"
      30
@@ -53,6 +53,11 @@ fn <name>(..., <parameter>: <Type> = <default expression>, ...): <ReturnType> { 
    print connect("localhost")
    print connect("localhost")
    print connect("localhost", timeout: 5)
+   // prints computing the default
+   // prints localhost timeout=30
+   // prints computing the default
+   // prints localhost timeout=30
+   // prints localhost timeout=5
    ```
 
    Running this prints `computing the default` twice, once for each call that leaves `timeout` out, and not for the
@@ -105,3 +110,4 @@ print connect("localhost", , 10)
 - [Declaring a function](declaring-a-function.md) - the rest of the parameter list.
 - [Arguments and labels](arguments.md) - how a call fills a parameter that has no default.
 - [Variadic parameters](variadics.md) - the other parameter that may be missing from a call.
+

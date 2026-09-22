@@ -63,6 +63,8 @@ print "moved {move(from: 3, to: 10)}, total {total}"
    ```trb error
    /* outer /* inner */ still here */
    // error: Cannot find `still` here
+   // error: Expected an expression, found `/`
+   // error: Expected an expression, found the end of the file
    ```
 
 4. **A doc comment belongs to the declaration written directly after it.** Everything that can be declared can have
@@ -99,8 +101,8 @@ print "moved {move(from: 3, to: 10)}, total {total}"
    reader is looking for.
 
    ```trb error
-   fn move(where: Int): Int {
-     where
+   fn move(where: Int) {
+     print "moving"
    }
    // error: `where` is a keyword and cannot be used as a name here
    ```
@@ -139,6 +141,7 @@ print "{first}{second}"
 ```trb error
 /* This mentions /* a comment */ that ends early. */
 // error: Cannot find `that` here
+// error: Expected the end of the statement, found a name
 ```
 
 The second block parses as two comments and leftover code, not as one long comment - the lexer does not count nesting

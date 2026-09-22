@@ -14,6 +14,10 @@ source:
   - std/collections/src/list.trb
 ---
 
+> **Not built natively yet.** A closure that changes a top-level `var` while a function holds another one as a `var`
+> parameter is not built by the native back end yet, so `torb run` refuses the examples here that use it. `torb check`
+> accepts them, and the rules are the language's.
+
 `CONCEPT.md` describes a rule beyond the single-path checks of [var paths](var-paths.md): two `var` accesses are never
 allowed to run at the same time against the same path, even when they belong to one call rather than to two nested
 ones. The checker enforces it, at the top level of a file included.

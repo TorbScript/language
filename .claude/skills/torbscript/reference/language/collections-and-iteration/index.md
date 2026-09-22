@@ -31,3 +31,4 @@ over time, `Source` and `Sink`, which are in
 - **[Collectors](collectors.md)** - An Accumulator describes what to do with the values of a pipeline and is the state of one run at the same time, because a value is a copy; collect fills a copy of the one it is given.
 
 <!-- torb:index:end -->
+

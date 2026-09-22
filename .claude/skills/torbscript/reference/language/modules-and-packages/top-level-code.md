@@ -13,6 +13,9 @@ source:
   - CONCEPT.md#modules-and-packages
 ---
 
+> **Not built natively yet.** `spawn` is not built by the native back end yet, so `torb run` refuses the examples here
+> that use it. `torb check` accepts them, and the rules are the language's.
+
 A file that nothing imports has no initialization order to protect, so it is free to run statements from top to
 bottom like any other program. A file that is imported is not: it only ever contributes declarations.
 
@@ -106,3 +109,4 @@ print "loading"
 - [Visibility](visibility.md) - `public` at the top level, the other half of what a file exports.
 - [Cyclic imports](cyclic-imports.md) - why a module having no initialization order is what makes a cycle harmless.
 - [Result](../errors/result.md) - what a top-level `?` prints and exits with.
+

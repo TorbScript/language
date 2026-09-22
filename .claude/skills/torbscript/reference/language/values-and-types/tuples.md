@@ -66,6 +66,7 @@ value.lowest                             access by label
 
    print bounds()
    // error: This position is `lowest`, not `highest`
+   // error: This position is `highest`, not `lowest`
    ```
 
 4. **A position is not a name.** `.0` and `.1` always stand behind a dot - `entry.0`, `_.0`, `self.0` - and a bare `0`
@@ -117,6 +118,7 @@ fn bounds(): (lowest: Int, highest: Int) {
   (highest: 9, lowest: 1)
 }
 // error: This position is `lowest`, not `highest`
+// error: This position is `highest`, not `lowest`
 ```
 
 ## Related
@@ -125,3 +127,4 @@ fn bounds(): (lowest: Int, highest: Int) {
 - [Bindings](bindings.md) - `const (a, b) = pair`, the pattern a binding shares with `match`.
 - [Cases and match](../pattern-matching/cases-and-match.md) - `(a, b)` as a pattern inside a `match`.
 - [Closures](../functions/closures.md) - `_`, `_2` and why a bare name in a closure is never a position.
+

@@ -145,3 +145,4 @@ into the surrounding scope.
 - [Trailing closures](trailing-closures.md) - writing a closure argument after the call it belongs to.
 - [Bindings](../values-and-types/bindings.md) - what `const` and `var` decide, which is what rules 6 and 7 build on.
 - [Coming from Rust](../../explanation/coming-from-rust.md) - closures here have no borrow checker to satisfy.
+

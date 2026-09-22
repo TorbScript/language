@@ -128,3 +128,4 @@ and how to write your own.
 - [Slices](../language/collections-and-iteration/slices.md) - `list[from..to]` as a value and as a `var` path.
 - [The collection traits](../language/collections-and-iteration/collection-traits.md) - `List`, `Map`, `Set`, `Stack`
   and `Queue` in full.
+

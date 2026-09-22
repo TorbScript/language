@@ -62,7 +62,7 @@ module, so it is skipped too.
   purpose: a gate that cries wolf is a gate that gets skipped.
 - **A first sentence that only repeats the name** ("The parser." on `type Parser`) is a finding.
 
-The rules themselves are in [`compiler/CONTRIBUTING.md`](../../compiler/CONTRIBUTING.md), and
+The rules themselves are in `compiler/CONTRIBUTING.md`, and
 `std/core/src/option.trb` is the reference every other file is written after.
 
 ### How an example is checked
@@ -132,7 +132,8 @@ the examples.
 
 ## Related
 
-- [The docs commands](../contributing/checks.md) - `docs check`, `index`, `skill` and `bundle`, the gate of the pages.
+- The docs commands - `docs check`, `index`, `skill` and `bundle`, the gate of the pages.
 - [Doc comments](../language/syntax/doc-comments.md) - what `/** */` attaches to, and the headings it carries.
 - [torb canon](torb-canon.md) - the canon that an example is held to.
 - [Verify your work](verifying-your-work.md) - where the gates of the repository sit.
+

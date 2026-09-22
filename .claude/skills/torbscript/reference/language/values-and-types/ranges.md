@@ -112,3 +112,4 @@ nothing, and none of the three types is involved.
 - [Strings](strings.md) - `text[from..to]`, a range passed to a slice.
 - [Built-in types](built-in-types.md) - the ranges next to every other type that needs no import.
 - [Integers](integers.md) - `Int`, the type `for value in 0..list.length()` counts through.
+

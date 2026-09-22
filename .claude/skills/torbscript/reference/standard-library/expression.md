@@ -15,6 +15,9 @@ source:
   - std/expression/src/lib.trb
 ---
 
+> **Not built natively yet.** A quoted expression (`Expression<Value>`) is not built by the native back end yet, so
+> `torb run` refuses the examples here that use it. `torb check` accepts them, and the rules are the language's.
+
 `std/expression` is quoted expressions: if a parameter or a binding has the type `Expression<Value>`, the compiler
 type checks the argument as an ordinary `Value` and then passes it together with its expression tree. `Expression`
 values can only be created by the compiler; `ExpressionNode` trees are plain data and can be built, matched and
@@ -37,8 +40,6 @@ print double(width)
 ```
 
 ## Declarations
-
-<!-- torb:declarations:begin -->
 
 ### Expression
 
@@ -128,11 +129,10 @@ Assertion failed: adults.length() > limit   (adults = [...], limit = 5)   at mai
 There are no matchers: `assert` is the one function `std/test` needs, because the expression tree already carries
 enough to explain a failure.
 
-<!-- torb:declarations:end -->
-
 ## Related
 
 - [Quoted expressions](../language/functions/quoted-expressions.md) - what an `Expression<Value>` parameter hands a
   function, and how it is created.
 - [std/test](test.md) - `assert` in a `test`/`group` body.
 - [The standard library](index.md) - the other packages.
+

@@ -14,6 +14,9 @@ source:
   - CONCEPT.md#types-values-and-reflection
 ---
 
+> **Not built natively yet.** The generated `encode` is not built by the native back end yet, so `torb run` refuses the
+> examples here that use it. `torb check` accepts them, and the rules are the language's.
+
 Reflection promises to answer "what is this, really?" at runtime, for any value, generically. TorbScript never lets
 that question be asked in the first place, and this page argues for closing the door instead of guarding it.
 
@@ -42,7 +45,7 @@ print Json.encode(user)
 
 **Because the same reflective operation would mean something different in every back end, and the language promises
 identical behavior everywhere.** One of the language's design principles rules out anything that cannot be
-implemented identically in the interpreter and in a compiled binary, see [CONCEPT.md](../../CONCEPT.md). Monomorphized generics in a native
+implemented identically in the interpreter and in a compiled binary, see CONCEPT.md. Monomorphized generics in a native
 binary and boxed generics in an interpreter would make a generic type's own reflected shape observably different -
 whether `List<Int>` and `List<String>` "are the same generic type" at runtime is exactly the kind of fact an
 implementation choice would leak into a program's behavior.
@@ -127,3 +130,4 @@ uses a library type, such as `JsonValue`, which is an ordinary ADT and not a dyn
 - [Why there are no macros](why-no-macros.md) - the same argument against code that runs ahead of the type checker,
   applied to syntax instead of values.
 - [std/encoding](../standard-library/encoding.md) - `Encoder`, `Decoder` and the formats built on them.
+

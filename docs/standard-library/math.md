@@ -33,8 +33,6 @@ print sumOfSquares.squareRoot()
 
 ## Declarations
 
-<!-- torb:declarations:begin -->
-
 ### `pi`, `e`
 
 ```trb fragment
@@ -71,8 +69,6 @@ public native fn arcTangent2(y: Float64, x: Float64): Float64
 
 `sine`, `cosine` and `tangent` take radians; `arcSine`, `arcCosine` and `arcTangent` answer radians. `arcTangent2(y, x)`
 is `arcTangent(y / x)` using the sign of both arguments to pick the correct quadrant.
-
-<!-- torb:declarations:end -->
 
 ## Related
 

@@ -121,3 +121,4 @@ page's rule about what happens after the path is used.
 - [Exclusivity](../language/types/exclusivity.md) - the other compiler check that comes from the same value model.
 - [What a model trained on other languages gets wrong](mistakes-models-make.md) - the copy trap as a diagnostic, in
   full.
+

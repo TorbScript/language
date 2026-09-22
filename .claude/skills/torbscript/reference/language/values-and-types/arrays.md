@@ -13,6 +13,10 @@ source:
   - std/core/src/array.trb
 ---
 
+> **Not built natively yet.** An `Array` value, from `Array.filled` or from a literal, is not built by the native back
+> end yet, so `torb run` refuses the examples here that use it. `torb check` accepts them, and the rules are the
+> language's.
+
 `Array<Item, const Size: Int>` puts a number in a type: the length is part of what the type is, checked the same way
 every other type argument is. A type parameter is ordinarily a type; a `const` parameter is a value instead - a
 literal, a named `const`, or another `const` parameter.
@@ -95,6 +99,9 @@ type Name<const Size: Int> { ... }       declaring a const parameter of your own
    var buffer: Array<Float, size + 1> = Array.filled 0.0
    print buffer[0]
    // error: `size` is a constant, not a type
+   // error: Traits are combined with `&`
+   // error: `1` is a type, not a trait
+   // error: Cannot infer `Size` of `Array`
    ```
 
 6. **A generic type or function can itself take a `const` parameter**, written `<const Name: Type>` alongside its
@@ -148,3 +155,4 @@ size is not known ahead of time is a `List`, a different type entirely, not an `
 - [Built-in types](built-in-types.md) - `Array` next to every other type that needs no import.
 - [Ranges](ranges.md) - `Range<Int>`, what a `for` loop over `0..Rows` counts through.
 - [Distinct types](distinct-types.md) - a single-field type, the other place a type wraps a value directly.
+

@@ -65,7 +65,7 @@ match <subject> {
 2. **`.Case` works wherever a type is expected**: an annotation, an argument, a field, a result, either side of `==`, an
    arm of a `match` whose result type is known, and every pattern (where the type is the type of the value being matched).
 
-   ```trb
+   ```trb run
    type Shape {
      case Circle(radius: Float)
      case Empty
@@ -73,9 +73,10 @@ match <subject> {
 
    const unit: Shape = .Circle(1.0)
    var shapes: List<Shape> = []
-   shapes.add .Empty
+   shapes.add(.Empty)
    const other = Shape.Circle 1.0
    print "{unit} {shapes} {other}"
+   // prints Circle(radius: 1.0) [Empty] Circle(radius: 1.0)
    ```
 
 3. **A case is imported by its path**, and only a case can be imported through a type: `use Option.Some from "std/core"`.
@@ -255,3 +256,4 @@ differently per case matches on `self`.
 - [use](../../language/index.md) - how a case is imported.
 - [Why a case is never bare](../../explanation/mistakes-models-make.md) - the argument, and the trap it closes.
 - [Coming from Rust](../../explanation/coming-from-rust.md) - where `Some(x)` works and `Circle(x)` does not.
+

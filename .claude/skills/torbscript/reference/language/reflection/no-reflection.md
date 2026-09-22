@@ -103,3 +103,4 @@ on, whatever the member is called.
 - [Cases and match](../pattern-matching/cases-and-match.md) - matching a case without ever asking for a type.
 - [Encode and Decode](encode-and-decode.md) - what covers serialization instead of reflection.
 - [Type parameters](../generics/type-parameters.md) - where a name stands for a type instead of a value.
+

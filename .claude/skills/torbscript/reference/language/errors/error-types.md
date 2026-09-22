@@ -163,3 +163,4 @@ distinct type, here `AppError.Config(ConfigError)` alone.
 - [Cases and match](../pattern-matching/cases-and-match.md) - the case syntax an error type uses like any other type.
 - [The Error trait](the-error-trait.md) - when to add `with Error` on top.
 - [Result](result.md) - `Ok` and `Fail`, which every function returning an error type answers with.
+

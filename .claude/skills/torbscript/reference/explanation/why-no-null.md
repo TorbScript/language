@@ -116,3 +116,4 @@ a function that can fail is folded into a pipeline with `filterMap`, not with `m
 - [Why there are no exceptions](why-no-exceptions.md) - the same argument applied to failure instead of absence.
 - [What a model trained on other languages gets wrong](mistakes-models-make.md) - the implicit-`Some` mistake, with
   the diagnostic.
+

@@ -14,6 +14,9 @@ source:
   - std/time/src/lib.trb
 ---
 
+> **Not built natively yet.** `Duration` and `Instant` are not built by the native back end yet, so `torb run` refuses
+> the examples here that use them. `torb check` accepts them, and the rules are the language's.
+
 `std/time` is wall-clock time: points in time (`Instant`) and the spans between them (`Duration`). `Instant` and
 `Duration` are values and are in the prelude; `Clock`, which reads the current time, is a capability and stays an
 explicit import.
@@ -35,8 +38,6 @@ except that the prelude already does (`public use Int64.seconds from "std/time"`
 no `use` at all. `Duration.seconds` is a member of the type itself and needs nothing either way.
 
 ## Declarations
-
-<!-- torb:declarations:begin -->
 
 ### Instant
 
@@ -81,10 +82,9 @@ public native fn sleep(seconds: Float64): Task<Void>
 
 Suspends the running task for this many seconds. Needs `.await()`, like every `Task` (see [std/task](task.md)).
 
-<!-- torb:declarations:end -->
-
 ## Related
 
 - [std/task](task.md) - `Task`, which `sleep` answers.
 - [std/sandbox](sandbox.md) - `SandboxCapabilities.limits`, which is a `Duration`.
 - [The standard library](index.md) - the other packages.
+

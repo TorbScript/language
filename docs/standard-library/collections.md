@@ -43,8 +43,6 @@ print numbers.reversed()
 
 ## Declarations
 
-<!-- torb:declarations:begin -->
-
 ### Collection
 
 ```trb fragment
@@ -171,8 +169,6 @@ says which end `add` and `remove` reach, and `first()` looks without taking. `re
 `const` binding: the item together with the rest, or `None` when empty. `ArrayStack` is a `List` underneath;
 `ArrayQueue` is a ring buffer that grows only when it is full. Both are `Equals` and `Hash` wherever `Item` is,
 order-dependent like a `List`.
-
-<!-- torb:declarations:end -->
 
 ## Related
 

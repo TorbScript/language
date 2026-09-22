@@ -78,3 +78,4 @@ list, including the test runner.
 - [Put it together](a-small-program.md) - one program that uses everything on this path.
 - [The torb command](../tooling/the-torb-command.md) - every subcommand.
 - [Verify your work](../tooling/verifying-your-work.md) - the commands to run before you are done, in order.
+

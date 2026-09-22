@@ -126,3 +126,4 @@ expected failure is a `Fail`, not a `panic`. See [panic](../language/errors/pani
 - [Result](../language/errors/result.md) - the exact vocabulary on `Ok` and `Fail`.
 - [Declaring an error type](../language/errors/error-types.md) - a type with cases, and when `From` is generated for
   it.
+

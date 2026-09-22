@@ -53,8 +53,9 @@ print "{square} {square.describe()}"
 
 ```text
 [public] trait <Name>[<parameters>] [with <supertraits>] {
-  fn <name>(self, ...): <Type>              a requirement
-  fn <name>(self, ...): <Type> { ... }      a default member
+  fn <name>(...): <Type>                    a requirement
+  fn <name>(...): <Type> { ... }            a default member
+  var fn <name>(...): <Type>                a requirement that changes the receiver
 }
 
 type <Name> with <Trait>, <Trait> & <Trait> by <field> { ... }
@@ -262,3 +263,4 @@ blanket implementation of the same trait - overlap is decided conservatively, so
 - [Cases and match](../pattern-matching/cases-and-match.md) - the other half of what a `type` can be.
 - [std/core](../../standard-library/core.md) - where `Equals`, `Compare`, `Hash`, `Show` and the operator traits live.
 - [Coming from Rust](../../explanation/coming-from-rust.md) - `impl Trait for Type` against `with` and `extend`.
+

@@ -192,7 +192,7 @@ fn shownPath(root: String, path: String): String {
   "{root}/{path}"
 }
 
-/** Reads every `.md` file below the root. Hidden directories, `target` and `node_modules` are skipped, as everywhere. */
+/** Reads every `.md` file below the root. Hidden directories are skipped, as everywhere. */
 public fn readDocumentation(root: String): Result<Documentation, IoError> {
   if !File.isDirectory(root) {
     return Fail IoError(root, "The documentation root is not a directory")
@@ -208,8 +208,7 @@ fn readInto(var files: Map<String, String>, root: String, relative: String): Res
     const child = joinDocumentationPath relative, entry
     const absolute = "{root}/{child}"
     if File.isDirectory(absolute) {
-      const isSkipped = entry.startsWith(".") || entry == "target" || entry == "node_modules"
-      if !isSkipped {
+      if !entry.startsWith(".") {
         readInto(files, root, child)?
       }
       continue

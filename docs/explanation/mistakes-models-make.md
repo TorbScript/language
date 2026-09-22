@@ -15,6 +15,9 @@ source:
   - CONCEPT.md#formatter-canon
 ---
 
+> **Not built natively yet.** An `Array` filled from a literal (mistake 19) is not built by the native back end yet, so
+> `torb run` refuses the examples here that use it. `torb check` accepts them, and the rules are the language's.
+
 A model writing TorbScript does not fail from ignorance. It fails because TorbScript looks like four languages it knows
 well and differs from all of them in the same few places. These are those places, in the order they go wrong, with the
 right line first and the wrong one after it.
@@ -137,6 +140,7 @@ print "{answer} {counter}"
 ```trb error
 let answer = 42
 // error: Cannot find `let` here
+// error: This is a temporary, and an assignment writes it
 ```
 
 `const` was chosen over `val` because a page of `val` with a `var` in the middle is easy to misread. There is no `let`,
@@ -158,7 +162,7 @@ counters[0].increment()
 print counters[0].count
 ```
 
-```trb check
+```trb run
 type Counter {
   var count: Int = 0
 
@@ -171,6 +175,7 @@ var counters = [Counter(), Counter()]
 var first = counters[0]
 first.increment()
 print "{first.count} {counters[0].count}"
+// prints 1 0
 ```
 
 This is the copy trap: the second program prints `1 0`, because values are never aliased and `counters[0]` in a binding
@@ -286,6 +291,7 @@ type Money with Hashable, Equatable {
   cents: Int
 }
 // error: Unknown type `Hashable`
+// error: Unknown type `Equatable`
 ```
 
 `Hash`, `Equals`, `Compare`, `Show`, `Add`, `Close`, `Length`, `From`. No `-able` and no `-ible`. A trait that is mainly
@@ -329,7 +335,6 @@ print maxSize
 
 ```trb error
 const MAX_SIZE = 1024
-print MAX_SIZE
 // error: A constant starts with a lowercase letter: TorbScript has no `MAX_SIZE` spelling, write `maxSize`
 ```
 
@@ -393,7 +398,7 @@ print "hello".shout()
 ```
 
 ```trb error
-use "./text-extensions"
+use "std/text"
 // error: A `use` names what it imports
 ```
 
@@ -495,8 +500,6 @@ type Canvas {
     "square"
   }
 }
-
-print Canvas().draw(Circle(1.0))
 // error: `draw` is already declared in `Canvas`
 ```
 
@@ -593,6 +596,8 @@ and a function *type* still names it: `(self: Point) => Int` and `(var self: Con
 
 | Do not write | Write | Why |
 |--------------|-------|-----|
+| `let mut count = 0`, `mutating func` | `var count = 0`, `var fn` | `var` on the binding or in front of the `fn` is all there is |
+| a borrow, `&mut value` | a copy, or a `var` parameter | a `var` parameter lends the caller's value for the duration of one call |
 | `null`, `nil`, `undefined` | `None` | absence is an `Option<Value>` |
 | `throw`, `try`, `catch` | `return Fail problem`, `?` | there are no exceptions |
 | `class`, `interface`, `enum`, `struct` | `type`, `trait` | one keyword for data, one for capability |
@@ -601,6 +606,7 @@ and a function *type* still names it: `(self: Point) => Int` and `(var self: Con
 | a second `fn` of the same name | a trait with a parameter, or a default parameter | a name means one declaration |
 | `Array.of(1, 2, 3)` | `const a: Array<Int, 3> = [1, 2, 3]` | only a literal counts its items |
 | `#[derive(...)]`, `@Annotation` | nothing | there are no annotations; what can be generated is |
+| `1 ?? 0` | an `Option` or a `Result` on the left | `??` is the trait `OrElse` of those two |
 | `list[i]` for a possibly missing index | `list.get(i)` | `list[i]` panics out of bounds |
 | `a.iter().map(...)` | `a.map(...)` | there is one pipeline and no `iter()` step |
 | `stack.push(x)`, `stack.pop()`, `queue.enqueue(x)`, `queue.dequeue()` | `add(x)`, `remove()` | one word per meaning; the type name says which end |

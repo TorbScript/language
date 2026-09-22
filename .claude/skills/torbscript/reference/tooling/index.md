@@ -9,7 +9,7 @@ order: 60
 One binary does everything: running, checking, building, testing, formatting and documenting. These pages say which
 command, which flag and which file.
 
-`torb` is `build/release/torb`, what [`sh tools/bootstrap.sh`](../ARCHITECTURE.md) writes, and every command on
+`torb` is `build/release/torb`, what `sh tools/bootstrap.sh` writes, and every command on
 these pages is run from the repository root.
 
 ## What belongs here
@@ -18,7 +18,7 @@ The commands of the toolchain, their flags and their exit codes; the project fil
 the formatter canon as the toolchain enforces it.
 
 What does not belong here: the language itself, which is [the reference](../language/index.md), and the compiler's own
-design, which is in [internals](../internals/index.md). A page here is about what you type and what comes back.
+design, which is in internals. A page here is about what you type and what comes back.
 
 <!-- torb:index:begin -->
 
@@ -40,3 +40,4 @@ design, which is in [internals](../internals/index.md). A page here is about wha
 - **[torb lint](torb-lint.md)** _(planned)_ - torb lint will check the style rules the type checker does not - full words instead of abbreviations, is/has for a computed question, an adjective for a Bool field, an unused irrefutable binding - none of which is enforced today.
 
 <!-- torb:index:end -->
+

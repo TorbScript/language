@@ -113,3 +113,4 @@ them.
 - [Traits](../language/traits/traits.md) - the exact rules, including why a single-method trait is named after its
   method.
 - [Trait intersections](../language/traits/intersections.md) - `Show & Encode` as one type.
+

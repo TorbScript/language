@@ -88,3 +88,4 @@ for player in ranked {
   has a generated `Equals` and `Hash`.
 - [Tuples](../language/values-and-types/tuples.md) - the generated `Compare`, lexicographic by position.
 - [Lists](../language/collections-and-iteration/lists.md) - `sort` and `sorted` alongside every other verb/participle pair.
+

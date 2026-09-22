@@ -197,34 +197,10 @@ panic "message"                               aborts with exit code 101
 
 ## What this is not
 
-The forms that look right and are not:
-
-| Wrong | Right | Why |
-|-------|-------|-----|
-| `let x = 1` | `const x = 1` | `let` is not a keyword |
-| `const x = 1;` | `const x = 1` | there are no semicolons |
-| `Circle(2.0)` | `Shape.Circle 2.0` | a case is never bare unless imported |
-| `Err(problem)` | `Fail problem` | the case is `Fail`; the field is `error` |
-| `Some(x)` where a value is expected | `x` | there is no implicit `Some`, and no implicit unwrap |
-| `null`, `nil`, `undefined` | `None` | absence is an `Option` |
-| `throw error` | `return Fail error` | there are no exceptions |
-| `text.length` | `text.chars().count()` | a `String` has no `length()` |
-| `list[i]` for a missing index | `list.get(i)` | `list[i]` panics out of bounds |
-| `a & b` on integers | `a.bitwiseAnd(b)` | there are no bit operators |
-| `x as Int` | `Int.from(x)` | there are no casts |
-| `const MAX_SIZE = 1` | `const maxSize = 1` | there is no MACRO_CASE |
-| `Some(value) => 0` | `Some(_) => 0` | an arm binding nothing reads is an error |
-| `while true { ... }` | `loop { ... }` | an endless loop says so in the word |
-| `break 42` | a `var` written before the loop | a `break` carries no value |
-| `use "./text-extensions"` | `use String.shout from "./text-extensions"` | a `use` names what it imports |
-| `1 ?? 0` | an `Option` or a `Result` on the left | `??` is the trait `OrElse` |
-| `class`, `interface`, `enum`, `struct` | `type`, `trait` | one keyword for data, one for capability |
-| `impl Trait for Type` | `extend Type with Trait` | `with` is the only word for it |
-| `Hashable`, `Comparable` | `Hash`, `Compare` | a single-method trait is its method |
-| `print(x)` | `print x` | the canon writes a command |
-| `assert sum == 3` | `assert(sum == 3)` | an operator at the top level of an argument |
-| `Ok Some x` | `Ok Some(x)` | commands do not nest |
-| `list.map { _ * 2 }` inside a command | `list.map({ _ * 2 })` | the `{` would belong to the outer command |
+This page is every form that is right. The forms that look right and are not - `let`, a semicolon, a bare case,
+`Err`, `text.length`, `a & b`, `x as Int`, `MAX_SIZE`, `while true`, `impl Trait for Type` and the rest - are one list,
+each with the diagnostic it produces:
+[What a model trained on other languages gets wrong](../../explanation/mistakes-models-make.md).
 
 ## Related
 
@@ -235,5 +211,5 @@ The forms that look right and are not:
 - [Traits](../traits/traits.md) - `with`, `extend` and the trait names.
 - [use](../modules-and-packages/use.md) - every form of an import, the path of a member included.
 - [Loops](../execution/loops.md) - `for`, `while` and `loop`, and what each one produces.
-- [What a model trained on other languages gets wrong](../../explanation/mistakes-models-make.md) - the same table with
-  the diagnostics.
+- [What a model trained on other languages gets wrong](../../explanation/mistakes-models-make.md) - the forms that
+  look right and are not, with their diagnostics.

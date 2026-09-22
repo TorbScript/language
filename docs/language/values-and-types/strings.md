@@ -20,16 +20,19 @@ needs one of those answers to even mean anything, so the type asks the caller to
 
 ## Example
 
-```trb check
+```trb run
 const text = "Grüße 👋"
 
-print text.chars().count()
-print text.byteLength()
-print text.isEmpty()
-print text.indexOf("ß")
-print text[3..]
-print text.substringAfter("ü")
+print text.chars().count()      // prints 7
+print text.byteLength()         // prints 12
+print text.isEmpty()            // prints false
+print text.indexOf("ß")         // prints Some(4)
+print text[4..]                 // prints ße 👋
+print text.substringAfter("ü")  // prints Some("ße 👋")
 ```
+
+`ü` takes two bytes, so `ß` starts at byte 4, and `text[3..]` would cut `ü` in half - which is a panic, not a
+shorter string.
 
 ## Syntax
 

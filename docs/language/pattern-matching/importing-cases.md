@@ -73,6 +73,7 @@ public use <Type>.<Case> from "<path>"               re-exported under the same 
      None
    }
    // error: Expected `from "..."`
+   // error: There is no package
    ```
 
 6. **`public use` re-exports what it imports, case included.** `public use Stack.Empty from "./collections/stack"`

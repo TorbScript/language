@@ -14,6 +14,9 @@ source:
   - CONCEPT.md#conversions
 ---
 
+> **Not built natively yet.** A conversion through `From` is not built by the native back end yet, so `torb run` refuses
+> the examples here that use it. `torb check` accepts them, and the rules are the language's.
+
 Every conversion in the language is one of four traits, chosen by whether it can fail and in which direction it is
 written. There is no separate cast syntax: implementing the trait is the whole job, and the call site is the same shape
 every time.
@@ -143,3 +146,4 @@ print unique.length()
   the only way in.
 - [Pipelines](../language/collections-and-iteration/pipelines.md) - `to<Target>()` alongside the rest of a pipeline's
   terminal operations.
+

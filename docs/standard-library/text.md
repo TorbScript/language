@@ -30,8 +30,6 @@ print shout
 
 ## Declarations
 
-<!-- torb:declarations:begin -->
-
 ### Char
 
 ```trb fragment
@@ -86,8 +84,6 @@ boundary, `String.from(Iterable<Char>)` and a runtime function that validates, s
 `IoError` and there is no replacement character anywhere in the language. `showNested()` is the text itself in double
 quotes with escapes; `show()` (from `Show`) is the text unquoted. `String.from(characters)` and
 `characters.to<String>()` come from `extend String with From<Iterable<Char>>`.
-
-<!-- torb:declarations:end -->
 
 ## Related
 

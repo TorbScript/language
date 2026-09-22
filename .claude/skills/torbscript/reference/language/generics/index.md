@@ -25,3 +25,4 @@ an example first, then the syntax, then numbered rules, then what the construct 
 - **[Witness tables](witnesses.md)** - A trait-typed value carries a witness table per trait it is known through, so a generic bound is satisfied by any trait the value's own traits require, even without knowing its concrete type.
 
 <!-- torb:index:end -->
+

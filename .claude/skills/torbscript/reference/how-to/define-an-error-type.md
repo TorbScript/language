@@ -151,3 +151,4 @@ match start() {
 - [The Error trait](../language/errors/the-error-trait.md) - `cause()`, and when `Result<Value, Error>` is the right signature.
 - [The question mark operator](../language/errors/question-mark.md) - what the generated `From` buys at every `?`.
 - [Read a file](read-a-file.md) - the same pattern applied to `IoError`.
+

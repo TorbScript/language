@@ -119,6 +119,7 @@ shared type <Name> {
      }
    }
    // error: `tick` changes `self` and answers a `Task`, and `Counter` is a value
+   // error: The result of `spawn` is not used
    ```
 
 ## What this is not

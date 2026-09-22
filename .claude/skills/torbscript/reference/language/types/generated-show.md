@@ -132,3 +132,4 @@ touching its `Show` - [copy and equality](copy-and-equality.md) shows the `Equal
 - [Declaring a type](declaring-a-type.md) - where `Show` is introduced alongside `Equals`, `Hash` and `copy`.
 - [Copy and equality](copy-and-equality.md) - the other members that are generated together with `Show`.
 - [Cases and match](../pattern-matching/cases-and-match.md) - the case syntax `Show` mirrors.
+

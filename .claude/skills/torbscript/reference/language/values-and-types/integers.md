@@ -15,6 +15,9 @@ source:
   - std/number/src/lib.trb
 ---
 
+> **Not built natively yet.** `tryFrom` between number types is not built by the native back end yet, so `torb run`
+> refuses the examples here that use it. `torb check` accepts them, and the rules are the language's.
+
 An integer type always carries its width: `Int8` through `Int64` signed, `UInt8` through `UInt64` unsigned. There is
 no platform-dependent "the native integer size" - the same program overflows at the same value on every platform.
 
@@ -58,7 +61,7 @@ Type.minimum  Type.maximum                the smallest and largest value of a ty
 
 5. **Overflow at runtime panics; overflow written directly in the source is caught where it is written.** Rule 4 is
    the compile-time half of this rule; the runtime half is the same panic every other bug produces (see
-   [what a panic does](../../../CONCEPT.md#error-handling)).
+   what a panic does).
 
 6. **Integer division truncates toward zero, and the remainder takes the sign of the dividend.** `-7 / 2` is `-3`,
    `-7 % 2` is `-1`, so `a` is always `(a / b) * b + a % b`. Dividing by zero panics, and so does dividing the
@@ -130,6 +133,7 @@ all, unlike `&`, which at least means something in a type position.
 ```trb error
 const flipped = 0b1010 ^ 0b0110
 // error: There is no `^` operator
+// error: Expected the end of the statement, found a number
 ```
 
 ## Related
@@ -137,3 +141,4 @@ const flipped = 0b1010 ^ 0b0110
 - [Built-in types](built-in-types.md) - the numeric types in the context of every other built-in type.
 - [Floating-point numbers](floating-point.md) - `Float32`, `Float64`, and why `==` and `compare` disagree.
 - [Literals](../syntax/literals.md) - the four ways to write an integer literal.
+

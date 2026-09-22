@@ -113,3 +113,4 @@ the trait's own name does not mean what it might in a language with explicit dic
 - [Bounds](bounds.md) - what a bound checks; witnesses are how it is checked against a trait-typed value.
 - [Object safety](../traits/object-safety.md) - the members no witness table can offer, whatever the bound asks.
 - [Traits as types](../traits/trait-types.md) - what a value becomes once it is known only through a trait.
+

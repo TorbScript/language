@@ -88,9 +88,26 @@ print counter.count
    // error: This closure captures the receiver `self` and may outlive the call
    ```
 
-4. **A captured `var` binding is the one exception, and it is a shared box, not a reference.** A closure that captures
-   a `var` binding may be stored or returned; the binding is then shared between the closure and its own scope,
-   reference counted like a `shared type`.
+4. **A closure that captures a `var` binding may not escape its scope** - the same rule, and the same conservative
+   check, as for a `var` parameter: the closure has to be written directly as the argument of a call that does not
+   store it. The binding is shared between the closure and its scope for that call, and the call counts as an access
+   to it. *Decided, and not yet enforced by the checker*: until it is, a closure that captures a `var` binding can
+   still be bound to a name, stored or returned, and the binding then lives in a counted box - the aliasing, the race
+   through `spawn` and the cycles that come from that are the reason for the rule.
+
+   ```trb skip decided, not yet enforced by the checker
+   fn makeCounter(): () => Int {
+     var count = 0
+     {
+       count = count + 1
+       count
+     }
+   }
+   // error (planned): the closure captures `count`, a `var` binding, and escapes its scope
+   ```
+
+   State that has to outlive its scope is a [shared type](shared-types.md), which says it has an identity; recursion is
+   a local `fn`, which captures nothing.
 
 5. **The base of a var path can never be a temporary.** Changing the result of a call directly is always rejected,
    because the change would be thrown away the moment the call returns - the value has to be bound to a name first.
@@ -116,7 +133,9 @@ print counter.count
    written back anywhere. `tick(makeCounter())` needs nothing bound first.
 
 6. **The variable of a `for` loop is a `const`.** Changing an element needs the path (`items[index].x = 1`) or a new
-   collection built with `map`; the loop variable itself never becomes a `var` path.
+   collection built with `map`; the loop variable itself never becomes a `var` path. *(Decided, not implemented:
+   `for var element in items` binds a `var` reference to each slot instead, over `MutableIndexed` - see the collections
+   design record, section 3.11. Until it lands the path is the only way.)*
 
 ## What this is not
 
@@ -143,3 +162,4 @@ print counters[0].count
 - [Fields](fields.md) - which field modifier a path is allowed to end on.
 - [Declaring a type](declaring-a-type.md) - `var fn` on a verb, and its participle that needs no path at all.
 - [Bindings](../values-and-types/bindings.md) - `const` and `var` on the binding a path starts from.
+

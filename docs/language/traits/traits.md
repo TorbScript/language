@@ -53,8 +53,9 @@ print "{square} {square.describe()}"
 
 ```text
 [public] trait <Name>[<parameters>] [with <supertraits>] {
-  fn <name>(self, ...): <Type>              a requirement
-  fn <name>(self, ...): <Type> { ... }      a default member
+  fn <name>(...): <Type>                    a requirement
+  fn <name>(...): <Type> { ... }            a default member
+  var fn <name>(...): <Type>                a requirement that changes the receiver
 }
 
 type <Name> with <Trait>, <Trait> & <Trait> by <field> { ... }

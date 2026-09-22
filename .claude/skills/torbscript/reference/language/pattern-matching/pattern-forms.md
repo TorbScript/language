@@ -102,6 +102,7 @@ Type(<pattern>, ...)              a trailing `...` stands for every field the pa
    }
    print describe(Shape.Circle(1.0))
    // error: `radius` is bound by the first alternative and not by this one
+   // error: `side` is bound by this alternative and not by the first one
    ```
 
 3. **A range pattern (`a..b`, `a..=b`) matches the values between its ends.** Over a built-in integer type the checker
@@ -288,6 +289,7 @@ fn describe(value: Int): String {
 }
 print describe(10)
 // error: `limit` is never read: write `_`, or `_limit` to keep the name
+// error: This arm is never reached
 ```
 
 `limit` inside the pattern is a new binding that shadows the constant and matches every value, not a comparison with
@@ -321,3 +323,4 @@ compares the matched value against the two ends, it does not ask whether the val
 - [Patterns in bindings and conditions](patterns-in-bindings.md) - where else besides `match` a pattern stands.
 - [Ranges](../values-and-types/ranges.md) - `Range` as a value, as opposed to a range pattern.
 - [Naming](../syntax/naming.md) - the rule the first letter of a pattern name follows from.
+

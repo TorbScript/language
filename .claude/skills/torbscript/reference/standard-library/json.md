@@ -14,6 +14,9 @@ source:
   - std/json/src/lib.trb
 ---
 
+> **Not built natively yet.** The generated `encode` is not built by the native back end yet, so `torb run` refuses the
+> examples here that use it. `torb check` accepts them, and the rules are the language's.
+
 `std/json` is JSON as a `Format` (see [std/encoding](encoding.md)): `Json` reads and writes any `Encode`/`Decode` type,
 and `JsonValue` is a library type for the rare document whose shape is not known ahead of time, because `Encoder`
 and `Decoder` are driven by the type being read or written and cannot express "whatever is there" on their own. `Json`
@@ -40,8 +43,6 @@ match Json.decode<User>(text) {
 ```
 
 ## Declarations
-
-<!-- torb:declarations:begin -->
 
 ### Json
 
@@ -96,10 +97,9 @@ fit the requested type (`decodeFailed`), or bytes that were not UTF-8 in the fir
 `DecodeError` or `Utf8Error` a rejected document failed on, so a report can unwind the chain down to the field or the
 byte.
 
-<!-- torb:declarations:end -->
-
 ## Related
 
 - [std/encoding](encoding.md) - `Encode`, `Decode` and `Format`, which `Json` implements.
 - [std/stream](stream.md) - the `Stage`s `Json.items` and `Json.encoded` answer.
 - [The standard library](index.md) - the other packages.
+

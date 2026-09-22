@@ -15,6 +15,9 @@ source:
   - examples/tour/src/11-data.trb
 ---
 
+> **Not built natively yet.** The generated `encode` and `Json` are not built by the native back end yet, so `torb run`
+> refuses the examples here that use them. `torb check` accepts them, and the rules are the language's.
+
 What reflection is normally needed for - serialization, config mapping, database rows, debug output - is covered by
 one more generated pair, the same way `Equals`, `Hash` and `Show` are generated for a `type` without being written.
 
@@ -37,7 +40,7 @@ print text
 
 ```text
 trait Encode { fn encode(var encoder: Encoder) }
-trait Decode { fn decode(var decoder: Decoder): Result<Self, DecodeError> }
+trait Decode { static fn decode(var decoder: Decoder): Result<Self, DecodeError> }
 ```
 
 ## Rules
@@ -91,8 +94,8 @@ trait Decode { fn decode(var decoder: Decoder): Result<Self, DecodeError> }
    missing on the way in through `fieldOr`.
 
 5. **A different field name, a skipped field, or a versioning scheme is written by hand.** There are no annotations:
-   what is a convention of the format and not of the type is an option of the format instead
-   (`Json.encode(user, naming: .SnakeCase)`).
+   what is a convention of the format and not of the type belongs to the format, not to the type. `Json.encode` has
+   no options yet, so a field name the format wants differently is an `encode` written by hand.
 
 6. **There is no tree in between.** Values are written while the type describes itself: nothing is lost on the way
    (a narrow number keeps its range, a `Set` comes back as a `Set` because the target type drives the decoding), and

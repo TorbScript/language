@@ -41,7 +41,7 @@ print largest([3, 1, 2])
 fn <name><Item: <Trait>>(...)                 inline, one parameter
 fn <name><Item>(...) where Item: <Trait>      after where, same meaning
 fn <name><A, B>(...) where A: <Trait>, B: <Trait> & <Trait>   several parameters, `&` combines traits
-fn <name>(self, ...): <Type> where Item: <Trait>              a member's own bound
+fn <name>(...): <Type> where Item: <Trait>                    a member's own bound
 ```
 
 ## Rules

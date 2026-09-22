@@ -38,8 +38,6 @@ another prelude, or to make the dependency explicit.
 
 ## Declarations
 
-<!-- torb:declarations:begin -->
-
 ### Option
 
 ```trb fragment
@@ -198,12 +196,10 @@ public fn using<Resource: Close, Value>(var resource: Resource, body: (var Resou
 public shared trait Close { var fn close() }
 ```
 
-`using` takes a `var` resource and a receiver closure over it, so the body reaches the resource's members without naming
-it and may change it: `using File.open(path)? { writeLine "done" }`. Passing a temporary to that `var` parameter is
+`using` takes a `var` resource and a closure that is handed the resource, calls the closure, then `close()`s the
+resource and answers what the closure answered: `using Connection() { connection => connection.send "hello" }`. Passing a temporary to that `var` parameter is
 allowed, because the callee is its only owner. There are no destructors, so the nesting of `using` blocks is the only
 observable destruction order in the language.
-
-<!-- torb:declarations:end -->
 
 ## Related
 

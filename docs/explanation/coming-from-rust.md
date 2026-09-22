@@ -79,7 +79,7 @@ There is no `&` at the call site. The signature says it, and the tooling shows i
 The trap is the mirror image of Rust's: `var first = counters[0]` compiles in Rust as a move or a clone and here takes a
 **copy**, so changing it changes nothing. The program below prints `1 0`.
 
-```trb check
+```trb run
 type Counter {
   var count: Int = 0
 
@@ -92,6 +92,7 @@ var counters = [Counter()]
 var first = counters[0]
 first.increment()
 print "{first.count} {counters[0].count}"
+// prints 1 0
 ```
 
 Write `counters[0].increment()`. A change that is never read afterwards is a compile error, which catches this as long

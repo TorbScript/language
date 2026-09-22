@@ -45,11 +45,12 @@ print total
    would fill something that is already filled.
 
    ```trb error
-   fn withTransform(transform: (Int) => Int, seed: Int): Int {
+   fn withTransform(transform: (value: Int) => Int, seed: Int): Int {
      transform(seed)
    }
 
-   const result = withTransform({ _ + 1 }, seed: 1) { _ * 2 }
+   const result = withTransform({ value: Int => value + 1 }, seed: 1) { value: Int => value * 2 }
+   print result
    // error: The trailing closure fills `seed`, which was already given by name
    ```
 
@@ -88,8 +89,9 @@ print total
    }
 
    const numbers = [1, 2, 3, 4]
-   show transformed(numbers) { _ * 2 }
+   show transformed(numbers) { item: Int => item * 2 }
    // error: The trailing closure fills `value`, which was already given by name
+   // error: `transformed` takes 2 arguments, 1 was given
    ```
 
 5. **A trailing closure is also the body of the head of `if`, `for`, `while` and `match` when the head is a command
@@ -162,8 +164,9 @@ fn transformed(items: List<Int>, transform: (Int) => Int): List<Int> {
 }
 
 const numbers = [1, 2, 3, 4]
-show transformed(numbers) { _ * 2 }
+show transformed(numbers) { item: Int => item * 2 }
 // error: The trailing closure fills `value`, which was already given by name
+// error: `transformed` takes 2 arguments, 1 was given
 ```
 
 **Naming the implicit parameter is not always available.** It only works where the callee's own function type names

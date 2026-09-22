@@ -126,3 +126,4 @@ as `Compare`, `min` has nothing to promise its result is.
 - [Trait intersections](intersections.md) - combining traits without changing which members are safe.
 - [Traits as types](trait-types.md) - what coercing to a trait type does and does not change.
 - [Witness tables](../generics/witnesses.md) - how a generic member, as opposed to a trait-typed value, still reaches every bound.
+

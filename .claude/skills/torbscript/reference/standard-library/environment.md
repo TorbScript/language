@@ -32,8 +32,6 @@ print(home ?? "not set")
 
 ## Declarations
 
-<!-- torb:declarations:begin -->
-
 ### Environment
 
 ```trb fragment
@@ -46,9 +44,8 @@ public native type Environment {
 variable that does not exist look the same on purpose, so a script cannot tell a granted-but-empty capability from a
 capability it never had.
 
-<!-- torb:declarations:end -->
-
 ## Related
 
 - [std/sandbox](sandbox.md) - `SandboxCapabilities.environment`, which grants the patterns a script may read.
 - [The standard library](index.md) - the other packages.
+

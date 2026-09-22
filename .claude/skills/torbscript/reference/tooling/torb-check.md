@@ -122,3 +122,4 @@ $ torb check .
 - [Verify your work](verifying-your-work.md) - where `check` sits among `canon` and `test`.
 - [torb build](torb-build.md) - what runs after `check` succeeds.
 - [torb run](torb-run.md) - running a program instead of only checking it.
+

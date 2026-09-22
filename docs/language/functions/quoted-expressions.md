@@ -14,6 +14,9 @@ source:
   - std/expression/src/lib.trb
 ---
 
+> **Not built natively yet.** A quoted expression (`Expression<Value>`) is not built by the native back end yet, so
+> `torb run` refuses the examples here that use it. `torb check` accepts them, and the rules are the language's.
+
 A parameter or a binding typed `Expression<Value>` checks its argument as an ordinary `Value` and additionally hands
 over the typed tree of what was written, its exact source text, and the values any captured variable held. `assert`
 is the one function of the prelude area that every program already uses this way.
@@ -155,6 +158,7 @@ type User {
 const user = User "ada@example.test"
 print nameOf(user.unknown)
 // error: `User` has no member `unknown`
+// error: Cannot infer `Value` of `nameOf`
 ```
 
 `nameOf` reads the name that was already resolved on the tree; it cannot read a name that does not exist, because the

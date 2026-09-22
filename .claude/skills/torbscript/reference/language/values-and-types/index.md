@@ -34,3 +34,4 @@ an example first, then the syntax, then numbered rules, then what the construct 
 - **[Arrays and const parameters](arrays.md)** - Array<Item, const Size> carries its length in the type, a const parameter is a value rather than a type, and there is no arithmetic over one.
 
 <!-- torb:index:end -->
+

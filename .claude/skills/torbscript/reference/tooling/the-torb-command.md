@@ -39,7 +39,7 @@ torb canon [path]...   Write the formatter canon over the syntax tree
 torb test [path]...    Run the *.test.trb files below the paths
 ```
 
-`torb` is `build/release/torb`, what [`sh tools/bootstrap.sh`](../ARCHITECTURE.md) writes, and every command below is
+`torb` is `build/release/torb`, what `sh tools/bootstrap.sh` writes, and every command below is
 run from the repository root:
 
 ```console
@@ -146,7 +146,7 @@ which is what the language's own conformance suite compares.
 
 Four commands over the documentation: `check` is the gate, `index` writes the generated part of every `index.md`, `skill`
 derives the Agent Skill, and `bundle` writes `llms.txt` and `llms-full.txt`. See
-[the docs commands](../contributing/checks.md).
+the docs commands.
 
 ### What is still planned
 
@@ -188,4 +188,5 @@ wrote ../build/dev/scratch.exe
 - [torb check](torb-check.md), [torb run](torb-run.md), [torb build](torb-build.md), [torb test](torb-test.md),
   [torb canon](torb-canon.md) - one page per command, in depth.
 - [Command calls](../language/syntax/command-calls.md) - the canon that `canon` enforces.
-- [The docs commands](../contributing/checks.md) - the four `docs` subcommands.
+- The docs commands - the four `docs` subcommands.
+

@@ -28,3 +28,4 @@ page: an example first, then the syntax, then numbered rules, then what the cons
 - **[Quoted expressions](quoted-expressions.md)** - A parameter or binding typed Expression<Value> gets the ordinary value plus the typed tree of what was written, its source text and the values it captured, which is what assert and a query provider read instead of running the code twice.
 
 <!-- torb:index:end -->
+

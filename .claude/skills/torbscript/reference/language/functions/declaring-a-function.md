@@ -123,3 +123,4 @@ fn makeAdder(step: Int): (Int) => Int {
 - [Arguments and labels](arguments.md) - positional and labelled parameters, and the order they are written in.
 - [Closures](closures.md) - the one closure form, and what it captures instead.
 - [Bindings](../values-and-types/bindings.md) - the same `const`/`var` split applies to a parameter.
+

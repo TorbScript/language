@@ -123,7 +123,7 @@ generates `equals`, `hashCode`, `toString`, `copy` and the `componentN` function
 generates the equivalent four - `Equals`, `Hash`, `Show`, `copy` - for every `type`, with no modifier to add, as long
 as every field itself supports them:
 
-```trb check
+```trb run
 type Employee {
   name: String
   salary: Int = 50_000
@@ -131,8 +131,8 @@ type Employee {
 
 const alice = Employee name: "Alice"
 const raise = alice.copy(salary: alice.salary + 5_000)
-print raise
-print(alice == alice.copy())
+print raise                   // prints Employee(name: "Alice", salary: 55000)
+print(alice == alice.copy())  // prints true
 ```
 
 That prints `Employee(name: "Alice", salary: 55000)` and then `true` - `copy()` with no arguments is a plain
@@ -237,3 +237,4 @@ These are things Kotlin has that TorbScript deliberately does not, and what repl
 - [Copy and equality](../language/types/copy-and-equality.md) - what is generated for every `type`.
 - [Cases and match](../language/pattern-matching/cases-and-match.md) - cases instead of a `sealed class` hierarchy.
 - [Coming from Swift](coming-from-swift.md) - the other language whose enums and protocols read close to this one.
+

@@ -15,6 +15,9 @@ source:
   - CONCEPT.md#types-values-and-reflection
 ---
 
+> **Not built natively yet.** `Json.encode` is not built by the native back end yet, so `torb run` refuses the examples
+> here that use it. `torb check` accepts them, and the rules are the language's.
+
 A format implements `Encoder` and `Decoder`, the two traits behind [Encode and Decode](encode-and-decode.md), and
 never sees a `type`. Both name the same small vocabulary: one method per scalar the language has, and four shapes
 for everything built out of them.
@@ -130,3 +133,4 @@ extend Pair with Encode {
 - [Encode and Decode](encode-and-decode.md) - the generated pair most types never write by hand.
 - [There is no reflection](no-reflection.md) - why a format never sees a type.
 - [std/core](../../standard-library/core.md) - `Option`, whose `Decode` reads `nothing()` first.
+

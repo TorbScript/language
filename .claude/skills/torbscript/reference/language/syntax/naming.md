@@ -126,6 +126,7 @@ type connection {
   var Timeout: Int = 30
 }
 // error: A type starts with an uppercase letter: write `Connection`
+// error: A field starts with a lowercase letter: write `timeout`
 ```
 
 **The rule is not about the whole name, only about its first letter.** `HTTPServer`, `ioError` and `x2` all pass:
@@ -153,3 +154,4 @@ abbreviations in other codebases; none of them is one of the names rule 9 lists,
 - [Declaring a type](../types/declaring-a-type.md) - where a type's name and its cases are written.
 - [Angle brackets or comparison](generics-or-comparison.md) - how a written-out type parameter is told apart from a
   comparison.
+

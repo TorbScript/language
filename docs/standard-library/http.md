@@ -14,6 +14,9 @@ source:
   - std/http/src/lib.trb
 ---
 
+> **Not built natively yet.** A function whose body answers a `Task` is not built by the native back end yet, so `torb
+> run` refuses the examples here that use it. `torb check` accepts them, and the rules are the language's.
+
 `std/http` is a minimal HTTP client. A body is a stream (see [std/stream](stream.md)): `Body` is a
 `Source<Bytes, HttpError>`, so a response of any size can be piped into a file or read item by item, and the
 convenience that covers the common case (`body.text()`, `body.json<User>()`) sits on top of it. It needs the network
@@ -46,8 +49,6 @@ fn fetchUser(id: Int): Task<Result<User, HttpError>> {
 ```
 
 ## Declarations
-
-<!-- torb:declarations:begin -->
 
 ### `get`, `post`, `request`
 
@@ -133,8 +134,6 @@ What went wrong making a request, as a single wrapper type - a new kind of failu
 [Cases and match](../language/pattern-matching/cases-and-match.md)). `isRetryable()` is `true` for a timeout, a
 connection failure, or a `5xx` response; `statusCode()` answers the status only if the request reached the server at
 all.
-
-<!-- torb:declarations:end -->
 
 ## Related
 

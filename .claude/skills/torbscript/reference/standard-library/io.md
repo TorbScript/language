@@ -33,8 +33,6 @@ print(first ?? "no input")
 
 ## Declarations
 
-<!-- torb:declarations:begin -->
-
 ### `readLine`
 
 ```trb fragment
@@ -66,10 +64,9 @@ The lines of standard input, as a stream - the same stage `File.lines` uses, ove
 a `Source` needs `.await()` on every `next()`, so `standardInput`, `standardOutput`, `standardError` and `lines` wait on
 the same milestone as [std/task](task.md), which is `status: planned`; `readLine()` does not touch `Task` at all.
 
-<!-- torb:declarations:end -->
-
 ## Related
 
 - [std/stream](stream.md) - `Source` and `Sink`, and the `lines` stage this package reuses.
 - [std/console](console.md) - `print` and `printError`, the short form for writing a line.
 - [The standard library](index.md) - the other packages.
+

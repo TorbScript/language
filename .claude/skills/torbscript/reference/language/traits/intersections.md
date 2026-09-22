@@ -67,6 +67,7 @@ where <Item>: <Trait> & <Trait>                a bound
      print value
    }
    // error: `Int64` is a type, not a trait
+   // error: `String` is a type, not a trait
    ```
 
 3. **An intersection is a trait type like any other**, so it stands wherever a trait type does: a parameter, a
@@ -133,6 +134,7 @@ trait Named {
 fn announce(entry: Loud, Named) {
 }
 // error: The parameter `Named` needs a type
+// error: A parameter starts with a lowercase letter: write `named`
 ```
 
 `fn announce(entry: Loud, Named)` parses as two parameters, the second one missing its name - not as one parameter
@@ -143,3 +145,4 @@ of an intersection type. `Loud & Named` is the only way to ask for both on one v
 - [Traits as types](trait-types.md) - a single trait used as a type, before combining several.
 - [Bounds](../generics/bounds.md) - the same `&` restricting a type parameter.
 - [Object safety](object-safety.md) - what stays uncallable on an intersection.
+

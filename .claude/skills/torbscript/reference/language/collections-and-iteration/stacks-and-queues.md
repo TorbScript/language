@@ -116,3 +116,4 @@ receiver's type, not by the number of arguments.
 - [Lists](lists.md) - the `List` each default implementation is built from.
 - [Verbs and participles](../types/verbs-and-participles.md) - why `removed()` answers the pair and `removedAt` does not.
 - [Option](../values-and-types/option.md) - the `Item?` that `remove()`, `first()` and `last()` all answer.
+

@@ -5,6 +5,9 @@ description: "Writes, reads and reviews TorbScript, a functional-first language 
 
 # TorbScript
 
+Paths below are relative to the directory of this file. Nothing but this file needs to be read up front:
+every other file is opened when a question needs it.
+
 ## The language in sixty seconds
 
 TorbScript looks like Rust, Swift and Kotlin and is none of them. Six ideas explain almost every line of it. Read this
@@ -20,11 +23,12 @@ does not compile.
 There is one `Point`, not a `Point` and a `MutablePoint`. There is one `List`, not `List` and `MutableList`. A `const`
 binding never changes and nothing below it changes; a `var` binding can be changed in place.
 
-```trb
+```trb run
 const fixed = [1, 2]
 var buffer = fixed
 buffer.add 3
 print "{fixed} {buffer}"
+// prints [1, 2] [1, 2, 3]
 ```
 
 That prints `[1, 2] [1, 2, 3]`. Assigning, passing and capturing a value is a **copy**, so two bindings never point at
@@ -149,20 +153,11 @@ higher-kinded types. A closure is always `{ parameters => body }`, and `_`, `_2`
 
 ### What to carry over from other languages, and what not
 
-| Your habit | In TorbScript |
-|------------|---------------|
-| `let mut` / `mutating func` | `var`, on the binding or in front of the `fn` |
-| a borrow, `&mut` | a copy, or a `var` parameter for the duration of one call |
-| `null`, `nil`, `undefined` | `Option<Value>`, and there is no implicit `Some` |
-| `throw` / `try` / `catch` | `Result`, `?`, and `panic` only for bugs |
-| a bare enum case (`Circle`) | `Shape.Circle` or `.Circle`, bare only when imported |
-| `class`, inheritance | `type` plus traits, or `shared type` for identity |
-| `f(a, b)` everywhere | `f a, b` wherever the grammar allows it |
-| `;` at the end of a line | nothing |
-| `x.length` on a string | `text.chars().count()` or `text.byteLength()` |
-| a `for` loop that mutates elements | `items[index].field = value`, or `map` into a new collection |
-| `MAX_SIZE`, `type point`, `fn Distance` | `maxSize`, `type Point`, `fn distance` - the first letter is a rule |
-| `Some(_)` or `Some(x)`, whichever | `Some(x)` only where the arm reads `x`; `_` or `_x` otherwise |
+The habits that break are one list, each with the diagnostic it produces:
+[What a model trained on other languages gets wrong](reference/explanation/mistakes-models-make.md). In short: `var` instead
+of `let mut` and `mutating func`, a copy or a `var` parameter instead of a borrow, `Option` instead of `null`,
+`Result` and `?` instead of exceptions, `Shape.Circle` instead of a bare case, `type` and traits instead of classes,
+`f a, b` instead of `f(a, b)`, and no semicolons.
 
 ### Next
 
@@ -174,14 +169,13 @@ higher-kinded types. A closure is always `{ parameters => body }`, and `_`, `_2`
 
 Source: `reference/guide/the-language-in-sixty-seconds.md`
 
-## Read these two files before writing TorbScript
+## Two files to look things up in
 
-- `reference/language/syntax/cheat-sheet.md` - Every form of the language, with its exact spelling.
-- `reference/explanation/mistakes-models-make.md` - The mistakes a model trained on other languages makes, each with its diagnostic.
+- `reference/language/syntax/cheat-sheet.md` - every form of the language with its exact spelling: how is this written?
+- `reference/explanation/mistakes-models-make.md` - the lines that look right and are not, each with its diagnostic: why does this not compile?
 
-They are lookup material, not background: the first one is the only place every form of the language is
-written down, and the second one is the list of lines that look right and are not. Read both once at the start
-of a task that writes TorbScript.
+Search them instead of reading them whole: `grep -n "^###" <file>` lists the sections of either one, and a
+section is a few dozen lines. Before handing over code, scan the section headings of the second one.
 
 ## How to verify your work
 
@@ -245,17 +239,19 @@ correct line rather than to describe the rule.
 
 #### Checking a snippet that is not a file yet
 
+<!-- To verify once the std-discovery round (findings H4) is merged: a loose file finds std and runtime/. -->
 Write it to a file and check the file. A `.trb` file that nothing imports is a script, so it may hold top-level code and
-needs no `fn main`:
+needs no `fn main`. A loose file, anywhere, is checked against the standard library of the `torb` that checks it and
+built with that toolchain's C runtime; `TORB_STD=<path to std>` and `TORB_RUNTIME=<path to runtime>` point it at
+others:
 
 ```console
-$ torb parse scratch.trb
+$ torb check scratch.trb
 1 files, no problems
 $ torb run scratch.trb
 ```
 
-To type check it against the standard library, put it in a package: a directory with a `project.trb` that has a `name`, and
-`src/main.trb` with the code. Then `check <that directory>`.
+`run` builds the file natively and starts it - there is no interpreter - so its first run costs a C compile.
 
 ### Examples
 
@@ -308,8 +304,8 @@ Source: `reference/tooling/verifying-your-work.md`
 
 ## Where to look things up
 
-Read `reference/index.md` first: it is one file with every page of the documentation and a one-sentence
-summary of each, so the right page can be chosen without opening any. The sections are:
+Every section has an index that lists its pages with one sentence each. Open the index of the section a
+question belongs to, then the one page that answers it:
 
 | Section | What is in it |
 |---------|---------------|
@@ -320,8 +316,12 @@ summary of each, so the right page can be chosen without opening any. The sectio
 | `reference/standard-library/index.md` | One page per package of std, what each contains, and which of them are in scope everywhere without an import. |
 | `reference/tooling/index.md` | The torb command, the project files, and how to verify that what you wrote is correct and in the formatter canon. |
 
-Every page is self-contained: it defines or links every term it uses, so one page is enough to answer one
-question. A page marked `status: draft` may still be wrong; verify it against the compiler.
+To find a construct or a name directly, search: `grep -ril "<word>" reference/` names the pages, and
+`reference/index.md` has every page's path and summary on one line each - search it, it is long:
+`grep -i "<word>" reference/index.md`.
 
-There are 202 pages. Pages of features that are designed but not implemented are not part of
-this skill at all, so everything in `reference/` is a feature that exists today.
+Every page is self-contained: it defines or links every term it uses, so one page is enough to answer one
+question. A page marked `status: draft` may still be wrong, so verify it against the compiler. A page marked
+`status: planned` describes a designed feature that does not compile yet, and its first line says so.
+
+There are 214 pages.

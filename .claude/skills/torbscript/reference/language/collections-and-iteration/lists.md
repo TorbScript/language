@@ -15,6 +15,10 @@ source:
   - CONCEPT.md#collections-and-iteration
 ---
 
+> **Not built natively yet.** A list literal handed to a parameter of a trait type (`addedAll([4, 5])`) is not built by
+> the native back end yet, so `torb run` refuses the examples here that use it. `torb check` accepts them, and the rules
+> are the language's.
+
 `List<Item>` is an ordered sequence, addressable by index, and the type of the literal `[1, 2, 3]`. Every change has a
 verb that changes the list in place and a participle that answers a changed copy, so the same operation is available
 whether the binding is `var` or `const`.
@@ -98,3 +102,4 @@ const combined = numbers + [4, 5]
 - [Slices](slices.md) - `list[from..to]`, a `List` again, as a value and as a `var` path.
 - [Verbs and participles](../types/verbs-and-participles.md) - the naming rule behind `add`/`added` and its siblings.
 - [Mutation and var paths](../types/var-paths.md) - why a verb needs a `var` path and a participle does not.
+

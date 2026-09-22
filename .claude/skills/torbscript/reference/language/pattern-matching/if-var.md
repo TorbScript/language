@@ -13,6 +13,9 @@ source:
   - CONCEPT.md#var-paths-and-var-parameters
 ---
 
+> **Not built natively yet.** `if var` is not built by the native back end yet, so `torb run` refuses the examples here
+> that use it. `torb check` accepts them, and the rules are the language's.
+
 Every other pattern binds a copy: `if const Some(user) = current` gives the body a `user` that is its own value, and
 changing it changes nothing `current` holds. `if var` is the one exception, for the one case where that copy is the
 problem.
@@ -130,3 +133,4 @@ binary today. `torb check` accepts it, which is what every block on this page is
 - [Patterns in bindings and conditions](patterns-in-bindings.md) - `if const` and `while const`, the copying siblings.
 - [Why values instead of references](../../explanation/why-values-instead-of-references.md) - why a `var` path exists
   only for the duration of a call or a block, and never longer.
+

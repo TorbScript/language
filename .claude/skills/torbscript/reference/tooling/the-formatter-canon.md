@@ -89,7 +89,7 @@ canon a file has to be in - they are sweeps for a rule of the *language*, and th
 
 ## Examples
 
-`torb docs check` (see [the docs commands](../contributing/checks.md)) holds every `trb` code block of this
+`torb docs check` (see the docs commands) holds every `trb` code block of this
 documentation to the call rule, so a snippet in the wrong style is caught the same way a wrong type is:
 
 ```console
@@ -102,4 +102,5 @@ $ torb docs check docs
 - [torb canon](torb-canon.md) - the command that writes and checks this canon today.
 - [Command calls](../language/syntax/command-calls.md) - the call rule, with every position it applies to.
 - [Multi-line strings](../language/syntax/multi-line-strings.md) - the dedent the indentation rule sits on top of.
-- [The docs commands](../contributing/checks.md) - how this documentation's own snippets are held to the canon.
+- The docs commands - how this documentation's own snippets are held to the canon.
+

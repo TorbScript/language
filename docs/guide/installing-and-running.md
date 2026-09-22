@@ -15,8 +15,9 @@ source:
   - CONCEPT.md#project-layout
 ---
 
-The toolchain is one binary called `torb`. It runs a file directly, without a build step, and it compiles the same file
-to a native executable.
+The toolchain is one binary called `torb`. `torb run` compiles a file to a native executable and starts it in one
+step, and `torb build` writes the executable instead. There is no interpreter yet, so the first run of a program costs a
+C compile.
 
 ## Goal
 
@@ -91,12 +92,14 @@ it writes it. The names are `owner/name`, because an owner is a verified namespa
 `src/main.trb` is what runs:
 
 ```trb
-fn greeting(name: String): String {
+public fn greeting(name: String): String {
   "Hello, {name}!"
 }
 
 print greeting("World")
 ```
+
+`public` is what lets the test below import `greeting`: a declaration is private to its file unless it says otherwise.
 
 Run the project by naming its directory:
 
@@ -110,6 +113,7 @@ Hello, World!
 A test file is a script made of `test` and `group` calls, and the only assertion is `assert`:
 
 ```trb skip it imports the `src/main.trb` of the project this page creates, which one snippet of this documentation cannot provide
+use test from "std/test"
 use greeting from "../src/main"
 
 test "greets by name" {
@@ -117,9 +121,9 @@ test "greets by name" {
 }
 ```
 
-`test` is an ordinary function whose last parameter is a closure, which is why the block can follow the string.
-`assert` takes an `Expression<Bool>`: it receives the condition **and its source text**, so a failure prints the
-expression and the values in it without a matcher vocabulary to learn. Note the parentheses around `sum == 3`-style
+`test` is an ordinary function of `std/test` whose last parameter is a closure, which is why the block can follow the
+string. `assert` takes an `Expression<Bool>`: it receives the condition **and its source text**, so a failure prints
+the expression and the values in it without a matcher vocabulary to learn. Note the parentheses around `sum == 3`-style
 conditions: an operator at the top level of an argument is one of the places where the canon requires them.
 
 ## Check and format

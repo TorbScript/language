@@ -121,3 +121,4 @@ it returns when it does, not by `Never`.
 - [Loops](../execution/loops.md) - the `loop` whose type is `Never`, and the `break` that makes it `Void`.
 - [Option](option.md) - the type for a value that may be absent.
 - [Result](../errors/result.md) - `Ok`/`Fail`, for a call that fails instead of panicking.
+

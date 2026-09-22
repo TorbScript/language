@@ -190,3 +190,4 @@ const wrong = Path(None, [])
 - [Copy and equality](copy-and-equality.md) - `copy`, which has the same shape as the constructor with every field
   optional.
 - [Result](../errors/result.md) - what a factory function answers when construction can fail.
+

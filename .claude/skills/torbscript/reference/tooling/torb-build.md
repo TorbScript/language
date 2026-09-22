@@ -102,3 +102,4 @@ wrote ../build/dev/scratch.exe
 - [torb run](torb-run.md) - running the same program without a build step.
 - [project.trb](project-trb.md) - `build { input, target, output }`, and which of them `build` reads today.
 - [The torb command](the-torb-command.md) - every subcommand in one table.
+

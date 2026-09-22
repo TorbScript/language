@@ -89,6 +89,7 @@ r"text"                                a raw string literal: no escapes, no inte
    ```trb error
    const both = 'ab'
    // error: A character literal contains exactly one character and ends with `'`
+   // error: Cannot find `b` here
    ```
 
 7. **A character or string literal escapes six named characters plus one general escape.** `\n`, `\r`, `\t`, `\0`,

@@ -78,8 +78,8 @@ fn <name>(..., body: () => <Type>) { ... }     a control structure: a function w
 ## What this is not
 
 **A control structure is not a keyword you could shadow by declaring a function of the same name.** `if`, `for`,
-`while` and `match` are the grammar, not names - there is no function called `if`, and declaring one does not change
-what the four built-in forms do.
+`while` and `match` are the grammar, not names - there is no function called `if`, and a keyword is refused wherever a
+name is declared, down to a parameter.
 
 ```trb check
 fn unless(condition: Bool, body: () => Void) {
@@ -92,8 +92,8 @@ unless false { print "runs, because the condition is false" }
 ```
 
 ```trb error
-fn if(condition: Bool, body: () => Void) {
-  body()
+fn repeat(times: Int, if: Bool) {
+  print times
 }
 // error: `if` is a keyword and cannot be used as a name here
 ```
@@ -104,3 +104,4 @@ fn if(condition: Bool, body: () => Void) {
 - [Command calls](../syntax/command-calls.md) - the call form every control structure is written in.
 - [std/core](../../standard-library/core.md) - `do`, `unless`, `retry`, `using` and `Close`.
 - [Declaring a function](../functions/declaring-a-function.md) - the one thing a control structure cannot replace: binding a name.
+

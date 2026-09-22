@@ -8,16 +8,18 @@
  * |-----------------------|------------------------------------------------------------------------------|
  * | `trb`                 | Lexes and parses without a diagnostic, and is in the formatter canon         |
  * | `trb check`           | ...and type checks against the real `std/`, as the entry file of a package   |
+ * | `trb run`             | ...and is built natively and run: its output is what its `// prints` say     |
  * | `trb fragment`        | Lexes without a diagnostic. For a signature or a shape that is not a program |
  * | `trb error`           | Produces exactly the diagnostics the block declares with `// error:` lines   |
  * | `trb skip <reason>`   | Nothing. The reason is required and every skip is counted in the report      |
  *
- * The type check of every `trb check` and `trb error` block of the whole documentation happens in **one** run of the
- * front end: the standard library is read and resolved once, and every block is a package of a synthetic workspace
- * next to it. One run of the checker costs seconds, one per block would cost minutes.
+ * The type check of every `trb check`, `trb run` and `trb error` block of the whole documentation happens in **one**
+ * run of the front end: the standard library is read and resolved once, and every block is a package of a synthetic
+ * workspace next to it. One run of the checker costs seconds, one per block would cost minutes.
  *
  * [collectSnippets] judges the info string of every block; [verifySyntax] and [verifyTypes] are the two checks that
- * follow, syntax for every block and types for the ones that asked for it.
+ * follow, syntax for every block and types for the ones that asked for it. What the native back end says about a block
+ * is [nativeSnippetProblems]'s.
  *
  * # Related
  *
@@ -29,10 +31,11 @@ use SourceText from "../syntax/source"
 use lex from "../syntax/lexer"
 use parse from "../syntax/parser/parser"
 use SourceTree from "../project/source-tree"
-use check from "../semantics/check"
+use check, Checked from "../semantics/check"
 use DocumentationProblem, CodeBlock, linesOf from "./markdown"
 use Page, Documentation from "./tree"
 use canonProblems from "./canon"
+use nativeNote from "./schema"
 
 /** How hard a fenced block is checked, decided by its marker. The spelling mirrors the markers themselves. */
 public type SnippetKind {
@@ -40,6 +43,8 @@ public type SnippetKind {
   case Program
   /** `trb check` */
   case Checked
+  /** `trb run` */
+  case Running
   /** `trb fragment` */
   case Fragment
   /** `trb error` */
@@ -60,17 +65,23 @@ public type Snippet {
   text: String
   /** What a `trb error` block declares with `// error:` lines, in the order they appear */
   expected: List<String>
+  /** What a `trb run` block declares with `// prints` comments: its output, one line per comment */
+  expectedOutput: List<String>
   /** The directory of the synthetic package this block becomes, without `snippets/` */
   name: String
   /** The reason of a `trb skip` */
   reason: String
+  /** The `status` of the page: a `trb check` block of a `stable` page is held to what the native back end accepts */
+  status: String
+  /** Whether the page says, with a line that opens with [nativeNote], that the native back end refuses a block of it */
+  hasNativeNote: Bool
 }
 
 /** The languages a fence may name. A typo in the info string is a problem, not a block nobody checks. */
 public const knownLanguages: List<String> = ["trb", "text", "console", "json", "md", "yaml", "diff"]
 
 /** The markers of a `trb` fence. */
-public const knownMarkers: List<String> = ["check", "fragment", "error", "skip"]
+public const knownMarkers: List<String> = ["check", "run", "fragment", "error", "skip"]
 
 /** Every snippet of the tree, plus the problems found in an info string along the way. */
 public type CollectedSnippets {
@@ -129,6 +140,7 @@ fn snippetOf(shown: String, page: Page, block: CodeBlock, index: Int): Collected
   const kind = match block.marker {
     "" => SnippetKind.Program
     "check" => SnippetKind.Checked
+    "run" => SnippetKind.Running
     "fragment" => SnippetKind.Fragment
     "error" => SnippetKind.Failing
     _ => SnippetKind.Skipped
@@ -150,8 +162,31 @@ fn snippetOf(shown: String, page: Page, block: CodeBlock, index: Int): Collected
     const note = "A `// error:` line only means something in a `trb error` block"
     problems.add DocumentationProblem(shown, block.line, note)
   }
+  const output = expectedOutputOf block.text
+  if kind == SnippetKind.Running && output.isEmpty() {
+    const note = "A `trb run` block writes the output it expects as `// prints <line>` comments, one per line"
+    problems.add DocumentationProblem(shown, block.line, note)
+  }
+  if kind != SnippetKind.Running && kind != SnippetKind.Skipped && !output.isEmpty() {
+    const note = "A `// prints` comment is compared with the output only in a `trb run` block. Mark the block `trb run`"
+    problems.add DocumentationProblem(shown, block.line, note)
+  }
   const name = snippetName page.path, index
-  const snippet = Snippet shown, block.line, block.contentLine, kind, block.text, expected, name, block.reason
+  const status = page.frontMatter.text("status") ?? "stable"
+  const hasNativeNote = page.read.prose.any({ _.text.trim().startsWith(nativeNote) })
+  const snippet = Snippet(
+    shown,
+    block.line,
+    block.contentLine,
+    kind,
+    block.text,
+    expected,
+    output,
+    name,
+    block.reason,
+    status,
+    hasNativeNote,
+  )
   CollectedSnippet Some(snippet), problems
 }
 
@@ -169,6 +204,42 @@ fn expectedMessages(text: String): List<String> {
     }
   }
   found
+}
+
+/**
+ * What a `trb run` block expects on its output: one line per `// prints <line>` comment, in the order they appear. The
+ * comment stands on a line of its own or behind the statement that prints, which keeps the expectation next to the
+ * line it belongs to - the reason a `trb error` block writes its `// error:` into the code as well.
+ */
+public fn expectedOutputOf(text: String): List<String> {
+  var found: List<String> = []
+  for line in linesOf(text) {
+    const at = match line.indexOf("// prints") {
+      Some(position) => position
+      None => {
+        continue
+      }
+    }
+    const rest = line.slice((at + 9)..line.byteLength())
+    if rest.trim().isEmpty() {
+      found.add ""
+      continue
+    }
+    if rest.startsWith(" ") {
+      found.add withoutTrailingSpaces(rest.slice(1..rest.byteLength()))
+    }
+  }
+  found
+}
+
+/** The text without the spaces and carriage returns at its end, which no reader of an output line can see. */
+public fn withoutTrailingSpaces(text: String): String {
+  // Both are one byte, so cutting one byte off never lands inside a character
+  var kept = text
+  while kept.endsWith(" ") || kept.endsWith("\r") {
+    kept = kept.slice(0..(kept.byteLength() - 1))
+  }
+  kept
 }
 
 /** The directory of the package one block becomes. A name that is unique and readable in a message. */
@@ -251,6 +322,10 @@ public fn lineOfOffset(text: String, offset: Int): Int {
  * One synthetic workspace: the standard library as it is on disk, and one package per block that needs the type
  * checker. The root manifest is written here and not read, so a block is checked against `std/` and against nothing
  * else - not against the compiler, not against the examples.
+ *
+ * Every block is the entry file of a package of its own, `snippets/<name>/src/main.trb`, which is a member of the
+ * workspace exactly the way `examples/<name>` is one of the repository's: it sees `std/` through its imports and not as
+ * files of its own package, and it sees no other block.
  */
 public fn snippetWorkspace(standardLibrary: Map<String, String>, snippets: List<Snippet>): SourceTree {
   var files: Map<String, String> = [:]
@@ -264,7 +339,7 @@ public fn snippetWorkspace(standardLibrary: Map<String, String>, snippets: List<
     }
     const manifest = "name \"docs/{snippet.name}\"\n"
     files.set "snippets/{snippet.name}/project.trb", manifest
-    files.set "snippets/{snippet.name}/src/main.trb", snippet.text
+    files.set snippetPath(snippet), snippet.text
   }
   SourceTree.of files
 }
@@ -279,9 +354,23 @@ fn rootManifest(): String {
     """
 }
 
-/** Does this kind of block ask for the type checker? Only `trb check` and `trb error` do. */
+/** Does this kind of block ask for the type checker? `trb check`, `trb run` and `trb error` do. */
 public fn needsTypeCheck(kind: SnippetKind): Bool {
-  kind == SnippetKind.Checked || kind == SnippetKind.Failing
+  kind == SnippetKind.Checked || kind == SnippetKind.Running || kind == SnippetKind.Failing
+}
+
+/** The file of the synthetic workspace a block becomes. */
+public fn snippetPath(snippet: Snippet): String {
+  "snippets/{snippet.name}/src/main.trb"
+}
+
+/** What one run of the front end over every block found: the problems, and the checked workspace behind them. */
+public type TypedSnippets {
+  problems: List<DocumentationProblem>
+  /** The blocks that were handed to the checker */
+  snippets: List<Snippet>
+  /** `None` when no block asked for the checker */
+  checked: Checked?
 }
 
 /**
@@ -289,18 +378,30 @@ public fn needsTypeCheck(kind: SnippetKind): Bool {
  * not come true. One run of the front end answers for all of them.
  */
 public fn verifyTypes(standardLibrary: Map<String, String>, snippets: List<Snippet>): List<DocumentationProblem> {
+  typeCheckSnippets(standardLibrary, snippets, false).problems
+}
+
+/**
+ * [verifyTypes], keeping the checked workspace for what the native back end is asked next. `checksEveryBody` is what a
+ * lowering needs: the body of every function of `std/` that a block can reach, and not only the blocks' own.
+ */
+public fn typeCheckSnippets(
+  standardLibrary: Map<String, String>,
+  snippets: List<Snippet>,
+  checksEveryBody: Bool,
+): TypedSnippets {
   const wanted = snippets.filter({ needsTypeCheck _.kind }).toList()
   if wanted.isEmpty() {
-    return []
+    return TypedSnippets([], wanted, None)
   }
   const tree = snippetWorkspace standardLibrary, wanted
-  const checked = check tree, ["snippets"]
+  const checked = check tree, ["snippets"], false, checksEveryBody
   var problems: List<DocumentationProblem> = []
   for problem in checked.problems {
     problems.add DocumentationProblem("<the snippet workspace>", 0, problem)
   }
   for snippet in wanted {
-    const path = "snippets/{snippet.name}/src/main.trb"
+    const path = snippetPath snippet
     var messages: List<String> = []
     for file in checked.files {
       if file.path != path {
@@ -312,22 +413,31 @@ public fn verifyTypes(standardLibrary: Map<String, String>, snippets: List<Snipp
     }
     problems.addAll snippetTypeProblems(snippet, messages)
   }
-  problems
+  TypedSnippets problems, wanted, Some(checked)
 }
 
 fn snippetTypeProblems(snippet: Snippet, messages: List<String>): List<DocumentationProblem> {
   var problems: List<DocumentationProblem> = []
-  if snippet.kind == SnippetKind.Checked {
+  if snippet.kind != SnippetKind.Failing {
     for message in messages {
       problems.add DocumentationProblem(snippet.path, snippet.line, message)
     }
     return problems
   }
   // A `trb error` block: every expectation has to be met, and it has to be wrong at all
+  // The file's diagnostics hold what the parser said already; a parse of its own is what a block that never reached the
+  // checker is judged by, and a message is counted once either way
   const parsed = parse SourceText.of(snippet.text)
-  var all = messages
+  var all: List<String> = []
+  for message in messages {
+    if !all.contains(message) {
+      all.add message
+    }
+  }
   for diagnostic in parsed.diagnostics {
-    all.add diagnostic.message
+    if !all.contains(diagnostic.message) {
+      all.add diagnostic.message
+    }
   }
   if all.isEmpty() {
     const note = "This `trb error` block has no diagnostic at all, so it is not the error it claims to be"
@@ -338,6 +448,14 @@ fn snippetTypeProblems(snippet: Snippet, messages: List<String>): List<Documenta
     if !all.any({ _.contains expectation }) {
       const said = all.joined separator: " | "
       const note = "No diagnostic of this block contains `{expectation}`. It says: {said}"
+      problems.add DocumentationProblem(snippet.path, snippet.line, note)
+    }
+  }
+  // And nothing else may be wrong with it: a block that fails for a second reason teaches a second wrong line, and one
+  // whose expected diagnostic went away passes for an incidental reason. A block that means several errors lists each
+  for message in all {
+    if !snippet.expected.any({ message.contains _ }) {
+      const note = "This `trb error` block also says `{message}`, which none of its `// error:` lines expects"
       problems.add DocumentationProblem(snippet.path, snippet.line, note)
     }
   }
@@ -359,8 +477,7 @@ fn readStandardLibraryInto(var files: Map<String, String>, directory: String, re
     const child = "{directory}/{entry}"
     const key = "{relative}/{entry}"
     if File.isDirectory(child) {
-      const isSkipped = entry.startsWith(".") || entry == "target" || entry == "node_modules"
-      if !isSkipped {
+      if !entry.startsWith(".") {
         readStandardLibraryInto(files, child, key)?
       }
       continue

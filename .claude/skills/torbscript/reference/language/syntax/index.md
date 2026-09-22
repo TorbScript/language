@@ -29,3 +29,4 @@ an example first, then the syntax, then numbered rules, then what the construct 
 - **[Command calls](command-calls.md)** - A call is written without parentheses wherever the grammar allows it, and with parentheses everywhere else. This is the formatter canon and it is enforced, not preferred.
 
 <!-- torb:index:end -->
+

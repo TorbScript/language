@@ -14,6 +14,9 @@ source:
   - CONCEPT.md#modules-and-packages
 ---
 
+> **Not built natively yet.** `Duration` is not built by the native back end yet, so `torb run` refuses the examples
+> here that use it. `torb check` accepts them, and the rules are the language's.
+
 A file starts with no names but the ones the [prelude](the-prelude.md) already brought in. `use` adds more of them,
 one declaration per statement, and where they come from is always written next to them.
 
@@ -114,7 +117,7 @@ public use <Name> from "<module>"                   a re-export
    would mean nothing at all:
 
    ```trb error
-   use "./text-extensions"
+   use "std/text"
    // error: A `use` names what it imports
    ```
 
@@ -145,3 +148,4 @@ print std.fs.File.exists("project.trb")
 - [The prelude](the-prelude.md) - the names already in scope before the first `use`.
 - [Packages](packages.md) - what `"owner/name"` after `from` names.
 - [Cases and match](../pattern-matching/cases-and-match.md) - why an imported case is written bare in a pattern.
+

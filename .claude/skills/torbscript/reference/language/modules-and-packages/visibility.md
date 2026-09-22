@@ -129,3 +129,4 @@ public const origin: Meters = Meters(0.0)
 - [use](use.md) - what a `public` declaration can be reached with from another file.
 - [Fields](../types/fields.md) - `private` and `private(var)` on a member, the other half of visibility.
 - [Packages](packages.md) - `src/lib.trb`, the surface a whole package exports.
+

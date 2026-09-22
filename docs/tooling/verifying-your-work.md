@@ -76,17 +76,19 @@ correct line rather than to describe the rule.
 
 ### Checking a snippet that is not a file yet
 
+<!-- To verify once the std-discovery round (findings H4) is merged: a loose file finds std and runtime/. -->
 Write it to a file and check the file. A `.trb` file that nothing imports is a script, so it may hold top-level code and
-needs no `fn main`:
+needs no `fn main`. A loose file, anywhere, is checked against the standard library of the `torb` that checks it and
+built with that toolchain's C runtime; `TORB_STD=<path to std>` and `TORB_RUNTIME=<path to runtime>` point it at
+others:
 
 ```console
-$ torb parse scratch.trb
+$ torb check scratch.trb
 1 files, no problems
 $ torb run scratch.trb
 ```
 
-To type check it against the standard library, put it in a package: a directory with a `project.trb` that has a `name`, and
-`src/main.trb` with the code. Then `check <that directory>`.
+`run` builds the file natively and starts it - there is no interpreter - so its first run costs a C compile.
 
 ## Examples
 

@@ -101,3 +101,4 @@ print isSame(a, b)
 - [Copy and equality](../types/copy-and-equality.md) - what a copy means, independent of what it costs.
 - [Shared types](../types/shared-types.md) - the one kind of type a copy never touches.
 - [Mutation and var paths](../types/var-paths.md) - the rule that stays true whichever strategy implements a copy.
+

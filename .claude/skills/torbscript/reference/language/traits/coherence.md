@@ -270,3 +270,4 @@ is nothing to work around by writing the extensions in a particular order or a p
 - [extend](extend.md) - adding members afterwards, and what only the declaration can add.
 - [Traits](traits.md) - `with` at the declaration, and coherence in one sentence.
 - [Trait intersections](intersections.md) - combining traits in a type position, which is unrelated to owning one.
+

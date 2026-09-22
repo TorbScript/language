@@ -42,8 +42,6 @@ print total
 
 ## Declarations
 
-<!-- torb:declarations:begin -->
-
 ### Iterator, Length
 
 ```trb fragment
@@ -185,8 +183,6 @@ use concatenated from "std/iteration"
 
 print concatenated(["a", "b", "c"], ", ")
 ```
-
-<!-- torb:declarations:end -->
 
 ## Related
 

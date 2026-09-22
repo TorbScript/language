@@ -61,6 +61,7 @@ value.field                       // Reads the field
 
    var server = Server()
    server.port 9090
+   print server
    // error: `port` never changes after construction
    ```
 

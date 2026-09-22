@@ -48,7 +48,7 @@ Every branch of an `if` used this way has to produce a value of the same type, e
 
 ## Loops: for, while and loop
 
-```trb
+```trb run
 for i in 0..3 {
   print i
 }
@@ -61,6 +61,12 @@ while attempts < 10 {
   }
   print "attempt {attempts}"
 }
+// prints 0
+// prints 1
+// prints 2
+// prints attempt 1
+// prints attempt 2
+// prints attempt 3
 ```
 
 `continue` and `break` work as expected inside both. `0..3` is a [range](../language/values-and-types/ranges.md); the
@@ -143,3 +149,4 @@ nothing but a function call. See [Builders and DSLs](../language/configuration/b
   to add your own.
 - [Receiver closures](../language/configuration/receiver-closures.md) - the exact rule for how a name resolves inside
   one.
+

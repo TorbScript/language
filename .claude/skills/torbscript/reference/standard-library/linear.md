@@ -40,8 +40,6 @@ print "{step.length()} {step.normalized()} {tile.manhattanLength()}"
 
 ## Declarations
 
-<!-- torb:declarations:begin -->
-
 ### `Vector2`, `Vector3`, `Vector4`
 
 ```trb fragment
@@ -132,11 +130,10 @@ the code.
 out of floating point, and `show` writes the exact decimal the value is - so `Fixed.tryFrom("0.1")` shows as
 `0.100006103515625`, because that is the number.
 
-<!-- torb:declarations:end -->
-
 ## Related
 
 - [std/geometry](geometry.md) - the shapes built out of these vectors.
 - [std/number](number.md) - `Numeric`, `Signed` and `Real`, the three bounds this package layers along.
 - [std/math](math.md) - the functions on `Float` that `Float64`'s `Real` is written over.
 - [Bounds](../language/generics/bounds.md) - the conditional `extend` that decides which member exists for which scalar.
+

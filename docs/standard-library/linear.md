@@ -40,8 +40,6 @@ print "{step.length()} {step.normalized()} {tile.manhattanLength()}"
 
 ## Declarations
 
-<!-- torb:declarations:begin -->
-
 ### `Vector2`, `Vector3`, `Vector4`
 
 ```trb fragment
@@ -131,8 +129,6 @@ the code.
 `Fixed.from(anInt)` is exact, `Fixed.tryFrom(text)` rounds to the nearest part, `Fixed.approximating(aFloat)` is the bridge
 out of floating point, and `show` writes the exact decimal the value is - so `Fixed.tryFrom("0.1")` shows as
 `0.100006103515625`, because that is the number.
-
-<!-- torb:declarations:end -->
 
 ## Related
 

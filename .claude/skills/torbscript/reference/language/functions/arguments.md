@@ -129,6 +129,7 @@ fn connect(host: String, port: Int, timeout: Int): String {
 const options = ["port": 5432, "timeout": 30]
 print connect("localhost", options)
 // error: `connect` takes 3 arguments, 2 were given
+// error: Expected `Int64`, found `Map<String, Int64>`
 ```
 
 **Argument order is not evaluation order.** Every argument is evaluated once, in the order it is written in the
@@ -142,3 +143,4 @@ order.
 - [Default values](default-values.md) - what happens to a parameter no argument fills.
 - [Variadic parameters](variadics.md) - the one parameter that can take any number of positional arguments.
 - [Coming from Rust](../../explanation/coming-from-rust.md) - Rust has no labelled arguments at all.
+

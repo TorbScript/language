@@ -27,9 +27,10 @@ for.
 torb docs check [root]                     Check the documentation (default root: docs)
     --standard-library <path>              Where std/ is. Default: <root>/../std
     --no-snippets                          Do not type check the snippets, which is the slow part
+    --no-native                            Do not build the snippets: for a machine without a C compiler
 torb docs index [root]                     Write the generated part of every index.md
     --check                                Report instead of writing, for the gate
-torb docs skill <root> <out>               Write the Agent Skill of the language
+torb docs skill <root> <out>               Write the Agent Skill of the language (fails on a dangling link)
 torb docs bundle <root> <out>              Write llms.txt and llms-full.txt
 torb docs source <path>...                 Check the doc comments of the code itself
 ```
@@ -99,8 +100,9 @@ A closing fence is at least as long as the one it closes, so a block that shows 
 |-------|-----------------|
 | `trb` | Lexes and parses without a diagnostic, and is in the formatter canon |
 | `trb check` | The same, and type checks against the real `std/` as the entry file of a package |
+| `trb run` | The same, and is built natively and run; its output has to be what its `// prints` comments say |
 | `trb fragment` | Lexes without a diagnostic. For a signature or a shape that is not a whole program |
-| `trb error` | Produces the diagnostics the block declares in its `// error:` lines |
+| `trb error` | Produces exactly the diagnostics the block declares in its `// error:` lines, and no other |
 | `trb skip <reason>` | Nothing. The reason is required and the gate prints every skip |
 
 A `trb error` block writes what it expects into the code, as a comment:
@@ -113,12 +115,47 @@ const small: Int8 = 300
 ````
 
 The comment stays in the block, because it parses like any other comment and because an expectation that sits next to
-the line it belongs to cannot drift away from it. Every expectation has to appear in some diagnostic of the block, and a
-`trb error` block that produces no diagnostic at all is an error itself.
+the line it belongs to cannot drift away from it. Every expectation has to appear in some diagnostic of the block,
+**and every diagnostic has to contain one of the expectations**: a block that is also wrong for a second reason
+teaches a second wrong line, and a block whose intended diagnostic went away would otherwise pass on the incidental
+one. A block that legitimately produces several diagnostics - two unknown trait names, a parse error and what follows
+from it - writes one `// error:` line per diagnostic. A `trb error` block that produces no diagnostic at all is an
+error itself.
+
+A `trb run` block writes its output the same way, one `// prints <line>` comment per line of output, behind the
+statement that prints or on a line of its own:
+
+````md
+```trb run
+const text = "Grüße"
+print text.byteLength()   // prints 7
+```
+````
+
+The program has to end with exit code 0. A claim about what a program prints belongs in such a block rather than in
+the prose around a `trb check` block, because only the block is compared with what the program does.
 
 Type checking happens in **one** run of the front end for the whole documentation: the standard library is read and
-resolved once, and every block that asked for it becomes a package of a synthetic workspace next to `std/`. One run
-costs seconds; one run per block would cost minutes.
+resolved once, and every block that asked for it becomes the entry file of a package of its own,
+`snippets/<name>/src/main.trb`, which is a member of a synthetic workspace next to `std/` - the way `examples/<name>`
+is a member of the repository. A block sees `std/` through its imports, not as files of its own package, and sees no
+other block. One run costs seconds; one run per block would cost minutes.
+
+### What the native back end says
+
+`torb run` builds natively - there is no interpreter - so a block that the back end refuses is a block a reader cannot
+run. Two blocks are asked, each lowered on its own so that a refusal belongs to it:
+
+- **Every `trb run` block.** A refusal is an error. The blocks that are not refused become the entries of **one**
+  program, compiled once with the C compiler at `-O0` into `build/docs/` beside the documentation root and run; a
+  marker line before each entry cuts the output back into one piece per block.
+- **Every `trb check` block of a `stable` page.** A `stable` page promises that what it shows works. When the back end
+  refuses a block of it, the page either shows a form that builds or says so in a paragraph that opens with
+  `> **Not built natively yet.**` and names what is refused. The note is held to the truth the other way as well: a
+  page that has it and whose blocks all build is reported, so the note goes away when the back end catches up. A
+  `draft` or `planned` page is not asked, because its banner already says it may not work.
+
+The C runtime is `$TORB_RUNTIME`, or the `runtime/` beside the standard library.
 
 ### The canon
 
@@ -132,6 +169,11 @@ Two of the rules of the formatter canon are decided on every block that parses:
 
 What is **not** checked is the layout that milestone 8's `torb format` will own: line length, blank lines, and where a
 long call breaks. A snippet that passes here is in the canon of `torb canon`; the reverse is not promised.
+
+### The declarations of a package page
+
+The `## Declarations` section of a `std/` page is written by hand. `torb doc`, which is planned, will generate it and
+bring its own markers for the generated part; until then no marker pretends that the section is compared with `std/`.
 
 ### The indexes
 
@@ -151,7 +193,7 @@ A green run names the numbers, so a change in them is visible in a diff:
 
 ```console
 $ torb docs check docs
-42 pages, 15 folders, 80 snippets, no problems
+224 pages, 24 folders, 979 snippets, no problems
 ```
 
 A problem names the file, the line and the rule:

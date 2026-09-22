@@ -65,18 +65,20 @@ and their "copy in, copy out" meaning is never executed literally.
 - **Lifetimes and a borrow checker**, as in Rust. They buy first-class references, which the language does not need once
   mutation needs a `var` path and every value is copied. They cost a concept that every reader and every error message has
   to carry.
-- **A `weak` reference.** Values cannot form cycles, so they need no cycle collection. Only `shared type` objects - and a
-  `var` binding captured by a closure - are tracked by a cycle collector.
-- **Destructors.** `Close` is a method and `using` is a function, so the only observable destruction order in the language
-  is the nesting of `using` blocks. A destructor would need drop flags, a rule about field order, and an answer to what a
-  panic inside one means.
+- **A `weak` reference, and a cycle collector.** Values cannot form cycles, and a closure that captures a `var` binding
+  may not escape its scope, so only `shared type` objects can. There is no cycle collector for them either: trees and
+  graphs hold handles instead of references, a stored callback takes its owner as a receiver, and a leaked cycle is
+  reported by type at the end of a test (the destructors design record, section 9).
+- **Destructors that run on any value.** A destructor exists, and only a `shared type` may have one: `close()`, run
+  exactly once by the last release (planned, the destructors design record). A value is copied on
+  assignment and has no identity for a destructor to belong to.
 
 ## Consequences
 
 **The copy trap is the price.** Taking an element out of a collection takes a copy, so the program below prints `1 0`:
 the copy changed and the list did not.
 
-```trb check
+```trb run
 type Counter {
   var count: Int = 0
 
@@ -89,6 +91,7 @@ var counters = [Counter(), Counter()]
 var first = counters[0]
 first.increment()
 print "{first.count} {counters[0].count}"
+// prints 1 0
 ```
 
 The rule that catches this is general: **a change that cannot have an effect is a compile error.** With value semantics
@@ -134,3 +137,4 @@ can be anywhere.
 - [Values and bindings](../guide/values-and-bindings.md) - the same material as a learning step.
 - [Coming from Rust](coming-from-rust.md) - what to do instead of `&mut`.
 - [What a model trained on other languages gets wrong](mistakes-models-make.md) - the copy trap as a diagnostic.
+

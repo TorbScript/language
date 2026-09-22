@@ -15,6 +15,9 @@ source:
   - CONCEPT.md#collections-and-iteration
 ---
 
+> **Not built natively yet.** A `Set` built from a literal is not built by the native back end yet, so `torb run`
+> refuses the examples here that use it. `torb check` accepts them, and the rules are the language's.
+
 `Map<Key, Value>` maps keys to values and is the type of the literal `["a": 1]`. `Set<Item>` is a collection without
 duplicates and has no literal of its own: a list literal builds one wherever a `Set` is the expected type. Both
 implementations iterate in the order values were inserted and compare equal regardless of it.
@@ -135,3 +138,4 @@ print ages["Linus"]
 - [Copy and equality](../types/copy-and-equality.md) - what the generated `Equals` and `Hash` do for a field that
   holds one of these.
 - [Tuples](../values-and-types/tuples.md) - the `(Key, Value)` pair a `Map` iterates as.
+

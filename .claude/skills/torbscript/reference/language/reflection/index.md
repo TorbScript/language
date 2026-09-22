@@ -25,3 +25,4 @@ example first, then the syntax, then numbered rules, then what the construct is 
 - **[Encoder and Decoder](encoders.md)** - Encoder and Decoder each name every scalar the language has - bool, int, unsigned, float, decimal, string, bytes - plus the four shapes a value can take, sequence, map, record and variant.
 
 <!-- torb:index:end -->
+

@@ -10,7 +10,7 @@ One path, in order, from no TorbScript at all to a program you wrote yourself. E
 works at the end of it, and ends with the next step. If you already know the language and want a rule, go to
 [the language reference](../language/index.md) instead.
 
-The twelve files of [`examples/tour`](../../examples/tour) are the same material as running code; this path links into
+The twelve files of `examples/tour` are the same material as running code; this path links into
 them where they help.
 
 ## What belongs here
@@ -41,3 +41,4 @@ isolation, which is a [how-to](../how-to/index.md); and the argument for a desig
 - **[Put it together](a-small-program.md)** - One small program - a type with cases, a function that can fail, and a pipeline - that uses everything this path taught.
 
 <!-- torb:index:end -->
+

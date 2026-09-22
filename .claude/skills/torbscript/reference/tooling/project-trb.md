@@ -67,7 +67,7 @@ are consulted, each as a literal string argument:
 `authors`, `registry`, `build { target, output }` and `test { coverageThreshold }` are part of `Project`'s vocabulary
 and type check, because the whole file is also checked as an ordinary program against `Project` - but no command
 reads them yet. A computed setting, such as `build { output "build/{target}/{binary}" }`
-(see [`CONCEPT.md`](../../CONCEPT.md#projecttrb)), type checks the same way and is silently not read either: only a
+(see `CONCEPT.md`), type checks the same way and is silently not read either: only a
 literal string argument with no `{...}` in it is.
 
 ### Workspaces
@@ -114,3 +114,4 @@ test {
 - [project.lock.trb](project-lock-trb.md) - the file `project.trb`'s dependencies resolve into.
 - [Packages](../language/modules-and-packages/packages.md) - `owner/name`, and the rules around publishing one.
 - [Workspaces](../language/modules-and-packages/workspaces.md) - one root, several members, one lock file.
+

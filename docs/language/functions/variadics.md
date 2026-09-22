@@ -87,6 +87,7 @@ fn <name>(..., ...<name>: <Type>): <ReturnType> { ... }
 
    print describe(1, 2, "totals")
    // error: `describe` has no argument for `label`
+   // error: Expected `Int64`, found `String`
    ```
 
 ## What this is not

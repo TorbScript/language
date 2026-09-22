@@ -148,3 +148,4 @@ used, the way every collector of `std/iteration` answers a fresh value.
 - [Pipelines](pipelines.md) - the lazy stages that produce what an accumulator consumes.
 - [The collection traits](collection-traits.md) - what a `Collection` is, and why it is not an `Accumulator`.
 - [Maps and sets](maps-and-sets.md) - the `Map<Key, List<Item>>` that `groupingBy` builds.
+

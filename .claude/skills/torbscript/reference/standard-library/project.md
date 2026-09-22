@@ -37,8 +37,6 @@ print project.name
 
 ## Declarations
 
-<!-- torb:declarations:begin -->
-
 ### Project
 
 ```trb fragment
@@ -115,9 +113,8 @@ public type Registry {
 
 An owner bound to a registry, so a public package can never take the place of a private one.
 
-<!-- torb:declarations:end -->
-
 ## Related
 
 - [std/sandbox](sandbox.md) - `Sandbox`, the mechanism `project.trb` is loaded through.
 - [The standard library](index.md) - the other packages.
+

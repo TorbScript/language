@@ -104,3 +104,4 @@ program's own logic promised could not happen: an index computed to be in range,
 - [Result](result.md) - the alternative for a failure the caller can act on.
 - [Errors at the top level](top-level-errors.md) - the other way a program can end with a nonzero exit code.
 - [Option](../values-and-types/option.md) - `first()` and the other `Option`-returning alternatives to indexing.
+

@@ -202,3 +202,4 @@ has nowhere to go, because the checker has not yet decided the result type at th
 - [Declaring an error type](error-types.md) - the generated `From` that rule 3 relies on.
 - [Errors at the top level](top-level-errors.md) - what a top-level `?` prints and exits with.
 - [Optional chaining](option-chaining.md) - `?.` and `??`, for reading through a failure instead of leaving on it.
+

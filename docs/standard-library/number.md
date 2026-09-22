@@ -33,8 +33,6 @@ print value.absolute()
 
 ## Declarations
 
-<!-- torb:declarations:begin -->
-
 ### Numeric, Signed, Bits, Real
 
 ```trb fragment
@@ -95,7 +93,7 @@ the same bits on every machine. `Fixed` (`std/linear`) is the deterministic one:
 and the trigonometry included, is integer arithmetic, so a lockstep simulation and a replay run on it.
 
 `unit`, `halved` and `doubled` are the constants a body that is generic over its scalar cannot write for itself: a
-numeric literal has a type, and inside such a body that type is the type parameter. `unit(self)` does not read `self` at
+numeric literal has a type, and inside such a body that type is the type parameter. `unit()` does not read `self` at
 all - it is the scalar type asked for its own one, through a value of it.
 
 ### NumberParseError, NumberRangeError
@@ -161,8 +159,6 @@ Widening between integer types, and from an integer or `Float32` to `Float64`, i
 (`Int64.from(byte)` for a `UInt8`). Narrowing - `Int64` down to `Int8` or `Int32`, or `Float64` to `Int64` - is
 `TryFrom<Source, NumberRangeError>` instead. `Int64.from(character)` is the code point of a `Char`; the other direction
 is `std/text`'s `Char.tryFrom`.
-
-<!-- torb:declarations:end -->
 
 ## Related
 

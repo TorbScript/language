@@ -111,3 +111,4 @@ answer for every pair including `nan`. Neither replaces the other.
 - [Integers](integers.md) - the fixed-width types a `Float` never implicitly converts with.
 - [Built-in types](built-in-types.md) - `Float` in the context of every other built-in type.
 - [Declaring a type](../types/declaring-a-type.md) - how `Equals`, `Hash` and `Show` are generated for a type.
+

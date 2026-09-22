@@ -42,8 +42,6 @@ print total
 
 ## Declarations
 
-<!-- torb:declarations:begin -->
-
 ### Iterator, Length
 
 ```trb fragment
@@ -186,10 +184,9 @@ use concatenated from "std/iteration"
 print concatenated(["a", "b", "c"], ", ")
 ```
 
-<!-- torb:declarations:end -->
-
 ## Related
 
 - [std/collections](collections.md) - the collections a pipeline is gathered into.
 - [std/stream](stream.md) - `Stage` on the asynchronous side, `Source.through` and `Sink`.
 - [The standard library](index.md) - the other packages.
+

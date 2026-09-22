@@ -16,6 +16,9 @@ source:
   - std/encoding/src/lib.trb
 ---
 
+> **Not built natively yet.** The generated `encode` is not built by the native back end yet, so `torb run` refuses the
+> examples here that use it. `torb check` accepts them, and the rules are the language's.
+
 `std/encoding` is what other languages need reflection for: serialization, configuration mapping, database rows. A type
 describes itself to an `Encoder` and reads itself from a `Decoder`; a format (`Json`, a database driver) implements
 those two traits and never sees a type, so there is no tree in between. `Encode` is generated for every type whose
@@ -40,8 +43,6 @@ print describe(point)
 ```
 
 ## Declarations
-
-<!-- torb:declarations:begin -->
 
 ### Encode, Decode
 
@@ -158,10 +159,9 @@ public native fn describe(value: Encode): String
 Any `Encode` value as readable text, for messages and debugging: `describe(Point(x: 1, y: 2))` is
 `"Point(x: 1, y: 2)"`.
 
-<!-- torb:declarations:end -->
-
 ## Related
 
 - [std/json](json.md) - `Json`, the one format the standard library implements.
 - [std/iteration](iteration.md) - `Stage`, which `Format.items` and `Format.encoded` answer.
 - [The standard library](index.md) - the other packages.
+

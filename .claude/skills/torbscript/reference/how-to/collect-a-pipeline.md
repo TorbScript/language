@@ -99,3 +99,4 @@ print highValue
 - [Collectors](../language/collections-and-iteration/collectors.md) - `Accumulator` and every standard
   collector in one place.
 - [Sort by more than one key](sort-by-more-than-one-key.md) - a `sorted` stage in front of the same kind of pipeline.
+

@@ -30,8 +30,8 @@ print(numbers.map { _ * 2 }.toList())
 ## Syntax
 
 ```text
-Option<Value>.map<Output>(self, transform: (value: Value) => Output): Output?
-Iterable<Item>.map<Output>(self, transform: (value: Item) => Output): Iterable<Output>
+Option<Value>.map<Output>(transform: (value: Value) => Output): Output?
+Iterable<Item>.map<Output>(transform: (value: Item) => Output): Iterable<Output>
 ```
 
 Same name, same shape of signature, two unrelated declarations - neither `extend`s a trait the other implements.

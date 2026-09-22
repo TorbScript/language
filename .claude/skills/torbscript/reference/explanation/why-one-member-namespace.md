@@ -14,6 +14,9 @@ source:
   - CONCEPT.md#members-a-method-is-a-constant-that-holds-a-closure
 ---
 
+> **Not built natively yet.** A method called through its type, `Point.area(p)`, is not built by the native back end
+> yet, so `torb run` refuses the examples here that use it. `torb check` accepts them, and the rules are the language's.
+
 Java gives a type two namespaces, one for fields and one for methods, so `name` and `name()` can both exist on the
 same class and mean different things. TorbScript gives a type one, and this page argues for why collapsing the two
 namespaces into one is what makes the rest of the member syntax work at all.
@@ -87,9 +90,9 @@ type itself declares or `extend`s, keeps "is `x.f` a member of `x`'s type?" answ
 ## Consequences
 
 **A field and a method are specified to never collide, because the compiler is meant to check one namespace for
-both.** CONCEPT.md states this as a consequence of the one-namespace rule: `type Broken { name: String; fn
-name(self): String { "computed" } }` should be rejected as an error, because `name` would be claimed twice in the same
-namespace. Today's checker accepts this declaration without reporting a problem - a gap between the design and the
+both.** CONCEPT.md states this as a consequence of the one-namespace rule: a `type Broken` with the field
+`name: String` and the method `fn name(): String` should be rejected as an error, because `name` would be claimed
+twice in the same namespace. Today's checker accepts this declaration without reporting a problem - a gap between the design and the
 checker rather than a second namespace appearing through the back door.
 
 **A property command's meaning is fixed by what the name refers to, never by how the call is written.** `tls true`
@@ -123,3 +126,4 @@ pipeline stage exactly as it would pass a free function.
 - [Declaring a type](../language/types/declaring-a-type.md) - fields and methods declared together, in one body.
 - [Why there are no properties](why-no-getters.md) - the other consequence of fields and methods sharing one rule for
   visibility.
+
