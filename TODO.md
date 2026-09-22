@@ -3994,3 +3994,11 @@ Wenn nicht, was bedeutet, bewirkt es?
     `added`/`addedAll` als eigene Member; `Accumulator` steht allein (`add`/`finish`/`isDone`); `into<Target>()` nutzt
     `Target.accumulator()`. Die `+`-Kollision wird auf der OPERATOR-Seite gelöst: `Add`→`Plus` mit Methode `plus`
     (konsistente Menge mit Subtract/Multiply/... prüfen). An die laufende C2b-Runde weitergegeben.
+  - **Endgültig (Nutzer, 2026-09-22): jede Collection-Art behält ihre eigenen Wörter** - List `append`/`removeAt`,
+    Set `add`/`remove`, Map `set`/`remove`, Stack `push`/`pop`, Queue `enqueue`/`dequeue` ("alles add ist mit dem
+    Hammer erschlagen"; oben drauf und hinten an sind verschiedene Bedeutungen). Kein gemeinsames "hinein"-Wort, kein
+    `Fill`, kein `accumulator()` am Trait: `Collection` schrumpft auf Sequence + Length + clear + contains.
+    **Akkumulatoren sind externe Typen** (Javas `Collectors.toList()`-Modell): `Accumulator` steht allein, `into<T>()`
+    braucht nur `T: From<Sequence<Item>>` (Standard sammelt in eine Liste), ein Package kann einen spezialisierten
+    `HashSetAccumulator` mitliefern, ohne dass `Set` ihn kennt. C1 wird damit teilweise zurückgedreht - an die
+    laufende Runde weitergegeben.
