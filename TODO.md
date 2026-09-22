@@ -3691,3 +3691,11 @@ Wenn nicht, was bedeutet, bewirkt es?
   - Befunde eingeplant: `std/random` fehlt; `UInt8` ohne Zahlkonversion (std/number); `fn main()` im Entry-Modul
     erzeugt kaputtes C statt Meldung; `Into<Uri>` nativ zwei interne Fehler; Kapsel-Regel kann ihr Decode-Paar nicht
     benennen (bricht, sobald IDNA `Path→Uri` unfehlbar macht - zusammen mit IDNA lösen).
+  - **Entschieden (Nutzer) zu Frage 1:** `File.open`/`std/fs` nimmt KEINE Uri - es ist der native Treiber auf `Path`.
+    Darüber liegt eine Abstraktion, die per URI-Schema den Treiber wählt und dann auch S3, WebDAV usw. kann; sie
+    konsumiert `std/fs` für `file:`. Wichtig: Verbindungsdaten zu Datenbanken, KV-Caches usw. sind URIs, deren Schema
+    Treiber/Protokoll/Ressource bestimmt.
+  - **Meine Skizze (wird in URI.md geprüft):** ein Trait pro Fähigkeit (`Storage`, `Connection`, `Cache`), Treiber
+    als Packages; Registrierung ist ein WERT, den das Programm baut (`Storage.registry([FileStorage.driver, ...])`),
+    keine Selbstanmeldung (keine Reflexion, Top-Level nie importierbar); unbekanntes Schema = `Result`-Fehler mit
+    Liste; `Show` einer Uri blendet das Passwort im `userInfo` aus. **Wird gelöst:** Abschnitt in `docs/URI.md`.
