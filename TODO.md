@@ -3988,3 +3988,9 @@ Wenn nicht, was bedeutet, bewirkt es?
     `Sink` bleiben - sie sagen "Fluss mit zwei Enden", die Asynchronität steht im Typ von `next()`. `add` bleibt: das
     einzige Wort ohne Orts-/Art-Annahme (`append` hat kein "hinten" bei Set/Map). Läuft in C2b; Nutzer kann bis dahin
     widersprechen.
+  - **Korrektur (Nutzer, 2026-09-22):** `add` kollidiert mit `+` (`Add`-Trait), falls später `[1, 2] + [3]` kommen
+    soll; und: Collections sollen keine Akkumulatoren SEIN, sondern welche BEREITSTELLEN. **Entschieden:** kein
+    `Fill`-Trait; `Collection` bekommt `static fn accumulator(): Accumulator<Item, Self>` und behält `add`/`addAll`/
+    `added`/`addedAll` als eigene Member; `Accumulator` steht allein (`add`/`finish`/`isDone`); `into<Target>()` nutzt
+    `Target.accumulator()`. Die `+`-Kollision wird auf der OPERATOR-Seite gelöst: `Add`→`Plus` mit Methode `plus`
+    (konsistente Menge mit Subtract/Multiply/... prüfen). An die laufende C2b-Runde weitergegeben.
