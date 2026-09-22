@@ -3428,3 +3428,22 @@ Wenn nicht, was bedeutet, bewirkt es?
     verwandelt (bei großen Dateien mit vielen Aufrufen entsprechend oft), und das im self-gehosteten Backend teurer
     ist als Rusts abgeleitetes `Debug` - eine Folgearbeit für wer als Nächstes an der generierten `Show` sitzt, kein
     Fehler dieser Portierung. `bootstrap/crates` bleibt unverändert, eingefroren, nur zum Vergleich.
+- (Antworten des Nutzers auf alle offenen Fragen, 2026-09-22) **Entschieden (Nutzer):**
+  - CONCURRENCY 1: `std/parallel` eigenes Package - ja. 2: **doch ins Prelude** ("cooles und wichtiges Tool für
+    schnellen Parallelismus, in C# gern unterschätzt; `Parallel.For`/`Parallel.ForEach` sind toll") - also auch
+    `Parallel.for`/`forEach`-Gegenstücke vorsehen. 3: Name `Plain` - ja. 4: `pause()`. 5: ich entscheide - **64**,
+    vor 7.7 messen, dann festschreiben. 6: `parallel()` nie ungeordnet - "das ist ja der Clou". 7: Feld-Fall von
+    ECS Lücke 8 - kann er nicht beurteilen; Zielniveau Godot/Unity, also offen lassen und mit dem ECS-Update
+    entscheiden. 8: **Task-Abbruch soll besprochen werden** - Vorschlag gemacht (implizit kooperativ an `await()`,
+    `cancel()` setzt ein Flag, der Task endet an seinem nächsten Suspendierpunkt ohne Unwinding; strukturiert wie
+    Swift: Kinder werden mit abgebrochen; `within(limit)` bricht dann wirklich ab; Abbruch sichtbar im Typ als
+    `Result<Value, Cancelled>` nur für Tasks, die es sagen). **Offen:** jeder Task abbrechbar oder nur die, die es sagen.
+  - Rust-Ausstieg 9: Seed als Release-Download ab dem ersten Release, bis dahin lokal. 10: `tests/conformance/`.
+    11: ich entscheide - Cache-Schlüssel bleibt, bis er stört.
+  - Performance 12: Allokationsbudget als Gate - ja, nach dem Ausstieg. 13: `--explain-copies` als eigener Schalter,
+    so gebaut, dass ein späterer Profiler ihn aufnimmt.
+  - 14: `isCloseTo`. 15: `nameWithoutExtension`.
+  - 16: **ECS: Packages bringen eigene Komponenten mit.** Vorbild Unity/Godot, später ein Behavior-System obendrauf,
+    das alles in einen Baum bringt. Auftrag: Unity (GameObject/Component, DOTS) und Godot (Node-Baum, Szenen,
+    Signale) analysieren und passend zur Sprache übertragen - Update von `docs/ECS.md`, nach den laufenden Runden.
+  - 17: `chcp 850` erklärt; falls keine Lust, wird es gestrichen.
