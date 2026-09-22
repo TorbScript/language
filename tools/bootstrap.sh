@@ -102,16 +102,34 @@ second=$(binary_of "build/release/torb")
 [ -n "$second" ] || fail "step 2 wrote no binary"
 
 # ----------------------------------------------------------------------------- the fixed point --------------------
+#
+# Step 1 was emitted by the seed, step 2 by the compiler itself. They agree unless the change being built alters what
+# the compiler emits - then the seed writes the old C and the fresh compiler the new, and the honest comparison is a
+# third step: the compiler of step 2 building the compiler once more. Only two builds of the SAME compiler have to agree.
 
 if cmp -s build/bootstrap/program.c build/release/program.c; then
   say ""
   say "the fixpoint holds: both steps emitted the same C."
   say "torb: $second"
+  exit 0
+fi
+
+say ""
+say "step 1 and step 2 emitted different C: the seed is older than the code generation it built."
+say "step 3: the compiler of step 2 builds the compiler once more"
+"$second" build ./compiler --output ./build/fixpoint/torb
+third=$(binary_of "build/fixpoint/torb")
+[ -n "$third" ] || fail "step 3 wrote no binary"
+
+if cmp -s build/release/program.c build/fixpoint/program.c; then
+  say ""
+  say "the fixpoint holds: steps 2 and 3 emitted the same C. Refresh the seed from build/release."
+  say "torb: $second"
 else
   say ""
-  say "the two steps emitted DIFFERENT C:"
-  say "  build/bootstrap/program.c  (the seed's)"
-  say "  build/release/program.c    (the compiler's own)"
-  say "The compiler is not a fixed point of itself. \`cmp\` says where they part."
+  say "steps 2 and 3 emitted DIFFERENT C:"
+  say "  build/release/program.c   (built by the seed's output)"
+  say "  build/fixpoint/program.c  (built by the compiler's own output)"
+  say "The compiler is not a fixed point of itself. `cmp` says where they part."
   exit 1
 fi

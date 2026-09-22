@@ -134,7 +134,12 @@ public fn operandsOf(program: IrProgram, facts: SlotFacts, instruction: Instruct
     .Intrinsic(_, _, arguments, _) => borrowedOperands arguments
     .Construct(_, _, _, fields) => ownedOperands fields
     .Read(_, reference) => borrowedOperands placeSlotsOf(reference)
+    // A write with no steps **defines** its base (`definedSlot`), so the base is no operand at all: what the slot held
+    // died at its own last use, and the store keeps the value it is given (docs/PERFORMANCE.md, finding 1)
     .Write(reference, value) => {
+      if reference.steps.isEmpty() {
+        return [ownedOperand(value.slot)]
+      }
       var found = borrowedOperands placeSlotsOf(reference)
       found.add ownedOperand(value.slot)
       found
@@ -330,6 +335,9 @@ public fn withOperands(instruction: Instruction, decided: List<Argument>): Instr
     }
     .Read(target, reference) => Instruction.Read target, withPlace(reference, decided, 0)
     .Write(reference, _) => {
+      if reference.steps.isEmpty() {
+        return Instruction.Write reference, decidedAt(decided, 0)
+      }
       const count = placeSlotsOf(reference).length()
       Instruction.Write withPlace(reference, decided, 0), decidedAt(decided, count)
     }

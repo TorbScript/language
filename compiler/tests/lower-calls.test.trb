@@ -304,3 +304,36 @@ group "What a call cannot reach yet" {
     assert(unsupportedIn("fn run(step: (Int) => Int): Int \{\n  step(1)\n\}") == [])
   }
 }
+
+group "The callee is an expression" {
+  /**
+   * `adder(4)(1)`: a closure is an ordinary value, so anything that produces one may stand where a callee stands. The
+   * parentheses of the second call belong to the value the first call answered, and asking the checker what the
+   * *callee* resolved to would answer for the inner call - which would lower one call with the other's arguments.
+   */
+  test "a callee that is itself a call is a call of the value it answered" {
+    const source = r"""
+      fn adder(amount: Int): (Int) => Int {
+        { value => value + amount }
+      }
+
+      fn raised(start: Int): Int {
+        adder(4)(start)
+      }
+      """
+    assert(
+      irOf(source, "t_acme_x2f_app_main_raised") == r"""
+        fn t_acme_x2f_app_main_raised(start: Int64 borrowed) -> Int64 {
+          slot %0 parameter start: Int64
+          slot %1 temporary: Int64
+          slot %2 temporary: Closure((Int64) -> Int64)
+          slot %3 temporary: Int64
+        b0: # acme/app/src/main.trb:5 body
+          %1 = constant s_literal__Int64_4
+          %2 = call t_acme_x2f_app_main_adder(%1 borrowed) at acme/app/src/main.trb:6:3
+          %3 = callClosure %2(%0 borrowed)
+          return %3 borrowed
+        }"""
+    )
+  }
+}

@@ -21,7 +21,7 @@ use IrTypeId, IrType, IrProgram, IrFunction, IrSignature, FunctionKind, RuntimeK
 use Block, BlockId, Slot, SlotRole, Instruction, Terminator, Argument, Reference, PathStep from "./ir"
 use Intrinsic, IntrinsicOperation, NumericKind, WitnessSource, WitnessRoot, Capture, LayoutId from "./ir"
 use FunctionId, IrSignatureId from "./ir"
-use isManagedType, containsCountedType from "./layout"
+use isManagedType, containsCountedType, textPartKindOf from "./layout"
 use isEnvironmentLayout from "./capture"
 use describeIrType, describeIntrinsic, describeNumericKind from "./print"
 
@@ -467,7 +467,12 @@ public fn usedSlots(instruction: Instruction): List<Slot> {
     .Intrinsic(_, _, arguments, _) => arguments
     .Construct(_, _, _, fields) => slotsOfArguments fields
     .Read(_, reference) => slotsOfReference reference
+    // A write with no steps replaces the whole slot, so it does not *read* its base: what the slot held died at its
+    // own last use, which is what lets `x = f(x)` hand the old value to the call (docs/PERFORMANCE.md, finding 1)
     .Write(reference, value) => {
+      if reference.steps.isEmpty() {
+        return [value.slot]
+      }
       var used = slotsOfReference reference
       used.add value.slot
       used
@@ -503,7 +508,15 @@ public fn usedSlots(instruction: Instruction): List<Slot> {
   }
 }
 
-/** The slot an instruction writes, if it writes one. */
+/**
+ * The slot an instruction writes, if it writes one.
+ *
+ * A `Write` **with no steps** is one of them: it replaces the whole slot, so it defines its base rather than reading
+ * it. That is what makes `x = f(x)` a move - the assignment kills the old value instead of holding it across the call
+ * - and it is what makes the extended verifier report an overwrite of a slot that still owns one
+ * (docs/PERFORMANCE.md, finding 1). A `Write` **with** steps changes a value that stays where it is, so it defines
+ * nothing.
+ */
 public fn definedSlot(instruction: Instruction): Slot? {
   match instruction {
     .Constant(target, _) => Some target
@@ -521,6 +534,13 @@ public fn definedSlot(instruction: Instruction): Slot? {
     .TraitValue(target, _, _) => Some target
     .ContainerNew(target, _, _) => Some target
     .TakeOut(target, _, _, _) => Some target
+    .Write(reference, _) => {
+      if reference.steps.isEmpty() {
+        Some reference.base
+      } else {
+        None
+      }
+    }
     _ => None
   }
 }
@@ -1099,7 +1119,9 @@ fn verifyIntrinsic(
   if !allowsNumericKind(intrinsic.operation) && intrinsic.kind.isSome() {
     found.add "{at}: `{name}` has only one form, so it names no numeric type"
   }
-  if isTextPartsOperation(intrinsic.operation) {
+  if const .TextConcat = intrinsic.operation {
+    verifyPartOperands program, function, found, at, name, arguments
+  } else if isTextPartsOperation(intrinsic.operation) {
     verifyTextOperands program, function, found, at, name, arguments
   } else {
     match intrinsic.kind {
@@ -1197,7 +1219,7 @@ fn isShiftOperation(operation: IntrinsicOperation): Bool {
   }
 }
 
-/** The three operations whose operand list is a list of shown parts: every one of them is a `String`, however many. */
+/** The three operations whose operand list is as long as the call was written: `print`'s parts are all `String`. */
 fn isTextPartsOperation(operation: IntrinsicOperation): Bool {
   match operation {
     .TextConcat | .PrintParts | .PrintErrorParts => true
@@ -1225,6 +1247,27 @@ fn verifyTextOperands(
     const annotation = function.typeOfSlot slot
     if !isTextType(program, annotation) {
       found.add "{at}: `{name}` joins strings, and %{slot.value} is `{describeIrType(program, annotation)}`"
+    }
+  }
+}
+
+/**
+ * The operands of a concatenation: a text, or a primitive the runtime writes into the result itself
+ * (`textPartKindOf`). Everything else went through `Show.show` in the lowering and arrives here as a text.
+ */
+fn verifyPartOperands(
+  program: IrProgram,
+  function: IrFunction,
+  var found: List<String>,
+  at: String,
+  name: String,
+  arguments: List<Slot>,
+) {
+  for slot in arguments {
+    const annotation = function.typeOfSlot slot
+    if textPartKindOf(program, annotation).isNone() {
+      const what = "a string or a value the runtime shows"
+      found.add "{at}: `{name}` joins {what}, and %{slot.value} is `{describeIrType(program, annotation)}`"
     }
   }
 }

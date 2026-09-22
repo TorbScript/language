@@ -87,7 +87,14 @@ typedef enum torb_block_kind {
   TORB_BLOCK_OBJECT = 8,         /**< The boxed payload of a trait-typed value. */
   TORB_BLOCK_ENVIRONMENT = 9,    /**< A closure environment on the heap. */
   TORB_BLOCK_TASK = 10,          /**< Milestone 7.3. */
-  TORB_BLOCK_CHANNEL = 11        /**< Milestone 7.3. */
+  TORB_BLOCK_CHANNEL = 11,       /**< Milestone 7.3. */
+  /**
+   * A closure environment that lives on the frame of the function that made it.
+   *
+   * It is counted like any other environment - the captures inside it are released when the last closure value that
+   * holds it goes away - and it is never freed, because the storage is a local of a C function and not a block.
+   */
+  TORB_BLOCK_FRAME_ENVIRONMENT = 12
 } torb_block_kind;
 
 typedef enum torb_color {
@@ -403,6 +410,17 @@ typedef struct torb_closure {
  */
 void torb_environment_release(torb_environment *environment);
 
+/**
+ * The header of an environment that the emitter put on the **frame** of the function that made the closure: count
+ * one, `TORB_BLOCK_FRAME_ENVIRONMENT`, and the drop of its layout.
+ *
+ * It is a whole environment in every other way - the captures in it are owned by it and released when the last
+ * closure value that holds it goes away - and only the storage is different, which is what makes a closure the callee
+ * cannot keep cost no allocation at all (docs/PERFORMANCE.md, finding 7). The emitter only takes this shape where the
+ * IR proves the closure does not leave the frame, because a pointer to a local outlives nothing.
+ */
+void torb_environment_on_frame(torb_environment *environment, torb_drop_function drop);
+
 /** The boxed payload of a trait-typed value: a witness member takes `void *self`, so the payload is always boxed. */
 typedef struct torb_object {
   torb_header header;
@@ -465,6 +483,42 @@ bool torb_text_is_empty(torb_text text);
 
 /** `parts` borrowed. `Intrinsic.TextConcat`: one allocation for the whole interpolation. Result owned. */
 torb_text torb_text_concat(const torb_text *parts, size_t count);
+
+/** Which member of a `torb_text_part` holds the value, and therefore how the runtime writes it. */
+typedef enum torb_part_kind {
+  TORB_PART_TEXT = 0,
+  TORB_PART_SIGNED = 1,     /**< `Int8` ... `Int64`, widened. */
+  TORB_PART_UNSIGNED = 2,   /**< `UInt8` ... `UInt64`, widened. */
+  TORB_PART_FLOATING = 3,   /**< `Float32` widened to `Float64`, which is what its `Show` does as well. */
+  TORB_PART_BOOLEAN = 4,    /**< `signed_value` is 0 or 1. */
+  TORB_PART_CHARACTER = 5,  /**< `unsigned_value` is the code point. */
+  TORB_PART_VOID = 6
+} torb_part_kind;
+
+/**
+ * One part of an interpolation: a text, or a primitive the runtime formats straight into the result.
+ *
+ * The members are separate rather than a union, because the emitter writes a designated initializer per part and a
+ * union member would need a name in it either way. Every part that is not `TORB_PART_TEXT` is a value that no
+ * `String` was ever built for, which is what makes an interpolation one allocation and not one per part
+ * (docs/PERFORMANCE.md, finding 6).
+ */
+typedef struct torb_text_part {
+  int32_t kind;
+  torb_text text;
+  int64_t signed_value;
+  uint64_t unsigned_value;
+  double floating;
+} torb_text_part;
+
+/**
+ * `parts` borrowed. The same as `torb_text_concat` for parts that may still be numbers: the result is measured once
+ * and every part is written into it, so an interpolation of any number of parts is **one** allocation. Result owned.
+ *
+ * The formatting is the same as the matching `torb_show_*` writes, byte for byte, because the conformance suite
+ * compares the two back ends on exactly these strings (`bootstrap/tests/native/interpolation.trb`, `floats.trb`).
+ */
+torb_text torb_text_concat_parts(const torb_text_part *parts, size_t count);
 
 /** `String.add`. Both borrowed, result owned. */
 torb_text torb_text_add(torb_text first, torb_text second);

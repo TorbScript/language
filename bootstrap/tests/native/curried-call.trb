@@ -1,0 +1,43 @@
+use Process from "std/process"
+
+/**
+ * `adder(4)(1)`: the callee of a call is itself a call, so what is called is the value the inner call answered.
+ *
+ * A closure is an ordinary value, so anything that produces one can stand where a callee stands - a call, a field, an
+ * element of a list, a conditional. The language has no separate "callable expression" rule, and the parentheses of
+ * the second call belong to the value the first one gave back.
+ */
+
+fn adder(amount: Int): (value: Int) => Int {
+  { _ + amount }
+}
+
+fn twice(inner: (value: Int) => Int): (value: Int) => Int {
+  { inner inner(_) }
+}
+
+type Table {
+  first: (value: Int) => Int
+  second: (value: Int) => Int
+}
+
+var total = 0
+
+// The callee is a call
+total = total + adder(4)(1)
+
+// ...and the value it answers is called again
+total = total + twice(adder(3))(10)
+
+// A closure out of a field of a record
+const table = Table adder(5), adder(6)
+total = total + table.first(100)
+total = total + table.second(100)
+
+// A closure a conditional chose
+const chosen = if total > 0 { adder 7 } else { adder 8 }
+total = total + chosen(1000)
+
+print "curried {total}"
+
+Process.exit(total % 200)

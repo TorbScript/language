@@ -627,17 +627,25 @@ group "The verifier" {
     )
   }
 
-  /** `textConcat`, `printParts` and `printErrorParts` take as many operands as there are parts, and each one is a text. */
-  test "a part of a concatenation that is not a text is reported, however many there are" {
+  /**
+   * All three take as many operands as there are parts, and the two rules about what a part may be are different.
+   *
+   * `textConcat` takes a text **or a value the runtime shows itself** - every number, `Bool`, `Char` and `Void` - and
+   * refuses everything whose `Show` the program has to call, because the lowering calls it before the concatenation
+   * (`textPartKindOf` in `ir/layout.trb`). `printParts` joins finished texts, so a number there is a mistake.
+   */
+  test "a part of a concatenation the runtime cannot show is reported, and so is a `print` part that is no text" {
     var program = IrProgram()
     const strings = program.internType IrType.Text
     const integer = program.internType IrType.Integer(64, true)
+    const signature = program.internSignature IrSignature([], integer)
+    const closure = program.internType IrType.Closure(signature)
     const at = program.internLocation Location("src/text.trb", 5, 3)
-    const parameters = [IrParameter("text", strings), IrParameter("number", integer)]
+    const parameters = [IrParameter("text", strings), IrParameter("number", integer), IrParameter("step", closure)]
     var builder = newFunction "t_main_join", None, IrSignature(parameters, strings), "body"
     const joined = addTemporary builder, strings
     const concat = Intrinsic IntrinsicOperation.TextConcat, None
-    emit builder, Instruction.Intrinsic(Some(joined), concat, [Slot(0), Slot(1), Slot(0)], at)
+    emit builder, Instruction.Intrinsic(Some(joined), concat, [Slot(0), Slot(1), Slot(2)], at)
     const printed = Intrinsic IntrinsicOperation.PrintParts, None
     emit builder, Instruction.Intrinsic(None, printed, [joined, Slot(1)], at)
     terminate builder, Terminator.Return(Some(owned(joined)))
@@ -646,7 +654,8 @@ group "The verifier" {
     const reported = verifyFunction(program, program.functionAt(identifier)).joined(separator: "; ")
     assert(
       reported
-        == "t_main_join b0: `textConcat` joins strings, and %1 is `Int64`;"
+        == "t_main_join b0: `textConcat` joins a string or a value the runtime shows,"
+          + " and %2 is `Closure(() -> Int64)`;"
           + " t_main_join b0: `printParts` joins strings, and %1 is `Int64`"
     )
   }

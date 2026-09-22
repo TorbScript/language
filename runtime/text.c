@@ -940,6 +940,95 @@ torb_text torb_show_f32(float value) {
   return torb_show_f64((double)value);
 }
 
+/* ------------------------------------------------------------------------- an interpolation of mixed parts --- */
+
+/**
+ * How many bytes one part can need at most: a text is its own length, and a primitive the widest its `Show` writes.
+ *
+ * It is an upper bound and not the exact length, so the result is measured in one pass and every part is formatted
+ * exactly once. The `torb_text` that comes out carries the exact length; the storage is at most a few bytes longer,
+ * which is what a slice of a text is anyway.
+ */
+static size_t torb_part_capacity(const torb_text_part *part) {
+  switch (part->kind) {
+    case TORB_PART_TEXT:
+      return (size_t)part->text.length;
+    case TORB_PART_SIGNED:
+    case TORB_PART_UNSIGNED:
+      return 24u;
+    case TORB_PART_FLOATING:
+      return 64u;
+    case TORB_PART_BOOLEAN:
+      return 5u;
+    case TORB_PART_CHARACTER:
+      return 4u;
+    default:
+      return 4u;
+  }
+}
+
+/**
+ * One part, written where it belongs in the result. The formatting is the one the matching `torb_show_*` writes: a
+ * number goes through the same `snprintf` and a float through the same shortest round trip, so a value that is
+ * interpolated and one that is shown produce the same bytes.
+ *
+ * A number is formatted into a buffer of its own first, because `snprintf` and `torb_format_f64` both write a
+ * terminating NUL and the byte after the part belongs to the next one.
+ */
+static size_t torb_part_write(const torb_text_part *part, uint8_t *out) {
+  char buffer[64];
+  size_t length;
+  switch (part->kind) {
+    case TORB_PART_TEXT:
+      length = (size_t)part->text.length;
+      if (length > 0u) {
+        memcpy(out, torb_text_data(part->text), length);
+      }
+      return length;
+    case TORB_PART_SIGNED:
+      length = (size_t)snprintf(buffer, sizeof buffer, "%lld", (long long)part->signed_value);
+      break;
+    case TORB_PART_UNSIGNED:
+      length = (size_t)snprintf(buffer, sizeof buffer, "%llu", (unsigned long long)part->unsigned_value);
+      break;
+    case TORB_PART_FLOATING:
+      length = torb_format_f64(part->floating, buffer, sizeof buffer);
+      break;
+    case TORB_PART_BOOLEAN:
+      length = part->signed_value != 0 ? 4u : 5u;
+      memcpy(out, part->signed_value != 0 ? "true" : "false", length);
+      return length;
+    case TORB_PART_CHARACTER:
+      return (size_t)torb_utf8_encode((torb_char)part->unsigned_value, out);
+    default:
+      memcpy(out, "void", 4u);
+      return 4u;
+  }
+  memcpy(out, buffer, length);
+  return length;
+}
+
+torb_text torb_text_concat_parts(const torb_text_part *parts, size_t count) {
+  size_t capacity = 0u;
+  size_t written = 0u;
+  size_t index;
+  uint8_t *data;
+  torb_text result;
+  for (index = 0u; index < count; index += 1u) {
+    capacity += torb_part_capacity(&parts[index]);
+  }
+  torb_check_text_length(capacity);
+  if (capacity == 0u) {
+    return torb_text_empty();
+  }
+  result = torb_text_allocate((uint32_t)capacity, &data);
+  for (index = 0u; index < count; index += 1u) {
+    written += torb_part_write(&parts[index], data + written);
+  }
+  result.length = (uint32_t)written;
+  return result;
+}
+
 /* --------------------------------------------------------------------------------------------- parsing --- */
 
 static int torb_digit_value(uint8_t byte) {

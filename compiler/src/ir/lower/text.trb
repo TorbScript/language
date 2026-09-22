@@ -1,11 +1,19 @@
 /**
  * Text: string interpolation, and the two calls that write one - `print` and `printError`.
  *
- * `"{name}: {count + 1}"` is one `Intrinsic.TextConcat` over the literal pieces and the shown parts (BACKEND 1.6), so a
+ * `"{name}: {count + 1}"` is one `Intrinsic.TextConcat` over the literal pieces and the parts (BACKEND 1.6), so a
  * text of *n* parts is one allocation and never a chain of `String.add`: building the long text of a loop stays linear.
- * Each interpolated part goes through `Show.show` - statically where its type is known, through the witness table the
- * value carries where it is trait typed - which is the very same function a derived `Show` calls per field, so a value
- * that is interpolated and one that is nested inside another value run the same code.
+ *
+ * A part whose type is a **primitive the runtime formats itself** - every integer, every float, `Bool`, `Char`, `Void`
+ * and a `String`, which [textPartKindOf] answers for - is handed to the intrinsic as the value it is, and the runtime
+ * writes it into the result where it belongs. That is what makes the *whole* interpolation one allocation instead of
+ * one per part plus one (docs/PERFORMANCE.md, finding 6). Every other part goes through `Show.show` - statically where
+ * its type is known, through the witness table the value carries where it is trait typed - which is the very same
+ * function a derived `Show` calls per field, so a value that is interpolated and one that is nested inside another
+ * value run the same code.
+ *
+ * `print` is the shape beside it and takes its parts as texts, because the join with one space and one `\n` is the
+ * runtime's and the parts of a variadic call are not the parts of one text.
  *
  * `showNested` is *not* what interpolation uses: `"{name}"` is the text itself and `["a"]` is quoted, which is exactly
  * the difference the generated `Show` format draws between the two members (docs/TYPECHECKER.md, The generated
@@ -21,6 +29,7 @@ use SymbolId from "../../semantics/symbols"
 use TypeId, LiteralValue from "../../semantics/checker/type"
 use IrTypeId, IrType, Slot, Instruction, StaticContents, WitnessSource, Reference from "../ir"
 use Intrinsic, IntrinsicOperation, borrowed from "../ir"
+use textPartKindOf from "../layout"
 use FunctionBuilder, addTemporary, emit from "../build"
 use memberOfType, memberInValue, traitMemberNamed from "../witness"
 use Lowering, reportUnsupported, locationOf, internStatic, substituted from "./context"
@@ -52,11 +61,11 @@ public fn lowerTextLiteral(
         }
       }
       .Interpolated(inner) => {
-        const shown = shownSlotOf lowering, builder, inner
+        const part = partSlotOf lowering, builder, inner
         if !lowering.isSupported {
           return abandonedSlot lowering, builder, destination
         }
-        parts.add shown
+        parts.add part
       }
     }
   }
@@ -113,8 +122,31 @@ fn concatenate(
  * (`lowerUncoercedValue`): boxing a value only to read its table back out of the box would cost one allocation per
  * argument, and the type of the value itself already says which `show` runs. A value that is trait typed to begin with
  * is unaffected - there the table is the only answer there is, and it is read out of the value.
+ *
+ * # Related
+ *
+ * - [loweredPart] - the body, which an interpolated part asks one question more of.
  */
 public fn shownSlotOf(var lowering: Lowering, var builder: FunctionBuilder, expression: Expression): Slot {
+  loweredPart lowering, builder, expression, raw: false
+}
+
+/**
+ * One **interpolated** part: the value itself where the runtime knows how to write it, and the `Show.show` of it
+ * everywhere else. It is the same step as [shownSlotOf] and asks one question more.
+ */
+fn partSlotOf(var lowering: Lowering, var builder: FunctionBuilder, expression: Expression): Slot {
+  loweredPart lowering, builder, expression, raw: true
+}
+
+/**
+ * The body both of them are: the value is lowered, the `Show` adaptation the checker recorded is marked as replayed
+ * ([showsHere]), and then the value either stands for itself or is shown.
+ *
+ * `raw` is what separates an interpolation from `print`: an interpolated part may be a number, because
+ * `Intrinsic.TextConcat` takes one, and a part of `print` may not, because the runtime joins finished texts.
+ */
+fn loweredPart(var lowering: Lowering, var builder: FunctionBuilder, expression: Expression, raw: Bool): Slot {
   const at = expression.span
   const source = match lowering.checker.expressionType(lowering.module, at) {
     Some(found) => found
@@ -127,6 +159,9 @@ public fn shownSlotOf(var lowering: Lowering, var builder: FunctionBuilder, expr
   const value = lowerUncoercedValue lowering, builder, expression
   if !lowering.isSupported {
     return abandonedSlot lowering, builder, None
+  }
+  if raw && textPartKindOf(lowering.program, builder.typeOfSlot(value)).isSome() {
+    return value
   }
   showSlot lowering, builder, value, subject, at
 }

@@ -21,8 +21,9 @@ use IrProgram, IrFunction, IrSignature, IrTypeId, LayoutId, FunctionId from "../
 use Slot, SlotDeclaration, BlockId, Instruction, Terminator, Argument, WitnessSource from "../../ir/ir"
 use Reference, LocationId, RuntimeKind, WitnessRoot, WitnessTableId, Capture from "../../ir/ir"
 use ElementId, IrParameter from "../../ir/ir"
-use Intrinsic, IntrinsicOperation, NumericKind from "../../ir/ir"
-use Layout, isManagedType, containsCountedType from "../../ir/layout"
+use Intrinsic, IntrinsicOperation, NumericKind, Ownership from "../../ir/ir"
+use usedSlots from "../../ir/verify"
+use Layout, isManagedType, containsCountedType, TextPartKind, textPartKindOf from "../../ir/layout"
 use isEnvironmentLayout from "../../ir/capture"
 use suffixOfNumeric from "../../ir/print"
 use payloadLayoutName from "../../ir/mangle"
@@ -42,6 +43,8 @@ public type Body {
   usedLabels: List<Bool>
   /** The result is written through the pointer the caller passes first (BACKEND 3.2). */
   isByPointer: Bool
+  /** Per slot: whether the closure a `Closure` writes into it keeps its environment on the frame ([framedClosures]). */
+  framedClosures: List<Bool>
 }
 
 /** The name the caller's result pointer has inside the callee. No mangled name can collide with it. */
@@ -62,11 +65,104 @@ public fn bodyOf(program: IrProgram, function: IrFunction, prototypes: Map<Strin
   }
   for block in function.blocks {
     for instruction in block.instructions {
-      markReadSlots reads, instruction
+      markReadSlots program, function, reads, instruction
     }
     markTerminator reads, labels, block.terminator
   }
-  Body function, prototypes, reads, labels, isByPointerResult(function)
+  const framed = framedClosures program, function
+  Body function, prototypes, reads, labels, isByPointerResult(function), framed
+}
+
+/**
+ * Which closures of one body may keep their environment on the frame instead of allocating one.
+ *
+ * Two answers have to agree, and this is the second one. The checker says the closure is **`local`**: it is written
+ * straight as the argument of a call, so it cannot outlive that call (`ir/lower/closure.trb`, and BACKEND's decision
+ * 14, "A closure that captures a `var` reference may not escape"). The IR says the callee does not **keep** it: the
+ * slot the `Closure` wrote is used only as a `borrowed` argument of a direct call - which the ownership summary makes
+ * exactly the parameters the callee does not store or return - as the callee of a `CallClosure`, or by the `Release`
+ * this frame itself emitted.
+ *
+ * Both halves are needed, and BACKEND's decision names both: "conservatively, when it is written directly as an
+ * argument of a call **and is not stored by the callee**". A closure handed to `Iterable.map` is `local` and is kept -
+ * the `Mapped` record it lands in is answered to this frame and may be answered on - so it is an `owned` argument and
+ * this says no. Everything that cannot be proved is proved false: an argument of a witness call, whose member modes
+ * the IR does not carry (`ir/operand.trb`), an argument of a `CallClosure`, whose callee is erased, a `Copy`, a
+ * `Return`, a capture, and a store are all a heap environment.
+ */
+fn framedClosures(program: IrProgram, function: IrFunction): List<Bool> {
+  var found: List<Bool> = []
+  for _ in 0..function.slots.length() {
+    found.add false
+  }
+  for block in function.blocks {
+    for instruction in block.instructions {
+      if const .Closure(target, _, _, isEscaping) = instruction {
+        if !isEscaping && target.value >= 0 && target.value < found.length() {
+          found.set target.value, true
+        }
+      }
+    }
+  }
+  for block in function.blocks {
+    for instruction in block.instructions {
+      for slot in keepingSlotsOf(program, instruction) {
+        if slot.value >= 0 && slot.value < found.length() {
+          found.set slot.value, false
+        }
+      }
+    }
+    if const .Return(value) = block.terminator {
+      if const Some(argument) = value {
+        if argument.slot.value >= 0 && argument.slot.value < found.length() {
+          found.set argument.slot.value, false
+        }
+      }
+    }
+  }
+  found
+}
+
+/**
+ * Which slots an instruction may hand on to something that outlives this frame. It is the conservative half of
+ * [framedClosures]: everything that is not provably a borrow of a callee that keeps nothing is in here.
+ */
+fn keepingSlotsOf(program: IrProgram, instruction: Instruction): List<Slot> {
+  match instruction {
+    // A `Release` is this frame's own, and the callee of a closure call only calls what it is handed
+    .Release(_) => []
+    .Retain(_) => []
+    .CallClosure(_, _, arguments) => argumentSlotsOf arguments
+    .Call(_, callee, arguments, _, _) => keptCallSlots program, callee, arguments
+    _ => usedSlots instruction
+  }
+}
+
+/** The arguments of a direct call the callee's signature does **not** call `Owned`, which is what it keeps. */
+fn keptCallSlots(program: IrProgram, callee: FunctionId, arguments: List<Argument>): List<Slot> {
+  if !program.hasFunction(callee) {
+    return argumentSlotsOf arguments
+  }
+  const parameters = program.functionAt(callee).signature.parameters
+  var found: List<Slot> = []
+  for index in 0..arguments.length() {
+    if index >= parameters.length() {
+      found.add arguments[index].slot
+      continue
+    }
+    if parameters[index].ownership == Ownership.Owned {
+      found.add arguments[index].slot
+    }
+  }
+  found
+}
+
+fn argumentSlotsOf(arguments: List<Argument>): List<Slot> {
+  var found: List<Slot> = []
+  for argument in arguments {
+    found.add argument.slot
+  }
+  found
 }
 
 fn isByPointerResult(function: IrFunction): Bool {
@@ -108,8 +204,24 @@ fn markReference(var reads: List<Bool>, reference: Reference) {
   }
 }
 
-/** Every operand occurrence, which is what "something reads this slot" means. A target is a write and not a read. */
-fn markReadSlots(var reads: List<Bool>, instruction: Instruction) {
+/**
+ * Every operand occurrence, which is what "something reads this slot" means. A target is a write and not a read.
+ *
+ * The one operand that is *not* a read is a `Void` part of a concatenation: `Void` has exactly one value, so the
+ * runtime writes `void` from the tag alone and the initializer names no member at all. A slot nothing reads is cast
+ * to `void` once, which is what keeps `-Wunused-but-set-variable` quiet about it.
+ */
+fn markReadSlots(program: IrProgram, function: IrFunction, var reads: List<Bool>, instruction: Instruction) {
+  if const .Intrinsic(_, intrinsic, arguments, _) = instruction {
+    if const .TextConcat = intrinsic.operation {
+      for slot in arguments {
+        if !isVoidPart(program, function, slot) {
+          markRead reads, slot
+        }
+      }
+      return
+    }
+  }
   match instruction {
     .Constant(_, _) => {}
     .Move(_, source) => markRead reads, source
@@ -168,6 +280,18 @@ fn markReadSlots(var reads: List<Bool>, instruction: Instruction) {
     .Panic(message, _) => markRead reads, message.slot
     .Suspend(_, awaited) => markRead reads, awaited
   }
+}
+
+fn isVoidPart(program: IrProgram, function: IrFunction, slot: Slot): Bool {
+  if !function.hasSlot(slot) {
+    return false
+  }
+  if const Some(kind) = textPartKindOf(program, function.typeOfSlot(slot)) {
+    if const .VoidPart = kind {
+      return true
+    }
+  }
+  false
 }
 
 fn markTerminator(var reads: List<Bool>, var labels: List<Bool>, terminator: Terminator) {
@@ -333,10 +457,49 @@ fn slotDeclarationsOf(program: IrProgram, body: Body): List<CStatement> {
     const spelling = valueTypeOf program, declared.annotation
     statements.add CStatement.Declaration(spelling, name, Some(zeroInitializer))
   }
+  statements.addAll frameEnvironmentDeclarations(program, body)
   if !silenced.isEmpty() {
     statements.add CStatement.Joined(silenced)
   }
   statements
+}
+
+/**
+ * The storage of every closure environment this body keeps on the frame ([framedClosures]): one local per `Closure`
+ * instruction, beside the slots and zero initialized like them, so no `goto` can cross an initialization.
+ *
+ * It is named after the slot the closure lands in, which is one per instruction: a closure literal is lowered once,
+ * so a loop that makes the same closure a thousand times reuses this one local - which is exactly what "the closure
+ * cannot outlive the call it is an argument of" allows.
+ */
+fn frameEnvironmentDeclarations(program: IrProgram, body: Body): List<CStatement> {
+  var statements: List<CStatement> = []
+  for block in body.function.blocks {
+    for instruction in block.instructions {
+      if const .Closure(target, callee, _, _) = instruction {
+        if !isFramedClosure(body, target) || !program.hasFunction(callee) {
+          continue
+        }
+        if const Some(layout) = environmentLayoutOfFunction(program, program.functionAt(callee)) {
+          const name = frameEnvironmentName body, target
+          statements.add CStatement.Declaration(program.layoutAt(layout).name, name, Some(zeroInitializer))
+        }
+      }
+    }
+  }
+  statements
+}
+
+/** The C local that holds the environment of the closure in a slot. */
+fn frameEnvironmentName(body: Body, target: Slot): String {
+  "{slotNameOf(body.function, target)}_environment"
+}
+
+fn isFramedClosure(body: Body, target: Slot): Bool {
+  if target.value < 0 || target.value >= body.framedClosures.length() {
+    return false
+  }
+  body.framedClosures[target.value]
 }
 
 /** `{ 0 }`, the universal initializer of C11, which is what every slot starts out as. */
@@ -415,11 +578,18 @@ fn instructionStatements(
       statements.addAll retains
       statements
     }
-    // A write through a counted place releases what was there before it stores the new value
+    // A write through a counted place releases what was there before it stores the new value. A write with **no
+    // steps** is the one that does not: it defines its slot (`ir/verify.trb`, `definedSlot`), so the ownership pass
+    // released what the slot held at that value's own last use. A `var` parameter is the exception in the exception -
+    // its storage is the caller's, no slot of this frame counts what is in it, and the release belongs here
     .Write(reference, value) => {
       var statements: List<CStatement> = []
       const place = placeExpression emission, program, body, reference
       const name = slotExpression body, value.slot
+      if reference.steps.isEmpty() && !isReferenceSlot(body, reference.base) {
+        statements.add CStatement.Assignment(place, name)
+        return statements
+      }
       const annotation = placeTypeOf program, body, reference
       const releases = releaseStatements emission, program, annotation, place
       statements.addAll releases
@@ -1087,6 +1257,10 @@ fn closureStatements(
   if shape.fields.length() != captures.length() {
     return reported emission, "a closure whose environment does not hold exactly its captures"
   }
+  // A closure the IR proves cannot leave this frame keeps its environment in a local of it, so nothing is allocated
+  if isFramedClosure(body, target) {
+    return framedClosureStatements emission, program, body, target, place, code, found, shape, captures
+  }
   const spelling = "{shape.name} *"
   var inner: List<CStatement> = []
   const allocated = CExpression.Call(CExpression.Name("torb_allocate"), [
@@ -1105,6 +1279,43 @@ fn closureStatements(
   const erased = CExpression.Cast "torb_environment *", CExpression.Name("environment")
   inner.add CStatement.Assignment(CExpression.Member(place, environmentMemberName), erased)
   [CStatement.Block(inner)]
+}
+
+/**
+ * The same closure with its environment in a local of the frame: `torb_environment_on_frame` writes the header the
+ * runtime reads - count one, the kind that says "never freed", and the drop of the layout - and the captures are
+ * stored into the local exactly as they would be into a block.
+ *
+ * Nothing else about the closure changes: the value is the same pair of a code pointer and an `torb_environment *`,
+ * a copy of it retains the environment and the last release runs its drop, so every capture is released once.
+ */
+fn framedClosureStatements(
+  var emission: Emission,
+  program: IrProgram,
+  body: Body,
+  target: Slot,
+  place: CExpression,
+  code: CExpression,
+  layout: LayoutId,
+  shape: Layout,
+  captures: List<Capture>,
+): List<CStatement> {
+  const name = CExpression.Name frameEnvironmentName(body, target)
+  const erased = CExpression.Cast "torb_environment *", CExpression.AddressOf(name)
+  var statements: List<CStatement> = []
+  const prepared = CExpression.Call(CExpression.Name("torb_environment_on_frame"), [
+    erased,
+    dropFunctionOf(program, layout),
+  ])
+  statements.add CStatement.Evaluate(prepared)
+  for index in 0..captures.length() {
+    const member = CExpression.Member name, memberNameOf(shape.fields[index])
+    const value = captureExpression emission, program, body, captures[index]
+    statements.add CStatement.Assignment(member, value)
+  }
+  statements.add CStatement.Assignment(CExpression.Member(place, codeMemberName), code)
+  statements.add CStatement.Assignment(CExpression.Member(place, environmentMemberName), erased)
+  statements
 }
 
 /**
@@ -1379,7 +1590,7 @@ fn intrinsicStatements(
     None => None
   }
   if const .TextConcat = intrinsic.operation {
-    const concatenated = textConcatStatements body, place, arguments
+    const concatenated = textConcatStatements emission, program, body, place, arguments
     statements.addAll concatenated
     return statements
   }
@@ -1412,8 +1623,21 @@ fn intrinsicStatements(
   statements
 }
 
-/** One allocation for the whole interpolation, never repeated `String.add` (BACKEND 1.6). */
-fn textConcatStatements(body: Body, place: CExpression?, arguments: List<Slot>): List<CStatement> {
+/**
+ * One allocation for the whole interpolation, never repeated `String.add` (BACKEND 1.6).
+ *
+ * Two shapes, and the difference is only which array the runtime is handed. Where every part is already a text it is
+ * an array of `torb_text`, which is what a concatenation of literals and shown values is. Where one part is a
+ * **primitive the runtime formats itself** (`textPartKindOf`) it is an array of `torb_text_part`: the value goes in
+ * as it is, no `String` is built for it, and the whole text still costs one block (docs/PERFORMANCE.md, finding 6).
+ */
+fn textConcatStatements(
+  var emission: Emission,
+  program: IrProgram,
+  body: Body,
+  place: CExpression?,
+  arguments: List<Slot>,
+): List<CStatement> {
   const into = match place {
     Some(found) => found
     None => {
@@ -1423,6 +1647,9 @@ fn textConcatStatements(body: Body, place: CExpression?, arguments: List<Slot>):
   if arguments.isEmpty() {
     const empty = CExpression.Call CExpression.Name("torb_text_empty"), []
     return [CStatement.Assignment(into, empty)]
+  }
+  if !isTextOnly(program, body, arguments) {
+    return mixedConcatStatements emission, program, body, into, arguments
   }
   var parts: List<CExpression> = []
   for slot in arguments {
@@ -1441,6 +1668,80 @@ fn textConcatStatements(body: Body, place: CExpression?, arguments: List<Slot>):
   ])
   // The array of the parts is a temporary of this one statement, so it lives in braces of its own
   [CStatement.Block([declaration, CStatement.Assignment(into, concatenated)])]
+}
+
+fn isTextOnly(program: IrProgram, body: Body, arguments: List<Slot>): Bool {
+  for slot in arguments {
+    if const Some(kind) = textPartKindOf(program, typeOfSlot(body, slot)) {
+      if const .TextValue = kind {
+        continue
+      }
+    }
+    return false
+  }
+  true
+}
+
+/** The array of `torb_text_part`, one designated initializer per part, and the one call that writes them all. */
+fn mixedConcatStatements(
+  var emission: Emission,
+  program: IrProgram,
+  body: Body,
+  into: CExpression,
+  arguments: List<Slot>,
+): List<CStatement> {
+  var parts: List<CExpression> = []
+  for slot in arguments {
+    parts.add textPartExpression(emission, program, body, slot)
+  }
+  const count = parts.length()
+  const declaration = CStatement.Declaration(
+    "const torb_text_part",
+    "parts",
+    Some(CExpression.Initializer(parts)),
+    count,
+  )
+  const concatenated = CExpression.Call(CExpression.Name("torb_text_concat_parts"), [
+    CExpression.Name("parts"),
+    CExpression.Literal("{count}"),
+  ])
+  [CStatement.Block([declaration, CStatement.Assignment(into, concatenated)])]
+}
+
+/**
+ * `{ .kind = TORB_PART_SIGNED, .signed_value = s3 }`: the tag and the one member that holds the value.
+ *
+ * A designated initializer leaves every other member zeroed, which is what the runtime reads for the kinds that do
+ * not use them - and it is the one form of C initializer that `-Wmissing-field-initializers` does not ask about.
+ */
+fn textPartExpression(
+  var emission: Emission,
+  program: IrProgram,
+  body: Body,
+  slot: Slot,
+): CExpression {
+  const value = slotExpression body, slot
+  const kind = match textPartKindOf(program, typeOfSlot(body, slot)) {
+    Some(found) => found
+    None => {
+      reportUnsupported emission, "a part of a text that is neither a string nor a value the runtime shows"
+      return CExpression.Designated([CDesignatedField("kind", CExpression.Name("TORB_PART_VOID"))])
+    }
+  }
+  const (tag, member) = match kind {
+    .TextValue => ("TORB_PART_TEXT", "text")
+    .SignedValue => ("TORB_PART_SIGNED", "signed_value")
+    .UnsignedValue => ("TORB_PART_UNSIGNED", "unsigned_value")
+    .FloatingValue => ("TORB_PART_FLOATING", "floating")
+    .BooleanValue => ("TORB_PART_BOOLEAN", "signed_value")
+    .CharacterValue => ("TORB_PART_CHARACTER", "unsigned_value")
+    .VoidPart => ("TORB_PART_VOID", "")
+  }
+  var fields = [CDesignatedField("kind", CExpression.Name(tag))]
+  if !member.isEmpty() {
+    fields.add CDesignatedField(member, value)
+  }
+  CExpression.Designated fields
 }
 
 /** Which function of the runtime writes the parts, or empty where the operation is not one of the two. */

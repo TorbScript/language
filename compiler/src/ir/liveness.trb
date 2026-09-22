@@ -20,9 +20,9 @@
  * live before it.
  */
 
-use IrProgram, IrFunction, Ownership, Slot, SlotRole from "./ir"
+use IrProgram, IrFunction, Ownership, Slot, SlotRole, Instruction from "./ir"
 use containsCountedType from "./layout"
-use usedSlots, definedSlot, usedByTerminator, successorsOf from "./verify"
+use usedSlots, definedSlot, usedByTerminator, successorsOf, outParameterSlotsOf from "./verify"
 
 /**
  * Which slots of one function carry a count the frame is responsible for, and where each of them sits in a live set.
@@ -35,6 +35,8 @@ public type Counted {
   indices: List<Int>
   /** Per position of a live set: the slot it stands for, in increasing slot order. */
   slots: List<Slot>
+  /** Per slot: whether it holds nothing but an immortal static, which is what [immortalSlotsOf] decides. */
+  immortal: List<Bool>
 
   fn width(): Int {
     slots.length()
@@ -55,6 +57,14 @@ public type Counted {
   fn counts(slot: Slot): Bool {
     positionOf(slot) >= 0
   }
+
+  /** Whether the slot holds a static value, whose retain and release do nothing at all at run time. */
+  fn isImmortal(slot: Slot): Bool {
+    if slot.value < 0 || slot.value >= immortal.length() {
+      return false
+    }
+    immortal[slot.value]
+  }
 }
 
 /**
@@ -68,18 +78,100 @@ public type Counted {
  * `MakeUnique` asks the narrower question, because only storage that is *shared* has to be made unique.
  */
 public fn countedSlotsOf(program: IrProgram, function: IrFunction): Counted {
+  const immortal = immortalSlotsOf program, function
   var indices: List<Int> = []
   var slots: List<Slot> = []
   for index in 0..function.slots.length() {
     const declaration = function.slots[index]
-    if !isCountedSlot(program, function, index, declaration.role) {
+    if immortal[index] || !isCountedSlot(program, function, index, declaration.role) {
       indices.add(0 - 1)
       continue
     }
     indices.add slots.length()
     slots.add Slot(index)
   }
-  Counted indices, slots
+  Counted indices, slots, immortal
+}
+
+/**
+ * Which slots hold nothing but a static value of the program: every definition of the slot is a `Constant`, it is no
+ * parameter, and nothing writes through it.
+ *
+ * **A static is immortal** (`ir/lower/expression.trb`, and `TORB_IMMORTAL_HEADER` in the emitted C): its count is the
+ * sentinel that `torb_retain`, `torb_release` and `torb_make_unique` all answer with "never counted, never freed". So
+ * a retain and a release of one are calls into another translation unit whose body does nothing, and gcc cannot see
+ * through them - which one list index read pays for the message of its `expect` (docs/PERFORMANCE.md, finding 11).
+ * Leaving such a slot out of the counted set removes both, and the extended verifier stops asking about a value that
+ * nothing owns.
+ *
+ * Three exclusions are what make it exact. A **parameter** holds whatever the caller handed over, and so does the
+ * place a `.ByPointer` result is written to. A slot a write, a `MakeUnique`, a `TakeOut`, a `PutBack`, a `var` argument
+ * or an **out** parameter reaches stops being the static: making an immortal value unique copies it, and the copy is an
+ * ordinary counted block. And a slot that some *other* instruction defines on another path holds that value there.
+ */
+public fn immortalSlotsOf(program: IrProgram, function: IrFunction): List<Bool> {
+  const count = function.slots.length()
+  var isStatic = filledFlags count, false
+  var isOther = filledFlags count, false
+  for index in 0..count {
+    match function.slots[index].role {
+      .Parameter(_) => isOther.set index, true
+      .ResultPointer => isOther.set index, true
+      _ => {}
+    }
+  }
+  for block in function.blocks {
+    for instruction in block.instructions {
+      markStaticDefinition isStatic, isOther, instruction
+      for slot in outParameterSlotsOf(program, instruction) {
+        setSlotFlag isOther, slot
+      }
+    }
+  }
+  var found = filledFlags count, false
+  for index in 0..count {
+    found.set(index, isStatic[index] && !isOther[index])
+  }
+  found
+}
+
+/** One instruction: which slot it defines as a static, and which slot it leaves holding something else. */
+fn markStaticDefinition(var isStatic: List<Bool>, var isOther: List<Bool>, instruction: Instruction) {
+  if const .Constant(target, _) = instruction {
+    setSlotFlag isStatic, target
+    return
+  }
+  if const Some(target) = definedSlot(instruction) {
+    setSlotFlag isOther, target
+  }
+  // The storage a place names is written through, so what is in it is no longer the static the slot was given
+  match instruction {
+    .Write(reference, _) => setSlotFlag isOther, reference.base
+    .MakeUnique(reference) => setSlotFlag isOther, reference.base
+    .TakeOut(_, container, _, _) => setSlotFlag isOther, container.base
+    .PutBack(container, _, _, _) => setSlotFlag isOther, container.base
+    .Call(_, _, arguments, _, _) => {
+      for argument in arguments {
+        if const Some(place) = argument.place {
+          setSlotFlag isOther, place.base
+        }
+      }
+    }
+    .CallClosure(_, _, arguments) => {
+      for argument in arguments {
+        if const Some(place) = argument.place {
+          setSlotFlag isOther, place.base
+        }
+      }
+    }
+    _ => {}
+  }
+}
+
+fn setSlotFlag(var flags: List<Bool>, slot: Slot) {
+  if slot.value >= 0 && slot.value < flags.length() {
+    flags.set slot.value, true
+  }
 }
 
 /**

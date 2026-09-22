@@ -1,0 +1,94 @@
+use Process from "std/process"
+
+/**
+ * `x = f(x)` at the last use: the value is handed to the call and the answer is assigned back, so the old value is
+ * gone by the time the store happens and nothing holds it twice.
+ *
+ * This is the shape the whole language is written in - `numbers = appended(numbers, value)`,
+ * `state = state.with(key)` - and it is what "last use is a move" promises. What has to hold is the same thing an
+ * assignment always promises: whatever the slot held is released exactly once, on every path. The gate is
+ * `live blocks at exit: 0` under `TORB_REPORT_LEAKS=1`, and the exit code says the values came out right.
+ *
+ * The shapes beside the participle are here because they share the rule: an overwrite whose new value never read the
+ * old one, an overwrite on one branch and not the other, a `var` parameter whose storage belongs to the caller, and a
+ * field of a record, which is a write through a path and not a whole slot.
+ */
+
+/** Forty bytes, so a `Pair` is a counted block and replacing one goes through the drop helper of its layout. */
+type Pair {
+  var first: String
+  var second: String
+  weight: Int
+}
+
+fn appended(numbers: List<Int>, value: Int): List<Int> {
+  var result = numbers
+  result.add value
+  result
+}
+
+/** The participle over a list: every round hands the list on and takes the answer back. */
+fn grown(times: Int): Int {
+  var numbers: List<Int> = []
+  for index in 0..times {
+    numbers = appended numbers, index
+  }
+  numbers.length()
+}
+
+fn suffixed(text: String, part: String): String {
+  text + part
+}
+
+/** The same over a string, where the old value is read by the call that produces the new one. */
+fn built(part: String, times: Int): Int {
+  var total = ""
+  for _index in 0..times {
+    total = suffixed total, part
+  }
+  total.byteLength()
+}
+
+/** An overwrite whose new value never reads the old one: the old one dies where it was made. */
+fn dropped(part: String): Int {
+  var current = suffixed part, part
+  current = "."
+  current.byteLength()
+}
+
+/** An overwrite on one path and not on the other: the release belongs on the edge that overwrites. */
+fn chosen(part: String, flag: Bool): Int {
+  var current = suffixed part, part
+  if flag {
+    current = suffixed part, "!"
+  }
+  current.byteLength()
+}
+
+/** A `var` parameter: the storage is the caller's, so the value that was in it is released through the place. */
+fn replaced(var text: String, part: String) {
+  text = suffixed part, part
+}
+
+/** A field of a record is a write through a path, which releases what the field held. */
+fn renamed(var pair: Pair, part: String) {
+  pair.first = suffixed part, pair.second
+}
+
+var total = 0
+
+total = total + grown(12)
+total = total + built("ab", 5)
+total = total + dropped("cd")
+total = total + chosen("ef", true)
+total = total + chosen("ef", false)
+
+var held = "gh"
+replaced held, "ij"
+total = total + held.byteLength()
+
+var pair = Pair "kl", "mn", 3
+renamed pair, "op"
+total = total + pair.first.byteLength() + pair.second.byteLength() + pair.weight
+
+Process.exit(total % 200)

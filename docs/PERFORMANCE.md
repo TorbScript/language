@@ -72,8 +72,8 @@ findings 3, 4, 5, 9 and 10 wait on it.
 
 Integer overflow, division by zero and every index are checked in every profile, because they are semantics and not
 diagnostics. The check is `__builtin_add_overflow` plus a cold branch. What it costs depends entirely on what else the
-code is doing: in a loop whose chain is latency-bound it is **1.09x** (`benchmarks/arithmetic`), and in a recursion
-whose whole body is three arithmetic operations and two calls it is **2.42x** (`benchmarks/call-depth`). Finding 8 says
+code is doing: in a loop whose chain is latency-bound it is free (`benchmarks/arithmetic`), and in a recursion
+whose whole body is three arithmetic operations and two calls it is **2.37x** (`benchmarks/call-depth`). Finding 8 says
 which of those checks are provably unnecessary.
 
 ### 1.6 What a user pays for at the call site, in one table
@@ -88,12 +88,14 @@ which of those checks are provably unnecessary.
 | `holder.big.d = v`, `big` boxed | `MakeUnique` then one store | 1 call | 0 or 1 |
 | `for index in 0..n` | a counted loop | 0 | 0 |
 | `{ _ * 2 }` capturing nothing | a code pointer and `NULL` | 0 | 0 |
-| `{ _ * factor }` capturing one value | a code pointer and a heap environment | 1 release | **1** |
+| `{ _ * factor }` as the argument of a call | a code pointer and an environment on the frame | 1 release | 0 |
+| `{ _ * factor }` stored, returned or kept by the callee | a code pointer and a heap environment | 1 release | **1** |
 | `numbers[index]` on a literal list | indirect call, `get`, an `Option`, `expect` | 0 | 0 |
 | `for value in numbers` | a boxed iterator, then `MakeUnique` and an indirect call per turn | 1 per turn | **1 per loop** |
 | `numbers[index] = v` | `MakeUnique`, indirect call | 1 per write | 0 |
 | `grid[row][column] = v` | read the row (retain), `MakeUnique` (**copies it**), write it back | 4 per write | **2 per write** |
-| `"{a} and {b}"` | one `Show.show` per non-text part, then one concatenation | - | **parts + 1** |
+| `"{a} and {b}"` of numbers, `Bool`, `Char` or text | one concatenation over the values themselves | 0 | **1** |
+| `"{a} and {b}"` of a type with its own `Show` | one `Show.show` per such part, then one concatenation | - | **those parts + 1** |
 | `map[key] ?? 0` then `map.set key, n` | two probes, the key hashed twice | 1 | 0 or 1 |
 
 ---
@@ -105,7 +107,7 @@ same machine code. Each row says **holds** or **does not hold** and names the ev
 
 | Abstraction | Verdict | Evidence |
 |-------------|:-------:|----------|
-| A one-field type (`type Meters { value: Float64 }`) | **holds** | `layout T_..._Meters inline size 8 align 8 fields(value: Float64)`; the C is `struct { double f_value; }` and `plus` is `s4 = s2 + s3`. `benchmarks/wrapper` is **1.02x** against the `double` loop |
+| A one-field type (`type Meters { value: Float64 }`) | **holds** | `layout T_..._Meters inline size 8 align 8 fields(value: Float64)`; the C is `struct { double f_value; }` and `plus` is `s4 = s2 + s3`. `benchmarks/wrapper` is **0.97x** against the `double` loop |
 | A newtype-like wrapper as the item of a list | **holds** | The element descriptor is `{ 8, 8, NULL, NULL, NULL, NULL }` - no retain, no release, no equals and no hash emitted for it |
 | Nested inline records, and a deep field write | **holds** | `deep.middle.inner.count = 7` is one `write %0.middle.inner.count = %4` |
 | `copy(field: value)` on an inline record | **holds** | `first.copy(count: 2)` is `construct T_..._Small (%23 borrowed)`; the source is not read at all |
@@ -118,20 +120,21 @@ same machine code. Each row says **holds** or **does not hold** and names the ev
 | The calling convention | **holds** | The recursion of `benchmarks/call-depth` compiles to the same shape as the C twin; a hand written C twin **with the same overflow checks** runs in the same time (0.38 s against the binary's 0.38 s on the same machine) |
 | `for index in 0..n` | **holds** | No `Range` value and no iterator: `%4 = intrinsic less.i64 %2, %3` and a counted back edge - the same three blocks the hand written `while` loop lowers to |
 | A closure that captures nothing | **holds** | `s1.environment = NULL` - no allocation, and the thunk is a `static` function gcc can inline |
-| Calling a closure through a parameter | **holds** | `benchmarks/closure` is **1.05x** against a C function pointer plus a context struct |
-| **Integer overflow checking** | **does not hold in general** | Free where arithmetic is not the bottleneck (`arithmetic` 1.09x), and **2.42x** where it is (`call-depth`). A C twin isolates it: the same recursion is 0.21 s plain, 0.38 s with all three operations checked, 0.28 s with only the addition - which is the only one that can overflow |
-| **A closure that captures and does not escape** | **does not hold** | The IR says `captures(%0 value) local`, and the emitter allocates anyway: `torb_allocate(sizeof(T_environment...), TORB_BLOCK_ENVIRONMENT)`. `grep -rn escaping compiler/src/backend/c compiler/src/ir` finds the flag in `print.trb` and nowhere else |
-| **A list literal, used as a list** | **does not hold** | `[1, 2, 3]` is `Object(List<Int64>)`: one heap box on top of the list, and `numbers[index]` is `callWitness value %0 bound 0 member 15`. `benchmarks/list-index` is **34.33x** |
-| **`for value in collection`** | **does not hold** | A heap-allocated `Object(Iterator<T>)`, then `makeUnique %3` and an indirect call every turn. `benchmarks/list-iterate` is **50.14x**, and slower than the counted index loop over the same data |
-| **A field of a record in a list** | **does not hold** | `points[index].y = v` reads the element out, writes the temporary and writes it back through two indirect calls. `benchmarks/record-write` is **71.15x** |
-| **A nested index write** | **does not hold** | `grid[row][column] = v` copies the whole row, because the grid still holds it: **7 688 815 allocations and 31.7 GB copied** where the C twin does 803 and 5.1 MB |
-| **`x = f(x)` at the last use** | **does not hold** | `retain %1` in front of the call, so the `makeUnique` inside `f` copies. **120 006 allocations and 20.0 GB copied** for 60 000 appends, where C does 16 and 1.0 MB |
-| **A pipeline of `map` and `filter`** | **does not hold** | One boxed stage record and one boxed iterator per stage: six allocations per pipeline, and one indirect call per stage per element. `benchmarks/pipeline` is **22.25x** |
-| **String interpolation** | **does not hold** | One allocation per non-text part plus one for the result: **6 000 004 allocations** for 2 000 000 interpolations, where the C `snprintf` into a stack buffer does 2 |
+| Calling a closure through a parameter | **holds** | `benchmarks/closure` is **0.98x** against a C function pointer plus a context struct |
+| **A closure that captures and does not escape** | **holds** where the callee is known not to keep it | `torb_environment_on_frame((torb_environment *)&s1_environment, NULL)` and no `torb_allocate`: the environment is a local of the frame. A closure a callee *stores* - which every `Iterable.map` does - is a block, because the pointer would outlive nothing |
+| **`x = f(x)` at the last use** | **holds** | `%5 = call ..._appended(%0 owned last)` and no `retain` in front of it: the assignment defines `%0`, so the argument is the last use and the `makeUnique` inside the callee finds a count of one. `benchmarks/accumulate` allocates **20 blocks and copies 1.05 MB** for 60 000 appends, where the C twin does 16 and 1.05 MB |
+| **A retain or release of a literal** | **holds** | A slot whose every definition is a `Constant` is left out of the counted set, so the body of `Indexed.at` holds no `torb_text_release` of the message its `expect` carries |
+| **String interpolation** | **holds** | `const torb_text_part parts[4] = { { .kind = TORB_PART_TEXT, .text = s5 }, { .kind = TORB_PART_SIGNED, .signed_value = s1_index }, ... }` and one `torb_text_concat_parts`: **2 000 003 allocations** for 2 000 000 interpolations, which is the one `String` each of them answers |
+| **Integer overflow checking** | **does not hold in general** | Free where arithmetic is not the bottleneck (`arithmetic` 0.95x), and **2.37x** where it is (`call-depth`). A C twin isolates it: the same recursion is 0.21 s plain, 0.38 s with all three operations checked, 0.28 s with only the addition - which is the only one that can overflow |
+| **A list literal, used as a list** | **does not hold** | `[1, 2, 3]` is `Object(List<Int64>)`: one heap box on top of the list, and `numbers[index]` is `callWitness value %0 bound 0 member 15`. `benchmarks/list-index` is **13.12x** |
+| **`for value in collection`** | **does not hold** | A heap-allocated `Object(Iterator<T>)`, then `makeUnique %3` and an indirect call every turn. `benchmarks/list-iterate` is **47.95x**, and slower than the counted index loop over the same data |
+| **A field of a record in a list** | **does not hold** | `points[index].y = v` reads the element out, writes the temporary and writes it back through two indirect calls. `benchmarks/record-write` is **47.53x** |
+| **A nested index write** | **does not hold** | `grid[row][column] = v` copies the whole row, because the grid still holds it: **7 688 814 allocations and 31.7 GB copied** where the C twin does 803 and 5.1 MB |
+| **A pipeline of `map` and `filter`** | **does not hold** | One boxed stage record and one boxed iterator per stage: five allocations per pipeline, and one indirect call per stage per element. `benchmarks/pipeline` is **18.26x** |
 
-Every row in the second half but two has one cause: **a value whose concrete type the compiler knows is boxed behind a
-trait anyway**, and everything that reads or writes through it is an indirect call the C compiler cannot see through.
-That is finding 2.
+Every row that does not hold has one cause: **a value whose concrete type the compiler knows is boxed behind a trait
+anyway**, and everything that reads or writes through it is an indirect call the C compiler cannot see through. That is
+finding 2 - the overflow checks are the one exception, and they are finding 8.
 
 ---
 
@@ -140,24 +143,24 @@ That is finding 2.
 Ranked by (gain x frequency) / effort. Each entry says what is generated, what it costs, where the fix goes, what it is
 worth, what it risks, and the test that pins it.
 
-| # | Pattern | Cost today | Fix | Effort |
-|---|---------|------------|-----|--------|
-| 1 | `x = f(x)` at the last use | >231x, 120 006 allocations, 20 GB copied | a `Write` with no steps defines its base | **tiny** |
-| 2 | A collection literal is a trait-typed value | 34x to 71x, and 66 830 bytes of C where 3 748 would do | a devirtualization peephole over the IR | large |
-| 3 | A nested index write copies the row | >510x, 2 allocations per write | an `Element` path step into the concrete list | medium, waits on 2 |
-| 4 | A field of a record in a list | 71x | the same `Element` path step | small, waits on 3 |
-| 5 | `for` over a collection | 50x, one box per loop, a `makeUnique` per turn | the concrete iterator, then a counted loop | medium, waits on 2 |
-| 6 | String interpolation | 3 allocations per interpolation | a text part that is still a number | small |
-| 7 | A non-escaping closure environment | one allocation per closure made | read `isEscaping` in the emitter | small |
-| 8 | Overflow checks that cannot fire | 2.42x on call-heavy code, 1.3x of it removable | a local range analysis | medium |
-| 9 | A pipeline of stages | 22x, six allocations per pipeline | falls out of 2 and 5 | none of its own |
-| 10 | A map read-modify-write, and `map[key].field = v` | 7.08x, the key hashed twice | `TakeOut`/`PutBack` on the map | medium, waits on 2 |
-| 11 | A `Release` of a literal text | one call per list index read | a dead-release rule in the ownership pass | tiny |
+| # | Pattern | Cost | Fix | Effort |
+|---|---------|------|-----|--------|
+| 1 | `x = f(x)` at the last use | was >231x, 120 006 allocations, 20 GB copied | a `Write` with no steps defines its base | **done, round P1** |
+| 2 | A collection literal is a trait-typed value | 13x to 48x, and 66 830 bytes of C where 3 748 would do | a devirtualization peephole over the IR | large |
+| 3 | A nested index write copies the row | 82x, 2 allocations per write | an `Element` path step into the concrete list | medium, waits on 2 |
+| 4 | A field of a record in a list | 48x | the same `Element` path step | small, waits on 3 |
+| 5 | `for` over a collection | 48x, one box per loop, a `makeUnique` per turn | the concrete iterator, then a counted loop | medium, waits on 2 |
+| 6 | String interpolation | was 3 allocations per interpolation | a text part that is still a number | **done, round P4** |
+| 7 | A non-escaping closure environment | was one allocation per closure made | the environment on the frame | **done, round P3** |
+| 8 | Overflow checks that cannot fire | 2.37x on call-heavy code, 1.3x of it removable | a local range analysis | medium |
+| 9 | A pipeline of stages | 18x, five allocations per pipeline | falls out of 2 and 5 | none of its own |
+| 10 | A map read-modify-write, and `map[key].field = v` | 4.89x, the key hashed twice | `TakeOut`/`PutBack` on the map | medium, waits on 2 |
+| 11 | A `Release` of a literal text | was one call per list index read | a dead-count rule in the ownership pass | **done, round P2** |
 | 12 | Witness members that nothing calls | 48 thunks in a three-line program | whole-program member liveness | large |
 | 13 | Reference counts cannot be inlined | measured: -14% to +9%, no decision | nothing yet | - |
 | 14 | A module `const` rebuilt where it is read | 63% of a read, already fixed | recorded, not open | - |
 
-### F1. `x = f(x)` retains, so the participle pattern copies
+### F1. `x = f(x)` is a move, because the assignment defines the slot
 
 **Pattern.** `numbers = appended(numbers, index)`, `state = state.with(key, value)` - the participle style the whole
 language is written in.
@@ -166,33 +169,36 @@ language is written in.
 
 ```text
 b2:
-  retain %1
-  %6 = call t_..._appended(%1 owned, %3 borrowed)
-  write %1 = %6 owned last
+  %5 = call t_..._appended(%0 owned last, %2 borrowed)
+  write %0 = %5 owned last
 ```
 
-and inside `appended`, `makeUnique %2` then finds a count of 2 and copies the whole list.
+No `retain` in front of the call, so `makeUnique %2` inside `appended` finds a count of one and copies nothing.
 
-**Why.** `Instruction.Write` is not in `definedSlot` (`compiler/src/ir/verify.trb:507`) and its base is a *borrowed
-operand* (`compiler/src/ir/operand.trb:137`). So the backward liveness walk sees the assignment as a **use** of `%1`
-rather than as a definition that kills it, `%1` stays live across the call, and the `Owned` argument becomes a `Copy`.
+**Why it works.** A `Write` whose `reference.steps` is empty **defines** its base, which is what `definedSlot`
+(`compiler/src/ir/verify.trb`) answers for it. Three things follow from that one rule and nothing else is written
+anywhere:
 
-**The cost.** O(length) per append instead of amortized O(1). `benchmarks/accumulate` at 60 000 appends:
-**120 006 allocations and 20.0 GB copied**, against 16 allocations and 1.0 MB in C, and **more than 231x** the time.
+- the base is not a *use*, so the backward liveness walk lets the last real use of the old value be the argument of the
+  call - and an `Owned` argument at a last use is a `Move` (`compiler/src/ir/operand.trb`);
+- the old value is released where it dies: after the instruction that read it last, at the definition that nothing
+  reads (`var t = make()  t = other`), or on the edge into the block that overwrites it - all three by the rules the
+  ownership pass already had;
+- the C back end's `Write` stores without releasing, because the ownership pass released. A **`var` parameter** is the
+  exception: its storage is the caller's and no slot of this frame counts what is in it, so the release stays at the
+  store (`compiler/src/backend/c/body.trb`).
 
-**The fix.** A `Write` whose `reference.steps` is empty **defines** its base: `definedSlot` answers
-`Some(reference.base)` for it, and `compiler/src/ir/ownership.trb` keeps emitting the release of the old value in front
-of the store, which it already does for an assignment to a counted local. Two files, one rule.
+A panic runs nothing on the way out - no release, no drop (CONCEPT, "A panic is output") - so a call that panics
+between the move and the store leaves what it was handed, exactly as a panic anywhere else does.
 
-**The gain.** The largest single ratio in the table, and it makes the promise in ARCHITECTURE ("Last use is a move")
-true for the shape users write it in.
+**The cost it removed.** O(length) per append became amortized O(1). `benchmarks/accumulate` at 60 000 appends:
+**20 allocations and 1.05 MB copied**, against 16 allocations and 1.05 MB in the C twin - the same bytes, which is what
+"the last use is a move" means. The retained shape paid 120 006 allocations and 20.0 GB for the same 60 000 appends.
 
-**The risk.** Low and bounded: a `Write` with steps is untouched, and a `Write` without steps always replaces the whole
-slot, so the kill is exact. `reassignment.trb` and `counted.trb` of the conformance suite already pin that the old value
-is released.
-
-**The test.** An IR snapshot of the loop above showing `move %1` and no `retain`, plus the allocation count of a native
-program with a `.leaks`-style companion.
+**What holds it.** The extended verifier reports `%n is overwritten while it still owns a value` at a write whose slot
+was not emptied, which is the invariant in one sentence; `compiler/tests/ownership.test.trb` pins the IR of the loop;
+and `reassignment.trb`, `participle.trb` and `counted.trb` of the conformance suite run every shape of an overwrite
+with the leak gate on.
 
 ### F2. A collection literal is a trait-typed value, so every access is an indirect call
 
@@ -236,7 +242,7 @@ the IR already contains.
 
 **The gain.** It is the enabling change for findings 3, 4, 5, 9 and 10, so its own share is the smaller half: the box
 per literal, the indirect call per access, and the instances the witness table no longer has to be filled with. The
-rows it moves are `list-index` (34.33x), `list-iterate` (50.14x), `record-write` (71.15x) and `pipeline` (22.25x).
+rows it moves are `list-index` (13.12x), `list-iterate` (47.95x), `record-write` (47.53x) and `pipeline` (18.26x).
 
 **The risk.** A `TraitValue` whose slot escapes - returned, stored in a field, captured by an escaping closure, passed
 to a parameter that is declared as the trait - may not be peeled. The pass has to be conservative in exactly the way the
@@ -263,8 +269,8 @@ callWitness value %0 bound 0 member 13(%14 borrowed, %17 owned last)
 ```
 
 **The cost.** O(width of the row) per write. `benchmarks/nested-write` writes 3 840 000 cells of an 800 x 800 grid and
-pays **7 688 815 allocations and 31.7 GB copied** for it, against 803 allocations and 5.1 MB in C: **two allocations per
-write** - the object box and the row's storage - and **more than 510x** the time.
+pays **7 688 814 allocations and 31.7 GB copied** for it, against 803 allocations and 5.1 MB in C: **two allocations per
+write** - the object box and the row's storage - and **82x** the time.
 
 **The fix.** `compiler/src/ir/lower/place.trb` already says why it cannot be done today, in the doc comment of
 `TakenElement`: "the container of a path is almost always a **trait-typed** value ... whose payload the back end may not
@@ -296,7 +302,7 @@ callWitness value %10 bound 0 member 13(%18 borrowed, %20 borrowed)
 ```
 
 **The cost.** Two indirect calls, two bounds checks and a copy of the record in each direction, for what is one store.
-`benchmarks/record-write` is **71.15x**, the worst ratio in the table that is not quadratic.
+`benchmarks/record-write` is **47.53x**, and one of the two worst ratios in the table that are not quadratic.
 
 **The fix.** The same as finding 3: an `Element` path step into the concrete list, so the write goes through an interior
 pointer and the record never moves.
@@ -328,9 +334,9 @@ s3_iterator.data = (torb_object *)torb_make_unique(s3_iterator.data, s3_iterator
 s5 = ((T_std_..._Option__... (*)(void *))s3_iterator.w0->members[0])(s3_iterator.data);
 ```
 
-**The cost.** One allocation per loop - `benchmarks/list-iterate` allocates 66 blocks for 40 loops where
-`benchmarks/list-index` allocates 26 for the same data - and, per element, one cross-unit call plus one indirect call
-plus an `Option` round trip. The ratio is **50.14x** against a pointer walk, and **1.9x slower than the counted index
+**The cost.** One allocation per loop - `benchmarks/list-iterate` allocates 65 blocks for 40 loops where
+`benchmarks/list-index` allocates 25 for the same data - and, per element, one cross-unit call plus one indirect call
+plus an `Option` round trip. The ratio is **47.95x** against a pointer walk, and **2.4x slower than the counted index
 loop** over the same list, which is the opposite of what a reader expects.
 
 **The fix.** Three levels, each worth doing on its own.
@@ -351,67 +357,98 @@ anyway; levels 1 and 3 change nothing observable.
 **The test.** An IR snapshot with no `makeUnique` in a loop head, and `benchmarks/list-iterate` at or under the
 `list-index` ratio.
 
-### F6. String interpolation allocates one string per part
+### F6. An interpolation is one allocation, because a part may still be a number
 
 **Pattern.** `"{a} and {b}"`, and `print` of anything that is not already a string.
 
 **What is generated.**
 
 ```text
-%2 = call t_std_x2f_core_convert_Show_show__Int64(%0 borrowed)
-%3 = constant s_literal__String__x20_and_x20_
-%4 = call t_std_x2f_core_convert_Show_show__String(%1 owned last)
-%5 = intrinsic textConcat %2, %3, %4
+%5 = constant s_literal__String_row_x20_
+%6 = constant s_literal__String__x3a__x20_
+%8 = intrinsic remainder.i64 %1, %7
+%4 = intrinsic textConcat %5, %1, %6, %8
 ```
-
-The concatenation is already **one** allocation for the result and not a chain of `+`, which is what BACKEND 1.6
-promises, and `Show.show` of a `String` is the identity function that gcc inlines away. What is left is the `Show.show`
-of every part that is *not* text: `torb_show_i64` allocates a `torb_bytes` for the digits, which `textConcat` then
-copies and releases.
-
-**The cost.** Three allocations per interpolation of two numbers. `benchmarks/interpolation`: **6 000 004 allocations**
-for 2 000 000 interpolations against 2 in C, and **2.84x** the time.
-
-**The fix.** `Intrinsic.TextConcat` takes *parts that may still be numbers*: the lowering passes the `Int64` and a
-formatter tag instead of the already-shown text, for the handful of types whose `Show` is a runtime intrinsic (`Int*`,
-`Float*`, `Char`, `Bool`), and the runtime formats straight into the destination buffer after measuring it. A user type
-keeps the `Show.show` it has. `compiler/src/ir/lower/text.trb` and one runtime function.
-
-**The gain.** Two allocations out of three on the most common string operation in any program that prints.
-
-**The risk.** The formatting has to stay byte-identical, which `floats.trb` and `interpolation.trb` of the conformance
-suite already pin word for word.
-
-**The test.** `interpolation.trb` keeps its expected output; the allocation count of `benchmarks/interpolation` becomes
-a budget.
-
-### F7. A non-escaping closure allocates its environment on the heap
-
-**Pattern.** Every trailing closure that captures something: `items.filter { _.age >= age }`.
-
-**What is generated.** The IR knows the answer and writes it down - `closure t_... captures(%0 value) local` - and the
-emitter does not read it:
 
 ```c
-T_environment__... *environment = (T_environment__... *)torb_allocate(sizeof(T_environment__...),
-                                                                      TORB_BLOCK_ENVIRONMENT);
-environment->f_factor = s0_factor;
+const torb_text_part parts[4] = { { .kind = TORB_PART_TEXT, .text = s5 },
+                                  { .kind = TORB_PART_SIGNED, .signed_value = s1_index },
+                                  { .kind = TORB_PART_TEXT, .text = s6 },
+                                  { .kind = TORB_PART_SIGNED, .signed_value = s8 } };
+s4_line = torb_text_concat_parts(parts, 4);
 ```
 
-**The cost.** One allocation and one release per closure that is made. It does not show in `benchmarks/closure`, where
-the closure is made once outside the loop and the call itself is 1.05x; it shows wherever a closure is made inside one.
+No `Show.show` at all: `torb_text_concat_parts` measures the parts, allocates the result once and writes each part into
+it with the same formatter its `torb_show_*` uses.
 
-**The fix.** `compiler/src/backend/c/body.trb`: for `isEscaping == false`, declare the environment as a local of the
-frame and give its header the immortal count, which `torb_retain`, `torb_release` and `torb_make_unique` already treat
-as "never counted, never freed".
+**Which parts.** Exactly the types the prelude declares `native`, which `textPartKindOf` (`compiler/src/ir/layout.trb`)
+answers for: every integer width, every float width, `Bool`, `Char`, `Void`, and `String`, whose `Show` is the identity.
+A second implementation of a trait for a type is an error, so no program can give one of them a `show` of its own. A
+value with a `Show` the program has to call - a record, a case, a tuple, a trait-typed value - is a text before the
+concatenation reads it, exactly as it was.
 
-**The gain.** One allocation per closure creation, and the environment's fields become ordinary locals that gcc can keep
-in registers.
+**The cost it removed.** `benchmarks/interpolation`: **2 000 003 allocations** for 2 000 000 interpolations, against 2
+in C, where the shown shape paid 6 000 004. One allocation per interpolation is the `String` it answers, which a
+language with value semantics cannot do without - the C twin writes into a stack buffer and keeps nothing. The same fix
+halves a program that only builds keys: `benchmarks/map-count` allocates **50 110** blocks against 100 111.
 
-**The risk.** A closure the callee stores would dangle. That is precisely what `isEscaping` decides, and it is decided
-by the checker's own escape rule, so the fix leans on an answer that already exists rather than computing a new one.
+**What holds it.** `interpolation.trb` and `floats.trb` of the conformance suite compare every shown form against stage
+0 byte for byte, which is what holds the *format* rather than the type list; `runtime/tests/text_test.c` compares each
+part kind against the matching `torb_show_*`; and `compiler/tests/lower-text.test.trb` pins the IR and the C.
 
-**The test.** The allocation count of a native program that makes a closure inside a loop.
+**`print` is the shape beside it** and keeps its texts: the join with one space and one `\n` is the runtime's, and the
+parts of a variadic call are not the parts of one text. `print "{a} {b}"` pays one allocation, because the
+interpolation inside it is the one text.
+
+### F7. A closure the callee cannot keep has its environment on the frame
+
+**Pattern.** A closure written straight as the argument of a call that only calls it: `applied(1, { _ * factor })`, and
+every receiver closure and DSL block.
+
+**What is generated.**
+
+```c
+T_environment__t_closure__..._scaled_0 s1_environment = { 0 };
+...
+torb_environment_on_frame((torb_environment *)&s1_environment, NULL);
+s1_environment.f_factor = s0_factor;
+s1.code = (void (*)(void))F_t_closure__..._scaled_0;
+s1.environment = (torb_environment *)&s1_environment;
+s2 = t_..._applied(s1);
+torb_environment_release(s1.environment);
+```
+
+The environment is a local of the frame, declared beside the slots so no `goto` crosses an initialization. It is a whole
+environment in every other way: `torb_environment_on_frame` writes count one, the drop of its layout and the block kind
+`TORB_BLOCK_FRAME_ENVIRONMENT`, which `torb_environment_release` answers by running out the count and running the drop
+without a free. So every capture is released exactly once, and nothing is allocated.
+
+**Which closures.** Two answers have to agree, and BACKEND's decision 14 names both: "conservatively, when it is
+written directly as an argument of a call **and is not stored by the callee**".
+
+- The checker says `local`, which is the first half: the closure stands straight as a call argument
+  (`compiler/src/ir/lower/closure.trb`).
+- The IR says the callee does not keep it, which is the second: the slot the `Closure` wrote is used only as a
+  `borrowed` argument of a **direct** call - and the ownership summary makes a parameter `Owned` exactly when the callee
+  stores or returns it - as the callee of a `CallClosure`, or by the `Release` this frame emitted
+  (`framedClosures` in `compiler/src/backend/c/body.trb`).
+
+Everything that cannot be proved is proved false. An argument of a **witness** call is one of them, because the IR
+borrows every argument of a witness call whatever the member's own modes are (`compiler/src/ir/operand.trb`) - so
+`items.filter { ... }` on a `List<Item>` value keeps a block until finding 2 makes that call direct. So does an argument
+of a `CallClosure`, whose callee is erased, and a `Copy`, a `Return`, a capture and a store.
+
+`Iterable.map` is the case that shows why the second half is needed: the closure is `local`, and `map` builds it into a
+`Mapped` record it answers, which the frame may answer on. Its parameter is `Owned`, so the environment is a block.
+
+**The gain.** One allocation per closure creation, and the environment's fields become locals that gcc can keep in
+registers. It does not show in `benchmarks/closure`, where the closure is made once outside the loop; it shows wherever
+a closure is made inside one.
+
+**What holds it.** `closure-frame.trb` of the conformance suite makes a closure with a counted capture inside a loop,
+two at once, and one the callee keeps and calls after the call has ended, with the leak gate on;
+`compiler/tests/lower-closures.test.trb` pins both halves of the C; `runtime/tests/memory_test.c` pins that a frame
+environment costs no block and still drops its captures.
 
 ### F8. Overflow checks that cannot fire
 
@@ -462,9 +499,9 @@ the panic programs of the conformance suite unchanged.
 
 and driving it allocates a `FilteredIterator`, a `MappedIterator` and a `ListIterator`, each boxed.
 
-**The cost.** `benchmarks/pipeline` allocates 146 blocks for 20 pipelines against 26 for the same data read once:
-**six allocations per pipeline**, and per element three indirect calls and three `Option` round trips. The ratio against
-the fused loop is **22.25x**.
+**The cost.** `benchmarks/pipeline` allocates 125 blocks for 20 pipelines against 25 for the same data read once:
+**five allocations per pipeline**, and per element three indirect calls and three `Option` round trips. The ratio against
+the fused loop is **18.26x**.
 
 **The fix.** Findings 2 and 5 remove the boxes and turn the three `next()` calls into direct calls that gcc can inline
 into one loop, which is stage fusion without a fusion pass. What stays is the `Option` per stage per element, which an
@@ -492,7 +529,7 @@ makeUnique %0
 callWitness value %0 bound 0 member 11(%6 borrowed last, %8 borrowed)
 ```
 
-**The cost.** `benchmarks/map-count` is **7.08x** against one probe of an open addressing table, and allocates 100 111
+**The cost.** `benchmarks/map-count` is **4.89x** against one probe of an open addressing table, and allocates 50 110
 blocks against 50 004.
 
 **The fix.** `Instruction.TakeOut` / `PutBack` with `RuntimeKind.Map` - the two instructions exist in the IR for exactly
@@ -509,35 +546,39 @@ and exclusivity is what says no write can happen in between.
 **The test.** An IR snapshot showing one `takeOut` and one `putBack` instead of two `callWitness`, and
 `benchmarks/map-count` as a budget.
 
-### F11. One list index read releases a literal it never owned
+### F11. A static value is never counted, so a literal costs no call
 
-**Pattern.** `numbers[index]`.
+**Pattern.** `numbers[index]`, and every `expect` and `panic` whose message is a literal.
 
 **What is generated.**
 
-```c
-static int64_t t_std_x2f_core_operators_Indexed_at__List_Int64_Int64_Int64(torb_list s0_self, int64_t s1_key) {
-  s2 = n_std_x2f_collections_list_ArrayList_get__Int64(s0_self, s1_key);   /* builds an Option */
-  s3 = s_literal__String_Key_x20_does_x20_not_x20_exist;
-  s4 = t_std_x2f_core_option_Option_expect__Int64(s2, s3);
-  torb_text_release(s3);                                                   /* every read */
-  return s4;
-}
+```text
+%2 = callWitness value %0 bound 0 member 9(%1 borrowed)
+%3 = constant s_literal__String_Key_x20_does_x20_not_x20_exist
+%4 = call t_std_x2f_core_option_Option_expect__Int64(%2 borrowed, %3 borrowed)
+return %4 borrowed
 ```
 
-**The cost.** gcc inlines the three `static` functions inside `program.c`, so the chain itself mostly disappears. What
-does not is `torb_text_release` of the message literal: a call into another translation unit whose body is a no-op,
-because the literal's count is the immortal sentinel, and which gcc cannot see through.
+No `retain` and no `release` of `%3`.
 
-**The fix.** A `Release` of a slot whose only definition is a `Constant` of a static value is dead and is not emitted.
-One rule in `compiler/src/ir/ownership.trb`.
+**Why.** A slot whose **every** definition is a `Constant` holds a static value of the program, and a static is emitted
+with `TORB_IMMORTAL_HEADER`: its count is the sentinel that `torb_retain`, `torb_release` and `torb_make_unique` all
+answer with "never counted, never freed". Such a slot is left out of the counted set (`immortalSlotsOf` in
+`compiler/src/ir/liveness.trb`), so liveness has nothing to say about it, the edges carry no release of it, and the
+extended verifier asks nothing about a value that nothing owns. A position that *keeps* it still says `owned`, because
+that is the contract of the position; it just needs no retain to satisfy it.
 
-**The gain.** One call per list index read, per map index read, and per `expect` anywhere.
+Three exclusions make it exact: a **parameter** holds whatever the caller handed over; a slot a write, a `MakeUnique`, a
+`TakeOut`, a `PutBack` or a `var` argument reaches stops being the static, because making an immortal value unique
+copies it and the copy is an ordinary counted block; and a slot some other instruction defines on another path holds
+that value there.
 
-**The risk.** None: the immortal count already makes the release a no-op at run time, so removing it changes no
-behaviour at all.
+**The cost it removed.** One cross-unit call per list index read, per map index read and per `expect` anywhere - a call
+whose body is a comparison and a return, which gcc cannot see through because `program.c` and the runtime are separate
+translation units with no working LTO (finding 13).
 
-**The test.** An IR snapshot with no `release` of a static text.
+**What holds it.** `compiler/tests/ownership.test.trb` pins a body where a static and a value the frame really owns
+stand side by side, and the extended verifier would report a leak if a slot that does own something were left out.
 
 ### F12. A witness table instantiates every member, called or not
 
@@ -601,37 +642,55 @@ initializer is not static data is built once and read with a retain, in both bac
 `sh benchmarks/run.sh --allocations` produces this; `benchmarks/README.md` says how to read it.
 
 Windows 11, 16 cores, gcc 13.2.0 (MinGW-W64 x86_64-ucrt-posix-seh), `-std=c11 -O2 -g0 -Wall -Wextra`, stage 0 built
-from this worktree. Times are the fastest of seven runs, in microseconds, net of the process floor that `nothing.trb`
-measures (torb 68 507, c 72 606).
+from this worktree. Times are the fastest of five runs, in microseconds, net of the process floor that `nothing.trb`
+measures (torb 72 165, c 70 538). The **allocations** column is the one that does not move with the machine; this run
+shared the machine with another build of the compiler, so a row whose two sides are close - `arithmetic`, `wrapper`,
+`closure` - can come out either side of 1.00x, and the rows further down carry more noise than the audit's first run
+did. The column to compare a later run against is the last one.
 
 | Program | torb | c | ratio | torb allocations | c allocations |
 |---------|-----:|--:|------:|-----------------:|--------------:|
-| `arithmetic` | 203 231 | 185 482 | **1.09x** | 4 | 2 |
-| `wrapper` | 191 586 | 187 086 | **1.02x** | 4 | 2 |
-| `closure` | 176 577 | 168 151 | **1.05x** | 5 | 2 |
-| `call-depth` | 1 003 091 | 414 344 | **2.42x** | 4 | 2 |
-| `interpolation` | 455 035 | 159 899 | **2.84x** | 6 000 004 | 2 |
-| `map-count` | 338 495 | 47 781 | **7.08x** | 100 111 | 50 004 |
-| `pipeline` | 787 538 | 35 391 | **22.25x** | 146 | 3 |
-| `list-index` | 524 282 | 15 271 | **34.33x** | 26 | 3 |
-| `list-iterate` | 996 395 | 19 871 | **50.14x** | 66 | 3 |
-| `record-write` | 1 287 841 | 18 100 | **71.15x** | 25 | 3 |
-| `accumulate` | 462 812 | under 2 000 | **>231x** | 120 006 (20.0 GB) | 16 (1.0 MB) |
-| `nested-write` | 1 021 686 | under 2 000 | **>510x** | 7 688 815 (31.7 GB) | 803 (5.1 MB) |
+| `arithmetic` | 199 450 | 207 979 | **0.95x** | 3 | 2 |
+| `wrapper` | 190 172 | 194 509 | **0.97x** | 3 | 2 |
+| `closure` | 176 167 | 179 556 | **0.98x** | 3 | 2 |
+| `interpolation` | 362 493 | 197 482 | **1.83x** | 2 000 003 | 2 |
+| `call-depth` | 428 936 | 180 589 | **2.37x** | 3 | 2 |
+| `accumulate` | 8 939 | under 2 000 | **>4.46x** | 20 (1.05 MB) | 16 (1.05 MB) |
+| `map-count` | 383 286 | 78 230 | **4.89x** | 50 110 | 50 004 |
+| `list-index` | 452 784 | 34 490 | **13.12x** | 25 | 3 |
+| `pipeline` | 872 349 | 47 755 | **18.26x** | 125 | 3 |
+| `record-write` | 1 355 326 | 28 513 | **47.53x** | 24 | 3 |
+| `list-iterate` | 1 084 314 | 22 612 | **47.95x** | 65 | 3 |
+| `nested-write` | 1 273 013 | 15 486 | **82.20x** | 7 688 814 (31.7 GB) | 803 (5.1 MB) |
 
-Three things this table does not say on its own:
+What rounds P1 to P4 moved, against the audit's own first run of the same suite:
 
-- **The last two ratios are lower bounds.** Their C twins do a few hundred microseconds of work, which is inside the
-  noise of the process floor, so the runner prints `>` and computes against two milliseconds. The allocation column is
-  the exact statement there.
+| Program | allocations before | after | what removed them |
+|---------|-------------------:|------:|-------------------|
+| `accumulate` | 120 006 (20.0 GB) | **20** (1.05 MB) | P1: the participle hands the list on instead of holding it |
+| `interpolation` | 6 000 004 | **2 000 003** | P4: a part that is a number needs no `String` of its own |
+| `map-count` | 100 111 | **50 110** | P4: the keys of the table are an interpolation |
+| `closure` | 5 | **3** | P3, and the one interpolation of its own output |
+| every other program | 4 to 7 688 815 | one fewer | P4: the line each of them prints is one allocation |
+
+The times moved with them: `accumulate` from 462 812 microseconds to 8 939 - a quadratic shape became a linear one -
+and `interpolation` from 455 035 to 362 493. Nothing else in the suite is a shape any of the four rounds touches.
+
+Four things this table does not say on its own:
+
+- **A ratio with a `>` in front of it is a lower bound.** The C twin of that row does a few hundred microseconds of
+  work, which is inside the noise of the process floor, so the runner computes against two milliseconds instead. Both
+  sides of `accumulate` are that small, which is what round P1 left of it; the allocation column is the exact
+  statement there.
 - **The C twins of `list-index`, `list-iterate` and `pipeline` vectorize.** gcc turns a sum over an array into a vector
   reduction, and no program whose elements come back from a call can do that. Part of those three ratios is the
   vectorization and not the dispatch - which is an argument for finding 2 rather than against it, because a direct call
   the compiler can inline is what makes the reduction visible again.
-- **The ratios are steadier than the absolute times.** Three runs of the suite on the same machine moved `call-depth`
-  between 0.39 s and 1.00 s with its twin moving by the same factor, while its ratio stayed between 2.40x and 2.57x.
-  Read the ratio and the allocation column; the microseconds are there so a later run can be compared against the same
-  shape of number.
+- **The ratios are steadier than the absolute times, and the allocation column is exact.** Three runs of the suite on
+  the same machine moved `call-depth` between 0.39 s and 1.00 s with its twin moving by the same factor, while its ratio
+  stayed between 2.40x and 2.57x. A run that shares the machine with another build moves both sides and moves them by
+  different amounts, so a ratio that is close to 1 can come out either side of it. Read the allocation column first; the
+  microseconds are there so a later run can be compared against the same shape of number.
 - **Nothing here is run under `cargo test`.** Section 6 says which of these numbers should become a gate and in which
   shape.
 
@@ -643,10 +702,10 @@ Each round is one agent's work, in this order. A round names the files it touche
 
 | Round | What | Files | Gate | Before the VM? |
 |-------|------|-------|------|----------------|
-| **P1** | F1: a `Write` with no steps defines its base | `ir/verify.trb`, `ir/ownership.trb` | conformance suite, an IR snapshot, `benchmarks/accumulate` | **yes** - it is the promise in ARCHITECTURE |
-| **P2** | F11: a `Release` of a static value is dead | `ir/ownership.trb` | an IR snapshot, the fixpoint | **yes** - one rule |
-| **P3** | F7: a non-escaping closure environment on the frame | `backend/c/body.trb`, `runtime/include/torb.h` | conformance suite, an allocation budget | **yes** |
-| **P4** | F6: a text part that is still a number | `ir/lower/text.trb`, `runtime/text.c`, the manifest | `interpolation.trb` and `floats.trb` unchanged, an allocation budget | **yes** |
+| **P1** | F1: a `Write` with no steps defines its base | `ir/verify.trb`, `ir/operand.trb`, `backend/c/body.trb` | **done** | - |
+| **P2** | F11: a static value is never counted | `ir/liveness.trb`, `ir/ownership.trb` | **done** | - |
+| **P3** | F7: a closure environment the callee cannot keep, on the frame | `backend/c/body.trb`, `runtime/memory.c`, `runtime/include/torb.h` | **done** | - |
+| **P4** | F6: a text part that is still a number | `ir/layout.trb`, `ir/lower/text.trb`, `ir/verify.trb`, `backend/c/body.trb`, `runtime/text.c` | **done** | - |
 | **P5** | F2: the devirtualization peephole | new `ir/devirtualize.trb`, `ir/lower/lower.trb`, `cli/build.trb` | the fixpoint, the conformance suite, an IR snapshot with no `traitValue`, the size of the smallest list program | **yes** - P6 to P9 all wait on it |
 | **P6** | F5 levels 1 and 3: the concrete iterator, and the hoisted `makeUnique` | `ir/ownership.trb`, `ir/lower/statement.trb` | an IR snapshot with no `makeUnique` in a loop head, `benchmarks/list-iterate` | yes |
 | **P7** | F3 and F4: an `Element` path step into a concrete list | `ir/lower/place.trb`, `runtime/list.c` | a native program with a `.leaks`-style companion, an IR snapshot, `benchmarks/nested-write` | yes |
@@ -657,7 +716,8 @@ Each round is one agent's work, in this order. A round names the files it touche
 | **P12** | F13 again, on the code P5 to P7 leave behind | `runtime/include/torb.h` | the benchmark table | after the VM |
 
 **Before milestone 7** are P1 to P8: each of them is a property of the IR or of the runtime that the VM will read the
-same way, so doing them first means the VM is written against the shape that stays. **After** are P9 to P12: P9 and P11
+same way, so doing them first means the VM is written against the shape that stays. P1 to P4 are done and the rows they
+moved are in section 4. **After** are P9 to P12: P9 and P11
 change what a construct lowers to and are better decided once there are two back ends to answer to, P10's whole-program
 dead-member scan is a code-size fix that only the C back end pays for, and P12 is a measurement whose answer changes
 once P5 to P7 have run.
@@ -675,7 +735,7 @@ A number that nobody measures again goes back. Four of these belong in the gates
 (BACKEND 1.7), so a snapshot is the cheapest possible regression test and it fails far earlier than any C-level test.
 The three that matter most:
 
-- `x = f(x)` at the last use shows `move` and no `retain`.
+- `x = f(x)` at the last use shows `owned last` and no `retain` (`compiler/tests/ownership.test.trb`).
 - No `makeUnique` stands on a container the surrounding frame still holds - the "no copy on a shared row" rule.
 - No loop head holds a `makeUnique`.
 

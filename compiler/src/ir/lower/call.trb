@@ -61,6 +61,12 @@ public fn lowerCall(
   arguments: List<Argument>,
   annotation: IrTypeId,
 ): Slot {
+  // `adder(4)(1)`: the callee is itself a call, so what is called is the **value** the inner call answered. Its own
+  // span carries its own resolution, and asking the checker here would answer that one - which would lower the inner
+  // call with the outer call's arguments and drop one call of the two
+  if const .Call(_, _, _) = callee.kind {
+    return lowerClosureCall lowering, builder, destination, expression, callee, arguments, annotation
+  }
   const resolution = match callResolutionOf(lowering, expression, callee) {
     Some(found) => found
     None => {

@@ -1451,7 +1451,11 @@ allows, the code won and this is the list. Everything else is as written.
   "stack or heap environment" to a back end and the flag is in the IR and in the text format, but taking it needs
   liveness to hold every captured value live to the closure's **last use** rather than to the `Closure` instruction: a
   borrowing environment whose captures die right after it was built would read freed memory at the call one line later.
-  That is a rule of the liveness pass, so it is 6.3's measurement and not this one's.
+  That is a rule of the liveness pass, so it is 6.3's measurement and not this one's. Round P1 to P4 of
+  [docs/PERFORMANCE.md](PERFORMANCE.md) (finding 7) takes the flag without that rule: the environment on the frame
+  stays a **counted** block with a block kind that says "never freed", so it owns its captures exactly as a heap one
+  does and only the storage differs. What it costs is a second condition beside the flag - the IR has to prove the
+  callee does not keep the closure, which is the half of decision 14 the checker does not decide.
 - **A capture is an `Owned` position and still cannot be a move.** 5.4's note asked for a mode on `Capture`; a `Capture`
   has no room for `last` and `withOperands` cannot write one back, so a capture at its last use is a retain followed by a
   release rather than a move. One retain/release pair per capture of a value the frame no longer needs, which the

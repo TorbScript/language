@@ -3177,6 +3177,25 @@ Wenn nicht, was bedeutet, bewirkt es?
   - Schon bekannt: verschachteltes Schreiben kopiert die innere Liste; jeder `List`-Zugriff ist ein `callWitness`
     auf einem `traitValue`, obwohl `ArrayList` statisch feststeht (Devirtualisierung).
   - Danach: die Befunde gehen als eigene Runden in die Warteschlange, VOR der VM (7.x), soweit sie die IR betreffen.
+  - **Erledigt:** Runde P1-P4, die vier kleinen Befunde in IR, C-Backend und Runtime, plus ein Bug nebenbei. Gemessen
+    mit `benchmarks/run.sh --allocations` auf dieser Maschine, vorher/nachher (Zeiten in Mikrosekunden abzüglich des
+    Prozess-Bodens, Allokationen exakt über `ld --wrap`; die Maschine war bei beiden Läufen von einem anderen Build
+    mitbenutzt, deshalb sind die Allokationszahlen die belastbare Hälfte). **P1** (Befund 1, `x = f(x)`): ein `Write`
+    ohne Pfadschritte DEFINIERT seinen Slot, also ist das Argument die letzte Verwendung, wird bewegt statt kopiert,
+    und das `makeUnique` im Aufgerufenen findet den Zähler 1 - `accumulate` (60 000 Appends) 417 903 -> 8 939,
+    **120 006 -> 20 Allokationen, 20,0 GB -> 1,05 MB kopiert**, also genau so viele Bytes wie der C-Zwilling. **P2**
+    (Befund 11): ein Slot, dessen einzige Definition ein `Constant` ist, hält einen immortalen Wert und fällt aus der
+    Zähler-Menge - kein `retain`/`release` einer Literal-Meldung mehr, also ein Cross-Unit-Aufruf weniger pro `a[i]`,
+    pro `map[k]` und pro `expect`. **P3** (Befund 7): die Umgebung einer Closure liegt im Frame statt auf dem Heap,
+    wenn der Checker `local` sagt UND das IR beweist, dass der Aufgerufene sie nur borgt - beide Hälften von
+    BACKEND-Entscheidung 14; `closure` 5 -> 3 Allokationen. **P4** (Befund 6): ein Interpolationsteil, den die Runtime
+    selbst formatiert (alle Zahlen, `Bool`, `Char`, `Void`, `String`), geht als WERT in `textConcat` statt als
+    Zwischen-`String` - `interpolation` (2 000 000 Interpolationen) 467 782 -> 362 493, **6 000 004 -> 2 000 003
+    Allokationen**, und `map-count`, das nur Schlüssel baut, **100 111 -> 50 110**. Nebenbei gefixt: `adder(4)(1)`
+    (ein Aufruf, dessen Callee selbst ein Aufruf ist) wurde falsch gesenkt - der innere Aufruf verschwand und der
+    Verifier meldete einen internen Fehler; jetzt ein Closure-Aufruf, mit IR-Test und
+    `bootstrap/tests/native/curried-call.trb`. Belege, Rundenplan und die neue Messtabelle stehen in
+    `docs/PERFORMANCE.md`; offen bleiben P5 (Devirtualisierung, der Hebel für alles andere) bis P12.
 
 - (Performance-Audit, 2026-09-22) Der obige Befund war der Anlass für eine systematische Messung: wo tut der erzeugte
   Code vermeidbare Arbeit? Ergebnis sind `docs/PERFORMANCE.md` (Kostenmodell, Zero-Cost-Vertrag mit hält/hält-nicht,

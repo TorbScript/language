@@ -192,6 +192,88 @@ TORB_TEST(concatenation_is_one_allocation) {
   torb_text_release(joined);
 }
 
+TORB_TEST(mixed_parts_are_one_allocation_and_the_same_bytes_as_show) {
+  torb_text_part parts[7];
+  torb_text joined;
+  torb_text piece = text_of("n=");
+  size_t before;
+  memset(parts, 0, sizeof parts);
+  parts[0].kind = TORB_PART_TEXT;
+  parts[0].text = piece;
+  parts[1].kind = TORB_PART_SIGNED;
+  parts[1].signed_value = -41;
+  parts[2].kind = TORB_PART_UNSIGNED;
+  parts[2].unsigned_value = 65535u;
+  parts[3].kind = TORB_PART_FLOATING;
+  parts[3].floating = 0.1;
+  parts[4].kind = TORB_PART_BOOLEAN;
+  parts[4].signed_value = 0;
+  parts[5].kind = TORB_PART_CHARACTER;
+  parts[5].unsigned_value = 0xDFu; /* 'ß', two bytes of UTF-8 */
+  parts[6].kind = TORB_PART_VOID;
+  before = torb_live_block_count();
+  joined = torb_text_concat_parts(parts, 7u);
+  /* One block for the whole thing, however many parts are in it and whatever they are. */
+  TORB_CHECK_INTEGER(torb_live_block_count(), before + 1u);
+  TORB_CHECK_TEXT(joined, "n=-4165535" "0.1" "false" "\xC3\x9F" "void");
+  torb_text_release(joined);
+  torb_text_release(piece);
+  /* Nothing at all: the empty result is the immortal empty storage, exactly as `torb_text_concat` answers. */
+  before = torb_live_block_count();
+  joined = torb_text_concat_parts(parts, 0u);
+  TORB_CHECK_INTEGER(torb_live_block_count(), before);
+  TORB_CHECK_TEXT(joined, "");
+  torb_text_release(joined);
+}
+
+TORB_TEST(a_mixed_part_writes_what_show_writes) {
+  /* Every kind, one part at a time, against the `torb_show_*` that formats the same value. */
+  torb_text_part part;
+  torb_text joined;
+  torb_text shown;
+  memset(&part, 0, sizeof part);
+
+  part.kind = TORB_PART_SIGNED;
+  part.signed_value = INT64_MIN;
+  joined = torb_text_concat_parts(&part, 1u);
+  shown = torb_show_i64(INT64_MIN);
+  TORB_CHECK(torb_text_equal(joined, shown));
+  torb_text_release(joined);
+  torb_text_release(shown);
+
+  part.kind = TORB_PART_UNSIGNED;
+  part.unsigned_value = UINT64_MAX;
+  joined = torb_text_concat_parts(&part, 1u);
+  shown = torb_show_u64(UINT64_MAX);
+  TORB_CHECK(torb_text_equal(joined, shown));
+  torb_text_release(joined);
+  torb_text_release(shown);
+
+  part.kind = TORB_PART_FLOATING;
+  part.floating = 1e21;
+  joined = torb_text_concat_parts(&part, 1u);
+  shown = torb_show_f64(1e21);
+  TORB_CHECK(torb_text_equal(joined, shown));
+  torb_text_release(joined);
+  torb_text_release(shown);
+
+  part.kind = TORB_PART_BOOLEAN;
+  part.signed_value = 1;
+  joined = torb_text_concat_parts(&part, 1u);
+  shown = torb_show_bool(true);
+  TORB_CHECK(torb_text_equal(joined, shown));
+  torb_text_release(joined);
+  torb_text_release(shown);
+
+  part.kind = TORB_PART_CHARACTER;
+  part.unsigned_value = 0x1F600u;
+  joined = torb_text_concat_parts(&part, 1u);
+  shown = torb_show_char(0x1F600u);
+  TORB_CHECK(torb_text_equal(joined, shown));
+  torb_text_release(joined);
+  torb_text_release(shown);
+}
+
 TORB_TEST(comparison_is_by_bytes_and_hashing_is_deterministic) {
   torb_text first = text_of("apple");
   torb_text second = text_of("apples");
@@ -520,6 +602,8 @@ void torb_register_text_tests(void) {
   TORB_ADD(a_character_and_a_byte_are_read_at_an_offset);
   TORB_ADD(a_character_of_a_slice_is_read_from_the_slice);
   TORB_ADD(concatenation_is_one_allocation);
+  TORB_ADD(mixed_parts_are_one_allocation_and_the_same_bytes_as_show);
+  TORB_ADD(a_mixed_part_writes_what_show_writes);
   TORB_ADD(comparison_is_by_bytes_and_hashing_is_deterministic);
   TORB_ADD(searching_a_text);
   TORB_ADD(trim_upper_lower_replace_and_repeat);

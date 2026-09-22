@@ -299,6 +299,58 @@ public fn alignedOffset(offset: Int, alignment: Int): Int {
   offset + alignment - remainder
 }
 
+// --- What one part of an interpolation is ----------------------------------------------------------------------------
+
+/**
+ * What one operand of `Intrinsic.TextConcat` holds, which is what the runtime reads it as (`torb_text_part`).
+ *
+ * The names are the runtime's `TORB_PART_*` constants, in that order, because the emitter writes the constant and the
+ * VM will read the same tag.
+ */
+public type TextPartKind {
+  case TextValue
+  case SignedValue
+  case UnsignedValue
+  case FloatingValue
+  case BooleanValue
+  case CharacterValue
+  case VoidPart
+}
+
+/**
+ * Which part kind a type is, or `None` for a type whose `Show` the program has to call.
+ *
+ * These are exactly the types the prelude declares `native` and whose `Show` is therefore a formatter of the runtime
+ * (`torb_show_i64`, `torb_show_f64`, `torb_show_bool`, `torb_show_char`, `torb_show_void`). A second implementation of
+ * a trait for a type is an error, so no program can give one of them a `show` of its own - which is what lets an
+ * interpolation hand the *value* to the runtime instead of a `String` built from it, and pay one allocation for the
+ * whole text rather than one per part (docs/PERFORMANCE.md, finding 6).
+ *
+ * `String` is `TextValue` and not `None`: `Show` of a text is the identity, so the part is the text itself.
+ *
+ * # Pitfalls
+ *
+ * The bytes have to stay the ones `Show` writes. `bootstrap/tests/native/interpolation.trb` and `floats.trb` compare
+ * them against stage 0 for every shape a program can write, which is what holds this to the format and not to a type.
+ */
+public fn textPartKindOf(program: IrProgram, id: IrTypeId): TextPartKind? {
+  match program.typeAt(id) {
+    .Text => Some TextPartKind.TextValue
+    .Integer(_, isSigned) => {
+      if isSigned {
+        Some TextPartKind.SignedValue
+      } else {
+        Some TextPartKind.UnsignedValue
+      }
+    }
+    .Floating(_) => Some TextPartKind.FloatingValue
+    .Boolean => Some TextPartKind.BooleanValue
+    .Character => Some TextPartKind.CharacterValue
+    .VoidType => Some TextPartKind.VoidPart
+    _ => None
+  }
+}
+
 // --- Counted, shared, and the niche ---------------------------------------------------------------------------------
 
 /**

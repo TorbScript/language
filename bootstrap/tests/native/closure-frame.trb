@@ -1,0 +1,67 @@
+use Process from "std/process"
+
+/**
+ * A closure that is written straight as the argument of a call and that the callee does not keep: it cannot outlive
+ * the call, so what it captured lives exactly as long as the frame that made it.
+ *
+ * What a reader can rely on is only the behaviour: the captures are read correctly however often the closure is made,
+ * a capture that carries a count is released exactly once, and a closure the callee *does* keep - one that is stored
+ * in a record or answered to the caller - still works after the call that made it has ended. Making one inside a loop
+ * is what separates the two: a closure made a thousand times has to cost what one costs, and the gate is
+ * `live blocks at exit: 0` under `TORB_REPORT_LEAKS=1`.
+ */
+
+type Held {
+  action: (value: Int) => Int
+}
+
+/** The callee only calls its closure, so nothing it does can make the closure outlive this call. */
+fn applied(value: Int, transform: (value: Int) => Int): Int {
+  transform value
+}
+
+/** Two closures alive at the same time, both arguments of one call. */
+fn combined(value: Int, first: (value: Int) => Int, second: (value: Int) => Int): Int {
+  first(value) + second(value)
+}
+
+/** The callee keeps the closure in a record it answers, so the closure outlives the call that made it. */
+fn kept(action: (value: Int) => Int): Held {
+  Held action
+}
+
+/** A closure made inside a loop, capturing a number and a counted value. */
+fn counted(label: String, times: Int): Int {
+  var total = 0
+  for index in 0..times {
+    total = total + applied(index, { _ * 2 + label.byteLength() })
+  }
+  total
+}
+
+/** Two of them at once, each with its own captures. */
+fn paired(label: String, other: String): Int {
+  combined(10, { _ + label.byteLength() }, { _ + other.byteLength() })
+}
+
+/** One that is stored, called after the call that made it, and then dropped. */
+fn stored(label: String): Int {
+  const holder = kept({ _ + label.byteLength() })
+  holder.action(5) + holder.action(6)
+}
+
+/** A closure that captures nothing at all still has no environment to put anywhere. */
+fn plain(start: Int): Int {
+  applied(start, { _ * 3 })
+}
+
+var total = 0
+
+total = total + counted("abc", 4)
+total = total + paired("de", "fghi")
+total = total + stored("jklmn")
+total = total + plain(7)
+
+print "closure frame {total}"
+
+Process.exit(total % 200)

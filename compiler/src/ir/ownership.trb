@@ -777,6 +777,10 @@ fn rewriteInstruction(
  * A value the frame does not own - a borrowed parameter, a `var` path - has no last use here at all: the caller keeps
  * its count for the whole call, so it is never moved out of and never released, and where it is needed owned it is
  * retained.
+ *
+ * A slot that holds a **static** value is the one that needs neither. Its count is the immortal sentinel, so a retain
+ * and a release of it do nothing at run time; the position keeps the mode it asks for and no instruction is inserted
+ * around it (`immortalSlotsOf` in `liveness.trb`, docs/PERFORMANCE.md finding 11).
  */
 fn decideOperand(
   program: IrProgram,
@@ -790,6 +794,12 @@ fn decideOperand(
   const slot = operand.slot
   if !facts.isCountedSlot(slot) {
     return Argument slot, Ownership.Borrowed, false
+  }
+  if counted.isImmortal(slot) {
+    if !operand.takesCount {
+      return Argument slot, Ownership.Borrowed, false
+    }
+    return Argument slot, Ownership.Owned, false
   }
   const position = counted.positionOf slot
   const isLast = position >= 0 && !alive[position]

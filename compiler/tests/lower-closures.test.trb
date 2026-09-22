@@ -449,6 +449,59 @@ group "The C of a closure" {
     )
   }
 
+  /**
+   * A closure the IR proves cannot leave the frame keeps its environment **in** the frame: a local beside the slots,
+   * the header `torb_environment_on_frame` writes, and no allocation at all (docs/PERFORMANCE.md, finding 7).
+   *
+   * Two answers have to agree for that. The checker says `local` - the closure is written straight as the argument of
+   * a call - and the ownership summary says the callee only borrows it, which is exactly "the callee does not store
+   * it". `remembered` is the other half of the pair: `keeps` builds the closure into a record it answers, so its
+   * parameter is `owned` and the environment is a block.
+   */
+  test "a closure the callee only borrows keeps its environment in the frame, and one it keeps does not" {
+    const source = r"""
+      type Kept {
+        action: () => Int
+      }
+
+      fn applied(transform: (Int) => Int): Int {
+        transform 2
+      }
+
+      fn keeps(action: () => Int): Kept {
+        Kept action
+      }
+
+      fn scaled(factor: Int): Int {
+        applied({ _ * factor })
+      }
+
+      fn remembered(factor: Int): Kept {
+        keeps({ factor })
+      }
+      """
+    assert(
+      functionOf(source, "t_acme_x2f_app_main_scaled") == r"""
+        static int64_t t_acme_x2f_app_main_scaled(int64_t s0_factor) {
+          torb_closure s1 = { 0 };
+          int64_t s2 = { 0 };
+          T_environment__t_closure__t_acme_x2f_app_main_scaled_0 s1_environment = { 0 };
+        #line 13 "acme/app/src/main.trb"
+          /* body */
+          torb_environment_on_frame((torb_environment *)&s1_environment, NULL);
+          s1_environment.f_factor = s0_factor;
+          s1.code = (void (*)(void))F_t_closure__t_acme_x2f_app_main_scaled_0;
+          s1.environment = (torb_environment *)&s1_environment;
+          s2 = t_acme_x2f_app_main_applied(s1);
+          torb_environment_release(s1.environment);
+          return s2;
+        }"""
+    )
+    const kept = functionOf source, "t_acme_x2f_app_main_remembered"
+    assert kept.contains("torb_allocate(sizeof(T_environment__t_closure__t_acme_x2f_app_main_remembered_0), TORB_BLOCK_ENVIRONMENT)")
+    assert(!kept.contains("torb_environment_on_frame"))
+  }
+
   test "the thunk casts the erased environment back, so nothing casts a function pointer it does not have" {
     assert(
       definitionOf(closures, "static int64_t F_t_closure__t_acme_x2f_app_main_adder_0") == r"""

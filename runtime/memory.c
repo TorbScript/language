@@ -120,8 +120,26 @@ void torb_release(void *block, torb_drop_function drop) {
   torb_live_blocks -= 1;
 }
 
+void torb_environment_on_frame(torb_environment *environment, torb_drop_function drop) {
+  environment->header.count = 1u;
+  environment->header.kind = (uint16_t)TORB_BLOCK_FRAME_ENVIRONMENT;
+  environment->header.color = (uint16_t)TORB_COLOR_NONE;
+  environment->drop = drop;
+}
+
 void torb_environment_release(torb_environment *environment) {
   if (environment == NULL) {
+    return;
+  }
+  /* The storage of a frame environment is a local of the caller, so the count runs out and nothing is freed. */
+  if (environment->header.kind == (uint16_t)TORB_BLOCK_FRAME_ENVIRONMENT) {
+    if (environment->header.count == 0u) {
+      torb_panic_text("internal error: released a block whose count is already zero", torb_location_unknown);
+    }
+    environment->header.count -= 1u;
+    if (environment->header.count == 0u && environment->drop != NULL) {
+      environment->drop(environment);
+    }
     return;
   }
   torb_release(environment, environment->drop);

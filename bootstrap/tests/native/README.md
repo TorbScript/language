@@ -108,6 +108,7 @@ panic.
 | `boxed-copy.trb` | A copy of a value whose layout is `Boxed` may not see a change made through the other one |
 | `records.trb` | Records, fields, defaults and nesting |
 | `reassignment.trb` | Assignment to a counted local releases what the slot held before the new value lands |
+| `participle.trb` | `x = f(x)`: the old value is handed to the call, and every shape of an overwrite releases exactly once |
 | `places.trb` | `var` parameters and `var fn` receivers: the callee works on the caller's value |
 | `place-counted.trb` | `var` paths through counted storage, and copy on write on every one of them |
 | `counted.trb` | Counted values through every position the ownership pass decides about |
@@ -132,6 +133,8 @@ panic.
 | `closures.trb` | A closure that captures nothing, one that captures a value, one that is stored and called later |
 | `closure-captures.trb` | A captured `var` binding is one **shared box** and everything else is a copy: a write on either side is seen by the other, a closure a function returns keeps the box, the binding of a `for` is fresh every turn |
 | `closure-counts.trb` | What a closure does with a count it was only lent |
+| `closure-frame.trb` | A closure a callee only calls, made in a loop, beside one the callee keeps and calls later |
+| `curried-call.trb` | `adder(4)(1)`: the callee of a call is a call, a field and a conditional |
 | `counted-closures.trb` | The leak gate of everything a closure can hold that carries a count |
 | `dsl.trb` | Receiver closures and the three property commands |
 

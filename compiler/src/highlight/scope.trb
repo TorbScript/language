@@ -373,10 +373,11 @@ fn addTo(var scope: FileScope, name: String, addition: TypeInfo) {
  */
 fn rememberMembers(var scope: FileScope, info: TypeInfo) {
   scope.declaredCases.addAll info.cases
-  for entry in info.methods {
-    const changes = entry.value.changesReceiver
-    const known = scope.changingMethods.get(entry.key) ?? changes
-    scope.changingMethods.set(entry.key, known && changes)
+  // Stage 0 hands a map entry over as a tuple without labels, so the pair is destructured and never read by name
+  for (name, method) in info.methods {
+    const changes = method.changesReceiver
+    const known = scope.changingMethods.get(name) ?? changes
+    scope.changingMethods.set(name, known && changes)
   }
 }
 

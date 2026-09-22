@@ -187,6 +187,30 @@ TORB_TEST(releasing_an_environment_runs_the_drop_function_it_carries) {
   TORB_CHECK_INTEGER(torb_live_block_count(), before);
 }
 
+/**
+ * A closure the callee cannot keep has its environment on the **frame** of the function that made it: no block is
+ * allocated, the captures inside it are still owned by it, and the last release runs the drop without a free.
+ */
+TORB_TEST(a_frame_environment_costs_no_block_and_still_drops_its_captures) {
+  size_t before = torb_live_block_count();
+  sample_environment environment;
+  uint8_t *data = NULL;
+  torb_environment_on_frame((torb_environment *)&environment, sample_environment_drop);
+  environment.captured = torb_text_allocate(3u, &data);
+  data[0] = 'a';
+  data[1] = 'b';
+  data[2] = 'c';
+  /* Only the capture is a block: the environment itself is this frame's storage. */
+  TORB_CHECK_INTEGER(torb_live_block_count(), before + 1u);
+  /* A copy of the closure shares it, so the captures die with the last one and not with the first. */
+  torb_retain(&environment);
+  torb_environment_release((torb_environment *)&environment);
+  TORB_CHECK_INTEGER(torb_live_block_count(), before + 1u);
+  torb_environment_release((torb_environment *)&environment);
+  TORB_CHECK_INTEGER(torb_live_block_count(), before);
+  TORB_CHECK_INTEGER(environment.header.count, 0);
+}
+
 /** A closure without captures has no environment at all, and releasing that is nothing. */
 TORB_TEST(releasing_the_environment_of_a_closure_without_captures_is_a_no_op) {
   size_t before = torb_live_block_count();
@@ -239,6 +263,7 @@ void torb_register_memory_tests(void) {
   TORB_ADD(a_block_of_an_immortal_region_is_born_immortal);
   TORB_ADD(immortal_regions_nest);
   TORB_ADD(releasing_an_environment_runs_the_drop_function_it_carries);
+  TORB_ADD(a_frame_environment_costs_no_block_and_still_drops_its_captures);
   TORB_ADD(releasing_the_environment_of_a_closure_without_captures_is_a_no_op);
   TORB_ADD(a_copied_closure_shares_its_environment);
   TORB_ADD(a_panic_hook_catches_a_panic_and_the_suite_goes_on);

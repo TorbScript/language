@@ -28,7 +28,11 @@ fn countOf(text: String, part: String): Int {
 }
 
 group "one concatenation per text" {
-  test "a literal piece, a name and an expression become one intrinsic" {
+  /**
+   * A part whose type the runtime shows itself is handed to the intrinsic as the **value**: no `Show.show` call, no
+   * `String` for the digits, and one allocation for the whole text (docs/PERFORMANCE.md, finding 6).
+   */
+  test "a literal piece, a name and an expression become one intrinsic over the values themselves" {
     const source = r"""
       fn label(count: Int): String {
         "n = {count + 1}!"
@@ -43,21 +47,23 @@ group "one concatenation per text" {
           slot %3 temporary: Int64
           slot %4 temporary: String
           slot %5 temporary: String
-          slot %6 temporary: String
         b0: # acme/app/src/main.trb:1 body
           %1 = constant s_literal__String_n_x20__x3d__x20_
           %2 = constant s_literal__Int64_1
           %3 = intrinsic add.i64 %0, %2 at acme/app/src/main.trb:2:9
-          %4 = call t_std_x2f_prelude_types_Show_show__Int64(%3 borrowed) at acme/app/src/main.trb:2:9
-          %5 = constant s_literal__String__x21_
-          %6 = intrinsic textConcat %1, %4, %5 at acme/app/src/main.trb:2:3
-          return %6 borrowed
+          %4 = constant s_literal__String__x21_
+          %5 = intrinsic textConcat %1, %3, %4 at acme/app/src/main.trb:2:3
+          return %5 borrowed
         }"""
     )
   }
 
-  /** Every shown part is a text the frame owns, so it is released once the concatenation has read it. */
-  test "the parts are released after the one intrinsic that reads them" {
+  /**
+   * Nothing is retained and nothing is released here at all. The two literal pieces are **statics**, whose count is
+   * the immortal sentinel (docs/PERFORMANCE.md, finding 11); the text and the number are parts the intrinsic reads
+   * and gives back, so the parameter that carries the text stays `borrowed` - a caller hands it over for free.
+   */
+  test "a part the runtime shows costs no count at all, and the parameter stays borrowed" {
     const source = r"""
       fn label(name: String, count: Int): String {
         "{name}: {count}"
@@ -65,22 +71,41 @@ group "one concatenation per text" {
       """
     assert(
       ownedIrOf(source, "t_acme_x2f_app_main_label") == r"""
-        fn t_acme_x2f_app_main_label(name: String owned, count: Int64 borrowed) -> String {
+        fn t_acme_x2f_app_main_label(name: String borrowed, count: Int64 borrowed) -> String {
           slot %0 parameter name: String
           slot %1 parameter count: Int64
           slot %2 temporary: String
           slot %3 temporary: String
-          slot %4 temporary: String
-          slot %5 temporary: String
         b0: # acme/app/src/main.trb:1 body
-          %2 = call t_std_x2f_prelude_types_Show_show__String(%0 owned last) at acme/app/src/main.trb:2:5
-          %3 = constant s_literal__String__x3a__x20_
-          %4 = call t_std_x2f_prelude_types_Show_show__Int64(%1 borrowed) at acme/app/src/main.trb:2:13
-          %5 = intrinsic textConcat %2, %3, %4 at acme/app/src/main.trb:2:3
+          %2 = constant s_literal__String__x3a__x20_
+          %3 = intrinsic textConcat %0, %2, %1 at acme/app/src/main.trb:2:3
+          return %3 owned last
+        }"""
+    )
+  }
+
+  /** A value whose `Show` the program has to call is a text before the concatenation, and it is released after it. */
+  test "a part the program has to show is a text the frame owns and releases" {
+    const source = r"""
+      fn label(value: Show): String {
+        "[{value}]"
+      }
+      """
+    assert(
+      ownedIrOf(source, "t_acme_x2f_app_main_label") == r"""
+        fn t_acme_x2f_app_main_label(value: Object(Show) borrowed) -> String {
+          slot %0 parameter value: Object(Show)
+          slot %1 temporary: String
+          slot %2 temporary: String
+          slot %3 temporary: String
+          slot %4 temporary: String
+        b0: # acme/app/src/main.trb:1 body
+          %1 = constant s_literal__String__x5b_
+          %2 = callWitness value %0 bound 0 member 0()
+          %3 = constant s_literal__String__x5d_
+          %4 = intrinsic textConcat %1, %2, %3 at acme/app/src/main.trb:2:3
           release %2
-          release %3
-          release %4
-          return %5 owned last
+          return %4 owned last
         }"""
     )
   }
@@ -108,6 +133,11 @@ group "one concatenation per text" {
     assert(!irOf(source, "t_acme_x2f_app_main_greeting").contains("textConcat"))
   }
 
+  /**
+   * One array on the stack and one call, and the number goes into it as the number it is: the runtime measures the
+   * parts, allocates once and writes each one where it belongs. A designated initializer leaves every other member
+   * of a part zeroed, which is what the runtime reads for the kinds that name none.
+   */
   test "the C of an interpolation is one array of parts and one call" {
     const source = r"""
       fn label(count: Int): String {
@@ -115,17 +145,49 @@ group "one concatenation per text" {
       }
       """
     const shown = ownedCOf source
-    assert shown.contains("    const torb_text parts[2] = \{ s1, s2 \};")
-    assert shown.contains("    s3 = torb_text_concat(parts, 2);")
+    assert(
+      shown.contains(
+        "    const torb_text_part parts[2] = \{ \{ .kind = TORB_PART_TEXT, .text = s1 \},"
+          + " \{ .kind = TORB_PART_SIGNED, .signed_value = s0_count \} \};"
+      )
+    )
+    assert shown.contains("    s2 = torb_text_concat_parts(parts, 2);")
+  }
+
+  /** A text of literal pieces alone needs no tags at all: the parts are texts and the runtime joins them. */
+  test "the C of a concatenation of texts is the array of texts it always was" {
+    const source = r"""
+      fn label(first: String, second: String): String {
+        "{first}-{second}"
+      }
+      """
+    const shown = ownedCOf source
+    assert shown.contains("    const torb_text parts[3] = \{ s0_first, s2, s1_second \};")
+    assert shown.contains("    s3 = torb_text_concat(parts, 3);")
   }
 }
 
 group "`Show` of every shape" {
-  /** Each of these is a different kind of member: a runtime function per width, and a generated body for a `type`. */
-  test "a number, a `Bool`, a `Char` and `Void` each reach their own member of the manifest" {
+  /**
+   * A number, a `Bool`, a `Char` and `Void` are parts the runtime writes itself, so an interpolation of them calls no
+   * `show` at all and the whole text is one intrinsic over four values and three literal pieces.
+   */
+  test "a number, a `Bool`, a `Char` and `Void` go into the concatenation as the values they are" {
     const source = r"""
       fn shown(number: Int, flag: Bool, character: Char, nothing: Void): String {
         "{number} {flag} {character} {nothing}"
+      }
+      """
+    const shown = irOf source, "t_acme_x2f_app_main_shown"
+    assert shown.contains("intrinsic textConcat %0, %4, %1, %5, %2, %6, %3 at")
+    assert(!shown.contains("Show_show"))
+  }
+
+  /** `print` takes finished texts, so each of them reaches its own member of the manifest. */
+  test "a `print` of the same values reaches a member of the manifest per type" {
+    const source = r"""
+      fn written(number: Int, flag: Bool, character: Char, nothing: Void) {
+        print number, flag, character, nothing
       }
       """
     const shown = textOf source
