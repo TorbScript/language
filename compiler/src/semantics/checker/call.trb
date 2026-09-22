@@ -22,6 +22,7 @@ use hasCases, caseNamesOf from "./member"
 use checkExpression, inferExpression, deferExpression, deferArguments, optionValueOf from "./expression"
 use resolveTarget, expectationOf from "./expression"
 use substituteFunction, substituteBounds, sameType, unify, resolveType, resolveTypes, openVariableOf from "./unify"
+use suppressVariables from "./unify"
 use witnessFor, isConcrete, traitArgumentsOf, fitsType from "./implementation"
 use propertyWrite from "./command"
 use openReceiverAccess, openArgumentAccess, closeAccessesTo, checkCallReads, isDeclaredVar from "./place"
@@ -30,7 +31,7 @@ use noteArgumentClosures from "./mutation"
 use noteTaskParameter, noteFunctionArgument from "./escape"
 use taskValueOf from "./statement"
 use isQuotation, openThunk, closeThunk from "./quote"
-use checkConstruction, checkSharedIdentity, requireSharedFields from "./declaration"
+use checkConstruction, checkSharedIdentity from "./declaration"
 use taskProblemOf, taskNoteOf from "./declaration"
 use capsuleNotesOf from "./derive"
 
@@ -43,6 +44,11 @@ public type ArgumentPlan {
   /** The parameter that collects the rest, and the written argument it starts at. `-1` when there is none. */
   variadic: Int
   variadicFrom: Int
+  /**
+   * More arguments were written than the callee takes, which was reported. Which parameter each one was meant for is
+   * then a guess, so the arguments are not checked against the parameters at all: one root cause, one message.
+   */
+  hasSurplus: Bool = false
 }
 
 /** A generic callee with its parameters filled in: fresh variables where the call site did not write them out. */
@@ -127,9 +133,6 @@ public fn checkCall(
   checker.isTaskArgument = isSpawnTarget checker, target
   checkArguments checker, inner, arguments, plan, target.resolution, calleeName, isDiscarded, call
   checker.isTaskArgument = savedTaskArgument
-  // A `var` field with an identity needs a `var` path, wherever the constructor is called from. After the
-  // arguments, because the paths it asks about are the ones checking them recorded
-  requireSharedFields checker, target, arguments
   // `spawn { ... }` takes no `var` binding with it, and the captures it would take are recorded by now
   requireTaskCaptures checker, target, arguments
   checkCallReads checker, callee, arguments, plan.targets, inner.parameters, isVarReceiver
@@ -595,7 +598,7 @@ fn matchArguments(
   if (hasSurplus || !missing.isEmpty()) && !hasUnknownLabel {
     reportArity checker, target, parameters, missing, arguments.length(), hasSurplus, at
   }
-  ArgumentPlan targets, defaults, variadic, variadicFrom
+  ArgumentPlan(targets, defaults, variadic, variadicFrom, hasSurplus: hasSurplus && !hasUnknownLabel)
 }
 
 /** The trailing closure fills the last parameter, which is what makes `fold(0) { ... }` and `html { ... }` work. */
@@ -672,6 +675,16 @@ fn checkArguments(
   /** Which call this is, so that two `var` accesses of it are told from an access of the call around it. */
   call: Int,
 ) {
+  if plan.hasSurplus {
+    deferArguments checker, arguments
+    // Nothing was read from the arguments, so the callee's own parameters are not solved: their "Cannot infer" would
+    // be about the same line again
+    for parameter in form.parameters {
+      suppressVariables checker, parameter.annotation
+    }
+    suppressVariables checker, form.result
+    return
+  }
   // A closure written straight as an argument cannot outlive the call, which is what lets it hold a reference
   noteArgumentClosures checker, arguments
   // The ordinary arguments first, then the closures: every `var` access of the call is open by the time a closure of it

@@ -13,6 +13,17 @@ use parsePrimaryExpression from "./expressions"
 public fn parseType(var parser: Parser): TypeReference {
   const start = parser.span()
   const first = parseSingleType parser
+  // `Array<Float, size + 1>`: a value with arithmetic after it is an expression, and no type position computes one
+  if isArithmetic(parser.kind()) && isValueLike(first) {
+    while isArithmetic(parser.kind()) {
+      parser.bump()
+      const _ = parseSingleType parser
+    }
+    const at = start.to parser.previousSpan()
+    const note = "A size is computed in a `const` and named here: `const length = size + 1`, then `Array<Float, length>`"
+    parser.errorWithNote "A type argument is a type or the name of a constant, never an expression", note, at
+    return TypeReference TypeKind.Invalid, at
+  }
   if parser.isAt(TokenKind.Plus) {
     parser.errorHere "Traits are combined with `&`: `Compare & Show`"
   } else if !parser.isAt(TokenKind.Ampersand) {
@@ -25,6 +36,30 @@ public fn parseType(var parser: Parser): TypeReference {
   TypeReference TypeKind.Intersection(members), start.to(parser.previousSpan())
 }
 
+fn isArithmetic(kind: TokenKind): Bool {
+  match kind {
+    .Plus | .Minus | .Star | .Slash | .Percent => true
+    _ => false
+  }
+}
+
+/** A constant's name or a literal: what a `const` argument is, and never a trait `+` could combine. */
+fn isValueLike(reference: TypeReference): Bool {
+  match reference.kind {
+    .Named(path, arguments) => {
+      if path.length() != 1 || !arguments.isEmpty() {
+        return false
+      }
+      match path[0].text.chars().first() {
+        Some(first) => first >= 'a' && first <= 'z'
+        None => false
+      }
+    }
+    .Literals(_) => true
+    _ => false
+  }
+}
+
 /** A type without `&`. This is what the items of a bound list are (`where Item: Hash & Equals`). */
 public fn parseSingleType(var parser: Parser): TypeReference {
   const start = parser.span()
@@ -33,8 +68,18 @@ public fn parseSingleType(var parser: Parser): TypeReference {
     return TypeReference TypeKind.Lazy(inner), start.to(parser.previousSpan())
   }
   var result = parsePrimaryType parser
-  while parser.eat(TokenKind.Question) {
-    result = TypeReference TypeKind.Optional(result), start.to(parser.previousSpan())
+  loop {
+    if parser.eat(TokenKind.Question) {
+      result = TypeReference TypeKind.Optional(result), start.to(parser.previousSpan())
+      continue
+    }
+    // `Int??` is `Option<Option<Int>>`: the lexer reads `??` as one token, which only an expression means as `orElse`
+    if parser.eat(TokenKind.QuestionQuestion) {
+      const inner = TypeReference TypeKind.Optional(result), start.to(parser.previousSpan())
+      result = TypeReference TypeKind.Optional(inner), start.to(parser.previousSpan())
+      continue
+    }
+    break
   }
   if parser.isAt(TokenKind.Pipe) {
     parser.errorHere(

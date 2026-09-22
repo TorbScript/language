@@ -72,8 +72,7 @@ public use <Type>.<Case> from "<path>"               re-exported under the same 
    fn empty(): Int? {
      None
    }
-   // error: Expected `from "..."`
-   // error: There is no package
+   // error: There is no `use Option.*`
    ```
 
 6. **`public use` re-exports what it imports, case included.** `public use Stack.Empty from "./collections/stack"`

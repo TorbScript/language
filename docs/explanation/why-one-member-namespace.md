@@ -95,9 +95,9 @@ both.** CONCEPT.md states this as a consequence of the one-namespace rule: a `ty
 twice in the same namespace. Today's checker accepts this declaration without reporting a problem - a gap between the design and the
 checker rather than a second namespace appearing through the back door.
 
-**A property command's meaning is fixed by what the name refers to, never by how the call is written.** `tls true`
-and `tls(true)` write the same field either way; a command on a method always calls it, with or without an argument
-list that reads like data.
+**A property command's meaning is fixed by what the name refers to and by whether the call has parentheses.** `tls
+true` writes the field, `tls(true)` calls it and is refused because a `Bool` has nothing to call; a command on a method
+always calls it, with or without an argument list that reads like data.
 
 ```trb check
 type Server {

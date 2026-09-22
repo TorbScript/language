@@ -47,11 +47,20 @@ print "{server.host}:{server.port} has {server.connections} connections"
 ## Rules
 
 1. **A field is `const` unless it is marked `var`.** `host: String` never changes after construction, not even through a
-   `var` binding to the `Server`. `var port: Int` can be written wherever a [var path](var-paths.md) reaches it.
+   `var` binding to the `Server`. `var port: Int` can be written wherever a [var path](var-paths.md) reaches it. The
+   word `const` is what a field is without it, so writing it is refused - one spelling per meaning:
 
-2. **A member is public unless it is marked `private`.** Reading a field cannot break an invariant, because values are
-   never aliased and a `const` field never changes - so what needs protection is writing, and each of the four
-   combinations answers a different question:
+   ```trb error
+   type Server {
+     const host: String
+   }
+   // error: `const` is what a field is without it
+   ```
+
+2. **A member is public unless it is marked `private`.** `public` on a member says nothing and is refused the same way;
+   it belongs on a top-level declaration, where the default is the other one. Reading a field cannot break an
+   invariant, because values are never aliased and a `const` field never changes - so what needs protection is
+   writing, and each of the four combinations answers a different question:
 
    | Field | Read from outside | Write from outside |
    |-------|:-----------------:|:------------------:|

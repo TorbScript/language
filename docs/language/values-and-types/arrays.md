@@ -98,10 +98,7 @@ type Name<const Size: Int> { ... }       declaring a const parameter of your own
    const size = 4
    var buffer: Array<Float, size + 1> = Array.filled 0.0
    print buffer[0]
-   // error: `size` is a constant, not a type
-   // error: Traits are combined with `&`
-   // error: `1` is a type, not a trait
-   // error: Cannot infer `Size` of `Array`
+   // error: A type argument is a type or the name of a constant, never an expression
    ```
 
 6. **A generic type or function can itself take a `const` parameter**, written `<const Name: Type>` alongside its

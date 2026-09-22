@@ -1,6 +1,6 @@
 /**
- * Command calls and property commands. A command on a function is an ordinary call; a call of a member that is not
- * callable **writes** it, with or without parentheses, and that is the whole configuration DSL.
+ * Command calls and property commands. A command on a function is an ordinary call; the command form on a member that
+ * is not callable **writes** it, and that is the whole configuration DSL. Parentheses always call.
  *
  * What a property command records is `Resolution.PropertyWrite(owner, field, kind)` at the span of the command, which
  * is what the lowering reads instead of looking at a name a second time - so every test here asserts the kind.
@@ -72,12 +72,21 @@ group "Property commands" {
     assert(problems(inServe("    prot 9000")) == ["Cannot find `prot` here"])
   }
 
-  test "parentheses write the field as well, which is the only way to pass some values (gap 15)" {
+  test "parentheses call, so a field that holds no function is not written by them" {
     const source = inServe "    tls(port == 8443)"
-    assert problems(source).isEmpty()
+    assert(problems(source) == ["`tls` is a field, and parentheses call a function"])
+    assert(notes(source) == ["The command form writes a field: `tls value`, the same as `tls = value`"])
+    // The value is still read as the field's: one message, and the argument has its type
     const probed = probe source
-    assert(probed.resolutionOf("tls(port == 8443)") == "assign Options.tls")
     assert(probed.typeOf("port == 8443") == "Bool")
+    // A value the command form cannot take - an operator at its top level - is written with `=`
+    assert problems(inServe("    tls = port == 8443")).isEmpty()
+  }
+
+  test "a closure in parentheses is handed to the function the field holds, which takes none" {
+    const source = inServe "    onStart(\{ \})"
+    assert(problems(source) == ["`onStart` holds a function: `onStart \{ ... \}` assigns it, `onStart()` calls it"])
+    assert problems(inServe("    onStart()")).isEmpty()
   }
 
   test "a field is readable where it is written" {
@@ -131,10 +140,8 @@ group "What a property command is not" {
   }
 
   test "a field without an argument, and with more than one" {
-    assert(
-      problems(inServe("    port()"))
-        == ["`port` is a field: `port value` writes it. Only a function can be called"]
-    )
+    assert(problems(inServe("    port()")) == ["`port` is a field, and parentheses call a function"])
+    assert(notes(inServe("    port()")) == ["A field is read without them: `port`"])
     assert(
       problems(inServe("    port 1, 2"))
         == ["`port` is a field: `port value` writes it. Only a function can be called"]
@@ -224,17 +231,45 @@ group "The first argument of a command" {
       notes(source)
         == [
           "`Debug` is a case of `Level`. The first argument of a command may not start with `.`, so"
-            + " `setting .Debug` is the member `setting.Debug`: write `setting(.Debug)` or `setting = .Debug`",
+            + " `setting .Debug` is the member `setting.Debug`: write `setting = .Debug`",
         ]
     )
   }
 
-  test "with parentheses the case is what it looks like" {
-    const source = inServe "    level(.Debug)"
+  test "with `=` the case is what it looks like, and parentheses call" {
+    const source = inServe "    level = .Debug"
     assert problems(source).isEmpty()
     const probed = probe source
-    assert(probed.resolutionOf("level(.Debug)") == "assign Options.level")
     assert(probed.typeOf(".Debug") == "Level")
+    const called = inServe "    level(.Debug)"
+    assert(problems(called) == ["`level` is a field, and parentheses call a function"])
+  }
+
+  test "a case after a function is a member of it, and the message is the call to write" {
+    const source = inServe "    tags .Debug"
+    assert(problems(source) == ["`tags` is a function, and `.Debug` right after it is a member of it"])
+    assert(
+      notes(source)
+        == [
+          "The first argument of a command may not start with `.`, whatever whitespace stands before it: write"
+            + " `tags(.Debug)`",
+        ]
+    )
+  }
+
+  test "a first argument that starts with `-` or `[` is a subtraction or an index, and the message says so" {
+    const negative = "fn probe(var items: List<Int>, amount: Int) \{\n  items.append -amount\n\}"
+    assert(problems(negative) == ["`items.append` is a function, and `items.append -amount` subtracts from it"])
+    assert(
+      notes(negative)
+        == [
+          "The first argument of a command may not start with `-`, so this reads as a subtraction: write"
+            + " `items.append(-amount)`",
+        ]
+    )
+    const indexed = "fn probe(var items: List<List<Int>>) \{\n  items.append [1]\n\}"
+    assert(problems(indexed) == ["`items.append` is a function, and `[...]` right after it indexes it"])
+    assert(notes(indexed) == ["The first argument of a command may not start with `[`: write `items.append([...])`"])
   }
 
   test "an `if` may start a command argument, so a setting can be computed" {

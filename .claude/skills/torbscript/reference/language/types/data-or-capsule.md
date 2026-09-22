@@ -145,9 +145,19 @@ extend <Source> with From<<Name>>        // ...and the pair is what `Encode` and
 
 ## What this is not
 
-**A capsule is not a constructor with logic in it.** A constructor is generated, total and free of code in every type
-there is; what a capsule adds is a factory *next to* it that can compute, refuse or normalize, plus a `private` that
-makes the factory the only door. So the failure is in the type of the factory and not hidden in a construction.
+**A capsule is not a constructor with logic in it.** A constructor is generated in every type there is: it has no body,
+and it never transforms or rejects what the caller passes. A field default is an expression written at the field that
+stands in for an argument the caller left out, evaluated at each construction that leaves it out
+([Construction](construction.md), rule 4) - and it cannot fail either, so a `?` in one is refused. What a capsule adds
+is a factory *next to* the constructor that can compute, refuse or normalize, plus a `private` that makes the factory
+the only door. So the failure is in the type of the factory and not hidden in a construction.
+
+```trb error
+type Probe {
+  count: Int = Int.tryFrom("1")?
+}
+// error: `?` cannot stand in a field default: building a value never fails
+```
 
 ```trb
 type Celsius with TryFrom<Int, String> {

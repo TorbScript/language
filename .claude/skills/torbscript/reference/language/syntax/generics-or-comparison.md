@@ -58,8 +58,6 @@ name < value                   "less than", otherwise
    const c = 3
    print a < b > c
    // error: Comparisons do not chain. Use `&&`: `a < b && b < c`
-   // error: Expected `Bool`, found `Int64`
-   // error: `Bool` does not implement `Compare`
    ```
 
 4. **In a type position there is no ambiguity to resolve.** After `:`, `with`, `where`, or inside another type's angle

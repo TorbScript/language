@@ -73,15 +73,22 @@ source.through(stage)                          puts a Stage in front of the valu
 3. **The catch of laziness: a stage with side effects does not run them until it is pulled.** Building `.map { ... }`
    runs the closure zero times; only a terminal operation runs it once per value.
 
+   A stage keeps its closure, so the closure changes no `var` binding - it counts on an object, which every holder
+   shares:
+
    ```trb check
-   var calls = 0
+   shared type Tally {
+     var count: Int = 0
+   }
+
+   const calls = Tally()
    const doubled = [1, 2, 3].map { value =>
-     calls = calls + 1
+     calls.count = calls.count + 1
      value * 2
    }
-   print calls
+   print calls.count
    print doubled.toList()
-   print calls
+   print calls.count
    ```
 
 4. **A terminal operation decides where the values end up, and there is exactly one per pipeline.**

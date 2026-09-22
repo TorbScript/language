@@ -121,6 +121,40 @@ extend<Source, Target> Source with <Trait><Target> where <bounds> { ... }   a bl
    // error: `Robot` already implements `Loud`
    ```
 
+   An implementation for a **trait** covers every type of that trait, so it overlaps with the one such a type writes
+   itself: a `Square` would answer `describe` with its own member, and the same value seen as a `Shape` with the
+   extension's - what a call does would depend on the static type it is made through. The type's own stays the answer,
+   and the message stands at the `extend`.
+
+   ```trb error
+   trait Shape {
+     fn area(): Float
+   }
+
+   trait Describe {
+     fn describe(): String
+   }
+
+   extend Shape with Describe {
+     fn describe(): String {
+       "some shape"
+     }
+   }
+
+   type Square with Shape, Describe {
+     side: Float
+
+     fn area(): Float {
+       side * side
+     }
+
+     fn describe(): String {
+       "a square"
+     }
+   }
+   // error: `Square` implements `Describe` itself, and it is a `Shape`
+   ```
+
 5. **A blanket implementation's target is a bare type parameter**
    (`extend<Source, Target> Source with Into<Target> where Target: From<Source>`), which covers every type. It is
    coherent only when your package owns the trait: it covers every type, so no owned type and no owned argument narrows

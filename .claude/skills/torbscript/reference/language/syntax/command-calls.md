@@ -75,7 +75,16 @@ A call is written as a command when **all five** of these hold. Otherwise it has
    An index the path **ends** in is not a callee: `mounted[index] elapsed` is the indexing of rule 3 and not a
    command, exactly as `f [1]` is.
 3. **It has at least one argument, and the first one does not start with `(`, `[`, `-`, `!` or `.`.** `f [1]` is always
-   indexing, `f -1` is always subtraction, and `f .Case` is always the member `f.Case`.
+   indexing, `f -1` is always subtraction, and `f .Case` is always the member `f.Case`. Where `f` is a function, which
+   is never subtracted from, indexed or asked for a member, the message is the call to write:
+
+   ```trb error
+   var history: List<Int> = []
+   const amount = 3
+   history.append -amount
+   print history
+   // error: `history.append` is a function, and `history.append -amount` subtracts from it
+   ```
 4. **No argument has an operator at its top level.** `assert sum == 3` would read as `(assert sum) == 3`, so it is written
    `assert(sum == 3)`.
 5. **The arguments are on one line.** A trailing closure may go over several.
@@ -108,9 +117,20 @@ Then the rest of the rules:
     configures the field's value in place. So calling a function held in a field always needs parentheses: `onStart()`
     calls it, `onStart { ... }` assigns it.
 
-11. **For a call on a non-callable member, the parentheses are meaning rather than style**, so the canon leaves such a call
-    exactly as it is written. `tls true` and `tls(true)` are the same line, and `tls(port == 8443)` is the only way to
-    write that value at all, because an operator at the top level of an argument needs parentheses.
+11. **Only the command form writes a field; parentheses always call.** `tls true` writes the field and `tls(true)` is an
+    error, because a `Bool` field has nothing to call. A value the command form cannot take - an operator at the top
+    level of it, or a first token `(`, `[`, `-`, `!` or `.` - is written with `=`: `tls = port == 8443`.
+
+    ```trb error
+    type Options {
+      var tls: Bool = false
+    }
+
+    var options = Options()
+    options.tls(true)
+    print options.tls
+    // error: `tls` is a field, and parentheses call a function
+    ```
 
 12. **A multi-line `"""` string is indented two spaces deeper than the line its statement starts on**, with a closing
     `"""` that stands alone aligned with the content. The value does not depend on it: the lexer subtracts the indentation

@@ -96,13 +96,23 @@ group "What an implementation has to provide" {
     assert problems(source).isEmpty()
   }
 
-  test "a `native` type provides the members of its traits through the runtime (gap 22)" {
-    // Only a package of the standard library may declare `native`, so `Pixel` lives in one
+  test "a `native` type provides the members of its traits through a row of the manifest, or a body" {
+    // Only a package of the standard library may declare `native`, so the types live in one. `Char.show` is a row of
+    // the manifest of natives, and `Char` is the name it is looked up under
+    const provided = [
+      "std/graphics/project.trb": "name \"std/graphics\"\n",
+      "std/graphics/src/lib.trb": "trait Named \{\n  fn show(): String\n\}\n\npublic native type Char with Named \{\}\n\n"
+        + "trait Shape \{\n  fn area(): Int\n\}\n\npublic native type Pixel with Shape \{\n  fn area(): Int \{\n    1\n  \}\n\}\n",
+    ]
+    assert problemsAt(provided, ["std/graphics"]).isEmpty()
+  }
+
+  test "a `native` type whose requirement neither the manifest nor a body provides is named" {
     const files = [
       "std/graphics/project.trb": "name \"std/graphics\"\n",
       "std/graphics/src/lib.trb": "trait Shape \{\n  fn area(): Int\n\}\n\npublic native type Pixel with Shape \{\}\n",
     ]
-    assert problemsAt(files, ["std/graphics"]).isEmpty()
+    assert(problemsAt(files, ["std/graphics"]) == ["`Pixel` implements `Shape`, and nothing provides its `area`"])
   }
 
   test "a trait as the target of an implementation asks nothing of the trait itself" {
@@ -136,6 +146,33 @@ group "Coherence" {
 
   test "an `extend` without a trait has no orphan rule: it only adds members" {
     assert problems("extend String \{\n  fn shout(): String \{\n    self\n  \}\n\}").isEmpty()
+  }
+
+  test "an implementation for a trait overlaps with the one a type of that trait writes itself" {
+    const declarations = "trait Shape \{\n  fn area(): Int\n\}\n\ntrait Describe \{\n  fn describe(): String\n\}\n\n"
+      + "extend Shape with Describe \{\n  fn describe(): String \{\n    \"some shape\"\n  \}\n\}\n\n"
+      + "type Square with Shape, Describe \{\n  fn area(): Int \{\n    1\n  \}\n\n"
+      + "  fn describe(): String \{\n    \"a square\"\n  \}\n\}\n\n"
+      + "fn viaBound<Value: Describe>(value: Value): String \{\n  value.describe()\n\}\n\n"
+    // The type's own implementation stays the answer, so the bound holds and there is one message, at the `extend`
+    const source = declarations + "fn probe(): String \{\n  viaBound(Square())\n\}"
+    assert(problems(source) == ["`Square` implements `Describe` itself, and it is a `Shape`"])
+    assert(
+      notes(source)
+        == [
+          "A `Square` would answer differently when it is seen as a `Shape`: what a call does may not depend on the"
+            + " type it is made through. Implement `Describe` in one of the two places",
+        ]
+    )
+  }
+
+  test "a type of the trait that does not write the member itself takes the one of the trait's implementation" {
+    const source = "trait Shape \{\n  fn area(): Int\n\}\n\ntrait Describe \{\n  fn describe(): String\n\}\n\n"
+      + "extend Shape with Describe \{\n  fn describe(): String \{\n    \"some shape\"\n  \}\n\}\n\n"
+      + "type Square with Shape \{\n  fn area(): Int \{\n    1\n  \}\n\}\n\n"
+      + "fn viaBound<Value: Describe>(value: Value): String \{\n  value.describe()\n\}\n\n"
+      + "fn probe(): String \{\n  const shape: Shape = Square()\n  viaBound(Square()) + shape.describe()\n\}"
+    assert problems(source).isEmpty()
   }
 
   test "two implementations of one trait for one type overlap" {
@@ -350,9 +387,27 @@ group "Delegation with `by`" {
       + "  fn show(): String \{\n    \"shape\"\n  \}\n\}"
     assert(problems(source) == ["`by` needs a type with a single field: `Shape` has cases, not fields"])
   }
+
+  test "a `by` that names no usable field still says where the members come from: one message, not a missing `add`" {
+    const source = "type Money with Add<Money, Money> by amount \{\n  amount: Int\n  currency: String\n\}"
+    assert(problems(source) == ["`by` needs a type with a single field: `Money` has `amount` and `currency`"])
+  }
 }
 
 group "Derived implementations" {
+  test "a generated member is a member: `equals` and `hash` are there before anything asked for the trait" {
+    const source = "type Point \{\n  x: Int\n\}\n\n"
+      + inBody("  const same = Point(1).equals(Point(1))\n  const code = Point(1).hash()\n  print same, code")
+    assert problems(source).isEmpty()
+    const found = probe source
+    assert(found.typeOf("Point(1).equals(Point(1))") == "Bool")
+  }
+
+  test "a type the trait cannot be generated for has no such member" {
+    const source = "type Holder \{\n  run: () => Void\n\}\n\n" + inBody("  print Holder(\{ \}).hash()")
+    assert(problems(source) == ["`Holder` has no member `hash`"])
+  }
+
   test "`Show` is generated for a type all of whose fields have it" {
     const source = "type Amount \{\n  value: Int\n  label: String\n\}\n\n"
       + inBody("  const shown = \"\{Amount(1, \"a\")\}\"")

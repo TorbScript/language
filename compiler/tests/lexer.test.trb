@@ -14,6 +14,11 @@ fn kinds(text: String): List<TokenKind> {
   lexed.tokens.map({ _.kind }).toList()
 }
 
+/** The kinds of a text that has problems: what the lexer made of the broken tokens. */
+fn tokensOf(text: String): List<TokenKind> {
+  lex(SourceText.of(text)).tokens.map({ _.kind }).toList()
+}
+
 fn messages(text: String): List<String> {
   lex(SourceText.of(text)).diagnostics.map({ _.message }).toList()
 }
@@ -80,6 +85,20 @@ group "Lexer" {
     assert(messages("a; b") == ["There are no semicolons. A statement ends at the end of its line"])
     assert(messages("\"open") == ["This string is never closed"])
     assert(messages("§") == ["Unexpected character `§`"])
+  }
+
+  test "a broken token still stands for what it meant, so the parser has nothing to add" {
+    // `;` is the line break it stands for, `^` the `*` it is read as
+    assert(tokensOf("a; b") == [.Identifier, .Newline, .Identifier, .EndOfFile])
+    assert(tokensOf("a ^ b") == [.Identifier, .Star, .Identifier, .EndOfFile])
+    // `'ab'` ends at its quote and is its first character
+    assert(tokensOf("'ab'") == [.CharLiteral('a'), .EndOfFile])
+    assert(messages("'ab'") == ["A character literal contains exactly one character and ends with `'`"])
+    // An unclosed string or interpolation is the string as far as it was read
+    assert(tokensOf("print \"open") == [.Identifier, .TextLiteral([TextPart.Literal("open")]), .EndOfFile])
+    const interpolated = tokensOf "print \"total: \{value"
+    assert(interpolated.length() == 3)
+    assert(interpolated[1] == TokenKind.TextLiteral([TextPart.Literal("total: ")]))
   }
 
   test "a name is written in ASCII letters, digits and `_`" {

@@ -41,8 +41,8 @@ print a.copy(y: 5)              // prints Point(x: 1, y: 5)
 
 ```text
 value == other                       Equals, generated
+value.equals(other), value.hash()    the members of the generated Equals and Hash
 value.copy(<field>: <value>, ...)    generated
-type <Name> with Equals, Hash { }    also makes value.equals(other) and value.hash() callable members
 ```
 
 ## Rules
@@ -53,9 +53,22 @@ type <Name> with Equals, Hash { }    also makes value.equals(other) and value.ha
 
 2. **`Equals`, `Hash` and `copy` are generated for every `type`, each only if every field supports it.** `==` always
    compares content, because there is no identity to compare instead. The generated implementations answer `==`, a
-   `Map` key and a `Set` element; `a.equals(b)` and `a.hash()` are members a caller can name only on a type that
-   says `with Equals, Hash`. A field that is a function breaks all three, because a function value has none of them,
-   and `==` asks for `Equals` like any other operator asks for its trait:
+   `Map` key and a `Set` element, and their members are members like any other: `a.equals(b)` and `a.hash()` are
+   there wherever `==` and a key would work, with or without `with Equals, Hash`.
+
+   ```trb check
+   type Point {
+     x: Int
+     y: Int
+   }
+
+   const a = Point x: 1, y: 2
+   print a.equals(Point(x: 1, y: 2))
+   print(a.hash() == Point(x: 1, y: 2).hash())
+   ```
+
+   A field that is a function breaks all three, because a function value has none of them, and `==` asks for `Equals`
+   like any other operator asks for its trait:
 
    ```trb error
    type Button {

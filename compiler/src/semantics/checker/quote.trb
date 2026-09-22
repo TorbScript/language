@@ -30,7 +30,7 @@ use checkExpression, expectationOf from "./expression"
 use witnessFor, implementsBound from "./implementation"
 use formOf from "./name"
 use resultOf from "./signature"
-use resolveType from "./unify"
+use resolveType, suppressVariables from "./unify"
 
 /** `Expression<Value>` quotes what arrives at it instead of evaluating it. */
 public fn isQuotation(checker: Checker, annotation: TypeId): Bool {
@@ -115,6 +115,10 @@ public fn checkQuotation(var checker: Checker, expression: Expression, wanted: T
   checker.closureFrames.append ClosureFrame(at, start, [], [], [], [], true, 0)
   const expectation = expectationOf checker, inner
   const found = checkExpression checker, expression, expectation
+  // `nameOf(user.unknown)`: the quoted expression was reported, and what it would have been is nothing to infer from
+  if checker.absorbs(found) {
+    suppressVariables checker, inner
+  }
   const last = checker.closureFrames.length() - 1
   const captured = checker.closureFrames[last].captures
   const _ = checker.closureFrames.removeAt last

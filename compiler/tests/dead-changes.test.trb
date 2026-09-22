@@ -138,12 +138,28 @@ group "Top-level `var` bindings" {
     assert problems(source).isEmpty()
   }
 
-  test "a function that changes it says nothing, because a function has no `after it`" {
-    // `bump` is checked where it is declared, which is above every statement that could read what it wrote
+  test "a function changes no top-level `var`: it could run while a `var` access to it is open" {
     const source = "var total = 0\n\nfn bump() \{\n  total = 1\n\}\n\nbump()\nprint total\n"
-    assert problems(source).isEmpty()
-    const alone = "var total = 0\n\nfn bump() \{\n  total = 1\n\}\n\nbump()\n"
-    assert problems(alone).isEmpty()
+    assert(problems(source) == ["`total` is a top-level `var`, and only the statements of its file change it"])
+    assert(
+      notes(source)
+        == [
+          "A function could run while a `var` access to `total` is open: take it as a `var` parameter instead"
+            + " (`fn reset(var total: ...)`)",
+        ]
+    )
+    // The initializer of a top-level `const` runs among the statements, in the order they are written
+    const initializer = "var totals: List<Int> = []\nconst first = totals.appended(1)\ntotals.append 2\nprint totals, first\n"
+    assert problems(initializer).isEmpty()
+  }
+
+  test "a closure that changes a top-level `var` may not outlive its statement" {
+    const stored = "var total = 0\nconst reset = \{\n  total = 0\n\}\nreset()\nprint total\n"
+    assert(problems(stored) == ["This closure changes the top-level `var` `total` and may outlive its statement"])
+    // Written straight as the argument of a parameter that only calls it, it runs while its statement does
+    const applied = "fn twice(body: () => Void) \{\n  body()\n  body()\n\}\n\n"
+      + "var total = 0\ntwice \{\n  total = total + 1\n\}\nprint total\n"
+    assert problems(applied).isEmpty()
   }
 
   test "a top-level `const` is never changed, so it is never one" {

@@ -126,6 +126,7 @@ public fn checkModule(var checker: Checker, module: ModuleId) {
   // The statements of a file are the one body a top-level `var` lives in, and the dead-change rule needs to know it
   // apart from the bodies of the functions that read the same declaration
   checker.isTopLevel = true
+  checker.writesDeclarations = true
   // `await()` is allowed at the top level of an entry file and of a script (CONCEPT, "Concurrency"). In a module top
   // level code is an error of its own, so nothing is said about it twice
   checker.awaitsTasks = true
@@ -155,11 +156,16 @@ public fn checkModule(var checker: Checker, module: ModuleId) {
  * is one a message was already given about - a parse error, a name that does not resolve, a call that could not be
  * resolved.
  *
- * So a module that has an unchecked expression and **no message at all** is a hole in the checker, and it says so
+ * So a module that has an unchecked expression and **no message at all** - neither the parser's nor the checker's - is
+ * a hole in the checker, and it says so
  * instead of leaving the number in `--statistics` for somebody to notice. One message per module: the first span.
  */
 fn reportUnchecked(var checker: Checker, module: ModuleId) {
   if !checker.diagnostics[module.value].isEmpty() {
+    return
+  }
+  // A syntax error leaves a tree the checker reads as well as it can: what it could not type is the parser's message
+  if !checker.program.graph.at(module).diagnostics.isEmpty() {
     return
   }
   const unchecked = checker.uncheckedSpanOf module

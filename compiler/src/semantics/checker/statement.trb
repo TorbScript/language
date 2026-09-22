@@ -23,7 +23,7 @@ use checkPattern, requireReadBindings from "./pattern"
 use requireIrrefutable from "./exhaustive"
 use traitArgumentsOf from "./implementation"
 use openInference, closeInference, resolveType, unify from "./unify"
-use checkAssignment, noteAssignment, requireSharedSource, leavesClosure from "./place"
+use checkAssignment, noteAssignment, leavesClosure from "./place"
 use settleLoop, settleChanges from "./mutation"
 use signatureOf, functionOfSite, declareSites from "./signature"
 use typeFromReference from "./lowering"
@@ -126,10 +126,14 @@ fn checkStatementIn(var checker: Checker, statement: Statement): Bool {
     // itself produced is the one that becomes the change
     .Assign(target, value) => {
       const annotation = inferExpression checker, target
+      // `let answer = 42`: a target that did not resolve was reported, and what kind of place it is has no answer
+      if checker.absorbs(annotation) {
+        const _ = inferExpression checker, value
+        return false
+      }
       const place = checkAssignment checker, target
       const inner = expectationOf checker, annotation
       const _ = checkExpression checker, value, inner
-      requireSharedSource checker, value, annotation
       noteAssignment checker, place
       false
     }
@@ -207,11 +211,6 @@ fn checkBinding(var checker: Checker, binding: Binding) {
     None => inferExpression checker, binding.value
   }
   var bound = annotation ?? found
-  // A `var` binding may not be taken from a `const` path to a shared object: there is no copy that would make it a
-  // different one, so it would hand out exactly what the `const` withheld
-  if binding.isVar {
-    requireSharedSource checker, binding.value, bound
-  }
   // Nothing is known about a value the checker could not type, so neither is anything about the name it is bound to
   if checker.absorbs(bound) {
     bound = checker.deferredType
@@ -405,6 +404,12 @@ fn requireLoop(var checker: Checker, keyword: String, at: Span) {
   )
 }
 
+/** Whether the lexer or the parser reported something inside of this span of the module being checked. */
+fn hasSyntaxErrorIn(checker: Checker, at: Span): Bool {
+  const reported = checker.program.graph.at(checker.module).diagnostics
+  reported.any({ _.span.start >= at.start && _.span.start < at.end })
+}
+
 /**
  * An expression statement must have the type `Void` or `Never`, unless the call it consists of changes something
  * through a `var` receiver or a `var` argument - then the mutation is the effect and the result may go.
@@ -418,6 +423,10 @@ public fn checkDiscarded(var checker: Checker, expression: Expression, found: Ty
     return
   }
   if hasEffect(checker, expression) {
+    return
+  }
+  // What is left of a line the parser could not read is not a value somebody forgot: the parser's message is the one
+  if hasSyntaxErrorIn(checker, expression.span) {
     return
   }
   const name = calledName checker, expression
@@ -652,9 +661,10 @@ public fn checkInitializer(
 ): TypeId {
   const voidType = checker.voidType
   const saved = checker.enterBody module, voidType, true, owner
-  // A top-level `const` of an entry file or a script is ordinary code, so `await()` is allowed in it; a field default
-  // and a parameter default are evaluated wherever the value is built and are not
+  // A top-level `const` of an entry file or a script is ordinary code, so `await()` is allowed in it and it may change a
+  // top-level `var`; a field default and a parameter default are evaluated wherever the value is built and are not
   checker.awaitsTasks = awaitsTasks
+  checker.writesDeclarations = awaitsTasks
   checker.openScope()
   openInference checker
   var found = match annotation {
@@ -690,6 +700,7 @@ public fn checkDestructuredBinding(var checker: Checker, module: ModuleId, bindi
   const voidType = checker.voidType
   const saved = checker.enterBody module, voidType, true, None
   checker.awaitsTasks = allowsTopLevelCode checker, module
+  checker.writesDeclarations = checker.awaitsTasks
   checker.openScope()
   openInference checker
   var annotation: TypeId? = None

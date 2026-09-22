@@ -81,17 +81,26 @@ group "Two `var` accesses of one call" {
     assert(problems(source) == ["`samples[...]` is being changed by `fill` right now"])
   }
 
-  test "a top-level `var` is a root like any other, from a function" {
+  test "a function never reaches a top-level `var` for a change, so no access of it can overlap one" {
+    const source = "{report}{swap}var entry = Report()\n\nfn probe() \{\n  swap(entry, entry)\n\}\n\nprobe()\nprint entry.title"
+    const message = "`entry` is a top-level `var`, and only the statements of its file change it"
+    assert(problems(source) == [message, message])
+  }
+
+  test "a top-level `var` is a root like any other, straight at the top level, which is where a script writes it" {
     // `rootKey` gives a declaration a negative number so that it never collides with a local's root, and `overlaps`
     // treats two different roots as always disjoint - a top-level `var` needs its own root for the rule to see it too
-    const source = "{report}{swap}var entry = Report()\n\nfn probe() \{\n  swap(entry, entry)\n\}\n\nprobe()\nprint entry.title"
+    const source = "{report}{swap}var entry = Report()\nswap(entry, entry)\nprint entry.title"
     assert(problems(source) == ["`entry` is being changed by `swap` right now"])
     assert(notes(source) == ["While a `var` access runs, the same path cannot be reached a second time"])
   }
 
-  test "and straight at the top level, which is where a script writes it" {
-    const source = "{report}{swap}var entry = Report()\nswap(entry, entry)\nprint entry.title"
-    assert(problems(source) == ["`entry` is being changed by `swap` right now"])
+  test "a closure that changes a top-level `var` and is handed on beside it cannot run inside the access" {
+    const change = "fn change(var items: List<Int>, body: () => Void) \{\n  items.append 4\n  body()\n\}\n\n"
+    const stored = "{change}var counter = [1]\nconst reset = \{\n  counter = []\n\}\nchange counter, reset\nprint counter\n"
+    assert(problems(stored) == ["This closure changes the top-level `var` `counter` and may outlive its statement"])
+    const written = "{change}var counter = [1]\nchange counter, \{\n  counter = []\n\}\nprint counter\n"
+    assert(problems(written) == ["`counter` is being changed by `change` right now"])
   }
 
   test "two indexes of a top-level collection cannot be told apart either" {

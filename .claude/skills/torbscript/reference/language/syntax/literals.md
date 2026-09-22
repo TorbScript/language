@@ -77,6 +77,11 @@ r"text"                                a raw string literal: no escapes, no inte
    print "{byte} {flags}"
    ```
 
+   ```trb error
+   const mask: Float = 0xFF
+   // error: `0xFF` is written in another base, and only an integer type takes it: `Float64` is not one
+   ```
+
 4. **`_` groups the digits of a number literal and carries no value of its own.** It may stand between digits of an
    integer or a float literal in any position; the formatter canon does not require a particular grouping.
 
@@ -89,7 +94,6 @@ r"text"                                a raw string literal: no escapes, no inte
    ```trb error
    const both = 'ab'
    // error: A character literal contains exactly one character and ends with `'`
-   // error: Cannot find `b` here
    ```
 
 7. **A character or string literal escapes six named characters plus one general escape.** `\n`, `\r`, `\t`, `\0`,

@@ -133,7 +133,6 @@ all, unlike `&`, which at least means something in a type position.
 ```trb error
 const flipped = 0b1010 ^ 0b0110
 // error: There is no `^` operator
-// error: Expected the end of the statement, found a number
 ```
 
 ## Related

@@ -108,7 +108,7 @@ print translate(limit > 3)
 fn wrong(condition: Expression<Bool>): Bool {
   condition.tree()
 }
-// error: `tree` is a field: `tree value` writes it. Only a function can be called
+// error: `tree` is a field, and parentheses call a function
 ```
 
 ## Related

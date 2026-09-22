@@ -73,10 +73,15 @@ print start("app.trb"), start("")
 print AppError.from(ConfigError("direct"))
 
 // Lazy parameters are evaluated at most once, and only when used
-var evaluations = 0
+shared type Tally {
+  var count: Int = 0
+}
+
+// A function changes no top-level `var`, and an object is not one: every holder sees the one tally
+const evaluations = Tally()
 
 fn expensive(): Int {
-  evaluations = evaluations + 1
+  evaluations.count = evaluations.count + 1
   42
 }
 
@@ -88,8 +93,8 @@ fn pick(useIt: Bool, value: lazy Int): Int {
   }
 }
 
-print pick(false, expensive()), pick(true, expensive()), evaluations
-print(None ?? expensive(), Some(1).orElse(expensive()), evaluations)
+print pick(false, expensive()), pick(true, expensive()), evaluations.count
+print(None ?? expensive(), Some(1).orElse(expensive()), evaluations.count)
 
 // Receiver closures, property commands and `var` parameters of closures: the configuration DSL
 type Database {

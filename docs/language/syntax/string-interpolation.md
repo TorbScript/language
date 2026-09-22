@@ -58,7 +58,6 @@ print "escaped: \{not interpolated\}"
    // error: This `{` inside of a string is never closed. A literal brace is written `\{`
    // error: Expected an expression, found `}`
    // error: This string is never closed
-   // error: This value is not used
    ```
 
 4. **A quote or a brace inside the expression can nest, and is not mistaken for the string's own end.** The lexer
@@ -80,7 +79,6 @@ print "price: \{19.99\}"
 ```trb error
 print "price: {{19.99}"
 // error: This `{` inside of a string is never closed. A literal brace is written `\{`
-// error: This value is not used
 ```
 
 **Interpolation is not string concatenation with a different spelling.** `"{a}{b}"` calls `Show.show` on `a` and on

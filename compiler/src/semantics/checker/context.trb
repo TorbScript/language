@@ -316,6 +316,12 @@ public type ClosureFrame {
    * file shares, and nothing copies it - which is exactly why a task may not reach one.
    */
   var declarations: List<SymbolId> = []
+  /**
+   * The top-level `var` declarations the body changes. A closure that changes one may not outlive the statement it is
+   * written in, the same rule as for a captured `var` binding: otherwise it could run while a `var` access to the
+   * declaration is open.
+   */
+  var changedDeclarations: List<SymbolId> = []
 }
 
 /** Everything the source does not spell out, in the order in which it applies. */
@@ -758,6 +764,8 @@ public type BodyState {
   runningClosures: Int = 0
   /** Whether the body is the statement sequence of a file, which is the one body a top-level `var` lives in. */
   isTopLevel: Bool = false
+  /** Whether the body may change a top-level `var`: the statements of a file and the initializers of its constants. */
+  writesDeclarations: Bool = false
   /** Whether `await()` is allowed in this body (CONCEPT, "Concurrency"). */
   awaitsTasks: Bool = false
   /** The `?` of an inferred body are its own: a body checked on demand must not settle the one it interrupted. */
@@ -900,6 +908,12 @@ public type Checker {
   var valueUses: List<ValueUse> = []
   /** Whether the body that is being checked is the statement sequence of a file. */
   var isTopLevel: Bool = false
+  /**
+   * Whether the body that is being checked may change a top-level `var`: the statements of a file and the initializer
+   * of a top-level `const` among them run in the order they are written, and a `fn` may run anywhere - also while a
+   * `var` access to the declaration is open.
+   */
+  var writesDeclarations: Bool = false
   /**
    * Whether the expression that is being checked is the default of a **field**. A default is evaluated without `self`
    * and without the other fields, so a name that is a field of the same type has a message of its own there.
@@ -1646,6 +1660,7 @@ public type Checker {
       resultRule,
       runningClosures,
       isTopLevel,
+      writesDeclarations,
       awaitsTasks,
       collectsTries,
       pendingTries,
@@ -1669,6 +1684,7 @@ public type Checker {
     valueUses = []
     runningClosures = 0
     isTopLevel = false
+    writesDeclarations = false
     awaitsTasks = false
     collectsTries = false
     pendingTries = []
@@ -1695,6 +1711,7 @@ public type Checker {
     valueUses = saved.valueUses
     runningClosures = saved.runningClosures
     isTopLevel = saved.isTopLevel
+    writesDeclarations = saved.writesDeclarations
     awaitsTasks = saved.awaitsTasks
     collectsTries = saved.collectsTries
     pendingTries = saved.pendingTries

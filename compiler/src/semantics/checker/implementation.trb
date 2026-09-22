@@ -35,6 +35,7 @@ use extensionMembers, signatureOf, functionOfSite from "./signature"
 use typeFromReference from "./lowering"
 use substitute, substituteFunction, sameType, sameFunction, resolveType from "./unify"
 use derivableMembers from "./derive"
+use nativeEntries from "../../backend/c/natives"
 
 // --- Building the index ---------------------------------------------------------------------------------------------
 
@@ -409,8 +410,13 @@ fn resolveUncached(var checker: Checker, annotation: TypeId, capability: SymbolI
     }
   }
   // Two implementations that both answer are an overlap, which `checkCoherence` reports at the two declarations - so
-  // nothing is said here: one root cause, one message
+  // nothing is said here: one root cause, one message. Where one of them is the type's own and the other one reaches it
+  // through a trait it implements, the overlap is reported at the second, and the type's own is the answer
   if second >= 0 {
+    if const Some(own) = ownOfTwo(checker, first, second) {
+      const given = applies(checker, own, subject, wanted) ?? arguments
+      return Resolved.Found ImplementationId(own), given
+    }
     return Resolved.Ambiguous ImplementationId(first), ImplementationId(second)
   }
   if first >= 0 {
@@ -422,6 +428,20 @@ fn resolveUncached(var checker: Checker, annotation: TypeId, capability: SymbolI
   }
   // `Show`, `Equals`, `Hash`, `Encode`, `Decode` and the `From` of a wrapper case are generated on first use
   deriveFor checker, subject, capability, wanted
+}
+
+/**
+ * Of two implementations that both answer, the one written for the type itself where the other one is written for a
+ * trait it implements (`type Square with Describe` against `extend Shape with Describe`). `None` for any other pair.
+ */
+fn ownOfTwo(checker: Checker, first: Int, second: Int): Int? {
+  const firstShape = targetShapeOf checker, checker.implementations.all[first].target
+  const secondShape = targetShapeOf checker, checker.implementations.all[second].target
+  match (firstShape, secondShape) {
+    (.Concrete(_), .Bounded(_)) => Some first
+    (.Bounded(_), .Concrete(_)) => Some second
+    _ => None
+  }
 }
 
 /**
@@ -2027,6 +2047,9 @@ fn checkOverlaps(var checker: Checker) {
 fn reportOverlap(var checker: Checker, first: Int, second: Int) {
   const left = checker.implementations.all[first]
   const right = checker.implementations.all[second]
+  if reportTraitTargetOverlap(checker, left, right) || reportTraitTargetOverlap(checker, right, left) {
+    return
+  }
   if !couldUnify(checker, left.target, right.target) {
     return
   }
@@ -2051,6 +2074,59 @@ fn reportOverlap(var checker: Checker, first: Int, second: Int) {
     Diagnostic.error("`{target}` already implements `{capability}` (in `{other}`)", right.at)
       .withNote("Two implementations of one trait may not overlap: only different target types tell them apart")
   )
+}
+
+/**
+ * `extend Shape with Describe` next to `type Square with Shape, Describe`: a `Square` would answer `describe` with its
+ * own member, and the same value seen as a `Shape` with the extension's - so what a call does would depend on the
+ * static type it was made through. That is an overlap, reported at the implementation for the trait, and the type's own
+ * stays the answer ([ownOfTwo]). Answers whether it said anything.
+ */
+fn reportTraitTargetOverlap(var checker: Checker, forTrait: Implementation, own: Implementation): Bool {
+  const traitHead = match targetShapeOf(checker, forTrait.target) {
+    .Bounded(found) => found
+    _ => {
+      return false
+    }
+  }
+  const ownHead = match targetShapeOf(checker, own.target) {
+    .Concrete(found) => found
+    _ => {
+      return false
+    }
+  }
+  // A trait target that only the trait-typed value reaches (`From` answers `Self`) never meets the type's own
+  if !reachesImplementers(checker, forTrait.capability) {
+    return false
+  }
+  const leftTrait = forTrait.capability ?? checker.invalidType
+  const rightTrait = own.capability ?? checker.invalidType
+  if !couldUnify(checker, leftTrait, rightTrait) {
+    return false
+  }
+  if !resolveTrait(checker, own.target, traitHead).isFound() {
+    return false
+  }
+  const typeName = checker.symbolAt(ownHead).name
+  const traitName = checker.symbolAt(traitHead).name
+  const capability = checker.describe rightTrait
+  // Where the type's own implementation is written, when that is another file
+  const elsewhere = if own.module == forTrait.module {
+    ""
+  } else {
+    " (in `{importPathOf(checker, own.module)}`)"
+  }
+  checker.report(
+    forTrait.module,
+    Diagnostic.error(
+      "`{typeName}` implements `{capability}` itself{elsewhere}, and it is a `{traitName}`",
+      forTrait.at,
+    ).withNote(
+      "A `{typeName}` would answer differently when it is seen as a `{traitName}`: what a call does may not depend"
+        + " on the type it is made through. Implement `{capability}` in one of the two places"
+    )
+  )
+  true
 }
 
 /**
@@ -2200,21 +2276,42 @@ fn isOpenType(checker: Checker, annotation: TypeId): Bool {
 
 /**
  * Every required member of every trait an implementation of this module names, and of their supertraits. A `native`
- * type is exempt: there the requirement is one on the runtime, not on any source.
+ * type meets a requirement with a member it writes a body for, or with a row of the manifest of natives
+ * (`backend/c/natives.trb`) - the runtime's half of the contract, which is checked here like the source's half.
  */
 public fn checkImplementations(var checker: Checker, module: ModuleId) {
   buildImplementations checker
   const total = checker.implementations.all.length()
+  var rows: Map<String, Bool>? = None
   for index in 0..total {
-    if checker.implementations.all[index].module == module {
-      checkOneImplementation checker, index
+    const implementation = checker.implementations.all[index]
+    if implementation.module != module {
+      continue
     }
+    // The manifest is only read where a native type implements something, which is a handful of files of `std/`
+    if rows.isNone() && isNativeTarget(checker, implementation.target) {
+      rows = Some manifestRows()
+    }
+    checkOneImplementation(checker, index, rows ?? [:])
   }
 }
 
-fn checkOneImplementation(var checker: Checker, index: Int) {
+/** `"Int64.add"` for every row of the manifest; `"Int64.tryFrom(String)"` answers for `"Int64.tryFrom"` as well. */
+fn manifestRows(): Map<String, Bool> {
+  var rows: Map<String, Bool> = [:]
+  for entry in nativeEntries() {
+    const name = entry.name
+    rows.set name, true
+    if const Some(open) = name.indexOf("(") {
+      rows.set name.slice(0..open), true
+    }
+  }
+  rows
+}
+
+fn checkOneImplementation(var checker: Checker, index: Int, rows: Map<String, Bool>) {
   const implementation = checker.implementations.all[index]
-  if isGenerated(implementation) || implementation.isNative {
+  if isGenerated(implementation) {
     return
   }
   const declared = match implementation.capability {
@@ -2235,7 +2332,7 @@ fn checkOneImplementation(var checker: Checker, index: Int) {
   var closure: List<TypeId> = []
   addClosure checker, closure, declared, target, 0
   for bound in closure {
-    checkRequirements checker, index, declared, bound, closure
+    checkRequirements checker, index, declared, bound, closure, rows
   }
 }
 
@@ -2245,6 +2342,7 @@ fn checkRequirements(
   declared: TypeId,
   bound: TypeId,
   closure: List<TypeId>,
+  rows: Map<String, Bool>,
 ) {
   const implementation = checker.implementations.all[index]
   const capability = match headSymbolOf(checker, bound) {
@@ -2256,6 +2354,7 @@ fn checkRequirements(
   const identifier = typeSignatureOf checker, capability
   const shape = checker.typeSignature identifier
   const target = implementation.target
+  const isNative = isNativeTarget checker, target
   var mapping: Map<ParameterId, TypeId> = [:]
   const arguments = argumentsOfBound checker, bound
   for position in 0..shape.generics.length().min(arguments.length()) {
@@ -2271,17 +2370,70 @@ fn checkRequirements(
       continue
     }
     match providerOf(checker, index, name) {
-      Some(provider) => compareSignatures checker, index, bound, name, member, provider, mapping
+      Some(provider) => {
+        // A `native fn` the type declares is the runtime's to implement, so the manifest has to name it
+        if isNative && !checker.signature(signatureOf(checker, provider)).hasBody {
+          if !hasManifestRow(checker, rows, target, name) {
+            reportMissingRow checker, index, bound, name
+          }
+          continue
+        }
+        compareSignatures checker, index, bound, name, member, provider, mapping
+      }
       None => {
         // `trait List<Item> with MutableSlice` writes `slice` itself: a default of any trait in the closure is the
         // implementation of the requirement, and nothing is asked of the type
         if hasDefaultInClosure(checker, closure, name) || isProvidedOtherwise(checker, index, bound) {
           continue
         }
+        // `native type Int64 with Signed {}`: `Int64.add` is a row of the manifest and nothing in the source
+        if isNative {
+          if !hasManifestRow(checker, rows, target, name) {
+            reportMissingRow checker, index, bound, name
+          }
+          continue
+        }
         reportMissingMember checker, index, declared, bound, name, member, mapping
       }
     }
   }
+}
+
+/** A `native type`: what the runtime provides, in the implementation of its own `with` list and in an `extend` of it. */
+fn isNativeTarget(var checker: Checker, target: TypeId): Bool {
+  if const .Nominal(symbol, _) = checker.types.form(target) {
+    return checker.typeSignature(typeSignatureOf(checker, symbol)).isNative
+  }
+  false
+}
+
+/** Whether the manifest of natives has a row for this member of this type: `"Int64.add"`, `"ArrayList.append"`. */
+fn hasManifestRow(checker: Checker, rows: Map<String, Bool>, target: TypeId, name: String): Bool {
+  const head = match headSymbolOf(checker, target) {
+    Some(found) => found
+    None => {
+      return true
+    }
+  }
+  rows.containsKey "{checker.symbolAt(head).name}.{name}"
+}
+
+fn reportMissingRow(var checker: Checker, index: Int, bound: TypeId, name: String) {
+  const implementation = checker.implementations.all[index]
+  const target = checker.describe implementation.target
+  const capability = checker.describe bound
+  const owner = match headSymbolOf(checker, implementation.target) {
+    Some(head) => checker.symbolAt(head).name
+    None => target
+  }
+  checker.report(
+    implementation.module,
+    Diagnostic.error("`{target}` implements `{capability}`, and nothing provides its `{name}`", implementation.at)
+      .withNote(
+        "A native type meets a requirement with a body, or with the row `{owner}.{name}` in the manifest of natives"
+          + " (`compiler/src/backend/c/natives.trb`)"
+      )
+  )
 }
 
 /** Whether any trait of the closure writes this member with a body, which makes it no requirement on the type. */
@@ -2348,21 +2500,13 @@ fn isProvidedOtherwise(var checker: Checker, index: Int, bound: TypeId): Bool {
   if implementation.delegate.isSome() {
     return true
   }
-  const target = implementation.target
-  if const .Nominal(symbol, _) = checker.types.form(target) {
-    const identifier = typeSignatureOf checker, symbol
-    const shape = checker.typeSignature identifier
-    if shape.isNative {
-      return true
-    }
-  }
   const capability = match headSymbolOf(checker, bound) {
     Some(found) => found
     None => {
       return true
     }
   }
-  derivableMembers(checker, target, capability, Some(bound)).isSome()
+  derivableMembers(checker, implementation.target, capability, Some(bound)).isSome()
 }
 
 /** Where a member of the target comes from: the implementation, the body of the type, or another extension of it. */

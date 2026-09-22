@@ -158,7 +158,6 @@ type User {
 const user = User "ada@example.test"
 print nameOf(user.unknown)
 // error: `User` has no member `unknown`
-// error: Cannot infer `Value` of `nameOf`
 ```
 
 `nameOf` reads the name that was already resolved on the tree; it cannot read a name that does not exist, because the

@@ -1005,21 +1005,27 @@ shared type Connection {
   }
 }
 
-var connection = Connection("tcp://example.test")
-var same = connection          // The same object
+const connection = Connection("tcp://example.test")
+const same = connection        // The same object
 same.send("hello")
 print connection.sent          // 1
 
-const view = connection
-view.send("nope")              // Compile error: no `var` path, no mutation
+connection = Connection("tcp://other.test")   // Compile error: a `const` binding always names the same object
 ```
 
 A `shared type` is the exception for everything that has an identity: assigning it does not copy, everybody who holds
 it sees the same object. Typical cases are handles to the outside world (`File`, `Socket`, `Window`), `Channel`,
 `Task`, registries. Most programs declare very few of them.
 
-- The rule stays the same: mutation needs a `var` path. A `const` binding to a shared object is a read-only view
-  (the object can still change, but not through this path).
+- **A change of an object is not a question of the path.** "Mutation needs a `var` path" is the rule for values, where
+  a path is where the copy lives. An object has one identity and no copy, so its `var fn` members and its `var` fields
+  change through any binding that holds it - a `const` one, a parameter, `pool[0]`. `var` on a binding of a shared type
+  means **rebinding** and nothing else: a `const` binding always names the same object. For the same reason `self` of a
+  shared type is never assigned and never handed to a `var` parameter - that would point the caller's binding
+  elsewhere. There are no read-only views of an object: a view that is a property of the path can be widened again by
+  any function that hands its argument back (`fn launder(c: Connection): Connection { c }`), so it would promise
+  nothing. (Decision 2026-09-22; it replaced the read-only view, its widening rule and the rule on `var` fields filled
+  from a `const` path.)
 - **A `var fn` method of a `shared type` may answer a `Task`.** For a value a `var` is an exclusive in-out access whose
   "copy in, copy out" ends with the call, so a change made after the call has returned would be lost - and a `var` of a
   value on a function that answers a `Task` is therefore a compile error. For an object there is no copy: `var` is the
@@ -1027,17 +1033,9 @@ it sees the same object. Typical cases are handles to the outside world (`File`,
   `await`. That is what lets `Source.next()` of [Streams](#streams) mirror `Iterator.next()` instead of
   hiding a cursor somewhere. An ordinary `trait` counts as a value here, because a value may implement it: only a
   `shared trait` may require such a member.
-- **A read-only view cannot be widened again.** A `var` binding, `var` field or `var` argument may not be
-  initialized from a `const` path to a shared object - there is no copy that would make it a different object, so
-  `var writable = view` would hand out exactly what the `const` withheld. For a value it is simply a copy and fine.
-  It holds in all four places: a binding, a field (also through the generated constructor, and also inside the type
-  itself), an argument, and a trait-typed value of a `shared trait`.
-- **A freshly produced object *is* a `var` path.** `Counter().increment()` is an error because the change would be lost
-  with the temporary it was made in - that rule is about values. An object has no copy, nothing is lost, and nobody else
-  holds a view of something that was just made, so `File.open(path)?.lines()` and a whole chain of wrappers read as one
-  expression. The read-only view is a promise about a **path**, not a property of a type: a function that *hands out* an
-  object hands out the full permission (`var writable = view()` is ordinary), and what `const` withholds is only what
-  goes through that one binding, field or argument.
+- **A freshly produced object can be changed right away.** `Counter().increment()` is an error because the change would
+  be lost with the temporary it was made in - that rule is about values. An object has no copy and nothing is lost, so
+  `File.open(path)?.lines()` and a whole chain of wrappers read as one expression.
 - `Equals`, `Hash`, `copy` and `Encode` are not generated. `==` is about content and does not exist for objects;
   `isSame(a, b)` compares identity. `Show` is a `shared trait`, so objects can be printed.
 - **`isSame` only works on shared objects.** On a value the answer would expose whether the implementation shares
@@ -1195,7 +1193,8 @@ is expected of it. There is no variance either: a `List<Square>` is not a `List<
 
 **Members are public unless marked `private`** - fields, methods and constants alike. In a language where values are
 never aliased and `const` is deep, reading a field cannot break anything, and a value _is_ its data. What needs
-protection is mutation and invariants, and both have a modifier:
+protection is mutation and invariants, and both have a modifier. The defaults are never written out: `public` on a
+member, `const` on a field and `const` after `static` are refused, one spelling per meaning:
 
 ```trb
 type Account {
@@ -1253,6 +1252,11 @@ account.balance = 1_000_000              // Compile error: only Account can writ
 - **`public const` is legal at top level, `public var` is not.** A module can export a constant (its initializer is
   compile-time evaluable, see [Modules and Packages](#modules-and-packages)); a module has no mutable state, so
   there is nothing a top-level `var` could export.
+- **A top-level `var` of a script is changed by the statements of its file and by nothing else** - the initializers
+  of its `const`s and a closure written straight as the argument of a call that only calls it included. A `fn` and a
+  closure that is kept may run while a `var` access to the declaration is open, so they read it and never change it;
+  what a function has to change it takes as a `var` parameter. (Decision 2026-09-22: it closes the exclusivity bypass of
+  a closure that assigns a top-level `var` and is passed beside it.)
 
 ### Members: a method is a constant that holds a closure
 
@@ -1309,11 +1313,12 @@ There is no case where the same line could mean two things: command on a method 
 Both forms need a `var` path to the field. Calling a function in a field always takes parentheses (`onClick()`,
 `onClick(event)`); `onClick { ... }` sets it.
 
-**A call of a non-callable member writes it, with or without parentheses.** `tls true` and `tls(true)` are the same
-line. The parenthesized form is not optional style: an operator at the top level of an argument takes parentheses
-(Formatter Canon), so `tls(port == 8443)` is the only way to write that value at all. And because the parentheses
-decide what a command on a **field** means and not just how it looks, the canon leaves such a call exactly as it is
-written - it is the one call whose form is meaning.
+**Only the command form writes; parentheses always call.** `tls true` writes the field, and `tls(true)` calls it - an
+error, because a `Bool` field has nothing to call; `onClick({ ... })` hands the closure to the function the field holds
+instead of storing it. A value the command form cannot take - an operator at the top level of it, which puts the call
+in parentheses (Formatter Canon), or a first token `(`, `[`, `-`, `!` or `.` - is written with `=`:
+`tls = port == 8443`, `level = .Debug`. (Decision 2026-09-22: a property command is the command form only, so no line
+means two things and a parenthesized call never writes.)
 
 ## Algebraic Data Types and Pattern Matching
 

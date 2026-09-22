@@ -120,7 +120,20 @@ Self(<field>, ...)                   // The constructor, from inside the type
 
 4. **A field default is evaluated at every construction, in a scope without `self` and without the other fields.** So
    the order the fields are declared in is not observable from a default, and a default that depends on another field
-   has to be a factory function instead of a field default.
+   has to be a factory function instead of a field default. A default stands in for an argument the caller left out,
+   and a construction cannot fail, so a `?` in one is refused - a value that has to be checked first comes from a
+   factory that answers a `Result`.
+
+   ```trb error
+   fn parsed(text: String): Int? {
+     None
+   }
+
+   type Probe {
+     count: Int = parsed("1")?
+   }
+   // error: `?` cannot stand in a field default: building a value never fails
+   ```
 
 5. **The constructor is usable from outside the type if and only if every `private` field has a default.** A `private`
    field with a default can be left out, and leaving it out is the only way outside code ever reaches this

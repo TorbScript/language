@@ -328,6 +328,13 @@ type Lexer {
     }
     if peek() != Some('\'') {
       error "A character literal contains exactly one character and ends with `'`", start
+      // `'ab'`: the literal ends at the next quote of the line and stands for its first character from there on, so the
+      // rest of it is not read as a name and a second literal
+      if const Some(first) = value {
+        if skipToQuote() {
+          push TokenKind.CharLiteral(first), start
+        }
+      }
       return
     }
     position = position + 1
@@ -335,6 +342,19 @@ type Lexer {
       Some(value) => push TokenKind.CharLiteral(value), start
       None => error "This character literal is empty", start
     }
+  }
+
+  /** Moves past the next `'` of the line, where there is one: the end of a character literal that holds too much. */
+  var fn skipToQuote(): Bool {
+    var probe = position
+    while probe < end && source.characters[probe] != '\n' {
+      if source.characters[probe] == '\'' {
+        position = probe + 1
+        return true
+      }
+      probe = probe + 1
+    }
+    false
   }
 
   /** Reads what follows a `\`. */
@@ -398,6 +418,7 @@ type Lexer {
         Some(character) => character
         None => {
           error "This string is never closed", start
+          pushUnclosed parts, literal, start
           return
         }
       }
@@ -407,6 +428,7 @@ type Lexer {
       }
       if character == '\n' && !isTripleQuoted {
         error "This string is never closed. Multi-line strings use `\"\"\"`", start
+        pushUnclosed parts, literal, start
         return
       }
       if atLineStart {
@@ -423,6 +445,11 @@ type Lexer {
         const expressionStart = position
         if !skipInterpolation() {
           error "This `\{` inside of a string is never closed. A literal brace is written `\\\{`", start
+          // The line break that ended the search still ends the statement
+          if position > 0 && source.characters[position - 1] == '\n' {
+            position = position - 1
+          }
+          pushUnclosed parts, literal, start
           return
         }
         if literal.isNotEmpty() {
@@ -441,6 +468,18 @@ type Lexer {
       parts.append TextPart.Literal(String.from(literal))
     }
     push TokenKind.TextLiteral(parts), start
+  }
+
+  /**
+   * A string that was never closed is still a string, as far as it was read: the statement it stands in stays what it
+   * was - `print "total: {value` is a call of `print` and not a function nobody called.
+   */
+  var fn pushUnclosed(parts: List<TextPart>, literal: List<Char>, start: Int) {
+    var read = parts
+    if literal.isNotEmpty() || read.isEmpty() {
+      read.append TextPart.Literal(String.from(literal))
+    }
+    push TokenKind.TextLiteral(read), start
   }
 
   /**
@@ -615,8 +654,16 @@ type Lexer {
     }
     position = position + text.byteLength()
     match text {
-      ";" => error "There are no semicolons. A statement ends at the end of its line", start
-      "^" => error "There is no `{text}` operator", start
+      // Read as the line break the table maps it to: the statement after it is still a statement of its own
+      ";" => {
+        error "There are no semicolons. A statement ends at the end of its line", start
+        push kind, start
+      }
+      // Read as the `*` the table maps it to from here on: the operands are still one expression
+      "^" => {
+        error "There is no `{text}` operator", start
+        push kind, start
+      }
       _ => push kind, start
     }
   }

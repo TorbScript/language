@@ -81,10 +81,10 @@ public shared trait Source<Item, Failure> with Close {
 
 The reading end of a stream. `next()` answers `Ok(Some(item))` for the next item, `Ok(None)` at the end, and
 `Fail(problem)` for a failure that ends the stream for good. A source has an identity and is consumed once, so it is a
-`shared type`, and **a source that is read from sits in a `var` binding**; a `const` handle is the read-only view every
-shared object has (see [Shared types](../language/types/shared-types.md)). Wrapping (`map`, `filter`, `through`) needs
-`var fn`s too, because the wrapper keeps the source in a `var` field and pulls from it afterwards - a chain still
-reads as one expression, because a freshly produced object is a `var` path. Backpressure is the pull: nothing is read
+`shared type`, and reading from it needs no `var` binding: a change of an object is not a question of the path it is
+reached through (see [Shared types](../language/types/shared-types.md)), so every holder reads from the one stream.
+Wrapping (`map`, `filter`, `through`) hands the source to a wrapper that pulls from it afterwards, and a chain reads as
+one expression. Backpressure is the pull: nothing is read
 before somebody asks for it. `checked()` (an extension for `Source<Result<Item, Problem>, Failure>`) turns `Result`
 items into the stream's own failure, ending the stream there. `produce` is the one way to write a producer without
 generators: `body` runs as a task of its own and writes into a `Channel` (see [std/task](task.md)), with `capacity: 0`

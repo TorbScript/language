@@ -2,13 +2,11 @@
  * Places and the mutation rules: what a valid path is, and what a change through it needs.
  *
  * Every rule of this file is one walk from the root of a path outwards - a `var` binding, then `var` fields, then
- * `MutableIndexed` and `MutableSlice` - plus the two rules that are about where a path may *not* start: a temporary is
- * never the base of one (and always a valid argument for a `var` parameter) and a `const` path to a shared object
- * never widens into a `var` one.
+ * `MutableIndexed` and `MutableSlice` - plus the rule about where a path may *not* start: a temporary is never the base
+ * of one (and always a valid argument for a `var` parameter).
  *
- * Both have the same exception, and it is the same reason: a **temporary with an identity** *is* a `var` path. The
- * rule against a temporary protects values, where the change would be lost with the copy it was made in; an object
- * has no copy, and nobody else holds a view of something that was just made.
+ * A **shared object** starts the walk afresh: it has one identity and no copy, so whether it changes is not a question
+ * of the path it was reached through, and a temporary with an identity may be changed right away.
  */
 
 use test, group from "std/test"
@@ -262,82 +260,61 @@ group "`if var` binds into the subject (gap 3)" {
   }
 }
 
-group "A shared object never widens (gap 20)" {
+group "An object changes through any path it is reached through" {
   const connection = "shared type Connection \{\n  url: String\n  private(var) sent: Int = 0\n\n"
     + "  var fn send() \{\n    sent = sent + 1\n  \}\n\}\n\n"
   const holder = "type Holder \{\n  var held: Connection\n\}\n\n{connection}"
 
-  test "a `var` binding may not be taken from a `const` path to a shared object" {
-    const source = "{connection}fn probe(view: Connection) \{\n  var writable = view\n  writable.send()\n  print writable.url\n\}"
-    assert(
-      problems(source) == ["`view` is a read-only view of a shared `Connection`, so no `var` comes out of it"]
-    )
-    assert(
-      notes(source)
-        == ["A shared object is never copied, so a `var` here would hand out what the `const` withheld"]
-    )
-  }
-
-  test "a `var` path to the same object is fine, and so is a value" {
-    const source = "{connection}fn probe(var handle: Connection) \{\n  var writable = handle\n  writable.send()\n  print writable.url\n\}"
-    assert problems(source).isEmpty()
-    const value = "type Point \{\n  var x: Int = 0\n\}\n\n"
-      + "fn probe(place: Point) \{\n  var moved = place\n  moved.x = 1\n  print moved.x\n\}"
-    assert problems(value).isEmpty()
-  }
-
-  /**
-   * The same rule where the `var` place is a **field**. The parameters of a generated constructor are values, so this
-   * needs a walk of its own - and it holds inside the type as well, which is where the factories of every wrapper live.
-   */
-  test "a `var` field with an identity may not be filled from a `const` path, inside the type either" {
-    const source = "{holder}fn probe(view: Connection): Holder \{\n  Holder view\n\}"
-    assert(
-      problems(source) == ["`view` is a read-only view of a shared `Connection`, so no `var` comes out of it"]
-    )
-    const inside = "shared type Wrapper \{\n  var held: Connection\n\n"
-      + "  fn of(held: Connection): Wrapper \{\n    Wrapper held\n  \}\n\}\n\n{connection}"
-    assert(
-      problems(inside) == ["`held` is a read-only view of a shared `Connection`, so no `var` comes out of it"]
-    )
-  }
-
-  test "a `var` path, a temporary and a labeled argument are all fine" {
-    const source = "{holder}fn probe(var handle: Connection): Holder \{\n  Holder handle\n\}"
-    assert problems(source).isEmpty()
-    const temporary = "{holder}fn probe(): Holder \{\n  Holder Connection(\"tcp://x\")\n\}"
-    assert problems(temporary).isEmpty()
-    const labeled = "{holder}fn probe(view: Connection): Holder \{\n  Holder(held: view)\n\}"
-    assert(
-      problems(labeled) == ["`view` is a read-only view of a shared `Connection`, so no `var` comes out of it"]
-    )
-  }
-
-  test "a `var` field of a *value* is copied in, so nothing is withheld" {
-    const source = "type Holder \{\n  var items: List<Int>\n\}\n\n"
-      + "fn probe(kept: List<Int>): Holder \{\n  Holder kept\n\}"
+  test "a `var fn` of a shared object needs no `var` path: a `const` binding, a parameter and `pool[0]` reach it" {
+    const source = "{connection}fn probe(view: Connection) \{\n  view.send()\n  const pool = [view]\n  pool[0].send()\n"
+      + "  const held = view\n  held.send()\n  print view.sent\n\}"
     assert problems(source).isEmpty()
   }
 
-  /** The fourth place, and the one the streams design ran into: a trait-typed value of a `shared trait`. */
-  test "a trait-typed value of a `shared trait` is a shared object like any other" {
-    const source = "{producer}fn probe(view: Producer) \{\n  var writable = view\n  writable.close()\n\}"
-    assert(
-      problems(source) == ["`view` is a read-only view of a shared `Producer`, so no `var` comes out of it"]
-    )
+  test "a change through an element of a `var` list changes the object, not the list, so it is never dead" {
+    const source = "{connection}fn probe() \{\n  var connection = Connection(\"tcp://x\")\n  var pool = [connection]\n"
+      + "  pool[0].send()\n  var alias = connection\n  alias.send()\n  print connection.sent\n\}"
+    assert problems(source).isEmpty()
   }
 
-  test "and as a `var` argument it is the ordinary path rule" {
+  test "what comes after the object is still asked about: a `const` field and a `private(var)` one" {
+    const constant = "{connection}fn probe(view: Connection) \{\n  view.url = \"tcp://y\"\n\}"
+    assert(problems(constant) == ["`url` never changes after construction"])
+    const through = "{holder}fn probe(holder: Holder) \{\n  holder.held.send()\n  print holder.held.sent\n\}"
+    assert problems(through).isEmpty()
+  }
+
+  test "a `var` binding, a `var` field and a constructor take an object from any path: there is no view to widen" {
+    const binding = "{connection}fn probe(view: Connection) \{\n  var writable = view\n  writable.send()\n  print writable.url\n\}"
+    assert problems(binding).isEmpty()
+    const field = "{holder}fn probe(view: Connection): Holder \{\n  Holder(held: view)\n\}"
+    assert problems(field).isEmpty()
+    const copied = "{holder}fn probe(target: Holder, view: Connection): Holder \{\n  target.copy(held: view)\n\}"
+    assert problems(copied).isEmpty()
+    const traitTyped = "{producer}fn probe(view: Producer) \{\n  view.close()\n\}"
+    assert problems(traitTyped).isEmpty()
+  }
+
+  test "a `var` argument may rebind what it is given, so it still takes a `var` path" {
     const source = "{producer}fn drain(var source: Producer) \{\n  source.close()\n\}\n\n"
       + "fn probe(view: Producer) \{\n  drain(view)\n\}"
     assert(problems(source) == ["`drain` changes `source`, and `view` is a `const`"])
   }
 
-  test "`copy` follows the constructor" {
-    const source = "{holder}fn probe(var target: Holder, view: Connection): Holder \{\n  target.copy(held: view)\n\}"
+  test "`self` of a shared type is the object, so a method never replaces it" {
+    const assigned = "shared type Connection \{\n  url: String\n\n  var fn reconnect() \{\n    self = Connection(url)\n  \}\n\}"
+    assert(problems(assigned) == ["`self` is the object itself, and a method of a shared type cannot replace it"])
     assert(
-      problems(source) == ["`view` is a read-only view of a shared `Connection`, so no `var` comes out of it"]
+      notes(assigned)
+        == ["Everybody who holds the object holds this one: change its fields, or make a new one and return it"]
     )
+    const handed = "shared type Connection \{\n  url: String\n\n  var fn reconnect() \{\n    replace(self)\n  \}\n\}\n\n"
+      + "fn replace(var connection: Connection) \{\n  connection = Connection(\"tcp://y\")\n\}"
+    assert(problems(handed) == ["`self` is the object itself, and a method of a shared type cannot replace it"])
+    const bound = "shared type Connection \{\n  url: String\n\n  var fn reconnect() \{\n    var other = self\n"
+      + "    replace(other)\n  \}\n\}\n\n"
+      + "fn replace(var connection: Connection) \{\n  connection = Connection(\"tcp://y\")\n\}"
+    assert problems(bound).isEmpty()
   }
 }
 

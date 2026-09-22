@@ -52,9 +52,10 @@ while const Some(item) = source.next().await()? { ... }
    it.** After `Ok(None)` every further `next()` answers `Ok(None)` again; after a `Fail` the stream never delivers
    another item.
 
-2. **Both ends are `shared type`s, so a source that is read from or a sink that is written to sits in a `var`
-   binding.** A `const` handle is the read-only view every shared object has, and it cannot be consumed - not even by
-   wrapping it in `map` or `filter`, because those hand the reading permission to a wrapper too.
+2. **Both ends are shared objects, so reading from a source or writing to a sink needs no `var` binding.** A change
+   of an object is not a question of the path it is reached through ([Shared types](../types/shared-types.md), rule 2):
+   every holder reads from the one stream, and an item one of them took is gone for all of them. `var` on a binding of
+   a source only means that the binding may be pointed at another one.
 
 3. **There is deliberately no `for` over a `Source`.** A `for` head has no place for the `?` that a failing pull
    needs, so the loop is a `while` that names both `await()` and `?`:

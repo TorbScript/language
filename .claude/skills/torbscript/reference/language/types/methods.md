@@ -121,8 +121,9 @@ print rectangle.square(5)
 // error: `square` is `static`: call it as `Rectangle.square(...)`
 ```
 
-**A field is not a constant of the type.** `x: Int` is a field and `const x: Int` is the same field written out;
-`static x = 0` is a constant of the type. A `const x = 0` inside a type body is neither, and says so.
+**A field is not a constant of the type.** `x: Int` is a field, and `const x: Int` is refused because `const` is what a
+field is without the word ([Fields](fields.md), rule 1); `static x = 0` is a constant of the type. A `const x = 0` inside
+a type body is neither, and says so.
 
 ```trb error
 type Probe {

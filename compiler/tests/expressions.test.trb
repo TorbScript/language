@@ -32,6 +32,15 @@ group "Literals" {
     assert(found.adaptationsOf("7") == ["literal Int8"])
   }
 
+  test "a hexadecimal or binary literal is an integer, and a floating-point type does not take one" {
+    assert(
+      problems(inBody("  const mask: Float64 = 0xFF"))
+        == ["`0xFF` is written in another base, and only an integer type takes it: `Float64` is not one"]
+    )
+    assert(problems(inBody("  const flags: Float32 = 0b1010")).length() == 1)
+    assert problems(inBody("  const byte: UInt8 = 0xFF\n  const wide: Float64 = 255")).isEmpty()
+  }
+
   test "a literal that does not fit the type it adapts to is an error" {
     assert(problems(inBody("  const small: Int8 = 300")) == ["`300` does not fit into `Int8`"])
     assert(problems(inBody("  const byte: UInt8 = -1")) == ["`-1` does not fit into `UInt8`"])
@@ -371,5 +380,68 @@ group "What waits for a later sub-milestone" {
 
   test "a closure body is checked like any other body (milestone 4.4)" {
     assert(problems(inBody("  const double = \{ value: Int => value * missing \}")) == ["Cannot find `missing` here"])
+  }
+}
+
+/**
+ * Every mistake of a user gets the message about it, and only that one: "The checker did not work out the type of this
+ * expression" is the checker's own hole and never stands in for one, and what follows from a mistake says nothing more.
+ */
+group "One root cause, one message" {
+  test "a command whose first argument starts with `-` is a subtraction from a function, and the message says so" {
+    const source = inBody "  print -0.0"
+    assert(problems(source) == ["`print` is a function, and `print -0.0` subtracts from it"])
+    assert(
+      notes(source)
+        == ["The first argument of a command may not start with `-`, so this reads as a subtraction: write `print(-0.0)`"]
+    )
+  }
+
+  test "a missing member of a collection whose element is a type parameter is reported" {
+    const source = "type Bag<Item> \{\n  var items: List<Item> = []\n\n  var fn put(value: Item) \{\n    items.add value\n  \}\n\}"
+    assert(problems(source) == ["`List<Item>` has no member `add`"])
+  }
+
+  test "the argument of a call that could not be resolved is still read: no second message about the binding" {
+    const source = "fn collect<Value>(item: Value?): List<Value> \{\n  var found: List<Value> = []\n"
+      + "  if const Some(x) = item \{\n    found.add x\n  \}\n  found\n\}"
+    assert(problems(source) == ["`List<Value>` has no member `add`"])
+  }
+
+  test "a keyword as the name of a function is the parser's message, and the checker adds none" {
+    assert(problems("fn if(value: Int): Int \{\n  value\n\}") == ["`if` is a keyword and cannot be used as a name here"])
+  }
+
+  test "arguments beyond what the callee takes are not matched against its parameters" {
+    const source = "fn apply(value: Int, body: (Int) => Int): Int \{\n  body(value)\n\}\n\n"
+      + inBody("  print apply(1, 2, \{ x => x \})")
+    assert(problems(source) == ["`apply` takes 2 arguments, 3 were given"])
+  }
+
+  test "an assignment to something that did not resolve is not also an assignment to a temporary" {
+    assert(problems(inBody("  let answer = 42")) == ["Cannot find `let` here"])
+  }
+
+  test "a string the lexer could not close is still a string: its statement is not a value nobody used" {
+    // At the top level: the search for the end of the interpolation runs to the end of the file here
+    const message = "This `\{` inside of a string is never closed. A literal brace is written `\\\{`"
+    assert(problems("print \"price: \{\{19.99\}\"") == [message])
+    assert(problems("print \"total: \{value\nprint 1") == [message])
+  }
+
+  test "`?` in a field default is refused: a construction has no failure it could return" {
+    const source = "fn parse(text: String): Int? \{\n  None\n\}\n\ntype Probe \{\n  count: Int = parse(\"1\")?\n\}"
+    assert(problems(source) == ["`?` cannot stand in a field default: building a value never fails"])
+    assert(
+      notes(source)
+        == [
+          "A default is evaluated at every construction that leaves the field out, and a constructor has no failure."
+            + " A value that has to be checked first is made by a factory: a `static fn` that answers a `Result`",
+        ]
+    )
+    // A closure in a default is a function of its own, and its `?` returns from it
+    const closure = "fn parse(text: String): Int? \{\n  None\n\}\n\n"
+      + "type Probe \{\n  read: () => Int? = \{ Some(parse(\"1\")? + 1) \}\n\}"
+    assert problems(closure).isEmpty()
   }
 }

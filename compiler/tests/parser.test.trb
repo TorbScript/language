@@ -614,25 +614,80 @@ group "The members of a type" {
     assert(memberParameters("  static fn square(size: Int): Self \{\n    Probe(size)\n  \}") == ["size"])
   }
 
-  test "`static name = value` is a constant of the type, with or without `const`" {
+  test "`static name = value` is a constant of the type, and `static const` says the default out loud" {
     match membersOf("  static origin = Probe(0)")[0].kind {
       .Constant(binding) => assert(!binding.isVar)
       other => panic "Expected a constant, found {other}"
     }
-    match membersOf("  static const origin = Probe(0)")[0].kind {
-      .Constant(binding) => assert(!binding.isVar)
-      other => panic "Expected a constant, found {other}"
-    }
+    const written = "type Probe \{\n  static const origin = Probe(0)\n\}"
+    assert(messages(written) == ["`const` is what a `static` member is without it"])
+    assert(noteMessages(written) == ["What belongs to the type is a constant of it: write `static name = ...`"])
   }
 
-  test "`const x: Int` is the long way to write the field `x: Int`" {
-    match membersOf("  const x: Int = 0")[0].kind {
+  test "a field is `const` without the word, so `const x: Int` is refused and still read as the field" {
+    match membersOf("  x: Int = 0")[0].kind {
       .Field(field) => {
         assert(field.name.text == "x")
         assert(!field.isVar)
       }
       other => panic "Expected a field, found {other}"
     }
+    const written = "type Probe \{\n  const x: Int = 0\n\}"
+    assert(messages(written) == ["`const` is what a field is without it"])
+    assert(noteMessages(written) == ["A field is `const` unless it is `var`: write `x: ...`"])
+    match parse(SourceText.of(written)).file.statements[0].kind {
+      .Declare(declaration) => match declaration.kind {
+        .Type(declared) => match declared.members[0].kind {
+          .Field(field) => assert(field.name.text == "x" && !field.isVar)
+          other => panic "Expected a field, found {other}"
+        }
+        other => panic "Expected a type, found {other}"
+      }
+      other => panic "Unexpected tree: {other}"
+    }
+  }
+
+  test "a member is public without the word, so `public` on one is refused" {
+    const written = "type Probe \{\n  public label: String\n\n  public fn shout(): String \{\n    label\n  \}\n\}"
+    assert(messages(written) == ["`public` is what a member is without it", "`public` is what a member is without it"])
+    assert(noteMessages(written)[0] == "Members are public by default: drop `public`, or write `private` to hide one")
+  }
+
+  test "`Int??` is an optional of an optional: the lexer's `??` is two `?` in a type" {
+    match statements("fn probe(value: Int??) \{\}")[0].kind {
+      .Declare(declaration) => match declaration.kind {
+        .Function(function) => {
+          const annotation = function.parameters[0].annotation ?? panic("Expected an annotation")
+          match annotation.kind {
+            .Optional(inner) => match inner.kind {
+              .Optional(innermost) => match innermost.kind {
+                .Named(path, _) => assert(path[0].text == "Int")
+                other => panic "Expected `Int`, found {other}"
+              }
+              other => panic "Expected an optional, found {other}"
+            }
+            other => panic "Expected an optional, found {other}"
+          }
+        }
+        other => panic "Expected a function, found {other}"
+      }
+      other => panic "Unexpected tree: {other}"
+    }
+  }
+
+  test "a chain of comparisons is one message, and the rest of the chain is dropped" {
+    assert(messages("print a < b > c") == ["Comparisons do not chain. Use `&&`: `a < b && b < c`"])
+    assert(messages("print a < b > c < d") == ["Comparisons do not chain. Use `&&`: `a < b && b < c`"])
+  }
+
+  test "an expression where a type argument goes is one message" {
+    assert(messages("var buffer: Array<Float, size + 1> = x") == ["A type argument is a type or the name of a constant, never an expression"])
+    assert(messages("fn probe(value: Compare + Show) \{\}") == ["Traits are combined with `&`: `Compare & Show`"])
+  }
+
+  test "`use Option.*` is named, and the `use` still reads its source" {
+    assert(messages("use Option.* from \"std/core\"") == ["There is no `use Option.*`"])
+    assert(messages("use Some from \"\"") == ["A `use` needs the path of a module: `use Name from \"std/core\"`"])
   }
 
   test "a `foreign` block declares free functions, so its `fn` gets no receiver" {

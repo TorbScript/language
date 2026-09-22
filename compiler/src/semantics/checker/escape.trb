@@ -69,7 +69,12 @@ public fn declareParameterOwners(var checker: Checker, symbol: SymbolId, from: I
  * An escaping closure may capture no `var` binding at all. A local one may, as long as the parameter it fills only
  * calls it - which only the callee's body says, so that part waits for [settleEscapes].
  */
-public fn noteClosureKind(var checker: Checker, at: Span, captures: List<Capture>) {
+public fn noteClosureKind(
+  var checker: Checker,
+  at: Span,
+  captures: List<Capture>,
+  changedDeclarations: List<SymbolId> = [],
+) {
   const isLocal = checker.argumentClosures.containsKey at
   const kind = if isLocal { ClosureKind.Local } else { ClosureKind.Escaping }
   checker.recordClosureKind at, kind
@@ -77,6 +82,24 @@ public fn noteClosureKind(var checker: Checker, at: Span, captures: List<Capture
   var firstHeld: LocalBinding? = None
   var parameters: List<(Int, Int)> = []
   var unseen: List<(String, TypeId)> = []
+  // A top-level `var` the closure changes is held like a captured `var` binding: the closure may only run while its
+  // statement does, or it could change the declaration while a `var` access to it is open
+  for symbol in changedDeclarations {
+    held.append "the top-level `var` `{checker.symbolAt(symbol).name}`"
+  }
+  if !isLocal {
+    if const Some(symbol) = changedDeclarations.first() {
+      const name = checker.symbolAt(symbol).name
+      checker.reportHere(
+        Diagnostic.error("This closure changes the top-level `var` `{name}` and may outlive its statement", at)
+          .withNote(
+            "Only a closure written straight as the argument of a call that just calls it may change `{name}`."
+              + " Take it as a `var` parameter instead, or let the closure return what it computed"
+          )
+      )
+      return
+    }
+  }
   for capture in captures {
     const binding = checker.binding capture.binding
     if binding.isVar {

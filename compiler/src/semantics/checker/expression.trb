@@ -266,12 +266,47 @@ fn memberTarget(
       found.copy arguments: explicit
     }
     None => {
+      // `shapes.append .Empty` lexes as `shapes.append.Empty`, a member of the function: that is the command whose first
+      // argument started with `.`
+      if reportCaseAfterFunction(checker, base, receiver, text, at) {
+        return Target Resolution.Deferred, checker.invalidType, name: text
+      }
       if reportUnknownMember(checker, receiver, text, at) {
         return Target Resolution.Deferred, checker.invalidType, name: text
       }
       Target Resolution.Deferred, checker.deferredType, name: text
     }
   }
+}
+
+/**
+ * A case name after a function, which has no members: `shapes.append .Empty` - whitespace never changes what a line of
+ * tokens means, so `.` cannot start the first argument of a command (TYPECHECKER decision 42). Answers whether it said
+ * anything.
+ */
+fn reportCaseAfterFunction(var checker: Checker, base: Expression, receiver: TypeId, text: String, at: Span): Bool {
+  match checker.types.form(resolveType(checker, receiver)) {
+    .Function(_) => {}
+    _ => {
+      return false
+    }
+  }
+  const isCaseName = match text.chars().first() {
+    Some(first) => first >= 'A' && first <= 'Z'
+    None => false
+  }
+  if !isCaseName {
+    return false
+  }
+  const callee = writtenPathOf(base) ?? "f"
+  checker.reportHere(
+    Diagnostic.error("`{callee}` is a function, and `.{text}` right after it is a member of it", at)
+      .withNote(
+        "The first argument of a command may not start with `.`, whatever whitespace stands before it: write"
+          + " `{callee}(.{text})`"
+      )
+  )
+  true
 }
 
 /**
@@ -485,6 +520,17 @@ fn indexType(var checker: Checker, target: Expression, index: Expression, at: Sp
   const key = inferExpression checker, index
   if checker.absorbs(receiver) {
     return checker.deferredType
+  }
+  // `grid.append ["c"]` is `grid.append["c"]`: a function is never indexed, so this is the command whose first argument
+  // started with `[`
+  if const Some(callee) = writtenPathOf(target) {
+    if const .Function(_) = checker.types.form(resolveType(checker, receiver)) {
+      checker.reportHere(
+        Diagnostic.error("`{callee}` is a function, and `[...]` right after it indexes it", at)
+          .withNote("The first argument of a command may not start with `[`: write `{callee}([...])`")
+      )
+      return checker.invalidType
+    }
   }
   // A range makes it a slice, which gives back a value of the same type
   if isRange(checker, key) {
@@ -738,6 +784,14 @@ fn integerLiteralType(var checker: Checker, text: String, isNegative: Bool, expe
     }
   }
   if const Some(name) = numericNameOf(checker, annotation) {
+    // `0xFF` and `0b1010` spell bits, and only an integer type has them
+    if isBitsLiteral(text) && !isIntegerName(name) {
+      checker.reportHere(
+        Diagnostic.error("`{text}` is written in another base, and only an integer type takes it: `{name}` is not one", at)
+          .withNote("A hexadecimal or binary literal is an integer. Write the number in decimal for a `{name}`")
+      )
+      return checker.invalidType
+    }
     if !fitsInto(value, name) {
       checker.reportHere Diagnostic.error("`{describeInteger(text, value)}` does not fit into `{name}`", at)
       return checker.invalidType
@@ -810,6 +864,15 @@ fn traitImplies(var checker: Checker, bound: TypeId, capability: SymbolId, depth
     }
   }
   false
+}
+
+/** `0xFF`, `0b1010`: an integer literal in a base other than ten. */
+fn isBitsLiteral(text: String): Bool {
+  text.startsWith("0x") || text.startsWith("0b")
+}
+
+fn isIntegerName(name: String): Bool {
+  name != "Float32" && name != "Float64" && name != "Decimal"
 }
 
 /** The text as it was written, unless it was written in another base - then the value says more. */
@@ -1812,6 +1875,16 @@ fn arithmeticType(
     deferExpression checker, right
     return checker.deferredType
   }
+  // `history.append -amount` is a subtraction from the function `history.append`: nothing subtracts from a function,
+  // so this is the command whose first argument started with `-`, and the message is the line to write
+  if const Some(message) = negativeCommandArgument(checker, operator, left, right, found) {
+    checker.reportHere(
+      Diagnostic.error(message.0, at)
+        .withNote("The first argument of a command may not start with `-`, so this reads as a subtraction: write `{message.1}`")
+    )
+    deferExpression checker, right
+    return checker.invalidType
+  }
   // `Other` and `Output` come from the implementation of the trait, so `Meters + Float` is a mistake. A type may carry
   // the trait **several times** - `Board with Multiply<Scale, Board>` next to `Multiply<Board, Board>` - and then the
   // right operand and the expected type say which one is meant, exactly as they do at the named call
@@ -1831,6 +1904,49 @@ fn arithmeticType(
   const _ = checkExpression checker, right, inner
   recordTraitCall checker, at, found, capability, memberOfOperator(operator), Some(bound)
   arguments[1]
+}
+
+/**
+ * `print -0.0`, `history.append -amount`: a function named on the left of `-`, which only a command with a negative
+ * first argument produces. The message and the call to write instead, or `None` for every other subtraction.
+ */
+fn negativeCommandArgument(
+  var checker: Checker,
+  operator: InfixOperator,
+  left: Expression,
+  right: Expression,
+  found: TypeId,
+): (String, String)? {
+  match operator {
+    .Subtract => {}
+    _ => {
+      return None
+    }
+  }
+  const callee = writtenPathOf(left)?
+  match checker.types.form(resolveType(checker, found)) {
+    .Function(_) => {}
+    _ => {
+      return None
+    }
+  }
+  const argument = writtenPathOf(right) ?? "..."
+  const message = "`{callee}` is a function, and `{callee} -{argument}` subtracts from it"
+  Some((message, "{callee}(-{argument})"))
+}
+
+/** A name, a member path or a number as it was written, for a message that shows the line to write instead. */
+fn writtenPathOf(expression: Expression): String? {
+  match expression.kind {
+    .Name(text) => Some text
+    .IntegerLiteral(text) => Some text
+    .FloatLiteral(text) => Some text
+    .Member(target, name, false) => {
+      const base = writtenPathOf(target)?
+      Some "{base}.{name.text}"
+    }
+    _ => None
+  }
 }
 
 /**
@@ -2129,6 +2245,18 @@ fn tryType(var checker: Checker, inner: Expression, at: Span, expected: Expectat
   const found = matchedFailure checker, subject
   if checker.absorbs(found) {
     return checker.deferredType
+  }
+  // `count: Int = parse("1")?`: a default stands in for an argument the caller left out, and a construction has no
+  // failure it could return - a closure inside the default is a function of its own and may have one
+  if checker.isFieldDefault && checker.closureFrames.isEmpty() {
+    checker.reportHere(
+      Diagnostic.error("`?` cannot stand in a field default: building a value never fails", at)
+        .withNote(
+          "A default is evaluated at every construction that leaves the field out, and a constructor has no failure."
+            + " A value that has to be checked first is made by a factory: a `static fn` that answers a `Result`"
+        )
+    )
+    return checker.invalidType
   }
   const value = match valueOfOptionOrResult(checker, found) {
     Some(given) => given
@@ -2960,6 +3088,13 @@ public fn deferExpression(var checker: Checker, expression: Expression) {
       }
     }
     .Try(inner) => deferExpression checker, inner
+    // A name inside of what could not be checked is still read there: the message about the call is the one to give,
+    // and "`x` is never read" about the argument of it would be a second one about the same line
+    .Name(text) => {
+      if const Some(.Bound(binding)) = checker.findLocal(text) {
+        checker.noteBindingRead binding
+      }
+    }
     _ => {}
   }
 }

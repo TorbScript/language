@@ -75,24 +75,19 @@ same.send "hello"
 print connection.sent          // 1
 ```
 
-A `const` binding to that same object is a read-only view: the object can still change through somebody else's `var`
-path, but never through this one - which is the Swift-`let`-on-a-class behavior TorbScript keeps. What changes is
-that ordinary types have no such loophole at all, because there is no `class` to fall back on when a `struct` starts
-feeling inconvenient to freeze:
+A `const` binding to that same object is Swift's `let` on a class reference: it fixes which object the name holds, and
+the object still changes through it. What changes is that ordinary types have no such loophole at all, because there
+is no `class` to fall back on when a `struct` starts feeling inconvenient to freeze - a `const` value changes through
+nothing:
 
 ```trb error
-shared type Connection {
-  url: String
-  private(var) sent: Int = 0
-
-  var fn send(message: String) {
-    sent = sent + 1
-  }
+type Point {
+  var x: Int
 }
 
-const view = Connection "tcp://example.test"
-view.send "nope"
-// error: `send` needs a `var`
+const origin = Point 0
+origin.x = 1
+// error: `origin` is a `const`. Only a `var` binding can be changed
 ```
 
 ### Mutation is marked on the declaration, not the call

@@ -220,6 +220,11 @@ fn searchMember(var checker: Checker, receiver: TypeId, name: String, isStatic: 
   if const Some(found) = traitMember(checker, receiver, name, isStatic) {
     return Some found
   }
+  // `a.hash()` before anything asked for `Hash`: a generated implementation is made on first use, and naming its member
+  // is a use - so the member is there whenever `==`, a key or an interpolation would find the trait
+  if const Some(found) = derivedMember(checker, receiver, name, isStatic) {
+    return Some found
+  }
   // `Trait.member`: the members of an implementation whose target is the trait itself, like `List.from`
   if isStatic {
     if const .Traits(_) = checker.types.form(receiver) {
@@ -335,6 +340,33 @@ fn traitMember(var checker: Checker, receiver: TypeId, name: String, isStatic: B
   // `Int.from` is one name with five signatures, because `Int64` implements `From<Int32>`, `From<UInt8>` and three
   // more: the argument decides which one is meant, and the call site picks (design 4.3)
   Some first.copy(needsArguments: true, overloads: found)
+}
+
+/**
+ * The member of a trait the language generates, where the type gets that trait generated: `equals`, `hash`, `show`,
+ * `encode` and `static decode`. Asking whether the type implements the trait is what generates it, and then the
+ * trait's members are the type's like those of a trait it names in its `with` list.
+ */
+fn derivedMember(var checker: Checker, receiver: TypeId, name: String, isStatic: Bool): Candidate? {
+  const traitName = derivedTraitOf(name, isStatic)?
+  const capability = checker.wellKnown.symbolNamed(traitName)?
+  if !resolveTrait(checker, receiver, capability).isFound() {
+    return None
+  }
+  traitMember checker, receiver, name, isStatic
+}
+
+fn derivedTraitOf(name: String, isStatic: Bool): String? {
+  if isStatic {
+    return if name == "decode" { Some "Decode" } else { None }
+  }
+  match name {
+    "equals" => Some "Equals"
+    "hash" => Some "Hash"
+    "show" => Some "Show"
+    "encode" => Some "Encode"
+    _ => None
+  }
 }
 
 /**

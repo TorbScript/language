@@ -1,16 +1,17 @@
 /**
- * Property commands. A command call of a *function* is an ordinary call and needs nothing here; a call of a member that
- * is not callable **writes** it, with or without parentheses - which is what gives the configuration DSL its
- * look without a single hand-written setter.
+ * Property commands. A command call of a *function* is an ordinary call and needs nothing here; the **command form** of
+ * a call of a field - no parentheses, or a trailing closure alone - **writes** it, which is what gives the configuration
+ * DSL its look without a single hand-written setter. Parentheses always call.
  *
  * There is no line that could mean two things:
  *
  * | Written                    | The field holds      | Means                                          |
  * |----------------------------|----------------------|------------------------------------------------|
- * | `port 8080`, `tls(secure)` | anything but a function | `port = 8080`               (`.Assign`)     |
+ * | `port 8080`                | anything but a function | `port = 8080`               (`.Assign`)     |
  * | `onStart { ... }`          | a function           | `onStart = { ... }`         (`.AssignClosure`) |
  * | `database { ... }`         | a type               | the receiver closure configures it in place (`.Configure`) |
  * | `onStart()`, `onStart(e)`  | a function           | a call - "calling a function in a field always needs parentheses" |
+ * | `port(8080)`, `onStart({ })` | no function, or one that takes no closure | an error: parentheses call, and nothing fits |
  *
  * The lowering reads `Resolution.PropertyWrite(owner, field, kind)` at the span of the whole command, and the field
  * itself at the span of the callee.
@@ -51,12 +52,33 @@ public fn propertyWrite(
   const annotation = resolveType checker, target.annotation
   const trailing = trailingClosureAt arguments, expression.span
   const isOnlyClosure = trailing == 0 && arguments.length() == 1
-  const holdsFunction = functionFormOf(checker, annotation).isSome()
-  // "Calling a function in a field always needs parentheses": `onStart()` and `onStart(event)` call, `onStart { }` sets
-  if holdsFunction && !isOnlyClosure {
-    if const .Parentheses = style {
+  const held = functionFormOf checker, annotation
+  const holdsFunction = held.isSome()
+  // Only the command form writes: `port 8080`, `onStart { }`. Parentheses always call - `onStart()` and
+  // `onStart(event)` run what the field holds, and `port(8080)` calls a field that holds no function
+  const isCommandForm = isOnlyClosure || isCommandStyle(style)
+  if !isCommandForm {
+    if const Some(form) = held {
+      // `onStart({ ... })` is the closure a command would have stored, handed to a function that takes none
+      if arguments.length() == 1 && form.parameters.length() != 1 {
+        if const .Closure(_) = arguments[0].value.kind {
+          checker.resolved callee.span, target.resolution
+          const _ = checker.typed callee.span, annotation
+          reportNotCallable checker, target.name, true, expression
+          return Some inferRest(checker, arguments)
+        }
+      }
       return None
     }
+    checker.resolved callee.span, target.resolution
+    const _ = checker.typed callee.span, annotation
+    reportParenthesizedWrite checker, target.name, arguments.isEmpty(), expression
+    // The value is still read as the field's, so `level(.Debug)` has one message and not a second one about the case
+    if arguments.length() == 1 {
+      const _ = checkExpression checker, arguments[0].value, expectationOf(checker, annotation)
+      return Some checker.invalidType
+    }
+    return Some inferRest(checker, arguments)
   }
   const kind = if isOnlyClosure {
     if holdsFunction { PropertyWriteKind.AssignClosure } else { PropertyWriteKind.Configure }
@@ -180,6 +202,29 @@ fn functionFormOf(checker: Checker, annotation: TypeId): FunctionForm? {
     return Some form
   }
   None
+}
+
+fn isCommandStyle(style: CallStyle): Bool {
+  match style {
+    .Command => true
+    .Parentheses => false
+  }
+}
+
+/** `config.port(8080)`: parentheses call, and a field that holds no function has nothing to call. */
+fn reportParenthesizedWrite(var checker: Checker, name: String, isEmpty: Bool, expression: Expression) {
+  // `condition.tree()`: nothing to write, so the reader wanted the value
+  if isEmpty {
+    checker.reportHere(
+      Diagnostic.error("`{name}` is a field, and parentheses call a function", expression.span)
+        .withNote("A field is read without them: `{name}`")
+    )
+    return
+  }
+  checker.reportHere(
+    Diagnostic.error("`{name}` is a field, and parentheses call a function", expression.span)
+      .withNote("The command form writes a field: `{name} value`, the same as `{name} = value`")
+  )
 }
 
 fn reportNotCallable(var checker: Checker, name: String, holdsFunction: Bool, expression: Expression) {

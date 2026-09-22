@@ -891,7 +891,9 @@ fn delegatedTraitList(
   for clause in clauses {
     var delegate: String? = None
     if const Some(name) = clause.delegate {
-      delegate = delegateFieldOf checker, scope.module, typeName, name, fields, hasCases
+      // A `by` that names no usable field was reported, and it still says the members come from somewhere: the trait's
+      // requirements are not reported a second time as missing
+      delegate = Some(delegateFieldOf(checker, scope.module, typeName, name, fields, hasCases) ?? name.text)
     }
     for capability in traitsFromReference(checker, clause.capability, of, scope) {
       if !containsCapability(traits, capability) {

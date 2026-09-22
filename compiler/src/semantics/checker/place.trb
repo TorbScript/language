@@ -53,6 +53,10 @@ type MutationProblem {
   case PrivateField(owner: TypeId, field: SymbolId)
   case NotIndexable(base: TypeId)
   case NotSliceable(base: TypeId)
+  /** `self = ...` in a method of a shared type, or `self` handed to a `var` parameter there. */
+  case SharedSelf
+  /** A top-level `var` changed inside of a `fn`, which may run while a `var` access to it is open. */
+  case DeclarationFromFunction(name: String)
 }
 
 // --- Reading a place out of an expression ---------------------------------------------------------------------------
@@ -198,7 +202,10 @@ public fn describePlace(checker: Checker, place: Place): String {
 public fn isMutable(var checker: Checker, place: Place): Bool {
   if place.steps.isEmpty() {
     if const .Local(binding) = place.root {
-      return checker.binding(binding).isVar
+      const found = checker.binding binding
+      if !found.isReceiver {
+        return found.isVar
+      }
     }
   }
   match problemOf(checker, place) {
@@ -232,13 +239,79 @@ public fn requireMutable(var checker: Checker, place: Place, at: Span, cause: Mu
   false
 }
 
-/** The first reason the path cannot be written through, from the root outwards. */
+/**
+ * The first reason the path cannot be written through, from the root outwards.
+ *
+ * **A step out of a shared object starts the path afresh.** An object has one identity and no copy, so whether it
+ * changes is not a question of the path it was reached through: `const connection = ...` and `pool[0]` reach the same
+ * object as a `var` does (CONCEPT, "Identity"). What comes after the object - a `var` field of it, a `private(var)` -
+ * is still asked about.
+ */
 fn problemOf(var checker: Checker, place: Place): MutationProblem {
+  const afterObject = stepsAfterObject checker, place
+  if afterObject > 0 {
+    // The step out of the object is its own field, and that one is still asked about
+    return problemOfStepsFrom(checker, place, afterObject - 1)
+  }
+  // `self = Connection()` in a method of a shared type would replace the object the caller holds, whatever the caller
+  // holds it through
+  if place.steps.isEmpty() {
+    if isSharedReceiver(checker, place.root) {
+      return MutationProblem.SharedSelf
+    }
+  }
   const found = problemOfRoot checker, place.root, place.at
   if const .Writable = found {
     return problemOfSteps checker, place
   }
   found
+}
+
+/** One more than the index of the last step out of a shared object on the path, or `0` where it goes through none. */
+fn stepsAfterObject(var checker: Checker, place: Place): Int {
+  var index = place.steps.length() - 1
+  while index >= 0 {
+    if isSharedType(checker, resolveType(checker, ownerOfStep(place.steps[index]))) {
+      return index + 1
+    }
+    index = index - 1
+  }
+  0
+}
+
+/** The type of the value a step is taken out of. */
+fn ownerOfStep(step: PlaceStep): TypeId {
+  match step {
+    .Field(owner, _) => owner
+    .TupleField(owner, _) => owner
+    .Index(base, _, _) => base
+    .Range(base, _) => base
+  }
+}
+
+/** Whether a change of this place is a change of an object - which no binding and no path owns. */
+public fn changesObject(var checker: Checker, place: Place): Bool {
+  stepsAfterObject(checker, place) > 0
+}
+
+/** `self` inside a method of a `shared type`: the object itself, which a method can change and never replace. */
+fn isSharedReceiver(var checker: Checker, root: PlaceRoot): Bool {
+  if const .Local(binding) = root {
+    const found = checker.binding binding
+    return found.isReceiver && isSharedType(checker, resolveType(checker, found.annotation))
+  }
+  false
+}
+
+fn problemOfStepsFrom(var checker: Checker, place: Place, start: Int): MutationProblem {
+  for index in start..place.steps.length() {
+    const found = problemOfStep checker, place.steps[index]
+    if const .Writable = found {
+      continue
+    }
+    return found
+  }
+  MutationProblem.Writable
 }
 
 fn problemOfRoot(var checker: Checker, root: PlaceRoot, at: Span): MutationProblem {
@@ -250,13 +323,18 @@ fn problemOfRoot(var checker: Checker, root: PlaceRoot, at: Span): MutationProbl
       }
       MutationProblem.ConstantRoot found.name
     }
-    // A top-level `var` of a script is written like any other root; a top-level `const` of a module never is
+    // A top-level `var` of a script is written by the statements of its file, and by a closure among them that does not
+    // outlive its statement; a top-level `const` of a module never is
     .Declared(symbol) => {
-      if isDeclaredVar(checker, symbol) {
-        return MutationProblem.Writable
-      }
       const name = checker.symbolAt(symbol).name
-      MutationProblem.ConstantRoot name
+      if !isDeclaredVar(checker, symbol) {
+        return MutationProblem.ConstantRoot name
+      }
+      if !checker.writesDeclarations {
+        return MutationProblem.DeclarationFromFunction name
+      }
+      noteChangedDeclaration checker, symbol
+      MutationProblem.Writable
     }
     // A freshly produced object **is** a `var` path. The rule against a temporary protects values: there the
     // change would be lost with the copy it was made in. An object has no copy, so nothing is lost, and nobody else
@@ -268,6 +346,23 @@ fn problemOfRoot(var checker: Checker, root: PlaceRoot, at: Span): MutationProbl
       MutationProblem.TemporaryRoot
     }
     .Unknown => MutationProblem.Unknown
+  }
+}
+
+/**
+ * A top-level `var` changed inside of every closure that is open here: each of them may only run while its statement
+ * does, which `escape.trb` holds it to exactly as it holds a closure that captured a `var` binding.
+ */
+fn noteChangedDeclaration(var checker: Checker, symbol: SymbolId) {
+  var index = 0
+  while index < checker.closureFrames.length() {
+    const frame = checker.closureFrames[index]
+    if !frame.changedDeclarations.contains(symbol) {
+      var changed = frame.changedDeclarations
+      changed.append symbol
+      checker.closureFrames.set index, frame.copy(changedDeclarations: changed)
+    }
+    index = index + 1
   }
 }
 
@@ -425,6 +520,21 @@ fn reportProblem(var checker: Checker, problem: MutationProblem, at: Span, cause
     .PrivateField(owner, field) => reportPrivateField checker, owner, field, at
     .NotIndexable(base) => reportMissingTrait checker, base, "MutableIndexed", "a[key]", at
     .NotSliceable(base) => reportMissingTrait checker, base, "MutableSlice", "a[from..to]", at
+    .DeclarationFromFunction(name) => {
+      checker.reportHere(
+        Diagnostic.error("`{name}` is a top-level `var`, and only the statements of its file change it", at)
+          .withNote(
+            "A function could run while a `var` access to `{name}` is open: take it as a `var` parameter instead"
+              + " (`fn reset(var {name}: ...)`)"
+          )
+      )
+    }
+    .SharedSelf => {
+      checker.reportHere(
+        Diagnostic.error("`self` is the object itself, and a method of a shared type cannot replace it", at)
+          .withNote("Everybody who holds the object holds this one: change its fields, or make a new one and return it")
+      )
+    }
     _ => {}
   }
 }
@@ -584,6 +694,13 @@ public fn openReceiverAccess(
   const place = receiverPlaceOf checker, callee
   const at = receiverSpanOf callee
   const _ = checkNewAccess checker, place, at, call
+  // `connection.send "hello"`, `pool[0].send "hello"`: a `var fn` of a shared type changes the object and not the path
+  // it was reached through, so the path needs no `var` and nothing about it is a change (CONCEPT, "Identity")
+  if isObjectHere(checker, at) || (place.steps.isEmpty() && isSharedReceiver(checker, place.root)) {
+    checker.recordPlace at, place
+    openAccess checker, place, member, at, call
+    return
+  }
   // The reason a place cannot be written is only built where there is one: the message costs a value and a string, and
   // almost every receiver of a `var fn` call is a plain `var` binding
   if isMutable(checker, place) {
@@ -597,6 +714,14 @@ public fn openReceiverAccess(
     noteChange checker, place, member
   }
   openAccess checker, place, member, at, call
+}
+
+/** Whether the expression under a span produced a shared object. */
+fn isObjectHere(var checker: Checker, at: Span): Bool {
+  match checker.expressionTypeHere(at) {
+    Some(found) => isSharedType checker, resolveType(checker, found)
+    None => false
+  }
 }
 
 /** What a `var fn` call changes: the base of the member path, or `self` where the member was written bare. */
@@ -643,6 +768,14 @@ public fn openArgumentAccess(
 ) {
   const place = placeOf checker, value
   const at = value.span
+  // A top-level `var` a function may not change at all is the one message: no access to it is opened
+  if const .Declared(_) = place.root {
+    if !checker.writesDeclarations {
+      const named = if parameter.isEmpty() { "its argument" } else { parameter }
+      const _ = requireMutable checker, place, at, Mutation.Argument(named, callee)
+      return
+    }
+  }
   const _ = checkNewAccess checker, place, at, call
   if isMutable(checker, place) {
     checker.recordPlace at, place
@@ -932,31 +1065,6 @@ fn checkReadsInText(var checker: Checker, segments: List<TextSegment>) {
     if const .Interpolated(inner) = segment {
       checkReads checker, inner
     }
-  }
-}
-
-// --- `shared type` -----------------------------------------------------------------------------------------------
-
-/**
- * A `var` binding, `var` field or `var` argument may not be taken from a `const` path to a shared object.
- * There is no copy that would make it a different object, so `var writable = view` would hand out exactly what the
- * `const` withheld - and then "no `var` path, no mutation" would be vacuous for the types where identity matters.
- */
-public fn requireSharedSource(var checker: Checker, value: Expression, annotation: TypeId) {
-  if !isSharedType(checker, annotation) {
-    return
-  }
-  const place = placeOf checker, value
-  if rootKey(place.root) != noRoot {
-    if isMutable(checker, place) {
-      return
-    }
-    const name = describePlace checker, place
-    const shown = checker.describe annotation
-    checker.reportHere(
-      Diagnostic.error("`{name}` is a read-only view of a shared `{shown}`, so no `var` comes out of it", value.span)
-        .withNote("A shared object is never copied, so a `var` here would hand out what the `const` withheld")
-    )
   }
 }
 

@@ -128,7 +128,17 @@ fn parseUse(var parser: Parser): DeclarationKind {
     parser.error message, at
     return DeclarationKind.Use UseDeclaration(items, UseSource.Module(""))
   }
-  DeclarationKind.Use UseDeclaration(items, UseSource.Module(parsePlainText(parser, "the path of a module")))
+  const isWritten = match parser.kind() {
+    .TextLiteral(_) => true
+    _ => false
+  }
+  const before = parser
+  const path = parsePlainText parser, "the path of a module"
+  // An empty path is what a broken `use` leaves behind, so the one written that way is reported here
+  if isWritten && path.isEmpty() && !parser.hasFailedSince(before) {
+    parser.error "A `use` needs the path of a module: `use Name from \"std/core\"`", parser.previousSpan()
+  }
+  DeclarationKind.Use UseDeclaration(items, UseSource.Module(path))
 }
 
 /** `Option.Some as Just`: one item of a `use` list, with its path and the local name it is to get. */
@@ -137,6 +147,16 @@ fn parseUseItem(var parser: Parser): UseItem {
   while parser.isAt(TokenKind.Dot) && parser.kindAt(1) == TokenKind.Identifier {
     parser.bump()
     path.append parser.name()
+  }
+  // `use Option.* from "std/core"`: a case list is never a wildcard, so the message is the line to write instead
+  if parser.isAt(TokenKind.Dot) && parser.kindAt(1) == TokenKind.Star {
+    const dot = parser.span()
+    parser.bump()
+    parser.bump()
+    const at = dot.to parser.previousSpan()
+    const owner = path.map({ _.text }).toList().joined(separator: ".")
+    const note = "A case list is not a wildcard: name every case on its own (`use {owner}.<Case> from \"...\"`)"
+    parser.errorWithNote "There is no `use {owner}.*`", note, at
   }
   // `use A as B from "..."`: `as` is a word, not a keyword, so a type named `as` stays possible
   if !parser.isAtWord("as") {
@@ -397,6 +417,11 @@ fn parseMembers(var parser: Parser, hasReceiver: Bool): List<Member> {
 fn parseMember(var parser: Parser, hasReceiver: Bool): Member {
   const doc = parser.takeDoc()
   const start = parser.span()
+  // `public` on a member says what it is already: a member is public unless it is `private`
+  if parser.isAtKeyword(Keyword.Public) {
+    const note = "Members are public by default: drop `public`, or write `private` to hide one"
+    parser.errorWithNote "`public` is what a member is without it", note, parser.span()
+  }
   const modifiers = parseModifiers parser
   const kind = match parser.kind() {
     .Reserved(.Static) if hasReceiver => parseStaticMember parser
@@ -439,8 +464,8 @@ fn parseMethod(var parser: Parser, hasReceiver: Bool, isVar: Bool): FunctionDecl
 }
 
 /**
- * `static origin = Point(0, 0)`, `static fn square(size: Int): Self`. `const` is what a member is without a word of
- * its own, so `static const origin = ...` is the same thing written out.
+ * `static origin = Point(0, 0)`, `static fn square(size: Int): Self`. A constant is what a `static` member is without
+ * a word of its own, so `static const origin = ...` is an error that says so.
  */
 fn parseStaticMember(var parser: Parser): MemberKind {
   const keyword = parser.span()
@@ -450,8 +475,11 @@ fn parseStaticMember(var parser: Parser): MemberKind {
     parser.bump()
     const note = "A type has no mutable state: what belongs to the type is a constant of it"
     parser.errorWithNote "`{staticKeyword} var` does not exist", note, at
-  } else {
-    parser.eatKeyword Keyword.Const
+  } else if parser.isAtKeyword(Keyword.Const) {
+    const at = keyword.to parser.span()
+    parser.bump()
+    const note = "What belongs to the type is a constant of it: write `{staticKeyword} name = ...`"
+    parser.errorWithNote "`const` is what a `{staticKeyword}` member is without it", note, at
   }
   if parser.isAt(TokenKind.Reserved(Keyword.Fn)) {
     return MemberKind.Function parseFunction(parser)
@@ -469,13 +497,16 @@ fn parseStaticMember(var parser: Parser): MemberKind {
 }
 
 /**
- * `const x: Int` is the long way to write the field `x: Int`. Without a type it names neither reading, and the
- * message offers both.
+ * `const x: Int` is the field `x: Int` with the word it has without it, so the word is an error that says so. Without
+ * a type it names neither reading, and the message offers both.
  */
 fn parseConstantMember(var parser: Parser): MemberKind {
   const keyword = parser.span()
   parser.bump()
-  if parser.kindAt(1) != TokenKind.Colon {
+  if parser.kindAt(1) == TokenKind.Colon {
+    const note = "A field is `const` unless it is `var`: write `{parser.text(parser.span())}: ...`"
+    parser.errorWithNote "`const` is what a field is without it", note, keyword
+  } else {
     const name = parser.name()
     const at = keyword.to name.span
     const note = "A field is `{name.text}: Type`, a constant of the type is `{staticKeyword} {name.text} = ...`"

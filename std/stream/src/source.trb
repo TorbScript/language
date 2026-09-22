@@ -57,7 +57,10 @@ public shared trait Source<Item, Failure> with Close {
    * or `lines()` are the same stage values an `Iterate` takes.
    */
   var fn through<Output>(stage: Stage<Item, Output>): Source<Output, Failure> {
-    Staged.of self, stage
+    // `self` is the object itself and never goes to a `var` parameter, which could replace it: a binding of it can be
+    // replaced and the object stays
+    var upstream = self
+    Staged.of upstream, stage
   }
 
   /** Transforms every item as it is read. */
@@ -110,12 +113,14 @@ public shared trait Source<Item, Failure> with Close {
    * `Stage` cannot do this - it computes and never waits - so this is a method and not a stage value.
    */
   var fn then<Output>(step: (value: Item) => Task<Result<Output, Failure>>): Source<Output, Failure> {
-    Stepping.of self, step
+    var upstream = self
+    Stepping.of upstream, step
   }
 
   /** A stream of the same items with a failure of another type: what `mapError` is on a `Result`. */
   var fn mapFailure<Other>(transform: (failure: Failure) => Other): Source<Item, Other> {
-    Remapped.of self, transform
+    var upstream = self
+    Remapped.of upstream, transform
   }
 
   // --- Terminal operations: reading the items -------------------------------------------------------------------
@@ -457,7 +462,8 @@ shared type Produced<Item, Failure> with Source<Item, Failure> {
 extend<Item, Problem, Failure: From<Problem>> Source<Result<Item, Problem>, Failure> {
   /** Turns every item's own failure into the stream's failure, and ends the stream at the first one. */
   var fn checked(): Source<Item, Failure> {
-    Checked.of self
+    var upstream = self
+    Checked.of upstream
   }
 }
 

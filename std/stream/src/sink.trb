@@ -53,12 +53,16 @@ public shared trait Sink<Item, Failure> with Close {
 
   /** Reads `source` empty into this sink and ends it: the same pump as `source.into(sink)`, from this side. */
   var fn fill(var source: Source<Item, Failure>): Task<Result<Void, Failure>> {
-    source.into(self).await()
+    // `self` is the object itself and never goes to a `var` parameter, which could replace it: a binding of it can be
+    // replaced and the object stays
+    var target = self
+    source.into(target).await()
   }
 
   /** A sink for the same items with a failure of another type: what `mapError` is on a `Result`. */
   var fn mapFailure<Other>(transform: (failure: Failure) => Other): Sink<Item, Other> {
-    Remapped.of self, transform
+    var downstream = self
+    Remapped.of downstream, transform
   }
 
   /**
@@ -66,7 +70,8 @@ public shared trait Sink<Item, Failure> with Close {
    * The answer is a `Buffered`, not a `Sink`, so that `flush()` stays reachable; `finish()` flushes.
    */
   var fn buffered(capacity: Int = 64): Buffered<Item, Failure> {
-    Buffered.of self, capacity: capacity
+    var downstream = self
+    Buffered.of downstream, capacity: capacity
   }
 
   /**

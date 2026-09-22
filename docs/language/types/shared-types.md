@@ -1,6 +1,6 @@
 ---
 title: Shared types
-summary: A shared type has an identity instead of a value, so assigning it never copies, isSame compares which object rather than which content, and Equals, Hash and copy are not generated for it.
+summary: A shared type has an identity instead of a value, so assigning it never copies, a change of the object needs no var path, isSame compares which object rather than which content, and Equals, Hash and copy are not generated for it.
 kind: reference
 status: stable
 order: 100
@@ -8,7 +8,7 @@ keywords:
   - shared type
   - identity
   - isSame
-  - read-only view
+  - rebinding
 source:
   - CONCEPT.md#identity-shared-type
   - std/core/src/shared.trb
@@ -29,8 +29,8 @@ shared type Connection {
   }
 }
 
-var connection = Connection "tcp://example.test"
-var same = connection          // The same object, not a copy
+const connection = Connection "tcp://example.test"
+const same = connection        // The same object, not a copy
 same.send "hello"
 print connection.sent          // 1
 ```
@@ -46,13 +46,15 @@ shared type <Name> {
 
 ## Rules
 
-1. **Assigning a `shared type` never copies it.** `var same = connection` gives `same` the same object `connection`
+1. **Assigning a `shared type` never copies it.** `const same = connection` gives `same` the same object `connection`
    names; a change through one is visible through the other, which is never true of an ordinary `type`.
 
-2. **Mutation still needs a `var` path.** A `const` binding to a shared object is a read-only view: the object can
-   still change through somebody else's `var` path, but not through this one.
+2. **A change of an object is not a question of the path it is reached through.** An object has one identity and no
+   copy, so its `var fn` members and its `var` fields change through any binding that holds it: a `const` one, a
+   parameter, an element of a `const` list. What still decides is the object's own type - a field that is not `var`
+   never changes, and `private(var)` is written only by the type.
 
-   ```trb error
+   ```trb
    shared type Connection {
      url: String
      private(var) sent: Int = 0
@@ -62,29 +64,38 @@ shared type <Name> {
      }
    }
 
-   const view = Connection "tcp://example.test"
-   view.send "nope"
-   // error: `send` needs a `var`
+   const connection = Connection "tcp://example.test"
+   const pool = [connection]
+   connection.send "hello"
+   pool[0].send "again"
+   print connection.sent
    ```
 
-3. **A read-only view cannot be widened back into a `var`.** There is no copy that would make it a different object,
-   so a `var` binding, field or argument may not be initialized from a `const` path to a shared object.
+3. **`var` on a binding of a shared type means rebinding, and nothing else.** A `const` binding always names the same
+   object, and a `var` one may be pointed at another. That is also why `self` of a shared type is never replaced: a
+   method changes the object everybody holds, and `self = ...` - or handing `self` to a `var` parameter - would point
+   the caller's binding somewhere else instead.
 
    ```trb error
    shared type Connection {
      url: String
-     private(var) sent: Int = 0
 
-     var fn send(message: String) {
-       sent = sent + 1
+     var fn reconnect() {
+       self = Connection url
      }
    }
+   // error: `self` is the object itself, and a method of a shared type cannot replace it
+   ```
 
-   fn widen(view: Connection): Connection {
-     var writable = view
-     writable
+   ```trb error
+   shared type Connection {
+     url: String
    }
-   // error: `view` is a read-only view of a shared `Connection`, so no `var` comes out of it
+
+   const connection = Connection "tcp://example.test"
+   connection = Connection "tcp://other.test"
+   print connection.url
+   // error: `connection` is a `const`. Only a `var` binding can be changed
    ```
 
 4. **`Equals`, `Hash` and `copy` are not generated for a `shared type`.** `==` is about content and does not exist for
@@ -124,11 +135,9 @@ shared type <Name> {
 
      var fn tick(): Task<Void> {
        count = count + 1
-       spawn { void }
      }
    }
    // error: `tick` changes `self` and answers a `Task`, and `Counter` is a value
-   // error: The result of `spawn` is not used
    ```
 
 7. **A shared object stays in the task that made it.** `spawn` takes only what it can see is a value, so a shared
@@ -154,16 +163,18 @@ b.x = 9
 print "{a.x} {b.x}"     // 1 9
 ```
 
+**A `const` binding to an object is not a read-only view of it.** It fixes which object the name holds, the way a
+`let` holds a class instance in Swift; the object changes through it like through every other holder. What cannot
+change through a `const` is a **value** - which is why almost nothing is a shared type.
+
 ```trb error
 type Point {
   var x: Int
-  var y: Int
 }
 
-const a = Point x: 1, y: 2
-const b = Point x: 1, y: 2
-print isSame(a, b)
-// error: `isSame` compares identity, and a `Point` is a value
+const origin = Point 0
+origin.x = 1
+// error: `origin` is a `const`. Only a `var` binding can be changed
 ```
 
 ## Related
@@ -171,4 +182,4 @@ print isSame(a, b)
 - [Declaring a type](declaring-a-type.md) - the value form `shared type` is the exception to.
 - [Copy and equality](copy-and-equality.md) - `Equals`, `Hash` and `copy`, generated for a value and not for an
   object.
-- [Mutation and var paths](var-paths.md) - the `var` path rule a shared object still follows.
+- [Mutation and var paths](var-paths.md) - the `var` path rule a value follows and an object does not need.

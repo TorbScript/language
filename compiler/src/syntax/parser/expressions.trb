@@ -212,6 +212,13 @@ fn parseBinary(var parser: Parser, minimum: Int): Expression {
     left = Expression ExpressionKind.Binary(operator, left, right), start.to(parser.previousSpan())
     if power == comparisonPower && isComparison(parser.kind()) {
       parser.errorHere "Comparisons do not chain. Use `&&`: `a < b && b < c`"
+      // The rest of the chain is read and dropped: `(a < b) > c` would only add messages about a `Bool` that nobody
+      // wrote, and one root cause gets one message
+      while isComparison(parser.kind()) {
+        parser.bump()
+        const _ = parseBinary(parser, minimum: comparisonPower + 1)
+      }
+      left = Expression ExpressionKind.Invalid, start.to(parser.previousSpan())
     }
   }
   left

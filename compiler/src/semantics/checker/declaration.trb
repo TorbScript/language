@@ -21,7 +21,6 @@ use Span from "../../syntax/source"
 use staticKeyword from "../../syntax/token"
 use Diagnostic from "../../syntax/diagnostic"
 use Name, Modifiers, Visibility, Declaration, Member, Binding, Argument, Expression from "../../syntax/ast"
-use requireSharedSource from "./place"
 use FunctionDeclaration, TypeDeclaration, TraitDeclaration, ExtendDeclaration from "../../syntax/ast"
 use ForeignDeclaration, TypeReference, TraitClause from "../../syntax/ast"
 use joinPath from "../../project/path"
@@ -209,50 +208,6 @@ public fn checkConstruction(var checker: Checker, target: Target, arguments: Lis
     }
   }
   reportPrivateArguments checker, fields, arguments, shown
-}
-
-/**
- * At a constructor too, a `var` field whose type has an identity may not be filled from a `const` path, because a
- * shared object is never copied and the field would hand on exactly the permission the `const` withheld.
- *
- * It needs a walk of its own, for two reasons. The parameters of a generated constructor are **values** - a `var` field
- * of a value type is copied in and there is nothing to withhold - so the ordinary `var` argument rule does not see
- * them. And unlike privacy this rule also holds *inside* the type, which is where the factories that build wrappers
- * live (`Staged.of`, `Buffered.of`).
- */
-public fn requireSharedFields(var checker: Checker, target: Target, arguments: List<Argument>) {
-  const owner = match target.resolution {
-    .Construct(found) => found
-    .CopyOf(found) => found
-    _ => {
-      return
-    }
-  }
-  const fields = fieldsOf checker, owner
-  if fields.isEmpty() {
-    return
-  }
-  var position = 0
-  for argument in arguments {
-    if argument.isSpread {
-      continue
-    }
-    var found: FieldSignature? = None
-    match argument.label {
-      Some(label) => {
-        found = fieldNamed fields, label.text
-      }
-      None => {
-        found = fields.get position
-        position = position + 1
-      }
-    }
-    if const Some(field) = found {
-      if field.isVar {
-        requireSharedSource checker, argument.value, field.annotation
-      }
-    }
-  }
 }
 
 /**

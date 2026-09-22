@@ -293,5 +293,7 @@ operation) in its doc comment. After the fixpoint the runtime shrinks to a small
 else becomes TorbScript with an optional native fast path.
 
 A native the compiler legitimately needs is declared in `std/`, entered in the manifest
-(`compiler/src/backend/c/natives.trb`) and implemented in `runtime/`. A new native is compiled into the binary that
+(`compiler/src/backend/c/natives.trb`) and implemented in `runtime/`. A `native type` meets the requirements of the
+traits it implements with a body or with a row of the manifest (`Int64.add`), and the checker holds every requirement
+against both: a missing row is a message at the type, never a link error. A new native is compiled into the binary that
 emits it, so the seed a checkout builds from has to be one that already knows it (docs/RUST-EXIT.md section 4.2).

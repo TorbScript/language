@@ -70,7 +70,6 @@ type Name with Trait, Trait & Trait by field, Trait by field { ... }
      currency: String
    }
    // error: `by` needs a type with a single field: `Money` has `amount` and `currency`
-   // error: `Money` implements `Add<Money, Money>` but has no `add`
    ```
 
 4. **Where a forwarded signature mentions `Self`, arguments are unwrapped and results wrapped again.** `add(other:

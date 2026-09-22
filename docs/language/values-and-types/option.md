@@ -71,6 +71,22 @@ None                                     an absent value
 6. **The generated `Show` writes `Some(value)` or the bare `None`.** A case with fields is written out, a case
    without one is its name - the same rule every other case follows.
 
+7. **`Value??` is an `Option` of an `Option`.** Each `?` wraps once, so `Int??` is `Option<Option<Int>>`: `None` is
+   "nothing was looked up", `Some(None)` is "it was looked up and there was nothing". In an expression `??` is the
+   fallback; in a type position it is two `?`.
+
+   ```trb check
+   fn describe(lookup: Int??): String {
+     match lookup {
+       Some(Some(value)) => "found {value}"
+       Some(None) => "looked up, nothing there"
+       None => "never looked up"
+     }
+   }
+
+   print describe(Some(None))
+   ```
+
 ## What this is not
 
 **A value is not implicitly `Some`.** There is no place where a plain `Value` is accepted and silently wrapped into

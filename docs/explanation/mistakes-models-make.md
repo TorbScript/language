@@ -140,7 +140,6 @@ print "{answer} {counter}"
 ```trb error
 let answer = 42
 // error: Cannot find `let` here
-// error: This is a temporary, and an assignment writes it
 ```
 
 `const` was chosen over `val` because a page of `val` with a `var` in the middle is easy to misread. There is no `let`,

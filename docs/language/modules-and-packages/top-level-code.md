@@ -100,6 +100,44 @@ const <name> = <compile-time expression>    a module's only top-level statement
    mutable state, so nothing a top-level `var` could export exists in the first place - see
    [Visibility](visibility.md).
 
+10. **A top-level `var` is changed by the statements of its file and by nothing else.** The statements - the
+    initializers of top-level `const`s among them - run in the order they are written, and a closure written straight
+    as the argument of a call that only calls it runs while its statement does. A `fn` may run anywhere, also while a
+    `var` access to the declaration is open ([Exclusivity](../types/exclusivity.md)), and so may a closure that is kept:
+    both read a top-level `var`, and neither changes one. What a function has to change, it takes as a `var` parameter.
+
+    ```trb check
+    fn addTo(var sum: Int, amount: Int) {
+      sum = sum + amount
+    }
+
+    var total = 0
+    addTo total, 5
+    print total
+    ```
+
+    ```trb error
+    var total = 0
+
+    fn bump() {
+      total = total + 1
+    }
+
+    bump()
+    print total
+    // error: `total` is a top-level `var`, and only the statements of its file change it
+    ```
+
+    ```trb error
+    var total = 0
+    const reset = {
+      total = 0
+    }
+    reset()
+    print total
+    // error: This closure changes the top-level `var` `total` and may outlive its statement
+    ```
+
 ## What this is not
 
 **Top-level code is not something a module can opt into.** Whether a file may hold a statement outside a declaration

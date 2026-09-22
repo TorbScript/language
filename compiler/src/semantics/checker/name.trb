@@ -18,9 +18,9 @@ use DefaultSource from "./context"
 use lookupMember, lookupStaticMember, resolutionOfCandidate from "./member"
 use constructorOf, memberNames, caseNamed, caseNamesOf, fieldsOf, typeNameOf, argumentMapping from "./member"
 use typeSignatureOf from "./signature"
-use isConcrete, hiddenExtensionOf, hiddenTraitMemberOf, importPathOf from "./implementation"
+use hiddenExtensionOf, hiddenTraitMemberOf, importPathOf from "./implementation"
 use signatureOf, aliasTargetOf, genericsOf, resultOf from "./signature"
-use substitute, substituteBounds from "./unify"
+use substitute, substituteBounds, resolveType from "./unify"
 use implicitParameterTarget, isImplicitName, namesImplicitParameter from "./closure"
 use noteRead, noteDeclaredRead, noteCapturedBinding from "./mutation"
 
@@ -668,7 +668,7 @@ public fn reportUnknownMember(
     checker.reportHere(
       problem.withNote(
         "`{text}` is a case of `{shown}`. The first argument of a command may not start with `.`, so"
-          + " `setting .{text}` is the member `setting.{text}`: write `setting(.{text})` or `setting = .{text}`"
+          + " `setting .{text}` is the member `setting.{text}`: write `setting = .{text}`"
       )
     )
     return true
@@ -776,21 +776,40 @@ fn openRangeNote(checker: Checker, receiver: TypeId, text: String): String? {
  *   `extend Shape` visible here, and no call site adds to that list,
  * - a **generic parameter**: what it has is its bounds, and those stand at its declaration.
  *
- * A member of a type that is not fully known - an unbound `Value` inside a generic function, for instance - is
- * silently not checked here: `checkModule`'s closing walk over the module reports "The checker did not work out the
- * type of this expression" for whatever it leaves untyped, which is the message that names a bug of the compiler.
+ * A type that still holds a variable nobody solved is not fully known, and nothing is said about its members: the
+ * variable's own "Cannot infer" is the message there.
  */
-public fn isFullyKnown(var checker: Checker, of: TypeId): Bool {
-  if checker.absorbs(of) {
+public fn isFullyKnown(var checker: Checker, written: TypeId): Bool {
+  if checker.absorbs(written) {
     return false
   }
+  const of = resolveType checker, written
   match checker.types.form(of) {
     .Parameter(_) => true
     // `Void` is the type with exactly one value, and its members are the ones the standard library declares on it: a
     // member it has not is an ordinary mistake, and saying nothing left `print(x).round()` with no type at all and the
     // reader with "this is a bug of the compiler"
     .VoidType => true
-    .Nominal(_, _) | .Tuple(_) | .Literals(_, _) | .Traits(_) => isConcrete checker, of
+    // `List<Value>` inside a generic body: the head says what it has, and a parameter among its arguments is a type as
+    // known as any other. Only a variable nobody has solved yet leaves the answer open
+    .Nominal(_, _) | .Tuple(_) | .Literals(_, _) | .Traits(_) | .Function(_) => !hasOpenPart(checker, of, 0)
+    _ => false
+  }
+}
+
+/** Whether a type still holds a variable nobody solved, or something broken: then what it has is not known yet. */
+fn hasOpenPart(checker: Checker, of: TypeId, depth: Int): Bool {
+  if depth > 16 {
+    return false
+  }
+  match checker.types.form(of) {
+    .Variable(_) | .Invalid | .Deferred => true
+    .Nominal(_, arguments) => arguments.any({ hasOpenPart(checker, _, depth + 1) })
+    .Traits(bounds) => bounds.any({ hasOpenPart(checker, _, depth + 1) })
+    .Tuple(fields) => fields.any({ hasOpenPart(checker, _.annotation, depth + 1) })
+    .Function(form) => {
+      form.parameters.any({ hasOpenPart(checker, _.annotation, depth + 1) }) || hasOpenPart(checker, form.result, depth + 1)
+    }
     _ => false
   }
 }

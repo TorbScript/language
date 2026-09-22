@@ -484,6 +484,14 @@ fn unifyDeep(var checker: Checker, left: TypeId, right: TypeId, depth: Int): Boo
     return true
   }
   if checker.absorbs(one) || checker.absorbs(other) {
+    // A variable that meets something broken is never solved, and its "Cannot infer" would be a second message about
+    // what was reported where it broke
+    if const Some(variable) = openVariableOf(checker, one) {
+      checker.markReported variable
+    }
+    if const Some(variable) = openVariableOf(checker, other) {
+      checker.markReported variable
+    }
     return true
   }
   if const Some(variable) = openVariableOf(checker, one) {

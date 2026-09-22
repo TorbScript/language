@@ -27,7 +27,7 @@ use SymbolId from "../symbols"
 use TypeId, SignatureId, SignatureState from "./type"
 use Checker, Place, PlaceRoot, BindingId, UseRoot, ValueUse, useKey from "./context"
 use isSharedType from "./declaration"
-use isDeclaredVar from "./place"
+use isDeclaredVar, changesObject from "./place"
 
 // --- Dead changes ---------------------------------------------------------------------------------------------------
 
@@ -112,6 +112,10 @@ public fn noteChange(var checker: Checker, place: Place, changedBy: String) {
     }
   }
   if !isCountedRoot(checker, root) {
+    return
+  }
+  // `holder.connection.sent = 1` changes the object, and the object is not a part of `holder` that could be lost
+  if changesObject(checker, place) {
     return
   }
   checker.valueUses.append ValueUse(root, true, place.at, changedBy: changedBy)
