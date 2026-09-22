@@ -15,9 +15,12 @@ without anybody asking for it — and so that a signature that takes a `Uri` can
   a String LITERAL ──→ parsed by the compiler ──→ a Uri, or a build error at the literal
   a String VALUE   ──→ Uri.tryFrom(text)?     ──→ a Uri, or a UriError that names the text
   a Path           ──→ Uri.tryFrom(path)?     ──→ a file: URI, and Path.tryFrom(uri)? is the way back
+
+  a Uri ──→ show() ──→ the display form: postgres://user:***@host/db
+        └─→ text() ──→ all of it:        postgres://user:secret@host/db, and Encode writes this one
 ```
 
-- **[1. What the probes proved](#1-what-the-probes-proved)** — six of them, checked and built in the worktree that wrote this
+- **[1. What the probes proved](#1-what-the-probes-proved)** — eight of them, checked and built in the worktree that wrote this
 - **[2. What other systems do](#2-what-other-systems-do)** — nine of them, and what is taken from each
 - **[3. The type](#3-the-type)** — the capsule, and why the scheme is an `Option`
 - **[4. Parsing and normalization](#4-parsing-and-normalization)** — what construction decides and what `normalized()` adds
@@ -27,11 +30,12 @@ without anybody asking for it — and so that a signature that takes a `Uri` can
 - **[8. `Path` and `Uri`](#8-path-and-uri)** — two conversions that are deliberately not a pair
 - **[9. A literal adapts to a checked type](#9-a-literal-adapts-to-a-checked-type)** — the language rule, and who is on the list
 - **[10. Who takes a `Uri`](#10-who-takes-a-uri)** — every signature, today and proposed
-- **[11. `std/identifier`](#11-stdidentifier)** — `Uuid`, `Ulid`, the `Identifier` trait, and where a value comes from
-- **[12. What the language must provide](#12-what-the-language-must-provide)** — nine gaps, smallest fix each
-- **[13. Migration](#13-migration)** — seven slices
-- **[14. What this is not](#14-what-this-is-not)**
-- **[15. Open](#15-open)**
+- **[11. Schemes choose drivers](#11-schemes-choose-drivers)** — one trait per capability, a registry that is a value, and where a secret lives
+- **[12. `std/identifier`](#12-stdidentifier)** — `Uuid`, `Ulid`, the `Identifier` trait, and where a value comes from
+- **[13. What the language must provide](#13-what-the-language-must-provide)** — thirteen gaps, smallest fix each
+- **[14. Migration](#14-migration)** — eight slices
+- **[15. What this is not](#15-what-this-is-not)**
+- **[16. Open](#16-open)**
 
 `std/uri` replaces no code, because there is none: the repository has three hand-written URI readers
 (`compiler/src/documentation/links.trb:38` classifies a link target with `startsWith("http://")`,
@@ -43,16 +47,16 @@ it touches a network.
 
 ## 1. What the probes proved
 
-`examples/uri-probe` is a package in the workspace: `Uri`, `Authority`, `UriError`, `Urn` and the `Path` bridge, with a
-hand-written RFC 3986 parser. It is type checked by the self-hosted compiler and **built and run as a native binary**;
-every table in this document is copied from that run. `examples/uri-scratch` held the probes that do not check, and is
-deleted.
+`examples/uri-probe` is a package in the workspace: `Uri`, `Authority`, `UriError`, `Urn`, the `Path` bridge and the
+driver layer of section 11, with a hand-written RFC 3986 parser. It is type checked by the self-hosted compiler and
+**built and run as a native binary**; every table in this document is copied from that run. `examples/uri-scratch` and
+`examples/uri-shared-scratch` held the probes that do not check or do not build, and are deleted.
 
 ```console
 $ build/release/torb check examples/uri-probe
-5 files, no problems
+6 files, no problems
 $ build/release/torb canon --check --rule calls --rule strings --rule imported-case-patterns --rule unused-bindings --rule loops examples/uri-probe
-0 of 5 files would change
+0 of 6 files would change
 $ build/release/torb run examples/uri-probe
 ----- parsing
   ...
@@ -162,7 +166,7 @@ Ok(Locator(storedText: "https://example.test/a"))
 ```
 
 **A static trait member reached through a bound type checks and builds natively.** So the generic reader that
-section 11's `Identifier` needs is buildable today, and the gap `ENCODING.md` records is narrower than the sentence
+section 12's `Identifier` needs is buildable today, and the gap `ENCODING.md` records is narrower than the sentence
 that records it — it is about `Into`'s blanket implementation over a type parameter (probe 4), not about static
 dispatch through a bound as such.
 
@@ -192,8 +196,57 @@ error: Cannot infer `Failure` of `leadOf`
 ```
 
 A type parameter that appears only inside a bound has nothing to be inferred from, so every generic function over
-`Identifier` would have to be called with both arguments written out. Section 11 therefore fixes the failure type:
+`Identifier` would have to be called with both arguments written out. Section 12 therefore fixes the failure type:
 `std/identifier` has one `IdentifierError` and the trait names it.
+
+### Probe 7 — a capability trait, three drivers and a registry that is a value
+
+Section 11's design, written out and built: a `Schemes` supertrait, a `Storage` trait of five members, a
+`MemoryStorage`, a `FileStorage` over `std/fs` and an `ObjectStorage` that carries a region and credentials, plus
+`Storage.registry(drivers)` — a `static fn` on the trait whose result is the trait.
+
+```text
+  the registry answers to ["file", "memory", "s3"]
+  write memory:/notes/first: Ok(void)
+  read  memory:/notes/first: Ok("hello")
+  read  webdav://host/x: Fail(no driver for `webdav://host/x`: the registry knows file, memory, s3)
+```
+
+Three things the probe settled, each of which changed the design.
+
+1. **A trait as a type is the driver shape.** `List<Storage>` is a list of different driver types, every member is
+   object safe, and `Storage.registry(…)` is reachable through the trait name. A `static fn` per driver behind a bound
+   (probe 5) builds and cannot make that list; a record of a scheme and a closure builds and says less.
+2. **`Map<String, Storage>` is the copy trap.** The first version bound the driver out of the map and wrote into the
+   copy: the write answered `Ok(void)` and the read after it answered ``Fail(nothing is stored at `memory:/notes/first`)``,
+   with no diagnostic anywhere. What builds reaches through the path instead — `Map<String, Int>` into a
+   `var List<Storage>`, and `storedDrivers[index].write(…)`.
+3. **A relative reference has no scheme, so a registry cannot dispatch on it**, and the failure says so rather than
+   guessing a base.
+
+### Probe 8 — a display form that redacts, beside a text form that does not
+
+```text
+  show postgres://ada:***@db.example.test:5432/orders?sslmode=require
+  text postgres://ada:hunter2@db.example.test:5432/orders?sslmode=require
+  two passwords, one display form: true
+  and they are still two values: false, compare Less
+```
+
+`Uri.show()` redacts everything after the first `:` of the user information and `Uri.text()` is the recomposition
+with all of it; `String.from(uri)` — the capsule's conversion pair, and therefore `Encode` — calls `text()`. The last
+two lines are the reason `compare` had to be moved off `show()`: two references that differ only in their password
+have one display form, and a comparison over it would have called them equal.
+
+**Two measurements came out of writing it.** `String.from(uri)` does **not** select `From<Uri>`:
+
+```text
+error: `Uri` does not implement `Iterable<Char>`
+```
+
+— `String`'s other `From` wins the selection — and `const back: String = uri.into()` type checks and answers *"a
+conversion through `From` is not supported by the native back end yet"*. So a capsule's own pair is unreachable in
+written-out form when its source type is `String`, and the accessor is what a caller has. Gap 11.
 
 ## 2. What other systems do
 
@@ -282,9 +335,14 @@ through `Uri`, which is normalized anyway.
 
 **`Uri` is a capsule, so `Uri.tryFrom(text)` is the one way in.** Every field is private and without a default
 (`docs/language/types/data-or-capsule.md` rule 1), so nothing outside `std/uri` can hand in a scheme with a slash in
-it or a host in upper case. The way out is `show()`, and the two are the conversion pair `Encode` and `Decode` are
+it or a host in upper case. The way out is `text()`, and the two are the conversion pair `Encode` and `Decode` are
 derived through — so a URI in a JSON document is its text, which is what every reader of such a document expects.
 Probe 2 is the measurement that three conversions still leave exactly one pair.
+
+**The way out and the way it is shown are two members, because a URI can carry a password.** `text()` is the
+recomposition with every part of it and `show()` replaces everything after the first `:` of the user information with
+`***`; section 11 is the argument, and the consequence for this section is that `compare` is written over `text()`
+and not over the display form.
 
 **`Equals`, `Hash` and `Compare` are over what the value holds, which is the normalized form.** There is no
 `equalsIgnoringPort`, no case-insensitive mode and no flag: normalization happens once, at the door, and everything
@@ -293,7 +351,7 @@ needs is short: **to compare two URIs as resources rather than as text, call `no
 sentence `Path` writes for "whether two paths name the same file is a question for the file system".
 
 `compare` orders by scheme, then authority, then path, then query, then fragment, each `None` before every `Some`. It
-is hand written, because comparing `show()` would order `https://a/b?c` before `https://a/b/c` — a text order is not a
+is hand written, because comparing `text()` would order `https://a/b?c` before `https://a/b/c` — a text order is not a
 URI order.
 
 ## 4. Parsing and normalization
@@ -337,7 +395,7 @@ and the five schemes it knows (`http` 80, `https` 443, `ws` 80, `wss` 443, `ftp`
 |---|---|---|
 | `https://example.test/a/b?q=1#top` | `https` \| `example.test` \| `/a/b` \| `q=1` \| `top` | `https://example.test/a/b?q=1#top` |
 | `HTTP://Example.TEST:80/a/./b/../c` | `http` \| `example.test:80` \| `/a/c` \| `-` \| `-` | `http://example.test:80/a/c` |
-| `https://user:secret@example.test:8443/` | `https` \| `user:secret@example.test:8443` \| `/` \| `-` \| `-` | unchanged |
+| `https://user:secret@example.test:8443/` | `https` \| `user:***@example.test:8443` \| `/` \| `-` \| `-` | `https://user:***@example.test:8443/`; `text()` has the password |
 | `file:///C:/Users/ada/notes.txt` | `file` \| `""` \| `/C:/Users/ada/notes.txt` \| `-` \| `-` | unchanged |
 | `file://server/share/x` | `file` \| `server` \| `/share/x` \| `-` \| `-` | unchanged |
 | `mailto:ada@example.test` | `mailto` \| `-` \| `ada@example.test` \| `-` \| `-` | unchanged |
@@ -442,10 +500,13 @@ public type Uri with Show, Equals, Hash, Compare {
   /** This URI as seen from `base`: the shortest reference `resolved` turns back into this one. */
   fn relativeTo(base: Uri): Uri?
 
-  /** The canonical text: the recomposition of RFC 3986 section 5.3. */
+  /** The canonical text: the recomposition of RFC 3986 section 5.3, with every part of it (section 11). */
+  fn text(): String
+
+  /** The same text with a password in the user information replaced by `***`. The display form (section 11). */
   fn show(): String
 
-  /** Scheme, then authority, then path, then query, then fragment. */
+  /** Scheme, then authority, then path, then query, then fragment, over [Uri.text]. */
   fn compare(other: Uri): Ordering
 }
 
@@ -480,14 +541,14 @@ word for one thing across two packages is worth more than matching a habit.
 
 | Answers | Members |
 |---|---|
-| a value | `path`, `segments`, `isAbsolute`, `isRelative`, `isUrl`, `isUrn`, `queryParameters`, `withQueryParameters`, `withFragment`, `joined`, `normalized`, `show`, `compare` |
+| a value | `path`, `segments`, `isAbsolute`, `isRelative`, `isUrl`, `isUrn`, `queryParameters`, `withQueryParameters`, `withFragment`, `joined`, `normalized`, `text`, `show`, `compare` |
 | `Option` | `scheme`, `authority`, `host`, `port`, `query`, `fragment`, `queryParameter`, `relativeTo` |
 | `Result` | `resolved(against:)` |
 
 **`query()` is one opaque string and `queryParameters()` is a reading of it.** RFC 3986 section 3.4 says a query is
 an opaque sequence of characters; `a=1&b=2` is `application/x-www-form-urlencoded`, which is an HTML form convention
 that `data:`, `git+ssh:` and half the APIs in the world do not follow. So the raw text is what the type holds and what
-`show()` reproduces byte for byte, and the `Map<String, List<String>>` is a member a caller asks for. `List<String>`
+`text()` reproduces byte for byte, and the `Map<String, List<String>>` is a member a caller asks for. `List<String>`
 and not `String` as the value, because `?tag=a&tag=b` is legal and every API that flattened it has a bug report about
 it; `queryParameter(name)` is the first value, which is the ninety-percent call.
 
@@ -521,7 +582,7 @@ Three reasons, in order of weight.
 | `http://example.com/a b` | the space is encoded as `%20` | the same | nothing |
 | `http://example.com/a\u0000b` | the NUL is encoded as `%00` | removed silently | gets a value where a browser drops a byte |
 | `  http://example.com  ` | the spaces are part of the reference and are encoded | trimmed | trims it itself, or writes a literal |
-| `http://münchen.de` | **refused** (`NonAsciiHost`) | `xn--mnchen-3ya.de` | section 12 gap 1: `std/idna` |
+| `http://münchen.de` | **refused** (`NonAsciiHost`) | `xn--mnchen-3ya.de` | section 13 gap 1: `std/idna` |
 | `file:///C:/x` | path `/C:/x`, host `""` | the same, with drive-letter special cases | nothing |
 | `HTTP://A/b` | `http://a/b` | `http://a/b` | nothing |
 
@@ -591,7 +652,7 @@ extend Uri with From<Urn>
 **for `Urn`**, whose `Decode` therefore goes through `Uri` and so through `Uri`'s own text, and **no** pair for `Uri`,
 whose `Decode` stays with `String`. Probe 2 measured both.
 
-`urn:uuid:` is the bridge to section 11, and it is the reason `Urn` is in `std/uri` rather than `std/identifier`:
+`urn:uuid:` is the bridge to section 12, and it is the reason `Urn` is in `std/uri` rather than `std/identifier`:
 `std/identifier` depends on `std/uri` and not the other way round, so a program that never names an identifier still
 gets URNs.
 
@@ -622,7 +683,7 @@ extend Path with TryFrom<Uri, UriError>
 **And because neither is a `From`, `Path` is not a second conversion pair of `Uri`.** The capsule rule needs the
 source to carry an infallible `From<Self>` (`docs/ENCODING.md` section 3a), so two `TryFrom`s make no pair at all and
 `Uri`'s `Decode` stays with `String`. Probe 2 measured it. This is a good outcome reached by a thin margin, and
-section 12 gap 9 is the part that should be fixed rather than relied on: once `std/idna` lands, `Path` into `Uri`
+section 13 gap 9 is the part that should be fixed rather than relied on: once `std/idna` lands, `Path` into `Uri`
 becomes infallible, `Path` becomes a real pair, and `Uri` **silently loses `Decode`**. A rule where adding a total
 conversion is a breaking change needs a way to say which pair is the `Decode` pair.
 
@@ -687,7 +748,7 @@ one that decides it.
 | a literal union type (`"tcp" \| "udp"`) | membership in a structural set | nothing | it ships |
 | `Path` | **none** — `From<String>` is infallible, so this is ergonomics only | the parameter kind | with the parameter kind |
 | `Resource`, `EmbeddedBytes`, `EmbeddedText` | the file exists, against a directory listing; UTF-8 for the text one | a directory listing per directory, cached | `docs/RESOURCES.md` slice 1 |
-| `Uri` | `Uri.tryFrom(text)` answers `Ok` | the checker imports `std/uri` | with slice 2 of section 13 |
+| `Uri` | `Uri.tryFrom(text)` answers `Ok` | the checker imports `std/uri` | with slice 2 of section 14 |
 | `Regex` | the pattern compiles | the checker imports `std/regex` | when `std/regex` exists |
 | a user's own `TryFrom<String, _>` type | `Type.tryFrom(text)` answers `Ok` | **the VM**, constant evaluation, and rules 1 to 3 above answered | 7.x, if ever |
 
@@ -749,6 +810,8 @@ rule for all of them.
 | `HttpError.InvalidUrl(message)` | a case of the error type | **deleted** | — |
 | `File.open/create/readText/writeText/list/…` | `path: String` | `path: Path` (`docs/PATH.md` slice 2) | **no** |
 | `Sandbox.embedded/load/read` | `path: String` | `EmbeddedText` / `Resource` / `Path` (`docs/RESOURCES.md` section 5) | **no** |
+| `Storage.read/write/list/delete/exists` | there is no such package | `uri: Uri`, and the scheme picks the driver (section 11) | **no** |
+| `Connect.connect(uri)` | the same | `uri: Uri`, a connection string with its credentials in it (section 11) | **no** |
 | `Resource.name` | `String` | `String`, unchanged | — |
 | `source "acme/x", git: "…"` | a `String` the resolver reads at fetch time | a `Uri`, parsed when the manifest is read | — |
 | `source "acme/x", archive: "…"` | the same | the same | — |
@@ -780,9 +843,8 @@ no producer. One case fewer in an error type every caller matches on is worth mo
 type check for `https://example.test/x` and fail when the program runs — which is a compile error turned into a
 run-time one, and in the one package whose import is the capability statement ("this file touches files"). What Bun
 buys with `Bun.file(url)` is bought here by the conversion (`Path.tryFrom(uri)?`) plus the literal rule, which makes
-`File.readText("./config.trb")` read exactly as it does in Bun. **The one thing this leaves out is a universal opener
-— "read this, wherever it is" — and it is taste question 1**: such a function reads the disk *or* the network, so its
-import says nothing, and a program that wants it writes three lines over `uri.scheme()`.
+`File.readText("./config.trb")` read exactly as it does in Bun. **What a program that is handed a scheme it does not
+know in advance needs is a layer above `std/fs` rather than a wider signature in it**, and that layer is section 11.
 
 **Network imports are not proposed.** `docs/PROJECT.md` section 7 decided that source files name packages and
 `project.trb` says where each comes from, and section 6 reserves every `scheme:` prefix with a message that points at
@@ -790,7 +852,407 @@ the manifest. Nothing here reopens it: a `Uri` in a `source` line is the manifes
 and `use X from "https://…"` keeps its grammar error. The argument stands as it did — a URL in a `use` means the type
 checker opens sockets — and a `Uri` type does not change it.
 
-## 11. `std/identifier`
+## 11. Schemes choose drivers
+
+**Decided by the owner.** *`std/fs` and `File.open` take no `Uri`: `std/fs` is the native driver on `Path`. Above it
+sits an abstraction that picks a driver by the URI's scheme and can then also reach S3, WebDAV and the rest; it
+consumes `std/fs` for `file:`. And the connection data of a service — a database, a key-value cache, a message queue —
+is a URI: `postgres://user:secret@host:5432/db?sslmode=require`, `redis://…`, `s3://bucket/key`, `webdav://…`, and the
+scheme is what finds the driver, the protocol or the resource.*
+
+That is the answer to taste question 1, and it is a **layer**, not a wider signature. Nothing below changes: `Path`
+stays the type of the file system, `std/fs` stays the import that means "this file touches files", and `Uri` stays a
+value that opens nothing.
+
+```text
+   the program            const storage = Storage.registry([FileStorage(), S3Storage.of(region, credentials)])
+       │                                            │
+       │                                 it names its drivers; nothing registers itself
+       ▼
+   std/storage      trait Storage  ─── read, exists, list, write, delete, each over a Uri
+       │                 │
+       │                 ├── FileStorage ──→ std/fs ──→ Path        file:
+       │                 ├── MemoryStorage                          memory:
+       │                 └── a package of its own                   s3:, webdav:, …
+       │
+   std/uri          trait Schemes ── the one member every registry dispatches on
+```
+
+### Two kinds of URI, and therefore two kinds of registry
+
+The sketch this section tests had one registry shape. Writing the drivers out shows there are two, because the two
+things a scheme is used for are not the same thing.
+
+| | A **resource** URI | A **service** URI |
+|---|---|---|
+| Example | `s3://bucket/key`, `file:///etc/hosts`, `webdav://host/a/b` | `postgres://user:secret@host:5432/db`, `redis://host:6379/0` |
+| What it names | one addressable thing | one endpoint, with everything behind it |
+| When it is read | at **every** call | **once**, when the driver is opened |
+| What the call after it carries | the URI again | a key, a statement, a topic — never a URI |
+| The registry therefore answers | the capability itself | an *opener* for the capability |
+
+So `Storage` dispatches per call and a registry over storages is itself a `Storage`. `Connection` and `Cache` are
+opened once from a URI and then queried by key, so a registry over them is not a connection: it is a `Connect` whose
+one member answers one. **Collapsing the two into a universal `open(uri)` is what loses this**, and it is also the
+reason `sqlx::AnyPool` is unpleasant to use: it erases the typed query surface the caller came for.
+
+### One trait per capability, and no universal opener
+
+```trb
+/** The schemes a driver answers to. It declares none of its own, which is why it lives beside `Uri`. */
+public trait Schemes {
+  /** The schemes this driver answers to, lower case. */
+  fn schemes(): List<String>
+}
+
+/** Bytes at a reference, wherever the scheme reaches. */
+public shared trait Storage with Schemes {
+  /** The bytes stored at `uri`. */
+  fn read(uri: Uri): Task<Result<Bytes, StorageFailure>>
+
+  /** Whether anything is stored at `uri`. */
+  fn exists(uri: Uri): Task<Result<Bool, StorageFailure>>
+
+  /** The references directly below `uri`, sorted. */
+  fn list(uri: Uri): Task<Result<List<Uri>, StorageFailure>>
+
+  /** Stores `content` at `uri`, replacing whatever was there. */
+  var fn write(uri: Uri, content: Bytes): Task<Result<Void, StorageFailure>>
+
+  /** Removes whatever is stored at `uri`. */
+  var fn delete(uri: Uri): Task<Result<Void, StorageFailure>>
+
+  /** The bytes read as UTF-8, which is the ninety-percent call. */
+  fn readText(uri: Uri): Task<Result<String, StorageFailure>> {
+    const content = read(uri).outcome()?
+    Ok textOf(content).mapError({ problem => StorageFailure.NotText(uri.show(), problem.show()) })?
+  }
+
+  /** One storage over several drivers, chosen by `uri.scheme()`. The answer is itself a [Storage]. */
+  static fn registry(drivers: List<Storage>): Storage
+}
+
+/** What a storage refuses with. `UnknownScheme` is the registry's own, and it lists what it knows. */
+public type StorageFailure with Show, Error {
+  case UnknownScheme(uri: String, known: List<String>)
+  case NotAddressable(uri: String, reason: String)
+  case NotFound(uri: String)
+  case NotText(uri: String, reason: String)
+  case Refused(uri: String, reason: String)
+  case Stopped
+}
+```
+
+**A capability trait and not an opener.** `open(uri): Task<Result<Source<Bytes, …>, …>>` is the shape `fsspec` and
+`Bun.file` have, and it answers one question — *give me the bytes* — while an object store is also a `list`, a
+`delete` and an `exists`. A trait with five members says what a driver has to be able to do, and a driver that cannot
+`list` says so in its `Result` instead of in its absence. The cost is that a driver has five members to write; the
+`readText`/`writeText` pair is a default over `read`/`write`, so the cost is five and not seven.
+
+**And the closed set of members is what keeps the import readable.** `use Storage from "std/storage"` means "this
+file reads and writes things it does not own"; a universal `open` in a package that reaches the disk *and* the
+network means nothing at all. That was the argument against the universal opener, and a capability trait keeps it
+while giving the owner what he asked for.
+
+The other two, written out for the shape rather than for `std`:
+
+```trb
+/** A connection to a service, and the only three things every driver can promise about one. */
+public shared trait Connection with Close {
+  /** The reference this connection was opened from, redacted by `show()` (below). */
+  fn uri(): Uri
+
+  /** A round trip, which is what a pool and a health check need. */
+  fn ping(): Task<Result<Void, ConnectionFailure>>
+}
+
+/** How a scheme becomes a connection. The query surface is the driver's own typed API and is not in here. */
+public shared trait Connect with Schemes {
+  fn connect(uri: Uri): Task<Result<Connection, ConnectionFailure>>
+
+  /** One opener over several, chosen by the scheme of the reference it is handed. */
+  static fn registry(drivers: List<Connect>): Connect
+}
+
+/** A key-value cache. Its `Uri` was consumed by `Connect`, so its members carry keys. */
+public shared trait Cache with Close {
+  fn get(key: String): Task<Result<Bytes?, CacheFailure>>
+
+  var fn set(key: String, value: Bytes, expires: Duration? = None): Task<Result<Void, CacheFailure>>
+
+  var fn remove(key: String): Task<Result<Void, CacheFailure>>
+}
+```
+
+**`Connection` says almost nothing, and that is the honest amount.** A trait that tried to carry a query surface
+would have to pick a query language, a row type and a parameter binding — and the whole reason a program reaches for
+`acme/postgres` rather than for a generic connection is that `Postgres` has a typed one. So there are two doors and
+the document says so: **a program that queries names its driver** (`Postgres.connect(uri)`, whose result is a
+`Postgres`), and **a program that only manages the lifetime uses the registry** (`Connect.registry([…]).connect(uri)`,
+whose result is a `Connection`). A driver package writes both, and the second is three lines over the first.
+
+### Registration is a value
+
+**There is no discovery of any kind, and there cannot be.** CONCEPT has no reflection, no `eval` and no dynamic
+import; a `use` brings in names and runs nothing, and top-level code is never importable, so a package cannot put
+itself into a table when somebody imports it. Every mechanism the comparison below lists — a `ServiceLoader`, an
+entry point, an `init()` reached by `import _ "…"` — is unavailable, and none of it is missed: **the program names its
+drivers, in one expression, in the file where it decides what it can reach.**
+
+```trb
+use Storage, FileStorage from "std/storage"
+use S3Storage, S3Credentials from "acme/s3"
+use Environment from "std/environment"
+
+const region = Environment.get("AWS_REGION") ?? "eu-central-1"
+const storage = Storage.registry([FileStorage(), S3Storage.of(region, S3Credentials.fromEnvironment()?)])
+
+const page = storage.readText("s3://reports/2026-09/summary.md").outcome()?
+```
+
+**An unknown scheme is a `Result` and the message lists what is known.** From the probe, run as a native binary:
+
+```text
+  the registry answers to ["file", "memory", "s3"]
+  write memory:/notes/first: Ok(void)
+  read  memory:/notes/first: Ok("hello")
+  read  s3://bucket/key: Fail(`s3://bucket/key` was refused: bucket "bucket" in "eu-central-1" as "AKIA", and this probe has no network)
+  read  webdav://host/x: Fail(no driver for `webdav://host/x`: the registry knows file, memory, s3)
+  read  ./notes/first: Fail(no driver for `./notes/first`: the registry knows file, memory, s3)
+  read  file:///C:/…/project.trb: "name \"torbscript/torbscript\""
+```
+
+The fourth line is the one a caller learns from: `webdav:` is a scheme the *program* did not build in, and the failure
+says which ones it did. The fifth is the other half of the same rule — **a relative reference has no scheme, so a
+registry cannot dispatch on it.** A program that reads configuration resolves against a base first
+(`reference.resolved(against: base)?`), which is exactly what section 4 says a relative reference is for.
+
+### The driver shape that builds, measured
+
+Three shapes were probed for "a driver as a value".
+
+| Shape | Type checks | Builds natively | Why it is not the answer |
+|---|---|---|---|
+| a `static fn` per driver type, reached through a bound (`Driver.open` under `Value: Driver`) | **yes**, probe 5 | **yes** | a bound is resolved at the call, so a `List` of different driver types cannot exist — and a registry is exactly that list |
+| a record of a scheme and a factory closure (`Driver(scheme, open: (uri: Uri) => …)`) | yes | yes | it works, and it says less than a trait: a closure cannot carry `list`, `delete` and `exists` without becoming five closures |
+| **a trait used as a type**, with `Schemes` as its supertrait | **yes** | **yes** | this is it |
+
+**A trait as a type is the shape, because rule 9 of `traits` makes `List<Storage>` a list one builds** and rule 10
+checks object safety per call: `schemes`, `read` and the rest mention no `Self`, so every one of them is callable on a
+trait-typed value, and `Storage.registry` is `static` and therefore reached through the trait name only — which is
+where it is written anyway.
+
+**And the registry's own table is where value semantics bite.** The first probe held `Map<String, Storage>` and bound
+the driver out of it:
+
+```trb
+var driver = driverOf(uri)?
+driver.write(uri, text)
+```
+
+```text
+  write memory:/notes/first: Ok(void)
+  read  memory:/notes/first: Fail(nothing is stored at `memory:/notes/first`)
+```
+
+**The write landed in a copy, and nothing in the language reported it** — the result of `write` is returned, so the
+dead-change check has nothing to say. That is mistake 6 of `mistakes-models-make`, met in the one place a registry
+cannot avoid it. There are two answers and the document takes both, one per era:
+
+- **What builds today**: the drivers are a `var List<Storage>` and the table is a `Map<String, Int>` into it, so every
+  member reaches through the path — `storedDrivers[index].write(uri, content)` — and nothing is ever bound to a local.
+  The probe does this and the run above is its output.
+- **What the design is**: `Storage` is a **`shared trait`** and a driver is a `shared type`, the way a `File` is. Then
+  the drivers have identity, `Map<String, Storage>` aliases instead of copying, and the index table is unnecessary.
+  This is forced anyway by the asynchronous form (below), and it does not build yet (gap 10).
+
+### Where configuration lives, and the rule
+
+A driver needs a region, an endpoint override, a timeout and credentials; a reference needs to stay something a
+manifest can hold and a log can print. The rule is one sentence: **the URI names the resource, and the driver value
+holds everything that is not the resource — except where the URI *is* the configuration, which is what a connection
+string is.**
+
+| What | Where it belongs | Why |
+|---|---|---|
+| `s3://bucket/key`, `file:///etc/hosts` | the URI, at every call | it is the name of the thing, and two programs must agree on it |
+| an AWS region, an endpoint override, a retry count, a timeout | the driver value | it is a property of *this program's* access, not of the resource |
+| the credentials of an object store | the driver value, read from the environment where the registry is built | so that `Show` of a reference is safe, and `grep` finds the one place a secret enters |
+| `postgres://user:secret@host:5432/db?sslmode=require` | the URI, once, at `connect` | a connection string is a single configuration value by convention everywhere, and splitting it would mean re-inventing .NET's `Server=…;` |
+| `?sslmode=require`, `?pool_max_conns=10` | the URI's query, read by the driver | it arrived with the connection string; the driver's `connect` is where it is interpreted |
+
+**So `userInfo` carries a secret for the service case and never for the resource case**, and that is not an
+inconsistency: a connection string is handed to the program as one value by an operator, and a resource reference is
+written by the program itself. What the rule buys is that `s3://bucket/key` can be logged, compared and put in a
+manifest, and `postgres://…` cannot — which is the next part.
+
+### Secrets in a URI
+
+**Decided: `show()` redacts and `text()` is the whole thing.** A `Uri` has two ways out, they are named so that the
+unsafe one is greppable, and the display form is the default because a display form is what interpolation, `print`,
+`describe` and a failing `assert` reach for.
+
+```trb
+public type Uri with Show, Equals, Hash, Compare {
+  /** The canonical text, with every part of it. A password in the user information is in this text. */
+  fn text(): String
+
+  /** The canonical text, with everything after the first `:` of the user information replaced by `***`. */
+  fn show(): String
+}
+```
+
+From the probe, built and run:
+
+```text
+  show postgres://ada:***@db.example.test:5432/orders?sslmode=require
+  text postgres://ada:hunter2@db.example.test:5432/orders?sslmode=require
+  show redis://:***@cache.example.test:6379/0
+  text redis://:hunter2@cache.example.test:6379/0
+  show https://ada@example.test/a
+  text https://ada@example.test/a
+  two passwords, one display form: true
+  and they are still two values: false, compare Less
+```
+
+- **A user information without a `:` is a name and is not a secret.** `https://ada@example.test/a` is unchanged;
+  RFC 3986 section 3.2.1 deprecates the `user:password` form, and the `:` is exactly what marks it.
+- **`Encode` writes the full form**, because `Encode` is data and not display. A configuration that round trips
+  through a JSON document without its password is a configuration that stopped working, and the capsule's pair
+  (`String.from(uri)`, section 3) therefore calls `text()`. The consequence is stated rather than hidden: **a `Uri`
+  encoded into a log line, a trace or a crash report carries its password**, and a program that encodes one is doing
+  the same thing as a program that encodes a password field, which no language redacts for it either.
+- **Redaction touches neither `Equals`, `Hash` nor `Compare`.** `Equals` and `Hash` are generated over the fields, so
+  they never saw a display form; `compare` is hand written and had to be moved onto `text()`, and the last two lines
+  of the probe are what a `compare` over `show()` would have broken — two references that differ only in the password
+  would have compared `Equal` and one of them would have vanished out of a `sorted`.
+- **A failure carries the display form.** `StorageFailure.UnknownScheme(uri.show(), known)` and every other case take
+  a `String` that `show()` produced, so a connection failure that reaches a log, a crash report or a user is redacted
+  by construction and not by a rule somebody has to remember. That is the one place the default matters most, and it
+  is why the redacting member is the one named `show`.
+- **The two names are a rule for every capsule with a secret, not a special case for `Uri`**:
+  `docs/language/types/data-or-capsule.md` rule 4 already says "a capsule with a secret writes its own `Show`", and
+  this is what writing one looks like when the value still has to be recoverable.
+
+### Asynchronous, per `docs/CONCURRENCY.md`
+
+Every driver operation reaches the outside world, so every one of them answers a `Task<Result<…, Failure>>` and every
+one of them is cancellable at its suspension points. That is CONCURRENCY section 8 applied without an exception:
+`Failure: From<Cancelled>` is the floor, `StorageFailure.Stopped` is what `From<Cancelled>` produces, and a caller
+writes `storage.read(uri).outcome()?` — `await()` plus the conversion the `?` would have applied anyway.
+
+**What runs today is the synchronous form**, and the reason is `std/fs`: `File.readText`, `File.writeText`,
+`File.exists` and `File.list` are synchronous natives, and only the streaming side (`chunks`, `fill`) is a `Task`. So
+`FileStorage` and `MemoryStorage` — the two drivers that exist before milestone 7 — have nothing to wait for, and the
+probe is synchronous throughout and builds as a native binary.
+
+**The asynchronous form type checks and does not build, for two independent reasons**, both measured in a scratch
+package that is deleted:
+
+```text
+error: `write` changes `self` and answers a `Task`, and `Storage` is not a `shared trait`
+   = An ordinary trait can be implemented by a value, and a value cannot be changed by a task: write `shared trait Storage`
+```
+
+```text
+error: `Task.await` is not supported by the native back end yet: the runtime does not provide it
+error: a body whose result is a `Task` is not supported by the native back end yet
+error: a counted field that is a `shared type` object is not supported by the native back end yet
+error: making a value of this type unique is not supported by the native back end yet
+```
+
+The first message is a design input and not a defect: **a writing member that answers a `Task` forces the whole
+capability onto a `shared trait`**, which forces every driver to be a `shared type`, which is why the trait is written
+`shared` above. The rest is the native back end, which lowers neither a `Task` nor a user-written `shared type` — so
+the asynchronous layer is checked and runs on stage 0 only. `std/storage` therefore lands **after** CONCURRENCY's
+cancellation slice rather than before it: a capability trait whose signatures change from `Result` to
+`Task<Result<…>>` is the one change an ecosystem of third-party drivers cannot absorb, and there is no consumer
+waiting.
+
+### The package cut
+
+**The rule: a capability trait belongs in `std` when `std` ships at least two drivers for it, one of which reaches
+the outside world.** A trait with no implementation in its own package is a specification nobody has run, and a trait
+with one is a specification nobody has compared.
+
+| Package | What is in it | Why there |
+|---|---|---|
+| `std/uri` | `Schemes` | it is about URIs, it declares no scheme, and it opens nothing — so a database package can depend on it without depending on a storage package |
+| `std/storage` | `Storage`, `StorageFailure`, `FileStorage`, `MemoryStorage`, `Storage.registry` | `file:` reaches the outside world and `memory:` is the double every test of a driver needs. It depends on `std/fs`, `std/uri`, `std/stream` and `std/task` |
+| `acme/s3`, `acme/webdav`, `acme/gcs` | `type S3Storage with Storage` and the rest | coherence (rule 6 of `traits`): the package owns its own type, so `with Storage` is legal wherever the trait is visible |
+| `acme/postgres`, `acme/redis` | `Postgres` with its typed query surface, `PostgresConnect with Connect` | `std` has no database driver and no network cache, so `Connection`, `Connect` and `Cache` are **not** in `std`. They are written out above so that the ecosystem converges on one spelling |
+
+**`Cache` in `std` was considered and refused.** `std` could write a `MemoryCache` in a hundred lines over a `Map` and
+an `Instant` — but a memory cache with no `redis:` sibling is a test double for nothing, which is the difference
+between it and `MemoryStorage`. It is taste question 8.
+
+### Where `Resource`, `Sandbox` and the manifest's sources sit
+
+**Separate, and the dividing line is who owns the list of schemes.**
+
+| | `Storage`'s registry | `Resource` / `Sandbox.load` | `source "…", git:/path:/archive:` |
+|---|---|---|---|
+| Who names the drivers | the program, in an expression | nobody: there is no scheme | the toolchain, in a closed list |
+| When | while it runs | at build time | while the manifest is read |
+| Reached by | `uri.scheme()` | a project-relative literal the compiler resolved | the label, and the value is a `Uri` (section 10) |
+| Extensible by a package | **yes** | no | **no**, deliberately |
+
+- **`Resource` is not in this pattern at all.** `docs/RESOURCES.md` section 6 says the stable name is project-relative
+  text the build resolved: there is no `resource:` scheme and no run-time lookup by string, and that document's "Not a
+  virtual file system" is untouched. A resource is a file the *author* chose at compile time; a `Storage` reference is
+  one the program is handed while it runs. Merging them would put a compile-time guarantee behind a run-time table.
+- **The manifest's sources use the same *idea* and must keep a closed list.** `git:`, `path:` and `archive:` are
+  schemes that pick a fetcher, which is exactly this section's picture — and the fetchers may not be a value a package
+  contributes, because `docs/PROJECT.md` section 8 requires that two builds of one commit agree. A build whose result
+  depended on which fetcher the *builder* happened to have installed is the failure mode every plug-in-based build
+  system has. So the toolchain validates the scheme with `Uri` and dispatches on a list it owns.
+- **`Sandbox` stays on `Path`, `Resource` and `EmbeddedText`** (`docs/RESOURCES.md` section 5), for the reason
+  `File.open` does. A script fetched through a `Storage` has no member to hand it to, which is gap 13.
+
+### What other systems do
+
+| System | One capability, many drivers | How a driver becomes reachable | Where configuration lives | What the URL buys |
+|---|---|---|---|---|
+| **JDBC** | `Connection`, `DataSource` | `ServiceLoader` over `META-INF/services` on the class path, and historically `Class.forName` | the URL's query, or a `Properties` | `jdbc:postgresql://host/db` picks the driver |
+| **Go `database/sql`** | `driver.Driver` | `sql.Register(name, driver)` in the package's `init()`, triggered by `import _ "github.com/lib/pq"` | a DSN whose grammar is the driver's own | nothing: `sql.Open("postgres", dsn)` takes a *name* and a string |
+| **.NET** | `DbProviderFactory` | `DbProviderFactories.RegisterFactory`, plus configuration files | `Server=…;Database=…;User Id=…;Password=…` | nothing: a connection string is not a URI |
+| **Rust `sqlx`** | `Any`, `AnyPool` | cargo feature flags plus `install_default_drivers()` | the URL | `postgres://…` picks the back end — and `Any` erases the typed query API |
+| **Bun** | none; one class per service | none | the client object (`new Bun.S3Client({…})`), credentials from the environment | `Bun.s3.file("s3://bucket/key")`, `Bun.sql(url)`, `Bun.file(url)` |
+| **Python `fsspec`** | `AbstractFileSystem` | a process-global registry plus `importlib` entry points | `**storage_options`, untyped keyword arguments | `fsspec.open("s3://bucket/key")` — the universal opener |
+| **Apache OpenDAL** | `Access`, behind one `Operator` | a `Scheme` enum in the core crate | a `HashMap<String, String>` | `Operator::via_iter(Scheme::S3, map)` |
+
+**What is taken.**
+
+- **The whole idea, from `fsspec` and OpenDAL**: one vocabulary over many back ends, with the scheme as the
+  discriminator. `fsspec` is the closest thing to the owner's picture and it is right about the important half — that
+  `s3://`, `file://` and `memory://` should be one API — and `AbstractFileSystem` is a capability with `ls`, `rm` and
+  `exists` on it rather than an opener, which is section 11's trait.
+- **Bun's placement of configuration**: the client holds the region and the credentials, the URL holds the resource.
+  That is the rule above, and it is what makes `s3://bucket/key` a value a manifest can hold.
+- **JDBC's and OpenDAL's scheme-picks-driver**, which is the owner's sentence and the reason this section exists.
+- **`sqlx`'s warning rather than its design**: `Any` shows what erasing a query surface costs, which is why
+  `Connection` promises `close`, `ping` and `uri` and nothing more.
+
+**What is left.**
+
+- **Every discovery mechanism there is.** `ServiceLoader`, entry points and `import _ "…"`-for-its-`init()` are three
+  spellings of one thing: a table that fills itself from what happens to be on the path. TorbScript cannot do it
+  (nothing runs on import) and would not want to: the Go form in particular makes the line that gives a program a
+  capability an import with an underscore in front of it, which is the least readable place it could be.
+- **`fsspec`'s global registry and its untyped options.** A process-global table means two libraries in one program
+  can disagree about what `s3://` is, and `**storage_options` means a typo in a credential key is a run-time surprise.
+  A registry that is a value has neither problem: it is scoped to whoever holds it, and a driver is a typed value with
+  fields.
+- **OpenDAL's `Scheme` enum.** A closed enum in the core crate means a service that the core does not know cannot be
+  addressed, so every new back end is a change to the central package. `Schemes` answers a `List<String>` the driver
+  itself names, so `acme/webdav` needs nothing from `std`.
+- **.NET's connection strings.** A second ad-hoc grammar per provider, with no parser anybody shares, no comparison
+  and no `Show`. The owner's decision is the opposite of this one, and it is the right way round.
+- **A universal `open(uri)`.** Section 10's argument survives the decision: a function that reads a disk *or* a
+  network is a function whose import says nothing. What replaces it is not three lines over `uri.scheme()` any more —
+  it is a named capability with a named set of members, and the import says which capability.
+
+## 12. `std/identifier`
 
 **Not in the prelude.** It is a package a program names when it makes identifiers, the way `std/fs` is a package a
 program names when it touches files.
@@ -892,13 +1354,14 @@ taste question 4.
 a fallible `TryFrom<Urn, IdentifierError>`, so `Uuid`'s one conversion pair stays `String` and its `Decode` is the
 canonical thirty-six characters.
 
-## 12. What the language must provide
+## 13. What the language must provide
 
-Nine gaps, each measured by a probe above or by a run in this worktree, with the smallest fix that closes it.
+Thirteen gaps, each measured by a probe above or by a run in this worktree, with the smallest fix that closes it.
+Gaps 1 to 9 are the type; gaps 10 to 13 are the driver layer of section 11.
 
 1. **`std/idna` does not exist, so a non-ASCII host is refused.** `Uri.tryFrom("https://münchen.test/a")` answers
    `NonAsciiHost`. *Smallest fix:* a package with Punycode (RFC 3492) and UTS #46 mapping, about three hundred lines
-   plus a table. It is a slice of its own (section 13, slice 7) and it is what makes `Path` into `Uri` infallible,
+   plus a table. It is a slice of its own (section 14, slice 7) and it is what makes `Path` into `Uri` infallible,
    which is gap 9's trigger.
 2. **A string literal adapts to nothing.** Probe 3. *Smallest fix:* the parameter kind of `docs/RESOURCES.md`
    slice 1, with the closed list of section 9 instead of three resource types.
@@ -934,11 +1397,38 @@ Nine gaps, each measured by a probe above or by a run in this worktree, with the
    which point `Uri` **silently** loses `Decode`, with a message at whoever asked for it and nothing at the line that
    caused it. *Smallest fix:* a rule that the pair with `String` wins where there are several (cheap, and it is right
    in every case in the repository), or a way to name the pair.
+10. **A writing member that answers a `Task` forces a `shared trait`, and a user-written `shared type` does not
+    build.** The two halves are one gap because they are met together. The checker is explicit and is arguably right:
 
-## 13. Migration
+    ```text
+    error: `write` changes `self` and answers a `Task`, and `Storage` is not a `shared trait`
+       = An ordinary trait can be implemented by a value, and a value cannot be changed by a task: write `shared trait Storage`
+    ```
 
-Seven slices. Each one lands with the repository checking green, `torb test` passing, `canon --check` clean and the
-conformance suite comparing the two implementations. Slices 1, 3 and 7 need nothing that does not exist.
+    So section 11's asynchronous `Storage` is a `shared trait` and every driver is a `shared type` — and the native
+    back end lowers neither ``a counted field that is a `shared type` object`` nor ``making a value of this type
+    unique``, both of which it says out loud with no location. *Smallest fix:* lower a user-written `shared type`.
+    Until then the driver layer exists as the synchronous form probe 7 builds, and `std/storage` cannot land.
+11. **A capsule's conversion pair is unreachable when its source type is `String`.** `String.from(uri)` answers
+    ``Uri` does not implement `Iterable<Char>`` because `String`'s other `From` wins the selection, and
+    `const back: String = uri.into()` type checks and does not lower (gap 3). Probe 8. *Smallest fix:* prefer an
+    exact `From<Source>` over one reached by coercing the argument to a trait type; it costs nothing, because the
+    exact one is strictly more specific.
+12. **`Task` is not compiled by the native back end at all.** *"a body whose result is a `Task` is not supported by
+    the native back end yet"* and *"`Task.await` is not supported by the native back end yet: the runtime does not
+    provide it"*. Every asynchronous signature in section 11 therefore type checks and runs on stage 0 only.
+    *Smallest fix:* it is `docs/CONCURRENCY.md`'s own work and not this document's; it is recorded because the driver
+    layer is the first design that is asynchronous end to end.
+13. **`std/fs` has no `remove`, and `Sandbox` reads only a `Path`.** `FileStorage.delete` has no native to call, and
+    a script a program fetched through a `Storage` cannot be handed to `Sandbox` without being written to a file
+    first. *Smallest fix:* `File.remove(path)` and `File.rename(from, to)` in `std/fs`; the `Sandbox` half belongs to
+    `docs/RESOURCES.md` and is named here so that it is not discovered twice.
+
+## 14. Migration
+
+Eight slices. Each one lands with the repository checking green, `torb test` passing, `canon --check` clean and the
+conformance suite comparing the two implementations. Slices 1, 3 and 7 need nothing that does not exist, and slice 8
+is the only one that waits on another document.
 
 **`std/uri` is part of the fixpoint from slice 2**, because that is where the checker imports it (section 9). Until
 then it is an ordinary package nothing in `compiler/` depends on.
@@ -946,24 +1436,28 @@ then it is an ordinary package nothing in `compiler/` depends on.
 | # | Slice | Files | Risk |
 |---|-------|-------|------|
 | 1 | **The package.** `Uri`, `Authority`, `UriError`, `Urn`, the parser, normalization, `resolved`/`relativeTo`, `Show`/`Equals`/`Hash`/`Compare`, `queryParameters`; the `Path` bridge; `std/text` gains the ASCII predicates of gap 6 and `std/number` the narrowing conversions of gap 5 | `std/uri/*`, `std/text/src/*`, `std/number/src/*`, `std/prelude/src/lib.trb` | **Low.** Probe 1 is this package, written out and built. `Decode` waits for gap 4, which is the encoding redesign, and nothing else in the slice does |
-| 2 | **The literal rule.** The parameter kind in the checker, the closed list with `Path`, `Uri` and the resource types, the three diagnostics, the recorded value in the IR; `compiler/` depends on `std/uri` | `compiler/src/semantics/checker/{expression,call}.trb`, `compiler/src/ir/*`, `compiler/project.trb`, `compiler/tests/check.test.trb` | **Highest of the seven.** It is a new parameter kind, probe 3 says there is nothing to build on, and it is the slice that puts `std/uri` in the fixpoint. It is the same work as `docs/RESOURCES.md` slice 1 and should be one round with it |
+| 2 | **The literal rule.** The parameter kind in the checker, the closed list with `Path`, `Uri` and the resource types, the three diagnostics, the recorded value in the IR; `compiler/` depends on `std/uri` | `compiler/src/semantics/checker/{expression,call}.trb`, `compiler/src/ir/*`, `compiler/project.trb`, `compiler/tests/check.test.trb` | **Highest of the eight.** It is a new parameter kind, probe 3 says there is nothing to build on, and it is the slice that puts `std/uri` in the fixpoint. It is the same work as `docs/RESOURCES.md` slice 1 and should be one round with it |
 | 3 | **`std/http`.** `get`, `post`, `request` and `Request.url` take a `Uri`; `HttpError.InvalidUrl` is deleted; the native side receives the canonical text | `std/http/src/lib.trb`, `compiler/src/backend/c/natives.trb`, `bootstrap/crates/torb-interpreter/src/natives.rs`, `runtime/*` | **Low.** Three signatures and one error case, and every call site in the repository passes a literal |
 | 4 | **The manifest.** `source "...", git:/archive:/path:` and `registry "...", url:` are read as `Uri`s when the manifest is evaluated, so a typo is a manifest error and not a fetch failure; the lock records the canonical text | `compiler/src/project/*`, `docs/PROJECT.md` section 7 | **Low**, and it depends on `docs/PROJECT.md` slices 1 to 4 having landed |
 | 5 | **The documentation tooling.** `links.trb`'s four `startsWith` tests become `Uri.tryFrom(target)` and `resolved(against:)`, so an anchor, a relative link and an external link are told apart by the type | `compiler/src/documentation/links.trb` | **Medium.** The documentation gates compare generated text, so a changed classification changes output; the four cases have to answer exactly what they answer today |
 | 6 | **`std/identifier`.** `Identifier`, `Uuid`, `Ulid`, `IdentifierError`, the `urn:uuid:` bridge | `std/identifier/*`, and `std/random`, which has to exist first | **Blocked** on `std/random` (`TODO.md` line 1364). Everything else in it is probe 6, which builds |
 | 7 | **IDNA.** `std/idna` with Punycode and UTS #46; `Uri.tryFrom` accepts a non-ASCII host and stores its ASCII form; `repaired(text)` for the WHATWG differences of section 6; gap 9 is answered before `Path` into `Uri` becomes infallible | `std/idna/*`, `std/uri/src/*`, `compiler/src/semantics/checker/derive.trb` | **Medium.** The tables are the work, and gap 9 has to be closed in the same slice or `Uri` loses `Decode` without a diagnostic |
+| 8 | **The driver layer.** `Schemes` in `std/uri`; `std/storage` with `Storage`, `StorageFailure`, `Storage.registry`, `FileStorage` over `std/fs` and `MemoryStorage`; `Uri.text` beside `Uri.show` and `compare` over `text` (that half belongs to slice 1 and is written there) | `std/uri/src/*`, `std/storage/*`, `std/fs/src/lib.trb` for gap 13's `remove` | **Blocked** on gap 10 and on `docs/CONCURRENCY.md`'s cancellation slice. Probe 7 builds the synchronous form; landing it before the trait is asynchronous would change every driver's signature afterwards, which is the one change an ecosystem cannot absorb |
 
-**The prose.** A new `docs/standard-library/uri.md` and `docs/standard-library/identifier.md`; `docs/PATH.md`'s "Not a
-URL" paragraph points here; `docs/RESOURCES.md`'s section 6 gains one sentence; `docs/PROJECT.md` section 7's source
-table says the values are `Uri`s; CONCEPT's decision log gains one entry for the literal rule;
-`docs/internals/index.md` lists this document, which is done.
+**The prose.** A new `docs/standard-library/uri.md`, `docs/standard-library/identifier.md` and
+`docs/standard-library/storage.md`; `docs/PATH.md`'s "Not a URL" paragraph points here; `docs/RESOURCES.md`'s
+section 6 gains one sentence and its `Sandbox` section gains gap 13's; `docs/PROJECT.md` section 7's source table
+says the values are `Uri`s and that the fetchers stay a closed list; CONCEPT's decision log gains one entry for the
+literal rule and one for "a registry is a value"; `docs/internals/index.md` lists this document, which is done.
 
-## 14. What this is not
+## 15. What this is not
 
 - **Not a replacement for `Path`.** Section 8. A path is platform-dependent and a URI is not, and the two are joined
   by two fallible conversions rather than merged.
-- **Not a fetcher.** Nothing in `std/uri` opens anything. It has no `get`, no `read` and no scheme registry, and
-  `use * as http from "std/http"` stays the import that means "this file talks to a network".
+- **Not a fetcher.** Nothing in `std/uri` opens anything. It has no `get`, no `read` and no registry of drivers, and
+  `use * as http from "std/http"` stays the import that means "this file talks to a network". What it gains from
+  section 11 is `Schemes`, a trait with one member that answers a `List<String>` — a driver says which schemes it
+  answers to, and `std/uri` neither knows nor asks which drivers exist.
 - **Not WHATWG.** Section 6 lists every difference and what a program does about each. A program that needs a
   browser's repairs calls `repaired(text)` before parsing, where a reader can see it.
 - **Not a `Url` type and not a `Uri`/`Url` split.** Section 7. Java's split is the most expensive mistake in this
@@ -977,7 +1471,14 @@ table says the values are `Uri`s; CONCEPT's decision log gains one entry for the
   of its own whose `expand` answers a `Uri`.
 - **Not a scheme registry.** `std/uri` knows five default ports and the word `urn`, and nothing else. It does not know
   that `https` needs a host, that `mailto` has no authority or that `data` is base64 — those are the schemes'
-  business, and a program that cares asks `uri.scheme()`.
+  business, and a program that cares asks `uri.scheme()`. The registry of section 11 is a value in `std/storage` that
+  a program builds out of drivers it named, and no part of it is global, discovered or implicit.
+- **Not a universal opener.** Section 11 answers "read this, wherever it is" with a capability trait of five members
+  and not with one `open(uri)`. A driver that cannot `list` says so in a `Result`, and the import of the capability
+  is what tells a reader what the file can reach.
+- **Not a query surface for databases.** `Connection` promises `close`, `ping` and `uri`, because that is all every
+  driver can honestly promise. A program that queries names its driver and gets its typed API; `sqlx::AnyPool` is
+  what the other choice looks like.
 - **Not a resource name.** `docs/RESOURCES.md` section 6's stable name is project-relative text that the build
   resolved; it is not reached by a scheme, there is no `embedded:` or `resource:`, and there is no run-time lookup by
   string. That document's "Not a virtual file system" is unchanged.
@@ -987,27 +1488,39 @@ table says the values are `Uri`s; CONCEPT's decision log gains one entry for the
   type (`docs/ENCODING.md` section 3a). A reader of such a document sees `"https://example.test/a"` and not five
   fields, which is what every other language's JSON does too.
 
-## 15. Open
+## 16. Open
 
 Everything technical above is decided. These are taste or direction, and only the owner answers them.
 
-1. **Is a universal opener wanted?** Section 10 keeps `std/fs` on `Path` and `std/http` on `Uri`, so a program that is
-   handed `file:///etc/hosts` *or* `https://example.test/x` in one configuration value writes three lines over
-   `uri.scheme()`. The alternative is one function — `open(uri): Task<Result<Source<Bytes, …>, …>>` — which is what
-   Bun's `fetch` does. It would have to live in a package that can reach both a disk and a network, so its import
-   would say neither, and "this file touches files" would stop being readable at the top of a file. The document
-   keeps the split and names this as the one place it narrows the direction "FS abstractions and everything where it
-   makes sense accept URIs".
+1. **Is a universal opener wanted? — Decided by the owner.** *`std/fs` and `File.open` take no `Uri`: `std/fs` is the
+   native driver on `Path`. Above it sits an abstraction that picks a driver by the URI's scheme and can then also
+   reach S3, WebDAV and the rest; it consumes `std/fs` for `file:`. And the connection data of a service — a
+   database, a key-value cache, a message queue — is a URI, and the scheme is what finds the driver, the protocol or
+   the resource.* Section 11 is that layer, written out and probed. What it changes against the sketch: the layer is
+   a **capability trait per capability** rather than one `open(uri)`, there are **two** registry shapes because a
+   resource URI and a service URI are read at different moments, and `Connection` promises only a lifecycle.
 2. **Does the prelude export `Uri`?** The document assumes yes: `Uri` and `UriError`, two names on top of 146, with
    `Authority`, `Urn` and `repaired` behind `use … from "std/uri"`. That pairs with `docs/PATH.md` open question 2,
    which left `Path` out of the prelude — and the two belong together, because `File.readText("./config.trb")` and
    `http.get("https://…")` are the same ergonomics. The recommendation is both, which is four names.
 3. **`Identifier`, or `Uid`?** The rule says full words and no abbreviations, and `Uid` also means a POSIX user id.
    The document uses `Identifier`.
-4. **UUIDv7 as the default, with `Ulid` kept?** Section 11's table is the argument. The other reading is that 26
+4. **UUIDv7 as the default, with `Ulid` kept?** Section 12's table is the argument. The other reading is that 26
    characters that sort as text are worth more than a standard, which is the case every ULID user makes.
 5. **`reference.resolved(against: base)`, or `base.resolve(reference)`?** The document uses the first, because it is
    `path.resolved(inside: base)` with one word changed. The second is what every other library writes.
 6. **Is refusing a non-ASCII host acceptable until `std/idna` exists?** The alternative is percent-encoding it, which
    produces a host no resolver accepts — a wrong value rather than an unsupported one. The document refuses, and
    slice 7 is the answer.
+7. **Is a redacting `show()` the right default?** Section 11 makes `print uri` lossy for the one URI in a thousand
+   that carries a password, so a value that is printed no longer round trips through its own display form — which is
+   a property every other capsule in the standard library has. The other reading is that `text()` should be the
+   `Show` and redaction should be a member a logger calls (`uri.redacted()`), which keeps `show()` honest and puts
+   the burden on whoever logs. The document takes the redacting default, because the failure mode of the other one
+   is a password in a crash report and the failure mode of this one is a `***` in a message that wanted the whole
+   thing.
+8. **Does `std` carry `Cache` and `Connection` before it carries a driver for either?** The document says no, by the
+   rule "a capability trait belongs in `std` when `std` ships two drivers for it, one of which reaches the outside
+   world" — so `std/storage` exists and `std/cache` does not. The other reading is that a trait in `std` is how an
+   ecosystem converges on one spelling, and that waiting for a driver means two packages will invent two `Cache`
+   traits first. Section 11 writes both traits out so that the shape is at least written down either way.

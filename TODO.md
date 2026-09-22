@@ -3744,3 +3744,29 @@ Wenn nicht, was bedeutet, bewirkt es?
      Indizierung ist und `print [1, 2]` weiter die Klammern-Meldung gibt. Der Versuch ist spekulativ, und ein
      `Parser` ist ein Wert - ihn zurückzusetzen macht Position und Diagnosen zusammen rückgängig.
      `command-calls.md` Regel 2.
+
+  - **Erledigt:** `docs/URI.md` Abschnitt 11 "Schemes choose drivers" steht (Dokument jetzt 16 Abschnitte, alles
+    umnummeriert, Frage 1 auf **Entschieden** mit deinen Worten). Zwei neue Probes in `examples/uri-probe`, geprüft,
+    im Kanon und als natives Binärprogramm gelaufen; die Scratch-Pakete sind gelöscht. **Treiberform (gemessen):**
+    ein Trait als Typ gewinnt - `List<Storage>` geht, jedes Mitglied ist objektsicher, `Storage.registry(drivers)`
+    ist ein `static fn` AM Trait, dessen Ergebnis der Trait ist. Ein `static fn` pro Treiber über eine Schranke baut
+    zwar, kann aber keine Liste verschiedener Treibertypen bilden - und genau die ist eine Registry. **Die
+    Kopierfalle ist echt:** mit `Map<String, Storage>` antwortete der Schreibzugriff `Ok(void)` und das Lesen danach
+    `Fail(nothing is stored at ...)`, ohne jede Diagnose; was baut, greift durch den Pfad
+    (`Map<String, Int>` in eine `var List<Storage>`). **Zwei Arten von URI, und deshalb zwei Registry-Formen:** eine
+    Ressourcen-URI (`s3://bucket/key`) wird bei JEDEM Aufruf gelesen, eine Dienst-URI (`postgres://...`) genau
+    einmal beim Öffnen - `Storage` ist selbst eine Registry, `Connect` ist eine Registry von ÖFFNERN. `Connection`
+    verspricht nur `close`/`ping`/`uri`; wer Abfragen macht, nennt seinen Treiber (sonst hat man `sqlx::AnyPool`).
+    **Paketschnitt:** `Schemes` (ein Mitglied) nach `std/uri`, `std/storage` mit `Storage`, `FileStorage`,
+    `MemoryStorage`; `Cache`/`Connection` NICHT in std - Regel: ein Fähigkeits-Trait gehört in std, wenn std zwei
+    Treiber dafür liefert, einer davon nach draußen. **Geheimnisse:** `show()` blendet aus, `text()` ist alles, das
+    Konversionspaar (und damit `Encode`) nimmt `text()` - ein Konfigurations-Round-Trip ohne Passwort ist kaputt; die
+    Fehlerfälle tragen `show()`. `compare` musste dafür von `show()` auf `text()` umziehen, sonst wären zwei URIs mit
+    verschiedenem Passwort gleich. **Vier neue Lücken (10-13):** ein `var fn`, das einen `Task` antwortet, erzwingt
+    `shared trait` (die Meldung sagt es wörtlich), und ein selbstgeschriebener `shared type` baut nativ NICHT - damit
+    ist die asynchrone Fassung heute nur prüfbar; `String.from(uri)` wählt `From<Uri>` nicht aus (`From<Iterable<Char>>`
+    gewinnt); `Task` baut nativ gar nicht; `std/fs` hat kein `remove` und `Sandbox` nimmt nur `Path`. **Scheibe 8**
+    (der Treiber-Layer) ist auf Lücke 10 und die Cancellation-Scheibe von CONCURRENCY blockiert - bewusst, weil eine
+    Signaturänderung von `Result` auf `Task<Result<...>>` das Einzige ist, was ein Treiber-Ökosystem nicht verkraftet.
+    **Zwei neue Geschmacksfragen (7, 8):** ob ein ausblendendes `show()` der richtige Standard ist (`print uri` ist
+    dann nicht mehr verlustfrei), und ob std `Cache`/`Connection` schon vor dem ersten Treiber tragen soll.

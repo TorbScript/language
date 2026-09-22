@@ -17,17 +17,38 @@ public type Authority with Show, Equals, Hash {
   /** The port, where one is written out. */
   port: Int?
 
-  /** The canonical text of the authority, without the `//` in front of it. */
-  fn show(): String {
+  /** The canonical text of the authority, without the `//` in front of it. A password is in it. */
+  fn text(): String {
     const front = match userInfo {
       Some(found) => "{found}@"
       None => ""
     }
-    const back = match port {
-      Some(found) => ":{found}"
+    "{front}{hostAndPort()}"
+  }
+
+  /** The same text with everything after the first `:` of the user information replaced by `***`. */
+  fn show(): String {
+    const front = match userInfo {
+      Some(found) => "{redacted(found)}@"
       None => ""
     }
-    "{front}{host}{back}"
+    "{front}{hostAndPort()}"
+  }
+
+  /** `host [":" port]`, which carries no secret either way. */
+  fn hostAndPort(): String {
+    match port {
+      Some(found) => "{host}:{found}"
+      None => host
+    }
+  }
+}
+
+/** `user:secret` becomes `user:***`, and a user information without a `:` is a name and stays. */
+fn redacted(userInfo: String): String {
+  match userInfo.indexOf(":") {
+    Some(at) => "{userInfo[..at]}:***"
+    None => userInfo
   }
 }
 
@@ -216,14 +237,27 @@ public type Uri with Show, Equals, Hash, Compare {
     Some Uri(None, None, walked.joined(separator: "/"), storedQuery, storedFragment)
   }
 
-  /** The canonical text: what RFC 3986 section 5.3 calls the recomposition of the components. */
+  /**
+   * The canonical text: what RFC 3986 section 5.3 calls the recomposition of the components, with every part of it.
+   * A password in the user information is in this text, and the name is what makes that greppable.
+   */
+  fn text(): String {
+    recomposed({ authority => authority.text() })
+  }
+
+  /** The canonical text with a password in the user information replaced by `***`. [Uri.text] is the whole one. */
   fn show(): String {
+    recomposed({ authority => authority.show() })
+  }
+
+  /** The recomposition of RFC 3986 section 5.3, with `authorityText` deciding how much of the authority is written. */
+  fn recomposed(authorityText: (authority: Authority) => String): String {
     var text = match storedScheme {
       Some(found) => "{found}:"
       None => ""
     }
     if const Some(found) = storedAuthority {
-      text = "{text}//{found}"
+      text = "{text}//{authorityText(found)}"
     }
     text = "{text}{storedPath}"
     if const Some(found) = storedQuery {
@@ -241,7 +275,7 @@ public type Uri with Show, Equals, Hash, Compare {
     if answer != .Equal {
       return answer
     }
-    answer = optionCompare storedAuthority?.show(), other.storedAuthority?.show()
+    answer = optionCompare storedAuthority?.text(), other.storedAuthority?.text()
     if answer != .Equal {
       return answer
     }
@@ -337,10 +371,14 @@ extend Uri with TryFrom<String, UriError> {
   }
 }
 
-/** The way back out, and with [Uri.tryFrom] the one conversion pair of the capsule. */
+/**
+ * The way back out, and with [Uri.tryFrom] the one conversion pair of the capsule. It is [Uri.text] and not
+ * [Uri.show], because this is the direction `Encode` is derived through and a configuration that round trips
+ * without its password is a configuration that stopped working.
+ */
 extend String with From<Uri> {
   static fn from(value: Uri): String {
-    value.show()
+    value.text()
   }
 }
 

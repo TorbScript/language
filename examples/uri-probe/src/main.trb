@@ -6,7 +6,9 @@
 use Uri, Authority, UriError from "./uri"
 use Urn from "./urn"
 use Path from "std/path"
+use File from "std/fs"
 use fileUriOf, pathOf from "./file"
+use Storage, MemoryStorage, FileStorage, ObjectStorage from "./storage"
 
 parsing()
 normalization()
@@ -15,6 +17,8 @@ paths()
 collections()
 refinements()
 encoding()
+drivers()
+secrets()
 
 /** Every row of the document's parsing table, printed as `input -> scheme | authority | path | query | fragment`. */
 fn parsing() {
@@ -185,6 +189,66 @@ fn encoding() {
   print "  Authority is data, so it has both from its fields: {hasDecode<Authority>()}"
   // `Json.encode(uri)` and `Json.decode<Uri>(text)` type check and the native back end refuses the first:
   // "a derived `encode`, whose `Encoder` is all `var self` members is not supported by the native back end yet".
+}
+
+/**
+ * A registry the program builds out of two drivers, and what the scheme chooses. The write is the measurement:
+ * a driver that keeps state is copied into the registry, so what it stores is stored in the copy.
+ */
+fn drivers() {
+  print "----- drivers"
+  var storage = Storage.registry([MemoryStorage(), FileStorage(), ObjectStorage.of("eu-central-1", "AKIA", "hunter2")])
+  print "  the registry answers to {storage.schemes()}"
+  const note = expected Uri.tryFrom("memory:/notes/first")
+  print "  write {note}: {storage.write(note, "hello")}"
+  print "  read  {note}: {storage.read(note)}"
+  const object = expected Uri.tryFrom("s3://bucket/key")
+  print "  read  {object}: {storage.read(object)}"
+  const unknown = expected Uri.tryFrom("webdav://host/x")
+  print "  read  {unknown}: {storage.read(unknown)}"
+  const relative = expected Uri.tryFrom("./notes/first")
+  print "  read  {relative}: {storage.read(relative)}"
+  const absolute = match File.absolutePath("project.trb") {
+    Ok(found) => found
+    Fail(problem) => panic "the probe cannot find its own manifest: {problem}"
+  }
+  const manifest = expected fileUriOf(Path.from(absolute))
+  const first = match storage.read(manifest) {
+    Ok(text) => text.lines().first() ?? ""
+    Fail(problem) => problem.show()
+  }
+  print "  read  {manifest}: {first.showNested()}"
+  var direct = MemoryStorage()
+  const kept = direct.write note, "hello"
+  print "  the same driver on its own: write {kept}, read {direct.read(note)}"
+}
+
+/**
+ * A connection URI carries a password, so `show()` redacts it and `text()` is the whole thing. The last two lines
+ * are the reason `compare` is written over [Uri.text]: two references that differ only in the password are two
+ * values, and a `compare` that went through the display form would call them equal.
+ */
+fn secrets() {
+  print "----- secrets"
+  const texts = [
+    "postgres://ada:hunter2@db.example.test:5432/orders?sslmode=require",
+    "redis://:hunter2@cache.example.test:6379/0",
+    "https://ada@example.test/a",
+    "s3://bucket/key",
+  ]
+  for text in texts {
+    const uri = expected Uri.tryFrom(text)
+    print "  show {uri}"
+    print "  text {uri.text()}"
+    // The pair itself is out of reach here: `String.from(uri)` answers ```Uri` does not implement `Iterable<Char>` ``
+    // because `String`'s other `From` wins the selection, and `const back: String = uri.into()` type checks and
+    // answers "a conversion through `From` is not supported by the native back end yet". `text()` is what it calls.
+    print "  round trip through the accessor the pair calls: {uri.text() == text}"
+  }
+  const one = expected Uri.tryFrom("postgres://ada:hunter2@db.example.test/orders")
+  const other = expected Uri.tryFrom("postgres://ada:other@db.example.test/orders")
+  print "  two passwords, one display form: {one.show() == other.show()}"
+  print "  and they are still two values: {one == other}, compare {one.compare(other)}"
 }
 
 /** Asks the checker for `Decode` and nothing else. */
