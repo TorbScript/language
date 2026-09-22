@@ -3983,3 +3983,8 @@ Wenn nicht, was bedeutet, bewirkt es?
     ist kein Ergebnis). Tabelle nach `docs/COLLECTIONS.md`. **Zu proben in C2b:** `Collector` und `Accumulator`
     verschmelzen - die Beschreibung ist der Anfangszustand, jede Kopie ein Lauf (Wertsemantik), spart einen Trait und
     `start()`; `groupingBy(...).then(downstream)` kopiert den Downstream pro Gruppe statt ihn zu starten.
+  - **Namen (Nutzer mag kein `-able`, `Hash` statt `Hashable`): Vorschlag `Sequence<Item>` statt `Iterable` (Swifts
+    Wort, Substantiv wie `Collection`/`Source`/`Sink`) und `Fill<Item>` als Gegenstück (Anforderung `add`). `Source`/
+    `Sink` bleiben - sie sagen "Fluss mit zwei Enden", die Asynchronität steht im Typ von `next()`. `add` bleibt: das
+    einzige Wort ohne Orts-/Art-Annahme (`append` hat kein "hinten" bei Set/Map). Läuft in C2b; Nutzer kann bis dahin
+    widersprechen.
