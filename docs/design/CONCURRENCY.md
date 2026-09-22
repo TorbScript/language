@@ -1,8 +1,10 @@
 # Concurrency and Parallelism
 
-**Status: partly implemented** — the checker rules of section 13 (gaps 1, 2, 3 and 17) are in, and so is the runtime
-half of 7.3: the task ABI, the single-worker scheduler, timers, channels, cancellation and `within` in C
-(section 16). The state-machine lowering, workers, `parallel()` and borrowing are designed and not built (section 14).
+**Status: partly implemented** — the checker rules of section 13 (gaps 1, 2, 3 and 17) are in, and so is all of 7.3 for
+the C back end: the task ABI, the single-worker scheduler, timers, channels and cancellation in C, and the lowering of
+task functions, `spawn`, `await()`, the cancellation checks and the main task on top of it (section 16), with slices A
+and A2 and the `std/task` surface of section 10. Workers, `parallel()` and borrowing are designed and not built
+(section 14).
 
 Many things waiting is one problem; one thing going faster is another. This is the specification of both: what a task
 is and what runs it, how many cores a program uses and who decides, how a pipeline is spread over them without copying
@@ -923,14 +925,17 @@ extend<Value, Failure: From<Cancelled>> Task<Result<Value, Failure>> {
 }
 ```
 
-**`await()`, `cancel()`, `within` and `outcome` are not in `std/task/src/lib.trb` yet**, and the reason is a migration
-rather than a doubt: changing `await()`'s result from `Value` to `Result<Value, Cancelled>` was probed against the
-whole repository and produces **80 problems in 8 files** — `std/stream` (`source.trb` 27, `sink.trb` 10, `bytes.trb` 2),
-`std/http` 9, `std/fs` 1, `examples/tour/src/13-streams.trb` 14, `examples/tour/src/10-async.trb` 13 and
-`examples/game-engine/src/main.trb` 4. `compiler/src` and `compiler/tests` are untouched, because the checker's own
-tests declare a `Task` of their own. Every one of those is `.await()` becoming `.outcome()` or `.await()?`, plus the
-`Source<Item, Never>` change of section 8 — one commit, and it belongs with the slice that writes `outcome`, not with a
-document.
+**`await()`, `cancel()`, `within`, `outcome`, `pause`, `Cancelled` and `TimedOut` are in `std/task/src/lib.trb`.**
+Changing `await()`'s result from `Value` to `Result<Value, Cancelled>` produced **97 problems in 8 files** of the
+repository - `std/stream` (`source.trb` 41, `sink.trb` 13, `bytes.trb` 2), `std/http` 9, `std/fs` 1,
+`examples/tour/src/13-streams.trb` 14, `examples/tour/src/10-async.trb` 13 and `examples/game-engine/src/main.trb` 4 -
+and the migration rewrote **121 `.await()` calls**: 69 in `std/` (42 in `std/stream`, 13 in `std/http`, 11 in `std/fs`,
+`std/io` and `std/process`, 3 in `std/task` itself), 27 in the two tour files and the game engine, and 25 in the pages of
+`docs/` - `.outcome()` wherever the value is itself a `Result`, `.await()?` or `.await() ?? fallback` elsewhere. `Source`
+and `Sink` carry `Failure: From<Cancelled>` on the trait, so `IoError`, `HttpError`, `ChannelClosed` and `Cancelled`
+itself convert from `Cancelled`, and `Channel`'s reading end is a `Source<Item, Cancelled>`. `outcome()` is a
+suspension point exactly like `await()`: the lowering puts the wait in front of the call of its TorbScript body, and
+`await()` is allowed wherever `outcome()` is.
 
 **`std/iteration`** gains `Merge` (section 5) and the implementations for the collectors that have one. `Merge` belongs
 here rather than beside `parallel()` because it is synchronous, it says nothing about tasks, and it is useful on its
@@ -1166,10 +1171,10 @@ are spawned by that task alone.
 flag on a blocking-pool job. *Smallest fix:* one cancel entry point per mechanism in `runtime/io.c`, behind the one
 interface gap 8 introduces.
 
-**16. `Cancelled`, `TimedOut`, `Task.await`'s result, `Task.cancel`, `Task.within` and `Task.outcome`** in
-`std/task`, with the migration section 10 measures: `.await()` becomes `.outcome()` or `.await()?` at 80 measured
-places in `std/stream`, `std/http`, `std/fs` and `examples/`, and `Channel`'s reading end becomes a
-`Source<Item, Cancelled>`. *Smallest fix:* one commit over `std/`, gated by `check .` and `docs check docs`.
+**16. `Cancelled`, `TimedOut`, `Task.await`'s result, `Task.cancel`, `Task.within` and `Task.outcome`. Done**, with
+the migration of section 10. The checker does not yet treat `outcome()` as the suspension point it is - its placement
+rule finds `await` by name - so an `outcome()` outside a task is refused by the lowering instead, a clean finding at
+build time rather than at the call.
 
 **17. `?` asks the bound. Done.** Probe 4 of section 12: the `?` conversion consults a type parameter's bound instead
 of accepting it, and refuses `Never` as a conversion target because it has no values at all.
@@ -1336,29 +1341,89 @@ negative or `nan` `sleep` is zero; a task that stops without the flag ends as ca
 later `Task.map` - passes on a cancellation it observed; a parent that finishes hands its running children to its own
 parent, so cancelling the grandparent still reaches them.
 
-### What the compiler round does
+### The compiler half, as built
 
-1. Lower a function whose result is a `Task` (and a `spawn` closure) to a resume function plus a constructor:
-   `torb_task_new(resume, sizeof(frame), &descriptor)`, move the parameters or captures into `torb_task_frame`,
-   `torb_task_start`. `spawn` is that constructor, not a call of the runtime.
-2. `await()` becomes `state = K`, `torb_task_await`, the label of state K, the check, `torb_task_outcome`,
-   `torb_task_result`. `pause().await()` may use `torb_task_pause` directly; `pause()` as a value is `torb_pause`.
-3. A stop path per state and per back-edge, releasing that point's live set - the liveness the split already computes.
-4. `torb_task_release` / `torb_channel_release` as the `Release` of a `Task` / `Channel` slot.
-5. The entry file of a program that uses tasks becomes the main task: `torb_task_new`, `torb_task_start`,
-   `torb_scheduler_run(main)`, `torb_scheduler_finish()` before `torb_process_finish()`.
-6. `enter_frame`/`leave_frame` balanced per resume, because the C stack is gone after every return.
+**The lowering (`ir/lower/task.trb`).** A function that *declares* `Task<Value>` - not one whose type parameter a task
+happens to fill - is two functions: a **resume function** (`FunctionKind.TaskResume`, named `t_resume__<name>`) whose
+parameters are the frame's and whose result is the `Value`, and in the declaration's own place a **constructor** whose
+body is one `TaskNew(target, resume, element, parameters)` and the `return` of the handle. So every caller keeps an
+ordinary `Call`, and only the back end knows a task is a state machine. A closure whose declared result is a `Task` is
+the same pair (the lowering reads off the type of what the body ends with whether the body is the task's, because the
+checker decides that by the expected type and records no flag), and `spawn { ... }` is a `Construct` of the closure's
+environment plus a `TaskNew` of its body, the environment being the frame; `spawn` of a closure *value* runs it through
+one generated resume function per closure type. A `var` parameter crosses into the frame as the value it holds, which
+is the same thing only for an object with an identity, so one of any other type is a clean finding. `await()` - and
+`outcome()` - is `Suspend(state, awaited)` in front of the call that reads the answer, the states numbered 1, 2, ... in
+block order once the body is done. `stopAsCancelled()` is `Terminator.Stop`. The top-level code of an entry file that
+waits anywhere is a resume function too, and runs as the main task.
+
+**Ownership.** Nothing new: the parameters of a resume function are `Owned` (the frame holds them), `TaskNew` takes the
+count of every argument as a `Construct` takes its fields, and `Stop` leaves the frame empty exactly as a `return`
+does, which the extended verifier checks.
+
+**The frame (`ir/suspension.trb`, `TaskMachine`).** Read off the finished body, after the ownership pass. It holds every
+parameter and every slot that is live across a suspension - liveness over *every* slot, not only the counted ones - and
+nothing else: a slot that is not live after any suspension is a C local of one resume, zeroed at every entry. The C back
+end writes the frame as a struct `F_<resume function>` with one member per frame slot, in slot order, and a slot of the
+frame is `frame->member` wherever the body names it.
+
+**The stop paths.** Because the ownership pass placed a release after every last use, a counted slot that is live is
+exactly a slot that holds a count, so what a stop releases is the live set where it stops: the entry (state 0) releases
+what is live at the first block, a resume point what is live right after its `Suspend`, and a back-edge what is live
+before the terminator that closes the loop. A back-edge is an edge into a block the depth-first walk from the entry has
+not left yet, which in the reducible graph a structured loop lowers to is exactly the edge that closes it.
+
+**The C back end.** A resume function is `static torb_poll <name>(torb_task *task)`: the frame pointer, the locals, a
+`switch (task->state)` whose case 0 falls through to the entry check and whose case K jumps to `resume_K`, the blocks,
+and after them one stop path per state and per back-edge (`stop_K`, `stop_loop_B`) that releases its set and answers
+`TORB_POLL_STOPPED`. A `Suspend` is `task->state = K`, `torb_task_await`, `return TORB_POLL_SUSPENDED` where it
+registered, the label, the check and `torb_task_outcome`; a `return` moves the value into `torb_task_result_slot` and
+answers `TORB_POLL_FINISHED`; a back-edge reads the flag before its terminator. `main` wraps an entry that waits in
+`torb_task_new`/`torb_task_start`/`torb_scheduler_run`/`torb_task_release`, runs `torb_scheduler_run(NULL)` after an
+entry that only starts tasks, and ends in `torb_scheduler_finish()`; a program with no resume function and no `TaskNew`
+calls none of it. No resume function enters a frame of `panic.c`, so there is nothing to balance.
+
+**Decisions of the compiler round**, each for the reason given:
+
+- **`within` is TorbScript over `torb_task_completed_within`** - a task of the runtime that answers whether the target
+  completed before the deadline, cancelling it where it did not - and not over `torb_task_within` with a generated
+  `torb_within_shape`. The `Result<Value, TimedOut>` is then built by TorbScript like every other value, and the
+  shape's two adapters would have been the only C of the back end that builds a variant of the program outside a body.
+  `torb_task_within` stays in the runtime and is unused.
+- **A channel's two ends are TorbScript shared types over one task per item each way** (`torb_channel_received`,
+  `torb_channel_offered`), and not machines that wait on the channel directly: a machine then waits for a task and for
+  nothing else, so the lowering has one kind of suspension point and the frame never lends a slot to a waiting send.
+  The price is a task block per item; a `Wait` instruction over the channel primitives is the optimization when it is
+  measured.
+- **`source()` and `sink()` answer `ChannelSource<Item>` and `ChannelSink<Item>`**, the concrete shared types, which
+  are a `Source` and a `Sink`. A call on one is a direct call, and a program that never needs the trait-typed value never
+  builds its witness table - which also keeps it clear of the one gap in the way of every `Source` object today (below).
+- **`Task.cancel` and `within` are TorbScript `var fn`s over natives that take the task by value** (`cancelTask`,
+  `completedWithin`), because a native `var fn` of a runtime object would hand the runtime a pointer to the caller's
+  slot rather than the task.
+- **A `shared type` object is a counted block** (`layout.trb` pins its layout `Boxed`), released through
+  `torb_release` with its layout's drop and never made unique - the part of 5.9b the channel ends need. The trace
+  functions of a cycle are not built: an object on a cycle of objects leaks.
+
+**What still does not build natively, and why.** A `Duration` has no representation in the back end yet (5.12), so a
+program that calls `within` does not build. A `Source` or `Sink` held as a **trait-typed value** does not either: its
+witness table holds every default member some implementation overrides, `through` among them, and `through` reaches
+`Stage.onto` - a generic member through a trait-typed value (gap 11). `Source.produce`, `std/stream`'s tests and
+`examples/tour/src/13-streams.trb` stop there. `?` that converts a failure through a `From` the program declares is not
+lowered yet, which is what stops `examples/tour/src/10-async.trb` (and `std/http` has no runtime at all). A
+`Process.exit` from inside a task ends the program with the main task's block still counted, the way a panic does.
 
 ### Manifest rows that change
 
-| Row | Today | As built |
+| Row | Before | As built |
 |---|---|---|
-| `Task.await` | `.Planned` `torb_task_await` | not a call: the `Suspend` lowering over `torb_task_await` + `torb_task_result` (`.Fallible`, `Cancelled` has no fields) |
-| `spawn` | `.Planned` `torb_spawn` | not a call: the lowering over `torb_task_new`/`torb_task_start`; no `torb_spawn` exists |
-| `sleep` | `.Planned` `torb_sleep` | `torb_task *torb_sleep(double seconds);` |
-| `pause`, `Task.cancel`, `Task.within` | missing | `torb_pause(void)`, `torb_task_cancel(torb_task *)`, `torb_task_within(torb_task *, torb_duration, const torb_within_shape *)` - the last with a generated shape argument |
-| `Channel.source`, `Channel.sink` | `.Planned` | TorbScript shared types in `std/task` implementing `Source`/`Sink` (witness tables the runtime cannot build) over new rows `torb_channel_new`, `_send`, `_receive`, `_end`, `_close` |
-| `Task.map`, `Task.flatMap`, `Task.all`, `all` | `.Planned` natives | TorbScript over `await` (BACKEND 5.3 already says so): the runtime cannot call a closure of an unknown signature. Each needs a way to end as cancelled - `TORB_POLL_STOPPED` without the flag, reached from a `Never`-returning intrinsic of the lowering |
+| `Task.await`, `Task.finished` | `.Planned` `torb_task_await` | `.Fallible` `torb_task_result`; the `Suspend` in front of the call is the lowering's |
+| `spawn`, `stopAsCancelled` | `.Planned` `torb_spawn` | `NativeTarget.Lowered`: a `TaskNew` over the closure's body, and `Terminator.Stop` |
+| `sleep`, `pause` | `.Planned` / missing | `torb_task *torb_sleep(double seconds);`, `torb_task *torb_pause(void);` |
+| `cancelTask`, `completedWithin` | missing | `torb_task_cancel(torb_task *)`, `torb_task_completed_within(torb_task *, torb_duration)`, under the TorbScript `Task.cancel` and `Task.within` |
+| `Channel(capacity:)` | - | `Instruction.ChannelNew` over `torb_channel_new` and the element descriptor of `Item` |
+| `Channel.source`, `Channel.sink` | `.Planned` | TorbScript: `ChannelSource`/`ChannelSink` over `received` (`torb_channel_received`), `offered` (`torb_channel_offered`), `endWriting` (`torb_channel_end`) and `closeReading` (`torb_channel_close`) |
+| `Task.map`, `Task.flatMap`, `Task.all`, `all` | `.Planned` natives | TorbScript over `await()` and `stopAsCancelled()` |
 | `standardInput`/`Output`/`Error`, `Process.start`, `Child.*`, `File.create`/`chunks`/`add`/`finish` | `.Planned` 7.3 | stay planned, for slice G: they are `Source`/`Sink` objects over real IO, which needs `runtime/io.c` and its poller |
 
 ### What waits for the thread pool (7.7)

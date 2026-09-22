@@ -18,9 +18,6 @@ source:
   - docs/design/STREAMS.md
 ---
 
-> **Not built natively yet.** A function whose body answers a `Task` is not built by the native back end yet, so `torb
-> run` refuses the examples here that use it. `torb check` accepts them, and the rules are the language's.
-
 "Stream" is the word for a flow in one direction, not a type: what a signature names is one of its two ends,
 `Source<Item, Failure>` to read from or `Sink<Item, Failure>` to write into. They are the asynchronous siblings of
 [std/iteration](iteration.md)'s `Iterator` and `Accumulator` and carry the same verbs. `Source`, `Sink` and `Bytes` are in
@@ -33,10 +30,10 @@ use Source, Sink, Bytes, Utf8Error, lines, textOf from "std/stream"
 ```
 
 ```trb check
-fn totalLength(channel: Channel<String>): Task<Result<Int, Never>> {
+fn totalLength(channel: Channel<String>): Task<Result<Int, Cancelled>> {
   var reading = channel.source()
   var total = 0
-  while const Some(word) = reading.next().await()? {
+  while const Some(word) = reading.next().outcome()? {
     total = total + word.byteLength()
   }
   Ok total
@@ -48,7 +45,7 @@ fn totalLength(channel: Channel<String>): Task<Result<Int, Never>> {
 ### Source
 
 ```trb fragment
-public shared trait Source<Item, Failure> with Close {
+public shared trait Source<Item, Failure: From<Cancelled>> with Close {
   var fn next(): Task<Result<Item?, Failure>>
   var fn through<Output>(stage: Stage<Item, Output>): Source<Output, Failure>
   var fn map<Output>(transform: (value: Item) => Output): Source<Output, Failure>
@@ -100,9 +97,9 @@ combined into a running state, left to right), `forEach` (an action run on every
 ### Sink
 
 ```trb fragment
-public shared trait Sink<Item, Failure> with Close {
+public shared trait Sink<Item, Failure: From<Cancelled>> with Close {
   var fn add(item: Item): Task<Result<Void, Failure>>
-  var fn finish(): Task<Result<Void, Failure>>
+  var fn end(): Task<Result<Void, Failure>>
   var fn addAll(items: Iterate<Item>): Task<Result<Void, Failure>>
   var fn fill(var source: Source<Item, Failure>): Task<Result<Void, Failure>>
   var fn mapFailure<Other>(transform: (failure: Failure) => Other): Sink<Item, Other>
@@ -117,11 +114,14 @@ public shared trait Sink<Item, Failure> with Close {
 ```
 
 The writing end, the asynchronous sibling of `Accumulator`. Backpressure is the `await` on `add`: the task finishes
-once the target has taken the item, so a writer faster than its target waits by itself. `finish()` is the graceful end
+once the target has taken the item, so a writer faster than its target waits by itself. `end()` is the graceful end
 - everything buffered is written, and whatever went wrong is reported here at the latest; `close()` (from `Close`) is
-the abrupt end, cannot fail, and may leave less written than `finish()` would have. `buffered(capacity:)` answers a
-`Buffered`, whose own `flush()` is where "when was it actually written" gets an answer; `finish()` flushes too, but
+the abrupt end, cannot fail, and may leave less written than `end()` would have. `buffered(capacity:)` answers a
+`Buffered`, whose own `flush()` is where "when was it actually written" gets an answer; `end()` flushes too, but
 `close()` does not.
+
+Both traits carry `Failure: From<Cancelled>`: every asynchronous read and write can be cancelled, so a stream's failure
+type is one a cancellation converts into, and `outcome()` of [std/task](task.md) folds it in with one `?`.
 
 ### Bytes, Utf8Error
 
@@ -174,12 +174,12 @@ program.
 
 ## What is missing
 
-The example above type checks against the real standard library, which is what `torb docs check` verifies. What does
-not run yet is everything that has to produce a real value through `.await()`: every `Source`/`Sink` verb answers a
-`Task`, and [std/task](task.md) is `status: planned` because no back end gives `Task.await` a value. `Bytes`,
-`Utf8Error`, `textOf`, `lines()` and `decodedText()` do not depend on `Task` at all and work today wherever a `Stage`
-does - over an `Iterate<Bytes>` in a test, for instance - which is why this page stays `status: stable` while
-[std/task](task.md) does not.
+What the native back end does not run yet is a `Source` or a `Sink` held as a **trait-typed value**: its witness
+table holds every default member some implementation overrides, `through` among them, and `through` reaches
+`Stage.onto` - a generic member through a trait-typed value, which the back end cannot call yet. A concrete source or
+sink - a `Channel`'s two ends, which `source()` and `sink()` answer as `ChannelSource` and `ChannelSink` - runs, stages
+and terminal operations included. `Bytes`, `Utf8Error`, `textOf`, `lines()` and `decodedText()` do not depend on
+`Task` at all and work wherever a `Stage` does - over an `Iterate<Bytes>` in a test, for instance.
 
 ## Related
 

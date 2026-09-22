@@ -200,6 +200,11 @@ public type Lowering {
   var isSilent: Bool = false
   /** Control cannot reach the end of the current block any more: `return`, `break`, `continue`, a panic. */
   var isDiverged: Bool = false
+  /**
+   * Whether the body being lowered is the body of a task - a function or a closure that answers a `Task`, a `spawn`
+   * closure, the top-level code of an entry file - where an `await()` is a suspension point (`ir/lower/task.trb`).
+   */
+  var isTaskBody: Bool = false
   /** Where a `break` and a `continue` of the innermost loop go, innermost last. */
   var breakTargets: List<BlockId> = []
   var continueTargets: List<BlockId> = []
@@ -436,10 +441,8 @@ public fn isVoidType(lowering: Lowering, id: IrTypeId): Bool {
 
 /**
  * Whether a type is a `Task<Value>`. A function that answers one has a body that produces the `Value` (concept,
- * Concurrency), so its body and its signature disagree by design; the state-machine transformation that closes the
- * gap (docs/BACKEND.md, Tasks) is not lowered yet, and such a body is a clean finding here instead - without it the
- * verifier would report "the function returns `Task(...)` and `return` carries `...`" about a program that is
- * correct.
+ * Concurrency), so its body and its signature disagree by design: the body becomes the resume function of the task
+ * and the function itself its constructor (`ir/lower/task.trb`).
  */
 public fn isTaskType(lowering: Lowering, id: IrTypeId): Bool {
   if const .Runtime(kind, _) = lowering.program.typeAt(id) {

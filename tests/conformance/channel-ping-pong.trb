@@ -1,0 +1,62 @@
+/**
+ * A `Channel` is a stream in memory between two tasks. With capacity `0` every `add` waits until a reader took the item,
+ * so a ping and its pong alternate in lock-step; with a capacity the writer runs ahead by that many items. `end()` ends
+ * the stream after what was already offered, and the reader sees `None`. The words that cross are counted blocks, and
+ * each one arrives exactly once.
+ */
+
+/** A value the program builds, so that its storage is counted and not the immortal storage of a literal. */
+fn repeated(part: String, times: Int): String {
+  var total = ""
+  for _ in 0..times {
+    total = total + part
+  }
+  total
+}
+
+/** Answers every ping with a pong until the pings end, then ends the pongs. */
+fn play(pings: Channel<String>, pongs: Channel<String>): Task<Result<Int, Cancelled>> {
+  var input = pings.source()
+  var output = pongs.sink()
+  var rounds = 0
+  while const Some(ball) = input.next().outcome()? {
+    print "got {ball}"
+    const _ = output.add("{ball} pong").await()?
+    rounds = rounds + 1
+  }
+  const _ = output.end().await()?
+  Ok rounds
+}
+
+/** Writes five numbers into a buffered channel and ends it. */
+fn produce(channel: Channel<Int>): Task<Result<Void, ChannelClosed>> {
+  var writing = channel.sink()
+  for value in 0..5 {
+    writing.add(value).outcome()?
+    print "sent {value}"
+  }
+  writing.end().outcome()
+}
+
+const pings = Channel<String>()
+const pongs = Channel<String>()
+const player = play pings, pongs
+var serve = pings.sink()
+var answers = pongs.source()
+for round in 0..3 {
+  serve.add(repeated("ping", round + 1)).outcome()?
+  print(answers.next().outcome()?)
+}
+serve.end().outcome()?
+print "rounds: {player.outcome()}"
+print "after the end: {answers.next().outcome()}"
+
+const numbers = Channel<Int>(capacity: 2)
+const producer = produce numbers
+var reading = numbers.source()
+var total = 0
+while const Some(value) = reading.next().outcome()? {
+  print "read {value}"
+  total = total + value
+}
+print "total {total}, sent {producer.outcome().isOk()}"

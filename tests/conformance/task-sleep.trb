@@ -1,0 +1,22 @@
+use sleep from "std/time"
+
+/**
+ * `sleep(seconds)` is a task that finishes once the time is up, so tasks that sleep wake in the order of their
+ * deadlines and not in the order they were started. A zero or negative time finishes as soon as the scheduler gets to
+ * it. The times are far enough apart that a busy machine cannot swap them.
+ */
+
+/** Sleeps, then says so. */
+fn after(seconds: Float, name: String): Task<String> {
+  sleep(seconds).await() ?? void
+  print name
+  name
+}
+
+const slow = after 0.06, "slow"
+const fast = after 0.02, "fast"
+const middle = after 0.04, "middle"
+const now = after(-1.0, "now")
+print "all four sleeping"
+const order = Task.all([now, slow, fast, middle]).await() ?? []
+print order

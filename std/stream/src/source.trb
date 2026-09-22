@@ -7,14 +7,14 @@
 use Shared from "std/core"
 use Stage, Accumulator, Queueing, collector, counting, listing from "std/iteration"
 use mapping, filtering, filterMapping, mappingWhile, taking, takingWhile, skipping, indexing, chunking from "std/iteration"
-use ChannelClosed from "std/task"
+use ChannelClosed, Cancelled from "std/task"
 use Sink from "./sink"
 
 /**
  * The reading end of a stream: the asynchronous sibling of `Iterator`, with the same verb and the same `var self`.
  *
  *     var lines = file.lines()
- *     while const Some(line) = lines.next().await()? {
+ *     while const Some(line) = lines.next().outcome()? {
  *       print line
  *     }
  *
@@ -46,7 +46,7 @@ use Sink from "./sink"
  * - [Sink] - the writing end, and `into`/`fill`'s other side.
  * - [Stage] - what `through` wraps a source with.
  */
-public shared trait Source<Item, Failure> with Close {
+public shared trait Source<Item, Failure: From<Cancelled>> with Close {
   /** `Ok(Some(item))` for the next item, `Ok(None)` at the end, `Fail(problem)` for a failure that ends the stream. */
   var fn next(): Task<Result<Item?, Failure>>
 
@@ -134,7 +134,7 @@ public shared trait Source<Item, Failure> with Close {
     if accumulator.isDone() {
       return Ok accumulator.finish()
     }
-    while const Some(item) = next().await()? {
+    while const Some(item) = next().outcome()? {
       accumulator.add item
       if accumulator.isDone() {
         break
@@ -145,22 +145,22 @@ public shared trait Source<Item, Failure> with Close {
 
   /** Every item, collected into a list. */
   var fn toList(): Task<Result<List<Item>, Failure>> {
-    collect(listing()).await()
+    collect(listing()).outcome()
   }
 
   /** How many items the stream delivers. */
   var fn count(): Task<Result<Int, Failure>> {
-    collect(counting()).await()
+    collect(counting()).outcome()
   }
 
   /** Combines every item into a running state, left to right, starting from `initial`. */
   var fn fold<State>(initial: State, combine: (State, Item) => State): Task<Result<State, Failure>> {
-    collect(collector(initial, finish: { _ }, step: combine)).await()
+    collect(collector(initial, finish: { _ }, step: combine)).outcome()
   }
 
   /** Runs `action` on every item as it arrives. */
   var fn forEach(action: (value: Item) => Void): Task<Result<Void, Failure>> {
-    while const Some(item) = next().await()? {
+    while const Some(item) = next().outcome()? {
       action item
     }
     Ok void
@@ -168,7 +168,7 @@ public shared trait Source<Item, Failure> with Close {
 
   /** Stops at the first item that matches, which leaves the rest of the stream unread. */
   var fn find(predicate: (value: Item) => Bool): Task<Result<Item?, Failure>> {
-    while const Some(item) = next().await()? {
+    while const Some(item) = next().outcome()? {
       if predicate(item) {
         return Ok Some(item)
       }
@@ -181,10 +181,10 @@ public shared trait Source<Item, Failure> with Close {
    * converted one into the other would hide which end broke. Use `mapFailure` on either side to say it.
    */
   var fn into(var sink: Sink<Item, Failure>): Task<Result<Void, Failure>> {
-    while const Some(item) = next().await()? {
-      sink.add(item).await()?
+    while const Some(item) = next().outcome()? {
+      sink.add(item).outcome()?
     }
-    sink.end().await()
+    sink.end().outcome()
   }
 
   // --- Making one -----------------------------------------------------------------------------------------------
@@ -213,7 +213,7 @@ public shared trait Source<Item, Failure> with Close {
    *
    *     Source.produce { sink =>
    *       for row in query.rows() {
-   *         sink.add(Report.of(row)).await()?
+   *         sink.add(Report.of(row)).outcome()?
    *       }
    *       Ok void
    *     }
@@ -231,7 +231,7 @@ public shared trait Source<Item, Failure> with Close {
     body: (var sink: Sink<Item, Failure>) => Task<Result<Void, Failure>>,
   ): Source<Item, Failure> where Failure: From<ChannelClosed> {
     const relay = Channel<Item>(capacity: capacity)
-    Produced.of(relay, spawn({ produceInto(relay, body).await() }))
+    Produced.of(relay, spawn({ produceInto(relay, body).outcome() }))
   }
 
   /** A stream that ends immediately, without reading anything. */
@@ -247,7 +247,7 @@ fn produceInto<Item, Failure: From<ChannelClosed>>(
   body: (var sink: Sink<Item, Failure>) => Task<Result<Void, Failure>>,
 ): Task<Result<Void, Failure>> {
   var writing = relay.sink().mapFailure(Failure.from)
-  body(writing).await()
+  body(writing).outcome()
 }
 
 // --- A closure as a source --------------------------------------------------------------------------------------
@@ -264,7 +264,7 @@ public shared type Pulling<Item, Failure> with Source<Item, Failure> {
 
   /** Calls `step` for the next item. */
   var fn next(): Task<Result<Item?, Failure>> {
-    step().await()
+    step().outcome()
   }
 
   /** Releases `above`, if there is one. */
@@ -306,9 +306,9 @@ shared type Stepping<Input, Item, Failure> with Source<Item, Failure> {
   }
 
   var fn next(): Task<Result<Item?, Failure>> {
-    const found = upstream.next().await()?
+    const found = upstream.next().outcome()?
     if const Some(value) = found {
-      return Ok Some(step(value).await()?)
+      return Ok Some(step(value).outcome()?)
     }
     Ok None
   }
@@ -328,7 +328,7 @@ shared type Remapped<Item, Failure, Other> with Source<Item, Other> {
   }
 
   var fn next(): Task<Result<Item?, Other>> {
-    Ok(upstream.next().await().mapError(transform)?)
+    Ok(upstream.next().outcome().mapError(transform)?)
   }
 
   var fn close() {
@@ -383,7 +383,7 @@ public shared type Staged<Input, Item, Failure> with Source<Item, Failure> {
         finished = true
         continue
       }
-      match upstream.next().await()? {
+      match upstream.next().outcome()? {
         Some(value) => pushing.add value
         None => {
           pushing.finish()
@@ -404,7 +404,7 @@ public shared type Staged<Input, Item, Failure> with Source<Item, Failure> {
     if accumulator.isDone() {
       return Ok accumulator.finish()
     }
-    while const Some(value) = upstream.next().await()? {
+    while const Some(value) = upstream.next().outcome()? {
       accumulator.add value
       if accumulator.isDone() {
         break
@@ -422,9 +422,9 @@ public shared type Staged<Input, Item, Failure> with Source<Item, Failure> {
 // --- A produced source ------------------------------------------------------------------------------------------
 
 /** What `Source.produce` answers: the receiving end of the channel, plus the task that fills it. */
-shared type Produced<Item, Failure> with Source<Item, Failure> {
+shared type Produced<Item, Failure: From<Cancelled>> with Source<Item, Failure> {
   private relay: Channel<Item>
-  private var reading: Source<Item, Never>
+  private var reading: Source<Item, Cancelled>
   private var writing: Sink<Item, ChannelClosed>
   private producer: Task<Result<Void, Failure>>
 
@@ -437,10 +437,10 @@ shared type Produced<Item, Failure> with Source<Item, Failure> {
    * is what makes a failing producer a failing stream and not a stream that simply stopped.
    */
   var fn next(): Task<Result<Item?, Failure>> {
-    if const Some(item) = reading.next().await()? {
+    if const Some(item) = reading.next().outcome()? {
       return Ok Some(item)
     }
-    producer.await()?
+    producer.outcome()?
     Ok None
   }
 
@@ -457,7 +457,7 @@ shared type Produced<Item, Failure> with Source<Item, Failure> {
  * knows nothing about the stream's failure. `checked()` is where those items become the stream's failure and end it -
  * the streaming counterpart of collecting an `Iterate<Result<...>>` into a `Result<List<...>, ...>`.
  *
- *     const all = body.through(Json.items<User>()).checked().toList().await()?
+ *     const all = body.through(Json.items<User>()).checked().toList().outcome()?
  */
 extend<Item, Problem, Failure: From<Problem>> Source<Result<Item, Problem>, Failure> {
   /** Turns every item's own failure into the stream's failure, and ends the stream at the first one. */
@@ -475,7 +475,7 @@ shared type Checked<Item, Problem, Failure: From<Problem>> with Source<Item, Fai
   }
 
   var fn next(): Task<Result<Item?, Failure>> {
-    const found = upstream.next().await()?
+    const found = upstream.next().outcome()?
     if const Some(item) = found {
       return Ok Some(item?)
     }

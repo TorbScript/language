@@ -31,6 +31,7 @@ use Emission, reportUnsupported, slotNameOf, locationExpression, lineDirectiveOf
 use cTypeOf, memberNameOf, variantMemberNameOf, witnessMemberNameOf from "./type"
 use CExpression, CDesignatedField, CStatement, CSwitchCase, declarationOf from "./writer"
 use readPrototype, matchPrototype from "./prototype"
+use TaskMachine, taskMachineOf from "../../ir/suspension"
 
 /** One function, with which slots are read and which labels are jumped to precomputed once for the whole body. */
 public type Body {
@@ -45,6 +46,8 @@ public type Body {
   isByPointer: Bool
   /** Per slot: whether the closure a `Closure` writes into it keeps its environment on the frame ([framedClosures]). */
   framedClosures: List<Bool>
+  /** The state machine of a resume function (`ir/suspension.trb`), and `None` for every other function. */
+  machine: TaskMachine? = None
 }
 
 /** The name the caller's result pointer has inside the callee. No mangled name can collide with it. */
@@ -75,6 +78,11 @@ public fn bodyOf(
     markTerminator reads, labels, block.terminator
   }
   const framed = framedClosures program, function, keeping
+  if const .TaskResume = function.kind {
+    // The value goes into the task block and never through a result pointer, whatever its size
+    const machine = taskMachineOf program, function
+    return Body function, prototypes, reads, labels, false, framed, Some(machine)
+  }
   Body function, prototypes, reads, labels, isByPointerResult(function), framed
 }
 
@@ -244,6 +252,8 @@ fn markReadSlots(program: IrProgram, function: IrFunction, var reads: List<Bool>
     }
     .Panic(message, _) => markRead reads, message.slot
     .Suspend(_, awaited) => markRead reads, awaited
+    .TaskNew(_, _, _, arguments) => markArguments reads, arguments
+    .ChannelNew(_, capacity, _, _) => markRead reads, capacity
   }
 }
 
@@ -280,6 +290,7 @@ fn markTerminator(var reads: List<Bool>, var labels: List<Bool>, terminator: Ter
       }
     }
     .Unreachable => {}
+    .Stop => {}
   }
 }
 
@@ -300,6 +311,10 @@ fn markLabel(var labels: List<Bool>, block: BlockId) {
  * apart again.
  */
 public fn signatureHeadOf(program: IrProgram, function: IrFunction): String {
+  // A resume function is called by the scheduler alone, with the task whose frame holds its parameters
+  if const .TaskResume = function.kind {
+    return "static torb_poll {function.name}(torb_task *{taskName})"
+  }
   const signature = function.signature
   var parameters: List<String> = []
   if isByPointerResult(function) {
@@ -382,6 +397,7 @@ fn calledFunctionsOf(function: IrFunction): List<FunctionId> {
       match instruction {
         .Call(_, callee, _, _, _) => found.append callee
         .Closure(_, callee, _, _) => found.append callee
+        .TaskNew(_, resume, _, _) => found.append resume
         _ => {}
       }
     }
@@ -478,13 +494,200 @@ public fn valueTypeOf(program: IrProgram, id: IrTypeId): String {
 /** Every statement of one function body, in order: the slots, then every block. */
 public fn bodyStatements(var emission: Emission, program: IrProgram, body: Body): List<CStatement> {
   var statements: List<CStatement> = []
+  // A machine that keeps nothing across a suspension reads no frame, and an unused local is a warning
+  if const Some(machine) = body.machine {
+    if machine.frameSlots.contains(true) {
+      statements.append frameDeclarationOf(body.function)
+    }
+  }
   const declarations = slotDeclarationsOf program, body
   statements.appendAll declarations
+  if const Some(machine) = body.machine {
+    statements.appendAll entryStatements(machine)
+  }
   for index in 0..body.function.blocks.length() {
     const found = blockStatements emission, program, body, index
     statements.appendAll found
   }
+  if const Some(machine) = body.machine {
+    statements.appendAll stopStatements(emission, program, body, machine)
+  }
   statements
+}
+
+// --- The state machine of a task ------------------------------------------------------------------------------------
+
+/** The parameter of a resume function: the task it runs, whose frame and state it reads. */
+const taskName = "task"
+
+/** The local that points at the frame of the task a resume function runs. */
+const frameName = "frame"
+
+/** `F_t_resume__t_main_fetch`: the struct of a resume function's frame, whose members are its frame slots. */
+public fn frameTypeName(function: IrFunction): String {
+  "F_{function.name}"
+}
+
+/** `F_x *frame = (F_x *)torb_task_frame(task);`: the frame of this resume, which every frame slot is a member of. */
+fn frameDeclarationOf(function: IrFunction): CStatement {
+  const spelling = pointerTo frameTypeName(function)
+  const frame = CExpression.Call CExpression.Name("torb_task_frame"), [CExpression.Name(taskName)]
+  CStatement.Declaration spelling, frameName, Some(CExpression.Cast(spelling, frame))
+}
+
+/**
+ * The switch over the state a resume goes on at, and the cancellation check of the entry. State 0 is the entry and
+ * falls through to the first block; every other state jumps to the label after its suspension point.
+ */
+fn entryStatements(machine: TaskMachine): List<CStatement> {
+  var statements: List<CStatement> = []
+  if machine.stateCount() > 0 {
+    const state = CExpression.PointerMember CExpression.Name(taskName), "state"
+    var cases = [CSwitchCase(0, [CStatement.Break])]
+    for index in 1..machine.stateCount() + 1 {
+      cases.append CSwitchCase(index, [CStatement.Goto(resumeLabelOf(index))])
+    }
+    statements.append CStatement.Switch(state, cases, [unreachableStatement])
+  }
+  statements.append cancellationCheckOf(stopLabelOf(0))
+  statements
+}
+
+const unreachableStatement = CStatement.Evaluate CExpression.Call(CExpression.Name("TORB_UNREACHABLE"), [])
+
+/** `if (torb_task_cancelled(task)) goto stop_3;`: one load and one branch, at every resume and every back-edge. */
+fn cancellationCheckOf(label: String): CStatement {
+  const cancelled = CExpression.Call CExpression.Name("torb_task_cancelled"), [CExpression.Name(taskName)]
+  CStatement.If cancelled, [CStatement.Goto(label)]
+}
+
+fn resumeLabelOf(state: Int): String {
+  "resume_{state}"
+}
+
+fn stopLabelOf(state: Int): String {
+  "stop_{state}"
+}
+
+fn backEdgeStopLabelOf(block: Int): String {
+  "stop_loop_{block}"
+}
+
+/**
+ * The stop paths, after the last block: one per state and one per back-edge, each releasing exactly what is live where
+ * the machine stops - the same values a `return` there would have let go of - and answering `TORB_POLL_STOPPED`.
+ */
+fn stopStatements(var emission: Emission, program: IrProgram, body: Body, machine: TaskMachine): List<CStatement> {
+  var statements: List<CStatement> = []
+  statements.appendAll stopPathOf(emission, program, body, stopLabelOf(0), machine.entry)
+  for state in 1..machine.stateCount() + 1 {
+    statements.appendAll stopPathOf(emission, program, body, stopLabelOf(state), machine.resumes[state])
+  }
+  for block in 0..machine.backEdges.length() {
+    if machine.isBackEdge(block) {
+      const releases = machine.backEdgeReleases[block]
+      statements.appendAll stopPathOf(emission, program, body, backEdgeStopLabelOf(block), releases)
+    }
+  }
+  statements
+}
+
+fn stopPathOf(
+  var emission: Emission,
+  program: IrProgram,
+  body: Body,
+  label: String,
+  releases: List<Slot>,
+): List<CStatement> {
+  var statements = [CStatement.Label(label, "cancelled")]
+  for slot in releases {
+    const place = slotExpression body, slot
+    const released = releaseStatements emission, program, typeOfSlot(body, slot), place
+    statements.appendAll released
+  }
+  statements.append CStatement.Return(Some(CExpression.Name("TORB_POLL_STOPPED")))
+  statements
+}
+
+/**
+ * `awaited.await()`, the suspension half: record the state, wait - and return where the wait registered the task - then
+ * the label the switch jumps to, the cancellation check, and the outcome the runtime asks to be read once.
+ */
+fn suspendStatements(body: Body, state: Int, awaited: Slot): List<CStatement> {
+  const task = CExpression.Name taskName
+  const recorded = CStatement.Assignment CExpression.PointerMember(task, "state"), CExpression.Literal("{state}")
+  const waited = CExpression.Call CExpression.Name("torb_task_await"), [task, slotExpression(body, awaited)]
+  const suspended = CExpression.Binary waited, "==", CExpression.Name("TORB_WAIT_SUSPENDED")
+  const returned = CStatement.Return Some(CExpression.Name("TORB_POLL_SUSPENDED"))
+  const outcome = CExpression.Call CExpression.Name("torb_task_outcome"), [task]
+  [
+    recorded,
+    CStatement.If(suspended, [returned]),
+    CStatement.Label(resumeLabelOf(state), ""),
+    cancellationCheckOf(stopLabelOf(state)),
+    CStatement.Evaluate(CExpression.Cast("void", outcome)),
+  ]
+}
+
+/**
+ * `TaskNew`: the block, every argument moved into the frame member of its parameter, and the task queued. The frame is
+ * zeroed by the runtime, so a member no argument fills starts as every slot does.
+ */
+fn taskNewStatements(
+  var emission: Emission,
+  program: IrProgram,
+  body: Body,
+  target: Slot,
+  resume: FunctionId,
+  result: ElementId?,
+  arguments: List<Argument>,
+): List<CStatement> {
+  if !program.hasFunction(resume) {
+    return reported emission, "a task over a function that is not in the program"
+  }
+  const started = program.functionAt resume
+  const element = match result {
+    Some(found) => {
+      if !program.hasElement(found) {
+        return reported emission, "a task over an element descriptor that is not in the program"
+      }
+      CExpression.AddressOf CExpression.Name(program.elementAt(found).name)
+    }
+    None => CExpression.AddressOf CExpression.Name("torb_element_void")
+  }
+  const frameType = frameTypeName started
+  const place = slotExpression body, target
+  const made = CExpression.Call(CExpression.Name("torb_task_new"), [
+    CExpression.Name(started.name),
+    sizeOf(frameType),
+    element,
+  ])
+  var statements = [CStatement.Assignment(place, made)]
+  const frame = CExpression.Cast pointerTo(frameType), CExpression.Call(CExpression.Name("torb_task_frame"), [place])
+  for index in 0..arguments.length() {
+    const member = CExpression.PointerMember frame, slotNameOf(started, Slot(index))
+    statements.append CStatement.Assignment(member, slotExpression(body, arguments[index].slot))
+  }
+  statements.append CStatement.Evaluate(CExpression.Call(CExpression.Name("torb_task_start"), [place]))
+  statements
+}
+
+/** A resume function finishes by moving its value into the result slot of the task block. */
+fn finishedStatements(program: IrProgram, body: Body, value: Argument?): List<CStatement> {
+  const finished = CStatement.Return Some(CExpression.Name("TORB_POLL_FINISHED"))
+  const found = match value {
+    Some(argument) => argument
+    None => {
+      return [finished]
+    }
+  }
+  if isVoidResult(program, body.function.signature.result) {
+    return [finished]
+  }
+  const spelling = valueTypeOf program, body.function.signature.result
+  const slot = CExpression.Call CExpression.Name("torb_task_result_slot"), [CExpression.Name(taskName)]
+  const into = CExpression.Dereference CExpression.Cast(pointerTo(spelling), slot)
+  [CStatement.Assignment(into, slotExpression(body, found.slot)), finished]
 }
 
 /**
@@ -498,6 +701,10 @@ fn slotDeclarationsOf(program: IrProgram, body: Body): List<CStatement> {
   for index in 0..function.slots.length() {
     const declared = function.slots[index]
     const name = slotNameOf function, Slot(index)
+    // A member of the frame is no local, and a struct member nothing reads is no warning
+    if isFrameSlot(body, Slot(index)) {
+      continue
+    }
     if !body.readSlots[index] {
       silenced.append CStatement.Evaluate(CExpression.Cast("void", CExpression.Name(name)))
     }
@@ -578,6 +785,12 @@ fn blockStatements(var emission: Emission, program: IrProgram, body: Body, index
   for instruction in block.instructions {
     const found = instructionStatements emission, program, body, instruction
     statements.appendAll found
+  }
+  // Where the loop turns around, a task reads its cancellation flag: every loop of a task is cancellable
+  if const Some(machine) = body.machine {
+    if machine.isBackEdge(index) {
+      statements.append cancellationCheckOf(backEdgeStopLabelOf(index))
+    }
   }
   const ending = terminatorStatements emission, program, body, block.terminator
   statements.appendAll ending
@@ -675,7 +888,27 @@ fn instructionStatements(
     }
     .TakeOut(_, _, _, _) => reported emission, "a `var` path through a map"
     .PutBack(_, _, _, _) => reported emission, "a `var` path through a map"
-    .Suspend(_, _) => reported emission, "a task that suspends"
+    .Suspend(state, awaited) => {
+      if body.machine.isNone() {
+        return reported emission, "a suspension outside the body of a task"
+      }
+      suspendStatements body, state, awaited
+    }
+    .TaskNew(target, resume, result, arguments) => {
+      taskNewStatements emission, program, body, target, resume, result, arguments
+    }
+    .ChannelNew(target, capacity, item, at) => {
+      if !program.hasElement(item) {
+        return reported emission, "a channel over an element descriptor that is not in the program"
+      }
+      const descriptor = CExpression.AddressOf CExpression.Name(program.elementAt(item).name)
+      const made = CExpression.Call(CExpression.Name("torb_channel_new"), [
+        slotExpression(body, capacity),
+        descriptor,
+        locationExpression(program, at),
+      ])
+      [CStatement.Assignment(slotExpression(body, target), made)]
+    }
   }
 }
 
@@ -749,6 +982,9 @@ public fn retainStatement(program: IrProgram, id: IrTypeId, place: CExpression):
         .ListStorage => Some retainedInto(place, "torb_list_retained")
         .MapStorage => Some retainedInto(place, "torb_map_retained")
         .SetStorage => Some retainedInto(place, "torb_set_retained")
+        // A task and a channel are counted blocks with the header first, so the generic retain is theirs
+        .TaskObject => Some CStatement.Evaluate(CExpression.Call(CExpression.Name("torb_retain"), [place]))
+        .ChannelObject => Some CStatement.Evaluate(CExpression.Call(CExpression.Name("torb_retain"), [place]))
         _ => None
       }
     }
@@ -778,6 +1014,11 @@ public fn releaseStatement(program: IrProgram, id: IrTypeId, place: CExpression)
     const helper = dropFunctionOf program, layout
     return Some CStatement.Evaluate(CExpression.Call(helper, [CExpression.AddressOf(place)]))
   }
+  // A `shared type` object is its block, whose drop releases what its fields hold
+  if const .SharedObject(layout) = program.typeAt(inner) {
+    const drop = dropFunctionOf program, layout
+    return Some CStatement.Evaluate(CExpression.Call(CExpression.Name("torb_release"), [place, drop]))
+  }
   match program.typeAt(inner) {
     // The payload is erased, so the drop function comes out of the first table the value carries: it is a function of the
     // *target* type, which is what a table is per, and the payload is that type whichever bound one looks at
@@ -801,6 +1042,8 @@ public fn releaseStatement(program: IrProgram, id: IrTypeId, place: CExpression)
         .ListStorage => Some releasedBy(place, "torb_list_release")
         .MapStorage => Some releasedBy(place, "torb_map_release")
         .SetStorage => Some releasedBy(place, "torb_set_release")
+        .TaskObject => Some releasedBy(place, "torb_task_release")
+        .ChannelObject => Some releasedBy(place, "torb_channel_release")
         _ => None
       }
     }
@@ -995,7 +1238,35 @@ fn makeUniqueStatements(
   if !isManagedType(program, annotation) {
     return []
   }
+  // A task, a channel and a `shared type` object have an identity: what a `var` binding of one permits is to act on that
+  // one, never on a copy
+  if isIdentityRuntime(program, annotation) || isSharedObjectType(program, annotation) {
+    return []
+  }
   reported emission, "making a value of this type unique"
+}
+
+fn isSharedObjectType(program: IrProgram, id: IrTypeId): Bool {
+  match program.typeAt(id) {
+    .SharedObject(_) => true
+    _ => false
+  }
+}
+
+fn isIdentityRuntime(program: IrProgram, id: IrTypeId): Bool {
+  if const .Runtime(kind, _) = program.typeAt(id) {
+    return isIdentityKind kind
+  }
+  false
+}
+
+/** A task and a channel: a pointer to a counted block with an identity, where a container is a value around storage. */
+fn isIdentityKind(kind: RuntimeKind): Bool {
+  match kind {
+    .TaskObject => true
+    .ChannelObject => true
+    _ => false
+  }
 }
 
 /**
@@ -2333,8 +2604,14 @@ fn nullTestOf(program: IrProgram, shape: Layout, name: CExpression): CExpression
   }
   match program.typeAt(payload) {
     .Text => storageTestOf name
-    // Every container of the ABI carries its storage in the same first member
-    .Runtime(_, _) => storageTestOf name
+    // Every container of the ABI carries its storage in the same first member; a task and a channel are the pointer
+    .Runtime(kind, _) => {
+      if isIdentityKind(kind) {
+        CExpression.Binary name, "!=", nullPointer
+      } else {
+        storageTestOf name
+      }
+    }
     .Closure(_) => CExpression.Binary CExpression.Member(name, codeMemberName), "!=", nullPointer
     _ => CExpression.Binary name, "!=", nullPointer
   }
@@ -2570,8 +2847,19 @@ fn terminatorStatements(
       }
       [CStatement.Switch(name, cases, [CStatement.Goto("L{otherwise.value}")])]
     }
-    .Return(value) => returnStatements program, body, value
+    .Return(value) => {
+      if body.machine.isSome() {
+        return finishedStatements program, body, value
+      }
+      returnStatements program, body, value
+    }
     .Unreachable => [CStatement.Evaluate(CExpression.Call(CExpression.Name("TORB_UNREACHABLE"), []))]
+    .Stop => {
+      if body.machine.isNone() {
+        return reported emission, "a stop outside the body of a task"
+      }
+      [CStatement.Return(Some(CExpression.Name("TORB_POLL_STOPPED")))]
+    }
   }
 }
 
@@ -2596,13 +2884,26 @@ fn returnStatements(program: IrProgram, body: Body, value: Argument?): List<CSta
 
 // --- Slots ----------------------------------------------------------------------------------------------------------
 
-/** A slot as an expression. A `var` parameter holds a pointer, so reading it goes through one dereference. */
+/**
+ * A slot as an expression. A `var` parameter holds a pointer, so reading it goes through one dereference; a slot of a
+ * task's frame is a member of the frame.
+ */
 public fn slotExpression(body: Body, slot: Slot): CExpression {
+  if isFrameSlot(body, slot) {
+    return CExpression.PointerMember CExpression.Name(frameName), slotNameOf(body.function, slot)
+  }
   const name = CExpression.Name slotNameOf(body.function, slot)
   if isReferenceSlot(body, slot) {
     return CExpression.Dereference name
   }
   name
+}
+
+fn isFrameSlot(body: Body, slot: Slot): Bool {
+  match body.machine {
+    Some(machine) => machine.isFrameSlot slot
+    None => false
+  }
 }
 
 fn isReferenceSlot(body: Body, slot: Slot): Bool {

@@ -15,6 +15,14 @@
 uint64_t torb_added_wrapping_u64(uint64_t first, uint64_t second);
 /* Float64.ceiling */
 double torb_ceiling_f64(double value);
+/* closeReading */
+void torb_channel_close(torb_channel *channel);
+/* endWriting */
+void torb_channel_end(torb_channel *channel);
+/* offered */
+torb_task *torb_channel_offered(torb_channel *channel, const void *item);
+/* received */
+torb_task *torb_channel_received(torb_channel *channel);
 /* Char.byteLength */
 int64_t torb_char_byte_length_of(torb_char character);
 /* Char.isDigit */
@@ -159,6 +167,8 @@ bool torb_parse_i64(torb_text text, int64_t *out);
 bool torb_parse_i64_digits(torb_text text, int64_t radix, int64_t *out);
 /* UInt16.tryFrom(String), UInt32.tryFrom(String), UInt64.tryFrom(String), UInt8.tryFrom(String) */
 bool torb_parse_u64(torb_text text, uint64_t *out);
+/* pause */
+torb_task *torb_pause(void);
 /* printError */
 void torb_print_error_parts(const torb_text *parts, size_t count);
 /* print */
@@ -203,8 +213,16 @@ torb_text torb_show_i64(int64_t value);
 torb_text torb_show_u64(uint64_t value);
 /* Void.show */
 torb_text torb_show_void(torb_void value);
+/* sleep */
+torb_task *torb_sleep(double seconds);
 /* Float64.squareRoot */
 double torb_square_root_f64(double value);
+/* cancelTask */
+void torb_task_cancel(torb_task *self);
+/* completedWithin */
+torb_task *torb_task_completed_within(torb_task *self, torb_duration limit);
+/* Task.await, Task.finished */
+bool torb_task_result(torb_task *task, void *out);
 /* test */
 void torb_test_case(torb_text name, torb_closure body);
 /* group */

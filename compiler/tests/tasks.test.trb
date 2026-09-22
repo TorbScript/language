@@ -1,0 +1,163 @@
+/**
+ * Tasks in the IR: the lowering of a function that answers a `Task` into a resume function and a constructor, `spawn`
+ * over a closure literal, what the verifier asks of the task instructions, and the state machine `ir/suspension.trb`
+ * reads off a finished resume function - which slots live in the frame, and what every stop releases.
+ */
+
+use test, group from "std/test"
+use IrProgram, IrType, IrTypeId, IrSignature, IrParameter, Ownership from "../src/ir/ir"
+use Slot, BlockId, FunctionKind, Instruction, Terminator, RuntimeKind, Location, borrowed, owned from "../src/ir/ir"
+use Intrinsic, IntrinsicOperation from "../src/ir/ir"
+use finishProgram from "../src/ir/layout"
+use newFunction, addLocal, addTemporary, openBlock, emit, terminate, terminateBlock, finishFunction from "../src/ir/build"
+use setFunctionKind from "../src/ir/build"
+use verifyFunction from "../src/ir/verify"
+use printFunction from "../src/ir/print"
+use taskMachineOf, TaskMachine from "../src/ir/suspension"
+use irOf, unsupportedIn from "./lower-harness"
+
+fn taskOf(var program: IrProgram, value: IrTypeId): IrTypeId {
+  program.internType IrType.Runtime(RuntimeKind.TaskObject, [value])
+}
+
+/** A set of slots as a reader says it: `%0 %3`, or `-`. */
+fn shown(slots: List<Slot>): String {
+  var parts: List<String> = []
+  for slot in slots {
+    parts.append "%{slot.value}"
+  }
+  if parts.isEmpty() {
+    return "-"
+  }
+  parts.joined separator: " "
+}
+
+fn shownFrame(machine: TaskMachine): String {
+  var parts: List<String> = []
+  for index in 0..machine.frameSlots.length() {
+    if machine.frameSlots[index] {
+      parts.append "%{index}"
+    }
+  }
+  parts.joined separator: " "
+}
+
+group "A function that answers a `Task`" {
+  test "is a constructor that starts the resume function, which produces the value" {
+    const source = r"""
+      fn answer(base: Int): Task<Int> {
+        base + 1
+      }
+      """
+    const constructor = irOf source, "t_acme_x2f_app_main_answer"
+    assert constructor.contains("-> Task(Int64) \{")
+    assert constructor.contains("= taskNew t_resume__t_acme_x2f_app_main_answer(%0 borrowed) d_Int64")
+    const resume = irOf source, "t_resume__t_acme_x2f_app_main_answer"
+    assert resume.startsWith("task fn t_resume__t_acme_x2f_app_main_answer(base: Int64 borrowed) -> Int64 \{")
+  }
+
+  test "a `spawn` closure is the resume function, and what it captured is its frame" {
+    const source = r"""
+      fn started(value: Int): Int {
+        const task = spawn { value + 1 }
+        value
+      }
+      """
+    const shownIr = irOf source, "t_acme_x2f_app_main_started"
+    assert shownIr.contains("= construct T_environment__t_closure__t_acme_x2f_app_main_started_0 (%0 borrowed)")
+    assert shownIr.contains("= taskNew t_closure__t_acme_x2f_app_main_started_0(")
+    const resume = irOf source, "t_closure__t_acme_x2f_app_main_started_0"
+    assert resume.startsWith("task fn t_closure__t_acme_x2f_app_main_started_0(environment: ")
+  }
+
+  test "lowers without a construct it does not support" {
+    assert(unsupportedIn("fn answer(): Task<Int> \{\n  1\n\}") == [])
+  }
+}
+
+group "The verifier of the task instructions" {
+  test "`taskNew` starts a resume function with its parameters, and makes a `Task`" {
+    var program = IrProgram()
+    const int64 = program.internType IrType.Integer(64, true)
+    const voidType = program.internType IrType.VoidType
+    const task = taskOf program, int64
+    var resume = newFunction "t_resume__t_main_run", None, IrSignature([IrParameter("value", int64)], int64), "task"
+    setFunctionKind resume, FunctionKind.TaskResume
+    terminate resume, Terminator.Return(Some(borrowed(Slot(0))))
+    const started = finishFunction program, resume
+    var builder = newFunction "t_main_run", None, IrSignature([], voidType), "body"
+    const made = addTemporary builder, task
+    emit builder, Instruction.TaskNew(made, started, None, [])
+    terminate builder, Terminator.Return(None)
+    const identifier = finishFunction program, builder
+    finishProgram program
+    assert(
+      verifyFunction(program, program.functionAt(identifier))
+        == ["t_main_run b0: `t_resume__t_main_run` takes 1 arguments and 0 were given"]
+    )
+    const printed = printFunction program, program.functionAt(identifier)
+    assert printed.contains("  %0 = taskNew t_resume__t_main_run() void\n")
+  }
+
+  test "only the body of a task stops as cancelled" {
+    var program = IrProgram()
+    const voidType = program.internType IrType.VoidType
+    var builder = newFunction "t_main_stop", None, IrSignature([], voidType), "body"
+    terminate builder, Terminator.Stop
+    const identifier = finishFunction program, builder
+    finishProgram program
+    assert(verifyFunction(program, program.functionAt(identifier)) == ["t_main_stop b0: only the body of a task stops as cancelled"])
+    assert printFunction(program, program.functionAt(identifier)).contains("\n  stop\n")
+  }
+}
+
+group "The state machine of a resume function" {
+  test "a slot read after a suspension is in the frame, and one read before it is a local of one resume" {
+    var program = IrProgram()
+    const int64 = program.internType IrType.Integer(64, true)
+    const task = taskOf program, int64
+    const location = program.internLocation Location("tasks.trb", 1, 1)
+    var builder = newFunction "t_main_wait", None, IrSignature([IrParameter("awaited", task)], int64), "task"
+    setFunctionKind builder, FunctionKind.TaskResume
+    const before = addLocal builder, int64, "before"
+    const after = addLocal builder, int64, "after"
+    const add = Intrinsic IntrinsicOperation.Add, None
+    emit builder, Instruction.Intrinsic(Some(before), add, [before, before], location)
+    emit builder, Instruction.Suspend(1, Slot(0))
+    emit builder, Instruction.Intrinsic(Some(after), add, [before, before], location)
+    terminate builder, Terminator.Return(Some(owned(after)))
+    const identifier = finishFunction program, builder
+    finishProgram program
+    const machine = taskMachineOf program, program.functionAt(identifier)
+    // The parameter, and `before`, which the add after the suspension reads; `after` never crosses one
+    assert(shownFrame(machine) == "%0 %1")
+    assert(machine.stateCount() == 1)
+  }
+
+  test "a loop that turns around is a back-edge, where the machine checks its flag" {
+    var program = IrProgram()
+    const int64 = program.internType IrType.Integer(64, true)
+    const boolean = program.internType IrType.Boolean
+    const location = program.internLocation Location("tasks.trb", 1, 1)
+    var builder = newFunction "t_main_spin", None, IrSignature([], int64), "task"
+    setFunctionKind builder, FunctionKind.TaskResume
+    const count = addLocal builder, int64, "count"
+    const going = addLocal builder, boolean, "going"
+    emit builder, Instruction.Intrinsic(Some(count), Intrinsic(IntrinsicOperation.Subtract, None), [count, count], location)
+    const head = openBlock builder, "head", None
+    terminateBlock builder, BlockId(0), Terminator.Jump(head)
+    emit builder, Instruction.Intrinsic(Some(going), Intrinsic(IntrinsicOperation.Equal, None), [count, count], location)
+    const body = openBlock builder, "body", None
+    const done = openBlock builder, "done", None
+    terminateBlock builder, head, Terminator.Branch(going, body, done)
+    terminateBlock builder, body, Terminator.Jump(head)
+    terminateBlock builder, done, Terminator.Return(Some(owned(count)))
+    const identifier = finishFunction program, builder
+    finishProgram program
+    const machine = taskMachineOf program, program.functionAt(identifier)
+    assert machine.isBackEdge(body.value)
+    assert(!machine.isBackEdge(0))
+    assert(!machine.isBackEdge(head.value))
+    assert(shown(machine.backEdgeReleases[body.value]) == "-")
+  }
+}

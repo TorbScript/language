@@ -13,8 +13,10 @@ use SymbolId from "../../semantics/symbols"
 use TypeId, ParameterId from "../../semantics/checker/type"
 use signatureOf, typeSignatureOf from "../../semantics/checker/signature"
 use extensionAt from "../../semantics/checker/implementation"
-use IrSignature, IrTypeId, Slot, BlockId, FunctionId, Instance, Terminator, borrowed from "../ir"
-use FunctionBuilder, newFunction, setBlockLocation, finishFunction from "../build"
+use IrSignature, IrTypeId, Slot, BlockId, FunctionId, Instance, Terminator, FunctionKind, LocationId, borrowed from "../ir"
+use FunctionBuilder, newFunction, setBlockLocation, finishFunction, setFunctionKind from "../build"
+use resumeFunctionName from "../mangle"
+use taskValueOf, resumeSignatureOf, buildTaskConstructor, numberSuspensions, hasSuspension from "./task"
 use moduleComponentOf from "../instantiate"
 use mangledName from "../mangle"
 use instanceOfSymbol, instanceKeyOf, functionDeclarationOf, isMonomorphic from "../instances"
@@ -23,6 +25,7 @@ use finishBlock, voidTypeOf from "./context"
 use lowerBlockInto, lowerBlockValue, lowerStatement from "./statement"
 use capturedVariablesOf, capturedVariablesIn from "./closure"
 use staticOfConstant from "../constant"
+use taskValueOf as declaredTaskValueOf from "../../semantics/checker/statement"
 
 /** The body of one instance. The stub is replaced only where everything in it could be lowered. */
 public fn lowerInstance(var lowering: Lowering, instance: Instance) {
@@ -64,8 +67,16 @@ public fn lowerInstance(var lowering: Lowering, instance: Instance) {
   lowering.substitution = lowering.instanceMappings.get(key) ?? empty
   lowering.owner = name
   lowering.capturedVariables = capturedVariablesOf lowering, body
-  var builder = newFunction name, Some(symbol), signature, "body"
   const location = locationOf lowering, body.span
+  // A declaration that *says* `Task<...>` - not one whose type parameter a task happens to fill, as `Option.expect` of
+  // an `Option<Task<Int>>` does: that body produces the task itself
+  if declaresTask(lowering, symbol) {
+    if const Some(value) = taskValueOf(lowering, signature.result) {
+      lowerTaskInstance lowering, identifier, symbol, declaration, body, signature, value, location
+      return
+    }
+  }
+  var builder = newFunction name, Some(symbol), signature, "body"
   setBlockLocation builder, BlockId(0), Some(location)
   declareParameterSlots lowering, symbol, declaration
   lowerBody lowering, builder, body, signature.result
@@ -77,12 +88,62 @@ public fn lowerInstance(var lowering: Lowering, instance: Instance) {
   lowering.lowered = lowering.lowered + 1
 }
 
+/** Whether the declaration writes `Task<...>` as its result, which is what makes its body the body of a task. */
+fn declaresTask(var lowering: Lowering, symbol: SymbolId): Bool {
+  const identifier = signatureOf lowering.checker, symbol
+  const declared = lowering.checker.signature(identifier).form.result
+  declaredTaskValueOf(lowering.checker, declared).isSome()
+}
+
+/**
+ * The body of a function that answers a `Task<Value>`: the **resume function** of the task, whose body produces the
+ * `Value` and may wait, and in the stub's place the **constructor** every caller already calls, which starts it
+ * (`ir/lower/task.trb`).
+ */
+fn lowerTaskInstance(
+  var lowering: Lowering,
+  identifier: FunctionId,
+  symbol: SymbolId,
+  declaration: FunctionDeclaration,
+  body: Block,
+  signature: IrSignature,
+  value: IrTypeId,
+  location: LocationId,
+) {
+  const name = lowering.program.functionAt(identifier).name
+  const resumeSignature = match resumeSignatureOf(lowering, signature, value, body.span) {
+    Some(found) => found
+    None => {
+      lowering.stubbed = lowering.stubbed + 1
+      return
+    }
+  }
+  var resume = newFunction resumeFunctionName(name), Some(symbol), resumeSignature, "task"
+  setFunctionKind resume, FunctionKind.TaskResume
+  setBlockLocation resume, BlockId(0), Some(location)
+  declareParameterSlots lowering, symbol, declaration
+  lowering.isTaskBody = true
+  lowerBody lowering, resume, body, value
+  numberSuspensions resume
+  if !lowering.isSupported {
+    lowering.stubbed = lowering.stubbed + 1
+    return
+  }
+  const started = finishFunction lowering.program, resume
+  var constructor = newFunction name, Some(symbol), signature, "task"
+  setBlockLocation constructor, BlockId(0), Some(location)
+  buildTaskConstructor lowering, constructor, signature, started, value
+  lowering.program.functions.set identifier.value, constructor.function
+  lowering.lowered = lowering.lowered + 1
+}
+
 /** What every function starts from: no slots, no loops, nothing diverged, and the module its body is written in. */
 public fn beginFunction(var lowering: Lowering, module: ModuleId) {
   lowering.module = module
   lowering.slots = [:]
   lowering.entryLocals = [:]
   lowering.hole = None
+  lowering.isTaskBody = false
   lowering.inlinedConstants = [:]
   lowering.inlinedThunks = [:]
   lowering.shownParts = [:]
@@ -106,13 +167,6 @@ public fn beginFunction(var lowering: Lowering, module: ModuleId) {
  * *into* the slot the `return` carries, so the last expression of a body needs no move of its own.
  */
 public fn lowerBody(var lowering: Lowering, var builder: FunctionBuilder, body: Block, result: IrTypeId) {
-  // A function that answers a `Task<Value>` has a body that produces the `Value`, so the two disagree by design until
-  // the state-machine transformation of 7.3 puts them back together (`Iterating.next` of `std/stream` is the one in the
-  // repository). A clean finding rather than an internal error of the verifier about a program that is correct
-  if isTaskType(lowering, result) {
-    reportUnsupported lowering, "a body whose result is a `Task`", body.span
-    return
-  }
   if isVoidType(lowering, result) {
     lowerBlockInto lowering, builder, body, None
     if !lowering.isDiverged {
@@ -198,6 +252,8 @@ public fn lowerEntryFunction(var lowering: Lowering, module: ModuleId): Function
   beginFunction lowering, module
   lowering.owner = name
   lowering.capturedVariables = capturedVariablesIn lowering, statements
+  // An entry file may wait at the top level: where it does, its code becomes the resume function of the main task
+  lowering.isTaskBody = true
   var builder = newFunction name, None, signature, "entry"
   for statement in statements {
     if isEntryStatement(statement) {
@@ -214,6 +270,10 @@ public fn lowerEntryFunction(var lowering: Lowering, module: ModuleId): Function
   }
   if !lowering.isDiverged {
     finishBlock lowering, builder, Terminator.Return(None)
+  }
+  if hasSuspension(builder) {
+    setFunctionKind builder, FunctionKind.TaskResume
+    numberSuspensions builder
   }
   if !lowering.isSupported {
     lowering.stubbed = lowering.stubbed + 1

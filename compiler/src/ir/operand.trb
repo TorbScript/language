@@ -168,6 +168,9 @@ public fn operandsOf(program: IrProgram, facts: SlotFacts, instruction: Instruct
     }
     .Panic(message, _) => [borrowedOperand(message.slot)]
     .Suspend(_, awaited) => [borrowedOperand(awaited)]
+    // The frame of the new task takes every argument, exactly as a `Construct` takes its fields
+    .TaskNew(_, _, _, arguments) => ownedOperands arguments
+    .ChannelNew(_, capacity, _, _) => [borrowedOperand(capacity)]
   }
 }
 
@@ -280,6 +283,7 @@ public fn consumedSlotsOf(instruction: Instruction): List<Slot> {
     .BoxNew(_, value) => movedSlotsOf([value])
     .TraitValue(_, value, _) => movedSlotsOf([value])
     .PutBack(_, _, value, _) => [value]
+    .TaskNew(_, _, _, arguments) => movedSlotsOf arguments
     _ => []
   }
 }
@@ -359,6 +363,10 @@ public fn withOperands(instruction: Instruction, decided: List<Argument>): Instr
     }
     .Panic(_, at) => Instruction.Panic decidedAt(decided, 0), at
     .Suspend(state, _) => Instruction.Suspend state, decidedAt(decided, 0).slot
+    .TaskNew(target, resume, result, arguments) => {
+      Instruction.TaskNew target, resume, result, takenArguments(arguments, decided, 0)
+    }
+    .ChannelNew(target, _, item, at) => Instruction.ChannelNew target, decidedAt(decided, 0).slot, item, at
   }
 }
 

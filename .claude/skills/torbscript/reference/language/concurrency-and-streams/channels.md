@@ -2,7 +2,7 @@
 title: Channels
 summary: A Channel is a stream in memory whose one holder has both ends, handed out separately as a Source and a Sink so a producer never sees the reading end and a consumer never sees the writing one.
 kind: reference
-status: planned
+status: stable
 order: 20
 keywords:
   - Channel
@@ -14,12 +14,9 @@ source:
   - std/task/src/lib.trb
 ---
 
-> **Planned.** This feature is designed but not implemented. Nothing on this page works today.
-
 `Channel<Item>` connects two tasks with a queue between them. Its one holder gets both ends through `source()` and
 `sink()`, and can then hand each one to a different task: a producer writes into the `Sink` and never sees the
-`Source`, a consumer reads the `Source` and never sees the `Sink`. The example below type checks; no back end runs it
-yet.
+`Source`, a consumer reads the `Source` and never sees the `Sink`.
 
 ## Example
 
@@ -29,21 +26,22 @@ const channel = Channel<Int>(capacity: 8)
 const producer = spawn {
   var writing = channel.sink()
   for value in 0..5 {
-    writing.add(value).await()?
+    writing.add(value).outcome()?
   }
-  writing.end().await()
+  writing.end().outcome()
 }
 
-const total = channel.source().collect(counting()).await()
-print "sent: {producer.await().isOk()}, total: {total}"
+var reading = channel.source()
+const total = reading.collect(counting()).outcome()
+print "sent: {producer.outcome().isOk()}, total: {total}"
 ```
 
 ## Syntax
 
 ```text
 Channel<Item>(capacity: Int = 0)          a stream in memory
-channel.source(): Source<Item, Never>     the reading end
-channel.sink(): Sink<Item, ChannelClosed> the writing end
+channel.source(): ChannelSource<Item>     the reading end, a Source<Item, Cancelled>
+channel.sink(): ChannelSink<Item>         the writing end, a Sink<Item, ChannelClosed>
 ```
 
 ## Rules
@@ -52,8 +50,10 @@ channel.sink(): Sink<Item, ChannelClosed> the writing end
    [Streams](streams.md) works on them.** They are methods, not fields, because they are computed and a field would
    have to be passed to the constructor.
 
-2. **The reading end cannot fail.** `channel.source()` is `Source<Item, Never>`: a closed channel is the end of the
-   stream, not a failure, so `next()` answers `Ok(None)` rather than a `Fail`.
+2. **The reading end fails only with `Cancelled`.** `channel.source()` is a `Source<Item, Cancelled>`: a closed
+   channel is the end of the stream, not a failure, so `next()` answers `Ok(None)` rather than a `Fail`. `Cancelled` is
+   there because every asynchronous read can be cancelled, and it is the floor every stream's failure type converts
+   from.
 
 3. **The writing end fails with `ChannelClosed` once nobody is reading any more.** `channel.sink()` is
    `Sink<Item, ChannelClosed>`; `ChannelClosed` is the one way a channel's writing end can fail, and it is a value, not

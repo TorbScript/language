@@ -115,10 +115,10 @@ that answers the question. A page marked (planned) describes a feature that does
 
 ## language/concurrency-and-streams
 
-- `language/concurrency-and-streams/channels.md` - **Channels** (reference, planned): A Channel is a stream in memory whose one holder has both ends, handed out separately as a Source and a Sink so a producer never sees the reading end and a consumer never sees the writing one.
+- `language/concurrency-and-streams/channels.md` - **Channels** (reference): A Channel is a stream in memory whose one holder has both ends, handed out separately as a Source and a Sink so a producer never sees the reading end and a consumer never sees the writing one.
 - `language/concurrency-and-streams/index.md` - **Concurrency and streams** (index): Task, Channel, Source and Sink - asynchrony in the type system instead of a keyword - designed and type-checked today, but not yet run by any back end.
-- `language/concurrency-and-streams/streams.md` - **Streams** (reference, planned): Source and Sink are the asynchronous siblings of Iterator and Accumulator, with the same verbs, the same Stage values in between, and a failure that stands in the type on both ends.
-- `language/concurrency-and-streams/tasks.md` - **Tasks** (reference, planned): Task<Value> is what an asynchronous function answers, and await() unwraps it - but no back end runs one yet, so a program that spawns a task type checks and cannot finish running.
+- `language/concurrency-and-streams/streams.md` - **Streams** (reference): Source and Sink are the asynchronous siblings of Iterator and Accumulator, with the same verbs, the same Stage values in between, and a failure that stands in the type on both ends.
+- `language/concurrency-and-streams/tasks.md` - **Tasks** (reference): Task<Value> is what an asynchronous function answers; await() waits for it and answers a Result, because every task can be cancelled.
 
 ## language/configuration
 
@@ -289,7 +289,7 @@ that answers the question. A page marked (planned) describes a feature that does
 - `standard-library/project.md` - **std/project** (package): The receiver type of project.trb - Project, Dependencies, Build, Test and Workspace.
 - `standard-library/sandbox.md` - **std/sandbox** (package): Sandbox and Script, which load a .trb file as a type-checked, capability-limited receiver closure.
 - `standard-library/stream.md` - **std/stream** (package): Source and Sink, the asynchronous ends of a stream, plus Bytes, Utf8Error and the stages between bytes and text.
-- `standard-library/task.md` - **std/task** (package, planned): Task and Channel, the two shared types that connect concurrent work, and spawn - designed, but not run by any back end yet.
+- `standard-library/task.md` - **std/task** (package): Task and Channel, the two shared types that connect concurrent work, spawn, cancellation with Cancelled and TimedOut, and pause.
 - `standard-library/test.md` - **std/test** (package): test and group, the two functions a .test.trb file calls, with assert doing all of the checking.
 - `standard-library/text.md` - **std/text** (package): Char, a Unicode scalar value, and String, always-valid UTF-8 text with no length() and no indexing by character.
 - `standard-library/time.md` - **std/time** (package): Instant and Duration, the two time values, plus Clock and sleep, which read and wait on the wall clock.

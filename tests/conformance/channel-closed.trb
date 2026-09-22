@@ -1,0 +1,46 @@
+/**
+ * Closing the reading end of a `Channel` is how a producer learns that nobody wants its items any more: every `add`
+ * after it - and the one that waits for a reader right then - fails with `ChannelClosed`, and what was buffered is
+ * dropped. The items that never arrived are counted blocks, released by the channel, so nothing leaks.
+ */
+
+/** A value the program builds, so that its storage is counted and not the immortal storage of a literal. */
+fn repeated(part: String, times: Int): String {
+  var total = ""
+  for _ in 0..times {
+    total = total + part
+  }
+  total
+}
+
+/** Writes until the channel says nobody reads, and tells how far it got. */
+fn write(channel: Channel<String>): Task<String> {
+  var output = channel.sink()
+  var written = 0
+  for index in 0..10 {
+    match output.add(repeated("w", index + 1)).outcome() {
+      Ok(_) => {
+        written = written + 1
+      }
+      Fail(problem) => {
+        return "stopped after {written}: {problem}"
+      }
+    }
+  }
+  "wrote all {written}"
+}
+
+const unbuffered = Channel<String>()
+const writer = write unbuffered
+var early = unbuffered.source()
+print(early.next().outcome()?)
+print(early.next().outcome()?)
+early.close()
+print(writer.await() ?? "cancelled")
+
+const buffered = Channel<String>(capacity: 3)
+const filler = write buffered
+var late = buffered.source()
+print(late.next().outcome()?)
+late.close()
+print(filler.await() ?? "cancelled")

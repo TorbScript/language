@@ -3,13 +3,14 @@
  * `var self`.
  */
 
+use Cancelled from "std/task"
 use Source from "./source"
 
 /**
  *     var file = File.create(path)?
  *     using file { target =>
- *       target.addLine("first").await()?
- *       target.end().await()
+ *       target.addLine("first").outcome()?
+ *       target.end().outcome()
  *     }
  *
  * A sink has an identity and is ended once, so it is a `shared type`, and `add` and `end` change it: they take
@@ -36,7 +37,7 @@ use Source from "./source"
  * - [Source] - the reading end, and `into`/`fill`'s other side.
  * - [Buffered] - what `buffered(capacity:)` answers.
  */
-public shared trait Sink<Item, Failure> with Close {
+public shared trait Sink<Item, Failure: From<Cancelled>> with Close {
   /** Finishes when the target has taken the item. */
   var fn add(item: Item): Task<Result<Void, Failure>>
 
@@ -46,7 +47,7 @@ public shared trait Sink<Item, Failure> with Close {
   /** Everything an `Iterate` holds, in order. Does not end the sink: a sink may be filled from several places. */
   var fn addAll(items: Iterate<Item>): Task<Result<Void, Failure>> {
     for item in items {
-      add(item).await()?
+      add(item).outcome()?
     }
     Ok void
   }
@@ -56,7 +57,7 @@ public shared trait Sink<Item, Failure> with Close {
     // `self` is the object itself and never goes to a `var` parameter, which could replace it: a binding of it can be
     // replaced and the object stays
     var target = self
-    source.into(target).await()
+    source.into(target).outcome()
   }
 
   /** A sink for the same items with a failure of another type: what `mapError` is on a `Result`. */
@@ -110,12 +111,12 @@ public shared type Pushing<Item, Failure> with Sink<Item, Failure> {
 
   /** Calls `accept` with the item. */
   var fn add(item: Item): Task<Result<Void, Failure>> {
-    accept(item).await()
+    accept(item).outcome()
   }
 
   /** Calls `complete`. */
   var fn end(): Task<Result<Void, Failure>> {
-    complete().await()
+    complete().outcome()
   }
 
   /** Releases `below`, if there is one. */
@@ -148,11 +149,11 @@ shared type Remapped<Item, Failure, Other> with Sink<Item, Other> {
   }
 
   var fn add(item: Item): Task<Result<Void, Other>> {
-    Ok(downstream.add(item).await().mapError(transform)?)
+    Ok(downstream.add(item).outcome().mapError(transform)?)
   }
 
   var fn end(): Task<Result<Void, Other>> {
-    Ok(downstream.end().await().mapError(transform)?)
+    Ok(downstream.end().outcome().mapError(transform)?)
   }
 
   var fn close() {
@@ -167,9 +168,9 @@ shared type Remapped<Item, Failure, Other> with Sink<Item, Other> {
  * a sink, because "when was it actually written" is the one question a writer has to be able to answer:
  *
  *     var out = standardOutput().buffered(capacity: 4096)
- *     out.addLine(report).await()?
- *     out.flush().await()?                   // now it is on the screen
- *     out.end().await()?                     // ... and this flushes too
+ *     out.addLine(report).outcome()?
+ *     out.flush().outcome()?                   // now it is on the screen
+ *     out.end().outcome()?                     // ... and this flushes too
  *
  * `close()` does **not** flush: it releases, and what was buffered is lost. That is the difference between abandoning
  * a sink and ending it.
@@ -199,7 +200,7 @@ public shared type Buffered<Item, Failure> with Sink<Item, Failure> {
     if pending.length() < capacity {
       return Ok void
     }
-    flush().await()
+    flush().outcome()
   }
 
   /** Writes everything that is buffered, and finishes when it has arrived below. */
@@ -207,15 +208,15 @@ public shared type Buffered<Item, Failure> with Sink<Item, Failure> {
     const ready = pending
     pending = []
     for one in ready {
-      downstream.add(one).await()?
+      downstream.add(one).outcome()?
     }
     Ok void
   }
 
   /** Flushes, then ends `downstream`. */
   var fn end(): Task<Result<Void, Failure>> {
-    flush().await()?
-    downstream.end().await()
+    flush().outcome()?
+    downstream.end().outcome()
   }
 
   /** Releases `downstream` without flushing - whatever is still buffered is lost. */

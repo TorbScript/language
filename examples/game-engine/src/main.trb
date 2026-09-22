@@ -53,7 +53,7 @@ const frameTime = 1.0 / 60.0
  * Returns every intermediate world: they share their storage with each other, so keeping the whole history costs
  * only what actually changed.
  */
-fn run(start: World, seconds: Float): Task<List<World>> {
+fn run(start: World, seconds: Float): Task<Result<List<World>, Cancelled>> {
   var world = start
   var history: List<World> = []          // Worlds share their storage, keeping all of them is cheap
 
@@ -64,13 +64,13 @@ fn run(start: World, seconds: Float): Task<List<World>> {
 
     const remaining = frameTime - (Clock.now() - frameStart).seconds()
     if remaining > 0.0 {
-      sleep(remaining).await()
+      sleep(remaining).await()?
     }
   }
-  history
+  Ok history
 }
 
-const history = run(initial, seconds: 5.0).await()
+const history = run(initial, seconds: 5.0).outcome()?
 
 const survivors = history.last()
   .map { _.query(ComponentKind.Tag, ComponentKind.Health).count() }

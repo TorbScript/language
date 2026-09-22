@@ -1,0 +1,44 @@
+/**
+ * `map`, `flatMap`, `Task.all`, `all` and `outcome()` are TorbScript over `await()`: `map` and `flatMap` go on with the
+ * finished value, `Task.all` answers the values in the order of the tasks - not the order they finish in - and
+ * `outcome()` waits for a task whose value is a `Result` and hands that `Result` on, so one `?` unwraps it.
+ */
+
+/** A value the program builds, so that its storage is counted and not the immortal storage of a literal. */
+fn repeated(part: String, times: Int): String {
+  var total = ""
+  for _ in 0..times {
+    total = total + part
+  }
+  total
+}
+
+fn square(value: Int): Task<Int> {
+  value * value
+}
+
+fn parsed(text: String): Task<Result<Int, Cancelled>> {
+  Ok text.byteLength()
+}
+
+/** Adds what two tasks answered, with `outcome()` and `?` for both. */
+fn added(first: String, second: String): Task<Result<Int, Cancelled>> {
+  const left = parsed(first).outcome()?
+  const right = parsed(second).outcome()?
+  Ok(left + right)
+}
+
+print(square(3).map({ _ + 1 }).await() ?? 0)
+print(square(2).flatMap({ value => square(value).await() ?? 0 }).await() ?? 0)
+print(square(5).map({ repeated "a", _ }).await() ?? "")
+
+var tasks: List<Task<Int>> = []
+for index in 0..5 {
+  tasks.append square(index)
+}
+print(Task.all(tasks).await() ?? [])
+
+const pair = all(square(4), spawn { repeated "b", 3 }).await()?
+print "{pair.0} {pair.1}"
+
+print added(repeated("c", 2), repeated("d", 3)).outcome()

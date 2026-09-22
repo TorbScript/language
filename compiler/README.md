@@ -93,6 +93,7 @@ src/
 │ ├ ownership-verify.trb The ownership invariants, as a safety net for every later pass
 │ ├ kept.trb            Which parameters a function may keep beyond the call
 │ ├ liveness.trb        Liveness over the slots a frame owns a count of
+│ ├ suspension.trb      The state machine of a task: its frame, and what every stop releases
 │ ├ layout.trb          Layouts and the representation classes
 │ ├ element.trb         The element descriptors the one C list and the one C hash table share
 │ ├ elements.trb        The element step: a write through `a[key]`
@@ -108,6 +109,7 @@ src/
 │   ├ expression.trb    Every expression of the monomorphic part of the language
 │   ├ call.trb          Calls, constructors and operators
 │   ├ closure.trb       A closure becomes a function plus an environment
+│   ├ task.trb          A task function becomes a resume function and a constructor; spawn, await
 │   ├ generic.trb       Which instance a call reaches, and when it goes through a witness table
 │   ├ match.trb         match, if const, while const, a destructuring binding, ?
 │   ├ place.trb         var paths: a checker Place to an IR Reference

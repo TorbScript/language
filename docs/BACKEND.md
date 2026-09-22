@@ -832,6 +832,13 @@ back with no marshalling.
 4. `spawn { ... }` allocates the task, copies the captures (a closure passed to `spawn` cannot capture a `var`, so
    there is no box to share) and enqueues it.
 
+**As built for the C back end** (`docs/design/CONCURRENCY.md` section 16, "The compiler half, as built"): no block is
+split and there is no `TaskFrame` layout. The lowering makes the resume function (`FunctionKind.TaskResume`, its result
+the `Value`) and a constructor that is one `TaskNew`, and writes a `Suspend` in front of the call that reads an
+`await()`; the ownership pass runs over the resume function unchanged. What lives in the frame and what every stop
+releases are read off the finished body (`ir/suspension.trb`), and the back end writes the frame as a struct of those
+slots, the switch over the state, and one stop path per state and per loop back-edge.
+
 The **scheduler is a FIFO run queue**, single threaded in 7.3, in `runtime/task.c` and in the VM with the same
 algorithm and the same order - so a program whose tasks do no real IO produces identical output in both back ends,
 and `10-async.trb` has a stable `.expected`. `Channel` is a ring buffer plus two waiter queues; `send` on a full
@@ -904,7 +911,7 @@ deleted).
 | **6.3** | **Measured, and one third of it done** (see "What 6.3 measured"): the flags stay, the translation unit is **not** sharded (4.3x faster to compile, 2.3x slower a binary), one witness thunk per member instead of per table entry (-13.3% of the C, -22% of the gcc), the module `const` of the lexer read once per file. **Left:** the mangled names (62.5% of the file), the element-type-blind collection defaults, `R_`/`D_` keyed on a layout's shape, `#line` behind a profile, a budget for `torb build` of the workspace. **The immortal counted static is done** (see the note of its own) | `backend/c/emit.trb`, `syntax/lexer.trb` | A timing test in the suite | 6.2 |
 | **7.1** | Bytecode: the format, the emitter from the IR, a disassembler for the snapshots | `backend/bytecode/*.trb` | Disassembly snapshots next to the IR snapshots | 6.2 |
 | **7.2** | The interpreter loop, `torb run` through the VM, the conformance suite through the VM. **Gate: C and the VM agree on every script** | `vm/*.trb` | The full suite, both back ends | 7.1 |
-| **7.3** | Tasks: the state-machine transformation in the lowering, `Task`/`spawn`/`await()`/`Channel`, the FIFO scheduler in C and in the VM. **Gate: `10-async.trb` in both back ends** | `ir/lower/task.trb`, `runtime/task.c`, `vm/task.trb` | `10-async.trb`, channel and ordering tests | 7.2 |
+| **7.3** | **Done for the C back end** (`docs/design/CONCURRENCY.md` section 16): the lowering of task functions, `spawn`, `await()` and `outcome()`, the cancellation checks, `Channel`, the main task, the FIFO scheduler in C; the VM half waits for the VM, and `10-async.trb` for a `From` conversion of `?` and `std/http`. Tasks: the state-machine transformation in the lowering, `Task`/`spawn`/`await()`/`Channel`, the FIFO scheduler in C and in the VM. **Gate: `10-async.trb` in both back ends** | `ir/lower/task.trb`, `ir/suspension.trb`, `runtime/task.c`, `vm/task.trb` | `10-async.trb`, channel and ordering tests | 7.2 |
 | **7.4** | The sandbox: `Script<Value>` (gap 12 below), capability checks at import, limits as counters, panics recovered, embedding the front end | `std/sandbox`, `vm/sandbox.trb` | A script that loops forever, one that imports what it may not, one that panics | 7.2 |
 | **7.5** | `project.trb` as a receiver script: `Project` and friends as real types, the static reader deleted after a test asserts both agree | `project/model.trb`, `project/manifest.trb` | Every `project.trb` of the repository, both readers | 7.4 |
 | **7.6** | The REPL: the scope chain, the persistent frame, shadowing, generations of redeclared types | `cli/repl.trb`, `vm/session.trb` | A transcript test | 7.4 |

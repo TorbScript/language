@@ -24,15 +24,15 @@ use ModuleId from "../../semantics/module"
 use TypeId, ParameterId, Signature, ParameterMode from "../../semantics/checker/type"
 use signatureOf from "../../semantics/checker/signature"
 use IrProgram, IrTypeId, IrType, IrSignature, IrSignatureId, IrParameter, Ownership from "../ir"
-use Slot, BlockId, LayoutId, FunctionId from "../ir"
+use Slot, BlockId, LayoutId, FunctionId, FunctionKind from "../ir"
 use Instruction, Terminator, Reference, PathStep, Capture, Argument as IrArgument, borrowed from "../ir"
 use FieldLayout from "../layout"
 use boxLayoutOf, environmentLayoutOf from "../capture"
 use FunctionBuilder, newFunction, addLocal, addTemporary, addBlock from "../build"
-use emit, terminate, setBlockLocation, finishFunction from "../build"
+use emit, terminate, setBlockLocation, finishFunction, setFunctionKind from "../build"
 use layoutOfType from "../verify"
 use describeIrType from "../print"
-use closureFunctionName, constructorFunctionName from "../mangle"
+use closureFunctionName, constructorFunctionName, resumeFunctionName from "../mangle"
 use instanceFor, cellTypeFor from "../instances"
 use Lowering, reportUnsupported, locationOf, irTypeOf from "./context"
 use isVoidType, finishBlock, continueIn, producesValue, borrowedArguments from "./context"
@@ -41,6 +41,8 @@ use lowerBody from "./function"
 use lowerPatternBinding from "./match"
 use lowerDefaultOfSource from "./call"
 use argumentReference, putBackElements, TakenElement from "./place"
+use taskValueOf, resumeSignatureOf, buildTaskConstructor, numberSuspensions, taskResultElement from "./task"
+use isTaskBodyClosure from "./task"
 
 // --- Which `var` bindings become boxes ------------------------------------------------------------------------------
 
@@ -879,6 +881,7 @@ fn loweredClosureBody(
   signature: IrSignatureId,
   environment: LayoutId?,
   plans: List<CapturePlan>,
+  isSpawned: Bool = false,
 ): FunctionId {
   const shape = lowering.program.signatureAt signature
   var parameters: List<IrParameter> = []
@@ -888,16 +891,52 @@ fn loweredClosureBody(
   }
   parameters.appendAll shape.parameters
   const built = IrSignature parameters, shape.result
-  var inner = newFunction name, None, built, "closure"
+  // A closure whose declared result is a `Task` has a body that produces the `Value`, exactly as a `fn` that answers one:
+  // the body becomes the resume function, and the closure's own function the constructor that starts it
+  const taskValue = match source {
+    .Written(written) => {
+      if isSpawned || isTaskBodyClosure(lowering, written) {
+        taskValueOf lowering, shape.result
+      } else {
+        None
+      }
+    }
+    .Thunk(_) => None
+  }
+  const isTaskClosure = !isSpawned && taskValue.isSome()
+  const bodySignature = match taskValue {
+    Some(value) => {
+      if isSpawned {
+        built
+      } else {
+        match resumeSignatureOf(lowering, built, value, at) {
+          Some(found) => found
+          None => {
+            var stub = newFunction name, None, built, "not supported yet"
+            return finishFunction lowering.program, stub
+          }
+        }
+      }
+    }
+    None => built
+  }
+  const bodyName = if isTaskClosure { resumeFunctionName name } else { name }
+  const label = if isSpawned || isTaskClosure { "task" } else { "closure" }
+  var inner = newFunction bodyName, None, bodySignature, label
+  if isSpawned || isTaskClosure {
+    setFunctionKind inner, FunctionKind.TaskResume
+  }
   const location = locationOf lowering, at
   setBlockLocation inner, BlockId(0), Some(location)
   const saved = savedFrame lowering
   enterClosure lowering, name, at
+  lowering.isTaskBody = isSpawned || isTaskClosure
   bindCaptures lowering, inner, environment, plans
   bindClosureParameters lowering, inner, at, source, environment.isSome(), shape.parameters.length()
   if lowering.isSupported {
-    lowerClosureBody lowering, inner, source, built.result
+    lowerClosureBody lowering, inner, source, bodySignature.result
   }
+  numberSuspensions inner
   const isSupported = lowering.isSupported
   restoreFrame lowering, saved
   if !isSupported {
@@ -905,7 +944,73 @@ fn loweredClosureBody(
     var stub = newFunction name, None, built, "not supported yet"
     return finishFunction lowering.program, stub
   }
-  finishFunction lowering.program, inner
+  const body = finishFunction lowering.program, inner
+  if !isTaskClosure {
+    return body
+  }
+  var constructor = newFunction name, None, built, "task"
+  setBlockLocation constructor, BlockId(0), Some(location)
+  buildTaskConstructor lowering, constructor, built, body, bodySignature.result
+  finishFunction lowering.program, constructor
+}
+
+/**
+ * `spawn { ... }`: the closure's body is the resume function of a new task, and the environment it captured is the
+ * frame - built here and moved into the task by `TaskNew`, where a closure value would have kept it.
+ *
+ * A `spawn` closure captures no `var` binding (the checker's rule), so every capture is a copy, which is exactly what a
+ * value that crosses into another task has to be.
+ */
+public fn lowerSpawnedClosure(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  expression: Expression,
+  closure: Closure,
+  annotation: IrTypeId,
+  value: IrTypeId,
+): Slot {
+  const at = expression.span
+  const plans = capturePlansOf lowering, builder, at
+  if !lowering.isSupported {
+    return abandonedSlot lowering, builder, destination
+  }
+  var fields: List<FieldLayout> = []
+  var captured: List<IrArgument> = []
+  for plan in plans {
+    const slot = match plan.taken {
+      .Value(found) => found
+      _ => {
+        return unsupportedSlot lowering, builder, destination, "a `spawn` closure that shares a variable", at
+      }
+    }
+    fields.append plan.field
+    captured.append borrowed(slot)
+  }
+  const index = lowering.closureCount
+  lowering.closureCount = index + 1
+  const name = closureFunctionName lowering.owner, index
+  const environment = if fields.isEmpty() {
+    None
+  } else {
+    Some environmentLayoutOf(lowering.program, name, fields)
+  }
+  const signature = lowering.program.internSignature IrSignature([], value)
+  const source = ClosureSource.Written closure
+  const resume = loweredClosureBody lowering, name, at, source, signature, environment, plans, isSpawned: true
+  if !lowering.isSupported {
+    return abandonedSlot lowering, builder, destination
+  }
+  var arguments: List<IrArgument> = []
+  if const Some(layout) = environment {
+    const environmentType = lowering.program.internType IrType.Record(layout)
+    const frame = addTemporary builder, environmentType
+    emit builder, Instruction.Construct(frame, layout, 0, captured)
+    arguments.append borrowed(frame)
+  }
+  const target = valueSlot lowering, builder, destination, annotation
+  emit builder, Instruction.TaskNew(target, resume, taskResultElement(lowering, value), arguments)
+  target
 }
 
 fn lowerClosureBody(
@@ -1045,6 +1150,7 @@ public type SavedFrame {
   closureParameters: List<Slot>
   hole: Slot?
   isDiverged: Bool
+  isTaskBody: Bool
   breakTargets: List<BlockId>
   continueTargets: List<BlockId>
   loopBroke: List<Bool>
@@ -1074,6 +1180,7 @@ public fn savedFrame(var lowering: Lowering): SavedFrame {
     lowering.closureParameters,
     lowering.hole,
     lowering.isDiverged,
+    lowering.isTaskBody,
     lowering.breakTargets,
     lowering.continueTargets,
     lowering.loopBroke,
@@ -1109,6 +1216,7 @@ public fn enterBody(var lowering: Lowering, name: String) {
   lowering.closureParameters = []
   lowering.hole = None
   lowering.isDiverged = false
+  lowering.isTaskBody = false
   lowering.breakTargets = []
   lowering.continueTargets = []
   lowering.loopBroke = []
@@ -1131,6 +1239,7 @@ public fn restoreFrame(var lowering: Lowering, saved: SavedFrame) {
   lowering.closureParameters = saved.closureParameters
   lowering.hole = saved.hole
   lowering.isDiverged = saved.isDiverged
+  lowering.isTaskBody = saved.isTaskBody
   lowering.breakTargets = saved.breakTargets
   lowering.continueTargets = saved.continueTargets
   lowering.loopBroke = saved.loopBroke

@@ -1,8 +1,8 @@
 ---
 title: Tasks
-summary: Task<Value> is what an asynchronous function answers, and await() unwraps it - but no back end runs one yet, so a program that spawns a task type checks and cannot finish running.
+summary: Task<Value> is what an asynchronous function answers; await() waits for it and answers a Result, because every task can be cancelled.
 kind: reference
-status: planned
+status: stable
 order: 10
 keywords:
   - Task
@@ -14,20 +14,23 @@ source:
   - std/task/src/lib.trb
 ---
 
-> **Planned.** This feature is designed but not implemented. Nothing on this page works today.
+> **Not built natively yet.** `Source.produce` builds its source out of a `Channel` and a trait-typed `Sink`, which the
+> native back end does not build yet, so `torb run` refuses the last example here. `torb check` accepts it, and the
+> rules are the language's.
 
 Asynchrony lives in the type system, not in a keyword. A function that returns `Task<Value>` may call `await()`
-inside its body, the same way a function that returns a `Result` may use `?`. The example below passes
-`torb docs check`'s type checker; running it is what no back end does yet.
+inside its body, the same way a function that returns a `Result` may use `?`. Every task can be cancelled, so
+`await()` answers `Result<Value, Cancelled>`: `?` hands a cancellation on, `??` replaces it. One worker runs the tasks
+of a program, one at a time, in the order they became ready.
 
 ## Example
 
 ```trb check
-fn double(value: Int): Task<Int> {
+fn double(value: Int): Task<Result<Int, Cancelled>> {
   spawn { value * 2 }.await()
 }
 
-const doubled = double(21).await()
+const doubled = double(21).outcome()?
 print doubled
 ```
 
@@ -36,7 +39,12 @@ print doubled
 ```text
 Task<Value>                                the type: a computation that finishes later
 spawn(body: () => Value): Task<Value>      starts body as a new task, running in parallel
-task.await(): Value                        waits for the value
+task.await(): Result<Value, Cancelled>     waits for the value, or Fail(Cancelled) where the task was cancelled
+task.outcome(): Result<Value, Failure>     for a Task<Result<Value, Failure>>: waits, and folds a cancellation in
+task.cancel()                              asks the task to stop (a var fn)
+task.within(limit): Task<Result<Value, TimedOut>>
+pause(): Task<Void>                        lets every other ready task run first (std/task)
+sleep(seconds: Float): Task<Void>          finishes once the time is up (std/time)
 task.map(transform): Task<Output>
 task.flatMap(transform): Task<Output>
 all(first: Task<A>, second: Task<B>): Task<(A, B)>
@@ -65,7 +73,7 @@ Task.all(tasks: Iterate<Task<Value>>): Task<List<Value>>
 
    ```trb error
    fn sumAll(tasks: List<Task<Int>>): Int {
-     tasks.map({ _.await() }).sum()
+     tasks.map({ _.await() ?? 0 }).sum()
    }
    // error: `await()` is only allowed in a closure that becomes a task
    ```
@@ -94,16 +102,16 @@ Task.all(tasks: Iterate<Task<Value>>): Task<List<Value>>
    Read the value into a `const` before the closure, and every task gets its own copy:
 
    ```trb check
-   fn counted(): Task<Int> {
+   fn counted(): Task<Result<Int, Cancelled>> {
      var total = 0
      total = 1
      const now = total
      const first = spawn { now + 1 }
      const second = spawn { now + 2 }
-     first.await() + second.await()
+     Ok(first.await()? + second.await()?)
    }
 
-   print counted().await()
+   print(counted().outcome()?)
    ```
 
 5. **A `spawn` closure takes no object with it, and a `Channel` carries none either.** A `shared type` is confined to
@@ -124,7 +132,7 @@ Task.all(tasks: Iterate<Task<Value>>): Task<List<Value>>
      }
    }
 
-   fn counted(): Task<Int> {
+   fn counted(): Task<Result<Int, Cancelled>> {
      const counter = Counter.open()
      spawn({ counter.value() }).await()
    }
@@ -138,7 +146,7 @@ Task.all(tasks: Iterate<Task<Value>>): Task<List<Value>>
    a `spawn` closure may capture none of the three, whatever the bounds say:
 
    ```trb error
-   fn later<Value>(value: Value): Task<Int> {
+   fn later<Value>(value: Value): Task<Result<Int, Cancelled>> {
      const task = spawn {
        const _ = value
        1
@@ -162,13 +170,41 @@ Task.all(tasks: Iterate<Task<Value>>): Task<List<Value>>
      value
    }
 
-   const (first, second) = all(asNumber(1), asNumber(2)).await()
-   print "{first} {second}"
+   fn both(): Task<Result<String, Cancelled>> {
+     const (first, second) = all(asNumber(1), asNumber(2)).await()?
+     Ok "{first} {second}"
+   }
+
+   print(both().outcome()?)
    ```
 
 7. **A `var fn` method may answer a `Task` only when its type is a `shared type`.** A value's `var fn` receiver is a copy
    in and a copy back that ends with the call; a `Task` finishes later, so only an object - which has no copy to lose
    - can be changed this way. See [Shared types](../types/shared-types.md), rule 6.
+
+8. **Every task is cancellable, and `cancel()` is a request, not a kill.** A task notices it where it waits and where a
+   loop of it turns around, so a loop that never waits stops at its next turn too. It stops there, releasing what it
+   holds as a `return` would, and whoever waits for it reads `Fail(Cancelled)`. The tasks it started are cancelled with
+   it. `cancel()` is a `var fn`, so a task somebody may stop sits in a `var` binding; dropping the last handle stops
+   nothing.
+
+   ```trb check
+   fn counting(): Task<Int> {
+     var count = 0
+     while count >= 0 {
+       count = count + 1
+     }
+     count
+   }
+
+   var worker = counting()
+   worker.cancel()
+   print worker.await().isOk()
+   ```
+
+9. **`outcome()` is `await()` for a task whose value is a `Result`**, with a cancellation folded into that
+   `Result`'s own failure, so one `?` unwraps both: `source.next().outcome()?`. Its failure type has to convert from
+   `Cancelled`, which every stream's does.
 
 ## What this is not
 
@@ -176,15 +212,15 @@ Task.all(tasks: Iterate<Task<Value>>): Task<List<Value>>
 `await()` is allowed; a function that answers a plain `Int` and calls `await()` anyway is rejected.
 
 ```trb check
-fn double(value: Int): Task<Int> {
+fn double(value: Int): Task<Result<Int, Cancelled>> {
   spawn { value * 2 }.await()
 }
 
-print double(21).await()
+print(double(21).outcome()?)
 ```
 
 ```trb error
-fn sum(a: Int, b: Int): Int {
+fn sum(a: Int, b: Int): Result<Int, Cancelled> {
   spawn { a }.await()
 }
 // error: `await()` is only allowed in a function that returns a `Task`
@@ -198,9 +234,9 @@ way the body of such a `fn` does.
 ```trb check
 use Source, Sink from "std/stream"
 
-fn ints(): Source<Int, Never> {
-  Source<Int, Never>.produce { sink =>
-    sink.add(1).await()?
+fn ints(): Source<Int, ChannelClosed> {
+  Source<Int, ChannelClosed>.produce { sink =>
+    sink.add(1).outcome()?
     Ok void
   }
 }

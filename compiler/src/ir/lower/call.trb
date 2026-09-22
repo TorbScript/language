@@ -42,11 +42,13 @@ use isNeverType, finishBlock, borrowedArguments from "./context"
 use lowerValue, valueSlot, unsupportedSlot, abandonedSlot, voidSlot from "./expression"
 use variantIndexOf from "./match"
 use emitIntrinsic, receiverSlot from "./expression"
-use Dispatched, dispatchedMember, dispatchedOn, preludeType from "./generic"
+use Dispatched, dispatchedMember, dispatchedOn, preludeType, lowerTraitValue, boundsOfTraitValue from "./generic"
 use lowerClosureCall, lowerLazyArgument, lazyParametersOf, lowerConstructorValue from "./closure"
 use printOperationOf, lowerPrint from "./text"
 use isAssertion, lowerAssertion from "./quote"
 use lowerItemList, listBoundFor from "./collection"
+use loweredNativeOf, lowerSpawn, lowerStop, isSuspendingCall, emitSuspension from "./task"
+use channelItemOf, lowerChannelNew from "./task"
 
 /**
  * `f(x)`, `Point(1, 2)`, `p.copy(y: 3)`, `a.Circle`: every call syntax lowers to one of a handful of shapes, chosen by
@@ -157,6 +159,10 @@ fn lowerCallable(
   if isAssertion(lowering, symbol) {
     return lowerAssertion lowering, builder, destination, expression, arguments
   }
+  // `spawn` needs the closure literal it is handed, not a value of it: its body becomes the resume function of the task
+  if loweredNativeOf(lowering, symbol) == Some("spawn") {
+    return lowerSpawn lowering, builder, destination, arguments, annotation, expression.span
+  }
   const dispatched = match dispatchedMember(lowering, symbol, typeArguments, dispatch, receiver, at) {
     Some(found) => found
     None => {
@@ -232,6 +238,12 @@ public fn lowerDispatched(
   // `native fn panic(message): Never` is the one native with an instruction of its own
   if owner.isEmpty() && name == "panic" {
     return lowerPanic lowering, builder, destination, written, at
+  }
+  // `task.await()` and `task.outcome()` wait first, and the call reads the answer once the task has completed
+  if isSuspendingCall(lowering, builder, name, written) {
+    if !emitSuspension(lowering, builder, written[0], at) {
+      return abandonedSlot lowering, builder, destination
+    }
   }
   const operands = separatedFromPlaces builder, written, places
   if dispatched.isDynamic {
@@ -482,6 +494,13 @@ fn lowerNativeCall(
         }
       }
       emitCall lowering, builder, destination, built, operands, annotation, at
+    }
+    // `spawn` never reaches this (`lowerCallable` takes it first), so what is left is the end of a task
+    .Lowered => {
+      if entry.name == "stopAsCancelled" {
+        return lowerStop lowering, builder, destination, at
+      }
+      unsupportedSlot lowering, builder, destination, "`{entry.name}` as a value", at
     }
   }
 }
@@ -806,6 +825,9 @@ fn referenceArgumentAt(
    * because it reads the argument as a value; here it is a clean finding instead of the two internal errors of the
    * verifier ("its place is …") a body in `std/stream` would otherwise produce.
    */
+  if path.annotation != annotation && isSharedObjectType(lowering, path.annotation) && isObjectType(lowering, annotation) {
+    return sharedObjectAsTraitPlace lowering, builder, value, signature, position, mapping, path, annotation
+  }
   if path.annotation != annotation {
     const given = describeIrType lowering.program, path.annotation
     const wanted = describeIrType lowering.program, annotation
@@ -814,6 +836,54 @@ fn referenceArgumentAt(
     return None
   }
   Some path
+}
+
+/**
+ * A `shared type` object handed to a `var` parameter of a trait it implements (`Staged.of self, stage` in a default member
+ * of `Source` reached for a concrete source): the object has an identity, so what the callee changes through the
+ * trait-typed value is the very object the caller's place holds, and the place itself is never written. So the object
+ * is read out of the place and boxed as the trait-typed value, and the callee gets the place of that value.
+ */
+fn sharedObjectAsTraitPlace(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  value: Expression,
+  signature: Signature,
+  position: Int,
+  mapping: Map<ParameterId, TypeId>,
+  path: PlacePath,
+  annotation: IrTypeId,
+): PlacePath? {
+  const parameter = signature.form.parameters.get(position)?
+  const wanted = if mapping.isEmpty() { parameter.annotation } else { substitute lowering.checker.types, parameter.annotation, mapping }
+  const source = match lowering.checker.expressionType(lowering.module, value.span) {
+    Some(found) => found
+    None => {
+      reportUnsupported lowering, "a `var` argument without a type", value.span
+      return None
+    }
+  }
+  const held = addTemporary builder, path.annotation
+  emit builder, Instruction.Read(held, path.reference)
+  const boxed = addTemporary builder, annotation
+  if !lowerTraitValue(lowering, builder, boxed, held, boundsOfTraitValue(lowering, wanted), source, value.span) {
+    return None
+  }
+  Some PlacePath(Reference(boxed, []), annotation, path.taken)
+}
+
+fn isSharedObjectType(lowering: Lowering, annotation: IrTypeId): Bool {
+  match lowering.program.typeAt(annotation) {
+    .SharedObject(_) => true
+    _ => false
+  }
+}
+
+fn isObjectType(lowering: Lowering, annotation: IrTypeId): Bool {
+  match lowering.program.typeAt(annotation) {
+    .Object(_) => true
+    _ => false
+  }
 }
 
 /**
@@ -991,6 +1061,20 @@ fn lowerConstructorCall(
   annotation: IrTypeId,
   owner: TypeId,
 ): Slot {
+  // `Channel<Item>(capacity:)` is a block of the runtime, which only the runtime can make
+  if const Some(item) = channelItemOf(lowering, annotation) {
+    const fields = lowerFieldArguments lowering, builder, expression, arguments, owner, None
+    if !lowering.isSupported {
+      return abandonedSlot lowering, builder, destination
+    }
+    const capacity = match fields.first() {
+      Some(found) => found
+      None => {
+        return unsupportedSlot lowering, builder, destination, "a `Channel` without a capacity", expression.span
+      }
+    }
+    return lowerChannelNew lowering, builder, destination, capacity, annotation, item, expression.span
+  }
   const layout = match layoutOfType(lowering.program, annotation) {
     Some(found) => found
     None => {
@@ -1593,7 +1677,8 @@ fn lowerNativeOperator(
       }
       emitCall lowering, builder, destination, generated, operands, annotation, at
     }
-    // No operator of the language builds a container, so nothing reaches this
+    // No operator of the language builds a container, starts a task or stops one, so nothing reaches these
     .Container(_) => unsupportedSlot lowering, builder, destination, "`{entry.name}` as an operator", at
+    .Lowered => unsupportedSlot lowering, builder, destination, "`{entry.name}` as an operator", at
   }
 }

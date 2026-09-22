@@ -1,0 +1,58 @@
+use pause from "std/task"
+
+/**
+ * Every task is cancellable, and a loop is where it notices: the machine reads its flag where a loop turns around, so a
+ * task that loops without ever waiting stops at its next turn once somebody asked - and its waiter reads
+ * `Fail(Cancelled)`. A loop that pauses stops at the pause as well. What the task held is released on the way out: the
+ * words here are counted blocks, so a stop that forgot one would leave a live block behind.
+ */
+
+/** A value the program builds, so that its storage is counted and not the immortal storage of a literal. */
+fn repeated(part: String, times: Int): String {
+  var total = ""
+  for _ in 0..times {
+    total = total + part
+  }
+  total
+}
+
+/** Counts forever unless it is stopped, holding a counted word the whole time. */
+fn counting(word: String): Task<Int> {
+  var count = 0
+  var held = [word]
+  while count >= 0 {
+    count = count + 1
+    held = [repeated("x", 2)]
+  }
+  count + held.length()
+}
+
+/** The same with a pause every turn, which is where it notices the cancellation first. */
+fn pausing(word: String): Task<Int> {
+  var turns = 0
+  while turns >= 0 {
+    turns = turns + word.byteLength()
+    pause().await() ?? void
+  }
+  turns
+}
+
+var looping = counting repeated("ab", 2)
+looping.cancel()
+match looping.await() {
+  Ok(count) => print "looping finished after {count}"
+  Fail(problem) => print "looping: {problem}"
+}
+
+var pauses = pausing repeated("cd", 2)
+pause().await() ?? void
+pause().await() ?? void
+pauses.cancel()
+print "pausing: {pauses.await().isOk()}"
+
+// A task that already finished is not changed by a cancellation, and asking twice changes nothing either
+var finished = spawn { repeated "ef", 2 }
+print(finished.await() ?? "cancelled")
+finished.cancel()
+finished.cancel()
+print(finished.await() ?? "cancelled")

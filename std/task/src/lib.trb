@@ -5,13 +5,14 @@
  * `Value` - the same way a function that returns `Result` may use `?`. `Task` and `Channel` are the two shared types
  * that connect concurrent work; everything else is copied when it crosses into one.
  *
- * # Open
- *
- * A program that calls [spawn] or [Task.await] type checks, but no current back end runs it: there is nothing yet
- * that gives a `Task` or a `Channel` a value.
+ * Every task is cancellable ([Task.cancel]), and a waiter learns it from the type: `await()` answers
+ * `Result<Value, Cancelled>`, so `task.await()?` inside a task hands a cancellation on and `task.await() ?? fallback`
+ * replaces it. [Cancelled] is the floor of every asynchronous failure: a stream's failure type converts from it, which
+ * is what lets [Task.outcome] fold a cancellation into the stream's own failure with one `?`.
  */
 
 use Source, Sink from "std/stream"
+use Duration from "std/time"
 
 /**
  * A computation that finishes later, running from the moment it is created (`spawn { ... }`, or calling a function
@@ -20,6 +21,10 @@ use Source, Sink from "std/stream"
  * Reach for it wherever work should happen while the caller keeps going. `map` and `flatMap` mean the same as
  * everywhere else and work on the finished value.
  *
+ * # Pitfalls
+ *
+ * - Dropping the last handle does not stop the task: a task runs until it finishes or somebody calls [Task.cancel].
+ *
  * # Related
  *
  * - [spawn] - starts a task from a closure.
@@ -27,52 +32,242 @@ use Source, Sink from "std/stream"
  */
 public native shared type Task<Value> {
   /**
-   * Waits for the value. Allowed in functions that return a `Task`, in closures passed to `spawn` and at the top
-   * level of entry files and scripts.
+   * Waits for the value, or answers `Cancelled` when the task stopped instead of finishing. Allowed in functions that
+   * return a `Task`, in closures passed to `spawn` and at the top level of entry files and scripts.
+   *
+   * A waiter that is cancelled itself never sees an answer: it stops where it waits.
    */
-  native fn await(): Value
+  native fn await(): Result<Value, Cancelled>
 
-  /** Changes the value once the task finishes, without waiting for it here. */
-  native fn map<Output>(transform: (value: Value) => Output): Task<Output>
+  /**
+   * What a task that has completed answered, without waiting: the one half of [Task.await] that is not a suspension.
+   * [Task.outcome] reads it after the caller has waited.
+   */
+  private native fn finished(): Result<Value, Cancelled>
+
+  /**
+   * Asks the task to stop at its next suspension point or loop turn. A request and not a kill; asking twice, or asking
+   * a task that has finished, changes nothing. The tasks this one started are cancelled with it.
+   */
+  var fn cancel() {
+    cancelTask self
+  }
+
+  /**
+   * Cancels the task once the limit has passed: `Ok(value)` where it finished in time, `Fail(TimedOut)` where the
+   * limit passed first. A task that finished first is unaffected. Cancelling the answer does not cancel this task.
+   */
+  var fn within(limit: Duration): Task<Result<Value, TimedOut>> {
+    const isInTime = completedWithin(self, limit).await() ?? false
+    if !isInTime {
+      return Fail TimedOut(limit)
+    }
+    // The task has completed, so this waits for nothing: it only tells a value from a cancellation
+    match await() {
+      Ok(value) => Ok value
+      Fail(_) => stopAsCancelled()
+    }
+  }
+
+  /** Changes the value once the task finishes, without waiting for it here. A cancelled task stays cancelled. */
+  fn map<Output>(transform: (value: Value) => Output): Task<Output> {
+    match await() {
+      Ok(value) => transform value
+      Fail(_) => stopAsCancelled()
+    }
+  }
 
   /** Continues with another task once this one finishes, and keeps one level: the async form of [Result.flatMap]. */
-  native fn flatMap<Output>(transform: (value: Value) => Task<Output>): Task<Output>
+  fn flatMap<Output>(transform: (value: Value) => Task<Output>): Task<Output> {
+    const value = match await() {
+      Ok(found) => found
+      Fail(_) => stopAsCancelled()
+    }
+    match transform(value).await() {
+      Ok(output) => output
+      Fail(_) => stopAsCancelled()
+    }
+  }
 
-  /** A task for every item, running at the same time. The values arrive in the order of the tasks. */
-  native static fn all(tasks: Iterate<Task<Value>>): Task<List<Value>>
+  /**
+   * A task for every item, running at the same time. The values arrive in the order of the tasks. Where one of them is
+   * cancelled the answer cannot be built, so the others are cancelled too and this task ends as cancelled.
+   */
+  static fn all(tasks: Iterate<Task<Value>>): Task<List<Value>> {
+    const started = tasks.toList()
+    var values: List<Value> = []
+    for task in started {
+      match task.await() {
+        Ok(value) => values.append value
+        Fail(_) => {
+          for other in started {
+            cancelTask other
+          }
+          stopAsCancelled()
+        }
+      }
+    }
+    values
+  }
+}
+
+/**
+ * Waits for a task whose value is a `Result`, and folds a cancellation into the task's own failure:
+ * `source.next().outcome()?`.
+ */
+extend<Value, Failure: From<Cancelled>> Task<Result<Value, Failure>> {
+  /**
+   * `await()` plus the conversion `?` would apply: the task's own `Result`, with a cancellation converted into
+   * `Failure`. A suspension point exactly like `await()`, and allowed where `await()` is.
+   */
+  fn outcome(): Result<Value, Failure> {
+    match finished() {
+      Ok(inner) => inner
+      Fail(cancelled) => Fail Failure.from(cancelled)
+    }
+  }
 }
 
 /** Runs the closure as a new task, in parallel. It gets copies of what it captures and cannot capture a `var`. */
 public native fn spawn<Value>(body: () => Value): Task<Value>
 
-/** Waits for two tasks of different types at once: `const (user, posts) = all(fetchUser(1), fetchPosts(1)).await()` */
-public native fn all<First, Second>(first: Task<First>, second: Task<Second>): Task<(First, Second)>
+/**
+ * Waits for two tasks of different types at once: `const (user, posts) = all(fetchUser(1), fetchPosts(1)).await()?`.
+ * Where one of them is cancelled, the other is cancelled too and this task ends as cancelled.
+ */
+public fn all<First, Second>(first: Task<First>, second: Task<Second>): Task<(First, Second)> {
+  const one = match first.await() {
+    Ok(value) => value
+    Fail(_) => {
+      cancelTask second
+      stopAsCancelled()
+    }
+  }
+  match second.await() {
+    Ok(two) => (one, two)
+    Fail(_) => stopAsCancelled()
+  }
+}
+
+/**
+ * Puts this task at the back of the queue and lets every other ready task run first. It is what makes a long loop
+ * fair; a loop of a task is cancellable at every turn without it.
+ */
+public native fn pause(): Task<Void>
+
+/** `task.cancel()` without the `var` binding the method asks for: the body of [Task.cancel], and what `all` uses. */
+native fn cancelTask<Value>(task: Task<Value>)
+
+/**
+ * Whether `task` completes within `limit`: `true` once it finished or was cancelled, `false` once the limit passed first,
+ * and then `task` is cancelled. The runtime's timer is the one thing [Task.within] cannot write in TorbScript.
+ */
+native fn completedWithin<Value>(task: Task<Value>, limit: Duration): Task<Bool>
+
+/**
+ * Ends the running task as cancelled: what a task that waited for a cancelled task and has no failure of its own to
+ * report does, so that its own waiters read `Fail(Cancelled)`. Nothing after it runs, and everything the task holds
+ * is released as at a `return`.
+ */
+native fn stopAsCancelled(): Never
 
 /**
  * A stream in memory, of which one holder has both ends: a queue between two tasks.
  *
  *     const channel = Channel<Report>(capacity: 8)
- *     const writer = spawn { channel.sink().fill(reports).await() }
- *     const total = channel.source().count().await()
+ *     const writer = spawn { channel.sink().fill(reports).outcome() }
+ *     const total = channel.source().count().outcome()
  *
- * `channel.source()` and `channel.sink()` are ordinary `Source` and `Sink` values and can be handed out separately, so
- * a producer never sees the reading end and a consumer never sees the writing one. They are methods and not fields
- * because they are computed, and because a field would have to be passed to the constructor.
+ * `channel.source()` and `channel.sink()` are a `Source` and a `Sink` and can be handed out separately, so a producer
+ * never sees the reading end and a consumer never sees the writing one. They are methods and not fields because they are
+ * computed, and because a field would have to be passed to the constructor. They answer the concrete [ChannelSource]
+ * and [ChannelSink], so a call on one is a direct call; where a `Source` or a `Sink` is asked for, either of them is one.
  *
- * The reading end cannot fail (`Never`): a closed channel is the end of the stream, not a failure. The writing end
- * fails with `ChannelClosed` once the reader is gone, which is how a producer learns that nobody wants its items any
- * more - the cancellation signal of `Source.produce`.
+ * Reading fails only with `Cancelled`: a closed channel is the end of the stream, not a failure. The writing end fails
+ * with `ChannelClosed` once the reader is gone, which is how a producer learns that nobody wants its items any more -
+ * the cancellation signal of `Source.produce`.
  */
 public native shared type Channel<Item> {
   /** `0` hands every item over directly: `add` waits until somebody pulls. */
   capacity: Int = 0
 
   /** Pulls items in the order they were added, and ends when the writing end is finished or closed. */
-  native fn source(): Source<Item, Never>
+  fn source(): ChannelSource<Item> {
+    ChannelSource.of self
+  }
 
   /** `add` waits while the channel is full, `end()` tells the reading end that the stream ended. */
-  native fn sink(): Sink<Item, ChannelClosed>
+  fn sink(): ChannelSink<Item> {
+    ChannelSink.of self
+  }
 }
+
+/**
+ * The reading end of a [Channel], a `Source<Item, Cancelled>`: every `next()` waits for the next item, and `close()` tells
+ * the writers to stop.
+ */
+public shared type ChannelSource<Item> with Source<Item, Cancelled> {
+  private channel: Channel<Item>
+
+  /** The reading end of `channel`: what [Channel.source] answers. */
+  static fn of(channel: Channel<Item>): ChannelSource<Item> {
+    ChannelSource channel
+  }
+
+  /** The task that waits for the item ends as cancelled where the stream ended, which is `None` here. */
+  var fn next(): Task<Result<Item?, Cancelled>> {
+    match received(channel).await() {
+      Ok(item) => Ok Some(item)
+      Fail(_) => Ok None
+    }
+  }
+
+  var fn close() {
+    closeReading channel
+  }
+}
+
+/**
+ * The writing end of a [Channel], a `Sink<Item, ChannelClosed>`: `add` finishes once a reader took the item, `end()` and
+ * `close()` end the stream.
+ */
+public shared type ChannelSink<Item> with Sink<Item, ChannelClosed> {
+  private channel: Channel<Item>
+
+  /** The writing end of `channel`: what [Channel.sink] answers. */
+  static fn of(channel: Channel<Item>): ChannelSink<Item> {
+    ChannelSink channel
+  }
+
+  /** The task that offers the item ends as cancelled where nobody reads any more, which is `ChannelClosed` here. */
+  var fn add(item: Item): Task<Result<Void, ChannelClosed>> {
+    match offered(channel, item).await() {
+      Ok(_) => Ok void
+      Fail(_) => Fail ChannelClosed()
+    }
+  }
+
+  var fn end(): Task<Result<Void, ChannelClosed>> {
+    endWriting channel
+    Ok void
+  }
+
+  var fn close() {
+    endWriting channel
+  }
+}
+
+/** The next item, as a task that ends as cancelled where the stream ended. */
+native fn received<Item>(channel: Channel<Item>): Task<Item>
+
+/** `item` handed to the channel, as a task that finishes once a reader took it and ends as cancelled where none will. */
+native fn offered<Item>(channel: Channel<Item>, item: Item): Task<Void>
+
+/** The writing end is done: what was offered is still delivered, then the stream ends. */
+native fn endWriting<Item>(channel: Channel<Item>)
+
+/** The reading end is gone: what is buffered is dropped, and every writer fails with `ChannelClosed`. */
+native fn closeReading<Item>(channel: Channel<Item>)
 
 /**
  * Nobody is reading any more: the reading end of the channel was closed. The only way a `Channel`'s writing end fails,
@@ -82,5 +277,51 @@ public type ChannelClosed with Show, Error {
   /** `"the channel is closed"`. */
   fn show(): String {
     "the channel is closed"
+  }
+}
+
+/**
+ * A writer whose own `add` was cancelled has nobody left to write for either, so a cancellation reaches a producer's
+ * failure type as a closed channel.
+ */
+extend ChannelClosed with From<Cancelled> {
+  static fn from(value: Cancelled): ChannelClosed {
+    ChannelClosed()
+  }
+}
+
+/** A producer whose own failure is `ChannelClosed` needs no conversion to learn that nobody reads any more. */
+extend ChannelClosed with From<ChannelClosed> {
+  static fn from(value: ChannelClosed): ChannelClosed {
+    value
+  }
+}
+
+/**
+ * A task that stopped at a suspension point because somebody asked it to. It carries no reason: who asked and why is
+ * the canceller's knowledge, and a deadline has a failure of its own, [TimedOut].
+ */
+public type Cancelled with Show, Error {
+  /** `"the task was cancelled"`. */
+  fn show(): String {
+    "the task was cancelled"
+  }
+}
+
+/** A cancellation is its own failure, so a stream whose failure is `Cancelled` meets the bound every stream carries. */
+extend Cancelled with From<Cancelled> {
+  static fn from(value: Cancelled): Cancelled {
+    value
+  }
+}
+
+/** A deadline that passed: what [Task.within] answers when the limit came first. */
+public type TimedOut with Show, Error {
+  /** How long the waiter was willing to wait. */
+  limit: Duration
+
+  /** `"the task did not finish within {limit}"`. */
+  fn show(): String {
+    "the task did not finish within {limit}"
   }
 }

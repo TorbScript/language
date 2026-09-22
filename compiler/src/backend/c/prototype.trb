@@ -57,7 +57,10 @@ public fn readPrototype(text: String): Prototype? {
   Some Prototype(result, parameterTypesOf(inside))
 }
 
-/** Everything of the head but the symbol, which is its last word. */
+/**
+ * Everything of the head but the symbol, which is its last word. A `*` binds to the type and not to the symbol, so
+ * `torb_task *torb_sleep` answers a `torb_task *`, the spelling `cTypeOf` gives a task.
+ */
 fn resultTypeOf(head: String): String? {
   const words = wordsOf head
   if words.length() < 2 {
@@ -66,6 +69,16 @@ fn resultTypeOf(head: String): String? {
   var parts: List<String> = []
   for index in 0..words.length() - 1 {
     parts.append words[index]
+  }
+  var stars = ""
+  for character in words[words.length() - 1].chars() {
+    if character != '*' {
+      break
+    }
+    stars = stars + "*"
+  }
+  if !stars.isEmpty() {
+    parts.append stars
   }
   Some parts.joined(separator: " ")
 }

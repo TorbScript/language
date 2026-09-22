@@ -56,6 +56,19 @@ public fn elementFor(
 }
 
 /**
+ * The element descriptor of a type the lowering holds as an IR type already: the value of a task, which the task block
+ * places, hands out and releases through it (`Instruction.TaskNew`). A task's value is never a key, so neither `Equals`
+ * nor `Hash` is asked of it, and a descriptor a list or a map made for the same type serves it as it is.
+ */
+public fn elementOfType(var lowering: Lowering, annotation: IrTypeId): ElementId {
+  const name = elementName lowering.program, annotation
+  if const Some(found) = lowering.program.elementNamed(name) {
+    return found
+  }
+  lowering.program.addElement ElementDescriptor(name, annotation, 0, 0)
+}
+
+/**
  * The `Equals` and the `Hash` of one element type. A key of the ordered hash table needs both, and the table calls them
  * through the descriptor - so the very same functions a `==` on the element reaches, which is what keeps a key in a map
  * and a comparison in the source from ever disagreeing.

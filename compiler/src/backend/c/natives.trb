@@ -114,6 +114,11 @@ public type NativeTarget {
    * TorbScript instead of a function of the runtime that would have to walk a witness table.
    */
   case Container(kind: RuntimeKind)
+  /**
+   * A native no function could be, which the lowering writes as IR of its own (`ir/lower/task.trb`): `spawn`, whose
+   * closure literal becomes the resume function of a task, and `stopAsCancelled`, which ends the machine it runs in.
+   */
+  case Lowered
 }
 
 /** Whether a `native` declaration can be called today, or is still a named, clean compile error where it is used. */
@@ -246,6 +251,11 @@ fn containerRuntimeOf(
 
 fn derivedOf(name: String, derived: DerivedKind): NativeEntry {
   NativeEntry name: name, target: NativeTarget.Derived(derived)
+}
+
+/** A native the lowering writes as IR of its own: `spawn`, `stopAsCancelled`. */
+fn loweredOf(name: String): NativeEntry {
+  NativeEntry name: name, target: NativeTarget.Lowered
 }
 
 fn plannedRuntimeOf(name: String, function: String, milestone: String): NativeEntry {
@@ -962,7 +972,53 @@ fn timeEntries(var entries: List<NativeEntry>) {
     "torb_clock_milliseconds",
     "int64_t torb_clock_milliseconds(void);",
   ))
-  entries.append plannedRuntimeOf("sleep", "torb_sleep", "7.3")
+  entries.append runtimeOf("sleep", "torb_sleep", "torb_task *torb_sleep(double seconds);")
+}
+
+/**
+ * `std/task`, over `runtime/task.c` (docs/CONCURRENCY.md 16). `await()` is a suspension point the lowering writes in
+ * front of the call, and the call reads the answer: `torb_task_result` is the `.Fallible` convention, and the wrapper
+ * builds `Ok(value)` or `Fail(Cancelled())` in the program's layout. `map`, `flatMap`, `Task.all` and `all` are
+ * TorbScript over `await()`, because the runtime cannot call a closure of a signature it does not know.
+ */
+fn taskEntries(var entries: List<NativeEntry>) {
+  entries.append(fallibleRuntimeOf(
+    "Task.await",
+    "torb_task_result",
+    "bool torb_task_result(torb_task *task, void *out);",
+  ))
+  entries.append(fallibleRuntimeOf(
+    "Task.finished",
+    "torb_task_result",
+    "bool torb_task_result(torb_task *task, void *out);",
+  ))
+  entries.append runtimeOf("cancelTask", "torb_task_cancel", "void torb_task_cancel(torb_task *self);")
+  entries.append runtimeOf("pause", "torb_pause", "torb_task *torb_pause(void);")
+  entries.append loweredOf("spawn")
+  entries.append loweredOf("stopAsCancelled")
+  // `within` is TorbScript over a task of the runtime that says whether the deadline or the task came first
+  entries.append(runtimeOf(
+    "completedWithin",
+    "torb_task_completed_within",
+    "torb_task *torb_task_completed_within(torb_task *self, torb_duration limit);",
+  ))
+  // A `Channel` hands out its two ends as `Source`/`Sink` objects, shared types of `std/task` over these four: one task
+  // per item each way, because a machine waits for a task and for nothing else
+  entries.append(runtimeOf(
+    "received",
+    "torb_channel_received",
+    "torb_task *torb_channel_received(torb_channel *channel);",
+  ))
+  entries.append(containerRuntimeOf(
+    "offered",
+    "torb_channel_offered",
+    "torb_task *torb_channel_offered(torb_channel *channel, const void *item);",
+    [1],
+    [1],
+    NativeResult.Direct,
+  ))
+  entries.append runtimeOf("endWriting", "torb_channel_end", "void torb_channel_end(torb_channel *channel);")
+  entries.append runtimeOf("closeReading", "torb_channel_close", "void torb_channel_close(torb_channel *channel);")
 }
 
 /** `std/environment`: capability filtering for the sandbox (`environment "APP_*"`) is a front-end concern of 7.4. */
@@ -975,17 +1031,6 @@ fn environmentEntries(var entries: List<NativeEntry>) {
 }
 
 fn plannedPackageEntries(var entries: List<NativeEntry>) {
-  entries.append plannedRuntimeOf("Task.await", "torb_task_await", "7.3")
-  entries.append plannedRuntimeOf("Task.map", "torb_task_map", "7.3")
-  entries.append plannedRuntimeOf("Task.flatMap", "torb_task_flat_map", "7.3")
-  entries.append plannedRuntimeOf("Task.all", "torb_task_all", "7.3")
-  entries.append plannedRuntimeOf("spawn", "torb_spawn", "7.3")
-  entries.append plannedRuntimeOf("all", "torb_task_all_pair", "7.3")
-  // A `Channel` hands out its two ends as `Source`/`Sink` objects: two natives instead of `send`/`receive`/`close`/
-  // `collect`, because everything else a stream can do is TorbScript on top of them (docs/design/STREAMS.md)
-  entries.append plannedRuntimeOf("Channel.source", "torb_channel_source", "7.3")
-  entries.append plannedRuntimeOf("Channel.sink", "torb_channel_sink", "7.3")
-
   entries.append plannedRuntimeOf("Expression.value", "torb_expression_value", "5.11")
   entries.append plannedRuntimeOf("Expression.captures", "torb_expression_captures", "5.11")
 
@@ -1032,6 +1077,7 @@ public fn nativeEntries(): List<NativeEntry> {
   mathEntries entries
   timeEntries entries
   environmentEntries entries
+  taskEntries entries
   plannedPackageEntries entries
   entries
 }

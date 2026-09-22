@@ -1,0 +1,31 @@
+use pause from "std/task"
+
+/**
+ * One worker runs one task at a time, in the order they became ready: a task runs once the running one waits, the queue
+ * is first in first out, and `pause()` puts the task at the back of it. So two tasks that pause between their steps
+ * interleave step by step, and the order is the same on every run and in every back end.
+ */
+
+/** Three steps with a pause between them, each step printed. */
+fn stepper(name: String): Task<Int> {
+  var steps = 0
+  for step in 0..3 {
+    print "{name} {step}"
+    steps = steps + 1
+    pause().await() ?? void
+  }
+  steps
+}
+
+const first = stepper "first"
+const second = stepper "second"
+print "both started"
+const done = (first.await() ?? 0) + (second.await() ?? 0)
+print "steps: {done}"
+
+const queued = [spawn { print "one" }, spawn { print "two" }, spawn { print "three" }]
+print "three queued"
+for task in queued {
+  task.await() ?? void
+}
+print "done"

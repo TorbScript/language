@@ -19,19 +19,20 @@
 
 use LiteralValue from "../../semantics/checker/type"
 use IrProgram, IrFunction, IrTypeId, LayoutId, StaticId, StaticValue, FunctionId from "../../ir/ir"
-use Slot, Instruction, WitnessTable, WitnessTableId, Ownership from "../../ir/ir"
+use Slot, Instruction, WitnessTable, WitnessTableId, Ownership, FunctionKind from "../../ir/ir"
+use taskMachineOf from "../../ir/suspension"
 use ElementId, ElementDescriptor from "../../ir/ir"
 use Layout, FieldLayout, containsCountedType from "../../ir/layout"
 use typeOfReference from "../../ir/verify"
 use keepingOf from "../../ir/kept"
 use hexDigits, objectTypeName, payloadLayoutName from "../../ir/mangle"
 use nativeEntries from "./natives"
-use CExpression, CStatement, CSwitchCase, CDeclaration, declarationOf, cStringOf from "./writer"
-use Emission, write, reportUnsupported, emittedText, locationExpression from "./emission"
+use CExpression, CStatement, CSwitchCase, CDeclaration, CMember, declarationOf, cStringOf from "./writer"
+use Emission, write, reportUnsupported, emittedText, locationExpression, slotNameOf from "./emission"
 use cTypeOf, whyNoCType, hasStructDefinition, memberNameOf, variantMemberNameOf from "./type"
 use structDeclarationOf, layoutDefinitionOrder, objectDeclarationOf from "./type"
 use bodyOf, bodyStatements, signatureHeadOf, valueTypeOf, emptyNicheExpression, resultTypeOf from "./body"
-use resultPointerName, keptFunctions from "./body"
+use resultPointerName, keptFunctions, frameTypeName from "./body"
 use dropFunctionOf, pointerTo, closureThunkNameOf, environmentLayoutOfFunction from "./body"
 use retainChildrenFunctionOf from "./body"
 use variantInitializerParts, boxedLayoutOf, countedFormOf, inlineCountedLayoutOf from "./body"
@@ -65,6 +66,8 @@ public fn emitProgram(program: IrProgram, entries: List<ProgramEntry>): Emission
   // while a layout may hold one in a field - the environment of a closure over a trait-typed value is one
   emitObjectTypes emission, program, functions, layouts
   emitTypeDefinitions emission, program, layouts
+  // The frames of the tasks come after the layouts, because a frame slot is a value of any of them
+  emitTaskFrames emission, program, functions
   emitCountedHelpers emission, program, functions, layouts
   emitStaticData emission, program, functions
   emitConstantCellStorage emission, program, functions
@@ -777,9 +780,6 @@ fn checkProgramTypes(var emission: Emission, program: IrProgram, functions: List
     for slot in function.slots {
       checkType emission, program, slot.annotation
     }
-    if const .TaskResume = function.kind {
-      reportUnsupported emission, "a function whose body is a state machine over `Task`"
-    }
   }
   for descriptor in program.elements {
     checkType emission, program, descriptor.item
@@ -1047,6 +1047,39 @@ fn emitTypeDefinitions(var emission: Emission, program: IrProgram, layouts: List
   }
 }
 
+/**
+ * The frame of every resume function: one member per frame slot (`ir/suspension.trb` decides which), in slot order, so
+ * that the constructor of a task writes its parameters where the machine reads them. A frame nothing lives in still has
+ * one member, because an empty struct is not C.
+ */
+fn emitTaskFrames(var emission: Emission, program: IrProgram, functions: List<IrFunction>) {
+  var written = false
+  for function in functions {
+    if function.kind != FunctionKind.TaskResume {
+      continue
+    }
+    if !written {
+      write emission, CDeclaration.Comment("The frames of the tasks: what a task keeps across a suspension (docs/CONCURRENCY.md 16).")
+      written = true
+    }
+    const machine = taskMachineOf program, function
+    var members: List<CMember> = []
+    for index in 0..function.slots.length() {
+      if !machine.isFrameSlot(Slot(index)) {
+        continue
+      }
+      const spelling = valueTypeOf program, function.slots[index].annotation
+      members.append CMember.Field(spelling, slotNameOf(function, Slot(index)))
+    }
+    if members.isEmpty() {
+      members.append CMember.Field("unsigned char", "nothing")
+    }
+    const name = frameTypeName function
+    write emission, CDeclaration.Typedef("struct {name}", name)
+    write emission, CDeclaration.Struct(name, members)
+  }
+}
+
 // --- Retaining and dropping the children of a counted block ---------------------------------------------------------
 
 /**
@@ -1185,6 +1218,20 @@ fn helperDemandOf(program: IrProgram, functions: List<IrFunction>, layouts: List
         collectHelperDemand program, function, instruction, retains, drops
       }
     }
+    // A stop path releases what is live where the task stops, which may be a value the body itself only ever moves
+    if function.kind == FunctionKind.TaskResume {
+      const machine = taskMachineOf program, function
+      var released = machine.entry
+      for found in machine.resumes {
+        released.appendAll found
+      }
+      for found in machine.backEdgeReleases {
+        released.appendAll found
+      }
+      for slot in released {
+        markDropped program, drops, typeOfSlotOf(function, slot)
+      }
+    }
   }
   // An element descriptor's `retain` and `release` act per element, and for an inline aggregate that is the `R_`/`D_`
   // pair of its layout
@@ -1273,6 +1320,10 @@ fn markRetained(program: IrProgram, var retains: List<Bool>, id: IrTypeId) {
 
 fn markDropped(program: IrProgram, var drops: List<Bool>, id: IrTypeId) {
   const inner = countedFormOf program, id
+  if const .SharedObject(layout) = program.typeAt(inner) {
+    markLayoutFlag program, drops, layout
+    return
+  }
   if const Some(layout) = boxedLayoutOf(program, inner) {
     markLayoutFlag program, drops, layout
     return
@@ -1814,6 +1865,7 @@ fn emitMain(var emission: Emission, entries: List<ProgramEntry>, functions: List
   var lines = ["torb_process_start(argument_count, argument_values);"]
   var isTestRun = false
   var isNamed = false
+  const isTasked = usesTasks functions
   for entry in entries {
     // A test file that declares things and runs nothing has no entry function; its name is still printed
     if !entry.file.isEmpty() {
@@ -1824,12 +1876,35 @@ fn emitMain(var emission: Emission, entries: List<ProgramEntry>, functions: List
       continue
     }
     isNamed = true
-    if functions.any({ _.name == entry.name }) {
-      lines.append "{entry.name}();"
+    const found = match functions.find({ _.name == entry.name }) {
+      Some(inner) => inner
+      None => {
+        continue
+      }
+    }
+    // An entry file that waits is the main task: the scheduler runs until it has completed
+    if found.kind == FunctionKind.TaskResume {
+      const frame = frameTypeName found
+      lines.append "\{"
+      lines.append "  torb_task *main_task = torb_task_new({entry.name}, sizeof({frame}), &torb_element_void);"
+      lines.append "  torb_task_start(main_task);"
+      lines.append "  torb_scheduler_run(main_task);"
+      lines.append "  torb_task_release(main_task);"
+      lines.append "\}"
+      continue
+    }
+    lines.append "{entry.name}();"
+    // Tasks it started and did not wait for run once it is done, in the order they were queued
+    if isTasked {
+      lines.append "torb_scheduler_run(NULL);"
     }
   }
   if lines.length() == 1 && !isNamed {
     return
+  }
+  // What is still running when the program ends is cancelled and runs to its stop, so every frame is released
+  if isTasked {
+    lines.append "torb_scheduler_finish();"
   }
   // The summary of the run is written before the leak report, so the two reports read in the order they happened
   if isTestRun {
@@ -1845,6 +1920,26 @@ fn emitMain(var emission: Emission, entries: List<ProgramEntry>, functions: List
     body = body + "  " + line + "\n"
   }
   write emission, CDeclaration.Fixed("int main(int argument_count, char **argument_values) \{\n" + body + "\}")
+}
+
+/**
+ * Whether the program starts a task anywhere: a resume function, or a call of the runtime that answers a task (`sleep`,
+ * `pause`). A program that does not pays nothing - its `main` never touches the scheduler.
+ */
+fn usesTasks(functions: List<IrFunction>): Bool {
+  for function in functions {
+    if function.kind == FunctionKind.TaskResume {
+      return true
+    }
+    for block in function.blocks {
+      for instruction in block.instructions {
+        if const .TaskNew(_, _, _, _) = instruction {
+          return true
+        }
+      }
+    }
+  }
+  false
 }
 
 // --- The prototypes of the runtime ----------------------------------------------------------------------------------

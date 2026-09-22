@@ -510,6 +510,7 @@ fn finishElements(var program: IrProgram) {
  */
 public fn finishLayouts(var program: IrProgram) {
   markRecursiveLayouts program
+  const objects = sharedObjectLayoutsOf program
   const limit = program.layouts.length() + 8
   var rounds = 0
   var isChanged = true
@@ -522,15 +523,29 @@ public fn finishLayouts(var program: IrProgram) {
     }
     for index in 0..program.layouts.length() {
       const identifier = LayoutId index
-      if updateLayout(program, identifier) {
+      if updateLayout(program, identifier, objects) {
         isChanged = true
       }
     }
   }
 }
 
+/**
+ * The layouts a `shared type` object is made of. An object has an identity - every handle reaches the one block - so it
+ * is a counted block whatever it costs, exactly as a box is.
+ */
+fn sharedObjectLayoutsOf(program: IrProgram): Set<Int> {
+  var found: Set<Int> = Set.of()
+  for index in 0..program.typeCount() {
+    if const .SharedObject(layout) = program.typeAt(IrTypeId(index)) {
+      found.insert layout.value
+    }
+  }
+  found
+}
+
 /** One layout, recomputed from its fields. `true` when something about it changed. */
-fn updateLayout(var program: IrProgram, id: LayoutId): Bool {
+fn updateLayout(var program: IrProgram, id: LayoutId, objects: Set<Int>): Bool {
   const before = program.layoutAt id
   const packed = packedSize program, before
   var representation = Representation.Inline
@@ -538,7 +553,7 @@ fn updateLayout(var program: IrProgram, id: LayoutId): Bool {
   var alignment = packed.alignment
   const niche = nicheOf program, before
   // A payload, an environment, a box and a cell are blocks whatever they cost: every one of them is shared
-  if isAlwaysBoxedKind(before.kind) {
+  if isAlwaysBoxedKind(before.kind) || objects.contains(id.value) {
     representation = Representation.Boxed
   } else if before.isRecursive {
     representation = Representation.Boxed

@@ -1355,6 +1355,89 @@ TORB_TEST(a_deadlock_panics_instead_of_hanging) {
   torb_task_release(blocked);
 }
 
+/* ------------------------------------------------------------------ the tasks `std/task` is written over --- */
+
+TORB_TEST(completed_within_says_whether_the_deadline_came_first) {
+  torb_task *late = slow(2.0);
+  torb_task *early = slow(0.01);
+  torb_task *first = torb_task_completed_within(late, 10000000);
+  torb_task *second = torb_task_completed_within(early, 5000000000LL);
+  torb_instant started = torb_clock_now();
+  bool answer = true;
+  log_reset();
+  torb_scheduler_run(NULL);
+  TORB_CHECK(torb_task_result(first, &answer));
+  TORB_CHECK(!answer);
+  TORB_CHECK_INTEGER(late->status, TORB_TASK_CANCELLED);
+  TORB_CHECK(torb_task_result(second, &answer));
+  TORB_CHECK(answer);
+  TORB_CHECK_INTEGER(early->status, TORB_TASK_FINISHED);
+  /* Only the early one wrote its "w", and nothing waited for the two seconds of the late one. */
+  TORB_CHECK(strcmp(task_log, "w") == 0);
+  TORB_CHECK(torb_clock_now() - started < 1000000000);
+  torb_task_release(late);
+  torb_task_release(early);
+  torb_task_release(first);
+  torb_task_release(second);
+  torb_scheduler_finish();
+}
+
+TORB_TEST(offered_and_received_items_cross_a_channel_once) {
+  torb_channel *channel = torb_channel_new(1, &torb_element_text, torb_location_unknown);
+  torb_task *offers[3];
+  torb_task *receipts[4];
+  torb_text item;
+  torb_text read;
+  size_t index;
+  for (index = 0u; index < 3u; index += 1u) {
+    item = torb_show_i64((int64_t)(index + 1u) * 111);
+    offers[index] = torb_channel_offered(channel, &item);
+  }
+  for (index = 0u; index < 3u; index += 1u) {
+    receipts[index] = torb_channel_received(channel);
+  }
+  torb_scheduler_run(NULL);
+  for (index = 0u; index < 3u; index += 1u) {
+    TORB_CHECK_INTEGER(offers[index]->status, TORB_TASK_FINISHED);
+    TORB_CHECK(torb_task_result(receipts[index], &read));
+    TORB_CHECK_INTEGER(read.length, 3);
+    torb_text_release(read);
+  }
+  /* After the end nothing will come: the receipt stops, which a source reads as `None`. */
+  torb_channel_end(channel);
+  receipts[3] = torb_channel_received(channel);
+  torb_scheduler_run(NULL);
+  TORB_CHECK_INTEGER(receipts[3]->status, TORB_TASK_CANCELLED);
+  for (index = 0u; index < 3u; index += 1u) {
+    torb_task_release(offers[index]);
+  }
+  for (index = 0u; index < 4u; index += 1u) {
+    torb_task_release(receipts[index]);
+  }
+  torb_channel_release(channel);
+  torb_scheduler_finish();
+}
+
+TORB_TEST(an_offer_to_a_closed_channel_stops_and_releases_its_item) {
+  torb_channel *channel = torb_channel_new(0, &torb_element_text, torb_location_unknown);
+  torb_text item = torb_show_i64(424242);
+  torb_task *waiting = torb_channel_offered(channel, &item);
+  torb_task *late;
+  /* The first offer waits for a reader, and closing the reading end fails it. */
+  torb_scheduler_run(NULL);
+  TORB_CHECK_INTEGER(waiting->status, TORB_TASK_PENDING);
+  torb_channel_close(channel);
+  item = torb_show_i64(434343);
+  late = torb_channel_offered(channel, &item);
+  torb_scheduler_run(NULL);
+  TORB_CHECK_INTEGER(waiting->status, TORB_TASK_CANCELLED);
+  TORB_CHECK_INTEGER(late->status, TORB_TASK_CANCELLED);
+  torb_task_release(waiting);
+  torb_task_release(late);
+  torb_channel_release(channel);
+  torb_scheduler_finish();
+}
+
 void torb_register_task_tests(void) {
   TORB_ADD(spawn_and_await);
   TORB_ADD(a_result_is_copied_for_every_reader);
@@ -1376,4 +1459,7 @@ void torb_register_task_tests(void) {
   TORB_ADD(ten_thousand_tasks_leave_nothing_behind);
   TORB_ADD(the_end_of_the_program_stops_every_task);
   TORB_ADD(a_deadlock_panics_instead_of_hanging);
+  TORB_ADD(completed_within_says_whether_the_deadline_came_first);
+  TORB_ADD(offered_and_received_items_cross_a_channel_once);
+  TORB_ADD(an_offer_to_a_closed_channel_stops_and_releases_its_item);
 }

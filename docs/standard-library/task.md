@@ -1,34 +1,34 @@
 ---
 title: std/task
-summary: Task and Channel, the two shared types that connect concurrent work, and spawn - designed, but not run by any back end yet.
+summary: Task and Channel, the two shared types that connect concurrent work, spawn, cancellation with Cancelled and TimedOut, and pause.
 kind: package
-status: planned
+status: stable
 order: 80
 keywords:
   - std/task
   - Task
   - Channel
   - spawn
+  - Cancelled
   - concurrency
   - asynchrony
 source:
   - std/task/src/lib.trb
+  - docs/design/CONCURRENCY.md
   - docs/design/STREAMS.md
 ---
-
-> **Planned.** This feature is designed but not implemented. Nothing on this page works today.
 
 `std/task` is a computation that finishes later. Asynchrony lives in the type: a function that returns `Task<Value>`
 may call `await()`, and its body produces the `Value` - the same way a function that returns `Result` may use `?`.
 `Task` and `Channel` are the two shared types that connect concurrent work; everything else is copied when it crosses
-into one. `CONCEPT.md` carries this design under "Concurrency (Draft)", and the tour's own async example
-(`examples/tour/src/10-async.trb`) is marked `DRAFT` for the same reason. Every name below is already in scope through
-the prelude.
+into one. Every task can be cancelled, so `await()` answers `Result<Value, Cancelled>`. `Task`, `Channel`,
+`ChannelClosed`, `Cancelled`, `TimedOut`, `spawn` and `all` are in scope through the prelude; `pause` is imported from
+here.
 
 ## Import
 
 ```trb fragment
-use Task, Channel, ChannelClosed, spawn, all from "std/task"
+use Task, Channel, ChannelClosed, Cancelled, TimedOut, spawn, all, pause from "std/task"
 ```
 
 ```trb check
@@ -38,8 +38,8 @@ const numbers: List<Int> = [1, 2, 3, 4]
 const tasks = numbers.map { number => spawn { number * number } }.toList()
 
 // Top-level `await()` is allowed in entry files and scripts. `Task.all` waits for all of them at once
-const total = Task.all(tasks).await().sum()
-print total
+const squares = Task.all(tasks).await()?
+print squares.sum()
 ```
 
 ## Declarations
@@ -48,29 +48,44 @@ print total
 
 ```trb fragment
 public native shared type Task<Value> {
-  fn await(): Value
+  fn await(): Result<Value, Cancelled>
+  var fn cancel()
+  var fn within(limit: Duration): Task<Result<Value, TimedOut>>
   fn map<Output>(transform: (value: Value) => Output): Task<Output>
   fn flatMap<Output>(transform: (value: Value) => Task<Output>): Task<Output>
   static fn all(tasks: Iterate<Task<Value>>): Task<List<Value>>
+}
+
+extend<Value, Failure: From<Cancelled>> Task<Result<Value, Failure>> {
+  fn outcome(): Result<Value, Failure>
 }
 ```
 
 A task starts running the moment it is created (`spawn { ... }`, or calling a function that returns one). `await()`
 waits for the value and is allowed in a function that returns a `Task`, in a closure passed to `spawn`, and at the top
 level of an entry file or a script - everywhere else it is a compile error, because a function that waits says so in
-its return type. `Task` belongs to the vocabulary of `Option` and `Result` (`map`, `flatMap`, `all`).
+its return type. It answers `Fail(Cancelled)` where the task was cancelled instead of finishing. `outcome()` waits the
+same way for a task whose value is a `Result` and folds a cancellation into that `Result`'s failure, so one `?`
+unwraps both.
 
-### `spawn`, `all`
+`cancel()` asks the task to stop where it next waits or where a loop of it turns around; the tasks it started stop with
+it. `within(limit)` cancels the task once the limit has passed and answers `Fail(TimedOut)` then. Both are `var fn`s,
+so a task somebody may stop sits in a `var` binding. Dropping the last handle stops nothing. `Task` belongs to the
+vocabulary of `Option` and `Result` (`map`, `flatMap`, `all`), and all three are TorbScript over `await()`.
+
+### `spawn`, `all`, `pause`
 
 ```trb fragment
 public native fn spawn<Value>(body: () => Value): Task<Value>
-public native fn all<First, Second>(first: Task<First>, second: Task<Second>): Task<(First, Second)>
+public fn all<First, Second>(first: Task<First>, second: Task<Second>): Task<(First, Second)>
+public native fn pause(): Task<Void>
 ```
 
-`spawn` runs the closure as a new task, in parallel; it gets copies of what it captures and cannot capture a `var`
-binding, so there is nothing to race for. The free function `all` waits for two tasks of different types at once
-(`const (user, posts) = all(fetchUser(1), fetchPosts(1)).await()`); `Task.all` is the same idea for any number of tasks
-of the same type.
+`spawn` runs the closure as a new task; it gets copies of what it captures and cannot capture a `var` binding, so
+there is nothing to race for. The free function `all` waits for two tasks of different types at once
+(`const (user, posts) = all(fetchUser(1), fetchPosts(1)).await()?`); `Task.all` is the same idea for any number of
+tasks of the same type. Where one of them is cancelled, the others are cancelled too. `pause()` puts the running task
+at the back of the queue, which is what makes a long loop fair.
 
 ### Channel
 
@@ -78,37 +93,33 @@ of the same type.
 public native shared type Channel<Item> {
   capacity: Int = 0
 
-  fn source(): Source<Item, Never>
-  fn sink(): Sink<Item, ChannelClosed>
+  fn source(): ChannelSource<Item>
+  fn sink(): ChannelSink<Item>
 }
 ```
 
 A stream in memory of which one holder has both ends. `capacity: 0` hands every item over directly, so `add` waits
-until somebody pulls; `source()` and `sink()` are ordinary `Source`/`Sink` values (see [std/stream](stream.md)) and can
-be handed out separately, so a producer never sees the reading end and a consumer never sees the writing one. The
-reading end cannot fail (`Never`): a closed channel is the end of the stream, not a failure.
+until somebody pulls; `source()` is a `Source<Item, Cancelled>` and `sink()` a `Sink<Item, ChannelClosed>` (see
+[std/stream](stream.md)), and they can be handed out separately, so a producer never sees the reading end and a
+consumer never sees the writing one. Reading fails only with `Cancelled`: a closed channel is the end of the stream,
+not a failure.
 
-### ChannelClosed
+### ChannelClosed, Cancelled, TimedOut
 
 ```trb fragment
 public type ChannelClosed with Show, Error {}
+public type Cancelled with Show, Error {}
+public type TimedOut with Show, Error {
+  limit: Duration
+}
 ```
 
-The only way a `Channel`'s writing end fails: nobody is reading any more. A value rather than a panic, because a
-producer that is no longer needed should stop, not crash.
-
-## What is missing
-
-The example above type checks against the real standard library, which is what `torb docs check` verifies - so `spawn`,
-`Task.await`, `Channel` and `all` are all accepted by the type checker today. What is missing is a back end that gives
-any of them a value: the native back end's manifest marks `spawn`, every `Task` member and both `Channel` members as
-work for a future milestone, listed under "What milestones 7 and 10 have to build" in
-[`docs/design/STREAMS.md`](../design/STREAMS.md), and the bytecode VM that would run them is milestone 7. Until then, a program that
-calls `spawn` or `await()` type checks and cannot be run to completion - the same gap `Decimal` documents for
-arithmetic, described in [Decimal](../language/values-and-types/decimal.md).
+`ChannelClosed` is the only way a `Channel`'s writing end fails: nobody is reading any more. `Cancelled` is what a
+waiter reads of a task that stopped because somebody asked it to; it carries no reason, and every stream's failure type
+converts from it. `TimedOut` is the failure `within` answers, with the limit that was too small.
 
 ## Related
 
+- [Tasks](../language/concurrency-and-streams/tasks.md) - the rules of `Task`, `await()` and cancellation.
 - [std/stream](stream.md) - `Source` and `Sink`, the two ends a `Channel` hands out.
-- [Decimal](../language/values-and-types/decimal.md) - another type that type checks today and has no back end yet.
 - [The standard library](index.md) - the other packages.

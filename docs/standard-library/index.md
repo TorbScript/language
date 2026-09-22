@@ -36,7 +36,7 @@ What does not belong here: the language rules that a type participates in, which
 - **[std/iteration](iteration.md)** - Iterate and Iterator, the lazy stages between them, and the collectors a pipeline ends in.
 - **[std/encoding](encoding.md)** - Encode and Decode, the Encoder and Decoder a format implements, and Format for the streaming side.
 - **[std/expression](expression.md)** - Expression and ExpressionNode, the typed tree a quoted parameter hands over, plus assert and nameOf.
-- **[std/task](task.md)** _(planned)_ - Task and Channel, the two shared types that connect concurrent work, and spawn - designed, but not run by any back end yet.
+- **[std/task](task.md)** - Task and Channel, the two shared types that connect concurrent work, spawn, cancellation with Cancelled and TimedOut, and pause.
 - **[std/console](console.md)** - print and printError, the two functions that write to the standard streams.
 - **[std/math](math.md)** - The functions on Float that read as an operation rather than a method, under the math namespace import.
 - **[std/linear](linear.md)** - Vectors, matrices, quaternions and angles over one generic scalar, plus Fixed, the fixed-point scalar whose answers are the same bits everywhere.

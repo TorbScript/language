@@ -1,0 +1,198 @@
+/**
+ * The state machine of a task, read off its finished resume function: which slots live in the frame, and what is
+ * released at every point where the machine stops (docs/CONCURRENCY.md 16). Both back ends drive a
+ * `FunctionKind.TaskResume` with this answer, so the VM and the C back end stop at the same points and release the same
+ * values.
+ *
+ * It runs on the IR **after** the ownership pass, and that is what makes it small. The pass placed a release after the
+ * last use of every counted value, so a counted slot that is *live* - used again further on - is exactly a slot that holds
+ * a count, and what a stop has to release is the live set at the point it stops: the same values a `return` there would
+ * have released on its way out, and never one more.
+ *
+ * - **The frame** holds every parameter (the constructor writes them before the first resume) and every slot live across a
+ *   suspension. Everything else is a local of one resume, because nothing reads it after the machine returns.
+ * - **The entry**, state 0, releases what is live when the body begins: the parameters it still owns.
+ * - **A resume point**, the state a `Suspend` records, releases what is live right after it - where the machine goes on.
+ * - **A back-edge** releases what is live before the terminator that turns the loop around. A back-edge is an edge into a
+ *   block the depth-first walk from the entry has not left yet, which in the reducible graph every loop of the source
+ *   lowers to is exactly the edge that closes a loop, so every cycle of the machine passes one check.
+ */
+
+use IrProgram, IrFunction, Slot, Instruction from "./ir"
+use Counted, countedSlotsOf, livenessOf, filledFlags from "./liveness"
+use usedSlots, definedSlot, usedByTerminator, successorsOf from "./verify"
+
+/** What a back end needs to drive one resume function. */
+public type TaskMachine {
+  /** Per slot: whether it is a member of the frame rather than a local of one resume. */
+  frameSlots: List<Bool>
+  /** What the entry releases where the task was cancelled before its first resume. */
+  entry: List<Slot>
+  /** Per state, from 1 at index 1 on: what is live where the machine goes on after that suspension. Index 0 is empty. */
+  resumes: List<List<Slot>>
+  /** Per block: whether its terminator closes a loop, which is where the back-edge check stands. */
+  backEdges: List<Bool>
+  /** Per block: what the back-edge check before its terminator releases, empty where the block is none. */
+  backEdgeReleases: List<List<Slot>>
+
+  /** How many suspension points the body has. */
+  fn stateCount(): Int {
+    resumes.length() - 1
+  }
+
+  fn isFrameSlot(slot: Slot): Bool {
+    slot.value >= 0 && slot.value < frameSlots.length() && frameSlots[slot.value]
+  }
+
+  fn isBackEdge(block: Int): Bool {
+    block >= 0 && block < backEdges.length() && backEdges[block]
+  }
+}
+
+/** The [TaskMachine] of one resume function whose ownership is final. */
+public fn taskMachineOf(program: IrProgram, function: IrFunction): TaskMachine {
+  const slotCount = function.slots.length()
+  const blockCount = function.blocks.length()
+  const counted = countedSlotsOf program, function
+  const live = livenessOf program, function, counted
+  // The same analysis over every slot, counted or not: a number that is read after a suspension has to survive it too
+  const every = everySlotOf function
+  const across = livenessOf program, function, every
+  var frame = filledFlags slotCount, false
+  for index in 0..slotCount {
+    if const .Parameter(_) = function.slots[index].role {
+      frame.set index, true
+    }
+  }
+  var resumes: List<List<Slot>> = [[]]
+  var releasedAt: Map<Int, List<Slot>> = [:]
+  for index in 0..blockCount {
+    const block = function.blocks[index]
+    var countedLive = live.liveOut[index]
+    var everyLive = across.liveOut[index]
+    addUses countedLive, counted, usedByTerminator(block.terminator)
+    addUses everyLive, every, usedByTerminator(block.terminator)
+    var at = block.instructions.length() - 1
+    while at >= 0 {
+      const instruction = block.instructions[at]
+      // What is live here is live *after* this instruction: where a suspension goes on
+      if const .Suspend(state, _) = instruction {
+        releasedAt.set state, slotsOf(counted, countedLive)
+        for position in 0..every.width() {
+          if everyLive[position] {
+            frame.set every.slots[position].value, true
+          }
+        }
+      }
+      stepBackwards countedLive, counted, instruction
+      stepBackwards everyLive, every, instruction
+      at = at - 1
+    }
+  }
+  var state = 1
+  while releasedAt.containsKey(state) {
+    resumes.append releasedAt[state]
+    state = state + 1
+  }
+  const entry = if blockCount == 0 { [] } else { slotsOf counted, live.liveIn[0] }
+  const edges = backEdgesOf function
+  var backEdgeReleases: List<List<Slot>> = []
+  for index in 0..blockCount {
+    if !edges[index] {
+      backEdgeReleases.append([])
+      continue
+    }
+    var before = live.liveOut[index]
+    addUses before, counted, usedByTerminator(function.blocks[index].terminator)
+    backEdgeReleases.append slotsOf(counted, before)
+  }
+  TaskMachine frame, entry, resumes, edges, backEdgeReleases
+}
+
+/** A [Counted] over every slot of the function, so that the liveness of `liveness.trb` answers for all of them. */
+fn everySlotOf(function: IrFunction): Counted {
+  var indices: List<Int> = []
+  var slots: List<Slot> = []
+  for index in 0..function.slots.length() {
+    indices.append index
+    slots.append Slot(index)
+  }
+  Counted indices, slots, filledFlags(function.slots.length(), false)
+}
+
+/** One instruction backwards: the slot it defines dies above it, and the slots it reads are live above it. */
+fn stepBackwards(var live: List<Bool>, counted: Counted, instruction: Instruction) {
+  if const Some(target) = definedSlot(instruction) {
+    const position = counted.positionOf target
+    if position >= 0 {
+      live.set position, false
+    }
+  }
+  addUses live, counted, usedSlots(instruction)
+}
+
+fn addUses(var live: List<Bool>, counted: Counted, slots: List<Slot>) {
+  for slot in slots {
+    const position = counted.positionOf slot
+    if position >= 0 {
+      live.set position, true
+    }
+  }
+}
+
+fn slotsOf(counted: Counted, live: List<Bool>): List<Slot> {
+  var found: List<Slot> = []
+  for position in 0..counted.width() {
+    if live[position] {
+      found.append counted.slots[position]
+    }
+  }
+  found
+}
+
+/**
+ * Per block: whether one of its edges goes back to a block the depth-first walk from the entry is still inside of.
+ * Iterative, with the walk's own stack, for the reason `postorderOf` is: a chain of blocks is as long as a body.
+ */
+fn backEdgesOf(function: IrFunction): List<Bool> {
+  const blockCount = function.blocks.length()
+  var edges = filledFlags blockCount, false
+  if blockCount == 0 {
+    return edges
+  }
+  var visited = filledFlags blockCount, false
+  var onStack = filledFlags blockCount, false
+  var stack = [0]
+  var cursor = [0]
+  visited.set 0, true
+  onStack.set 0, true
+  while !stack.isEmpty() {
+    const top = stack.length() - 1
+    const block = stack[top]
+    const targets = successorsOf function.blocks[block]
+    const at = cursor[top]
+    if at >= targets.length() {
+      onStack.set block, false
+      stack.removeAt top
+      cursor.removeAt top
+      continue
+    }
+    cursor.set(top, at + 1)
+    const next = targets[at]
+    if next < 0 || next >= blockCount {
+      continue
+    }
+    if onStack[next] {
+      edges.set block, true
+      continue
+    }
+    if visited[next] {
+      continue
+    }
+    visited.set next, true
+    onStack.set next, true
+    stack.append next
+    cursor.append 0
+  }
+  edges
+}

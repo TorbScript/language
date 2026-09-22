@@ -14,17 +14,19 @@ source:
   - std/http/src/lib.trb
 ---
 
-> **Not built natively yet.** A function whose body answers a `Task` is not built by the native back end yet, so `torb
-> run` refuses the examples here that use it. `torb check` accepts them, and the rules are the language's.
+> **Not built natively yet.** `get`, `post` and `request` need the network half of the runtime, which the native back
+> end does not have yet, so `torb run` refuses the examples here. `torb check` accepts them, and the rules are the
+> language's.
 
 `std/http` is a minimal HTTP client. A body is a stream (see [std/stream](stream.md)): `Body` is a
 `Source<Bytes, HttpError>`, so a response of any size can be piped into a file or read item by item, and the
 convenience that covers the common case (`body.text()`, `body.json<User>()`) sits on top of it. It needs the network
 capability inside a sandboxed script, and is not in the prelude.
 
-Every request answers a `Task`, so a program that calls `get`, `post` or `request` needs `.await()` on the result -
-and [std/task](task.md) is `status: planned`, because no back end gives a `Task` a value yet. The types and rules below
-are the settled design and type check today; running a request end to end waits on the same milestone as `spawn`.
+Every request answers a `Task`, so a program that calls `get`, `post` or `request` waits for the result with
+`.outcome()` - `.await()` with a cancellation folded into `HttpError`, which is why `HttpError` converts from
+`Cancelled`. The types and rules below are the settled design and type check today; running a request end to end waits
+on the network half of the runtime.
 
 ## Import
 
@@ -43,8 +45,8 @@ type User {
 }
 
 fn fetchUser(id: Int): Task<Result<User, HttpError>> {
-  var response = http.get("https://example.test/users/{id}").await()?
-  response.json<User>().await()
+  var response = http.get("https://example.test/users/{id}").outcome()?
+  response.json<User>().outcome()
 }
 ```
 

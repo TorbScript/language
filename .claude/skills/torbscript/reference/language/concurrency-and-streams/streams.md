@@ -2,7 +2,7 @@
 title: Streams
 summary: Source and Sink are the asynchronous siblings of Iterator and Accumulator, with the same verbs, the same Stage values in between, and a failure that stands in the type on both ends.
 kind: reference
-status: planned
+status: stable
 order: 30
 keywords:
   - Source
@@ -13,37 +13,35 @@ source:
   - docs/design/STREAMS.md
 ---
 
-> **Planned.** This feature is designed but not implemented. Nothing on this page works today.
-
 A stream is one flow, in one direction, with two ends. `Source<Item, Failure>` reads with `next`, exactly like
-`Iterator`; `Sink<Item, Failure>` writes with `add` and `finish`, exactly like `Accumulator` - the only difference is
-that every verb answers a `Task`. The example below type checks against the real `std/stream`; no back end runs it
-yet.
+`Iterator`; `Sink<Item, Failure>` writes with `add` and ends with `end`, like `Accumulator` - the only difference is
+that every verb answers a `Task`, and that every stream's failure type converts from `Cancelled`, so `outcome()`
+folds a cancellation into it.
 
 ## Example
 
 ```trb check
-fn sumOf(var source: Source<Int, Never>): Task<Result<Int, Never>> {
-  source.collect(counting()).await()
+fn sumOf(var source: Source<Int, Cancelled>): Task<Result<Int, Cancelled>> {
+  source.collect(counting()).outcome()
 }
 
 const total = sumOf Channel<Int>(capacity: 1).source()
-print total.await().orElse(0)
+print total.outcome().orElse(0)
 ```
 
 ## Syntax
 
 ```text
-shared trait Source<Item, Failure> with Close {
+shared trait Source<Item, Failure: From<Cancelled>> with Close {
   var fn next(): Task<Result<Item?, Failure>>
 }
 
-shared trait Sink<Item, Failure> with Close {
+shared trait Sink<Item, Failure: From<Cancelled>> with Close {
   var fn add(item: Item): Task<Result<Void, Failure>>
-  var fn finish(): Task<Result<Void, Failure>>
+  var fn end(): Task<Result<Void, Failure>>
 }
 
-while const Some(item) = source.next().await()? { ... }
+while const Some(item) = source.next().outcome()? { ... }
 ```
 
 ## Rules
@@ -58,11 +56,11 @@ while const Some(item) = source.next().await()? { ... }
    a source only means that the binding may be pointed at another one.
 
 3. **There is deliberately no `for` over a `Source`.** A `for` head has no place for the `?` that a failing pull
-   needs, so the loop is a `while` that names both `await()` and `?`:
+   needs, so the loop is a `while` that names both `outcome()` and `?`:
 
    ```trb check
-   fn printAll(var source: Source<Int, Never>): Task<Result<Void, Never>> {
-     while const Some(item) = source.next().await()? {
+   fn printAll(var source: Source<Int, Cancelled>): Task<Result<Void, Cancelled>> {
+     while const Some(item) = source.next().outcome()? {
        print item
      }
      Ok void
@@ -77,7 +75,7 @@ while const Some(item) = source.next().await()? { ... }
    the rest.** A stage is synchronous and never asks where its values come from, so `mapping`, `filtering` and every
    other stage of [Pipelines](../collections-and-iteration/pipelines.md) work unchanged on both worlds.
 
-6. **`close()` releases what is above or below, synchronously and without failing; `finish()` is the graceful end of
+6. **`close()` releases what is above or below, synchronously and without failing; `end()` is the graceful end of
    a `Sink` and can fail.** A reader that stops early (`take`, a `find` that found it, an abandoned loop) closes what
    it was reading from; a sink that is closed without being finished may have written less than it was given.
 
@@ -87,8 +85,8 @@ while const Some(item) = source.next().await()? { ... }
 form because its pull can fail.
 
 ```trb check
-fn printAll(var source: Source<Int, Never>): Task<Result<Void, Never>> {
-  while const Some(item) = source.next().await()? {
+fn printAll(var source: Source<Int, Cancelled>): Task<Result<Void, Cancelled>> {
+  while const Some(item) = source.next().outcome()? {
     print item
   }
   Ok void
@@ -96,12 +94,12 @@ fn printAll(var source: Source<Int, Never>): Task<Result<Void, Never>> {
 ```
 
 ```trb error
-fn printAll(source: Source<Int, Never>) {
+fn printAll(source: Source<Int, Cancelled>) {
   for item in source {
     print item
   }
 }
-// error: `Source<Int64, Never>` is not `Iterate`, so `for` cannot walk it
+// error: `Source<Int64, Cancelled>` is not `Iterate`, so `for` cannot walk it
 ```
 
 ## Related

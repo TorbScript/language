@@ -898,6 +898,134 @@ void torb_channel_release(torb_channel *channel) {
   torb_release(channel, torb_channel_drop);
 }
 
+/* ------------------------------------------------------------------ the tasks `std/task` is written over --- */
+
+/*
+ * `Channel.source().next()` and `Channel.sink().add(item)` are TorbScript in `std/task`, over one task each that the
+ * runtime writes: a machine can only wait for a task through `torb_task_await`, so the two channel waits are wrapped in
+ * a task that waits for the channel instead. It costs one task block per item, and it keeps the lowering to one kind
+ * of suspension point.
+ */
+
+typedef struct torb_received_frame {
+  torb_channel *channel;
+} torb_received_frame;
+
+static torb_poll torb_received_resume(torb_task *task) {
+  torb_received_frame *frame = (torb_received_frame *)torb_task_frame(task);
+  torb_outcome outcome;
+  /* A delivered item this machine did not take yet is released by the runtime when it stops. */
+  if (torb_task_cancelled(task)) {
+    torb_channel_release(frame->channel);
+    return TORB_POLL_STOPPED;
+  }
+  if (task->state == 0u) {
+    task->state = 1u;
+    if (torb_channel_receive(task, frame->channel, torb_task_result_slot(task)) == TORB_WAIT_SUSPENDED) {
+      return TORB_POLL_SUSPENDED;
+    }
+  }
+  outcome = torb_task_outcome(task);
+  torb_channel_release(frame->channel);
+  /* The end of the stream has no value: the task ends as cancelled, which the source reads as `None`. */
+  return outcome == TORB_OUTCOME_READY ? TORB_POLL_FINISHED : TORB_POLL_STOPPED;
+}
+
+torb_task *torb_channel_received(torb_channel *channel) {
+  torb_task *task = torb_task_new(torb_received_resume, sizeof(torb_received_frame), channel->item);
+  torb_retain(channel);
+  ((torb_received_frame *)torb_task_frame(task))->channel = channel;
+  torb_task_start(task);
+  return task;
+}
+
+typedef struct torb_offered_frame {
+  torb_channel *channel;
+} torb_offered_frame;
+
+/* Where the item sits in the frame of an offer: after the channel, aligned for anything C aligns to 16 or less. */
+#define TORB_OFFERED_ITEM_OFFSET ((sizeof(torb_offered_frame) + 15u) & ~(size_t)15u)
+
+static torb_poll torb_offered_resume(torb_task *task) {
+  torb_offered_frame *frame = (torb_offered_frame *)torb_task_frame(task);
+  void *item = (uint8_t *)frame + TORB_OFFERED_ITEM_OFFSET;
+  torb_outcome outcome;
+  if (torb_task_cancelled(task)) {
+    /* Before the send the item is still the frame's; after it, the send consumed it either way. */
+    if (task->state == 0u) {
+      torb_release_item(frame->channel->item, item);
+    }
+    torb_channel_release(frame->channel);
+    return TORB_POLL_STOPPED;
+  }
+  if (task->state == 0u) {
+    task->state = 1u;
+    if (torb_channel_send(task, frame->channel, item) == TORB_WAIT_SUSPENDED) {
+      return TORB_POLL_SUSPENDED;
+    }
+  }
+  outcome = torb_task_outcome(task);
+  torb_channel_release(frame->channel);
+  if (outcome != TORB_OUTCOME_READY) {
+    /* Nobody reads any more: the item was released, and the sink reads the stop as `ChannelClosed`. */
+    return TORB_POLL_STOPPED;
+  }
+  *(torb_void *)torb_task_result_slot(task) = 0u;
+  return TORB_POLL_FINISHED;
+}
+
+torb_task *torb_channel_offered(torb_channel *channel, const void *item) {
+  torb_task *task = torb_task_new(torb_offered_resume, TORB_OFFERED_ITEM_OFFSET + (size_t)channel->item->size,
+                                  &torb_element_void);
+  torb_offered_frame *frame = (torb_offered_frame *)torb_task_frame(task);
+  torb_retain(channel);
+  frame->channel = channel;
+  torb_move_item(channel->item, (uint8_t *)frame + TORB_OFFERED_ITEM_OFFSET, item);
+  torb_task_start(task);
+  return task;
+}
+
+/* The descriptor of a `Bool` as a task result: one byte, trivial. */
+static const torb_element torb_element_flag = { (uint32_t)sizeof(bool), (uint32_t)TORB_ALIGN_OF(bool),
+                                                NULL, NULL, NULL, NULL };
+
+typedef struct torb_deadline_frame {
+  torb_task *target;
+  torb_instant deadline;
+} torb_deadline_frame;
+
+static torb_poll torb_deadline_resume(torb_task *task) {
+  torb_deadline_frame *frame = (torb_deadline_frame *)torb_task_frame(task);
+  torb_outcome outcome;
+  if (torb_task_cancelled(task)) {
+    torb_task_release(frame->target);
+    return TORB_POLL_STOPPED;
+  }
+  if (task->state == 0u) {
+    task->state = 1u;
+    if (torb_task_await_until(task, frame->target, frame->deadline) == TORB_WAIT_SUSPENDED) {
+      return TORB_POLL_SUSPENDED;
+    }
+  }
+  outcome = torb_task_outcome(task);
+  if (outcome == TORB_OUTCOME_TIMED_OUT) {
+    torb_task_cancel(frame->target);
+  }
+  *(bool *)torb_task_result_slot(task) = outcome != TORB_OUTCOME_TIMED_OUT;
+  torb_task_release(frame->target);
+  return TORB_POLL_FINISHED;
+}
+
+torb_task *torb_task_completed_within(torb_task *self, torb_duration limit) {
+  torb_task *task = torb_task_new(torb_deadline_resume, sizeof(torb_deadline_frame), &torb_element_flag);
+  torb_deadline_frame *frame = (torb_deadline_frame *)torb_task_frame(task);
+  torb_retain(self);
+  frame->target = self;
+  frame->deadline = torb_deadline_after(limit);
+  torb_task_start(task);
+  return task;
+}
+
 /* ----------------------------------------------------------------------------------------------- the scheduler --- */
 
 static void torb_fire_timers(torb_scheduler *scheduler) {

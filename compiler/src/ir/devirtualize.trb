@@ -695,6 +695,14 @@ fn collectInstruction(
       const location = slotLocation places, index, awaited
       poison peeling, location
     }
+    // The frame of a task is a parameter list of a resume function, which is frozen: nothing flows into it by rewrite
+    .TaskNew(_, _, _, arguments) => {
+      for argument in arguments {
+        const location = slotLocation places, index, argument.slot
+        poison peeling, location
+      }
+    }
+    .ChannelNew(_, _, _, _) => {}
   }
 }
 

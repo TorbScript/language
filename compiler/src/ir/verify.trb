@@ -505,6 +505,8 @@ public fn usedSlots(instruction: Instruction): List<Slot> {
     }
     .Panic(message, _) => [message.slot]
     .Suspend(_, awaited) => [awaited]
+    .TaskNew(_, _, _, arguments) => slotsOfArguments arguments
+    .ChannelNew(_, capacity, _, _) => [capacity]
   }
 }
 
@@ -534,6 +536,8 @@ public fn definedSlot(instruction: Instruction): Slot? {
     .TraitValue(target, _, _) => Some target
     .ContainerNew(target, _, _) => Some target
     .TakeOut(target, _, _, _) => Some target
+    .TaskNew(target, _, _, _) => Some target
+    .ChannelNew(target, _, _, _) => Some target
     .Write(reference, _) => {
       if reference.steps.isEmpty() {
         Some reference.base
@@ -617,6 +621,11 @@ fn verifyTypes(program: IrProgram, function: IrFunction, var found: List<String>
     }
     if const .Return(value) = block.terminator {
       checkReturn program, function, found, at, value
+    }
+    if const .Stop = block.terminator {
+      if function.kind != FunctionKind.TaskResume {
+        found.append "{at}: only the body of a task stops as cancelled"
+      }
     }
   }
 }
@@ -827,9 +836,82 @@ fn verifyInstruction(
       }
       if !function.hasSlot(awaited) {
         found.append "{at}: there is no slot %{awaited.value}"
+        return
+      }
+      if !isTaskValue(program, function.typeOfSlot(awaited)) {
+        found.append "{at}: a task waits for a `Task`, and %{awaited.value} is `{describeIrType(program, function.typeOfSlot(awaited))}`"
       }
     }
+    .TaskNew(target, resume, _, arguments) => verifyTaskNew program, function, found, at, target, resume, arguments
+    .ChannelNew(target, capacity, item, location) => {
+      if !program.hasElement(item) {
+        found.append "{at}: there is no element descriptor d{item.value}"
+      }
+      if !program.hasLocation(location) {
+        found.append "{at}: there is no location for the channel"
+      }
+      if !function.hasSlot(target) || !function.hasSlot(capacity) {
+        found.append "{at}: a channel needs a target slot and a capacity slot that exist"
+        return
+      }
+      if !isIntegerType(program, function.typeOfSlot(capacity)) {
+        found.append "{at}: the capacity of a channel is an integer"
+      }
+      if const .Runtime(kind, _) = program.typeAt(function.typeOfSlot(target)) {
+        if const .ChannelObject = kind {
+          return
+        }
+      }
+      found.append "{at}: `channelNew` makes a `Channel`, and %{target.value} is `{describeIrType(program, function.typeOfSlot(target))}`"
+    }
   }
+}
+
+/**
+ * `taskNew`: the resume function is one, every argument fills its parameter of the same position with the same type, and
+ * the target is a `Task` - of the resume function's result, which the element descriptor describes.
+ */
+fn verifyTaskNew(
+  program: IrProgram,
+  function: IrFunction,
+  var found: List<String>,
+  at: String,
+  target: Slot,
+  resume: FunctionId,
+  arguments: List<Argument>,
+) {
+  if !program.hasFunction(resume) {
+    found.append "{at}: there is no function t{resume.value}"
+    return
+  }
+  const started = program.functionAt resume
+  if started.kind != FunctionKind.TaskResume {
+    found.append "{at}: `taskNew` starts the resume function of a task, and `{started.name}` is none"
+  }
+  const parameters = started.signature.parameters
+  if parameters.length() != arguments.length() {
+    found.append "{at}: `{started.name}` takes {parameters.length()} arguments and {arguments.length()} were given"
+    return
+  }
+  for index in 0..arguments.length() {
+    expectType program, function, found, at, arguments[index].slot, parameters[index].annotation, "a frame parameter"
+  }
+  if !function.hasSlot(target) {
+    found.append "{at}: there is no slot %{target.value}"
+    return
+  }
+  if !isTaskValue(program, function.typeOfSlot(target)) {
+    found.append "{at}: `taskNew` makes a `Task`, and %{target.value} is `{describeIrType(program, function.typeOfSlot(target))}`"
+  }
+}
+
+fn isTaskValue(program: IrProgram, annotation: IrTypeId): Bool {
+  if const .Runtime(kind, _) = program.typeAt(annotation) {
+    if const .TaskObject = kind {
+      return true
+    }
+  }
+  false
 }
 
 fn verifyCall(

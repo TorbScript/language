@@ -319,7 +319,15 @@ public type SlotDeclaration {
 /** A function whose body is a state machine over `Task<Value>` is not a plain function (BACKEND 5.3). */
 public type FunctionKind {
   case Plain
-  /** `resume(task, state) -> Poll<Value>`: the entry block switches on the state. */
+  /**
+   * The **resume function** of a task: the body of a function that answers a `Task<Value>`, of a closure that does, of a
+   * `spawn` closure, or the top-level code of an entry file that waits. Its result is the `Value` and its parameters are
+   * the frame's (the task owns them); nothing calls it but the scheduler, and a `TaskNew` is what makes one run.
+   *
+   * A back end drives it as a state machine: a switch over the state at the entry, one resume point after every
+   * `Suspend`, a cancellation check there and at every loop back-edge, and a stop path per point that releases what is
+   * live (`ir/suspension.trb` computes what).
+   */
   case TaskResume
   /**
    * A `native fn` the runtime provides (BACKEND 3.7): a signature, no blocks, and the C symbol the emitter calls.
@@ -625,8 +633,27 @@ public type Instruction {
   case PutBack(container: Reference, key: Slot, value: Slot, kind: RuntimeKind)
 
   case Panic(message: Argument, at: LocationId)
-  /** Only in the body of a task (BACKEND 5.3). */
+  /**
+   * `awaited.await()`, the suspension half: the machine records `state`, waits for `awaited` to complete, and goes on
+   * after this instruction once it has - or stops there, releasing what is live, where it was cancelled meanwhile. Only
+   * in the body of a task (docs/CONCURRENCY.md 16). `state` counts the suspension points of the body from 1, in the
+   * order of its blocks; 0 is the entry.
+   */
   case Suspend(state: Int, awaited: Slot)
+  /**
+   * A task over a resume function, started: `torb_task_new`, every argument moved into the parameter of the same position
+   * of `resume`, `torb_task_start`. It is what a call of a function that answers a `Task` does, and what `spawn` is -
+   * the arguments are the parameters, or the environment of the `spawn` closure.
+   *
+   * `result` is the element descriptor of the task's value, which places and releases it in the task block; `None` is a
+   * `Void` task, which the runtime describes itself.
+   */
+  case TaskNew(target: Slot, resume: FunctionId, result: ElementId?, arguments: List<Argument>)
+  /**
+   * `Channel<Item>(capacity:)`: `torb_channel_new` over the element descriptor of `Item`, which no declaration of `std/`
+   * can name - the same reason `ContainerNew` is an instruction. A negative capacity panics at `at`.
+   */
+  case ChannelNew(target: Slot, capacity: Slot, item: ElementId, at: LocationId)
 }
 
 /** How a [Block] ends: a jump, a branch, a switch, a return, or code nothing may reach. */
@@ -638,6 +665,12 @@ public type Terminator {
   case Return(value: Argument?)
   /** `panic`, `Process.exit`, a call of a `Never` function, an exhausted decision tree. */
   case Unreachable
+  /**
+   * Ends the running task as cancelled: no value, and every `await()` of it answers `Fail(Cancelled)`. What is live is
+   * released before it, as before a `return`. Only in the body of a task, where a task that waited for a cancelled one
+   * passes the cancellation on (`stopAsCancelled` of `std/task`).
+   */
+  case Stop
 }
 
 // --- The program ----------------------------------------------------------------------------------------------------

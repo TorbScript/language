@@ -1,0 +1,358 @@
+/**
+ * Tasks: a function that answers a `Task<Value>` becomes **two** functions, `spawn` becomes the same pair over its
+ * closure, `await()` becomes a suspension point, and `stopAsCancelled` the end of a task that passes a cancellation on
+ * (docs/CONCURRENCY.md 16).
+ *
+ * The pair is a **resume function** (`FunctionKind.TaskResume`) and a **constructor**. The resume function is the body:
+ * its result is the `Value`, its parameters are the frame's, and nothing calls it but the scheduler. The constructor
+ * keeps the name and the signature every caller already calls, and its body is one `TaskNew` - the parameters moved into
+ * the frame, the task started - plus the `return` of the handle. So a call of a task function stays an ordinary `Call`
+ * for every pass, and the only thing that knows a task is a state machine is the back end that drives it.
+ *
+ * `await()` is a `Suspend` in front of the call that reads the answer: the machine waits there, goes on after it, and
+ * the call - `torb_task_result` behind the `.Fallible` wrapper of `Task.await` - builds the `Result<Value, Cancelled>`
+ * in the program's own layout. `outcome()` is the same suspension in front of its TorbScript body. Which slots live
+ * across a suspension, and what a stop releases, is not decided here: the ownership pass places every release, and
+ * `ir/suspension.trb` reads the answer off the finished body.
+ *
+ * # Related
+ *
+ * - `ir/suspension.trb` - the frame and the stop paths a back end emits for a resume function.
+ * - `ir/lower/closure.trb` - `spawn` of a closure literal, and a closure whose declared result is a `Task`.
+ */
+
+use Span from "../../syntax/source"
+use Argument as SyntaxArgument, Closure from "../../syntax/ast"
+use SymbolId from "../../semantics/symbols"
+use signatureOf from "../../semantics/checker/signature"
+use IrTypeId, IrType, IrSignature, IrParameter, Ownership, Slot, FunctionId, ElementId, FunctionKind from "../ir"
+use Instruction, Terminator, Reference, Argument, borrowed from "../ir"
+use FunctionBuilder, newFunction, emit, terminate, addTemporary, setFunctionKind, finishFunction from "../build"
+use canonicalType, spawnedFunctionName from "../mangle"
+use elementOfType from "../element"
+use NativeTarget from "../../backend/c/natives"
+use Lowering, reportUnsupported, finishBlock, isVoidType, nativeNamed, irTypeOf, locationOf from "./context"
+use valueSlot, unsupportedSlot, abandonedSlot, lowerValue from "./expression"
+use lowerSpawnedClosure, closureSignatureOf from "./closure"
+
+// --- Types ----------------------------------------------------------------------------------------------------------
+
+/** The `Value` of a `Task<Value>`, or `None` where the type is no task. */
+public fn taskValueOf(lowering: Lowering, annotation: IrTypeId): IrTypeId? {
+  if const .Runtime(kind, arguments) = lowering.program.typeAt(annotation) {
+    if const .TaskObject = kind {
+      return arguments.first()
+    }
+  }
+  None
+}
+
+/**
+ * Whether a value of the type may cross into a frame in place of a `var` parameter: an object with an identity, whose
+ * changes are the object's and not the binding's - a `shared type`, a trait-typed value (every trait a `var` parameter of
+ * a task names is a `shared trait`, `Source` and `Sink`), a `Task` or a `Channel`.
+ */
+fn crossesByIdentity(lowering: Lowering, annotation: IrTypeId): Bool {
+  match lowering.program.typeAt(annotation) {
+    .SharedObject(_) => true
+    .Object(_) => true
+    .Runtime(kind, _) => {
+      match kind {
+        .TaskObject => true
+        .ChannelObject => true
+        _ => false
+      }
+    }
+    _ => false
+  }
+}
+
+/**
+ * Whether a closure literal whose type answers a `Task` is the **body** of that task. The checker decides it by the
+ * expected type: where one declared the `Task` (`Source.produce`, `then`), the body produces the `Value` and may wait;
+ * where the closure's type was inferred from the body, the body produced the task itself and is an ordinary closure. The
+ * checker records no flag for it, so the answer is read off the type of what the body ends with.
+ */
+public fn isTaskBodyClosure(var lowering: Lowering, closure: Closure): Bool {
+  const last = match closure.body.statements.last() {
+    Some(found) => found
+    None => {
+      return true
+    }
+  }
+  const produced = match last.kind {
+    .Evaluate(expression) => expression.span
+    .Return(value) => {
+      match value {
+        Some(inner) => inner.span
+        None => {
+          return true
+        }
+      }
+    }
+    _ => {
+      return true
+    }
+  }
+  const module = lowering.module
+  const found = match lowering.checker.expressionType(module, produced) {
+    Some(inner) => inner
+    None => {
+      return true
+    }
+  }
+  if lowering.checker.isBroken(found) {
+    return true
+  }
+  taskValueOf(lowering, irTypeOf(lowering, found)).isNone()
+}
+
+/** The `Item` of a `Channel<Item>`, or `None` where the type is no channel. */
+public fn channelItemOf(lowering: Lowering, annotation: IrTypeId): IrTypeId? {
+  if const .Runtime(kind, arguments) = lowering.program.typeAt(annotation) {
+    if const .ChannelObject = kind {
+      return arguments.first()
+    }
+  }
+  None
+}
+
+/** `Channel<Item>(capacity:)`: the runtime's channel over the element descriptor of `Item`. */
+public fn lowerChannelNew(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  capacity: Slot,
+  annotation: IrTypeId,
+  item: IrTypeId,
+  at: Span,
+): Slot {
+  const element = elementOfType lowering, item
+  const target = valueSlot lowering, builder, destination, annotation
+  emit builder, Instruction.ChannelNew(target, capacity, element, locationOf(lowering, at))
+  target
+}
+
+// --- The pair of functions ------------------------------------------------------------------------------------------
+
+/**
+ * The signature of the resume function of a task over `signature`: the same parameters in the same order - the frame
+ * owns them, which the ownership pass reads off the kind - and the task's `Value` as the result.
+ *
+ * A `var` parameter crosses as the value it holds, because a task outlives the call that made it and cannot keep a
+ * pointer into the caller's frame. That is the same thing only for an object with an identity (`crossesByIdentity`), so
+ * a `var` parameter of any other type is a clean finding.
+ */
+public fn resumeSignatureOf(var lowering: Lowering, signature: IrSignature, value: IrTypeId, at: Span): IrSignature? {
+  var parameters: List<IrParameter> = []
+  for parameter in signature.parameters {
+    if parameter.isReference && !crossesByIdentity(lowering, parameter.annotation) {
+      reportUnsupported lowering, "a `var` parameter of a value type in a function that answers a `Task`", at
+      return None
+    }
+    parameters.append IrParameter(parameter.name, parameter.annotation, false, Ownership.Borrowed)
+  }
+  Some IrSignature(parameters, value)
+}
+
+/**
+ * The body of a constructor: every parameter handed to the frame of `resume` - a `var` parameter read out of its place
+ * first - and the task that starts there returned.
+ */
+public fn buildTaskConstructor(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  signature: IrSignature,
+  resume: FunctionId,
+  value: IrTypeId,
+) {
+  var arguments: List<Argument> = []
+  for index in 0..signature.parameters.length() {
+    const parameter = signature.parameters[index]
+    if parameter.isReference {
+      const held = addTemporary builder, parameter.annotation
+      emit builder, Instruction.Read(held, Reference(Slot(index), []))
+      arguments.append borrowed(held)
+      continue
+    }
+    arguments.append borrowed(Slot(index))
+  }
+  const task = addTemporary builder, signature.result
+  emit builder, Instruction.TaskNew(task, resume, taskResultElement(lowering, value), arguments)
+  terminate builder, Terminator.Return(Some(borrowed(task)))
+}
+
+/** The element descriptor of a task's value, which the task block places and releases it by; `None` for `Void`. */
+public fn taskResultElement(var lowering: Lowering, value: IrTypeId): ElementId? {
+  if isVoidType(lowering, value) {
+    return None
+  }
+  Some elementOfType(lowering, value)
+}
+
+/**
+ * The suspension points of a finished resume body, numbered 1, 2, ... in the order of its blocks: the state the machine
+ * records before it waits, and the label it goes on at. 0 is the entry.
+ */
+public fn numberSuspensions(var builder: FunctionBuilder) {
+  var state = 0
+  for index in 0..builder.function.blocks.length() {
+    const instructions = builder.function.blocks[index].instructions
+    var numbered: List<Instruction> = []
+    var isChanged = false
+    for instruction in instructions {
+      if const .Suspend(_, awaited) = instruction {
+        state = state + 1
+        numbered.append Instruction.Suspend(state, awaited)
+        isChanged = true
+        continue
+      }
+      numbered.append instruction
+    }
+    if isChanged {
+      builder.function.blocks[index].instructions = numbered
+    }
+  }
+}
+
+/** Whether a body waits anywhere: the top-level code of an entry file becomes the main task where it does. */
+public fn hasSuspension(builder: FunctionBuilder): Bool {
+  for block in builder.function.blocks {
+    for instruction in block.instructions {
+      if const .Suspend(_, _) = instruction {
+        return true
+      }
+    }
+  }
+  false
+}
+
+// --- `await()` and `outcome()` ----------------------------------------------------------------------------------------
+
+/**
+ * Whether a call waits: `await()` and `outcome()` of a `Task`, found by their name and a receiver that is a task - the
+ * same way the checker's placement rule finds them. The call itself reads the answer; the wait stands in front of it.
+ */
+public fn isSuspendingCall(lowering: Lowering, var builder: FunctionBuilder, name: String, operands: List<Slot>): Bool {
+  if name != "await" && name != "outcome" {
+    return false
+  }
+  const receiver = match operands.first() {
+    Some(found) => found
+    None => {
+      return false
+    }
+  }
+  taskValueOf(lowering, builder.typeOfSlot(receiver)).isSome()
+}
+
+/**
+ * The suspension half of `task.await()`: the machine waits for `awaited` here and goes on after it - or stops there,
+ * where it was cancelled meanwhile. Answers `false` in a body that is no task's, which is a clean finding: the checker's
+ * placement rule keeps `await()` out of one, and `outcome()` is found by the lowering alone.
+ */
+public fn emitSuspension(var lowering: Lowering, var builder: FunctionBuilder, awaited: Slot, at: Span): Bool {
+  if !lowering.isTaskBody {
+    reportUnsupported lowering, "`await()` or `outcome()` outside the body of a task", at
+    return false
+  }
+  emit builder, Instruction.Suspend(0, awaited)
+  true
+}
+
+// --- The natives the lowering writes itself ---------------------------------------------------------------------------
+
+/**
+ * The name of the `.Lowered` manifest entry a call of `symbol` reaches - `spawn`, `stopAsCancelled` - or `None`. These
+ * are natives no function could be: one needs the closure literal it is handed, the other ends the machine it runs in.
+ */
+public fn loweredNativeOf(var lowering: Lowering, symbol: SymbolId): String? {
+  const identifier = signatureOf lowering.checker, symbol
+  const signature = lowering.checker.signature identifier
+  if signature.hasBody || signature.takesSelf {
+    return None
+  }
+  const name = lowering.checker.symbolAt(symbol).name
+  const entry = nativeNamed(lowering, "", name, signature)?
+  if const .Lowered = entry.target {
+    return Some entry.name
+  }
+  None
+}
+
+/**
+ * `stopAsCancelled()`: the machine ends as cancelled, with nothing of the frame left live - the ownership pass releases
+ * it in front of the `stop` as it does in front of a `return`.
+ */
+public fn lowerStop(var lowering: Lowering, var builder: FunctionBuilder, destination: Slot?, at: Span): Slot {
+  if !lowering.isTaskBody {
+    return unsupportedSlot lowering, builder, destination, "`stopAsCancelled` outside the body of a task", at
+  }
+  finishBlock lowering, builder, Terminator.Stop
+  abandonedSlot lowering, builder, destination
+}
+
+/**
+ * `spawn { ... }`: the closure's body is the resume function and its environment the frame (`lowerSpawnedClosure`).
+ * A closure *value* - a parameter, a field - runs through a resume function of its own that calls it, one per closure
+ * type; its body cannot wait, because the checker allows `await()` only in a closure literal handed to `spawn`.
+ */
+public fn lowerSpawn(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  arguments: List<SyntaxArgument>,
+  annotation: IrTypeId,
+  at: Span,
+): Slot {
+  const value = match taskValueOf(lowering, annotation) {
+    Some(found) => found
+    None => {
+      return unsupportedSlot lowering, builder, destination, "`spawn` whose result is no `Task`", at
+    }
+  }
+  if arguments.length() != 1 {
+    return unsupportedSlot lowering, builder, destination, "`spawn` without exactly one closure", at
+  }
+  const written = arguments[0].value
+  if const .Closure(closure) = written.kind {
+    return lowerSpawnedClosure lowering, builder, destination, written, closure, annotation, value
+  }
+  const held = lowerValue lowering, builder, written
+  if !lowering.isSupported {
+    return abandonedSlot lowering, builder, destination
+  }
+  const closureType = builder.typeOfSlot held
+  const resume = match spawnedRunnerOf(lowering, closureType, value) {
+    Some(found) => found
+    None => {
+      return unsupportedSlot lowering, builder, destination, "`spawn` of a value that is no closure", at
+    }
+  }
+  const target = valueSlot lowering, builder, destination, annotation
+  emit builder, Instruction.TaskNew(target, resume, taskResultElement(lowering, value), [borrowed(held)])
+  target
+}
+
+/** The resume function that calls a closure value of one type and finishes with its answer. */
+fn spawnedRunnerOf(var lowering: Lowering, closureType: IrTypeId, value: IrTypeId): FunctionId? {
+  const _ = closureSignatureOf(lowering, closureType)?
+  const name = spawnedFunctionName canonicalType(lowering.program, closureType)
+  if const Some(found) = lowering.generatedInstances.get(name) {
+    return Some found
+  }
+  const parameters = [IrParameter("body", closureType, false, Ownership.Borrowed)]
+  var runner = newFunction name, None, IrSignature(parameters, value), "spawned"
+  setFunctionKind runner, FunctionKind.TaskResume
+  if isVoidType(lowering, value) {
+    emit runner, Instruction.CallClosure(None, Slot(0), [])
+    terminate runner, Terminator.Return(None)
+  } else {
+    const answer = addTemporary runner, value
+    emit runner, Instruction.CallClosure(Some(answer), Slot(0), [])
+    terminate runner, Terminator.Return(Some(borrowed(answer)))
+  }
+  const added = finishFunction lowering.program, runner
+  lowering.generatedInstances.set name, added
+  Some added
+}

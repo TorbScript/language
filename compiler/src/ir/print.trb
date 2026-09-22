@@ -224,6 +224,16 @@ public fn printInstruction(program: IrProgram, function: IrFunction, instruction
     }
     .Panic(message, at) => "panic {printArgument(program, message)} at {printLocation(program, at)}"
     .Suspend(state, awaited) => "suspend state {state} %{awaited.value}"
+    .TaskNew(target, resume, result, arguments) => {
+      const described = match result {
+        Some(element) => program.elementAt(element).name
+        None => "void"
+      }
+      "{printTarget(target)}taskNew {program.functionAt(resume).name}({printArguments(program, arguments)}) {described}"
+    }
+    .ChannelNew(target, capacity, item, at) => {
+      "{printTarget(target)}channelNew %{capacity.value} {program.elementAt(item).name} at {printLocation(program, at)}"
+    }
   }
 }
 
@@ -247,6 +257,7 @@ public fn printTerminator(program: IrProgram, function: IrFunction, terminator: 
       }
     }
     .Unreachable => "unreachable"
+    .Stop => "stop"
   }
 }
 

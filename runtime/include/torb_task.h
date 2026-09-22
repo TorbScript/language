@@ -344,6 +344,9 @@ typedef struct torb_within_shape {
  *     self was cancelled by another  the new task stops too, so its `await()` answers Fail(Cancelled)
  *
  * Cancelling the new task does not cancel `self`: the deadline is gone, the work is not.
+ *
+ * `std/task` does not call this: its `Task.within` is TorbScript over `torb_task_completed_within` below, which builds
+ * no `Result` and so needs no shape. This one stays for a caller that has the adapters at hand.
  */
 torb_task *torb_task_within(torb_task *self, torb_duration limit, const torb_within_shape *shape);
 
@@ -397,6 +400,35 @@ void torb_channel_drop(void *block);
 
 /** `channel` consumed: `Release` for a `Channel` slot. */
 void torb_channel_release(torb_channel *channel);
+
+/* ------------------------------------------------------------------ the tasks `std/task` is written over --- */
+
+/*
+ * A resume function of the program waits through `torb_task_await` alone, so the three other waits `std/task` needs
+ * are each a task the runtime writes, which the TorbScript side awaits like any other.
+ */
+
+/**
+ * The next item of the channel, as a task: it finishes with the item, and ends as cancelled where the stream ended - no
+ * item will come - or where it was cancelled. `Channel.source().next()` reads the second as `None`. `channel` borrowed
+ * (the task holds its own reference), result owned.
+ */
+torb_task *torb_channel_received(torb_channel *channel);
+
+/**
+ * `item` offered to the channel, as a task: it finishes once a reader took the item, and ends as cancelled where the
+ * reading end is closed, the writing end already ended, or it was cancelled - the item released in each of those.
+ * `Channel.sink().add(item)` reads the stop as `ChannelClosed`. `channel` borrowed; **`item` consumed**, moved into the
+ * task's frame by address. Result owned.
+ */
+torb_task *torb_channel_offered(torb_channel *channel, const void *item);
+
+/**
+ * Whether `self` completes within `limit`, as a task of a `Bool`: `true` once `self` finished or was cancelled, and
+ * `false` once the limit passed first - after which `self` is cancelled. What `Task.within` is written over; cancelling
+ * this task does not cancel `self`. `self` borrowed, result owned.
+ */
+torb_task *torb_task_completed_within(torb_task *self, torb_duration limit);
 
 /* ----------------------------------------------------------------------------------------------- the scheduler --- */
 

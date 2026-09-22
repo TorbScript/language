@@ -213,6 +213,20 @@ jump left behind released nothing. The directory is the exemption, instead of a 
 | `expect-none.trb` | `Option.expect` panics with its message alone |
 | `expect-failure.trb` | `Result.expect` panics with its message **and** the error |
 
+**Tasks** - one worker, a FIFO queue, and a task that stops where it waits or where its loop turns around.
+
+| Program | What it pins |
+|---------|--------------|
+| `tasks.trb` | A task function, `spawn` over what it captured, `await()` answering `Ok`, and counted values that cross into a task and back |
+| `task-order.trb` | Tasks run in the order they became ready, and two that `pause()` between their steps interleave step by step |
+| `task-sleep.trb` | Tasks that `sleep` wake in the order of their deadlines, and `Task.all` answers in the order of the tasks |
+| `task-cancel-loop.trb` | A loop that never waits stops at its next turn once cancelled, and one that pauses stops at the pause |
+| `task-cancel-await.trb` | A task cancelled while it waits never sees an answer, its waiter reads `Fail(Cancelled)`, and a cancelled parent takes its children with it |
+| `task-combinators.trb` | `map`, `flatMap`, `Task.all`, `all` and `outcome()` |
+| `task-thousand.trb` | A thousand tasks alive at once, and every block of them released |
+| `channel-ping-pong.trb` | A rendezvous channel alternates in lock-step, a buffered one carries every item once and in order, and `end()` is `None` for the reader |
+| `channel-closed.trb` | Closing the reading end fails every later `add` with `ChannelClosed` and releases what was buffered |
+
 **The outside world**
 
 | Program | What it pins |

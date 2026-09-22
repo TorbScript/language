@@ -27,7 +27,7 @@
  * retain), which is what makes a fixpoint over the call graph a safe thing to run at all.
  */
 
-use IrProgram, IrFunction, Ownership, Slot, SlotRole, SlotDeclaration from "./ir"
+use IrProgram, IrFunction, FunctionKind, Ownership, Slot, SlotRole, SlotDeclaration from "./ir"
 use BlockId, Block, Instruction, Terminator, Argument, Reference from "./ir"
 use isManagedType, containsCountedType from "./layout"
 use isSharedStorage from "./capture"
@@ -218,6 +218,8 @@ fn promoteParameters(var program: IrProgram, index: Int, isErased: Bool): Bool {
   if isErased {
     return false
   }
+  // The parameters of a resume function are the frame's: `TaskNew` moved them in, and the machine releases them
+  const isTask = function.kind == FunctionKind.TaskResume
   const escaping = escapingSlots program, function
   var parameters = function.signature.parameters
   var isChanged = false
@@ -229,7 +231,7 @@ fn promoteParameters(var program: IrProgram, index: Int, isErased: Bool): Bool {
     if !containsCountedType(program, parameter.annotation) {
       continue
     }
-    if position >= function.slots.length() || !escaping[position] {
+    if position >= function.slots.length() || (!escaping[position] && !isTask) {
       continue
     }
     const promoted = parameter.copy ownership: Ownership.Owned

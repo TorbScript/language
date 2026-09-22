@@ -203,10 +203,19 @@ fn runtimeShapeOf(
   const signature = lowering.checker.signature identifier
   const declared = irSignatureUnder lowering, signature, mapping
   var annotations: List<IrTypeId> = []
-  for out in outParametersOf(lowering, declared, crossing, isPartsResult(entry)) {
+  for out in outParametersOf(lowering, declared, crossing, isPartsResult(entry), writesAnyPayload(entry)) {
     annotations.append out.annotation
   }
   RuntimeShape entry.addressedParameters, annotations, []
+}
+
+/**
+ * Whether the runtime writes the payload through an opaque `void *`, which serves every type of value and so writes the
+ * one byte of a `Void` as well: `torb_task_result`, whose `Task<Void>` has no payload to speak of and still takes the out
+ * parameter every other task's value needs. The prototype of the manifest is what says so.
+ */
+fn writesAnyPayload(entry: NativeEntry): Bool {
+  entry.prototype.endsWith "void *out);"
 }
 
 /**
@@ -248,6 +257,7 @@ fn outParametersOf(
   declared: IrSignature,
   crossing: CollectionCrossing?,
   isSplit: Bool,
+  writesVoid: Bool,
 ): List<OutParameter> {
   var found: List<OutParameter> = []
   const layout = match variantLayoutOfType(lowering, declared.result) {
@@ -260,7 +270,7 @@ fn outParametersOf(
   const success = successVariantOf lowering, layout
   if success >= 0 {
     if const Some(first) = shape.fieldsOfVariant(success).first() {
-      if !isVoidResult(lowering, first.annotation) {
+      if !isVoidResult(lowering, first.annotation) || writesVoid {
         if isSplit {
           found.appendAll payloadParametersOf(lowering, first.annotation)
         } else {
@@ -378,7 +388,7 @@ fn buildWrapper(
     reportUnsupported lowering, "`{entry.name}`, whose result has no success and no failure case", at
     return None
   }
-  const outs = outParametersOf lowering, declared, crossing, isPartsResult(entry)
+  const outs = outParametersOf lowering, declared, crossing, isPartsResult(entry), writesAnyPayload(entry)
   var slots: List<Slot> = []
   for out in outs {
     const slot = addTemporary builder, out.annotation

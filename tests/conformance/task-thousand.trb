@@ -1,0 +1,22 @@
+use pause from "std/task"
+
+/**
+ * A task is a record in a heap and not a thread, so a thousand of them are nothing special: each one starts, pauses once
+ * so that all of them are alive at the same time, and finishes. Every frame and every task block is released once the
+ * values are read, which the live-block count at the end says.
+ */
+
+fn squared(value: Int): Task<Int> {
+  pause().await() ?? void
+  value * value
+}
+
+var tasks: List<Task<Int>> = []
+for index in 0..1000 {
+  tasks.append squared(index)
+}
+var total = 0
+for task in tasks {
+  total = total + (task.await() ?? 0)
+}
+print total
