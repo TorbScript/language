@@ -3447,3 +3447,9 @@ Wenn nicht, was bedeutet, bewirkt es?
     das alles in einen Baum bringt. Auftrag: Unity (GameObject/Component, DOTS) und Godot (Node-Baum, Szenen,
     Signale) analysieren und passend zur Sprache übertragen - Update von `docs/ECS.md`, nach den laufenden Runden.
   - 17: `chcp 850` erklärt; falls keine Lust, wird es gestrichen.
+- (Task-Abbruch und ECS, 2026-09-22) **Entschieden (Nutzer):** JEDER Task ist abbrechbar - "dann hat man nicht
+  wieder 2 Welten". Folge: `await()` liefert `Result<Value, Cancelled>` für jeden Task; `cancel()` ist kooperativ
+  am nächsten Suspendierpunkt, strukturiert (Kinder werden mit abgebrochen), `within(limit)` bricht wirklich ab.
+  **Wird gelöst:** `docs/CONCURRENCY.md` Abschnitt 8 umbauen + std/task-Oberfläche + Doku-Snippets (`await()?`).
+  - ECS: prüfen, ob das kontrollierte `Any` elegant umgangen werden kann; moderne Engines wie **Bevy** mit
+    analysieren (neben Unity/Godot). 17 (`chcp 850`) wird getestet, wenn alles fertig ist.
