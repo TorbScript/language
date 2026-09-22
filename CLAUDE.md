@@ -46,6 +46,6 @@ Code rules, gates and repository operations: `compiler/CONTRIBUTING.md`.
 
 ## Working as a subagent
 
-- You work in your own git worktree; commit there, never on master, never push. Do not touch `seed/`, `TODO.md` or
+- You work in your own git worktree; commit there, never on `main`, never push. Do not touch `seed/`, `TODO.md` or
   `.claude/` unless the task says so.
 - Report what changed, the gate output, and anything left undone with the reason.
