@@ -3770,3 +3770,5 @@ Wenn nicht, was bedeutet, bewirkt es?
     Signaturänderung von `Result` auf `Task<Result<...>>` das Einzige ist, was ein Treiber-Ökosystem nicht verkraftet.
     **Zwei neue Geschmacksfragen (7, 8):** ob ein ausblendendes `show()` der richtige Standard ist (`print uri` ist
     dann nicht mehr verlustfrei), und ob std `Cache`/`Connection` schon vor dem ersten Treiber tragen soll.
+  - **URI.md Fragen 7/8 (ich):** 7 redigierendes `show()` - ja (Passwort im Crash-Report ist der schlimmere Fehler,
+    `text()` ist die volle Form). 8 `Cache`/`Connection` in std ohne Treiber - nein, erst mit zwei Treibern (wie Deque).
