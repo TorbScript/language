@@ -272,18 +272,16 @@ group "a `var` path through `a[key]`" {
 
 group "which of the three shapes a literal is" {
   /**
-   * The checker decides it and records it at the literal's span, so the back end reads the decision. Only `Default` -
-   * the collection the literal's own type names, item by item - is lowered; the other two say what they wait for
-   * instead of building the wrong container.
+   * The checker decides it and records it at the literal's span, so the back end reads the decision. `Default` - the
+   * collection the literal's own type names, item by item - and a list literal built through `from` are lowered; an
+   * `Array` says what it waits for instead of building the wrong container. The one built through `from` hands an
+   * `ArrayList` over as an `Iterate`, whose table this test prelude cannot build, so the conformance program
+   * `literal-through-from.trb` is what pins it.
    */
-  test "a literal that fills an `Array` names 5.9b, and one that goes through `from` names its target" {
+  test "a literal that fills an `Array` names 5.9b" {
     assert(
       unsupportedIn("fn fixed(): Array<Int, 2> \{\n  [1, 2]\n\}")
         == ["a literal that fills an `Array` of 2 items is not supported by the native back end yet"]
-    )
-    assert(
-      unsupportedIn("fn names(): Set<Int> \{\n  [1, 2]\n\}")
-        == ["a literal that is built through the `from` of `Set<Int64>` is not supported by the native back end yet"]
     )
   }
 }

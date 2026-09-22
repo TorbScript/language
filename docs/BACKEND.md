@@ -1866,7 +1866,9 @@ first, plus the two findings that were hiding behind each other.
   and hands it to the `from` of the target, and the `from` to call is an ordinary member of the `witness` the checker
   recorded - but every one of them bottoms out in `TrieSet.from` or `ArrayQueue.from`, the same `.Planned` natives as
   `ArrayList.from`, so it waits for the same step and names its target meanwhile. There is **one** `FromIterate` in the
-  repository (`std/http`) and no `InlineArray` at all.
+  repository (`std/http`) and no `InlineArray` at all. **Later:** the list literal's `FromIterate` is lowered
+  (`lowerBuiltList` in `ir/lower/collection.trb`, the field-default round of 2026-09-22), because a field default is a
+  constant and `[]` is how a field of a `Set` starts; a map literal built through `from` still waits.
 - **Two bugs of the lowering that `for` made reachable, both older than this round.** A *destination is a hint*, and the
   one `Void` slot of the function is the wrong hint for a value: an `if` used as a statement has the type `Void`, so both
   of its arms produce into that slot - and an arm whose last expression answers a value nobody takes (`parser.bump()`,

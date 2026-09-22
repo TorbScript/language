@@ -21,7 +21,7 @@
 use Span from "../../syntax/source"
 use Expression, Argument from "../../syntax/ast"
 use SymbolId from "../../semantics/symbols"
-use TypeId from "../../semantics/checker/type"
+use TypeId, TypeForm from "../../semantics/checker/type"
 use Adaptation from "../../semantics/checker/context"
 use IrTypeId, IrType, Slot, ElementId, RuntimeKind, Instruction, Reference, FunctionId from "../ir"
 use LayoutId, PathStep, Terminator from "../ir"
@@ -38,7 +38,7 @@ use variantLayoutOfType, variantNamed from "./match"
 use valueSlot, unsupportedSlot, abandonedSlot from "./expression"
 use lowerValue from "./expression"
 use lowerTraitValue, dispatchedMember, dispatchedOn, resultTypeOf, preludeType from "./generic"
-use lowerDispatched from "./call"
+use lowerDispatched, emitCall from "./call"
 
 /** `[1, 2, 3]`: an `ArrayList<Item>` filled in written order, then coerced to the `List<Item>` the literal is. */
 public fn lowerListLiteral(
@@ -50,6 +50,9 @@ public fn lowerListLiteral(
   annotation: IrTypeId,
 ): Slot {
   const at = expression.span
+  if const Some(.FromIterate(target, item, _)) = lowering.checker.collectionLiteralAt(lowering.module, at) {
+    return lowerBuiltList lowering, builder, destination, items, target, item, annotation, at
+  }
   if !isDefaultLiteral(lowering, at) {
     return abandonedSlot lowering, builder, destination
   }
@@ -100,40 +103,101 @@ public fn lowerItemList(
       return unsupportedSlot lowering, builder, destination, "a list of a type that is not a `List`", at
     }
   }
-  const container = match implementationOf(lowering, "ArrayList", [item], at) {
+  const (storage, container) = match filledList(lowering, builder, items, item, bound, at) {
     Some(found) => found
     None => {
       return abandonedSlot lowering, builder, destination
     }
   }
-  const element = match elementFor(lowering, item, false, at) {
-    Some(found) => found
-    None => {
-      return abandonedSlot lowering, builder, destination
-    }
-  }
+  coerced lowering, builder, destination, storage, bounds, container, annotation, at
+}
+
+/**
+ * The `ArrayList<Item>` a literal is made of, built empty over the element descriptor of its item type and filled in
+ * written order through the `append` of `bound` - and through one `append` per item for a `...spread`. `None` where a
+ * step is not supported, which it reported.
+ */
+fn filledList(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  items: List<Argument>,
+  item: TypeId,
+  bound: TypeId,
+  at: Span,
+): (Slot, TypeId)? {
+  const container = implementationOf(lowering, "ArrayList", [item], at)?
+  const element = elementFor(lowering, item, false, at)?
   const storage = addTemporary builder, irTypeOfClosed(lowering, container)
   emit builder, Instruction.ContainerNew(storage, RuntimeKind.ListStorage, [element])
-  const adder = match memberOfType(lowering, container, bound, "append", at) {
-    Some(found) => found
-    None => {
-      return abandonedSlot lowering, builder, destination
-    }
-  }
+  const adder = memberOfType(lowering, container, bound, "append", at)?
   for written in items {
     if written.isSpread {
       if !spreadInto(lowering, builder, storage, adder, written.value) {
-        return abandonedSlot lowering, builder, destination
+        return None
       }
       continue
     }
     const value = lowerValue lowering, builder, written.value
     if !lowering.isSupported {
-      return abandonedSlot lowering, builder, destination
+      return None
     }
     addInto lowering, builder, adder, storage, [value], written.value.span
   }
-  coerced lowering, builder, destination, storage, bounds, container, annotation, at
+  Some((storage, container))
+}
+
+/**
+ * `const names: Set<String> = ["a", "b"]`, `var seen: Set<Int> = []`: the literal the checker recorded as
+ * `CollectionLiteral.FromIterate`. The default list is built as for any literal, handed over as the `Iterate<Item>` the
+ * one protocol of a collection target takes, and the target's own `from` builds the value - the call
+ * `Set.from([...])` the literal stands for, through the implementation the checker found for `From<Iterate<Item>>`.
+ */
+fn lowerBuiltList(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  items: List<Argument>,
+  written: TypeId,
+  writtenItem: TypeId,
+  annotation: IrTypeId,
+  at: Span,
+): Slot {
+  const target = substituted lowering, written
+  const item = substituted lowering, writtenItem
+  const listBound = match listBoundFor(lowering, item, at) {
+    Some(found) => found
+    None => {
+      return abandonedSlot lowering, builder, destination
+    }
+  }
+  const (iterable, conversion) = match (lowering.checker.wellKnown.iterate, lowering.checker.wellKnown.from) {
+    (Some(first), Some(second)) => (first, second)
+    _ => {
+      const what = "a literal built through `from` without `Iterate` and `From` in the prelude"
+      return unsupportedSlot lowering, builder, destination, what, at
+    }
+  }
+  const iterateBound = lowering.checker.nominal iterable, [item]
+  const source = lowering.checker.types.intern TypeForm.Traits([iterateBound])
+  const fromBound = lowering.checker.nominal conversion, [source]
+  const (storage, container) = match filledList(lowering, builder, items, item, listBound, at) {
+    Some(found) => found
+    None => {
+      return abandonedSlot lowering, builder, destination
+    }
+  }
+  const boxed = irTypeOfClosed lowering, source
+  const argument = coerced lowering, builder, None, storage, [iterateBound], container, boxed, at
+  if !lowering.isSupported {
+    return abandonedSlot lowering, builder, destination
+  }
+  const from = match memberOfType(lowering, target, fromBound, "from", at) {
+    Some(found) => found
+    None => {
+      return abandonedSlot lowering, builder, destination
+    }
+  }
+  emitCall lowering, builder, destination, from, [argument], annotation, at
 }
 
 /**
@@ -281,10 +345,8 @@ public fn listBoundFor(var lowering: Lowering, item: TypeId, at: Span): TypeId? 
  * - **`InlineArray`** writes the items straight into the inline slots of an `Array<Item, Size>`. That is a
  *   `FixedArray`, and filling one this way is not lowered yet, together with its interior paths.
  * - **`FromIterate`** builds the default list and hands it to the `from` of the target (`Set<String>`, `Queue<Int>`).
- *   The `from` to call is `memberOfImplementation` of the `witness` the checker recorded, so the *call* is ordinary - but
- *   every one of those bottoms out in `TrieSet.from` or `ArrayQueue.from`, which are the same `.Planned` natives as
- *   `ArrayList.from` and cannot be functions of the runtime at all (they walk an `Iterate` of the program). So it waits
- *   for exactly the step `ArrayList.from` waits for, and naming the target is more use than half a chain.
+ *   A list literal takes that way before it gets here (`lowerBuiltList`); a map literal whose target is not a `Map`
+ *   does not yet.
  */
 fn isDefaultLiteral(var lowering: Lowering, at: Span): Bool {
   const module = lowering.module
