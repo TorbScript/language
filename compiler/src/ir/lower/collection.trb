@@ -28,7 +28,7 @@ use LayoutId, PathStep, Terminator from "../ir"
 use borrowed, referenced from "../ir"
 use FunctionBuilder, addTemporary, addLocal, addBlock, emit from "../build"
 use elementFor from "../element"
-use memberOfType from "../witness"
+use hasMemberOfType, memberOfType, traitMemberNamed from "../witness"
 use traitArgumentsOf from "../../semantics/checker/implementation"
 use locationOf from "./context"
 use Lowering, reportUnsupported, irTypeOfClosed, substituted, voidTypeOf from "./context"
@@ -108,7 +108,9 @@ public fn lowerItemList(
   }
   const storage = addTemporary builder, irTypeOfClosed(lowering, container)
   emit builder, Instruction.ContainerNew(storage, RuntimeKind.ListStorage, [element])
-  const adder = match memberOfType(lowering, container, bound, "add", at) {
+  // Rename fallback: delete after the seed knows the new name.
+  const filler = if hasMemberOfType(lowering, container, bound, "append") { "append" } else { "add" }
+  const adder = match memberOfType(lowering, container, bound, filler, at) {
     Some(found) => found
     None => {
       return abandonedSlot lowering, builder, destination
@@ -169,7 +171,8 @@ fn spreadInto(
   if !lowering.isSupported {
     return false
   }
-  const made = match dispatchedOn(lowering, subject, iterableBound, "iterator", at) {
+  const cursorMember = cursorMemberOf lowering, iterableBound
+  const made = match dispatchedOn(lowering, subject, iterableBound, cursorMember, at) {
     Some(found) => found
     None => {
       return false
@@ -378,7 +381,21 @@ public fn lowerMapLiteral(
  * accepted the loop, so a `for` the checker let through is one the back end can dispatch.
  */
 public fn iterableBoundOf(var lowering: Lowering, subject: TypeId, at: Span): TypeId? {
-  appliedBoundOf lowering, subject, "Iterable", at
+  // Rename fallback: delete after the seed knows the new name.
+  const name = if lowering.checker.wellKnown.symbolNamed("Iterate").isSome() { "Iterate" } else { "Iterable" }
+  appliedBoundOf lowering, subject, name, at
+}
+
+// Rename fallback: delete after the seed knows the new name.
+/**
+ * The member of the bound [iterableBoundOf] answers that makes the cursor: `iterate`, or `iterator` where the prelude
+ * still declares that one. It is asked of the bound without a finding, because `dispatchedOn` reports a name it misses.
+ */
+public fn cursorMemberOf(var lowering: Lowering, iterableBound: TypeId): String {
+  if traitMemberNamed(lowering, iterableBound, "iterate").isSome() {
+    return "iterate"
+  }
+  "iterator"
 }
 
 /**

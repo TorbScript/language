@@ -134,6 +134,11 @@ public type WellKnown {
  */
 public fn wellKnownOf(program: Program): WellKnown {
   const exports = preludeExports program
+  // Rename fallback: delete after the seed knows the new name.
+  const iterable = match exports.get("Iterate") {
+    Some(found) => Some found
+    None => exports.get "Iterable"
+  }
   WellKnown(
     exports,
     bothNames(program, exports, "Void"),
@@ -163,7 +168,7 @@ public fn wellKnownOf(program: Program): WellKnown {
     spawn: exports.get("spawn"),
     expression: exports.get("Expression"),
     encode: exports.get("Encode"),
-    iterable: exports.get("Iterable"),
+    iterable: iterable,
     indexed: exports.get("Indexed"),
     slice: exports.get("Slice"),
     mutableIndexed: exports.get("MutableIndexed"),

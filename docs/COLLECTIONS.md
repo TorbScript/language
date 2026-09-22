@@ -32,6 +32,7 @@ section 3 is the design, and section 5 says which slices are still open.
 - **[4. What the language must provide](#4-what-the-language-must-provide)** — numbered gaps, smallest fix each
 - **[5. Slices](#5-slices)** — one agent each, with gates
 - **[6a. What a rename of a name the compiler knows costs](#6a-what-a-rename-of-a-name-the-compiler-knows-costs)** — the seed, measured
+- **[6b. Commit 1 landed](#6b-commit-1-landed)** — the compiler accepts both names; where commit 2 finds the fallbacks
 - **[6. Open, for the owner](#6-open-for-the-owner)**
 
 Every declaration below was written into a probe file under `tests/language/` — where the workspace makes
@@ -924,6 +925,57 @@ has one namespace of members, so the graceful end (`Task<Result<Void, Failure>>`
 name. `end()` says the same thing as `close` about a *stream* without claiming the word `Close` owns. The other way
 out would be to take `Close` off `Sink` and lose `using(sink)` and `Buffered`'s "release without flushing"; that is a
 question for the owner and not one the language decides.
+
+## 6b. Commit 1 landed
+
+The renames the owner settled: the trait `Iterable` becomes `Iterate` and its member `iterator()` becomes `iterate()`
+(a single-method trait is named like its method), `List.add` becomes `append`, `Set.add` becomes `insert`, and
+`Map.set` stays. **`Add` and `add` stay** - `a + b` is not renamed. The compiler now accepts **both** names wherever it
+resolves one of these words by literal string, new name first and old name second. Nothing in `std`, the docs or the
+tests was renamed. Every site carries the same line, so commit 2 finds all of them with one search:
+
+```text
+grep -rn "Rename fallback: delete after the seed knows the new name." compiler/src
+```
+
+| Site | What it accepts |
+|---|---|
+| `compiler/src/semantics/checker/wellknown.trb`: `wellKnownOf` | the prelude's `Iterate`, else `Iterable` (`WellKnown.iterable`, which is all the checker's `for` and `...` ask) |
+| `compiler/src/semantics/checker/name.trb`: `openRangeNote` | the note on `(..10).iterate()` as on `(..10).iterator()` |
+| `compiler/src/ir/lower/collection.trb`: `iterableBoundOf` | the `for` bound `Iterate`, else `Iterable` |
+| `compiler/src/ir/lower/collection.trb`: `cursorMemberOf` | the member that makes the cursor: `iterate` where the bound declares it, else `iterator`. Asked through `traitMemberNamed`, because `dispatchedOn` reports a name it misses |
+| `compiler/src/ir/lower/collection.trb`: `spreadInto` | `...values` makes its cursor through `cursorMemberOf` |
+| `compiler/src/ir/lower/statement.trb`: `lowerCursor` | a `for` makes its cursor through `cursorMemberOf` |
+| `compiler/src/ir/lower/collection.trb`: `lowerItemList` | a list literal fills through `append` when the container has it, else `add`. It asks `hasMemberOfType` first, because `memberOfType` reports on a miss and abandons the body |
+| `compiler/src/ir/witness.trb`: `hasMemberOfType` | the probe the line above uses. It has no other caller and goes with the fallback |
+| `compiler/src/ir/lower/context.trb`: `nativeNamed`, `renamedFrom` | a native the manifest does not list under its new name answers with the row of its old one: `ArrayList.append` and `HashSet.insert` are the `add` rows (`torb_list_add`, `torb_set_add`), `Array.iterate` the planned `Array.iterator` row |
+
+The map literal's `"set"` has no fallback because it keeps its name. No Set literal exists, so `Set.insert` reaches the
+compiler through the manifest and nowhere else.
+
+**The manifest was not given a second row.** `compiler/tests/natives.test.trb` compares the checked-in
+`runtime/include/torb_natives.h` with what the manifest renders, and the header lists every name above its symbol, so
+an alias row would change a generated file in `runtime/` twice for nothing. Commit 2 **renames** the rows instead:
+`{owner}.add` becomes `{owner}.append` in `listEntries` and `{owner}.insert` in `setEntries`, and `"iterator"` becomes
+`"iterate"` in `arrayMembers` - whose runtime symbol is built from the member (`torb_array_{member}`), so there the
+symbol has to keep its spelling or change on purpose. Then it runs `torb natives --header runtime` and updates the names
+the test asserts (`ArrayList.add`, `HashSet.add`, `"add"` in the member lists, the comment
+`/* ArrayList.add, TrieList.add */`).
+
+**Measured with this compiler.** Each rename was applied to a scratch copy of `std` and reverted:
+
+- `Iterable` → `Iterate` and `iterator` → `iterate` (178 and 63 sites in `std`): `check std/core std/collections
+  std/iteration std/text` says "32 files, no problems"; the seed reports 7 problems there, every one "The checker did not
+  work out the type of this expression" on a `for` or a collection call. A built program with a `for` over a list, a
+  `for` over a range, a spread and `more.iterate()` prints `12`, `[1, 2, 3, 4]` and `Some(1)`.
+- `List` declaring `append`, `ArrayList`/`TrieList` declaring `native append` and `HashSet`/`TrieSet` declaring
+  `native insert`: a list literal and two `insert`s build and run (`[1, 2, 3]`, `3`, `true`), and the emitted C fills the
+  literal through `ArrayList_append__Int64` and wraps `TrieSet_insert__Int64` around `torb_set_add`.
+
+**Not known to the compiler, so a plain sweep:** `Stack.add`/`remove` → `push`/`pop`, `Queue.add`/`remove` →
+`enqueue`/`dequeue`, their `first()` → `peek()`, and the trait `Collection` - no string in `compiler/src` looks any of
+them up, and no native row names a stack or a queue. The compiler's *messages* that say `Iterable` (`statement.trb`,
+`call.trb`, `expression.trb`) are prose and go with the sweep, together with the tests that quote them.
 
 ## 6. Open, for the owner
 

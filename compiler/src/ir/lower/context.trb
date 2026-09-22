@@ -551,12 +551,33 @@ public fn nativeNamed(lowering: Lowering, owner: String, member: String, signatu
   if const Some(index) = lowering.nativeIndex.get(key) {
     return lowering.natives.get index
   }
+  // Rename fallback: delete after the seed knows the new name.
+  const before = renamedFrom member
+  if !owner.isEmpty() && !before.isEmpty() {
+    if const Some(index) = lowering.nativeIndex.get("{owner}.{before}") {
+      return lowering.natives.get index
+    }
+  }
   const source = conversionSourceOf lowering, signature
   if source.isEmpty() {
     return None
   }
   const index = lowering.nativeIndex.get("{key}({source})")?
   lowering.natives.get index
+}
+
+// Rename fallback: delete after the seed knows the new name.
+/**
+ * The name the manifest still lists a renamed member under: `List.append` and `Set.insert` are its `add` rows and
+ * `iterate` its `iterator` rows. Empty for every member that kept its name.
+ */
+fn renamedFrom(member: String): String {
+  match member {
+    "append" => "add"
+    "insert" => "add"
+    "iterate" => "iterator"
+    _ => ""
+  }
 }
 
 /** The type the one value of a conversion comes from, as the manifest writes it. Empty for every other member. */

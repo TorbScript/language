@@ -251,6 +251,30 @@ fn manifestNameOf(var lowering: Lowering, id: TypeId): String? {
   None
 }
 
+// Rename fallback: delete after the seed knows the new name.
+/**
+ * Whether [memberOfType] would find a member under this name. It is the **probe** beside it: nothing is reported when
+ * the answer is no, so a caller that has a second name to try asks this one first - [memberOfType] would otherwise
+ * record a finding and abandon the whole body over a name it was going to try again.
+ *
+ * # Related
+ *
+ * - [memberOfType] - the function itself, for the name this one accepted.
+ */
+public fn hasMemberOfType(var lowering: Lowering, subject: TypeId, bound: TypeId, name: String): Bool {
+  const implementation = match witnessFor(lowering.checker, subject, bound) {
+    .Implementation(found, _, _) => found
+    _ => {
+      return false
+    }
+  }
+  const required = traitMemberNamed lowering, bound, name
+  if declaredMemberOf(lowering, implementation, required, name).isSome() {
+    return true
+  }
+  required.isSome()
+}
+
 /**
  * The function that implements one member of one trait for one concrete type: what a generated body calls per field, and
  * what a `for` loop and an interpolation will ask for. It goes through the very same path a witness table member does, so

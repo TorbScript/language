@@ -26,7 +26,7 @@ use TypeId from "../../semantics/checker/type"
 use isClosedType from "../instances"
 use dispatchedOn, resultTypeOf from "./generic"
 use lowerDispatched from "./call"
-use iterableBoundOf, iteratorBoundOf from "./collection"
+use iterableBoundOf, iteratorBoundOf, cursorMemberOf from "./collection"
 
 /**
  * Every statement of a block, and the value of the block where somebody takes one. Nothing is emitted after a
@@ -623,7 +623,8 @@ fn lowerCursor(
   iterableBound: TypeId,
   at: Span,
 ): Cursor? {
-  const made = match dispatchedOn(lowering, subjectType, iterableBound, "iterator", at) {
+  const cursorMember = cursorMemberOf lowering, iterableBound
+  const made = match dispatchedOn(lowering, subjectType, iterableBound, cursorMember, at) {
     Some(found) => found
     None => {
       return None
