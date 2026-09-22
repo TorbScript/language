@@ -133,9 +133,9 @@ PowerShell arrays or a heredoc.
 
 **Scratch programs.** A file named on the command line is checked wherever it lies: at the repository root, in a
 temporary directory, in a project that is nobody's member. Its `std/` is the workspace's when the workspace has one,
-and otherwise the toolchain's, found above the named path and above the working directory (`$TORB_STD` overrides);
-the runtime `torb run` links is found the same way (`$TORB_RUNTIME` overrides). `torb check <path>` that reaches no
-file at all is an error, never "0 files, no problems".
+and otherwise the toolchain's, found above the named path, the working directory and `torb` itself (`$TORB_STD`
+overrides); the runtime `torb run` links is found the same way (`$TORB_RUNTIME` overrides). `torb check <path>` that
+reaches no file at all is an error, never "0 files, no problems".
 
 ## Style
 

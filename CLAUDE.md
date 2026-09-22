@@ -17,8 +17,8 @@ Code rules, gates and repository operations: `compiler/CONTRIBUTING.md`.
 ## Checking a scratch program
 
 - Any file can be named: `torb check scratch.trb` / `torb run scratch.trb`, at the root, in a temp dir, in a package
-  that is nobody's member. Without a `std/` of its own it gets the toolchain's, found above the file and above the
-  working directory - so run `torb` from inside the checkout, or set `TORB_STD=<repo>/std` and `TORB_RUNTIME=<repo>/runtime`.
+  that is nobody's member. Without a `std/` of its own it gets the toolchain's, found above the file, the working
+  directory and `torb` itself (`build/release/torb` finds its checkout's `std/` and `runtime/`); no variables needed.
 
 ## Seed and breaking changes
 

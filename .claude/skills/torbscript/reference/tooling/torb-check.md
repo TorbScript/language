@@ -36,7 +36,13 @@ the outermost one it finds is the workspace root, and every `.trb` file below th
 where the standard library the path depends on lives. A file with no `project.trb` above it at all is checked alone,
 against the default prelude.
 
-Passing several paths checks several targets in one run; each is resolved this way independently.
+A file that is named directly is checked even where no project would sweep it in - at the root of a workspace, beside
+`src/` rather than in it. A workspace without a standard library of its own - a file below no `project.trb`, a project
+that is nobody's member - gets the toolchain's: the `std` of the nearest directory above the named path, then above
+the working directory, then above `torb` itself, that has `std/prelude/project.trb`, or `$TORB_STD`.
+
+Passing several paths checks several targets in one run; each is resolved this way independently. A path that reaches
+no file at all is an error, not a clean run.
 
 ### What is checked
 

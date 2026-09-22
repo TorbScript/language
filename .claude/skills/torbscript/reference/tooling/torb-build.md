@@ -22,6 +22,8 @@ construct the back end cannot lower yet is reported the same way a type error is
 
 ```text
 torb build [path]         Compile an entry file to a native binary through C
+    --profile dev|release   How hard the C compiler optimizes (default: release)
+    --release               The same as --profile release
     --emit-c                Write the C and stop, which needs no C compiler at all
     --output <file>          Where the binary goes (the C is written next to it)
 ```
@@ -72,12 +74,24 @@ wrote ../build/dev/my-project.exe
 Writes the generated C next to where the binary would have gone and stops, needing no C compiler on the machine at
 all. This is what lets a change to the back end be reviewed as a diff of the C it emits.
 
+### `--profile`
+
+A profile is how hard the C compiler works on the one C file: `dev` is `-O1`, `release` is `-O2`. The C is the same
+under both, so a profile never changes what a program means - only how long the build takes and how fast the binary
+is. `build` builds `release` unless told otherwise, and the default path of the binary is `build/<profile>/<name>`;
+`torb test` and `torb run` build `dev`.
+
 ### The C compiler
 
 Without `--emit-c`, `build` looks for one in this order: `$TORB_CC`, `clang`, `gcc`, `cc`, then `cl` (MSVC), and
 compiles with warnings turned into errors, because a warning in generated code is the emitter's bug and not the
-program's. `$TORB_RUNTIME` says where the C runtime (`runtime/`) is; without it, `build` walks up from the working
-directory looking for it, which is only found inside a checkout of the toolchain itself.
+program's. `$TORB_RUNTIME` says where the C runtime (`runtime/`) is; without it, `build` walks up from the entry file,
+then from the working directory and then from `torb` itself to a directory that has `runtime/include/torb.h`, which a
+checkout of the toolchain has - so `<checkout>/build/release/torb` finds its runtime from anywhere.
+
+A C file of 8 MB or more is compiled while holding one of `$TORB_BUILD_SLOTS` (default 3) machine-wide build slots,
+through `tools/build-slot.sh` beside the runtime, so that several builds of that size at once do not run the machine
+out of memory; `build` prints one line when it has to wait for one.
 
 ### Exit codes
 

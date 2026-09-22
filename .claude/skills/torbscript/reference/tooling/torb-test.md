@@ -22,6 +22,8 @@ panics - there are no matchers to learn beyond [`assert`](../standard-library/ex
 
 ```text
 torb test [path]... [--jobs N]   Run every *.test.trb below the paths (default: tests)
+    --profile dev|release           How hard the C compiler optimizes (default: dev)
+    --release                       The same as --profile release
 ```
 
 ## What it does
@@ -65,6 +67,12 @@ of a build goes. The whole suite together is about the size of one such translat
 
 A test whose body panics is reported and the **next** one runs, in the file it is in and in every file after it: that
 is the recovery point of the runtime, and it is what makes one binary behave like one process per file.
+
+### `--profile`
+
+`test` builds the `dev` profile unless told otherwise: the C compiler runs with `-O1` instead of `-O2`, which is the
+fastest suite from end to end, because a test binary is built to be run once. The binary goes to
+`<first path>/build/<profile>/tests`. [`torb build`](torb-build.md) says what a profile is.
 
 ### `--jobs`
 

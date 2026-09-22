@@ -3,18 +3,19 @@
  * not bring them along - a standalone file, or a project that is no member of a workspace with the standard library.
  *
  * Both ask the same question in the same order. The environment variable (`TORB_STD`, `TORB_RUNTIME`) is taken as it
- * is; otherwise the walk goes up from every path of the command line and then from the working directory, and the
- * first directory that has the marker file answers. A checkout finds its own `std/` and `runtime/` this way, from
- * wherever inside of it `torb` is started and whichever of its files is named.
+ * is; otherwise the walk goes up from every path of the command line, then from the working directory, then from the
+ * `torb` that runs, and the first directory that has the marker file answers. A checkout finds its own `std/` and
+ * `runtime/` this way, whichever of its files is named, and `<checkout>/build/release/torb` finds them from anywhere.
  */
 
 use File from "std/fs"
 use Environment from "std/environment"
+use Process from "std/process"
 use normalizePath, parentPath, joinPath, pathDepth from "./path"
 
 /**
  * The toolchain's `std` directory: `$TORB_STD`, or the `std` of the nearest directory above a path of the command line
- * (then above the working directory) that has `std/prelude/project.trb`.
+ * (then above the working directory and above `torb` itself) that has `std/prelude/project.trb`.
  */
 public fn findStandardLibrary(paths: List<String>): String? {
   findToolchainPart "TORB_STD", "std", "prelude/project.trb", paths
@@ -22,7 +23,7 @@ public fn findStandardLibrary(paths: List<String>): String? {
 
 /**
  * The C runtime a binary links against: `$TORB_RUNTIME`, or the `runtime` of the nearest directory above a path of the
- * command line (then above the working directory) that has `runtime/include/torb.h`.
+ * command line (then above the working directory and above `torb` itself) that has `runtime/include/torb.h`.
  */
 public fn findRuntime(paths: List<String>): String? {
   findToolchainPart "TORB_RUNTIME", "runtime", "include/torb.h", paths
@@ -39,6 +40,9 @@ fn findToolchainPart(variable: String, name: String, marker: String, paths: List
     starts.add absoluteOf(path)
   }
   starts.add absoluteOf(".")
+  if const Some(executable) = Process.executablePath() {
+    starts.add parentPath(normalizePath(executable))
+  }
   for start in starts {
     if const Some(found) = searchAbove(start, name, marker) {
       return Some found

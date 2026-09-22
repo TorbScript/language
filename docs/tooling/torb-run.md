@@ -22,7 +22,9 @@ way when it is shipped.
 ## Synopsis
 
 ```text
-torb run <path> [arguments]   Build a file, or a project's build { input }, and run it
+torb run [--profile dev|release] <path> [arguments]   Build a file, or a project's build { input }, and run it
+    --profile dev|release   In front of the path: how hard the C compiler optimizes (default: dev)
+    --release               The same as --profile release
 ```
 
 ## What it does
@@ -36,8 +38,9 @@ when the manifest says `input "src/main.trb"`. A file that nothing imports may h
 
 ### The cache
 
-The binary goes into `build/run/<key>/` under the workspace root, and `<key>` is a hash of **every file the front end
-read**, with its path and its text, plus the entry that was named. An unchanged program is therefore not rebuilt: the
+The binary goes into `build/run/<profile>/<key>/` under the workspace root, and `<key>` is a hash of **every file the
+front end read**, with its path and its text, plus the entry that was named. The profile is `dev` unless the command
+line says `--profile release` or `--release` in front of the path. An unchanged program is therefore not rebuilt: the
 first run costs a build, every run after it costs a process start.
 
 Keying on every file that was read rather than on the ones the program imports is the same trade
