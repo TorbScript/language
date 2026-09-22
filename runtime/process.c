@@ -205,3 +205,18 @@ void torb_process_exit(int64_t code) {
   fflush(stderr);
   TORB_EXIT_IMMEDIATELY((int)(code & 0xFF));
 }
+
+/**
+ * `Process.executablePath()`. The platform layer answers, because every operating system keeps this somewhere else
+ * (`GetModuleFileNameW`, `/proc/self/exe`) and some keep it nowhere a program can read.
+ */
+bool torb_process_executable_path(torb_text *out) {
+  char *value = NULL;
+  size_t length = 0u;
+  if (!torb_platform_executable_path(&value, &length)) {
+    return false;
+  }
+  *out = torb_text_from_cstring(value);
+  torb_raw_free(value, length + 1u);
+  return true;
+}

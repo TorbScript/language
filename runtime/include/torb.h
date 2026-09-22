@@ -856,6 +856,11 @@ int64_t torb_process_run(torb_text command, torb_list arguments, torb_text *outp
  * input reads the one the user is typing into.
  */
 int64_t torb_process_run_inheriting(torb_text command, torb_list arguments, torb_text *failure);
+/**
+ * `Process.executablePath()`: the absolute path of the running program's executable into `*out` (owned), or false
+ * where the operating system does not say. It is how a toolchain finds the files it was installed beside.
+ */
+bool torb_process_executable_path(torb_text *out);
 
 /* -------------------------------------------------------------------------------------------------- files --- */
 
@@ -1002,6 +1007,11 @@ bool torb_platform_environment_variable(const char *name, char **value, size_t *
  * variable, so there is nothing above the platform layer to route it through. False on failure.
  */
 bool torb_platform_set_environment_variable(const char *name, const char *value);
+/**
+ * The absolute path of the running executable, with `/` as the separator. `*value` owned, freed with
+ * `torb_raw_free(*value, *length + 1)`. False where the operating system does not say (and then nothing is allocated).
+ */
+bool torb_platform_executable_path(char **value, size_t *length);
 
 #if defined(_WIN32)
 

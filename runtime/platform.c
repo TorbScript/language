@@ -454,6 +454,45 @@ bool torb_platform_environment_variable(const char *name, char **value, size_t *
   return *value != NULL;
 }
 
+/**
+ * `GetModuleFileNameW`, grown until the path fits. What the program sees is the `/` form every other path of this
+ * runtime has, without the `\\?\` a very long path may come back with.
+ */
+bool torb_platform_executable_path(char **value, size_t *length) {
+  DWORD capacity = MAX_PATH;
+  for (;;) {
+    const size_t bytes = (size_t)capacity * sizeof(wchar_t);
+    wchar_t *wide = (wchar_t *)torb_raw_allocate(bytes);
+    const DWORD written = GetModuleFileNameW(NULL, wide, capacity);
+    char *text;
+    size_t start = 0u;
+    size_t index;
+    if (written == 0u || written >= capacity) {
+      torb_raw_free(wide, bytes);
+      if (written == 0u || capacity >= 32768u) {
+        return false;
+      }
+      capacity *= 2u;
+      continue;
+    }
+    text = torb_platform_utf8(wide, length);
+    torb_raw_free(wide, bytes);
+    if (text == NULL) {
+      return false;
+    }
+    if (*length >= 4u && memcmp(text, "\\\\?\\", 4u) == 0) {
+      start = 4u;
+    }
+    *value = (char *)torb_raw_allocate(*length - start + 1u);
+    for (index = start; index <= *length; index += 1u) {
+      (*value)[index - start] = text[index] == '\\' ? '/' : text[index];
+    }
+    torb_raw_free(text, *length + 1u);
+    *length -= start;
+    return true;
+  }
+}
+
 bool torb_platform_set_environment_variable(const char *name, const char *value) {
   size_t name_capacity = 0u;
   size_t value_capacity = 0u;
@@ -567,6 +606,35 @@ bool torb_platform_environment_variable(const char *name, char **value, size_t *
 
 bool torb_platform_set_environment_variable(const char *name, const char *value) {
   return setenv(name, value, 1) == 0;
+}
+
+/**
+ * Linux names the executable in `/proc/self/exe`. Where that link is missing (macOS, the BSDs without procfs), the
+ * answer is false rather than a guess from `argv[0]`, which names whatever the caller typed.
+ */
+bool torb_platform_executable_path(char **value, size_t *length) {
+  size_t capacity = 256u;
+  for (;;) {
+    char *buffer = (char *)torb_raw_allocate(capacity);
+    const ssize_t written = readlink("/proc/self/exe", buffer, capacity);
+    if (written < 0) {
+      torb_raw_free(buffer, capacity);
+      return false;
+    }
+    if ((size_t)written < capacity) {
+      *length = (size_t)written;
+      *value = (char *)torb_raw_allocate(*length + 1u);
+      memcpy(*value, buffer, *length);
+      (*value)[*length] = '\0';
+      torb_raw_free(buffer, capacity);
+      return true;
+    }
+    torb_raw_free(buffer, capacity);
+    if (capacity >= 65536u) {
+      return false;
+    }
+    capacity *= 2u;
+  }
 }
 
 #endif

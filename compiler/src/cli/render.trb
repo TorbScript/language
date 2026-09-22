@@ -1,7 +1,27 @@
-/** [renderDiagnostic]: a [Diagnostic] as the text the command line prints, with the source line and a caret under it. */
+/**
+ * [renderDiagnostic]: a [Diagnostic] as the text the command line prints, with the source line and a caret under it.
+ * [renderProblem]: a problem that belongs to no file, with how to fix it where the command line knows that.
+ */
 
 use LineIndex from "../syntax/source"
 use Diagnostic from "../syntax/diagnostic"
+
+/**
+ * A problem of the workspace as text. A prelude that was not found gets the two ways out, because it is what a file
+ * outside of every workspace runs into first and the message of the name resolution cannot know about the toolchain.
+ */
+public fn renderProblem(problem: String): String {
+  if !problem.startsWith("The prelude package") {
+    return "error: {problem}"
+  }
+  const lines = [
+    "error: {problem}",
+    "  The standard library is looked for above the named paths and the working directory, in a directory that has",
+    "  `std/prelude/project.trb`. Name a file inside of a checkout of the toolchain, make the project a member of a",
+    "  workspace that has `std/*`, or set $TORB_STD to the `std` directory of the toolchain.",
+  ]
+  lines.joined separator: "\n"
+}
 
 /**
  * A diagnostic as text, with the line it points to:

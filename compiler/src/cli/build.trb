@@ -1,9 +1,12 @@
 /**
  * `torb build`: a checked program to a native binary, through one C file and whatever C compiler is on the machine.
  *
- * This is the minimum path: one profile, no cache of its own, no `project.trb` output path. `torb run` (build into a
- * cache and execute) and `torb test` (every `*.test.trb` as one binary) are additions on top of it, never a rewrite of
- * it, and profiles and a `build { output }` read from the manifest will be the same.
+ * This is the minimum path: two profiles ([Profile]), no cache of its own, no `project.trb` output path. `torb run`
+ * (build into a cache and execute) and `torb test` (every `*.test.trb` as one binary) are additions on top of it, never
+ * a rewrite of it, and a `profile` block and a `build { output }` read from the manifest will be the same.
+ *
+ * A C file the size of the compiler's is compiled while holding one of a few machine-wide build slots
+ * (`tools/build-slot.sh`), so that several checkouts building at once do not run the machine out of memory.
  *
  * Nothing is compiled that the back end cannot emit yet: a construct the lowering does not support becomes a
  * finding, and `torb build` reports every finding and refuses to produce a binary. A C compiler error, on the other
@@ -12,11 +15,12 @@
 
 use File, IoError from "std/fs"
 use Environment from "std/environment"
-use Process from "std/process"
+use Process, ProcessOutput from "std/process"
 use LineIndex from "../syntax/source"
-use normalizePath, parentPath, joinPath, pathName, pathDepth from "../project/path"
+use normalizePath, parentPath, joinPath, pathName from "../project/path"
 use SourceTree from "../project/source-tree"
 use readSourceTree, absolutePaths from "../project/read"
+use findRuntime from "../project/toolchain"
 use ModuleId from "../semantics/module"
 use check, Checked from "../semantics/check"
 use insertOwnership from "../ir/ownership"
@@ -26,10 +30,47 @@ use lowerWorkspace, pathsOfModules from "../ir/lower/lower"
 use entryNameOf from "../ir/lower/function"
 use emitProgram, ProgramEntry from "../backend/c/emit"
 use emittedText from "../backend/c/emission"
-use renderDiagnostic from "./render"
+use renderDiagnostic, renderProblem from "./render"
 
-/** What the profile is called until `--profile` exists. It is the `{target}` of an output path. */
-public const buildTarget = "release"
+/**
+ * How a program is built: how hard the C compiler optimizes the one C file. The C itself is the same under every
+ * profile, which is what keeps the fixpoint of the compiler a question about the emitter and not about a flag.
+ *
+ * `torb build` builds `release` unless told otherwise, `torb test` and `torb run` build `dev`: a test suite or a
+ * scratch program is run once per build, and there the C compiler is most of the wait.
+ */
+public type Profile {
+  /** `-O1`: the C compiler takes about two thirds of the time of `-O2`, for a binary that is a little slower */
+  case Dev
+  /** `-O2`: what the toolchain builds itself with, and what a benchmark measures */
+  case Release
+
+  /** The word on the command line (`--profile dev`), and the directory of an output path (`build/dev/`). */
+  fn name(): String {
+    match self {
+      .Dev => "dev"
+      .Release => "release"
+    }
+  }
+
+  /** The optimization flag of a C compiler that takes GCC's flags. */
+  fn optimization(): String {
+    match self {
+      .Dev => "-O1"
+      .Release => "-O2"
+    }
+  }
+}
+
+/** The profile a `--profile` names, or `None` for a name that is none. */
+public fn profileNamed(name: String): Profile? {
+  for profile in [Profile.Dev, Profile.Release] {
+    if profile.name() == name {
+      return Some profile
+    }
+  }
+  None
+}
 
 /** What `torb build` needs from the command line. */
 public type BuildOptions {
@@ -49,6 +90,8 @@ public type BuildOptions {
    * it: `torb run` and `torb test` put the program's own output on the console and nothing else.
    */
   saysWhatItWrote: Bool = true
+  /** `--profile dev|release`, `--release`. It decides the C compiler's flags and the `build/<profile>/` directory. */
+  profile: Profile = Profile.Release
 }
 
 /** Exit codes of `torb build`. */
@@ -106,7 +149,7 @@ public fn build(options: BuildOptions): Result<Int, IoError> {
     }
     return Ok 0
   }
-  compile source, binary, options.saysWhatItWrote
+  compile source, text.byteLength(), binary, options
 }
 
 // --- What was wrong with the program --------------------------------------------------------------------------------
@@ -115,7 +158,7 @@ public fn build(options: BuildOptions): Result<Int, IoError> {
 fn reportChecked(checked: Checked): Int {
   var problems = checked.problems.length()
   for problem in checked.problems {
-    printError "error: {problem}"
+    printError renderProblem(problem)
   }
   for file in checked.files {
     if file.diagnostics.isEmpty() {
@@ -270,8 +313,8 @@ fn entryModuleOf(checked: Checked): ModuleId? {
 }
 
 /**
- * `<project>/build/<target>/<name>`, or whatever `--output` says. Reading `build { output "build/{target}/torb" }` out
- * of the manifest is not implemented yet; the shape of the default path already matches what it would produce.
+ * `<project>/build/<profile>/<name>`, or whatever `--output` says. Reading `build { output "build/{target}/torb" }`
+ * out of the manifest is not implemented yet; the shape of the default path already matches what it would produce.
  */
 fn outputPathOf(checked: Checked, module: ModuleId, options: BuildOptions): String {
   if !options.output.isEmpty() {
@@ -281,7 +324,7 @@ fn outputPathOf(checked: Checked, module: ModuleId, options: BuildOptions): Stri
   const package = checked.program.workspace.packages[inside.package]
   const name = binaryNameOf inside.path
   const directory = if package.directory.isEmpty() { parentPath inside.path } else { package.directory }
-  joinPath directory, "build/{buildTarget}/{name}"
+  joinPath directory, "build/{options.profile.name()}/{name}"
 }
 
 /** The name of the binary: the entry file without its extension. */
@@ -337,36 +380,6 @@ fn canRun(command: String, arguments: List<String>): Bool {
   }
 }
 
-/**
- * The runtime the binary links against: `$TORB_RUNTIME`, or the `runtime/` of the repository the compiler is being run
- * from - found by walking up from the working directory, because until the compiler compiles itself it is run from
- * inside its own checkout.
- */
-fn findRuntime(): String? {
-  if const Some(given) = Environment.get("TORB_RUNTIME") {
-    if !given.isEmpty() {
-      return Some normalizePath(given)
-    }
-  }
-  const working = match File.absolutePath(".") {
-    Ok(found) => found
-    Fail(_) => "."
-  }
-  var current = normalizePath working
-  while pathDepth(current) >= 1 {
-    const candidate = joinPath current, "runtime"
-    if File.exists(joinPath(candidate, "include/torb.h")) {
-      return Some candidate
-    }
-    const parent = parentPath current
-    if parent == current {
-      return None
-    }
-    current = parent
-  }
-  None
-}
-
 /** Every `.c` file of the runtime, sorted: its tests are not part of a program. */
 fn runtimeSourcesOf(directory: String): Result<List<String>, IoError> {
   var sources: List<String> = []
@@ -378,7 +391,7 @@ fn runtimeSourcesOf(directory: String): Result<List<String>, IoError> {
   Ok sources
 }
 
-fn compile(source: String, binary: String, saysWhatItWrote: Bool): Result<Int, IoError> {
+fn compile(source: String, size: Int, binary: String, options: BuildOptions): Result<Int, IoError> {
   const compiler = match findCompiler() {
     Some(found) => found
     None => {
@@ -389,16 +402,17 @@ fn compile(source: String, binary: String, saysWhatItWrote: Bool): Result<Int, I
       return Ok noCompilerCode
     }
   }
-  const runtime = match findRuntime() {
+  const runtime = match findRuntime(options.paths) {
     Some(found) => found
     None => {
-      printError "error: the C runtime was not found. Set $TORB_RUNTIME to the `runtime` directory of the toolchain."
+      printError "error: the C runtime was not found above the program, the working directory or `torb`."
+      printError "  Set $TORB_RUNTIME to the `runtime` directory of the toolchain."
       return Ok noCompilerCode
     }
   }
   const sources = runtimeSourcesOf(runtime)?
-  const arguments = compilerArguments compiler, source, binary, runtime, sources
-  const output = match Process.run(compiler.command, arguments) {
+  const arguments = compilerArguments compiler, source, binary, runtime, sources, options.profile
+  const output = match runCompiler(compiler, arguments, source, size, runtime) {
     Ok(found) => found
     // `$TORB_CC` is taken as it is given, so a name that is not a program at all ends up here
     Fail(problem) => {
@@ -409,7 +423,7 @@ fn compile(source: String, binary: String, saysWhatItWrote: Bool): Result<Int, I
   if output.exitCode == 0 {
     // A C compiler on Windows appends `.exe` to an output name without an extension, so the path that is reported is
     // the one that is really there
-    if saysWhatItWrote {
+    if options.saysWhatItWrote {
       if File.exists(binary) {
         print "wrote {binary}"
       } else {
@@ -423,8 +437,49 @@ fn compile(source: String, binary: String, saysWhatItWrote: Bool): Result<Int, I
 }
 
 /**
+ * The size from which a C file is compiled inside a build slot: the compiler's own C is about 65 MB and its test suite's
+ * about 85 MB, the largest example a few MB. A program below it never waits for a slot.
+ */
+const slottedSize = 8_388_608
+
+/**
+ * Runs the C compiler. A C file of at least [slottedSize] is compiled through `tools/build-slot.sh`, found beside the
+ * runtime, which holds one of a few machine-wide slots while the compiler runs and says so on standard error while it
+ * waits for one - which is why it is started with this process's streams and its compiler's output comes back through
+ * a file next to the C.
+ *
+ * # Pitfalls
+ *
+ * Without `sh`, or without the script beside the runtime, the compile runs without a slot: a machine that cannot run
+ * the script is not one on which several checkouts build at once.
+ */
+fn runCompiler(
+  compiler: CCompiler,
+  arguments: List<String>,
+  source: String,
+  size: Int,
+  runtime: String,
+): Result<ProcessOutput, IoError> {
+  const script = joinPath parentPath(runtime), "tools/build-slot.sh"
+  if size < slottedSize || compiler.isMicrosoft || !File.exists(script) {
+    return Process.run compiler.command, arguments
+  }
+  const log = joinPath parentPath(source), "c-compiler.log"
+  var slotted = [script, log, compiler.command]
+  slotted.addAll arguments
+  match Process.runPassingThrough("sh", slotted) {
+    Ok(code) => {
+      const text = File.readText(log).ok() ?? ""
+      Ok ProcessOutput(code, text, "")
+    }
+    // No `sh` to start the script with
+    Fail(_) => Process.run compiler.command, arguments
+  }
+}
+
+/**
  * The flags of BACKEND 4, plus the warnings: a warning in generated code is a bug of the emitter, so it is an error
- * here and not a message the user has to read.
+ * here and not a message the user has to read. The profile decides the optimization and nothing else.
  */
 fn compilerArguments(
   compiler: CCompiler,
@@ -432,16 +487,22 @@ fn compilerArguments(
   binary: String,
   runtime: String,
   sources: List<String>,
+  profile: Profile,
 ): List<String> {
   if compiler.isMicrosoft {
-    var arguments = ["/std:c11", "/O2", "/W3", "/WX", "/nologo", "/I{joinPath(runtime, "include")}", "/Fe{binary}"]
+    const optimization = match profile {
+      .Dev => "/O1"
+      .Release => "/O2"
+    }
+    const include = joinPath runtime, "include"
+    var arguments = ["/std:c11", optimization, "/W3", "/WX", "/nologo", "/I{include}", "/Fe{binary}"]
     arguments.add source
     arguments.addAll sources
     return arguments
   }
   var arguments = [
     "-std=c11",
-    "-O2",
+    profile.optimization(),
     "-g0",
     "-Wall",
     "-Wextra",

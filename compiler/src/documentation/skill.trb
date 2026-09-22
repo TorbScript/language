@@ -20,8 +20,8 @@
  * every file the skill holds has to resolve inside the skill: a dangling link is a problem of the build, never a file
  * that is written anyway.
  *
- * [buildSkill] is the whole command, a pure function of the [Documentation] to a [BuiltSkill]; [writeSkill] is the one
- * place that touches disk.
+ * [buildSkill] is the whole command, a pure function of the [Documentation] to a [BuiltSkill]; [writeSkill] and
+ * [staleSkillFiles] (`--check`, the gate) are the two places that touch disk.
  */
 
 use File, IoError from "std/fs"
@@ -572,6 +572,52 @@ public fn writeSkill(out: String, skill: BuiltSkill): Result<Void, IoError> {
     File.writeText(path, file.text)?
   }
   Ok(void)
+}
+
+/**
+ * Every file under `out` that is not what [writeSkill] would write there, relative to `out` and sorted: one that is
+ * missing, one whose text differs, and one that no page produces any more. Empty when the committed skill is current.
+ * A line ending is not a difference, because git may check the files out with either one.
+ */
+public fn staleSkillFiles(out: String, skill: BuiltSkill): Result<List<String>, IoError> {
+  var stale: List<String> = []
+  var generated: List<String> = []
+  for file in skill.files {
+    generated.add file.path
+    const path = "{out}/{file.path}"
+    if !File.exists(path) {
+      stale.add "{file.path} (missing)"
+      continue
+    }
+    const text = File.readText(path)?
+    if text.replace("\r\n", "\n") != file.text.replace("\r\n", "\n") {
+      stale.add "{file.path} (differs)"
+    }
+  }
+  if File.isDirectory(out) {
+    for path in filesBelow(out, "")? {
+      if !generated.contains(path) {
+        stale.add "{path} (no page writes it)"
+      }
+    }
+  }
+  stale.sort({ _ })
+  Ok stale
+}
+
+/** Every file below `out`, as a path relative to it. */
+fn filesBelow(out: String, relative: String): Result<List<String>, IoError> {
+  const directory = if relative.isEmpty() { out } else { "{out}/{relative}" }
+  var found: List<String> = []
+  for entry in File.list(directory)? {
+    const child = if relative.isEmpty() { entry } else { "{relative}/{entry}" }
+    if File.isDirectory("{out}/{child}") {
+      found.addAll(filesBelow(out, child)?)
+    } else {
+      found.add child
+    }
+  }
+  Ok found
 }
 
 /** The name of the file the skill is installed as, for the message the command prints. */

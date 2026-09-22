@@ -23,6 +23,10 @@ public type Manifest {
   /** Patterns, each either a directory or `directory/*`. Empty for a project that is not a workspace. */
   workspaceMembers: List<String> = []
   buildInput: String = "src/main.trb"
+  /**
+   * The test directory, relative to the project. Empty for none, which is what a workspace manifest has unless it
+   * says `test { input }`: its tests belong to its members, and a `tests/` beside it is theirs or another workspace's.
+   */
   testInput: String = "tests"
 
   fn isWorkspace(): Bool {
@@ -73,6 +77,7 @@ public type Setting {
  */
 public fn readManifest(file: SourceFile): Manifest {
   var manifest = Manifest()
+  var namesTestInput = false
   for setting in readSettings(file.statements) {
     match setting.word {
       "name" => {
@@ -107,10 +112,14 @@ public fn readManifest(file: SourceFile): Manifest {
       "test" => {
         if const Some(text) = firstTextOf(setting, "input") {
           manifest = manifest.copy testInput: text
+          namesTestInput = true
         }
       }
       _ => {}
     }
+  }
+  if manifest.isWorkspace() && !namesTestInput {
+    manifest = manifest.copy testInput: ""
   }
   manifest
 }

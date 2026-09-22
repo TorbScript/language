@@ -15,13 +15,13 @@ use lex from "./syntax/lexer"
 use parse from "./syntax/parser/parser"
 use dumpTokens from "./syntax/dump"
 use collectSourceFiles from "./cli/files"
-use renderDiagnostic from "./cli/render"
+use renderDiagnostic, renderProblem from "./cli/render"
 use readSourceTree, absolutePaths from "./project/read"
 use SourceTree from "./project/source-tree"
 use check, Checked from "./semantics/check"
 use Lowering from "./ir/lower/context"
 use lowerChecked, loweredText, loweredProblems, statisticsLines from "./ir/lower/lower"
-use BuildOptions, build from "./cli/build"
+use BuildOptions, Profile, profileNamed, build from "./cli/build"
 use RunOptions, runProgram from "./cli/run"
 use TestOptions, runTests from "./cli/test"
 use insertOwnership from "./ir/ownership"
@@ -42,11 +42,15 @@ fn printUsage() {
   printError "                         --statistics: how many expressions of every file have a type"
   printError "                         --timings: the wall time of every pass, in the order they ran"
   printError "  torb build [path]      Compile an entry file to a native binary through C"
+  printError "                         --profile dev|release: how hard the C compiler optimizes (default: release)"
+  printError "                         --release: the same as --profile release"
   printError "                         --emit-c: write the C and stop, which needs no C compiler"
   printError "                         --output <file>: where the binary goes (the C is written next to it)"
   printError "  torb run <path> [...]  Build a file or a project into build/run/ and execute it"
   printError "                         everything behind the path is the program's own Process.arguments()"
+  printError "                         --profile dev|release, --release: in front of the path (default: dev)"
   printError "  torb test [path]...    Build every *.test.trb below the paths into one binary and run it"
+  printError "                         --profile dev|release, --release (default: dev)"
   printError "                         --jobs N: accepted and ignored - one binary is one process"
   printError "  torb ir <path>...      Print the typed IR of what the back end lowers, and what it does not yet"
   printError "                         --statistics: only the counts, without the IR itself"
@@ -125,7 +129,7 @@ fn checkProjects(paths: List<String>, withStatistics: Bool, withTimings: Bool): 
   var problems = checked.problems.length()
   var filesWithProblems = 0
   for problem in checked.problems {
-    printError "error: {problem}"
+    printError renderProblem(problem)
   }
   for file in checked.files {
     if file.diagnostics.isEmpty() {
@@ -138,6 +142,16 @@ fn checkProjects(paths: List<String>, withStatistics: Bool, withTimings: Bool): 
       printError renderDiagnostic(file.path, lines, diagnostic)
       printError ""
     }
+  }
+  // Nothing checked is not "no problems": a path that reaches no module of any package is a mistake of the command line
+  if checked.files.isEmpty() {
+    var named: List<String> = []
+    for path in paths {
+      named.add "`{path}`"
+    }
+    printError "error: {named.joined(separator: ", ")} holds no TorbScript file to check"
+    printError "  a file is checked when it is named, or lies below `src/` or the test directory of a project"
+    return Ok(problems + 1)
   }
   if problems == 0 {
     print "{checked.files.length()} files, no problems"
@@ -189,7 +203,7 @@ fn printIr(paths: List<String>, onlyStatistics: Bool, withOwnership: Bool): Resu
   const checked = check(tree, absolutePaths(paths)?, false, true)
   var problems = checked.problems.length()
   for problem in checked.problems {
-    printError "error: {problem}"
+    printError renderProblem(problem)
   }
   for file in checked.files {
     problems = problems + file.diagnostics.length()
@@ -238,16 +252,60 @@ fn irProblems(lowering: Lowering, withOwnership: Bool): List<String> {
   found
 }
 
+/** What `--profile` and `--release` said, and every other argument in its order. */
+type ProfileChoice {
+  profile: Profile
+  rest: List<String>
+}
+
 /**
- * `torb build [path] [--emit-c] [--output <file>]`. Profiles, a cache and an output path read from `project.trb`
- * are not implemented yet, so this is the whole command line for now.
+ * `--profile dev|release` and its shorthand `--release`, taken off the arguments. `None`, after the error is printed,
+ * for a name that is no profile.
  */
-fn buildOptionsOf(arguments: List<String>): BuildOptions {
+fn profileChoiceOf(arguments: List<String>, fallback: Profile): ProfileChoice? {
+  var profile = fallback
+  var rest: List<String> = []
+  var wantsProfile = false
+  for argument in arguments {
+    if wantsProfile {
+      wantsProfile = false
+      profile = match profileNamed(argument) {
+        Some(named) => named
+        None => {
+          printError "error: `{argument}` is no profile: the profiles are `dev` and `release`"
+          return None
+        }
+      }
+      continue
+    }
+    if argument == "--profile" {
+      wantsProfile = true
+      continue
+    }
+    if argument == "--release" {
+      profile = Profile.Release
+      continue
+    }
+    rest.add argument
+  }
+  if wantsProfile {
+    printError "error: `--profile` needs a name: `dev` or `release`"
+    return None
+  }
+  Some ProfileChoice(profile, rest)
+}
+
+/**
+ * `torb build [path] [--profile dev|release] [--emit-c] [--output <file>]`, `release` unless told otherwise. A cache
+ * and an output path read from `project.trb` are not implemented yet, so this is the whole command line for now.
+ */
+fn buildOptionsOf(arguments: List<String>): BuildOptions? {
+  const choice = profileChoiceOf(arguments, Profile.Release)?
   var paths: List<String> = []
   var onlyC = false
   var output = ""
   var wantsOutput = false
-  for argument in arguments {
+  for argument in choice.rest {
     if wantsOutput {
       output = argument
       wantsOutput = false
@@ -264,17 +322,18 @@ fn buildOptionsOf(arguments: List<String>): BuildOptions {
     paths.add argument
   }
   const given = if paths.isEmpty() { ["."] } else { paths }
-  BuildOptions given, onlyC, output
+  Some BuildOptions(given, onlyC, output, profile: choice.profile)
 }
 
 /**
- * `torb test [path]... [--jobs N]`. `--jobs` means nothing here: one binary holds every test file, so there is one
- * process whatever the number says. It is accepted and ignored.
+ * `torb test [path]... [--profile dev|release] [--jobs N]`, `dev` unless told otherwise. `--jobs` means nothing here:
+ * one binary holds every test file, so there is one process whatever the number says. It is accepted and ignored.
  */
-fn testOptionsOf(arguments: List<String>): TestOptions {
+fn testOptionsOf(arguments: List<String>): TestOptions? {
+  const choice = profileChoiceOf(arguments, Profile.Dev)?
   var paths: List<String> = []
   var wantsJobs = false
-  for argument in arguments {
+  for argument in choice.rest {
     if wantsJobs {
       wantsJobs = false
       continue
@@ -288,7 +347,34 @@ fn testOptionsOf(arguments: List<String>): TestOptions {
     }
     paths.add argument
   }
-  TestOptions(if paths.isEmpty() { ["tests"] } else { paths })
+  const given = if paths.isEmpty() { ["tests"] } else { paths }
+  Some TestOptions(given, choice.profile)
+}
+
+/**
+ * `torb run [--profile dev|release] <path> [argument]...`, `dev` unless told otherwise. The flags of `run` come in front
+ * of the path, because everything behind it is the program's. `None` without a path or with a name that is no profile.
+ */
+fn runOptionsOf(arguments: List<String>): RunOptions? {
+  var profile = Profile.Dev
+  var index = 0
+  while index < arguments.length() {
+    const argument = arguments[index]
+    if argument == "--release" {
+      profile = Profile.Release
+      index = index + 1
+      continue
+    }
+    if argument != "--profile" {
+      break
+    }
+    const name = arguments.get(index + 1) ?? ""
+    const choice = profileChoiceOf(["--profile", name], profile)?
+    profile = choice.profile
+    index = index + 2
+  }
+  const path = arguments.get(index)?
+  Some RunOptions(path, arguments.skip(index + 1).toList(), profile)
 }
 
 /**
@@ -332,21 +418,36 @@ match Process.arguments() {
     }
   }
   ["build", ...more] => {
-    const code = build(buildOptionsOf(more))?
+    const options = match buildOptionsOf(more) {
+      Some(found) => found
+      None => Process.exit 2
+    }
+    const code = build(options)?
     if code != 0 {
       Process.exit code
     }
   }
   // Everything behind the path is the program's, whatever it looks like: `torb run tool.trb --emit-c` passes
   // `--emit-c` on rather than reading it here
-  ["run", path, ...more] => {
-    const code = runProgram(RunOptions(path, more))?
+  ["run", ...more] => {
+    const options = match runOptionsOf(more) {
+      Some(found) => found
+      None => {
+        printUsage()
+        Process.exit 2
+      }
+    }
+    const code = runProgram(options)?
     if code != 0 {
       Process.exit code
     }
   }
   ["test", ...more] => {
-    const code = runTests(testOptionsOf(more))?
+    const options = match testOptionsOf(more) {
+      Some(found) => found
+      None => Process.exit 2
+    }
+    const code = runTests(options)?
     if code != 0 {
       Process.exit code
     }

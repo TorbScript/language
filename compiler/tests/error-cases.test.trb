@@ -1,0 +1,58 @@
+/**
+ * Recovery of the lexer and the parser over the two files of `tests/lexer-cases/` and `tests/parser-cases/`, in which
+ * every line is wrong on purpose: every problem is reported where it is, and one broken line never swallows the next.
+ */
+
+use test, group from "std/test"
+use File from "std/fs"
+use SourceText, LineIndex from "../src/syntax/source"
+use parse from "../src/syntax/parser/parser"
+use normalizePath, parentPath, joinPath, pathDepth from "../src/project/path"
+
+/** The root of the repository, found from wherever the test runner was started. */
+fn repositoryRoot(): String {
+  var current = normalizePath File.absolutePath(".").expect("the working directory")
+  while pathDepth(current) >= 1 {
+    if File.exists(joinPath(current, "compiler/project.trb")) {
+      return current
+    }
+    const parent = parentPath current
+    if parent == current {
+      break
+    }
+    current = parent
+  }
+  panic "the root of the repository is not above the working directory"
+}
+
+/** `line:column` of every diagnostic of the file, in the order the parser reports them. */
+fn positionsOf(path: String): List<String> {
+  const text = File.readText(joinPath(repositoryRoot(), path)).expect("the case file")
+  const lines = LineIndex.of text
+  var positions: List<String> = []
+  for diagnostic in parse(SourceText.of(text)).diagnostics {
+    const (line, column) = lines.lineAndColumn diagnostic.span.start
+    positions.add "{line}:{column}"
+  }
+  positions
+}
+
+group "Recovery" {
+  test "the lexer reports every broken token and goes on" {
+    const expected = [
+      "1:11", "2:1", "2:12", "3:7", "4:7", "5:18", "6:13", "6:17", "7:11", "7:14", "8:11", "9:1", "9:16", "9:30",
+      "10:11", "13:18", "17:3",
+    ]
+    assert(positionsOf("tests/lexer-cases/errors.trb") == expected)
+  }
+
+  test "the parser reports every broken statement and goes on" {
+    const expected = [
+      "2:23", "3:7", "4:14", "5:21", "6:12", "7:9", "8:28", "9:18", "10:23", "11:21", "12:21", "13:25", "14:4", "15:11",
+      "16:7", "16:12", "17:10", "18:12", "19:19", "20:7", "21:7", "22:6", "22:7", "23:3", "25:25", "28:22", "29:24",
+      "29:33", "31:7", "32:23", "33:14", "34:8", "35:1", "36:10", "37:5", "38:10", "39:8", "40:9", "41:20", "43:8",
+      "44:1", "45:20", "46:21", "59:21", "60:21", "61:10", "63:5", "64:10", "66:5", "67:4", "91:19", "93:24",
+    ]
+    assert(positionsOf("tests/parser-cases/errors.trb") == expected)
+  }
+}

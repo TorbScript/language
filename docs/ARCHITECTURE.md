@@ -20,8 +20,9 @@ The language itself is specified in [CONCEPT.md](../CONCEPT.md).
 | `docs/`      | This file                                                                                    |            |
 
 The root `project.trb` makes the repository a workspace of `std/*`, `compiler`, `examples/*` and `benchmarks`. That is
-how the compiler finds the standard library: `"std/fs"` is a member of the workspace it runs in. It also writes
-`test { input "no-tests" }`, because it has no tests of its own and `tests/` belongs to other workspaces.
+how the compiler finds the standard library: `"std/fs"` is a member of the workspace it runs in. A workspace manifest
+has no test directory unless it names one, so `tests/` - which belongs to other workspaces - is no part of the root
+package. A file or a project outside of every workspace with a `std/` gets the toolchain's own (`project/toolchain.trb`).
 
 ## The Bootstrap
 

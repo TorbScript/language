@@ -413,8 +413,8 @@ said nothing about it, so a directory called `tests/` at the root became the roo
 `torb check .` read every program below it as a module of that package. The two deliberately broken `errors.trb`
 then collided with the standard library ("`Option<Value>` already implements `Show`") and `check .` reported 179
 problems in 50 files. The root manifest now writes `test { input "no-tests" }` - it has no tests of its own, every
-test belongs to a member - and `check .` answers `370 files, no problems` again. This is a trap for any package that
-keeps a `tests/` directory that does not belong to it, not a property of this move.
+test belongs to a member - and `check .` answers `370 files, no problems` again. The trap is closed since: a workspace
+manifest has no test directory unless it says `test { input }`, and the root manifest says nothing about tests.
 
 The move cost the conformance programs one directory level, so the 33 imports that reach into the standard library by
 path (`std/linear`, `std/geometry`, `std/path`) read `../../std/...` where they read `../../../std/...`. The package

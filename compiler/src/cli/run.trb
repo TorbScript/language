@@ -17,7 +17,7 @@ use Process from "std/process"
 use SourceTree from "../project/source-tree"
 use readSourceTree from "../project/read"
 use normalizePath, parentPath, joinPath, pathName, pathDepth from "../project/path"
-use BuildOptions, build, buildFailedCode, binaryNameOf from "./build"
+use BuildOptions, Profile, build, buildFailedCode, binaryNameOf from "./build"
 
 /** What `torb run` needs from the command line. */
 public type RunOptions {
@@ -28,6 +28,11 @@ public type RunOptions {
    * `Process.arguments()`, so `torb run tool.trb --verbose` hands `["--verbose"]` to `tool.trb`.
    */
   arguments: List<String> = []
+  /**
+   * `--profile`, written in front of the path: `dev` unless told otherwise, because a scratch program is built far more
+   * often than it runs long. A benchmark says `torb run --release`.
+   */
+  profile: Profile = Profile.Dev
 }
 
 /** The exit code of the whole command: the program's own, or what went wrong before it started. */
@@ -38,10 +43,12 @@ public fn runProgram(options: RunOptions): Result<Int, IoError> {
   }
   const entry = normalizePath(File.absolutePath(options.path)?)
   const tree = readSourceTree([options.path])?
-  const directory = joinPath cacheDirectoryOf(entry), "{cacheKeyOf(tree, entry)}"
+  const directory = joinPath cacheDirectoryOf(entry), "{options.profile.name()}/{cacheKeyOf(tree, entry)}"
   const output = joinPath directory, binaryNameOf(entry)
   if const None = builtBinary(output) {
-    const built = build(BuildOptions([options.path], output: output, saysWhatItWrote: false))?
+    const built = build(
+      BuildOptions([options.path], output: output, saysWhatItWrote: false, profile: options.profile),
+    )?
     if built != 0 {
       return Ok built
     }
@@ -92,7 +99,7 @@ fn cacheKeyOf(tree: SourceTree, entry: String): Int {
  * Where the cache goes: `build/run/` under the outermost directory above the entry that has a `project.trb`, which is
  * the workspace root - so one checkout has one cache and a program outside of any project caches beside itself.
  *
- * The walk stops where [readSourceTree]'s does, at a hidden directory, `target` or `node_modules`: a checkout below
+ * The walk stops where [readSourceTree]'s does, at a hidden directory: a checkout below
  * `.claude/worktrees` is a workspace of its own and caches inside itself.
  */
 fn cacheDirectoryOf(entry: String): String {
@@ -116,7 +123,7 @@ fn cacheDirectoryOf(entry: String): String {
 }
 
 fn isSkippedDirectory(name: String): Bool {
-  name.startsWith(".") || name == "target" || name == "node_modules"
+  name.startsWith "."
 }
 
 /** A C compiler on Windows appends `.exe` to an output name without an extension, so both names are the binary. */

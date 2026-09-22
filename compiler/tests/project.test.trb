@@ -106,6 +106,11 @@ group "Manifest" {
     assert(manifest.name == "acme/app")
   }
 
+  test "a workspace has no test directory unless it names one" {
+    assert(manifestOf("workspace \{ members \"std/*\" \}").testInput == "")
+    assert(manifestOf("workspace \{ members \"std/*\" \}\ntest \{ input \".\" \}").testInput == ".")
+  }
+
   test "a name with an interpolation is not a literal, so it is not read" {
     assert(manifestOf("name \"acme/\{suffix\}\"").name == "")
   }
@@ -144,6 +149,26 @@ group "Workspaces" {
   test "a file below no project is a package of its own" {
     const packages = packagesOf(["script.trb": "const answer = 42"], "script.trb")
     assert(packages == [": script.trb"])
+  }
+
+  test "a file named on its own is a module of the project around it" {
+    const packages = packagesOf workspace, "elsewhere/script.trb"
+    assert(packages[0] == "acme/all: elsewhere/script.trb")
+  }
+
+  test "a workspace without a standard library gets the toolchain's" {
+    const files = [
+      "toolchain/std/prelude/project.trb": "name \"std/prelude\"",
+      "toolchain/std/prelude/src/lib.trb": "",
+      "app/project.trb": "name \"acme/app\"",
+      "app/src/main.trb": "",
+      "script.trb": "",
+    ]
+    const tree = SourceTree.of files, ".", "toolchain/std"
+    const project = findWorkspace(tree, "app").packages.map({ _.name }).toList()
+    assert(project == ["acme/app", "std/prelude"])
+    const script = findWorkspace(tree, "script.trb").packages.map({ _.name }).toList()
+    assert(script == ["", "std/prelude"])
   }
 
   test "a pattern that matches nothing is a problem of the workspace" {

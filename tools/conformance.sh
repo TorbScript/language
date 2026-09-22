@@ -71,9 +71,11 @@ run_one() {
     return
   fi
 
+  # A drive path is a letter, a colon and a slash with no letter in front of it: `C:/x` and `"D:\x"` are, the `p:/` of
+  # an `http://` in a string literal is not
   cfile="$work/program.c"
   bad_path=0
-  if [ -f "$cfile" ] && { grep -qF "$root" "$cfile" || grep -qF ':\' "$cfile" || grep -qF ':/' "$cfile"; }; then
+  if [ -f "$cfile" ] && { grep -qF "$root" "$cfile" || grep -qE '(^|[^A-Za-z])[A-Za-z]:[\\/]' "$cfile"; }; then
     bad_path=1
   fi
 
@@ -83,8 +85,11 @@ run_one() {
     return
   fi
 
+  # The program runs in its own work directory, so a program that writes files (`build/native-*`) writes them there and
+  # never into the checkout, and two programs never share one
+  mkdir -p "$work/run"
   set +e
-  "$binary" >"$work/stdout" 2>"$work/stderr"
+  (cd "$work/run" && "$binary" >"$work/stdout" 2>"$work/stderr")
   code=$?
   set -e
   fold_library_positions <"$work/stderr" >"$work/stderr.folded"
@@ -155,7 +160,7 @@ $(cat "$work/stderr.folded")"
   esac
   if [ "$is_binary_only" -eq 0 ] && [ ! -f "$stderr_file" ] && [ ! -f "$leaks_file" ]; then
     set +e
-    TORB_REPORT_LEAKS=1 "$binary" >"$work/leak.stdout" 2>"$work/leak.stderr"
+    (cd "$work/run" && TORB_REPORT_LEAKS=1 "$binary" >"$work/leak.stdout" 2>"$work/leak.stderr")
     set -e
     if ! grep -q 'live blocks at exit: 0$' "$work/leak.stderr"; then
       problems="$problems

@@ -165,6 +165,8 @@ void torb_print_error_parts(const torb_text *parts, size_t count);
 void torb_print_parts(const torb_text *parts, size_t count);
 /* Process.arguments */
 torb_list torb_process_arguments(void);
+/* Process.executablePath */
+bool torb_process_executable_path(torb_text *out);
 /* Process.exit */
 void torb_process_exit(int64_t code);
 /* Process.runCollecting */

@@ -6,10 +6,12 @@
 #
 # One line per gate, with its time. The first red gate stops the run and shows its output; nothing after it runs.
 #
-# Tier A: bootstrap if `build/release/torb` is missing or older than the compiler's sources, `check .`,
-# `check --statistics .`, `test compiler/tests`, `test` of the std/example packages that build natively (the ones
-# that do not are named in docs/RUST-EXIT.md section 2.4 and skipped here with the same reason), the two docs gates,
-# and `canon --check` with the five rules.
+# Tier A: bootstrap if `build/release/torb` is missing or older than a file it is built from (the compiler's sources,
+# `std/`, the runtime), `check .`, `check --statistics .`, `check tests/conformance tests/language`,
+# `test compiler/tests`, `test` of the std/example packages that build natively (the ones that do not are named in
+# docs/RUST-EXIT.md section 2.4 and skipped here with the same reason), the programs of `tests/language/` against their
+# `.expected`, the three docs gates, and `canon --check` with the five rules. Every binary that is only built to be run
+# once is built with `--profile dev`, which `torb test` and `torb run` do by default.
 #
 # Tier B: `tools/conformance.sh` (the conformance suite), `tools/bootstrap.sh` (the fixpoint: seed -> torb -> torb,
 # byte-identical C), and the C runtime's own tests.
@@ -59,6 +61,43 @@ gate() {
   say "$name: ${elapsed}s"
 }
 
+# Whether a file `torb` is built from is newer than the binary: the compiler's sources, the standard library's, the
+# runtime it links, and the manifests that make them one workspace. Everything that is *written* during a build or a
+# test run lives in a `build` directory and is never looked at.
+is_stale() {
+  newer=$(find compiler/src compiler/project.trb std runtime project.trb -name build -prune -o -type f \
+    \( -name '*.trb' -o -name '*.c' -o -name '*.h' \) -newer "$1" -print 2>/dev/null | head -n 1)
+  [ -n "$newer" ]
+}
+
+# The programs of `tests/language/`, each built and run with `torb run` and compared with its `.expected`. The ones in
+# `$language_broken` do not build natively yet and are skipped, with the reason printed below the gate.
+language_programs() {
+  torb=$1
+  failures=0
+  for program in tests/language/*.trb; do
+    case "$program" in
+      */project.trb) continue ;;
+    esac
+    case " $language_broken " in
+      *" $program "*) continue ;;
+    esac
+    expected="${program%.trb}.expected"
+    if actual=$("$torb" run "$program" 2>&1); then
+      if ! printf '%s\n' "$actual" | cmp -s - "$expected"; then
+        printf '%s\n' "$program: the output is not $expected:"
+        printf '%s\n' "$actual" | diff "$expected" - || true
+        failures=$((failures + 1))
+      fi
+    else
+      printf '%s\n' "$program failed:"
+      printf '%s\n' "$actual"
+      failures=$((failures + 1))
+    fi
+  done
+  [ "$failures" -eq 0 ]
+}
+
 tier=${1-}
 case "$tier" in
   a | A) tier=a ;;
@@ -75,14 +114,7 @@ torb_path="build/release/torb"
 
 if [ "$tier" = "a" ]; then
   torb=$(binary_of "$torb_path")
-  stale=1
-  if [ -n "$torb" ]; then
-    stale=0
-    if [ -n "$(find compiler -type f -newer "$torb" 2>/dev/null)" ]; then
-      stale=1
-    fi
-  fi
-  if [ "$stale" -eq 1 ]; then
+  if [ -z "$torb" ] || is_stale "$torb"; then
     gate "bootstrap (seed -> torb -> torb)" sh tools/bootstrap.sh
   else
     say "bootstrap (seed -> torb -> torb): skipped, build/release/torb is current"
@@ -92,6 +124,7 @@ if [ "$tier" = "a" ]; then
 
   gate "check ." "$torb" check .
   gate "check --statistics ." "$torb" check --statistics .
+  gate "check tests/conformance tests/language" "$torb" check tests/conformance tests/language
   gate "test compiler/tests" "$torb" test compiler/tests
 
   # docs/RUST-EXIT.md section 2.4: four of the six candidate packages do not build natively yet, each blocked by one
@@ -111,8 +144,17 @@ if [ "$tier" = "a" ]; then
   say "  witness), std/stream/tests (onto outside a witness table), examples/encoding-lab/tests (describe as a"
   say "  function value), examples/game-engine/tests (a conversion through From)"
 
+  # Both smoke programs are blocked by back-end gaps (findings B7 and a `From` conversion that lowers a slot of type
+  # `Never`); the runner is here so that each one is compared the moment it builds.
+  language_broken="tests/language/basics.trb tests/language/language.trb"
+  gate "tests/language against .expected (native)" language_programs "$torb"
+  say "  skipped, do not build natively yet: tests/language/basics.trb (an assignment to a top-level var from a"
+  say "  function), tests/language/language.trb (the same, a var receiver through a slice, and an internal error:"
+  say "  the From conversion of AppError lowers a slot of type Never)"
+
   gate "docs check" "$torb" docs check docs
   gate "docs index --check" "$torb" docs index --check docs
+  gate "docs skill --check" "$torb" docs skill docs .claude/skills/torbscript --check
 
   gate "canon --check" "$torb" canon --check --rule calls --rule strings --rule imported-case-patterns \
     --rule unused-bindings --rule loops .

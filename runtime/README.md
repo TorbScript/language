@@ -10,9 +10,11 @@ The plan this implements is [docs/BACKEND.md](../docs/BACKEND.md) sections 2 and
 ## Running the tests
 
 ```sh
-sh runtime/build.sh          # compiles the runtime and the tests, runs them, checks the generated header
-CC=clang sh runtime/build.sh # any C11 compiler; $CFLAGS is added to the flags
+sh runtime/build.sh               # compiles the runtime and the tests, runs them, checks the generated header
+TORB_CC=clang sh runtime/build.sh # any C11 compiler (default: clang, gcc, cc); $CFLAGS is added to the flags
 ```
+
+Everything it writes goes to `build/runtime/` of the repository.
 
 It works in Git Bash on Windows and on Linux and macOS, and `make` is not needed. Everything is built with
 `-std=c11 -Wall -Wextra -Wpedantic -Werror`; a warning is a bug.
@@ -34,7 +36,7 @@ deliberately panics says `TORB_IGNORE_LEAKS()`, because a panic runs nothing on 
 | `map.c`               | The one insertion-ordered hash table, and the set on top of it                             |
 | `number.c`            | The float routines, the total order of gap 5, the wrapping pair, the checked narrowings, and `std/math` (thin `<math.h>` wrappers) |
 | `console.c`           | `print`, `printError`, `readLine`                                                          |
-| `process.c`           | `Process.arguments`, `Process.exit`                                                        |
+| `process.c`           | `Process.arguments`, `Process.exit`, `Process.executablePath`, running a child process      |
 | `file.c`              | `readText`, `writeText`, `exists`, `isDirectory`, `list` (sorted), `absolutePath`, and the open handle (`File.open`/`readAll`/`close`) |
 | `clock.c`             | `std/time`: `Clock.now` and the arithmetic of `Instant` and `Duration`                     |
 | `environment.c`       | `std/environment`: `Environment.get`                                                       |

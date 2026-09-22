@@ -20,7 +20,7 @@
 use File, IoError from "std/fs"
 use Process from "std/process"
 use normalizePath, joinPath from "../project/path"
-use BuildOptions, build, buildTarget, buildFailedCode from "./build"
+use BuildOptions, Profile, build, buildFailedCode from "./build"
 
 /**
  * What `torb test` needs from the command line, which is the paths alone: `--jobs N` is read off the arguments and
@@ -33,6 +33,8 @@ public type TestOptions {
    * in the order the paths sort in. The default is `tests` beside the working directory.
    */
   paths: List<String> = ["tests"]
+  /** `--profile`: `dev` unless told otherwise, because a suite is run once per build and the C compiler is the wait */
+  profile: Profile = Profile.Dev
 }
 
 /** The exit code of the whole command: what the test binary answered, or what went wrong before it ran. */
@@ -40,8 +42,10 @@ public fn runTests(options: TestOptions): Result<Int, IoError> {
   const first = options.paths.first() ?? "tests"
   // Where a run of several packages puts its binary: the first path is the one the command line names first, and the
   // key of the cache the binary is not - a test run is asked for, so it is built
-  const output = joinPath normalizePath(first), "build/{buildTarget}/tests"
-  const built = build(BuildOptions(options.paths, output: output, isTestRun: true, saysWhatItWrote: false))?
+  const output = joinPath normalizePath(first), "build/{options.profile.name()}/tests"
+  const built = build(
+    BuildOptions(options.paths, output: output, isTestRun: true, saysWhatItWrote: false, profile: options.profile),
+  )?
   if built != 0 {
     return Ok built
   }

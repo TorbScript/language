@@ -1,0 +1,72 @@
+/**
+ * [findStandardLibrary] and [findRuntime]: where the toolchain's own `std/` and `runtime/` are, for a program that does
+ * not bring them along - a standalone file, or a project that is no member of a workspace with the standard library.
+ *
+ * Both ask the same question in the same order. The environment variable (`TORB_STD`, `TORB_RUNTIME`) is taken as it
+ * is; otherwise the walk goes up from every path of the command line and then from the working directory, and the
+ * first directory that has the marker file answers. A checkout finds its own `std/` and `runtime/` this way, from
+ * wherever inside of it `torb` is started and whichever of its files is named.
+ */
+
+use File from "std/fs"
+use Environment from "std/environment"
+use normalizePath, parentPath, joinPath, pathDepth from "./path"
+
+/**
+ * The toolchain's `std` directory: `$TORB_STD`, or the `std` of the nearest directory above a path of the command line
+ * (then above the working directory) that has `std/prelude/project.trb`.
+ */
+public fn findStandardLibrary(paths: List<String>): String? {
+  findToolchainPart "TORB_STD", "std", "prelude/project.trb", paths
+}
+
+/**
+ * The C runtime a binary links against: `$TORB_RUNTIME`, or the `runtime` of the nearest directory above a path of the
+ * command line (then above the working directory) that has `runtime/include/torb.h`.
+ */
+public fn findRuntime(paths: List<String>): String? {
+  findToolchainPart "TORB_RUNTIME", "runtime", "include/torb.h", paths
+}
+
+fn findToolchainPart(variable: String, name: String, marker: String, paths: List<String>): String? {
+  if const Some(given) = Environment.get(variable) {
+    if !given.isEmpty() {
+      return Some absoluteOf(given)
+    }
+  }
+  var starts: List<String> = []
+  for path in paths {
+    starts.add absoluteOf(path)
+  }
+  starts.add absoluteOf(".")
+  for start in starts {
+    if const Some(found) = searchAbove(start, name, marker) {
+      return Some found
+    }
+  }
+  None
+}
+
+fn absoluteOf(path: String): String {
+  match File.absolutePath(path) {
+    Ok(found) => normalizePath found
+    Fail(_) => normalizePath path
+  }
+}
+
+/** The first directory at or above `start` that has `<name>/<marker>`, answered as `<directory>/<name>`. */
+fn searchAbove(start: String, name: String, marker: String): String? {
+  var current = start
+  while pathDepth(current) >= 1 {
+    const candidate = joinPath current, name
+    if File.exists(joinPath(candidate, marker)) {
+      return Some candidate
+    }
+    const parent = parentPath current
+    if parent == current {
+      return None
+    }
+    current = parent
+  }
+  None
+}

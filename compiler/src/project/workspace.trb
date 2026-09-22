@@ -43,6 +43,10 @@ public type Workspace {
  * The workspace of a path: the outermost `project.trb` above it whose `workspace { members ... }` contains the
  * project the path belongs to. A project that nobody lists is its own workspace, and a file below no `project.trb`
  * at all becomes a package of its own, checked with the default prelude.
+ *
+ * A file that is named on its own is a module of the project around it even where it lies outside of `src/` and the
+ * test directory, so `torb check scratch.trb` checks it instead of finding nothing. A workspace that has no standard
+ * library of its own gets the packages of the toolchain's (`SourceTree.standardLibrary`).
  */
 public fn findWorkspace(tree: SourceTree, path: String): Workspace {
   const target = normalizePath path
@@ -51,10 +55,55 @@ public fn findWorkspace(tree: SourceTree, path: String): Workspace {
   // Innermost first: the project the path belongs to, then everything it could be a member of
   const owners = manifests.filter({ isInside directory, _ }).toList().reversed()
   if const Some(project) = owners.first() {
-    return workspaceOf tree, manifests, owners, project
+    const found = withNamedFile workspaceOf(tree, manifests, owners, project), tree, project, target
+    return withStandardLibrary tree, manifests, found
   }
   const files = if tree.exists(target) { [target] } else { tree.below directory }
-  Workspace([Package("", directory, Manifest(), files)])
+  withStandardLibrary tree, manifests, Workspace([Package("", directory, Manifest(), files)])
+}
+
+/** The workspace with a file that was named on its own added to its project, unless a package has it already. */
+fn withNamedFile(workspace: Workspace, tree: SourceTree, project: String, target: String): Workspace {
+  if !tree.exists(target) || pathName(target) == "project.trb" {
+    return workspace
+  }
+  if workspace.packages.any({ _.files.contains target }) {
+    return workspace
+  }
+  var packages: List<Package> = []
+  for package in workspace.packages {
+    if package.directory == project {
+      packages.add package.copy(files: package.files.added(target))
+    } else {
+      packages.add package
+    }
+  }
+  workspace.copy packages: packages
+}
+
+/**
+ * The workspace with the packages of the toolchain's standard library added, when one of its packages names a prelude
+ * that none of them is. A package the workspace already has - by directory or by name - is not added twice.
+ */
+fn withStandardLibrary(tree: SourceTree, manifests: List<String>, workspace: Workspace): Workspace {
+  const library = tree.standardLibrary()
+  if library.isEmpty() {
+    return workspace
+  }
+  const lacksPrelude = workspace.packages.any({
+    !_.manifest.prelude.isEmpty() && workspace.packageNamed(_.manifest.prelude).isNone()
+  })
+  if !lacksPrelude {
+    return workspace
+  }
+  var packages = workspace.packages
+  for directory in manifests.filter({ parentPath(_) == library }) {
+    const package = packageAt tree, directory
+    if !packages.any({ _.directory == directory || (!package.name.isEmpty() && _.name == package.name) }) {
+      packages.add package
+    }
+  }
+  workspace.copy packages: packages
 }
 
 /** The directories with a `project.trb`, the outermost first: a directory always comes before what is inside it. */
@@ -121,7 +170,12 @@ fn expandMembers(
 fn packageAt(tree: SourceTree, directory: String): Package {
   const manifest = manifestOf tree, directory
   var files = tree.below joinPath(directory, "src")
-  for file in tree.below(joinPath(directory, manifest.testInput)) {
+  // No test directory is no test directory, and not the whole project: `joinPath(directory, "")` is the directory
+  var tests: List<String> = []
+  if !manifest.testInput.isEmpty() {
+    tests = tree.below joinPath(directory, manifest.testInput)
+  }
+  for file in tests {
     // A `project.trb` is never an ordinary module, whatever `test { input }` sweeps in: it declares the package and
     // its scope is "the prelude, and nothing else", so it is a receiver script or it is nothing
     if pathName(file) == "project.trb" {

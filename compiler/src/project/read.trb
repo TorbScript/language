@@ -5,8 +5,9 @@
  */
 
 use File, IoError from "std/fs"
-use normalizePath, parentPath, joinPath, pathDepth, pathName from "./path"
+use normalizePath, parentPath, joinPath, pathDepth, pathName, isInside from "./path"
 use SourceTree from "./source-tree"
+use findStandardLibrary from "./toolchain"
 
 /**
  * The one place in the front end that does IO. It reads everything that could matter before anything is resolved:
@@ -15,6 +16,10 @@ use SourceTree from "./source-tree"
  *
  * Reading more than necessary is deliberate: a repository of this size is a few hundred kilobytes, and in exchange
  * the module graph, the symbols and the whole name resolution are pure functions over a `SourceTree`.
+ *
+ * The toolchain's own `std/` ([findStandardLibrary]) is read as well where it lies outside of what was read so far, so
+ * that a standalone file or a project that is nobody's member still has a prelude: the tree carries where it is, and
+ * `findWorkspace` adds its packages to a workspace without a standard library of its own.
  */
 public fn readSourceTree(paths: List<String>): Result<SourceTree, IoError> {
   var files: Map<String, String> = [:]
@@ -30,7 +35,11 @@ public fn readSourceTree(paths: List<String>): Result<SourceTree, IoError> {
   for root in roots {
     readBelow(files, root)?
   }
-  Ok SourceTree.of(files, normalizePath(File.absolutePath(".")?))
+  const library = findStandardLibrary(paths) ?? ""
+  if !library.isEmpty() && !roots.any({ isInside library, _ }) {
+    readBelow(files, library)?
+  }
+  Ok SourceTree.of(files, normalizePath(File.absolutePath(".")?), library)
 }
 
 /** The paths of the command line the way the `SourceTree` spells them: absolute and normalized. */
@@ -72,10 +81,10 @@ fn readProjectsAbove(var files: Map<String, String>, directory: String): Result<
 }
 
 fn isSkippedDirectory(name: String): Bool {
-  name.startsWith(".") || name == "target" || name == "node_modules"
+  name.startsWith "."
 }
 
-/** Every `.trb` file below the path. Hidden directories, `target` and `node_modules` are skipped, as in `torb parse`. */
+/** Every `.trb` file below the path. Hidden directories are skipped, as in `torb parse`. */
 fn readBelow(var files: Map<String, String>, path: String): Result<Void, IoError> {
   if !File.isDirectory(path) {
     if path.endsWith(".trb") && !files.containsKey(path) {
