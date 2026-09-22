@@ -3597,3 +3597,13 @@ Wenn nicht, was bedeutet, bewirkt es?
     `static fn of(...items: Item): Self { Self.from(items) }`, `From<Iterable<Item>>` als Anforderung von `List`;
     dasselbe für `filled` und die Gegenstücke bei `Map`/`Set`. `List.of` am Trait selbst wird damit unaufrufbar
     (wer keine Liste nennt, schreibt das Literal). Alle statischen Defaults in Traits prüfen, ob sie `Self` liefern.
+- (Collection-Familie, 2026-09-22) Anlass (Nutzer): `Stack.add`/`push` und `Queue.add`/`enqueue` tun dasselbe. Ich
+  hatte vorgeschlagen, `Collection` zu streichen und Stack/Queue zu Typen zu machen. **Nutzer: Stack und Queue bleiben
+  Traits** - man soll mit Implementierungen experimentieren können. Auftrag: "Lege die komplette
+  Array/Collection/Iterator/Stream-Struktur vor dich hin und schaue, wie wir ein elegantes, sauberes/konsistentes,
+  performantes und ergonomisches Design erzielen."
+  - **Wird gelöst - läuft:** Design-Dokument `docs/COLLECTIONS.md` (Opus): Bestandsaufnahme aller Traits/Typen
+    (`Iterable`, `Iterator`, `Length`, `Collection`, `Accumulator`/`Collector`, `Stage`, `List`/`Set`/`Map`/
+    `Stack`/`Queue` + Implementierungen, `Indexed`/`Slice`, `Array`, `Buffer`, `Source`/`Sink`), Doppelwörter, was
+    `Collection` leistet, Vergleich mit Rust/Swift/Kotlin/Scala/Clojure, Zielentwurf mit Probes, Migrationsscheiben.
+    Fest: ein Wort pro Bedeutung; Konstruktor-Defaults über `Self`; Stack/Queue als Traits.
