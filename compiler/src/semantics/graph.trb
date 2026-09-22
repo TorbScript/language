@@ -42,7 +42,7 @@ public fn buildGraph(tree: SourceTree, workspace: Workspace): Graph {
       const source = SourceText.of(tree.text(path) ?? "")
       const parsed = parse source
       const id = ModuleId modules.length()
-      modules.add Module(id, index, path, source, parsed.file, parsed.diagnostics, isEntryFile(package, path))
+      modules.append Module(id, index, path, source, parsed.file, parsed.diagnostics, isEntryFile(package, path))
     }
   }
   addReceiverScripts tree, workspace, modules
@@ -67,7 +67,7 @@ fn addReceiverScripts(tree: SourceTree, workspace: Workspace, var modules: List<
   const ordinary = modules.length()
   var known: Set<String> = Set.of()
   for module in modules {
-    known.add module.path
+    known.insert module.path
   }
   if workspace.packageNamed("std/project").isSome() {
     for index in 0..workspace.packages.length() {
@@ -75,7 +75,7 @@ fn addReceiverScripts(tree: SourceTree, workspace: Workspace, var modules: List<
       if !tree.exists(path) || known.contains(path) {
         continue
       }
-      known.add path
+      known.insert path
       addScript tree, modules, index, path, ScriptReceiver.ProjectFile
     }
   }
@@ -89,7 +89,7 @@ fn addReceiverScripts(tree: SourceTree, workspace: Workspace, var modules: List<
       if !tree.exists(path) || known.contains(path) {
         continue
       }
-      known.add path
+      known.insert path
       addScript tree, modules, package, path, ScriptReceiver.Loaded(from, load.annotation)
     }
   }
@@ -99,7 +99,7 @@ fn addScript(tree: SourceTree, var modules: List<Module>, package: Int, path: St
   const source = SourceText.of(tree.text(path) ?? "")
   const parsed = parse source
   const id = ModuleId modules.length()
-  modules.add Module(id, package, path, source, parsed.file, parsed.diagnostics, true, receiver: Some(receiver))
+  modules.append Module(id, package, path, source, parsed.file, parsed.diagnostics, true, receiver: Some(receiver))
 }
 
 /** What a `use "..."` path names, or why it names nothing. */

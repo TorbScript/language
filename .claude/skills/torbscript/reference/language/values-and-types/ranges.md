@@ -58,7 +58,7 @@ range.inclusive                           a Bool on Range and RangeTo; an adject
    `RangeTo<Value>` has `end` and `inclusive`. Nothing is an `Option`, so a range that has no start has no `start` to
    read at all.
 
-2. **`Range<Int>` is `Iterable<Int>` and `Length`, `RangeFrom<Int>` is `Iterable<Int>` and endless, `RangeTo<Int>` is
+2. **`Range<Int>` is `Iterate<Int>` and `Length`, `RangeFrom<Int>` is `Iterate<Int>` and endless, `RangeTo<Int>` is
    neither.** A `for` over a range that has no start and a `length()` on a range that has no end are compile errors,
    each with the reason:
 
@@ -66,7 +66,7 @@ range.inclusive                           a Bool on Range and RangeTo; an adject
    for index in ..10 {
      print index
    }
-   // error: `RangeTo<Int64>` is not `Iterable`, so `for` cannot walk it
+   // error: `RangeTo<Int64>` is not `Iterate`, so `for` cannot walk it
    ```
 
    ```trb error

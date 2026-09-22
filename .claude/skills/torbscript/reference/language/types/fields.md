@@ -28,7 +28,7 @@ type Server {
   private var log: List<String> = []
 
   var fn record(message: String) {
-    log.add message
+    log.append message
   }
 }
 

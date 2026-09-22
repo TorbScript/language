@@ -96,10 +96,10 @@ fn memberNames(members: List<Member>): List<String> {
   var names: List<String> = []
   for member in members {
     match member.kind {
-      .Field(field) => names.add field.name.text
-      .Constant(binding) => names.addAll bindingNames(binding.pattern)
-      .Function(function) => names.add function.name.text
-      .Case(declared) => names.add declared.name.text
+      .Field(field) => names.append field.name.text
+      .Constant(binding) => names.appendAll bindingNames(binding.pattern)
+      .Function(function) => names.append function.name.text
+      .Case(declared) => names.append declared.name.text
     }
   }
   names
@@ -110,12 +110,12 @@ fn addMembers(var table: Map<String, List<String>>, name: String, names: List<St
     return
   }
   var found = table.get(name) ?? []
-  found.addAll names
+  found.appendAll names
   table.set name, found
 }
 
 /**
- * A type can also be asked for what its traits declare: `[List.map]` is `Collection.map`, and a reader who follows the
+ * A type can also be asked for what its traits declare: `[List.map]` is `Iterate.map`, and a reader who follows the
  * link finds it. One level is enough - the traits of a trait of a trait are not what a doc comment links to.
  */
 fn withInheritedMembers(
@@ -126,7 +126,7 @@ fn withInheritedMembers(
   for (name, capabilities) in supertraits {
     var found = expanded.get(name) ?? []
     for capability in capabilities {
-      found.addAll(members.get(capability) ?? [])
+      found.appendAll(members.get(capability) ?? [])
     }
     expanded.set name, found
   }
@@ -152,8 +152,8 @@ public fn importedNames(file: SourceFile): List<String> {
     if const .Declare(declaration) = statement.kind {
       if const .Use(used) = declaration.kind {
         match used.items {
-          .Names(items) => names.addAll(items.map({ _.localName().text }).toList())
-          .All(alias) => names.add alias.text
+          .Names(items) => names.appendAll(items.map({ _.localName().text }).toList())
+          .All(alias) => names.append alias.text
         }
       }
     }
@@ -168,7 +168,7 @@ public fn namespaceNames(file: SourceFile): List<String> {
     if const .Declare(declaration) = statement.kind {
       if const .Use(used) = declaration.kind {
         if const .All(alias) = used.items {
-          names.add alias.text
+          names.append alias.text
         }
       }
     }
@@ -194,8 +194,8 @@ public type Scope {
 /** The file's own top-level declarations, what it imports, and the prelude. */
 public fn scopeOf(file: SourceFile, index: NameIndex): Scope {
   var names = declaredNames file
-  names.addAll importedNames(file)
-  names.addAll index.prelude
+  names.appendAll importedNames(file)
+  names.appendAll index.prelude
   Scope names, namespaceNames(file)
 }
 
@@ -204,7 +204,7 @@ public fn declaredNames(file: SourceFile): List<String> {
   var names: List<String> = []
   for statement in file.statements {
     if const .Declare(declaration) = statement.kind {
-      names.addAll declarationNames(declaration)
+      names.appendAll declarationNames(declaration)
     }
   }
   names
@@ -228,7 +228,7 @@ public fn bindingNames(pattern: Pattern): List<String> {
     .TuplePattern(items) => {
       var names: List<String> = []
       for item in items {
-        names.addAll bindingNames(item)
+        names.appendAll bindingNames(item)
       }
       names
     }
@@ -242,7 +242,7 @@ public fn publicNames(file: SourceFile): List<String> {
   for statement in file.statements {
     if const .Declare(declaration) = statement.kind {
       if declaration.modifiers.visibility == Visibility.Public {
-        names.addAll declarationNames(declaration)
+        names.appendAll declarationNames(declaration)
       }
     }
   }

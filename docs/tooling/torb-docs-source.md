@@ -45,7 +45,7 @@ module, so it is skipped too.
   declaration; `examples/` asks for every top-level declaration; a test file asks for its file comment only.
 - **Six headings and no others**: `# Examples`, `# Errors`, `# Panics`, `# Pitfalls`, `# Open`, `# Related`. A heading
   outside the vocabulary and a heading with nothing under it are both findings.
-- **Every link resolves.** `[Iterator]`, `[List.add]` and `[Option.Some]` are resolved like a name at that place in the
+- **Every link resolves.** `[Iterator]`, `[List.append]` and `[Option.Some]` are resolved like a name at that place in the
   code: what the file declares, what it imports, the prelude, and `Type.member` through the type.
 - **Every example compiles.** The code indented by four spaces below `# Examples` is parsed, held to the
   [formatter canon](the-formatter-canon.md) and type checked.

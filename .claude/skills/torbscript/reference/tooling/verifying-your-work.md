@@ -107,11 +107,11 @@ A run that found something:
 
 ```console
 $ torb check scratch
-error: `add` needs a `var`. Did you mean `added`?
+error: `append` needs a `var`. Did you mean `appended`?
  --> scratch/src/main.trb:3:7
   |
-3 | fixed.add 3
-  |       ^^^
+3 | fixed.append 3
+  |       ^^^^^^
 
 1 problems in 1 of 1 files
 ```

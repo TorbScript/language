@@ -101,7 +101,7 @@ fn parseUse(var parser: Parser): DeclarationKind {
   } else {
     var items = [parseUseItem(parser)]
     while parser.eat(TokenKind.Comma) {
-      items.add parseUseItem(parser)
+      items.append parseUseItem(parser)
     }
     UseItems.Names items
   }
@@ -121,7 +121,7 @@ fn parseUse(var parser: Parser): DeclarationKind {
     var path = [parser.name()]
     while parser.isAt(TokenKind.Dot) && parser.kindAt(1) == TokenKind.Identifier {
       parser.bump()
-      path.add parser.name()
+      path.append parser.name()
     }
     const at = start.to parser.previousSpan()
     const message = typeSourceMessage path, items
@@ -136,7 +136,7 @@ fn parseUseItem(var parser: Parser): UseItem {
   var path = [parser.name()]
   while parser.isAt(TokenKind.Dot) && parser.kindAt(1) == TokenKind.Identifier {
     parser.bump()
-    path.add parser.name()
+    path.append parser.name()
   }
   // `use A as B from "..."`: `as` is a word, not a keyword, so a type named `as` stays possible
   if !parser.isAtWord("as") {
@@ -259,7 +259,7 @@ fn parseBounds(var parser: Parser): List<TypeReference> {
     parser.errorHere "Traits are combined with `&`: `Compare & Show`"
   }
   while parser.eat(TokenKind.Ampersand) || parser.eat(TokenKind.Plus) {
-    bounds.add parseSingleType(parser)
+    bounds.append parseSingleType(parser)
   }
   bounds
 }
@@ -273,7 +273,7 @@ fn parseWhereClauses(var parser: Parser): List<WhereClause> {
   loop {
     const subject = parseType parser
     parser.expect TokenKind.Colon
-    clauses.add WhereClause(subject, parseBounds(parser))
+    clauses.append WhereClause(subject, parseBounds(parser))
     if !parser.eat(TokenKind.Comma) {
       break
     }
@@ -291,7 +291,7 @@ fn parseTraitList(var parser: Parser): List<TypeReference> {
   }
   var traits = [parseType(parser)]
   while parser.eat(TokenKind.Comma) {
-    traits.add parseType(parser)
+    traits.append parseType(parser)
   }
   if parser.isAtWord("by") {
     parser.errorHere "`by` delegates to a field: only a `type` has fields to name"
@@ -311,7 +311,7 @@ fn parseDelegatedTraitList(var parser: Parser): List<TraitClause> {
   }
   var traits = [parseTraitClause(parser)]
   while parser.eat(TokenKind.Comma) {
-    traits.add parseTraitClause(parser)
+    traits.append parseTraitClause(parser)
   }
   traits
 }
@@ -380,7 +380,7 @@ fn parseMembers(var parser: Parser, hasReceiver: Bool): List<Member> {
       break
     }
     const before = parser.position
-    members.add parseMember(parser, hasReceiver)
+    members.append parseMember(parser, hasReceiver)
     if !parser.isAtEndOfStatement() {
       const found = parser.kind().describe()
       parser.errorHere "Expected the end of the member, found {found}"
@@ -434,7 +434,7 @@ fn parseMethod(var parser: Parser, hasReceiver: Bool, isVar: Bool): FunctionDecl
     return function
   }
   var parameters = [Parameter(None, Name("self", function.name.span), isVar, false, None, None)]
-  parameters.addAll function.parameters
+  parameters.appendAll function.parameters
   function.copy parameters: parameters
 }
 

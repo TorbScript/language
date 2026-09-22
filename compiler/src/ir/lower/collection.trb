@@ -28,7 +28,7 @@ use LayoutId, PathStep, Terminator from "../ir"
 use borrowed, referenced from "../ir"
 use FunctionBuilder, addTemporary, addLocal, addBlock, emit from "../build"
 use elementFor from "../element"
-use hasMemberOfType, memberOfType, traitMemberNamed from "../witness"
+use memberOfType, traitMemberNamed from "../witness"
 use traitArgumentsOf from "../../semantics/checker/implementation"
 use locationOf from "./context"
 use Lowering, reportUnsupported, irTypeOfClosed, substituted, voidTypeOf from "./context"
@@ -108,9 +108,7 @@ public fn lowerItemList(
   }
   const storage = addTemporary builder, irTypeOfClosed(lowering, container)
   emit builder, Instruction.ContainerNew(storage, RuntimeKind.ListStorage, [element])
-  // Rename fallback: delete after the seed knows the new name.
-  const filler = if hasMemberOfType(lowering, container, bound, "append") { "append" } else { "add" }
-  const adder = match memberOfType(lowering, container, bound, filler, at) {
+  const adder = match memberOfType(lowering, container, bound, "append", at) {
     Some(found) => found
     None => {
       return abandonedSlot lowering, builder, destination
@@ -133,14 +131,14 @@ public fn lowerItemList(
 }
 
 /**
- * `...values` in a list or in a variadic argument list: **one `add` per item**, which is what `Collection.addAll` means.
+ * `...values` in a list or in a variadic argument list: **one `append` per item**, which is what `List.appendAll` means.
  *
  * It is written out here rather than called, and the reason is the fourth round's decision about the tables: a default no
- * implementation overrides has **one** instance with `Self` bound to the *trait type*, so `Collection.addAll` takes an
+ * implementation overrides has **one** instance with `Self` bound to the *trait type*, so `List.appendAll` takes an
  * `Object(List<Item>)` place - and what is being filled here is the concrete buffer the literal builds. Boxing the buffer
  * to call it would hand the callee a box of its own and the items would never reach this slot.
  *
- * So the spread is the loop BACKEND 1.6 describes for a `for`: the subject once into a slot, `iterator()` on it, and a
+ * So the spread is the loop BACKEND 1.6 describes for a `for`: the subject once into a slot, `iterate()` on it, and a
  * head that pulls `next()` from a `var` local and switches on the `Option` - which is also why a spread of a *pipeline*
  * works and not only one of a list.
  */
@@ -161,7 +159,7 @@ fn spreadInto(
     }
   }
   const subject = substituted lowering, written
-  const iterableBound = match iterableBoundOf(lowering, subject, at) {
+  const iterateBound = match iterateBoundOf(lowering, subject, at) {
     Some(found) => found
     None => {
       return false
@@ -171,8 +169,7 @@ fn spreadInto(
   if !lowering.isSupported {
     return false
   }
-  const cursorMember = cursorMemberOf lowering, iterableBound
-  const made = match dispatchedOn(lowering, subject, iterableBound, cursorMember, at) {
+  const made = match dispatchedOn(lowering, subject, iterateBound, "iterate", at) {
     Some(found) => found
     None => {
       return false
@@ -277,10 +274,10 @@ public fn listBoundFor(var lowering: Lowering, item: TypeId, at: Span): TypeId? 
  *
  * - **`InlineArray`** writes the items straight into the inline slots of an `Array<Item, Size>`. That is a
  *   `FixedArray`, and filling one this way is not lowered yet, together with its interior paths.
- * - **`FromIterable`** builds the default list and hands it to the `from` of the target (`Set<String>`, `Queue<Int>`).
+ * - **`FromIterate`** builds the default list and hands it to the `from` of the target (`Set<String>`, `Queue<Int>`).
  *   The `from` to call is `memberOfImplementation` of the `witness` the checker recorded, so the *call* is ordinary - but
  *   every one of those bottoms out in `TrieSet.from` or `ArrayQueue.from`, which are the same `.Planned` natives as
- *   `ArrayList.from` and cannot be functions of the runtime at all (they walk an `Iterable` of the program). So it waits
+ *   `ArrayList.from` and cannot be functions of the runtime at all (they walk an `Iterate` of the program). So it waits
  *   for exactly the step `ArrayList.from` waits for, and naming the target is more use than half a chain.
  */
 fn isDefaultLiteral(var lowering: Lowering, at: Span): Bool {
@@ -298,7 +295,7 @@ fn isDefaultLiteral(var lowering: Lowering, at: Span): Bool {
       reportUnsupported lowering, "a literal that fills an `Array` of {size} items", at
       false
     }
-    .FromIterable(target, _, _) => {
+    .FromIterate(target, _, _) => {
       const shown = lowering.checker.describe target
       reportUnsupported lowering, "a literal that is built through the `from` of `{shown}`", at
       false
@@ -377,30 +374,16 @@ public fn lowerMapLiteral(
 // --- The traits a `for` walks ---------------------------------------------------------------------------------------
 
 /**
- * The `Iterable<Item>` a subject implements, with its arguments filled in - the very question `checkLoop` asked before it
+ * The `Iterate<Item>` a subject implements, with its arguments filled in - the very question `checkLoop` asked before it
  * accepted the loop, so a `for` the checker let through is one the back end can dispatch.
  */
-public fn iterableBoundOf(var lowering: Lowering, subject: TypeId, at: Span): TypeId? {
-  // Rename fallback: delete after the seed knows the new name.
-  const name = if lowering.checker.wellKnown.symbolNamed("Iterate").isSome() { "Iterate" } else { "Iterable" }
-  appliedBoundOf lowering, subject, name, at
-}
-
-// Rename fallback: delete after the seed knows the new name.
-/**
- * The member of the bound [iterableBoundOf] answers that makes the cursor: `iterate`, or `iterator` where the prelude
- * still declares that one. It is asked of the bound without a finding, because `dispatchedOn` reports a name it misses.
- */
-public fn cursorMemberOf(var lowering: Lowering, iterableBound: TypeId): String {
-  if traitMemberNamed(lowering, iterableBound, "iterate").isSome() {
-    return "iterate"
-  }
-  "iterator"
+public fn iterateBoundOf(var lowering: Lowering, subject: TypeId, at: Span): TypeId? {
+  appliedBoundOf lowering, subject, "Iterate", at
 }
 
 /**
  * The `Iterator<Item>` the cursor of a loop implements. It is asked of the cursor's own type rather than read off the
- * declared result of `iterator`, so a cursor that is a concrete type and one that is the trait value both answer.
+ * declared result of `iterate`, so a cursor that is a concrete type and one that is the trait value both answer.
  */
 public fn iteratorBoundOf(var lowering: Lowering, cursor: TypeId, at: Span): TypeId? {
   appliedBoundOf lowering, cursor, "Iterator", at
@@ -496,7 +479,7 @@ fn addInto(
 ) {
   var given = [referenced(Reference(storage, []))]
   for value in values {
-    given.add borrowed(value)
+    given.append borrowed(value)
   }
   const location = locationOf lowering, at
   emit builder, Instruction.Call(None, member, given, [], Some(location))

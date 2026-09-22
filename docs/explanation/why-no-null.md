@@ -104,7 +104,7 @@ for `isSome`, `map`, `flatMap`, `filter` and `okOr`, and [Optional chaining](../
 `?.` and `??`.
 
 **Reaching for `Option` inside a pipeline uses `filterMap`, not a nested `Option`.** Because `Option` shares `map`'s
-name with `Iterable` but is not itself an `Iterable` - its `map` runs immediately, a pipeline's runs when pulled -
+name with `Iterate` but is not itself an `Iterate` - its `map` runs immediately, a pipeline's runs when pulled -
 a function that can fail is folded into a pipeline with `filterMap`, not with `map` followed by a flatten. See
 [No higher-kinded types](../language/generics/no-higher-kinded-types.md).
 

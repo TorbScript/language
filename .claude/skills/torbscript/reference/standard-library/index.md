@@ -33,7 +33,7 @@ What does not belong here: the language rules that a type participates in, which
 - **[std/text](text.md)** - Char, a Unicode scalar value, and String, always-valid UTF-8 text with no length() and no indexing by character.
 - **[std/number](number.md)** - Every numeric type of the language, the traits their arithmetic and bit operations go through, and Real.
 - **[std/collections](collections.md)** - The collection traits every signature talks about, and the implementations that only show up where one is built.
-- **[std/iteration](iteration.md)** - Iterable and Iterator, the lazy stages between them, and the collectors a pipeline ends in.
+- **[std/iteration](iteration.md)** - Iterate and Iterator, the lazy stages between them, and the collectors a pipeline ends in.
 - **[std/encoding](encoding.md)** - Encode and Decode, the Encoder and Decoder a format implements, and Format for the streaming side.
 - **[std/expression](expression.md)** - Expression and ExpressionNode, the typed tree a quoted parameter hands over, plus assert and nameOf.
 - **[std/task](task.md)** _(planned)_ - Task and Channel, the two shared types that connect concurrent work, and spawn - designed, but not run by any back end yet.

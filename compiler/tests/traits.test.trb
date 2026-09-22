@@ -172,13 +172,13 @@ group "A trait with a parameter, implemented more than once" {
   }
 
   /**
-   * `String` writes `static fn from(value: Iterable<Char>)` in its own body, as part of `with From<Iterable<Char>>`,
+   * `String` writes `static fn from(value: Iterate<Char>)` in its own body, as part of `with From<Iterate<Char>>`,
    * and `std/path` adds `extend String with From<Path>`. Rule 2 of the member lookup used to find the body's member
-   * and stop there, so `String.from(path)` reported that a `Path` is not an `Iterable<Char>`.
+   * and stop there, so `String.from(path)` reported that a `Path` is not an `Iterate<Char>`.
    */
   const capsule = "type Slug \{\n  text: String\n\}\n\n"
-    + "type Text with From<Iterable<Char>> \{\n  value: String\n\n"
-    + "  static fn from(value: Iterable<Char>): Text \{\n    Text(\"chars\")\n  \}\n\}\n\n"
+    + "type Text with From<Iterate<Char>> \{\n  value: String\n\n"
+    + "  static fn from(value: Iterate<Char>): Text \{\n    Text(\"chars\")\n  \}\n\}\n\n"
     + "extend Text with From<Slug> \{\n  static fn from(value: Slug): Text \{\n    Text(value.text)\n  \}\n\}\n\n"
 
   test "an `extend ... with From<X>` is part of the overload set of a `static fn` the type writes itself" {
@@ -338,28 +338,28 @@ group "An `extend` of a trait type" {
     const source = "fn probe(numbers: List<Int>): ArrayList<Int> \{\n  numbers.to<ArrayList<Int>>()\n\}"
     assert problems(source).isEmpty()
     const found = probe source
-    assert(found.witnessesOf("numbers.to<ArrayList<Int>>()") == ["ArrayList<Item>: From<Iterable<Item>>"])
+    assert(found.witnessesOf("numbers.to<ArrayList<Int>>()") == ["ArrayList<Item>: From<Iterate<Item>>"])
   }
 
   test "the trait itself is the one the extension implements" {
     const source = "fn probe(numbers: List<Int>): List<Int> \{\n  numbers.to<List<Int>>()\n\}"
     assert problems(source).isEmpty()
     const found = probe source
-    assert(found.witnessesOf("numbers.to<List<Int>>()") == ["List<Item>: From<Iterable<Item>>"])
+    assert(found.witnessesOf("numbers.to<List<Int>>()") == ["List<Item>: From<Iterate<Item>>"])
   }
 
   test "a trait target with a bound of its own is reached the same way, and brings its inner witness" {
     const source = "fn probe(numbers: List<Int>): Set<Int> \{\n  numbers.to<Set<Int>>()\n\}"
     assert problems(source).isEmpty()
     const found = probe source
-    assert(found.witnessesOf("numbers.to<Set<Int>>()") == ["Set<Item>: From<Iterable<Item>> [Int64: Hash]"])
+    assert(found.witnessesOf("numbers.to<Set<Int>>()") == ["Set<Item>: From<Iterate<Item>> [Int64: Hash]"])
   }
 
   test "a concrete implementer of such a trait uses its own implementation, not the extension" {
     const source = "fn probe(numbers: List<Int>): TrieSet<Int> \{\n  numbers.to<TrieSet<Int>>()\n\}"
     assert problems(source).isEmpty()
     const found = probe source
-    assert(found.witnessesOf("numbers.to<TrieSet<Int>>()") == ["TrieSet<Item>: From<Iterable<Item>> [Int64: Hash]"])
+    assert(found.witnessesOf("numbers.to<TrieSet<Int>>()") == ["TrieSet<Item>: From<Iterate<Item>> [Int64: Hash]"])
   }
 
   test "an instance member of a trait-type extension still reaches a concrete receiver" {
@@ -371,16 +371,16 @@ group "An `extend` of a trait type" {
 
   test "a type that implements neither is still told so" {
     const source = "fn probe(numbers: List<Int>): Int \{\n  numbers.to<Int>()\n\}"
-    assert(problems(source) == ["`Int64` does not implement `From<Iterable<Int64>>`"])
+    assert(problems(source) == ["`Int64` does not implement `From<Iterate<Int64>>`"])
   }
 
   test "`From` is the one trait a type implements several times, and `From<Never>` never hides another one" {
-    // `String` has `From<Iterable<Char>>` of its own and the blanket `From<Never>` every type gets: "the argument of
-    // `From` for a `String`" has two answers, and "which of them takes an `Iterable`" has one
+    // `String` has `From<Iterate<Char>>` of its own and the blanket `From<Never>` every type gets: "the argument of
+    // `From` for a `String`" has two answers, and "which of them takes an `Iterate`" has one
     const source = "fn probe(): String \{\n  const text: String = ['a', 'b']\n  text\n\}"
     assert problems(source).isEmpty()
     const found = probe source
-    assert(found.collectionOf("['a', 'b']") == "from String of Char through String: From<Iterable<Char>>")
+    assert(found.collectionOf("['a', 'b']") == "from String of Char through String: From<Iterate<Char>>")
   }
 }
 
@@ -535,7 +535,7 @@ group "Interpolation and iteration" {
     assert(found.adaptationsOf("Amount(2)") == ["show through Amount: Show"])
   }
 
-  test "`for` walks everything that implements `Iterable`, through an `extend` as well" {
+  test "`for` walks everything that implements `Iterate`, through an `extend` as well" {
     const source = inBody(
       "  const texts: List<String> = [\"a\"]\n  for part in texts \{\n    print (part)\n  \}\n"
         + "  for index in 0..2 \{\n    print (index)\n  \}"
@@ -546,10 +546,10 @@ group "Interpolation and iteration" {
     assert(found.patternTypeOf("index") == "Int64")
   }
 
-  test "a subject that is not `Iterable` cannot be looped over" {
+  test "a subject that is not `Iterate` cannot be looped over" {
     const source = "type Amount \{\n  value: Int\n\}\n\n"
       + inBody("  const a = Amount(1)\n  for part in a \{\n    print (part)\n  \}")
-    assert(problems(source) == ["`Amount` is not `Iterable`, so `for` cannot walk it"])
+    assert(problems(source) == ["`Amount` is not `Iterate`, so `for` cannot walk it"])
   }
 
   test "an interpolated part has to be `Show`" {
@@ -622,13 +622,13 @@ group "Coercion to a trait type" {
     assert(problems(source) == ["Expected `Int64`, found `Map<String, Int64>`"])
   }
 
-  test "a closure that produces a `List` where an `Iterable` is wanted still coerces inside its body" {
+  test "a closure that produces a `List` where an `Iterate` is wanted still coerces inside its body" {
     // The closure's own result is the type that was asked for, because the body is what coerced: a function type has no
     // variance, so reading the body's `List<Int64>` back out here would report the closure a second time
-    const source = "fn each<Item, Output>(items: List<Item>, transform: (value: Item) => Iterable<Output>): Int \{\n"
+    const source = "fn each<Item, Output>(items: List<Item>, transform: (value: Item) => Iterate<Output>): Int \{\n"
       + "  1\n\}\n\nfn probe(numbers: List<Int>): Int \{\n  each(numbers, \{ [_, _] \})\n\}"
     assert problems(source).isEmpty()
-    assert(probe(source).typeOf("\{ [_, _] \}") == "(value: Int64) => Iterable<Int64>")
+    assert(probe(source).typeOf("\{ [_, _] \}") == "(value: Int64) => Iterate<Int64>")
   }
 }
 

@@ -155,9 +155,9 @@ public fn linesOf(text: String): List<String> {
   var lines: List<String> = []
   for line in text.split("\n") {
     if line.endsWith("\r") {
-      lines.add line.slice(0..(line.byteLength() - 1))
+      lines.append line.slice(0..(line.byteLength() - 1))
     } else {
-      lines.add line
+      lines.append line
     }
   }
   lines
@@ -177,17 +177,17 @@ public fn readPage(path: String, text: String): ReadPage {
     match end {
       Some(index) => {
         const read = readFrontMatter path, lines, 1, index
-        problems.addAll read.problems
+        problems.appendAll read.problems
         frontMatter = Some read.frontMatter
         bodyStart = index + 1
       }
       None => {
-        problems.add DocumentationProblem(path, 1, "The front matter is never closed. A second `---` line ends it")
+        problems.append DocumentationProblem(path, 1, "The front matter is never closed. A second `---` line ends it")
       }
     }
   }
   const scanned = scanBody path, lines, bodyStart
-  scanned.copy frontMatter: frontMatter, problems: problems.addedAll(scanned.problems)
+  scanned.copy frontMatter: frontMatter, problems: problems.appendedAll(scanned.problems)
 }
 
 /** The index of the `---` line that closes the front matter. */
@@ -224,7 +224,7 @@ fn readFrontMatter(path: String, lines: List<String>, from: Int, to: Int): ReadF
       continue
     }
     if line.startsWith(" ") || line.startsWith("\t") {
-      problems.add DocumentationProblem(path, number, "An indented line in the front matter belongs to a list item and has to start with `- `")
+      problems.append DocumentationProblem(path, number, "An indented line in the front matter belongs to a list item and has to start with `- `")
       index = index + 1
       continue
     }
@@ -232,19 +232,19 @@ fn readFrontMatter(path: String, lines: List<String>, from: Int, to: Int): ReadF
     const at = match colon {
       Some(found) => found
       None => {
-        problems.add DocumentationProblem(path, number, "A line of the front matter is `key: value`. There is no colon on this one")
+        problems.append DocumentationProblem(path, number, "A line of the front matter is `key: value`. There is no colon on this one")
         index = index + 1
         continue
       }
     }
     const key = line.slice(0..at)
     if !isFieldKey(key) {
-      problems.add DocumentationProblem(path, number, "`{key}` is not a field name. A field name is lowercase letters and hyphens")
+      problems.append DocumentationProblem(path, number, "`{key}` is not a field name. A field name is lowercase letters and hyphens")
       index = index + 1
       continue
     }
     if fields.any({ _.key == key }) {
-      problems.add DocumentationProblem(path, number, "The field `{key}` is written twice")
+      problems.append DocumentationProblem(path, number, "The field `{key}` is written twice")
       index = index + 1
       continue
     }
@@ -252,16 +252,16 @@ fn readFrontMatter(path: String, lines: List<String>, from: Int, to: Int): ReadF
     if rest.isEmpty() {
       const collected = collectItems(path, lines, index + 1, to)
       if collected.items.isEmpty() {
-        problems.add DocumentationProblem(path, number, "`{key}` has no value. A block list needs at least one `- ` item below it")
+        problems.append DocumentationProblem(path, number, "`{key}` has no value. A block list needs at least one `- ` item below it")
       }
-      problems.addAll collected.problems
-      fields.add Field(key, FieldValue.Items(collected.items), number)
+      problems.appendAll collected.problems
+      fields.append Field(key, FieldValue.Items(collected.items), number)
       index = collected.next
       continue
     }
     const read = readScalarOrList path, number, rest
-    problems.addAll read.problems
-    fields.add Field(key, read.value, number)
+    problems.appendAll read.problems
+    fields.append Field(key, read.value, number)
     index = index + 1
   }
   ReadFields FrontMatter(fields), problems
@@ -290,8 +290,8 @@ fn collectItems(path: String, lines: List<String>, from: Int, to: Int): Collecte
     }
     const value = line.slice(4..line.byteLength()).trim()
     const read = readScalar(path, index + 1, value)
-    problems.addAll read.problems
-    items.add read.value
+    problems.appendAll read.problems
+    items.append read.value
     index = index + 1
   }
   CollectedItems items, index, problems
@@ -316,8 +316,8 @@ fn readScalarOrList(path: String, line: Int, text: String): ReadValue {
     var problems: List<DocumentationProblem> = []
     for part in inside.split(",") {
       const read = readScalar path, line, part.trim()
-      problems.addAll read.problems
-      items.add read.value
+      problems.appendAll read.problems
+      items.append read.value
     }
     return ReadValue FieldValue.Items(items), problems
   }
@@ -418,17 +418,17 @@ fn scanBody(path: String, lines: List<String>, from: Int): ReadPage {
   while index < lines.length() {
     const line = lines[index]
     const number = index + 1
-    body.add line
+    body.append line
     // A fence inside a list item carries the indentation of the item, which is the style of the page templates: the
     // block is read there exactly as at column 0, and its content is dedented by the same amount
     const indent = indentOf line
     if line.slice(indent..line.byteLength()).startsWith("```") {
       const collected = collectBlock path, lines, index, indent
-      problems.addAll collected.problems
-      blocks.add collected.block
+      problems.appendAll collected.problems
+      blocks.append collected.block
       var inside = index + 1
       while inside < collected.next {
-        body.add lines[inside]
+        body.append lines[inside]
         inside = inside + 1
       }
       index = collected.next
@@ -436,18 +436,18 @@ fn scanBody(path: String, lines: List<String>, from: Int): ReadPage {
     }
     // A tilde fence and an indented code block name no language, so nothing could verify what is in them
     if line.slice(indent..line.byteLength()).startsWith("~~~") {
-      problems.add DocumentationProblem(path, number, "A code block is fenced with three backticks and names its language")
+      problems.append DocumentationProblem(path, number, "A code block is fenced with three backticks and names its language")
     }
     if line.startsWith("#") {
       const read = readHeading path, number, line
-      problems.addAll read.problems
-      headings.add read.heading
+      problems.appendAll read.problems
+      headings.append read.heading
       index = index + 1
       continue
     }
-    links.addAll linksOf(number, line)
+    links.appendAll linksOf(number, line)
     if !line.trim().isEmpty() {
-      prose.add((line: number, text: line))
+      prose.append((line: number, text: line))
     }
     index = index + 1
   }
@@ -520,7 +520,7 @@ fn collectBlock(path: String, lines: List<String>, at: Int, indent: Int): Collec
   var reasonParts: List<String> = []
   var word = 2
   while word < parts.length() {
-    reasonParts.add parts[word]
+    reasonParts.append parts[word]
     word = word + 1
   }
   const reason = reasonParts.joined separator: " "
@@ -534,11 +534,11 @@ fn collectBlock(path: String, lines: List<String>, at: Int, indent: Int): Collec
       index = index + 1
       break
     }
-    content.add dedented(line, indent)
+    content.append dedented(line, indent)
     index = index + 1
   }
   if !isClosed {
-    problems.add DocumentationProblem(path, at + 1, "This code block is never closed")
+    problems.append DocumentationProblem(path, at + 1, "This code block is never closed")
   }
   const block = CodeBlock(info, language, marker, reason, content.joined(separator: "\n"), at + 1, at + 2)
   CollectedBlock block, index, problems
@@ -550,7 +550,7 @@ public fn words(text: String): List<String> {
   for part in text.split(" ") {
     const trimmed = part.trim()
     if !trimmed.isEmpty() {
-      found.add trimmed
+      found.append trimmed
     }
   }
   found
@@ -572,7 +572,7 @@ fn readHeading(path: String, number: Int, line: String): ReadHeading {
   var problems: List<DocumentationProblem> = []
   const rest = line.slice(level..line.byteLength())
   if !rest.startsWith(" ") && !rest.isEmpty() {
-    problems.add DocumentationProblem(path, number, "A heading has a space behind its `#`")
+    problems.append DocumentationProblem(path, number, "A heading has a space behind its `#`")
   }
   var text = rest.trim()
   var anchor = ""
@@ -604,12 +604,12 @@ public fn anchorOf(text: String): String {
   for character in text.toLowerCase().chars() {
     const isKept = character.isLetter() || character.isDigit() || character == '-' || character == '_'
     if isKept {
-      characters.add character
+      characters.append character
       lastWasHyphen = false
       continue
     }
     if !lastWasHyphen && !characters.isEmpty() {
-      characters.add '-'
+      characters.append '-'
       lastWasHyphen = true
     }
   }
@@ -668,7 +668,7 @@ fn linksOf(number: Int, line: String): List<Link> {
       Some(at) => Link text, whole.slice(0..at), whole.slice((at + 1)..whole.byteLength()), number
       None => Link text, whole, "", number
     }
-    found.add link
+    found.append link
     index = targetEnd + 1
   }
   found

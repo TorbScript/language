@@ -138,12 +138,12 @@ public fn documentationOf(root: String, files: Map<String, String>): Documentati
     const read = readPage shownPath(root, path), text
     match read.frontMatter {
       Some(frontMatter) => {
-        problems.addAll read.problems
-        pages.add Page(path, folder, fileName(path) == "index.md", text, frontMatter, read)
+        problems.appendAll read.problems
+        pages.append Page(path, folder, fileName(path) == "index.md", text, frontMatter, read)
       }
       None => {
         const existing = plainByFolder.get(folder) ?? []
-        plainByFolder.set folder, existing.added(path)
+        plainByFolder.set folder, existing.appended(path)
         plainTitles.set path, firstHeadingOf(text, path)
       }
     }
@@ -156,10 +156,10 @@ public fn documentationOf(root: String, files: Map<String, String>): Documentati
     var children: List<String> = []
     for candidate in folderPaths {
       if candidate != folderPath && folderOf(candidate) == folderPath {
-        children.add candidate
+        children.append candidate
       }
     }
-    folders.add Folder(folderPath, index, own, children, plainByFolder.get(folderPath) ?? [])
+    folders.append Folder(folderPath, index, own, children, plainByFolder.get(folderPath) ?? [])
   }
   Documentation root, pages, folders, plainTitles, problems
 }
@@ -179,7 +179,7 @@ fn addFolderChain(var folders: List<String>, folder: String) {
   var current = folder
   while !current.isEmpty() {
     if !folders.contains(current) {
-      folders.add current
+      folders.append current
     }
     current = folderOf current
   }

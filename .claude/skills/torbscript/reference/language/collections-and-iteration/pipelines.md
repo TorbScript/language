@@ -18,7 +18,7 @@ source:
 > end yet, so `torb run` refuses the examples here that use it. `torb check` accepts them, and the rules are the
 > language's.
 
-Working with an `Iterable` has three parts: a source (anything `Iterable`), zero or more lazy stages (`map`, `filter`,
+Working with an `Iterate` has three parts: a source (anything `Iterate`), zero or more lazy stages (`map`, `filter`,
 `sorted`, `take`, ...) that describe a transformation without running it, and exactly one terminal operation that pulls
 the values through and decides where they end up.
 
@@ -49,14 +49,14 @@ print seniorEngineers.toList()
 ## Syntax
 
 ```text
-source.filter { ... }.map { ... }.take(n)      lazy stages: each answers an Iterable again
+source.filter { ... }.map { ... }.take(n)      lazy stages: each answers an Iterate again
 source.through(stage)                          puts a Stage in front of the values instead of a method
 .toList()  .to<Target>()  .fold(...)  .find(...)  .collect(...)      terminal operations: pull the values through
 ```
 
 ## Rules
 
-1. **A lazy stage answers an `Iterable` and runs nothing when it is called.** `map`, `filter`, `filterMap`,
+1. **A lazy stage answers an `Iterate` and runs nothing when it is called.** `map`, `filter`, `filterMap`,
    `mapWhile`, `flatMap`, `take`, `skip`, `takeWhile`, `zip`, `indexed` and `sorted` all return a value that describes
    the next step; none of them touch the source until something pulls.
 
@@ -85,7 +85,7 @@ source.through(stage)                          puts a Stage in front of the valu
    ```
 
 4. **A terminal operation decides where the values end up, and there is exactly one per pipeline.**
-   `toList()`, `to<Target>()` (any `From<Iterable<Item>>`), `fold`, `find`, `first`, `any`, `all`, `count`, `sum`,
+   `toList()`, `to<Target>()` (any `From<Iterate<Item>>`), `fold`, `find`, `first`, `any`, `all`, `count`, `sum`,
    `joined(separator:)`, `forEach`, `for ... in`, and the general one, `collect` - see
    [Collectors](collectors.md).
 
@@ -110,12 +110,12 @@ print employees.filter({ _ > 1 }).toList()
 ```trb error
 const employees = [1, 2, 3]
 print employees.filter({ _ > 1 })
-// error: `Iterable<Int64>` does not implement `Show`
+// error: `Iterate<Int64>` does not implement `Show`
 ```
 
 ## Related
 
-- [Iterating](iterating.md) - `Iterable` and `Iterator`, which every stage is built from.
+- [Iterating](iterating.md) - `Iterate` and `Iterator`, which every stage is built from.
 - [Collectors](collectors.md) - `collect`, the general terminal operation, and how to write one.
 - [The collection traits](collection-traits.md) - the traits a pipeline's terminal operation can build back into.
 

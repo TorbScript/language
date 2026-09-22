@@ -281,7 +281,7 @@ no `.Forwarded` that reaches an `.Object` can be monomorphized. The lowering fol
   implementations in one place costs, not what every collection literal costs.
   ([docs/PERFORMANCE.md](PERFORMANCE.md) finding 2.)
 - **A frozen member gets a copy for the call sites that know the payload.** A member of a witness table may not move
-  its signature, so `ArrayList.iterator` answers the boxed `Iterator<Item>` however concrete the receiver is. The pass
+  its signature, so `ArrayList.iterate` answers the boxed `Iterator<Item>` however concrete the receiver is. The pass
   therefore runs twice, and between the two runs `specializeFrozenCallees` copies every frozen function a **direct**
   call already names and whose signature holds an `Object` - the table keeps the original, the direct call site gets
   the copy, and the second run reads the copy's result and parameters as ordinary locations. That is what makes the
@@ -321,10 +321,10 @@ underscore is written when it would create one).
 | `lazy Value` argument        | `BoxNew` of a `Lazy(T)` cell holding a capture-free-or-not closure; each use is `Intrinsic.LazyForce`        |
 | `match`                      | `MatchPlan` to a decision tree of `Switch`/`Branch`/comparison blocks, tests memoized so the DAG is shared  |
 | `e?`                         | `Tag` + `Switch`; the error arm calls the recorded `From.from` and `Return`s after releasing everything live |
-| `for x in xs`                | `xs` into a temporary, `Iterable.iterator()`, loop head calls `next()` on a local `var`, `Switch` on the `Option` |
+| `for x in xs`                | `xs` into a temporary, `Iterate.iterate()`, loop head calls `next()` on a local `var`, `Switch` on the `Option` |
 | `"{a} and {b}"`              | `Show.show`/`showNested` per part, then one `Intrinsic.TextConcat(parts)` - never repeated `String.add`      |
 | defaults                     | `Adaptation.DefaultArgument`: the default expression is lowered **at the call site**, after the written arguments |
-| variadics / `...e`           | Build a list at the call site; `Spread` calls `addAll` through the recorded `Iterable` witness                |
+| variadics / `...e`           | Build a list at the call site; `Spread` calls `addAll` through the recorded `Iterate` witness                |
 | `port 8080`, `db { ... }`    | `Resolution.PropertyWrite`: `.Assign` a `Write`, `.AssignClosure` a `Closure` then a `Write`, `.Configure` a `Reference` to the field passed to the closure |
 | `p.copy(y: 30)`              | `Construct` from the old fields plus the overrides; when the source is at its last use and `Boxed`, `MakeUnique` plus `Write` instead - this is how `p = p.copy(y: 30)` stays in place |
 | `with Show` derived          | A generated body per instance (section 1.4)                                                                 |
@@ -890,7 +890,7 @@ deleted).
 | **5.4** | **Done.** Ownership: the summary pass, liveness, `Copy`/`Move`/`Retain`/`Release` insertion, edge splitting, `MakeUnique`, and the verifier's ownership invariants | `ir/liveness.trb`, `ir/operand.trb`, `ir/ownership.trb`, `ir/ownership-verify.trb` | IR snapshots pinning every insertion point (45 tests in `ownership`, `liveness`, `operand`, `make-unique` and `ownership-verify`); hand-built wrong IR against every message of the verifier; the live-block counter is zero after every conformance script (from 5.3 on) | 5.2 |
 | **5.5** | **Done.** ADTs: variant layouts, the niche, `MatchPlan` to decision trees, guards and fallbacks, case constructors, `Option`/`Result`, `?` with its conversion, `??`, `if const`/`while const`, destructuring bindings | `ir/decision.trb`, `ir/lower/match.trb` | `compiler/tests/decision.test.trb` (6 decision trees as text), `lower-match.test.trb` (10 IR snapshots, every one through `verifyOwnedProgram`), `emit-c` additions; `tests/conformance/{adts,errors,matching,states}.trb` run natively with zero live blocks | 5.2, 5.4 |
 | **5.6** | **Done.** Generics: instance keys with type arguments, the worklist, witness tables, trait-typed values, per-bound sharing, derived `Show`/`Equals`/`Hash`/`compare`, trait defaults and overrides. **Gate: `tests/conformance/{traits,generics,derived}.trb`** - `basics.trb` needs 5.7 to 5.10 as well (see the note below) | `ir/witness.trb`, `ir/lower/generic.trb`, `ir/lower/derive.trb`, `backend/c/emit.trb` | `compiler/tests/lower-generics.test.trb` (8, instance counts among them), `emit-c` additions (5 pinned C snippets), three native gate programs with zero live blocks | 5.5 |
-| **5.7** | **The lists run.** The ABI of the containers, `var fn` members of a **trait-typed value**, the witness of a value as a *place*, element descriptors, `ContainerNew`, the list literal, `a[key]` reads, `for` over a collection, a range as a value; then **the bound on the instance set** (a default nothing overrides is no slot of a table), **nested tables**, `ArrayList.from` and `Range.iterator`/`length`/`show` as TorbScript. **Done since:** the map/set cursor with the map and set literals (`tests/conformance/maps-and-sets.trb`), index paths (`collection-places.trb`, and PERFORMANCE round P7's in-place write), variadics and the spread (`variadics.trb`). **Done in the long tail of 6.1:** list patterns, `String.chars`/`bytes`/`from` and `String.slice` (see the note at the end). **Gate: `tests/conformance/{collections,ranges,collection-index}.trb}` - `language.trb` is a stage-0 script and not a checked program (see the note)** | `ir/element.trb`, `ir/lower/{native,collection}.trb`, `ir/witness.trb`, `backend/c/{natives,emit}.trb`, `std/collections/src/list.trb`, `std/core/src/range.trb` | `tests/conformance/{natives,reassignment,trait-values,collections,ranges,collection-index}.trb`, `compiler/tests/{lower-natives,ir-elements,lower-generics}.test.trb`; `07-collections.trb` is two index-path findings away | 5.3, 5.6, 5.8 |
+| **5.7** | **The lists run.** The ABI of the containers, `var fn` members of a **trait-typed value**, the witness of a value as a *place*, element descriptors, `ContainerNew`, the list literal, `a[key]` reads, `for` over a collection, a range as a value; then **the bound on the instance set** (a default nothing overrides is no slot of a table), **nested tables**, `ArrayList.from` and `Range.iterate`/`length`/`show` as TorbScript. **Done since:** the map/set cursor with the map and set literals (`tests/conformance/maps-and-sets.trb`), index paths (`collection-places.trb`, and PERFORMANCE round P7's in-place write), variadics and the spread (`variadics.trb`). **Done in the long tail of 6.1:** list patterns, `String.chars`/`bytes`/`from` and `String.slice` (see the note at the end). **Gate: `tests/conformance/{collections,ranges,collection-index}.trb}` - `language.trb` is a stage-0 script and not a checked program (see the note)** | `ir/element.trb`, `ir/lower/{native,collection}.trb`, `ir/witness.trb`, `backend/c/{natives,emit}.trb`, `std/collections/src/list.trb`, `std/core/src/range.trb` | `tests/conformance/{natives,reassignment,trait-values,collections,ranges,collection-index}.trb`, `compiler/tests/{lower-natives,ir-elements,lower-generics}.test.trb`; `07-collections.trb` is two index-path findings away | 5.3, 5.6, 5.8 |
 | **5.8** | **Done.** Closures: closure conversion, environments, escaping or not, boxes for captured `var` bindings, `lazy` cells, function values, receiver closures, property commands. **Gate: `tests/conformance/{closures,counted-closures,dsl}.trb`** - `examples/config-dsl` loads a receiver *script* (7.4) and needs 5.7 and 5.10 besides (see the note below) | `ir/lower/closure.trb`, `ir/capture.trb` | `compiler/tests/lower-closures.test.trb` (19: the IR text, the pinned C, the findings); three native gate programs with zero live blocks | 5.6 |
 | **5.9a** | **Done.** `var` parameters and `var fn` receivers: a place as an argument, interior projections through fields, assignment and property commands through a path, `MakeUnique` per counted owner of the path | `ir/lower/place.trb` | `compiler/tests/lower-places.test.trb` (23: the IR text, the pinned C, the verifier's invariants); `tests/conformance/{places,place-counted}.trb` run natively with zero live blocks | 5.4 |
 | **5.9b** | The rest of the `var` paths: index paths (`TakeOut`/`PutBack`), slices as windows, `if var`/`while var`, `shared type` objects with their headers and trace functions, `FixedArray`, `Close`/`using` | `ir/lower/place.trb`, `runtime/memory.c` | `01-bindings-and-values.trb`, `03-types.trb`, `08-control-flow.trb` | 5.9a, 5.7 |
@@ -1056,7 +1056,7 @@ the code won and this is the list. Everything else is as written.
   every expression of a body that was abandoned, answer with that one slot rather than a temporary each.
 - **`for` is lowered without an iterator only where the range is written out.** `for index in a..b` with both ends and
   an integer item becomes a counter, a `less` and an `add`; an inclusive range, a range without both ends and every
-  other subject need `Iterable.iterator()` and the `Option` its `next()` answers, so they are counted and wait for 5.5
+  other subject need `Iterate.iterate()` and the `Option` its `next()` answers, so they are counted and wait for 5.5
   and 5.6. `continue` jumps to the increment block, which is why the increment is a block of its own.
 - **`loop { ... }` without a `break` diverges, tracked per loop.** It is one block that jumps back to itself, with no
   condition to evaluate; the block after it stays an empty `unreachable` marker, and nothing is emitted into it - the
@@ -1423,10 +1423,10 @@ portable C can express, the code won and this is the list. Everything else is as
   the owner of a member matched against the type it was reached on, and which member an implementation provides under a
   name is what `checkRequirements` already decides - asking the checker twice would have been a second place to be wrong.
 - **A narrowing coercion to a *supertrait* of a trait-typed value is a finding.** `List<Item>` narrowed to
-  `Iterable<Item>` would need the table of `(the payload's type, Iterable<Item>)`, and the payload's type is exactly what
+  `Iterate<Item>` would need the table of `(the payload's type, Iterate<Item>)`, and the payload's type is exactly what
   a trait-typed value has erased - so it can only come out of a `nested` list in the table, which this sub-milestone does
   not build. Coercing a *concrete* value to any of its traits is unaffected, and so is calling an inherited member on a
-  trait-typed value (that is what the flattening above is for). 5.7 needs the nested tables for `Iterable` and will add
+  trait-typed value (that is what the flattening above is for). 5.7 needs the nested tables for `Iterate` and will add
   them; there are two occurrences in the repository today.
 - **`torb ir --statistics` over the repository: 578 of 2441 declarations lowered before 5.6, 852 of 2648 after** (23% to
   32%). "A call on a trait-typed value" (512), "a generic call", "a generic function or a member of a generic type", "a
@@ -1434,7 +1434,7 @@ portable C can express, the code won and this is the list. Everything else is as
   the new top blockers are a list literal (469, 5.7), string interpolation (264, 5.10), `a[key]` (236, 5.7) and `for` over
   a collection (212, 5.7).
 - **The gate is not `basics.trb`.** It cannot be: `print shapes.map({ _.area() })` does not type-check at all
-  (`Iterable<Float64>` does not implement `Show`, because `map` answers an `Iterable` and only a named collection is
+  (`Iterate<Float64>` does not implement `Show`, because `map` answers an `Iterate` and only a named collection is
   `Show`), so the file is a stage-0 script and not a checked program. What is left of it after that is blocked by 5.7
   (list and map literals, `a[key]`, `for` over a collection, the variadic list of `print`), 5.8 (closures), 5.9
   (a `var fn` receiver, `var` parameters, assignment to a place) and 5.10 (string interpolation). The gate of this sub-milestone is
@@ -1540,8 +1540,8 @@ allows, the code won and this is the list. Everything else is as written.
   gives the callee, so nothing says whether `m` answered an `Option` already, and that is exactly what decides whether the
   arm wraps its value or hands it on. Two occurrences in the repository.
 - **One bug of 5.6 that closures made reachable.** `objectTypeOf` did not substitute the bounds `Adaptation.ToTraitValue`
-  recorded, while `lowerTraitValue` did - so the slot a coercion produced into was `Object(Iterable<Void>)` while its
-  tables were for `Iterable<String>`. Every body of `std/iteration` that the closures unlocked reported it, and it is
+  recorded, while `lowerTraitValue` did - so the slot a coercion produced into was `Object(Iterate<Void>)` while its
+  tables were for `Iterate<String>`. Every body of `std/iteration` that the closures unlocked reported it, and it is
   fixed where the type is built.
 - **The trait-typed values are emitted before the layouts.** An object struct is made of the erased pointers of the ABI
   and of nothing of the program, while a layout may hold one in a field - the environment of a closure over a trait-typed
@@ -1730,10 +1730,10 @@ after both.
   whole chain - one `MakeUnique` per counted owner *along* the path, outermost first, and the box at the end. 5.4's pass
   only walks the proper *prefixes* of a place, because the storage a place names is normally the callee's business; for a
   trait-typed receiver it is not, so the lowering takes both halves over, which 5.4 explicitly allows.
-- **`ArrayList.iterator` is ordinary TorbScript.** `ListIterator<Item>` in `std/collections/src/list.trb` holds the list
+- **`ArrayList.iterate` is ordinary TorbScript.** `ListIterator<Item>` in `std/collections/src/list.trb` holds the list
   and an index and its `next` is `items.get(index)` - which the `.Optional` convention of the first round made callable.
   So the runtime keeps one function fewer ("natives stay few"), and the cursor holds the list **by value**, which is what
-  makes changing a list while iterating it not change what the cursor walks. `TrieList.iterator` is `.Planned("8")`: its
+  makes changing a list while iterating it not change what the cursor walks. `TrieList.iterate` is `.Planned("8")`: its
   cursor is the trie's, and nothing constructs a `TrieList` before the trie exists.
 - **Element descriptors are here, and the compiler fills in only what is a function of the language.** `ir/element.trb`
   makes one per element type, memoized by its mangled name, and upgrades one that a list asked for first and a map key
@@ -1754,9 +1754,9 @@ after both.
   `std/collections` (`List.from` answers an `ArrayList`, `Map.from` a `TrieMap`) and the lowering asks the prelude for the
   same name - a wrong answer would be a different container and not a slower one.
 - **`objectTypeOf` never substituted the arguments of the enclosing instance**, so a coercion to a *generic* trait inside
-  a generic body produced `Object(Iterable<Void>)` while the declared result was `Object(Iterable<Int64>)`. 5.6 never saw
+  a generic body produced `Object(Iterate<Void>)` while the declared result was `Object(Iterate<Int64>)`. 5.6 never saw
   it because `Show` has no arguments. A bound that is still open after the substitution is now a clean finding
-  (`closedBounds`) and no longer an internal error: `Iterable.filter` coerces its `Filtered` stage to `Iterable<Item>` and
+  (`closedBounds`) and no longer an internal error: `Iterate.filter` coerces its `Filtered` stage to `Iterate<Item>` and
   the `Item` the checker recorded there belongs to the stage's parameter list, which nothing has a value for. Closing that
   is a record of the checker; the bodies that hit it all need closures anyway.
 - **The struct of a trait-typed value is written before the layouts**, because a layout may hold one in a field. It needs
@@ -1768,7 +1768,7 @@ after both.
 
 **The instance count, and what would bound it.** The *instance count* is the number this sub-milestone really moved, and
 it is the monomorphization risk of section 7 arriving in practice. What drives it is the **element type**: a container
-literal builds the witness table of `List<Item>`, and that one table drags in every default member of `Iterable`,
+literal builds the witness table of `List<Item>`, and that one table drags in every default member of `Iterate`,
 `Collection`, `MutableIndexed`, `Length` and `Accumulator` *for that one item type* - `map`, `filter`, `fold`, `find`,
 `joined`, `added`, `contains`, and so on down. Two small real files (`syntax/source.trb` and `syntax/diagnostic.trb`) with
 two element types cost 228 functions, 18 witness tables and 2 element descriptors, and `compiler/tests/lower.test.trb`
@@ -1791,13 +1791,13 @@ yet is what its **table members** cannot do, and every one of them is a clean fi
 
 | finding | what it is | slice |
 |---|---|---|
-| a closure, a call of a closure value | the lazy stages of `Iterable` (`filter`, `take`, `sorted`, …) and `sort` | 5.8 |
-| `for` over anything but a range of integers | `Collection.addAll`, `Iterable.fold`, `find`, `forEach` | 5.7, done in the third round |
+| a closure, a call of a closure value | the lazy stages of `Iterate` (`filter`, `take`, `sorted`, …) and `sort` | 5.8 |
+| `for` over anything but a range of integers | `Collection.addAll`, `Iterate.fold`, `find`, `forEach` | 5.7, done in the third round |
 | `a[key]` | `List.swapAt`, `List.first`, `Map.mapValues` | 5.7, done in the third round |
-| a range as a value | `Iterable.indexed` is `Zipped(0.., self)` | 5.7, done in the third round - and `Iterable.indexed` is exactly what makes it diverge, below |
+| a range as a value | `Iterate.indexed` is `Zipped(0.., self)` | 5.7, done in the third round - and `Iterate.indexed` is exactly what makes it diverge, below |
 | a receiver the back end cannot reach | not a receiver at all: a written type argument, and a static member of a trait type | 5.7, done in the third round |
 | `finish`, which neither the source nor the natives manifest provides | `Accumulator.finish` is required by `Accumulator` and provided by the default of its **subtrait** `Collection`; `memberFunctionOf` only looks in the implementation of the trait that requires it and in that trait itself | 5.7, done in the third round |
-| `TrieMap.iterator`, `TrieSet.iterator` | the ordered hash table's cursor has to skip tombstones, so it needs one new runtime function (`bool torb_map_entry_after(torb_map, int64_t *cursor, void *key, void *value)`) plus a third convention, `bool` plus **two** out parameters, whose wrapper builds the `(Key, Value)` tuple | 5.7 |
+| `TrieMap.iterate`, `TrieSet.iterate` | the ordered hash table's cursor has to skip tombstones, so it needs one new runtime function (`bool torb_map_entry_after(torb_map, int64_t *cursor, void *key, void *value)`) plus a third convention, `bool` plus **two** out parameters, whose wrapper builds the `(Key, Value)` tuple | 5.7 |
 
 So the next steps of this row, in order: the `finish` provider lookup, `a[key]` reads, `for` over a collection (which
 `ListIterator` now makes possible), the map and set cursor with its two-out convention, nested tables for the supertrait
@@ -1817,7 +1817,7 @@ first, plus the two findings that were hiding behind each other.
 - **"A receiver the back end cannot reach" was two findings, and neither was a receiver.** `to<List<Item>>()` writes its
   type arguments *between* the receiver and the call, so the callee is `.Generic(.Name("to"), …)` and never a `.Member` -
   and `receiverSlot` asked for `Adaptation.ImplicitSelf` at the span of the whole `.Generic` node, where the checker
-  records nothing. Unwrapping `.Generic` then uncovered `Target.from self` in `Iterable.to`: a **static** member of a
+  records nothing. Unwrapping `.Generic` then uncovered `Target.from self` in `Iterate.to`: a **static** member of a
   generic parameter that turned out to be a trait type. There is no value there to erase, `Traits([List<Int>])` is a
   closed type like any other and `witnessFor` names the one implementation of it, so `.Forwarded` goes dynamic only for a
   member with a receiver now. Object safety says the same thing from the other side: a static member is never in a
@@ -1835,30 +1835,30 @@ first, plus the two findings that were hiding behind each other.
   dead on the back edge and its drop an ordinary edge drop. `continue` jumps to the head, where the next value is pulled,
   and `break` to the block after it - so neither needs the step block the counter of a range has. `dispatchedOn` in
   `ir/lower/generic.trb` is the dispatch of a member the **lowering itself** calls, with no call site to read a
-  resolution from; it asks the very question a written call asks, so `xs.iterator()` reaches the same function either
+  resolution from; it asks the very question a written call asks, so `xs.iterate()` reaches the same function either
   way.
 - **A range as a value is one `Construct`.** A `Range` is the one `native type` that declares fields and is no
   `RuntimeKind` (5.1's note), so `3..7` builds its three fields - an `Option` around each end, and `inclusive` as a
   `Bool` - in source order. Nothing about *iterating* one is here.
 - **`Range<Int>.iterator` is deliberately still a `.Planned` native, and the reason is not the runtime: the instance set
   diverges.** Writing it as `RangeIterator` in TorbScript (which is what "natives stay few" asks for, and which is two
-  dozen lines) makes `Iterable.indexed` reachable - and `indexed(self): Iterable<(Int, Item)>` is `Zipped(0.., self)`. So
-  the table of `Iterable<(Int, Item)>` for `Zipped<Int, Item>` holds `indexed` again, which needs
+  dozen lines) makes `Iterate.indexed` reachable - and `indexed(self): Iterate<(Int, Item)>` is `Zipped(0.., self)`. So
+  the table of `Iterate<(Int, Item)>` for `Zipped<Int, Item>` holds `indexed` again, which needs
   `Zipped<Int, (Int, Item)>`, which holds `indexed` again, and the worklist never ends: `torb ir ..` over
   `compiler/src/syntax` alone does not finish in five minutes where the whole repository takes two. Every collection's
   table holds `indexed`, and the only thing that kept it unreachable was that `0..` was not a value. **This is the
   monomorphization risk of section 7 arriving as a non-termination and not as a build time**, and it has to be decided
-  before `Range.iterator` can be TorbScript: either the instance sharing the note above describes (a container whose
+  before `Range.iterate` can be TorbScript: either the instance sharing the note above describes (a container whose
   element is a counted pointer is one instance), or a bound on the depth of an instance's type arguments, or `indexed`
   out of the table (which needs a reason object safety does not give). Milestone 6.3 owns the measurement; the
   two entries stay `.Planned` until then, and the 705 functions that ask for one are the price.
 - **`Tables.collectionLiterals` is read, and only `Default` is lowered.** The checker decided which of the three shapes a
   literal is (gap 51, TYPECHECKER 8) and recorded it at the literal's span, so the back end reads that decision instead
   of asking the expected type a second time and answering it differently. `InlineArray` writes its items into the inline
-  slots of an `Array<Item, Size>`, which is a `FixedArray` and therefore 5.9b's; `FromIterable` builds the default list
+  slots of an `Array<Item, Size>`, which is a `FixedArray` and therefore 5.9b's; `FromIterate` builds the default list
   and hands it to the `from` of the target, and the `from` to call is an ordinary member of the `witness` the checker
   recorded - but every one of them bottoms out in `TrieSet.from` or `ArrayQueue.from`, the same `.Planned` natives as
-  `ArrayList.from`, so it waits for the same step and names its target meanwhile. There is **one** `FromIterable` in the
+  `ArrayList.from`, so it waits for the same step and names its target meanwhile. There is **one** `FromIterate` in the
   repository (`std/http`) and no `InlineArray` at all.
 - **Two bugs of the lowering that `for` made reachable, both older than this round.** A *destination is a hint*, and the
   one `Void` slot of the function is the wrong hint for a value: an `if` used as a statement has the type `Void`, so both
@@ -1868,14 +1868,14 @@ first, plus the two findings that were hiding behind each other.
   place argument is legal: it is about the **base**, whose own count dies at the call, which is what the `Release` after
   it is for (5.10 found the same thing).
 - **`torb ir --statistics` over the repository: 7381 of 12511 before this round, 15257 of 17250 after** (58% to 88%; the
-  total grows by a third, because a `for` that lowers reaches every default of `Iterable` for every element type). The
+  total grows by a third, because a `for` that lowers reaches every default of `Iterate` for every element type). The
   `finish` (602), `a[key]` (382 plus what the table members behind it unlocked), `for` over anything but a range (1995,
   which grew to 2614 as the other three unlocked bodies) and "a receiver the back end cannot reach" (536) findings are
-  all gone. The new top blockers are `Range.iterator` (705, above), "a declaration the back end cannot build an instance
-  of" (258), `TrieMap.iterator` (174, the map cursor), the index *paths* of 5.9b (149 + 140 + 34) and `ArrayList.from`
+  all gone. The new top blockers are `Range.iterate` (705, above), "a declaration the back end cannot build an instance
+  of" (258), `TrieMap.iterate` (174, the map cursor), the index *paths* of 5.9b (149 + 140 + 34) and `ArrayList.from`
   (140).
 - **`ArrayList.from` cannot be a function of the runtime at all**, which its `.Planned("5.7")` entry does not say:
-  `from(items: Iterable<Item>)` walks a trait-typed value of the *program* through a witness table, and a C function
+  `from(items: Iterate<Item>)` walks a trait-typed value of the *program* through a witness table, and a C function
   cannot. It is `var result = ArrayList.withCapacity(0)  result.addAll(items)  result` in TorbScript, which every piece
   of now exists - but `withCapacity` has no element descriptor in its declaration, so the wrapper has nowhere to get one
   and `ContainerNew` is the instruction that does. Closing it is `ContainerNew` plus `addAll`, and it is the next step of
@@ -1904,7 +1904,7 @@ written.
   **trait** contributes nothing, or `extend<Item: Show> List<Item> with Show` would name every default of `List` and the
   decision would be a no-op. And the **fields** of a target are not in it although `providerOf` answers a member with
   one: a field is not a method and cannot be the body of a default, and one field of the compiler's own `WellKnown` is
-  called `indexed` - which put `Iterable.indexed` straight back into every table and brought the non-terminating worklist
+  called `indexed` - which put `Iterate.indexed` straight back into every table and brought the non-terminating worklist
   back with it (the tripwire measured 967 declarations and eight `do not end` findings until the fields came out). For
   separately compiled packages later this means the table layout of a trait is fixed **per program** - which it already
   is, because a table is emitted with the program that uses it and its member order is computed from the same closed
@@ -1913,8 +1913,8 @@ written.
   258 functions / 20 witness tables / 2 element descriptors to **78 / 108 / 24 / 2** - a quarter of the functions, and
   more tables only because the *nested* ones below are built now. Over the whole repository `torb ir --statistics ..`
   went from 15257 of 17250 (88%) to **8301 of 9182 (90%)**: the *total* is what halved, because every collection's table
-  used to drag every default of `Iterable`, `Collection`, `MutableIndexed`, `Length` and `Accumulator` in per element
-  type. The 705 `Range.iterator` findings and the 140 `ArrayList.from` findings are gone (both are TorbScript now), the
+  used to drag every default of `Iterate`, `Collection`, `MutableIndexed`, `Length` and `Accumulator` in per element
+  type. The 705 `Range.iterate` findings and the 140 `ArrayList.from` findings are gone (both are TorbScript now), the
   `a[key]` assignment finding of `List.swapAt` and `List.updated` is gone from every table (neither is instantiated at
   all any more), and the wall time of `torb ir --statistics ..` fell from 1m53s to 1m39s.
 - **The backstop, for the case the decision does not cover.** An overridden default that is itself type-growing would
@@ -1942,7 +1942,7 @@ written.
   element descriptor per type argument, and no declaration of `std/` can name one, so this cannot be a `native fn` at all
   (the third round wrote that down). `ArrayList.from` is then
   `var result: ArrayList<Item> = ArrayList.withCapacity 0  result.addAll items  result`, which is what unblocks
-  `toList()`, `to<List<Item>>()` and `Iterable.to`. The capacity is dropped for now: it is a hint, and giving
+  `toList()`, `to<List<Item>>()` and `Iterate.to`. The capacity is dropped for now: it is a hint, and giving
   `ContainerNew` an operand would change the instruction in both back ends for something that is not observable.
   `TrieList.from`, `TrieSet.from`, `TrieMap.from` and `HashSet.from` stay `.Planned` - the tries need the trie, and the
   hash containers need the cursor below.
@@ -1967,13 +1967,13 @@ written.
 - **Four bugs the gate programs found, and every one of them is the kind only running finds.**
   - **A witness thunk borrowed everything.** The erased ABI borrows the payload and every argument, because a call site
     knows the member's index and not its declaration - but the real member may take one **owned**: the `self` of
-    `ArrayList.iterator`, whose `ListIterator` stores the list, and the value of `ArrayList.add`, which the buffer keeps.
+    `ArrayList.iterate`, whose `ListIterator` stores the list, and the value of `ArrayList.add`, which the buffer keeps.
     The thunk is where the counts are made now (the payload through a local of its own, because a read-only member's box
     is `const`). Without it `for x in list` and `list.add(text)` released the same block twice.
   - **A closure body's parameter may never be `Owned`.** `CallClosure`'s callee is a *slot*, so no call site can read the
     summary of the function it will reach, and the type of a closure is the type of every closure of its shape (5.8's
     note) - so the signature in the type cannot answer it either. `summarizeParameters` skips every function a `Closure`
-    instruction points at, which also covers a named function used as a value. `Iterable.joined` builds
+    instruction points at, which also covers a named function used as a value. `Iterate.joined` builds
     `separator + item` and was exactly that.
   - **And therefore a closure that *hands on* its parameter needs a retain, which the pass used to walk past.** The
     other half of the rule above, found by `torb ir ..` over the compiler itself and the one internal error it was left
@@ -1996,20 +1996,20 @@ written.
     origin of an implementation says who wrote it down, not who writes the body.
 - **The gate is not `language.trb`**, and it cannot be: like `basics.trb` before it, it is a stage-0 **script** and not a
   checked program. Eleven of its lines are refused by the type checker itself and by no back end - `onStart { "...{port}" }`
-  captures the receiver `self` in a closure that may outlive the call, `print counters.map({ _.count })` asks `Iterable<Int>` for
+  captures the receiver `self` in a closure that may outlive the call, `print counters.map({ _.count })` asks `Iterate<Int>` for
   `Show`, `samples[1..4].sort()` calls `sort` without its `by`, `Seconds` implements none of `Add`, `Compare` or
   `Subtract`, `match` does not handle `[_, _, ...]`, and `visit`/`seen`/`limit`/`toMap` are names that are not there. So
   5.7's row needs a gate that is a program: `tests/conformance/{collections,ranges,collection-index}.trb` are it -
-  the literals of every element shape, `for` over a list and over a trait-typed `Iterable` with `break` and `continue`,
+  the literals of every element shape, `for` over a list and over a trait-typed `Iterate` with `break` and `continue`,
   `a[key]` and its panic (exit 101, the message of `Indexed.at` and therefore the language's own), growth over the
   doubling of the buffer, copy on write through a local, a field and a `var` parameter, the closure pipelines, and a range
   in all four spellings. Each is compiled, run, compared with stage 0 byte for byte and asserted to leave zero live
   blocks. **`examples/tour/src/07-collections.trb` is two findings away**, and both are the index *places* of the next
   step: `numbers[0] = 5` and `swapAt`'s `var` argument through `a[key]`.
 - **What is left of the row, measured on this tree.** "A declaration the back end cannot build an instance of" (260, the
-  biggest single blocker left and not yet diagnosed), the index paths of 5.9b (155 + 34 + 11), `TrieMap.iterator` (137,
+  biggest single blocker left and not yet diagnosed), the index paths of 5.9b (155 + 34 + 11), `TrieMap.iterate` (137,
   the map and set cursor with its `bool`-plus-two-outs convention, which also blocks **every map and set literal**:
-  `iterator` is required by `Iterable`, so the table of `Map<Key, Value>` cannot be built at all and `["a": 1]` does not
+  `iterate` is required by `Iterate`, so the table of `Map<Key, Value>` cannot be built at all and `["a": 1]` does not
   lower), `String.chars` (31), `sort` on a trait-typed value (20), the variadic parameters and arguments (8 + 5), and the
   list patterns (8). The `print` interception of 5.10 therefore still stands, because a variadic parameter is still a
   finding.
@@ -2068,8 +2068,8 @@ path *is*.
 - **`torb ir --statistics ../compiler`: 7471 of 7954 lowered before, 7691 of 7997 after** (93% to 96%). The three index
   findings (139 `var` arguments, 34 `var` receivers, 5 assignments) are gone.
 
-**The map and the set cursor, which is what blocked every map and every set literal.** `iterator` is a *required* member of
-`Iterable`, so the witness table of `Map<Key, Value>` could not be built at all and `["a": 1]` did not lower - 130 findings
+**The map and the set cursor, which is what blocked every map and every set literal.** `iterate` is a *required* member of
+`Iterate`, so the witness table of `Map<Key, Value>` could not be built at all and `["a": 1]` did not lower - 130 findings
 that were all one missing cursor.
 
 - **One new runtime function, and it is a native for a reason the doc comment gives**: `torb_map_entry_after(map, &cursor,
@@ -2086,7 +2086,7 @@ that were all one missing cursor.
   parameters are named `out0`/`out1` where there are several, and the wrapper constructs the tuple and then the `Some`.
   Everything else was already there: the conditional out parameter of the fourth round makes a counted half `owned` on the
   `true` path and releases it on neither other one, for two outs exactly as for one.
-- **`iterator` is TorbScript, and so are `from` and `withCapacity`'s replacement.** `MapIterator` holds the table by value
+- **`iterate` is TorbScript, and so are `from` and `withCapacity`'s replacement.** `MapIterator` holds the table by value
   and an index, `SetIterator` the same; `TrieMap.from` is `withCapacity 0` plus `addAll`, exactly as `ArrayList.from` is;
   and `withCapacity` is a `NativeTarget.Container(MapStorage)`, which is `Instruction.ContainerNew` - so
   `torb_map_with_capacity` is out of the manifest and the element descriptors stay the lowering's business. The runtime has
@@ -2120,8 +2120,8 @@ that were all one missing cursor.
   (`counters["a"].increment()`), copy on write through two copies taken at different times, and `toSet`/`groupBy`/
   `Map.from`. Byte identical to stage 0, `live blocks at exit: 0`.
 - **`torb ir --statistics ../compiler`: 7691 of 7997 lowered before, 11357 of 11553 after** (96% to 98%). The *total* grows
-  by 3556, because a map and a set that lower reach every default of `Iterable`, `Collection` and `Accumulator` for every
-  key and value type they are used with. `TrieMap.iterator` (130) and the "without a receiver" findings are gone.
+  by 3556, because a map and a set that lower reach every default of `Iterate`, `Collection` and `Accumulator` for every
+  key and value type they are used with. `TrieMap.iterate` (130) and the "without a receiver" findings are gone.
 
 **`sort` is a default of `List` and written in TorbScript, and `slice` is the one that is still open.** Both were
 "`x`, which is not in the witness table of a trait-typed value" (27 + 11), and they are not the same problem at all.
@@ -2187,9 +2187,9 @@ parameter that every positional argument from its position on fills; it is a **`
   decided that a default no implementation overrides has **one** instance with `Self` bound to the trait type - so
   `Collection.addAll` takes an `Object(List<Item>)` place, while what a literal fills is the concrete buffer. Boxing the
   buffer to call it would hand the callee a box of its own and the items would never reach the slot. So `spreadInto` writes
-  the loop BACKEND 1.6 describes for a `for`: the subject into a slot, `iterator()`, a head that pulls `next()` from a
+  the loop BACKEND 1.6 describes for a `for`: the subject into a slot, `iterate()`, a head that pulls `next()` from a
   `var` local and switches on the `Option`. That is what makes `total(...numbers.map({ _ * 10 }))` work - a spread of a
-  **pipeline**, which is an `Iterable` and no list at all - and it is the same code for a spread in an argument list and one
+  **pipeline**, which is an `Iterate` and no list at all - and it is the same code for a spread in an argument list and one
   in a literal (`[1, ...numbers, 4]`), which was a finding until now.
 - **An operator on a trait-typed value was dispatched without a receiver at all.** `operandTypeOf` answered `None` for
   anything but an implementation dispatch, so `replaced == arguments` on two `List<TypeId>`s reported "a call on a
@@ -2225,10 +2225,10 @@ longer than "the pipelines need closures":
    trait name in a type position is an `Object`"), so lowering one means building an `ArrayList<Int>`, filling it, and
    boxing it with the witness table of `(ArrayList<Int>, List<Int>)`. The literal is therefore not reachable without
    that table.
-2. **The table of `List<Item>` cannot be built yet, and the first thing it blocks on is `iterator`.** Measured:
-   `ArrayList<Int>` coerced to `List<Int>` reports `` `ArrayList.iterator`, which the runtime provides from milestone 5.7
-   on ``. `iterator` is a required member of `Iterable`, so it is in every collection's table.
-3. **`iterator` should be TorbScript and not a runtime function** ("natives stay few"): a `ListIterator<Item>` over the
+2. **The table of `List<Item>` cannot be built yet, and the first thing it blocks on is `iterate`.** Measured:
+   `ArrayList<Int>` coerced to `List<Int>` reports `` `ArrayList.iterate`, which the runtime provides from milestone 5.7
+   on ``. `iterate` is a required member of `Iterate`, so it is in every collection's table.
+3. **`iterate` should be TorbScript and not a runtime function** ("natives stay few"): a `ListIterator<Item>` over the
    list and an index, whose `next` is `items.get(index)` - which the `.Optional` convention above now makes callable.
 4. **But `Iterator.next()` is a `var fn` member**, and a `var fn` member is still left out of a witness table
    (5.6's list). So `for x in xs` cannot pull from a trait-typed iterator.
@@ -2239,7 +2239,7 @@ longer than "the pipelines need closures":
    That was the decision the second round took, and it unlocked 4, 3, 2 and 1 in that order.
 
 **Nested witness tables are still not built.** 5.6 left `WitnessTable.nested` empty and named `List<Item>` →
-`Iterable<Item>` as what needs it, and the field is in the emitted `torb_witness_table` now. The mechanism is settled -
+`Iterate<Item>` as what needs it, and the field is in the emitted `torb_witness_table` now. The mechanism is settled -
 `nested[i]` is the table of the i-th direct supertrait, and a narrowing reads `value.w0->nested[i]` through
 `WitnessSource.steps`, whose indices are a static property of the *trait* and not of the erased target - and what is left
 is filling the list in `witnessTableOf` and walking the steps in `witnessExpression`. The two occurrences in the
@@ -2321,7 +2321,7 @@ or what the two back ends can *both* write, the code won and this is the list. E
   may be implemented **for its trait type**: `extend<Item: Show> List<Item> with Show` of the prelude is exactly that, so
   `"{list}"` on a `List<Item>` value is a *static* call of that implementation. `dynamicDispatch` asks `witnessFor` before
   it reports, which is 116 functions of the repository and turns "`show`, which is not in the witness table" into the
-  finding that names the real blocker (`iterator`, 5.7).
+  finding that names the real blocker (`iterate`, 5.7).
 - **Two latent bugs that interpolation made reachable, both internal errors of the verifier.** A block whose value is
   discarded handed its destination to its last expression, so `{ errorHere "..."  bump() }` as a `match` arm put a `Token`
   in a `Void` slot (gap 18 makes that statement legal, because the call has a `var` receiver). And `verifyCall` forbade
@@ -2423,10 +2423,10 @@ declarations).
 - **What the language cannot express about a text is reading its raw storage.** There is no `text[i]` and no
   `length()` - "say what you count" - so the two natives are `charAt(offset)` and `byteAt(offset)`, both `.Optional`
   (`bool` plus one out parameter, the convention 5.7 built). Everything above them is TorbScript: `Characters` and
-  `CharacterIterator`, `TextBytes` and `TextByteIterator` in `std/text`, the stage-plus-cursor shape every `Iterable` of
+  `CharacterIterator`, `TextBytes` and `TextByteIterator` in `std/text`, the stage-plus-cursor shape every `Iterate` of
   the standard library has. Walking a text is **O(1) per character** - `charAt` decodes at an offset,
   `Char.byteLength()` says how far to move - and nothing ever re-scans what it has walked.
-- **`String.from(Iterable<Char>)` cannot be a function of the runtime**, for exactly the reason `ArrayList.from` cannot
+- **`String.from(Iterate<Char>)` cannot be a function of the runtime**, for exactly the reason `ArrayList.from` cannot
   (5.7's fourth round): it walks a trait-typed value of the *program* through a witness table, which C cannot do. The
   manifest's `.Planned` entry for it said "5.7" and was never going to come true. It is one `+` per character now, which
   is O(n²) in the bytes for a long text and what the language has: a builder would need a mutable text, and a `String`
@@ -2457,9 +2457,9 @@ declarations).
   `runtime/include/torb_natives.h` from the manifest, and `compiler/tests/natives.test.trb` asserts that the file on disk
   is what the manifest renders - the byte-for-byte half that needed file IO from a test.
 - **The instance-count tripwire moved from 78/108/24/2 to 121/169/38/3** declarations/functions/tables/descriptors. Two
-  files that walk a text now reach `Characters`, `CharacterIterator`, their `Iterable<Char>` and `Iterator<Char>` tables
+  files that walk a text now reach `Characters`, `CharacterIterator`, their `Iterate<Char>` and `Iterator<Char>` tables
   and the payload boxes of both - one set for the whole program, not one per call - which is the same trade 5.7 made when
-  `ArrayList.from` and `Range.iterator` became TorbScript. Its comment in `lower.test.trb` says so.
+  `ArrayList.from` and `Range.iterate` became TorbScript. Its comment in `lower.test.trb` says so.
 - The gate is `tests/conformance/characters.trb`: every width of UTF-8 (one to four bytes) so that a cursor moving
   by the wrong amount is a wrong character and not a slower loop, a cursor over a **slice** (which may not read the
   storage in front of it), `charAt` past the end, `String.from`, and `Int.from(byte)`. Compiled, run, compared with stage
@@ -2480,7 +2480,7 @@ line).
   range, because the length was tested on the way into the block.
 - **A rest is a copy, and it cannot be anything else.** `Slice.slice` answers `Self`, so object safety keeps it out of the
   witness table of a trait-typed value (5.6's rule) - there is no way to *share* the storage from a pattern. `skip` and
-  `toList` are ordinary members of `Iterable` and give a list of their own; a value has no identity, so only the cost is
+  `toList` are ordinary members of `Iterate` and give a list of their own; a value has no identity, so only the cost is
   observable, and it is the cost `toList()` has anywhere.
 - **Which trait declares the member is not the back end's business.** `boundDeclaring` walks the closure of the subject's
   own traits and takes the first that declares `length`, `at`, `skip` or `toList`. `length` is `Length`'s in
@@ -2692,12 +2692,12 @@ does it again.** Milestone 6.2 is one bug wide, and the bug was not in the back 
 
 **Joining a text is a merge tree, and a `String` is a value.** This is the whole hang.
 
-- `Iterable.joined` folded `result + separator + item.show()` over its pieces. A `String` is a value, so every step copies
+- `Iterate.joined` folded `result + separator + item.show()` over its pieces. A `String` is a value, so every step copies
   everything that is already in the accumulator, and `n` pieces copy `O(n²)` bytes. `emittedText` is one `joined` over the
   lines of the translation unit, and the compiler's own is **786457 lines and 66 megabytes**: measured on a probe that
   joins 60000 pieces into 1.4 MB (20.6 seconds natively), that extrapolates to **over three hours** of copying before one
   byte reaches the file. "Ten minutes on one core without a line of C" was the first ten minutes of it.
-- **Stage 0 never ran a line of the fold.** `joined`, `String.from` and the whole `Iterable` surface are natives of the
+- **Stage 0 never ran a line of the fold.** `joined`, `String.from` and the whole `Iterate` surface are natives of the
   interpreter (`natives.rs`), and Rust's `parts.join(separator)` walks the bytes once - so the square was paid by the
   emitted C alone and nothing in the repository could see it. That is the shape of the class: *not* a value that shares
   storage where it must not, and *not* a fixpoint that fails to settle, but a **library algorithm whose cost only the
@@ -2709,7 +2709,7 @@ does it again.** Milestone 6.2 is one bug wide, and the bug was not in the back 
   fork writes one separator.
 - It is a module of its own because `collectors.trb` needs it too and `iteration.trb` already imports that one; and it is
   in `std/iteration` and not in `std/text` because `std/text` depends on that package and not the other way round.
-- The same shape in two more places, both fixed with it: `String.from(Iterable<Char>)` appended one character at a time
+- The same shape in two more places, both fixed with it: `String.from(Iterate<Char>)` appended one character at a time
   (also a native of stage 0, so also invisible), and the `joining` collector accumulated a `String?`.
 - **A leading empty piece used to swallow its separator.** `result.isEmpty()` cannot tell "nothing yet" from "the empty
   text", so `["", "b"].joined(separator: ",")` came out as `b` where stage 0 answers `,b`. A list of pieces has no such
@@ -3295,7 +3295,7 @@ suite compares.
 no layout, so the container a `length()` or an `at(index)` runs on cannot be read off the layouts the way a field can;
 `containerTypeOf` walks the subject's type step by step instead and asks the checker the questions the pattern check
 asked on the way in - `caseNamed` for a case field, `fieldsOf` for a field, the type's form for a tuple position, and
-`itemOfSubject` for an item of an `Iterable`. The subject is substituted first, so a nested list inside an instance of a
+`itemOfSubject` for an item of an `Iterate`. The subject is substituted first, so a nested list inside an instance of a
 generic reaches that instance's type arguments. `torb ir --statistics ../compiler/tests` lowers **12375 of 12375**
 functions.
 
@@ -3687,7 +3687,7 @@ is the gate. **The VM needs nothing new for it**: the instance set is the one th
 **`==` and `<` on a record go through the implementation the language generates.** The checker records a *member* for an
 operator only where `lookupMember` finds a declaration, and a generated `equals` is not one - the same hole a tuple's
 structural comparison has always been in. `structuralOperator` therefore asks the question a `for` asks about
-`iterator` (`dispatchedOn`) for a nominal operand as well as for a tuple, which reaches the body `ir/lower/derive.trb`
+`iterate` (`dispatchedOn`) for a nominal operand as well as for a tuple, which reaches the body `ir/lower/derive.trb`
 writes. Whether the checker should record the member instead is a question of the checker; the lowering answers the
 same way either way.
 
@@ -3803,7 +3803,7 @@ _Decision:_ accepted.
 an offset past the end, a reversed range, or where invalid UTF-8 could come from.
 _Proposal:_ an offset greater than `byteLength()`, a start greater than the end, and an offset on a UTF-8
 continuation byte each panic, with the offset and the length in the message. `String` is therefore always valid
-UTF-8: the only ways in are literals, slices at character boundaries, `String.from(Iterable<Char>)` and runtime
+UTF-8: the only ways in are literals, slices at character boundaries, `String.from(Iterate<Char>)` and runtime
 functions that validate - so reading a file whose bytes are not UTF-8 is an `IoError`, never a replacement character.
 _Reason:_ a total `String` removes a replacement-character rule from every back end and from `chars()`.
 
@@ -3912,9 +3912,9 @@ test - the cost should be written down rather than discovered.
 _Decision:_ accepted. The Decision Log entry about quoting being free is corrected with it.
 
 **17. `for x in ..10` and `Range.length()` of an open range.** A range with two `Option` ends makes "has a start" a
-condition about a field's value, so `iterator()` and `length()` could only panic.
+condition about a field's value, so `iterate()` and `length()` could only panic.
 _Proposal:_ **the type says which ends there are**, chosen by the syntax: `a..b` is a `Range`, `a..` a `RangeFrom`,
-`..b` a `RangeTo`. No field is optional, `Range<Int>` is `Iterable` and `Length`, `RangeFrom<Int>` is `Iterable` and
+`..b` a `RangeTo`. No field is optional, `Range<Int>` is `Iterate` and `Length`, `RangeFrom<Int>` is `Iterate` and
 endless, `RangeTo<Int>` is neither - so `for index in ..10` and `(0..).length()` are refused where they are written,
 each with the reason. What accepts every form takes the trait `Bounds<Value>` (`lowest`, `highest`,
 `includesHighest`, `contains` as a default), which is what `Slice.slice` declares.

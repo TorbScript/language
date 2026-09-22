@@ -53,24 +53,24 @@ This is the part that is different from nearly every other language:
 
 ```trb
 var list = [1, 2]
-list.add 3
+list.append 3
 const fixed = list
 print "{list} {fixed}"
 ```
 
-`list.add 3` works because `list` is a `var`. `fixed.add 3` would not compile, and not because the *binding* cannot be
+`list.append 3` works because `list` is a `var`. `fixed.append 3` would not compile, and not because the *binding* cannot be
 reassigned - because `const` is **deep**. Through a `const` binding you cannot reassign, cannot assign a field, and
 cannot call a method that is a `var fn`.
 
 ```trb error
 const fixed = [1, 2]
-fixed.add 3
-// error: `add` needs a `var`
+fixed.append 3
+// error: `append` needs a `var`
 ```
 
 The diagnostic names the other half of the rule. A method that changes its receiver in place is a **verb** and declares
 a `var fn`; the method that returns a changed copy instead is its **participle**. So `list.sort { _ }` sorts in place and
-`list.sorted { _ }` answers a new list, `add` and `added`, `remove` and `removed`.
+`list.sorted { _ }` answers a new list, `append` and `appended`, `remove` and `removed`.
 
 There is no `MutableList`, no `ImmutableList` and no read-only view. A `const` binding *is* the immutable list.
 

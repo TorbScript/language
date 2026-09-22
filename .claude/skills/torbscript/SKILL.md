@@ -26,7 +26,7 @@ binding never changes and nothing below it changes; a `var` binding can be chang
 ```trb run
 const fixed = [1, 2]
 var buffer = fixed
-buffer.add 3
+buffer.append 3
 print "{fixed} {buffer}"
 // prints [1, 2] [1, 2, 3]
 ```
@@ -133,7 +133,7 @@ Statements end at the end of the line. There are no semicolons, and two statemen
 
 ### Pipelines are lazy, and one vocabulary is shared
 
-`map`, `filter`, `flatMap`, `take`, `sorted` and the rest return an `Iterable` and run nothing until a terminal
+`map`, `filter`, `flatMap`, `take`, `sorted` and the rest return an `Iterate` and run nothing until a terminal
 operation pulls the values through.
 
 ```trb
@@ -147,7 +147,7 @@ const names = employees.filter({ _.age >= 40 }).map({ _.name }).toList()
 print names
 ```
 
-`map` and `flatMap` mean the same thing on `Option`, `Result`, `Task` and `Iterable`, by convention rather than through
+`map` and `flatMap` mean the same thing on `Option`, `Result`, `Task` and `Iterate`, by convention rather than through
 higher-kinded types. A closure is always `{ parameters => body }`, and `_`, `_2` are its implicit parameters. See
 [the language reference](reference/language/index.md).
 
@@ -270,11 +270,11 @@ A run that found something:
 
 ```console
 $ torb check scratch
-error: `add` needs a `var`. Did you mean `added`?
+error: `append` needs a `var`. Did you mean `appended`?
  --> scratch/src/main.trb:3:7
   |
-3 | fixed.add 3
-  |       ^^^
+3 | fixed.append 3
+  |       ^^^^^^
 
 1 problems in 1 of 1 files
 ```

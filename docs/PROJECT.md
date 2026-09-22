@@ -289,7 +289,7 @@ public type Program {
 extend Project {
   /** Declares a program: `program "migrate", entry: "tools/migrate.trb"`. */
   var fn program(name: String, entry: String = "", output: String = "") {
-    programs.add Program(name, entry, output)
+    programs.append Program(name, entry, output)
   }
 }
 ```

@@ -233,7 +233,7 @@ public fn instantiateTarget(
       argument = checker.newVariable declared.name, target.name, at, isConst: declared.isConst
     }
     mapping.set parameter, argument
-    solved.add argument
+    solved.append argument
   }
   const instantiated = substituteFunction checker.types, form, mapping
   const bounds = substituteBounds checker.types, target.bounds, mapping
@@ -309,20 +309,20 @@ fn chooseOverload(
   var given: List<TypeId?> = []
   for argument in arguments {
     if argument.isSpread || isClosureArgument(argument) {
-      given.add None
+      given.append None
       continue
     }
     const found = inferExpression checker, argument.value
-    given.add(if checker.absorbs(found) { None } else { Some found })
+    given.append(if checker.absorbs(found) { None } else { Some found })
   }
   var fitting: List<Candidate> = []
   var exact: List<Candidate> = []
   for candidate in target.overloads {
     if fitsArguments(checker, candidate, arguments, given, isExact: false) {
-      fitting.add candidate
+      fitting.append candidate
     }
     if fitsArguments(checker, candidate, arguments, given, isExact: true) {
-      exact.add candidate
+      exact.append candidate
     }
   }
   // A candidate whose parameters *are* the types that were written beats one that only cannot be ruled out: an argument
@@ -373,7 +373,7 @@ fn narrowByResult(var checker: Checker, fitting: List<Candidate>, expected: Type
   for candidate in fitting {
     if const Some(form) = candidate.form {
       if fitsType(checker, form.result, wanted) {
-        narrowed.add candidate
+        narrowed.append candidate
       }
     }
   }
@@ -438,7 +438,7 @@ fn reportNoOverload(var checker: Checker, target: Target, given: List<TypeId?>, 
     if takesNever(checker, candidate) {
       continue
     }
-    offered.add describeOverload(checker, candidate)
+    offered.append describeOverload(checker, candidate)
   }
   const shown = describeWritten checker, given
   checker.reportHere(
@@ -450,7 +450,7 @@ fn reportNoOverload(var checker: Checker, target: Target, given: List<TypeId?>, 
 fn reportAmbiguousOverload(var checker: Checker, target: Target, fitting: List<Candidate>, at: Span) {
   var offered: List<String> = []
   for candidate in fitting {
-    offered.add describeOverload(checker, candidate)
+    offered.append describeOverload(checker, candidate)
   }
   const shown = offered.joined separator: ", "
   checker.reportHere(
@@ -493,8 +493,8 @@ fn describeWritten(var checker: Checker, given: List<TypeId?>): String {
   var written: List<String> = []
   for found in given {
     match found {
-      Some(annotation) => written.add checker.describe(annotation)
-      None => written.add "_"
+      Some(annotation) => written.append checker.describe(annotation)
+      None => written.append "_"
     }
   }
   written.joined separator: ", "
@@ -516,7 +516,7 @@ fn matchArguments(
   var targets: List<Int> = []
   var filled: List<Bool> = []
   for _ in parameters {
-    filled.add false
+    filled.append false
   }
   var variadic = -1
   var variadicFrom = -1
@@ -528,7 +528,7 @@ fn matchArguments(
   for index in 0..arguments.length() {
     const argument = arguments[index]
     if index == trailing {
-      targets.add(-1)
+      targets.append(-1)
       continue
     }
     if const Some(label) = argument.label {
@@ -536,21 +536,21 @@ fn matchArguments(
       if position < 0 {
         reportUnknownLabel checker, target, parameters, filled, label.text, label.span
         hasUnknownLabel = true
-        targets.add(-1)
+        targets.append(-1)
         continue
       }
       if filled[position] {
         checker.reportHere Diagnostic.error("`{label.text}` already has an argument", label.span)
-        targets.add(-1)
+        targets.append(-1)
         continue
       }
       filled.set position, true
-      targets.add position
+      targets.append position
       continue
     }
     // A variadic parameter is last and collects every positional argument from here on
     if variadic >= 0 {
-      targets.add variadic
+      targets.append variadic
       continue
     }
     while next < parameters.length() && filled[next] {
@@ -558,18 +558,18 @@ fn matchArguments(
     }
     if next >= parameters.length() {
       hasSurplus = true
-      targets.add(-1)
+      targets.append(-1)
       continue
     }
     if const .Variadic = parameters[next].mode {
       variadic = next
       variadicFrom = index
       filled.set next, true
-      targets.add next
+      targets.append next
       continue
     }
     filled.set next, true
-    targets.add next
+    targets.append next
     next = next + 1
   }
   if trailing >= 0 {
@@ -583,14 +583,14 @@ fn matchArguments(
       continue
     }
     if parameters[position].hasDefault {
-      defaults.add position
+      defaults.append position
       continue
     }
     // A variadic parameter that collects nothing is an empty list, not a missing argument
     if const .Variadic = parameters[position].mode {
       continue
     }
-    missing.add position
+    missing.append position
   }
   if (hasSurplus || !missing.isEmpty()) && !hasUnknownLabel {
     reportArity checker, target, parameters, missing, arguments.length(), hasSurplus, at
@@ -933,7 +933,7 @@ fn requireTaskValue(var checker: Checker, annotation: TypeId, name: String, at: 
   checker.reportHere Diagnostic.error("`spawn` cannot take `{name}` with it: a `{shown}` {held}", at).withNote(note)
 }
 
-/** `...expression` spreads any `Iterable<Item>` into a variadic parameter; a collection is never spread implicitly. */
+/** `...expression` spreads any `Iterate<Item>` into a variadic parameter; a collection is never spread implicitly. */
 fn checkSpread(var checker: Checker, argument: Argument, parameter: ParameterForm) {
   const given = inferExpression checker, argument.value
   checker.adapted argument.value.span, Adaptation.Spread
@@ -950,7 +950,7 @@ fn checkSpread(var checker: Checker, argument: Argument, parameter: ParameterFor
     )
     return
   }
-  const iterable = match checker.wellKnown.iterable {
+  const iterable = match checker.wellKnown.iterate {
     Some(found) => found
     None => {
       return
@@ -966,7 +966,7 @@ fn checkSpread(var checker: Checker, argument: Argument, parameter: ParameterFor
       if isConcrete(checker, given) {
         const shown = checker.describe given
         checker.reportHere(
-          Diagnostic.error("`{shown}` is not `Iterable`, so `...` cannot spread it", argument.value.span)
+          Diagnostic.error("`{shown}` is not `Iterate`, so `...` cannot spread it", argument.value.span)
         )
       }
     }
@@ -990,7 +990,7 @@ public fn checkBounds(var checker: Checker, bounds: List<Bound>, owner: String, 
       if const .Unresolved = found {
         reportUnmetBound checker, subject, wanted, owner, at
       }
-      witnesses.add found
+      witnesses.append found
     }
   }
   witnesses
@@ -1234,9 +1234,9 @@ fn defaultedNote(parameters: List<ParameterForm>): String {
   var required: List<Int> = []
   for position in 0..parameters.length() {
     if parameters[position].hasDefault {
-      defaulted.add position
+      defaulted.append position
     } else {
-      required.add position
+      required.append position
     }
   }
   if defaulted.isEmpty() {
@@ -1252,7 +1252,7 @@ fn defaultedNote(parameters: List<ParameterForm>): String {
 fn listOfNames(parameters: List<ParameterForm>, positions: List<Int>): String {
   var names: List<String> = []
   for position in positions {
-    names.add "`{parameters[position].name ?? "?"}`"
+    names.append "`{parameters[position].name ?? "?"}`"
   }
   if names.length() <= 1 {
     return names.first() ?? "`?`"

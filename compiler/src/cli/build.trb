@@ -250,14 +250,14 @@ fn entryModulesOf(checked: Checked, tree: SourceTree, options: BuildOptions): Li
     if !shown.endsWith(".test.trb") {
       continue
     }
-    paths.add shown
+    paths.append shown
     byPath.set shown, module
   }
   paths.sort({ _ })
   var found: List<ModuleId> = []
   for path in paths {
     if const Some(module) = byPath.get(path) {
-      found.add module
+      found.append module
     }
   }
   if found.isEmpty() {
@@ -284,12 +284,12 @@ fn programEntriesOf(
   for module in modules {
     const name = entryNameOf lowering, module
     if !options.isTestRun {
-      entries.add ProgramEntry(name)
+      entries.append ProgramEntry(name)
       continue
     }
     const file = tree.display checked.program.graph.at(module).path
     const called = if hasEntryFunction(lowering, name) { name } else { "" }
-    entries.add ProgramEntry(called, file)
+    entries.append ProgramEntry(called, file)
   }
   entries
 }
@@ -385,7 +385,7 @@ fn runtimeSourcesOf(directory: String): Result<List<String>, IoError> {
   var sources: List<String> = []
   for entry in File.list(directory)? {
     if entry.endsWith(".c") {
-      sources.add joinPath(directory, entry)
+      sources.append joinPath(directory, entry)
     }
   }
   Ok sources
@@ -466,7 +466,7 @@ fn runCompiler(
   }
   const log = joinPath parentPath(source), "c-compiler.log"
   var slotted = [script, log, compiler.command]
-  slotted.addAll arguments
+  slotted.appendAll arguments
   match Process.runPassingThrough("sh", slotted) {
     Ok(code) => {
       const text = File.readText(log).ok() ?? ""
@@ -496,8 +496,8 @@ fn compilerArguments(
     }
     const include = joinPath runtime, "include"
     var arguments = ["/std:c11", optimization, "/W3", "/WX", "/nologo", "/I{include}", "/Fe{binary}"]
-    arguments.add source
-    arguments.addAll sources
+    arguments.append source
+    arguments.appendAll sources
     return arguments
   }
   var arguments = [
@@ -511,9 +511,9 @@ fn compilerArguments(
     "-o",
     binary,
   ]
-  arguments.add source
-  arguments.addAll sources
-  arguments.add "-lm"
+  arguments.append source
+  arguments.appendAll sources
+  arguments.append "-lm"
   arguments
 }
 

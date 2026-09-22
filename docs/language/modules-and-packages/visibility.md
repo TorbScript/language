@@ -84,7 +84,7 @@ print zero()
 
    extend Server {
      var fn record(line: String) {
-       log.add line
+       log.append line
      }
    }
 

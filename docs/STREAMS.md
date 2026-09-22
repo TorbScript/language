@@ -11,7 +11,7 @@ traits are ordinary traits and the drivers are ordinary loops.
 ```text
                        Stage<Input, Output>          (synchronous, source-independent, a value)
                   ┌──────────── through ────────────┐
-Iterable<Item> ───┤                                 │
+Iterate<Item> ───┤                                 │
  Source<Item, F> ─┘        onto(Accumulator)        └───  Accumulator<Item, Output>   ← the same accumulators
 ```
 
@@ -56,8 +56,8 @@ of a flow is not a result (section 3, and `docs/COLLECTIONS.md` 6a for why it is
 |--------------------------|-----------------------------------|-------------|
 | `Iterator<Item>`         | `Source<Item, Failure>`           | `next`      |
 | `Accumulator<Item, Out>` | `Sink<Item, Failure>`             | `add`; `finish` against `end` |
-| `Iterable<Item>`         | — (a source *is* the flow)        | `iterator`  |
-| `Collection<Item>`       | — (a flow is not a container)     | `add`       |
+| `Iterate<Item>`          | — (a source *is* the flow)        | `iterate`   |
+| `List<Item>`, `Set<Item>` | — (a flow is not a container)     | `append`, `insert` |
 | `Stage<Input, Output>`   | the same `Stage`                  | `onto`      |
 
 Five decisions carry everything below.
@@ -90,7 +90,7 @@ flushes, `close()` does not. "When was it actually written" is the one question 
 is never a hidden property of a sink.
 
 **Only what has to wait is asynchronous.** Everything in the middle — `map`, `filter`, `take`, framing, codecs, the
-collectors, the terminal operations — is synchronous and shared with `Iterable`. See section 5.
+collectors, the terminal operations — is synchronous and shared with `Iterate`. See section 5.
 
 ## 2. `Source`
 
@@ -224,7 +224,7 @@ trait's own type arguments from the member's signature, and `Stage.filter` canno
 and says nothing about `Output`, so the checker reports "Cannot infer `Output` of `Stage`" — verified. Defaulting
 `Output` to `Input` fixes `filter` and breaks `map` (a defaulted argument is filled in, never inferred; gap 6). So the
 factories are free functions, named with the gerunds `std/iteration` already uses for collectors (`counting`, `joining`,
-`groupingBy`), which has the second benefit of keeping them apart from the methods of the same meaning on `Iterable`
+`groupingBy`), which has the second benefit of keeping them apart from the methods of the same meaning on `Iterate`
 and `Source`: `items.map(f)` *is* `items.through(mapping(f))`. Section 13 records what a language rule could look like
 that would make `Stage.map` possible.
 
@@ -241,7 +241,7 @@ extend<Item, Problem, Failure: From<Problem>> Source<Result<Item, Problem>, Fail
 }
 ```
 
-On an `Iterable` the same job is already done by `Result … with From<Iterable<Result<…>>>` in `std/core`
+On an `Iterate` the same job is already done by `Result … with From<Iterate<Result<…>>>` in `std/core`
 (`.to<Result<List<User>, JsonError>>()`), which stops at the first failure.
 
 **Static or dynamic dispatch.** The drivers take `stage: Stage<Item, Output>` as a trait-typed value rather than a
@@ -256,7 +256,7 @@ of the design (section 14), and `Decoder.sequence<Output>` in `std/encoding` has
 
 | | What it is | Where it lives |
 |---|---|---|
-| `Iterator`, `Iterable` | **synchronous** — pulled, no waiting | `std/iteration` |
+| `Iterator`, `Iterate` | **synchronous** — pulled, no waiting | `std/iteration` |
 | `Accumulator` | **synchronous** — pushed into, `isDone()` ends it; the description AND the state of one run | `std/iteration` |
 | `Stage` | **blueprint** — `onto()` makes an accumulator chain per run | `std/iteration` |
 | the stage factories (`mapping`, `taking`, `lines`, `Json.items`) | **blueprint** | `std/iteration`, `std/stream`, a format |
@@ -277,20 +277,20 @@ of the design (section 14), and `Decoder.sequence<Output>` in `std/encoding` has
 
 | | reading end | writing end | what it is about |
 |---|---|---|---|
-| **values, synchronous** | `Iterable` (`iterator()`) | `Collection` (`add`) | a finite thing that is there already |
+| **values, synchronous** | `Iterate` (`iterate()`) | the kind's own verb (`append`, `insert`, `push`, ...) | a finite thing that is there already |
 | **a flow, asynchronous** | `Source` (`next()`) | `Sink` (`add`, `end()`) | values over time, fallible, `shared` |
 | **one run** | — | `Accumulator` (`add`, `finish()`, `isDone()`) | what to do with the values, and how far it has got |
 
 `Accumulator` is used by **both** time axes: `iterable.collect(a)` and `source.collect(a)` are the same accumulator
 driven two ways. `finish()` is its word alone — a stream's end is `Sink.end()`, because the end of a flow is not a
-result. And `Collection` is not an `Accumulator`: the writing end of the value world is a container, not a run.
+result. And a collection is not an `Accumulator`: the writing end of the value world is a container, not a run.
 
 ## 6. The drivers
 
 There are exactly **two** drivers, and they are the only place the two worlds differ:
 
 ```trb
-fn through<Output>(stage: Stage<Item, Output>): Iterable<Output>              // Iterable, a loop
+fn through<Output>(stage: Stage<Item, Output>): Iterate<Output>              // Iterate, a loop
 fn through<Output>(stage: Stage<Item, Output>): Source<Output, Failure>       // Source, a loop with `await`
 ```
 
@@ -312,7 +312,7 @@ accumulator.finish()
 
 Every terminal operation of both worlds ends here: `toList`, `count`, `fold`, `joined`, `groupBy`, and `collect` itself.
 
-**`iterator()` / `next()` needs a queue,** because one value pushed in can become none or many coming out while the
+**`iterate()` / `next()` needs a queue,** because one value pushed in can become none or many coming out while the
 caller asks for exactly one. The queue holds what *one* input produced and is emptied before the next input is pulled,
 so it stays as wide as the widest stage of the pipeline and no wider. This is what Clojure's `sequence` does and what
 Java's `Spliterator` bridge does. The driver keeps it in a `var` field; the tail of the chain is `Queueing<Item>`, an
@@ -324,7 +324,7 @@ and it is there because accumulators are values, not because a shared object cou
 `upstream.through(stage.then(other))`, so `source.through(a).through(b)` is one driver over one composed stage and stays
 fused all the way down. `map`, `filter`, `take`, … on both traits are one-liners over `through`.
 
-**`zip` reads two sources** and is therefore a driver and not a stage. On `Iterable` it exists today (`Zipped`); on
+**`zip` reads two sources** and is therefore a driver and not a stage. On `Iterate` it exists today (`Zipped`); on
 `Source` it belongs to milestone 7, where "wait for the next item of both" is a scheduler question.
 
 ## 7. Cancelling and `Close`
@@ -366,7 +366,7 @@ cancellation check, and every end it held is closed by that release.
 The language has no `yield`, and three factories cover what generators are used for:
 
 ```trb
-fn from(items: Iterable<Item>): Source<Item, Failure>                        // everything an Iterable has
+fn from(items: Iterate<Item>): Source<Item, Failure>                        // everything an Iterate has
 fn pulling(step: () => Task<Result<Item?, Failure>>): Source<Item, Failure>   // the closure *is* `next`
 fn produce(capacity: Int = 0, body: (sink: Sink<Item, Failure>) => Result<Void, Failure>): Source<Item, Failure>
     where Failure: From<ChannelClosed>
@@ -397,7 +397,7 @@ arithmetic. It lives in `std/stream` because a *chunk* is the streams chapter's 
 `List<UInt8>` in their signatures, which is one of the ways in which `std/encoding` did not change.
 
 Chunk borders are nobody's choice, so a line, a JSON value or even a single character can be split across two of them.
-Hence three stages, all resumable, all synchronous, all working on an `Iterable<Bytes>` in a test just as well:
+Hence three stages, all resumable, all synchronous, all working on an `Iterate<Bytes>` in a test just as well:
 
 | | |
 |---|---|
@@ -487,7 +487,7 @@ was a plain `Result` only because the whole response had been read before anybod
 **`std/fs`.** `File` is `with Close, Sink<Bytes, IoError>` — an open file *is* the writing end, so everything that writes
 into a sink writes into a file. `file.chunks(size:)` is the reading end and the one native of it; `file.lines()` is
 TorbScript over `chunks().through(lines()).checked()`, which also fixes what the old `File.lines(path)` did wrong: it
-answered an `Iterable<String>` and swallowed a read failure halfway through, and now the failure is in the type.
+answered an `Iterate<String>` and swallowed a read failure halfway through, and now the failure is in the type.
 `File.create(path)`, `File.write(path, source)` and the whole-file helpers (`readText`, `writeText`) stay.
 
 **`std/io`.** `standardInput()` is a `Source<Bytes, IoError>`, `standardOutput()` and `standardError()` are
@@ -506,7 +506,7 @@ stages, the drivers, the framers, UTF-8, `Buffered`, `Body`'s conveniences — i
 them are in `compiler/src/backend/c/natives.trb`, planned for 7.3.
 
 **The prelude** re-exports `Source`, `Sink` and `Bytes` from `std/stream`, `Stage` and the stage factories from
-`std/iteration`, and `Format` from `std/encoding`. They are *vocabulary*, exactly like `Iterable` and `Accumulator`: a
+`std/iteration`, and `Format` from `std/encoding`. They are *vocabulary*, exactly like `Iterate` and `Accumulator`: a
 signature that says which end of a stream it wants should be writable without an import, and the traits touch nothing by
 themselves. What touches something stays an import — `File`, `standardInput`, `http`, `Process` — because there the
 import *is* the statement "this file reads files", which is what reviews and `torb add` read and what the per-target
@@ -541,7 +541,7 @@ capability tables need.
 | Making *everything* asynchronous (fs2, Web Streams) | It kills `list.map(…).toList()`: a list would answer a task. The synchronous world stays synchronous and the stages are shared. |
 | Effect polymorphism / higher-kinded types (one set of combinators for both worlds) | This is Rust's unsolved "keyword generics". The language has no HKT on purpose (CONCEPT, "One Vocabulary instead of Higher-Kinded Types"); `Stage` shares the *logic* without sharing the names, which is the 90% that matters. |
 | A blocking `await()` with a stack per task (Go, Java's Loom) | Already rejected in CONCEPT: it needs a stack per task in every back end and does not fit a JavaScript target. |
-| `IntoStream`/`AsyncIterable` protocol sugar (`for await`) | See section 2: there is no place for the `?`. |
+| `IntoStream`/`AsyncIterate` protocol sugar (`for await`) | See section 2: there is no place for the `?`. |
 | A separate async `Accumulator` | The accumulators are push-based already, so they work unchanged for values that arrive over time. |
 | Streaming a single value into a type (a "streaming decoder") | Section 10: it colours every decoder and saves only the text buffer. |
 
@@ -617,7 +617,7 @@ _Decision:_ no read-ahead in v1. Milestone 7 may add it natively where the platf
    `Decoder.map<Output>` need the same one, so it is not a cost of this design. Until it is there, `Stage` type checks
    and does not compile.
 7. **The scheduled refactoring:** `std/iteration/stages.trb`'s per-stage iterators (`Mapped`, `Filtered`, `Taken`, …)
-   become `Stage` values, so `Iterable.map` is `through(mapping(transform))` and the duplication in the standard library
+   become `Stage` values, so `Iterate.map` is `through(mapping(transform))` and the duplication in the standard library
    goes away. It waits for two things: point 6, and the native back end compiling `list.map(…)` at all (5.7). The two
    forms mean the same thing meanwhile and are tested against each other.
 

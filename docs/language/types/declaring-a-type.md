@@ -86,7 +86,7 @@ print "{point} {point.area()} {Point.origin}"
    | `private x: Value` | no | no |
 
    `private(var)` reads as "the `var` is private": the field is public, its mutability is not. It hands an outsider a
-   `const` path, and `const` is deep, so `config.routes.add(...)` from outside is an error while `config.routes` can be
+   `const` path, and `const` is deep, so `config.routes.append(...)` from outside is an error while `config.routes` can be
    read and iterated.
 
 3. **`private` reaches as far as the type does.** A private member is visible in the body of its type and in every

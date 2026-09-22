@@ -145,8 +145,8 @@ public fn resolveNames(graph: Graph, workspace: Workspace): Program {
         }
       }
     }
-    definitions.add declared
-    scopes.add scope
+    definitions.append declared
+    scopes.append scope
   }
 
   var problems: List<String> = []
@@ -158,9 +158,9 @@ public fn resolveNames(graph: Graph, workspace: Workspace): Program {
       found = graph.moduleAt joinPath(prelude.directory, "src/lib.trb")
     }
     if found.isNone() && !name.isEmpty() {
-      problems.add "The prelude package `{name}` of {package.directory} was not found"
+      problems.append "The prelude package `{name}` of {package.directory} was not found"
     }
-    preludeModules.add found
+    preludeModules.append found
   }
 
   var binder = Binder graph, workspace, preludeModules, symbols, scopes
@@ -214,7 +214,7 @@ type Binder {
         var here = scope.members.get(key) ?? []
         for entry in entries {
           if !here.any({ _.package == entry.package && _.name == entry.name }) {
-            here.add entry
+            here.append entry
           }
         }
         scope.members.set key, here
@@ -274,14 +274,14 @@ type Binder {
     var hasChanged = false
     var here = scope.members.get(key) ?? []
     if !here.any({ _.package == entry.package && _.name == entry.name }) {
-      here.add entry
+      here.append entry
       scope.members.set key, here
       hasChanged = true
     }
     if isPublic {
       var exported = scope.exportedMembers.get(key) ?? []
       if !exported.any({ _.package == entry.package && _.name == entry.name }) {
-        exported.add entry
+        exported.append entry
         scope.exportedMembers.set key, exported
         hasChanged = true
       }
@@ -406,13 +406,13 @@ public fn checkNames(program: Program, id: ModuleId): List<Diagnostic> {
   var declared: Set<String> = Set.of()
   for definition in program.definitions[id.value] {
     if declared.contains(definition.name) {
-      diagnostics.add(
+      diagnostics.append(
         Diagnostic.error("`{definition.name}` is already declared in this file", definition.span)
           .withNote("Two top-level declarations of a file cannot have the same name, even when neither is `public`")
       )
       continue
     }
-    declared.add definition.name
+    declared.insert definition.name
   }
   var imported: Set<String> = Set.of()
   for statement in program.graph.at(id).file.statements {
@@ -439,14 +439,14 @@ fn checkImport(
       const target = match resolveImport(program.graph, program.workspace, id, path) {
         .Found(target) => target
         .NoModule(missing) => {
-          diagnostics.add(
+          diagnostics.append(
             Diagnostic.error("There is no module `{missing}`", at)
               .withNote("A path that starts with `./` or `../` is a file next to this one, without its extension")
           )
           return
         }
         .NoPackage(name) => {
-          diagnostics.add(
+          diagnostics.append(
             Diagnostic.error("There is no package `{name}`", at)
               .withNote(
                 "A package is `owner/name`. The standard library comes with the toolchain; everything else has to be a"
@@ -457,14 +457,14 @@ fn checkImport(
         }
         .NotADependency(name) => {
           const importer = program.workspace.packages[program.graph.at(id).package].name
-          diagnostics.add(
+          diagnostics.append(
             Diagnostic.error("The package `{name}` is not a dependency of `{importer}`", at)
               .withNote("Add it: `dependencies \{ runtime \"{name}\" \}` in project.trb")
           )
           return
         }
         .NoModuleInPackage(name, missing) => {
-          diagnostics.add(
+          diagnostics.append(
             Diagnostic.error("The package `{name}` has no module `{missing}`", at)
               .withNote("`\"owner/name\"` is `src/lib.trb` of a package, `\"owner/name/path\"` is `src/path.trb` of it")
           )
@@ -486,7 +486,7 @@ fn checkImport(
               if program.scopes[target.value].names.containsKey(first.text) {
                 problem = problem.withNote "It is declared there, but not `public`"
               }
-              diagnostics.add problem
+              diagnostics.append problem
               continue
             }
             const start = program.scopes[target.value].exported.get(first.text)
@@ -503,7 +503,7 @@ fn checkImport(
           const first = item.path[0]
           const start = program.lookUp id, first.text
           if start.isNone() {
-            diagnostics.add Diagnostic.error("Unknown name `{first.text}`", first.span)
+            diagnostics.append Diagnostic.error("Unknown name `{first.text}`", first.span)
             continue
           }
           checkItemPath program, item, start, declared, imported, diagnostics
@@ -591,15 +591,15 @@ fn reportNoStep(program: Program, owner: SymbolId, step: Name, var diagnostics: 
     .Type => {
       // A method, a constant or a field is reached through the type; only a case becomes a name of its own
       if const Some(kind) = memberKindOf(program, owner, step.text) {
-        diagnostics.add(
+        diagnostics.append(
           Diagnostic.error("Only a case can be imported from a type: `{step.text}` is a {kind} of `{name}`", step.span)
         )
         return
       }
-      diagnostics.add Diagnostic.error("`{name}` has no case `{step.text}`", step.span)
+      diagnostics.append Diagnostic.error("`{name}` has no case `{step.text}`", step.span)
     }
-    .Namespace(_) => diagnostics.add Diagnostic.error("`{step.text}` is not exported by `{name}`", step.span)
-    _ => diagnostics.add(
+    .Namespace(_) => diagnostics.append Diagnostic.error("`{step.text}` is not exported by `{name}`", step.span)
+    _ => diagnostics.append(
       Diagnostic.error("{program.symbols.describe(owner)} has no cases", step.span)
         .withNote("A path in a `use` names a case of a type: `use Shape.Circle from \"./shape\"`")
     )
@@ -657,15 +657,15 @@ fn reportDuplicate(name: Name, declared: Set<String>, var imported: Set<String>,
     return
   }
   if declared.contains(name.text) {
-    diagnostics.add(
+    diagnostics.append(
       Diagnostic.error("`{name.text}` is already declared in this file", name.span)
         .withNote("An import cannot bring in a name the file declares itself")
     )
     return
   }
   if imported.contains(name.text) {
-    diagnostics.add Diagnostic.error("`{name.text}` is already imported", name.span)
+    diagnostics.append Diagnostic.error("`{name.text}` is already imported", name.span)
     return
   }
-  imported.add name.text
+  imported.insert name.text
 }

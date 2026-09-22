@@ -11,12 +11,12 @@
 
 use Equals, Hash from "std/core"
 use From, Show from "std/core"
-use Collection from "./collection"
+use Iterate, Length from "std/iteration"
 
 /**
- * Collection without duplicates. `add` of a value that is already present does nothing.
+ * Collection without duplicates. `insert` of a value that is already present does nothing.
  *
- * Verbs change the set in place (`add`, `remove`, `addAll`, `removeAll`, `retainAll`). The set operations are
+ * Verbs change the set in place (`insert`, `remove`, `insertAll`, `removeAll`, `retainAll`). The set operations are
  * nouns and never change either operand (`union`, `intersection`, `difference`).
  *
  * **Every implementation iterates in insertion order,** and removing a value does not reorder the rest. The order
@@ -25,7 +25,7 @@ use Collection from "./collection"
  * # Examples
  *
  *     var unique: Set<Int> = [1, 2, 2, 3]
- *     unique.add 2
+ *     unique.insert 2
  *     print unique
  *
  * The set operations never change either operand:
@@ -37,26 +37,41 @@ use Collection from "./collection"
  * # Related
  *
  * - [Map] - the same idea keyed by more than presence.
- * - [Collection] - `add`, `contains`, `length`, `iterator`, which `Set` builds on.
+ * - [Iterate] - the pipeline vocabulary (`map`, `filter`, `fold`, ...) every set has.
  */
 public trait Set<Item>
-  with Collection<Item>
+  with Iterate<Item>, Length
 {
   /** Builds a set from its arguments: `Set.of(2, 3, 5, 7)`, needs `Item: Hash`. Answers `Self`. */
-  static fn of(...items: Item): Self where Self: From<Iterable<Item>>, Item: Hash {
+  static fn of(...items: Item): Self where Self: From<Iterate<Item>>, Item: Hash {
     Self.from items
   }
 
   /** Whether the value is present. Required: a set that has to search is not a set. */
   fn contains(value: Item): Bool
 
+  /** How many values there are. A set knows its size, so counting it does not walk it. */
+  fn count(): Int {
+    length()
+  }
+
   // --- In place ------------------------------------------------------------------------------------
+
+  /** Inserts `value`, in place; does nothing if it is already present. */
+  var fn insert(value: Item)
+
+  /** Inserts every value of `values`, in place. */
+  var fn insertAll(values: Iterate<Item>) {
+    for value in values {
+      insert value
+    }
+  }
 
   /** Removes the value, in place, and answers whether it was present. */
   var fn remove(value: Item): Bool
 
   /** Removes every value of `values`, in place. */
-  var fn removeAll(values: Iterable<Item>) {
+  var fn removeAll(values: Iterate<Item>) {
     for value in values {
       remove value
     }
@@ -68,7 +83,24 @@ public trait Set<Item>
     removeAll obsolete
   }
 
+  /** Removes every value, in place. */
+  var fn clear()
+
   // --- Changed copies --------------------------------------------------------------------------------
+
+  /** The participle of [Set.insert]: a changed copy with `value` in it, for a `const` binding. */
+  fn inserted(value: Item): Self {
+    var result = self
+    result.insert value
+    result
+  }
+
+  /** The participle of [Set.insertAll]: a changed copy with every value of `values` in it. */
+  fn insertedAll(values: Iterate<Item>): Self {
+    var result = self
+    result.insertAll values
+    result
+  }
 
   /** The participle of [Set.remove]: a changed copy with the value gone. */
   fn removed(value: Item): Self {
@@ -77,9 +109,9 @@ public trait Set<Item>
     result
   }
 
-  /** The values of either set, as a changed copy: the participle of [Collection.addedAll], read as a set operation. */
-  fn union(other: Iterable<Item>): Self {
-    addedAll other
+  /** The values of either set, as a changed copy: [Set.insertedAll], read as a set operation. */
+  fn union(other: Iterate<Item>): Self {
+    insertedAll other
   }
 
   /** The values common to both sets, as a changed copy. */
@@ -90,7 +122,7 @@ public trait Set<Item>
   }
 
   /** The values of this set that are not in `other`, as a changed copy. */
-  fn difference(other: Iterable<Item>): Self {
+  fn difference(other: Iterate<Item>): Self {
     var result = self
     result.removeAll other
     result
@@ -101,8 +133,8 @@ public trait Set<Item>
  * The factory picks the default implementation. This is what makes `toSet()`, `to<Set<Item>>()` and a list literal
  * adapted to `Set<Item>` work.
  */
-extend<Item: Hash> Set<Item> with From<Iterable<Item>> {
-  static fn from(items: Iterable<Item>): Set<Item> {
+extend<Item: Hash> Set<Item> with From<Iterate<Item>> {
+  static fn from(items: Iterate<Item>): Set<Item> {
     TrieSet.from items
   }
 }
@@ -151,11 +183,7 @@ public type SetIterator<Item: Hash> with Iterator<Item> {
 
   /** The next item, or `None` once the table is exhausted. */
   var fn next(): Item? {
-    // The position travels through a local because stage 0 takes a `var` argument before it evaluates the receiver
-    var found = position
-    const item = items.itemAfter found
-    position = found
-    item
+    items.itemAfter position
   }
 }
 
@@ -168,10 +196,7 @@ public type HashSetIterator<Item: Hash> with Iterator<Item> {
 
   /** Same as [SetIterator.next]. */
   var fn next(): Item? {
-    var found = position
-    const item = items.itemAfter found
-    position = found
-    item
+    items.itemAfter position
   }
 }
 
@@ -182,12 +207,12 @@ public type HashSetIterator<Item: Hash> with Iterator<Item> {
  * `Show` are the same either way.
  */
 public native type TrieSet<Item: Hash>
-  with Set<Item>, From<Iterable<Item>>
+  with Set<Item>, From<Iterate<Item>>
 {
   /** Builds the set from `items`: TorbScript, because `items` is a trait-typed value of the *program*: see [TrieMap.from]. */
-  static fn from(items: Iterable<Item>): TrieSet<Item> {
+  static fn from(items: Iterate<Item>): TrieSet<Item> {
     var result: TrieSet<Item> = TrieSet.withCapacity 0
-    result.addAll items
+    result.insertAll items
     result
   }
 
@@ -201,15 +226,15 @@ public native type TrieSet<Item: Hash>
   native fn contains(value: Item): Bool
 
   /** Ordinary TorbScript over `itemAfter`: see [SetIterator]. */
-  fn iterator(): Iterator<Item> {
+  fn iterate(): Iterator<Item> {
     SetIterator self
   }
 
   /** The item at or after `cursor` in insertion order, with `cursor` left one past it: see [TrieMap.entryAfter]. */
   native fn itemAfter(var cursor: Int): Item?
 
-  /** Adds `value`, in place; does nothing if it is already present. */
-  native var fn add(value: Item)
+  /** Inserts `value`, in place; does nothing if it is already present. */
+  native var fn insert(value: Item)
 
   /** Removes `value` and answers whether it was present, in place. */
   native var fn remove(value: Item): Bool
@@ -223,12 +248,12 @@ public native type TrieSet<Item: Hash>
  * Iterates in insertion order.
  */
 public native type HashSet<Item: Hash>
-  with Set<Item>, From<Iterable<Item>>
+  with Set<Item>, From<Iterate<Item>>
 {
   /** Same as [TrieSet.from]. */
-  static fn from(items: Iterable<Item>): HashSet<Item> {
+  static fn from(items: Iterate<Item>): HashSet<Item> {
     var result: HashSet<Item> = HashSet.withCapacity 0
-    result.addAll items
+    result.insertAll items
     result
   }
 
@@ -242,15 +267,15 @@ public native type HashSet<Item: Hash>
   native fn contains(value: Item): Bool
 
   /** A cursor over the items, in insertion order; see [HashSetIterator]. */
-  fn iterator(): Iterator<Item> {
+  fn iterate(): Iterator<Item> {
     HashSetIterator self
   }
 
   /** Same as [TrieSet.itemAfter]. */
   native fn itemAfter(var cursor: Int): Item?
 
-  /** Same as [TrieSet.add]. */
-  native var fn add(value: Item)
+  /** Same as [TrieSet.insert]. */
+  native var fn insert(value: Item)
 
   /** Same as [TrieSet.remove]. */
   native var fn remove(value: Item): Bool

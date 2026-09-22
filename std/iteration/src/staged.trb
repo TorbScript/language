@@ -1,22 +1,22 @@
 /**
- * The synchronous driver of a `Stage`: what `Iterable.through(stage)` answers.
+ * The synchronous driver of a `Stage`: what `Iterate.through(stage)` answers.
  *
- * A stage pushes, an `Iterable` is pulled, so the driver has two halves and they are not the same code:
+ * A stage pushes, an `Iterate` is pulled, so the driver has two halves and they are not the same code:
  *
  * - **`collect` is fused.** The stage wraps the collector's accumulator and the values go straight through, one push
- *   per value, nothing in between. This is the path every terminal operation of `Iterable` ends in.
- * - **`iterator()` needs a queue,** because one value pushed in can become none or many coming out while the caller
+ *   per value, nothing in between. This is the path every terminal operation of `Iterate` ends in.
+ * - **`iterate()` needs a queue,** because one value pushed in can become none or many coming out while the caller
  *   asks for exactly one. The queue holds what one input produced and is drained before the next input is pulled, so
  *   it stays as small as the widest stage of the pipeline (Clojure's `sequence` works the same way).
  */
 
 use Shared from "std/core"
-use Iterable, Iterator from "./iteration"
+use Iterate, Iterator from "./iteration"
 use Accumulator from "./collectors"
 use Stage from "./stage"
 
 /**
- * `items.through(stage)` - an `Iterable` again, so a staged pipeline is a source for the next one and can be
+ * `items.through(stage)` - an `Iterate` again, so a staged pipeline is a source for the next one and can be
  * iterated more than once (every iteration builds a fresh accumulator chain, exactly as `Mapped` builds a fresh
  * iterator).
  *
@@ -24,9 +24,9 @@ use Stage from "./stage"
  *
  * - [Stage] - the reusable middle this type drives.
  */
-public type Staged<Input, Item> with Iterable<Item> {
+public type Staged<Input, Item> with Iterate<Item> {
   /** Where the values come from before the stage sees them. */
-  source: Iterable<Input>
+  source: Iterate<Input>
   /** What is put in front of `source`'s values. */
   stage: Stage<Input, Item>
 
@@ -50,14 +50,14 @@ public type Staged<Input, Item> with Iterable<Item> {
   }
 
   /** Composes instead of stacking, so a chain of `through` calls stays one driver over one stage and stays fused. */
-  fn through<Output>(other: Stage<Item, Output>): Iterable<Output> {
+  fn through<Output>(other: Stage<Item, Output>): Iterate<Output> {
     source.through stage.then(other)
   }
 
   /** The queued path: pushes one source value at a time into the stage and hands out what comes back out. */
-  fn iterator(): Iterator<Item> {
+  fn iterate(): Iterator<Item> {
     var queue: Shared<List<Item>> = Shared([])
-    StagedIterator source.iterator(), stage.onto(Queueing(queue)), queue
+    StagedIterator source.iterate(), stage.onto(Queueing(queue)), queue
   }
 }
 
@@ -72,7 +72,7 @@ public type Queueing<Item> with Accumulator<Item, Void> {
 
   /** Appends the value to the queue the driver reads from. */
   var fn add(value: Item) {
-    box.update { items => items.added value }
+    box.update { items => items.appended value }
   }
 
   /** Nothing to do: the values are already in the box. */

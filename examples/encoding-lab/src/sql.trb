@@ -67,7 +67,7 @@ public type SqlFormat {
 
   /** `primaryKey { _.orderId }` in the design. */
   var fn primaryKey(field: String) {
-    keys.add field
+    keys.append field
   }
 
   /** The column type of one type, everywhere it appears: `column<Instant> Timestamp`. */
@@ -97,7 +97,7 @@ public type Sql {
     const structure = structureOf describe
     var columns: List<SqlColumn> = []
     for field in structure.recordFields() {
-      columns.addAll(columnsOf(field, "", format.overrides)?)
+      columns.appendAll(columnsOf(field, "", format.overrides)?)
     }
     for key in format.keys {
       if columns.find({ _.name == key }).isNone() {
@@ -116,11 +116,11 @@ public type Sql {
         Some(value) => " NOT NULL DEFAULT {literal(value)}"
         None => ""
       }
-      lines.add "  {column.name} {column.kind.sql()}{required}{given}"
+      lines.append "  {column.name} {column.kind.sql()}{required}{given}"
     }
     if !keys.isEmpty() {
       const key = keys.joined separator: ", "
-      lines.add "  PRIMARY KEY ({key})"
+      lines.append "  PRIMARY KEY ({key})"
     }
     const body = lines.joined separator: ",\n"
     "CREATE TABLE {tableName} (\n{body}\n)"
@@ -164,7 +164,7 @@ fn columnsOf(
     .Record(_, fields) => {
       var columns: List<SqlColumn> = []
       for nested in fields {
-        columns.addAll(columnsOf(nested, name, overrides)?)
+        columns.appendAll(columnsOf(nested, name, overrides)?)
       }
       // The path of a nested column is the path the encoder builds, which uses the field names and not the prefix
       Ok(columns.map({ _.copy path: "{field.name()}.{_.path}" }).toList())
@@ -285,12 +285,12 @@ type ColumnEncoder with Encoder {
   }
 
   private var fn descend() {
-    path.add pending
+    path.append pending
     pending = ""
   }
 
   private var fn put(value: EncodedValue) {
-    const full = if pending.isEmpty() { path } else { path.added pending }
+    const full = if pending.isEmpty() { path } else { path.appended pending }
     const key = full.filter({ !_.isEmpty() }).toList().joined(separator: ".")
     values.set key, value
     pending = ""

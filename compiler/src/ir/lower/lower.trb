@@ -92,7 +92,7 @@ fn dropUncountedMakeUnique(var program: IrProgram) {
             continue
           }
         }
-        kept.add instruction
+        kept.append instruction
       }
       if isChanged {
         program.functions[index].blocks[block].instructions = kept
@@ -109,7 +109,7 @@ fn dropUncountedMakeUnique(var program: IrProgram) {
  * *closed-world* - "does any implementation override this default" (`overridesAnyMember`, which decides the member list of
  * every witness table) and, through it, how many instances the worklist reaches - and a closed world has to be the
  * **program**. It was the whole `SourceTree` instead, and `readSourceTree` always reads the entire workspace: adding
- * `examples/encoding-lab`, which overrides defaults of `Iterable` for types of its own, took the instance count of
+ * `examples/encoding-lab`, which overrides defaults of `Iterate` for types of its own, took the instance count of
  * `source.trb`'s program from 121 declarations to 192 without a line of the program changing.
  *
  * The unit is the **package** and not the module, because that is the unit of coherence
@@ -124,7 +124,7 @@ fn programPackagesOf(checker: Checker, modules: List<ModuleId>): Map<Int, Bool> 
     const index = checker.program.graph.at(module).package
     if !found.containsKey(index) {
       found.set index, true
-      pending.add index
+      pending.append index
     }
   }
   var at = 0
@@ -136,15 +136,15 @@ fn programPackagesOf(checker: Checker, modules: List<ModuleId>): Map<Int, Bool> 
     }
     const manifest = workspace.packages[index].manifest
     var names = manifest.runtimeDependencies
-    names.addAll manifest.developmentDependencies
-    names.add manifest.prelude
+    names.appendAll manifest.developmentDependencies
+    names.append manifest.prelude
     for name in names {
       const other = packageIndexNamed workspace, name
       if other < 0 || found.containsKey(other) {
         continue
       }
       found.set other, true
-      pending.add other
+      pending.append other
     }
   }
   found
@@ -178,7 +178,7 @@ fn programModules(checker: Checker, modules: List<ModuleId>): List<ModuleId> {
     if const Some(.ProjectFile) = receiver {
       continue
     }
-    found.add module
+    found.append module
   }
   found
 }
@@ -203,7 +203,7 @@ public fn pathsOfModules(checked: Checked): List<String> {
   var paths: List<String> = []
   for module in checked.program.graph.modules {
     const package = checked.program.workspace.packages[module.package]
-    paths.add stablePathOf(package, module.path)
+    paths.append stablePathOf(package, module.path)
   }
   paths
 }
@@ -257,7 +257,7 @@ public fn loweredText(lowering: Lowering): String {
 public fn loweredProblems(lowering: Lowering): List<String> {
   var found = verifyProgram lowering.program
   for problem in lowering.program.problems {
-    found.add problem
+    found.append problem
   }
   found
 }
@@ -270,18 +270,18 @@ public fn statisticsLines(lowering: Lowering): List<String> {
   var lines: List<String> = []
   const total = lowering.lowered + lowering.stubbed
   const share = if total == 0 { 100 } else { lowering.lowered * 100 / total }
-  lines.add "{lowering.lowered} of {total} functions lowered ({share}%), {lowering.stubbed} not supported yet"
+  lines.append "{lowering.lowered} of {total} functions lowered ({share}%), {lowering.stubbed} not supported yet"
   var sorted = lowering.unsupported
   sorted.sort({ (0 - _.count, _.what) })
   for entry in sorted {
-    lines.add "  {entry.count}  {entry.what} (first at {entry.at})"
+    lines.append "  {entry.count}  {entry.what} (first at {entry.at})"
   }
   // A `native type` the runtime does not represent yet belongs here and not among the internal errors: it is a
   // declaration of `std/` that is not implemented yet, exactly like a `native fn` the manifest marks as planned
   var planned = lowering.program.planned
   planned.sort({ _ })
   for what in planned {
-    lines.add "  {what}"
+    lines.append "  {what}"
   }
   lines
 }

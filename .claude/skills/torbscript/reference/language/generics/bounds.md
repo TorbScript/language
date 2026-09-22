@@ -61,8 +61,8 @@ fn <name>(...): <Type> where Item: <Trait>                    a member's own bou
    ```
 
 4. **A member of a trait can carry a `where` clause of its own, and then it is not a requirement on every
-   implementor - it exists only where the clause holds.** `Iterable<Item>` declares
-   `fn toSet(): Set<Item> where Item: Hash`, so every `Iterable` has the method, but calling it is only legal
+   implementor - it exists only where the clause holds.** `Iterate<Item>` declares
+   `fn toSet(): Set<Item> where Item: Hash`, so every `Iterate` has the method, but calling it is only legal
    where `Item` happens to be `Hash`:
 
    ```trb check

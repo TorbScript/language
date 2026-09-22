@@ -77,9 +77,9 @@ public fn objectDeclarationOf(program: IrProgram, id: IrTypeId): CDeclaration? {
     }
   }
   var members: List<CMember> = []
-  members.add CMember.Field("torb_object *", "data")
+  members.append CMember.Field("torb_object *", "data")
   for index in 0..bounds.length() {
-    members.add CMember.Field("const torb_witness_table *", witnessMemberNameOf(index))
+    members.append CMember.Field("const torb_witness_table *", witnessMemberNameOf(index))
   }
   Some CDeclaration.Struct(objectTypeName(program, bounds), members)
 }
@@ -183,28 +183,28 @@ public fn variantMemberNameOf(variant: Int): String {
 public fn structDeclarationOf(program: IrProgram, layout: Layout): CDeclaration {
   var members: List<CMember> = []
   if isBoxed(layout) {
-    members.add CMember.Field("torb_header", "header")
+    members.append CMember.Field("torb_header", "header")
   }
   // The environment of a closure carries its own drop function, because a closure value has the *type* of every closure
   // of its shape and the release of one therefore cannot know which captures are inside it (BACKEND 5.8)
   if isEnvironmentLayout(layout) {
-    members.add CMember.Field("torb_drop_function", "drop")
+    members.append CMember.Field("torb_drop_function", "drop")
   }
   if layout.variants.isEmpty() {
     for field in layout.fields {
-      members.add memberOf(program, field)
+      members.append memberOf(program, field)
     }
   } else {
     for field in layout.commonFields() {
-      members.add memberOf(program, field)
+      members.append memberOf(program, field)
     }
-    members.add CMember.Field("uint32_t", "tag")
+    members.append CMember.Field("uint32_t", "tag")
     if const Some(payload) = unionMemberOf(program, layout) {
-      members.add payload
+      members.append payload
     }
   }
   if members.isEmpty() {
-    members.add CMember.Field("unsigned char", "nothing")
+    members.append CMember.Field("unsigned char", "nothing")
   }
   CDeclaration.Struct layout.name, members
 }
@@ -225,9 +225,9 @@ fn unionMemberOf(program: IrProgram, layout: Layout): CMember? {
     }
     var inner: List<CMember> = []
     for field in fields {
-      inner.add memberOf(program, field)
+      inner.append memberOf(program, field)
     }
-    groups.add CMember.Group(variantMemberNameOf(index), inner)
+    groups.append CMember.Group(variantMemberNameOf(index), inner)
   }
   if groups.isEmpty() {
     return None
@@ -249,7 +249,7 @@ fn unionMemberOf(program: IrProgram, layout: Layout): CMember? {
 public fn layoutDefinitionOrder(program: IrProgram): List<LayoutId> {
   var names: List<String> = []
   for layout in program.layouts {
-    names.add layout.name
+    names.append layout.name
   }
   var byName = names
   byName.sort({ _ })
@@ -261,7 +261,7 @@ public fn layoutDefinitionOrder(program: IrProgram): List<LayoutId> {
   }
   var state: List<Int> = []
   for _ in 0..names.length() {
-    state.add 0
+    state.append 0
   }
   var order: List<LayoutId> = []
   for name in byName {
@@ -288,7 +288,7 @@ fn visitLayout(program: IrProgram, var state: List<Int>, var order: List<LayoutI
     }
   }
   state.set index, 2
-  order.add LayoutId(index)
+  order.append LayoutId(index)
 }
 
 /** The layouts one definition needs complete: every field that is stored inline, in field order. */
@@ -297,7 +297,7 @@ fn inlineDependenciesOf(program: IrProgram, layout: Layout): List<Int> {
   for field in layout.fields {
     for found in inlineLayoutsOfType(program, field.annotation) {
       if !needed.contains(found) {
-        needed.add found
+        needed.append found
       }
     }
   }

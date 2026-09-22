@@ -37,7 +37,7 @@ Where the compiler and `CONCEPT.md` disagree, the compiler is right and the page
 - **[Cases and pattern matching](pattern-matching/index.md)** - How a type with cases is declared, and every place a pattern can stand.
 - **[Generics](generics/index.md)** - Type parameters, where they are declared, how a bound restricts them, what is inferred, and how a trait-typed value satisfies one at runtime.
 - **[Errors](errors/index.md)** - How a function says it can fail, how a caller handles it, and what a panic is for.
-- **[Collections and iteration](collections-and-iteration/index.md)** - List, Map, Set, Stack and Queue as traits over a shared Iterable, plus slices, pipelines and collectors.
+- **[Collections and iteration](collections-and-iteration/index.md)** - List, Map, Set, Stack and Queue as traits over a shared Iterate, plus slices, pipelines and collectors.
 - **[Concurrency and streams](concurrency-and-streams/index.md)** - Task, Channel, Source and Sink - asynchrony in the type system instead of a keyword - designed and type-checked today, but not yet run by any back end.
 - **[Modules and packages](modules-and-packages/index.md)** - How a file brings in names from elsewhere, what a package is, and the two rules - visibility and top-level code - that decide what a module may contain.
 - **[Reflection](reflection/index.md)** - Why there is no runtime reflection, the four syntactic bridges that connect a type to a value instead, and the generated Encode and Decode pair that covers serialization.

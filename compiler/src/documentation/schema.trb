@@ -121,12 +121,12 @@ public const forbiddenWords: List<String> = [
 public fn schemaProblems(documentation: Documentation, page: Page): List<DocumentationProblem> {
   const shown = page.shown documentation.root
   var problems: List<DocumentationProblem> = []
-  problems.addAll fieldProblems(shown, page)
+  problems.appendAll fieldProblems(shown, page)
   const kind = page.frontMatter.text("kind") ?? ""
   const status = page.frontMatter.text("status") ?? ""
-  problems.addAll headingProblems(shown, page, kind)
-  problems.addAll bannerProblems(shown, page, status)
-  problems.addAll proseProblems(shown, page)
+  problems.appendAll headingProblems(shown, page, kind)
+  problems.appendAll bannerProblems(shown, page, status)
+  problems.appendAll proseProblems(shown, page)
   problems
 }
 
@@ -137,19 +137,19 @@ fn fieldProblems(shown: String, page: Page): List<DocumentationProblem> {
     if !knownFields.contains(field.key) {
       const all = knownFields.joined separator: ", "
       const note = "`{field.key}` is not a field of the front matter. One of: {all}"
-      problems.add DocumentationProblem(shown, field.line, note)
+      problems.append DocumentationProblem(shown, field.line, note)
     }
   }
   for required in requiredFields {
     if !frontMatter.has(required) {
-      problems.add DocumentationProblem(shown, 1, "The front matter needs a `{required}`")
+      problems.append DocumentationProblem(shown, 1, "The front matter needs a `{required}`")
     }
   }
-  problems.addAll titleProblems(shown, frontMatter)
-  problems.addAll summaryProblems(shown, frontMatter)
-  problems.addAll kindProblems(shown, page, frontMatter)
-  problems.addAll statusProblems(shown, frontMatter)
-  problems.addAll listProblems(shown, page, frontMatter)
+  problems.appendAll titleProblems(shown, frontMatter)
+  problems.appendAll summaryProblems(shown, frontMatter)
+  problems.appendAll kindProblems(shown, page, frontMatter)
+  problems.appendAll statusProblems(shown, frontMatter)
+  problems.appendAll listProblems(shown, page, frontMatter)
   problems
 }
 
@@ -161,10 +161,10 @@ fn titleProblems(shown: String, frontMatter: FrontMatter): List<DocumentationPro
   var problems: List<DocumentationProblem> = []
   const line = frontMatter.lineOf "title"
   if title.byteLength() > longestTitle {
-    problems.add DocumentationProblem(shown, line, "A title is at most {longestTitle} characters long")
+    problems.append DocumentationProblem(shown, line, "A title is at most {longestTitle} characters long")
   }
   if title.endsWith(".") {
-    problems.add DocumentationProblem(shown, line, "A title has no full stop at the end")
+    problems.append DocumentationProblem(shown, line, "A title has no full stop at the end")
   }
   problems
 }
@@ -179,19 +179,19 @@ fn summaryProblems(shown: String, frontMatter: FrontMatter): List<DocumentationP
   const length = summary.byteLength()
   if length < shortestSummary {
     const note = "A summary says what the page answers and is at least {shortestSummary} characters long"
-    problems.add DocumentationProblem(shown, line, note)
+    problems.append DocumentationProblem(shown, line, note)
   }
   if length > longestSummary {
     const note = "A summary is at most {longestSummary} characters long. This one has {length}"
-    problems.add DocumentationProblem(shown, line, note)
+    problems.append DocumentationProblem(shown, line, note)
   }
   const endsSentence = summary.endsWith(".") || summary.endsWith("?") || summary.endsWith("!")
   if !endsSentence {
-    problems.add DocumentationProblem(shown, line, "A summary is one or two whole sentences and ends with a full stop")
+    problems.append DocumentationProblem(shown, line, "A summary is one or two whole sentences and ends with a full stop")
   }
   if summary.toLowerCase().contains("this page") {
     const note = "A summary is about the subject, not about the document. Leave out `this page`"
-    problems.add DocumentationProblem(shown, line, note)
+    problems.append DocumentationProblem(shown, line, note)
   }
   problems
 }
@@ -206,27 +206,27 @@ fn kindProblems(shown: String, page: Page, frontMatter: FrontMatter): List<Docum
   if !kinds.contains(kind) {
     const all = kinds.joined separator: ", "
     const note = "`{kind}` is not a kind of page. One of: {all}"
-    problems.add DocumentationProblem(shown, line, note)
+    problems.append DocumentationProblem(shown, line, note)
     return problems
   }
   if page.isIndex && kind != "index" {
-    problems.add DocumentationProblem(shown, line, "An `index.md` has the kind `index`")
+    problems.append DocumentationProblem(shown, line, "An `index.md` has the kind `index`")
   }
   if !page.isIndex && kind == "index" {
-    problems.add DocumentationProblem(shown, line, "Only an `index.md` has the kind `index`")
+    problems.append DocumentationProblem(shown, line, "Only an `index.md` has the kind `index`")
   }
   if kindsThatNeedASource.contains(kind) && frontMatter.items("source").isEmpty() {
     const note = "A `{kind}` page names in `source` where its facts come from, so drift can be found"
-    problems.add DocumentationProblem(shown, 1, note)
+    problems.append DocumentationProblem(shown, 1, note)
   }
   const title = frontMatter.text("title") ?? ""
   if kind == "how-to" && title.toLowerCase().startsWith("how to") {
     const note = "The title of a how-to starts with the verb, not with `How to`"
-    problems.add DocumentationProblem(shown, frontMatter.lineOf("title"), note)
+    problems.append DocumentationProblem(shown, frontMatter.lineOf("title"), note)
   }
   if kind == "contrast" && !title.startsWith("Coming from ") {
     const note = "The title of a contrast page is `Coming from <language>`"
-    problems.add DocumentationProblem(shown, frontMatter.lineOf("title"), note)
+    problems.append DocumentationProblem(shown, frontMatter.lineOf("title"), note)
   }
   problems
 }
@@ -245,12 +245,12 @@ fn listProblems(shown: String, page: Page, frontMatter: FrontMatter): List<Docum
   var problems: List<DocumentationProblem> = []
   if frontMatter.has("documents") && !page.isIndex {
     const note = "`documents` names plain Markdown files an index links, so only an `index.md` has it"
-    problems.add DocumentationProblem(shown, frontMatter.lineOf("documents"), note)
+    problems.append DocumentationProblem(shown, frontMatter.lineOf("documents"), note)
   }
   const kind = frontMatter.text("kind") ?? ""
   if frontMatter.has("prerequisites") && kind != "guide" {
     const note = "`prerequisites` belongs to a learning path, so only a `guide` page has it"
-    problems.add DocumentationProblem(shown, frontMatter.lineOf("prerequisites"), note)
+    problems.append DocumentationProblem(shown, frontMatter.lineOf("prerequisites"), note)
   }
   const role = frontMatter.text "skill"
   match role {
@@ -258,7 +258,7 @@ fn listProblems(shown: String, page: Page, frontMatter: FrontMatter): List<Docum
       if !skillRoles.contains(found) {
         const all = skillRoles.joined separator: ", "
         const note = "`{found}` is not a role in the skill. One of: {all}"
-        problems.add DocumentationProblem(shown, frontMatter.lineOf("skill"), note)
+        problems.append DocumentationProblem(shown, frontMatter.lineOf("skill"), note)
       }
     }
     None => {}
@@ -274,42 +274,42 @@ fn headingProblems(shown: String, page: Page, kind: String): List<DocumentationP
   for heading in page.read.headings {
     if heading.level == 1 {
       const note = "The `title` of the front matter is the heading of the page. A body starts at `##`"
-      problems.add DocumentationProblem(shown, heading.line, note)
+      problems.append DocumentationProblem(shown, heading.line, note)
     }
     if isFirst && heading.level != 2 {
-      problems.add DocumentationProblem(shown, heading.line, "The first heading of a body is a `##`")
+      problems.append DocumentationProblem(shown, heading.line, "The first heading of a body is a `##`")
     }
     if !isFirst && heading.level > previousLevel + 1 {
       const deepest = previousLevel + 1
       const note = "A heading level is never skipped: below a level {previousLevel} heading comes level {deepest} at the deepest"
-      problems.add DocumentationProblem(shown, heading.line, note)
+      problems.append DocumentationProblem(shown, heading.line, note)
     }
-    problems.addAll headingTextProblems(shown, heading)
+    problems.appendAll headingTextProblems(shown, heading)
     if anchors.contains(heading.anchor) {
       const note = "Two headings of this page have the anchor `{heading.anchor}`. A link could not tell them apart"
-      problems.add DocumentationProblem(shown, heading.line, note)
+      problems.append DocumentationProblem(shown, heading.line, note)
     }
-    anchors.add heading.anchor
+    anchors.append heading.anchor
     previousLevel = heading.level
     isFirst = false
   }
-  problems.addAll sectionProblems(shown, page, kind)
+  problems.appendAll sectionProblems(shown, page, kind)
   problems
 }
 
 fn headingTextProblems(shown: String, heading: Heading): List<DocumentationProblem> {
   var problems: List<DocumentationProblem> = []
   if heading.text.isEmpty() {
-    problems.add DocumentationProblem(shown, heading.line, "A heading has text")
+    problems.append DocumentationProblem(shown, heading.line, "A heading has text")
     return problems
   }
   if heading.text.endsWith(".") || heading.text.endsWith(":") {
-    problems.add DocumentationProblem(shown, heading.line, "A heading ends without a full stop and without a colon")
+    problems.append DocumentationProblem(shown, heading.line, "A heading ends without a full stop and without a colon")
   }
   const first = heading.text.chars().first() ?? ' '
   if first.isLetter() && first != first.toUpperCase() {
     const note = "A heading is written in sentence case: the first word is capitalized"
-    problems.add DocumentationProblem(shown, heading.line, note)
+    problems.append DocumentationProblem(shown, heading.line, note)
   }
   problems
 }
@@ -324,7 +324,7 @@ fn sectionProblems(shown: String, page: Page, kind: String): List<DocumentationP
   var titles: List<String> = []
   for heading in page.read.headings {
     if heading.level == 2 {
-      titles.add heading.text
+      titles.append heading.text
     }
   }
   var from = 0
@@ -346,17 +346,17 @@ fn sectionProblems(shown: String, page: Page, kind: String): List<DocumentationP
       } else {
         "A `{kind}` page has a section `## {section}`"
       }
-      problems.add DocumentationProblem(shown, 1, note)
+      problems.append DocumentationProblem(shown, 1, note)
       continue
     }
     from = found + 1
   }
   if kind == "guide" && !titles.isEmpty() {
     if titles[0] != "Goal" {
-      problems.add DocumentationProblem(shown, 1, "A guide page starts with `## Goal`")
+      problems.append DocumentationProblem(shown, 1, "A guide page starts with `## Goal`")
     }
     if titles[titles.length() - 1] != "Next" {
-      problems.add DocumentationProblem(shown, 1, "A guide page ends with `## Next`")
+      problems.append DocumentationProblem(shown, 1, "A guide page ends with `## Next`")
     }
   }
   problems
@@ -370,7 +370,7 @@ fn indexSectionProblems(shown: String, page: Page, kind: String): List<Documenta
   var titles: List<String> = []
   for heading in page.read.headings {
     if heading.level == 2 {
-      titles.add heading.text
+      titles.append heading.text
     }
   }
   if titles.contains("What belongs here") {
@@ -404,7 +404,7 @@ fn proseProblems(shown: String, page: Page): List<DocumentationProblem> {
     for word in forbiddenWords {
       if bare.contains(word) {
         const note = "`{word}` says nothing exactly. Name the rule, the number or the limit instead"
-        problems.add DocumentationProblem(shown, line.line, note)
+        problems.append DocumentationProblem(shown, line.line, note)
       }
     }
   }
@@ -421,7 +421,7 @@ public fn withoutInlineCode(text: String): String {
       continue
     }
     if !isInside {
-      kept.add character
+      kept.append character
     }
   }
   String.from kept
@@ -441,9 +441,9 @@ public fn skillRoleProblems(documentation: Documentation): List<DocumentationPro
         if taken.contains(found) {
           const shown = page.shown documentation.root
           const note = "Another page already is the `{found}` of the skill. There is exactly one of each"
-          problems.add DocumentationProblem(shown, page.frontMatter.lineOf("skill"), note)
+          problems.append DocumentationProblem(shown, page.frontMatter.lineOf("skill"), note)
         }
-        taken.add found
+        taken.append found
       }
       None => {}
     }
@@ -459,7 +459,7 @@ public fn nameProblems(documentation: Documentation): List<DocumentationProblem>
     if name != name.toLowerCase() || name.contains(" ") || name.contains("_") {
       const shown = page.shown documentation.root
       const note = "A file name is lowercase and uses hyphens: a path is part of every link to it"
-      problems.add DocumentationProblem(shown, 1, note)
+      problems.append DocumentationProblem(shown, 1, note)
     }
   }
   problems
@@ -469,7 +469,7 @@ public fn nameProblems(documentation: Documentation): List<DocumentationProblem>
 public fn anchorsOf(page: Page): List<String> {
   var anchors: List<String> = []
   for heading in page.read.headings {
-    anchors.add heading.anchor
+    anchors.append heading.anchor
   }
   anchors
 }

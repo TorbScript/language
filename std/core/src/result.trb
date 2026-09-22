@@ -13,7 +13,7 @@
 
 use Show, From from "./convert"
 use OrElse from "./operators"
-use Iterable from "std/iteration"
+use Iterate from "std/iteration"
 
 /**
  * The result of an operation that can fail: `Ok` with the value, or `Fail` with the reason.
@@ -182,13 +182,13 @@ extend<Value: Show, Failure: Show> Result<Value, Failure> with Show {
  * The reason of the first `Fail` of the pipeline. Nothing behind it is pulled, so a step that fails early costs
  * nothing more.
  */
-extend<Value, Failure, Target: From<Iterable<Value>>> Result<Target, Failure> with From<Iterable<Result<Value, Failure>>> {
-  static fn from(value: Iterable<Result<Value, Failure>>): Result<Target, Failure> {
+extend<Value, Failure, Target: From<Iterate<Value>>> Result<Target, Failure> with From<Iterate<Result<Value, Failure>>> {
+  static fn from(value: Iterate<Result<Value, Failure>>): Result<Target, Failure> {
     // The values are gathered first: a lazy stage that noted the failure would have to capture a `var` it outlives
     var found: List<Value> = []
     for item in value {
       match item {
-        Ok(success) => found.add success
+        Ok(success) => found.append success
         Fail(error) => {
           return Fail error
         }

@@ -81,7 +81,7 @@ fn buildType(var checker: Checker, reference: TypeReference, scope: TypeScope): 
           Some(name) => Some name.text
           None => None
         }
-        built.add TupleField(label, typeFromReference(checker, field.annotation, scope.forType()))
+        built.append TupleField(label, typeFromReference(checker, field.annotation, scope.forType()))
       }
       checker.types.intern TypeForm.Tuple(built)
     }
@@ -90,7 +90,7 @@ fn buildType(var checker: Checker, reference: TypeReference, scope: TypeScope): 
     .FunctionType(parameters, result) => {
       var built: List<ParameterForm> = []
       for parameter in parameters {
-        built.add functionTypeParameter(checker, parameter, scope)
+        built.append functionTypeParameter(checker, parameter, scope)
       }
       const returns = typeFromReference checker, result, scope.forType()
       checker.types.intern TypeForm.Function(FunctionForm(built, returns))
@@ -193,7 +193,7 @@ fn typeArguments(
     const inner = if isConstant { scope.forConstant() } else { scope.forType() }
     const lowered = typeFromReference checker, arguments[index], inner
     if index < generics.length() {
-      built.add lowered
+      built.append lowered
     }
   }
   if arguments.length() > generics.length() {
@@ -206,11 +206,11 @@ fn typeArguments(
     match declaration.default {
       Some(default) => {
         const filled = defaultArgument checker, generics, built, default, declaration, at, scope
-        built.add filled
+        built.append filled
       }
       None => {
         isMissing = true
-        built.add checker.invalidType
+        built.append checker.invalidType
       }
     }
   }
@@ -428,7 +428,7 @@ fn literalType(var checker: Checker, reference: TypeReference, values: List<Expr
   var literals: List<LiteralValue> = []
   for value in values {
     match literalOf(value) {
-      Some(literal) => literals.add literal
+      Some(literal) => literals.append literal
       None => {
         checker.report(
           scope.module,
@@ -457,7 +457,7 @@ fn literalType(var checker: Checker, reference: TypeReference, values: List<Expr
       )
       continue
     }
-    members.add literal
+    members.append literal
   }
   if scope.takesConstant() && members.length() == 1 {
     return checker.types.intern TypeForm.Constant(members[0], base)
@@ -488,7 +488,7 @@ fn sortedLiterals(values: List<LiteralValue>): List<LiteralValue> {
   var unique: List<LiteralValue> = []
   for value in values {
     if !unique.contains(value) {
-      unique.add value
+      unique.append value
     }
   }
   unique.sort({ (integerOfLiteral(_), textOfLiteral(_)) })
@@ -569,7 +569,7 @@ fn intersectionType(
       .Traits(inner) => {
         for bound in inner {
           if !bounds.contains(bound) {
-            bounds.add bound
+            bounds.append bound
           }
         }
       }

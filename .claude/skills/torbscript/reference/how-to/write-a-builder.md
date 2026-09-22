@@ -64,7 +64,7 @@ the builder reads like a small language of its own - checked like ordinary code,
 
    ```trb fragment
    var fn route(path: String, to: String) {
-     routes.add Route(path, to)
+     routes.append Route(path, to)
    }
    ```
 
@@ -101,7 +101,7 @@ type ServerOptions {
   private(var) routes: List<Route> = []
 
   var fn route(path: String, to: String) {
-    routes.add Route(path, to)
+    routes.append Route(path, to)
   }
 }
 

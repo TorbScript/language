@@ -1,6 +1,6 @@
 ---
 title: Loops
-summary: for walks an Iterable, while repeats while a condition holds, and loop is the endless one - with the type Never until a break gives it a Void. while true is an error, because never ending is a property of the syntax here.
+summary: for walks an Iterate, while repeats while a condition holds, and loop is the endless one - with the type Never until a break gives it a Void. while true is an error, because never ending is a property of the syntax here.
 kind: reference
 status: stable
 order: 5
@@ -15,7 +15,7 @@ source:
   - compiler/src/semantics/checker/statement.trb
 ---
 
-There are three loops: `for` over anything `Iterable`, `while` over a condition, and `loop` for the one that does not
+There are three loops: `for` over anything `Iterate`, `while` over a condition, and `loop` for the one that does not
 end by itself. `break` and `continue` work in all three, and none of them is an expression - a loop produces no value.
 
 ## Example
@@ -44,7 +44,7 @@ print remaining
 ## Syntax
 
 ```text
-for <pattern> in <iterable> { ... }        over anything `Iterable`
+for <pattern> in <iterable> { ... }        over anything `Iterate`
 while <condition> { ... }                   while the condition holds
 while const <pattern> = <expression> { }    while the pattern matches
 loop { ... }                                until a `break`, or forever

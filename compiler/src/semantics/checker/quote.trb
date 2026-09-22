@@ -112,7 +112,7 @@ public fn checkQuotation(var checker: Checker, expression: Expression, wanted: T
   const start = checker.bindings.length()
   // The quotation is a closure as far as the scope chain is concerned: a name from around it is a capture, and there is
   // nothing implicit to take from it, so the frame declares its parameters (there are none) as written
-  checker.closureFrames.add ClosureFrame(at, start, [], [], [], [], true, 0)
+  checker.closureFrames.append ClosureFrame(at, start, [], [], [], [], true, 0)
   const expectation = expectationOf checker, inner
   const found = checkExpression checker, expression, expectation
   const last = checker.closureFrames.length() - 1
@@ -141,7 +141,7 @@ public fn checkQuotation(var checker: Checker, expression: Expression, wanted: T
  */
 public fn openThunk(var checker: Checker, at: Span) {
   const start = checker.bindings.length()
-  checker.closureFrames.add ClosureFrame(at, start, [], [], [], [], true, 0)
+  checker.closureFrames.append ClosureFrame(at, start, [], [], [], [], true, 0)
 }
 
 /** Closes the frame [openThunk] opened and records what it captured, unless the argument itself already did. */
@@ -306,7 +306,7 @@ fn quoteClosure(var checker: Checker, var state: QuotationWalk, closure: Closure
   }
   const parameters = lambdaParametersOf checker, closure, at
   state.lambdas.set at, parameters
-  state.open.add parameters
+  state.open.append parameters
   quoteBlock checker, state, closure.body
   const last = state.open.length() - 1
   if last >= 0 {
@@ -335,7 +335,7 @@ fn lambdaParametersOf(var checker: Checker, closure: Closure, at: Span): List<Qu
         name = written
       }
     }
-    parameters.add QuotationParameter(name, resolveType(checker, shape.annotation))
+    parameters.append QuotationParameter(name, resolveType(checker, shape.annotation))
   }
   parameters
 }
@@ -513,7 +513,7 @@ fn encodedCaptures(
       const at = state.firstReads.get(index) ?? local.at
       reportNotEncodable checker, local.name, annotation, bound, owner, parameter, at
     }
-    found.add QuotationCapture(binding, local.name, annotation, witness)
+    found.append QuotationCapture(binding, local.name, annotation, witness)
   }
   found
 }
@@ -524,7 +524,7 @@ fn plainCaptures(var checker: Checker, state: QuotationWalk): List<QuotationCapt
   for capture in state.captures {
     const local = checker.binding capture.binding
     const annotation = resolveType checker, local.annotation
-    found.add QuotationCapture(capture.binding, local.name, annotation, Witness.Unresolved)
+    found.append QuotationCapture(capture.binding, local.name, annotation, Witness.Unresolved)
   }
   found
 }

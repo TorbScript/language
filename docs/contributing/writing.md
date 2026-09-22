@@ -35,8 +35,8 @@ The shape of a rule, in the form every reference page uses.
 
    ```trb error
    const fixed = [1, 2]
-   fixed.add 3
-   // error: `add` needs a `var`. Did you mean `added`?
+   fixed.append 3
+   // error: `append` needs a `var`. Did you mean `appended`?
    ```
 ```
 

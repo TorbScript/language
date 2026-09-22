@@ -80,18 +80,18 @@ public fn noteClosureKind(var checker: Checker, at: Span, captures: List<Capture
   for capture in captures {
     const binding = checker.binding capture.binding
     if binding.isVar {
-      held.add heldName(binding)
+      held.append heldName(binding)
       if firstHeld.isNone() {
         firstHeld = Some binding
       }
     }
     if const Some(owner) = checker.parameterOwners.get(capture.binding.value) {
-      parameters.add owner
+      parameters.append owner
       continue
     }
     if !binding.isVar && taskProblemOf(checker, binding.annotation).isSome() {
       const item = (binding.name, binding.annotation)
-      unseen.add item
+      unseen.append item
     }
   }
   if !isLocal {
@@ -111,7 +111,7 @@ public fn noteClosureKind(var checker: Checker, at: Span, captures: List<Capture
   if held.isEmpty() && parameters.isEmpty() && unseen.isEmpty() {
     return
   }
-  checker.escapeChecks.add EscapeCheck(checker.module, at, site, held, parameters, unseen)
+  checker.escapeChecks.append EscapeCheck(checker.module, at, site, held, parameters, unseen)
 }
 
 /**
@@ -127,7 +127,7 @@ public fn noteParameterUse(var checker: Checker, binding: BindingId, at: Span) {
   }
   if const Some(site) = checker.nameSite {
     if checker.nameSiteAt == at {
-      checker.parameterForwards.add ParameterForward(owner, site)
+      checker.parameterForwards.append ParameterForward(owner, site)
       return
     }
   }
@@ -166,7 +166,7 @@ public fn noteFunctionArgument(var checker: Checker, value: Expression, annotati
       _ => {}
     }
   }
-  checker.functionValueChecks.add FunctionValueCheck(checker.module, value.span, site)
+  checker.functionValueChecks.append FunctionValueCheck(checker.module, value.span, site)
 }
 
 /**
@@ -214,17 +214,17 @@ public fn settleEscapes(var checker: Checker) {
     isGrowing = false
     while escapeCallees.length() < checker.escapeChecks.length() {
       const site = checker.escapeChecks[escapeCallees.length()].site
-      escapeCallees.add calleesChecked(checker, site)
+      escapeCallees.append calleesChecked(checker, site)
       isGrowing = true
     }
     while forwardCallees.length() < checker.parameterForwards.length() {
       const site = checker.parameterForwards[forwardCallees.length()].site
-      forwardCallees.add calleesChecked(checker, site)
+      forwardCallees.append calleesChecked(checker, site)
       isGrowing = true
     }
     while valueCallees.length() < checker.functionValueChecks.length() {
       const site = checker.functionValueChecks[valueCallees.length()].site
-      valueCallees.add calleesChecked(checker, site)
+      valueCallees.append calleesChecked(checker, site)
       isGrowing = true
     }
   }
@@ -318,7 +318,7 @@ fn calleesOf(var checker: Checker, site: ArgumentSite): Callees {
 
 /**
  * Every declaration a call of a trait member through a witness table may run: the default of the trait, the default a
- * trait that extends it declares in its place (`List` overrides members of `Iterable`), and the member every
+ * trait that extends it declares in its place (`List` overrides members of `Iterate`), and the member every
  * implementation of one of those traits provides. A requirement nothing implements answers nothing, and then nothing
  * can run to keep or to hand on what the call is given.
  */
@@ -349,7 +349,7 @@ fn traitMembersOf(var checker: Checker, symbol: SymbolId, bound: TypeId): List<S
       continue
     }
     if !traits.contains(implemented) {
-      traits.add implemented
+      traits.append implemented
       const shape = checker.typeSignature typeSignatureOf(checker, implemented)
       if const Some(own) = shape.members.get(name) {
         addWithBody checker, members, own
@@ -361,7 +361,7 @@ fn traitMembersOf(var checker: Checker, symbol: SymbolId, bound: TypeId): List<S
         // A `native type` provides the member through the runtime, with nothing declared: the requirement stands for
         // it, and having no body it keeps what it is handed
         if implementation.isNative && !members.contains(symbol) {
-          members.add symbol
+          members.append symbol
         }
       }
     }
@@ -375,7 +375,7 @@ fn addWithBody(var checker: Checker, var members: List<SymbolId>, member: Symbol
     return
   }
   if checker.signature(signatureOf(checker, member)).hasBody || isNativeMember(checker, member) {
-    members.add member
+    members.append member
   }
 }
 

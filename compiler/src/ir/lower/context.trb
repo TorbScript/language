@@ -315,7 +315,7 @@ public fn reportUnsupported(var lowering: Lowering, what: String, at: Span, beca
   const place = describeSpan lowering, at
   const next = lowering.unsupported.length()
   lowering.unsupportedIndex.set message, next
-  lowering.unsupported.add Unsupported(message, place, 1)
+  lowering.unsupported.append Unsupported(message, place, 1)
 }
 
 /**
@@ -325,7 +325,7 @@ public fn reportUnsupported(var lowering: Lowering, what: String, at: Span, beca
 public fn reportProblem(var lowering: Lowering, message: String, at: Span) {
   const module = lowering.module
   const problem = Diagnostic.error message, at
-  lowering.problems.add LoweredProblem(module, problem)
+  lowering.problems.append LoweredProblem(module, problem)
 }
 
 /** `src/main.trb:12:5`, the way a location is written everywhere else. */
@@ -496,14 +496,14 @@ fn spellingOfContents(lowering: Lowering, contents: StaticContents): String {
     .Aggregate(layout, variant, fields) => {
       var parts = ["{lowering.program.layoutAt(layout).name}", "{variant}"]
       for field in fields {
-        parts.add lowering.program.staticAt(field).name
+        parts.append lowering.program.staticAt(field).name
       }
       parts.joined separator: "_"
     }
     .Items(item, items) => {
       var parts = ["items", canonicalType(lowering.program, item)]
       for one in items {
-        parts.add lowering.program.staticAt(one).name
+        parts.append lowering.program.staticAt(one).name
       }
       parts.joined separator: "_"
     }
@@ -523,14 +523,14 @@ public fn borrowedArguments(slots: List<Slot>, places: List<Reference?> = []): L
   var given: List<Argument> = []
   if places.length() != slots.length() {
     for slot in slots {
-      given.add borrowed(slot)
+      given.append borrowed(slot)
     }
     return given
   }
   for index in 0..slots.length() {
     match places[index] {
-      Some(place) => given.add referenced(place)
-      None => given.add borrowed(slots[index])
+      Some(place) => given.append referenced(place)
+      None => given.append borrowed(slots[index])
     }
   }
   given
@@ -551,33 +551,12 @@ public fn nativeNamed(lowering: Lowering, owner: String, member: String, signatu
   if const Some(index) = lowering.nativeIndex.get(key) {
     return lowering.natives.get index
   }
-  // Rename fallback: delete after the seed knows the new name.
-  const before = renamedFrom member
-  if !owner.isEmpty() && !before.isEmpty() {
-    if const Some(index) = lowering.nativeIndex.get("{owner}.{before}") {
-      return lowering.natives.get index
-    }
-  }
   const source = conversionSourceOf lowering, signature
   if source.isEmpty() {
     return None
   }
   const index = lowering.nativeIndex.get("{key}({source})")?
   lowering.natives.get index
-}
-
-// Rename fallback: delete after the seed knows the new name.
-/**
- * The name the manifest still lists a renamed member under: `List.append` and `Set.insert` are its `add` rows and
- * `iterate` its `iterator` rows. Empty for every member that kept its name.
- */
-fn renamedFrom(member: String): String {
-  match member {
-    "append" => "add"
-    "insert" => "add"
-    "iterate" => "iterator"
-    _ => ""
-  }
 }
 
 /** The type the one value of a conversion comes from, as the manifest writes it. Empty for every other member. */
@@ -609,9 +588,9 @@ public fn continueIn(var lowering: Lowering, var builder: FunctionBuilder, block
 
 /** Opens a new loop: where its `break` and its `continue` jump to, and a fresh flag for whether it ever broke. */
 public fn enterLoop(var lowering: Lowering, exit: BlockId, step: BlockId) {
-  lowering.breakTargets.add exit
-  lowering.continueTargets.add step
-  lowering.loopBroke.add false
+  lowering.breakTargets.append exit
+  lowering.continueTargets.append step
+  lowering.loopBroke.append false
 }
 
 /** Answers whether anything in the loop wrote a `break`, which is what says a `loop` can be left at all. */

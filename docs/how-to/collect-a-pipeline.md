@@ -16,13 +16,13 @@ source:
 ---
 
 Nothing in a pipeline runs until its terminal operation pulls the values through. Most of the time the result you
-need already has a name on `Iterable` itself; `collect` with an `Accumulator` is what is left for everything that does
+need already has a name on `Iterate` itself; `collect` with an `Accumulator` is what is left for everything that does
 not.
 
 ## Steps
 
 1. **Reach for the named terminal operation first.** `toList()`, `toSet()`, `to<Target>()` for any other
-   `From<Iterable<Item>>`, `sum()`, `count()`, `joined(separator:)`, `fold(initial, combine)`, `first()`,
+   `From<Iterate<Item>>`, `sum()`, `count()`, `joined(separator:)`, `fold(initial, combine)`, `first()`,
    `find { ... }`, `any { ... }`, `all { ... }` and `groupBy { ... }` cover most pipelines without ever naming an
    `Accumulator`.
 
@@ -65,9 +65,9 @@ not.
 - **`fold` and a hand-written `Accumulator` do the same pull.** Reach for `fold` when the state is a simple running
   value and there is only one call site; reach for a named `Accumulator` the moment two pipelines need the same
   aggregate, so the logic is written once.
-- **A `Collection` is not an `Accumulator`.** `pipeline.collect(existingList)` is not a thing: name the accumulator
+- **A collection is not an `Accumulator`.** `pipeline.collect(existingList)` is not a thing: name the accumulator
   that gathers into one - `listing()` or `ListAccumulator<Item>()` for a list, `into<Set<Int>>()` for anything with
-  `From<Iterable<Item>>` - and add the result to what you already have.
+  `From<Iterate<Item>>` - and append the result to what you already have.
 
 ## Full example
 

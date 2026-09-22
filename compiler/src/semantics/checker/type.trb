@@ -158,7 +158,7 @@ public type TypeTable {
       return existing
     }
     const identifier = TypeId forms.length()
-    forms.add form
+    forms.append form
     identifiers.set key, identifier
     identifier
   }
@@ -178,7 +178,7 @@ public type TypeTable {
         return existing
       }
     }
-    declarations.add declaration
+    declarations.append declaration
     const identifier = ParameterId(declarations.length() - 1)
     if const Some(symbol) = declaration.symbol {
       bySymbol.set symbol.value, identifier
@@ -287,7 +287,7 @@ public fn describeType(types: TypeTable, symbols: Symbols, id: TypeId): String {
     .Traits(bounds) => {
       var parts: List<String> = []
       for bound in bounds {
-        parts.add describeType(types, symbols, bound)
+        parts.append describeType(types, symbols, bound)
       }
       parts.joined separator: " & "
     }
@@ -298,7 +298,7 @@ public fn describeType(types: TypeTable, symbols: Symbols, id: TypeId): String {
       var parts: List<String> = []
       for field in fields {
         const shown = describeType types, symbols, field.annotation
-        parts.add(match field.label {
+        parts.append(match field.label {
           Some(label) => "{label}: {shown}"
           None => shown
         })
@@ -309,7 +309,7 @@ public fn describeType(types: TypeTable, symbols: Symbols, id: TypeId): String {
     .Literals(_, values) => {
       var parts: List<String> = []
       for value in values {
-        parts.add describeLiteral(value)
+        parts.append describeLiteral(value)
       }
       parts.joined separator: " | "
     }
@@ -327,7 +327,7 @@ public fn describeType(types: TypeTable, symbols: Symbols, id: TypeId): String {
 public fn describeFunction(types: TypeTable, symbols: Symbols, form: FunctionForm): String {
   var parts: List<String> = []
   for parameter in form.parameters {
-    parts.add describeParameter(types, symbols, parameter)
+    parts.append describeParameter(types, symbols, parameter)
   }
   "({parts.joined(separator: ", ")}) => {describeType(types, symbols, form.result)}"
 }
@@ -350,7 +350,7 @@ fn describeParameter(types: TypeTable, symbols: Symbols, parameter: ParameterFor
 fn describeTypes(types: TypeTable, symbols: Symbols, arguments: List<TypeId>): String {
   var parts: List<String> = []
   for argument in arguments {
-    parts.add describeType(types, symbols, argument)
+    parts.append describeType(types, symbols, argument)
   }
   parts.joined separator: ", "
 }
@@ -630,20 +630,20 @@ public type ImplementationTable {
    * handing a field of `self` to another `var self` method would read a place that has already been taken out.
    */
   var fn add(implementation: Implementation, shape: TargetShape, capability: SymbolId?): ImplementationId {
-    all.add implementation
+    all.append implementation
     const index = all.length() - 1
     if const .Concrete(head) = shape {
       var known = byHead.get(head.value) ?? []
-      known.add index
+      known.append index
       byHead.set head.value, known
       if const Some(symbol) = capability {
         const key = (symbol.value, head.value)
         var candidates = byTraitAndHead.get(key) ?? []
-        candidates.add index
+        candidates.append index
         byTraitAndHead.set key, candidates
       } else {
         var extensions = inherent.get(head.value) ?? []
-        extensions.add index
+        extensions.append index
         inherent.set head.value, extensions
       }
     }
@@ -652,14 +652,14 @@ public type ImplementationTable {
       _ => false
     }
     if isOpen {
-      open.add index
+      open.append index
       match capability {
         Some(symbol) => {
           var candidates = byTraitOpen.get(symbol.value) ?? []
-          candidates.add index
+          candidates.append index
           byTraitOpen.set symbol.value, candidates
         }
-        None => inherentOpen.add index
+        None => inherentOpen.append index
       }
     }
     ImplementationId index
@@ -669,12 +669,12 @@ public type ImplementationTable {
     var found: List<Int> = []
     if const Some(symbol) = head {
       for index in byTraitAndHead.get((capability.value, symbol.value)) ?? [] {
-        found.add index
+        found.append index
       }
     }
     for index in byTraitOpen.get(capability.value) ?? [] {
       if !found.contains(index) {
-        found.add index
+        found.append index
       }
     }
     found
@@ -689,7 +689,7 @@ public type ImplementationTable {
     var found: List<Int> = []
     if const Some(symbol) = head {
       for index in byHead.get(symbol.value) ?? [] {
-        found.add index
+        found.append index
       }
     }
     found
@@ -699,11 +699,11 @@ public type ImplementationTable {
     var found: List<Int> = []
     if const Some(symbol) = head {
       for index in inherent.get(symbol.value) ?? [] {
-        found.add index
+        found.append index
       }
     }
     for index in inherentOpen {
-      found.add index
+      found.append index
     }
     found
   }

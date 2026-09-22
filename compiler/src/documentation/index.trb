@@ -39,8 +39,8 @@ public fn generateIndexes(documentation: Documentation): IndexResult {
     match folder.index {
       Some(page) => {
         const written = indexTextOf documentation, folder, page
-        problems.addAll written.problems
-        generated.add GeneratedIndex(page, written.text)
+        problems.appendAll written.problems
+        generated.append GeneratedIndex(page, written.text)
       }
       None => {}
     }
@@ -73,16 +73,16 @@ fn indexTextOf(documentation: Documentation, folder: Folder, page: Page): Writte
   var head: List<String> = []
   if beginAt < 0 {
     const note = "The generated part of an index stands between `{indexBegin}` and `{indexEnd}`. Run `torb docs index`"
-    problems.add DocumentationProblem(shown, 1, note)
+    problems.append DocumentationProblem(shown, 1, note)
     head = lines
   } else {
     if endAt < 0 {
       const note = "The generated part of this index is never closed by `{indexEnd}`"
-      problems.add DocumentationProblem(shown, beginAt + 1, note)
+      problems.append DocumentationProblem(shown, beginAt + 1, note)
     }
     var line = 0
     while line < beginAt {
-      head.add lines[line]
+      head.append lines[line]
       line = line + 1
     }
     if endAt >= 0 {
@@ -90,7 +90,7 @@ fn indexTextOf(documentation: Documentation, folder: Folder, page: Page): Writte
       while after < lines.length() {
         if !lines[after].trim().isEmpty() {
           const note = "Nothing stands below the generated part of an index"
-          problems.add DocumentationProblem(shown, after + 1, note)
+          problems.append DocumentationProblem(shown, after + 1, note)
           break
         }
         after = after + 1
@@ -102,11 +102,11 @@ fn indexTextOf(documentation: Documentation, folder: Folder, page: Page): Writte
   }
   var body = head
   if !body.isEmpty() {
-    body.add ""
+    body.append ""
   }
-  body.add indexBegin
-  body.addAll entriesOf(documentation, folder, page)
-  body.add indexEnd
+  body.append indexBegin
+  body.appendAll entriesOf(documentation, folder, page)
+  body.append indexEnd
   const text = body.joined separator: "\n"
   WrittenIndex "{text}\n", problems
 }
@@ -127,34 +127,34 @@ fn entriesOf(documentation: Documentation, folder: Folder, page: Page): List<Str
   var lines: List<String> = []
   const sections = sortedChildren documentation, folder
   if !sections.isEmpty() {
-    lines.add ""
-    lines.add "## Sections"
-    lines.add ""
+    lines.append ""
+    lines.append "## Sections"
+    lines.append ""
     for child in sections {
-      lines.add entryOf(child, indexLinkOf(folder, child))
+      lines.append entryOf(child, indexLinkOf(folder, child))
     }
   }
   const pages = sortedPages folder
   if !pages.isEmpty() {
-    lines.add ""
-    lines.add "## Pages"
-    lines.add ""
+    lines.append ""
+    lines.append "## Pages"
+    lines.append ""
     for child in pages {
-      lines.add entryOf(child, fileName(child.path))
+      lines.append entryOf(child, fileName(child.path))
     }
   }
   const documents = page.frontMatter.items "documents"
   if !documents.isEmpty() {
-    lines.add ""
-    lines.add "## Design documents"
-    lines.add ""
+    lines.append ""
+    lines.append "## Design documents"
+    lines.append ""
     for document in documents {
       const resolved = normalizePath joinDocumentationPath(folder.path, document)
       const title = documentation.plainTitles.get(resolved) ?? fileName(document)
-      lines.add "- **[{title}]({document})**"
+      lines.append "- **[{title}]({document})**"
     }
   }
-  lines.add ""
+  lines.append ""
   lines
 }
 
@@ -187,7 +187,7 @@ fn sortedChildren(documentation: Documentation, folder: Folder): List<Page> {
   var found: List<Page> = []
   for child in folder.folders {
     match documentation.indexOf(child) {
-      Some(index) => found.add index
+      Some(index) => found.append index
       None => {}
     }
   }
@@ -214,7 +214,7 @@ public fn writeIndexes(documentation: Documentation, result: IndexResult): Resul
     }
     const path = "{documentation.root}/{generated.page.path}"
     File.writeText(path, generated.text)?
-    written.add generated.page.path
+    written.append generated.page.path
   }
   Ok written
 }
@@ -228,7 +228,7 @@ public fn staleIndexes(documentation: Documentation, result: IndexResult): List<
     }
     const shown = generated.page.shown documentation.root
     const note = "The generated part of this index is not up to date. Run `torb docs index`"
-    problems.add DocumentationProblem(shown, 1, note)
+    problems.append DocumentationProblem(shown, 1, note)
   }
   problems
 }

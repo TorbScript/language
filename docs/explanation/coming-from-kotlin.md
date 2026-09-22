@@ -98,7 +98,7 @@ var counter = 0
 counter = counter + 1
 
 var list = [1, 2]
-list.add 3
+list.append 3
 const fixed = list
 
 print "{answer} {counter} {list} {fixed}"
@@ -109,8 +109,8 @@ here nothing about it can change, through any method:
 
 ```trb error
 const fixed = [1, 2]
-fixed.add 3
-// error: `add` needs a `var`
+fixed.append 3
+// error: `append` needs a `var`
 ```
 
 There is no `MutableList` to reach for instead - the trait `list` and `fixed` both have is the same one, `List`, and

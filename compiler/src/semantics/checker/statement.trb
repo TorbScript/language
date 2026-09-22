@@ -231,8 +231,8 @@ fn nameOfPattern(pattern: Pattern): String {
 
 /**
  * `for x in xs` evaluates the subject once into a temporary and binds a copy of every item. The item type is the
- * `Item` of the `Iterable<Item>` the subject implements - through its own declaration, through an `extend`
- * (`extend Range<Int> with Iterable<Int>`) or through a supertrait, which is one and the same question.
+ * `Item` of the `Iterate<Item>` the subject implements - through its own declaration, through an `extend`
+ * (`extend Range<Int> with Iterate<Int>`) or through a supertrait, which is one and the same question.
  */
 fn checkLoop(var checker: Checker, pattern: Pattern, iterable: Expression, body: Block) {
   const subject = inferExpression checker, iterable
@@ -252,7 +252,7 @@ fn iterationItemOf(var checker: Checker, subject: TypeId, at: Span): TypeId {
   if checker.absorbs(subject) {
     return checker.deferredType
   }
-  const iterable = match checker.wellKnown.iterable {
+  const iterable = match checker.wellKnown.iterate {
     Some(found) => found
     None => {
       return checker.deferredType
@@ -261,28 +261,28 @@ fn iterationItemOf(var checker: Checker, subject: TypeId, at: Span): TypeId {
   match traitArgumentsOf(checker, subject, iterable) {
     Some(arguments) => arguments.get(0) ?? checker.deferredType
     None => {
-      reportNotIterable checker, subject, at
+      reportNotIterate checker, subject, at
       checker.deferredType
     }
   }
 }
 
-/** A subject that is not `Iterable` cannot be looped over, and nothing else in the statement can be checked either. */
-fn reportNotIterable(var checker: Checker, subject: TypeId, at: Span) {
+/** A subject that is not `Iterate` cannot be looped over, and nothing else in the statement can be checked either. */
+fn reportNotIterate(var checker: Checker, subject: TypeId, at: Span) {
   if !isFullyKnown(checker, subject) {
     return
   }
   const shown = checker.describe subject
-  var problem = Diagnostic.error "`{shown}` is not `Iterable`, so `for` cannot walk it", at
+  var problem = Diagnostic.error "`{shown}` is not `Iterate`, so `for` cannot walk it", at
   // A generic parameter iterates what its bounds say it iterates, and the fix stands at its declaration
   if const .Parameter(_) = checker.types.form(subject) {
-    problem = problem.withNote "Add the bound to the declaration: `where {shown}: Iterable<Item>`"
+    problem = problem.withNote "Add the bound to the declaration: `where {shown}: Iterate<Item>`"
   } else if isRangeTo(checker, subject) {
     // The one shape whose *reason* is the type: `..10` has no start, so there is no first value to count from
     problem = problem.withNote "`..10` has no start, so there is no first value to count from: write one (`0..10`)"
   } else {
     problem = problem.withNote(
-      "`for x in xs` needs an `Iterable<Item>`: a collection, a range, a pipeline, or a type that implements it"
+      "`for x in xs` needs an `Iterate<Item>`: a collection, a range, a pipeline, or a type that implements it"
     )
   }
   checker.reportHere problem
@@ -305,7 +305,7 @@ fn checkReturn(var checker: Checker, value: Expression?, at: Span) {
       // `loop { ... return ... }` would otherwise infer `Never` from the loop that never ends
       if checker.isResultInferred {
         const nothing = checker.voidType
-        checker.returnTypes.add nothing
+        checker.returnTypes.append nothing
         return
       }
       if checker.resultType != checker.voidType {
@@ -319,7 +319,7 @@ fn checkReturn(var checker: Checker, value: Expression?, at: Span) {
   }
   if checker.isResultInferred {
     const found = inferExpression checker, expression
-    checker.returnTypes.add found
+    checker.returnTypes.append found
     // A `public` function and a trait method do not infer: `return e` has to say what `e` is
     requireDeclaredResult checker, found, expression.span
     return
@@ -475,7 +475,7 @@ fn isCall(expression: Expression): Bool {
   }
 }
 
-/** The name a message about a discarded result points at: `added` in `list.added(4)`. */
+/** The name a message about a discarded result points at: `appended` in `list.appended(4)`. */
 fn calledName(checker: Checker, expression: Expression): String {
   if const .Call(callee, _, _) = expression.kind {
     match callee.kind {

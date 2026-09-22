@@ -94,13 +94,13 @@ print items
    ```trb check
    fn apply(var target: List<Int>, action: () => Void) {
      action()
-     target.add 1
+     target.append 1
    }
 
    var list = [1, 2]
    var log: List<String> = []
    apply list {
-     log.add "applied"
+     log.append "applied"
    }
    print list
    print log
@@ -109,12 +109,12 @@ print items
    ```trb error
    fn apply(var target: List<Int>, action: () => Void) {
      action()
-     target.add 1
+     target.append 1
    }
 
    var list = [1, 2]
    apply list {
-     list.add 3
+     list.append 3
    }
    print list
    // error: `list` is being changed by `apply` right now
@@ -127,7 +127,7 @@ print items
    ```trb error
    var items = [1, 2, 3]
    items.update(0) { value =>
-     items.add 4
+     items.append 4
      value = value + 1
    }
    print items

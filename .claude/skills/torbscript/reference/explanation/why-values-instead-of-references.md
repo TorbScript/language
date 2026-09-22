@@ -112,12 +112,12 @@ counters[0].increment()
 print counters[0].count
 ```
 
-**A method that changes and a method that returns a copy are different words.** `sort` and `sorted`, `add` and `added`,
+**A method that changes and a method that returns a copy are different words.** `sort` and `sorted`, `append` and `appended`,
 `remove` and `removed`. The verb is a `var fn`; the participle reads its receiver and answers a new value. The
 participles are default members of the collection traits, so an implementation writes only the verbs.
 
 **There are no getters and no defensive copies.** `private(var)` hands an outsider a `const` path to a field, and `const`
-is deep, so `config.routes` can be read and iterated from outside while `config.routes.add(...)` is an error. What somebody
+is deep, so `config.routes` can be read and iterated from outside while `config.routes.append(...)` is an error. What somebody
 takes out of it is a copy anyway.
 
 **Exclusivity replaces the borrow checker, and it is conservative.** While a `var` access to a path is running, the same

@@ -6,7 +6,7 @@
 
 use Equals, Compare, Hash, Show, From, TryFrom, Add from "std/core"
 use Int64, NumberRangeError from "std/number"
-use Iterable, Length, concatenated from "std/iteration"
+use Iterate, Length, concatenated from "std/iteration"
 
 /**
  * A Unicode scalar value: one character, decoded from UTF-8.
@@ -55,7 +55,7 @@ public native type Char with Equals, Compare, Hash, Show {
  * Positions come from searching and are byte offsets. Slicing with them is O(1) and shares the storage.
  *
  * **A `String` is always valid UTF-8.** The only ways in are literals, slices at character boundaries,
- * `String.from(Iterable<Char>)` and runtime functions that validate - so reading a file whose bytes are not UTF-8 is
+ * `String.from(Iterate<Char>)` and runtime functions that validate - so reading a file whose bytes are not UTF-8 is
  * an `IoError`, and there is no replacement character anywhere in the language.
  *
  * # Examples
@@ -70,31 +70,31 @@ public native type Char with Equals, Compare, Hash, Show {
  * - [Show] - `show()` is the text unquoted, `showNested()` is quoted with escapes.
  */
 public native type String
-  with Equals, Compare, Hash, Show, Add, Slice, From<Iterable<Char>>
+  with Equals, Compare, Hash, Show, Add, Slice, From<Iterate<Char>>
 {
   /**
    * `String.from(characters)`, `characters.to<String>()`.
    *
    * Ordinary TorbScript, and it **cannot** be a function of the runtime for the same reason `ArrayList.from` cannot be
-   * one: `value` is a trait-typed `Iterable` of the *program*, so reading it means calling `iterator` and `next` through
+   * one: `value` is a trait-typed `Iterate` of the *program*, so reading it means calling `iterate` and `next` through
    * a witness table, which C code cannot do. So it collects the characters and hands them to [concatenated]: a `String`
    * is a value, so appending to one in a loop copies everything that is already in it, which is `O(n²)` in the bytes.
    */
-  static fn from(value: Iterable<Char>): String {
+  static fn from(value: Iterate<Char>): String {
     var pieces: List<String> = []
     for character in value {
-      pieces.add character.show()
+      pieces.append character.show()
     }
     concatenated pieces, ""
   }
 
   /** The characters, decoded one at a time: `for character in text.chars()`. Ordinary TorbScript, see [Characters]. */
-  fn chars(): Iterable<Char> {
+  fn chars(): Iterate<Char> {
     Characters self
   }
 
   /** The bytes of the UTF-8, in order. */
-  fn bytes(): Iterable<UInt8> {
+  fn bytes(): Iterate<UInt8> {
     TextBytes self
   }
 
@@ -211,18 +211,18 @@ public native type String
 }
 
 /**
- * The characters of a text, and the cursor that walks them: a stage plus an iterator, the shape every `Iterable` of the
+ * The characters of a text, and the cursor that walks them: a stage plus an iterator, the shape every `Iterate` of the
  * standard library has (`ListIterator`, and the stages of `std/iteration`).
  *
- * Neither is exported, exactly as the stages of a pipeline are not: `chars()` answers an `Iterable<Char>` and which type
+ * Neither is exported, exactly as the stages of a pipeline are not: `chars()` answers an `Iterate<Char>` and which type
  * carries it is nobody's business. The cursor holds the text **by value** and a byte offset, so a copy of it forks it and
  * nothing can move it from outside; `charAt` decodes the character at the offset and `Char.byteLength()` says how far to
  * move, so walking a text is O(1) per character and never a re-scan.
  */
-type Characters with Iterable<Char> {
+type Characters with Iterate<Char> {
   text: String
 
-  fn iterator(): Iterator<Char> {
+  fn iterate(): Iterator<Char> {
     CharacterIterator text
   }
 }
@@ -242,10 +242,10 @@ type CharacterIterator with Iterator<Char> {
 }
 
 /** The same for the bytes of the UTF-8. `Bytes` is the prelude's name for a chunk of them, so this one says `Text`. */
-type TextBytes with Iterable<UInt8> {
+type TextBytes with Iterate<UInt8> {
   text: String
 
-  fn iterator(): Iterator<UInt8> {
+  fn iterate(): Iterator<UInt8> {
     TextByteIterator text
   }
 }

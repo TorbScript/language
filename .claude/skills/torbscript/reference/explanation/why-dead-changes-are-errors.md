@@ -93,7 +93,7 @@ defensive fallback either - it is dead code the same way a change nothing reads 
   the pattern is intentional: a `var` that is never read again can never be observed through another binding, so
   warning instead of rejecting would keep a bug compiling for no benefit.
 - **Requiring every call to use its result** (as an unconditional rule, without the `var`-receiver exception). Rejected
-  because it would make `parser.bump()`, `list.add(1)` and every other mutating call that returns nothing but changes
+  because it would make `parser.bump()`, `list.append(1)` and every other mutating call that returns nothing but changes
   the receiver into ordinary, useful statements that a blanket rule would have no reason to reject - the rule is about
   values wasted, not about results ignored.
 
@@ -109,7 +109,7 @@ is no single line after which "never read again" could be decided. See
 [Why values instead of references](why-values-instead-of-references.md#consequences) for why such a closure never
 outlives the binding.
 
-**A temporary is never a valid base for a change, which is a related but different error.** `iterator().next()` fails
+**A temporary is never a valid base for a change, which is a related but different error.** `iterate().next()` fails
 before the dead-change rule is even relevant, because the change would be lost with the temporary it was made in - see
 [Mutation and var paths](../language/types/var-paths.md) for the rule about the base of a path, as opposed to this
 page's rule about what happens after the path is used.

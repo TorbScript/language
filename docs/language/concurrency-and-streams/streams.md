@@ -72,7 +72,7 @@ while const Some(item) = source.next().await()? { ... }
    called. Writing waits: `add`'s `Task` finishes only once the target has taken the item, so a writer faster than its
    target waits by itself.
 
-5. **The same `Stage` an `Iterable` uses drives a `Source` too, through `through(stage)`, `map`, `filter`, `take` and
+5. **The same `Stage` an `Iterate` uses drives a `Source` too, through `through(stage)`, `map`, `filter`, `take` and
    the rest.** A stage is synchronous and never asks where its values come from, so `mapping`, `filtering` and every
    other stage of [Pipelines](../collections-and-iteration/pipelines.md) work unchanged on both worlds.
 
@@ -82,7 +82,7 @@ while const Some(item) = source.next().await()? { ... }
 
 ## What this is not
 
-**A `Source` is not something a `for` loop can read.** Only `Iterable` works after `in`; a `Source` needs the `while`
+**A `Source` is not something a `for` loop can read.** Only `Iterate` works after `in`; a `Source` needs the `while`
 form because its pull can fail.
 
 ```trb check
@@ -100,7 +100,7 @@ fn printAll(source: Source<Int, Never>) {
     print item
   }
 }
-// error: `Source<Int64, Never>` is not `Iterable`, so `for` cannot walk it
+// error: `Source<Int64, Never>` is not `Iterate`, so `for` cannot walk it
 ```
 
 ## Related

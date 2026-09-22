@@ -64,7 +64,7 @@ fn lineInFile(example: SourceExample, moduleLine: Int): Int {
 public fn exampleSyntaxProblems(examples: List<SourceExample>): List<DocumentationProblem> {
   var problems: List<DocumentationProblem> = []
   for example in examples {
-    problems.addAll syntaxProblemsOf(example)
+    problems.appendAll syntaxProblemsOf(example)
   }
   problems
 }
@@ -78,20 +78,20 @@ fn syntaxProblemsOf(example: SourceExample): List<DocumentationProblem> {
   if example.kind == ExampleKind.Fragment {
     for diagnostic in lex(source).diagnostics {
       const at = example.line + lineOfOffset(example.text, diagnostic.span.start) - 1
-      problems.add DocumentationProblem(example.path, at, diagnostic.message)
+      problems.append DocumentationProblem(example.path, at, diagnostic.message)
     }
     return problems
   }
   const parsed = parse source
   for diagnostic in parsed.diagnostics {
     const at = example.line + lineOfOffset(example.text, diagnostic.span.start) - 1
-    problems.add DocumentationProblem(example.path, at, diagnostic.message)
+    problems.append DocumentationProblem(example.path, at, diagnostic.message)
   }
   if !parsed.diagnostics.isEmpty() {
     return problems
   }
   for problem in canonProblems(example.text, parsed.file) {
-    problems.add DocumentationProblem(example.path, example.line + problem.line - 1, problem.message)
+    problems.append DocumentationProblem(example.path, example.line + problem.line - 1, problem.message)
   }
   problems
 }
@@ -129,7 +129,7 @@ public fn exampleTypeProblems(
   // Every example is asked for by name: `check` only reports what was requested, and a path of one file would leave
   // the modules next to it out
   var requested = roots
-  requested.addAll wanted.map({ _.module }).toList()
+  requested.appendAll wanted.map({ _.module }).toList()
   const checked = check workspace, requested
   var problems: List<DocumentationProblem> = []
   for example in wanted {
@@ -139,7 +139,7 @@ public fn exampleTypeProblems(
       }
       for diagnostic in file.diagnostics {
         const moduleLine = lineOfOffset file.text, diagnostic.span.start
-        problems.add DocumentationProblem(example.path, lineInFile(example, moduleLine), diagnostic.message)
+        problems.append DocumentationProblem(example.path, lineInFile(example, moduleLine), diagnostic.message)
       }
     }
   }

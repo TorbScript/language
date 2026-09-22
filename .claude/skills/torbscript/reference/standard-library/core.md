@@ -148,7 +148,7 @@ public trait Bounds<Value: Compare> {
 
 **Which ends a range has is its type**, chosen by the syntax: `a..b` and `a..=b` are a `Range`, `a..` a `RangeFrom`,
 `..b` and `..=b` a `RangeTo`. Nothing is optional, so `for index in ..10` and `(0..).length()` are compile errors where
-they are written: `Range<Int>` is `Iterable<Int>` and `Length`, `RangeFrom<Int>` is `Iterable<Int>` and endless,
+they are written: `Range<Int>` is `Iterate<Int>` and `Length`, `RangeFrom<Int>` is `Iterate<Int>` and endless,
 `RangeTo<Int>` is neither. `Bounds<Value>` is what all three are and what `Slice.slice` takes, so every spelling works in
 brackets.
 
@@ -156,11 +156,11 @@ brackets.
 
 ```trb fragment
 public native type Array<Item, const Size: Int>
-  with Iterable<Item>, Length, MutableIndexed<Int, Item>
+  with Iterate<Item>, Length, MutableIndexed<Int, Item>
 {
   static fn filled(value: Item): Array<Item, Size>
   static fn generated(produce: (index: Int) => Item): Array<Item, Size>
-  static fn from(items: Iterable<Item>): Array<Item, Size>?
+  static fn from(items: Iterate<Item>): Array<Item, Size>?
   var fn set(index: Int, value: Item)
   var fn fill(value: Item)
   fn mapped<Output>(transform: (value: Item) => Output): Array<Output, Size>

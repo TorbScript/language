@@ -15,7 +15,7 @@ source:
   - CONCEPT.md#collections-and-iteration
 ---
 
-> **Not built natively yet.** A list literal handed to a parameter of a trait type (`addedAll([4, 5])`) is not built by
+> **Not built natively yet.** A list literal handed to a parameter of a trait type (`appendedAll([4, 5])`) is not built by
 > the native back end yet, so `torb run` refuses the examples here that use it. `torb check` accepts them, and the rules
 > are the language's.
 
@@ -27,9 +27,9 @@ whether the binding is `var` or `const`.
 
 ```trb check
 var numbers = [3, 1, 2]
-numbers.add 4
+numbers.append 4
 numbers[0] = 5
-const doubled = numbers.added(6).sorted { value => value }.map { _ * 2 }.toList()
+const doubled = numbers.appended(6).sorted { value => value }.map { _ * 2 }.toList()
 
 print numbers
 print doubled
@@ -40,9 +40,9 @@ print doubled
 ```text
 [1, 2, 3]                                the literal: ArrayList<Int>
 List.of(1, 2, 3)                         from arguments
-List.of(...anyIterable)                  from a spread
-List.from(anyIterable)                   from any Iterable
-anyIterable.toList()                     from a pipeline
+List.of(...anyIterate)                   from a spread
+List.from(anyIterate)                    from any Iterate
+anyIterate.toList()                      from a pipeline
 list[index]                              Indexed.at: panics if index is out of range
 list.get(index)                          Indexed.get: an Option
 list[index] = value                      MutableIndexed.set
@@ -51,8 +51,9 @@ list[index] = value                      MutableIndexed.set
 ## Rules
 
 1. **A verb changes the list in place through a `var` path, and its participle answers a changed copy and works on a
-   `const` list too.** `add`/`added`, `insert`/`inserted`, `remove`/`removed`, `removeAt`/`removedAt`, `sort`/`sorted`,
-   `reverse`/`reversed`. A participle is built from its verb once, as a default method of `List`: `fn added(value: Item): Self { var result = self; result.add value; result }`.
+   `const` list too.** `append`/`appended`, `insert`/`inserted`, `remove`/`removed`, `removeAt`/`removedAt`,
+   `sort`/`sorted`, `reverse`/`reversed`. A participle is built from its verb once, as a default method of `List`:
+   `appended` copies the list into a `var`, calls `append` on the copy and answers it.
 
 2. **Reading `list[index]` panics if the index is out of range; `list.get(index)` answers an `Option` instead.**
    `[index]` is `Indexed.at`, which calls `get` and panics on `None`; `get` itself never panics.
@@ -67,8 +68,8 @@ list[index] = value                      MutableIndexed.set
    three.** Two lists with the same items in a different order are unequal, hash differently, and print differently -
    unlike [Maps and sets](maps-and-sets.md), which ignore insertion order for both.
 
-4. **Creation goes through `List.of`, `List.from`, a literal, or `toList()` on any `Iterable`**, and every one of them
-   answers the default implementation, `ArrayList`. `List.of(...items)` accepts a spread of any `Iterable`, and a
+4. **Creation goes through `List.of`, `List.from`, a literal, or `toList()` on any `Iterate`**, and every one of them
+   answers the default implementation, `ArrayList`. `List.of(...items)` accepts a spread of any `Iterate`, and a
    nested list needs its own brackets: `List.of([1, 2], [3])` is a `List<List<Int>>`, because a variadic parameter
    never unpacks by itself.
 
@@ -81,12 +82,12 @@ list[index] = value                      MutableIndexed.set
 
 ## What this is not
 
-**A `List` has no `+`.** `Add.add` and `add(value)` would be the same member on the same type, so combining two lists
-is `addedAll`, not an operator.
+**A `List` has no `+`.** Combining two lists is `appendedAll`, a word that says which end the second list goes to,
+not an operator.
 
 ```trb check
 const numbers = [1, 2, 3]
-const combined = numbers.addedAll([4, 5])
+const combined = numbers.appendedAll([4, 5])
 print combined
 ```
 
@@ -98,7 +99,7 @@ const combined = numbers + [4, 5]
 
 ## Related
 
-- [The collection traits](collection-traits.md) - `Collection` and `Iterable`, which `List` is built on.
+- [The collection traits](collection-traits.md) - `Iterate` and `Length`, which `List` is built on.
 - [Slices](slices.md) - `list[from..to]`, a `List` again, as a value and as a `var` path.
-- [Verbs and participles](../types/verbs-and-participles.md) - the naming rule behind `add`/`added` and its siblings.
+- [Verbs and participles](../types/verbs-and-participles.md) - the naming rule behind `append`/`appended` and its siblings.
 - [Mutation and var paths](../types/var-paths.md) - why a verb needs a `var` path and a participle does not.

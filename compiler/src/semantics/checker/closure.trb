@@ -46,9 +46,9 @@ public fn checkClosure(var checker: Checker, closure: Closure, at: Span, expecte
   var used: List<Int> = []
   if !hasParameters {
     for index in (receiver + 1)..parameters.length() {
-      implicit.add parameters[index].name
-      types.add parameters[index].annotation
-      used.add(-1)
+      implicit.append parameters[index].name
+      types.append parameters[index].annotation
+      used.append(-1)
     }
   }
   // A closure whose parameters do not line up with what was expected of it said so already: its body is checked
@@ -144,7 +144,7 @@ fn parameterFormsOf(
         }
       }
     }
-    parameters.add ParameterForm(nameOfParameter(parameter), mode, annotation)
+    parameters.append ParameterForm(nameOfParameter(parameter), mode, annotation)
   }
   ClosureParameters parameters, isBroken
 }
@@ -196,7 +196,7 @@ fn checkClosureBody(
   const savedCollects = checker.collectsTries
   const savedTries = checker.pendingTries
   // The result is inferred whenever the expected one is not pinned down yet, which is the ordinary case at a call. It
-  // still flows into the body: `flatMap { _.manager.toList() }` learns its `Output` from the `Iterable<Output>` the
+  // still flows into the body: `flatMap { _.manager.toList() }` learns its `Output` from the `Iterate<Output>` the
   // closure has to produce, and that is a coercion and not a unification
   var isInferred = true
   var declared = checker.voidType
@@ -231,7 +231,7 @@ fn checkClosureBody(
   // still holds a call responsible for once its arguments have been evaluated
   checker.runningClosures = checker.runningClosures + 1
   const start = checker.bindings.length()
-  checker.closureFrames.add frame.copy(bindings: start, enclosingLoopDepth: savedDepth)
+  checker.closureFrames.append frame.copy(bindings: start, enclosingLoopDepth: savedDepth)
   if receiver >= 0 {
     declareReceiver checker, closure, at, parameters, receiver, hasParameters
   }
@@ -281,7 +281,7 @@ fn checkClosureBody(
   if const Some(found) = expectedResult {
     if isInferred {
       // The body was checked against the expected result, so where it did not *unify* it either coerced into it
-      // (`flatMap { _.toList() }` produces a `List` where an `Iterable<Output>` is wanted, design 2.5) or the body has
+      // (`flatMap { _.toList() }` produces a `List` where an `Iterate<Output>` is wanted, design 2.5) or the body has
       // already said what is wrong with it. Either way what the closure *is* is the type that was asked for: a function
       // type has no variance, so keeping the body's own result here would report the closure a second time
       if !unify(checker, result, found) {

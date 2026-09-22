@@ -98,9 +98,9 @@ public fn collectSnippets(documentation: Documentation): CollectedSnippets {
     var index = 0
     for block in page.read.blocks {
       const collected = snippetOf shown, page, block, index
-      problems.addAll collected.problems
+      problems.appendAll collected.problems
       match collected.snippet {
-        Some(found) => snippets.add found
+        Some(found) => snippets.append found
         None => {}
       }
       index = index + 1
@@ -128,7 +128,7 @@ fn snippetOf(shown: String, page: Page, block: CodeBlock, index: Int): Collected
   if block.language != "trb" {
     if !block.marker.isEmpty() {
       const note = "Only a `trb` block takes a marker. `{block.info}` has one"
-      problems.add DocumentationProblem(shown, block.line, note)
+      problems.append DocumentationProblem(shown, block.line, note)
     }
     return CollectedSnippet None, problems
   }
@@ -147,29 +147,29 @@ fn snippetOf(shown: String, page: Page, block: CodeBlock, index: Int): Collected
   }
   if kind == SnippetKind.Skipped && block.reason.byteLength() < 10 {
     const note = "`trb skip` needs a reason of its own behind it, so that a skip cannot hide"
-    problems.add DocumentationProblem(shown, block.line, note)
+    problems.append DocumentationProblem(shown, block.line, note)
   }
   if kind != SnippetKind.Skipped && !block.reason.isEmpty() {
     const note = "`{block.info}` says more than a language and a marker"
-    problems.add DocumentationProblem(shown, block.line, note)
+    problems.append DocumentationProblem(shown, block.line, note)
   }
   const expected = expectedMessages block.text
   if kind == SnippetKind.Failing && expected.isEmpty() {
     const note = "A `trb error` block names the diagnostic it expects in a `// error: <message>` line"
-    problems.add DocumentationProblem(shown, block.line, note)
+    problems.append DocumentationProblem(shown, block.line, note)
   }
   if kind != SnippetKind.Failing && !expected.isEmpty() {
     const note = "A `// error:` line only means something in a `trb error` block"
-    problems.add DocumentationProblem(shown, block.line, note)
+    problems.append DocumentationProblem(shown, block.line, note)
   }
   const output = expectedOutputOf block.text
   if kind == SnippetKind.Running && output.isEmpty() {
     const note = "A `trb run` block writes the output it expects as `// prints <line>` comments, one per line"
-    problems.add DocumentationProblem(shown, block.line, note)
+    problems.append DocumentationProblem(shown, block.line, note)
   }
   if kind != SnippetKind.Running && kind != SnippetKind.Skipped && !output.isEmpty() {
     const note = "A `// prints` comment is compared with the output only in a `trb run` block. Mark the block `trb run`"
-    problems.add DocumentationProblem(shown, block.line, note)
+    problems.append DocumentationProblem(shown, block.line, note)
   }
   const name = snippetName page.path, index
   const status = page.frontMatter.text("status") ?? "stable"
@@ -200,7 +200,7 @@ fn expectedMessages(text: String): List<String> {
   for line in linesOf(text) {
     const trimmed = line.trim()
     if trimmed.startsWith("// error:") {
-      found.add trimmed.slice(9..trimmed.byteLength()).trim()
+      found.append trimmed.slice(9..trimmed.byteLength()).trim()
     }
   }
   found
@@ -222,11 +222,11 @@ public fn expectedOutputOf(text: String): List<String> {
     }
     const rest = line.slice((at + 9)..line.byteLength())
     if rest.trim().isEmpty() {
-      found.add ""
+      found.append ""
       continue
     }
     if rest.startsWith(" ") {
-      found.add withoutTrailingSpaces(rest.slice(1..rest.byteLength()))
+      found.append withoutTrailingSpaces(rest.slice(1..rest.byteLength()))
     }
   }
   found
@@ -247,9 +247,9 @@ fn snippetName(path: String, index: Int): String {
   var characters: List<Char> = []
   for character in path.toLowerCase().chars() {
     if character.isLetter() || character.isDigit() {
-      characters.add character
+      characters.append character
     } else {
-      characters.add '-'
+      characters.append '-'
     }
   }
   "{String.from(characters)}-{index}"
@@ -259,7 +259,7 @@ fn snippetName(path: String, index: Int): String {
 public fn verifySyntax(snippets: List<Snippet>): List<DocumentationProblem> {
   var problems: List<DocumentationProblem> = []
   for snippet in snippets {
-    problems.addAll syntaxProblemsOf(snippet)
+    problems.appendAll syntaxProblemsOf(snippet)
   }
   problems
 }
@@ -274,7 +274,7 @@ fn syntaxProblemsOf(snippet: Snippet): List<DocumentationProblem> {
   if snippet.kind == SnippetKind.Fragment {
     for diagnostic in lex(source).diagnostics {
       const at = snippet.contentLine + lineOfOffset(snippet.text, diagnostic.span.start) - 1
-      problems.add DocumentationProblem(snippet.path, at, diagnostic.message)
+      problems.append DocumentationProblem(snippet.path, at, diagnostic.message)
     }
     return problems
   }
@@ -286,7 +286,7 @@ fn syntaxProblemsOf(snippet: Snippet): List<DocumentationProblem> {
       continue
     }
     const line = snippet.contentLine + lineOfOffset(snippet.text, diagnostic.span.start) - 1
-    problems.add DocumentationProblem(snippet.path, line, diagnostic.message)
+    problems.append DocumentationProblem(snippet.path, line, diagnostic.message)
   }
   if !parsed.diagnostics.isEmpty() {
     return problems
@@ -297,7 +297,7 @@ fn syntaxProblemsOf(snippet: Snippet): List<DocumentationProblem> {
   }
   for problem in canonProblems(snippet.text, parsed.file) {
     const line = snippet.contentLine + problem.line - 1
-    problems.add DocumentationProblem(snippet.path, line, problem.message)
+    problems.append DocumentationProblem(snippet.path, line, problem.message)
   }
   problems
 }
@@ -398,7 +398,7 @@ public fn typeCheckSnippets(
   const checked = check tree, ["snippets"], false, checksEveryBody
   var problems: List<DocumentationProblem> = []
   for problem in checked.problems {
-    problems.add DocumentationProblem("<the snippet workspace>", 0, problem)
+    problems.append DocumentationProblem("<the snippet workspace>", 0, problem)
   }
   for snippet in wanted {
     const path = snippetPath snippet
@@ -408,10 +408,10 @@ public fn typeCheckSnippets(
         continue
       }
       for diagnostic in file.diagnostics {
-        messages.add diagnostic.message
+        messages.append diagnostic.message
       }
     }
-    problems.addAll snippetTypeProblems(snippet, messages)
+    problems.appendAll snippetTypeProblems(snippet, messages)
   }
   TypedSnippets problems, wanted, Some(checked)
 }
@@ -420,7 +420,7 @@ fn snippetTypeProblems(snippet: Snippet, messages: List<String>): List<Documenta
   var problems: List<DocumentationProblem> = []
   if snippet.kind != SnippetKind.Failing {
     for message in messages {
-      problems.add DocumentationProblem(snippet.path, snippet.line, message)
+      problems.append DocumentationProblem(snippet.path, snippet.line, message)
     }
     return problems
   }
@@ -431,24 +431,24 @@ fn snippetTypeProblems(snippet: Snippet, messages: List<String>): List<Documenta
   var all: List<String> = []
   for message in messages {
     if !all.contains(message) {
-      all.add message
+      all.append message
     }
   }
   for diagnostic in parsed.diagnostics {
     if !all.contains(diagnostic.message) {
-      all.add diagnostic.message
+      all.append diagnostic.message
     }
   }
   if all.isEmpty() {
     const note = "This `trb error` block has no diagnostic at all, so it is not the error it claims to be"
-    problems.add DocumentationProblem(snippet.path, snippet.line, note)
+    problems.append DocumentationProblem(snippet.path, snippet.line, note)
     return problems
   }
   for expectation in snippet.expected {
     if !all.any({ _.contains expectation }) {
       const said = all.joined separator: " | "
       const note = "No diagnostic of this block contains `{expectation}`. It says: {said}"
-      problems.add DocumentationProblem(snippet.path, snippet.line, note)
+      problems.append DocumentationProblem(snippet.path, snippet.line, note)
     }
   }
   // And nothing else may be wrong with it: a block that fails for a second reason teaches a second wrong line, and one
@@ -456,7 +456,7 @@ fn snippetTypeProblems(snippet: Snippet, messages: List<String>): List<Documenta
   for message in all {
     if !snippet.expected.any({ message.contains _ }) {
       const note = "This `trb error` block also says `{message}`, which none of its `// error:` lines expects"
-      problems.add DocumentationProblem(snippet.path, snippet.line, note)
+      problems.append DocumentationProblem(snippet.path, snippet.line, note)
     }
   }
   problems

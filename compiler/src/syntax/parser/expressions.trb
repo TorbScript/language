@@ -148,14 +148,14 @@ fn parseCommandCall(var parser: Parser, start: Span, callee: Expression): Expres
   var arguments = parser.withTrailingClosures(false, { parser =>
     var first = [parseArgument(parser)]
     while parser.eat(TokenKind.Comma) {
-      first.add parseArgument(parser)
+      first.append parseArgument(parser)
     }
     first
   })
   checkArgumentOrder parser, arguments
   // The `{` belongs to the command, like the `{` after the head of an `if`
   if parser.allowsTrailingClosures && parser.isAt(TokenKind.BraceOpen) {
-    arguments.add Argument(None, isSpread: false, value: parseClosure(parser))
+    arguments.append Argument(None, isSpread: false, value: parseClosure(parser))
     if parser.isAtAny([TokenKind.Dot, TokenKind.QuestionDot, TokenKind.BraceOpen]) {
       parser.errorHere "The `\{ ... \}` in front of this belongs to the command call, like the `\{` after the head of an `if`. To pass a closure to one of the arguments, call the command with parentheses: `print(list.map \{ ... \})`"
       parser.recoverToLineEnd()
@@ -295,7 +295,7 @@ fn parsePostfix(var parser: Parser): Expression {
       .BraceOpen if parser.allowsTrailingClosures && takesTrailingClosure(expression) => {
         const closure = Argument None, isSpread: false, value: parseClosure(parser)
         match expression.kind {
-          .Call(callee, arguments, CallStyle.Parentheses) => ExpressionKind.Call callee, arguments.added(closure), CallStyle.Parentheses
+          .Call(callee, arguments, CallStyle.Parentheses) => ExpressionKind.Call callee, arguments.appended(closure), CallStyle.Parentheses
           _ => ExpressionKind.Call expression, [closure], CallStyle.Parentheses
         }
       }
@@ -337,7 +337,7 @@ fn parseGenericArguments(var parser: Parser): List<TypeReference>? {
   parser.bump()
   var arguments = [parseType(parser)]
   while parser.eat(TokenKind.Comma) {
-    arguments.add parseType(parser)
+    arguments.append parseType(parser)
   }
   const isClosed = parser.eat TokenKind.Greater
   const followers = [
@@ -440,7 +440,7 @@ fn parseListOrMap(var parser: Parser): ExpressionKind {
     const isSpread = parser.eat TokenKind.Ellipsis
     const value = parseExpression parser
     if !isSpread && parser.eat(TokenKind.Colon) {
-      entries.add((value, parseExpression(parser)))
+      entries.append((value, parseExpression(parser)))
     }
     Argument None, isSpread, value
   })
@@ -459,7 +459,7 @@ fn parseTextSegments(var parser: Parser, parts: List<TextPart>): List<TextSegmen
   var segments: List<TextSegment> = []
   for part in parts {
     match part {
-      .Literal(text) => segments.add TextSegment.Literal(text)
+      .Literal(text) => segments.append TextSegment.Literal(text)
       .Expression(range) => {
         const lexed = lexRange parser.source, range
         var inner = Parser parser.source, lexed.tokens
@@ -467,9 +467,9 @@ fn parseTextSegments(var parser: Parser, parts: List<TextPart>): List<TextSegmen
         if !inner.isAt(TokenKind.EndOfFile) {
           inner.errorHere "Expected `\}` after the expression. A literal brace is written `\\\{`"
         }
-        parser.diagnostics.addAll lexed.diagnostics
-        parser.diagnostics.addAll inner.diagnostics
-        segments.add TextSegment.Interpolated(expression)
+        parser.diagnostics.appendAll lexed.diagnostics
+        parser.diagnostics.appendAll inner.diagnostics
+        segments.append TextSegment.Interpolated(expression)
       }
     }
   }
@@ -493,7 +493,7 @@ fn parseClosureParameters(var parser: Parser): List<ClosureParameter>? {
   loop {
     const pattern = parsePattern parser
     const annotation = if parser.eat(TokenKind.Colon) { Some parseType(parser) } else { None }
-    parameters.add ClosureParameter(pattern, annotation)
+    parameters.append ClosureParameter(pattern, annotation)
     if !parser.eat(TokenKind.Comma) {
       break
     }
@@ -531,7 +531,7 @@ fn parseMatch(var parser: Parser): ExpressionKind {
       break
     }
     const before = parser.position
-    arms.add parser.withTrailingClosures(true, parseMatchArm)
+    arms.append parser.withTrailingClosures(true, parseMatchArm)
     parser.eat TokenKind.Comma
     if !parser.isAtEndOfStatement() {
       const found = parser.kind().describe()

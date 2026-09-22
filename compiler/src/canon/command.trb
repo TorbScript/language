@@ -96,19 +96,19 @@ public fn canonOptionsOf(arguments: List<String>): CanonOptions? {
       continue
     }
     if argument.startsWith(ruleFlag) {
-      rules.add(Rule.fromText(argument[ruleFlag.byteLength()..argument.byteLength()])?)
+      rules.append(Rule.fromText(argument[ruleFlag.byteLength()..argument.byteLength()])?)
       index = index + 1
       continue
     }
     if argument == "--rule" {
-      rules.add(Rule.fromText(arguments.get(index + 1)?)?)
+      rules.append(Rule.fromText(arguments.get(index + 1)?)?)
       index = index + 2
       continue
     }
     if argument.startsWith("-") {
       return None
     }
-    paths.add argument
+    paths.append argument
     index = index + 1
   }
   if paths.isEmpty() {
@@ -216,16 +216,16 @@ public fn runCanon(options: CanonOptions): Result<Int, IoError> {
     report.files = report.files + 1
     const outcome = rewrite source, options.rules
     for reason in outcome.skipped {
-      report.skipped.add "{file}: {reason}"
+      report.skipped.append "{file}: {reason}"
     }
     for reason in outcome.dropped {
-      report.dropped.add "{file}: {reason}"
+      report.dropped.append "{file}: {reason}"
     }
     report.counts.addAll outcome.counts
     if outcome.text == source {
       continue
     }
-    report.changed.add file
+    report.changed.append file
     if options.check {
       continue
     }
@@ -247,7 +247,7 @@ fn collectCanonFiles(var files: List<String>, path: String): Result<Void, IoErro
     if !File.exists(path) {
       return Fail IoError(path, "The file does not exist")
     }
-    files.add path
+    files.append path
     return Ok(void)
   }
   for entry in File.list(path)? {
@@ -258,7 +258,7 @@ fn collectCanonFiles(var files: List<String>, path: String): Result<Void, IoErro
         collectCanonFiles(files, child)?
       }
     } else if entry.endsWith(".trb") {
-      files.add child
+      files.append child
     }
   }
   Ok(void)
@@ -270,7 +270,7 @@ public fn rewrite(source: String, rules: List<Rule>): Outcome {
   const baseline = match canonicalText(source) {
     Some(found) => found
     None => {
-      outcome.skipped.add "it does not parse"
+      outcome.skipped.append "it does not parse"
       return outcome
     }
   }
@@ -281,27 +281,27 @@ public fn rewrite(source: String, rules: List<Rule>): Outcome {
 
   var edits: List<Edit> = []
   if rules.contains(Rule.Calls) {
-    edits.addAll callEdits(source, lexed.tokens, sites.calls)
+    edits.appendAll callEdits(source, lexed.tokens, sites.calls)
   }
   if rules.contains(Rule.Strings) {
     const found = stringEdits source, lexed.tokens
-    edits.addAll found.edits
+    edits.appendAll found.edits
     const lines = LineIndex.of source
     for skip in found.skipped {
       const at = lines.lineAndColumn skip.offset
-      outcome.skipped.add "{at.line}:{at.column}: {skip.reason}"
+      outcome.skipped.append "{at.line}:{at.column}: {skip.reason}"
     }
   }
   edits.sort({ _.position })
   // The rule that changes the tree comes last, so that it starts from a file the safety net has settled
   if rules.contains(Rule.ImportedCasePatterns) {
-    edits.addAll patternEdits(source, parsed.file, sites.patterns)
+    edits.appendAll patternEdits(source, parsed.file, sites.patterns)
   }
   if rules.contains(Rule.UnusedBindings) {
-    edits.addAll bindingEdits(source, sites.bindings)
+    edits.appendAll bindingEdits(source, sites.bindings)
   }
   if rules.contains(Rule.Loops) {
-    edits.addAll loopEdits(source, sites.endless)
+    edits.appendAll loopEdits(source, sites.endless)
   }
 
   var document = Document.of source
@@ -313,7 +313,7 @@ public fn rewrite(source: String, rules: List<Rule>): Outcome {
     const stays = if edit.kind.preservesTheTree() { after == Some(expected) } else { after.isSome() }
     if !stays {
       const at = lines.lineAndColumn edit.position
-      outcome.dropped.add "{at.line}:{at.column}: {edit.kind} would change more than the way it is written"
+      outcome.dropped.append "{at.line}:{at.column}: {edit.kind} would change more than the way it is written"
       continue
     }
     if !edit.kind.preservesTheTree() {

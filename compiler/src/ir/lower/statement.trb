@@ -4,7 +4,7 @@
  *
  * `for` is lowered **without an iterator** where the subject is written as a range with both ends: a counter, a
  * comparison and an increment, which is what "only if it needs no trait dispatch" means. Every other `for` needs
- * `Iterable.iterator()` and the `Option` its `next()` answers (`lowerForIterable`).
+ * `Iterate.iterate()` and the `Option` its `next()` answers (`lowerForIterate`).
  */
 
 use Span from "../../syntax/source"
@@ -26,7 +26,7 @@ use TypeId from "../../semantics/checker/type"
 use isClosedType from "../instances"
 use dispatchedOn, resultTypeOf from "./generic"
 use lowerDispatched from "./call"
-use iterableBoundOf, iteratorBoundOf, cursorMemberOf from "./collection"
+use iterateBoundOf, iteratorBoundOf from "./collection"
 
 /**
  * Every statement of a block, and the value of the block where somebody takes one. Nothing is emitted after a
@@ -400,9 +400,9 @@ fn lowerLoop(var lowering: Lowering, var builder: FunctionBuilder, body: Block, 
  * iterate the original or a copy?), and the end must not change with the body.
  *
  * Everything else - a collection, a pipeline, an inclusive range, a range without both ends - goes through
- * `Iterable.iterator()` and the `Option` that `next()` answers (`lowerForIterable`).
+ * `Iterate.iterate()` and the `Option` that `next()` answers (`lowerForIterate`).
  */
-/** The two ends of a range that is written out. Everything else is iterated through its `Iterable`. */
+/** The two ends of a range that is written out. Everything else is iterated through its `Iterate`. */
 fn rangeEndsOf(iterable: Expression): (Expression, Expression)? {
   const (from, to, isInclusive) = match iterable.kind {
     .RangeLiteral(first, second, inclusive) => (first, second, inclusive)
@@ -429,7 +429,7 @@ fn lowerFor(
   const (start, end) = match rangeEndsOf(iterable) {
     Some(found) => found
     None => {
-      lowerForIterable lowering, builder, pattern, iterable, body, at
+      lowerForIterate lowering, builder, pattern, iterable, body, at
       return
     }
   }
@@ -491,7 +491,7 @@ fn lowerFor(
 // --- `for` over a collection ----------------------------------------------------------------------------------------
 
 /**
- * `for value in values`: the subject once into a slot of its own, `Iterable.iterator()` on it, and a loop whose head
+ * `for value in values`: the subject once into a slot of its own, `Iterate.iterate()` on it, and a loop whose head
  * pulls `next()` from the cursor and switches on the `Option` that comes back (BACKEND 1.6).
  *
  * Three properties make it correct, and not one of them is a rule of the `for`:
@@ -507,7 +507,7 @@ fn lowerFor(
  * `continue` jumps to the head, where the next value is pulled; `break` leaves to the block after it. So neither needs a
  * step block of its own, unlike the counter of a range.
  */
-fn lowerForIterable(
+fn lowerForIterate(
   var lowering: Lowering,
   var builder: FunctionBuilder,
   pattern: Pattern,
@@ -524,7 +524,7 @@ fn lowerForIterable(
     }
   }
   const subjectType = substituted lowering, written
-  const iterableBound = match iterableBoundOf(lowering, subjectType, at) {
+  const iterateBound = match iterateBoundOf(lowering, subjectType, at) {
     Some(found) => found
     None => {
       return
@@ -534,7 +534,7 @@ fn lowerForIterable(
   if !lowering.isSupported {
     return
   }
-  const cursor = match lowerCursor(lowering, builder, subject, subjectType, iterableBound, at) {
+  const cursor = match lowerCursor(lowering, builder, subject, subjectType, iterateBound, at) {
     Some(found) => found
     None => {
       return
@@ -614,17 +614,16 @@ fn lowerForIterable(
   continueIn lowering, builder, done
 }
 
-/** The cursor a loop pulls from: `xs.iterator()`, with the type it answered, which is what `next` is dispatched on. */
+/** The cursor a loop pulls from: `xs.iterate()`, with the type it answered, which is what `next` is dispatched on. */
 fn lowerCursor(
   var lowering: Lowering,
   var builder: FunctionBuilder,
   subject: Slot,
   subjectType: TypeId,
-  iterableBound: TypeId,
+  iterateBound: TypeId,
   at: Span,
 ): Cursor? {
-  const cursorMember = cursorMemberOf lowering, iterableBound
-  const made = match dispatchedOn(lowering, subjectType, iterableBound, cursorMember, at) {
+  const made = match dispatchedOn(lowering, subjectType, iterateBound, "iterate", at) {
     Some(found) => found
     None => {
       return None

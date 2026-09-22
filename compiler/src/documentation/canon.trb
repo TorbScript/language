@@ -60,11 +60,11 @@ public fn canonProblems(text: String, file: SourceFile): List<CanonProblem> {
   for site in sites {
     const found = callProblem text, tokens, lines, site
     match found {
-      Some(problem) => problems.add problem
+      Some(problem) => problems.append problem
       None => {}
     }
   }
-  problems.addAll stringProblems(text, tokens, lines)
+  problems.appendAll stringProblems(text, tokens, lines)
   problems.sort({ _.line })
   problems
 }
@@ -87,12 +87,12 @@ fn linesWithOffsets(text: String): Lines {
   for character in text.chars() {
     offset = offset + character.byteLength()
     if character == '\n' {
-      texts.add text.slice(lineStart..(offset - 1))
-      starts.add offset
+      texts.append text.slice(lineStart..(offset - 1))
+      starts.append offset
       lineStart = offset
     }
   }
-  texts.add text.slice(lineStart..text.byteLength())
+  texts.append text.slice(lineStart..text.byteLength())
   Lines starts, texts
 }
 
@@ -241,7 +241,7 @@ fn walkArguments(var walk: Walk, arguments: List<Argument>) {
 fn walkExpression(var walk: Walk, expression: Expression, isCommandPosition: Bool) {
   if const .Call(callee, _, _) = expression.kind {
     const couldBeAField = isFieldName walk.fields, callee
-    walk.sites.add CallSite(expression, isCommandPosition, couldBeAField)
+    walk.sites.append CallSite(expression, isCommandPosition, couldBeAField)
   }
   match expression.kind {
     .IntegerLiteral(_) => {}
@@ -365,10 +365,10 @@ fn fieldNames(members: List<Member>): List<String> {
   var names: List<String> = []
   for member in members {
     match member.kind {
-      .Field(field) => names.add field.name.text
+      .Field(field) => names.append field.name.text
       .Constant(binding) => {
         if const .Binding(name) = binding.pattern.kind {
-          names.add name
+          names.append name
         }
       }
       _ => {}
@@ -770,7 +770,7 @@ fn stringProblems(text: String, tokens: List<Token>, lines: Lines): List<CanonPr
     }
     const found = stringProblem lines, token.span, quotes
     match found {
-      Some(problem) => problems.add problem
+      Some(problem) => problems.append problem
       None => {}
     }
   }

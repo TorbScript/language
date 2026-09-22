@@ -100,7 +100,7 @@ fn wrapperKeyOf(entry: NativeEntry, arguments: List<IrTypeId>, declared: IrSigna
     return arguments
   }
   match declared.parameters.first() {
-    Some(parameter) => arguments.added parameter.annotation
+    Some(parameter) => arguments.appended parameter.annotation
     None => arguments
   }
 }
@@ -141,7 +141,7 @@ fn needsWrapper(entry: NativeEntry, crossing: CollectionCrossing?): Bool {
  *
  * **The manifest says which entries these are, and the declaration says what the storage is.** The flag cannot be
  * derived: a collection also crosses the boundary as an *element* of another container, and an element is opaque
- * (`const void *value`, `void *out`) whatever it holds - so `ArrayList.add` of a `List<Int>` needs no coercion while
+ * (`const void *value`, `void *out`) whatever it holds - so `ArrayList.append` of a `List<Int>` needs no coercion while
  * `String.split` does, and nothing but the runtime's own prototype tells the two apart.
  */
 fn collectionOf(
@@ -189,7 +189,7 @@ fn runtimeShapeOf(
   if const .Direct = entry.result {
     var storage: List<StoragePosition> = []
     if const Some(found) = crossing {
-      storage.add StoragePosition(0 - 1, found.storage)
+      storage.append StoragePosition(0 - 1, found.storage)
     }
     return RuntimeShape entry.addressedParameters, [], storage
   }
@@ -204,7 +204,7 @@ fn runtimeShapeOf(
   const declared = irSignatureUnder lowering, signature, mapping
   var annotations: List<IrTypeId> = []
   for out in outParametersOf(lowering, declared, crossing, isPartsResult(entry)) {
-    annotations.add out.annotation
+    annotations.append out.annotation
   }
   RuntimeShape entry.addressedParameters, annotations, []
 }
@@ -262,14 +262,14 @@ fn outParametersOf(
     if const Some(first) = shape.fieldsOfVariant(success).first() {
       if !isVoidResult(lowering, first.annotation) {
         if isSplit {
-          found.addAll payloadParametersOf(lowering, first.annotation)
+          found.appendAll payloadParametersOf(lowering, first.annotation)
         } else {
           // The runtime writes the storage of a collection, not the trait-typed value the declaration names
           var annotation = first.annotation
           if const Some(inner) = crossing {
             annotation = inner.storage
           }
-          found.add OutParameter("out", annotation)
+          found.append OutParameter("out", annotation)
         }
       }
     }
@@ -296,7 +296,7 @@ fn outParametersOf(
   }
   for field in errorShape.fields {
     if parameterNamed(declared, field.name) < 0 {
-      found.add OutParameter(field.name, field.annotation)
+      found.append OutParameter(field.name, field.annotation)
     }
   }
   found
@@ -342,10 +342,10 @@ fn buildWrapper(
     // A `var self` is a place; an element the runtime takes by address stays an ordinary value operand, and the emitter
     // takes its address off the callee's signature - it carries a count and a place does not
     if declared.parameters[index].isReference {
-      given.add referenced(Reference(Slot(index), []))
+      given.append referenced(Reference(Slot(index), []))
       continue
     }
-    given.add borrowed(Slot(index))
+    given.append borrowed(Slot(index))
   }
   const empty: List<WitnessSource> = []
   if const .Direct = entry.result {
@@ -382,8 +382,8 @@ fn buildWrapper(
   var slots: List<Slot> = []
   for out in outs {
     const slot = addTemporary builder, out.annotation
-    slots.add slot
-    given.add referenced(Reference(slot, []))
+    slots.append slot
+    given.append referenced(Reference(slot, []))
   }
   const boolean = lowering.program.internType IrType.Boolean
   const answered = addTemporary builder, boolean
@@ -584,7 +584,7 @@ fn builtPayload(
   var parts: List<Argument> = []
   for index in 0..outs.length() {
     if outs[index].name.startsWith("out") && outs[index].name != "out" {
-      parts.add borrowed(slots[index])
+      parts.append borrowed(slots[index])
     }
   }
   if parts.isEmpty() {
@@ -609,7 +609,7 @@ fn payloadParametersOf(var lowering: Lowering, payload: IrTypeId): List<OutParam
   }
   const fields = lowering.program.layoutAt(layout).fields
   for index in 0..fields.length() {
-    found.add OutParameter("out{index}", fields[index].annotation)
+    found.append OutParameter("out{index}", fields[index].annotation)
   }
   found
 }
@@ -659,7 +659,7 @@ fn failureConstruct(
   for field in errorShape.fields {
     const found = parameterNamed declared, field.name
     if found >= 0 {
-      parts.add borrowed(Slot(found))
+      parts.append borrowed(Slot(found))
       continue
     }
     // What no parameter names is what the runtime wrote through an out parameter of its own: the `message`
@@ -669,7 +669,7 @@ fn failureConstruct(
       reportUnsupported lowering, what, at
       return false
     }
-    parts.add borrowed(slots[written])
+    parts.append borrowed(slots[written])
   }
   const value = addTemporary builder, error
   emit builder, Instruction.Construct(value, errorLayout, 0, parts)

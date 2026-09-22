@@ -26,7 +26,7 @@ public type PathExists {
 public fn linkProblems(documentation: Documentation, exists: PathExists): List<DocumentationProblem> {
   var problems: List<DocumentationProblem> = []
   for page in documentation.pages {
-    problems.addAll pageLinkProblems(documentation, exists, page)
+    problems.appendAll pageLinkProblems(documentation, exists, page)
   }
   problems
 }
@@ -45,13 +45,13 @@ fn pageLinkProblems(documentation: Documentation, exists: PathExists, page: Page
       // `[text](#anchor)`: the same page
       if !link.anchor.isEmpty() && !anchorsOf(page).contains(link.anchor) {
         const note = "This page has no heading with the anchor `{link.anchor}`"
-        problems.add DocumentationProblem(shown, link.line, note)
+        problems.append DocumentationProblem(shown, link.line, note)
       }
       continue
     }
     if link.target.startsWith("/") {
       const note = "A link inside the documentation is relative, so the tree can be moved: `{link.target}` is absolute"
-      problems.add DocumentationProblem(shown, link.line, note)
+      problems.append DocumentationProblem(shown, link.line, note)
       continue
     }
     const resolved = normalizePath joinDocumentationPath(page.folder, link.target)
@@ -59,11 +59,11 @@ fn pageLinkProblems(documentation: Documentation, exists: PathExists, page: Page
       // Outside of the documentation: the concept, a source file, an example
       const outside = joinPath documentation.root, joinDocumentationPath(page.folder, link.target)
       if !exists.probe(outside) {
-        problems.add DocumentationProblem(shown, link.line, "`{link.target}` does not exist")
+        problems.append DocumentationProblem(shown, link.line, "`{link.target}` does not exist")
       }
       continue
     }
-    problems.addAll insideLinkProblems(documentation, shown, page, link.line, link.target, link.anchor, resolved)
+    problems.appendAll insideLinkProblems(documentation, shown, page, link.line, link.target, link.anchor, resolved)
   }
   problems
 }
@@ -83,7 +83,7 @@ fn insideLinkProblems(
     Some(other) => {
       if !anchor.isEmpty() && !anchorsOf(other).contains(anchor) {
         const note = "`{target}` has no heading with the anchor `{anchor}`"
-        problems.add DocumentationProblem(shown, line, note)
+        problems.append DocumentationProblem(shown, line, note)
       }
     }
     None => {
@@ -92,10 +92,10 @@ fn insideLinkProblems(
       }
       if target.endsWith("/") || !target.endsWith(".md") {
         const note = "A link inside the documentation names a `.md` file: `{target}` does not"
-        problems.add DocumentationProblem(shown, line, note)
+        problems.append DocumentationProblem(shown, line, note)
         return problems
       }
-      problems.add DocumentationProblem(shown, line, "`{target}` is not a page of this documentation")
+      problems.append DocumentationProblem(shown, line, "`{target}` is not a page of this documentation")
     }
   }
   problems
@@ -122,7 +122,7 @@ public fn shapeProblems(documentation: Documentation): List<DocumentationProblem
       Some(_) => {}
       None => {
         const note = "Every folder of the documentation has an `index.md`"
-        problems.add DocumentationProblem(shownFolder, 0, note)
+        problems.append DocumentationProblem(shownFolder, 0, note)
       }
     }
     const documents = match folder.index {
@@ -132,10 +132,10 @@ public fn shapeProblems(documentation: Documentation): List<DocumentationProblem
     const isEmpty = folder.pages.isEmpty() && folder.folders.isEmpty() && folder.plain.isEmpty() && documents.isEmpty()
     if isEmpty {
       const note = "This folder has nothing but its index. An empty section teaches a reader nothing"
-      problems.add DocumentationProblem(shownFolder, 0, note)
+      problems.append DocumentationProblem(shownFolder, 0, note)
     }
   }
-  problems.addAll plainDocumentProblems(documentation)
+  problems.appendAll plainDocumentProblems(documentation)
   problems
 }
 
@@ -144,7 +144,7 @@ fn plainDocumentProblems(documentation: Documentation): List<DocumentationProble
   var declared: List<String> = []
   for page in documentation.pages {
     for document in page.frontMatter.items("documents") {
-      declared.add normalizePath(joinDocumentationPath(page.folder, document))
+      declared.append normalizePath(joinDocumentationPath(page.folder, document))
     }
   }
   var problems: List<DocumentationProblem> = []
@@ -155,7 +155,7 @@ fn plainDocumentProblems(documentation: Documentation): List<DocumentationProble
       }
       const shown = "{documentation.root}/{plain}"
       const note = "This file has no front matter, so it is a design document. Name it in the `documents` of an index"
-      problems.add DocumentationProblem(shown, 0, note)
+      problems.append DocumentationProblem(shown, 0, note)
     }
   }
   for document in declared {
@@ -163,7 +163,7 @@ fn plainDocumentProblems(documentation: Documentation): List<DocumentationProble
       continue
     }
     const note = "`{document}` is named in a `documents` list but is not there"
-    problems.add DocumentationProblem(documentation.root, 0, note)
+    problems.append DocumentationProblem(documentation.root, 0, note)
   }
   problems
 }

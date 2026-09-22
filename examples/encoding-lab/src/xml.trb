@@ -40,7 +40,7 @@ public type XmlMapping {
 
   /** `attribute { _.currency }` in the design. */
   var fn attribute(field: String) {
-    attributes.add field
+    attributes.append field
   }
 
   /** `text { _.amount }` in the design: this field is the element's content, not a child. */
@@ -164,25 +164,25 @@ fn valueOf(node: XmlNode, mappings: Map<String, XmlMapping>, byElement: Map<Stri
       caseName = attribute.value
       continue
     }
-    fields.add EncodedField(attribute.name, EncodedValue.String(attribute.value))
+    fields.append EncodedField(attribute.name, EncodedValue.String(attribute.value))
   }
   // Only when there is text: the same mapping has to read a field back out of a child element just as well
   if !mapping.textField.isEmpty() && !node.text.isEmpty() {
-    fields.add EncodedField(mapping.textField, EncodedValue.String(node.text))
+    fields.append EncodedField(mapping.textField, EncodedValue.String(node.text))
   }
   const names = node.children.map({ _.name }).toList()
   for child in node.children {
     const value = valueOf child, mappings, byElement
     const repeated = names.filter({ _ == child.name }).count() > 1
     if !repeated {
-      fields.add EncodedField(child.name, value)
+      fields.append EncodedField(child.name, value)
       continue
     }
     match fields.find({ _.name == child.name }) {
       Some(_) => {
         fields = grown fields, child.name, value
       }
-      None => fields.add EncodedField(child.name, EncodedValue.Sequence([value]))
+      None => fields.append EncodedField(child.name, EncodedValue.Sequence([value]))
     }
   }
   if !caseName.isEmpty() {
@@ -198,7 +198,7 @@ fn grown(fields: List<EncodedField>, name: String, value: EncodedValue): List<En
       return field
     }
     match field.value {
-      .Sequence(items) => EncodedField name, EncodedValue.Sequence(items.added(value))
+      .Sequence(items) => EncodedField name, EncodedValue.Sequence(items.appended(value))
       only => EncodedField name, EncodedValue.Sequence([only, value])
     }
   }.toList()
@@ -249,21 +249,21 @@ public type XmlEncoder with Encoder {
     const _length = length
     const name = pendingName()
     clearPending()
-    frames.add XmlFrame(.Items, elementName: name)
+    frames.append XmlFrame(.Items, elementName: name)
   }
 
   var fn map(length: Int?) {
     const _length = length
     const name = pendingName()
     clearPending()
-    frames.add XmlFrame(.Entries, elementName: name)
+    frames.append XmlFrame(.Entries, elementName: name)
   }
 
   var fn record(typeName: String) {
     const mapping = mappings.get(typeName) ?? XmlMapping()
     const name = elementNameFor typeName, mapping
     clearPending()
-    frames.add XmlFrame(.Element, elementName: name, mapping: mapping)
+    frames.append XmlFrame(.Element, elementName: name, mapping: mapping)
   }
 
   var fn variant(typeName: String, name: String) {
@@ -271,8 +271,8 @@ public type XmlEncoder with Encoder {
     const element = elementNameFor typeName, mapping
     clearPending()
     var frame = XmlFrame(.Element, elementName: element, mapping: mapping)
-    frame.attributes.add " {caseAttribute}=\"{name}\""
-    frames.add frame
+    frame.attributes.append " {caseAttribute}=\"{name}\""
+    frames.append frame
   }
 
   var fn field(name: String) {
@@ -341,7 +341,7 @@ public type XmlEncoder with Encoder {
           return
         }
         match frame.mapping.roleOf(name) {
-          .Attribute => frames[last].attributes.add(" {name}=\"{value}\"")
+          .Attribute => frames[last].attributes.append(" {name}=\"{value}\"")
           .Text => {
             frames[last].text = value
           }
@@ -436,7 +436,7 @@ type XmlParser {
         return Fail DecodeError("the attribute `{attributeName}` has no value")
       }
       position = position + 1
-      attributes.add XmlAttribute(attributeName, quotedValue()?)
+      attributes.append XmlAttribute(attributeName, quotedValue()?)
       skipWhitespace()
     }
     if atEnd() {
@@ -454,10 +454,10 @@ type XmlParser {
         break
       }
       if characters[position] == '<' {
-        children.add(element()?)
+        children.append(element()?)
         continue
       }
-      text.add characters[position]
+      text.append characters[position]
       position = position + 1
     }
     if atEnd() {
@@ -488,7 +488,7 @@ type XmlParser {
       if !character.isLetter() && !character.isDigit() && character != '_' && character != '.' {
         break
       }
-      out.add character
+      out.append character
       position = position + 1
     }
     String.from out
@@ -502,7 +502,7 @@ type XmlParser {
     position = position + 1
     var out: List<Char> = []
     while !atEnd() && characters[position] != '"' {
-      out.add characters[position]
+      out.append characters[position]
       position = position + 1
     }
     if atEnd() {

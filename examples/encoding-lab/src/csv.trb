@@ -34,7 +34,7 @@ public type CsvFormat {
    * the lab checks the name against the type's own `Describe` instead, which is the same error one phase later.
    */
   var fn flatten(field: String) {
-    flattened.add field
+    flattened.append field
   }
 }
 
@@ -59,7 +59,7 @@ public type Csv {
     }
     var columns: List<CsvColumn> = []
     for field in structure.recordFields() {
-      columns.addAll(columnsOf(field, format.flattened)?)
+      columns.appendAll(columnsOf(field, format.flattened)?)
     }
     Ok Csv(columns)
   }
@@ -117,7 +117,7 @@ fn columnsOf(field: StructureField, flattened: List<String>): Result<List<CsvCol
       for nested in inner {
         const below = columnsOf(nested, flattened)?
         for column in below {
-          columns.add CsvColumn("{name}.{column.path}", "{name}.{column.name}")
+          columns.append CsvColumn("{name}.{column.path}", "{name}.{column.name}")
         }
       }
       Ok columns
@@ -140,16 +140,16 @@ fn recordOf(columns: List<CsvColumn>, values: Map<String, String>): EncodedValue
     if seen.contains(head) {
       continue
     }
-    seen.add head
+    seen.append head
     if parts.length() == 1 {
-      fields.add EncodedField(head, cellOf(values.get(head) ?? ""))
+      fields.append EncodedField(head, cellOf(values.get(head) ?? ""))
       continue
     }
     const inner = columns.filter({ _.path.startsWith "{head}." }).map { column =>
       const name = column.path.split(".")[1]
       EncodedField name, cellOf(values.get(column.path) ?? "")
     }
-    fields.add EncodedField(head, EncodedValue.Record("", inner.toList()))
+    fields.append EncodedField(head, EncodedValue.Record("", inner.toList()))
   }
   EncodedValue.Record "", fields
 }
@@ -231,12 +231,12 @@ type CsvEncoder with Encoder {
 
   /** Whatever opens takes the field name it sits in with it, so the path below is right. */
   private var fn descend() {
-    path.add pending
+    path.append pending
     pending = ""
   }
 
   private var fn put(value: String) {
-    const full = if pending.isEmpty() { path } else { path.added pending }
+    const full = if pending.isEmpty() { path } else { path.appended pending }
     const key = full.filter({ !_.isEmpty() }).toList().joined(separator: ".")
     cells.set key, value
     pending = ""

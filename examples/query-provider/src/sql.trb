@@ -20,7 +20,7 @@ public type Fragment {
 
   /** `a.join(" AND ", b)` -> `(a AND b)` */
   fn join(keyword: String, other: Fragment): Fragment {
-    Fragment "({sql} {keyword} {other.sql})", parameters.addedAll(other.parameters)
+    Fragment "({sql} {keyword} {other.sql})", parameters.appendedAll(other.parameters)
   }
 
   fn wrap(before: String, after: String = ""): Fragment {
@@ -80,7 +80,7 @@ public fn translate(node: ExpressionNode, captures: List<Encode>): Result<Fragme
       const c = translate(condition, captures)?
       const t = translate(then, captures)?
       const o = translate(otherwise, captures)?
-      Ok Fragment("CASE WHEN {c.sql} THEN {t.sql} ELSE {o.sql} END", c.parameters.addedAll(t.parameters).addedAll(o.parameters))
+      Ok Fragment("CASE WHEN {c.sql} THEN {t.sql} ELSE {o.sql} END", c.parameters.appendedAll(t.parameters).appendedAll(o.parameters))
     }
 
     // Everything else - and every node kind that is added in the future

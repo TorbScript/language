@@ -28,7 +28,7 @@ public fn parse(source: SourceText): Parsed {
   const lexed = lex source
   var parser = Parser source, lexed.tokens, docs: lexed.docs
   const statements = parseStatementsUntil parser, TokenKind.EndOfFile
-  var diagnostics = lexed.diagnostics.addedAll parser.diagnostics
+  var diagnostics = lexed.diagnostics.appendedAll parser.diagnostics
   diagnostics.sort({ _.span.start })
   Parsed SourceFile(statements), diagnostics
 }
@@ -157,7 +157,7 @@ public type Parser {
     if diagnostics.last()?.span == Some(at) {
       return
     }
-    diagnostics.add Diagnostic.error(message, at)
+    diagnostics.append Diagnostic.error(message, at)
   }
 
   /** The same, with the line to write instead. A parse error rarely has one; a form that was removed always does. */
@@ -165,7 +165,7 @@ public type Parser {
     if diagnostics.last()?.span == Some(at) {
       return
     }
-    diagnostics.add Diagnostic.error(message, at).withNote(note)
+    diagnostics.append Diagnostic.error(message, at).withNote(note)
   }
 
   /** Did something go wrong since this copy of the parser was taken? */
@@ -214,7 +214,7 @@ public type Parser {
     skipNewlines()
     while !isAt(close) && !isAt(TokenKind.EndOfFile) {
       const before = position
-      items.add parseItem(self)
+      items.append parseItem(self)
       skipNewlines()
       if !eat(TokenKind.Comma) {
         break

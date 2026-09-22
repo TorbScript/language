@@ -24,7 +24,7 @@ public fn patternEdits(source: String, file: SourceFile, patterns: List<Pattern>
   var edits: List<Edit> = []
   for pattern in patterns {
     match editForPattern(source, pattern, imported) {
-      Some(edit) => edits.add edit
+      Some(edit) => edits.append edit
       None => {}
     }
   }
@@ -57,7 +57,7 @@ fn importedCases(file: SourceFile): List<String> {
     match statement.kind {
       .Bind(binding) => {
         match binding.pattern.kind {
-          .Binding(name) => shadowed.add name
+          .Binding(name) => shadowed.append name
           _ => {}
         }
       }
@@ -70,22 +70,22 @@ fn importedCases(file: SourceFile): List<String> {
                   const local = item.localName().text
                   // `use Option.Some from "std/core"`, `use Shape.Circle`: a path names a case, a single name a type
                   if item.path.length() > 1 {
-                    cases.add local
+                    cases.append local
                   } else {
-                    shadowed.add local
+                    shadowed.append local
                   }
                 }
               }
               .All(_) => {}
             }
           }
-          .Function(inner) => shadowed.add inner.name.text
-          .Type(inner) => shadowed.add inner.name.text
-          .Alias(inner) => shadowed.add inner.name.text
-          .Trait(inner) => shadowed.add inner.name.text
+          .Function(inner) => shadowed.append inner.name.text
+          .Type(inner) => shadowed.append inner.name.text
+          .Alias(inner) => shadowed.append inner.name.text
+          .Trait(inner) => shadowed.append inner.name.text
           .Constant(inner) => {
             match inner.pattern.kind {
-              .Binding(name) => shadowed.add name
+              .Binding(name) => shadowed.append name
               _ => {}
             }
           }
@@ -97,7 +97,7 @@ fn importedCases(file: SourceFile): List<String> {
   }
   for name in preludeCases {
     if !shadowed.contains(name) {
-      cases.add name
+      cases.append name
     }
   }
   cases

@@ -572,13 +572,13 @@ yet"*.
 
 ## 4. Queries
 
-A query answers an `Iterable` of tuples. That is the whole shape:
+A query answers an `Iterate` of tuples. That is the whole shape:
 
 ```trb fragment
-public fn query<Space, Component>(space: Space): Iterable<(Entity, Component)>
-public fn pairs<Space, First, Second>(space: Space): Iterable<(Entity, First, Second)>
-public fn triples<Space, First, Second, Third>(space: Space): Iterable<(Entity, First, Second, Third)>
-public fn quadruples<Space, First, Second, Third, Fourth>(space: Space): Iterable<(Entity, First, Second, Third, Fourth)>
+public fn query<Space, Component>(space: Space): Iterate<(Entity, Component)>
+public fn pairs<Space, First, Second>(space: Space): Iterate<(Entity, First, Second)>
+public fn triples<Space, First, Second, Third>(space: Space): Iterate<(Entity, First, Second, Third)>
+public fn quadruples<Space, First, Second, Third, Fourth>(space: Space): Iterate<(Entity, First, Second, Third, Fourth)>
 ```
 
 ### Four arities, because variadic type parameters are the honest answer and do not exist
@@ -592,7 +592,7 @@ So **the honest answer is a variadic type parameter, and the smallest form of it
 places**: as the element list of a tuple type, and as the subject of a bound.
 
 ```trb fragment
-public fn query<Space, ...Components>(space: Space): Iterable<(Entity, ...Components)>
+public fn query<Space, ...Components>(space: Space): Iterate<(Entity, ...Components)>
   where Space: Store<...Components> {
 ```
 
@@ -647,7 +647,7 @@ named function cannot capture, so a system that needs the frame time cannot use 
 
 ### Filters
 
-**An ECS filter is a filter.** A query answers an `Iterable`, so the language's own vocabulary is the whole story:
+**An ECS filter is a filter.** A query answers an `Iterate`, so the language's own vocabulary is the whole story:
 
 | What an ECS calls it | What is written |
 |----------------------|-----------------|
@@ -661,7 +661,7 @@ Change detection is a stamp per row and a clock per column, which is Bevy's mech
 
 ```trb fragment
 /** The entities whose value was written after `stamp`. */
-fn changedSince(stamp: Int): Iterable<Entity>
+fn changedSince(stamp: Int): Iterate<Entity>
 ```
 
 The probe runs it: `changed since the frame began: 1`.
@@ -692,7 +692,7 @@ fn collisions<Space, Bodies>(space: Space, bodies: Bodies): List<(Entity, Entity
       const (there, thereAt, thereReach) = all[second]
       const reach = hereReach.radius + thereReach.radius
       if hereAt.value.distanceSquaredTo(thereAt.value) <= reach * reach {
-        touching.add((here, there))
+        touching.append((here, there))
       }
     }
   }
@@ -1279,8 +1279,8 @@ phantom parameter suggests. The ECS expects a value type with an identity, a com
 expects a group to store two of them per entity (`Transform2`, `GlobalTransform2`). It expects *nothing* about
 propagation: the ECS owns the order, `std/transform` owns the arithmetic applied in it.
 
-**`std/collision`.** Broad phase, narrow phase, contacts. The ECS expects it to take an `Iterable` of `(Entity, shape)`
-and answer an `Iterable` of contacts, so that a collision system is a query piped into a function and `std/collision`
+**`std/collision`.** Broad phase, narrow phase, contacts. The ECS expects it to take an `Iterate` of `(Entity, shape)`
+and answer an `Iterate` of contacts, so that a collision system is a query piped into a function and `std/collision`
 never learns what an entity is. A broad phase that wanted to keep a spatial index between frames keeps it as a field
 of its own group, like any other state.
 

@@ -179,7 +179,7 @@ public type PackedEncoder with Encoder {
       .Items => {
         var payload: List<Int64> = []
         appendVarint payload, frame.count
-        payload.addAll frame.bytes
+        payload.appendAll frame.bytes
         block payload
       }
       .Fields(_) => block frame.bytes
@@ -187,7 +187,7 @@ public type PackedEncoder with Encoder {
   }
 
   private var fn open(kind: PackedFrameKind) {
-    frames.add PackedFrame(kind)
+    frames.append PackedFrame(kind)
   }
 
   /** One varint value, with its key when it sits in a record. */
@@ -201,33 +201,33 @@ public type PackedEncoder with Encoder {
   private var fn block(payload: List<Int64>) {
     var body: List<Int64> = []
     appendVarint body, payload.length()
-    body.addAll payload
+    body.appendAll payload
     put body, blockWire
   }
 
   private var fn put(payload: List<Int64>, wire: Int64) {
     if frames.isEmpty() {
-      output.addAll payload
+      output.appendAll payload
       return
     }
     const last = frames.length() - 1
     match frames[last].kind {
       // An item of a sequence carries no key: the type knows what it is reading
       .Items => {
-        frames[last].bytes.addAll(payload)
+        frames[last].bytes.appendAll(payload)
         frames[last].count = frames[last].count + 1
       }
       // Field number zero: no `field` was announced, so this is a wrapper's one value and carries no key
       .Fields(_) => {
         const number = frames[last].number
         if number == 0 {
-          frames[last].bytes.addAll(payload)
+          frames[last].bytes.appendAll(payload)
           return
         }
         var key: List<Int64> = []
         appendVarint(key, number * 8 + wire)
-        frames[last].bytes.addAll(key)
-        frames[last].bytes.addAll(payload)
+        frames[last].bytes.appendAll(key)
+        frames[last].bytes.appendAll(payload)
       }
     }
   }
@@ -251,10 +251,10 @@ type PackedFrameKind {
 fn appendVarint(var target: List<Int64>, value: Int64) {
   var rest = value
   while rest >= 128 {
-    target.add(rest % 128 + 128)
+    target.append(rest % 128 + 128)
     rest = rest / 128
   }
-  target.add rest
+  target.append rest
 }
 
 /** A signed number as a non-negative one, so a small negative number stays small. */
@@ -314,7 +314,7 @@ public type PackedDecoder with Decoder {
     while position < end {
       const code = readVarint()?
       const character = Char.tryFrom(code).mapError({ _ => DecodeError "{code} is not a character" })?
-      out.add character
+      out.append character
     }
     Ok String.from(out)
   }
@@ -327,7 +327,7 @@ public type PackedDecoder with Decoder {
   var fn sequence(): Result<Int?, DecodeError> {
     const _length = readVarint()?
     const count = readVarint()?
-    frames.add PackedCursor(.Items, remaining: count)
+    frames.append PackedCursor(.Items, remaining: count)
     Ok Some(count)
   }
 
@@ -352,7 +352,7 @@ public type PackedDecoder with Decoder {
   var fn record(typeName: String): Result<Void, DecodeError> {
     const names = numbering.get(typeName) ?? []
     const length = readVarint()?
-    frames.add PackedCursor(.Fields(names), end: position + length)
+    frames.append PackedCursor(.Fields(names), end: position + length)
     Ok void
   }
 

@@ -1,7 +1,7 @@
 /**
  * The element step: a write through `a[key]` goes into the container's own storage instead of through a copy.
  *
- * `grid[row][column] = value`, `points[index].y = value`, `rows[index].add(value)` are all lowered the same way
+ * `grid[row][column] = value`, `points[index].y = value`, `rows[index].append(value)` are all lowered the same way
  * (`ir/lower/place.trb`): the element is **taken out** of the container with `Indexed.at`, changed in a slot of the
  * frame, and **put back** with `MutableIndexed.set`. That is the concept's own model of an index path, and it is what
  * a trait-typed container can do - but the container still holds a count of the element while the frame changes it,
@@ -481,7 +481,7 @@ fn isUndisturbed(
   var guarded = [container.base, key]
   for step in container.steps {
     if const .Element(_, index, _, _) = step {
-      guarded.add index
+      guarded.append index
     }
   }
   var at = take + 1
@@ -532,7 +532,7 @@ fn rewritten(
 ): List<Instruction> {
   const step = PathStep.Element found.item, found.key, found.missing, found.at
   var steps = found.container.steps
-  steps.add step
+  steps.append step
   const prefix = Reference found.container.base, steps
   var kept: List<Instruction> = []
   for at in 0..instructions.length() {
@@ -544,16 +544,16 @@ fn rewritten(
     }
     const instruction = instructions[at]
     if at <= found.take || at > found.putBack {
-      kept.add instruction
+      kept.append instruction
       continue
     }
     if const .MakeUnique(reference) = instruction {
       if reference.base == found.element {
-        kept.addAll ownersMadeUnique(program, function, substitutedReference(reference, found.element, prefix))
+        kept.appendAll ownersMadeUnique(program, function, substitutedReference(reference, found.element, prefix))
         continue
       }
     }
-    kept.add substituted(instruction, found.element, prefix)
+    kept.append substituted(instruction, found.element, prefix)
   }
   kept
 }
@@ -574,11 +574,11 @@ fn ownersMadeUnique(program: IrProgram, function: IrFunction, reference: Referen
         continue
       }
       if isManagedType(program, annotation) {
-        found.add Instruction.MakeUnique(owner)
+        found.append Instruction.MakeUnique(owner)
       }
     }
   }
-  found.add Instruction.MakeUnique(reference)
+  found.append Instruction.MakeUnique(reference)
   found
 }
 
@@ -625,7 +625,7 @@ fn substitutedReference(reference: Reference, element: Slot, prefix: Reference):
     return reference
   }
   var steps = prefix.steps
-  steps.addAll reference.steps
+  steps.appendAll reference.steps
   Reference prefix.base, steps
 }
 
@@ -635,9 +635,9 @@ fn substitutedArguments(arguments: List<Argument>, element: Slot, prefix: Refere
     match argument.place {
       Some(place) => {
         const moved = substitutedReference place, element, prefix
-        found.add argument.copy(slot: moved.base, place: Some(moved))
+        found.append argument.copy(slot: moved.base, place: Some(moved))
       }
-      None => found.add argument
+      None => found.append argument
     }
   }
   found
@@ -650,7 +650,7 @@ fn substitutedWitnesses(
 ): List<WitnessSource> {
   var found: List<WitnessSource> = []
   for witness in witnesses {
-    found.add substitutedWitness(witness, element, prefix)
+    found.append substitutedWitness(witness, element, prefix)
   }
   found
 }
@@ -701,7 +701,7 @@ fn isSameReference(first: Reference, second: Reference): Bool {
 fn referenceBasesOf(instruction: Instruction): List<Slot> {
   var found: List<Slot> = []
   for reference in referencesOf(instruction) {
-    found.add reference.base
+    found.append reference.base
   }
   found
 }
@@ -717,7 +717,7 @@ fn writtenReferencesOf(instruction: Instruction): List<Reference> {
     .CallClosure(_, _, arguments) => placesOfArguments arguments
     .CallWitness(_, witness, _, arguments) => {
       var found = placesOfArguments arguments
-      found.addAll placeOfWitness(witness)
+      found.appendAll placeOfWitness(witness)
       found
     }
     _ => []
@@ -734,21 +734,21 @@ fn referencesOf(instruction: Instruction): List<Reference> {
     .Call(_, _, arguments, witnesses, _) => {
       var found = placesOfArguments arguments
       for witness in witnesses {
-        found.addAll placeOfWitness(witness)
+        found.appendAll placeOfWitness(witness)
       }
       found
     }
     .CallClosure(_, _, arguments) => placesOfArguments arguments
     .CallWitness(_, witness, _, arguments) => {
       var found = placeOfWitness witness
-      found.addAll placesOfArguments(arguments)
+      found.appendAll placesOfArguments(arguments)
       found
     }
     .Construct(_, _, _, fields) => placesOfArguments fields
     .TraitValue(_, _, tables) => {
       var found: List<Reference> = []
       for table in tables {
-        found.addAll placeOfWitness(table)
+        found.appendAll placeOfWitness(table)
       }
       found
     }
@@ -756,7 +756,7 @@ fn referencesOf(instruction: Instruction): List<Reference> {
       var found: List<Reference> = []
       for capture in captures {
         if const .Place(reference) = capture {
-          found.add reference
+          found.append reference
         }
       }
       found
@@ -769,7 +769,7 @@ fn placesOfArguments(arguments: List<Argument>): List<Reference> {
   var found: List<Reference> = []
   for argument in arguments {
     if const Some(place) = argument.place {
-      found.add place
+      found.append place
     }
   }
   found

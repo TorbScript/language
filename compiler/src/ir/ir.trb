@@ -70,7 +70,7 @@ public type IrSignatureId {
   value: Int
 }
 
-/** The index of an applied trait in `IrProgram.traits`: `Show`, `Iterable<Int64>`. */
+/** The index of an applied trait in `IrProgram.traits`: `Show`, `Iterate<Int64>`. */
 public type TraitId {
   value: Int
 }
@@ -147,7 +147,7 @@ public type RuntimeKind {
 }
 
 /**
- * `Show`, `Iterable<Int64>`: a trait with its type arguments applied. Interned.
+ * `Show`, `Iterate<Int64>`: a trait with its type arguments applied. Interned.
  *
  * It carries where the trait is declared, because a mangled name has to be a pure function of the *program*: a
  * witness table and a trait-typed value are named after the trait, and two traits of the same name in two packages
@@ -455,7 +455,7 @@ public type WitnessRoot {
    * One of the witness pointers inside a trait-typed value: the place the value is at, and which of its bounds.
    *
    * A **place** and not a slot, because a `var fn` member reached through a table writes through the value the table
-   * came from - `holder.items.add(x)` reads the table out of `holder.items` and hands the callee the payload inside
+   * came from - `holder.items.append(x)` reads the table out of `holder.items` and hands the callee the payload inside
    * exactly that box. A bare slot is `Reference(slot, [])`.
    */
   case Value(place: Reference, bound: Int)
@@ -708,7 +708,7 @@ public type IrProgram {
       return existing
     }
     const identifier = IrTypeId types.length()
-    types.add form
+    types.append form
     typeIdentifiers.set key, identifier
     identifier
   }
@@ -733,7 +733,7 @@ public type IrProgram {
       return existing
     }
     const identifier = TraitId traits.length()
-    traits.add applied
+    traits.append applied
     traitIdentifiers.set key, identifier
     identifier
   }
@@ -750,7 +750,7 @@ public type IrProgram {
       return existing
     }
     const identifier = IrSignatureId signatures.length()
-    signatures.add signature
+    signatures.append signature
     signatureIdentifiers.set key, identifier
     identifier
   }
@@ -779,7 +779,7 @@ public type IrProgram {
       return ReservedLayout existing, false
     }
     const identifier = LayoutId layouts.length()
-    layouts.add Layout(name, kind)
+    layouts.append Layout(name, kind)
     layoutIdentifiers.set name, identifier
     ReservedLayout identifier, true
   }
@@ -809,7 +809,7 @@ public type IrProgram {
       return existing
     }
     const identifier = LocationId locations.length()
-    locations.add location
+    locations.append location
     locationIdentifiers.set key, identifier
     identifier
   }
@@ -825,7 +825,7 @@ public type IrProgram {
   // --- Everything else
 
   var fn addFunction(function: IrFunction): FunctionId {
-    functions.add function
+    functions.append function
     FunctionId(functions.length() - 1)
   }
 
@@ -838,7 +838,7 @@ public type IrProgram {
   }
 
   var fn addStatic(value: StaticValue): StaticId {
-    statics.add value
+    statics.append value
     StaticId(statics.length() - 1)
   }
 
@@ -851,7 +851,7 @@ public type IrProgram {
   }
 
   var fn addWitnessTable(table: WitnessTable): WitnessTableId {
-    witnessTables.add table
+    witnessTables.append table
     witnessTableIdentifiers.set table.name, WitnessTableId(witnessTables.length() - 1)
     WitnessTableId(witnessTables.length() - 1)
   }
@@ -883,7 +883,7 @@ public type IrProgram {
   }
 
   var fn addElement(descriptor: ElementDescriptor): ElementId {
-    elements.add descriptor
+    elements.append descriptor
     elementIdentifiers.set descriptor.name, ElementId(elements.length() - 1)
     ElementId(elements.length() - 1)
   }
@@ -908,14 +908,14 @@ public type IrProgram {
   /** An internal error of the compiler: the lowering produced something no back end can represent. */
   var fn reportProblem(message: String) {
     if !problems.contains(message) {
-      problems.add message
+      problems.append message
     }
   }
 
   /** A construct that is well formed but not implemented yet. One root cause gets one message, however often. */
   var fn reportPlanned(message: String) {
     if !planned.contains(message) {
-      planned.add message
+      planned.append message
     }
   }
 }

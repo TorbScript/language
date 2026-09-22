@@ -60,7 +60,7 @@ public fn generatedFunctionOf(
   var builder = newFunction name, Some(member), built, "generated"
   const added = finishFunction lowering.program, builder
   lowering.generatedInstances.set name, added
-  lowering.pendingGenerated.add GeneratedRequest(added, kind, member, subject, bound, mapping)
+  lowering.pendingGenerated.append GeneratedRequest(added, kind, member, subject, bound, mapping)
   Some added
 }
 
@@ -168,7 +168,7 @@ fn containerBody(
         return
       }
     }
-    elements.add found
+    elements.append found
   }
   const target = addTemporary builder, builder.function.signature.result
   emit builder, Instruction.ContainerNew(target, kind, elements)
@@ -190,7 +190,7 @@ fn isKeyedContainer(kind: RuntimeKind): Bool {
 fn operationBody(var lowering: Lowering, var builder: FunctionBuilder, intrinsic: Intrinsic, at: Span) {
   var operands: List<Slot> = []
   for index in 0..builder.function.signature.parameters.length() {
-    operands.add Slot(index)
+    operands.append Slot(index)
   }
   const result = builder.function.signature.result
   const location = locationOf lowering, at
@@ -231,10 +231,10 @@ fn runtimeCallBody(
   for index in 0..parameters.length() {
     // A `var self` native takes a pointer, and the wrapper's own parameter already *is* that place
     if parameters[index].isReference {
-      given.add referenced(Reference(Slot(index), []))
+      given.append referenced(Reference(Slot(index), []))
       continue
     }
-    given.add borrowed(Slot(index))
+    given.append borrowed(Slot(index))
   }
   const result = builder.function.signature.result
   const location = locationOf lowering, at
@@ -359,7 +359,7 @@ fn derivedFieldsOf(
     } else {
       PathStep.Variant layout, variant, index
     }
-    found.add DerivedField(field.name, field.annotation, subjects[position], step)
+    found.append DerivedField(field.name, field.annotation, subjects[position], step)
   }
   Some found
 }
@@ -380,7 +380,7 @@ fn fieldTypesOf(var lowering: Lowering, subject: TypeId): List<TypeId>? {
     .Tuple(fields) => {
       var found: List<TypeId> = []
       for field in fields {
-        found.add field.annotation
+        found.append field.annotation
       }
       Some found
     }
@@ -393,11 +393,11 @@ fn fieldTypesOf(var lowering: Lowering, subject: TypeId): List<TypeId>? {
       }
       var found: List<TypeId> = []
       for field in shape.fields {
-        found.add substitute(lowering.checker.types, field.annotation, mapping)
+        found.append substitute(lowering.checker.types, field.annotation, mapping)
       }
       for declared in shape.cases {
         for field in declared.fields {
-          found.add substitute(lowering.checker.types, field.annotation, mapping)
+          found.append substitute(lowering.checker.types, field.annotation, mapping)
         }
       }
       Some found
@@ -468,8 +468,8 @@ fn equalsBody(var lowering: Lowering, var builder: FunctionBuilder, subject: Typ
       return
     }
     terminate builder, Terminator.Jump(equal)
-    values.add index
-    targets.add arm
+    values.append index
+    targets.append arm
   }
   const chosen = Terminator.Switch tag, values, targets, equal
   terminateBlock builder, head, chosen
@@ -633,8 +633,8 @@ fn hashBody(var lowering: Lowering, var builder: FunctionBuilder, subject: TypeI
       return
     }
     terminate builder, Terminator.Jump(exit)
-    values.add index
-    targets.add arm
+    values.append index
+    targets.append arm
   }
   terminateBlock builder, head, Terminator.Switch(tag, values, targets, exit)
   switchTo builder, exit
@@ -1046,8 +1046,8 @@ fn showVariantBody(
       fallback = arm
       continue
     }
-    values.add index
-    targets.add arm
+    values.append index
+    targets.append arm
   }
   terminateBlock builder, head, Terminator.Switch(tag, values, targets, fallback)
 }
@@ -1070,15 +1070,15 @@ fn addShownFields(
     const field = fields[index]
     const separator = if index == 0 { opening } else { ", " }
     const label = if labeled { "{field.name}: " } else { "" }
-    parts.add textSlot(lowering, builder, "{separator}{label}")
+    parts.append textSlot(lowering, builder, "{separator}{label}")
     const value = readField lowering, builder, Slot(0), field.step, field.annotation
     const shown = fieldShown lowering, builder, field, value, at
     if !lowering.isSupported {
       return
     }
-    parts.add shown
+    parts.append shown
   }
-  parts.add textSlot(lowering, builder, ")")
+  parts.append textSlot(lowering, builder, ")")
 }
 
 fn fieldShown(

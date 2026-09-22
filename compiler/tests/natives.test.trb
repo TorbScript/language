@@ -21,7 +21,7 @@ fn readyEntries(): List<NativeEntry> {
     if const .Planned(_) = entry.state {
       continue
     }
-    found.add entry
+    found.append entry
   }
   found
 }
@@ -66,7 +66,7 @@ group "the manifest of natives" {
     var repeated: List<String> = []
     for (name, count) in seen {
       if count > 1 {
-        repeated.add name
+        repeated.append name
       }
     }
     assert(repeated == [])
@@ -77,7 +77,7 @@ group "the manifest of natives" {
     const entries = nativeEntries()
     assert(findNative(entries, "String.thereIsNoSuchMethod") == None)
     assert(findNative(entries, "String.trim") != None)
-    assert(findNative(entries, "ArrayList.add") != None)
+    assert(findNative(entries, "ArrayList.append") != None)
     assert(findNative(entries, "Decimal.add") != None)
   }
 
@@ -109,17 +109,17 @@ group "the manifest of natives" {
   }
 
   test "the parameters a native stores are recorded" {
-    assert(ownedOf("ArrayList.add") == [1])
+    assert(ownedOf("ArrayList.append") == [1])
     assert(ownedOf("HashMap.set") == [1, 2])
     assert(ownedOf("TrieMap.set") == [1, 2])
-    assert(ownedOf("HashSet.add") == [1])
+    assert(ownedOf("HashSet.insert") == [1])
     assert(ownedOf("ArrayList.length") == [])
   }
 
   test "the trie names are the array and hash implementations" {
     const entries = nativeEntries()
     assert(entries.length() > 0)
-    for member in ["add", "get", "length", "removeAt", "slice"] {
+    for member in ["append", "get", "length", "removeAt", "slice"] {
       assert(symbolOf("ArrayList.{member}") == symbolOf("TrieList.{member}"))
       assert symbolOf("ArrayList.{member}").startsWith("torb_list_")
     }
@@ -163,7 +163,7 @@ group "the manifest of natives" {
     var ordered: List<String> = []
     for entry in nativeEntries() {
       if const .Ordering = entry.result {
-        ordered.add entry.name
+        ordered.append entry.name
       }
     }
     assert(ordered == ["Float64.compare", "Instant.compare", "Duration.compare"])
@@ -251,7 +251,7 @@ group "the generated header" {
 
   test "the natives that share a symbol are listed above it, sorted" {
     const header = renderNativesHeader nativeEntries()
-    assert header.contains("/* ArrayList.add, TrieList.add */\nvoid torb_list_add(torb_list *list, const void *value);")
+    assert header.contains("/* ArrayList.append, TrieList.append */\nvoid torb_list_add(torb_list *list, const void *value);")
     assert header.contains("/* String.trim */\ntorb_text torb_text_trim(torb_text text);")
   }
 

@@ -48,7 +48,7 @@ Constraints that shape every decision below:
 public type TypeForm {
   /** `Point`, `List<Int>`, `Option<User>`. Aliases are expanded, so `symbol` is never an Alias. */
   case Nominal(symbol: SymbolId, arguments: List<TypeId>)
-  /** A value of one or more traits: `Shape`, `Show & Encode`, `Iterable<Item>`. Bounds are `Nominal` of a trait. */
+  /** A value of one or more traits: `Shape`, `Show & Encode`, `Iterate<Item>`. Bounds are `Nominal` of a trait. */
   case Traits(bounds: List<TypeId>)
   /** `Item`, `Key`, `Self` in a trait, `const Size`. The parameter table says which. */
   case Parameter(parameter: ParameterId)
@@ -504,7 +504,7 @@ innermost receiver or an explicit target (`build.target "dev"`); a local binding
   that does not exist gets a "did you mean" note. A parameter that is filled twice, a missing argument for a parameter
   without a default, and a surplus argument each get their own message.
 - A **variadic** parameter is last, has no default, is never labeled, and collects the rest into a `List<Item>`
-  (`Adaptation.Variadic`). `...expression` spreads any `Iterable<Item>` (`Adaptation.Spread`, with the witness).
+  (`Adaptation.Variadic`). `...expression` spreads any `Iterate<Item>` (`Adaptation.Spread`, with the witness).
   A collection is never spread implicitly.
 - A **trailing closure** fills the last parameter. Error if that parameter already has an argument, or is variadic, or
   is not of function type. Labeled arguments for earlier parameters are fine
@@ -630,7 +630,7 @@ with escapes, `Option` as `Some(x)` / `None`.
 ### 4.3 Bounds, `where`, and type parameters as namespaces
 
 - `<Item: Hash & Equals>` and `where Item: Hash` are the same thing and both land in `Signature.bounds`.
-- A bound's subject may be any type mentioning the generic parameters (`where Target: From<Iterable<Item>>`,
+- A bound's subject may be any type mentioning the generic parameters (`where Target: From<Iterate<Item>>`,
   `where Item: Compare`), which is what the prelude needs.
 - A **member's** `where` clause makes that member conditionally available (`fn contains(value: Item) where Item:
   Equals`, `fn toSet() where Item: Hash`). An unsatisfied condition is a member-not-available error naming the
@@ -673,8 +673,8 @@ This resolves the open question in CONCEPT.md ("generic methods on a trait-typed
 | `a[k]`                     | `Indexed.at`, `MutableIndexed.set` for a write | `a[k]` as a `var` path needs `MutableIndexed`         |
 | `a[from..to]`              | `Slice.slice`, `MutableSlice.replace`          | As a `var` path it is a window                        |
 | `"{e}"`                    | `Show.show` per part                           | Records `Adaptation.Show`                             |
-| `for x in xs`              | `Iterable.iterator`                            | The subject is evaluated once into a temporary        |
-| `...e`                     | `Iterable`                                     |                                                      |
+| `for x in xs`              | `Iterate.iterate`                            | The subject is evaluated once into a temporary        |
+| `...e`                     | `Iterate`                                     |                                                      |
 | `e?`                       | `Result`/`Option`, plus `From` for the error   | Section 4.6                                           |
 | `a ?? b`                   | `OrElse.orElse`, `b` is lazy                   | A trait, because it is a method call                  |
 | `a?.m`                     | `Option.map`, or `flatMap` if `m` returns an `Option` | Never a nested `Option` (gap 12)               |
@@ -732,7 +732,7 @@ gets "`id` never changes after construction"; a `private(var)` field gets "`bala
 `Account`".
 
 **Temporaries.** A `var` _path_ through a temporary is an error, because the change is lost:
-`iterator().next()`, `f().field = 1`, `samples.toList().sort { _ }`. A temporary as the _argument_ of a `var`
+`iterate().next()`, `f().field = 1`, `samples.toList().sort { _ }`. A temporary as the _argument_ of a `var`
 parameter is allowed: the callee is its only owner, "copy in, copy out" is exact, and this is what
 `using File.open(path)? { ... }` needs (gap 2).
 
@@ -910,7 +910,7 @@ The catalogue (the ~40 that matter):
 | `const` written | ``` `q` is a `const`. Only a `var` binding can be changed ``` |
 | Verb on a const path | ``` `add` needs a `var`. Did you mean `added`? ``` |
 | Non-`var` field / `private(var)` / `private` | ``` `id` never changes after construction ``` / ``` `balance` can only be written by `Account` ``` / ``` `history` is private to `Account` ``` |
-| `var` path through a temporary | ``` `iterator()` is a temporary, and `next` changes its receiver: bind it first (`var cursor = iterator()`) ``` |
+| `var` path through a temporary | ``` `iterate()` is a temporary, and `next` changes its receiver: bind it first (`var cursor = iterate()`) ``` |
 | Exclusivity | ``` `root` is being changed by `div` right now ``` / ``` `items[i]` and `items[j]` cannot be told apart. Use `items.swapAt(i, j)` ``` - _While a `var` access runs, the same path cannot be reached a second time_ |
 | Dead change | ``` This change has no effect: `first` is never read again. Did you mean `counters[0].increment()`? ``` |
 | Discarded value | ``` The result of `added` is not used. Did you mean `add`? Discard it with `const _ = ...` ``` |
@@ -953,7 +953,7 @@ milestones cannot collide:
 ```text
 compiler/src/semantics/checker/
 ├ type.trb            TypeForm, TypeId, TypeTable, formatting a type for a message
-├ wellknown.trb       The prelude symbols the checker knows by name (Int64, Option, Iterable, Show, From, ...)
+├ wellknown.trb       The prelude symbols the checker knows by name (Int64, Option, Iterate, Show, From, ...)
 ├ lowering.trb        A `TypeReference` to a `TypeId`: names, tuples, functions, literals, const arguments
 ├ signature.trb       Declarations to signatures, lazily, with cycle detection
 ├ context.trb         Checker, Tables, Resolution, Adaptation, scopes, diagnostics, inference contexts
@@ -1061,7 +1061,7 @@ files that have to check cleanly afterwards.
 |---|---|---|---|
 | **4.1** | **Done.** Type representation and signatures. `TypeForm`, interning, `TypeReference` to `TypeId`, alias expansion, `Self`, generic parameters, const arguments, literal types, tuples, function types, intersections. Signatures on demand with cycle detection. `describeType` for messages. No expression checking. | `type.trb`, `wellknown.trb`, `signature.trb`, `context.trb`, `unify.trb` (equality and substitution only), `check.trb` (skeleton) | M3 |
 | **4.2** | **Done.** Statements, blocks and monomorphic expressions. Literals with adaptation, locals, bindings with irrefutable patterns, assignment, `if`/`match` types without exhaustiveness, calls of top-level functions and of methods on concrete types, arguments/labels/defaults/variadics, field and static member access, definite return, `Never`. Everything else becomes `TypeForm.Deferred` and is counted (`torb check --statistics`). | `expression.trb`, `statement.trb`, `call.trb`, `member.trb`, `name.trb`, `pattern.trb` | 4.1 |
-| **4.3** | **Done.** Traits and implementations. The index, bound resolution with memoization, coherence, overlap, supertraits, member lookup through traits and extensions (the `extend` visibility rule), delegation `by`, derived implementations, operators, interpolation through `Show`, `Iterable` in `for`, `?`/`??`/`?.`, `into()`. | `implementation.trb`, `derive.trb`, `member.trb`, `expression.trb` | 4.2 |
+| **4.3** | **Done.** Traits and implementations. The index, bound resolution with memoization, coherence, overlap, supertraits, member lookup through traits and extensions (the `extend` visibility rule), delegation `by`, derived implementations, operators, interpolation through `Show`, `Iterate` in `for`, `?`/`??`/`?.`, `into()`. | `implementation.trb`, `derive.trb`, `member.trb`, `expression.trb` | 4.2 |
 | **4.4** | **Done.** Generics and inference. Unification variables, inference contexts, two-pass argument checking, closures from expected function types, implicit `_`/named parameters, `.Case`, empty literals, bounds at call sites, witnesses, trait-typed values and per-call object safety. **Gate: `torb check compiler/src/syntax` is clean** - and so is all of `std/` and `compiler/`, at 100% of their expressions. | `unify.trb`, `closure.trb`, `call.trb`, `implementation.trb` | 4.3 |
 | **4.5** | **Done.** Exhaustiveness and redundancy. The pattern matrix over ADTs, literals, ranges, tuples, lists with rest, literal unions, `Option`/`Result`; witnesses; `MatchPlan`; `if const`/`if var`/`while const`, and every pattern that has to match. | `exhaustive.trb`, `usefulness.trb`, `pattern.trb` | 4.4 |
 | **4.6** | **Done.** Places and the mutation rules. `const`/`var`, valid paths, `var` parameters and temporaries, `private(var)`, exclusivity, dead changes, `break`/`continue`. | `place.trb`, `mutation.trb`, `statement.trb` | 4.4 |
@@ -1158,7 +1158,7 @@ list. Everything else is as written.
 - **Operators and `a[k]` go through the `with` list of a declaration, transitively** (`declaredTraitArguments`), not
   through implementations. `Int64 with Signed`, `Signed with Numeric`, `Numeric with Add<Self, Self>` answers
   `1 + 2` with `Int64` and makes `Meters + Float` a mistake, and it needs nothing from 4.3. The same walk answers
-  `Indexed` for `a[key]`, `Slice` for `a[from..to]` and `Iterable<Item>` for `for x in xs`, so `for` is *not* deferred.
+  `Indexed` for `a[key]`, `Slice` for `a[from..to]` and `Iterate<Item>` for `for x in xs`, so `for` is *not* deferred.
   4.3 replaces the walk with the real lookup; the memoization it needs is already there.
 - **A comparison is a `Bool` and an interpolated text is a `String`, whatever implements them.** Only the witness is
   4.3's, and deferring the *type* of every `==` and of every `"{x}"` would have left almost nothing typed.
@@ -1282,7 +1282,7 @@ list. Everything else is as written.
   the closure. Nothing is reported there - the real check happens where the value arrives - and a bare variable is never
   solved with a trait type, because a value *coerces* into one and a coercion may not solve a variable (2.5).
 - **A coercion into a trait type solves the arguments of the trait** (`matchedBound`). Every collection parameter of the
-  prelude is an `Iterable<Item>` whose `Item` is open at the call, and what carries the answer is the implementation the
+  prelude is an `Iterate<Item>` whose `Item` is open at the call, and what carries the answer is the implementation the
   coercion finds: `traitArgumentsOf` gives `[Int64]` for a `List<Int64>` and those unify with the bound's arguments.
 - **`Self` is a name, so `Receiver` and `Value` are the same parameter mode** (`sameMode`). `Point.area` read as a value
   is `(self: Point) => Int64`, and `[p, q].map(Point.area)` passes it where `(value: Point) => Int64` is wanted.
@@ -1308,7 +1308,7 @@ list. Everything else is as written.
   is **not** implemented: the local wins, silently. Reporting it needs a look at the body before it is checked, and
   `any { _ == value }` next to a parameter called `value` is ordinary prelude code that must not be a mistake.
 - **A closure body is checked against the expected result even when that result is still a variable.**
-  `flatMap { _.manager.toList() }` learns its `Output` from the `Iterable<Output>` the closure has to produce, and that
+  `flatMap { _.manager.toList() }` learns its `Output` from the `Iterate<Output>` the closure has to produce, and that
   is a coercion and not a unification, so `Expectation.None` would lose it. The result is still what the body produces.
 - **A closure whose parameters do not line up counts as the type that was asked for**, and its body is checked without
   an expectation: one root cause, one message.
@@ -1326,7 +1326,7 @@ list. Everything else is as written.
   `value.okOr(.Missing("port"))?` in a function that returns `Result<_, ConfigError>` unifies the open failure type with
   `ConfigError`. A failure type that is already known stays what it is and is converted through `From` as always.
 - **`if const`, `while const` and a list pattern get their types here**, although 4.5 owns the patterns: the type of the
-  subject and the `Item` of its `Iterable` are available, and leaving them `Deferred` would have left a tenth of the
+  subject and the `Item` of its `Iterate` are available, and leaving them `Deferred` would have left a tenth of the
   parser unchecked for no reason.
 - **`closure.trb` is the only new file.** `unify.trb` grew the contexts and the unifier, `call.trb` the instantiation,
   the two argument passes and the bounds, `name.trb` the generic targets and the captures, `member.trb` the generic
@@ -1439,7 +1439,7 @@ list. Everything else is as written.
 - **A dead change needs the change to be the *only* effect.** Design 5.3 counts every change; the implementation
   counts a change to a place only where the call produces `Void`/`Never` or its result is thrown away, plus every
   assignment. `cursor.next()` hands its value on, so the change to `cursor` is not what the statement is for and
-  `fn first() { var cursor = iterator()  cursor.next() }` - the idiom gap 2 asks for - is not a mistake.
+  `fn first() { var cursor = iterate()  cursor.next() }` - the idiom gap 2 asks for - is not a mistake.
 - **A change through a step reads the old value; only `x = value` replaces the whole binding.** So the read that
   resolving the target produced stays for `x.part = value` and goes away for `x = value`, and the change itself is
   noted *after* the value has been read - otherwise `total = total + 1` would count its own right-hand side as the
@@ -1753,17 +1753,17 @@ nothing told a back end how such a literal is built.
   public type CollectionLiteral {
     case Default
     case InlineArray(item: TypeId, size: Int)
-    case FromIterable(target: TypeId, item: TypeId, witness: Witness)
+    case FromIterate(target: TypeId, item: TypeId, witness: Witness)
   }
   ```
 
   `Default` means "build the collection this literal's own type names, item by item" - the default implementation where
   the trait is what is expected (`ArrayList` for a list, `TrieMap` for a map), and that very type where a concrete
   implementation of the trait is (`const numbers: TrieList<Int> = [1, 2]`). **A concrete implementation is therefore
-  `Default` and not `FromIterable`:** a literal knows its items, so building the type that is asked for directly *is*
+  `Default` and not `FromIterate`:** a literal knows its items, so building the type that is asked for directly *is*
   the fast path the concept asks the compiler to find, and going through `Target.from` would be a list built to be
   thrown away. (While this was written it was also the only answer resolution could give, because both
-  `extend<Item> List<Item> with From<Iterable<Item>>` and the `with From<Iterable<Item>>` on `ArrayList` itself applied
+  `extend<Item> List<Item> with From<Iterate<Item>>` and the `with From<Iterate<Item>>` on `ArrayList` itself applied
   to `ArrayList<Int>`. Gap 53 settled that: only `ArrayList`'s own does, and `.to<ArrayList<Int>>()` works. The reason
   above is the one that stands.)
 - **`Array<Item, Size>` is checked before anything else**, because it is the one target that is not built from a
@@ -1773,19 +1773,19 @@ nothing told a back end how such a literal is built.
   A `Size` that is a const *parameter* (`Array<Float, Columns>` inside a generic type) says nothing: what `Columns` is,
   the caller decides. A `...` contributes its own size where its operand is an `Array` of a known size, and is otherwise
   `` `List<Int64>` does not say how many items it has, so `...` cannot fill an `Array` ``.
-- **Every other target goes through `From<Iterable<Item>>`**, the one collection protocol the language has, and `Item` is
-  what the target itself iterates (`Iterable<Item>`), or - for a target that is not iterable at all - the
-  `Iterable<Item>` its own `From` takes. So a literal accepts exactly the targets `.to<Target>()` accepts, trait types
-  included: `Set<String>` and `Queue<Int>` are `From<Iterable<Item>>` through an `extend` whose target is the trait, and
+- **Every other target goes through `From<Iterate<Item>>`**, the one collection protocol the language has, and `Item` is
+  what the target itself iterates (`Iterate<Item>`), or - for a target that is not iterable at all - the
+  `Iterate<Item>` its own `From` takes. So a literal accepts exactly the targets `.to<Target>()` accepts, trait types
+  included: `Set<String>` and `Queue<Int>` are `From<Iterate<Item>>` through an `extend` whose target is the trait, and
   the `Witness` that is recorded is that implementation with its inner witnesses (`String: Hash`). For a target that is
   not iterable at all the `Item` comes from its own `From`, and **which** of several `From` implementations that is,
   `iterableSourceOf` answers - so `const text: String = ['a', 'b']` is `String.from(['a', 'b'])` and gap 50's blanket
   `From<Never>` does not get in the way (gap 53).
 - **A type that is none of these is an error** instead of a silent acceptance:
-  `` A list literal cannot become a `Point`: `Point` is not `From<Iterable<Item>>` ``, and for a map literal
-  `` ... is not `From<Iterable<(Key, Value)>>` ``. A trait type the collection merely *coerces* to is deliberately not
-  one of these: `print [1, 2]` fills a `...values: Show`, and `const numbers: Iterable<Int> = []` takes its item type
-  from the `Iterable<Item>` of the expectation. Such a literal keeps the expected type as its own, as before - but the
+  `` A list literal cannot become a `Point`: `Point` is not `From<Iterate<Item>>` ``, and for a map literal
+  `` ... is not `From<Iterate<(Key, Value)>>` ``. A trait type the collection merely *coerces* to is deliberately not
+  one of these: `print [1, 2]` fills a `...values: Show`, and `const numbers: Iterate<Int> = []` takes its item type
+  from the `Iterate<Item>` of the expectation. Such a literal keeps the expected type as its own, as before - but the
   coercion is now held to, so `const ordered: Compare = [1, 2]` gets the existing
   `` `List<Int64>` does not implement `Compare` ``.
 - **Map literals had the same hole and are fixed by the same three rules**, minus the `Array` one. **Set literals have
@@ -1815,11 +1815,11 @@ nothing told a back end how such a literal is built.
   concrete implementer only through the coercion of the receiver: every member of the implemented trait has to take
   `self` and none may answer `Self`. `reachesImplementers` guards the one branch of `matchTarget` that let a
   trait-targeted implementation match any implementer, so `ArrayList<Int>` has exactly one candidate for
-  `From<Iterable<Int>>` - its own - and `.to<ArrayList<Int>>()`, `.to<TrieSet<Int>>()` and a literal expected as one all
+  `From<Iterate<Int>>` - its own - and `.to<ArrayList<Int>>()`, `.to<TrieSet<Int>>()` and a literal expected as one all
   resolve. `Show`/`Equals`/`Hash`/`Encode` still reach implementers, so `ArrayList<Int>.show()` is unchanged.
 - **`iterableSourceOf`** is the question the collection protocol really has: not "what is the argument of `From` for this
   type" (which has no single answer - `From` is the one trait a type implements several times) but "which of its `From`
-  implementations takes an `Iterable`". That is what brings `const text: String = ['a', 'b']` back.
+  implementations takes an `Iterate`". That is what brings `const text: String = ['a', 'b']` back.
 
 ### What the conformance round found (gaps 55 to 59)
 
@@ -1941,7 +1941,7 @@ Neither is in `std/prelude`, and `Range` is used in signatures (`operators.trb`,
 `examples/tour/src/06-errors.trb`) uses `Void` as a _value_, which contradicts "A type never flows as a value".
 _Proposal:_ the prelude declares `public native type Void`, `public native type Never` and
 `public type Range<Value> { start: Value?, end: Value?, inclusive: Bool }` with
-`extend Range<Int> with Iterable<Int>` (only when `start` is present) and `Slice` support; the unit value is written
+`extend Range<Int> with Iterate<Int>` (only when `start` is present) and `Slice` support; the unit value is written
 `Void()`, an ordinary zero-field constructor call, and the five call sites are changed. _Reason:_ it needs no new rule
 at all - "calls without arguments always need `()`" already covers it - and it keeps types out of expression
 positions.
@@ -1958,12 +1958,12 @@ statement has the value `void`. `Void`, `Never` and `Range<Value>` are declared 
 language that was both, and that exception is what this replaces.)
 
 **2. `using` passes a temporary to a `var` parameter.**
-"`var` Paths": "A temporary is not a `var` path: `iterator().next()` is a compile error." But
+"`var` Paths": "A temporary is not a `var` path: `iterate().next()` is a compile error." But
 `fn using<Resource: Close, Value>(var resource: Resource, ...)` is documented and used as
 `using File.open(path)? { ... }` (`std/prelude/src/control.trb`, `std/fs/src/lib.trb`,
 `examples/tour/src/08-control-flow.trb`).
 _Proposal:_ a temporary is a valid _argument_ for a `var` parameter (the callee is its only owner, "copy in, copy out"
-is exact), and stays invalid as the _base of a path_ (`iterator().next()`, `f().x = 1`). _Reason:_ the rule's purpose
+is exact), and stays invalid as the _base of a path_ (`iterate().next()`, `f().x = 1`). _Reason:_ the rule's purpose
 is "a change that is thrown away is a mistake", which only applies when the change would have to be written back
 somewhere.
 
@@ -1992,7 +1992,7 @@ _Decision:_ accepted.
 
 **5. Blanket implementations are used but never described.**
 `std/prelude/src/convert.trb` has `extend<Source, Target> Source with Into<Target> where Target: From<Source>`, and
-`option.trb`/`result.trb` have `extend<Value, Target: From<Iterable<Value>>> Option<Target> with From<...>`. The
+`option.trb`/`result.trb` have `extend<Value, Target: From<Iterate<Value>>> Option<Target> with From<...>`. The
 "Coherence" bullet only talks about `extend X with Trait`.
 _Proposal:_ an implementation whose target is a bare generic parameter is a blanket implementation and is allowed when
 the package owns the trait; two implementations of one trait may never overlap; disjointness is proved only by
@@ -2024,7 +2024,7 @@ _Decision:_ accepted.
 
 **8. Coercion to a trait type is nowhere stated.**
 "Traits": "A trait can be used as a type" - but nothing says that `Square` is assignable to `Shape`, which
-`const shapes: List<Shape> = [Square(2.0), Circle(1.0)]` and every `Iterable` parameter in the prelude require.
+`const shapes: List<Shape> = [Square(2.0), Circle(1.0)]` and every `Iterate` parameter in the prelude require.
 _Proposal:_ name the four coercions (value to trait value, trait value to fewer bounds/supertrait, `Never` to
 anything, literal to literal type), state that they apply only where a type is expected and never solve an inference
 variable, and state that there is **no variance** (`List<Square>` is not a `List<Shape>`). _Reason:_ it is the one
@@ -2270,7 +2270,7 @@ members exist). _Reason:_ a structural type has no owner, so the orphan rule can
 _Decision:_ accepted.
 
 **33. `Self` as a trait argument in a supertrait.**
-`collection.trb` writes `trait Collection<Item> with Iterable<Item>, Length, Accumulator<Item, Self>`, while
+`collection.trb` writes `trait Collection<Item> with Iterate<Item>, Length, Accumulator<Item, Self>`, while
 "One Vocabulary" rules out "`Self<U>`, F-bounded tricks".
 _Proposal:_ allow `Self` in any type position inside a trait, including as a trait argument; it is a type, not a type
 constructor, so it costs nothing. _Reason:_ the collection traits need it and it is not higher-kinded.
@@ -2466,7 +2466,7 @@ for a trait), in `signature.trb`, so it covers a trait requirement and a `native
 Two consequences for an API built on this. **Reading is a `var fn`, wrapping only reads:** a temporary is no `var`
 path, so if `map`/`filter`/`through` were `var fn`s no pipeline could be written as one expression. Handing a source to
 a wrapper is therefore a hand-over, and the wrapper pulls from then on. **A pipeline that is read gets a name**
-(`var users = body.through(...).checked()` and then `users.toList()`), exactly as `var cursor = iterator()` does, and the
+(`var users = body.through(...).checked()` and then `users.toList()`), exactly as `var cursor = iterate()` does, and the
 message for forgetting it already says so.
 
 **50. `?` on a `Result<Value, Never>`.**
@@ -2489,7 +2489,7 @@ handed *any* expected collection type back unverified, so `const wrong: Array<In
 link the number of arguments of a factory to its `Size`.
 _Proposal:_ a collection literal adapts to exactly three things and nothing else - the collection its expected type
 names, built directly; an `Array<Item, Size>`, filled inline, whose number of items has to be `Size` (an open `Size` is
-solved by the count, a spread has to come from an `Array` too); and any `From<Iterable<Item>>` target, built from the
+solved by the count, a spread has to come from an `Array` too); and any `From<Iterate<Item>>` target, built from the
 collection, which is the one collection protocol the language has. Anything else is an error that names what a target has
 to be. What the literal became is recorded per span (`CollectionLiteral`), so a back end reads the decision instead of
 making it again. A literal is the only place items are counted - `Array [1, 2, 3, 4]` is an index expression, and a
@@ -2500,21 +2500,21 @@ precisely because the compiler knows the items; for a *value* it is a type patte
 generic call.
 
 _Decision:_ accepted. Three points had to be decided beyond the proposal:
-- **A concrete implementation of the literal's own trait is `Default`, not `FromIterable`** (`ArrayList<Int>`,
+- **A concrete implementation of the literal's own trait is `Default`, not `FromIterate`** (`ArrayList<Int>`,
   `TrieList<Int>`, `HashMap<K, V>`): the literal builds the type that is asked for directly. Going through
   `Target.from` would build a collection to throw it away, and resolution cannot even name the implementation - the
-  standard library's trait-level `extend ... with From<Iterable<Item>>` and the inherent one on `ArrayList` both apply,
+  standard library's trait-level `extend ... with From<Iterate<Item>>` and the inherent one on `ArrayList` both apply,
   which `resolveBound` reports as ambiguous. That overlap is gap 5's rule to settle, and `.to<ArrayList<Int>>()` has it
   too.
-- **A trait type the collection only coerces to is not a target** (`Show` for `print [1, 2]`, `Iterable<Int>`,
+- **A trait type the collection only coerces to is not a target** (`Show` for `print [1, 2]`, `Iterate<Int>`,
   `Collection<Int>`): the literal stays the expected type as it did before, its item type comes from the
-  `Iterable<Item>` of the expectation where there is one, and the coercion is verified so that
+  `Iterate<Item>` of the expectation where there is one, and the coercion is verified so that
   `const ordered: Compare = [1, 2]` is reported with the existing "does not implement" message.
 - **Set literals are not touched**, because the parser has no set literal: `{a, b}` is in the concept and in no
   `ExpressionKind`. The rule is written so that adding one is `listLiteralType` with `Set` in place of `List`.
 
 **52. Is a temporary with an identity a `var` path, and where does gap 20 hold?**
-Gap 2 settled that "a temporary is not a `var` path" (`iterator().next()`), with the reason that a change to something
+Gap 2 settled that "a temporary is not a `var` path" (`iterate().next()`), with the reason that a change to something
 that is thrown away is always a mistake. That reason is about a **value**: the change would be lost with the copy the
 temporary is. An object with an identity has no copy, nothing is lost, and nobody else holds a view of something that was
 just produced - so the rule was protecting nothing there, while costing every chain over a stream its one-expression
@@ -2554,10 +2554,10 @@ reason gap 20 does not look inside values; nothing in `std/` relies on it, and i
 
 **53. What does an `extend` whose target is a *trait type* implement?**
 CONCEPT says `extend<Item> List<Item> with Show` "makes every list showable" and that
-`extend<Item> List<Item> with From<Iterable<Item>>` "makes `List<Item>` itself a valid target of `to<List<Item>>()`" -
+`extend<Item> List<Item> with From<Iterate<Item>>` "makes `List<Item>` itself a valid target of `to<List<Item>>()`" -
 one sentence about every implementer, one about the trait-typed value, and nothing about which of the two it is. The
 checker read it as "every implementer": `matchTarget` lets a trait-targeted implementation match any type that implements
-the trait. So `ArrayList<Int>` had **two** candidates for `From<Iterable<Int>>` - its own and the extension's - and
+the trait. So `ArrayList<Int>` had **two** candidates for `From<Iterate<Int>>` - its own and the extension's - and
 `resolveBound` called it ambiguous, which made `.to<ArrayList<Int>>()` fail and a literal expected as an `ArrayList<Int>`
 unable to name its own `from`.
 _Proposal:_ such an `extend` implements the trait **for the trait-typed value**. Its members reach a concrete implementer
@@ -2578,7 +2578,7 @@ moment later. `Show`, `Equals`, `Hash` and `Encode` reach implementers; `From` a
   From)` has no single answer by design - `From` is the one trait a type implements several times (`Int.from` for five
   widths, and `From<Never>` for *every* type) - so "the argument of `From` for a `String`" is rightly `Ambiguous`, and
   preferring one candidate over another would be arbitrary. The question the collection protocol actually has is "which
-  of them takes an `Iterable`", and `iterableSourceOf` answers that one. `const text: String = ['a', 'b']` works again.
+  of them takes an `Iterate`", and `iterableSourceOf` answers that one. `const text: String = ['a', 'b']` works again.
 - **A concrete implementation of a collection trait stays `CollectionLiteral.Default`** (gap 51): now that resolution can
   name `ArrayList<Int>`'s own `from`, that is no longer the reason - the reason is the one that was always first, that a
   literal knows its items and building the type that is asked for directly *is* the fast path the concept asks the
@@ -2814,7 +2814,7 @@ says exactly as much as is true, and therefore cannot change an inference that w
 
 _Decision:_ accepted (`Expectation.Unwrapped`, `conversionPartsOf` and `soleConversionFailure` in `expression.trb`,
 `fallibleFailuresOf` in `implementation.trb`). The failure is looked up the way `iterableSourceOf` looks up the `From`
-that takes an `Iterable`: `TryFrom` is a trait a type implements several times, so "the arguments of `TryFrom` for this
+that takes an `Iterate`: `TryFrom` is a trait a type implements several times, so "the arguments of `TryFrom` for this
 type" is `Ambiguous` while "the failure for *this* source" has one answer wherever the list has one entry. None says
 `` `Int64` does not convert into `Port` `` with the `extend` to write; several say `` `String` converts into `Port` in
 more than one way `` and name them, because only a written-out `Result<Target, Failure>` tells them apart.
@@ -2825,9 +2825,9 @@ and `(0..).length()` could only be found at run time - and a panic in std is for
 express.
 _Proposal:_ one type per pair of ends, chosen by the syntax: `a..b`/`a..=b` is a `Range<Value>`, `a..` a
 `RangeFrom<Value>`, `..b`/`..=b` a `RangeTo<Value>`. `rangeLiteralType` picks by which ends were written, and the
-implementations follow: `Range<Int>` is `Iterable` and `Length`, `RangeFrom<Int>` is `Iterable` alone, `RangeTo<Int>`
+implementations follow: `Range<Int>` is `Iterate` and `Length`, `RangeFrom<Int>` is `Iterate` alone, `RangeTo<Int>`
 is neither. What accepts every form takes the trait `Bounds<Value>`.
-_Reason:_ both mistakes become the ordinary messages the checker already has - "`RangeTo<Int64>` is not `Iterable`"
+_Reason:_ both mistakes become the ordinary messages the checker already has - "`RangeTo<Int64>` is not `Iterate`"
 and "`RangeFrom<Int64>` has no member `length`" - each with a note that names the missing end, and no `expect` is
 left in `std/core/src/range.trb`.
 
@@ -2929,7 +2929,7 @@ answers away cannot remove it. The symptom that measured it: `"{point}"` derives
 On top of that the overload set is merged at the lookup, for a **`static`** member only: `withTraitOverloads` in
 `member.trb` adds every candidate the traits of the type provide to the one its body writes, dropping a duplicate by
 declaration or by signature. That is what `String.from(path)` needed - `String` writes `static fn
-from(value: Iterable<Char>)` in its own body for `with From<Iterable<Char>>`, and `std/path` adds
+from(value: Iterate<Char>)` in its own body for `with From<Iterate<Char>>`, and `std/path` adds
 `extend String with From<Path>`. The order of the lookup is not undone by it: the member the body writes carries
 `Candidate.preferred`, and where nothing in the call tells the candidates apart it is the answer and **no ambiguity is
 reported**, because rule 2 comes before rule 5. An instance member is untouched - it has no such form, and `a.b` is
@@ -2956,7 +2956,7 @@ target, and a bare parameter has no head.
 _Decision:_ accepted, with two limits that the repository measured:
 
 - **Only for a concrete receiver.** What a generic parameter has is what its bounds say. Adding blankets to a
-  parameter gives `Target` of `fn to<Target: From<Iterable<Item>>>` a second `From` - the `From<Never>` every type has
+  parameter gives `Target` of `fn to<Target: From<Iterate<Item>>>` a second `From` - the `From<Never>` every type has
   - and `Target.from()` becomes an ambiguity no call site can resolve.
 - **Only where the type decides the trait`s own arguments.** `extend<Source, Target> Source with Into<Target>` would
   put `Into<Target>` with an open `Target` on every type at all, and what that means is decided at a call.

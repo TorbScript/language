@@ -20,7 +20,7 @@ public type Arguments {
     const structure = structureOf describe
     var options: List<Option> = []
     for field in structure.recordFields() {
-      options.addAll optionsOf(field, "")
+      options.appendAll optionsOf(field, "")
     }
     Arguments options
   }
@@ -32,7 +32,7 @@ public type Arguments {
       const takes = if option.flag { "" } else { " <{option.shape}>" }
       const head = "  --{option.name}{takes}"
       const padded = head + " ".repeat(maximumOf(28 - head.byteLength(), 1))
-      lines.add "{padded}{option.documentation}{option.suffix()}"
+      lines.append "{padded}{option.documentation}{option.suffix()}"
     }
     lines.joined separator: "\n"
   }
@@ -142,14 +142,14 @@ fn dashed(path: String): String {
   var out: List<Char> = []
   for character in path.chars() {
     if character == '.' {
-      out.add '-'
+      out.append '-'
       continue
     }
     const lower = character.toLowerCase()
     if lower != character {
-      out.add '-'
+      out.append '-'
     }
-    out.add lower
+    out.append lower
   }
   String.from out
 }
@@ -164,10 +164,10 @@ fn recordOf(options: List<Option>, values: Map<String, String>): EncodedValue {
     if seen.contains(head) {
       continue
     }
-    seen.add head
+    seen.append head
     if parts.length() == 1 {
       if const Some(text) = values.get(head) {
-        fields.add EncodedField(head, EncodedValue.String(text))
+        fields.append EncodedField(head, EncodedValue.String(text))
       }
       continue
     }
@@ -178,11 +178,11 @@ fn recordOf(options: List<Option>, values: Map<String, String>): EncodedValue {
       }
       const name = nested.path.split(".")[1]
       if const Some(text) = values.get(nested.path) {
-        inner.add EncodedField(name, EncodedValue.String(text))
+        inner.append EncodedField(name, EncodedValue.String(text))
       }
     }
     if !inner.isEmpty() {
-      fields.add EncodedField(head, EncodedValue.Record("", inner))
+      fields.append EncodedField(head, EncodedValue.Record("", inner))
     }
   }
   EncodedValue.Record "", fields

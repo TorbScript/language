@@ -53,10 +53,10 @@ source.collect(accumulator)
    over an infinite source never returns, but `collect` behind `taking(10)` or `first()` stops reading after enough
    values arrived - `isDone` defaults to `false`.
 
-3. **A `Collection` is not an `Accumulator`, and there is no trait for "something with `add`".** What gathers into a
+3. **A collection is not an `Accumulator`, and there is no trait for "something with `add`".** What gathers into a
    collection is a type of its own beside it, the way `Collector` and `Collectors.toList()` are in Java:
    `ListAccumulator<Item>` is the one the standard library ships, and `into<Target>()` is the general one for any
-   `From<Iterable<Item>>` target - it gathers into a `List` and calls `Target.from` once at the end.
+   `From<Iterate<Item>>` target - it gathers into a `List` and calls `Target.from` once at the end.
 
    ```trb check
    const numbers = [3, 1, 2, 1]
@@ -86,7 +86,7 @@ source.collect(accumulator)
    ```trb check
    fn median<Item>(value: (value: Item) => Int): Accumulator<Item, Int?> {
      collector([], finish: { values: List<Int> => values.sorted { it => it }.skip(values.length() / 2).first() }) {
-       values, item => values.added value(item)
+       values, item => values.appended value(item)
      }
    }
 
@@ -146,5 +146,5 @@ used, the way every collector of `std/iteration` answers a fresh value.
 ## Related
 
 - [Pipelines](pipelines.md) - the lazy stages that produce what an accumulator consumes.
-- [The collection traits](collection-traits.md) - what a `Collection` is, and why it is not an `Accumulator`.
+- [The collection traits](collection-traits.md) - the five kinds, and why none of them is an `Accumulator`.
 - [Maps and sets](maps-and-sets.md) - the `Map<Key, List<Item>>` that `groupingBy` builds.

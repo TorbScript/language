@@ -159,7 +159,7 @@ public fn checkExhaustive(
       reachable.set index, plans[index].copy(isReachable: false)
     }
     for row in own {
-      rows.add row
+      rows.append row
     }
   }
   const matrix = Matrix([subject], rows)
@@ -224,7 +224,7 @@ fn reportUnreachable(var checker: Checker, at: Span, shown: String) {
 fn shownWitnesses(var checker: Checker, matrix: Matrix): List<String> {
   var shown: List<String> = []
   for witness in missingValues(checker, matrix, 16) {
-    shown.add describeNormal(witness.get(0) ?? Normal.Anything)
+    shown.append describeNormal(witness.get(0) ?? Normal.Anything)
   }
   shown
 }
@@ -237,7 +237,7 @@ fn reportMissing(var checker: Checker, witnesses: List<String>, at: Span) {
 fn listOfWitnesses(witnesses: List<String>): String {
   var quoted: List<String> = []
   for index in 0..witnesses.length().min(3) {
-    quoted.add "`{witnesses[index]}`"
+    quoted.append "`{witnesses[index]}`"
   }
   if witnesses.length() > 3 {
     const listed = quoted.joined separator: ", "
@@ -344,7 +344,7 @@ fn irrefutableWitnesses(var checker: Checker, pattern: Pattern, subject: TypeId,
   }
   var shown: List<String> = []
   for witness in missingValues(checker, Matrix([subject], rows), limit) {
-    shown.add describeNormal(witness.get(0) ?? Normal.Anything)
+    shown.append describeNormal(witness.get(0) ?? Normal.Anything)
   }
   shown
 }
@@ -368,7 +368,7 @@ fn normalizedRows(
 ): List<List<Normal>> {
   var rows: List<List<Normal>> = []
   for one in normalizedPatterns(checker, state, pattern, subject) {
-    rows.add([one])
+    rows.append([one])
   }
   rows
 }
@@ -400,7 +400,7 @@ fn normalizedPatterns(
       const element = itemOfSubject checker, subject
       var columns: List<List<Normal>> = []
       for item in items {
-        columns.add normalizedPatterns(checker, state, item, element)
+        columns.append normalizedPatterns(checker, state, item, element)
       }
       const constructor = Constructor.ListOf items.length(), rest.isSome()
       productOf constructor, columns
@@ -416,7 +416,7 @@ fn normalizedPatterns(
       var found: List<Normal> = []
       for alternative in patterns {
         for one in normalizedPatterns(checker, state, alternative, subject) {
-          found.add one
+          found.append one
         }
       }
       found
@@ -441,7 +441,7 @@ fn normalizedTuple(
   var types: List<TypeId> = []
   if const .Tuple(fields) = checker.types.form(subject) {
     for field in fields {
-      types.add field.annotation
+      types.append field.annotation
     }
   }
   if types.length() != items.length() {
@@ -450,7 +450,7 @@ fn normalizedTuple(
   }
   var columns: List<List<Normal>> = []
   for index in 0..items.length() {
-    columns.add normalizedPatterns(checker, state, items[index], types[index])
+    columns.append normalizedPatterns(checker, state, items[index], types[index])
   }
   productOf Constructor.Named("", "", items.length()), columns
 }
@@ -471,12 +471,12 @@ fn normalizedVariant(
   const declared = declaredCaseName checker, name
   if const Some(variant) = caseNamed(checker, subject, declared) {
     for field in variant.fields {
-      types.add field.annotation
+      types.append field.annotation
     }
     constructor = Constructor.Named declared, ".{declared}", types.length()
   } else if name == "Self" || typeNameOf(checker, subject) == Some(name) {
     for field in fieldsOf(checker, subject) {
-      types.add field.annotation
+      types.append field.annotation
     }
     const shown = typeNameOf(checker, subject) ?? name
     constructor = Constructor.Named shown, shown, types.length()
@@ -497,8 +497,8 @@ fn normalizedVariant(
   for index in 0..types.length() {
     const written = arranged.get(index) ?? None
     match written {
-      Some(found) => columns.add normalizedPatterns(checker, state, found, types[index])
-      None => columns.add anything
+      Some(found) => columns.append normalizedPatterns(checker, state, found, types[index])
+      None => columns.append anything
     }
   }
   productOf constructor, columns
@@ -518,7 +518,7 @@ fn arrangedFields(
 ): List<Pattern?> {
   var found: List<Pattern?> = []
   for _ in 0..count {
-    found.add None
+    found.append None
   }
   const declared = fieldsOfPattern checker, name, subject
   const targets = fieldPatternTargets checker, name, fields, declared, reports: false
@@ -548,14 +548,14 @@ fn productOf(constructor: Constructor, columns: List<List<Normal>>): List<Normal
     var grown: List<List<Normal>> = []
     for known in combinations {
       for one in column {
-        grown.add known.added(one)
+        grown.append known.appended(one)
       }
     }
     combinations = grown
   }
   var found: List<Normal> = []
   for arguments in combinations {
-    found.add Normal.Applied(constructor, arguments)
+    found.append Normal.Applied(constructor, arguments)
   }
   found
 }
@@ -699,7 +699,7 @@ fn branchesOf(
       var found: List<PatternBranch> = []
       for alternative in patterns {
         for branch in branchesOf(checker, alternative, subject, path) {
-          found.add branch
+          found.append branch
         }
       }
       found
@@ -740,14 +740,14 @@ fn tupleBranches(
   var types: List<TypeId> = []
   if const .Tuple(fields) = checker.types.form(subject) {
     for field in fields {
-      types.add field.annotation
+      types.append field.annotation
     }
   }
   var branches: List<PatternBranch> = [PatternBranch([], [])]
   for index in 0..items.length() {
     const inner = types.get(index) ?? checker.deferredType
     const step = PatternStep.TupleField subject, index
-    const grown = branchesOf checker, items[index], inner, path.added(step)
+    const grown = branchesOf checker, items[index], inner, path.appended(step)
     branches = combined branches, grown
   }
   branches
@@ -778,13 +778,13 @@ fn listBranches(
     } else {
       PatternStep.ItemFromEnd(items.length() - 1 - index)
     }
-    const grown = branchesOf checker, items[index], element, path.added(step)
+    const grown = branchesOf checker, items[index], element, path.appended(step)
     branches = combined branches, grown
   }
   if const Some(more) = rest {
     if const Some(name) = more.name {
       const step = PatternStep.Rest position
-      if const Some(bound) = bindingOf(checker, name.text, path.added(step)) {
+      if const Some(bound) = bindingOf(checker, name.text, path.appended(step)) {
         branches = withBinding branches, bound
       }
     }
@@ -814,7 +814,7 @@ fn variantBranches(
       }
       const field = variant.fields[index]
       const step = PatternStep.CaseField subject, variant.symbol, index, field.symbol
-      const grown = branchesOf checker, written, field.annotation, path.added(step)
+      const grown = branchesOf checker, written, field.annotation, path.appended(step)
       branches = combined branches, grown
     }
     return branches
@@ -831,7 +831,7 @@ fn variantBranches(
     }
     const field = declared[index]
     const step = PatternStep.Field subject, index, field.symbol
-    const grown = branchesOf checker, written, field.annotation, path.added(step)
+    const grown = branchesOf checker, written, field.annotation, path.appended(step)
     branches = combined branches, grown
   }
   branches
@@ -842,7 +842,7 @@ fn combined(left: List<PatternBranch>, right: List<PatternBranch>): List<Pattern
   var found: List<PatternBranch> = []
   for one in left {
     for other in right {
-      found.add PatternBranch(one.tests.addedAll(other.tests), one.bindings.addedAll(other.bindings))
+      found.append PatternBranch(one.tests.appendedAll(other.tests), one.bindings.appendedAll(other.bindings))
     }
   }
   found
@@ -851,7 +851,7 @@ fn combined(left: List<PatternBranch>, right: List<PatternBranch>): List<Pattern
 fn withBinding(branches: List<PatternBranch>, bound: PatternBinding): List<PatternBranch> {
   var found: List<PatternBranch> = []
   for branch in branches {
-    found.add branch.copy(bindings: branch.bindings.added(bound))
+    found.append branch.copy(bindings: branch.bindings.appended(bound))
   }
   found
 }

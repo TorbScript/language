@@ -169,7 +169,7 @@ public fn sourceProblems(read: ReadSource, index: NameIndex): CheckedSource {
   const module = moduleStart read
   if module < 0 {
     const note = "This file has no module comment. Put a doc comment at the top, in front of the first `use`: what the module is for, its main constructs, how they relate"
-    problems.add DocumentationProblem(read.path, 1, note)
+    problems.append DocumentationProblem(read.path, 1, note)
   }
   const items = itemsOf read.file, read.tree
   var required = 0
@@ -184,28 +184,28 @@ public fn sourceProblems(read: ReadSource, index: NameIndex): CheckedSource {
         documented = documented + 1
       } else {
         const note = "`{item.word} {item.name}` has no doc comment. Say what it does, then what it is for"
-        problems.add DocumentationProblem(read.path, lineOf(read.lines, item.span.start), note)
+        problems.append DocumentationProblem(read.path, lineOf(read.lines, item.span.start), note)
       }
     }
     if isOwn {
       if const Some(found) = block {
-        problems.addAll repeatedNameProblems(read, item, found)
+        problems.appendAll repeatedNameProblems(read, item, found)
       }
     }
   }
   const scope = scopeOf read.file, index
   var examples: List<SourceExample> = []
   for block in read.blocks {
-    problems.addAll sectionProblems(read, block)
-    problems.addAll fenceProblems(read, block)
-    problems.addAll skipProblems(read, block)
-    problems.addAll linkProblems(read, block, scope, index)
+    problems.appendAll sectionProblems(read, block)
+    problems.appendAll fenceProblems(read, block)
+    problems.appendAll skipProblems(read, block)
+    problems.appendAll linkProblems(read, block, scope, index)
     collectExamples read, block, examples
   }
   const hits = historyHits read.comments
   for hit in hits {
     const note = "`{hit.word}`: a comment says what the code does now, not what it did before"
-    problems.add DocumentationProblem(read.path, hit.line, note)
+    problems.append DocumentationProblem(read.path, hit.line, note)
   }
   CheckedSource(problems, module >= 0, required, documented, examples, hits.length())
 }
@@ -282,9 +282,9 @@ fn spacedName(name: String): String {
   var characters: List<Char> = []
   for character in name.chars() {
     if character.isLetter() && character == character.toUpperCase() {
-      characters.add ' '
+      characters.append ' '
     }
-    characters.add character
+    characters.append character
   }
   String.from characters
 }
@@ -296,12 +296,12 @@ fn sectionProblems(read: ReadSource, block: DocumentationBlock): List<Documentat
   for section in sectionsOf(block).sections {
     if section.level != 1 || !sectionHeadings.contains(section.heading) {
       const note = "`# {section.heading}` is not a heading of a doc comment. One of: # {known}"
-      problems.add DocumentationProblem(read.path, section.line, note)
+      problems.append DocumentationProblem(read.path, section.line, note)
       continue
     }
     if section.isEmpty() {
       const note = "`# {section.heading}` says nothing. Write what belongs under it, or leave the heading out"
-      problems.add DocumentationProblem(read.path, section.line, note)
+      problems.append DocumentationProblem(read.path, section.line, note)
     }
   }
   problems
@@ -315,7 +315,7 @@ fn linkProblems(read: ReadSource, block: DocumentationBlock, scope: Scope, index
     const head = parts[0]
     if !scope.has(head) {
       const note = "`[{link.target}]` does not resolve here. Name what this file declares, imports or gets from the prelude"
-      problems.add DocumentationProblem(read.path, link.line, note)
+      problems.append DocumentationProblem(read.path, link.line, note)
       continue
     }
     if parts.length() == 1 || scope.isNamespace(head) {
@@ -325,7 +325,7 @@ fn linkProblems(read: ReadSource, block: DocumentationBlock, scope: Scope, index
     // A name whose declaration was not read is not judged: it may come from a package that is not part of this walk
     if index.hasType(head) && !index.hasMember(head, member) {
       const note = "`[{link.target}]`: `{head}` has no member `{member}`"
-      problems.add DocumentationProblem(read.path, link.line, note)
+      problems.append DocumentationProblem(read.path, link.line, note)
     }
   }
   problems
@@ -344,7 +344,7 @@ fn collectExamples(read: ReadSource, block: DocumentationBlock, var examples: Li
     for example in found.examples {
       const number = examples.length() + 1
       const module = "{directory}/{name}-example-{number}.trb"
-      examples.add SourceExample(read.path, example.line, example.kind, example.text, example.reason, context, module)
+      examples.append SourceExample(read.path, example.line, example.kind, example.text, example.reason, context, module)
     }
   }
 }
@@ -360,7 +360,7 @@ fn skipProblems(read: ReadSource, block: DocumentationBlock): List<Documentation
       const isBare = example.kind == ExampleKind.Skipped && example.reason.byteLength() < 10
       if isBare {
         const note = "`// skip` needs a reason of its own behind it, so that a skip cannot hide"
-        problems.add DocumentationProblem(read.path, example.line, note)
+        problems.append DocumentationProblem(read.path, example.line, note)
       }
     }
   }
@@ -377,7 +377,7 @@ fn fenceProblems(read: ReadSource, block: DocumentationBlock): List<Documentatio
     // The opening fence is enough: the closing one is the same mistake, one line further down
     if const Some(line) = examplesOf(section).fences.first() {
       const note = "An example is indented by four spaces, not fenced with backticks"
-      problems.add DocumentationProblem(read.path, line, note)
+      problems.append DocumentationProblem(read.path, line, note)
     }
   }
   problems
@@ -396,7 +396,7 @@ fn contextOf(read: ReadSource): String {
   for statement in read.file.statements {
     if const .Declare(declaration) = statement.kind {
       if const .Use(_) = declaration.kind {
-        lines.add withoutPublic(read.source.text[declaration.span.start..declaration.span.end])
+        lines.append withoutPublic(read.source.text[declaration.span.start..declaration.span.end])
       }
     }
   }
@@ -404,7 +404,7 @@ fn contextOf(read: ReadSource): String {
   const own = publicNames(read.file).filter({ !imported.contains(_) }).toList()
   if !own.isEmpty() && !hasTopLevelCode(read.file) {
     const names = own.joined separator: ", "
-    lines.add "use {names} from \"./{moduleName(read.module)}\""
+    lines.append "use {names} from \"./{moduleName(read.module)}\""
   }
   lines.joined separator: "\n"
 }
@@ -475,28 +475,28 @@ fn addDeclaration(declaration: Declaration, tree: Tree, var items: List<SourceIt
   const span = declaration.span
   match declaration.kind {
     .Use(_) => {}
-    .Function(function) => items.add SourceItem("fn", function.name.text, span, doc, isNeeded)
-    .Alias(declared) => items.add SourceItem("type", declared.name.text, span, doc, isNeeded)
+    .Function(function) => items.append SourceItem("fn", function.name.text, span, doc, isNeeded)
+    .Alias(declared) => items.append SourceItem("type", declared.name.text, span, doc, isNeeded)
     .Constant(binding) => {
       const name = bindingNames(binding.pattern).first() ?? ""
-      items.add SourceItem("const", name, span, doc, isNeeded)
+      items.append SourceItem("const", name, span, doc, isNeeded)
     }
     .Type(declared) => {
-      items.add SourceItem("type", declared.name.text, span, doc, isNeeded)
+      items.append SourceItem("type", declared.name.text, span, doc, isNeeded)
       addMembers declared.members, tree, isPublic, true, items
     }
     .Trait(declared) => {
-      items.add SourceItem("trait", declared.name.text, span, doc, isNeeded)
+      items.append SourceItem("trait", declared.name.text, span, doc, isNeeded)
       addMembers declared.members, tree, isPublic, true, items
     }
     .Extend(extension) => {
       const name = typeNameOf extension.target
-      items.add SourceItem("extend", name, span, doc, requiresExtension(tree))
+      items.append SourceItem("extend", name, span, doc, requiresExtension(tree))
       // The members of an `extend ... with Trait` implement the trait, and the trait is where they are documented
       addMembers extension.members, tree, true, extension.traits.isEmpty(), items
     }
     .Foreign(library) => {
-      items.add SourceItem("foreign", library.library, span, doc, isNeeded)
+      items.append SourceItem("foreign", library.library, span, doc, isNeeded)
       addMembers library.members, tree, isPublic, true, items
     }
   }
@@ -507,12 +507,12 @@ fn addMembers(members: List<Member>, tree: Tree, isOwnerPublic: Bool, isAsked: B
     const isPrivate = member.modifiers.visibility == Visibility.Private
     const isNeeded = isAsked && isOwnerPublic && !isPrivate && requiresMembers(tree)
     match member.kind {
-      .Field(field) => items.add SourceItem("field", field.name.text, member.span, member.doc, isNeeded)
-      .Case(declared) => items.add SourceItem("case", declared.name.text, member.span, member.doc, isNeeded)
-      .Function(function) => items.add SourceItem("fn", function.name.text, member.span, member.doc, isNeeded)
+      .Field(field) => items.append SourceItem("field", field.name.text, member.span, member.doc, isNeeded)
+      .Case(declared) => items.append SourceItem("case", declared.name.text, member.span, member.doc, isNeeded)
+      .Function(function) => items.append SourceItem("fn", function.name.text, member.span, member.doc, isNeeded)
       .Constant(binding) => {
         const name = bindingNames(binding.pattern).first() ?? ""
-        items.add SourceItem("const", name, member.span, member.doc, isNeeded)
+        items.append SourceItem("const", name, member.span, member.doc, isNeeded)
       }
     }
   }
@@ -599,7 +599,7 @@ public fn sourceOptionsOf(arguments: List<String>): SourceOptions {
       withStatistics = true
       continue
     }
-    paths.add argument
+    paths.append argument
   }
   SourceOptions paths, withoutExamples, withStatistics, tree
 }
@@ -625,14 +625,14 @@ public fn runSource(options: SourceOptions): Result<Int, IoError> {
     const read = readSource path, module, treeFor(options, path), text
     const checked = sourceProblems read, index
     declarations = declarations + checked.required
-    problems.addAll checked.problems
-    examples.addAll checked.examples
+    problems.appendAll checked.problems
+    examples.appendAll checked.examples
     record statistics, read.tree.name(), checked
   }
   if !options.withoutExamples {
-    problems.addAll exampleSyntaxProblems(examples)
+    problems.appendAll exampleSyntaxProblems(examples)
     const roots = absolutePaths(paths)?
-    problems.addAll exampleTypeProblems(tree, roots, examples)
+    problems.appendAll exampleTypeProblems(tree, roots, examples)
   }
   if options.withStatistics {
     for line in statisticsLines(statistics) {
@@ -684,13 +684,13 @@ fn indexPaths(tree: SourceTree, files: List<String>): List<String> {
   var paths: List<String> = []
   for path in tree.paths() {
     if path.contains("/std/") {
-      paths.add path
+      paths.append path
     }
   }
   for path in files {
     const normalized = normalizePath path
     if !paths.contains(normalized) && tree.exists(normalized) {
-      paths.add normalized
+      paths.append normalized
     }
   }
   paths
@@ -718,7 +718,7 @@ fn statisticsLines(statistics: Map<String, SourceStatistics>): List<String> {
   var lines: List<String> = []
   for tree in trees {
     if const Some(found) = statistics.get(tree.name()) {
-      lines.add found.show()
+      lines.append found.show()
     }
   }
   lines

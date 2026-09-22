@@ -91,7 +91,7 @@ bool torb_instant_equals(torb_instant first, torb_instant second);
 torb_duration torb_instant_subtract(torb_instant first, torb_instant second, torb_location at);
 /* Float64.isNaN */
 bool torb_is_nan_f64(double value);
-/* ArrayList.add, TrieList.add */
+/* ArrayList.append, TrieList.append */
 void torb_list_add(torb_list *list, const void *value);
 /* ArrayList.clear, TrieList.clear */
 void torb_list_clear(torb_list *list);
@@ -177,7 +177,7 @@ int64_t torb_process_run_inheriting(torb_text command, torb_list arguments, torb
 bool torb_read_line(torb_text *out);
 /* Float64.round */
 double torb_round_f64(double value);
-/* HashSet.add, TrieSet.add */
+/* HashSet.insert, TrieSet.insert */
 void torb_set_add(torb_set *set, const void *item);
 /* HashSet.clear, TrieSet.clear */
 void torb_set_clear(torb_set *set);

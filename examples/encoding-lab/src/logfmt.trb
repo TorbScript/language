@@ -93,19 +93,19 @@ type LogfmtEncoder with Encoder {
   }
 
   private var fn descend() {
-    path.add pending
+    path.append pending
     pending = ""
   }
 
   private var fn put(value: String) {
-    const full = if pending.isEmpty() { path } else { path.added pending }
+    const full = if pending.isEmpty() { path } else { path.appended pending }
     const key = full.filter({ !_.isEmpty() }).toList().joined(separator: ".")
     pending = ""
     if key.isEmpty() {
       return
     }
     const shown = if value.contains(" ") { "\"{value}\"" } else { value }
-    pairs.add "{key}={shown}"
+    pairs.append "{key}={shown}"
   }
 }
 
@@ -123,7 +123,7 @@ fn recordOf(line: String): EncodedValue {
     const value = EncodedValue.String parts[1].replace("\"", "")
     const keys = parts[0].split(".")
     if keys.length() == 1 {
-      fields.add EncodedField(keys[0], value)
+      fields.append EncodedField(keys[0], value)
       continue
     }
     fields = withNested fields, keys[0], keys[1], value
@@ -135,13 +135,13 @@ fn recordOf(line: String): EncodedValue {
 fn withNested(fields: List<EncodedField>, head: String, name: String, value: EncodedValue): List<EncodedField> {
   const entry = EncodedField name, value
   match fields.find({ _.name == head }) {
-    None => fields.added EncodedField(head, EncodedValue.Record("", [entry]))
+    None => fields.appended EncodedField(head, EncodedValue.Record("", [entry]))
     Some(_) => fields.map({ field =>
       if field.name != head {
         return field
       }
       match field.value {
-        .Record(_, inner) => EncodedField head, EncodedValue.Record("", inner.added(entry))
+        .Record(_, inner) => EncodedField head, EncodedValue.Record("", inner.appended(entry))
         _ => field
       }
     }).toList()

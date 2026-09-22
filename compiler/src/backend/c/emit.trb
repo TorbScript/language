@@ -104,7 +104,7 @@ public fn emittedFunctionsOf(program: IrProgram): List<IrFunction> {
     if !kept[index] {
       continue
     }
-    found.add function
+    found.append function
   }
   found.sort({ _.name })
   found
@@ -207,7 +207,7 @@ fn objectTypesOf(program: IrProgram, functions: List<IrFunction>, layouts: List<
   var order: List<IrTypeId> = []
   for name in sorted {
     if const Some(index) = byName.get(name) {
-      order.add IrTypeId(index)
+      order.append IrTypeId(index)
     }
   }
   order
@@ -226,7 +226,7 @@ fn collectObjectType(
     const name = objectTypeName program, bounds
     if !byName.containsKey(name) {
       byName.set name, id.value
-      names.add name
+      names.append name
     }
   }
 }
@@ -295,7 +295,7 @@ fn witnessTableOrder(program: IrProgram): List<WitnessTableId> {
     const name = program.witnessTables[index].name
     if !byName.containsKey(name) {
       byName.set name, index
-      names.add name
+      names.append name
     }
   }
   var sorted = names
@@ -329,7 +329,7 @@ fn addWitnessTableAfterNested(
       }
     }
   }
-  order.add id
+  order.append id
 }
 
 /**
@@ -338,8 +338,8 @@ fn addWitnessTableAfterNested(
  *
  * A thunk is a function of exactly those two things - it casts `void *self` to the payload of the target and calls one
  * function of the program - so the same member of the same target reached through three traits is three copies of one
- * function. `Accumulator.add`, `Collection.add` and `List.add` of one list type are such a triple, and the whole
- * compiler has 16510 thunks of which 8221 are distinct; naming them after what they are instead of after the table they
+ * function. `Iterate.iterate` and `List.iterate` of one list type are such a pair, and when this was measured the whole
+ * compiler had 16510 thunks of which 8221 are distinct; naming them after what they are instead of after the table they
  * happen to sit in is 11.8% of the translation unit.
  *
  * A name that two keys would share is a **collision and not a merge**: the keys of a base name are sorted and numbered,
@@ -358,7 +358,7 @@ fn thunkNamesOf(program: IrProgram): Map<String, String> {
       const base = thunkBaseNameOf program, table, member
       bases.set key, base
       var keys = keysOfBase.get(base) ?? []
-      keys.add key
+      keys.append key
       keysOfBase.set base, keys
     }
   }
@@ -434,7 +434,7 @@ fn thunkHeadOf(
   for position in 1..signature.parameters.length() {
     const spelling = valueTypeOf program, signature.parameters[position].annotation
     const written = if signature.parameters[position].isReference { pointerTo spelling } else { spelling }
-    parameters.add declarationOf(written, "a{position}")
+    parameters.append declarationOf(written, "a{position}")
   }
   const result = resultTypeOf program, signature.result
   const written = parameters.joined separator: ", "
@@ -484,19 +484,19 @@ fn emitThunk(
   }
   var body: List<CStatement> = []
   const cast = CExpression.Cast spelling, CExpression.Name("self")
-  body.add CStatement.Declaration(spelling, "box", Some(cast))
+  body.append CStatement.Declaration(spelling, "box", Some(cast))
   // **The erased ABI borrows every operand**, because a call site knows the member's index and not its declaration:
   // `CallWitness` hands over `value.data` and the arguments as they are and keeps its own counts. A parameter the real
-  // member takes **owned** - the `self` of `ArrayList.iterator`, whose `ListIterator` stores the list, and the value of
-  // `ArrayList.add`, which the buffer keeps - would consume a count nobody handed over, and the caller's own release
+  // member takes **owned** - the `self` of `ArrayList.iterate`, whose `ListIterator` stores the list, and the value of
+  // `ArrayList.append`, which the buffer keeps - would consume a count nobody handed over, and the caller's own release
   // would then free the block twice. So the thunk is where the counts are made, which is also the one place that knows
   // both conventions. The payload needs a local of its own because a read-only member's box is `const`; an ordinary
   // parameter is already a local of the thunk and is retained in place
   const receiver = match retainedReceiverOf(program, table, index) {
     Some(statement) => {
       const annotation = valueTypeOf program, function.signature.parameters[0].annotation
-      body.add CStatement.Declaration(annotation, receiverName, Some(unwrapped))
-      body.add statement
+      body.append CStatement.Declaration(annotation, receiverName, Some(unwrapped))
+      body.append statement
       CExpression.Name receiverName
     }
     None => if writes { CExpression.AddressOf unwrapped } else { unwrapped }
@@ -505,16 +505,16 @@ fn emitThunk(
   for position in 1..function.signature.parameters.length() {
     const argument = CExpression.Name "a{position}"
     if const Some(statement) = retainedArgumentOf(program, function, position, argument) {
-      body.add statement
+      body.append statement
     }
-    given.add argument
+    given.append argument
   }
   const called = CExpression.Call CExpression.Name(function.name), given
   if isVoidResultOf(program, function.signature.result) {
-    body.add CStatement.Evaluate(called)
-    body.add CStatement.Return()
+    body.append CStatement.Evaluate(called)
+    body.append CStatement.Return()
   } else {
-    body.add CStatement.Return(Some(called))
+    body.append CStatement.Return(Some(called))
   }
   write emission, CDeclaration.Definition("", head, body)
 }
@@ -537,8 +537,8 @@ fn retainedReceiverOf(program: IrProgram, table: WitnessTable, index: Int): CSta
 
 /**
  * The retain a thunk owes one of its own parameters, where the member takes it **owned**: the thunk's parameter is an
- * ordinary local, so it is retained in place and handed on. `ArrayList.add` is the one that needs it - the buffer keeps
- * the value - and without it `list.add(text)` through a table released the text twice.
+ * ordinary local, so it is retained in place and handed on. `ArrayList.append` is the one that needs it - the buffer
+ * keeps the value - and without it `list.append(text)` through a table released the text twice.
  */
 fn retainedArgumentOf(
   program: IrProgram,
@@ -580,7 +580,7 @@ fn emitWitnessTable(
   var members: List<CExpression> = []
   for index in 0..table.members.length() {
     const name = thunkNameOf program, table, index, names
-    members.add CExpression.Cast("torb_witness_member", CExpression.Name(name))
+    members.append CExpression.Cast("torb_witness_member", CExpression.Name(name))
   }
   const arrayName = "{table.name}_members"
   if !members.isEmpty() {
@@ -593,15 +593,15 @@ fn emitWitnessTable(
     const one = match inner {
       Some(found) => found
       None => {
-        nested.add CExpression.Literal("NULL")
+        nested.append CExpression.Literal("NULL")
         continue
       }
     }
     if !program.hasWitnessTable(one) {
-      nested.add CExpression.Literal("NULL")
+      nested.append CExpression.Literal("NULL")
       continue
     }
-    nested.add CExpression.AddressOf(CExpression.Name(program.witnessTableAt(one).name))
+    nested.append CExpression.AddressOf(CExpression.Name(program.witnessTableAt(one).name))
   }
   const nestedName = "{table.name}_nested"
   if !nested.isEmpty() {
@@ -684,7 +684,7 @@ fn closureTargetsOf(program: IrProgram, functions: List<IrFunction>): List<IrFun
           const name = program.functionAt(callee).name
           if !byName.containsKey(name) {
             byName.set name, callee.value
-            names.add name
+            names.append name
           }
         }
       }
@@ -695,7 +695,7 @@ fn closureTargetsOf(program: IrProgram, functions: List<IrFunction>): List<IrFun
   var order: List<IrFunction> = []
   for name in sorted {
     if const Some(index) = byName.get(name) {
-      order.add program.functionAt(FunctionId(index))
+      order.append program.functionAt(FunctionId(index))
     }
   }
   order
@@ -714,7 +714,7 @@ fn thunkHeadOfFunction(var emission: Emission, program: IrProgram, function: IrF
     const parameter = signature.parameters[index]
     const spelling = valueTypeOf program, parameter.annotation
     const shown = if parameter.isReference { pointerTo spelling } else { spelling }
-    parameters.add declarationOf(shown, "a{index}")
+    parameters.append declarationOf(shown, "a{index}")
   }
   const result = resultTypeOf program, signature.result
   const written = parameters.joined separator: ", "
@@ -735,19 +735,19 @@ fn emitClosureThunk(var emission: Emission, program: IrProgram, function: IrFunc
   match layout {
     Some(found) => {
       const spelling = "{program.layoutAt(found).name} *"
-      given.add CExpression.Cast(spelling, CExpression.Name("environment"))
+      given.append CExpression.Cast(spelling, CExpression.Name("environment"))
     }
-    None => body.add CStatement.Evaluate(CExpression.Cast("void", CExpression.Name("environment")))
+    None => body.append CStatement.Evaluate(CExpression.Cast("void", CExpression.Name("environment")))
   }
   for index in first..function.signature.parameters.length() {
-    given.add CExpression.Name("a{index}")
+    given.append CExpression.Name("a{index}")
   }
   const called = CExpression.Call CExpression.Name(function.name), given
   if isVoidResultOf(program, function.signature.result) {
-    body.add CStatement.Evaluate(called)
-    body.add CStatement.Return()
+    body.append CStatement.Evaluate(called)
+    body.append CStatement.Return()
   } else {
-    body.add CStatement.Return(Some(called))
+    body.append CStatement.Return(Some(called))
   }
   write emission, CDeclaration.Definition("", head, body)
 }
@@ -820,7 +820,7 @@ fn elementOrder(program: IrProgram): List<ElementId> {
     const name = program.elements[index].name
     if !byName.containsKey(name) {
       byName.set name, index
-      names.add name
+      names.append name
     }
   }
   var sorted = names
@@ -828,7 +828,7 @@ fn elementOrder(program: IrProgram): List<ElementId> {
   var order: List<ElementId> = []
   for name in sorted {
     if const Some(index) = byName.get(name) {
-      order.add ElementId(index)
+      order.append ElementId(index)
     }
   }
   order
@@ -886,10 +886,10 @@ fn emitElementDescriptor(var emission: Emission, program: IrProgram, descriptor:
   const counted = containsCountedType program, item
   const retains = counted && retainStatement(program, item, CExpression.Name("element")).isSome()
   const releases = counted && releaseStatement(program, item, CExpression.Name("element")).isSome()
-  parts.add elementPointer(retains, "R", descriptor)
-  parts.add elementPointer(releases, "D", descriptor)
-  parts.add elementPointer(isThere(program, descriptor.equals), "E", descriptor)
-  parts.add elementPointer(isThere(program, descriptor.hash), "H", descriptor)
+  parts.append elementPointer(retains, "R", descriptor)
+  parts.append elementPointer(releases, "D", descriptor)
+  parts.append elementPointer(isThere(program, descriptor.equals), "E", descriptor)
+  parts.append elementPointer(isThere(program, descriptor.hash), "H", descriptor)
   const annotation = "static const torb_element"
   write emission, CDeclaration.StaticData(annotation, descriptor.name, CExpression.Initializer(parts))
 }
@@ -928,7 +928,7 @@ fn checkType(var emission: Emission, program: IrProgram, id: IrTypeId) {
 fn usedLayoutsOf(program: IrProgram, functions: List<IrFunction>): List<Bool> {
   var used: List<Bool> = []
   for _ in 0..program.layouts.length() {
-    used.add false
+    used.append false
   }
   var pending: List<Int> = []
   for function in functions {
@@ -1004,7 +1004,7 @@ fn markLayout(program: IrProgram, var used: List<Bool>, var pending: List<Int>, 
     return
   }
   used.set id.value, true
-  pending.add id.value
+  pending.append id.value
 }
 
 // --- Type definitions -----------------------------------------------------------------------------------------------
@@ -1024,7 +1024,7 @@ fn emitTypeDefinitions(var emission: Emission, program: IrProgram, layouts: List
     if !hasStructDefinition(layout) {
       continue
     }
-    names.add layout.name
+    names.append layout.name
   }
   if names.isEmpty() {
     return
@@ -1088,9 +1088,9 @@ fn helperHeadOf(prefix: String, name: String): String {
 fn emitHelper(var emission: Emission, program: IrProgram, layout: Layout, prefix: String, isRetain: Bool) {
   var body: List<CStatement> = []
   const cast = CExpression.Cast "{layout.name} *", CExpression.Name("block")
-  body.add CStatement.Declaration("{layout.name} *", "value", Some(cast))
+  body.append CStatement.Declaration("{layout.name} *", "value", Some(cast))
   const children = childStatements emission, program, layout, isRetain
-  body.addAll children
+  body.appendAll children
   const declaration = CDeclaration.Definition "", helperHeadOf(prefix, layout.name), body
   write emission, declaration
 }
@@ -1110,7 +1110,7 @@ fn childStatements(var emission: Emission, program: IrProgram, layout: Layout, i
   for field in common {
     const place = CExpression.PointerMember value, memberNameOf(field)
     if const Some(statement) = childStatement(emission, program, place, field, isRetain) {
-      statements.add statement
+      statements.append statement
     }
   }
   var cases: List<CSwitchCase> = []
@@ -1121,21 +1121,21 @@ fn childStatements(var emission: Emission, program: IrProgram, layout: Layout, i
       const group = CExpression.Member CExpression.PointerMember(value, "payload"), variantMemberNameOf(index)
       const place = CExpression.Member group, memberNameOf(field)
       if const Some(statement) = childStatement(emission, program, place, field, isRetain) {
-        found.add statement
+        found.append statement
       }
     }
     if found.isEmpty() {
       continue
     }
-    found.add CStatement.Break
-    cases.add CSwitchCase(index, found)
+    found.append CStatement.Break
+    cases.append CSwitchCase(index, found)
   }
   if !cases.isEmpty() {
     const tag = CExpression.PointerMember value, "tag"
-    statements.add CStatement.Switch(tag, cases, [CStatement.Break])
+    statements.append CStatement.Switch(tag, cases, [CStatement.Break])
   }
   if statements.isEmpty() {
-    statements.add CStatement.Evaluate(CExpression.Cast("void", value))
+    statements.append CStatement.Evaluate(CExpression.Cast("void", value))
   }
   statements
 }
@@ -1207,7 +1207,7 @@ fn helperDemandOf(program: IrProgram, functions: List<IrFunction>, layouts: List
 fn filledFalse(count: Int): List<Bool> {
   var filled: List<Bool> = []
   for _ in 0..count {
-    filled.add false
+    filled.append false
   }
   filled
 }
@@ -1339,7 +1339,7 @@ fn sortedLayouts(program: IrProgram, flags: List<Bool>, layouts: List<Bool>): Li
     const name = program.layouts[index].name
     if !byName.containsKey(name) {
       byName.set name, index
-      names.add name
+      names.append name
     }
   }
   var sorted = names
@@ -1347,7 +1347,7 @@ fn sortedLayouts(program: IrProgram, flags: List<Bool>, layouts: List<Bool>): Li
   var found: List<Int> = []
   for name in sorted {
     if const Some(index) = byName.get(name) {
-      found.add index
+      found.append index
     }
   }
   found
@@ -1370,7 +1370,7 @@ fn emitStaticData(var emission: Emission, program: IrProgram, functions: List<Ir
   for id in all {
     const value = program.staticAt id
     if textOfStatic(value).isSome() {
-      storages.add value.name
+      storages.append value.name
     }
   }
   if !storages.isEmpty() {
@@ -1403,7 +1403,7 @@ fn namedStaticsOf(program: IrProgram, functions: List<IrFunction>): List<StaticI
             const name = program.staticAt(value).name
             if !byName.containsKey(name) {
               byName.set name, value.value
-              names.add name
+              names.append name
             }
           }
         }
@@ -1415,7 +1415,7 @@ fn namedStaticsOf(program: IrProgram, functions: List<IrFunction>): List<StaticI
   var found: List<StaticId> = []
   for name in sorted {
     if const Some(index) = byName.get(name) {
-      found.add StaticId(index)
+      found.append StaticId(index)
     }
   }
   found
@@ -1434,9 +1434,9 @@ fn closedStaticsOf(program: IrProgram, named: List<StaticId>): List<StaticId> {
       continue
     }
     seen.set current.value, true
-    order.add current
+    order.append current
     for inner in childStaticsOf(program, current) {
-      pending.add inner
+      pending.append inner
     }
   }
   var names: List<String> = []
@@ -1445,7 +1445,7 @@ fn closedStaticsOf(program: IrProgram, named: List<StaticId>): List<StaticId> {
     const name = program.staticAt(id).name
     if !byName.containsKey(name) {
       byName.set name, id.value
-      names.add name
+      names.append name
     }
   }
   var sorted = names
@@ -1453,7 +1453,7 @@ fn closedStaticsOf(program: IrProgram, named: List<StaticId>): List<StaticId> {
   var found: List<StaticId> = []
   for name in sorted {
     if const Some(index) = byName.get(name) {
-      found.add StaticId(index)
+      found.append StaticId(index)
     }
   }
   found
@@ -1491,11 +1491,11 @@ fn emitTextStorage(var emission: Emission, program: IrProgram, id: StaticId) {
   }
   var bytes: List<CExpression> = []
   for byte in text.bytes() {
-    bytes.add CExpression.Literal("0x{hexDigits(Int.from(byte), 2)}")
+    bytes.append CExpression.Literal("0x{hexDigits(Int.from(byte), 2)}")
   }
   const count = bytes.length().max(1)
   if bytes.isEmpty() {
-    bytes.add CExpression.Literal("0x00")
+    bytes.append CExpression.Literal("0x00")
   }
   const header = CExpression.Call(CExpression.Name("TORB_IMMORTAL_HEADER"), [
     CExpression.Name("TORB_BLOCK_BYTES"),
@@ -1588,7 +1588,7 @@ fn aggregateOf(
   for field in fields {
     const inner = program.staticAt field
     const found = staticValueOf emission, program, inner
-    written.add found
+    written.append found
   }
   match shape.representation {
     .Boxed => {
@@ -1685,20 +1685,20 @@ fn emitConstantCell(
     CExpression.Call CExpression.Name(built.name), []
   }
   var building: List<CStatement> = []
-  building.add CStatement.Evaluate(CExpression.Call(CExpression.Name("torb_begin_immortal"), []))
+  building.append CStatement.Evaluate(CExpression.Call(CExpression.Name("torb_begin_immortal"), []))
   if isByPointer {
-    building.add CStatement.Evaluate(call)
+    building.append CStatement.Evaluate(call)
   } else {
-    building.add CStatement.Assignment(CExpression.Name(cell), call)
+    building.append CStatement.Assignment(CExpression.Name(cell), call)
   }
-  building.add CStatement.Evaluate(CExpression.Call(CExpression.Name("torb_end_immortal"), []))
-  building.add CStatement.Assignment(CExpression.Name(ready), CExpression.Literal("true"))
+  building.append CStatement.Evaluate(CExpression.Call(CExpression.Name("torb_end_immortal"), []))
+  building.append CStatement.Assignment(CExpression.Name(ready), CExpression.Literal("true"))
   var statements: List<CStatement> = []
-  statements.add CStatement.If(CExpression.Unary("!", CExpression.Name(ready)), building)
+  statements.append CStatement.If(CExpression.Unary("!", CExpression.Name(ready)), building)
   if isByPointer {
-    statements.add CStatement.Assignment(CExpression.Dereference(CExpression.Name(resultPointerName)), CExpression.Name(cell))
+    statements.append CStatement.Assignment(CExpression.Dereference(CExpression.Name(resultPointerName)), CExpression.Name(cell))
   } else {
-    statements.add CStatement.Return(Some(CExpression.Name(cell)))
+    statements.append CStatement.Return(Some(CExpression.Name(cell)))
   }
   const comment = "{function.name}: built once, immortal, never freed"
   write emission, CDeclaration.Definition(comment, signatureHeadOf(program, function), statements)
@@ -1760,10 +1760,10 @@ fn emitMain(var emission: Emission, entries: List<ProgramEntry>) {
     // A test file that declares things and runs nothing has no entry function; its name is still printed
     if !entry.file.isEmpty() {
       isTestRun = true
-      lines.add "torb_test_file({cStringOf(entry.file)}, {entry.file.byteLength()});"
+      lines.append "torb_test_file({cStringOf(entry.file)}, {entry.file.byteLength()});"
     }
     if !entry.name.isEmpty() {
-      lines.add "{entry.name}();"
+      lines.append "{entry.name}();"
     }
   }
   if lines.length() == 1 {
@@ -1771,12 +1771,12 @@ fn emitMain(var emission: Emission, entries: List<ProgramEntry>) {
   }
   // The summary of the run is written before the leak report, so the two reports read in the order they happened
   if isTestRun {
-    lines.add "int code = torb_test_finish();"
-    lines.add "torb_process_finish();"
-    lines.add "return code;"
+    lines.append "int code = torb_test_finish();"
+    lines.append "torb_process_finish();"
+    lines.append "return code;"
   } else {
-    lines.add "torb_process_finish();"
-    lines.add "return 0;"
+    lines.append "torb_process_finish();"
+    lines.append "return 0;"
   }
   var body = ""
   for line in lines {

@@ -26,7 +26,7 @@ var counter = 0
 counter = counter + 1
 
 var list = [1, 2]
-list.add 3
+list.append 3
 const fixed = list
 
 print "{answer} {counter} {list} {fixed}"
@@ -60,8 +60,8 @@ has to be one thing (see [Top-level code](../modules-and-packages/top-level-code
 
    ```trb error
    const fixed = [1, 2]
-   fixed.add 3
-   // error: `add` needs a `var`
+   fixed.append 3
+   // error: `append` needs a `var`
    ```
 
 3. **The binding decides about the value, not the type.** There is no `List` and `MutableList`, no `Point` and
@@ -130,14 +130,14 @@ leave the object writable. Here the value is frozen too:
 
 ```trb
 var writable = [1, 2]
-writable.add 3
+writable.append 3
 print writable
 ```
 
 ```trb error
 const frozen = [1, 2]
-frozen.add 3
-// error: `add` needs a `var`
+frozen.append 3
+// error: `append` needs a `var`
 ```
 
 **`var` is not `let mut`, because there is nothing to borrow.** A `var` binding owns its value. Handing it to a function

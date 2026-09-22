@@ -940,7 +940,7 @@ fn lowerTuple(
   }
   var slots: List<Slot> = []
   for item in items {
-    slots.add lowerValue(lowering, builder, item.value)
+    slots.append lowerValue(lowering, builder, item.value)
   }
   const target = valueSlot lowering, builder, destination, annotation
   lowerConstruct lowering, builder, target, layout, 0, slots
@@ -955,7 +955,7 @@ fn lowerTuple(
  * `Option` each, `inclusive` is a `Bool`, and both ends are evaluated in source order before the record is built.
  *
  * Nothing about *iterating* a range is here: `for index in a..b` with both ends written out is still the counter of 5.2,
- * and every other range walks `Range<Int>.iterator` like any other `Iterable`.
+ * and every other range walks `Range<Int>.iterator` like any other `Iterate`.
  */
 fn lowerRangeLiteral(
   var lowering: Lowering,
@@ -978,10 +978,10 @@ fn lowerRangeLiteral(
   const fields = lowering.program.layoutAt(layout).fields
   var written: List<Expression> = []
   if const Some(found) = from {
-    written.add found
+    written.append found
   }
   if const Some(found) = to {
-    written.add found
+    written.append found
   }
   const hasFlag = to.isSome()
   const wanted = if hasFlag { written.length() + 1 } else { written.length() }
@@ -994,11 +994,11 @@ fn lowerRangeLiteral(
     if !lowering.isSupported {
       return abandonedSlot lowering, builder, destination
     }
-    arguments.add value
+    arguments.append value
   }
   if hasFlag {
     const contents = StaticContents.Literal LiteralValue.Boolean(isInclusive)
-    arguments.add constantSlot(lowering, builder, None, contents, fields[written.length()].annotation)
+    arguments.append constantSlot(lowering, builder, None, contents, fields[written.length()].annotation)
   }
   const target = valueSlot lowering, builder, destination, annotation
   lowerConstruct lowering, builder, target, layout, 0, arguments

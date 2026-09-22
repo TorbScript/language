@@ -1,11 +1,11 @@
 ---
 title: Iterating
-summary: for pulls from Iterator.next() through Iterable.iterator(), and the subject of a for is evaluated once into a temporary, so changing it inside the loop does not affect what is walked.
+summary: for pulls from Iterator.next() through Iterate.iterate(), and the subject of a for is evaluated once into a temporary, so changing it inside the loop does not affect what is walked.
 kind: reference
 status: stable
 order: 60
 keywords:
-  - Iterable
+  - Iterate
   - Iterator
   - for
   - next
@@ -14,9 +14,9 @@ source:
   - CONCEPT.md#collections-and-iteration
 ---
 
-`Iterator<Item>` is a cursor with one member, `next`. `Iterable<Item>` is anything that can hand out such a cursor,
+`Iterator<Item>` is a cursor with one member, `next`. `Iterate<Item>` is anything that can hand out such a cursor,
 which is what `for` and every collection method (`map`, `filter`, `fold`, ...) are built on. A type takes part by
-implementing `Iterable` itself.
+implementing `Iterate` itself.
 
 ## Example
 
@@ -33,10 +33,10 @@ type CountdownIterator with Iterator<Int> {
   }
 }
 
-type Countdown with Iterable<Int> {
+type Countdown with Iterate<Int> {
   start: Int
 
-  fn iterator(): Iterator<Int> {
+  fn iterate(): Iterator<Int> {
     CountdownIterator start
   }
 }
@@ -50,7 +50,7 @@ for value in Countdown(3) {
 
 ```text
 trait Iterator<Item> { var fn next(): Item? }
-trait Iterable<Item> { fn iterator(): Iterator<Item> }
+trait Iterate<Item> { fn iterate(): Iterator<Item> }
 
 for <name> in <iterable> { ... }
 for (<name>, <name>) in <iterable of tuples> { ... }
@@ -59,10 +59,10 @@ for (<name>, <name>) in <iterable of tuples> { ... }
 ## Rules
 
 1. **`Iterator<Item>` has exactly one member, `next(): Item?`, which answers `None` once there is nothing
-   left.** `Iterable<Item>` has exactly one required member, `iterator(): Iterator<Item>`; every other method a
+   left.** `Iterate<Item>` has exactly one required member, `iterate(): Iterator<Item>`; every other method a
    collection has (`map`, `filter`, `fold`, `toList()`, ...) is a default method built from those two.
 
-2. **`for value in xs { ... }` calls `xs.iterator()` once and then `next()` until it answers `None`.** The loop
+2. **`for value in xs { ... }` calls `xs.iterate()` once and then `next()` until it answers `None`.** The loop
    variable is a `const` copy of each item, produced fresh by every `next()`.
 
 3. **The subject of a `for` is evaluated once, into a temporary.** Changing the binding named after `in` inside the
@@ -72,12 +72,12 @@ for (<name>, <name>) in <iterable of tuples> { ... }
    ```trb check
    var numbers = [1, 2, 3]
    for value in numbers {
-     numbers.add(value * 10)
+     numbers.append(value * 10)
    }
    print numbers
    ```
 
-4. **A `Map` is `Iterable<(Key, Value)>`, and a `for` head can destructure the tuple directly.** `for (name, age) in
+4. **A `Map` is `Iterate<(Key, Value)>`, and a `for` head can destructure the tuple directly.** `for (name, age) in
    ages { ... }` binds both parts without a separate step.
 
    ```trb check
@@ -87,13 +87,13 @@ for (<name>, <name>) in <iterable of tuples> { ... }
    }
    ```
 
-5. **A type takes part in `for` and in every pipeline method by implementing `Iterable`, with a private `Iterator`
+5. **A type takes part in `for` and in every pipeline method by implementing `Iterate`, with a private `Iterator`
    type next to it that does the work.** `Countdown` above is the whole shape: one type that answers cursors, one
    type that is a cursor.
 
 ## What this is not
 
-**`for` is not a special form that works on every type - only on `Iterable`.** A type with no `iterator()` cannot
+**`for` is not a special form that works on every type - only on `Iterate`.** A type with no `iterate()` cannot
 stand after `in`.
 
 ```trb check
@@ -111,12 +111,12 @@ type Point {
 for value in Point(1, 2) {
   print value
 }
-// error: `Point` is not `Iterable`, so `for` cannot walk it
+// error: `Point` is not `Iterate`, so `for` cannot walk it
 ```
 
 ## Related
 
-- [The collection traits](collection-traits.md) - `Collection`, built on top of `Iterable`.
-- [Pipelines](pipelines.md) - the lazy stages and terminal operations `Iterable` gives every collection for free.
+- [The collection traits](collection-traits.md) - the five kinds, each built on top of `Iterate`.
+- [Pipelines](pipelines.md) - the lazy stages and terminal operations `Iterate` gives every collection for free.
 - [Bindings](../values-and-types/bindings.md) - why the loop variable is always a `const`.
 

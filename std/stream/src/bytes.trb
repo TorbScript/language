@@ -4,7 +4,7 @@
  * Everything that comes off a file, a socket or a pipe arrives in chunks whose borders nobody chose: a line, a JSON
  * value or even a single character can be split across two of them. So the stages here are resumable - they keep what
  * is incomplete and hand it on when the rest arrives - and that is also why they are `Stage`s and not methods: the
- * very same value works on an `Iterable<Bytes>` in a test.
+ * very same value works on an `Iterate<Bytes>` in a test.
  */
 
 use Stage, Accumulator, mapping from "std/iteration"
@@ -42,7 +42,7 @@ public type Utf8Error with Show, Error {
  * break itself is not part of the line, and a last line without one is still a line.
  *
  * Fallible, so the items are `Result`s; `source.through(lines()).checked()` turns them into the stream's own failure.
- * The same stage works on a plain `Iterable<Bytes>`, with no `Source` and no `Task` involved.
+ * The same stage works on a plain `Iterate<Bytes>`, with no `Source` and no `Task` involved.
  *
  * # Examples
  *
@@ -157,7 +157,7 @@ type LinesAccumulator<Final> with Accumulator<Bytes, Final> {
   var pending: Bytes = []
 
   var fn add(value: Bytes) {
-    pending.addAll value
+    pending.appendAll value
     while const Some(at) = indexOfNewline(pending) {
       const line = pending[0..at]
       const rest = pending[(at + 1)..]
@@ -218,7 +218,7 @@ type DecodedTextAccumulator<Final> with Accumulator<Bytes, Final> {
   var consumed: Int = 0
 
   var fn add(value: Bytes) {
-    pending.addAll value
+    pending.appendAll value
     match decodeUtf8(pending) {
       Ok((text, used)) => {
         const rest = pending[used..]
@@ -291,7 +291,7 @@ fn decodeUtf8(bytes: Bytes): Result<(String, Int), Utf8Error> {
       return Fail Utf8Error(at)
     }
     match Char.tryFrom(point) {
-      Ok(character) => characters.add character
+      Ok(character) => characters.append character
       Fail(_) => {
         return Fail Utf8Error(at)
       }

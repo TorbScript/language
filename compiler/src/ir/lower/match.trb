@@ -96,11 +96,11 @@ public fn lowerMatch(
   for index in 0..arms.length() {
     // An arm no value reaches got a message from the checker; a block nothing jumps to is not a block
     if plan.arms[index].isReachable {
-      armBlocks.add addBlock(builder, "arm", Some(location))
+      armBlocks.append addBlock(builder, "arm", Some(location))
     } else {
-      armBlocks.add BlockId(0)
+      armBlocks.append BlockId(0)
     }
-    guards.add arms[index].guard
+    guards.append arms[index].guard
   }
   const join = addBlock builder, "join", Some(location)
   for index in 0..arms.length() {
@@ -359,7 +359,7 @@ fn emitWalk(var lowering: Lowering, var builder: FunctionBuilder, walk: Walk) {
   const location = walk.location
   var blocks: List<BlockId> = []
   for index in 0..walk.graph.nodes.length() {
-    blocks.add addBlock(builder, labelOfNode(walk.graph.nodes[index]), Some(location))
+    blocks.append addBlock(builder, labelOfNode(walk.graph.nodes[index]), Some(location))
   }
   const filled = walk.copy blocks: blocks
   const root = filled.graph.root
@@ -413,8 +413,8 @@ fn emitNode(var lowering: Lowering, var builder: FunctionBuilder, walk: Walk, no
           reportUnsupported lowering, "a case the layout of its type does not have", walk.at
           return
         }
-        values.add index
-        targets.add walk.blocks[edge.target.value]
+        values.append index
+        targets.append walk.blocks[edge.target.value]
       }
       const fallback = walk.blocks[otherwise.value]
       finishBlock lowering, builder, Terminator.Switch(tag, values, targets, fallback)
@@ -532,7 +532,7 @@ fn emitCheck(
  * reading from it is a call through its witness table, exactly as `a[key]` is (`at` is `Indexed.at`, whose default body
  * decides what an index out of range does - and here nothing is ever out of range, because the length was tested on the
  * way in). That is also why `[first, ...rest]` copies: `Slice.slice` answers `Self` and is therefore not in the table of
- * a trait-typed value at all (5.6), while `skip` and `toList` are ordinary members of `Iterable`. A value has no
+ * a trait-typed value at all (5.6), while `skip` and `toList` are ordinary members of `Iterate`. A value has no
  * identity, so a copy of the rest is not observable - only its cost is, which is the same cost `toList()` has anywhere.
  */
 fn emitLengthTest(
@@ -574,7 +574,7 @@ fn emitLengthTest(
  * A list *inside* another pattern (`.Wrapped([first])`) needs the checker's type halfway down a path, and a plan says
  * nothing about one - only the layouts do, and **a list has no layout**. So the walk asks the checker the same questions
  * the pattern check asked on the way in: a case field and a field are `caseNamed`/`fieldsOf` with the receiver's
- * arguments filled in, a tuple position is a field of its form, and an item is the `Item` of the `Iterable<Item>` the
+ * arguments filled in, a tuple position is a field of its form, and an item is the `Item` of the `Iterate<Item>` the
  * container is. The subject is substituted first, so a nested list inside an instance of a generic reaches the type
  * arguments of that instance.
  *
@@ -736,7 +736,7 @@ fn itemFromEndOf(
 /**
  * `[first, ...rest]`: the items from `index` on, as a list of their own - `skip(index).toList()`.
  *
- * Both are members of `Iterable`, which is what makes this work on a trait-typed value at all: `Slice.slice` answers
+ * Both are members of `Iterate`, which is what makes this work on a trait-typed value at all: `Slice.slice` answers
  * `Self` and is therefore not in a witness table (5.6's rule about object safety), so there is no way to *share* the
  * storage from here. A copy is what the language can express, and value semantics make it indistinguishable.
  */
@@ -1185,7 +1185,7 @@ fn reportFailure(
   const shape = lowering.program.layoutAt subjectLayout
   const fields = shape.fieldsOfVariant failure
   var parts: List<Slot> = []
-  parts.add constantSlot(lowering, builder, None, StaticContents.Literal(LiteralValue.Text("error: ")), text)
+  parts.append constantSlot(lowering, builder, None, StaticContents.Literal(LiteralValue.Text("error: ")), text)
   var chain: (Slot, TypeId)? = None
   // A `None` carries nothing, so the line is the prefix alone: `x?` on an `Option` says that there was no value
   if const Some(field) = fields.first() {
@@ -1198,7 +1198,7 @@ fn reportFailure(
         return
       }
     }
-    parts.add shown
+    parts.append shown
     if !boundsOfTraitValue(lowering, failed).isEmpty() {
       chain = Some((carried, failed))
     }
@@ -1282,12 +1282,12 @@ fn lowerCauseChain(
   continueIn lowering, builder, inner
   emit builder, Instruction.Read(current, Reference(pulled, [PathStep.Variant(layout, some, 0)]))
   var parts: List<Slot> = []
-  parts.add constantSlot(lowering, builder, None, StaticContents.Literal(LiteralValue.Text("  caused by: ")), text)
+  parts.append constantSlot(lowering, builder, None, StaticContents.Literal(LiteralValue.Text("  caused by: ")), text)
   const shown = showSlot lowering, builder, current, failed, at
   if !lowering.isSupported {
     return
   }
-  parts.add shown
+  parts.append shown
   const line = intrinsicSlot lowering, builder, None, IntrinsicOperation.TextConcat, None, parts, text, at
   emitIntrinsic lowering, builder, None, IntrinsicOperation.PrintErrorParts, None, [line], at
   finishBlock lowering, builder, Terminator.Jump(check)
@@ -1366,7 +1366,7 @@ fn emitFailure(
         return
       }
     }
-    fields.add converted
+    fields.append converted
   }
   const failed = addTemporary builder, result
   lowerConstruct lowering, builder, failed, resultLayout, wantedFailure, fields

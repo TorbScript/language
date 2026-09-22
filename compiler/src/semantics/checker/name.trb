@@ -172,7 +172,7 @@ public fn noteCapture(var checker: Checker, binding: BindingId) {
     }
     var captures = frame.captures
     if !captures.any({ _.binding == binding }) {
-      captures.add Capture(binding, isVar)
+      captures.append Capture(binding, isVar)
       checker.closureFrames.set index, frame.copy(captures: captures)
       // A captured `var` binding is a shared box, not a copy, so it is exempt from the dead-change rule
       noteCapturedBinding checker, binding
@@ -196,7 +196,7 @@ fn noteDeclarationCapture(var checker: Checker, symbol: SymbolId) {
     const frame = checker.closureFrames[index]
     if !frame.declarations.contains(symbol) {
       var declarations = frame.declarations
-      declarations.add symbol
+      declarations.append symbol
       checker.closureFrames.set index, frame.copy(declarations: declarations)
     }
     index = index + 1
@@ -417,15 +417,15 @@ public fn argumentsFor(
   const known = wanted ?? []
   for index in 0..generics.length() {
     if index < explicit.length() {
-      arguments.add explicit[index]
+      arguments.append explicit[index]
       continue
     }
     if index < known.length() {
-      arguments.add known[index]
+      arguments.append known[index]
       continue
     }
     const declared = checker.types.parameter generics[index]
-    arguments.add checker.newVariable(declared.name, owner, at, isConst: declared.isConst)
+    arguments.append checker.newVariable(declared.name, owner, at, isConst: declared.isConst)
   }
   arguments
 }
@@ -742,8 +742,8 @@ fn silenceVariables(var checker: Checker, of: TypeId, depth: Int) {
 }
 
 /**
- * Why a range has no `length` and no `iterator`: which ends it has *is* its type, so an end the range does not have
- * is the whole answer. `(0..).length()` and `(..10).iterator()` are the two the language itself can name.
+ * Why a range has no `length` and no `iterate`: which ends it has *is* its type, so an end the range does not have
+ * is the whole answer. `(0..).length()` and `(..10).iterate()` are the two the language itself can name.
  */
 fn openRangeNote(checker: Checker, receiver: TypeId, text: String): String? {
   const symbol = match checker.types.form(receiver) {
@@ -757,8 +757,7 @@ fn openRangeNote(checker: Checker, receiver: TypeId, text: String): String? {
     return Some "`0..` has no end, so it has no length: write one (`0..10`)"
   }
   if checker.wellKnown.rangeTo == named {
-    // Rename fallback: delete after the seed knows the new name.
-    if text == "length" || text == "isEmpty" || text == "iterate" || text == "iterator" {
+    if text == "length" || text == "isEmpty" || text == "iterate" {
       return Some "`..10` has neither a start nor a length: write the start (`0..10`)"
     }
   }

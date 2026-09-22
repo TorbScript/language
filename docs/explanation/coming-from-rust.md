@@ -234,7 +234,7 @@ is left alone.
 ### Generics stay declarative
 
 `<Item: Hash>` and `where Item: Hash & Equals` work as they do in Rust, and inference works the same way. What is missing is
-associated types and anything higher-kinded: `Option`, `Result`, `Task` and `Iterable` share the names `map`, `flatMap`,
+associated types and anything higher-kinded: `Option`, `Result`, `Task` and `Iterate` share the names `map`, `flatMap`,
 `filter` and `forEach` by convention, `orElse` is the one of those that is a trait (`OrElse`, what `a ?? b` calls), and
 `traverse` is a collection target (`to<Result<List<Int>, ParseError>>()`).
 
@@ -269,7 +269,7 @@ comparison.
 - **`Vec`, `HashMap`, `BTreeMap` in signatures.** Signatures name traits (`List<Item>`, `Map<Key, Value>`) and an
   implementation is named only where something is constructed (`HashMap()`, `ArrayList`). `ArrayList` is what `Vec` is;
   `TrieMap` is the default `Map`.
-- **`.iter()`, `.into_iter()`, `.iter_mut()`.** There is one pipeline. `for x in xs` works on anything `Iterable`, the
+- **`.iter()`, `.into_iter()`, `.iter_mut()`.** There is one pipeline. `for x in xs` works on anything `Iterate`, the
   stages are lazy, and a terminal operation (`toList()`, `fold`, `count`, `to<Target>()`) pulls the values through. To change
   elements in place, use the path (`items[index].x = 1`) or `items.update(index) { ... }`.
 - **`Try`, and `?` for a type of your own.** `?` leaves the *enclosing function*, which no method can do, so it stays

@@ -130,7 +130,7 @@ fn isUsefulFor(
 ): Bool {
   const specialized = specializeMatrix checker, matrix, candidate
   const inner = specializeRow(head, candidate) ?? []
-  isUsefulAt(checker, specialized, inner.addedAll(rest), depth + 1)
+  isUsefulAt(checker, specialized, inner.appendedAll(rest), depth + 1)
 }
 
 /** A type that contains itself through a `shared type` is legal, so the descent needs an end that is an answer. */
@@ -199,7 +199,7 @@ fn missingValuesAt(var checker: Checker, matrix: Matrix, limit: Int, depth: Int)
   if set.hasMissing {
     const inner = missingValuesAt(checker, defaultMatrix(matrix), limit, depth + 1)
     for witness in inner {
-      found.add([Normal.Anything].addedAll(witness))
+      found.append([Normal.Anything].appendedAll(witness))
     }
     return found
   }
@@ -210,7 +210,7 @@ fn missingValuesAt(var checker: Checker, matrix: Matrix, limit: Int, depth: Int)
     const specialized = specializeMatrix checker, matrix, candidate
     const room = limit - found.length()
     for witness in missingValuesAt(checker, specialized, room, depth + 1) {
-      found.add appliedWitness(candidate, witness)
+      found.append appliedWitness(candidate, witness)
     }
   }
   found
@@ -219,7 +219,7 @@ fn missingValuesAt(var checker: Checker, matrix: Matrix, limit: Int, depth: Int)
 fn wildcards(count: Int): List<Normal> {
   var found: List<Normal> = []
   for _ in 0..count {
-    found.add Normal.Anything
+    found.append Normal.Anything
   }
   found
 }
@@ -229,13 +229,13 @@ fn appliedWitness(candidate: Constructor, witness: List<Normal>): List<Normal> {
   const arity = arityOf candidate
   var arguments: List<Normal> = []
   for index in 0..arity {
-    arguments.add(witness.get(index) ?? Normal.Anything)
+    arguments.append(witness.get(index) ?? Normal.Anything)
   }
   var rest: List<Normal> = []
   for index in arity..witness.length() {
-    rest.add witness[index]
+    rest.append witness[index]
   }
-  [Normal.Applied(candidate, arguments)].addedAll(rest)
+  [Normal.Applied(candidate, arguments)].appendedAll(rest)
 }
 
 // --- Specialization and the default matrix --------------------------------------------------------------------------
@@ -243,7 +243,7 @@ fn appliedWitness(candidate: Constructor, witness: List<Normal>): List<Normal> {
 fn columnOf(matrix: Matrix): List<Normal> {
   var column: List<Normal> = []
   for row in matrix.rows {
-    column.add(row.get(0) ?? Normal.Anything)
+    column.append(row.get(0) ?? Normal.Anything)
   }
   column
 }
@@ -251,7 +251,7 @@ fn columnOf(matrix: Matrix): List<Normal> {
 fn tailOf(row: List<Normal>): List<Normal> {
   var rest: List<Normal> = []
   for index in 1..row.length() {
-    rest.add row[index]
+    rest.append row[index]
   }
   rest
 }
@@ -259,7 +259,7 @@ fn tailOf(row: List<Normal>): List<Normal> {
 fn tailOfTypes(types: List<TypeId>): List<TypeId> {
   var rest: List<TypeId> = []
   for index in 1..types.length() {
-    rest.add types[index]
+    rest.append types[index]
   }
   rest
 }
@@ -269,13 +269,13 @@ fn specializeMatrix(var checker: Checker, matrix: Matrix, constructor: Construct
   const first = matrix.types[0]
   var types = argumentTypesOf checker, first, constructor
   for index in 1..matrix.types.length() {
-    types.add matrix.types[index]
+    types.append matrix.types[index]
   }
   var rows: List<List<Normal>> = []
   for row in matrix.rows {
     const head = row.get(0) ?? Normal.Anything
     if const Some(inner) = specializeRow(head, constructor) {
-      rows.add inner.addedAll(tailOf(row))
+      rows.append inner.appendedAll(tailOf(row))
     }
   }
   Matrix types, rows
@@ -286,7 +286,7 @@ fn defaultMatrix(matrix: Matrix): Matrix {
   var rows: List<List<Normal>> = []
   for row in matrix.rows {
     if const .Anything = row.get(0) ?? Normal.Anything {
-      rows.add tailOf(row)
+      rows.append tailOf(row)
     }
   }
   Matrix tailOfTypes(matrix.types), rows
@@ -299,7 +299,7 @@ fn specializeRow(head: Normal, constructor: Constructor): List<Normal>? {
     .Anything => {
       var arguments: List<Normal> = []
       for _ in 0..arity {
-        arguments.add Normal.Anything
+        arguments.append Normal.Anything
       }
       Some arguments
     }
@@ -311,7 +311,7 @@ fn specializeRow(head: Normal, constructor: Constructor): List<Normal>? {
       if arguments.length() < arity {
         var padded = arguments
         for _ in arguments.length()..arity {
-          padded.add Normal.Anything
+          padded.append Normal.Anything
         }
         return Some padded
       }
@@ -385,7 +385,7 @@ fn splitColumn(
   var hasOpaque = false
   for pattern in column {
     if const .Applied(constructor, _) = pattern {
-      written.add constructor
+      written.append constructor
     }
   }
   for constructor in written {
@@ -427,7 +427,7 @@ fn columnKind(var checker: Checker, annotation: TypeId): ColumnKind {
     .Literals(_, values) => {
       var constructors: List<Constructor> = []
       for value in values {
-        constructors.add Constructor.Literal(literalKey(value), describeLiteral(value))
+        constructors.append Constructor.Literal(literalKey(value), describeLiteral(value))
       }
       ColumnKind.Finite constructors
     }
@@ -452,7 +452,7 @@ fn nominalKind(var checker: Checker, symbol: SymbolId): ColumnKind {
   if !shape.cases.isEmpty() {
     var constructors: List<Constructor> = []
     for variant in shape.cases {
-      constructors.add Constructor.Named(variant.name, ".{variant.name}", variant.fields.length())
+      constructors.append Constructor.Named(variant.name, ".{variant.name}", variant.fields.length())
     }
     return ColumnKind.Finite constructors
   }
@@ -526,9 +526,9 @@ fn splitLists(written: List<Constructor>): ConstructorSet {
   }
   var constructors: List<Constructor> = []
   for length in 0..border {
-    constructors.add Constructor.ListOf(length, false)
+    constructors.append Constructor.ListOf(length, false)
   }
-  constructors.add Constructor.ListOf(border, true)
+  constructors.append Constructor.ListOf(border, true)
   ConstructorSet constructors, false
 }
 
@@ -545,11 +545,11 @@ fn splitIntervals(written: List<Constructor>, low: Int, high: Int): ConstructorS
         continue
       }
       if !bounds.contains(from) {
-        bounds.add(from)
+        bounds.append(from)
       }
       // The piece behind a written interval begins one past its end, unless that is past the type itself
       if to < high && !bounds.contains(to + 1) {
-        bounds.add(to + 1)
+        bounds.append(to + 1)
       }
     }
   }
@@ -563,7 +563,7 @@ fn splitIntervals(written: List<Constructor>, low: Int, high: Int): ConstructorS
     const from = bounds[index]
     const to = if index + 1 < bounds.length() { bounds[index + 1] - 1 } else { high }
     if isCovered(written, from, to) {
-      pieces.add Constructor.Interval(from, to)
+      pieces.append Constructor.Interval(from, to)
       continue
     }
     hasMissing = true
@@ -593,7 +593,7 @@ fn uniqueConstructors(written: List<Constructor>): List<Constructor> {
       continue
     }
     seen.set key, true
-    found.add constructor
+    found.append constructor
   }
   found
 }
@@ -607,7 +607,7 @@ public fn argumentTypesOf(var checker: Checker, annotation: TypeId, constructor:
       const element = itemOfSubject checker, annotation
       var types: List<TypeId> = []
       for _ in 0..length {
-        types.add element
+        types.append element
       }
       types
     }
@@ -620,14 +620,14 @@ fn namedArgumentTypes(var checker: Checker, annotation: TypeId, name: String, ar
   if const .Tuple(fields) = checker.types.form(annotation) {
     var types: List<TypeId> = []
     for field in fields {
-      types.add field.annotation
+      types.append field.annotation
     }
     return types
   }
   if const Some(variant) = caseNamed(checker, annotation, name) {
     var types: List<TypeId> = []
     for field in variant.fields {
-      types.add field.annotation
+      types.append field.annotation
     }
     return types
   }
@@ -635,13 +635,13 @@ fn namedArgumentTypes(var checker: Checker, annotation: TypeId, name: String, ar
   if !declared.isEmpty() {
     var types: List<TypeId> = []
     for field in declared {
-      types.add field.annotation
+      types.append field.annotation
     }
     return types
   }
   var types: List<TypeId> = []
   for _ in 0..arity {
-    types.add checker.deferredType
+    types.append checker.deferredType
   }
   types
 }
@@ -655,7 +655,7 @@ public fn describeNormal(pattern: Normal): String {
     .Applied(constructor, arguments) => {
       var parts: List<String> = []
       for argument in arguments {
-        parts.add describeNormal(argument)
+        parts.append describeNormal(argument)
       }
       describeApplied constructor, parts
     }
@@ -681,10 +681,10 @@ fn describeApplied(constructor: Constructor, parts: List<String>): String {
     .ListOf(length, hasRest) => {
       var items = parts
       while items.length() < length {
-        items.add "_"
+        items.append "_"
       }
       if hasRest {
-        items.add "..."
+        items.append "..."
       }
       const inner = items.joined separator: ", "
       "[{inner}]"

@@ -51,7 +51,7 @@ public native shared type Task<Value> {
   fn await(): Value
   fn map<Output>(transform: (value: Value) => Output): Task<Output>
   fn flatMap<Output>(transform: (value: Value) => Task<Output>): Task<Output>
-  static fn all(tasks: Iterable<Task<Value>>): Task<List<Value>>
+  static fn all(tasks: Iterate<Task<Value>>): Task<List<Value>>
 }
 ```
 

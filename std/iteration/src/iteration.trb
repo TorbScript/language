@@ -1,16 +1,16 @@
 /**
- * The pull side of a pipeline: [Iterator], a cursor with one method, and [Iterable], anything that can hand one out.
+ * The pull side of a pipeline: [Iterator], a cursor with one method, and [Iterate], anything that can hand one out.
  * `for`, the spread operator (`...`) and every lazy stage (`map`, `filter`, `take`, ...) are built on these two
- * traits alone - a type takes part simply by implementing [Iterable].
+ * traits alone - a type takes part simply by implementing [Iterate].
  *
- * [Iterator] and [Iterable] are the synchronous half of the pipeline vocabulary: a [Collector] describes where the
+ * [Iterator] and [Iterate] are the synchronous half of the pipeline vocabulary: a [Collector] describes where the
  * values of a pipeline end up, and a [Stage] is the reusable middle a pipeline is built from. [Source] and [Sink]
  * carry the same two verbs (`next`, `add`/`finish`) asynchronously, for values that arrive over time instead of all
  * being there already.
  *
  * # Related
  *
- * - [Length] - the `length()`/`isEmpty()` pair a sized collection carries next to `Iterable`.
+ * - [Length] - the `length()`/`isEmpty()` pair a sized collection carries next to `Iterate`.
  * - [Source] - the asynchronous sibling of `Iterator`, for values that are not all there yet.
  */
 
@@ -29,13 +29,13 @@ use Mapped, Filtered, FilterMapped, MappedWhile, FlatMapped, Taken, Skipped, Tak
  *
  * # Examples
  *
- *     var digits = [1, 2, 3].iterator()
+ *     var digits = [1, 2, 3].iterate()
  *     print digits.next()
  *     print digits.next()
  *
  * # Related
  *
- * - [Iterable] - anything that can hand out a fresh one.
+ * - [Iterate] - anything that can hand out a fresh one.
  */
 public trait Iterator<Item> {
   /** The next value, or `None` once there is nothing left. */
@@ -67,14 +67,14 @@ public trait Length {
 }
 
 /**
- * Everything that works with `for ... in` and the spread operator (`...`). Only `iterator` is required.
+ * Everything that works with `for ... in` and the spread operator (`...`). Only `iterate` is required.
  *
  * A pipeline has three parts, like in Java and Rust:
  *
  *     source            .filter { ... }.map { ... }.take(10)          .toList()
- *     any Iterable      lazy stages: nothing runs, nothing is stored   terminal operation: pulls the values through
+ *     any Iterate      lazy stages: nothing runs, nothing is stored   terminal operation: pulls the values through
  *
- * Stages are values (an `Iterable` again), so a pipeline can be passed around, extended and iterated more than once.
+ * Stages are values (an `Iterate` again), so a pipeline can be passed around, extended and iterated more than once.
  * Where the values end up is decided by the terminal operation alone - usually `collect` with a `Collector`.
  *
  * # Examples
@@ -89,54 +89,54 @@ public trait Length {
  * - [Collector] - what `collect()` describes; every other terminal operation is written in terms of it.
  * - [Stage] - the reusable middle a `through(...)` puts in front of the values.
  */
-public trait Iterable<Item> {
+public trait Iterate<Item> {
   /** A fresh cursor over the values, positioned before the first one. */
-  fn iterator(): Iterator<Item>
+  fn iterate(): Iterator<Item>
 
   // --- Lazy stages -----------------------------------------------------------------------------
 
   /** Transforms every value into another one, in order. */
-  fn map<Output>(transform: (value: Item) => Output): Iterable<Output> {
+  fn map<Output>(transform: (value: Item) => Output): Iterate<Output> {
     Mapped self, transform
   }
 
   /** Keeps every value that answers the predicate, and drops the rest. */
-  fn filter(predicate: (value: Item) => Bool): Iterable<Item> {
+  fn filter(predicate: (value: Item) => Bool): Iterate<Item> {
     Filtered self, predicate
   }
 
-  /** Transforms every value into its own Iterable, and flattens all of them into one sequence. */
-  fn flatMap<Output>(transform: (value: Item) => Iterable<Output>): Iterable<Output> {
+  /** Transforms every value into its own Iterate, and flattens all of them into one sequence. */
+  fn flatMap<Output>(transform: (value: Item) => Iterate<Output>): Iterate<Output> {
     FlatMapped self, transform
   }
 
   /** `map` and `filter` in one: keeps the values of all `Some`. The bridge for functions that return an Option. */
-  fn filterMap<Output>(transform: (value: Item) => Output?): Iterable<Output> {
+  fn filterMap<Output>(transform: (value: Item) => Output?): Iterate<Output> {
     FilterMapped self, transform
   }
 
   /** Like `filterMap`, but ends the pipeline at the first `None`. */
-  fn mapWhile<Output>(transform: (value: Item) => Output?): Iterable<Output> {
+  fn mapWhile<Output>(transform: (value: Item) => Output?): Iterate<Output> {
     MappedWhile self, transform
   }
 
   /** The first `amount` values. Ends the pipeline there, so a source that never runs out still finishes. */
-  fn take(amount: Int): Iterable<Item> {
+  fn take(amount: Int): Iterate<Item> {
     Taken self, amount
   }
 
   /** Every value after the first `amount`, which are read and thrown away. */
-  fn skip(amount: Int): Iterable<Item> {
+  fn skip(amount: Int): Iterate<Item> {
     Skipped self, amount
   }
 
   /** Values up to, but not including, the first one that fails the predicate. */
-  fn takeWhile(predicate: (value: Item) => Bool): Iterable<Item> {
+  fn takeWhile(predicate: (value: Item) => Bool): Iterate<Item> {
     TakenWhile self, predicate
   }
 
   /** Pairs each value with the one at the same position of `other`; stops at the shorter of the two. */
-  fn zip<Output>(other: Iterable<Output>): Iterable<(Item, Output)> {
+  fn zip<Output>(other: Iterate<Output>): Iterate<(Item, Output)> {
     Zipped self, other
   }
 
@@ -150,12 +150,12 @@ public trait Iterable<Item> {
    *       print "{pair.index}: {pair.item}"
    *     }
    */
-  fn indexed(): Iterable<(index: Int, item: Item)> {
+  fn indexed(): Iterate<(index: Int, item: Item)> {
     Zipped(0.., self)
   }
 
   /** Lazy as a stage, but has to buffer all values as soon as it is iterated. */
-  fn sorted<Key: Compare>(by: (value: Item) => Key): Iterable<Item> {
+  fn sorted<Key: Compare>(by: (value: Item) => Key): Iterate<Item> {
     Sorted self, by
   }
 
@@ -163,7 +163,7 @@ public trait Iterable<Item> {
    * Puts a `Stage` in front of the values: the one stage that is written once and works on a `Source` of `std/stream`
    * just as well (`body.through(Json.items<User>())`). Everything above is the same stage with a name of its own.
    */
-  fn through<Output>(stage: Stage<Item, Output>): Iterable<Output> {
+  fn through<Output>(stage: Stage<Item, Output>): Iterate<Output> {
     Staged self, stage
   }
 
@@ -192,10 +192,10 @@ public trait Iterable<Item> {
   }
 
   /**
-   * Collects into whatever can be created from an Iterable: `.to<Set<Int>>()`, or
-   * `const names: List<String> = pipeline.to()`. No special trait needed, this is plain `From<Iterable<Item>>`.
+   * Collects into whatever can be created from an Iterate: `.to<Set<Int>>()`, or
+   * `const names: List<String> = pipeline.to()`. No special trait needed, this is plain `From<Iterate<Item>>`.
    */
-  fn to<Target: From<Iterable<Item>>>(): Target {
+  fn to<Target: From<Iterate<Item>>>(): Target {
     Target.from self
   }
 
@@ -221,7 +221,7 @@ public trait Iterable<Item> {
   fn joined(separator: String = ""): String where Item: Show {
     var pieces: List<String> = []
     for item in self {
-      pieces.add item.show()
+      pieces.append item.show()
     }
     concatenated pieces, separator
   }
@@ -254,7 +254,7 @@ public trait Iterable<Item> {
 
   /** The first value, or `None` when there is none. */
   fn first(): Item? {
-    var cursor = iterator()              // `next` needs a `var` path, a temporary is not one
+    var cursor = iterate()              // `next` needs a `var` path, a temporary is not one
     cursor.next()
   }
 

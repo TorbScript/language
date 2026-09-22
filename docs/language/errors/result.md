@@ -97,7 +97,7 @@ Fail(error)    Fail problem     the failure case
 6. **`?.` is not defined on `Result`.** It is `Option.map`, and `Option.flatMap` when the member answers an `Option`, so
    it never produces a nested `Option`. To go from a `Result` to an `Option`, call `ok()`.
 
-7. **`Result` shares the vocabulary of `Option`, `Task` and `Iterable`**: `map`, `flatMap`, `forEach`, `orElse`,
+7. **`Result` shares the vocabulary of `Option`, `Task` and `Iterate`**: `map`, `flatMap`, `forEach`, `orElse`,
    `toList()`. They mean the same thing everywhere, by convention rather than through higher-kinded types. `map` and
    `flatMap` work on the `Ok` side; `mapError` works on the `Fail` side.
 
@@ -111,7 +111,7 @@ Fail(error)    Fail problem     the failure case
 
 10. **A collection of results collects into a result of a collection.** `to<Result<List<Int>, ParseError>>()` stops at the
     first `Fail`. That is what `traverse` or `sequence` is in a language with higher-kinded types, and it is an ordinary
-    `From<Iterable<...>>` implementation rather than a language feature.
+    `From<Iterate<...>>` implementation rather than a language feature.
 
 11. **A top-level `?` is not a panic.** In an entry file or a script it prints `error: <the error through Show>` and
     exits with **1** (the `  caused by:` lines of the chain are specified and not built yet, see

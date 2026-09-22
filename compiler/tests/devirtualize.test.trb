@@ -258,7 +258,7 @@ group "what keeps its box" {
 }
 
 /**
- * The frozen member a direct call site gets a copy of. `ArrayList.iterator` is the one that pays for it: a table
+ * The frozen member a direct call site gets a copy of. `ArrayList.iterate` is the one that pays for it: a table
  * member's signature may not move, so the boxed `Iterator<Item>` it answers used to be the cursor of every `for` over a
  * list. The copy no table names is free of that, and the second run of the analysis peels it.
  */
@@ -273,19 +273,19 @@ group "a copy of a frozen member" {
       }
     }
 
-    type Three with Iterable<Int> {
-      fn iterator(): Iterator<Int> {
+    type Three with Iterate<Int> {
+      fn iterate(): Iterator<Int> {
         Counting()
       }
     }
 
-    type Four with Iterable<Int> {
-      fn iterator(): Iterator<Int> {
+    type Four with Iterate<Int> {
+      fn iterate(): Iterator<Int> {
         Counting()
       }
     }
 
-    fn sumOf(values: Iterable<Int>): Int {
+    fn sumOf(values: Iterate<Int>): Int {
       var sum = 0
       for value in values {
         sum = sum + value
@@ -303,8 +303,8 @@ group "a copy of a frozen member" {
     """)
 
   /**
-   * Two implementations meet in the parameter of `sumOf`, so `Iterable<Int>` is a real dispatch here and both tables
-   * are built - which is what freezes `Three.iterator`. The loop of `total` calls it directly all the same, so the copy
+   * Two implementations meet in the parameter of `sumOf`, so `Iterate<Int>` is a real dispatch here and both tables
+   * are built - which is what freezes `Three.iterate`. The loop of `total` calls it directly all the same, so the copy
    * is what that call reaches: no box, a cursor on the frame, and a direct `next` through the place the cursor is.
    */
   test "a `for` whose iterable is concrete gets a cursor on the frame, although a table names the member" {
@@ -317,7 +317,7 @@ group "a copy of a frozen member" {
     assert(
       irOf(iterated, "t_acme_x2f_app_main_total").contains(
         r"""
-          %2 = call t_acme_x2f_app_main_Three_iterator_x24_direct(%0 borrowed)"""
+          %2 = call t_acme_x2f_app_main_Three_iterate_x24_direct(%0 borrowed)"""
       )
     )
     // No `makeUnique` in the head of the loop, and no dispatch in it either: the cursor is a record of this frame
@@ -330,13 +330,13 @@ group "a copy of a frozen member" {
     const text = textOf iterated
     assert(
       text.contains(
-        "fn t_acme_x2f_app_main_Three_iterator(self: Record(T_acme_x2f_app_main_Three) borrowed)"
+        "fn t_acme_x2f_app_main_Three_iterate(self: Record(T_acme_x2f_app_main_Three) borrowed)"
           + " -> Object(Iterator<Int64>)"
       )
     )
     assert(
       text.contains(
-        "fn t_acme_x2f_app_main_Three_iterator_x24_direct(self: Record(T_acme_x2f_app_main_Three) borrowed)"
+        "fn t_acme_x2f_app_main_Three_iterate_x24_direct(self: Record(T_acme_x2f_app_main_Three) borrowed)"
           + " -> Record(T_acme_x2f_app_main_Counting)"
       )
     )

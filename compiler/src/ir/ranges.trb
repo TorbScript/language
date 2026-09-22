@@ -95,14 +95,14 @@ fn universesOf(program: IrProgram, function: IrFunction): Universes {
     const range = rangeOfKind kind
     match range {
       Some(interval) => {
-        found.range.add interval
-        found.tracked.add true
-        found.kind.add kind
+        found.range.append interval
+        found.tracked.append true
+        found.kind.append kind
       }
       None => {
-        found.range.add Interval(0, 0)
-        found.tracked.add false
-        found.kind.add None
+        found.range.append Interval(0, 0)
+        found.tracked.append false
+        found.kind.append None
       }
     }
   }
@@ -283,8 +283,8 @@ fn settledEntries(program: IrProgram, function: IrFunction, universes: Universes
   var exits: List<List<Interval>> = []
   var visited = filledFlags blockCount, false
   for _ in 0..blockCount {
-    entries.add universes.range
-    exits.add universes.range
+    entries.append universes.range
+    exits.append universes.range
   }
   var round = 0
   var isChanged = true
@@ -342,7 +342,7 @@ fn settledEntries(program: IrProgram, function: IrFunction, universes: Universes
 fn filledEntries(universes: Universes, blockCount: Int): List<List<Interval>> {
   var found: List<List<Interval>> = []
   for _ in 0..blockCount {
-    found.add universes.range
+    found.append universes.range
   }
   found
 }
@@ -366,8 +366,8 @@ fn loopWritesOf(function: IrFunction, order: List<Int>): List<List<Bool>> {
   var position: List<Int> = []
   var written: List<List<Bool>> = []
   for _ in 0..blockCount {
-    position.add blockCount
-    written.add filledFlags(slotCount, false)
+    position.append blockCount
+    written.append filledFlags(slotCount, false)
   }
   for index in 0..order.length() {
     position.set order[index], index
@@ -415,7 +415,7 @@ fn naturalLoopOf(function: IrFunction, head: Int, source: Int): List<Bool> {
       }
       if reaches {
         body.set candidate, true
-        stack.add candidate
+        stack.append candidate
       }
     }
   }
@@ -445,7 +445,7 @@ fn reverseOfPostorder(function: IrFunction): List<Int> {
   const postorder = postorderOf function
   var order: List<Int> = []
   for index in 0..postorder.length() {
-    order.add postorder[postorder.length() - 1 - index]
+    order.append postorder[postorder.length() - 1 - index]
   }
   order
 }
@@ -497,7 +497,7 @@ fn reaches(function: IrFunction, predecessor: Int, block: Int): Bool {
 fn joinedFacts(left: List<Interval>, right: List<Interval>): List<Interval> {
   var found: List<Interval> = []
   for index in 0..left.length() {
-    found.add joined(left[index], right[index])
+    found.append joined(left[index], right[index])
   }
   found
 }
@@ -674,7 +674,7 @@ fn widened(
     const fresh = proposed[index]
     const whole = universes.range[index]
     if index >= widen.length() || !widen[index] {
-      found.add fresh
+      found.append fresh
       continue
     }
     // The old bound is kept where the new one is narrower, so the entry of a loop head only ever grows and the
@@ -689,7 +689,7 @@ fn widened(
     } else {
       old.high
     }
-    found.add Interval(low, high)
+    found.append Interval(low, high)
   }
   found
 }
@@ -791,7 +791,7 @@ fn placeBasesOf(arguments: List<Argument>): List<Slot> {
   var found: List<Slot> = []
   for argument in arguments {
     if const Some(place) = argument.place {
-      found.add place.base
+      found.append place.base
     }
   }
   found
@@ -893,7 +893,7 @@ fn rewriteFunction(
         }
       }
       facts = afterInstruction program, original, universes, facts, instruction
-      written.add kept
+      written.append kept
     }
     if isChanged {
       program.functions[index].blocks[block].instructions = written

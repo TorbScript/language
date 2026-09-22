@@ -31,7 +31,7 @@ print ages
 print ages.keys().toList()
 
 var unique: Set<Int> = [1, 2, 2, 3]
-unique.add 2
+unique.insert 2
 print unique
 ```
 
@@ -44,21 +44,21 @@ map[key]                                 Indexed.at: panics if the key is absent
 map.get(key)                             Indexed.get: an Option
 map[key] = value                         MutableIndexed.set
 
-const unique: Set<Int> = [1, 2, 2, 3]    a list literal, adapted because Set is From<Iterable<Item>>
+const unique: Set<Int> = [1, 2, 2, 3]    a list literal, adapted because Set is From<Iterate<Item>>
 Set.of(1, 2, 3)                          from arguments, needs Item: Hash
 ```
 
 ## Rules
 
 1. **A `Map` has a literal of its own; a `Set` does not.** `["a": 1]` is native syntax that builds a `TrieMap` through
-   `Map`'s own `From<Iterable<(Key, Value)>>`. A `Set` is built the way every other target is: a list literal adapts
+   `Map`'s own `From<Iterate<(Key, Value)>>`. A `Set` is built the way every other target is: a list literal adapts
    to the type expected of it, so `const unique: Set<Int> = [1, 2, 2, 3]` is `Set.from([1, 2, 2, 3])`.
 
 2. **Every implementation of `Map` and `Set` iterates in insertion order, and removing a value does not reorder the
    rest.** The order reaches the output through `Show`: an empty `Map` shows as `[:]`, an empty `Set` as `{}` - which
    is why the order is a rule of the language and not of the implementation.
 
-   **A `Map` iterates as a labelled pair:** `Map.iterator` answers `Iterator<(key: Key, value: Value)>`, so an entry
+   **A `Map` iterates as a labelled pair:** `Map.iterate` answers `Iterator<(key: Key, value: Value)>`, so an entry
    reads as `entry.key` and `entry.value`. A label is not part of the type, so the positional forms mean exactly the
    same thing and a `(Key, Value)` pair goes into `Map.from` unchanged.
 
@@ -70,7 +70,7 @@ Set.of(1, 2, 3)                          from arguments, needs Item: Hash
    }
    ```
 
-3. **Equality and hashing ignore insertion order, unlike a `List`.** Two maps with the same entries added in a
+3. **Equality and hashing ignore insertion order, unlike a `List`.** Two maps with the same entries set in a
    different order are equal and hash the same, because both combine their entries with `bitwiseExclusiveOr` instead
    of folding them in sequence.
 
@@ -85,11 +85,10 @@ Set.of(1, 2, 3)                          from arguments, needs Item: Hash
    hashes its keys would not.
 
 5. **A `Map`'s verb for writing a key is `set`, and its participle is `updated` rather than `setted`.** `remove`/
-   `removed` follows the usual pattern, and putting one map into another is `addAll`/`addedAll` of
-   [Collection](collection-traits.md) - a map is a `Collection<(Key, Value)>` and needs no word of its own for it. A
-   `Set`'s in-place
-   verbs are `add`/`remove`/`addAll`/`removeAll`/`retainAll`; its set operations - `union`, `intersection`,
-   `difference` - are nouns and never change either operand.
+   `removed` follows the usual pattern, and putting one map into another is a `for` over its entries with `set`. A
+   `Set`'s in-place verbs are `insert`/`remove`/`insertAll`/`removeAll`/`retainAll`, with the participles
+   `inserted`, `insertedAll` and `removed`; its set operations - `union`, `intersection`, `difference` - are nouns
+   and never change either operand.
 
    ```trb check
    const ages: Map<String, Int> = ["Ada": 36]
@@ -111,7 +110,7 @@ Set.of(1, 2, 3)                          from arguments, needs Item: Hash
    ```trb check
    var groups: Map<String, List<String>> = [:]
    for name in ["Ada", "Alan", "Grace"] {
-     groups.update name[0..1], [] { names => names.add name }
+     groups.update name[0..1], [] { names => names.append name }
    }
    print groups
    ```
@@ -133,7 +132,7 @@ print ages["Linus"]
 
 ## Related
 
-- [The collection traits](collection-traits.md) - `Collection` and `Iterable`, which `Map` and `Set` are built on.
+- [The collection traits](collection-traits.md) - `Iterate` and `Length`, which `Map` and `Set` are built on.
 - [Lists](lists.md) - the order-dependent collection `Map` and `Set` are compared against.
 - [Copy and equality](../types/copy-and-equality.md) - what the generated `Equals` and `Hash` do for a field that
   holds one of these.

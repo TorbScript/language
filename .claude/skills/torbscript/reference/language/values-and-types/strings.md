@@ -37,8 +37,8 @@ shorter string.
 ## Syntax
 
 ```text
-text.chars()                             an Iterable<Char>: Unicode scalar values
-text.bytes()                             an Iterable<UInt8>: the raw UTF-8 bytes
+text.chars()                             an Iterate<Char>: Unicode scalar values
+text.bytes()                             an Iterate<UInt8>: the raw UTF-8 bytes
 text.byteLength()                        the byte count, O(1)
 text.indexOf(part)                       Some(byteOffset) or None; a byte offset, from searching
 text.lastIndexOf(part)                   the same for the last occurrence
@@ -50,7 +50,7 @@ text[from..to]                           a slice by byte offset, O(1), shares st
 1. **Every position that comes out of `String` is a byte offset, produced by searching.** `indexOf`, `startsWith`,
    `substringBefore` and `substringAfter` all work this way; nothing counts characters to find a position.
 
-2. **`chars()` is an `Iterable<Char>` of Unicode scalar values, and counting it is O(n).** `text.chars().count()` is
+2. **`chars()` is an `Iterate<Char>` of Unicode scalar values, and counting it is O(n).** `text.chars().count()` is
    how a caller asks for "how many characters", explicitly paying for the answer it wants.
 
 3. **`byteLength()` is O(1) and `isEmpty()` follows from it.** These are the only two size questions a `String`
@@ -61,7 +61,7 @@ text[from..to]                           a slice by byte offset, O(1), shares st
    naming the offset and the length. See [Ranges](ranges.md) for the four range forms a slice can take.
 
 5. **A `String` is always valid UTF-8.** The only ways to produce one are a literal, a slice at a character
-   boundary, `String.from(Iterable<Char>)`, and a runtime function that validates as it reads - so a file whose bytes
+   boundary, `String.from(Iterate<Char>)`, and a runtime function that validates as it reads - so a file whose bytes
    are not UTF-8 is an `IoError` when it is read, never a replacement character.
 
 6. **`substringBefore` and `substringAfter` return `Option<String>`, `None` when the part is not found.** Most code

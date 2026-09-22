@@ -78,7 +78,7 @@ type Name with Trait, Trait & Trait by field, Trait by field { ... }
    the underlying `Int`.
 
 5. **A trait without `Self` in its signature can be delegated by a type of any field count**, because there is
-   nothing to unwrap or rewrap. `Iterable<User>` delegated by a multi-field `Team` is this case.
+   nothing to unwrap or rewrap. `Iterate<User>` delegated by a multi-field `Team` is this case.
 
 6. **`by` forwards the required members; the default members still come from the trait.** A default written in terms
    of the required ones - `Compare.max` in terms of `compare` - stays correct without being forwarded itself, and

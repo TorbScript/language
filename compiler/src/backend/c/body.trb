@@ -62,11 +62,11 @@ public fn bodyOf(
 ): Body {
   var reads: List<Bool> = []
   for _ in 0..function.slots.length() {
-    reads.add false
+    reads.append false
   }
   var labels: List<Bool> = []
   for _ in 0..function.blocks.length() {
-    labels.add false
+    labels.append false
   }
   for block in function.blocks {
     for instruction in block.instructions {
@@ -89,7 +89,7 @@ public fn bodyOf(
  * emitted.
  *
  * Both halves are needed, and BACKEND's decision names both: "conservatively, when it is written directly as an
- * argument of a call **and is not stored by the callee**". A closure handed to `Iterable.map` is `local` and is kept -
+ * argument of a call **and is not stored by the callee**". A closure handed to `Iterate.map` is `local` and is kept -
  * the `Mapped` record it lands in is answered to this frame and may be answered on - so this says no. So does a callee
  * that hands the closure on to a witness call or a closure call, however deep: `holder.keep { ... }` whose body is
  * `actions.add action` on a trait-typed `List` stores it although the ownership summary calls the parameter
@@ -100,7 +100,7 @@ public fn bodyOf(
 fn framedClosures(program: IrProgram, function: IrFunction, keeping: Keeping): List<Bool> {
   var found: List<Bool> = []
   for _ in 0..function.slots.length() {
-    found.add false
+    found.append false
   }
   for block in function.blocks {
     for instruction in block.instructions {
@@ -304,17 +304,17 @@ public fn signatureHeadOf(program: IrProgram, function: IrFunction): String {
   var parameters: List<String> = []
   if isByPointerResult(function) {
     const spelling = resultTypeOf program, signature.result
-    parameters.add declarationOf(pointerTo(spelling), resultPointerName)
+    parameters.append declarationOf(pointerTo(spelling), resultPointerName)
   }
   for index in 0..signature.parameters.length() {
     const parameter = signature.parameters[index]
     const spelling = valueTypeOf program, parameter.annotation
     const name = slotNameOf function, Slot(index)
     if parameter.isReference {
-      parameters.add declarationOf(pointerTo(spelling), name)
+      parameters.append declarationOf(pointerTo(spelling), name)
       continue
     }
-    parameters.add declarationOf(spelling, name)
+    parameters.append declarationOf(spelling, name)
   }
   const written = if parameters.isEmpty() { "void" } else { parameters.joined separator: ", " }
   const result = returnTypeOf program, function
@@ -337,7 +337,7 @@ public fn signatureHeadOf(program: IrProgram, function: IrFunction): String {
 public fn keptFunctions(program: IrProgram): List<Bool> {
   var kept: List<Bool> = []
   for index in 0..program.functions.length() {
-    kept.add(!program.specializedFunctions.contains(index))
+    kept.append(!program.specializedFunctions.contains(index))
   }
   if program.specializedFunctions.isEmpty() {
     return kept
@@ -375,13 +375,13 @@ public fn keptFunctions(program: IrProgram): List<Bool> {
 fn calledFunctionsOf(function: IrFunction): List<FunctionId> {
   var found: List<FunctionId> = []
   if const .ConstantCell(initializer) = function.kind {
-    found.add initializer
+    found.append initializer
   }
   for block in function.blocks {
     for instruction in block.instructions {
       match instruction {
-        .Call(_, callee, _, _, _) => found.add callee
-        .Closure(_, callee, _, _) => found.add callee
+        .Call(_, callee, _, _, _) => found.append callee
+        .Closure(_, callee, _, _) => found.append callee
         _ => {}
       }
     }
@@ -394,7 +394,7 @@ fn descriptorFunctionsOf(descriptor: ElementDescriptor): List<FunctionId> {
   var found: List<FunctionId> = []
   for candidate in [descriptor.retain, descriptor.release, descriptor.equals, descriptor.hash] {
     if const Some(function) = candidate {
-      found.add function
+      found.append function
     }
   }
   found
@@ -479,10 +479,10 @@ public fn valueTypeOf(program: IrProgram, id: IrTypeId): String {
 public fn bodyStatements(var emission: Emission, program: IrProgram, body: Body): List<CStatement> {
   var statements: List<CStatement> = []
   const declarations = slotDeclarationsOf program, body
-  statements.addAll declarations
+  statements.appendAll declarations
   for index in 0..body.function.blocks.length() {
     const found = blockStatements emission, program, body, index
-    statements.addAll found
+    statements.appendAll found
   }
   statements
 }
@@ -499,17 +499,17 @@ fn slotDeclarationsOf(program: IrProgram, body: Body): List<CStatement> {
     const declared = function.slots[index]
     const name = slotNameOf function, Slot(index)
     if !body.readSlots[index] {
-      silenced.add CStatement.Evaluate(CExpression.Cast("void", CExpression.Name(name)))
+      silenced.append CStatement.Evaluate(CExpression.Cast("void", CExpression.Name(name)))
     }
     if isParameterSlot(declared) {
       continue
     }
     const spelling = valueTypeOf program, declared.annotation
-    statements.add CStatement.Declaration(spelling, name, Some(zeroInitializer))
+    statements.append CStatement.Declaration(spelling, name, Some(zeroInitializer))
   }
-  statements.addAll frameEnvironmentDeclarations(program, body)
+  statements.appendAll frameEnvironmentDeclarations(program, body)
   if !silenced.isEmpty() {
-    statements.add CStatement.Joined(silenced)
+    statements.append CStatement.Joined(silenced)
   }
   statements
 }
@@ -532,7 +532,7 @@ fn frameEnvironmentDeclarations(program: IrProgram, body: Body): List<CStatement
         }
         if const Some(layout) = environmentLayoutOfFunction(program, program.functionAt(callee)) {
           const name = frameEnvironmentName body, target
-          statements.add CStatement.Declaration(program.layoutAt(layout).name, name, Some(zeroInitializer))
+          statements.append CStatement.Declaration(program.layoutAt(layout).name, name, Some(zeroInitializer))
         }
       }
     }
@@ -567,20 +567,20 @@ fn blockStatements(var emission: Emission, program: IrProgram, body: Body, index
   var statements: List<CStatement> = []
   if const Some(at) = block.at {
     if const Some(directive) = lineDirectiveOf(program, at) {
-      statements.add directive
+      statements.append directive
     }
   }
   if body.usedLabels[index] {
-    statements.add CStatement.Label("L{index}", block.label)
+    statements.append CStatement.Label("L{index}", block.label)
   } else if !block.label.isEmpty() {
-    statements.add CStatement.Comment(block.label)
+    statements.append CStatement.Comment(block.label)
   }
   for instruction in block.instructions {
     const found = instructionStatements emission, program, body, instruction
-    statements.addAll found
+    statements.appendAll found
   }
   const ending = terminatorStatements emission, program, body, block.terminator
-  statements.addAll ending
+  statements.appendAll ending
   statements
 }
 
@@ -623,9 +623,9 @@ fn instructionStatements(
       var statements: List<CStatement> = []
       const place = placeExpression emission, program, body, reference
       const name = slotExpression body, target
-      statements.add CStatement.Assignment(name, place)
+      statements.append CStatement.Assignment(name, place)
       const retains = retainStatements emission, program, typeOfSlot(body, target), name
-      statements.addAll retains
+      statements.appendAll retains
       statements
     }
     // A write through a counted place releases what was there before it stores the new value. A write with **no
@@ -637,24 +637,24 @@ fn instructionStatements(
       const place = placeExpression emission, program, body, reference
       const name = slotExpression body, value.slot
       if reference.steps.isEmpty() && !isReferenceSlot(body, reference.base) {
-        statements.add CStatement.Assignment(place, name)
+        statements.append CStatement.Assignment(place, name)
         return statements
       }
       const annotation = placeTypeOf program, body, reference
       const releases = releaseStatements emission, program, annotation, place
-      statements.addAll releases
-      statements.add CStatement.Assignment(place, name)
+      statements.appendAll releases
+      statements.append CStatement.Assignment(place, name)
       statements
     }
     .Tag(target, source) => tagStatements emission, program, body, target, source
     .Panic(message, at) => {
       var statements: List<CStatement> = []
       if const Some(directive) = lineDirectiveOf(program, at) {
-        statements.add directive
+        statements.append directive
       }
       const name = slotExpression body, message.slot
       const site = locationExpression program, at
-      statements.add CStatement.Evaluate(CExpression.Call(CExpression.Name("torb_panic"), [name, site]))
+      statements.append CStatement.Evaluate(CExpression.Call(CExpression.Name("torb_panic"), [name, site]))
       statements
     }
     .CallClosure(target, callee, arguments) => {
@@ -710,10 +710,10 @@ fn copyStatements(
   const annotation = typeOfSlot body, source
   if target != source {
     const from = slotExpression body, source
-    statements.add CStatement.Assignment(to, from)
+    statements.append CStatement.Assignment(to, from)
   }
   const retains = retainStatements emission, program, annotation, to
-  statements.addAll retains
+  statements.appendAll retains
   statements
 }
 
@@ -1050,7 +1050,7 @@ fn containerStatements(
     if !program.hasElement(element) {
       return reported emission, "a container over an element descriptor that is not in the program"
     }
-    given.add CExpression.AddressOf(CExpression.Name(program.elementAt(element).name))
+    given.append CExpression.AddressOf(CExpression.Name(program.elementAt(element).name))
   }
   const symbol = match kind {
     .ListStorage => "torb_list_new"
@@ -1171,16 +1171,16 @@ fn argumentsOf(
       None => false
     }
     if isReference {
-      written.add referenceExpression(emission, program, body, arguments[index])
+      written.append referenceExpression(emission, program, body, arguments[index])
       continue
     }
     const place = slotExpression body, arguments[index].slot
     // An element of a container goes over as its address, because one C implementation serves every element type
     if isByAddressParameter(parameter) {
-      written.add CExpression.AddressOf(place)
+      written.append CExpression.AddressOf(place)
       continue
     }
-    written.add place
+    written.append place
   }
   written
 }
@@ -1256,7 +1256,7 @@ fn runtimeCallStatements(
         }
       }
       var written = argumentsOf emission, program, body, function.signature, arguments
-      written.add locationExpression(program, site)
+      written.append locationExpression(program, site)
       callStatementOf emission, body, target, function, symbol, written, ""
     }
     .Converted(annotation, withLocation) => {
@@ -1268,7 +1268,7 @@ fn runtimeCallStatements(
             return reported emission, "`{symbol}` takes the source location of the call, and the call carries none"
           }
         }
-        written.add locationExpression(program, site)
+        written.append locationExpression(program, site)
       }
       callStatementOf emission, body, target, function, symbol, written, annotation
     }
@@ -1329,17 +1329,17 @@ fn closureStatements(
     sizeOf(shape.name),
     CExpression.Name("TORB_BLOCK_ENVIRONMENT"),
   ])
-  inner.add CStatement.Declaration(spelling, "environment", Some(CExpression.Cast(spelling, allocated)))
+  inner.append CStatement.Declaration(spelling, "environment", Some(CExpression.Cast(spelling, allocated)))
   const drop = CExpression.PointerMember CExpression.Name("environment"), "drop"
-  inner.add CStatement.Assignment(drop, dropFunctionOf(program, found))
+  inner.append CStatement.Assignment(drop, dropFunctionOf(program, found))
   for index in 0..captures.length() {
     const member = CExpression.PointerMember CExpression.Name("environment"), memberNameOf(shape.fields[index])
     const value = captureExpression emission, program, body, captures[index]
-    inner.add CStatement.Assignment(member, value)
+    inner.append CStatement.Assignment(member, value)
   }
-  inner.add CStatement.Assignment(CExpression.Member(place, codeMemberName), code)
+  inner.append CStatement.Assignment(CExpression.Member(place, codeMemberName), code)
   const erased = CExpression.Cast "torb_environment *", CExpression.Name("environment")
-  inner.add CStatement.Assignment(CExpression.Member(place, environmentMemberName), erased)
+  inner.append CStatement.Assignment(CExpression.Member(place, environmentMemberName), erased)
   [CStatement.Block(inner)]
 }
 
@@ -1369,14 +1369,14 @@ fn framedClosureStatements(
     erased,
     dropFunctionOf(program, layout),
   ])
-  statements.add CStatement.Evaluate(prepared)
+  statements.append CStatement.Evaluate(prepared)
   for index in 0..captures.length() {
     const member = CExpression.Member name, memberNameOf(shape.fields[index])
     const value = captureExpression emission, program, body, captures[index]
-    statements.add CStatement.Assignment(member, value)
+    statements.append CStatement.Assignment(member, value)
   }
-  statements.add CStatement.Assignment(CExpression.Member(place, codeMemberName), code)
-  statements.add CStatement.Assignment(CExpression.Member(place, environmentMemberName), erased)
+  statements.append CStatement.Assignment(CExpression.Member(place, codeMemberName), code)
+  statements.append CStatement.Assignment(CExpression.Member(place, environmentMemberName), erased)
   statements
 }
 
@@ -1461,12 +1461,12 @@ fn closureCallStatements(
   var spellings = ["torb_environment *"]
   for parameter in signature.parameters {
     const spelling = valueTypeOf program, parameter.annotation
-    spellings.add(if parameter.isReference { pointerTo spelling } else { spelling })
+    spellings.append(if parameter.isReference { pointerTo spelling } else { spelling })
   }
   const result = resultTypeOf program, signature.result
   const shape = "{result} (*)({spellings.joined(separator: ", ")})"
   var given = [CExpression.Member(held, environmentMemberName)]
-  given.addAll argumentsOf(emission, program, body, signature, arguments)
+  given.appendAll argumentsOf(emission, program, body, signature, arguments)
   const code = CExpression.Cast shape, CExpression.Member(held, codeMemberName)
   const called = CExpression.Call code, given
   match target {
@@ -1507,10 +1507,10 @@ fn traitValueStatements(
   if isObjectType(program, item) {
     var narrowed: List<CStatement> = []
     const data = CExpression.Member slotExpression(body, value.slot), "data"
-    narrowed.add CStatement.Assignment(CExpression.Member(place, "data"), data)
+    narrowed.append CStatement.Assignment(CExpression.Member(place, "data"), data)
     for index in 0..tables.length() {
       const found = witnessExpression emission, program, body, tables[index]
-      narrowed.add CStatement.Assignment(CExpression.Member(place, witnessMemberNameOf(index)), found)
+      narrowed.append CStatement.Assignment(CExpression.Member(place, witnessMemberNameOf(index)), found)
     }
     return narrowed
   }
@@ -1527,18 +1527,18 @@ fn traitValueStatements(
     sizeOf(name),
     CExpression.Name("TORB_BLOCK_OBJECT"),
   ])
-  inner.add CStatement.Declaration(spelling, "box", Some(CExpression.Cast(spelling, allocated)))
+  inner.append CStatement.Declaration(spelling, "box", Some(CExpression.Cast(spelling, allocated)))
   const shape = program.layoutAt layout
   if shape.fields.isEmpty() {
     return reported emission, "a trait-typed value whose payload layout has no field"
   }
   const field = CExpression.PointerMember CExpression.Name("box"), memberNameOf(shape.fields[0])
-  inner.add CStatement.Assignment(field, slotExpression(body, value.slot))
+  inner.append CStatement.Assignment(field, slotExpression(body, value.slot))
   const data = CExpression.Member place, "data"
-  inner.add CStatement.Assignment(data, CExpression.Cast("torb_object *", CExpression.Name("box")))
+  inner.append CStatement.Assignment(data, CExpression.Cast("torb_object *", CExpression.Name("box")))
   for index in 0..tables.length() {
     const found = witnessExpression emission, program, body, tables[index]
-    inner.add CStatement.Assignment(CExpression.Member(place, witnessMemberNameOf(index)), found)
+    inner.append CStatement.Assignment(CExpression.Member(place, witnessMemberNameOf(index)), found)
   }
   [CStatement.Block(inner)]
 }
@@ -1574,8 +1574,8 @@ fn witnessCallStatements(
   const value = placeExpression emission, program, body, receiver
   var given = [CExpression.Member(value, "data")]
   for argument in arguments {
-    spellings.add valueTypeOf(program, typeOfSlot(body, argument.slot))
-    given.add slotExpression(body, argument.slot)
+    spellings.append valueTypeOf(program, typeOfSlot(body, argument.slot))
+    given.append slotExpression(body, argument.slot)
   }
   const annotation = "{result} (*)({spellings.joined(separator: ", ")})"
   const members = CExpression.PointerMember table, "members"
@@ -1645,7 +1645,7 @@ fn intrinsicStatements(
 ): List<CStatement> {
   var statements: List<CStatement> = []
   if const Some(directive) = lineDirectiveOf(program, at) {
-    statements.add directive
+    statements.append directive
   }
   const place = match target {
     Some(slot) => Some slotExpression(body, slot)
@@ -1653,12 +1653,12 @@ fn intrinsicStatements(
   }
   if const .TextConcat = intrinsic.operation {
     const concatenated = textConcatStatements emission, program, body, place, arguments
-    statements.addAll concatenated
+    statements.appendAll concatenated
     return statements
   }
   const printed = printSymbolOf intrinsic.operation
   if !printed.isEmpty() {
-    statements.addAll printPartsStatements(body, printed, arguments)
+    statements.appendAll printPartsStatements(body, printed, arguments)
     return statements
   }
   // `Process.exit` of the runtime, which flushes, reports the live blocks and leaves without running anything else
@@ -1668,7 +1668,7 @@ fn intrinsicStatements(
       None => CExpression.Literal "0"
     }
     const call = CExpression.Call CExpression.Name("torb_process_exit"), [code]
-    statements.add CStatement.Evaluate(call)
+    statements.append CStatement.Evaluate(call)
     return statements
   }
   const expression = intrinsicExpression emission, program, body, intrinsic, arguments, at
@@ -1679,8 +1679,8 @@ fn intrinsicStatements(
     }
   }
   match place {
-    Some(inner) => statements.add CStatement.Assignment(inner, found)
-    None => statements.add CStatement.Evaluate(CExpression.Cast("void", found))
+    Some(inner) => statements.append CStatement.Assignment(inner, found)
+    None => statements.append CStatement.Evaluate(CExpression.Cast("void", found))
   }
   statements
 }
@@ -1715,7 +1715,7 @@ fn textConcatStatements(
   }
   var parts: List<CExpression> = []
   for slot in arguments {
-    parts.add slotExpression(body, slot)
+    parts.append slotExpression(body, slot)
   }
   const count = parts.length()
   const declaration = CStatement.Declaration(
@@ -1754,7 +1754,7 @@ fn mixedConcatStatements(
 ): List<CStatement> {
   var parts: List<CExpression> = []
   for slot in arguments {
-    parts.add textPartExpression(emission, program, body, slot)
+    parts.append textPartExpression(emission, program, body, slot)
   }
   const count = parts.length()
   const declaration = CStatement.Declaration(
@@ -1801,7 +1801,7 @@ fn textPartExpression(
   }
   var fields = [CDesignatedField("kind", CExpression.Name(tag))]
   if !member.isEmpty() {
-    fields.add CDesignatedField(member, value)
+    fields.append CDesignatedField(member, value)
   }
   CExpression.Designated fields
 }
@@ -1832,7 +1832,7 @@ fn printPartsStatements(body: Body, symbol: String, arguments: List<Slot>): List
   }
   var parts: List<CExpression> = []
   for slot in arguments {
-    parts.add slotExpression(body, slot)
+    parts.append slotExpression(body, slot)
   }
   const count = parts.length()
   const declaration = CStatement.Declaration(
@@ -1859,7 +1859,7 @@ fn intrinsicExpression(
 ): CExpression? {
   var operands: List<CExpression> = []
   for slot in arguments {
-    operands.add slotExpression(body, slot)
+    operands.append slotExpression(body, slot)
   }
   const first = operands.get(0) ?? CExpression.Literal("0")
   const second = operands.get(1) ?? CExpression.Literal("0")
@@ -1934,10 +1934,10 @@ fn arithmeticExpression(
   const symbol = CExpression.Name "torb_{name}_{suffixOfNumeric(kind)}"
   var given: List<CExpression> = [first]
   if !isUnary(intrinsic.operation) {
-    given.add second
+    given.append second
   }
   if takesLocation(intrinsic.operation) {
-    given.add site
+    given.append site
   }
   Some CExpression.Call(symbol, given)
 }
@@ -2139,7 +2139,7 @@ fn constructStatements(
   const place = slotExpression body, target
   var written: List<CExpression> = []
   for field in fields {
-    written.add slotExpression(body, field.slot)
+    written.append slotExpression(body, field.slot)
   }
   match shape.representation {
     .Boxed => boxedConstructStatements program, place, shape, variant, written
@@ -2186,18 +2186,18 @@ public fn variantInitializerParts(
   var index = 0
   for field in shape.commonFields() {
     const value = written.get(index) ?? CExpression.Literal("0")
-    parts.add CDesignatedField(memberNameOf(field), value)
+    parts.append CDesignatedField(memberNameOf(field), value)
     index = index + 1
   }
-  parts.add CDesignatedField("tag", CExpression.Literal("{variant}"))
+  parts.append CDesignatedField("tag", CExpression.Literal("{variant}"))
   var group: List<CExpression> = []
   while index < written.length() {
-    group.add written[index]
+    group.append written[index]
     index = index + 1
   }
   if !group.isEmpty() {
     const inner = CDesignatedField variantMemberNameOf(variant), CExpression.Initializer(group)
-    parts.add CDesignatedField("payload", CExpression.Designated([inner]))
+    parts.append CDesignatedField("payload", CExpression.Designated([inner]))
   }
   parts
 }
@@ -2215,30 +2215,30 @@ fn boxedConstructStatements(
     sizeOf(shape.name),
     CExpression.Name("TORB_BLOCK_RECORD"),
   ])
-  statements.add CStatement.Assignment(place, CExpression.Cast("{shape.name} *", allocated))
+  statements.append CStatement.Assignment(place, CExpression.Cast("{shape.name} *", allocated))
   var index = 0
   if shape.variants.isEmpty() {
     for field in shape.fields {
       const value = written.get(index) ?? CExpression.Literal("0")
-      statements.add CStatement.Assignment(CExpression.PointerMember(place, memberNameOf(field)), value)
+      statements.append CStatement.Assignment(CExpression.PointerMember(place, memberNameOf(field)), value)
       index = index + 1
     }
     return statements
   }
   for field in shape.commonFields() {
     const value = written.get(index) ?? CExpression.Literal("0")
-    statements.add CStatement.Assignment(CExpression.PointerMember(place, memberNameOf(field)), value)
+    statements.append CStatement.Assignment(CExpression.PointerMember(place, memberNameOf(field)), value)
     index = index + 1
   }
   const tag = CExpression.PointerMember place, "tag"
-  statements.add CStatement.Assignment(tag, CExpression.Literal("{variant}"))
+  statements.append CStatement.Assignment(tag, CExpression.Literal("{variant}"))
   if !shape.hasVariant(variant) {
     return statements
   }
   const group = CExpression.Member CExpression.PointerMember(place, "payload"), variantMemberNameOf(variant)
   for field in shape.fieldsOfVariant(variant) {
     const value = written.get(index) ?? CExpression.Literal("0")
-    statements.add CStatement.Assignment(CExpression.Member(group, memberNameOf(field)), value)
+    statements.append CStatement.Assignment(CExpression.Member(group, memberNameOf(field)), value)
     index = index + 1
   }
   statements
@@ -2270,7 +2270,7 @@ public fn emptyNicheExpression(program: IrProgram, shape: Layout): CExpression {
 fn emptySlice(annotation: String, members: Int): CExpression {
   var values = [nullPointer]
   for _ in 1..members {
-    values.add CExpression.Literal("0")
+    values.append CExpression.Literal("0")
   }
   CExpression.CompoundLiteral annotation, CExpression.Initializer(values)
 }
@@ -2566,7 +2566,7 @@ fn terminatorStatements(
       var cases: List<CSwitchCase> = []
       const count = values.length().min(targets.length())
       for index in 0..count {
-        cases.add CSwitchCase(values[index], [CStatement.Goto("L{targets[index].value}")])
+        cases.append CSwitchCase(values[index], [CStatement.Goto("L{targets[index].value}")])
       }
       [CStatement.Switch(name, cases, [CStatement.Goto("L{otherwise.value}")])]
     }

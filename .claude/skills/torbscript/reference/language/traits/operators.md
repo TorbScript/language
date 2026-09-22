@@ -142,7 +142,7 @@ a ?? b       OrElse.orElse(a, b)         "{a}"   Show.show(a)
    `Option` instead.** `at` has a default body that calls `get`, so a type only ever has to write `get`.
 
 5. **`a[i] = v` needs `MutableIndexed`, a supertrait of `Indexed`.** It also makes `a[i]` a `var` path:
-   `enemies[0].health = 5` and `groups[key].add(value)` take the element out, change it and put it back, without a
+   `enemies[0].health = 5` and `groups[key].append(value)` take the element out, change it and put it back, without a
    copy.
 
 6. **`a[from..to]` is `Slice.slice` and shares the storage of `a`, starting at index `0` again.**

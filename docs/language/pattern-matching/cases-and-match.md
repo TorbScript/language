@@ -73,7 +73,7 @@ match <subject> {
 
    const unit: Shape = .Circle(1.0)
    var shapes: List<Shape> = []
-   shapes.add(.Empty)
+   shapes.append(.Empty)
    const other = Shape.Circle 1.0
    print "{unit} {shapes} {other}"
    // prints Circle(radius: 1.0) [Empty] Circle(radius: 1.0)
@@ -196,7 +196,7 @@ match <subject> {
     ```
 
 12. **Patterns also stand in bindings and conditions**: `const Point(x, y) = p`, `if const Some(user) = findUser(id)`,
-    `while const Some(next) = queue.remove()`, and `for (key, value) in someMap`.
+    `while const Some(next) = queue.dequeue()`, and `for (key, value) in someMap`.
 
 13. **`if var P = place` binds into the place**, exactly like a `var` parameter, so the subject has to be a `var` path and
     the body runs inside a `var` access to it. A `var` pattern that bound a copy would be a dead change by construction.

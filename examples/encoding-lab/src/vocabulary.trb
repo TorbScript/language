@@ -276,7 +276,7 @@ extend<Value: Describe> Option<Value> with Describe {
  *
  *     fn decode<Source: Decoder>(var source: Source): Result<List<Item>, DecodeError> {
  *       ...
- *       items.add Item.decode(source)?
+ *       items.append Item.decode(source)?
  *     }
  *
  * and `Item.decode` is a static trait member reached through a bound. The checker resolves it - `extend<Item: Decode>
@@ -295,7 +295,7 @@ public fn decodeSequence<Item, Source: Decoder>(
   var index = 0
   while source.hasNext()? {
     const value = item(source).mapError({ _.inside "{index}" })?
-    items.add value
+    items.append value
     index = index + 1
   }
   source.finish()?
@@ -537,20 +537,20 @@ public type Values with Encoder {
 
   var fn sequence(length: Int?) {
     const _length = length
-    frames.add ValueFrame(.Sequence)
+    frames.append ValueFrame(.Sequence)
   }
 
   var fn map(length: Int?) {
     const _length = length
-    frames.add ValueFrame(.Mapping)
+    frames.append ValueFrame(.Mapping)
   }
 
   var fn record(typeName: String) {
-    frames.add ValueFrame(.Record(typeName))
+    frames.append ValueFrame(.Record(typeName))
   }
 
   var fn variant(typeName: String, name: String) {
-    frames.add ValueFrame(.Variant(typeName, name))
+    frames.append ValueFrame(.Variant(typeName, name))
   }
 
   var fn field(name: String) {
@@ -585,10 +585,10 @@ public type Values with Encoder {
     const last = frames.length() - 1
     match frames[last].pending {
       Some(name) => {
-        frames[last].fields.add(EncodedField(name, value))
+        frames[last].fields.append(EncodedField(name, value))
         frames[last].pending = None
       }
-      None => frames[last].children.add(value)
+      None => frames[last].children.append(value)
     }
   }
 }
@@ -701,7 +701,7 @@ public type ValueDecoder with Decoder {
   var fn sequence(): Result<Int?, DecodeError> {
     match take()? {
       .Sequence(items) => {
-        frames.add ValueCursor(.Items, items: items)
+        frames.append ValueCursor(.Items, items: items)
         Ok Some(items.length())
       }
       /*
@@ -716,7 +716,7 @@ public type ValueDecoder with Decoder {
           .Nothing => []
           only => [only]
         }
-        frames.add ValueCursor(.Items, items: items)
+        frames.append ValueCursor(.Items, items: items)
         Ok Some(items.length())
       }
     }
@@ -725,7 +725,7 @@ public type ValueDecoder with Decoder {
   var fn map(): Result<Int?, DecodeError> {
     match take()? {
       .Mapping(entries) => {
-        frames.add ValueCursor(.Items, items: entries)
+        frames.append ValueCursor(.Items, items: entries)
         Ok Some(entries.length() / 2)
       }
       other => Fail DecodeError("a map is needed, not {other.show()}")
@@ -750,11 +750,11 @@ public type ValueDecoder with Decoder {
     const _typeName = typeName
     match take()? {
       .Record(_, fields) => {
-        frames.add ValueCursor(.Fields, fields: fields)
+        frames.append ValueCursor(.Fields, fields: fields)
         Ok void
       }
       only => {
-        frames.add ValueCursor(.Items, items: [only])
+        frames.append ValueCursor(.Items, items: [only])
         Ok void
       }
     }
@@ -764,12 +764,12 @@ public type ValueDecoder with Decoder {
     const _typeName = typeName
     match take()? {
       .Variant(_, name, fields) => {
-        frames.add ValueCursor(.Fields, fields: fields)
+        frames.append ValueCursor(.Fields, fields: fields)
         Ok name
       }
       // A format that writes a case without fields as a bare text reads back the same way
       .String(name) => {
-        frames.add ValueCursor(.Fields)
+        frames.append ValueCursor(.Fields)
         Ok name
       }
       /*
@@ -788,8 +788,8 @@ public type ValueDecoder with Decoder {
           return Fail DecodeError("a variant has one case, this record has {fields.length()} fields")
         }
         match only.value {
-          .Record(_, inner) => frames.add ValueCursor(.Fields, fields: inner)
-          _ => frames.add ValueCursor(.Fields)
+          .Record(_, inner) => frames.append ValueCursor(.Fields, fields: inner)
+          _ => frames.append ValueCursor(.Fields)
         }
         Ok only.name
       }
@@ -1037,15 +1037,15 @@ public type Structures with Describer {
   }
 
   var fn optional() {
-    frames.add StructureFrame(.Optional)
+    frames.append StructureFrame(.Optional)
   }
 
   var fn sequence() {
-    frames.add StructureFrame(.Sequence)
+    frames.append StructureFrame(.Sequence)
   }
 
   var fn map() {
-    frames.add StructureFrame(.Mapping)
+    frames.append StructureFrame(.Mapping)
   }
 
   var fn record(typeName: String): Bool {
@@ -1053,8 +1053,8 @@ public type Structures with Describer {
       complete Structure.Reference(typeName)
       return false
     }
-    known.add typeName
-    frames.add StructureFrame(.Record(typeName))
+    known.append typeName
+    frames.append StructureFrame(.Record(typeName))
     true
   }
 
@@ -1063,13 +1063,13 @@ public type Structures with Describer {
       complete Structure.Reference(typeName)
       return false
     }
-    known.add typeName
-    frames.add StructureFrame(.Variant(typeName))
+    known.append typeName
+    frames.append StructureFrame(.Variant(typeName))
     true
   }
 
   var fn variantCase(name: String) {
-    frames.add StructureFrame(.VariantCase(name))
+    frames.append StructureFrame(.VariantCase(name))
   }
 
   var fn field(description: FieldDescription) {
@@ -1101,7 +1101,7 @@ public type Structures with Describer {
 
   private var fn addCase(found: StructureCase) {
     const last = frames.length() - 1
-    frames[last].cases.add(found)
+    frames[last].cases.append(found)
   }
 
   private var fn complete(value: Structure) {
@@ -1112,10 +1112,10 @@ public type Structures with Describer {
     const last = frames.length() - 1
     match frames[last].pending {
       Some(description) => {
-        frames[last].fields.add(StructureField(description, value))
+        frames[last].fields.append(StructureField(description, value))
         frames[last].pending = None
       }
-      None => frames[last].children.add(value)
+      None => frames[last].children.append(value)
     }
   }
 }

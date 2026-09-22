@@ -72,7 +72,7 @@ fn walkStatement(var sites: Sites, fields: List<String>, item: Statement) {
     .While(condition, body) => {
       // `while true { ... }` is written `loop { ... }`, which is the rule `loops`
       if isEndlessCondition(condition) {
-        sites.endless.add item
+        sites.endless.append item
       }
       walkCondition sites, fields, condition
       // `while const Some(item) = next()`: the body is where the binding has to be used
@@ -174,7 +174,7 @@ fn walkBlock(var sites: Sites, fields: List<String>, item: Block) {
 /** A pattern in the head of an `if` or a `while`, with the text its bindings may be used in. */
 fn walkRefutable(var sites: Sites, item: Condition, regions: List<Span>) {
   match item {
-    .Bind(_, pattern, _) => sites.bindings.add BindingSite(pattern, regions)
+    .Bind(_, pattern, _) => sites.bindings.append BindingSite(pattern, regions)
     .Test(_) => {}
   }
 }
@@ -215,7 +215,7 @@ fn walkExpression(var sites: Sites, fields: List<String>, node: Expression, isCo
         Some(name) => fields.contains name
         None => false
       }
-      sites.calls.add CallSite(node, isCommandPosition, calleeCouldBeAField)
+      sites.calls.append CallSite(node, isCommandPosition, calleeCouldBeAField)
       walkExpression sites, fields, callee, isCommandPosition: false
       walkArguments sites, fields, arguments
     }
@@ -259,7 +259,7 @@ fn walkExpression(var sites: Sites, fields: List<String>, node: Expression, isCo
           Some(guard) => [guard.span, arm.body.span]
           None => [arm.body.span]
         }
-        sites.bindings.add BindingSite(arm.pattern, regions)
+        sites.bindings.append BindingSite(arm.pattern, regions)
         match arm.guard {
           Some(guard) => walkExpression sites, fields, guard, isCommandPosition: false
           None => {}
@@ -272,7 +272,7 @@ fn walkExpression(var sites: Sites, fields: List<String>, node: Expression, isCo
 }
 
 fn walkPattern(var sites: Sites, fields: List<String>, node: Pattern) {
-  sites.patterns.add node
+  sites.patterns.append node
   match node.kind {
     .Wildcard | .Binding(_) | .Invalid => {}
     .Literal(value) => walkExpression sites, fields, value, isCommandPosition: false
@@ -306,10 +306,10 @@ fn fieldNames(members: List<Member>): List<String> {
   var names: List<String> = []
   for member in members {
     match member.kind {
-      .Field(field) => names.add field.name.text
+      .Field(field) => names.append field.name.text
       .Constant(binding) => {
         match binding.pattern.kind {
-          .Binding(name) => names.add name
+          .Binding(name) => names.append name
           _ => {}
         }
       }

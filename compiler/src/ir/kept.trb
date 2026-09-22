@@ -59,11 +59,11 @@ public fn keepingOf(program: IrProgram): Keeping {
     var flags: List<Bool> = []
     const isOpaque = function.blocks.isEmpty() && !isRuntime(function)
     for parameter in function.signature.parameters {
-      flags.add(isOpaque || parameter.ownership == Ownership.Owned)
+      flags.append(isOpaque || parameter.ownership == Ownership.Owned)
     }
-    parameters.add flags
+    parameters.append flags
     if !function.blocks.isEmpty() {
-      queue.add index
+      queue.append index
       isQueued.set index, true
     }
   }
@@ -97,7 +97,7 @@ public fn keepingOf(program: IrProgram): Keeping {
         continue
       }
       isQueued.set caller, true
-      queue.add caller
+      queue.append caller
     }
   }
   keeping
@@ -115,7 +115,7 @@ fn tablesByTraitOf(program: IrProgram): Map<Int, List<WitnessTableId>> {
   for index in 0..program.witnessTables.length() {
     const applied = program.witnessTables[index].applied.value
     var tables = found.get(applied) ?? []
-    tables.add WitnessTableId(index)
+    tables.append WitnessTableId(index)
     found.set applied, tables
   }
   found
@@ -129,7 +129,7 @@ fn callersOf(program: IrProgram, keeping: Keeping): List<List<Int>> {
   const count = program.functions.length()
   var callers: List<List<Int>> = []
   for _ in 0..count {
-    callers.add([])
+    callers.append([])
   }
   for index in 0..count {
     const function = program.functions[index]
@@ -137,18 +137,18 @@ fn callersOf(program: IrProgram, keeping: Keeping): List<List<Int>> {
       for instruction in block.instructions {
         var callees: List<FunctionId> = []
         if const .Call(_, callee, _, _, _) = instruction {
-          callees.add callee
+          callees.append callee
         }
         if const .CallWitness(_, witness, member, _) = instruction {
           if const Some(tables) = reachableTables(program, keeping, function, witness) {
-            callees.addAll membersAt(program, tables, member)
+            callees.appendAll membersAt(program, tables, member)
           }
         }
         for callee in callees {
           if callee.value < 0 || callee.value >= count || callers[callee.value].contains(index) {
             continue
           }
-          callers[callee.value].add(index)
+          callers[callee.value].append(index)
         }
       }
     }
@@ -211,7 +211,7 @@ fn keptCallSlots(program: IrProgram, keeping: Keeping, callee: FunctionId, argum
   for index in 0..arguments.length() {
     const argument = arguments[index]
     if argument.place.isSome() || index >= flags.length() || flags[index] {
-      found.add argument.slot
+      found.append argument.slot
     }
   }
   found
@@ -239,12 +239,12 @@ fn keptWitnessSlots(
   }
   var found: List<Slot> = []
   if const .Value(place, _) = witness.root {
-    found.add place.base
+    found.append place.base
   }
   for index in 0..arguments.length() {
     const argument = arguments[index]
     if argument.place.isSome() || isKeptByAny(program, keeping, tables, member, index + 1) {
-      found.add argument.slot
+      found.append argument.slot
     }
   }
   found
@@ -275,7 +275,7 @@ fn membersAt(program: IrProgram, tables: List<WitnessTableId>, member: Int): Lis
   for table in tables {
     const members = program.witnessTableAt(table).members
     if member >= 0 && member < members.length() {
-      found.add members[member]
+      found.append members[member]
     }
   }
   found
@@ -294,7 +294,7 @@ fn reachableTables(
 ): List<WitnessTableId>? {
   var current: List<WitnessTableId> = []
   match witness.root {
-    .Table(table) => current.add table
+    .Table(table) => current.append table
     .Value(place, bound) => {
       var problems: List<String> = []
       const annotation = typeOfReference(program, function, problems, "", place)?
@@ -322,7 +322,7 @@ fn reachableTables(
       }
       // A hole is a table that could not be built, and a narrowing through it is reported where it is written
       if const Some(inner) = nested[step] {
-        next.add inner
+        next.append inner
       }
     }
     current = next
@@ -333,7 +333,7 @@ fn reachableTables(
 fn argumentSlotsOf(arguments: List<Argument>): List<Slot> {
   var found: List<Slot> = []
   for argument in arguments {
-    found.add argument.slot
+    found.append argument.slot
   }
   found
 }

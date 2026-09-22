@@ -409,7 +409,7 @@ fn isInhabited(var checker: Checker, annotation: TypeId, path: List<SymbolId>): 
     return true
   }
   var walked = path
-  walked.add symbol
+  walked.append symbol
   if !shape.cases.isEmpty() {
     const variants = caseNamesOf checker, annotation
     for variant in variants {
@@ -974,7 +974,7 @@ fn traitReferencesOf(reference: TypeReference): List<TypeReference> {
   if const .Intersection(parts) = reference.kind {
     var found: List<TypeReference> = []
     for part in parts {
-      found.addAll traitReferencesOf(part)
+      found.appendAll traitReferencesOf(part)
     }
     return found
   }
@@ -1007,7 +1007,7 @@ fn traitHeadsOf(reference: TypeReference): List<String> {
     .Intersection(parts) => {
       var found: List<String> = []
       for part in parts {
-        found.addAll traitHeadsOf(part)
+        found.appendAll traitHeadsOf(part)
       }
       found
     }
@@ -1266,13 +1266,13 @@ fn checkExposedType(var checker: Checker, module: ModuleId, typeDeclaration: Typ
   // A `private` field is not part of the surface: nobody outside can read it, so its type is nobody's business there
   for field in shape.fields {
     if isPublicField(field) {
-      types.add field.annotation
+      types.append field.annotation
     }
   }
   for variant in shape.cases {
     for field in variant.fields {
       if isPublicField(field) {
-        types.add field.annotation
+        types.append field.annotation
       }
     }
   }
@@ -1290,7 +1290,7 @@ fn checkExposedTrait(var checker: Checker, module: ModuleId, traitDeclaration: T
     }
     const inner = signatureOf checker, member
     const form = checker.signature(inner).form
-    types.addAll typesOfForm(form)
+    types.appendAll typesOfForm(form)
   }
   checkExposure checker, module, traitDeclaration.name, types, "trait"
 }
@@ -1298,9 +1298,9 @@ fn checkExposedTrait(var checker: Checker, module: ModuleId, traitDeclaration: T
 fn typesOfForm(form: FunctionForm): List<TypeId> {
   var types: List<TypeId> = []
   for parameter in form.parameters {
-    types.add parameter.annotation
+    types.append parameter.annotation
   }
-  types.add form.result
+  types.append form.result
   types
 }
 
@@ -1320,7 +1320,7 @@ fn privateTypeIn(var checker: Checker, module: ModuleId, annotation: TypeId, dep
     .Tuple(fields) => {
       var inner: List<TypeId> = []
       for field in fields {
-        inner.add field.annotation
+        inner.append field.annotation
       }
       privateTypeInAll checker, module, inner, depth
     }
@@ -1587,7 +1587,7 @@ fn unseenOf(var checker: Checker, annotation: TypeId): Unseen {
     .Tuple(fields) => {
       var parts: List<TypeId> = []
       for field in fields {
-        parts.add field.annotation
+        parts.append field.annotation
       }
       return firstUnseen checker, parts
     }
@@ -1597,7 +1597,7 @@ fn unseenOf(var checker: Checker, annotation: TypeId): Unseen {
       }
       var parts: List<TypeId> = []
       for bound in bounds {
-        parts.addAll argumentsOfType(checker, bound)
+        parts.appendAll argumentsOfType(checker, bound)
       }
       return firstUnseen checker, parts
     }
@@ -1613,12 +1613,12 @@ fn unseenOf(var checker: Checker, annotation: TypeId): Unseen {
   }
   var parts = arguments
   for field in fieldsOf(checker, annotation) {
-    parts.add field.annotation
+    parts.append field.annotation
   }
   for name in caseNamesOf(checker, annotation) {
     if const Some(variant) = caseNamed(checker, annotation, name) {
       for field in variant.fields {
-        parts.add field.annotation
+        parts.append field.annotation
       }
     }
   }

@@ -79,8 +79,8 @@ public fn witnessTableOf(var lowering: Lowering, subject: TypeId, bound: TypeId,
 
 /**
  * The table of every **direct** supertrait of a bound, in declaration order. That is what makes a narrowing coercion
- * possible: `List<Item>` handed to a parameter of type `Iterable<Item>` has erased its payload's type, so the table of
- * `(the payload's type, Iterable<Item>)` can only come out of the table the value already carries - and `nested[i]` is
+ * possible: `List<Item>` handed to a parameter of type `Iterate<Item>` has erased its payload's type, so the table of
+ * `(the payload's type, Iterate<Item>)` can only come out of the table the value already carries - and `nested[i]` is
  * where it is (5.6 left the list empty and named this as what needs it).
  *
  * The indices are a static property of the **trait** and not of the erased target, because they are the positions of
@@ -103,10 +103,10 @@ fn nestedTablesOf(
     const name = witnessTableName lowering.program, applied, target
     // A supertrait whose table is being built one level up would report "a witness table that needs itself"
     if lowering.buildingTables.containsKey(name) {
-      found.add None
+      found.append None
       continue
     }
-    found.add withoutReports(lowering, subject, supertrait, at)
+    found.append withoutReports(lowering, subject, supertrait, at)
   }
   found
 }
@@ -125,7 +125,7 @@ fn withoutReports(var lowering: Lowering, subject: TypeId, bound: TypeId, at: Sp
   built
 }
 
-/** `Show`, `Iterable<Int64>`: one bound, interned, so that a name is a function of the trait and its arguments. */
+/** `Show`, `Iterate<Int64>`: one bound, interned, so that a name is a function of the trait and its arguments. */
 public fn traitIdOf(var lowering: Lowering, bound: TypeId): TraitId {
   instantiateTrait lowering.program, lowering.checker, lowering.instantiation, bound
 }
@@ -140,7 +140,7 @@ fn membersOfTable(
   var found: List<FunctionId> = []
   for member in tableMembersOf(lowering, bound, subject) {
     const built = memberFunctionOf(lowering, subject, member.bound, implementation, member.member, at)?
-    found.add built
+    found.append built
   }
   Some found
 }
@@ -191,8 +191,8 @@ public fn memberFunctionOf(
  * 1. what the implementation provides under the name - its own member, a member of the target's body, a field, or a
  *    member of another implementation of the same target (`memberOfImplementation` *is* `providerOf`),
  * 2. the default of the trait that requires it,
- * 3. the default of any **other** trait of the type's closure. `Accumulator.finish` is required by `Accumulator` and
- *    written by its subtrait `Collection`, which `checkRequirements` accepts through `hasDefaultInClosure` - so without
+ * 3. the default of any **other** trait of the type's closure. `Slice.slice` is required by `Slice` and written by its
+ *    subtrait `List`, which `checkRequirements` accepts through `hasDefaultInClosure` - so without
  *    this step the back end refuses a program the checker approved.
  *
  * Where none of the three has a body the member has no source at all and the manifest or a derived implementation
@@ -249,30 +249,6 @@ fn manifestNameOf(var lowering: Lowering, id: TypeId): String? {
     return Some lowering.checker.symbolAt(symbol).name
   }
   None
-}
-
-// Rename fallback: delete after the seed knows the new name.
-/**
- * Whether [memberOfType] would find a member under this name. It is the **probe** beside it: nothing is reported when
- * the answer is no, so a caller that has a second name to try asks this one first - [memberOfType] would otherwise
- * record a finding and abandon the whole body over a name it was going to try again.
- *
- * # Related
- *
- * - [memberOfType] - the function itself, for the name this one accepted.
- */
-public fn hasMemberOfType(var lowering: Lowering, subject: TypeId, bound: TypeId, name: String): Bool {
-  const implementation = match witnessFor(lowering.checker, subject, bound) {
-    .Implementation(found, _, _) => found
-    _ => {
-      return false
-    }
-  }
-  const required = traitMemberNamed lowering, bound, name
-  if declaredMemberOf(lowering, implementation, required, name).isSome() {
-    return true
-  }
-  required.isSome()
 }
 
 /**
@@ -587,7 +563,7 @@ fn addBlanketArguments(
   const _ = matchTypePattern lowering.checker, capability, bound, generics, mapping
 }
 
-/** `trait Iterable<Item>`: the arguments of the trait fill its own parameters, in declaration order. */
+/** `trait Iterate<Item>`: the arguments of the trait fill its own parameters, in declaration order. */
 fn addTraitArguments(
   var lowering: Lowering,
   var mapping: Map<ParameterId, TypeId>,
@@ -618,15 +594,15 @@ public type TableMember {
  *
  * A **`var self`** member *is* in a table: its thunk takes the address of the payload inside the box, and the caller
  * makes that box unique first, which is what the `size` and the two helpers in the table are for. Without it
- * `List.add`, `Map.set`, `Set.add` and `Iterator.next` would be unreachable on a trait-typed value, and every
+ * `List.append`, `Map.set`, `Set.insert` and `Iterator.next` would be unreachable on a trait-typed value, and every
  * collection of the language is one.
  *
  * A **default** member is in the table only where some implementation of the program **overrides** it: which of the
  * two a trait-typed value reaches is a run-time question exactly then. A default that nothing overrides is dispatched
  * statically with `Self` bound to the trait type itself, because a default body reaches `self` only through the
  * trait's own members - so one instance per trait type serves every implementer and what runs is what would have run
- * anyway. That is what bounds the instance set: `Iterable.indexed` is `Zipped(0.., self)`, so a table that held it
- * would need the table of `Iterable<(Int, Item)>` for `Zipped<Int, Item>`, which holds `indexed` again, and the
+ * anyway. That is what bounds the instance set: `Iterate.indexed` is `Zipped(0.., self)`, so a table that held it
+ * would need the table of `Iterate<(Int, Item)>` for `Zipped<Int, Item>`, which holds `indexed` again, and the
  * worklist would never end - a witness table holds only the members a type overrides, not its trait's defaults
  * (BACKEND 5.6).
  */
@@ -677,7 +653,7 @@ fn addTableMembers(
     if isUnoverriddenDefault(lowering, member, name) {
       continue
     }
-    found.add TableMember(member, bound)
+    found.append TableMember(member, bound)
   }
   for supertrait in supertraitsOfBound(lowering.checker, bound, subject) {
     addTableMembers(lowering, found, supertrait, subject, depth + 1)
@@ -722,7 +698,7 @@ fn overridesAnyMember(var lowering: Lowering, name: String): Bool {
  *
  * The **fields** of a target are deliberately not in it, although `providerOf` answers a member with one: a field is not
  * a method and cannot be the body of a default, and one field of the compiler is called `indexed` - which would put
- * `Iterable.indexed` back into every table and bring the non-terminating worklist back with it.
+ * `Iterate.indexed` back into every table and bring the non-terminating worklist back with it.
  */
 fn collectOverriddenMembers(var lowering: Lowering) {
   lowering.overriddenMembersAreKnown = true
@@ -743,7 +719,7 @@ fn collectOverriddenMembers(var lowering: Lowering) {
  * Whether a package is part of the program. **The closed world of a closed-world question is the program**, never the
  * whole `SourceTree` - and `readSourceTree` reads the entire workspace whatever is being lowered, so without this an
  * unrelated package next to yours changes the member list of your witness tables and with it your binary. Adding
- * `examples/encoding-lab`, which overrides defaults of `Iterable` for types of its own, took the instance count of
+ * `examples/encoding-lab`, which overrides defaults of `Iterate` for types of its own, took the instance count of
  * `source.trb`'s program from 121 declarations to 192.
  */
 fn isProgramPackage(var lowering: Lowering, package: Int): Bool {
@@ -916,8 +892,8 @@ public fn boundIndexOf(var lowering: Lowering, bounds: List<TypeId>, bound: Type
 
 /**
  * Where the table of a **supertrait** of one of a value's bounds sits: the index of the bound, and then one `nested`
- * index per step down the supertrait lists. `List<Item>` narrowed to `Iterable<Item>` is bound 0 step 0, because
- * `Iterable<Item>` is the first supertrait of `Collection<Item>`, which is the first of `List<Item>`.
+ * index per step down the supertrait lists. `List<Item>` narrowed to `Iterate<Item>` is bound 0 step 0, because
+ * `Iterate<Item>` is the first supertrait of `List<Item>`.
  *
  * The steps are positions in `supertraitsOfBound` and therefore a static property of the **trait**, which is exactly why
  * an erased payload can be narrowed at all: nothing about the path depends on the type the value has hidden.
@@ -952,12 +928,12 @@ fn stepsToBound(
   const supertraits = supertraitsOfBound lowering.checker, from, subject
   for index in 0..supertraits.length() {
     if sameType(lowering.checker.types, supertraits[index], wanted) {
-      steps.add index
+      steps.append index
       return true
     }
   }
   for index in 0..supertraits.length() {
-    steps.add index
+    steps.append index
     if stepsToBound(lowering, supertraits[index], subject, wanted, steps, depth + 1) {
       return true
     }

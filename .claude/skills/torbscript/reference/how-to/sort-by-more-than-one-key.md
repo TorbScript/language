@@ -27,7 +27,7 @@ compares the way "first by level, then by score" reads.
    ```
 
 2. **Use `sort` to reorder in place, `sorted` to keep the original and get a copy.** Both take the same key selector;
-   `sort` needs a `var` path to the list, `sorted` works on a `const` one and answers a new `Iterable`.
+   `sort` needs a `var` path to the list, `sorted` works on a `const` one and answers a new `Iterate`.
 
    ```trb fragment
    const ranked = players.sorted { player => (player.level, player.score) }

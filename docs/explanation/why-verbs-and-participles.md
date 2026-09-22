@@ -20,7 +20,7 @@ second name to learn, so this page argues for why the two words earn their keep.
 ## The decision
 
 **A verb changes its receiver in place and is a `var fn`; its participle reads its receiver and returns a changed
-copy, under a different name.** `add`/`added`, `sort`/`sorted`, `remove`/`removed`, `insert`/`inserted`.
+copy, under a different name.** `append`/`appended`, `sort`/`sorted`, `remove`/`removed`, `insert`/`inserted`.
 
 - The participles are default members of the collection traits, written once in terms of the verb: copy, change the
   copy, return it. An implementation only has to write the verb.
@@ -59,8 +59,8 @@ list," which is what it returns; `list.sort()` reads as an instruction, which is
 call site's context (was the result assigned? was it discarded?) to be understood, unlike a single `sort` that means
 either depending on how it is used.
 
-**Because it costs nothing per implementation.** The participles are default members of `Collection`, `List`, `Set`
-and the rest, each written once against the verb they pair with. A type that implements `add` gets `added` for free;
+**Because it costs nothing per implementation.** The participles are default members of `List`, `Set` and `Map`,
+each written once against the verb they pair with. A type that implements `append` gets `appended` for free;
 nobody writes the copy-and-call-through logic twice.
 
 ### What was rejected
@@ -77,7 +77,7 @@ nobody writes the copy-and-call-through logic twice.
 ## Consequences
 
 **Every collection member that could mutate has two names to choose between, and the table is fixed rather than
-invented per type.** `add`/`added`, `remove`/`removed`, `sort`/`sorted`, `insert`/`inserted` - one pair per meaning,
+invented per type.** `append`/`appended`, `remove`/`removed`, `sort`/`sorted`, `insert`/`inserted` - one pair per meaning,
 spelled the same on every collection, and a participle answers `Self` so it can be chained. See
 [Verbs and participles](../language/types/verbs-and-participles.md) for the complete table.
 

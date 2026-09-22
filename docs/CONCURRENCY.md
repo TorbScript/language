@@ -178,7 +178,7 @@ the count is decided before the first line of the program runs, by the three lev
 
 ## 4. `parallel()`
 
-The same words as `Iterable` and `Source`, and the terminal answers a `Task`:
+The same words as `Iterate` and `Source`, and the terminal answers a `Task`:
 
 ```trb fragment
 const total = numbers
@@ -189,7 +189,7 @@ const total = numbers
   .await()?
 ```
 
-**type checks today** against a locally declared `Parallel<Item>` and an `extend<Item> Iterable<Item>` that carries
+**type checks today** against a locally declared `Parallel<Item>` and an `extend<Item> Iterate<Item>` that carries
 `parallel` — the extension is found on a `List<Int>`, which is worth saying because ECS gap 3 is that a *blanket*
 `extend<World: Bound> World` is not. An extension of an instantiated trait is a different thing and it works. The `?`
 is section 8: a terminal answers a `Task` and every task is cancellable, so `await()` answers a `Result`. A script may
@@ -205,8 +205,8 @@ terminal is `forEach`:
 cells.parallel().forEach({ shade(_) }).await()?            // Parallel.ForEach
 ```
 
-**type checks today**, the range and the list alike: `Range<Int>` is an `Iterable<Int>`, so the same
-`extend<Item> Iterable<Item>` carries `parallel` on both and nothing has to be written twice.
+**type checks today**, the range and the list alike: `Range<Int>` is an `Iterate<Int>`, so the same
+`extend<Item> Iterate<Item>` carries `parallel` on both and nothing has to be written twice.
 
 **There is no `parallelFor`.** A second spelling would buy the word "for" and cost the thing this section is about: a
 `parallelFor` is not a pipeline, so it has no `map`, no `filter`, no `chunk:` and no `workers:` without growing its own
@@ -336,7 +336,7 @@ second before joining with the separator, because it knows what they are. A free
 | `minBy(key:)`, `maxBy(key:)` | the smaller of the two, the first on a tie — which is what the sequential run answers |
 | `partitioningBy(predicate:)` | the two lists concatenated pairwise |
 | `groupingBy(key:)` | the maps merged, the lists per key concatenated |
-| `into<Target>()` for a user's `Target` | whatever that type's `From<Iterable<Item>>` implies; the user writes it |
+| `into<Target>()` for a user's `Target` | whatever that type's `From<Iterate<Item>>` implies; the user writes it |
 | **`averaging(value:)`** | **none.** Its output is a `Float?` and the count is gone |
 
 `averaging` is the honest exception, and the shape of the workaround is the general one: a collector whose output
@@ -765,7 +765,7 @@ never starts.
 const loaded: Result<List<User>, HttpError> = (Task.all(fetches).await()?).into()
 ```
 
-`extend<Value, Failure, Target: From<Iterable<Value>>> Result<Target, Failure> with From<Iterable<Result<Value,
+`extend<Value, Failure, Target: From<Iterate<Value>>> Result<Target, Failure> with From<Iterate<Result<Value,
 Failure>>>` is in `std/core/src/result.trb` today. No second API, and the shape is honest about the fact that every
 task that was not cancelled ran to its end.
 
@@ -945,7 +945,7 @@ public trait Parallel<Item> {
   fn map<Output>(transform: (value: Item) => Output): Parallel<Output>
   fn filter(predicate: (value: Item) => Bool): Parallel<Item>
   fn filterMap<Output>(transform: (value: Item) => Output?): Parallel<Output>
-  fn flatMap<Output>(transform: (value: Item) => Iterable<Output>): Parallel<Output>
+  fn flatMap<Output>(transform: (value: Item) => Iterate<Output>): Parallel<Output>
 
   fn collect<Output>(collector: Merge<Item, Output>): Task<Output>
   fn toList(): Task<List<Item>>
@@ -956,7 +956,7 @@ public trait Parallel<Item> {
   fn forEach(body: (value: Item) => Void): Task<Void>
 }
 
-extend<Item> Iterable<Item> {
+extend<Item> Iterate<Item> {
   /** Spreads this pipeline over the workers. `chunk` fixes the number of pieces; the borders never depend on `workers`. */
   fn parallel(workers: Int = Workers.count(), chunk: Int? = None): Parallel<Item>
 }
@@ -968,7 +968,7 @@ public fn windows<Item: Plain>(var items: Buffer<Item>, count: Int, body: (var w
 public shared type Window<Item> with Length, Indexed<Int, Item> {}
 ```
 
-**The whole `Parallel` trait, the `Merge` trait and the `Iterable` extension type check today** as written, with bodies
+**The whole `Parallel` trait, the `Merge` trait and the `Iterate` extension type check today** as written, with bodies
 that panic. `windows` type checks with a named `fn` as the body; with a closure it is gap 5.
 
 **A package of its own, and in the prelude.** The two halves of that are not in tension, and the count is what settles
@@ -976,7 +976,7 @@ it: the prelude does not need sixteen names, it needs **two lines**.
 
 ```trb fragment
 public use Parallel from "std/parallel"
-public use Iterable.parallel from "std/parallel"
+public use Iterate.parallel from "std/parallel"
 ```
 
 `map`, `filter`, `sum` and the rest are *members of `Parallel`*, so they cost nothing in a file scope, and `parallel`
@@ -1246,7 +1246,7 @@ document above carries it.
    `filter` and the rest are members of `Parallel` and `parallel` is an extension member imported by its qualified
    name. `windows`, `Window` and `Plain` stay imports. The counterparts of `Parallel.For` and `Parallel.ForEach` are
    `(0..rows).parallel().forEach { … }` and `cells.parallel().forEach { … }`, both of which type check today over the
-   one `extend<Item> Iterable<Item>`; there is no `parallelFor`, and section 4 argues why.
+   one `extend<Item> Iterate<Item>`; there is no `parallelFor`, and section 4 argues why.
 3. **The name `Plain`** for "nothing reference counted inside". The alternatives considered were `Inline` (which the IR
    already uses for a different property — it also caps the size) and `Uncounted` (accurate and ugly).
    **Decided:** `Plain`.

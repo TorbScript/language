@@ -7,13 +7,13 @@
  *     const fromList = events.through(interesting).toList()          // a list, synchronously
  *     const fromBody = response.body.through(interesting).toList()   // an HTTP body, asynchronously
  *
- * Because a stage never asks where its values come from, every stage exists once: the pull side ([Iterable]) and the
+ * Because a stage never asks where its values come from, every stage exists once: the pull side ([Iterate]) and the
  * push side ([Source]) only differ in the two drivers that feed one. And because a stage is an ordinary value, a
  * pipeline is a value: it can be named, passed, stored in a field and applied more than once.
  *
  * # Open
  *
- * The per-stage iterators of `stages.trb` (`Mapped`, `Filtered`, ...) still carry `Iterable.map` and friends of their
+ * The per-stage iterators of `stages.trb` (`Mapped`, `Filtered`, ...) still carry `Iterate.map` and friends of their
  * own, next to the `Stage` values here that do the same job through `through(...)`. The two live side by side and
  * mean the same thing.
  *
@@ -65,7 +65,7 @@ type Composition<Input, Middle, Output> with Stage<Input, Output> {
  * Every stage is a function, not a member of `Stage`, for one reason: a member of a trait used as a namespace has to
  * fix the trait's own type arguments, and `Stage.filter` could not (its answer says nothing about `Output`). The names
  * are the gerunds the collectors already use (`counting`, `joining`, `groupingBy`), which also keeps them apart from
- * the methods of the same meaning on `Iterable` and `Source` (`items.map(f)` is `items.through(mapping(f))`).
+ * the methods of the same meaning on `Iterate` and `Source` (`items.map(f)` is `items.through(mapping(f))`).
  */
 public fn mapping<Input, Output>(transform: (value: Input) => Output): Stage<Input, Output> {
   Mapping transform
@@ -86,8 +86,8 @@ public fn mappingWhile<Input, Output>(transform: (value: Input) => Output?): Sta
   MappingWhile transform
 }
 
-/** Transforms every value into its own Iterable, and flattens all of them into one sequence. */
-public fn flatMapping<Input, Output>(transform: (value: Input) => Iterable<Output>): Stage<Input, Output> {
+/** Transforms every value into its own Iterate, and flattens all of them into one sequence. */
+public fn flatMapping<Input, Output>(transform: (value: Input) => Iterate<Output>): Stage<Input, Output> {
   FlatMapping transform
 }
 
@@ -238,7 +238,7 @@ type MappingWhileAccumulator<Input, Output, Final> with Accumulator<Input, Final
 // --- flatMapping ----------------------------------------------------------------------------------------------------
 
 type FlatMapping<Input, Output> with Stage<Input, Output> {
-  transform: (value: Input) => Iterable<Output>
+  transform: (value: Input) => Iterate<Output>
 
   fn onto<Final>(downstream: Accumulator<Output, Final>): Accumulator<Input, Final> {
     FlatMappingAccumulator transform, downstream
@@ -246,7 +246,7 @@ type FlatMapping<Input, Output> with Stage<Input, Output> {
 }
 
 type FlatMappingAccumulator<Input, Output, Final> with Accumulator<Input, Final> {
-  transform: (value: Input) => Iterable<Output>
+  transform: (value: Input) => Iterate<Output>
   var downstream: Accumulator<Output, Final>
 
   /** The one stage that answers many values for one, so it is also the one that has to watch `isDone` itself. */
@@ -401,7 +401,7 @@ type ChunkingAccumulator<Item, Final> with Accumulator<Item, Final> {
   var group: List<Item> = []
 
   var fn add(value: Item) {
-    group.add value
+    group.append value
     if group.length() >= size.max(1) {
       const full = group
       group = []

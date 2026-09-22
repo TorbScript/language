@@ -54,7 +54,7 @@ public shared trait Source<Item, Failure> with Close {
 
   /**
    * The one place where a stage meets a stream. Everything below is this call with a name, and `Json.items<User>()`
-   * or `lines()` are the same stage values an `Iterable` takes.
+   * or `lines()` are the same stage values an `Iterate` takes.
    */
   var fn through<Output>(stage: Stage<Item, Output>): Source<Output, Failure> {
     Staged.of self, stage
@@ -95,7 +95,7 @@ public shared trait Source<Item, Failure> with Close {
     through skipping(amount)
   }
 
-  /** `(0, first), (1, second), ...`, with the halves named `index` and `item` as [Iterable.indexed] names them. */
+  /** `(0, first), (1, second), ...`, with the halves named `index` and `item` as [Iterate.indexed] names them. */
   var fn indexed(): Source<(index: Int, item: Item), Failure> {
     through indexing()
   }
@@ -185,10 +185,10 @@ public shared trait Source<Item, Failure> with Close {
   // --- Making one -----------------------------------------------------------------------------------------------
 
   /**
-   * Everything an `Iterable` has, as a stream that never waits. `Failure` is whatever the caller needs: a source over
+   * Everything an `Iterate` has, as a stream that never waits. `Failure` is whatever the caller needs: a source over
    * a list cannot fail, and saying so as `Never` would make it unusable where a failing stream is expected.
    */
-  static fn from(items: Iterable<Item>): Source<Item, Failure> {
+  static fn from(items: Iterate<Item>): Source<Item, Failure> {
     Iterating.of items
   }
 
@@ -274,8 +274,8 @@ public shared type Pulling<Item, Failure> with Source<Item, Failure> {
 shared type Iterating<Item, Failure> with Source<Item, Failure> {
   private var cursor: Iterator<Item>
 
-  static fn of(items: Iterable<Item>): Iterating<Item, Failure> {
-    Iterating items.iterator()
+  static fn of(items: Iterate<Item>): Iterating<Item, Failure> {
+    Iterating items.iterate()
   }
 
   var fn next(): Task<Result<Item?, Failure>> {
@@ -450,7 +450,7 @@ shared type Produced<Item, Failure> with Source<Item, Failure> {
 /**
  * A stage that can fail answers `Result` items (`Json.items<User>()`, `lines()`), because a `Stage` is synchronous and
  * knows nothing about the stream's failure. `checked()` is where those items become the stream's failure and end it -
- * the streaming counterpart of collecting an `Iterable<Result<...>>` into a `Result<List<...>, ...>`.
+ * the streaming counterpart of collecting an `Iterate<Result<...>>` into a `Result<List<...>, ...>`.
  *
  *     const all = body.through(Json.items<User>()).checked().toList().await()?
  */

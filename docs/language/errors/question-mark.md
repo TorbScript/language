@@ -199,7 +199,7 @@ fn parseAll(values: List<String>): List<Int> {
   var parsed: List<Int> = []
   for value in values {
     match Int.tryFrom(value) {
-      Ok(number) => parsed.add number
+      Ok(number) => parsed.append number
       Fail(_) => {}
     }
   }
@@ -220,7 +220,7 @@ List<Int>` cannot receive the failure `Int.tryFrom(value)?` would hand back, and
 fn total(values: List<String>): List<Int> {
   var result: List<Int> = []
   for value in values {
-    result.add Int.tryFrom(value)?
+    result.append Int.tryFrom(value)?
   }
   result
 }

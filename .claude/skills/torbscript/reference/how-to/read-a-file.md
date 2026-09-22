@@ -50,7 +50,7 @@ function of `File` that can fail answers a `Result`, so the failure travels up w
    }
    ```
 
-5. **Read line by line for a file that does not fit in memory.** `File.lines` answers `Result<Iterable<String>, IoError>`
+5. **Read line by line for a file that does not fit in memory.** `File.lines` answers `Result<Iterate<String>, IoError>`
    and the file is never in memory as a whole. The pipeline is lazy, so a `take` stops reading.
 
    ```trb fragment

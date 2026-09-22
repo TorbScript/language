@@ -179,7 +179,7 @@ reaches no file at all is an error, never "0 files, no problems".
   means: `listEntries entries, "ArrayList", hasCapacity: false`, never `listEntries entries, "ArrayList", false`. Two
   cases need none: a call with a single argument (`setEnabled(true)`, `assert(false)` - the function's name says it),
   and a literal that is the *data* and not an option, which is the case exactly when the parameter's declared type is a
-  type parameter (`flags.set key, true`, `Some(true)`, `list.add(None)`). Labeled arguments follow the positional ones,
+  type parameter (`flags.set key, true`, `Some(true)`, `list.append(None)`). Labeled arguments follow the positional ones,
   so options are declared last. The same goes for a number literal whose meaning the call does not show
   (`connect("localhost", timeout: 10)`); that half is judgement, the `Bool`/`None` half will be a lint with a fix.
 - **A capsule names its field for the storage and its method for the answer.** A type whose constructor is closed from
@@ -199,7 +199,7 @@ reaches no file at all is an error, never "0 files, no problems".
 - **What panics in `std/`.** A panic there is only for a caller's mistake that **no type can express**: an index out of
   range, an integer overflow, a division by zero. Where a type *can* say it, the type says it - an `Option`, a
   `Result`, a narrower parameter type, or a split type as with `Range`/`RangeFrom`/`RangeTo`, where "this range has a
-  start" became the type instead of an `expect` in `iterator()`. A panic a body **writes** is a promise: its docblock
+  start" became the type instead of an `expect` in `iterate()`. A panic a body **writes** is a promise: its docblock
   carries a `# Panics` section that names the condition, and the conformance suite pins the message word for word,
   because the two back ends may not disagree about it. A member that only passes one on - an overflow of the `Int`
   arithmetic under it, an index it hands to a container - says so in its sentence instead. `Option.expect` and
@@ -224,7 +224,7 @@ that asks for all of it ([docs/tooling/torb-docs-source](../docs/tooling/torb-do
 2. **Six headings, and no others**: `# Examples` (the code indented by four spaces below it - it is parsed, canonized
    and type checked), `# Errors` (the `Fail` cases), `# Panics`, `# Pitfalls`, `# Open` (a problem that is open, in the
    present tense), `# Related` (links). Every heading that is written has something under it.
-3. **Links are names**: `[Iterator]`, `[List.add]`, `[Option.Some]`. They resolve like a name at that place in the code -
+3. **Links are names**: `[Iterator]`, `[List.append]`, `[Option.Some]`. They resolve like a name at that place in the code -
    what the file declares, what it imports, the prelude - and `Type.member` through the type.
 4. **Every file starts with a module comment**: a doc comment at the top, in front of the first `use`. What the module
    is for, its main constructs, how they relate. (The parser attaches it to that import, which is what makes it belong

@@ -243,7 +243,7 @@ have one display form, and a comparison over it would have called them equal.
 **Two measurements came out of writing it.** `String.from(uri)` does **not** select `From<Uri>`:
 
 ```text
-error: `Uri` does not implement `Iterable<Char>`
+error: `Uri` does not implement `Iterate<Char>`
 ```
 
 — `String`'s other `From` wins the selection — and `const back: String = uri.into()` type checks and answers *"a
@@ -1413,7 +1413,7 @@ Gaps 1 to 9 are the type; gaps 10 to 13 are the driver layer of section 11.
     unique``, both of which it says out loud with no location. *Smallest fix:* lower a user-written `shared type`.
     Until then the driver layer exists as the synchronous form probe 7 builds, and `std/storage` cannot land.
 11. **A capsule's conversion pair is unreachable when its source type is `String`.** `String.from(uri)` answers
-    ``Uri` does not implement `Iterable<Char>`` because `String`'s other `From` wins the selection, and
+    ``Uri` does not implement `Iterate<Char>`` because `String`'s other `From` wins the selection, and
     `const back: String = uri.into()` type checks and does not lower (gap 3). Probe 8. *Smallest fix:* prefer an
     exact `From<Source>` over one reached by coercing the argument to a trait type; it costs nothing, because the
     exact one is strictly more specific.

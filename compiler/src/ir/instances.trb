@@ -68,13 +68,13 @@ public fn instanceFor(
   const added = finishFunction lowering.program, builder
   lowering.program.instances.set key, added
   lowering.instanceMappings.set key, mapping
-  lowering.program.pending.add instance
+  lowering.program.pending.append instance
   Some added
 }
 
 /**
  * The backstop against a worklist that does not end. A type-growing instance - one whose body asks for itself with a
- * *bigger* type argument - would otherwise be a hang and not a message: `Iterable.indexed` is `Zipped(0.., self)`, so a
+ * *bigger* type argument - would otherwise be a hang and not a message: `Iterate.indexed` is `Zipped(0.., self)`, so a
  * table holding it asks for `Zipped<Int, (Int, Item)>`, then for `Zipped<Int, (Int, (Int, Item))>`, and so on. A witness
  * table holds only the members a type overrides, not its trait's defaults (BACKEND 5.6), which is what really bounds it
  * in practice; this is the guard that turns any remaining case into a finding at the declaration instead of a build
@@ -217,7 +217,7 @@ public fn runtimeFunctionShaped(
   var function = IrFunction name, Some(symbol), built, [], [], FunctionKind.Runtime(runtime)
   for index in 0..built.parameters.length() {
     const parameter = built.parameters[index]
-    function.slots.add SlotDeclaration(parameter.annotation, SlotRole.Parameter(index), parameter.name)
+    function.slots.append SlotDeclaration(parameter.annotation, SlotRole.Parameter(index), parameter.name)
   }
   const added = lowering.program.addFunction function
   lowering.program.instances.set key, added
@@ -239,10 +239,10 @@ fn shapedSignature(var lowering: Lowering, declared: IrSignature, shape: Runtime
       parameter = parameter.copy annotation: found
     }
     if shape.addressed.contains(index) {
-      parameters.add parameter.copy(isByAddress: true)
+      parameters.append parameter.copy(isByAddress: true)
       continue
     }
-    parameters.add parameter
+    parameters.append parameter
   }
   if shape.outs.isEmpty() {
     const result = storageAt(shape, 0 - 1) ?? declared.result
@@ -252,7 +252,7 @@ fn shapedSignature(var lowering: Lowering, declared: IrSignature, shape: Runtime
   // tell them apart
   for index in 0..shape.outs.length() {
     const name = if index == 0 { "out" } else { "out{index}" }
-    parameters.add IrParameter(name, shape.outs[index], true, Ownership.Borrowed, true, false)
+    parameters.append IrParameter(name, shape.outs[index], true, Ownership.Borrowed, true, false)
   }
   const boolean = lowering.program.internType IrType.Boolean
   IrSignature parameters, boolean
@@ -307,11 +307,11 @@ public fn instanceArgumentsOf(
   var arguments: List<IrTypeId> = []
   if const Some(own) = selfParameterOf(lowering, signature) {
     const found = closedArgument(lowering, mapping, own)?
-    arguments.add found
+    arguments.append found
   }
   for parameter in signature.generics {
     const found = closedArgument(lowering, mapping, parameter)?
-    arguments.add found
+    arguments.append found
   }
   // An owner that is neither concrete nor covered by the arguments cannot be laid out at all
   if const Some(owner) = signature.owner {
@@ -443,14 +443,14 @@ public fn irSignatureUnder(
     if const Some(owner) = signature.owner {
       const applied = substitute lowering.checker.types, owner, mapping
       const annotation = irTypeOfClosed lowering, applied
-      parameters.add IrParameter("self", annotation, signature.isVarSelf, Ownership.Borrowed)
+      parameters.append IrParameter("self", annotation, signature.isVarSelf, Ownership.Borrowed)
     }
   }
   for parameter in signature.form.parameters {
     const annotation = parameterTypeOf lowering, parameter, mapping
     const name = parameter.name ?? ""
     const isReference = isReferenceParameter parameter.mode
-    parameters.add IrParameter(name, annotation, isReference, Ownership.Borrowed)
+    parameters.append IrParameter(name, annotation, isReference, Ownership.Borrowed)
   }
   const applied = substitute lowering.checker.types, signature.form.result, mapping
   const result = irTypeOfClosed lowering, applied

@@ -134,7 +134,7 @@ type Row {
   var cells: List<Int> = []
 
   var fn cell(value: Int) {
-    cells.add value
+    cells.append value
   }
 }
 

@@ -17,22 +17,22 @@ use emittedProgramText from "../src/backend/c/emit"
 
 group "an element the runtime takes by address" {
   test "a `var self` receiver of a native is an ordinary place now" {
-    assert(unsupportedIn("fn push(var items: ArrayList<Int>) \{\n  items.add(1)\n\}") == [])
+    assert(unsupportedIn("fn push(var items: ArrayList<Int>) \{\n  items.append(1)\n\}") == [])
   }
 
   test "the wrapper hands the receiver over as a place and the element as a value" {
     const source = r"""
       fn push(var items: ArrayList<Int>) {
-        items.add(1)
+        items.append(1)
       }
       """
     assert(
-      irOf(source, "n_std_x2f_prelude_types_List_add__List_Int64_Int64") == r"""
-        fn n_std_x2f_prelude_types_List_add__List_Int64_Int64(var self: List(Int64) borrowed, value: Int64 borrowed) -> Void {
+      irOf(source, "n_std_x2f_prelude_types_List_append__List_Int64_Int64") == r"""
+        fn n_std_x2f_prelude_types_List_append__List_Int64_Int64(var self: List(Int64) borrowed, value: Int64 borrowed) -> Void {
           slot %0 parameter self: List(Int64)
           slot %1 parameter value: Int64
         b0: # std/prelude/src/types.trb:273 native wrapper
-          call t_std_x2f_prelude_types_List_add__List_Int64_Int64(&%0 borrowed, %1 borrowed) at std/prelude/src/types.trb:273:10
+          call t_std_x2f_prelude_types_List_append__List_Int64_Int64(&%0 borrowed, %1 borrowed) at std/prelude/src/types.trb:273:10
           return
         }"""
     )
@@ -41,13 +41,13 @@ group "an element the runtime takes by address" {
   test "the call site calls the wrapper and never the runtime symbol" {
     const source = r"""
       fn push(var items: ArrayList<Int>) {
-        items.add(1)
+        items.append(1)
       }
       """
     const shown = textOf source
     assert(
       shown.contains(
-        "  call n_std_x2f_prelude_types_List_add__List_Int64_Int64(&%0 borrowed, %1 borrowed) at acme/app/src/main.trb:2:3"
+        "  call n_std_x2f_prelude_types_List_append__List_Int64_Int64(&%0 borrowed, %1 borrowed) at acme/app/src/main.trb:2:3"
       )
     )
   }
@@ -55,13 +55,13 @@ group "an element the runtime takes by address" {
   test "the runtime function itself takes the addressed parameter by address" {
     const source = r"""
       fn push(var items: ArrayList<Int>) {
-        items.add(1)
+        items.append(1)
       }
       """
     const shown = textOf source
     assert(
       shown.contains(
-        "runtime fn t_std_x2f_prelude_types_List_add__List_Int64_Int64(var self: List(Int64) borrowed, byAddress value: Int64 borrowed) -> Void = torb_list_add"
+        "runtime fn t_std_x2f_prelude_types_List_append__List_Int64_Int64(var self: List(Int64) borrowed, byAddress value: Int64 borrowed) -> Void = torb_list_add"
       )
     )
   }
@@ -147,7 +147,7 @@ fn functionOf(source: String, name: String): String {
     if !isInside {
       continue
     }
-    lines.add line
+    lines.append line
     if line == "\}" {
       break
     }
@@ -223,10 +223,10 @@ group "the C of a wrapper" {
   test "an element goes to the runtime as the address of the slot that holds it" {
     const source = r"""
       fn push(var items: ArrayList<Int>) {
-        items.add(1)
+        items.append(1)
       }
       """
-    const shown = functionOf source, "n_std_x2f_prelude_types_List_add__List_Int64_Int64"
+    const shown = functionOf source, "n_std_x2f_prelude_types_List_append__List_Int64_Int64"
     assert shown.contains("  torb_list_add(s0_self, &s1_value);")
   }
 

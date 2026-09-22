@@ -209,11 +209,11 @@ Simple to use like npm, strict like Maven. The rules exist so that adding a depe
   linter hint for user code. Type parameters are written out, too: `List<Item>`, `Map<Key, Value>`,
   `Result<Value, Failure>`, `fn map<Output>(...)` - not `T`, `K`, `V`, `E`, `U`.
 - **Verbs change, participles return.** A method that changes its receiver in place is a verb and is a `var fn`
-  (`add`, `remove`, `sort`, `translate`). The method that returns a changed copy instead is its participle (`added`,
+  (`append`, `remove`, `sort`, `translate`). The method that returns a changed copy instead is its participle (`appended`,
   `removed`, `sorted`, `translated`). Pick verbs whose participle is a different word: the standard library avoids
   `put`, `cut`, `reset` as mutators, and `set` has the counterpart `updated`. Nouns never change
   anything (`union`, `intersection`). Tooling does not offer verbs on a const path, and the compiler error names the
-  participle ("`add` needs a `var`. Did you mean `added`?").
+  participle ("`append` needs a `var`. Did you mean `appended`?").
 - **A `Bool` is an adjective, a question is a method.** A `Bool` field, parameter or binding is an adjective or a
   participle (`inclusive`, `discarded`, `signed`, `retryable`); a question that is *computed* is a method whose name
   starts with `is` or `has` (`isEmpty()`, `hasGuard()`, `isRetryable()`). So `range.inclusive` is data and
@@ -272,7 +272,7 @@ type Shape {
 - **A comment never tells the history of its own code.** What something used to be, what changed and which plan a
   change belonged to is in the log, not at the declaration.
 - **Examples are tests.** `torb test` compiles and runs the code under `# Examples`, so documentation cannot rot.
-- `[List.add]` and `[Option]` are links. They are resolved like names in the code at that place; a link that does not
+- `[List.append]` and `[Option]` are links. They are resolved like names in the code at that place; a link that does not
   resolve is a warning.
 - The doc comment is part of the syntax tree. The language server, `torb doc` and the test runner read the same data.
 - A `//` comment inside a body is the rare exception, for a step that is not obvious from the code. What a caller or a
@@ -285,8 +285,8 @@ const y = 30        // Immutable binding
 var x = 20          // Mutable binding
 const z: Float = 1  // Optional type annotation; literals adapt to the expected type
 
-var list = [1, 2]   // The binding decides about the value, too: `list.add(3)` works, ...
-const fixed = list  // ...`fixed.add(3)` does not. `const` is deep, and `fixed` is a copy: it never changes.
+var list = [1, 2]   // The binding decides about the value, too: `list.append(3)` works, ...
+const fixed = list  // ...`fixed.append(3)` does not. `const` is deep, and `fixed` is a copy: it never changes.
 
 var a               // Compile error: bindings must be initialized
 var b: Int          // Compile error: no implied default value
@@ -299,7 +299,7 @@ var b: Int          // Compile error: no implied default value
 - **Changes that cannot have an effect are compile errors,** because with value semantics they are always a mistake:
   a `var` that is changed but never read afterwards (`var first = list[0]` followed by `first.increment()` - the
   message points to `list[0].increment()`), and the discarded result of a method that only reads its receiver
-  (`list.added(4)` as a statement - the message points to `add`). Discard on purpose with `const _ = ...`.
+  (`list.appended(4)` as a statement - the message points to `append`). Discard on purpose with `const _ = ...`.
 - **An expression statement must have the type `Void` or `Never`,** unless the call has a `var` receiver or a `var`
   argument. That is the whole rule behind the one above: `parser.bump()` and `cursor.next()` change something and
   stay statements, `Email.tryFrom(text)` and `1 + 2` are values that go nowhere.
@@ -382,7 +382,7 @@ const emptyMap: Map<String, Int> = [:]
 - `Void`, `Never` and the three ranges are declared in the prelude like every other type. **Which ends a range has is
   its type**, chosen by the syntax: `a..b` and `a..=b` are a `Range(start, end, inclusive)`, `a..` a
   `RangeFrom(start)`, `..b` and `..=b` a `RangeTo(end, inclusive)`. No field is optional in any of them.
-- **`Range<Int>` is `Iterable<Int>` and `Length`, `RangeFrom<Int>` is `Iterable<Int>` and endless, `RangeTo<Int>` is
+- **`Range<Int>` is `Iterate<Int>` and `Length`, `RangeFrom<Int>` is `Iterate<Int>` and endless, `RangeTo<Int>` is
   neither** - so `for index in ..10` and `(0..).length()` are refused where they are written, each with the reason, and
   nothing has to panic. What accepts every form takes the trait `Bounds<Value>` (`lowest()`, `highest()`,
   `includesHighest()`, `contains` as a default), which is what `list[from..to]` passes to `Slice.slice`. `inclusive`
@@ -396,7 +396,7 @@ two of them are slow:
 
 ```trb
 const text = "Grüße 👋"
-text.chars().count()               // 7  - `chars()` is an Iterable<Char> (Unicode scalar values)
+text.chars().count()               // 7  - `chars()` is an Iterate<Char> (Unicode scalar values)
 text.byteLength()                  // 13 - O(1)
 text.isEmpty()
 
@@ -408,7 +408,7 @@ text.substringAfter("ü")           // Some("ße 👋") - most code never sees a
 - **Every offset is checked.** An offset greater than `byteLength()`, a start greater than the end, and an offset on a
   UTF-8 continuation byte each panic, with the offset and the length in the message.
 - **A `String` is therefore always valid UTF-8.** The only ways in are literals, slices at character boundaries,
-  `String.from(Iterable<Char>)` and runtime functions that validate - so reading a file whose bytes are not UTF-8 is an
+  `String.from(Iterate<Char>)` and runtime functions that validate - so reading a file whose bytes are not UTF-8 is an
   `IoError`, never a replacement character, and neither `chars()` nor a back end needs a rule for broken text.
 
 **A `"""`/`r"""` string is dedented by its first line,** so a block of code reads at the indentation of the call
@@ -565,7 +565,7 @@ const raw = total.value                        // Explicit way out
   member's meaning unambiguous without saying more than the field's name.
 - Where a forwarded signature mentions `Self` (`add(self, other: Self): Self`), arguments are unwrapped and results
   wrapped again. That only works for single-field types. Traits without `Self` in arguments or results can be
-  delegated by any type (`type Team with Iterable<User> by members { ... }`).
+  delegated by any type (`type Team with Iterate<User> by members { ... }`).
 - **`by` forwards the required members, the default members come from the trait.** `total.max(Seconds(10))` is
   `Compare.max` over the forwarded `compare`, so it returns a `Seconds` and nothing has to be rewrapped. A default
   that is written in terms of the required members stays correct by construction.
@@ -601,7 +601,7 @@ connect("localhost", timeout: 10)          // Labeled arguments use `:` and foll
 fn largest(first: Int, ...rest: Int): Int { ... }   // Variadic parameter, `rest` is a `List<Int>`
 
 largest(1, 2, 3)
-largest(0, ...someSet)                         // Spread works with every `Iterable<Int>`
+largest(0, ...someSet)                         // Spread works with every `Iterate<Int>`
 ```
 
 A variadic parameter never accepts a collection implicitly (`List.of([1, 2])` is a `List<List<Int>>` with one
@@ -661,7 +661,7 @@ numbers.fold(0) { sum, number => sum + number }
 The implicit parameter can be named by the _type of the function_:
 
 ```trb
-fn map<Output>(transform: (value: Item) => Output): Iterable<Output>
+fn map<Output>(transform: (value: Item) => Output): Iterate<Output>
 
 numbers.map { value * 2 }
 ```
@@ -856,7 +856,7 @@ construct the same way the body of a `for` does.
 ```trb
 const initialized = do {
   const base = [1, 2, 3]
-  base.added(4).added(5).removed(2)
+  base.appended(4).appended(5).removed(2)
 }
 ```
 
@@ -1092,7 +1092,7 @@ samples[1..4].sort { _ }             // A range is a path, too: sorts this part 
   (`project.build { output "{project.name}" }`). Two indices or ranges of the same collection are not, because they
   cannot be compared statically (`swap(items[i], items[j])`: use `items.swapAt(i, j)`). The check is static and
   conservative: what the compiler cannot prove is an error, and there is no check at runtime.
-- A temporary is not a `var` path: `iterator().next()` is a compile error, `var cursor = iterator()` comes first.
+- A temporary is not a `var` path: `iterate().next()` is a compile error, `var cursor = iterate()` comes first.
   (Changing something that is thrown away is always a mistake.) As the _argument_ of a `var` parameter a temporary
   is fine - the callee is its only owner, so "copy in, copy out" is exact and nothing is written back anywhere:
   `using File.open(path)? { ... }`. The rule is about the base of a path (`f().x = 1`), not about ownership.
@@ -1206,7 +1206,7 @@ type Account {
 
   var fn deposit(amount: Int) {
     balance = balance + amount
-    history.add("deposit {amount}")
+    history.append("deposit {amount}")
   }
 }
 
@@ -1222,7 +1222,7 @@ account.balance = 1_000_000              // Compile error: only Account can writ
 | `private x: Value` / `private var x: Value` | no |  no                |
 
 - `private(var)` reads as "the `var` is private": the field is public, its mutability is not. It hands outsiders a _const path_ to the field, and const is deep: with `private(var) routes: List<Route>`,
-  `config.routes` can be read and iterated from outside, but `config.routes.add(...)` is a compile error. What
+  `config.routes` can be read and iterated from outside, but `config.routes.append(...)` is a compile error. What
   somebody takes out of it is a copy anyway. No defensive copies by hand, no accessor methods.
 - `private(var)` is a modifier of a field and of nothing else. On a member that has no `var` it has nothing to say
   and is an error. It also already *is* the `var`, so `private(var) var balance: Int` is an error: one of the two says
@@ -1342,7 +1342,7 @@ Never bare: `Circle` alone is a type, a function or a variable of that name, lik
 
 ```trb
 const unit: Shape = .Circle(1.0)               // The annotation says which type
-shapes.add(.Empty)                             // The parameter does
+shapes.append(.Empty)                          // The parameter does
 if shape == .Empty { ... }                     // The other side of the comparison does
 const other = Shape.Circle(1.0)                // Nothing does: write the type
 
@@ -1437,7 +1437,7 @@ if const Some(user) = findUser(id) {
   print user.name
 }
 
-while const Some((next, rest)) = queue.removed() { ... }
+while const Some(next) = pending.dequeue() { ... }
 
 if var Some(iterator) = current { iterator.next() }     // `var` instead of `const`: the binding is mutable
 
@@ -1503,7 +1503,7 @@ extend<Item> List<Item> with Show where Item: Show { ... }   // Type parameters 
 - **Naming:** a trait is a capability the type comes _with_, so a trait with a single required method is named like
   that method: `Hash` (`hash`), `Equals`, `Compare`, `Show`, `Add`, `From`, `Length`, `Close`. `type Money with Equals,
   Hash, Compare` reads as what it is. No `-able`/`-ible` adjectives. Traits that are mainly used _as types_ are nouns:
-  `Iterable`, `Iterator`, `Collection`, `List`, `Map`, `Accumulator`, `Stage`.
+  `Iterate`, `Iterator`, `List`, `Map`, `Accumulator`, `Stage`.
 - `with` is the only keyword for "implements" and for supertraits. Bounds use `where Item: Hash & Equals` or inline `<Item: Hash>`.
 - **Type parameters of a `type` and of a `trait` can have defaults** (`trait Add<Other = Self, Output = Self>`), so
   `with Add` means `Add<Self, Self>` and nobody writes it out. A default may name earlier parameters and `Self`, and
@@ -1512,7 +1512,7 @@ extend<Item> List<Item> with Show where Item: Show { ... }   // Type parameters 
   requirement for implementors - the member simply exists only where the clause holds, and a use that does not
   satisfy it reports the unmet bound. Same rule as for a conditional `extend`.
 - **`Self` is allowed in every type position inside a trait,** including as a trait argument
-  (`trait Collection<Item> with Iterable<Item>, Length`). `Self` is a type, not a type
+  (`trait List<Item> with Iterate<Item>, Length`). `Self` is a type, not a type
   constructor, so this is not the `Self<U>` that ["One Vocabulary"](#one-vocabulary-instead-of-higher-kinded-types)
   rules out, and it costs nothing.
 - **Coherence:** you can only `extend X with Trait<Arguments...>` if your package owns `X`, or `Trait`, or a type that
@@ -1548,7 +1548,7 @@ extend<Item> List<Item> with Show where Item: Show { ... }   // Type parameters 
   ("fields and cases belong to the declaration of the type"), because exhaustiveness and the generated constructor
   have to be decidable from the declaration alone.
 - Traits are implemented by values. A `shared type` can only implement a `shared trait` (`shared trait Close`), and a
-  value of such a trait type counts as shared. So a `List<Item>` or an `Iterable<Item>` is always a value: nobody
+  value of such a trait type counts as shared. So a `List<Item>` or an `Iterate<Item>` is always a value: nobody
   changes it while you hold it, and it can be passed to another task.
 - Several traits can be one type: `fn audit(entry: Show & Encode)`, `List<Show & Hash>`. It is the `&` of bounds in
   type position, and only traits can be combined (two different types have no values in common) - `&` is to traits
@@ -1571,17 +1571,17 @@ extend<Item> List<Item> with Show where Item: Show { ... }   // Type parameters 
   (`From.from`, `TryFrom.tryFrom`). With a body they are defaults of the trait - the place for factories that answer
   `Self` (`List.of(1, 2)` on the trait picks the default implementation, `TrieList.of(1, 2)` is a `TrieList`).
 - Because a trait is a type, it can be extended like one. `extend<Item> List<Item> with Show where Item: Show` makes every list
-  showable, `extend<Item> List<Item> with From<Iterable<Item>>` makes `List<Item>` itself a valid target of `to<List<Item>>()`.
+  showable, `extend<Item> List<Item> with From<Iterate<Item>>` makes `List<Item>` itself a valid target of `to<List<Item>>()`.
 - **Such an `extend` implements the trait for the trait-typed value, and reaches a concrete implementer only through the
   receiver.** `show` reads its receiver, so an `ArrayList<Int>` is showable through it: the receiver coerces to `List<Int>` and
   the member is found. `From.from` has no `self` and answers `Self`, so an `ArrayList<Int>` does **not** get it - the
   `from` would answer "some `List`" where an `ArrayList` is required. So every member of the implemented trait has to
   take `self` and none of them may answer `Self`; a `Self` in a *parameter* is fine, because there the concrete value
   coerces into the trait, which is the direction that always holds. `ArrayList` therefore has exactly one
-  `From<Iterable<Int>>` - its own - and `List<Int>` has the extension's.
+  `From<Iterate<Int>>` - its own - and `List<Int>` has the extension's.
 - **`Trait.member` reads the trait's own members first, then the members of implementations whose target is the
   trait itself.** That is what makes `List.from(...)` and `Map.from(...)` work, where `from` comes from
-  `extend<Key: Hash, Value> Map<Key, Value> with From<Iterable<(Key, Value)>>`. Two such implementations are an
+  `extend<Key: Hash, Value> Map<Key, Value> with From<Iterate<(Key, Value)>>`. Two such implementations are an
   ambiguity error, and the fix is to name a type (`TrieMap.from(...)`).
 - **An operator is a trait exactly when it is a method call.** `+` is `Add.add`, `==` is `Equals.equals`, `<` is
   `Compare.compare`, `a[i]` is `Indexed.at`, `a[i] = v` is `MutableIndexed.set`, `a[from..to]` is `Slice.slice`,
@@ -1754,36 +1754,34 @@ The collection types are **traits**, one per kind. Signatures, fields and bindin
 implementation is only named where something is constructed. Collections are values like everything else: the binding
 decides whether they can be changed.
 
-**The words are decided and not yet swept** (owner, 2026-09-22 - [docs/COLLECTIONS.md](docs/COLLECTIONS.md) section
-6b): `Iterable` becomes `Iterate` with `iterate()`, the `Collection` trait is deleted, and every kind keeps its own
-words - `List` `append`, `Set` `insert`/`remove`, `Map` `set`/`remove`, `Stack` `push`/`pop`/`peek`, `Queue`
-`enqueue`/`dequeue`/`peek`. `Add` stays. The tree, the table and the examples below still show today's names until the
-rename round has swept them.
+**Every kind has its own words** (owner, 2026-09-22 - [docs/COLLECTIONS.md](docs/COLLECTIONS.md) section 6b): `List`
+`append`, `Set` `insert`/`remove`, `Map` `set`/`remove`, `Stack` `push`/`pop`/`peek`, `Queue` `enqueue`/`dequeue`/`peek`.
+"`add` for everything is a sledgehammer": on top of a stack, at the back of a list and somewhere in a set are different
+meanings, and the word at the call says which one it is. There is no `Collection` trait above the five kinds.
 
 ```text
-Iterable<Item>   Length
-└──────────────────┘
-Collection<Item>              add, clear, compact, count, contains, addAll, the participles
-   ├─ List<Item>              ArrayList (literal [1, 2]), TrieList
-   ├─ Set<Item>               TrieSet, HashSet
-   ├─ Map<Key, Value>      TrieMap (literal ["a": 1]), HashMap           a Collection<(Key, Value)>
-   ├─ Stack<Item>             ArrayStack
-   └─ Queue<Item>             ArrayQueue
+                      Iterate<Item>             Length
+        ┌──────────────┬──────────────┬──────────────┬──────────────┐
+     List<Item>     Set<Item>    Map<Key, Value>  Stack<Item>    Queue<Item>
+     append         insert       set              push           enqueue
+     removeAt       remove       remove           pop, peek      dequeue, peek
+     ArrayList      TrieSet      TrieMap          ArrayStack     ArrayQueue
+     TrieList       HashSet      HashMap
 ```
 
 ```trb
 const numbers = [1, 2, 3]
 var buffer = numbers                                    // A copy. The storage is shared until one of them is written to.
-buffer.add(4)                                           // In place. `numbers` is still [1, 2, 3].
-const more = numbers.added(4).removed(2)                // Participles work everywhere
+buffer.append(4)                                        // In place. `numbers` is still [1, 2, 3].
+const more = numbers.appended(4).removed(2)             // Participles work everywhere
 
 type Inventory {
   private(var) items: Map<String, Int> = [:]
 }
 
 fn lookup(table: Map<String, Int>): Int { ... }         // Any map. Read-only, and nobody changes it meanwhile.
-fn describe<Item>(items: Collection<Item>): String { ... }    // Any collection
-fn fill(var target: Collection<Int>) { ... }            // Fills the caller's list, set, stack, queue, ...
+fn describe<Item>(items: Iterate<Item> & Length): String { ... }    // Any collection: the smallest bound it uses
+fn fill(var target: Set<Int>) { ... }                   // Fills the caller's set, whichever implementation it is
 
 var index: Map<String, Int> = HashMap()                 // Trait as the type, implementation at construction
 ```
@@ -1799,20 +1797,21 @@ var index: Map<String, Int> = HashMap()                 // Trait as the type, im
 
   | In place (`var fn`)                         | Changed copy (`fn`)                                    |
   |---------------------------------------------|--------------------------------------------------------|
-  | `add`, `addAll`, `insert`                   | `added`, `addedAll`, `inserted`                        |
+  | `append`, `appendAll`, `insert` of a `List`  | `appended`, `appendedAll`, `inserted`                  |
+  | `insert`, `insertAll` of a `Set`            | `inserted`, `insertedAll`                              |
   | `remove`, `removeAt`                        | `removed`, `removedAt`                                 |
   | `list[i] = v`, `map[key] = v` (`set`)       | `updated(i, v)`, `updated(key, v)`                     |
-  | `sort(by:)`, `reverse`                      | `sorted(by:)` (a `List` again; lazy on a bare Iterable), `reversed` |
-  | `add`, `remove` of a `Stack`/`Queue`        | `added`, `removed` (which returns `(element, rest)?`)  |
+  | `sort(by:)`, `reverse`                      | `sorted(by:)` (a `List` again; lazy on a bare Iterate), `reversed` |
   | `removeAll`, `retainAll`                    | `union`, `intersection`, `difference`                  |
 
   The participles are default methods of the traits (copy, change the copy, return it), an implementation only
-  writes the verbs.
+  writes the verbs. A `Stack` and a `Queue` have none: `pop` and `dequeue` answer the item they take, a participle
+  would have to answer the pair beside the rest, and a `var` copy does that without a second word.
 - **Slices:** `list[from..to]` is a `List` again that shares the storage and starts at index 0. It is a value, not a
   window: later changes of the original are not visible in it. As a `var` path it _is_ a window:
   `samples[0..100].sort { _ }`, `fill(buffer[offset..])`. The same holds for `String` and `Array`.
   A slice keeps the storage of the original alive. Implementations copy small slices of big storage on their own;
-  `header.compact()` does it explicitly (`Collection.compact`: it gives the value a storage of its own that is exactly
+  `header.compact()` does it explicitly (`List.compact`: it gives the value a storage of its own that is exactly
   as big as needed).
 - The traits do not constrain their type parameters, the implementations do: `TrieMap<Key: Hash, Value>`, a sorted
   map needs `Key: Compare`. Only the factories (`Map.of`, `Map.from`, literals) ask for `Hash`, because they pick `TrieMap`.
@@ -1827,24 +1826,24 @@ var index: Map<String, Int> = HashMap()                 // Trait as the type, im
   write" is implemented. Every type that is built from them is a value without doing anything for it (`ArrayQueue`
   is a ring buffer in a `List`). `Array<Item, Size>` is not a collection but a small inline value, see
   [Const Parameters](#const-parameters-and-array).
-- A `Collection` is **not** an `Accumulator`, and there is no trait for "something with `add`": a container that is
+- A collection is **not** an `Accumulator`, and there is no trait for "something with `add`": a container that is
   merely filled has no result of a run to give. What gathers a pipeline into one is a type beside it
   (`ListAccumulator`, `into<Target>()`), the way `Collector`/`Collectors.toList()` are in Java.
-- Lists have no `+`: `Add.add` and `add(value)` would be the same member. Use `addedAll`.
+- Lists have no `+`: combining two lists is `appendedAll`, which says which end the second one goes to.
 - `List`, `Set`, `Map`, `Option` and `Result` are `Show` wherever their items are, in the format of the generated
   `Show` (see [Values](#values)): `[1, 2]`, `{a, b}`, `["k": v]`, `Some(x)`.
 - `List`, `Set` and `Map` are `Equals`/`Hash` wherever their items are, so a `type` with a collection field can be
   compared and be a `Map` key. A `List` is equal, and hashes, in order: two lists with the same items in a different
   order differ. A `Set` or a `Map` is equal **regardless of insertion order** - iteration order is insertion order,
   equality is not - so their hash combines entries with `bitwiseExclusiveOr` instead of folding them in order.
-- `for x in xs` works with everything that is `Iterable<Item>`. **The subject is evaluated once, into a temporary,**
+- `for x in xs` works with everything that is `Iterate<Item>`. **The subject is evaluated once, into a temporary,**
   so it is not an open `var` access: changing `xs` inside of the loop is safe and does not affect the loop, and the
   loop variable is a `const` copy of each item.
 - **`for var element in container` changes every element in place** (decided, not yet implemented -
   [docs/COLLECTIONS.md](docs/COLLECTIONS.md) section 3.11). It binds a `var` reference to each slot for one turn of the
   body - Rust's `iter_mut`, not Swift's `for var`, which binds a mutable copy. It is sugar over `MutableIndexed` plus
   its `keys()`, so a `List`, an `Array`, a slice and the values of a `Map` (`for (key, var value) in map`) work, and a
-  user container joins by implementing that one trait; a `Set` and a plain `Iterable` are rejected with a message that
+  user container joins by implementing that one trait; a `Set` and a plain `Iterate` are rejected with a message that
   says why. The container has to be a `var` path, the body may not touch it any other way (exclusivity), and the loop
   is lowered to an index loop over element paths - no iterator object, no copy per element.
 - Creation: literals, `List.of(1, 2, 3)`, `List.of(...iterable)`, `List.from(iterable)`, `iterable.toList()`,
@@ -1854,24 +1853,24 @@ var index: Map<String, Int> = HashMap()                 // Trait as the type, im
 
   ```trb
   const numbers = [1, 2, 3]                         // The default list: ArrayList<Int>
-  const unique: Set<Int> = [1, 2, 2, 3]             // Set.from([1, 2, 2, 3]) - any From<Iterable<Item>> target
+  const unique: Set<Int> = [1, 2, 2, 3]             // Set.from([1, 2, 2, 3]) - any From<Iterate<Item>> target
   const corners: Array<Int, 4> = [1, 2, 3, 4]       // Filled inline: no list, no iterator, and exactly 4 items
   const index: Map<String, Int> = ["a": 1]          // The default map: TrieMap
-  const origin: Point = [1, 2]                      // Compile error: a Point is not From<Iterable<Item>>
+  const origin: Point = [1, 2]                      // Compile error: a Point is not From<Iterate<Item>>
   ```
 
   So there are exactly three answers: the collection the expected type names, built directly (the trait itself, or one
   of its implementations); an `Array<Item, Size>`, whose items go into the inline slots and whose **number of items has
-  to be `Size`**; and any `From<Iterable<Item>>` target, built from the list - the same targets `to<Target>()` accepts.
+  to be `Size`**; and any `From<Iterate<Item>>` target, built from the list - the same targets `to<Target>()` accepts.
   Anything else is a compile error that names what a target has to be. A spread inside an array literal is only allowed
   where its operand is an `Array` too, because the size has to be known: `[...half, 3, 4]`.
 
 ### Pipelines and Collectors
 
-Working with an `Iterable` has three parts, like in Java and Rust:
+Working with an `Iterate` has three parts, like in Java and Rust:
 
 ```trb
-const adults = users                     // 1. A source: anything Iterable (collections, ranges, files, channels)
+const adults = users                     // 1. A source: anything Iterate (collections, ranges, files, channels)
   .filter { _.age >= 18 }                // 2. Lazy stages: nothing runs, nothing is stored
   .sorted { _.name }
   .map { "{_.name} ({_.age})" }
@@ -1880,12 +1879,12 @@ const adults = users                     // 1. A source: anything Iterable (coll
 ```
 
 - **Stages are lazy and are values.** `map`, `filter`, `filterMap`, `mapWhile`, `flatMap`, `take`, `skip`, `takeWhile`, `zip`, `indexed`,
-  `sorted` return an `Iterable` again. A pipeline can be stored, passed around, extended and iterated more than once.
+  `sorted` return an `Iterate` again. A pipeline can be stored, passed around, extended and iterated more than once.
   Values are pulled one by one and only as far as needed, so infinite sources (`1..`) and big files just work.
-- **Terminal operations decide where the values end up:** `toList()`, `to<Set<String>>()` (any `From<Iterable<Item>>`),
+- **Terminal operations decide where the values end up:** `toList()`, `to<Set<String>>()` (any `From<Iterate<Item>>`),
   `fold`, `find`, `first`, `any`, `all`, `count`, `sum`, `joined(separator:)`, `forEach`, `for ... in` - and the
   general one, `collect`.
-- `joined(separator: String = "")` is `Iterable` where `Item: Show`: `[1, 2].joined(separator: ", ")` is `"1, 2"`,
+- `joined(separator: String = "")` is `Iterate` where `Item: Show`: `[1, 2].joined(separator: ", ")` is `"1, 2"`,
   `show()` of each item, joined. For `String` items `show()` is the text itself. The collector `joining` below is
   for the same thing plugged into a pipeline that needs a prefix or a suffix, or that combines with another
   collector; a plain join is `joined`, not `collect(joining(...))`.
@@ -1923,9 +1922,9 @@ code runs against a database: the provider's `filter` takes an `Expression<(row:
 
 ### One Vocabulary instead of Higher-Kinded Types
 
-`Option`, `Result`, `Task` and `Iterable` share their method names, and the names mean the same everywhere:
+`Option`, `Result`, `Task` and `Iterate` share their method names, and the names mean the same everywhere:
 
-| Method                 | Meaning                                                        | Option | Result | Task | Iterable |
+| Method                 | Meaning                                                        | Option | Result | Task | Iterate |
 |------------------------|----------------------------------------------------------------|:------:|:------:|:----:|:--------:|
 | `map`                  | Transform what is inside, keep the shape                       |   x    |   x    |  x   |    x     |
 | `flatMap`              | Transform into the same shape, flatten one level               |   x    |   x    |  x   |    x     |
@@ -1938,9 +1937,9 @@ code runs against a database: the provider's `filter` takes an `Expression<(row:
 
 This is a convention of the standard library, not an abstraction of the language. There are **no higher-kinded types**
 (`Functor<F<_>>`, `Monad`), no `Self<U>`, no F-bounded tricks. (`Self` as a trait _argument_ is fine -
-`From<Iterable<Item>>` on `Self` names a type, not a type constructor, see [Traits](#traits).)
+`From<Iterate<Item>>` on `Self` names a type, not a type constructor, see [Traits](#traits).)
 
-- The operations look alike but are not the same: an Option is a value and `map` runs immediately, an Iterable is a
+- The operations look alike but are not the same: an Option is a value and `map` runs immediately, an Iterate is a
   pipeline and `map` runs when it is pulled. An abstraction over both would hide exactly that difference.
 - A kind system, partially applied type constructors (`Result<_, Failure>`) and higher-order unification would cost the
   local type inference, readable error messages and a simple mental model - for code that scripts rarely need.
@@ -1955,7 +1954,7 @@ What higher-kinded types are typically used for is covered by things that alread
 | A function returning an Option as a stage    | `ids.filterMap { findUser(_) }`                                                |
 | An Option or Result inside a pipeline        | `users.flatMap { _.manager.toList() }`                                         |
 
-Both "all or nothing" targets are ordinary `From<Iterable<...>>` implementations in the standard library - no new
+Both "all or nothing" targets are ordinary `From<Iterate<...>>` implementations in the standard library - no new
 language feature was needed for them.
 
 ## Streams
@@ -2049,9 +2048,9 @@ const fromBody = body.through(activeNames).toList().await()?         // an HTTP 
 - `Accumulator` has `fn isDone(): Bool { false }` for it. A driver asks before the first value and after every
   `add`, so `taking(10)`, `first()` and `find(...)` end a pipeline over an infinite or expensive source without pulling
   one value they will not deliver.
-- **The difference between the two worlds shrinks to two drivers:** `Iterable.through(stage)` (a loop) and
+- **The difference between the two worlds shrinks to two drivers:** `Iterate.through(stage)` (a loop) and
   `Source.through(stage)` (a loop with `await`). `collect` runs *fused* - the stage wraps the accumulator itself,
-  no queue - and `next()`/`iterator()` runs through a small queue, because one value pushed in can become many coming
+  no queue - and `next()`/`iterate()` runs through a small queue, because one value pushed in can become many coming
   out while the caller asks for one. `map`, `filter`, `take`, ... on both traits are one-liners over `through`.
 - **`Accumulator` is shared between both worlds,** so every terminal operation is written once:
   `source.collect(accumulator)`, `toList`, `count`, `fold`, `find`, `forEach`.
@@ -2061,14 +2060,14 @@ const fromBody = body.through(activeNames).toList().await()?         // an HTTP 
   then delivers.
 - **A stage that can fail answers `Result` items,** because it is synchronous and knows nothing about the stream around
   it. `source.checked()` lifts them into the stream's failure and ends it there (`where Failure: From<Problem>`); on an
-  `Iterable` the existing `to<Result<List<Item>, Failure>>()` does the same job.
+  `Iterate` the existing `to<Result<List<Item>, Failure>>()` does the same job.
 - **Only what must wait is asynchronous:** `Source`, `Sink`, `source.then { ... }` (a step whose function answers a
   `Task`) and `source.into(sink)`.
 
 ### Producing, and what it is made of
 
 ```trb
-Source.from(items)                              // everything an Iterable has
+Source.from(items)                              // everything an Iterate has
 Source.pulling { ... }                          // the closure *is* `next`
 Source.produce { sink => ... }                  // a task of its own plus a channel; capacity 0 is lock-step
 ```
@@ -2192,7 +2191,7 @@ type ServerConfig {
 
   // Only what is more than "set a field" or "configure a field" needs a method
   var fn route(path: String, to: String) {
-    routes.add(Route(path, to))
+    routes.append(Route(path, to))
   }
 }
 
@@ -2495,7 +2494,8 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
   section 6b). `iterate()`, `List.append`, `Set.insert`/`remove`, `Map.set`/`remove`, `Stack.push`/`pop`/`peek`,
   `Queue.enqueue`/`dequeue`/`peek`; the `Collection` trait is deleted and `Add` stays (`Plus` is no longer planned).
   "`add` for everything is a sledgehammer": on top, at the back and somewhere are different meanings. A single-method
-  trait is named like its method, and nothing ends in `-able`.
+  trait is named like its method, and nothing ends in `-able`. Participles stay where they read naturally (`List`,
+  `Set`, `Map`); a `Stack` and a `Queue` have none, because `popped(): (Item, Stack)?` is a pair and a `var` copy is not.
 - **A sink ends with `end()`** (was `finish()`): `finish` is the `Accumulator`'s word for the result of a run, and
   `close()` is the destructor, so the graceful end of a flow needed a word of its own.
 - **An extension member is named where it is used.** Nothing a foreign package attaches is implicitly visible: a member
@@ -2537,18 +2537,18 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
 - Iteration is a lazy pipeline with collectors (Java streams / Rust iterators) instead of eager methods that return
   lists: streaming, early exit, infinite sources, and the target is chosen at the end. One model only - there is no
   second, eager set of methods on `List`. `toList()` is the price.
-- No higher-kinded types. `Option`, `Result`, `Task`, `Iterable` share a vocabulary by convention; `traverse`/`sequence`
+- No higher-kinded types. `Option`, `Result`, `Task`, `Iterate` share a vocabulary by convention; `traverse`/`sequence`
   are collection targets (`to<Result<List<Item>, Failure>>()`), `filterMap` bridges Option-returning functions into pipelines.
-  Option is deliberately not an `Iterable`: its `map` is eager, the trait promises a lazy one.
-- No `Collectable`/`FromIterator` trait: a collection target is simply `From<Iterable<Item>>`, `to<Target>()` is a typed `into()`.
-- **A collection literal adapts to the expected type, to an `Array<Item, Size>` and to every `From<Iterable<Item>>`
+  Option is deliberately not an `Iterate`: its `map` is eager, the trait promises a lazy one.
+- No `Collectable`/`FromIterator` trait: a collection target is simply `From<Iterate<Item>>`, `to<Target>()` is a typed `into()`.
+- **A collection literal adapts to the expected type, to an `Array<Item, Size>` and to every `From<Iterate<Item>>`
   target** - and to nothing else, which is why `const origin: Point = [1, 2]` is an error instead of silently claiming to
   be a `Point`. A literal and `to<Target>()` therefore accept the same targets, and no new protocol was needed for it:
   **a fast path is the compiler's job for a literal** (it knows the items, so it fills an array inline and builds the
   expected implementation directly) **and a type pattern inside `from` for a value** - `from` is generic over what
   arrives, so an implementation may recognize the type it is handed and take its storage instead of iterating it, decided
   at compile time like every other generic call. Never a second trait that every collection would implement twice.
-- Collectors are push-based (`Accumulator.add`), so they are not tied to `Iterable` and work for channels and streams.
+- Collectors are push-based (`Accumulator.add`), so they are not tied to `Iterate` and work for channels and streams.
 - **A stream is a word, not a type: what a signature names is one of its two ends,** `Source<Item, Failure>` or
   `Sink<Item, Failure>`. They are the asynchronous siblings of `Iterator` and `Accumulator` and carry the same verbs
   (`next`, `add`), and both are `shared trait`s with `Close`, because a stream has an identity and is consumed once. A
@@ -2741,7 +2741,7 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
   (docs/DESTRUCTORS.md section 9)
 - Type parameters are written out (`Item`, `Key`, `Value`, `Failure`, `Output`)
 - `nameOf(expression)` through `Expression<Value>`, `typeName<Value>()` as a compile-time function
-- Variadics never unpack implicitly, spread (`...`) works on `Iterable`
+- Variadics never unpack implicitly, spread (`...`) works on `Iterate`
 - `static` marks what belongs to the type, `var fn` marks mutation, access through the receiver is implicit
 - Members are public by default, `private` is explicit - one rule for fields and methods (was: fields private,
   methods public; 142 of 160 fields in the examples had to say `public`). Immutability made private-by-default
@@ -2772,10 +2772,10 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
 - References are second-class (`var` parameters and `var fn` only) instead of lifetimes, borrow checking or span
   types. A mutable slice is a `var` path to a range.
 - No marker for `var` arguments at the call site (`fill(buffer)`, not `fill(var buffer)`): the signature and the
-  tooling show it, and a marker would make DSLs and method calls inconsistent (`buffer.add(1)` has none either).
-- Verbs change in place, participles return a changed copy (`sort`/`sorted`, `add`/`added`). Rejected: one name
+  tooling show it, and a marker would make DSLs and method calls inconsistent (`buffer.append(1)` has none either).
+- Verbs change in place, participles return a changed copy (`sort`/`sorted`, `append`/`appended`). Rejected: one name
   plus a `copy { ... }` block, Ruby's `!` suffix, Scala's symbolic operators.
-- Collection types are traits, one per kind (`List`, `Set`, `Map`, `Stack`, `Queue` under `Collection`),
+- Collection types are traits, one per kind (`List`, `Set`, `Map`, `Stack`, `Queue`, each `with Iterate<Item>, Length`),
   implementations are named after their data structure. Defaults: `ArrayList`, `TrieMap`, `TrieSet`.
 - The lazy stage `sortBy` became `sorted(by:)` to fit the verb/participle rule; `list.sort(by:)` sorts in place.
 - `Option`/`Result`/`?` instead of exceptions (also: trivial to implement identically in VM and AOT)
@@ -2884,7 +2884,7 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
   from every line, a lesser or mismatched indentation is a lexer error, and a leading line break right after `"""`
   is never part of the string. This lets a code block sit at the indentation of the call around it instead of at
   the left margin. `torb format` will enforce the layout it produces.
-- `String.join(parts, separator:)` became `Iterable.joined(separator:)`, now that a member can carry its own `where`
+- `String.join(parts, separator:)` became `Iterate.joined(separator:)`, now that a member can carry its own `where`
   clause (`where Item: Show`). One way to join instead of two, and it reads left to right with the rest of a
   pipeline; the collector `joining` stays for a prefix, a suffix, or a step inside `collect`.
 - `&` instead of `+` for an intersection of traits (was: `+`, from Rust).

@@ -43,8 +43,8 @@ public shared trait Sink<Item, Failure> with Close {
   /** No more items. Flushes, reports what is left to report, and makes every further `add` fail. */
   var fn end(): Task<Result<Void, Failure>>
 
-  /** Everything an `Iterable` holds, in order. Does not end the sink: a sink may be filled from several places. */
-  var fn addAll(items: Iterable<Item>): Task<Result<Void, Failure>> {
+  /** Everything an `Iterate` holds, in order. Does not end the sink: a sink may be filled from several places. */
+  var fn addAll(items: Iterate<Item>): Task<Result<Void, Failure>> {
     for item in items {
       add(item).await()?
     }
@@ -190,7 +190,7 @@ public shared type Buffered<Item, Failure> with Sink<Item, Failure> {
 
   /** Adds to the buffer, and flushes once it reaches `capacity`. */
   var fn add(item: Item): Task<Result<Void, Failure>> {
-    pending.add item
+    pending.append item
     if pending.length() < capacity {
       return Ok void
     }

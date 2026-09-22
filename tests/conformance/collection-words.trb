@@ -1,8 +1,9 @@
 /**
  * The words the collection family spends, checked where they run: a participle answers `Self`, a collection counts
- * without walking, and a stack and a queue say `add` and `remove` at the end their own name points at.
+ * without walking, and a stack and a queue spend the words everybody knows for them: `push`/`pop`/`peek` and
+ * `enqueue`/`dequeue`/`peek`.
  *
- * `sorted` is the interesting one. On an `Iterable` it is a lazy stage that answers `Iterable<Item>`, on a `List` it
+ * `sorted` is the interesting one. On an `Iterate` it is a lazy stage that answers `Iterate<Item>`, on a `List` it
  * answers a list - so `const ordered: List<Int> = numbers.sorted({ _ })` is a binding and not a conversion, and the
  * receiver it was called on is untouched. The two spellings of the same order are compared here so that a back end
  * cannot make the participle and the verb disagree.
@@ -46,35 +47,37 @@ fn countDoesNotWalk() {
   print ages.count()
 }
 
-fn stackAndQueueSpendTwoWords() {
+fn stackAndQueueSpendTheirOwnWords() {
   var pile = Stack<Int>.of()
-  pile.add 1
-  pile.add 2
-  print pile.first()
-  print pile.remove()
+  pile.push 1
+  pile.push 2
+  print pile.peek()
+  print pile.pop()
   print pile.toList()
 
   var pending = Queue<Int>.of()
-  pending.add 1
-  pending.add 2
-  print pending.first()
-  print pending.remove()
+  pending.enqueue 1
+  pending.enqueue 2
+  print pending.peek()
+  print pending.dequeue()
   print pending.toList()
 }
 
-fn theParticiplesKeepTheOldVersion() {
-  const stack = Stack.of(1, 2).added(3)
-  if const Some((top, rest)) = stack.removed() {
+fn aCopyKeepsTheOldVersion() {
+  const stack = Stack.of 1, 2, 3
+  var rest = stack
+  if const Some(top) = rest.pop() {
     print "{top} {rest.length()} {stack.length()}"
   }
-  const queue = Queue.of(1, 2).added(3)
-  if const Some((next, rest)) = queue.removed() {
-    print "{next} {rest.length()} {queue.length()}"
+  const queue = Queue.of 1, 2, 3
+  var remaining = queue
+  if const Some(next) = remaining.dequeue() {
+    print "{next} {remaining.length()} {queue.length()}"
   }
 }
 
 sortedAnswersAList()
 sortedIsStable()
 countDoesNotWalk()
-stackAndQueueSpendTwoWords()
-theParticiplesKeepTheOldVersion()
+stackAndQueueSpendTheirOwnWords()
+aCopyKeepsTheOldVersion()

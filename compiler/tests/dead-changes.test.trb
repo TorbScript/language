@@ -190,12 +190,12 @@ group "What the rule does not reach" {
   }
 
   test "a call whose result is used is not a change and nothing else" {
-    const source = "fn probe(items: List<Int>): Int? \{\n  var cursor = items.iterator()\n  cursor.next()\n\}"
+    const source = "fn probe(items: List<Int>): Int? \{\n  var cursor = items.iterate()\n  cursor.next()\n\}"
     assert problems(source).isEmpty()
   }
 
   test "the same call whose result goes nowhere changes a copy nobody reads" {
-    const source = "fn probe(items: List<Int>) \{\n  var cursor = items.iterator()\n  cursor.next()\n  print \"done\"\n\}"
+    const source = "fn probe(items: List<Int>) \{\n  var cursor = items.iterate()\n  cursor.next()\n  print \"done\"\n\}"
     assert(problems(source) == ["This change has no effect: `cursor` is never read again"])
   }
 
@@ -206,7 +206,7 @@ group "What the rule does not reach" {
 }
 
 group "`var` arguments" {
-  const fill = "fn fill(var target: List<Int>) \{\n  target.add(1)\n\}\n\n"
+  const fill = "fn fill(var target: List<Int>) \{\n  target.append(1)\n\}\n\n"
 
   test "a `var` argument of a call whose result goes nowhere is a change" {
     const source = "{fill}fn probe() \{\n  var buffer: List<Int> = []\n  fill(buffer)\n\}"

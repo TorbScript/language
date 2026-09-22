@@ -42,7 +42,7 @@ const conflictState = 3
 public fn verifyOwnedProgram(program: IrProgram): List<String> {
   var found = verifyProgram program
   for function in program.functions {
-    found.addAll verifyOwnership(program, function)
+    found.appendAll verifyOwnership(program, function)
   }
   found
 }
@@ -128,12 +128,12 @@ fn verifyInstructionModes(
     }
     .Move(_, source) => {
       if isLentParameter(function, source) {
-        found.add "{at}: %{source.value} is a parameter the caller keeps the count of, so it cannot be moved out of"
+        found.append "{at}: %{source.value} is a parameter the caller keeps the count of, so it cannot be moved out of"
       }
     }
     .Release(slot) => {
       if isLentParameter(function, slot) {
-        found.add "{at}: %{slot.value} is a parameter the caller keeps the count of, so it is never released"
+        found.append "{at}: %{slot.value} is a parameter the caller keeps the count of, so it is never released"
       }
     }
     _ => {}
@@ -153,7 +153,7 @@ fn checkKeptOperand(
     return
   }
   if argument.ownership != Ownership.Owned {
-    found.add "{at}: {what} keeps %{argument.slot.value}, so the operand has to be `owned`"
+    found.append "{at}: {what} keeps %{argument.slot.value}, so the operand has to be `owned`"
     return
   }
   checkMovedOperand function, at, argument, found
@@ -166,7 +166,7 @@ fn checkMovedOperand(function: IrFunction, at: String, argument: Argument, var f
   if !isLentParameter(function, argument.slot) {
     return
   }
-  found.add "{at}: %{argument.slot.value} is a parameter the caller keeps the count of, so it cannot be moved out of"
+  found.append "{at}: %{argument.slot.value} is a parameter the caller keeps the count of, so it cannot be moved out of"
 }
 
 /** Every argument of a call carries exactly the mode the callee's signature asks for - it is one contract, not two. */
@@ -193,10 +193,10 @@ fn checkArgumentModes(
       continue
     }
     if wanted == Ownership.Owned {
-      found.add "{at}: {callee} keeps argument {index}, so %{argument.slot.value} has to be `owned`"
+      found.append "{at}: {callee} keeps argument {index}, so %{argument.slot.value} has to be `owned`"
       continue
     }
-    found.add "{at}: {callee} borrows argument {index}, so %{argument.slot.value} cannot be `owned`"
+    found.append "{at}: {callee} borrows argument {index}, so %{argument.slot.value} cannot be `owned`"
   }
 }
 
@@ -233,7 +233,7 @@ fn verifyFlow(
   const order = reverseOf postorderOf(function)
   var entry: List<List<Int>> = []
   for _ in 0..blockCount {
-    entry.add filledStates(width, unknownState)
+    entry.append filledStates(width, unknownState)
   }
   entry.set 0, initialState(function, counted, width)
   var ignored: List<String> = []
@@ -244,7 +244,7 @@ fn verifyFlow(
     isChanged = false
     rounds = rounds + 1
     if rounds > blockCount + 2 {
-      found.add "{function.name}: the ownership of the slots did not settle"
+      found.append "{function.name}: the ownership of the slots did not settle"
       return
     }
     for block in order {
@@ -284,7 +284,7 @@ fn initialState(function: IrFunction, counted: Counted, width: Int): List<Int> {
 fn filledStates(count: Int, value: Int): List<Int> {
   var filled: List<Int> = []
   for _ in 0..count {
-    filled.add value
+    filled.append value
   }
   filled
 }
@@ -293,7 +293,7 @@ fn reverseOf(order: List<Int>): List<Int> {
   var reversed: List<Int> = []
   var at = order.length() - 1
   while at >= 0 {
-    reversed.add order[at]
+    reversed.append order[at]
     at = at - 1
   }
   reversed
@@ -359,7 +359,7 @@ fn conditionalOutPositions(program: IrProgram, function: IrFunction, counted: Co
 fn filledFlags(count: Int, value: Bool): List<Bool> {
   var filled: List<Bool> = []
   for _ in 0..count {
-    filled.add value
+    filled.append value
   }
   filled
 }
@@ -415,7 +415,7 @@ fn runInstruction(
       return
     }
     if reports && state[position] == owningState {
-      found.add "{at}: %{target.value} is overwritten while it still owns a value"
+      found.append "{at}: %{target.value} is overwritten while it still owns a value"
     }
     state.set position, owningState
   }
@@ -461,11 +461,11 @@ fn runTerminator(
     }
     const slot = counted.slots[position]
     if state[position] == owningState {
-      found.add "{at}: %{slot.value} still owns a value where the function returns"
+      found.append "{at}: %{slot.value} still owns a value where the function returns"
       continue
     }
     if state[position] == conflictState {
-      found.add "{at}: %{slot.value} owns a value on one path to this `return` and not on another"
+      found.append "{at}: %{slot.value} owns a value on one path to this `return` and not on another"
     }
   }
 }
@@ -479,20 +479,20 @@ fn isUnreachable(terminator: Terminator): Bool {
 
 fn reportUse(at: String, slot: Slot, state: Int, var found: List<String>) {
   if state == emptyState {
-    found.add "{at}: %{slot.value} is used after it was moved out of or released"
+    found.append "{at}: %{slot.value} is used after it was moved out of or released"
     return
   }
   if state == conflictState {
-    found.add "{at}: %{slot.value} owns a value on one path here and not on another"
+    found.append "{at}: %{slot.value} owns a value on one path here and not on another"
   }
 }
 
 fn reportRelease(at: String, slot: Slot, state: Int, var found: List<String>) {
   if state == emptyState {
-    found.add "{at}: %{slot.value} is released twice"
+    found.append "{at}: %{slot.value} is released twice"
     return
   }
   if state == conflictState {
-    found.add "{at}: %{slot.value} is released on a path where it holds no value"
+    found.append "{at}: %{slot.value} is released on a path where it holds no value"
   }
 }

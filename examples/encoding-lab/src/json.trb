@@ -43,9 +43,9 @@ fn toSnakeCase(name: String): String {
   for character in name.chars() {
     const lower = character.toLowerCase()
     if lower != character {
-      out.add '_'
+      out.append '_'
     }
-    out.add lower
+    out.append lower
   }
   String.from out
 }
@@ -59,7 +59,7 @@ fn fromSnakeCase(name: String): String {
       upper = true
       continue
     }
-    out.add(if upper { character.toUpperCase() } else { character })
+    out.append(if upper { character.toUpperCase() } else { character })
     upper = false
   }
   String.from out
@@ -149,14 +149,14 @@ public type JsonEncoder with Encoder {
     const _length = length
     before()
     output = output + "["
-    frames.add JsonFrame(.Items)
+    frames.append JsonFrame(.Items)
   }
 
   var fn map(length: Int?) {
     const _length = length
     before()
     output = output + openBrace
-    frames.add JsonFrame(.Entries)
+    frames.append JsonFrame(.Entries)
   }
 
   /**
@@ -166,14 +166,14 @@ public type JsonEncoder with Encoder {
   var fn record(typeName: String) {
     const _typeName = typeName
     before()
-    frames.add JsonFrame(.Fields)
+    frames.append JsonFrame(.Fields)
   }
 
   /** Externally tagged: a case with fields is `{"Rejected": {...}}`, a case without fields is `"Draft"`. */
   var fn variant(typeName: String, name: String) {
     const _typeName = typeName
     before()
-    frames.add JsonFrame(.Variant, variantName: name)
+    frames.append JsonFrame(.Variant, variantName: name)
   }
 
   var fn field(name: String) {
@@ -334,7 +334,7 @@ type JsonParser {
       }
       position = position + 1
       const found = value()?
-      fields.add EncodedField(naming.original(key), found)
+      fields.append EncodedField(naming.original(key), found)
       skipWhitespace()
       if !atEnd() && characters[position] == ',' {
         position = position + 1
@@ -354,7 +354,7 @@ type JsonParser {
     skipWhitespace()
     while !atEnd() && characters[position] != ']' {
       const found = value()?
-      items.add found
+      items.append found
       skipWhitespace()
       if !atEnd() && characters[position] == ',' {
         position = position + 1
@@ -388,7 +388,7 @@ type JsonParser {
           other => other
         }
       }
-      out.add character
+      out.append character
       position = position + 1
     }
     if atEnd() {
@@ -401,7 +401,7 @@ type JsonParser {
   private var fn word(): Result<EncodedValue, DecodeError> {
     var out: List<Char> = []
     while !atEnd() && characters[position].isLetter() {
-      out.add characters[position]
+      out.append characters[position]
       position = position + 1
     }
     const found = String.from out
@@ -426,7 +426,7 @@ type JsonParser {
       if character == '.' || character == 'e' || character == 'E' {
         floating = true
       }
-      out.add character
+      out.append character
       position = position + 1
     }
     const found = String.from out

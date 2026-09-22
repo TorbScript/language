@@ -42,8 +42,8 @@ fn <name>(..., ...<name>: <Type>): <ReturnType> { ... }
 1. **`...name: Type` inside a parameter list declares a variadic parameter, and its body sees `name` as a
    `List<Type>`.** It is written last, and every positional argument from its position onward fills it.
 
-2. **A call spreads an `Iterable<Type>` into a variadic parameter with `...expression`.** Spreading works with any
-   type that implements the `Iterable` trait, not only `List`, so a `Set` spreads the same way a `List` does.
+2. **A call spreads an `Iterate<Type>` into a variadic parameter with `...expression`.** Spreading works with any
+   type that implements the `Iterate` trait, not only `List`, so a `Set` spreads the same way a `List` does.
 
    ```trb check
    fn sumAll(...numbers: Int): Int {

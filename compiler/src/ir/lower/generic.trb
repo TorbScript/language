@@ -81,7 +81,7 @@ public fn dispatchedMember(
       const applied = substituted lowering, bound
       // A **static** member of a trait-typed type is no call on a value: there is no payload to erase, object safety keeps
       // such a member out of every table, and `Traits([Map<Key, Value>])` is a closed type `witnessFor` names the one
-      // implementation of. `Target.from self` inside `Iterable.to` is exactly that, and it is why the table of a
+      // implementation of. `Target.from self` inside `Iterate.to` is exactly that, and it is why the table of a
       // collector's `Map` could not be reached. `.Forwarded` already asked the same question
       if const Some(found) = subject {
         if !takesSelf(lowering, symbol) {
@@ -121,7 +121,7 @@ fn parameterFormOf(parameter: ParameterId): TypeForm {
 
 /**
  * Whether a member has a receiver at all. A **static** member of a generic parameter that turned out to be a trait type
- * (`Target.from self` inside `fn to<Target: From<Iterable<Item>>>`) is no call on a *value*: there is no payload to
+ * (`Target.from self` inside `fn to<Target: From<Iterate<Item>>>`) is no call on a *value*: there is no payload to
  * erase, `Traits([List<Int>])` is a closed type like any other, and `witnessFor` names the one implementation of it. So
  * such a call is an ordinary static one and not a dynamic call the table of a value would have to hold - which is what
  * object safety says about it as well (a static member is never in a table).
@@ -283,7 +283,7 @@ fn memberOfImplementationDispatch(
   }
   // Which declaration really runs is the same question a witness table asks, and it has three answers and not one: the
   // implementation, the default of the requiring trait, and the default of any **other** trait of the target's closure.
-  // `Map.add` is written by `Map` and required by `Collection`, so `TrieMap.from`'s `addAll` had nothing to call
+  // `Slice.slice` is required by `Slice` and written by `List`, so a trait-typed list's slice would have nothing to call
   const member = providerOfMember lowering, target, implementation, symbol, name
   var mapping = memberMappingOf lowering, member, target, bound
   addOwnArguments lowering, mapping, member, typeArguments
@@ -342,8 +342,7 @@ fn dynamicDispatch(
   }
   const name = lowering.checker.symbolAt(symbol).name
   // The bound a call resolved is the trait that *requires* the member, and another trait of the closure may be the one
-  // that writes it: `Slice.slice` is required and `List` gives it a body, exactly as `Collection.add` is required and
-  // `Map` gives it one. It is the third question `providerOfMember` asks, and a table asks it for the same reason
+  // that writes it: `Slice.slice` is required and `List` gives it a body. It is the third question `providerOfMember` asks, and a table asks it for the same reason
   const declared = traitMemberNamed(lowering, bound, name) ?? symbol
   const member = providedInClosure lowering, declared, target, name
   var mapping = memberMappingOf lowering, member, target, bound
@@ -385,10 +384,10 @@ fn providedInClosure(var lowering: Lowering, declared: SymbolId, target: TypeId,
 
 /**
  * The dispatch of a member the **lowering itself** calls, where there is no call site in the source whose resolution
- * could be read: `iterator` and `next` of a `for` over a collection.
+ * could be read: `iterate` and `next` of a `for` over a collection.
  *
  * It asks exactly the question a written call asks - is the receiver a trait-typed value or a concrete type - so such a
- * call reaches the very function the source `xs.iterator()` would reach, and the two can never disagree.
+ * call reaches the very function the source `xs.iterate()` would reach, and the two can never disagree.
  */
 public fn dispatchedOn(
   var lowering: Lowering,
@@ -613,11 +612,11 @@ public fn objectTypeOf(var lowering: Lowering, bounds: List<TypeId>): IrTypeId {
   // first - otherwise the tables `lowerTraitValue` builds and the type of the slot they land in disagree
   var applied: List<TypeId> = []
   for bound in bounds {
-    applied.add substituted(lowering, bound)
+    applied.append substituted(lowering, bound)
   }
   var traits: List<TraitId> = []
   for bound in applied {
-    traits.add instantiateTrait(lowering.program, lowering.checker, lowering.instantiation, bound)
+    traits.append instantiateTrait(lowering.program, lowering.checker, lowering.instantiation, bound)
   }
   lowering.program.internType IrType.Object(traits)
 }
@@ -625,8 +624,8 @@ public fn objectTypeOf(var lowering: Lowering, bounds: List<TypeId>): IrTypeId {
 /**
  * Whether every bound of a coercion is closed after the arguments of the enclosing instance have been substituted.
  *
- * A bound that is not is a **finding** and not an internal error: `Iterable.filter` coerces its `Filtered` stage to
- * `Iterable<Item>`, and the `Item` the checker recorded there belongs to the *stage's* parameter list rather than to the
+ * A bound that is not is a **finding** and not an internal error: `Iterate.filter` coerces its `Filtered` stage to
+ * `Iterate<Item>`, and the `Item` the checker recorded there belongs to the *stage's* parameter list rather than to the
  * instance's, so nothing has a value for it. Closing that is a record of the checker, and a body that hits it is blocked
  * for a reason of its own anyway: every stage takes a closure.
  */
@@ -670,10 +669,10 @@ public fn lowerTraitValue(
       const found = boundIndexOf lowering, inner, applied
       if found >= 0 {
         const empty: List<Int> = []
-        tables.add WitnessSource(WitnessRoot.Value(Reference(value, []), found), empty)
+        tables.append WitnessSource(WitnessRoot.Value(Reference(value, []), found), empty)
         continue
       }
-      // `List<Item>` narrowed to `Iterable<Item>`: the table of a **supertrait** of one of the bounds, which is the
+      // `List<Item>` narrowed to `Iterate<Item>`: the table of a **supertrait** of one of the bounds, which is the
       // `nested` list of the table the value already carries (5.6 named this as what needs it)
       const path = match narrowingPathOf(lowering, inner, subject, applied) {
         Some(one) => one
@@ -687,7 +686,7 @@ public fn lowerTraitValue(
         .Value(_, index) => WitnessRoot.Value Reference(value, []), index
         _ => path.root
       }
-      tables.add WitnessSource(root, path.steps)
+      tables.append WitnessSource(root, path.steps)
       continue
     }
     const built = match witnessTableOf(lowering, subject, applied, at) {
@@ -697,7 +696,7 @@ public fn lowerTraitValue(
       }
     }
     const empty: List<Int> = []
-    tables.add WitnessSource(WitnessRoot.Table(built), empty)
+    tables.append WitnessSource(WitnessRoot.Table(built), empty)
   }
   emit builder, Instruction.TraitValue(target, owned(value), tables)
   true

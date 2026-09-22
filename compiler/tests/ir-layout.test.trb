@@ -26,7 +26,7 @@ fn recordLayout(var program: IrProgram, name: String, fields: List<FieldLayout>)
 fn tupleLayout(var program: IrProgram, name: String, annotations: List<IrTypeId>): LayoutId {
   var fields: List<FieldLayout> = []
   for index in 0..annotations.length() {
-    fields.add FieldLayout("{index}", annotations[index])
+    fields.append FieldLayout("{index}", annotations[index])
   }
   const reserved = program.reserveLayout name, LayoutKind.Tuple
   const layout = program.layoutAt reserved.layout
@@ -40,8 +40,8 @@ fn variantLayout(var program: IrProgram, name: String, names: List<String>, case
   var variants: List<VariantLayout> = []
   for index in 0..cases.length() {
     const first = fields.length()
-    fields.addAll cases[index]
-    variants.add VariantLayout(names[index], first, cases[index].length())
+    fields.appendAll cases[index]
+    variants.append VariantLayout(names[index], first, cases[index].length())
   }
   const layout = program.layoutAt reserved.layout
   program.setLayout reserved.layout, layout.copy(fields: fields, variants: variants, isBuilt: true)
@@ -79,7 +79,7 @@ group "Layouts" {
     const named = recordLayout program, "T_main_Named", [FieldLayout("name", strings), FieldLayout("age", int64)]
     var many: List<FieldLayout> = []
     for index in 0..5 {
-      many.add FieldLayout("field{index}", int64)
+      many.append FieldLayout("field{index}", int64)
     }
     const big = recordLayout program, "T_main_Big", many
     finishProgram program
@@ -95,7 +95,7 @@ group "Layouts" {
     const int64 = program.internType IrType.Integer(64, true)
     var many: List<FieldLayout> = []
     for index in 0..5 {
-      many.add FieldLayout("field{index}", int64)
+      many.append FieldLayout("field{index}", int64)
     }
     const big = recordLayout program, "T_main_Big", many
     const bigType = program.internType IrType.Record(big)
@@ -248,9 +248,9 @@ group "Mangling" {
   test "a name is the source path plus the arguments, and nothing else" {
     var program = IrProgram()
     const int64 = program.internType IrType.Integer(64, true)
-    const list = SymbolPath "std/prelude", "collections/list", ["ArrayList"], "add"
+    const list = SymbolPath "std/prelude", "collections/list", ["ArrayList"], "append"
     assert(
-      functionName(program, list, [int64]) == "t_std_x2f_prelude_collections_x2f_list_ArrayList_add__Int64"
+      functionName(program, list, [int64]) == "t_std_x2f_prelude_collections_x2f_list_ArrayList_append__Int64"
     )
     assert(functionName(program, SymbolPath("", "main", [], "translated"), []) == "t_main_translated")
     assert(layoutName(program, SymbolPath("", "main", [], "Point"), []) == "T_main_Point")
@@ -287,20 +287,20 @@ group "Mangling" {
     assert(canonicalSignature(program, reference) == "Function_ref_Int64_to_Bool")
     const show = program.internTrait IrTrait(SymbolId(3), SymbolPath("std/prelude", "convert", [], "Show"), [])
     const iterable = program.internTrait(
-      IrTrait(SymbolId(4), SymbolPath("std/prelude", "iteration", [], "Iterable"), [int64])
+      IrTrait(SymbolId(4), SymbolPath("std/prelude", "iteration", [], "Iterate"), [int64])
     )
     assert(canonicalTrait(program, show) == "std_x2f_prelude_convert_Show")
-    assert(canonicalTrait(program, iterable) == "std_x2f_prelude_iteration_Iterable_Int64")
+    assert(canonicalTrait(program, iterable) == "std_x2f_prelude_iteration_Iterate_Int64")
     const object = program.internType IrType.Object([show, iterable])
     assert(
       canonicalType(program, object)
-        == "Object_std_x2f_prelude_convert_Show_std_x2f_prelude_iteration_Iterable_Int64"
+        == "Object_std_x2f_prelude_convert_Show_std_x2f_prelude_iteration_Iterate_Int64"
     )
     const target = program.internType IrType.Integer(32, true)
     assert(witnessTableName(program, show, target) == "w_std_x2f_prelude_convert_Show__Int32")
     assert(
       witnessTableName(program, iterable, target)
-        == "w_std_x2f_prelude_iteration_Iterable__Int32_Int64"
+        == "w_std_x2f_prelude_iteration_Iterate__Int32_Int64"
     )
   }
 

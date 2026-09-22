@@ -96,26 +96,26 @@ public fn nativeSnippetProblems(typed: TypedSnippets, options: NativeOptions): R
     const refused = refusalsOf checked, paths, module, isChecked
     if !refused.isEmpty() {
       if isChecked && snippet.hasNativeNote {
-        refusedPages.add snippet.path
+        refusedPages.append snippet.path
         continue
       }
-      problems.add DocumentationProblem(snippet.path, snippet.line, refusalNote(snippet, refused))
+      problems.append DocumentationProblem(snippet.path, snippet.line, refusalNote(snippet, refused))
       continue
     }
     if snippet.kind == SnippetKind.Running {
-      runnable.add snippet
-      modules.add module
+      runnable.append snippet
+      modules.append module
     }
   }
   // The note is held to the truth the other way as well, so that it goes away when the back end catches up
   for (path, line) in noted {
     if !refusedPages.contains(path) {
       const note = "Every block of this page builds natively: the line `{nativeNote}` is no longer true, remove it"
-      problems.add DocumentationProblem(path, line, note)
+      problems.append DocumentationProblem(path, line, note)
     }
   }
   if !runnable.isEmpty() {
-    problems.addAll(runSnippets(checked, paths, runnable, modules, options)?)
+    problems.appendAll(runSnippets(checked, paths, runnable, modules, options)?)
   }
   Ok problems
 }
@@ -150,22 +150,22 @@ public fn refusalsOf(checked: Checked, paths: List<String>, module: ModuleId, se
   insertOwnership lowering.program
   var found: List<String> = []
   for problem in lowering.problems {
-    found.add problem.diagnostic.message
+    found.append problem.diagnostic.message
   }
   for blocked in lowering.unsupported {
-    found.add blocked.what
+    found.append blocked.what
   }
   for what in lowering.program.planned {
-    found.add what
+    found.append what
   }
   for problem in lowering.program.problems {
-    found.add "internal error: {problem}"
+    found.append "internal error: {problem}"
   }
   if !found.isEmpty() {
     return found
   }
   for problem in verifyOwnedProgram(lowering.program) {
-    found.add "internal error: {problem}"
+    found.append "internal error: {problem}"
   }
   if !found.isEmpty() {
     return found
@@ -198,7 +198,7 @@ fn runSnippets(
   for snippet in runnable {
     const name = entryNameOf lowering, modules[index]
     const called = if hasFunction(lowering, name) { name } else { "" }
-    entries.add ProgramEntry(called, markerOf(snippet))
+    entries.append ProgramEntry(called, markerOf(snippet))
     index = index + 1
   }
   const emission = emitProgram lowering.program, entries
@@ -238,10 +238,10 @@ fn compileProgram(source: String, binary: String, runtime: String): Result<Strin
   var arguments = ["-std=c11", "-O0", "-g0", "-I{joinPath(runtime, "include")}", "-o", binary, source]
   for entry in File.list(runtime)? {
     if entry.endsWith(".c") {
-      arguments.add joinPath(runtime, entry)
+      arguments.append joinPath(runtime, entry)
     }
   }
-  arguments.add "-lm"
+  arguments.append "-lm"
   const output = Process.run(compiler, arguments)?
   if output.exitCode == 0 {
     return Ok ""
@@ -285,7 +285,7 @@ public fn outputProblems(snippets: List<Snippet>, output: String, exitCode: Int)
     const line = withoutTrailingSpaces raw
     if const Some(snippet) = snippets.find({ markerOf(_) == line }) {
       current = snippet.name
-      started.add current
+      started.append current
       pieces.set current, []
       continue
     }
@@ -293,7 +293,7 @@ public fn outputProblems(snippets: List<Snippet>, output: String, exitCode: Int)
       continue
     }
     var piece = pieces.get(current) ?? []
-    piece.add line
+    piece.append line
     pieces.set current, piece
   }
   // The summary a run of entries ends with belongs to no block: an empty line and `0 passed, 0 failed (N files)`
@@ -313,20 +313,20 @@ public fn outputProblems(snippets: List<Snippet>, output: String, exitCode: Int)
       Some(found) => found
       None => {
         const note = "This `trb run` block did not run: a block before it ended the program with exit code {exitCode}"
-        problems.add DocumentationProblem(snippet.path, snippet.line, note)
+        problems.append DocumentationProblem(snippet.path, snippet.line, note)
         continue
       }
     }
     const printed = shownLines piece
     if exitCode != 0 && snippet.name == current {
       const note = "This `trb run` block ended the program with exit code {exitCode}. It printed: {printed}"
-      problems.add DocumentationProblem(snippet.path, snippet.line, note)
+      problems.append DocumentationProblem(snippet.path, snippet.line, note)
       continue
     }
     if piece != snippet.expectedOutput {
       const expected = shownLines snippet.expectedOutput
       const note = "This `trb run` block printed {printed}, and its `// prints` comments say {expected}"
-      problems.add DocumentationProblem(snippet.path, snippet.line, note)
+      problems.append DocumentationProblem(snippet.path, snippet.line, note)
     }
   }
   problems

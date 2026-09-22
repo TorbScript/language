@@ -20,7 +20,7 @@ public fn parseType(var parser: Parser): TypeReference {
   }
   var members = [first]
   while parser.eat(TokenKind.Ampersand) || parser.eat(TokenKind.Plus) {
-    members.add parseSingleType(parser)
+    members.append parseSingleType(parser)
   }
   TypeReference TypeKind.Intersection(members), start.to(parser.previousSpan())
 }
@@ -81,7 +81,7 @@ fn parseNamedType(var parser: Parser): TypeKind {
   var path = [parser.nameOrKeyword()]
   while parser.isAt(TokenKind.Dot) && parser.kindAt(1) == TokenKind.Identifier {
     parser.bump()
-    path.add parser.name()
+    path.append parser.name()
   }
   const arguments = if parser.eat(TokenKind.Less) { parser.commaSeparated TokenKind.Greater, parseType } else { [] }
   TypeKind.Named path, arguments
@@ -92,7 +92,7 @@ fn parseLiteralType(var parser: Parser): TypeKind {
   var literals = [parseTypeLiteral(parser)]
   while parser.eat(TokenKind.Pipe) {
     if startsLiteral(parser.kind()) {
-      literals.add parseTypeLiteral(parser)
+      literals.append parseTypeLiteral(parser)
     } else if parser.isAt(TokenKind.FloatLiteral) {
       parser.errorHere "A float cannot be a literal type"
       parser.bump()

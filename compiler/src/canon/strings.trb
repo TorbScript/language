@@ -31,8 +31,8 @@ public fn stringEdits(source: String, tokens: List<Token>): (edits: List<Edit>, 
     match token.kind {
       .TextLiteral(_) => {
         match editForString(source, token) {
-          .Found(edit) => edits.add edit
-          .Skip(reason) => skipped.add Skipped(token.span.start, reason)
+          .Found(edit) => edits.append edit
+          .Skip(reason) => skipped.append Skipped(token.span.start, reason)
           .Nothing => {}
         }
       }
@@ -129,7 +129,7 @@ fn replacementsFor(source: String, lines: List<Line>, missingLineBreak: Bool, re
 
 fn addIfChanged(var replacements: List<Replacement>, source: String, start: Int, end: Int, replacement: String) {
   if source[start..end] != replacement {
-    replacements.add Replacement(start, end, replacement)
+    replacements.append Replacement(start, end, replacement)
   }
 }
 
@@ -163,7 +163,7 @@ fn linesOf(source: String, body: Int, close: Int): List<Line> {
     const content = start + (indexOfFirstNonSpaceOrTab(text) ?? text.byteLength())
     const rest = source[content..source.byteLength()]
     const hasContent = !(rest.startsWith("\n") || rest.startsWith("\r") || content == close)
-    lines.add Line(start, content, end, hasContent, isTheClosingQuotes: content == close)
+    lines.append Line(start, content, end, hasContent, isTheClosingQuotes: content == close)
     if lineBreak.isNone() {
       return lines
     }

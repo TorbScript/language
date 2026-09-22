@@ -38,7 +38,7 @@ when it runs.
 
    ```trb fragment
    var fn route(path: String, to: String) {
-     routes.add Route(path, to)
+     routes.append Route(path, to)
    }
    ```
 
@@ -120,7 +120,7 @@ type ServerConfig {
 
   /** More than setting a field, so it is a method. */
   var fn route(path: String, to: String) {
-    routes.add Route(path, to)
+    routes.append Route(path, to)
   }
 }
 

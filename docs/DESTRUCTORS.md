@@ -231,8 +231,8 @@ declaration. `close()` may read and change the object's fields and call its othe
 error: `close` may not keep `self`: the object is being released
   --> src/main.trb:6:15
    |
- 6 |     registry.add self
-   |                  ^^^^
+ 6 |     registry.append self
+   |                     ^^^^
    = `close` runs because the last reference went away, so nothing may hold the object afterwards
 ```
 
@@ -409,7 +409,7 @@ inside a task.
 wants it, and awaits there:
 
 ```trb fragment
-fn upload(items: Iterable<Bytes>, path: Path): Task<Result<Void, IoError>> {
+fn upload(items: Iterate<Bytes>, path: Path): Task<Result<Void, IoError>> {
   using sink = File.create(path)?
   for item in items {
     sink.add(item).await()?

@@ -70,21 +70,21 @@ type <Name> with <Trait> { ... }        satisfies <Trait> and every one of its s
 
 5. **A trait's own `with` list is a promise about every instantiation of it, so an implementation of a supertrait
    *for the trait type* may not be narrower than the promise.** Member lookup reads the `with` list, so
-   `trait Mound<Item> with From<Iterable<Item>>` makes `Mound.from` resolve for every `Item` at all - and an
-   `extend<Item: Hash> Mound<Item> with From<Iterable<Item>>` beside it would leave the rest of them with a supertrait
+   `trait Mound<Item> with From<Iterate<Item>>` makes `Mound.from` resolve for every `Item` at all - and an
+   `extend<Item: Hash> Mound<Item> with From<Iterate<Item>>` beside it would leave the rest of them with a supertrait
    and nothing behind it. Where the capability really is conditional, it belongs on the member instead
-   (`static fn of(...items: Item): Self where Self: From<Iterable<Item>>`), which is where a bound can be checked at
+   (`static fn of(...items: Item): Self where Self: From<Iterate<Item>>`), which is where a bound can be checked at
    the call.
 
    ```trb error
-   trait Mound<Item> with From<Iterable<Item>> {
+   trait Mound<Item> with From<Iterate<Item>> {
      fn size(): Int
    }
 
-   type Heap<Item: Hash> with Mound<Item>, From<Iterable<Item>> {
+   type Heap<Item: Hash> with Mound<Item>, From<Iterate<Item>> {
      stored: Int
 
-     static fn from(values: Iterable<Item>): Heap<Item> {
+     static fn from(values: Iterate<Item>): Heap<Item> {
        Self(0)
      }
 
@@ -93,8 +93,8 @@ type <Name> with <Trait> { ... }        satisfies <Trait> and every one of its s
      }
    }
 
-   extend<Item: Hash> Mound<Item> with From<Iterable<Item>> {
-     static fn from(values: Iterable<Item>): Mound<Item> {
+   extend<Item: Hash> Mound<Item> with From<Iterate<Item>> {
+     static fn from(values: Iterate<Item>): Mound<Item> {
        Heap.from(values)
      }
    }

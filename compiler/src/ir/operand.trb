@@ -46,11 +46,11 @@ public fn slotFactsOf(program: IrProgram, function: IrFunction): SlotFacts {
   var isCounted: List<Bool> = []
   var isParameter: List<Bool> = []
   for declaration in function.slots {
-    types.add declaration.annotation
-    isCounted.add containsCountedType(program, declaration.annotation)
+    types.append declaration.annotation
+    isCounted.append containsCountedType(program, declaration.annotation)
     match declaration.role {
-      .Parameter(_) => isParameter.add true
-      _ => isParameter.add false
+      .Parameter(_) => isParameter.append true
+      _ => isParameter.append false
     }
   }
   SlotFacts types, isCounted, isParameter
@@ -86,7 +86,7 @@ fn ownedOperand(slot: Slot): Operand {
 fn borrowedOperands(slots: List<Slot>): List<Operand> {
   var found: List<Operand> = []
   for slot in slots {
-    found.add borrowedOperand(slot)
+    found.append borrowedOperand(slot)
   }
   found
 }
@@ -94,7 +94,7 @@ fn borrowedOperands(slots: List<Slot>): List<Operand> {
 fn ownedOperands(arguments: List<Argument>): List<Operand> {
   var found: List<Operand> = []
   for argument in arguments {
-    found.add ownedOperand(argument.slot)
+    found.append ownedOperand(argument.slot)
   }
   found
 }
@@ -115,19 +115,19 @@ public fn operandsOf(program: IrProgram, facts: SlotFacts, instruction: Instruct
     .MakeUnique(reference) => borrowedOperands placeSlotsOf(reference)
     .Call(_, callee, arguments, witnesses, _) => {
       var found = callOperands program, callee, arguments
-      found.addAll borrowedOperands(witnessSlotsOf(witnesses))
+      found.appendAll borrowedOperands(witnessSlotsOf(witnesses))
       found
     }
     .CallClosure(_, callee, arguments) => {
       var found = [borrowedOperand(callee)]
-      found.addAll closureOperands(program, facts, callee, arguments)
+      found.appendAll closureOperands(program, facts, callee, arguments)
       found
     }
     // Every argument of a witness call is borrowed: the member's own parameter modes are not read here, which only
     // costs a retain nothing needed and never gets the count wrong
     .CallWitness(_, witness, _, arguments) => {
       var found = borrowedOperands witnessSlotsOf([witness])
-      found.addAll borrowedOperands(slotsOfArguments(arguments))
+      found.appendAll borrowedOperands(slotsOfArguments(arguments))
       found
     }
     // An intrinsic reads its operands and builds its answer out of them: `textConcat` allocates, it does not store
@@ -141,7 +141,7 @@ public fn operandsOf(program: IrProgram, facts: SlotFacts, instruction: Instruct
         return [ownedOperand(value.slot)]
       }
       var found = borrowedOperands placeSlotsOf(reference)
-      found.add ownedOperand(value.slot)
+      found.append ownedOperand(value.slot)
       found
     }
     .Tag(_, source) => [borrowedOperand(source)]
@@ -150,20 +150,20 @@ public fn operandsOf(program: IrProgram, facts: SlotFacts, instruction: Instruct
     .BoxNew(_, value) => [ownedOperand(value.slot)]
     .TraitValue(_, value, tables) => {
       var found = [ownedOperand(value.slot)]
-      found.addAll borrowedOperands(witnessSlotsOf(tables))
+      found.appendAll borrowedOperands(witnessSlotsOf(tables))
       found
     }
     // A fresh container reads nothing: its descriptors are static data
     .ContainerNew(_, _, _) => []
     .TakeOut(_, container, key, _) => {
       var found = borrowedOperands placeSlotsOf(container)
-      found.add borrowedOperand(key)
+      found.append borrowedOperand(key)
       found
     }
     .PutBack(container, key, value, _) => {
       var found = borrowedOperands placeSlotsOf(container)
-      found.add borrowedOperand(key)
-      found.add ownedOperand(value)
+      found.append borrowedOperand(key)
+      found.append ownedOperand(value)
       found
     }
     .Panic(message, _) => [borrowedOperand(message.slot)]
@@ -208,14 +208,14 @@ fn signatureOperands(signature: IrSignature, arguments: List<Argument>): List<Op
   for index in 0..arguments.length() {
     const slot = arguments[index].slot
     if index >= signature.parameters.length() {
-      found.add borrowedOperand(slot)
+      found.append borrowedOperand(slot)
       continue
     }
     if signature.parameters[index].ownership == Ownership.Owned {
-      found.add ownedOperand(slot)
+      found.append ownedOperand(slot)
       continue
     }
-    found.add borrowedOperand(slot)
+    found.append borrowedOperand(slot)
   }
   found
 }
@@ -224,9 +224,9 @@ fn captureOperands(captures: List<Capture>): List<Operand> {
   var found: List<Operand> = []
   for capture in captures {
     match capture {
-      .Value(slot) => found.add Operand(slot, true, false, false)
-      .Boxed(slot) => found.add Operand(slot, true, false, false)
-      .Place(reference) => found.addAll borrowedOperands(placeSlotsOf(reference))
+      .Value(slot) => found.append Operand(slot, true, false, false)
+      .Boxed(slot) => found.append Operand(slot, true, false, false)
+      .Place(reference) => found.appendAll borrowedOperands(placeSlotsOf(reference))
     }
   }
   found
@@ -237,7 +237,7 @@ public fn placeSlotsOf(reference: Reference): List<Slot> {
   var found = [reference.base]
   for step in reference.steps {
     if const .Element(_, index, _, _) = step {
-      found.add index
+      found.append index
     }
   }
   found
@@ -247,7 +247,7 @@ fn witnessSlotsOf(witnesses: List<WitnessSource>): List<Slot> {
   var found: List<Slot> = []
   for witness in witnesses {
     if const .Value(place, _) = witness.root {
-      found.addAll placeSlotsOf(place)
+      found.appendAll placeSlotsOf(place)
     }
   }
   found
@@ -256,7 +256,7 @@ fn witnessSlotsOf(witnesses: List<WitnessSource>): List<Slot> {
 fn slotsOfArguments(arguments: List<Argument>): List<Slot> {
   var found: List<Slot> = []
   for argument in arguments {
-    found.add argument.slot
+    found.append argument.slot
   }
   found
 }
@@ -288,7 +288,7 @@ fn movedSlotsOf(arguments: List<Argument>): List<Slot> {
   var found: List<Slot> = []
   for argument in arguments {
     if argument.ownership == Ownership.Owned && argument.isLastUse {
-      found.add argument.slot
+      found.append argument.slot
     }
   }
   found
@@ -326,7 +326,7 @@ public fn withOperands(instruction: Instruction, decided: List<Argument>): Instr
     .Intrinsic(target, intrinsic, arguments, at) => {
       var slots: List<Slot> = []
       for index in 0..arguments.length() {
-        slots.add decidedAt(decided, index).slot
+        slots.append decidedAt(decided, index).slot
       }
       Instruction.Intrinsic target, intrinsic, slots, at
     }
@@ -378,7 +378,7 @@ fn takenArguments(arguments: List<Argument>, decided: List<Argument>, first: Int
   var taken: List<Argument> = []
   for index in 0..arguments.length() {
     const answer = decidedAt(decided, first + index)
-    taken.add answer.copy(place: arguments[index].place)
+    taken.append answer.copy(place: arguments[index].place)
   }
   taken
 }
@@ -388,11 +388,11 @@ fn withPlace(reference: Reference, decided: List<Argument>, first: Int): Referen
   var at = first + 1
   for step in reference.steps {
     if const .Element(item, _, missing, location) = step {
-      steps.add PathStep.Element(item, decidedAt(decided, at).slot, missing, location)
+      steps.append PathStep.Element(item, decidedAt(decided, at).slot, missing, location)
       at = at + 1
       continue
     }
-    steps.add step
+    steps.append step
   }
   Reference decidedAt(decided, first).slot, steps
 }

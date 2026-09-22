@@ -70,25 +70,25 @@ public fn buildSkill(documentation: Documentation): BuiltSkill {
   const excluded = documentation.pages.length() - pages.length()
   var carried: List<String> = ["index.md"]
   for page in pages {
-    carried.add page.path
+    carried.append page.path
   }
   var files: List<SkillFile> = []
   const body = skillBody documentation, pages, carried
-  problems.addAll body.problems
-  files.add SkillFile("SKILL.md", body.text)
-  files.add SkillFile("reference/index.md", referenceIndex(documentation, pages))
+  problems.appendAll body.problems
+  files.append SkillFile("SKILL.md", body.text)
+  files.append SkillFile("reference/index.md", referenceIndex(documentation, pages))
   for page in pages {
     // `reference/index.md` is the generated map of every page, which is worth more here than the root index
     if page.path == "index.md" {
       continue
     }
-    files.add SkillFile("reference/{page.path}", carriedText(page, carried))
+    files.append SkillFile("reference/{page.path}", carriedText(page, carried))
   }
-  problems.addAll danglingLinks(files)
+  problems.appendAll danglingLinks(files)
   const lines = linesOf(body.text).length()
   if lines > longestSkillBody {
     const note = "`SKILL.md` has {lines} lines. A skill body stays under {longestSkillBody}: move material into a page"
-    problems.add DocumentationProblem("SKILL.md", 0, note)
+    problems.append DocumentationProblem("SKILL.md", 0, note)
   }
   BuiltSkill files, problems, lines, pages.length(), excluded
 }
@@ -105,7 +105,7 @@ fn includedPages(documentation: Documentation): List<Page> {
     if role == "omit" {
       continue
     }
-    kept.add page
+    kept.append page
   }
   kept
 }
@@ -118,14 +118,14 @@ type WrittenBody {
 fn skillBody(documentation: Documentation, pages: List<Page>, carried: List<String>): WrittenBody {
   var problems: List<DocumentationProblem> = []
   var lines: List<String> = ["---", "name: {skillName}"]
-  lines.add "description: \"{skillDescription}\""
-  lines.add "---"
-  lines.add ""
-  lines.add "# TorbScript"
-  lines.add ""
-  lines.add "Paths below are relative to the directory of this file. Nothing but this file needs to be read up front:"
-  lines.add "every other file is opened when a question needs it."
-  lines.add ""
+  lines.append "description: \"{skillDescription}\""
+  lines.append "---"
+  lines.append ""
+  lines.append "# TorbScript"
+  lines.append ""
+  lines.append "Paths below are relative to the directory of this file. Nothing but this file needs to be read up front:"
+  lines.append "every other file is opened when a question needs it."
+  lines.append ""
   // Two sections are needed on every task and are short, so they stand in the body. The two that are long lookup
   // material are one `Read` away instead, which is what keeps the body inside the published budget of 500 lines -
   // and they are named as lookup material, not as reading, because a file read up front is paid on every task
@@ -135,47 +135,47 @@ fn skillBody(documentation: Documentation, pages: List<Page>, carried: List<Stri
   ]
   match pageWithRole(documentation, "model") {
     Some(page) => {
-      lines.addAll inlinedSection("The language in sixty seconds", page, carried)
+      lines.appendAll inlinedSection("The language in sixty seconds", page, carried)
     }
     None => {
-      problems.add DocumentationProblem("SKILL.md", 0, "No page carries `skill: model`")
+      problems.append DocumentationProblem("SKILL.md", 0, "No page carries `skill: model`")
     }
   }
-  lines.add "## Two files to look things up in"
-  lines.add ""
+  lines.append "## Two files to look things up in"
+  lines.append ""
   for (role, why) in referenced {
     match pageWithRole(documentation, role) {
       Some(page) => {
-        lines.add "- `reference/{page.path}` - {why}"
+        lines.append "- `reference/{page.path}` - {why}"
       }
       None => {
-        problems.add DocumentationProblem("SKILL.md", 0, "No page carries `skill: {role}`")
+        problems.append DocumentationProblem("SKILL.md", 0, "No page carries `skill: {role}`")
       }
     }
   }
-  lines.add ""
-  lines.add "Search them instead of reading them whole: `grep -n \"^###\" <file>` lists the sections of either one, and a"
-  lines.add "section is a few dozen lines. Before handing over code, scan the section headings of the second one."
-  lines.add ""
+  lines.append ""
+  lines.append "Search them instead of reading them whole: `grep -n \"^###\" <file>` lists the sections of either one, and a"
+  lines.append "section is a few dozen lines. Before handing over code, scan the section headings of the second one."
+  lines.append ""
   match pageWithRole(documentation, "verify") {
     Some(page) => {
-      lines.addAll inlinedSection("How to verify your work", page, carried)
+      lines.appendAll inlinedSection("How to verify your work", page, carried)
     }
     None => {
-      problems.add DocumentationProblem("SKILL.md", 0, "No page carries `skill: verify`")
+      problems.append DocumentationProblem("SKILL.md", 0, "No page carries `skill: verify`")
     }
   }
-  lines.addAll navigation(documentation, pages)
+  lines.appendAll navigation(documentation, pages)
   WrittenBody lines.joined(separator: "\n"), problems
 }
 
 /** One section of the body: the heading, the page's body one level deeper, and where it came from. */
 fn inlinedSection(heading: String, page: Page, carried: List<String>): List<String> {
   var lines = ["## {heading}", ""]
-  lines.addAll demoted(page, carried)
-  lines.add ""
-  lines.add "Source: `reference/{page.path}`"
-  lines.add ""
+  lines.appendAll demoted(page, carried)
+  lines.append ""
+  lines.append "Source: `reference/{page.path}`"
+  lines.append ""
   lines
 }
 
@@ -200,18 +200,18 @@ fn demoted(page: Page, carried: List<String>): List<String> {
         openIndent = indentOf line
       }
       openFence = fence
-      lines.add line
+      lines.append line
       continue
     }
     if openFence > 0 {
-      lines.add line
+      lines.append line
       continue
     }
     if line.startsWith("#") {
-      lines.add "#{line}"
+      lines.append "#{line}"
       continue
     }
-    lines.add withRewrittenLinks(line, page.folder, carried, "reference/")
+    lines.append withRewrittenLinks(line, page.folder, carried, "reference/")
   }
   trimmedBlankLines lines
 }
@@ -231,14 +231,14 @@ fn carriedText(page: Page, carried: List<String>): String {
         openIndent = indentOf line
       }
       openFence = fence
-      lines.add line
+      lines.append line
       continue
     }
     if openFence > 0 {
-      lines.add line
+      lines.append line
       continue
     }
-    lines.add withRewrittenLinks(line, page.folder, carried, "")
+    lines.append withRewrittenLinks(line, page.folder, carried, "")
   }
   var text = lines.joined separator: "\n"
   if page.text.endsWith("\n") {
@@ -306,7 +306,7 @@ fn labelStartOf(head: String): Int? {
   var at = 0
   for character in head.chars() {
     if character == '[' {
-      open.add at
+      open.append at
     }
     if character == ']' && !open.isEmpty() {
       open.removeAt(open.length() - 1)
@@ -408,7 +408,7 @@ fn trimmedBlankLines(lines: List<String>): List<String> {
 fn danglingLinks(files: List<SkillFile>): List<DocumentationProblem> {
   var paths: List<String> = []
   for file in files {
-    paths.add file.path
+    paths.append file.path
   }
   var problems: List<DocumentationProblem> = []
   for file in files {
@@ -442,7 +442,7 @@ fn danglingLinks(files: List<SkillFile>): List<DocumentationProblem> {
         const resolved = normalizePath joinDocumentationPath(folder, path)
         if !paths.contains(resolved) {
           const note = "The link `{target}` leads to no file of the skill"
-          problems.add DocumentationProblem("{skillName}/{file.path}", number, note)
+          problems.append DocumentationProblem("{skillName}/{file.path}", number, note)
         }
       }
     }
@@ -472,7 +472,7 @@ fn linkTargetsOf(line: String): List<String> {
       }
     }
     if !isInsideCode && labelStartOf(head).isSome() {
-      targets.add tail.slice(0..end)
+      targets.append tail.slice(0..end)
     }
     rest = tail.slice((end + 1)..tail.byteLength())
   }
@@ -482,11 +482,11 @@ fn linkTargetsOf(line: String): List<String> {
 /** How to find the rest: the section indexes, a search, and the one map of every page. */
 fn navigation(documentation: Documentation, pages: List<Page>): List<String> {
   var lines: List<String> = ["## Where to look things up", ""]
-  lines.add "Every section has an index that lists its pages with one sentence each. Open the index of the section a"
-  lines.add "question belongs to, then the one page that answers it:"
-  lines.add ""
-  lines.add "| Section | What is in it |"
-  lines.add "|---------|---------------|"
+  lines.append "Every section has an index that lists its pages with one sentence each. Open the index of the section a"
+  lines.append "question belongs to, then the one page that answers it:"
+  lines.append ""
+  lines.append "| Section | What is in it |"
+  lines.append "|---------|---------------|"
   for folder in documentation.folders {
     if folder.path.isEmpty() || folder.path.contains("/") {
       continue
@@ -496,22 +496,22 @@ fn navigation(documentation: Documentation, pages: List<Page>): List<String> {
         // A folder whose index is not part of the skill has no file to point at
         if pages.any({ _.path == index.path }) {
           const summary = index.frontMatter.text("summary") ?? ""
-          lines.add "| `reference/{folder.path}/index.md` | {summary} |"
+          lines.append "| `reference/{folder.path}/index.md` | {summary} |"
         }
       }
       None => {}
     }
   }
-  lines.add ""
-  lines.add "To find a construct or a name directly, search: `grep -ril \"<word>\" reference/` names the pages, and"
-  lines.add "`reference/index.md` has every page's path and summary on one line each - search it, it is long:"
-  lines.add "`grep -i \"<word>\" reference/index.md`."
-  lines.add ""
-  lines.add "Every page is self-contained: it defines or links every term it uses, so one page is enough to answer one"
-  lines.add "question. A page marked `status: draft` may still be wrong, so verify it against the compiler. A page marked"
-  lines.add "`status: planned` describes a designed feature that does not compile yet, and its first line says so."
-  lines.add ""
-  lines.add "There are {pages.length()} pages."
+  lines.append ""
+  lines.append "To find a construct or a name directly, search: `grep -ril \"<word>\" reference/` names the pages, and"
+  lines.append "`reference/index.md` has every page's path and summary on one line each - search it, it is long:"
+  lines.append "`grep -i \"<word>\" reference/index.md`."
+  lines.append ""
+  lines.append "Every page is self-contained: it defines or links every term it uses, so one page is enough to answer one"
+  lines.append "question. A page marked `status: draft` may still be wrong, so verify it against the compiler. A page marked"
+  lines.append "`status: planned` describes a designed feature that does not compile yet, and its first line says so."
+  lines.append ""
+  lines.append "There are {pages.length()} pages."
   lines
 }
 
@@ -522,36 +522,36 @@ fn navigation(documentation: Documentation, pages: List<Page>): List<String> {
  */
 fn referenceIndex(documentation: Documentation, pages: List<Page>): String {
   var lines: List<String> = ["# The TorbScript documentation", ""]
-  lines.add "Every page of the reference, with what it answers. Search this file for a word, then open the one page"
-  lines.add "that answers the question. A page marked (planned) describes a feature that does not compile yet."
-  lines.add ""
-  lines.add "## Contents"
-  lines.add ""
+  lines.append "Every page of the reference, with what it answers. Search this file for a word, then open the one page"
+  lines.append "that answers the question. A page marked (planned) describes a feature that does not compile yet."
+  lines.append ""
+  lines.append "## Contents"
+  lines.append ""
   for folder in documentation.folders {
     if carried(pages, folder.path).isEmpty() {
       continue
     }
     const shown = if folder.path.isEmpty() { "the root" } else { folder.path }
-    lines.add "- {shown}"
+    lines.append "- {shown}"
   }
-  lines.add ""
+  lines.append ""
   for folder in documentation.folders {
     const own = carried pages, folder.path
     if own.isEmpty() {
       continue
     }
     const heading = if folder.path.isEmpty() { "The root" } else { folder.path }
-    lines.add "## {heading}"
-    lines.add ""
+    lines.append "## {heading}"
+    lines.append ""
     for page in own {
       const title = page.frontMatter.text("title") ?? ""
       const summary = page.frontMatter.text("summary") ?? ""
       const kind = page.frontMatter.text("kind") ?? ""
       const status = page.frontMatter.text("status") ?? "stable"
       const marked = if status == "stable" { kind } else { "{kind}, {status}" }
-      lines.add "- `{page.path}` - **{title}** ({marked}): {summary}"
+      lines.append "- `{page.path}` - **{title}** ({marked}): {summary}"
     }
-    lines.add ""
+    lines.append ""
   }
   lines.joined separator: "\n"
 }
@@ -583,21 +583,21 @@ public fn staleSkillFiles(out: String, skill: BuiltSkill): Result<List<String>, 
   var stale: List<String> = []
   var generated: List<String> = []
   for file in skill.files {
-    generated.add file.path
+    generated.append file.path
     const path = "{out}/{file.path}"
     if !File.exists(path) {
-      stale.add "{file.path} (missing)"
+      stale.append "{file.path} (missing)"
       continue
     }
     const text = File.readText(path)?
     if text.replace("\r\n", "\n") != file.text.replace("\r\n", "\n") {
-      stale.add "{file.path} (differs)"
+      stale.append "{file.path} (differs)"
     }
   }
   if File.isDirectory(out) {
     for path in filesBelow(out, "")? {
       if !generated.contains(path) {
-        stale.add "{path} (no page writes it)"
+        stale.append "{path} (no page writes it)"
       }
     }
   }
@@ -612,9 +612,9 @@ fn filesBelow(out: String, relative: String): Result<List<String>, IoError> {
   for entry in File.list(directory)? {
     const child = if relative.isEmpty() { entry } else { "{relative}/{entry}" }
     if File.isDirectory("{out}/{child}") {
-      found.addAll(filesBelow(out, child)?)
+      found.appendAll(filesBelow(out, child)?)
     } else {
-      found.add child
+      found.append child
     }
   }
   Ok found

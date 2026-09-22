@@ -48,7 +48,7 @@ const names = for user in users {
 const withoutB = names.filter { !_.startsWith("b") }
 print withoutB.toList()
 
-fn mapUsers(users: List<User>): Iterable<MappedUser> {
+fn mapUsers(users: List<User>): Iterate<MappedUser> {
   for user in users {
     MappedUser(name: user.name, age: user.age)
   }
@@ -91,7 +91,7 @@ families of `map`: `List.map` answers a `List` and `LazyList.map` answers a `Laz
 TorbScript has one family, and its `map` is lazy:
 
 ```trb fragment
-fn map<Output>(transform: (value: Item) => Output): Iterable<Output> {
+fn map<Output>(transform: (value: Item) => Output): Iterate<Output> {
   Mapped self, transform
 }
 ```
@@ -100,12 +100,12 @@ fn map<Output>(transform: (value: Item) => Output): Iterable<Output> {
 `std/iteration/src/stages.trb`. So the identical desugaring applied here gives **lazy for every subject**, including a
 list. There is no strict `map` for the strictness to follow.
 
-The alternative reading — a rule keyed on the static type of the subject, `List` eager and a trait-typed `Iterable`
+The alternative reading — a rule keyed on the static type of the subject, `List` eager and a trait-typed `Iterate`
 lazy — is worse than the trap it is meant to avoid. It would make
 
 ```trb fragment
 const a = for user in users { user.name }              // eager, `users` is a `List<User>`
-const b = for user in users.filter(active) { user.name }   // lazy, the filter answers an `Iterable<User>`
+const b = for user in users.filter(active) { user.name }   // lazy, the filter answers an `Iterate<User>`
 ```
 
 two different programs that differ in one word inside the head, and the word that decides is a type the reader has to
@@ -118,7 +118,7 @@ signature to a subexpression. **Rejected.**
 |---|---|---|
 | **`var sum = 0; for … { sum = sum + x; … }`** | works, because the body runs where it stands | forbidden, or silently operating on a copy — see section 8 |
 | **`return` and `?` in the body** | work, and mean what they mean in a loop statement | cannot work: the body outlives the function that wrote it |
-| **The same body in two positions** | one meaning: it runs, and the value is kept or discarded | two meanings: `fn f(): Iterable<X>` defers the body, `fn f()` runs it |
+| **The same body in two positions** | one meaning: it runs, and the value is kept or discarded | two meanings: `fn f(): Iterate<X>` defers the body, `fn f()` runs it |
 | **An endless or very large source** | cannot be walked; `.map`/`.filter`/`take` is the spelling | walks it, and fuses into one pass |
 
 The first three are the objections. The fourth is what lazy buys, and it is real: a loop expression over
@@ -220,14 +220,14 @@ print withoutB.toList()
 **needs gap 1.** `names` is a `List<String>`; `filter` is the ordinary lazy stage over it, and `toList()` pulls it.
 
 ```trb fragment
-fn mapUsers(users: List<User>): Iterable<MappedUser> {
+fn mapUsers(users: List<User>): Iterate<MappedUser> {
   for user in users {
     MappedUser(name: user.name, age: user.age)
   }
 }
 ```
 
-**needs gap 1.** A `List<MappedUser>` satisfies an `Iterable<MappedUser>` result without a conversion — the
+**needs gap 1.** A `List<MappedUser>` satisfies an `Iterate<MappedUser>` result without a conversion — the
 hand-written form of exactly this **type checks today** and runs.
 
 ### The lowering is the loop that exists, plus the list that exists
@@ -240,7 +240,7 @@ const names = for user in users { … }
 var result: List<String> = []
 for user in users {
   …
-  result.add …
+  result.append …
 }
 result
 ```
@@ -264,7 +264,7 @@ fn names(users: List<User>): List<String> {
     if user.name.startsWith("a") {
       continue
     }
-    result.add user.name
+    result.append user.name
   }
   result
 }
@@ -389,7 +389,7 @@ fn size(text: String): Result<Int, TooLong> {
 fn checked(texts: List<String>): Result<List<Int>, TooLong> {
   var result: List<Int> = []
   for text in texts {
-    result.add(size(text)?)
+    result.append(size(text)?)
   }
   Ok result
 }
@@ -459,7 +459,7 @@ fn halves(start: Int): List<Int> {
   var result: List<Int> = []
   while remaining > 1 {
     remaining = remaining / 2
-    result.add remaining
+    result.append remaining
   }
   result
 }
@@ -509,9 +509,9 @@ fn grid(rows: List<Int>, columns: List<Int>): List<List<(Int, Int)>> {
   for row in rows {
     var inner: List<(Int, Int)> = []
     for column in columns {
-      inner.add((row, column))
+      inner.append((row, column))
     }
-    outer.add inner
+    outer.append inner
   }
   outer
 }
@@ -552,8 +552,8 @@ be endless by its syntax. It can still be endless by a condition that never goes
 
 ### Rule 9 — the answer is a `List`, and the pipeline after it is the ordinary pipeline
 
-`List<Body>`, not `Iterable<Body>`. The loop has already run, so the value carries what it knows: `length()`,
-`[index]`, `Show`, `Equals`, and a `List` where a function wants an `Iterable`. Answering `Iterable` would hide that
+`List<Body>`, not `Iterate<Body>`. The loop has already run, so the value carries what it knows: `length()`,
+`[index]`, `Show`, `Equals`, and a `List` where a function wants an `Iterate`. Answering `Iterate` would hide that
 the elements are already in memory, which is the thing the eager/lazy question is about — a type that says "a
 sequence, do not count on how" would be a promise the construct does not keep in either direction.
 
@@ -570,20 +570,20 @@ syntax, and section 12 asks whether that is wanted enough to add a second spelli
 **2. One materialisation more than a fused pipeline.** `for x in xs { f x }.filter(p).toList()` builds a list, then
 walks it; `xs.map({ f _ }).filter(p).toList()` builds one. For the owner's example that is one list of names. Where it
 matters the pipeline is the answer, and rule 9's `List` is what makes the cost visible in the type instead of hidden
-behind an `Iterable`.
+behind an `Iterate`.
 
 **3. `loop { … }` is not the infinite generator of the sketch.** This is the one thing eager takes away from what was
 asked. Fibonacci as a loop expression is not available; the shapes that are: `Source.produce`, or a `type` pair of
 twelve lines that **type checks today and runs**:
 
 ```trb check
-use Iterable, Iterator from "std/iteration"
+use Iterate, Iterator from "std/iteration"
 
-type Fibonacci with Iterable<Int> {
+type Fibonacci with Iterate<Int> {
   previous: Int
   current: Int
 
-  fn iterator(): Iterator<Int> {
+  fn iterate(): Iterator<Int> {
     FibonacciCursor(previous: previous, current: current)
   }
 }
@@ -628,7 +628,7 @@ available, and section 2's probes are what "stops being available" means: `break
 that exits 1.
 
 That is a boundary a compiler can point at, and it is the one Kotlin, Scala and Rust arrive at by attrition: a `map`
-whose body grows past one expression degrades into a loop with `result.add`, in every one of them, and the loop it
+whose body grows past one expression degrades into a loop with `result.append`, in every one of them, and the loop it
 degrades into is exactly the code the lowering of section 4 writes. The proposal is to let that code be written the
 way it reads.
 
@@ -655,7 +655,7 @@ non-re-iterable, below.
 frame becomes an `Iterator`. The generated shape **type checks today and runs**:
 
 ```trb check
-use Iterable, Iterator from "std/iteration"
+use Iterate, Iterator from "std/iteration"
 
 type User {
   name: String
@@ -668,11 +668,11 @@ type MappedUser {
 }
 
 /** What `for user in users { … }` would answer. */
-type MapUsers with Iterable<MappedUser> {
+type MapUsers with Iterate<MappedUser> {
   users: List<User>
 
-  fn iterator(): Iterator<MappedUser> {
-    MapUsersCursor users.iterator()
+  fn iterate(): Iterator<MappedUser> {
+    MapUsersCursor users.iterate()
   }
 }
 
@@ -695,7 +695,7 @@ const mapped = MapUsers([User("ada", 36), User("alan", 41), User("grace", 45)])
 print mapped.map({ _.name }).toList()
 ```
 
-`["grace"]`. Two generated types per loop expression: one value type holding the captures and implementing `Iterable`,
+`["grace"]`. Two generated types per loop expression: one value type holding the captures and implementing `Iterate`,
 one holding the live locals and implementing `Iterator`.
 
 ### Is it literally the transformation tasks need
@@ -714,7 +714,7 @@ differ:
 | What `resume` answers | `Poll<Value>` | `Item?` |
 
 So the IR node `Suspend(state, awaited)` would become one node with an optional incoming operand and an optional
-outgoing one, and everything above it is shared. **The important asymmetry:** a `for` over an `Iterable` has exactly
+outgoing one, and everything above it is shared. **The important asymmetry:** a `for` over an `Iterate` has exactly
 one suspension point, so its state machine has **one state** and degenerates into the cursor above — no `Switch`, no
 state field. The machine earns its keep only where something lives across a round: a nested loop expression, where the
 inner cursor is a field and the state distinguishes "start an inner" from "pull from the inner", which **type checks
@@ -729,20 +729,20 @@ combination, because the head's own pull failure goes into the same channel and 
 `Failure` of the loop's type, written at the signature. That is the strongest argument the lazy design has and it is
 the one thing the eager recommendation gives up.
 
-### `Iterable` or `Iterator`, and the answer value semantics makes possible
+### `Iterate` or `Iterator`, and the answer value semantics makes possible
 
-If a loop expression were lazy, its type would be `Iterable<Body>` and not `Iterator<Body>`, and the reason is "one
+If a loop expression were lazy, its type would be `Iterate<Body>` and not `Iterator<Body>`, and the reason is "one
 vocabulary": `Iterator` has exactly one member, so `.filter` after the loop — the owner's own second line — would not
-resolve on one. `Iterable` carries the whole pipeline.
+resolve on one. `Iterate` carries the whole pipeline.
 
-`Iterable` promises "a fresh cursor, positioned before the first one", so an `Iterable` loop expression has to be
+`Iterate` promises "a fresh cursor, positioned before the first one", so an `Iterate` loop expression has to be
 **re-iterable**, which Python's generators and Rust's `gen` blocks are not. It can be, and the reason is the language
 rather than cleverness: **every capture is a value, so a copy is what the language does anyway.** The `Fibonacci`
 probe of section 6 takes `take(10)` and then `take(3)` and answers `[0, 1, 1]` the second time, because the cursor's
-state is in the cursor and the `Iterable` holds only the starting values.
+state is in the cursor and the `Iterate` holds only the starting values.
 
 **And that is exactly why lazy cannot allow rule 4.** A `var` the body changes would have to be either the shared box
-of a closure — and then a second `iterator()` continues where the first stopped, and the `Iterable` contract is broken
+of a closure — and then a second `iterate()` continues where the first stopped, and the `Iterate` contract is broken
 — or a copy taken when the loop expression is evaluated, and then `print total` after the loop prints the value from
 before it. Both are surprises with no good diagnostic, and choosing "copy" would mean the same `{ … }` captures a
 `var` by box in a closure and by copy in a loop body, which is the kind of context-dependent rule the whole objection
@@ -862,8 +862,8 @@ taste or direction.
    the one lazy form (which makes the trap of objection 2 smaller but real), a marked head, or nothing at all — the
    pipeline and `Source.produce`, which is where the language stands. The recommendation is nothing at all until a
    case turns up that `Source.produce` writes badly, which is also what CONCEPT's `yield` bullet waits for.
-3. **`List<Body>` as the answer, against `Iterable<Body>`.** Rule 9 argues for `List`: the elements are in memory and
-   the type should say so. The cost is that a function answering `Iterable` and one answering `List` are two different
+3. **`List<Body>` as the answer, against `Iterate<Body>`.** Rule 9 argues for `List`: the elements are in memory and
+   the type should say so. The cost is that a function answering `Iterate` and one answering `List` are two different
    promises, and a body that wants to change from an eager loop to a pipeline changes its signature.
 4. **`loop` in expression position at all.** With rule 8 it is "repeat until `break`, collecting", which is a real
    shape (read until a sentinel) and is not what was asked for. Leaving it out would give `for` and `while` the

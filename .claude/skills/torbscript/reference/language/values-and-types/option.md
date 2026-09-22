@@ -66,7 +66,7 @@ None                                     an absent value
    ```
 
 5. **`toList()` turns an `Option` into a list of zero or one elements**, which is the way into a pipeline: `map`,
-   `filter` and the rest of `Iterable` all follow from there once the value is a `List`.
+   `filter` and the rest of `Iterate` all follow from there once the value is a `List`.
 
 6. **The generated `Show` writes `Some(value)` or the bare `None`.** A case with fields is written out, a case
    without one is its name - the same rule every other case follows.

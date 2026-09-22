@@ -85,7 +85,7 @@ public fn decisionTreeOf(plan: MatchPlan): DecisionGraph {
       continue
     }
     for branch in 0..found.branches.length() {
-      rows.add Row(arm, branch, found.branches[branch].tests, found.hasGuard)
+      rows.append Row(arm, branch, found.branches[branch].tests, found.hasGuard)
     }
   }
   const root = buildNode graph, rows
@@ -94,7 +94,7 @@ public fn decisionTreeOf(plan: MatchPlan): DecisionGraph {
 }
 
 fn addNode(var graph: DecisionGraph, node: DecisionNode): NodeId {
-  graph.nodes.add node
+  graph.nodes.append node
   NodeId(graph.nodes.length() - 1)
 }
 
@@ -140,7 +140,7 @@ fn buildSwitch(var graph: DecisionGraph, rows: List<Row>, path: List<PatternStep
   for row in rows {
     if const Some(found) = caseTestedAt(row, path) {
       if !variants.contains(found) {
-        variants.add found
+        variants.append found
       }
     }
   }
@@ -151,18 +151,18 @@ fn buildSwitch(var graph: DecisionGraph, rows: List<Row>, path: List<PatternStep
       match caseTestedAt(row, path) {
         Some(found) => {
           if found == variant {
-            taken.add withoutTest(row, path, PatternCheck.IsCase(owner, variant))
+            taken.append withoutTest(row, path, PatternCheck.IsCase(owner, variant))
           }
         }
-        None => taken.add row
+        None => taken.append row
       }
     }
-    edges.add CaseEdge(variant, buildNode(graph, taken))
+    edges.append CaseEdge(variant, buildNode(graph, taken))
   }
   var rest: List<Row> = []
   for row in rows {
     if caseTestedAt(row, path).isNone() {
-      rest.add row
+      rest.append row
     }
   }
   const otherwise = buildNode graph, rest
@@ -180,11 +180,11 @@ fn buildCheck(var graph: DecisionGraph, rows: List<Row>, path: List<PatternStep>
   var rest: List<Row> = []
   for row in rows {
     if hasTest(row, path, check) {
-      taken.add withoutTest(row, path, check)
+      taken.append withoutTest(row, path, check)
       continue
     }
-    taken.add row
-    rest.add row
+    taken.append row
+    rest.append row
   }
   const then = buildNode graph, taken
   const otherwise = buildNode graph, rest
@@ -222,7 +222,7 @@ fn withoutTest(row: Row, path: List<PatternStep>, check: PatternCheck): Row {
       isRemoved = true
       continue
     }
-    kept.add test
+    kept.append test
   }
   row.copy tests: kept
 }
@@ -233,9 +233,9 @@ fn keyOfRows(rows: List<Row>): String {
   for row in rows {
     var tests: List<String> = []
     for test in row.tests {
-      tests.add "{keyOfPath(test.path)}={keyOfCheck(test.check)}"
+      tests.append "{keyOfPath(test.path)}={keyOfCheck(test.check)}"
     }
-    parts.add "{row.arm}/{row.branch}/{tests.joined(separator: "&")}"
+    parts.append "{row.arm}/{row.branch}/{tests.joined(separator: "&")}"
   }
   parts.joined separator: ";"
 }
@@ -243,7 +243,7 @@ fn keyOfRows(rows: List<Row>): String {
 fn keyOfPath(path: List<PatternStep>): String {
   var parts: List<String> = []
   for step in path {
-    parts.add keyOfStep(step)
+    parts.append keyOfStep(step)
   }
   parts.joined separator: "."
 }
@@ -287,7 +287,7 @@ fn keyOfLiteral(literal: PatternLiteral): String {
 public fn printDecisionGraph(var checker: Checker, graph: DecisionGraph): String {
   var lines = ["root n{graph.root.value}"]
   for index in 0..graph.nodes.length() {
-    lines.add "n{index}: {printDecisionNode(checker, graph.nodes[index])}"
+    lines.append "n{index}: {printDecisionNode(checker, graph.nodes[index])}"
   }
   lines.joined separator: "\n"
 }
@@ -297,7 +297,7 @@ fn printDecisionNode(var checker: Checker, node: DecisionNode): String {
     .SwitchCase(path, _, edges, otherwise) => {
       var parts: List<String> = []
       for edge in edges {
-        parts.add ".{checker.symbolAt(edge.variant).name} -> n{edge.target.value}"
+        parts.append ".{checker.symbolAt(edge.variant).name} -> n{edge.target.value}"
       }
       const shown = parts.joined separator: ", "
       "switch {printPath(checker, path)} [{shown}] otherwise n{otherwise.value}"

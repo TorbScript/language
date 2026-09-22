@@ -37,7 +37,7 @@ language, and almost every convenience rests on it:
 |-----------------|--------------------------|
 | `.Circle` | the type the parameter is declared as |
 | `None`, `Some(x)` | the parameter is an `Option` |
-| `[1, 2, 3]` | a `List`, an `Array<Int, 3>`, or a `From<Iterable<Item>>` target |
+| `[1, 2, 3]` | a `List`, an `Array<Int, 3>`, or a `From<Iterate<Item>>` target |
 | `{ _ + 1 }` | the function type of the parameter, which names its parameters |
 | a `lazy` argument | the parameter's mode: it becomes a thunk |
 | `assert(x > 1)` | the parameter is an `Expression<Bool>`, so the argument is quoted |

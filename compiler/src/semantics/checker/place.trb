@@ -34,7 +34,7 @@ public type Mutation {
   case Write
   /** `port 8080`, `database { ... }`: a property command writes the field it names. */
   case Command(member: String)
-  /** `list.add(1)`: the member that is a `var fn`. */
+  /** `list.append(1)`: the member that is a `var fn`. */
   case Receiver(member: String)
   /** A `var` parameter: which one, and of what. */
   case Argument(parameter: String, callee: String)
@@ -139,7 +139,7 @@ fn stepped(var checker: Checker, base: Expression, step: PlaceStep): Place {
   if const .Unknown = inner.root {
     return inner
   }
-  Place inner.root, inner.steps.added(step), inner.at
+  Place inner.root, inner.steps.appended(step), inner.at
 }
 
 /**
@@ -333,7 +333,7 @@ fn problemOfStep(var checker: Checker, step: PlaceStep): MutationProblem {
 
 /**
  * A field step. The field has to be declared `var`, and `private(var)` hands out a const path to everybody outside the
- * package that declares the type - const is deep, so `config.routes.add(...)` is an error while `config.routes` reads.
+ * package that declares the type - const is deep, so `config.routes.append(...)` is an error while `config.routes` reads.
  */
 fn problemOfField(var checker: Checker, owner: TypeId, field: SymbolId): MutationProblem {
   const signature = match fieldSignatureOf(checker, owner, field) {
@@ -471,7 +471,7 @@ fn reportTemporary(var checker: Checker, at: Span, cause: Mutation) {
   }
   checker.reportHere(
     Diagnostic.error("This is a temporary, and {what}: the change would be thrown away", at)
-      .withNote("Bind it first (`var cursor = iterator()`), then the path leads somewhere")
+      .withNote("Bind it first (`var cursor = iterate()`), then the path leads somewhere")
   )
 }
 
@@ -670,7 +670,7 @@ public fn openAccess(var checker: Checker, place: Place, changedBy: String, at: 
   // A path that leads nowhere cannot be reached a second time either, so it is not worth a place on the stack
   if rootKey(place.root) != noRoot {
     const depth = checker.runningClosures
-    checker.accesses.add Access(place, changedBy, at, call, depth)
+    checker.accesses.append Access(place, changedBy, at, call, depth)
   }
 }
 

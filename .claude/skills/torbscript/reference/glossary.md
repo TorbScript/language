@@ -342,7 +342,7 @@ exit code 101, and nothing else runs. See [panic](language/errors/panic.md).
 
 ### Participle
 
-The method that returns a changed copy, next to the [verb](#verb) that changes in place: `added` next to `add`, `sorted`
+The method that returns a changed copy, next to the [verb](#verb) that changes in place: `appended` next to `append`, `sorted`
 next to `sort`. See [Verbs and participles](language/types/verbs-and-participles.md).
 
 ### Pattern binding
@@ -459,7 +459,7 @@ The reading end of a stream, `Source<Item, Failure>`, with `next` in place of an
 
 ### Stage
 
-The synchronous middle of a pipeline, `Stage<Input, Output>`, written once and driven by both an `Iterable` and a
+The synchronous middle of a pipeline, `Stage<Input, Output>`, written once and driven by both an `Iterate` and a
 `Source`. See [Pipelines](language/collections-and-iteration/pipelines.md).
 
 ### Static member
@@ -502,7 +502,7 @@ required method is named after that method. See [Traits](language/traits/traits.
 
 ### Trait-typed value
 
-A value whose static type is a trait, such as a `Shape` or an `Iterable<Int>`: it holds some implementation and is
+A value whose static type is a trait, such as a `Shape` or an `Iterate<Int>`: it holds some implementation and is
 dispatched through a [witness table](#witness-table). Never called a trait object or an existential. See
 [Trait types](language/traits/trait-types.md).
 

@@ -43,15 +43,15 @@ public fn newFunction(name: String, origin: SymbolId?, signature: IrSignature, l
   var function = IrFunction name, origin, signature
   for index in 0..signature.parameters.length() {
     const parameter = signature.parameters[index]
-    function.slots.add SlotDeclaration(parameter.annotation, SlotRole.Parameter(index), parameter.name)
+    function.slots.append SlotDeclaration(parameter.annotation, SlotRole.Parameter(index), parameter.name)
   }
-  function.blocks.add Block([], Terminator.Unreachable, label, None)
+  function.blocks.append Block([], Terminator.Unreachable, label, None)
   FunctionBuilder function, BlockId(0)
 }
 
 /** A slot of any role. The lowering usually asks for `addLocal` or `addTemporary` instead. */
 public fn addSlot(var builder: FunctionBuilder, annotation: IrTypeId, role: SlotRole, name: String): Slot {
-  builder.function.slots.add SlotDeclaration(annotation, role, name)
+  builder.function.slots.append SlotDeclaration(annotation, role, name)
   Slot(builder.function.slots.length() - 1)
 }
 
@@ -70,7 +70,7 @@ public fn addTemporary(var builder: FunctionBuilder, annotation: IrTypeId): Slot
  * anyway - and what the verifier rejects when anything can reach it.
  */
 public fn addBlock(var builder: FunctionBuilder, label: String, at: LocationId?): BlockId {
-  builder.function.blocks.add Block([], Terminator.Unreachable, label, at)
+  builder.function.blocks.append Block([], Terminator.Unreachable, label, at)
   BlockId(builder.function.blocks.length() - 1)
 }
 
@@ -89,7 +89,7 @@ public fn openBlock(var builder: FunctionBuilder, label: String, at: LocationId?
 /** Appends an instruction to the current block, after everything already emitted into it. */
 public fn emit(var builder: FunctionBuilder, instruction: Instruction) {
   const index = builder.current.value
-  builder.function.blocks[index].instructions.add(instruction)
+  builder.function.blocks[index].instructions.append(instruction)
 }
 
 /** Replaces the terminator of the current block. A block has exactly one, so this is not an append. */

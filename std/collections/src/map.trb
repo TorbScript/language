@@ -12,13 +12,12 @@
 use Equals, Hash, combineHashes from "std/core"
 use MutableIndexed from "std/core"
 use From, Show from "std/core"
-use Collection from "./collection"
+use Iterate, Length from "std/iteration"
 
 /**
  * Mapping from keys to values. This is the type of the literal `["a": 1, "b": 2]`.
  *
- * As a collection it consists of `(key, value)` tuples: `add((key, value))` is `set(key, value)`. The trait asks
- * nothing of `Key` - what a key has to be able to do is a matter of the implementation (`TrieMap` and `HashMap` need
+ * Iterated, it consists of `(key, value)` tuples. The trait asks nothing of `Key` - what a key has to be able to do is a matter of the implementation (`TrieMap` and `HashMap` need
  * `Hash`, a sorted map would need `Compare`), so only the factories carry a bound.
  *
  * **Every implementation iterates in insertion order,** and removing an entry does not reorder the rest. The order
@@ -61,13 +60,13 @@ use Collection from "./collection"
  * # Related
  *
  * - [Set] - the same idea without a value.
- * - [Collection] - `add`, `contains`, `length`, `iterator`, which `Map` builds on.
+ * - [Iterate] - the pipeline vocabulary (`map`, `filter`, `fold`, ...) every map has, over its entries.
  */
 public trait Map<Key, Value>
-  with Collection<(key: Key, value: Value)>, MutableIndexed<Key, Value>
+  with Iterate<(key: Key, value: Value)>, Length, MutableIndexed<Key, Value>
 {
   /** Builds a map from its arguments: `Map.of(("a", 1), ("b", 2))`. Answers `Self`. */
-  static fn of(...entries: (Key, Value)): Self where Self: From<Iterable<(Key, Value)>>, Key: Hash {
+  static fn of(...entries: (Key, Value)): Self where Self: From<Iterate<(Key, Value)>>, Key: Hash {
     Self.from entries
   }
 
@@ -76,13 +75,8 @@ public trait Map<Key, Value>
   /** Removes the entry for `key` and answers its value, or `None` if there was none. */
   var fn remove(key: Key): Value?
 
-  /**
-   * Adds an entry: the same as `set(entry.key, entry.value)`. What lets a `Map` be filled by a collector or a
-   * channel like any other [Collection].
-   */
-  var fn add(entry: (key: Key, value: Value)) {
-    set entry.key, entry.value
-  }
+  /** Removes every entry, in place. */
+  var fn clear()
 
   /**
    * The value for `key`, storing `fallback` first where there is none. The fallback is `lazy`, so a value that costs
@@ -98,7 +92,7 @@ public trait Map<Key, Value>
    *
    * # Pitfalls
    *
-   * - The answer is a **copy**, as every value is. `groups.getOrInsert(city, []).add(user)` changes nothing and the
+   * - The answer is a **copy**, as every value is. `groups.getOrInsert(city, []).append(user)` changes nothing and the
    *   compiler says so ("a temporary is not a `var` path"): a method cannot answer a place, because a place is a path
    *   and not a value. [Map.update] is the one that changes what is stored.
    *
@@ -119,7 +113,7 @@ public trait Map<Key, Value>
    * Changes the value for `key` in place, storing `fallback` first where there is none. This is the grouping loop:
    *
    *     var groups: Map<String, List<String>> = [:]
-   *     groups.update("north", []) { names => names.add("Ada") }
+   *     groups.update("north", []) { names => names.append("Ada") }
    *     print groups
    *
    * The fallback is `lazy`, so it is only built on a miss.
@@ -152,18 +146,23 @@ public trait Map<Key, Value>
 
   // --- Reading -----------------------------------------------------------------------------------------
 
+  /** How many entries there are. A map knows its size, so counting it does not walk it. */
+  fn count(): Int {
+    length()
+  }
+
   /** Whether there is an entry for `key`. */
   fn containsKey(key: Key): Bool {
     get(key).isSome()
   }
 
   /** Every key, in insertion order. */
-  fn keys(): Iterable<Key> {
+  fn keys(): Iterate<Key> {
     map { entry => entry.key }
   }
 
   /** Every value, in insertion order. */
-  fn values(): Iterable<Value> {
+  fn values(): Iterate<Value> {
     map { entry => entry.value }
   }
 
@@ -174,8 +173,8 @@ public trait Map<Key, Value>
 }
 
 /** The factory picks the default implementation. This is what makes `Map.from` and the literal `["a": 1]` work. */
-extend<Key: Hash, Value> Map<Key, Value> with From<Iterable<(Key, Value)>> {
-  static fn from(entries: Iterable<(Key, Value)>): Map<Key, Value> {
+extend<Key: Hash, Value> Map<Key, Value> with From<Iterate<(Key, Value)>> {
+  static fn from(entries: Iterate<(Key, Value)>): Map<Key, Value> {
     TrieMap.from entries
   }
 }
@@ -237,11 +236,7 @@ public type MapIterator<Key: Hash, Value> with Iterator<(key: Key, value: Value)
 
   /** The next entry, or `None` once the table is exhausted. */
   var fn next(): (key: Key, value: Value)? {
-    // The position travels through a local because stage 0 takes a `var` argument before it evaluates the receiver
-    var found = position
-    const entry = entries.entryAfter found
-    position = found
-    entry
+    entries.entryAfter position
   }
 }
 
@@ -254,10 +249,7 @@ public type HashMapIterator<Key: Hash, Value> with Iterator<(key: Key, value: Va
 
   /** Same as [MapIterator.next]. */
   var fn next(): (key: Key, value: Value)? {
-    var found = position
-    const entry = entries.entryAfter found
-    position = found
-    entry
+    entries.entryAfter position
   }
 }
 
@@ -269,17 +261,19 @@ public type HashMapIterator<Key: Hash, Value> with Iterator<(key: Key, value: Va
  * and `Show` are the same either way.
  */
 public native type TrieMap<Key: Hash, Value>
-  with Map<Key, Value>, From<Iterable<(Key, Value)>>
+  with Map<Key, Value>, From<Iterate<(Key, Value)>>
 {
   /**
    * Ordinary TorbScript, and it **cannot** be a function of the runtime: `entries` is a trait-typed value of the
-   * *program*, so reading it means calling `iterator` and `next` through a witness table. `withCapacity` builds the empty
+   * *program*, so reading it means calling `iterate` and `next` through a witness table. `withCapacity` builds the empty
    * table, and it is the one native the lowering answers itself - the element descriptors a table needs are a function of
    * the language and no declaration can name one.
    */
-  static fn from(entries: Iterable<(Key, Value)>): TrieMap<Key, Value> {
+  static fn from(entries: Iterate<(Key, Value)>): TrieMap<Key, Value> {
     var result: TrieMap<Key, Value> = TrieMap.withCapacity 0
-    result.addAll entries
+    for (key, value) in entries {
+      result.set key, value
+    }
     result
   }
 
@@ -293,7 +287,7 @@ public native type TrieMap<Key: Hash, Value>
   native fn get(key: Key): Value?
 
   /** Ordinary TorbScript over `entryAfter`: see [MapIterator]. */
-  fn iterator(): Iterator<(key: Key, value: Value)> {
+  fn iterate(): Iterator<(key: Key, value: Value)> {
     MapIterator self
   }
 
@@ -322,12 +316,14 @@ public native type TrieMap<Key: Hash, Value>
  * The one for caches and indexes that are never copied. Iterates in insertion order.
  */
 public native type HashMap<Key: Hash, Value>
-  with Map<Key, Value>, From<Iterable<(Key, Value)>>
+  with Map<Key, Value>, From<Iterate<(Key, Value)>>
 {
   /** Same as [TrieMap.from]. */
-  static fn from(entries: Iterable<(Key, Value)>): HashMap<Key, Value> {
+  static fn from(entries: Iterate<(Key, Value)>): HashMap<Key, Value> {
     var result: HashMap<Key, Value> = HashMap.withCapacity 0
-    result.addAll entries
+    for (key, value) in entries {
+      result.set key, value
+    }
     result
   }
 
@@ -341,7 +337,7 @@ public native type HashMap<Key: Hash, Value>
   native fn get(key: Key): Value?
 
   /** A cursor over the entries, in insertion order; see [HashMapIterator]. */
-  fn iterator(): Iterator<(key: Key, value: Value)> {
+  fn iterate(): Iterator<(key: Key, value: Value)> {
     HashMapIterator self
   }
 

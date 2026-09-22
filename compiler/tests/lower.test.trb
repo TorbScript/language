@@ -451,7 +451,7 @@ group "What the back end does not lower yet" {
       }
       """
     assert(unsupportedIn(source)
-      == ["`iterator`, which neither the source nor the natives manifest provides is not supported by the native back end yet"])
+      == ["`iterate`, which neither the source nor the natives manifest provides is not supported by the native back end yet"])
     assert(
       irOf(source, "t_acme_x2f_app_main_collected") == r"""
         fn t_acme_x2f_app_main_collected(value: Int64 borrowed) -> Int64 {
@@ -464,14 +464,14 @@ group "What the back end does not lower yet" {
 
   /**
    * `a[key]` itself is lowered since 5.7 (`lower-collections.test.trb`), and the `ArrayList` of the prelude of
-   * `harness.trb` provides no `iterator`, which is what the one that is left reports. Its `at` is written out like
+   * `harness.trb` provides no `iterate`, which is what the one that is left reports. Its `at` is written out like
    * the default of `std/core`, because `ir/elements.trb` reads the panic of `a[key]` out of that body - so an index
    * on a list lowers here as it does over the real standard library.
    */
   test "a list literal says which construct it is" {
     assert(
       unsupportedIn("fn items(): Int \{\n  const found = [1, 2]\n  1\n\}")
-        == ["`iterator`, which neither the source nor the natives manifest provides is not supported by the native back end yet"]
+        == ["`iterate`, which neither the source nor the natives manifest provides is not supported by the native back end yet"]
     )
     assert(unsupportedIn("fn first(items: ArrayList<Int>): Int \{\n  items[0]\n\}") == [])
     // A `?` at the top level of an entry file is lowered to `error: <the error through Show>` and exit code 1
@@ -532,11 +532,11 @@ group "The closed world is the program" {
       name "acme/lab"
       """,
     "lab/src/main.trb": r"""
-      type Rows with Iterable<Int> {
+      type Rows with Iterate<Int> {
         var items: List<Int> = []
 
-        fn iterator(): Iterator<Int> {
-          items.iterator()
+        fn iterate(): Iterator<Int> {
+          items.iterate()
         }
 
         var fn sort(by: (value: Int) => Int) {
@@ -581,7 +581,7 @@ group "The closed world is the program" {
     assert beside.problems.isEmpty()
     var names: List<String> = []
     for function in beside.program.functions {
-      names.add function.name
+      names.append function.name
     }
     // Nothing of `acme/lab` is lowered - `torb ir` seeds the requested modules - but the checker indexed it
     assert(!names.any({ _.contains "lab" }))
@@ -619,7 +619,7 @@ group "Real code" {
     var reported: List<String> = []
     for file in checked.files {
       for diagnostic in file.diagnostics {
-        reported.add "{file.path}: {diagnostic.message}"
+        reported.append "{file.path}: {diagnostic.message}"
       }
     }
     assert reported.isEmpty()
@@ -630,7 +630,7 @@ group "Real code" {
     assert found.problems.isEmpty()
     // Nine declarations of the two files, plus the instances and the generated members the worklist reaches from
     // them: a text is iterated through `Characters` and `CharacterIterator` of `std/text`, so the two files reach
-    // `Iterable<Char>`, `Iterator<Char>` and the payload boxes of both - one set for the whole program.
+    // `Iterate<Char>`, `Iterator<Char>` and the payload boxes of both - one set for the whole program.
     //
     // **The closed world is the whole program, not the two files.** "Does any implementation override this default"
     // is asked over every file the `SourceTree` reads, and `readSourceTree` reads the whole workspace - so the
@@ -640,24 +640,24 @@ group "Real code" {
     assert(found.lowered + found.stubbed == 112)
     // **The instance-count tripwire.** Monomorphization with `List<Item>` everywhere can multiply, and what
     // multiplies it is the **element type**: a container literal builds the witness table of `List<Item>`, and that
-    // table carries only the default members of `Iterable`, `Collection`, `MutableIndexed`, `Length` and
+    // table carries only the default members of `Iterate`, `List`, `MutableIndexed`, `Length` and
     // `Accumulator` that some implementation in the program actually overrides - never every default for every item
     // type. They *are* the footprint - the functions, the tables and the descriptors - and they are asserted exactly
     // so that an explosion fails a test instead of being noticed as a build time.
     // Eleven of these are the copies the devirtualization makes of a frozen member a direct call names
     // (`specializeFrozenCallees`): the table keeps the original, the call site gets a body whose result and whose
     // parameters may become concrete
-    assert(found.program.functions.length() == 168)
-    assert(found.program.witnessTables.length() == 36)
+    assert(found.program.functions.length() == 165)
+    assert(found.program.witnessTables.length() == 33)
     assert(found.program.elements.length() == 3)
     var blocked: List<String> = []
     for entry in found.unsupported {
-      blocked.add entry.what
+      blocked.append entry.what
     }
     blocked.sort({ _ })
     // A list literal is lowered since 5.7 and a closure since 5.8, the defaults nothing overrides are out of the tables
     // since the fourth round - so `swapAt`, `updated` and `indexed` are not instantiated at all any more - and
-    // `ArrayList.from`, `Range.iterator`, `String.chars` and `sort` are all TorbScript now, and the index paths `sort` is
+    // `ArrayList.from`, `Range.iterate`, `String.chars` and `sort` are all TorbScript now, and the index paths `sort` is
     // written over lower - so **nothing** of these two files is blocked any more, which is what this assertion is for:
     // the next construct that stops being lowered is the next line of this list
     assert blocked.isEmpty()

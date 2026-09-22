@@ -30,7 +30,7 @@ torb doc   Documentation from the doc comments (planned; no command line decided
 
 Everything that is declared can carry a `/** ... */` comment - a parameter, a field and a case included - so there
 is no separate tag language to keep in sync with the signature. The text is Markdown, with the conventional headings
-`# Errors`, `# Panics` and `# Examples`; `[List.add]` and `[Option]` are links, resolved like a name in the code next
+`# Errors`, `# Panics` and `# Examples`; `[List.append]` and `[Option]` are links, resolved like a name in the code next
 to them. The doc comment is part of the syntax tree, so `torb doc`, the language server and the test runner are
 specified to read the same data - one comment, three consumers.
 

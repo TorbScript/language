@@ -1035,16 +1035,16 @@ runs, and `end()` is the graceful one a program calls and awaits itself.
 
 ## 6b. The words per kind: the decision of 2026-09-22
 
-**Decided by the owner, recorded here; the code and `docs/language` follow in the rename round (C2c).**
+**Decided by the owner, recorded here; the code and `docs/language` follow it since the rename round (C2c, section 6d).**
 
 | Trait | Its own words | Participles (the rule of 3.3) |
 |---|---|---|
 | `Iterate<Item>` (was `Iterable`) | `iterate()` (was `iterator()`), and the stages and terminals it already has | — |
-| `List<Item>` | `append`, and the index words it has (`insert`, `removeAt`) | `appended`, `inserted`, `removedAt` |
-| `Set<Item>` | `insert`, `remove` | `inserted`, `removed` |
+| `List<Item>` | `append`, `appendAll`, and the index words it has (`insert`, `removeAt`) | `appended`, `appendedAll`, `inserted`, `removedAt` |
+| `Set<Item>` | `insert`, `insertAll`, `remove` | `inserted`, `insertedAll`, `removed` |
 | `Map<Key, Value>` | `set`, `remove` | `updated` for `set` (1.5 point 3), `removed` |
-| `Stack<Item>` | `push`, `pop`, `peek` | `pushed`, `popped(): (Item, Self)?` |
-| `Queue<Item>` | `enqueue`, `dequeue`, `peek` | `enqueued`, `dequeued(): (Item, Self)?` |
+| `Stack<Item>` | `push`, `pop`, `peek` | none (see below) |
+| `Queue<Item>` | `enqueue`, `dequeue`, `peek` | none (see below) |
 | `Collection<Item>` | **deleted** | — |
 | `Add` (the operator) | **stays** — `Add` → `Plus` is no longer planned | — |
 
@@ -1070,6 +1070,17 @@ not sequences.
 **Why `Add` stays.** The rename to `Plus` existed so that `a + b` and a container's `add(value)` would not be one member
 name. With `append`, `insert` and `push` no container spends `add` any more; `Accumulator.add` stays, and an
 accumulator is a run and not an operand of `+`.
+
+**Participles only where they already read naturally (decided in C2c).** The table first proposed `pushed`,
+`popped(): (Item, Self)?`, `enqueued` and `dequeued(): (Item, Self)?`. The language review argued against them and the
+rename round followed it: a participle that answers a pair beside the rest is a second word for what a `var` copy does
+(`var rest = stack`, then `rest.pop()`), and `popped` reads as a past tense of the item and not as "the stack without
+its top". `List`, `Set` and `Map` keep the participles they had (`appended`, `inserted`, `updated`, `removed`, ...),
+because there the copy answers `Self` and nothing is lost. `Stack` and `Queue` lose the `added`/`removed()` of C1 and get
+none; `peek()` replaces the `first()` C1 pointed to (`first()` is still there, from `Iterate`).
+
+**`Accumulator.add` stays.** An accumulator is a run a pipeline pushes into and not a container, so the reasoning that
+took `add` away from the five kinds does not reach it; `Sink.add` stays for the same reason.
 
 **What it revises.** C1 and C2 are turned back where they chose `add`/`remove` for stacks and queues and a shared
 `Collection`; 3.2 and 3.3 carry notes; questions 1 and 2 of section 6 are answered.
@@ -1125,6 +1136,27 @@ the test asserts (`ArrayList.add`, `HashSet.add`, `"add"` in the member lists, t
 them up, and no native row names a stack or a queue. The compiler's *messages* that say `Iterable` (`statement.trb`,
 `call.trb`, `expression.trb`) are prose and go with the sweep, together with the tests that quote them.
 
+## 6d. Commit 2 landed
+
+The old names are gone: every fallback of section 6c is deleted (`hasMemberOfType`, `cursorMemberOf`, `renamedFrom`, the
+second branch of `wellKnownOf` and of `openRangeNote`), and the compiler looks up `Iterate`, `iterate` and `append`
+only. `std/collections/src/collection.trb` is deleted; each kind declares `clear`, `count` (answering `length()`) and,
+where it has them, `compact` and `contains`. `containsAll` went with `Collection`: nothing called it. A `Map` has no
+`add(entry)` and no `addAll` any more - `TrieMap.from` is a `for` over the entries with `set`.
+
+The natives manifest renames its rows (`{owner}.append` in `listEntries`, `{owner}.insert` in `setEntries`, `"iterate"` in
+`arrayMembers`, and `File.end` for the planned `File.finish`); the C symbols keep their spelling (`torb_list_add`,
+`torb_set_add`), because the manifest maps a member to a symbol and a rename of `runtime/` would buy nothing. The header
+only changes the names above the two symbols.
+
+**How the call sites were found.** A regex cannot tell `list.add` from `accumulator.add`, the checker can: the sweep
+renamed `std` first and then read every "`T` has no member `m`" of `check .`, `check tests/conformance tests/language`
+and `docs check docs`, choosing the new word from the head of `T` (`List` → `append`, `Set` → `insert`, `Stack` →
+`push`/`pop`, `Queue` → `enqueue`/`dequeue`), until a round found nothing. Where the receiver's element type is a type
+parameter the checker says "The checker did not work out the type of this expression" instead of naming the member (a
+checker defect worth its own round: inside a `var fn add`, `items.add value` on a `List<Item>` field reports that and
+not "has no member"); those few were read off the source and were all lists.
+
 ## 6. Open, for the owner
 
 Everything technical above is decided and argued. These six were taste and direction; the first two are answered.
@@ -1143,10 +1175,9 @@ writable?
 **Answered (2026-09-22):** the premise is gone — with their own words the two traits are no longer identical, and
 `Collection` itself is deleted. No worklist supertrait.
 
-**3. `Set.union`.** Its body is `addedAll`. It stays because `union`, `intersection` and `difference` are a vocabulary
+**3. `Set.union`.** Its body is `insertedAll` (was `addedAll`). It stays because `union`, `intersection` and `difference` are a vocabulary
 and two thirds of one is worse than three thirds with an overlap. The other reading is that one word per meaning
-admits no exception. *(Still open. After 6b the overlap is with whatever bulk participle `Set` keeps beside
-`insert` — `insertedAll` if the rename round keeps one.)*
+admits no exception. *(Still open. After 6b the overlap is with `insertedAll`, which the rename round kept.)*
 
 **4. The name of the ordered structure.** `Ordered.by { _.priority }`, or `Heap`, or `Priority`. `Ordered` says what
 the contract is and not how it is built, which is the rule every other implementation name breaks on purpose

@@ -9,9 +9,9 @@
  * 1. **The summary.** Which parameters the callee *stores*, to a fixpoint over the call graph. A parameter is `Owned`
  *    when its value escapes the frame - returned, built into something, written into a place, handed on to another
  *    `Owned` position, or copied into a slot that is later written through. That last rule is what makes the participles
- *    free: `fn added(value): Self \{ var result = self  result.add(value)  result \}` receives `self` owned, so at
+ *    free: `fn appended(value): Self \{ var result = self  result.append(value)  result \}` receives `self` owned, so at
  *    a call site where the receiver is dead the `Copy` is a `Move`, the count stays one, `MakeUnique` is a no-op, and
- *    `list = list.added(x)` changes in place.
+ *    `list = list.appended(x)` changes in place.
  * 2. **Liveness** over the slots the frame counts (`liveness.trb`).
  * 3. **The rewrite.** Every operand occurrence, walked backwards; a value that dies on an edge is released on that edge,
  *    and an edge that needs releases and is not the only one out of its block is split. Which positions there *are* and
@@ -74,7 +74,7 @@ public fn summarizeParameters(var program: IrProgram) {
   var queue: List<Int> = []
   var isQueued = filledFlags count, true
   for index in 0..count {
-    queue.add index
+    queue.append index
   }
   var cursor = 0
   while cursor < queue.length() {
@@ -89,15 +89,15 @@ public fn summarizeParameters(var program: IrProgram) {
         continue
       }
       isQueued.set caller, true
-      queue.add caller
+      queue.append caller
     }
   }
 }
 
 /**
- * The parameters a function of the runtime stores, out of the natives manifest (BACKEND 3.7): `ArrayList.add`,
+ * The parameters a function of the runtime stores, out of the natives manifest (BACKEND 3.7): `ArrayList.append`,
  * `Map.set`, `ArrayStack.push`. Keyed by the C symbol, because that is what a `FunctionKind.Runtime` carries - and two
- * manifest entries that map to one symbol (`ArrayList.add` and `TrieList.add` are one `torb_list_add`) agree about it
+ * manifest entries that map to one symbol (`ArrayList.append` and `TrieList.append` are one `torb_list_add`) agree about it
  * by construction.
  */
 fn applyManifest(var program: IrProgram) {
@@ -159,7 +159,7 @@ fn applyOwnedParameters(var program: IrProgram, index: Int, positions: List<Int>
  * Their parameters may **never** be promoted to `Owned`. A closure is called through `CallClosure`, whose callee is a
  * *slot*, so no call site can read the summary of the function it will reach - and the type of a closure is the type of
  * every closure of its shape (BACKEND 5.8), so the signature in the type cannot answer it either. A closure body that
- * stored an argument would therefore consume a count nobody handed it, which is a double release: `Iterable.joined`
+ * stored an argument would therefore consume a count nobody handed it, which is a double release: `Iterate.joined`
  * builds `separator + item` and was exactly that.
  *
  * It costs one copy inside a closure that really stores an argument, which is BACKEND 2.1's own rule: getting the
@@ -187,7 +187,7 @@ fn callersOf(program: IrProgram): List<List<Int>> {
   const count = program.functions.length()
   var callers: List<List<Int>> = []
   for _ in 0..count {
-    callers.add([])
+    callers.append([])
   }
   for index in 0..count {
     for block in program.functions[index].blocks {
@@ -199,7 +199,7 @@ fn callersOf(program: IrProgram): List<List<Int>> {
           if callers[callee.value].contains(index) {
             continue
           }
-          callers[callee.value].add(index)
+          callers[callee.value].append(index)
         }
       }
     }
@@ -387,13 +387,13 @@ fn rewriteFunction(var program: IrProgram, index: Int) {
   var endDrops: List<List<Slot>> = []
   for block in 0..blockCount {
     if !reachable[block] {
-      endDrops.add([])
+      endDrops.append([])
       continue
     }
     const rewritten = rewriteBlock program, facts, counted, live, function.blocks[block], block
     function.blocks[block].instructions = rewritten.instructions
     function.blocks[block].terminator = rewritten.terminator
-    endDrops.add rewritten.endDrops
+    endDrops.append rewritten.endDrops
   }
   const conditional = conditionalOutSlotsOf program, function
   splitEdges function, counted, live, endDrops, blockCount, conditional
@@ -453,19 +453,19 @@ fn prepared(program: IrProgram, function: IrFunction, counted: Counted): IrFunct
       const instruction = instructions[at]
       const owners = uniqueOwnersOf program, function, instructions, at
       if !owners.isEmpty() {
-        written.addAll owners
+        written.appendAll owners
         isChanged = true
       }
       if const Some(slot) = conflictingSlot(instruction, counted) {
         const annotation = function.typeOfSlot slot
-        built.slots.add SlotDeclaration(annotation, SlotRole.Temporary, "")
+        built.slots.append SlotDeclaration(annotation, SlotRole.Temporary, "")
         const saved = Slot(built.slots.length() - 1)
-        written.add Instruction.Move(saved, slot)
-        written.add renamedUse(program, facts, instruction, slot, saved)
+        written.append Instruction.Move(saved, slot)
+        written.append renamedUse(program, facts, instruction, slot, saved)
         isChanged = true
         continue
       }
-      written.add instruction
+      written.append instruction
     }
     if isChanged {
       built.blocks[block].instructions = written
@@ -510,7 +510,7 @@ fn uniqueOwnersOf(
         }
         // Two `var` arguments of one call may share a prefix, and making the same storage unique twice is only noise
         if isManagedType(program, inner) && !needed.contains(Instruction.MakeUnique(prefix)) {
-          needed.add Instruction.MakeUnique(prefix)
+          needed.append Instruction.MakeUnique(prefix)
         }
       }
     }
@@ -540,7 +540,7 @@ fn placesOfArguments(arguments: List<Argument>): List<Reference> {
   var places: List<Reference> = []
   for argument in arguments {
     if const Some(place) = argument.place {
-      places.add place
+      places.append place
     }
   }
   places
@@ -580,10 +580,10 @@ fn renamedUse(
   var decided: List<Argument> = []
   for operand in operandsOf(program, facts, instruction) {
     if operand.slot == slot {
-      decided.add Argument(saved, Ownership.Borrowed, false)
+      decided.append Argument(saved, Ownership.Borrowed, false)
       continue
     }
-    decided.add Argument(operand.slot, Ownership.Borrowed, false)
+    decided.append Argument(operand.slot, Ownership.Borrowed, false)
   }
   withOperands instruction, decided
 }
@@ -612,9 +612,9 @@ fn rewriteBlock(
   var after: List<List<Instruction>> = []
   var updated: List<Instruction> = []
   for position in 0..count {
-    before.add([])
-    after.add([])
-    updated.add block.instructions[position]
+    before.append([])
+    after.append([])
+    updated.append block.instructions[position]
   }
   var at = count - 1
   while at >= 0 {
@@ -629,11 +629,11 @@ fn rewriteBlock(
   }
   var instructions = entryReleases facts, counted, alive, index
   for position in 0..count {
-    instructions.addAll before[position]
-    instructions.add updated[position]
-    instructions.addAll after[position]
+    instructions.appendAll before[position]
+    instructions.append updated[position]
+    instructions.appendAll after[position]
   }
-  instructions.addAll tail
+  instructions.appendAll tail
   RewrittenBlock instructions, terminator, endDrops
 }
 
@@ -654,7 +654,7 @@ fn entryReleases(facts: SlotFacts, counted: Counted, arriving: List<Bool>, index
     if !facts.isParameter[slot.value] {
       continue
     }
-    released.add Instruction.Release(slot)
+    released.append Instruction.Release(slot)
   }
   released
 }
@@ -681,7 +681,7 @@ fn rewriteTerminator(
       const operand = Operand argument.slot, true, true, false
       const answer = decideOperand program, facts, counted, alive, retains, releases, operand
       // Nothing can follow a `return`, and a value that is returned is never released: only a retain can land here
-      tail.addAll retains
+      tail.appendAll retains
       markAlive alive, counted, argument.slot
       Terminator.Return Some(answer)
     }
@@ -704,7 +704,7 @@ fn dropAtEnd(counted: Counted, var alive: List<Bool>, var endDrops: List<Slot>, 
     return
   }
   if !alive[position] {
-    endDrops.add slot
+    endDrops.append slot
   }
   alive.set position, true
 }
@@ -742,7 +742,7 @@ fn rewriteInstruction(
   }
   var decided: List<Argument> = []
   for operand in operands {
-    decided.add Argument(operand.slot, Ownership.Borrowed, false)
+    decided.append Argument(operand.slot, Ownership.Borrowed, false)
   }
   var taken: List<Instruction> = []
   var dropped: List<Instruction> = []
@@ -754,12 +754,12 @@ fn rewriteInstruction(
     markAlive alive, counted, operand.slot
     at = at - 1
   }
-  retains.addAll reversedInstructions(taken)
-  releases.addAll reversedInstructions(dropped)
+  retains.appendAll reversedInstructions(taken)
+  releases.appendAll reversedInstructions(dropped)
   // `const _ = text.trimmed()`: a value nobody takes is dead where it is made
   if isDeadDefinition {
     if const Some(target) = defined {
-      releases.add Instruction.Release(target)
+      releases.append Instruction.Release(target)
     }
   }
   withOperands instruction, decided
@@ -805,7 +805,7 @@ fn decideOperand(
   const isLast = position >= 0 && !alive[position]
   if !operand.takesCount {
     if isLast {
-      releases.add Instruction.Release(slot)
+      releases.append Instruction.Release(slot)
     }
     return Argument slot, Ownership.Borrowed, isLast
   }
@@ -813,10 +813,10 @@ fn decideOperand(
     return Argument slot, Ownership.Owned, true
   }
   if !operand.retainsItself {
-    retains.add Instruction.Retain(slot)
+    retains.append Instruction.Retain(slot)
   }
   if isLast {
-    releases.add Instruction.Release(slot)
+    releases.append Instruction.Release(slot)
   }
   Argument slot, Ownership.Owned, false
 }
@@ -832,7 +832,7 @@ fn reversedInstructions(instructions: List<Instruction>): List<Instruction> {
   var reversed: List<Instruction> = []
   var at = instructions.length() - 1
   while at >= 0 {
-    reversed.add instructions[at]
+    reversed.append instructions[at]
     at = at - 1
   }
   reversed
@@ -867,7 +867,7 @@ fn splitEdges(
       // A `jump` reads nothing, so a release at the end of the block is on the edge
       const drops = dropsOnEdge counted, live, endDrops, block, targets[0], conditional
       for slot in drops {
-        function.blocks[block].instructions.add(Instruction.Release(slot))
+        function.blocks[block].instructions.append(Instruction.Release(slot))
       }
       continue
     }
@@ -878,11 +878,11 @@ fn splitEdges(
       }
       var instructions: List<Instruction> = []
       for slot in drops {
-        instructions.add Instruction.Release(slot)
+        instructions.append Instruction.Release(slot)
       }
       const at = function.blocks[block].at
       const jump = Terminator.Jump BlockId(targets[position])
-      function.blocks.add Block(instructions, jump, "drop", at)
+      function.blocks.append Block(instructions, jump, "drop", at)
       const added = BlockId(function.blocks.length() - 1)
       const replaced = withEdge function.blocks[block].terminator, position, added
       function.blocks[block].terminator = replaced
@@ -908,11 +908,11 @@ fn dropsOnEdge(
         if slot.value < conditional.length() && conditional[slot.value] {
           continue
         }
-        drops.add slot
+        drops.append slot
       }
     }
   }
-  drops.addAll endDrops[block]
+  drops.appendAll endDrops[block]
   drops
 }
 

@@ -62,7 +62,7 @@ print total
    fn mapped<Output>(items: List<Int>, transform: (value: Int) => Output): List<Output> {
      var result: List<Output> = []
      for item in items {
-       result.add transform(item)
+       result.append transform(item)
      }
      result
    }
@@ -79,7 +79,7 @@ print total
    fn transformed(items: List<Int>, transform: (Int) => Int): List<Int> {
      var result: List<Int> = []
      for item in items {
-       result.add transform(item)
+       result.append transform(item)
      }
      result
    }
@@ -141,7 +141,7 @@ fn show(value: List<Int>) {
 fn transformed(items: List<Int>, transform: (Int) => Int): List<Int> {
   var result: List<Int> = []
   for item in items {
-    result.add transform(item)
+    result.append transform(item)
   }
   result
 }
@@ -158,7 +158,7 @@ fn show(value: List<Int>) {
 fn transformed(items: List<Int>, transform: (Int) => Int): List<Int> {
   var result: List<Int> = []
   for item in items {
-    result.add transform(item)
+    result.append transform(item)
   }
   result
 }

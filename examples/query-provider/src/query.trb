@@ -28,7 +28,7 @@ type Quoted {
 }
 
 /**
- * A description of a query. Has the same vocabulary as `Iterable` - but its parameters are `Expression`,
+ * A description of a query. Has the same vocabulary as `Iterate` - but its parameters are `Expression`,
  * so the closures are not executed, they are translated.
  */
 public type Query<Row> {
@@ -38,11 +38,11 @@ public type Query<Row> {
   private limit: Int? = None
 
   fn filter(predicate: Expression<(row: Row) => Bool>): Query<Row> {
-    copy conditions: conditions.added(Quoted.of(predicate))
+    copy conditions: conditions.appended(Quoted.of(predicate))
   }
 
   fn sorted<Key: Compare>(by: Expression<(row: Row) => Key>): Query<Row> {
-    copy ordering: ordering.added(Quoted.of(by))
+    copy ordering: ordering.appended(Quoted.of(by))
   }
 
   fn take(amount: Int): Query<Row> {
@@ -55,14 +55,14 @@ public type Query<Row> {
     var keyword = " WHERE "
     for condition in conditions {
       const fragment = condition.toSql()?
-      statement = Fragment(statement.sql + keyword + fragment.sql, statement.parameters.addedAll(fragment.parameters))
+      statement = Fragment(statement.sql + keyword + fragment.sql, statement.parameters.appendedAll(fragment.parameters))
       keyword = " AND "
     }
 
     keyword = " ORDER BY "
     for key in ordering {
       const fragment = key.toSql()?
-      statement = Fragment(statement.sql + keyword + fragment.sql, statement.parameters.addedAll(fragment.parameters))
+      statement = Fragment(statement.sql + keyword + fragment.sql, statement.parameters.appendedAll(fragment.parameters))
       keyword = ", "
     }
 

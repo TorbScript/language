@@ -87,7 +87,7 @@ f()                                          no arguments: always parentheses
 f(a) { x => x }                              a trailing closure
 f a { x => x }                               a command call with a trailing closure
 f(label: value)                              a labelled argument; labels follow the positional ones
-f(...values)                                 a spread of any `Iterable`
+f(...values)                                 a spread of any `Iterate`
 { x: Int => x * 2 }                          a closure with a typed parameter
 { _ * 2 }                                    a closure with implicit parameters `_`, `_2`, `_3`
 Type.Case(field)                             a case, written out
@@ -155,7 +155,7 @@ Show & Encode                                an intersection of traits
 
 ```text
 return value                                 an early return
-for item in items { ... }                     over anything `Iterable`
+for item in items { ... }                     over anything `Iterate`
 for (key, value) in table { ... }             destructuring in a loop
 while condition { ... }                      `break` and `continue` work
 loop { ... }                                 endless: `Never` without a `break`, `Void` with one

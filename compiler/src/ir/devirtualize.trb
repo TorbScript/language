@@ -25,7 +25,7 @@
  * a direct call are read off the callee's signature, which is what `insertOwnership` does next, so the retain a witness
  * thunk owed its arguments becomes the caller's ordinary `Move` or `Retain` and nothing needs a rule of its own.
  *
- * A frozen function is where the analysis used to stop, and `ArrayList.iterator` is the one that costs the most:
+ * A frozen function is where the analysis used to stop, and `ArrayList.iterate` is the one that costs the most:
  * a `for` over a list allocated a boxed cursor per loop and paid a `makeUnique` and an indirect call per turn, because
  * the member answers `Iterator<Item>` and a table member's signature may not move. `specializeFrozenCallees` takes the
  * signature out of the way instead of moving it: a **copy** of the member that no table names is free, the direct call
@@ -85,7 +85,7 @@ fn peelProgram(var program: IrProgram) {
  *
  * A **member of a witness table** is the case this exists for. Its thunk casts the erased receiver to the payload and
  * calls exactly the signature the table was built against, so `collectSignature` poisons its parameters and its result
- * - and `ArrayList.iterator` therefore answers the boxed `Iterator<Item>` even where the receiver has been a concrete
+ * - and `ArrayList.iterate` therefore answers the boxed `Iterator<Item>` even where the receiver has been a concrete
  * list since the first run. A copy is free of that: nothing points at it but the call sites that were rewritten here,
  * so the second run reads its result as an ordinary location and the cursor of a `for` becomes a record on the frame.
  *
@@ -105,7 +105,7 @@ fn specializeFrozenCallees(var program: IrProgram): Bool {
   var clones: List<Int> = []
   var isWanted = false
   for _ in 0..count {
-    clones.add(-1)
+    clones.append(-1)
   }
   for index in 0..count {
     for block in program.functions[index].blocks {
@@ -124,7 +124,7 @@ fn specializeFrozenCallees(var program: IrProgram): Bool {
   }
   var taken: Set<String> = Set.of()
   for function in program.functions {
-    taken.add function.name
+    taken.insert function.name
   }
   for index in 0..count {
     if clones[index] < 0 {
@@ -132,9 +132,9 @@ fn specializeFrozenCallees(var program: IrProgram): Bool {
     }
     const original = program.functions[index]
     const name = specializedName taken, original.name
-    taken.add name
-    program.functions.add original.copy(name: name)
-    program.specializedFunctions.add(program.functions.length() - 1)
+    taken.insert name
+    program.functions.append original.copy(name: name)
+    program.specializedFunctions.insert(program.functions.length() - 1)
     clones.set(index, program.functions.length() - 1)
   }
   redirectSpecializedCalls program, clones
@@ -206,12 +206,12 @@ fn redirectSpecializedCalls(var program: IrProgram, clones: List<Int>) {
         if const .Call(target, callee, arguments, witnesses, at) = instruction {
           if callee.value >= 0 && callee.value < clones.length() && clones[callee.value] >= 0 {
             const clone = FunctionId clones[callee.value]
-            written.add Instruction.Call(target, clone, arguments, witnesses, at)
+            written.append Instruction.Call(target, clone, arguments, witnesses, at)
             isChanged = true
             continue
           }
         }
-        written.add instruction
+        written.append instruction
       }
       if isChanged {
         program.functions[index].blocks[block].instructions = written
@@ -245,24 +245,24 @@ fn locationsOf(program: IrProgram): Locations {
   for index in 0..program.functions.length() {
     const function = program.functions[index]
     const base = places.ofSlot.length()
-    places.slotBase.add base
-    places.slotCount.add function.slots.length()
+    places.slotBase.append base
+    places.slotCount.append function.slots.length()
     for declaration in function.slots {
       if isObjectType(program, declaration.annotation) {
         const at = places.count
-        places.ofSlot.add at
+        places.ofSlot.append at
         places.count = at + 1
         continue
       }
-      places.ofSlot.add(-1)
+      places.ofSlot.append(-1)
     }
     if isObjectType(program, function.signature.result) {
       const at = places.count
-      places.ofResult.add at
+      places.ofResult.append at
       places.count = at + 1
       continue
     }
-    places.ofResult.add(-1)
+    places.ofResult.append(-1)
   }
   places
 }
@@ -336,11 +336,11 @@ type Producer {
 fn newPeeling(program: IrProgram, places: Locations): Peeling {
   var peeling = Peeling()
   for at in 0..places.count {
-    peeling.parent.add at
-    peeling.poisoned.add false
-    peeling.declared.add(-1)
-    peeling.payload.add(-1)
-    peeling.tables.add(-1)
+    peeling.parent.append at
+    peeling.poisoned.append false
+    peeling.declared.append(-1)
+    peeling.payload.append(-1)
+    peeling.tables.append(-1)
   }
   for index in 0..program.functions.length() {
     const function = program.functions[index]
@@ -499,7 +499,7 @@ fn frozenFunctionsOf(program: IrProgram): List<Bool> {
   const count = program.functions.length()
   var frozen: List<Bool> = []
   for _ in 0..count {
-    frozen.add false
+    frozen.append false
   }
   for index in 0..program.witnessTableCount() {
     const members = program.witnessTables[index].members
@@ -813,7 +813,7 @@ fn poisonArguments(var peeling: Peeling, places: Locations, index: Int, argument
 
 /**
  * What a box says about the slot it wrote: the type of its payload, and the tables it was built with. A payload that is
- * **itself** a trait-typed value is a narrowing coercion - a `List<Item>` handed on as an `Iterable<Item>` - and
+ * **itself** a trait-typed value is a narrowing coercion - a `List<Item>` handed on as an `Iterate<Item>` - and
  * neither side of one can lose its box, because the tables of the narrower value are read out of the wider one.
  */
 fn collectTraitValue(
@@ -845,10 +845,10 @@ fn collectTraitValue(
     return
   }
   const payload = function.typeOfSlot value.slot
-  peeling.tableSets.add tables
-  peeling.tableKeys.add key
+  peeling.tableSets.append tables
+  peeling.tableKeys.append key
   const at = peeling.tableSets.length() - 1
-  peeling.producers.add Producer(answer, payload.value, at)
+  peeling.producers.append Producer(answer, payload.value, at)
 }
 
 /**
@@ -1067,11 +1067,11 @@ fn directCallOf(
   }
   var given: List<Argument> = []
   if first.isReference {
-    given.add referenced(Reference(place.base, []))
+    given.append referenced(Reference(place.base, []))
   } else {
-    given.add borrowed(place.base)
+    given.append borrowed(place.base)
   }
-  given.addAll arguments
+  given.appendAll arguments
   Some Instruction.Call(target, callee, given, [])
 }
 
@@ -1250,10 +1250,10 @@ fn rewriteFunction(peeling: Peeling, places: Locations, var program: IrProgram, 
       const rewritten = rewrittenInstruction peeling, places, program, original, index, instruction
       match rewritten {
         Some(found) => {
-          written.add found
+          written.append found
           isChanged = true
         }
-        None => written.add instruction
+        None => written.append instruction
       }
     }
     if isChanged {

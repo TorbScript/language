@@ -10,14 +10,14 @@
 use From from "std/core"
 
 /** Two implementations, so that one default body has to answer two types. */
-trait Pushdown<Item> with Collection<Item> {
+trait Pushdown<Item> with Iterate<Item>, Length {
   /** Builds one from its arguments, whatever `Self` is. */
-  static fn of(...items: Item): Self where Self: From<Iterable<Item>> {
+  static fn of(...items: Item): Self where Self: From<Iterate<Item>> {
     Self.from items
   }
 
   /** A second default over the first, to show that `Self` keeps its meaning one call deeper. */
-  static fn filled(count: Int, value: Item): Self where Self: From<Iterable<Item>> {
+  static fn filled(count: Int, value: Item): Self where Self: From<Iterate<Item>> {
     Self.from((0..count).map({ position => value }))
   }
 
@@ -26,16 +26,16 @@ trait Pushdown<Item> with Collection<Item> {
 }
 
 /** The default implementation: what `Pushdown.of` answers when nothing narrower is asked for. */
-extend<Item> Pushdown<Item> with From<Iterable<Item>> {
-  static fn from(items: Iterable<Item>): Pushdown<Item> {
+extend<Item> Pushdown<Item> with From<Iterate<Item>> {
+  static fn from(items: Iterate<Item>): Pushdown<Item> {
     Pile.from items
   }
 }
 
-type Pile<Item> with Pushdown<Item>, From<Iterable<Item>> {
+type Pile<Item> with Pushdown<Item>, From<Iterate<Item>> {
   private var items: List<Item> = []
 
-  static fn from(items: Iterable<Item>): Pile<Item> {
+  static fn from(items: Iterate<Item>): Pile<Item> {
     Self items.toList()
   }
 
@@ -44,7 +44,7 @@ type Pile<Item> with Pushdown<Item>, From<Iterable<Item>> {
   }
 
   var fn add(value: Item) {
-    items.add value
+    items.append value
   }
 
   var fn clear() {
@@ -55,15 +55,15 @@ type Pile<Item> with Pushdown<Item>, From<Iterable<Item>> {
     items.length()
   }
 
-  fn iterator(): Iterator<Item> {
-    items.iterator()
+  fn iterate(): Iterator<Item> {
+    items.iterate()
   }
 }
 
-type Reversing<Item> with Pushdown<Item>, From<Iterable<Item>> {
+type Reversing<Item> with Pushdown<Item>, From<Iterate<Item>> {
   private var items: List<Item> = []
 
-  static fn from(items: Iterable<Item>): Reversing<Item> {
+  static fn from(items: Iterate<Item>): Reversing<Item> {
     Self items.toList().reversed().toList()
   }
 
@@ -83,8 +83,8 @@ type Reversing<Item> with Pushdown<Item>, From<Iterable<Item>> {
     items.length()
   }
 
-  fn iterator(): Iterator<Item> {
-    items.iterator()
+  fn iterate(): Iterator<Item> {
+    items.iterate()
   }
 }
 

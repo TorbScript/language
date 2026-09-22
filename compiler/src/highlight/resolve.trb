@@ -104,7 +104,7 @@ public fn resolveFile(file: SourceFile): List<HighlightToken> {
 // --- The tables -------------------------------------------------------------------------------------------------
 
 fn pushToken(var resolver: Resolver, span: Span, kind: String, modifiers: List<String>) {
-  resolver.tokens.add HighlightToken(span, kind, modifiers)
+  resolver.tokens.append HighlightToken(span, kind, modifiers)
 }
 
 fn isGeneric(resolver: Resolver, name: String): Bool {
@@ -146,7 +146,7 @@ fn isKnownType(resolver: Resolver, name: String): Bool {
 
 fn pushScope(var resolver: Resolver) {
   const depth = resolver.locals.length()
-  resolver.scopeStarts.add depth
+  resolver.scopeStarts.append depth
 }
 
 fn popScope(var resolver: Resolver) {
@@ -164,14 +164,14 @@ fn declareLocal(var resolver: Resolver, name: String, kind: LocalKind, isVar: Bo
   if resolver.scopeStarts.isEmpty() {
     return
   }
-  resolver.locals.add LocalSymbol(name, kind, isVar)
+  resolver.locals.append LocalSymbol(name, kind, isVar)
 }
 
 fn pushGenerics(var resolver: Resolver, generics: List<GenericParameter>) {
   const depth = resolver.genericNames.length()
-  resolver.genericStarts.add depth
+  resolver.genericStarts.append depth
   for parameter in generics {
-    resolver.genericNames.add parameter.name.text
+    resolver.genericNames.append parameter.name.text
   }
   // A second pass, so a bound may name a parameter that is declared after it
   for parameter in generics {
@@ -218,7 +218,7 @@ fn methodModifiers(method: MethodSymbol): List<String> {
 fn fieldModifiers(field: FieldSymbol): List<String> {
   var modifiers = readonlyModifiers field.isVar
   if field.isStatic {
-    modifiers.add "static"
+    modifiers.append "static"
   }
   modifiers
 }
@@ -475,11 +475,11 @@ fn resolveFunction(var resolver: Resolver, function: FunctionDeclaration, isMeth
   const changesReceiver = receiver.map({ _.isVar }) ?? false
   var modifiers = ["declaration"]
   if isMethod && receiver.isNone() {
-    modifiers.add "static"
+    modifiers.append "static"
   }
   // A `var fn` is underlined at its declaration as at every call of it
   if changesReceiver {
-    modifiers.add "mutable"
+    modifiers.append "mutable"
   }
   const kind = if isMethod {
     "method"

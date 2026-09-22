@@ -150,7 +150,7 @@ public fn startsUpperCase(text: String): Bool {
 
 fn collectPatternNames(pattern: Pattern, var found: List<Name>) {
   match pattern.kind {
-    .Binding(name) => found.add Name(name, pattern.span)
+    .Binding(name) => found.append Name(name, pattern.span)
     .TuplePattern(items) => {
       for item in items {
         collectPatternNames item, found
@@ -162,7 +162,7 @@ fn collectPatternNames(pattern: Pattern, var found: List<Name>) {
       }
       if const Some(tail) = rest {
         if const Some(name) = tail.name {
-          found.add name
+          found.append name
         }
       }
     }
@@ -309,7 +309,7 @@ fn collectDeclaration(var scope: FileScope, declaration: Declaration, topLevel: 
     .Use(useDeclaration) => collectUse scope, useDeclaration
     .Function(function) => {
       if topLevel {
-        scope.functions.add function.name.text
+        scope.functions.insert function.name.text
       }
       // A function's own body is never top level, whatever surrounds the function
       if const Some(body) = function.body {
@@ -341,7 +341,7 @@ fn collectDeclaration(var scope: FileScope, declaration: Declaration, topLevel: 
     .Foreign(library) => {
       for member in library.members {
         if const .Function(function) = member.kind {
-          scope.functions.add function.name.text
+          scope.functions.insert function.name.text
         }
       }
     }
@@ -358,9 +358,13 @@ fn collectDeclaration(var scope: FileScope, declaration: Declaration, topLevel: 
 /** The members of an `extend` join whatever the type already has, so a type and its extensions read as one. */
 fn addTo(var scope: FileScope, name: String, addition: TypeInfo) {
   var entry = scope.types.get(name) ?? TypeInfo()
-  entry.fields.addAll addition.fields
-  entry.methods.addAll addition.methods
-  entry.cases.addAll addition.cases
+  for (field, info) in addition.fields {
+    entry.fields.set field, info
+  }
+  for (method, info) in addition.methods {
+    entry.methods.set method, info
+  }
+  entry.cases.insertAll addition.cases
   scope.types.set name, entry
 }
 
@@ -372,7 +376,7 @@ fn addTo(var scope: FileScope, name: String, addition: TypeInfo) {
  * agrees that it is a `var fn`.
  */
 fn rememberMembers(var scope: FileScope, info: TypeInfo) {
-  scope.declaredCases.addAll info.cases
+  scope.declaredCases.insertAll info.cases
   for (name, method) in info.methods {
     const changes = method.changesReceiver
     const known = scope.changingMethods.get(name) ?? changes
@@ -382,16 +386,16 @@ fn rememberMembers(var scope: FileScope, info: TypeInfo) {
 
 fn collectUse(var scope: FileScope, useDeclaration: UseDeclaration) {
   match useDeclaration.items {
-    .All(alias) => scope.namespaces.add alias.text
+    .All(alias) => scope.namespaces.insert alias.text
     .Names(items) => {
       for item in items {
         const localName = item.localName().text
         if item.path.length() > 1 {
-          scope.importedCases.add localName
+          scope.importedCases.insert localName
         } else if startsUpperCase(localName) {
-          scope.importedTypes.add localName
+          scope.importedTypes.insert localName
         } else {
-          scope.importedFunctions.add localName
+          scope.importedFunctions.insert localName
         }
       }
     }
@@ -414,7 +418,7 @@ fn typeInfoOf(members: List<Member>, kind: GlobalKind?): TypeInfo {
         const changes = receiver.map({ _.isVar }) ?? false
         info.methods.set function.name.text, MethodSymbol(receiver.isSome(), changesReceiver: changes)
       }
-      .Case(caseDeclaration) => info.cases.add caseDeclaration.name.text
+      .Case(caseDeclaration) => info.cases.insert caseDeclaration.name.text
     }
   }
   info

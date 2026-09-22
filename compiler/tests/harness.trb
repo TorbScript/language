@@ -81,8 +81,8 @@ public const preludeSource = r"""
     var fn replace(range: Bounds<Int>, values: Self)
   }
 
-  public trait Iterable<Item> {
-    fn iterator(): Iterator<Item>
+  public trait Iterate<Item> {
+    fn iterate(): Iterator<Item>
   }
 
   public trait Iterator<Item> {
@@ -280,18 +280,18 @@ public const preludeSource = r"""
     }
   }
 
-  extend Range<Int> with Iterable<Int> {
-    native fn iterator(): Iterator<Int>
+  extend Range<Int> with Iterate<Int> {
+    native fn iterate(): Iterator<Int>
   }
 
-  extend RangeFrom<Int> with Iterable<Int> {
-    native fn iterator(): Iterator<Int>
+  extend RangeFrom<Int> with Iterate<Int> {
+    native fn iterate(): Iterator<Int>
   }
 
-  public trait List<Item> with Iterable<Item>, MutableIndexed<Int, Item>, MutableSlice {
+  public trait List<Item> with Iterate<Item>, MutableIndexed<Int, Item>, MutableSlice {
     fn length(): Int
-    var fn add(value: Item)
-    fn added(value: Item): Self
+    var fn append(value: Item)
+    fn appended(value: Item): Self
     var fn removeAt(index: Int): Item?
 
     /** A body, because the real one is a default of `std/collections` as well: a sort is TorbScript over `a[key]`. */
@@ -304,8 +304,8 @@ public const preludeSource = r"""
   }
 
   /** What makes `List.from(...)` and `toList()` work: an implementation whose target is the trait. */
-  extend<Item> List<Item> with From<Iterable<Item>> {
-    static fn from(items: Iterable<Item>): List<Item> {
+  extend<Item> List<Item> with From<Iterate<Item>> {
+    static fn from(items: Iterate<Item>): List<Item> {
       ArrayList.from(items)
     }
   }
@@ -354,8 +354,8 @@ public const preludeSource = r"""
    * the message the *caller* wrote and at the site inside `expect`, which is what the `Element` path step of
    * `ir/elements.trb` carries over when it replaces the round trip.
    */
-  public native type ArrayList<Item> with List<Item>, From<Iterable<Item>> {
-    native static fn from(items: Iterable<Item>): ArrayList<Item>
+  public native type ArrayList<Item> with List<Item>, From<Iterate<Item>> {
+    native static fn from(items: Iterate<Item>): ArrayList<Item>
     native fn get(index: Int): Item?
 
     fn at(key: Int): Item {
@@ -364,8 +364,8 @@ public const preludeSource = r"""
   }
 
   /** The trie, whose `from` waits for milestone 8: what a **planned** native looks like to the back end. */
-  public native type TrieList<Item> with List<Item>, From<Iterable<Item>> {
-    native static fn from(items: Iterable<Item>): TrieList<Item>
+  public native type TrieList<Item> with List<Item>, From<Iterate<Item>> {
+    native static fn from(items: Iterate<Item>): TrieList<Item>
     native fn get(index: Int): Item?
 
     fn at(key: Int): Item {
@@ -386,35 +386,35 @@ public const preludeSource = r"""
 
   /** A set, so that a literal can be tested against a collection target that is not a `List` (gap 51). */
   public trait Set<Item>
-    with Iterable<Item>, Length
+    with Iterate<Item>, Length
   {
     fn contains(value: Item): Bool
   }
 
-  extend<Item: Hash> Set<Item> with From<Iterable<Item>> {
-    static fn from(items: Iterable<Item>): Set<Item> {
+  extend<Item: Hash> Set<Item> with From<Iterate<Item>> {
+    static fn from(items: Iterate<Item>): Set<Item> {
       TrieSet.from items
     }
   }
 
-  public native type TrieSet<Item: Hash> with Set<Item>, From<Iterable<Item>> {
-    native static fn from(items: Iterable<Item>): TrieSet<Item>
+  public native type TrieSet<Item: Hash> with Set<Item>, From<Iterate<Item>> {
+    native static fn from(items: Iterate<Item>): TrieSet<Item>
 
     native fn length(): Int
-    native fn iterator(): Iterator<Item>
+    native fn iterate(): Iterator<Item>
     native fn contains(value: Item): Bool
   }
 
   /** `[1, 2]` against an `Array<Int, 2>` writes the items into the inline slots, and the checker counts them. */
   public native type Array<Item, const Size: Int>
-    with Iterable<Item>, Length, MutableIndexed<Int, Item>
+    with Iterate<Item>, Length, MutableIndexed<Int, Item>
   {
     native static fn filled(value: Item): Array<Item, Size>
     native static fn generated(produce: (index: Int) => Item): Array<Item, Size>
-    native static fn from(items: Iterable<Item>): Array<Item, Size>?
+    native static fn from(items: Iterate<Item>): Array<Item, Size>?
 
     native fn length(): Int
-    native fn iterator(): Iterator<Item>
+    native fn iterate(): Iterator<Item>
   }
 
   public native fn print(...values: Show): Void
@@ -450,15 +450,15 @@ public const preludeSource = r"""
   // added in the middle moves them all.
 
   /** As in `std/iteration`: the one collection target the language has, and what gap 53 is about. */
-  extend<Item> Iterable<Item> {
-    fn to<Target: From<Iterable<Item>>>(): Target {
+  extend<Item> Iterate<Item> {
+    fn to<Target: From<Iterate<Item>>>(): Target {
       Target.from self
     }
   }
 
-  /** As in `std/text`: a `String` is built from its characters, and it is not `Iterable<Char>` itself. */
-  extend String with From<Iterable<Char>> {
-    native static fn from(value: Iterable<Char>): String
+  /** As in `std/text`: a `String` is built from its characters, and it is not `Iterate<Char>` itself. */
+  extend String with From<Iterate<Char>> {
+    native static fn from(value: Iterate<Char>): String
   }
 
   /**
@@ -534,7 +534,7 @@ public const workspace = [
     """,
   "std/prelude/src/types.trb": preludeSource,
   "std/prelude/src/lib.trb": r"""
-    public use Show, Equals, Compare, Hash, Negate, Iterable, Iterator from "./types"
+    public use Show, Equals, Compare, Hash, Negate, Iterate, Iterator from "./types"
     public use Add, Subtract, Multiply, Divide, Remainder, Indexed, Slice from "./types"
     public use MutableIndexed, MutableSlice, OrElse from "./types"
     public use Numeric, Signed, Int8, Int32, Int64, UInt8, Float32, Float64 from "./types"
@@ -608,7 +608,7 @@ public type Probed {
     const at = lastSpanOf written
     var found: List<String> = []
     for adaptation in checker.adaptationsAt(module, at) {
-      found.add describeAdaptation(checker, adaptation)
+      found.append describeAdaptation(checker, adaptation)
     }
     found
   }
@@ -654,7 +654,7 @@ public type Probed {
     const at = spanOf written
     var found: List<String> = []
     for adaptation in checker.adaptationsAt(module, at) {
-      found.add describeAdaptation(checker, adaptation)
+      found.append describeAdaptation(checker, adaptation)
     }
     found
   }
@@ -671,7 +671,7 @@ public type Probed {
     const found = checker.typeArgumentsAt(module, at) ?? []
     var shown: List<String> = []
     for argument in found {
-      shown.add checker.describe(argument)
+      shown.append checker.describe(argument)
     }
     shown
   }
@@ -681,7 +681,7 @@ public type Probed {
     const at = spanOf written
     var shown: List<String> = []
     for witness in checker.witnessesAt(module, at) ?? [] {
-      shown.add describeWitness(checker, witness)
+      shown.append describeWitness(checker, witness)
     }
     shown
   }
@@ -692,7 +692,7 @@ public type Probed {
     var shown: List<String> = []
     for capture in checker.capturesAt(module, at) ?? [] {
       const name = checker.binding(capture.binding).name
-      shown.add(if capture.isVar { "var {name}" } else { name })
+      shown.append(if capture.isVar { "var {name}" } else { name })
     }
     shown
   }
@@ -710,25 +710,25 @@ public type Probed {
       const capture = found.captures[index]
       const shown = checker.describe capture.annotation
       const witness = describeWitness checker, capture.witness
-      lines.add "capture {index} {capture.name}: {shown} through {witness}"
+      lines.append "capture {index} {capture.name}: {shown} through {witness}"
     }
     var inside: List<(Span, String)> = []
     for (span, parameters) in found.lambdas {
       var parts: List<String> = []
       for parameter in parameters {
-        parts.add "{parameter.name}: {checker.describe(parameter.annotation)}"
+        parts.append "{parameter.name}: {checker.describe(parameter.annotation)}"
       }
-      inside.add((span, "lambda `{textAt(span)}` ({parts.joined(separator: ", ")})"))
+      inside.append((span, "lambda `{textAt(span)}` ({parts.joined(separator: ", ")})"))
     }
     for (span, node) in found.names {
       const shown = match node {
         .Parameter(index) => "parameter {index}"
         .Captured(index) => "capture {index}"
       }
-      inside.add((span, "name `{textAt(span)}` {shown}"))
+      inside.append((span, "name `{textAt(span)}` {shown}"))
     }
     inside.sort({ (_.0.start, _.0.end) })
-    lines.addedAll(inside.map({ _.1 }).toList())
+    lines.appendedAll(inside.map({ _.1 }).toList())
   }
 
   /** The text of one span of the source, which is how a test recognizes a node of a quotation. */
@@ -811,7 +811,7 @@ public fn describeArms(checker: Checker, plan: MatchPlan): List<String> {
   for arm in plan.arms {
     var branches: List<String> = []
     for branch in arm.branches {
-      branches.add describeBranch(checker, branch)
+      branches.append describeBranch(checker, branch)
     }
     var line = branches.joined separator: " | "
     if arm.hasGuard {
@@ -820,7 +820,7 @@ public fn describeArms(checker: Checker, plan: MatchPlan): List<String> {
     if !arm.isReachable {
       line = "{line} unreachable"
     }
-    lines.add line
+    lines.append line
   }
   lines
 }
@@ -830,12 +830,12 @@ fn describeBranch(checker: Checker, branch: PatternBranch): String {
   var parts: List<String> = []
   for probed in branch.tests {
     const place = describePath checker, probed.path
-    parts.add "{place} {describeCheck(checker, probed.check)}"
+    parts.append "{place} {describeCheck(checker, probed.check)}"
   }
   for bound in branch.bindings {
     const place = describePath checker, bound.path
     const name = if bound.isVar { "var {bound.name}" } else { bound.name }
-    parts.add "{name}={place}"
+    parts.append "{name}={place}"
   }
   if parts.isEmpty() {
     return "anything"
@@ -937,7 +937,7 @@ public fn problems(source: String): List<String> {
   var found: List<String> = []
   for file in check(workspaceWith(["app/src/main.trb": source]), ["app"]).files {
     for diagnostic in file.diagnostics {
-      found.add diagnostic.message
+      found.append diagnostic.message
     }
   }
   found
@@ -948,7 +948,7 @@ public fn problemsOf(files: Map<String, String>): List<String> {
   var found: List<String> = []
   for file in check(workspaceWith(files), ["app"]).files {
     for diagnostic in file.diagnostics {
-      found.add diagnostic.message
+      found.append diagnostic.message
     }
   }
   found
@@ -959,7 +959,7 @@ public fn problemsAt(files: Map<String, String>, paths: List<String>): List<Stri
   var found: List<String> = []
   for file in check(workspaceWith(files), paths).files {
     for diagnostic in file.diagnostics {
-      found.add diagnostic.message
+      found.append diagnostic.message
     }
   }
   found
@@ -1044,20 +1044,20 @@ public fn describeAdaptation(checker: Checker, adaptation: Adaptation): String {
 fn describeBounds(checker: Checker, bounds: List<TypeId>): String {
   var parts: List<String> = []
   for bound in bounds {
-    parts.add checker.describe(bound)
+    parts.append checker.describe(bound)
   }
   parts.joined separator: " + "
 }
 
 /**
  * What a collection literal became, as a test compares it: the default collection of the trait, `Item x Size` slots of
- * an inline array, or the target the list is handed to with the `From<Iterable<Item>>` that does it.
+ * an inline array, or the target the list is handed to with the `From<Iterate<Item>>` that does it.
  */
 public fn describeCollectionLiteral(checker: Checker, found: CollectionLiteral): String {
   match found {
     .Default => "default"
     .InlineArray(item, size) => "array {checker.describe(item)} x {size}"
-    .FromIterable(target, item, witness) => {
+    .FromIterate(target, item, witness) => {
       const shown = describeWitness checker, witness
       "from {checker.describe(target)} of {checker.describe(item)} through {shown}"
     }
@@ -1075,7 +1075,7 @@ public fn describeWitness(checker: Checker, witness: Witness): String {
       }
       var parts: List<String> = []
       for nested in inner {
-        parts.add describeWitness(checker, nested)
+        parts.append describeWitness(checker, nested)
       }
       "{shown} [{parts.joined(separator: ", ")}]"
     }

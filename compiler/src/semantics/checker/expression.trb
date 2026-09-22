@@ -19,7 +19,7 @@ use Target, deferredTarget, resolveName, symbolTarget, targetOfCandidate from ".
 use formOf, reportUnknownMember, isFullyKnown from "./name"
 use lookupMember, lookupStaticMember, recordDelegation, traitDispatchOf, requireObjectSafe from "./member"
 use boundMember, dispatchOfBound from "./member"
-use traitArgumentsOf, witnessFor, isConcrete, implementsBound, iterableSourceOf from "./implementation"
+use traitArgumentsOf, witnessFor, isConcrete, implementsBound, iterateSourceOf from "./implementation"
 use fallibleFailuresOf, appliedTraitsOf, appliedArgumentsOf, fitsType from "./implementation"
 use typeFromReference, integerLiteral from "./lowering"
 use typeSignatureOf from "./signature"
@@ -160,7 +160,7 @@ public fn resolveTarget(
       const scope = scopeHere checker
       var given: List<TypeId> = []
       for reference in references {
-        given.add typeFromReference(checker, reference, scope.forEither())
+        given.append typeFromReference(checker, reference, scope.forEither())
       }
       const found = resolveTarget checker, inner, expected, given
       const _ = checker.typed inner.span, found.annotation
@@ -436,7 +436,7 @@ fn withDeclaredDefaults(var checker: Checker, own: TypeId): TypeId? {
   for index in 0..arguments.length() {
     const argument = arguments[index]
     if openVariableOf(checker, argument).isNone() {
-      filled.add argument
+      filled.append argument
       continue
     }
     const declaration = checker.types.parameter shape.generics[index]
@@ -450,7 +450,7 @@ fn withDeclaredDefaults(var checker: Checker, own: TypeId): TypeId? {
     if checker.absorbs(annotation) {
       return None
     }
-    filled.add annotation
+    filled.append annotation
     isChanged = true
   }
   if !isChanged {
@@ -999,7 +999,7 @@ fn tupleLiteralType(var checker: Checker, items: List<Argument>, expected: TypeI
     if index < wanted.length() {
       checkLabel checker, label, wanted[index].label, item.value.span
     }
-    fields.add TupleField(label, annotation)
+    fields.append TupleField(label, annotation)
   }
   checker.types.intern TypeForm.Tuple(fields)
 }
@@ -1028,7 +1028,7 @@ fn checkLabel(var checker: Checker, written: String?, wanted: String?, at: Span)
  *   solve or the message asks for the annotation.
  * - an `Array<Item, Size>`: the items go straight into the inline slots, and how many of them there are is part of the
  *   type.
- * - anything that is `From<Iterable<Item>>` - `ArrayList<Int>`, `Set<String>`, `ArrayQueue<Int>`, a type of your own -
+ * - anything that is `From<Iterate<Item>>` - `ArrayList<Int>`, `Set<String>`, `ArrayQueue<Int>`, a type of your own -
  *   the default list is built and handed to `Target.from`. These are exactly the targets `.to<Target>()` accepts.
  * - anything else: an error. A literal that silently claims to be a type nobody can build from a list is what no back
  *   end can lower.
@@ -1052,11 +1052,11 @@ fn listLiteralType(var checker: Checker, items: List<Argument>, expected: TypeId
       return builtListType checker, items, found, at
     }
     if const Some(annotation) = wrongTargetOf(checker, wanted) {
-      reportWrongTarget checker, annotation, "list", "From<Iterable<Item>>", at
+      reportWrongTarget checker, annotation, "list", "From<Iterate<Item>>", at
       inferArguments checker, items
       return checker.invalidType
     }
-    // A trait type the list only *coerces* to still says what it holds: `const numbers: Iterable<Int> = []`
+    // A trait type the list only *coerces* to still says what it holds: `const numbers: Iterate<Int> = []`
     item = itemOfIterated checker, wanted
   }
   defaultListType checker, items, item, wanted, list, at
@@ -1126,7 +1126,7 @@ fn mapLiteralType(
   var key = itemOfCollection checker, wanted, map, 0
   var value = itemOfCollection checker, wanted, map, 1
   if key.isNone() && value.isNone() {
-    // A target of its own takes `Iterable<(Key, Value)>`; one that takes single items is not a map target at all
+    // A target of its own takes `Iterate<(Key, Value)>`; one that takes single items is not a map target at all
     if const Some(found) = builtTargetOf(checker, wanted) {
       match entryTypesOf(checker, found.item) {
         Some((first, second)) => {
@@ -1204,7 +1204,7 @@ type ExpectedArray {
   size: TypeId
 }
 
-/** An expected type that has to be *built* from a collection, with the `From<Iterable<Item>>` that does it. */
+/** An expected type that has to be *built* from a collection, with the `From<Iterate<Item>>` that does it. */
 type BuiltTarget {
   annotation: TypeId
   item: TypeId
@@ -1257,13 +1257,13 @@ fn itemOfCollection(var checker: Checker, expected: TypeId?, capability: SymbolI
 }
 
 /**
- * The expected type as a target of its own. The one protocol is `From<Iterable<Item>>` - there is no `Collectable` and
+ * The expected type as a target of its own. The one protocol is `From<Iterate<Item>>` - there is no `Collectable` and
  * no `FromIterator` (concept, Decision Log) - and `Item` is what the target itself iterates, so a literal accepts
  * exactly the targets `.to<Target>()` accepts.
  */
 fn builtTargetOf(var checker: Checker, expected: TypeId?): BuiltTarget? {
   const conversion = checker.wellKnown.from?
-  const iterable = checker.wellKnown.iterable?
+  const iterable = checker.wellKnown.iterate?
   const annotation = expected?
   if !isConcrete(checker, annotation) {
     return None
@@ -1279,28 +1279,28 @@ fn builtTargetOf(var checker: Checker, expected: TypeId?): BuiltTarget? {
   Some BuiltTarget(annotation, item, witness)
 }
 
-/** What a target iterates, which is the `Item` its `From<Iterable<Item>>` takes. */
+/** What a target iterates, which is the `Item` its `From<Iterate<Item>>` takes. */
 fn itemOfTarget(var checker: Checker, annotation: TypeId, iterable: SymbolId): TypeId? {
   if const Some(arguments) = traitArgumentsOf(checker, annotation, iterable) {
     if const Some(item) = arguments.first() {
       return Some item
     }
   }
-  // A target that is not iterable itself - `String`, a `Histogram with From<Iterable<Int>>` - says it in its own `From`.
-  // Which of several `From` implementations that is, is the question `iterableSourceOf` answers: `String` has two
-  // (`From<Iterable<Char>>` and the blanket `From<Never>`) and only one of them takes an `Iterable`
-  iterableSourceOf checker, annotation, iterable
+  // A target that is not iterable itself - `String`, a `Histogram with From<Iterate<Int>>` - says it in its own `From`.
+  // Which of several `From` implementations that is, is the question `iterateSourceOf` answers: `String` has two
+  // (`From<Iterate<Char>>` and the blanket `From<Never>`) and only one of them takes an `Iterate`
+  iterateSourceOf checker, annotation, iterable
 }
 
-/** The `Item` of an expected type that is merely iterable: `const numbers: Iterable<Int> = []` holds `Int64`s. */
+/** The `Item` of an expected type that is merely iterable: `const numbers: Iterate<Int> = []` holds `Int64`s. */
 fn itemOfIterated(var checker: Checker, expected: TypeId?): TypeId? {
-  const iterable = checker.wellKnown.iterable?
+  const iterable = checker.wellKnown.iterate?
   const annotation = expected?
   const arguments = traitArgumentsOf(checker, annotation, iterable)?
   arguments.first()
 }
 
-/** The `Key` and the `Value` of a map target, which takes `Iterable<(Key, Value)>` and nothing else. */
+/** The `Key` and the `Value` of a map target, which takes `Iterate<(Key, Value)>` and nothing else. */
 fn entryTypesOf(checker: Checker, item: TypeId): (TypeId, TypeId)? {
   if const .Tuple(fields) = checker.types.form(item) {
     if fields.length() == 2 {
@@ -1460,7 +1460,7 @@ fn wrongMapType(
   annotation: TypeId,
   at: Span,
 ): TypeId {
-  reportWrongTarget checker, annotation, "map", "From<Iterable<(Key, Value)>>", at
+  reportWrongTarget checker, annotation, "map", "From<Iterate<(Key, Value)>>", at
   inferEntries checker, entries
   checker.invalidType
 }
@@ -1468,7 +1468,7 @@ fn wrongMapType(
 fn recordBuiltLiteral(var checker: Checker, target: BuiltTarget, at: Span) {
   const annotation = resolveType checker, target.annotation
   const item = resolveType checker, target.item
-  checker.recordCollectionLiteral at, CollectionLiteral.FromIterable(annotation, item, target.witness)
+  checker.recordCollectionLiteral at, CollectionLiteral.FromIterate(annotation, item, target.witness)
 }
 
 /**
@@ -1513,14 +1513,14 @@ fn inferEntries(var checker: Checker, entries: List<(Expression, Expression)>) {
 // --- The messages of the collection literals ------------------------------------------------------------------------
 
 /**
- * A literal against a type that can neither *be* it nor be built from it. `From<Iterable<Item>>` is the one collection
+ * A literal against a type that can neither *be* it nor be built from it. `From<Iterate<Item>>` is the one collection
  * target the language has (concept, Decision Log), so that is what the message names.
  */
 fn reportWrongTarget(var checker: Checker, annotation: TypeId, kind: String, protocol: String, at: Span) {
   const shown = checker.describe annotation
   checker.reportHere(
     Diagnostic.error("A {kind} literal cannot become a `{shown}`: `{shown}` is not `{protocol}`", at)
-      .withNote("A collection target is `From<Iterable<...>>`, the same one `.to<Target>()` asks for")
+      .withNote("A collection target is `From<Iterate<...>>`, the same one `.to<Target>()` asks for")
   )
 }
 
@@ -1866,7 +1866,7 @@ fn operatorBound(
       continue
     }
     if fitsType(checker, other, arguments[0]) {
-      fitting.add candidate
+      fitting.append candidate
     }
   }
   if fitting.isEmpty() {
@@ -1881,7 +1881,7 @@ fn operatorBound(
     for candidate in fitting {
       const arguments = appliedArgumentsOf checker, candidate
       if fitsType(checker, arguments[1], wanted) {
-        narrowed.add candidate
+        narrowed.append candidate
       }
     }
   }
@@ -1934,7 +1934,7 @@ fn describeOperands(var checker: Checker, candidates: List<TypeId>): String {
   for candidate in candidates {
     const arguments = appliedArgumentsOf checker, candidate
     if const Some(operand) = arguments.first() {
-      shown.add checker.describe(operand)
+      shown.append checker.describe(operand)
     }
   }
   shown.joined separator: ", "
@@ -2069,11 +2069,11 @@ fn matchType(var checker: Checker, subject: Expression, arms: List<MatchArm>, ex
     // The names this arm bound: the guard and the body are where they have to be read
     const bound = checker.bindingsHere()
     const plan = armPlanOf checker, arm, found
-    plans.add plan
+    plans.append plan
     if const Some(guard) = arm.guard {
       const _ = checkExpression checker, guard, Expectation.Type(checker.booleanType())
     }
-    produced.add checkExpression(checker, arm.body, expected)
+    produced.append checkExpression(checker, arm.body, expected)
     requireReadBindings checker, bound
     checker.closeScope()
   }
@@ -2152,7 +2152,7 @@ fn tryType(var checker: Checker, inner: Expression, at: Span, expected: Expectat
         Some((_, error)) => Some error
         None => None
       }
-      checker.pendingTries.add PendingTry(at, failure)
+      checker.pendingTries.append PendingTry(at, failure)
     }
     return value
   }
@@ -2550,7 +2550,7 @@ fn soleConversionFailure(var checker: Checker, source: TypeId, target: TypeId, a
   }
   var shown: List<String> = []
   for failure in failures {
-    shown.add "`{checker.describe(failure)}`"
+    shown.append "`{checker.describe(failure)}`"
   }
   const listed = shown.joined separator: ", "
   checker.reportHere(
@@ -2796,9 +2796,9 @@ fn coerceToTraits(var checker: Checker, found: TypeId, bounds: List<TypeId>, at:
   var applied: List<TypeId> = []
   var missing: TypeId? = None
   for wanted in bounds {
-    // `fn each<Item>(items: Iterable<Item>)` with a `List<Int64>`: the arguments of the bound come out of the coercion
+    // `fn each<Item>(items: Iterate<Item>)` with a `List<Int64>`: the arguments of the bound come out of the coercion
     const bound = matchedBound checker, found, wanted
-    applied.add bound
+    applied.append bound
     const witness = witnessFor checker, found, bound
     if const .Unresolved = witness {
       if missing.isNone() {
@@ -2806,7 +2806,7 @@ fn coerceToTraits(var checker: Checker, found: TypeId, bounds: List<TypeId>, at:
       }
       continue
     }
-    witnesses.add witness
+    witnesses.append witness
   }
   if const Some(bound) = missing {
     if !isConcrete(checker, found) || !isConcrete(checker, bound) {
@@ -2822,7 +2822,7 @@ fn coerceToTraits(var checker: Checker, found: TypeId, bounds: List<TypeId>, at:
 }
 
 /**
- * One bound of the expected trait type, with the arguments a coercion decides. `Iterable<Item>` with an unsolved `Item`
+ * One bound of the expected trait type, with the arguments a coercion decides. `Iterate<Item>` with an unsolved `Item`
  * is what every collection parameter of the prelude looks like at a call: the type that arrives says what `Item` is, and
  * that is a solution and not a coercion, so it goes through `unify`.
  */

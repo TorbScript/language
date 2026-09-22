@@ -181,9 +181,9 @@ fn lowerCallable(
           return abandonedSlot lowering, builder, destination
         }
       }
-      operands.add path.reference.base
-      places.add Some(path.reference)
-      taken.addAll path.taken
+      operands.append path.reference.base
+      places.append Some(path.reference)
+      taken.appendAll path.taken
     } else {
       const receiver = match receiverSlot(lowering, builder, callee) {
         Some(found) => found
@@ -192,8 +192,8 @@ fn lowerCallable(
           return unsupportedSlot lowering, builder, destination, what, expression.span
         }
       }
-      operands.add receiver
-      places.add None
+      operands.append receiver
+      places.append None
     }
   }
   const plan = dispatched.mapping
@@ -201,9 +201,9 @@ fn lowerCallable(
   if !lowering.isSupported {
     return abandonedSlot lowering, builder, destination
   }
-  operands.addAll written.slots
-  places.addAll written.places
-  taken.addAll written.taken
+  operands.appendAll written.slots
+  places.appendAll written.places
+  taken.appendAll written.taken
   const result = lowerDispatched lowering, builder, destination, at, dispatched, operands, places, annotation
   putBackElements lowering, builder, taken
   result
@@ -275,7 +275,7 @@ fn separatedFromPlaces(var builder: FunctionBuilder, operands: List<Slot>, place
   var bases: List<Slot> = []
   for place in places {
     if const Some(found) = place {
-      bases.add found.base
+      bases.append found.base
     }
   }
   if bases.isEmpty() {
@@ -396,7 +396,7 @@ fn lowerWitnessCall(
   }
   var rest: List<Slot> = []
   for index in 1..operands.length() {
-    rest.add operands[index]
+    rest.append operands[index]
   }
   const given = borrowedArguments rest
   if !producesValue(lowering, annotation) {
@@ -643,8 +643,8 @@ public fn lowerArgumentSlots(
   var places: List<Reference?> = []
   var taken: List<TakenElement> = []
   for _ in 0..count {
-    filled.add None
-    places.add None
+    filled.append None
+    places.append None
   }
   // `...values: Show` is **one** parameter that every positional argument from its position on fills, so the list is built
   // before the ordinary loop runs and in the place the first of those arguments stands: a variadic is written last, so
@@ -689,7 +689,7 @@ public fn lowerArgumentSlots(
       }
       filled.set position, Some(path.reference.base)
       places.set position, Some(path.reference)
-      taken.addAll path.taken
+      taken.appendAll path.taken
       continue
     }
     const slot = lowerValue lowering, builder, arguments[index].value
@@ -741,7 +741,7 @@ fn lowerVariadicArgument(
   var collected: List<Argument> = []
   for index in 0..arguments.length() {
     if targets.get(index) == Some(position) {
-      collected.add arguments[index]
+      collected.append arguments[index]
     }
   }
   const annotation = irTypeOfClosed lowering, lowering.checker.types.intern(TypeForm.Traits([bound]))
@@ -867,7 +867,7 @@ fn lowerDefaults(
   var ordered: List<Slot> = []
   for entry in found {
     match entry {
-      Some(slot) => ordered.add slot
+      Some(slot) => ordered.append slot
       None => {
         reportUnsupported lowering, "an argument list the back end could not complete", expression.span
         return CallOperands([], [])
@@ -907,7 +907,7 @@ fn declaredDefaults(var lowering: Lowering, symbol: SymbolId): List<Expression?>
   // at = None)` are the fields' and not a parameter list's
   if const Some(fields) = caseFieldsOfDeclarationSite(lowering, symbol) {
     for field in fields {
-      defaults.add field.default
+      defaults.append field.default
     }
     return defaults
   }
@@ -921,7 +921,7 @@ fn declaredDefaults(var lowering: Lowering, symbol: SymbolId): List<Expression?>
     if parameter.name.text == "self" && parameter.annotation.isNone() {
       continue
     }
-    defaults.add parameter.default
+    defaults.append parameter.default
   }
   defaults
 }
@@ -1072,7 +1072,7 @@ fn lowerFieldArguments(
   }
   var filled: List<Slot?> = []
   for _ in 0..count {
-    filled.add None
+    filled.append None
   }
   for index in 0..arguments.length() {
     const position = targets.get(index) ?? -1
@@ -1150,7 +1150,7 @@ fn completeFields(
   var ordered: List<Slot> = []
   for entry in found {
     match entry {
-      Some(slot) => ordered.add slot
+      Some(slot) => ordered.append slot
       None => {
         reportUnsupported lowering, "a construction the back end could not complete", expression.span
         return []

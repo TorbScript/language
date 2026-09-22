@@ -13,19 +13,19 @@
 use Equals, Compare, Hash, combineHashes from "std/core"
 use MutableIndexed, MutableSlice from "std/core"
 use From, Show from "std/core"
-use Collection from "./collection"
+use Iterate, Length from "std/iteration"
 
 /**
  * An ordered sequence, addressable by index. This is the type of the literal `[1, 2, 3]`.
  *
  * Every change has a verb that changes the list in place through a `var` path, and a participle that answers a
- * changed copy and works on a `const` list too: `add`/`added`, `insert`/`inserted`, `remove`/`removed`,
+ * changed copy and works on a `const` list too: `append`/`appended`, `insert`/`inserted`, `remove`/`removed`,
  * `removeAt`/`removedAt`, `sort`/`sorted`, `reverse`/`reversed`.
  *
  * # Examples
  *
  *     var numbers = [3, 1, 2]
- *     numbers.add 4
+ *     numbers.append 4
  *     numbers[0] = 5
  *     for number in numbers {
  *       print number
@@ -34,7 +34,7 @@ use Collection from "./collection"
  * A verb needs a `var` path; its participle answers a changed copy and works on a `const` list too:
  *
  *     const numbers = [3, 1, 2]
- *     const more = numbers.added 6
+ *     const more = numbers.appended 6
  *     print more
  *
  * `list[index]` is itself a `var` path, so an element is changed in place without reading it out first:
@@ -57,28 +57,38 @@ use Collection from "./collection"
  *
  * # Related
  *
- * - [Collection] - `add`, `contains`, `length`, `iterator`, which `List` builds on.
+ * - [Iterate] - the pipeline vocabulary (`map`, `filter`, `fold`, ...) every list has.
  * - [Slice] and [MutableSlice] - `list[from..to]`, a `List` again, as a value and as a `var` path.
  */
 public trait List<Item>
-  with Collection<Item>, MutableIndexed<Int, Item>, MutableSlice
+  with Iterate<Item>, Length, MutableIndexed<Int, Item>, MutableSlice
 {
   /**
-   * Builds a list from its arguments: `List.of(1, 2, 3)`, or with a spread, `List.of(...anyIterable)`.
+   * Builds a list from its arguments: `List.of(1, 2, 3)`, or with a spread, `List.of(...anyIterate)`.
    *
    * It answers `Self`, so `TrieList.of(1, 2)` is a `TrieList` and not somebody else's list. The requirement is on
    * the member and not on the trait, because an implementation may need more of `Item` than `List` does.
    */
-  static fn of(...items: Item): Self where Self: From<Iterable<Item>> {
+  static fn of(...items: Item): Self where Self: From<Iterate<Item>> {
     Self.from items
   }
 
   /** Builds a list of `count` copies of `value`: `List.filled(3, "-")` is `["-", "-", "-"]`. */
-  static fn filled(count: Int, value: Item): Self where Self: From<Iterable<Item>> {
+  static fn filled(count: Int, value: Item): Self where Self: From<Iterate<Item>> {
     Self.from((0..count).map({ position => value }))
   }
 
   // --- In place ------------------------------------------------------------------------------------
+
+  /** Appends `value` at the end, in place. */
+  var fn append(value: Item)
+
+  /** Appends every value of `values`, in order, in place. */
+  var fn appendAll(values: Iterate<Item>) {
+    for value in values {
+      append value
+    }
+  }
 
   /** Inserts `value` at `index`, in place; shifts everything at or after it one position on. */
   var fn insert(index: Int, value: Item)
@@ -88,6 +98,18 @@ public trait List<Item>
 
   /** Reverses the order, in place. */
   var fn reverse()
+
+  /** Removes every item, in place. */
+  var fn clear()
+
+  /**
+   * Gives the list storage of its own, sized exactly to its length. For the small part of something big that is kept
+   * for a long time: `var header = file[0..64]`, then `header.compact()`.
+   *
+   * The default does nothing, which is the honest answer for a storage that keeps no spare room; an implementation
+   * that holds capacity beyond its length hands it back here.
+   */
+  var fn compact() {}
 
   /**
    * Sorts in place, by a key: `names.sort { _.length() }`. Stable - two values with the same key keep their order.
@@ -158,7 +180,7 @@ public trait List<Item>
   /**
    * The participle of [List.sort]: a list of the same kind, sorted by the key, with this one left alone.
    *
-   * It overrides [Iterable.sorted], which is a lazy stage answering `Iterable<Item>`. A participle answers `Self`, so
+   * It overrides [Iterate.sorted], which is a lazy stage answering `Iterate<Item>`. A participle answers `Self`, so
    * on a list it answers a list and `const ordered: List<Int> = numbers.sorted({ _ })` needs no `toList()` after it.
    *
    * # Examples
@@ -228,7 +250,7 @@ public trait List<Item>
     result.clear()
     var index = from
     while index < last {
-      result.add self[index]
+      result.append self[index]
       index = index + 1
     }
     result
@@ -247,6 +269,20 @@ public trait List<Item>
   }
 
   // --- Changed copies --------------------------------------------------------------------------------
+
+  /** The participle of [List.append]: a changed copy with `value` at the end, for a `const` binding. */
+  fn appended(value: Item): Self {
+    var result = self
+    result.append value
+    result
+  }
+
+  /** The participle of [List.appendAll]: a changed copy with every value of `values` at the end. */
+  fn appendedAll(values: Iterate<Item>): Self {
+    var result = self
+    result.appendAll values
+    result
+  }
 
   /** The participle of [List.insert]: a changed copy with `value` inserted at `index`. */
   fn inserted(index: Int, value: Item): Self {
@@ -285,6 +321,16 @@ public trait List<Item>
 
   // --- Reading -----------------------------------------------------------------------------------------
 
+  /** How many items there are. A list knows its length, so counting it does not walk it. */
+  fn count(): Int {
+    length()
+  }
+
+  /** Whether `value` is present: a scan of every item. */
+  fn contains(value: Item): Bool where Item: Equals {
+    any { item => item == value }
+  }
+
   /** The first item, or `None` if the list is empty. */
   fn first(): Item? {
     get 0
@@ -302,8 +348,8 @@ public trait List<Item>
 }
 
 /** The factory picks the default implementation. This is also what makes `toList()` and `to<List<Item>>()` work. */
-extend<Item> List<Item> with From<Iterable<Item>> {
-  static fn from(items: Iterable<Item>): List<Item> {
+extend<Item> List<Item> with From<Iterate<Item>> {
+  static fn from(items: Iterate<Item>): List<Item> {
     ArrayList.from items
   }
 }
@@ -381,17 +427,17 @@ public type ListIterator<Item> with Iterator<Item> {
  * somebody writes to it while it is shared. Nobody can observe the difference.
  */
 public native type ArrayList<Item>
-  with List<Item>, From<Iterable<Item>>
+  with List<Item>, From<Iterate<Item>>
 {
   /**
    * Ordinary TorbScript, and it **cannot** be a function of the runtime: `items` is a trait-typed value of the
-   * *program*, so reading it means calling `iterator` and `next` through a witness table, which C code cannot do.
+   * *program*, so reading it means calling `iterate` and `next` through a witness table, which C code cannot do.
    * `withCapacity` is what builds the empty buffer, and it is the one native the lowering answers itself - the element
    * descriptor a buffer needs is a function of the language and no declaration can name one.
    */
-  static fn from(items: Iterable<Item>): ArrayList<Item> {
+  static fn from(items: Iterate<Item>): ArrayList<Item> {
     var result: ArrayList<Item> = ArrayList.withCapacity 0
-    result.addAll items
+    result.appendAll items
     result
   }
 
@@ -411,12 +457,12 @@ public native type ArrayList<Item>
   native fn slice(range: Bounds<Int>): ArrayList<Item>
 
   /** Ordinary TorbScript over `get`: see [ListIterator]. */
-  fn iterator(): Iterator<Item> {
+  fn iterate(): Iterator<Item> {
     ListIterator self
   }
 
-  /** Adds an item at the end, in place. */
-  native var fn add(value: Item)
+  /** Appends an item at the end, in place. */
+  native var fn append(value: Item)
 
   /** Changes the item at `index` in place. `list[index] = value` goes through this; see [MutableIndexed.set]. */
   native var fn set(index: Int, value: Item)
@@ -439,7 +485,7 @@ public native type ArrayList<Item>
   /** Removes every item, in place. */
   native var fn clear()
 
-  /** Gives the list storage of its own, sized exactly to its length; see [Collection.compact]. */
+  /** Gives the list storage of its own, sized exactly to its length; see [List.compact]. */
   native var fn compact()
 }
 
@@ -451,12 +497,12 @@ public native type ArrayList<Item>
  * and `Show` are the same either way.
  */
 public native type TrieList<Item>
-  with List<Item>, From<Iterable<Item>>
+  with List<Item>, From<Iterate<Item>>
 {
   /** Ordinary TorbScript, for the reason [ArrayList.from] gives: `items` is a trait-typed value of the program. */
-  static fn from(items: Iterable<Item>): TrieList<Item> {
+  static fn from(items: Iterate<Item>): TrieList<Item> {
     var result: TrieList<Item> = TrieList.withCapacity 0
-    result.addAll items
+    result.appendAll items
     result
   }
 
@@ -469,16 +515,16 @@ public native type TrieList<Item>
   /** Same as [ArrayList.get]. */
   native fn get(index: Int): Item?
 
-  /** Ordinary TorbScript over `get`, exactly as [ArrayList.iterator] is: see [TrieListIterator]. */
-  fn iterator(): Iterator<Item> {
+  /** Ordinary TorbScript over `get`, exactly as [ArrayList.iterate] is: see [TrieListIterator]. */
+  fn iterate(): Iterator<Item> {
     TrieListIterator self
   }
 
   /** Same as [ArrayList.slice]. */
   native fn slice(range: Bounds<Int>): TrieList<Item>
 
-  /** Same as [ArrayList.add]. */
-  native var fn add(value: Item)
+  /** Same as [ArrayList.append]. */
+  native var fn append(value: Item)
 
   /** Same as [ArrayList.set]. */
   native var fn set(index: Int, value: Item)

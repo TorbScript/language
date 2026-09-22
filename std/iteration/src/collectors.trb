@@ -10,7 +10,7 @@
  * copies the downstream per group. Because values are pushed, an `Accumulator` is the synchronous counterpart of
  * [Sink], which pushes the same way but may have to wait for the other end to keep up.
  *
- * A [Collection] is **not** one, and there is no trait for "something with `add`" either: an accumulator is a type of
+ * A collection is **not** one, and there is no trait for "something with `add`" either: an accumulator is a type of
  * its own beside the collections, the way `Collector`/`Collectors.toList()` are in Java. `ListAccumulator` is the one
  * this package ships; a package that owns a collection may ship its own beside it, and a caller names it.
  *
@@ -28,13 +28,13 @@ use concatenated from "./concatenate"
 /**
  * What to do with the values of a pipeline, and the state of doing it: values arrive one at a time through `add`, and
  * `finish` produces the result once they have all arrived. `collect(accumulator)` is the general terminal operation of
- * [Iterable] - `toList`, `count`, `fold` and the rest are all written on top of it.
+ * [Iterate] - `toList`, `count`, `fold` and the rest are all written on top of it.
  *
  * **A description and a run are one type, because a value is a copy.** `collect` fills a copy of what it was given, so
  * one accumulator may be collected with twice and the two runs never see each other, and `then(downstream)` needs no
  * factory: it keeps the downstream and copies it per group.
  *
- * It stands alone. A [Collection] does not implement it: a container that is merely filled has no result of a run to
+ * It stands alone. A collection does not implement it: a container that is merely filled has no result of a run to
  * give and no `isDone()` to answer, so what gathers into one is a type beside it ([ListAccumulator], [into]).
  *
  * # Examples
@@ -76,7 +76,7 @@ public trait Accumulator<Item, Output> {
 // --- Collecting into collections ------------------------------------------------------------------
 
 /**
- * Collects into anything a pipeline can be turned into (`From<Iterable<Item>>`), which every collection is.
+ * Collects into anything a pipeline can be turned into (`From<Iterate<Item>>`), which every collection is.
  * `Target` can be given on its own, the rest is inferred.
  *
  * It gathers into a `List` and calls `Target.from` once at the end, which is the answer that works for every target.
@@ -89,7 +89,7 @@ public trait Accumulator<Item, Output> {
  *     const numbers = [3, 1, 2, 1]
  *     print numbers.collect(into<Set<Int>>())
  */
-public fn into<Target: From<Iterable<Item>>, Item>(): Accumulator<Item, Target> {
+public fn into<Target: From<Iterate<Item>>, Item>(): Accumulator<Item, Target> {
   IntoAccumulator<Item, Target>()
 }
 
@@ -111,7 +111,7 @@ public type ListAccumulator<Item> with Accumulator<Item, List<Item>> {
 
   /** Appends to the list that is being gathered. */
   var fn add(value: Item) {
-    items.add value
+    items.append value
   }
 
   /** The list, as it stands after the last `add`. */
@@ -121,11 +121,11 @@ public type ListAccumulator<Item> with Accumulator<Item, List<Item>> {
 }
 
 /** The general one: gathers into a `List` and converts once at the end, for a target that ships none of its own. */
-type IntoAccumulator<Item, Target: From<Iterable<Item>>> with Accumulator<Item, Target> {
+type IntoAccumulator<Item, Target: From<Iterate<Item>>> with Accumulator<Item, Target> {
   private var items: List<Item> = []
 
   var fn add(value: Item) {
-    items.add value
+    items.append value
   }
 
   fn finish(): Target {
@@ -214,7 +214,7 @@ public fn maxBy<Item, Key: Compare>(key: (value: Item) => Key): Accumulator<Item
 public fn joining(separator: String = "", prefix: String = "", suffix: String = ""): Accumulator<String, String> {
   const initial: List<String> = []
   collector(initial, finish: { parts => prefix + concatenated(parts, separator) + suffix }) { parts, part =>
-    parts.added part
+    parts.appended part
   }
 }
 
@@ -222,7 +222,7 @@ public fn joining(separator: String = "", prefix: String = "", suffix: String = 
 public fn partitioningBy<Item>(predicate: (value: Item) => Bool): Accumulator<Item, (List<Item>, List<Item>)> {
   const initial: (List<Item>, List<Item>) = ([], [])
   collector(initial, finish: { _ }) { lists, item =>
-    if predicate(item) { (lists.0.added(item), lists.1) } else { (lists.0, lists.1.added(item)) }
+    if predicate(item) { (lists.0.appended(item), lists.1) } else { (lists.0, lists.1.appended(item)) }
   }
 }
 

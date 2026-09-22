@@ -156,7 +156,7 @@ public fn substitute(var types: TypeTable, id: TypeId, mapping: Map<ParameterId,
       for field in fields {
         const inner = substitute types, field.annotation, mapping
         isChanged = isChanged || inner != field.annotation
-        replaced.add TupleField(field.label, inner)
+        replaced.append TupleField(field.label, inner)
       }
       if !isChanged {
         return id
@@ -179,7 +179,7 @@ public fn substitute(var types: TypeTable, id: TypeId, mapping: Map<ParameterId,
 public fn substituteAll(var types: TypeTable, arguments: List<TypeId>, mapping: Map<ParameterId, TypeId>): List<TypeId> {
   var replaced: List<TypeId> = []
   for argument in arguments {
-    replaced.add substitute(types, argument, mapping)
+    replaced.append substitute(types, argument, mapping)
   }
   replaced
 }
@@ -188,7 +188,7 @@ public fn substituteAll(var types: TypeTable, arguments: List<TypeId>, mapping: 
 public fn substituteFunction(var types: TypeTable, form: FunctionForm, mapping: Map<ParameterId, TypeId>): FunctionForm {
   var parameters: List<ParameterForm> = []
   for parameter in form.parameters {
-    parameters.add parameter.copy(annotation: substitute(types, parameter.annotation, mapping))
+    parameters.append parameter.copy(annotation: substitute(types, parameter.annotation, mapping))
   }
   FunctionForm parameters, substitute(types, form.result, mapping)
 }
@@ -197,7 +197,7 @@ public fn substituteFunction(var types: TypeTable, form: FunctionForm, mapping: 
 public fn substituteBounds(var types: TypeTable, bounds: List<Bound>, mapping: Map<ParameterId, TypeId>): List<Bound> {
   var replaced: List<Bound> = []
   for bound in bounds {
-    replaced.add Bound(substitute(types, bound.subject, mapping), substituteAll(types, bound.traits, mapping))
+    replaced.append Bound(substitute(types, bound.subject, mapping), substituteAll(types, bound.traits, mapping))
   }
   replaced
 }
@@ -207,7 +207,7 @@ public fn substituteBounds(var types: TypeTable, bounds: List<Bound>, mapping: M
 /**
  * Inference is bidirectional and local: a context is opened for one statement and closed at its end, and a variable
  * never leaves it. There is no generalization and no propagation across statements, so `var items = []` on one line and
- * `items.add(1)` on the next is an error by design - the annotation is the answer.
+ * `items.append(1)` on the next is an error by design - the annotation is the answer.
  *
  * Closing a context does two things: it reports every variable that is still open, and it walks the tables of the
  * statement once to put the solutions in. That last step is needed because an expression is recorded before the
@@ -219,7 +219,7 @@ public fn openInference(var checker: Checker) {
     checker.hasVariables = false
   }
   const start = checker.variables.length()
-  checker.contextStarts.add start
+  checker.contextStarts.append start
 }
 
 /**
@@ -330,7 +330,7 @@ fn resolveDeep(var checker: Checker, id: TypeId, depth: Int): TypeId {
       for field in fields {
         const inner = resolveDeep(checker, field.annotation, depth + 1)
         isChanged = isChanged || inner != field.annotation
-        replaced.add TupleField(field.label, inner)
+        replaced.append TupleField(field.label, inner)
       }
       if !isChanged {
         return id
@@ -351,7 +351,7 @@ fn resolveDeep(var checker: Checker, id: TypeId, depth: Int): TypeId {
 fn resolveList(var checker: Checker, arguments: List<TypeId>, depth: Int): List<TypeId> {
   var replaced: List<TypeId> = []
   for argument in arguments {
-    replaced.add resolveDeep(checker, argument, depth + 1)
+    replaced.append resolveDeep(checker, argument, depth + 1)
   }
   replaced
 }
@@ -359,7 +359,7 @@ fn resolveList(var checker: Checker, arguments: List<TypeId>, depth: Int): List<
 fn resolveFunction(var checker: Checker, form: FunctionForm, depth: Int): FunctionForm {
   var parameters: List<ParameterForm> = []
   for parameter in form.parameters {
-    parameters.add parameter.copy(annotation: resolveDeep(checker, parameter.annotation, depth + 1))
+    parameters.append parameter.copy(annotation: resolveDeep(checker, parameter.annotation, depth + 1))
   }
   FunctionForm parameters, resolveDeep(checker, form.result, depth + 1)
 }
@@ -651,7 +651,7 @@ fn pruneAt(var checker: Checker, at: Span) {
     for adaptation in adaptations {
       const solved = pruneAdaptation checker, adaptation
       isChanged = isChanged || solved != adaptation
-      replaced.add solved
+      replaced.append solved
     }
     if isChanged {
       checker.setAdaptations at, replaced
@@ -692,7 +692,7 @@ fn pruneCollectionLiteral(var checker: Checker, found: CollectionLiteral): Colle
   match found {
     .Default => found
     .InlineArray(item, size) => CollectionLiteral.InlineArray resolveType(checker, item), size
-    .FromIterable(target, item, witness) => CollectionLiteral.FromIterable(
+    .FromIterate(target, item, witness) => CollectionLiteral.FromIterate(
       resolveType(checker, target),
       resolveType(checker, item),
       pruneWitness(checker, witness),
@@ -705,14 +705,14 @@ fn pruneQuotation(var checker: Checker, quotation: Quotation): Quotation {
   for capture in quotation.captures {
     const annotation = resolveType checker, capture.annotation
     const witness = pruneWitness checker, capture.witness
-    captures.add QuotationCapture(capture.binding, capture.name, annotation, witness)
+    captures.append QuotationCapture(capture.binding, capture.name, annotation, witness)
   }
   var lambdas: Map<Span, List<QuotationParameter>> = [:]
   for (span, parameters) in quotation.lambdas {
     var solved: List<QuotationParameter> = []
     for parameter in parameters {
       const annotation = resolveType checker, parameter.annotation
-      solved.add QuotationParameter(parameter.name, annotation)
+      solved.append QuotationParameter(parameter.name, annotation)
     }
     lambdas.set span, solved
   }
@@ -777,7 +777,7 @@ fn pruneDispatch(var checker: Checker, dispatch: Dispatch): Dispatch {
 public fn pruneWitnesses(var checker: Checker, witnesses: List<Witness>): List<Witness> {
   var replaced: List<Witness> = []
   for witness in witnesses {
-    replaced.add pruneWitness(checker, witness)
+    replaced.append pruneWitness(checker, witness)
   }
   replaced
 }

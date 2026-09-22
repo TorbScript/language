@@ -8,13 +8,13 @@
  * # Related
  *
  * - [Result] - absence with a reason, for an operation that can fail.
- * - [Iterable] - the same vocabulary over many values instead of one.
+ * - [Iterate] - the same vocabulary over many values instead of one.
  */
 
 use Result from "./result"
 use From, Show from "./convert"
 use OrElse from "./operators"
-use Iterable from "std/iteration"
+use Iterate from "std/iteration"
 
 /**
  * A value that may be absent. `Value?` is sugar for `Option<Value>`.
@@ -188,13 +188,13 @@ extend<Value: Show> Option<Value> with Show {
  * All or nothing: `names.map(findUser).to<List<User>?>()` is `Some(users)` if every user was found.
  * Stops pulling at the first `None`.
  */
-extend<Value, Target: From<Iterable<Value>>> Option<Target> with From<Iterable<Value?>> {
-  static fn from(value: Iterable<Value?>): Target? {
+extend<Value, Target: From<Iterate<Value>>> Option<Target> with From<Iterate<Value?>> {
+  static fn from(value: Iterate<Value?>): Target? {
     // The values are gathered first: a lazy stage that noted the `None` would have to capture a `var` it outlives
     var found: List<Value> = []
     for item in value {
       match item {
-        Some(present) => found.add present
+        Some(present) => found.append present
         None => {
           return None
         }

@@ -1,5 +1,5 @@
 /**
- * Collections: persistent `List`/`Map`/`Set` values plus mutable `HashMap`/`Stack`/`Queue`, slices, `Iterable` for
+ * Collections: persistent `List`/`Map`/`Set` values plus mutable `HashMap`/`Stack`/`Queue`, slices, `Iterate` for
  * a type of your own, and the pipeline of lazy stages, terminal operations and collectors that queries them.
  */
 
@@ -9,14 +9,14 @@ use File from "std/fs"
 
 const numbers = [1, 2, 3]                // List<Int>
 var buffer = numbers                     // A copy. (The storage is shared until one of them is written to.)
-buffer.add 4
+buffer.append 4
 buffer[0] = 10
 print numbers                            // [1, 2, 3]
 print buffer                             // [10, 2, 3, 4]
-// numbers.add(4)                        // Compile error: `add` needs a `var`. Did you mean `added`?
+// numbers.append(4)                     // Compile error: `append` needs a `var`. Did you mean `appended`?
 
 // Verbs change in place, their participles return a changed copy and work everywhere
-const more = numbers.added(4).added(5).removed(2)      // [1, 3, 4, 5]
+const more = numbers.appended(4).appended(5).removed(2)      // [1, 3, 4, 5]
 
 var ages = ["Ada": 36, "Grace": 45]      // Map<String, Int>
 ages["Linus"] = 28
@@ -30,18 +30,18 @@ const evenPrimes = primes.intersection Set.of(2, 4, 6)
 var cache: Map<Int, String> = [:]
 const label = cache.getOrInsert 42, "stored once"    // The fallback is `lazy`: only built on a miss
 var groups: Map<Int, List<String>> = [:]
-groups.update 1, [] { names => names.add "Ada" }    // The one that changes what is stored, in place
+groups.update 1, [] { names => names.append "Ada" }    // The one that changes what is stored, in place
 print "{label} {groups}"
 
 // Creation
 const a = List.of 1, 2, 3
-const b = List.of(...primes)             // Spread any Iterable
+const b = List.of(...primes)             // Spread any Iterate
 const c = List.from primes
 const d = primes.toList()
 const nested = List.of([1, 2], [3])      // List<List<Int>>: variadics never unpack implicitly
 
 // A literal adapts to what is expected of it: an `Array` is filled inline (no list, no iterator in between), and any
-// `From<Iterable<Item>>` target is built from the list - the same targets `to<Target>()` accepts.
+// `From<Iterate<Item>>` target is built from the list - the same targets `to<Target>()` accepts.
 const corners: Array<Int, 4> = [1, 2, 3, 4]           // Exactly 4 items, or a compile error
 const wider: Array<Int, 6> = [...corners, 5, 6]       // A spread of another Array: the sizes add up to 6
 const ramp: Array<Int, 4> = Array.generated { _ * 2 } // Every slot from its index; `Size` from the annotation
@@ -62,27 +62,24 @@ fn greet(name: String, titles: Map<String, String>): String {
 
 print greet("Ada", titles: ["Ada": "Countess"])
 
-// Less specific: `Collection` (or `Iterable`) accepts every kind
-/** How many items `items` has - `Collection` accepts a `List`, a `Set` or a `Map` alike. */
-fn describe<Item>(items: Collection<Item>): String {
+// Less specific: `Iterate<Item> & Length` accepts every kind - a signature asks for the smallest thing it uses
+/** How many items `items` has - a `List`, a `Set` or a `Map` alike. */
+fn describe<Item>(items: Iterate<Item> & Length): String {
   if items.isEmpty() { "nothing" } else { "{items.length()} items" }
 }
 
 print describe(numbers)
-print describe(ages)                     // A Map is a Collection<(Key, Value)>
+print describe(ages)                     // A Map iterates over (key, value) tuples
 
-// A `var` parameter works on the caller's collection, whatever it is
-/** Adds the squares up to `upTo` into `target`, whatever kind of collection the caller passes. */
-fn fillWithSquares(var target: Collection<Int>, upTo: Int) {
-  target.addAll((1..=upTo).map { _ * _ })
+// A `var` parameter works on the caller's collection, whatever implementation it is
+/** Inserts the squares up to `upTo` into `target`, whichever kind of set the caller passes. */
+fn insertSquares(var target: Set<Int>, upTo: Int) {
+  target.insertAll((1..=upTo).map { _ * _ })
 }
 
-var squares = Set.of 1
-fillWithSquares squares, upTo: 3        // A set...
-var pile = Stack<Int>.of()
-fillWithSquares pile, upTo: 3           // ...or a stack: `add` reaches the top
+var squares = Set.of 2
+insertSquares squares, upTo: 3
 print describe(squares)                 // 4 items - the caller's set really grew
-print describe(pile)                    // 3 items
 
 // --- Slices -------------------------------------------------------------------------------------
 
@@ -117,7 +114,7 @@ for i in 0..numbers.length() {
   print "{i}: {numbers[i]}"
 }
 
-// Your own types take part by implementing `Iterable`
+// Your own types take part by implementing `Iterate`
 /** The state of one countdown in progress: an `Iterator<Int>` that counts down to zero and then stops. */
 type CountdownIterator with Iterator<Int> {
   var current: Int
@@ -132,10 +129,10 @@ type CountdownIterator with Iterator<Int> {
 }
 
 /** Counts down from `start`; every `for` or pipeline over it gets a fresh [CountdownIterator]. */
-type Countdown with Iterable<Int> {
+type Countdown with Iterate<Int> {
   start: Int
 
-  fn iterator(): Iterator<Int> {
+  fn iterate(): Iterator<Int> {
     CountdownIterator start
   }
 }
@@ -143,7 +140,7 @@ type Countdown with Iterable<Int> {
 for n in Countdown(3) {
   print n                                // 3, 2, 1
 }
-const odd = Countdown(5).filter { _ % 2 == 1 }.toList()   // [5, 3, 1] - the pipeline comes with `Iterable`
+const odd = Countdown(5).filter { _ % 2 == 1 }.toList()   // [5, 3, 1] - the pipeline comes with `Iterate`
 print odd
 
 // --- Pipelines: source -> lazy stages -> terminal operation ------------------------------
@@ -167,11 +164,11 @@ const employees = [
 const seniorEngineers = employees
   .filter { _.department == "Engineering" && _.age >= 40 }
   .sorted { _.name }
-  .map { "{_.name} ({_.age})" }          // Iterable<String> - nothing has happened yet
+  .map { "{_.name} ({_.age})" }          // Iterate<String> - nothing has happened yet
 
 // A terminal operation pulls the values through. Where they end up is its decision alone.
 print seniorEngineers.toList()                           // ["Grace (45)"]
-print seniorEngineers.to<Set<String>>()                  // Any `From<Iterable<Item>>` works as a target
+print seniorEngineers.to<Set<String>>()                  // Any `From<Iterate<Item>>` works as a target
 print seniorEngineers.collect(joining(", ", prefix: "Seniors: "))
 
 const best = employees.sorted { -_.salary }.take(2).map { _.name }.toList()
@@ -203,7 +200,7 @@ print(employees.filter { _.age < 50 }.collect(salaryStatistics))
 /** An accumulator of your own: folds values into a list, then finishes by sorting it and taking the middle one. */
 fn median<Item>(value: (value: Item) => Int): Accumulator<Item, Int?> {
   collector([], finish: { values: List<Int> => values.sorted { _ }.skip(values.length() / 2).first() }) {
-    values, item => values.added value(item)
+    values, item => values.appended value(item)
   }
 }
 
@@ -230,20 +227,21 @@ const errors = log
 
 // --- Stack and queue ------------------------------------------------------------------------
 
-// One verb per end, and the type name says which end: `add` and `remove` read alike on both
+// The words everybody knows: `enqueue`/`dequeue` on a queue, `push`/`pop` on a stack, `peek` on both
 var pending = Queue.of 1
-while const Some(number) = pending.remove() {
+while const Some(number) = pending.dequeue() {
   if number < 100 {
-    pending.add(number * 3)
+    pending.enqueue(number * 3)
   }
 }
 
 var brackets = Stack<Char>.of()
-brackets.add '('
-print brackets.remove()                  // Some('(')
+brackets.push '('
+print brackets.pop()                  // Some('(')
 
-// The participles keep the old version: history, undo, backtracking
-const stack = Stack.of(1, 2).added(3)
-if const Some((top, rest)) = stack.removed() {
-  print "top: {top}, remaining: {rest.length()}, before: {stack.length()}"
+// A copy keeps the old version: history, undo, backtracking
+const stack = Stack.of 1, 2, 3
+var rest = stack
+if const Some(top) = rest.pop() {
+  print "top: {top}, remaining: {rest.length()}, before: {stack.length()}, next: {rest.peek()}"
 }

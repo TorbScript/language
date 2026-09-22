@@ -57,7 +57,7 @@ fn collectComments(var found: List<CommentLine>, source: SourceText, lines: Line
         stop = stop + 1
       }
       const line = lineAt lines, source.offsets[index]
-      found.add CommentLine(line, source.slice(index + 2, stop))
+      found.append CommentLine(line, source.slice(index + 2, stop))
       index = stop
       continue
     }
@@ -75,7 +75,7 @@ fn collectComments(var found: List<CommentLine>, source: SourceText, lines: Line
       const text = source.slice index, stop
       var offset = 0
       for content in linesOf(text) {
-        found.add CommentLine(line + offset, content)
+        found.append CommentLine(line + offset, content)
         offset = offset + 1
       }
       index = stop
@@ -118,10 +118,10 @@ public fn documentationBlocks(source: SourceText, lines: LineIndex, docs: List<D
     var content: List<CommentLine> = []
     var offset = 0
     for line in linesOf(inner) {
-      content.add CommentLine(start + offset, stripMargin(line))
+      content.append CommentLine(start + offset, stripMargin(line))
       offset = offset + 1
     }
-    blocks.add DocumentationBlock(doc.span, start, content)
+    blocks.append DocumentationBlock(doc.span, start, content)
   }
   blocks
 }
@@ -181,14 +181,14 @@ public fn sectionsOf(block: DocumentationBlock): Sections {
   for content in block.lines {
     if !content.text.startsWith("#") {
       if level == 0 {
-        summary.add content
+        summary.append content
       } else {
-        body.add content
+        body.append content
       }
       continue
     }
     if level > 0 {
-      sections.add DocumentationSection(heading, level, line, body)
+      sections.append DocumentationSection(heading, level, line, body)
     }
     level = headingLevel content.text
     heading = content.text[level..].trim()
@@ -196,7 +196,7 @@ public fn sectionsOf(block: DocumentationBlock): Sections {
     body = []
   }
   if level > 0 {
-    sections.add DocumentationSection(heading, level, line, body)
+    sections.append DocumentationSection(heading, level, line, body)
   }
   Sections summary, sections
 }
@@ -297,17 +297,17 @@ public fn examplesOf(section: DocumentationSection): Examples {
   var block: List<CommentLine> = []
   for content in section.lines {
     if content.text.startsWith("    ") {
-      block.add CommentLine(content.line, content.text[4..])
+      block.append CommentLine(content.line, content.text[4..])
       continue
     }
     if content.text.isBlank() {
       if !block.isEmpty() {
-        block.add CommentLine(content.line, "")
+        block.append CommentLine(content.line, "")
       }
       continue
     }
     if content.text.trim().startsWith("```") {
-      fences.add content.line
+      fences.append content.line
     }
     addExample block, examples
     block = []
@@ -327,18 +327,18 @@ fn addExample(block: List<CommentLine>, var examples: List<Example>) {
   const text = kept.map({ _.text }).toList().joined(separator: "\n")
   const marker = kept[0].text.trim()
   if marker == "// fragment" {
-    examples.add Example(kept[0].line, ExampleKind.Fragment, text, "")
+    examples.append Example(kept[0].line, ExampleKind.Fragment, text, "")
     return
   }
   if marker.startsWith("// skip") {
     const reason = marker[7..].trim()
-    examples.add Example(kept[0].line, ExampleKind.Skipped, text, reason)
+    examples.append Example(kept[0].line, ExampleKind.Skipped, text, reason)
     return
   }
-  examples.add Example(kept[0].line, ExampleKind.Program, text, "")
+  examples.append Example(kept[0].line, ExampleKind.Program, text, "")
 }
 
-/** A link of a doc comment: `[Iterator]`, `[List.add]`, `[Option.Some]`. */
+/** A link of a doc comment: `[Iterator]`, `[List.append]`, `[Option.Some]`. */
 public type DocumentationLink {
   line: Int
   /** Everything between the brackets */
@@ -382,13 +382,13 @@ fn addLinks(content: CommentLine, var links: List<DocumentationLink>) {
     // `[text](page.md)`: a link that names its own target, not a name of the code
     const isInline = characters.get(stop + 1) == Some('(')
     if !isInline && isName(target) {
-      links.add DocumentationLink(content.line, target)
+      links.append DocumentationLink(content.line, target)
     }
     index = stop + 1
   }
 }
 
-/** `Iterator`, `List.add`: one name, or a name and one member. */
+/** `Iterator`, `List.append`: one name, or a name and one member. */
 fn isName(target: String): Bool {
   const parts = target.split "."
   if parts.length() > 2 {
@@ -467,12 +467,12 @@ public fn historyHits(comments: List<CommentLine>): List<HistoryHit> {
     const words = wordsOf withoutCode(comment.text)
     for phrase in historyPhrases {
       if tellsHistory(words, phrase) {
-        hits.add HistoryHit(comment.line, phrase)
+        hits.append HistoryHit(comment.line, phrase)
       }
     }
     for word in numberingWords {
       if isNumbered(words, word) {
-        hits.add HistoryHit(comment.line, "{word} <number>")
+        hits.append HistoryHit(comment.line, "{word} <number>")
       }
     }
   }
@@ -489,7 +489,7 @@ fn withoutCode(text: String): String {
       continue
     }
     if !isCode {
-      characters.add character
+      characters.append character
     }
   }
   String.from characters
@@ -515,7 +515,7 @@ public fn wordsOf(text: String): List<String> {
       current = []
     }
     isDigits = character.isDigit()
-    current.add character
+    current.append character
   }
   addWord current, words
   words
@@ -523,7 +523,7 @@ public fn wordsOf(text: String): List<String> {
 
 fn addWord(characters: List<Char>, var words: List<String>) {
   if !characters.isEmpty() {
-    words.add String.from(characters)
+    words.append String.from(characters)
   }
 }
 

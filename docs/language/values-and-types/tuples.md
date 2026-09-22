@@ -78,7 +78,7 @@ value.lowest                             access by label
    print pairs.map({ _.0 }).toList()
    ```
 
-5. **A labelled tuple is how a pair gets names without a type.** `Map.iterator` answers
+5. **A labelled tuple is how a pair gets names without a type.** `Map.iterate` answers
    `Iterator<(key: Key, value: Value)>`, so an entry reads as `entry.key` and `entry.value`. The labels cost nothing -
    they are not part of the type - and the positional forms keep working.
 

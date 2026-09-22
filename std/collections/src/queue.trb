@@ -1,76 +1,76 @@
 /**
  * FIFO: [Queue], with [ArrayQueue] as its only implementation.
  *
- * `add` puts an item at the back and `remove` takes the one at the front, and `add` is [Collection.add] - so `addAll`,
- * a collector or a channel fill a `Queue` at the back. There is no index: the only way to see an item is to remove it
- * or to iterate the whole queue.
+ * `enqueue` puts an item at the back, `dequeue` takes the one at the front, and `peek` looks at the front without
+ * taking it. There is no index: the only way to see an item behind the front is to dequeue up to it or to iterate the
+ * whole queue.
  *
  * # Related
  *
- * - [Stack] - the LIFO sibling; `add` and `remove` reach the top instead of the two ends.
+ * - [Stack] - the LIFO sibling, with `push`, `pop` and `peek` at its top.
  */
 
 use Equals, Hash, combineHashes from "std/core"
 use From from "std/core"
-use Collection from "./collection"
+use Iterate, Length from "std/iteration"
 
 /**
  * FIFO queue. Iterates from front to back, which is the order it hands items out in.
  *
- * Two words, and the type name carries which end they mean: `add` puts an item at the back, `remove` takes the one
- * at the front off. `add` and its participle `added` come from [Collection]; looking without taking is
- * [Iterable.first].
+ * The words everybody knows for a queue: `enqueue` puts an item at the back, `dequeue` takes the one at the front off,
+ * and `peek` looks at the front without taking it.
  *
  * # Examples
  *
  *     var pending = Queue.of 1, 2, 3
- *     pending.add 4
- *     print pending.remove()
+ *     pending.enqueue 4
+ *     print pending.dequeue()
+ *     print pending.peek()
  *     print pending.toList()
- *
- * A `const` queue, or one whose old version is still needed, uses the participles instead:
- *
- *     const queue = Queue.of(1, 2).added(3)
- *     if const Some((next, rest)) = queue.removed() {
- *       print "next: {next}, remaining: {rest.length()}"
- *     }
  *
  * # Related
  *
- * - [Stack] - the LIFO sibling, with the same two words at one end.
- * - [Collection] - `add`, `added`, `contains`, `length`, `iterator`, which `Queue` builds on.
+ * - [Stack] - the LIFO sibling.
+ * - [Iterate] - the pipeline vocabulary (`map`, `filter`, `fold`, ...), from the front to the back.
  */
 public trait Queue<Item>
-  with Collection<Item>
+  with Iterate<Item>, Length
 {
   /** Builds a queue from its arguments. The first item ends up at the front. Answers `Self`. */
-  static fn of(...items: Item): Self where Self: From<Iterable<Item>> {
+  static fn of(...items: Item): Self where Self: From<Iterate<Item>> {
     Self.from items
   }
 
   // --- In place ------------------------------------------------------------------------------------
 
-  /** Removes the item the queue gives next - the one at the front - and answers it, or `None` if it is empty. */
-  var fn remove(): Item?
+  /** Puts `value` at the back, in place. */
+  var fn enqueue(value: Item)
 
-  // --- Changed copies --------------------------------------------------------------------------------
+  /** Takes the item at the front off and answers it, or `None` if the queue is empty. */
+  var fn dequeue(): Item?
 
-  /**
-   * The participle of [Queue.remove]: the item at the front and the rest, or `None` if the queue is empty.
-   *
-   * It answers the pair and not `Self` alone, because a queue has no index: the item is gone once the copy is made,
-   * so the copy has to carry it.
-   */
-  fn removed(): (Item, Self)? {
-    var rest = self
-    const next = rest.remove()?
-    Some((next, rest))
+  /** Removes every item, in place. */
+  var fn clear()
+
+  /** Hands back storage held beyond the length. The default does nothing: a storage without spare room has none. */
+  var fn compact() {}
+
+  // --- Reading -----------------------------------------------------------------------------------------
+
+  /** The item `dequeue` would take, without taking it, or `None` if the queue is empty. */
+  fn peek(): Item? {
+    first()
+  }
+
+  /** How many items there are. A queue knows its size, so counting it does not walk it. */
+  fn count(): Int {
+    length()
   }
 }
 
 /** The factory picks the default implementation: what `Queue.of` and a pipeline's `to<Queue<Item>>()` build. */
-extend<Item> Queue<Item> with From<Iterable<Item>> {
-  static fn from(items: Iterable<Item>): Queue<Item> {
+extend<Item> Queue<Item> with From<Iterate<Item>> {
+  static fn from(items: Iterate<Item>): Queue<Item> {
     ArrayQueue.from items
   }
 }
@@ -102,20 +102,22 @@ extend<Item: Hash> Queue<Item> with Hash {
 // --- Implementation, written in plain TorbScript ----------------------------------------------------------
 
 /** Ring buffer on top of a `List`. Nothing is moved and nothing is allocated until the buffer is full. */
-public type ArrayQueue<Item> with Queue<Item>, From<Iterable<Item>> {
+public type ArrayQueue<Item> with Queue<Item>, From<Iterate<Item>> {
   private var slots: List<Item?> = List.filled 16, None
   private var head: Int = 0
   private var storedLength: Int = 0
 
   /** Builds the queue from `items`, with the first one at the front. */
-  static fn from(items: Iterable<Item>): ArrayQueue<Item> {
+  static fn from(items: Iterate<Item>): ArrayQueue<Item> {
     var queue = Self()
-    queue.addAll items
+    for item in items {
+      queue.enqueue item
+    }
     queue
   }
 
-  /** Adds `value` at the back, in place; grows the buffer first if it is full. */
-  var fn add(value: Item) {
+  /** Puts `value` at the back, in place; grows the buffer first if it is full. */
+  var fn enqueue(value: Item) {
     if storedLength == slots.length() {
       grow()
     }
@@ -123,13 +125,18 @@ public type ArrayQueue<Item> with Queue<Item>, From<Iterable<Item>> {
     storedLength = storedLength + 1
   }
 
-  /** Removes and answers the item at the front, or `None` if empty. */
-  var fn remove(): Item? {
+  /** Takes the item at the front off and answers it, or `None` if empty. */
+  var fn dequeue(): Item? {
     const next = slots[head]?            // Empty queue: the slot is `None`
     slots[head] = None                   // Release the value
     head = slot 1
     storedLength = storedLength - 1
     Some next
+  }
+
+  /** The item at the front, or `None` if empty: one slot, without walking the ring. */
+  fn peek(): Item? {
+    slots[head]
   }
 
   /** Removes every item, in place. */
@@ -145,11 +152,11 @@ public type ArrayQueue<Item> with Queue<Item>, From<Iterable<Item>> {
   }
 
   /** A cursor from front to back: the order the queue hands items out in. */
-  fn iterator(): Iterator<Item> {
-    (0..storedLength).filterMap { slots[slot(_)] }.iterator()
+  fn iterate(): Iterator<Item> {
+    (0..storedLength).filterMap { slots[slot(_)] }.iterate()
   }
 
-  /** Shrinks the ring to the items it holds; see [Collection.compact]. */
+  /** Shrinks the ring to the items it holds; see [Queue.compact]. */
   var fn compact() {
     // At least one slot, because every index goes through `% slots.length()`
     var tight: List<Item?> = List.filled storedLength.max(1), None

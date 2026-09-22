@@ -42,7 +42,7 @@ public fn genericsOf(var checker: Checker, symbol: SymbolId): List<ParameterId> 
     }
   }
   var parameters = enclosingParameters site
-  parameters.addAll declareParameters(checker, site.module, Some(symbol), declaredParameters(site))
+  parameters.appendAll declareParameters(checker, site.module, Some(symbol), declaredParameters(site))
   checker.genericParameters.set symbol, parameters
   parameters
 }
@@ -61,7 +61,7 @@ public fn declareParameters(
   for index in 0..declared.length() {
     const parameter = declared[index]
     const symbol = checker.resolvedName module, parameter.name.span
-    parameters.add(
+    parameters.append(
       checker.types.declareParameter(
         ParameterDeclaration(parameter.name.text, symbol, owner, parameter.isConst, index, parameter.default, module)
       )
@@ -118,14 +118,14 @@ public fn selfTypeOf(var checker: Checker, symbol: SymbolId): TypeId {
     // The one bound of `Self` is the trait itself, which is what makes a member lookup on it find the trait's members
     var arguments: List<TypeId> = []
     for own in generics {
-      arguments.add checker.types.intern(TypeForm.Parameter(own))
+      arguments.append checker.types.intern(TypeForm.Parameter(own))
     }
     const bound = checker.nominal symbol, arguments
     checker.parameterBounds.set parameter.value, [bound]
   } else {
     var arguments: List<TypeId> = []
     for parameter in generics {
-      arguments.add checker.types.intern(TypeForm.Parameter(parameter))
+      arguments.append checker.types.intern(TypeForm.Parameter(parameter))
     }
     built = checker.nominal symbol, arguments
   }
@@ -172,7 +172,7 @@ public fn aliasTargetOf(var checker: Checker, symbol: SymbolId): TypeId {
   if isFailed(checker.aliasStates.get(symbol)) {
     return checker.invalidType
   }
-  checker.aliasTargets.add target
+  checker.aliasTargets.append target
   const index = checker.aliasTargets.length() - 1
   checker.aliasStates.set symbol, SignatureState.Ready(index)
   target
@@ -340,7 +340,7 @@ public fn signatureOf(var checker: Checker, symbol: SymbolId): SignatureId {
   identifier
 }
 
-/** A call of a generic signature: `map<Int>` on an `Iterable<String>`. */
+/** A call of a generic signature: `map<Int>` on an `Iterate<String>`. */
 public fn instantiate(var checker: Checker, signature: SignatureId, arguments: List<TypeId>): FunctionForm {
   const found = checker.signature signature
   var mapping: Map<ParameterId, TypeId> = [:]
@@ -487,7 +487,7 @@ fn functionSignature(
       isVarSelf = parameter.isVar
       continue
     }
-    parameters.add parameterForm(checker, parameter, scope)
+    parameters.append parameterForm(checker, parameter, scope)
   }
   const hasBody = function.body.isSome()
   const bounds = boundsOf checker, generics, function.generics, function.whereClauses, scope
@@ -672,7 +672,7 @@ fn caseSignature(
   var parameters: List<ParameterForm> = []
   for field in caseDeclaration.fields {
     const annotation = typeFromReference checker, field.annotation, scope.forType()
-    parameters.add ParameterForm(Some(field.name.text), ParameterMode.Value, annotation, field.default.isSome())
+    parameters.append ParameterForm(Some(field.name.text), ParameterMode.Value, annotation, field.default.isSome())
   }
   const result = owner ?? checker.invalidType
   Signature symbol, generics, FunctionForm(parameters, result), [], owner, false, false, false
@@ -743,18 +743,18 @@ fn addBound(
 ) {
   var traits: List<TypeId> = []
   for reference in references {
-    traits.addAll traitsFromReference(checker, reference, subject, scope)
+    traits.appendAll traitsFromReference(checker, reference, subject, scope)
   }
   if traits.isEmpty() {
     return
   }
-  bounds.add Bound(subject, traits)
+  bounds.append Bound(subject, traits)
   // `<Item: Hash>` and `where Item: Hash` are what a member lookup on `Item` may see (design 4.1, `Parameter`)
   if const .Parameter(parameter) = checker.types.form(subject) {
     var known = checker.parameterBounds.get(parameter.value) ?? []
     for bound in traits {
       if !known.contains(bound) {
-        known.add bound
+        known.append bound
       }
     }
     checker.parameterBounds.set parameter.value, known
@@ -861,7 +861,7 @@ public fn traitList(var checker: Checker, references: List<TypeReference>, of: T
   for reference in references {
     for bound in traitsFromReference(checker, reference, of, scope) {
       if !traits.contains(bound) {
-        traits.add bound
+        traits.append bound
       }
     }
   }
@@ -895,7 +895,7 @@ fn delegatedTraitList(
     }
     for capability in traitsFromReference(checker, clause.capability, of, scope) {
       if !containsCapability(traits, capability) {
-        traits.add DelegatedTrait(capability, delegate)
+        traits.append DelegatedTrait(capability, delegate)
       }
     }
   }
@@ -984,7 +984,7 @@ fn collectMembers(
       .Field(field) => {
         const symbol = defineMember checker, module, field.name, SymbolKind.Field(owner), member
         checker.addSite symbol, site
-        body.fields.add fieldSignature(checker, symbol, field, member, scope)
+        body.fields.append fieldSignature(checker, symbol, field, member, scope)
       }
       .Constant(binding) => {
         if const .Binding(name) = binding.pattern.kind {
@@ -1008,9 +1008,9 @@ fn collectMembers(
           var fields: List<FieldSignature> = []
           for field in caseDeclaration.fields {
             const fieldSymbol = defineMember checker, module, field.name, SymbolKind.Field(symbol), member
-            fields.add fieldSignature(checker, fieldSymbol, field, member, scope)
+            fields.append fieldSignature(checker, fieldSymbol, field, member, scope)
           }
-          body.cases.add CaseSignature(symbol, caseDeclaration.name.text, fields)
+          body.cases.append CaseSignature(symbol, caseDeclaration.name.text, fields)
         }
       }
     }

@@ -73,9 +73,9 @@ fn withNamedFile(workspace: Workspace, tree: SourceTree, project: String, target
   var packages: List<Package> = []
   for package in workspace.packages {
     if package.directory == project {
-      packages.add package.copy(files: package.files.added(target))
+      packages.append package.copy(files: package.files.appended(target))
     } else {
-      packages.add package
+      packages.append package
     }
   }
   workspace.copy packages: packages
@@ -100,7 +100,7 @@ fn withStandardLibrary(tree: SourceTree, manifests: List<String>, workspace: Wor
   for directory in manifests.filter({ parentPath(_) == library }) {
     const package = packageAt tree, directory
     if !packages.any({ _.directory == directory || (!package.name.isEmpty() && _.name == package.name) }) {
-      packages.add package
+      packages.append package
     }
   }
   workspace.copy packages: packages
@@ -132,7 +132,7 @@ fn workspaceOf(tree: SourceTree, manifests: List<String>, owners: List<String>, 
   var directories = [root]
   for member in members {
     if !directories.contains(member) {
-      directories.add member
+      directories.append member
     }
   }
   Workspace(directories.map({ packageAt tree, _ }).toList(), problems)
@@ -152,16 +152,16 @@ fn expandMembers(
       const parent = joinPath root, pattern[0..(pattern.byteLength() - 2)]
       const matched = manifests.filter({ _ != root && parentPath(_) == parent }).toList()
       if matched.isEmpty() {
-        problems.add "The workspace member pattern `{pattern}` of {root} matches no project"
+        problems.append "The workspace member pattern `{pattern}` of {root} matches no project"
       }
-      members.addAll matched
+      members.appendAll matched
       continue
     }
     const directory = joinPath root, pattern
     if manifests.contains(directory) {
-      members.add directory
+      members.append directory
     } else {
-      problems.add "The workspace member `{pattern}` of {root} has no `project.trb`"
+      problems.append "The workspace member `{pattern}` of {root} has no `project.trb`"
     }
   }
   members
@@ -182,7 +182,7 @@ fn packageAt(tree: SourceTree, directory: String): Package {
       continue
     }
     if !files.contains(file) {
-      files.add file
+      files.append file
     }
   }
   Package manifest.name, directory, manifest, files

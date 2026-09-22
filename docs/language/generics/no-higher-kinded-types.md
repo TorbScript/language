@@ -1,6 +1,6 @@
 ---
 title: No higher-kinded types
-summary: Option, Result, Iterable and Task share method names with the same meaning as a convention of the standard library, not as a shared trait, because the language has no way to be generic over a type constructor.
+summary: Option, Result, Iterate and Task share method names with the same meaning as a convention of the standard library, not as a shared trait, because the language has no way to be generic over a type constructor.
 kind: reference
 status: stable
 order: 40
@@ -13,7 +13,7 @@ source:
   - CONCEPT.md#one-vocabulary-instead-of-higher-kinded-types
 ---
 
-`Option`, `Result`, `Iterable` and `Task` all have a `map`, and `map` always means "transform what is inside, keep
+`Option`, `Result`, `Iterate` and `Task` all have a `map`, and `map` always means "transform what is inside, keep
 the shape". Nothing in the language ties the four `map`s together - there is no trait one of them implements that
 the others do too.
 
@@ -31,22 +31,22 @@ print(numbers.map { _ * 2 }.toList())
 
 ```text
 Option<Value>.map<Output>(transform: (value: Value) => Output): Output?
-Iterable<Item>.map<Output>(transform: (value: Item) => Output): Iterable<Output>
+Iterate<Item>.map<Output>(transform: (value: Item) => Output): Iterate<Output>
 ```
 
 Same name, same shape of signature, two unrelated declarations - neither `extend`s a trait the other implements.
 
 ## Rules
 
-1. **A shared method name across `Option`, `Result`, `Task` and `Iterable` is a convention of the standard library,
+1. **A shared method name across `Option`, `Result`, `Task` and `Iterate` is a convention of the standard library,
    not a language feature.** `map` transforms what is inside and keeps the shape everywhere it appears; `flatMap`
    transforms into the same shape and flattens one level; `filter` and `forEach` exist on the ones where "keep it"
    and "look at it" make sense.
 
 2. **`Task` shares the same two names.** `map` and `flatMap` exist on `Task<Value>` with the same meaning as on
-   `Option` and `Iterable`; code that uses them type checks today, but a `Task` does not run yet.
+   `Option` and `Iterate`; code that uses them type checks today, but a `Task` does not run yet.
 
-3. **There is no trait that unifies them, and none of `Option`, `Result` or `Iterable` implements one.** Each type
+3. **There is no trait that unifies them, and none of `Option`, `Result` or `Iterate` implements one.** Each type
    declares its own `map`; nothing generic can be written that calls "the `map` of whatever container was passed
    in", because there is no bound that names it.
 
@@ -73,7 +73,7 @@ Same name, same shape of signature, two unrelated declarations - neither `extend
 
 **The shared vocabulary is not a reason to write one generic function over all of them.** `map`, `flatMap` and the
 rest look alike because the standard library was written to make them look alike on purpose - not because a bound
-exists that could accept an `Option`, a `Result` and an `Iterable` in the same parameter.
+exists that could accept an `Option`, a `Result` and an `Iterate` in the same parameter.
 
 ```trb check
 fn doubled(value: Int?): Int? {

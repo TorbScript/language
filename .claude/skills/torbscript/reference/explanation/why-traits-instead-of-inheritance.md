@@ -99,7 +99,7 @@ exists for a type and there is nowhere else to look for a second one.
 
 ## Consequences
 
-**A capability that several unrelated types share is a trait, not a common ancestor.** `Iterable<Item>` is
+**A capability that several unrelated types share is a trait, not a common ancestor.** `Iterate<Item>` is
 implemented by `List`, `Set`, a `Range`, and anything else that can be pulled through a pipeline, none of which share
 a base type or any data at all.
 

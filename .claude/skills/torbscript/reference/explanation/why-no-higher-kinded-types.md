@@ -1,6 +1,6 @@
 ---
 title: Why there are no higher-kinded types
-summary: Option, Result, Task and Iterable share method names by convention of the standard library rather than by a shared abstraction, because a kind system would cost local inference and readable errors for problems a script rarely has.
+summary: Option, Result, Task and Iterate share method names by convention of the standard library rather than by a shared abstraction, because a kind system would cost local inference and readable errors for problems a script rarely has.
 kind: explanation
 status: stable
 order: 100
@@ -15,12 +15,12 @@ source:
 ---
 
 Haskell's `Functor f => f a -> (a -> b) -> f b` describes `map` once for every shape that has one. TorbScript describes
-`map` four times - once each for `Option`, `Result`, `Task` and `Iterable` - and this page argues for why that
+`map` four times - once each for `Option`, `Result`, `Task` and `Iterate` - and this page argues for why that
 repetition is a better trade than the abstraction that would remove it.
 
 ## The decision
 
-**`Option`, `Result`, `Task` and `Iterable` share a vocabulary because the standard library was written to use the
+**`Option`, `Result`, `Task` and `Iterate` share a vocabulary because the standard library was written to use the
 same words for the same meanings, not because the language can abstract over "a type with a `map`."**
 
 - `map`, `flatMap`, `filter`, `forEach`, `orElse`/`??` and `toList()` mean the same thing on every one of them where
@@ -46,7 +46,7 @@ print doubleAll([1, 2, 3])
 ## Why
 
 **Because the operations that look alike are not actually the same operation, and a shared abstraction would hide
-exactly the difference that matters.** `Option.map` runs immediately, because an `Option` is a value; `Iterable.map`
+exactly the difference that matters.** `Option.map` runs immediately, because an `Option` is a value; `Iterate.map`
 returns a new lazy stage and runs nothing until a terminal operation pulls it, because a pipeline is not a value in
 that sense - it is a plan. A `Functor` typeclass that covers both promises one behavior under one name and delivers
 two, and the only way to tell them apart is to already know which concrete type is behind the abstraction, which
@@ -66,15 +66,15 @@ function into a pipeline is `filterMap`. Each of these was added once, as an ord
 `From` implementation, rather than once as an instance of a general abstraction that then has to be learned on top of
 the four types it covers.
 
-**Because `Option` deliberately not being an `Iterable` is a feature the abstraction would erase.** `Option.map` is
-eager and `Iterable.map` is lazy on purpose - see [Why values instead of references](why-values-instead-of-references.md)
+**Because `Option` deliberately not being an `Iterate` is a feature the abstraction would erase.** `Option.map` is
+eager and `Iterate.map` is lazy on purpose - see [Why values instead of references](why-values-instead-of-references.md)
 for the same instinct applied elsewhere: make the two different things look different, so a reader does not have to
 hold "well, this one is actually lazy" in their head.
 
 ### What was rejected
 
 - **A `Functor`/`Monad` hierarchy.** Rejected because the shared behavior these typeclasses promise does not actually
-  hold across `Option` (eager) and `Iterable` (lazy), and because the inference and error messages a kind system needs
+  hold across `Option` (eager) and `Iterate` (lazy), and because the inference and error messages a kind system needs
   cost more than a script gains from writing one generic function instead of four similar ones.
 - **F-bounded polymorphism and `Self<U>`** to let a trait describe "the same shape with a different type argument."
   Rejected for the same reason: `Self` stays a type, and a bound never asks for a type constructor.
@@ -112,6 +112,6 @@ implementing an interface.** A new asynchronous stream type gets a `map` that me
   substitution table.
 - [Why there is no null](why-no-null.md) - `Option`, one of the four shapes this vocabulary covers.
 - [Why there are no exceptions](why-no-exceptions.md) - `Result`, another of the four.
-- [Pipelines](../language/collections-and-iteration/pipelines.md) - `Iterable`'s lazy `map`, the one that differs from
+- [Pipelines](../language/collections-and-iteration/pipelines.md) - `Iterate`'s lazy `map`, the one that differs from
   `Option`'s.
 

@@ -140,7 +140,7 @@ public fn instantiateTypes(
 ): List<IrTypeId> {
   var built: List<IrTypeId> = []
   for argument in arguments {
-    built.add instantiateType(program, checker, instantiation, mapping, argument)
+    built.append instantiateType(program, checker, instantiation, mapping, argument)
   }
   built
 }
@@ -181,7 +181,7 @@ fn buildType(var program: IrProgram, var checker: Checker, var instantiation: In
     .Traits(bounds) => {
       var traits: List<TraitId> = []
       for bound in bounds {
-        traits.add instantiateTrait(program, checker, instantiation, bound)
+        traits.append instantiateTrait(program, checker, instantiation, bound)
       }
       program.internType IrType.Object(traits)
     }
@@ -199,14 +199,14 @@ fn tupleType(
   const empty: Map<ParameterId, TypeId> = [:]
   var annotations: List<IrTypeId> = []
   for field in fields {
-    annotations.add instantiateType(program, checker, instantiation, empty, field.annotation)
+    annotations.append instantiateType(program, checker, instantiation, empty, field.annotation)
   }
   const name = tupleLayoutName program, annotations
   const reserved = program.reserveLayout name, LayoutKind.Tuple
   if reserved.isFresh {
     var built: List<FieldLayout> = []
     for index in 0..annotations.length() {
-      built.add FieldLayout("{index}", annotations[index], None)
+      built.append FieldLayout("{index}", annotations[index], None)
     }
     const layout = program.layoutAt reserved.layout
     program.setLayout reserved.layout, layout.copy(arguments: annotations, fields: built, isBuilt: true)
@@ -225,7 +225,7 @@ public fn instantiateSignature(
   var parameters: List<IrParameter> = []
   for parameter in form.parameters {
     const annotation = instantiateParameterType program, checker, instantiation, parameter
-    parameters.add IrParameter(parameter.name ?? "", annotation, isReferenceMode(parameter.mode), Ownership.Borrowed)
+    parameters.append IrParameter(parameter.name ?? "", annotation, isReferenceMode(parameter.mode), Ownership.Borrowed)
   }
   const result = instantiateType program, checker, instantiation, empty, form.result
   const signature = IrSignature parameters, result
@@ -310,7 +310,7 @@ fn isReferenceMode(mode: ParameterMode): Bool {
   }
 }
 
-/** `Show`, `Iterable<Int64>`: one bound of a trait-typed value, or the trait a witness table belongs to. */
+/** `Show`, `Iterate<Int64>`: one bound of a trait-typed value, or the trait a witness table belongs to. */
 public fn instantiateTrait(
   var program: IrProgram,
   var checker: Checker,
@@ -389,7 +389,7 @@ fn buildNominalLayout(
   // A type may carry fields of its own *and* cases; those fields are in front of every group
   for field in signature.fields {
     const annotation = instantiateType program, checker, instantiation, mapping, field.annotation
-    fields.add FieldLayout(field.name, annotation, Some(field.symbol))
+    fields.append FieldLayout(field.name, annotation, Some(field.symbol))
   }
   const common = fields.length()
   var variants: List<VariantLayout> = []
@@ -397,9 +397,9 @@ fn buildNominalLayout(
     const first = fields.length()
     for field in declared.fields {
       const annotation = instantiateType program, checker, instantiation, mapping, field.annotation
-      fields.add FieldLayout(field.name, annotation, Some(field.symbol))
+      fields.append FieldLayout(field.name, annotation, Some(field.symbol))
     }
-    variants.add VariantLayout(declared.name, first, fields.length() - first, Some(declared.symbol))
+    variants.append VariantLayout(declared.name, first, fields.length() - first, Some(declared.symbol))
   }
   const layout = program.layoutAt id
   program.setLayout(

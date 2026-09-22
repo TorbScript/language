@@ -124,7 +124,7 @@ fn problems(source: String): List<String> {
   var found: List<String> = []
   for file in check(workspaceWith(["app/src/main.trb": source]), ["app"]).files {
     for diagnostic in file.diagnostics {
-      found.add diagnostic.message
+      found.append diagnostic.message
     }
   }
   found
@@ -144,14 +144,14 @@ fn notes(source: String): List<String> {
 fn describeSignature(checker: Checker, signature: Signature): String {
   var parts = [describeFunction(checker.types, checker.symbols, signature.form)]
   if signature.takesSelf {
-    parts.add(if signature.isVarSelf { "var self" } else { "self" })
+    parts.append(if signature.isVarSelf { "var self" } else { "self" })
   }
   for bound in signature.bounds {
     var traits: List<String> = []
     for one in bound.traits {
-      traits.add checker.describe(one)
+      traits.append checker.describe(one)
     }
-    parts.add "where {checker.describe(bound.subject)}: {traits.joined(separator: " & ")}"
+    parts.append "where {checker.describe(bound.subject)}: {traits.joined(separator: " & ")}"
   }
   parts.joined separator: ", "
 }
@@ -554,7 +554,7 @@ group "The whole repository" {
     var reported: List<String> = []
     for file in checked.files {
       for diagnostic in file.diagnostics {
-        reported.add "{file.path}: {diagnostic.message}"
+        reported.append "{file.path}: {diagnostic.message}"
       }
     }
     assert reported.isEmpty()
@@ -617,11 +617,11 @@ group "The whole repository" {
       const path = joinPath root, example
       const checked = check readSourceTree([path]).expect("the sources of {example}"), [path]
       for problem in checked.problems {
-        reported.add "{example}: {problem}"
+        reported.append "{example}: {problem}"
       }
       for file in checked.files {
         for diagnostic in file.diagnostics {
-          reported.add "{file.path}: {diagnostic.message}"
+          reported.append "{file.path}: {diagnostic.message}"
         }
       }
       var deferred = 0
@@ -629,7 +629,7 @@ group "The whole repository" {
         deferred = deferred + checked.checker.statisticsOf(module).deferred
       }
       if deferred > 0 {
-        reported.add "{example}: {deferred} expressions without a type"
+        reported.append "{example}: {deferred} expressions without a type"
       }
     }
     assert reported.isEmpty()

@@ -59,7 +59,7 @@ public shared trait Source<Item, Failure> with Close {
   var fn toList(): Task<Result<List<Item>, Failure>>
   var fn into(var sink: Sink<Item, Failure>): Task<Result<Void, Failure>>
 
-  static fn from(items: Iterable<Item>): Source<Item, Failure>
+  static fn from(items: Iterate<Item>): Source<Item, Failure>
   static fn pulling(step: () => Task<Result<Item?, Failure>>): Source<Item, Failure>
   static fn produce(
     capacity: Int = 0,
@@ -85,7 +85,7 @@ handing every item over directly, in lock-step with the consumer.
 public shared trait Sink<Item, Failure> with Close {
   var fn add(item: Item): Task<Result<Void, Failure>>
   var fn finish(): Task<Result<Void, Failure>>
-  var fn addAll(items: Iterable<Item>): Task<Result<Void, Failure>>
+  var fn addAll(items: Iterate<Item>): Task<Result<Void, Failure>>
   var fn fill(var source: Source<Item, Failure>): Task<Result<Void, Failure>>
   var fn mapFailure<Other>(transform: (failure: Failure) => Other): Sink<Item, Other>
   var fn buffered(capacity: Int = 64): Buffered<Item, Failure>
@@ -134,7 +134,7 @@ public fn encodedText(): Stage<String, Bytes>
 
 Bytes to lines, split at `\n` with a trailing `\r` dropped so CRLF files read like LF files; a last line without a
 break is still a line. `decodedText` cuts at character borders instead, holding back a character split across two
-chunks. Both are resumable `Stage`s (see [std/iteration](iteration.md)) and work on any `Iterable<Bytes>` as well as on
+chunks. Both are resumable `Stage`s (see [std/iteration](iteration.md)) and work on any `Iterate<Bytes>` as well as on
 a `Source<Bytes, Failure>` - they need no `Task` themselves, only reading the `Source` they sit in front of does.
 A sequence that is still incomplete when the stream ends is reported as invalid UTF-8, at the offset it starts on - there
 is no more input coming to complete it. `textOf` is the short form for a whole chunk that has already arrived;
@@ -146,7 +146,7 @@ The example above type checks against the real standard library, which is what `
 not run yet is everything that has to produce a real value through `.await()`: every `Source`/`Sink` verb answers a
 `Task`, and [std/task](task.md) is `status: planned` because no back end gives `Task.await` a value. `Bytes`,
 `Utf8Error`, `textOf`, `lines()` and `decodedText()` do not depend on `Task` at all and work today wherever a `Stage`
-does - over an `Iterable<Bytes>` in a test, for instance - which is why this page stays `status: stable` while
+does - over an `Iterate<Bytes>` in a test, for instance - which is why this page stays `status: stable` while
 [std/task](task.md) does not.
 
 ## Related

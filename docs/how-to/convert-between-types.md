@@ -62,7 +62,7 @@ every time.
    type](parse-text-into-a-type.md) is this step on its own, with the constructor rules it depends on.
 
 5. **Collect a pipeline into any type at all with `to<Target>()`, not only a `List`.** Every collection implements
-   `From<Iterable<Item>>`, so `to<Target>()` works for `Set`, `Map` (of a pipeline of pairs), or a type of your own
+   `From<Iterate<Item>>`, so `to<Target>()` works for `Set`, `Map` (of a pipeline of pairs), or a type of your own
    that implements the same trait.
 
    ```trb fragment

@@ -282,7 +282,7 @@ public fn lowerClosureValue(
 public fn lazyParametersOf(signature: Signature): List<Bool> {
   var found: List<Bool> = []
   for parameter in signature.form.parameters {
-    found.add isLazyMode(parameter.mode)
+    found.append isLazyMode(parameter.mode)
   }
   found
 }
@@ -534,7 +534,7 @@ fn constructorFunctionOf(
   const result = addTemporary inner, shape.result
   var fields: List<IrArgument> = []
   for index in 0..shape.parameters.length() {
-    fields.add borrowed(Slot(index))
+    fields.append borrowed(Slot(index))
   }
   emit inner, Instruction.Construct(result, layout, variant, fields)
   terminate inner, Terminator.Return(Some(borrowed(result)))
@@ -581,8 +581,8 @@ public fn lowerClosureCall(
   var slots: List<Slot?> = []
   var places: List<Reference?> = []
   for _ in 0..count {
-    slots.add None
-    places.add None
+    slots.append None
+    places.append None
   }
   // What a `var` argument took out of a container and has to put back once the closure has run
   var taken: List<TakenElement> = []
@@ -605,7 +605,7 @@ public fn lowerClosureCall(
       }
       slots.set position, Some(path.reference.base)
       places.set position, Some(path.reference)
-      taken.addAll path.taken
+      taken.appendAll path.taken
       continue
     }
     const slot = lowerValue lowering, builder, value
@@ -642,7 +642,7 @@ fn closureArgumentTargets(
   }
   var straight: List<Int> = []
   for index in 0..arguments.length() {
-    straight.add index
+    straight.append index
   }
   straight
 }
@@ -669,7 +669,7 @@ fn closureDefaults(
   if !isMissing {
     for entry in slots {
       match entry {
-        Some(slot) => found.add slot
+        Some(slot) => found.append slot
         None => {}
       }
     }
@@ -692,7 +692,7 @@ fn closureDefaults(
   }
   for index in 0..slots.length() {
     if const Some(slot) = slots[index] {
-      found.add slot
+      found.append slot
       continue
     }
     const filled = match lowerDefaultOfSource(lowering, builder, source, index, at) {
@@ -701,7 +701,7 @@ fn closureDefaults(
         return []
       }
     }
-    found.add filled
+    found.append filled
   }
   found
 }
@@ -766,7 +766,7 @@ fn closureValueOf(
   const name = closureFunctionName lowering.owner, index
   var fields: List<FieldLayout> = []
   for plan in plans {
-    fields.add plan.field
+    fields.append plan.field
   }
   const environment = if fields.isEmpty() {
     None
@@ -776,7 +776,7 @@ fn closureValueOf(
   const function = loweredClosureBody lowering, name, at, source, signature, environment, plans
   var taken: List<Capture> = []
   for plan in plans {
-    taken.add plan.taken
+    taken.append plan.taken
   }
   const isEscaping = escapesAt lowering, at
   const target = valueSlot lowering, builder, destination, annotation
@@ -817,7 +817,7 @@ fn capturePlansOf(var lowering: Lowering, var builder: FunctionBuilder, at: Span
     const name = if binding.name.isEmpty() { "captured" } else { binding.name }
     if const Some(box) = lowering.boxes.get(declared) {
       const annotation = builder.typeOfSlot box
-      plans.add CapturePlan(Capture.Boxed(box), FieldLayout(name, annotation, None), declared, true)
+      plans.append CapturePlan(Capture.Boxed(box), FieldLayout(name, annotation, None), declared, true)
       continue
     }
     const slot = match lowering.slots.get(declared) {
@@ -833,7 +833,7 @@ fn capturePlansOf(var lowering: Lowering, var builder: FunctionBuilder, at: Span
       return []
     }
     const annotation = builder.typeOfSlot slot
-    plans.add CapturePlan(Capture.Value(slot), FieldLayout(name, annotation, None), declared, false)
+    plans.append CapturePlan(Capture.Value(slot), FieldLayout(name, annotation, None), declared, false)
   }
   plans
 }
@@ -884,9 +884,9 @@ fn loweredClosureBody(
   var parameters: List<IrParameter> = []
   if const Some(layout) = environment {
     const annotation = lowering.program.internType IrType.Record(layout)
-    parameters.add IrParameter("environment", annotation, false, Ownership.Borrowed)
+    parameters.append IrParameter("environment", annotation, false, Ownership.Borrowed)
   }
-  parameters.addAll shape.parameters
+  parameters.appendAll shape.parameters
   const built = IrSignature parameters, shape.result
   var inner = newFunction name, None, built, "closure"
   const location = locationOf lowering, at
@@ -981,7 +981,7 @@ fn bindClosureParameters(
   const first = if hasEnvironment { 1 } else { 0 }
   var positions: List<Slot> = []
   for index in 0..count {
-    positions.add Slot(first + index)
+    positions.append Slot(first + index)
   }
   lowering.closureParameters = positions
   const closure = match source {

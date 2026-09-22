@@ -76,9 +76,9 @@ public type Column<Component> {
       }
       None => {
         rows[entity] = values.length()
-        owners.add entity
-        values.add value
-        stamps.add clock
+        owners.append entity
+        values.append value
+        stamps.append clock
       }
     }
   }
@@ -132,14 +132,14 @@ public type Column<Component> {
   }
 
   /** The entities whose value was written after `stamp`. This is change detection, without a second data structure. */
-  fn changedSince(stamp: Int): Iterable<Entity> {
+  fn changedSince(stamp: Int): Iterate<Entity> {
     (0..values.length()).filterMap { row =>
       if stamps[row] > stamp { Some owners[row] } else { None }
     }
   }
 
   /** Every entity that has a value here, in the order the values lie. */
-  fn entities(): Iterable<Entity> {
+  fn entities(): Iterate<Entity> {
     (0..values.length()).map { owners[_] }
   }
 }
@@ -181,7 +181,7 @@ public type World {
  * Every entity that has both a [Position] and a [Velocity], with both values.
  *
  * This is the shape `query2` has in `docs/ECS.md`: it walks the shorter column and probes the other, and it answers
- * a plain `Iterable`, so `filter` is what an ECS calls a "without" filter.
+ * a plain `Iterate`, so `filter` is what an ECS calls a "without" filter.
  *
  * # Examples
  *
@@ -191,7 +191,7 @@ public type World {
  *     world.velocities.add entity, Velocity(Vector2(1.0, 0.0))
  *     assert(moving(world).count() == 1)
  */
-public fn moving(world: World): Iterable<(Entity, Position, Velocity)> {
+public fn moving(world: World): Iterate<(Entity, Position, Velocity)> {
   (0..world.velocities.length()).filterMap { row =>
     const entity = world.velocities.ownerAt row
     match world.positions.get(entity) {
@@ -202,7 +202,7 @@ public fn moving(world: World): Iterable<(Entity, Position, Velocity)> {
 }
 
 /** Every entity that has both a [GlobalPosition] and a [Collider], with both values. */
-public fn bodies(world: World): Iterable<(Entity, GlobalPosition, Collider)> {
+public fn bodies(world: World): Iterate<(Entity, GlobalPosition, Collider)> {
   (0..world.colliders.length()).filterMap { row =>
     const entity = world.colliders.ownerAt row
     match world.globals.get(entity) {

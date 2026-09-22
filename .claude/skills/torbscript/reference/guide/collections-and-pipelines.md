@@ -46,7 +46,7 @@ because it has no literal of its own. See [Lists](../language/collections-and-it
 
 ```trb
 var buffer = numbers
-buffer.add 4
+buffer.append 4
 buffer[0] = 10
 print numbers
 print buffer
@@ -57,15 +57,15 @@ print buffer
 verb and a participle:
 
 ```trb
-const more = numbers.added(4).added(5).removed(2)
+const more = numbers.appended(4).appended(5).removed(2)
 print more
 print numbers
 ```
 
-`added` and `removed` answer a changed copy and leave `numbers` untouched, so they work through a `const` binding.
-`add` and `remove` need a `var`. See
-[The collection traits](../language/collections-and-iteration/collection-traits.md) for the full vocabulary, shared by
-`List`, `Map`, `Set`, `Stack` and `Queue`.
+`appended` and `removed` answer a changed copy and leave `numbers` untouched, so they work through a `const` binding.
+`append` and `remove` need a `var`. Each kind has the words everybody knows for it - a list appends, a set inserts, a
+map sets, a stack pushes and pops, a queue enqueues and dequeues. See
+[The collection traits](../language/collections-and-iteration/collection-traits.md) for all of them.
 
 ## Reading with for
 

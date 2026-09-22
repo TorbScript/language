@@ -40,7 +40,7 @@ task.await(): Value                        waits for the value
 task.map(transform): Task<Output>
 task.flatMap(transform): Task<Output>
 all(first: Task<A>, second: Task<B>): Task<(A, B)>
-Task.all(tasks: Iterable<Task<Value>>): Task<List<Value>>
+Task.all(tasks: Iterate<Task<Value>>): Task<List<Value>>
 ```
 
 ## Rules

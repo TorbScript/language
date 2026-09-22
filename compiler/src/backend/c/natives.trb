@@ -32,7 +32,7 @@ use Intrinsic, IntrinsicOperation, NumericKind, RuntimeKind from "../../ir/ir"
 
 /** One `native` declaration and what it becomes. */
 public type NativeEntry {
-  /** `"ArrayList.add"`, `"String.trim"`, `"print"`. The owner is empty for a free function. */
+  /** `"ArrayList.append"`, `"String.trim"`, `"print"`. The owner is empty for a free function. */
   name: String
   target: NativeTarget
   /** Which parameters the callee stores, so the ownership pass knows (BACKEND 2.1). `self` is index 0. */
@@ -282,30 +282,30 @@ fn numericSuffix(kind: NumericKind): String {
  */
 fn numericMembers(var entries: List<NativeEntry>, owner: String, kind: NumericKind, showFunction: String,
                   showPrototype: String, parseFunction: String, parsePrototype: String) {
-  entries.add numericOf("{owner}.add", IntrinsicOperation.Add, kind)
-  entries.add numericOf("{owner}.subtract", IntrinsicOperation.Subtract, kind)
-  entries.add numericOf("{owner}.multiply", IntrinsicOperation.Multiply, kind)
-  entries.add numericOf("{owner}.divide", IntrinsicOperation.Divide, kind)
-  entries.add numericOf("{owner}.remainder", IntrinsicOperation.Remainder, kind)
-  entries.add numericOf("{owner}.equals", IntrinsicOperation.Equal, kind)
-  entries.add runtimeOf("{owner}.show", showFunction, showPrototype)
-  entries.add fallibleRuntimeOf("{owner}.tryFrom(String)", parseFunction, parsePrototype)
+  entries.append numericOf("{owner}.add", IntrinsicOperation.Add, kind)
+  entries.append numericOf("{owner}.subtract", IntrinsicOperation.Subtract, kind)
+  entries.append numericOf("{owner}.multiply", IntrinsicOperation.Multiply, kind)
+  entries.append numericOf("{owner}.divide", IntrinsicOperation.Divide, kind)
+  entries.append numericOf("{owner}.remainder", IntrinsicOperation.Remainder, kind)
+  entries.append numericOf("{owner}.equals", IntrinsicOperation.Equal, kind)
+  entries.append runtimeOf("{owner}.show", showFunction, showPrototype)
+  entries.append fallibleRuntimeOf("{owner}.tryFrom(String)", parseFunction, parsePrototype)
 }
 
 /** `Signed` adds `negate` and `absolute` on top of `Numeric`. */
 fn signedMembers(var entries: List<NativeEntry>, owner: String, kind: NumericKind) {
-  entries.add numericOf("{owner}.negate", IntrinsicOperation.Negate, kind)
-  entries.add derivedOf("{owner}.absolute", DerivedKind.Absolute)
+  entries.append numericOf("{owner}.negate", IntrinsicOperation.Negate, kind)
+  entries.append derivedOf("{owner}.absolute", DerivedKind.Absolute)
 }
 
 /** The six methods of `Bits`, one entry per member per width. */
 fn bitsMembers(var entries: List<NativeEntry>, owner: String, kind: NumericKind) {
-  entries.add numericOf("{owner}.bitwiseAnd", IntrinsicOperation.BitwiseAnd, kind)
-  entries.add numericOf("{owner}.bitwiseOr", IntrinsicOperation.BitwiseOr, kind)
-  entries.add numericOf("{owner}.bitwiseExclusiveOr", IntrinsicOperation.BitwiseExclusiveOr, kind)
-  entries.add numericOf("{owner}.bitwiseNot", IntrinsicOperation.BitwiseNot, kind)
-  entries.add numericOf("{owner}.shiftedLeft", IntrinsicOperation.ShiftedLeft, kind)
-  entries.add numericOf("{owner}.shiftedRight", IntrinsicOperation.ShiftedRight, kind)
+  entries.append numericOf("{owner}.bitwiseAnd", IntrinsicOperation.BitwiseAnd, kind)
+  entries.append numericOf("{owner}.bitwiseOr", IntrinsicOperation.BitwiseOr, kind)
+  entries.append numericOf("{owner}.bitwiseExclusiveOr", IntrinsicOperation.BitwiseExclusiveOr, kind)
+  entries.append numericOf("{owner}.bitwiseNot", IntrinsicOperation.BitwiseNot, kind)
+  entries.append numericOf("{owner}.shiftedLeft", IntrinsicOperation.ShiftedLeft, kind)
+  entries.append numericOf("{owner}.shiftedRight", IntrinsicOperation.ShiftedRight, kind)
 }
 
 fn integerEntries(var entries: List<NativeEntry>) {
@@ -324,8 +324,8 @@ fn integerEntries(var entries: List<NativeEntry>) {
     )
     signedMembers entries, owner, kind
     bitsMembers entries, owner, kind
-    entries.add derivedOf("{owner}.compare", DerivedKind.Compare)
-    entries.add runtimeOf("{owner}.hash", "torb_hash_i64", "uint64_t torb_hash_i64(int64_t value);")
+    entries.append derivedOf("{owner}.compare", DerivedKind.Compare)
+    entries.append runtimeOf("{owner}.hash", "torb_hash_i64", "uint64_t torb_hash_i64(int64_t value);")
   }
   for width in widths {
     const owner = "UInt{width}"
@@ -340,8 +340,8 @@ fn integerEntries(var entries: List<NativeEntry>) {
       "bool torb_parse_u64(torb_text text, uint64_t *out);",
     )
     bitsMembers entries, owner, kind
-    entries.add derivedOf("{owner}.compare", DerivedKind.Compare)
-    entries.add runtimeOf("{owner}.hash", "torb_hash_u64", "uint64_t torb_hash_u64(uint64_t value);")
+    entries.append derivedOf("{owner}.compare", DerivedKind.Compare)
+    entries.append runtimeOf("{owner}.hash", "torb_hash_u64", "uint64_t torb_hash_u64(uint64_t value);")
   }
 }
 
@@ -359,25 +359,25 @@ fn floatEntries(var entries: List<NativeEntry>) {
   signedMembers entries, "Float64", kind
   // `compare` is a total order with `nan` above everything (runtime/README.md, "Determinism"), which no comparison
   // intrinsic gives.
-  entries.add(orderingRuntimeOf(
+  entries.append(orderingRuntimeOf(
     "Float64.compare",
     "torb_compare_f64",
     "int32_t torb_compare_f64(double first, double second);",
   ))
-  entries.add runtimeOf("Float64.squareRoot", "torb_square_root_f64", "double torb_square_root_f64(double value);")
-  entries.add runtimeOf("Float64.floor", "torb_floor_f64", "double torb_floor_f64(double value);")
-  entries.add runtimeOf("Float64.ceiling", "torb_ceiling_f64", "double torb_ceiling_f64(double value);")
-  entries.add runtimeOf("Float64.round", "torb_round_f64", "double torb_round_f64(double value);")
-  entries.add runtimeOf("Float64.isNaN", "torb_is_nan_f64", "bool torb_is_nan_f64(double value);")
+  entries.append runtimeOf("Float64.squareRoot", "torb_square_root_f64", "double torb_square_root_f64(double value);")
+  entries.append runtimeOf("Float64.floor", "torb_floor_f64", "double torb_floor_f64(double value);")
+  entries.append runtimeOf("Float64.ceiling", "torb_ceiling_f64", "double torb_ceiling_f64(double value);")
+  entries.append runtimeOf("Float64.round", "torb_round_f64", "double torb_round_f64(double value);")
+  entries.append runtimeOf("Float64.isNaN", "torb_is_nan_f64", "bool torb_is_nan_f64(double value);")
 
   // `Float32` arithmetic is not implemented: everything narrows to `Float64` for now.
   const float32Members = [
     "add", "subtract", "multiply", "divide", "remainder", "negate", "absolute", "equals", "compare", "show",
   ]
   for member in float32Members {
-    entries.add plannedRuntimeOf("Float32.{member}", "torb_{member}_f32", "8")
+    entries.append plannedRuntimeOf("Float32.{member}", "torb_{member}_f32", "8")
   }
-  entries.add plannedRuntimeOf("Float32.tryFrom(String)", "torb_parse_f32", "8")
+  entries.append plannedRuntimeOf("Float32.tryFrom(String)", "torb_parse_f32", "8")
 }
 
 fn decimalEntries(var entries: List<NativeEntry>) {
@@ -385,46 +385,46 @@ fn decimalEntries(var entries: List<NativeEntry>) {
     "add", "subtract", "multiply", "divide", "remainder", "negate", "absolute", "equals", "compare", "show", "hash",
   ]
   for member in members {
-    entries.add plannedRuntimeOf("Decimal.{member}", "torb_decimal_{member}", "8")
+    entries.append plannedRuntimeOf("Decimal.{member}", "torb_decimal_{member}", "8")
   }
-  entries.add plannedRuntimeOf("Decimal.tryFrom(String)", "torb_decimal_parse", "8")
+  entries.append plannedRuntimeOf("Decimal.tryFrom(String)", "torb_decimal_parse", "8")
 }
 
 fn conversionEntries(var entries: List<NativeEntry>) {
-  entries.add numericOf("Int64.from", IntrinsicOperation.Convert(NumericKind.Signed(64)), NumericKind.Signed(32))
-  entries.add(numericOf(
+  entries.append numericOf("Int64.from", IntrinsicOperation.Convert(NumericKind.Signed(64)), NumericKind.Signed(32))
+  entries.append(numericOf(
     "Float64.from",
     IntrinsicOperation.Convert(NumericKind.Floating(64)),
     NumericKind.Signed(64),
   ))
-  entries.add(numericOf(
+  entries.append(numericOf(
     "Float64.fromFloat32",
     IntrinsicOperation.Convert(NumericKind.Floating(64)),
     NumericKind.Floating(32),
   ))
   // A `NumberRangeError` carries a `message` and no parameter of `tryFrom` names it, so the runtime writes it through one
   // more out parameter - the `.Fallible` convention, exactly as the `message` of an `IoError` arrives
-  entries.add(fallibleRuntimeOf(
+  entries.append(fallibleRuntimeOf(
     "Int32.tryFrom(Int64)",
     "torb_convert_i64_i32_checked",
     "bool torb_convert_i64_i32_checked(int64_t value, int32_t *out, torb_text *message);",
   ))
-  entries.add(fallibleRuntimeOf(
+  entries.append(fallibleRuntimeOf(
     "Int64.tryFrom(Float64)",
     "torb_convert_f64_i64_checked",
     "bool torb_convert_f64_i64_checked(double value, int64_t *out, torb_text *message);",
   ))
-  entries.add(fallibleRuntimeOf(
+  entries.append(fallibleRuntimeOf(
     "Int64.parseDigits",
     "torb_parse_i64_digits",
     "bool torb_parse_i64_digits(torb_text text, int64_t radix, int64_t *out);",
   ))
-  entries.add(runtimeOf(
+  entries.append(runtimeOf(
     "UInt64.addedWrapping",
     "torb_added_wrapping_u64",
     "uint64_t torb_added_wrapping_u64(uint64_t first, uint64_t second);",
   ))
-  entries.add(runtimeOf(
+  entries.append(runtimeOf(
     "UInt64.multipliedWrapping",
     "torb_multiplied_wrapping_u64",
     "uint64_t torb_multiplied_wrapping_u64(uint64_t first, uint64_t second);",
@@ -437,7 +437,7 @@ fn conversionEntries(var entries: List<NativeEntry>) {
  * from the runtime.
  */
 fn compareEntries(var entries: List<NativeEntry>) {
-  entries.add(runtimeOf(
+  entries.append(runtimeOf(
     "combineHashes",
     "torb_hash_combine",
     "uint64_t torb_hash_combine(uint64_t first, uint64_t second);",
@@ -447,155 +447,155 @@ fn compareEntries(var entries: List<NativeEntry>) {
 // --- Bool, Char, String, Void ---------------------------------------------------------------------------------------
 
 fn textEntries(var entries: List<NativeEntry>) {
-  entries.add intrinsicOf("Bool.equals", IntrinsicOperation.Equal)
-  entries.add runtimeOf("Bool.hash", "torb_hash_bool", "uint64_t torb_hash_bool(bool value);")
-  entries.add runtimeOf("Bool.show", "torb_show_bool", "torb_text torb_show_bool(bool value);")
+  entries.append intrinsicOf("Bool.equals", IntrinsicOperation.Equal)
+  entries.append runtimeOf("Bool.hash", "torb_hash_bool", "uint64_t torb_hash_bool(bool value);")
+  entries.append runtimeOf("Bool.show", "torb_show_bool", "torb_text torb_show_bool(bool value);")
 
-  entries.add intrinsicOf("Char.equals", IntrinsicOperation.Equal)
-  entries.add derivedOf("Char.compare", DerivedKind.Compare)
-  entries.add runtimeOf("Char.hash", "torb_hash_char", "uint64_t torb_hash_char(torb_char character);")
-  entries.add runtimeOf("Char.show", "torb_show_char", "torb_text torb_show_char(torb_char character);")
-  entries.add(runtimeOf(
+  entries.append intrinsicOf("Char.equals", IntrinsicOperation.Equal)
+  entries.append derivedOf("Char.compare", DerivedKind.Compare)
+  entries.append runtimeOf("Char.hash", "torb_hash_char", "uint64_t torb_hash_char(torb_char character);")
+  entries.append runtimeOf("Char.show", "torb_show_char", "torb_text torb_show_char(torb_char character);")
+  entries.append(runtimeOf(
     "Char.showNested",
     "torb_show_char_nested",
     "torb_text torb_show_char_nested(torb_char character);",
   ))
-  entries.add runtimeOf("Char.isDigit", "torb_char_is_digit", "bool torb_char_is_digit(torb_char character);")
-  entries.add runtimeOf("Char.isLetter", "torb_char_is_letter", "bool torb_char_is_letter(torb_char character);")
-  entries.add(runtimeOf(
+  entries.append runtimeOf("Char.isDigit", "torb_char_is_digit", "bool torb_char_is_digit(torb_char character);")
+  entries.append runtimeOf("Char.isLetter", "torb_char_is_letter", "bool torb_char_is_letter(torb_char character);")
+  entries.append(runtimeOf(
     "Char.isWhitespace",
     "torb_char_is_whitespace",
     "bool torb_char_is_whitespace(torb_char character);",
   ))
-  entries.add(runtimeOf(
+  entries.append(runtimeOf(
     "Char.byteLength",
     "torb_char_byte_length_of",
     "int64_t torb_char_byte_length_of(torb_char character);",
   ))
-  entries.add(runtimeOf(
+  entries.append(runtimeOf(
     "Char.toUpperCase",
     "torb_char_to_upper_case",
     "torb_char torb_char_to_upper_case(torb_char character);",
   ))
-  entries.add(runtimeOf(
+  entries.append(runtimeOf(
     "Char.toLowerCase",
     "torb_char_to_lower_case",
     "torb_char torb_char_to_lower_case(torb_char character);",
   ))
-  entries.add(fallibleRuntimeOf(
+  entries.append(fallibleRuntimeOf(
     "Char.tryFrom(Int64)",
     "torb_char_try_from_i64",
     "bool torb_char_try_from_i64(int64_t value, torb_char *out, torb_text *message);",
   ))
-  entries.add numericOf("Int64.fromChar", IntrinsicOperation.Convert(NumericKind.Signed(64)), NumericKind.Unsigned(32))
+  entries.append numericOf("Int64.fromChar", IntrinsicOperation.Convert(NumericKind.Signed(64)), NumericKind.Unsigned(32))
 
-  entries.add intrinsicOf("String.equals", IntrinsicOperation.TextEqual)
-  entries.add derivedOf("String.compare", DerivedKind.Compare)
-  entries.add runtimeOf("String.hash", "torb_text_hash", "uint64_t torb_text_hash(torb_text text);")
+  entries.append intrinsicOf("String.equals", IntrinsicOperation.TextEqual)
+  entries.append derivedOf("String.compare", DerivedKind.Compare)
+  entries.append runtimeOf("String.hash", "torb_text_hash", "uint64_t torb_text_hash(torb_text text);")
   // `show()` of a `String` is the text itself, which is a copy and not a call.
-  entries.add derivedOf("String.show", DerivedKind.Identity)
-  entries.add(runtimeOf(
+  entries.append derivedOf("String.show", DerivedKind.Identity)
+  entries.append(runtimeOf(
     "String.showNested",
     "torb_text_show_nested",
     "torb_text torb_text_show_nested(torb_text text);",
   ))
-  entries.add intrinsicOf("String.add", IntrinsicOperation.TextConcat)
-  entries.add intrinsicOf("String.byteLength", IntrinsicOperation.TextByteLength)
-  entries.add runtimeOf("String.isEmpty", "torb_text_is_empty", "bool torb_text_is_empty(torb_text text);")
-  entries.add(runtimeOf(
+  entries.append intrinsicOf("String.add", IntrinsicOperation.TextConcat)
+  entries.append intrinsicOf("String.byteLength", IntrinsicOperation.TextByteLength)
+  entries.append runtimeOf("String.isEmpty", "torb_text_is_empty", "bool torb_text_is_empty(torb_text text);")
+  entries.append(runtimeOf(
     "String.sliceBytes",
     "torb_text_slice",
     "torb_text torb_text_slice(torb_text text, int64_t from, int64_t to, torb_location at);",
   ))
-  entries.add(runtimeOf(
+  entries.append(runtimeOf(
     "String.contains",
     "torb_text_contains",
     "bool torb_text_contains(torb_text text, torb_text part);",
   ))
-  entries.add(runtimeOf(
+  entries.append(runtimeOf(
     "String.startsWith",
     "torb_text_starts_with",
     "bool torb_text_starts_with(torb_text text, torb_text prefix);",
   ))
-  entries.add(runtimeOf(
+  entries.append(runtimeOf(
     "String.endsWith",
     "torb_text_ends_with",
     "bool torb_text_ends_with(torb_text text, torb_text suffix);",
   ))
-  entries.add(optionalRuntimeOf(
+  entries.append(optionalRuntimeOf(
     "String.indexOf",
     "torb_text_index_of",
     "bool torb_text_index_of(torb_text text, torb_text part, int64_t *out);",
   ))
-  entries.add(optionalRuntimeOf(
+  entries.append(optionalRuntimeOf(
     "String.lastIndexOf",
     "torb_text_last_index_of",
     "bool torb_text_last_index_of(torb_text text, torb_text part, int64_t *out);",
   ))
-  entries.add runtimeOf("String.trim", "torb_text_trim", "torb_text torb_text_trim(torb_text text);")
-  entries.add(runtimeOf(
+  entries.append runtimeOf("String.trim", "torb_text_trim", "torb_text torb_text_trim(torb_text text);")
+  entries.append(runtimeOf(
     "String.toUpperCase",
     "torb_text_to_upper_case",
     "torb_text torb_text_to_upper_case(torb_text text);",
   ))
-  entries.add(runtimeOf(
+  entries.append(runtimeOf(
     "String.toLowerCase",
     "torb_text_to_lower_case",
     "torb_text torb_text_to_lower_case(torb_text text);",
   ))
-  entries.add(runtimeOf(
+  entries.append(runtimeOf(
     "String.replace",
     "torb_text_replace",
     "torb_text torb_text_replace(torb_text text, torb_text part, torb_text replacement);",
   ))
-  entries.add(runtimeOf(
+  entries.append(runtimeOf(
     "String.repeat",
     "torb_text_repeat",
     "torb_text torb_text_repeat(torb_text text, int64_t times, torb_location at);",
   ))
   // The runtime builds the list and answers its storage, which the wrapper coerces to the `List<String>` the declaration
   // names: it cannot build a trait-typed value, because that is a boxed payload plus one witness pointer per bound
-  entries.add(collectionRuntimeOf(
+  entries.append(collectionRuntimeOf(
     "String.split",
     "torb_text_split",
     "torb_list torb_text_split(torb_text text, torb_text separator);",
   ))
   /*
    * `chars()` and `bytes()` are ordinary TorbScript over these two (`Characters` and `TextBytes` in `std/text`), and
-   * `String.from(Iterable<Char>)` is TorbScript for the same reason `ArrayList.from` is: it walks a trait-typed value of
+   * `String.from(Iterate<Char>)` is TorbScript for the same reason `ArrayList.from` is: it walks a trait-typed value of
    * the *program* through a witness table, which a C function cannot do. So none of the three is a native any more, and
    * what is left is the one thing the language cannot express at all - reading raw storage, because a `String` has no
    * index.
    */
-  entries.add(optionalRuntimeOf(
+  entries.append(optionalRuntimeOf(
     "String.charAt",
     "torb_text_char_at",
     "bool torb_text_char_at(torb_text text, int64_t offset, torb_char *out);",
   ))
-  entries.add(optionalRuntimeOf(
+  entries.append(optionalRuntimeOf(
     "String.byteAt",
     "torb_text_byte_at",
     "bool torb_text_byte_at(torb_text text, int64_t offset, uint8_t *out);",
   ))
 
-  entries.add derivedOf("Void.equals", DerivedKind.Identity)
-  entries.add derivedOf("Void.hash", DerivedKind.Hash)
+  entries.append derivedOf("Void.equals", DerivedKind.Identity)
+  entries.append derivedOf("Void.hash", DerivedKind.Hash)
   // `show(self)` passes the one value of `Void` like any other receiver, so the runtime takes it and ignores it
-  entries.add runtimeOf("Void.show", "torb_show_void", "torb_text torb_show_void(torb_void value);")
+  entries.append runtimeOf("Void.show", "torb_show_void", "torb_text torb_show_void(torb_void value);")
 }
 
 fn consoleEntries(var entries: List<NativeEntry>) {
-  entries.add(runtimeOf(
+  entries.append(runtimeOf(
     "print",
     "torb_print_parts",
     "void torb_print_parts(const torb_text *parts, size_t count);",
   ))
-  entries.add(runtimeOf(
+  entries.append(runtimeOf(
     "printError",
     "torb_print_error_parts",
     "void torb_print_error_parts(const torb_text *parts, size_t count);",
   ))
-  entries.add runtimeOf("panic", "torb_panic", "void torb_panic(torb_text message, torb_location at);")
+  entries.append runtimeOf("panic", "torb_panic", "void torb_panic(torb_text message, torb_location at);")
 }
 
 /**
@@ -607,8 +607,8 @@ fn consoleEntries(var entries: List<NativeEntry>) {
  * implementations of one format are two chances to disagree, and `torb test` compares the two line by line.
  */
 fn testEntries(var entries: List<NativeEntry>) {
-  entries.add runtimeOf("test", "torb_test_case", "void torb_test_case(torb_text name, torb_closure body);")
-  entries.add runtimeOf("group", "torb_test_group", "void torb_test_group(torb_text name, torb_closure body);")
+  entries.append runtimeOf("test", "torb_test_case", "void torb_test_case(torb_text name, torb_closure body);")
+  entries.append runtimeOf("group", "torb_test_group", "void torb_test_group(torb_text name, torb_closure body);")
 }
 
 // --- The collections ------------------------------------------------------------------------------------------------
@@ -618,31 +618,31 @@ fn testEntries(var entries: List<NativeEntry>) {
  * observable apart only through performance - iteration order and `Show` are the same either way.
  */
 fn listEntries(var entries: List<NativeEntry>, owner: String) {
-  // `from` and `iterator` are in neither list: both are ordinary TorbScript, and `from` cannot be anything else - it
-  // walks a trait-typed `Iterable` of the *program* through a witness table, which a C function cannot do.
+  // `from` and `iterate` are in neither list: both are ordinary TorbScript, and `from` cannot be anything else - it
+  // walks a trait-typed `Iterate` of the *program* through a witness table, which a C function cannot do.
   // `withCapacity` is the empty container, which is an instruction and no call: `torb_list_with_capacity` takes an
   // element descriptor that no declaration of `std/` can name. The capacity is a hint the first version drops.
-  entries.add containerOf("{owner}.withCapacity", RuntimeKind.ListStorage)
-  entries.add runtimeOf("{owner}.length", "torb_list_length", "int64_t torb_list_length(torb_list list);")
-  entries.add(optionalRuntimeOf(
+  entries.append containerOf("{owner}.withCapacity", RuntimeKind.ListStorage)
+  entries.append runtimeOf("{owner}.length", "torb_list_length", "int64_t torb_list_length(torb_list list);")
+  entries.append(optionalRuntimeOf(
     "{owner}.get",
     "torb_list_get",
     "bool torb_list_get(torb_list list, int64_t index, void *out);",
   ))
-  entries.add(runtimeOf(
+  entries.append(runtimeOf(
     "{owner}.slice",
     "torb_list_slice",
     "torb_list torb_list_slice(torb_list list, int64_t from, int64_t to, torb_location at);",
   ))
-  entries.add(containerRuntimeOf(
-    "{owner}.add",
+  entries.append(containerRuntimeOf(
+    "{owner}.append",
     "torb_list_add",
     "void torb_list_add(torb_list *list, const void *value);",
     [1],
     [1],
     NativeResult.Direct,
   ))
-  entries.add(containerRuntimeOf(
+  entries.append(containerRuntimeOf(
     "{owner}.set",
     "torb_list_set",
     "void torb_list_set(torb_list *list, int64_t index, const void *value, torb_location at);",
@@ -650,7 +650,7 @@ fn listEntries(var entries: List<NativeEntry>, owner: String) {
     [2],
     NativeResult.Direct,
   ))
-  entries.add(containerRuntimeOf(
+  entries.append(containerRuntimeOf(
     "{owner}.insert",
     "torb_list_insert",
     "void torb_list_insert(torb_list *list, int64_t index, const void *value, torb_location at);",
@@ -658,27 +658,27 @@ fn listEntries(var entries: List<NativeEntry>, owner: String) {
     [2],
     NativeResult.Direct,
   ))
-  entries.add(optionalRuntimeOf(
+  entries.append(optionalRuntimeOf(
     "{owner}.removeAt",
     "torb_list_remove_at",
     "bool torb_list_remove_at(torb_list *list, int64_t index, void *out);",
   ))
-  entries.add(runtimeOf(
+  entries.append(runtimeOf(
     "{owner}.replace",
     "torb_list_replace",
     "void torb_list_replace(torb_list *list, int64_t from, int64_t to, torb_list values, torb_location at);",
   ))
-  entries.add runtimeOf("{owner}.reverse", "torb_list_reverse", "void torb_list_reverse(torb_list *list);")
-  entries.add runtimeOf("{owner}.clear", "torb_list_clear", "void torb_list_clear(torb_list *list);")
-  entries.add runtimeOf("{owner}.compact", "torb_list_compact", "void torb_list_compact(torb_list *list);")
+  entries.append runtimeOf("{owner}.reverse", "torb_list_reverse", "void torb_list_reverse(torb_list *list);")
+  entries.append runtimeOf("{owner}.clear", "torb_list_clear", "void torb_list_clear(torb_list *list);")
+  entries.append runtimeOf("{owner}.compact", "torb_list_compact", "void torb_list_compact(torb_list *list);")
 }
 
 fn mapEntries(var entries: List<NativeEntry>, owner: String) {
-  // `from` and `iterator` are ordinary TorbScript, exactly as `ArrayList`'s are: `from` walks a trait-typed `Iterable` of
+  // `from` and `iterate` are ordinary TorbScript, exactly as `ArrayList`'s are: `from` walks a trait-typed `Iterate` of
   // the *program*, which a C function cannot, and the cursor is `MapIterator` over the one native below.
-  entries.add containerOf("{owner}.withCapacity", RuntimeKind.MapStorage)
-  entries.add runtimeOf("{owner}.length", "torb_map_length", "int64_t torb_map_length(torb_map map);")
-  entries.add(containerRuntimeOf(
+  entries.append containerOf("{owner}.withCapacity", RuntimeKind.MapStorage)
+  entries.append runtimeOf("{owner}.length", "torb_map_length", "int64_t torb_map_length(torb_map map);")
+  entries.append(containerRuntimeOf(
     "{owner}.entryAfter",
     "torb_map_entry_after",
     "bool torb_map_entry_after(torb_map map, int64_t *cursor, void *key, void *value);",
@@ -686,7 +686,7 @@ fn mapEntries(var entries: List<NativeEntry>, owner: String) {
     [],
     NativeResult.OptionalParts,
   ))
-  entries.add(containerRuntimeOf(
+  entries.append(containerRuntimeOf(
     "{owner}.get",
     "torb_map_get",
     "bool torb_map_get(torb_map map, const void *key, void *out);",
@@ -694,7 +694,7 @@ fn mapEntries(var entries: List<NativeEntry>, owner: String) {
     [1],
     NativeResult.Optional,
   ))
-  entries.add(containerRuntimeOf(
+  entries.append(containerRuntimeOf(
     "{owner}.set",
     "torb_map_set",
     "void torb_map_set(torb_map *map, const void *key, const void *value);",
@@ -702,7 +702,7 @@ fn mapEntries(var entries: List<NativeEntry>, owner: String) {
     [1, 2],
     NativeResult.Direct,
   ))
-  entries.add(containerRuntimeOf(
+  entries.append(containerRuntimeOf(
     "{owner}.remove",
     "torb_map_remove",
     "bool torb_map_remove(torb_map *map, const void *key, void *out);",
@@ -710,18 +710,18 @@ fn mapEntries(var entries: List<NativeEntry>, owner: String) {
     [1],
     NativeResult.Optional,
   ))
-  entries.add runtimeOf("{owner}.clear", "torb_map_clear", "void torb_map_clear(torb_map *map);")
+  entries.append runtimeOf("{owner}.clear", "torb_map_clear", "void torb_map_clear(torb_map *map);")
 }
 
 fn setEntries(var entries: List<NativeEntry>, owner: String) {
-  entries.add containerOf("{owner}.withCapacity", RuntimeKind.SetStorage)
-  entries.add runtimeOf("{owner}.length", "torb_set_length", "int64_t torb_set_length(torb_set set);")
-  entries.add(optionalRuntimeOf(
+  entries.append containerOf("{owner}.withCapacity", RuntimeKind.SetStorage)
+  entries.append runtimeOf("{owner}.length", "torb_set_length", "int64_t torb_set_length(torb_set set);")
+  entries.append(optionalRuntimeOf(
     "{owner}.itemAfter",
     "torb_set_item_after",
     "bool torb_set_item_after(torb_set set, int64_t *cursor, void *item);",
   ))
-  entries.add(containerRuntimeOf(
+  entries.append(containerRuntimeOf(
     "{owner}.contains",
     "torb_set_contains",
     "bool torb_set_contains(torb_set set, const void *item);",
@@ -729,15 +729,15 @@ fn setEntries(var entries: List<NativeEntry>, owner: String) {
     [1],
     NativeResult.Direct,
   ))
-  entries.add(containerRuntimeOf(
-    "{owner}.add",
+  entries.append(containerRuntimeOf(
+    "{owner}.insert",
     "torb_set_add",
     "void torb_set_add(torb_set *set, const void *item);",
     [1],
     [1],
     NativeResult.Direct,
   ))
-  entries.add(containerRuntimeOf(
+  entries.append(containerRuntimeOf(
     "{owner}.remove",
     "torb_set_remove",
     "bool torb_set_remove(torb_set *set, const void *item);",
@@ -745,7 +745,7 @@ fn setEntries(var entries: List<NativeEntry>, owner: String) {
     [1],
     NativeResult.Direct,
   ))
-  entries.add runtimeOf("{owner}.clear", "torb_set_clear", "void torb_set_clear(torb_set *set);")
+  entries.append runtimeOf("{owner}.clear", "torb_set_clear", "void torb_set_clear(torb_set *set);")
 }
 
 fn collectionEntries(var entries: List<NativeEntry>) {
@@ -758,15 +758,15 @@ fn collectionEntries(var entries: List<NativeEntry>) {
 
   // `Array<Item, Size>` is inline storage the emitter writes itself; the members arrive with the interior paths of 5.9b.
   // `filled` and `generated` take their `Size` from the expected type, so the emitter knows how many slots to write.
-  const arrayMembers = ["filled", "generated", "from", "length", "get", "iterator", "set", "fill", "mapped"]
+  const arrayMembers = ["filled", "generated", "from", "length", "get", "iterate", "set", "fill", "mapped"]
   for member in arrayMembers {
-    entries.add plannedRuntimeOf("Array.{member}", "torb_array_{member}", "5.9b")
+    entries.append plannedRuntimeOf("Array.{member}", "torb_array_{member}", "5.9b")
   }
 
   // A `Range` is an ordinary record; only its iteration is native, and it panics without both ends.
-  entries.add derivedOf("Range.equals", DerivedKind.Equals)
-  entries.add derivedOf("Range.hash", DerivedKind.Hash)
-  // `Range.show` writes the source form (`0..10`, `0..=10`), which the derived one cannot, and `iterator` and `length`
+  entries.append derivedOf("Range.equals", DerivedKind.Equals)
+  entries.append derivedOf("Range.hash", DerivedKind.Hash)
+  // `Range.show` writes the source form (`0..10`, `0..=10`), which the derived one cannot, and `iterate` and `length`
   // are ordinary TorbScript over `RangeIterator` - so none of the three is a native any more (`std/core/src/range.trb`)
 }
 
@@ -778,28 +778,28 @@ fn fileEntries(var entries: List<NativeEntry>) {
    * symbol answers `bool`, the payload of `Ok` comes through an out parameter (none where it is `Void`), and the
    * `message` of the `IoError` through one more - its `path` *is* the parameter of that name.
    */
-  entries.add(fallibleRuntimeOf(
+  entries.append(fallibleRuntimeOf(
     "File.readText",
     "torb_file_read_text",
     "bool torb_file_read_text(torb_text path, torb_text *out, torb_text *error);",
   ))
-  entries.add(fallibleRuntimeOf(
+  entries.append(fallibleRuntimeOf(
     "File.writeText",
     "torb_file_write_text",
     "bool torb_file_write_text(torb_text path, torb_text text, torb_text *error);",
   ))
-  entries.add runtimeOf("File.exists", "torb_file_exists", "bool torb_file_exists(torb_text path);")
-  entries.add(runtimeOf(
+  entries.append runtimeOf("File.exists", "torb_file_exists", "bool torb_file_exists(torb_text path);")
+  entries.append(runtimeOf(
     "File.isDirectory",
     "torb_file_is_directory",
     "bool torb_file_is_directory(torb_text path);",
   ))
-  entries.add(fallibleCollectionOf(
+  entries.append(fallibleCollectionOf(
     "File.list",
     "torb_file_list",
     "bool torb_file_list(torb_text path, torb_list *out, torb_text *error);",
   ))
-  entries.add(fallibleRuntimeOf(
+  entries.append(fallibleRuntimeOf(
     "File.absolutePath",
     "torb_file_absolute_path",
     "bool torb_file_absolute_path(torb_text path, torb_text *out, torb_text *error);",
@@ -809,46 +809,46 @@ fn fileEntries(var entries: List<NativeEntry>) {
   // `torb_file_drop`, which closes the handle if `close` never ran - the language has no destructors, so a leaked
   // reference must not leak the OS handle either. Emitting a call to one of these three still needs the `shared
   // type` lowering of 5.9; the runtime side is ready now.
-  entries.add(runtimeOf(
+  entries.append(runtimeOf(
     "File.open",
     "torb_file_open",
     "bool torb_file_open(torb_text path, torb_file **out, torb_text *error);",
   ))
-  entries.add(runtimeOf(
+  entries.append(runtimeOf(
     "File.readAll",
     "torb_file_read_all",
     "bool torb_file_read_all(torb_file *self, torb_text *out, torb_text *error);",
   ))
-  entries.add runtimeOf("File.close", "torb_file_close", "void torb_file_close(torb_file *self);")
-  // The stream side of a file (docs/STREAMS.md). `chunks` answers a `Source<Bytes, IoError>` and `add`/`finish` are the
+  entries.append runtimeOf("File.close", "torb_file_close", "void torb_file_close(torb_file *self);")
+  // The stream side of a file (docs/STREAMS.md). `chunks` answers a `Source<Bytes, IoError>` and `add`/`end` are the
   // `Sink` a `File` is, so all three are shared objects the runtime owns; `file.lines()` is TorbScript over `chunks`
   // and needs no native of its own.
-  entries.add plannedRuntimeOf("File.create", "torb_file_create", "7.3")
-  entries.add plannedRuntimeOf("File.chunks", "torb_file_chunks", "7.3")
-  entries.add plannedRuntimeOf("File.add", "torb_file_add", "7.3")
-  entries.add plannedRuntimeOf("File.finish", "torb_file_finish", "7.3")
+  entries.append plannedRuntimeOf("File.create", "torb_file_create", "7.3")
+  entries.append plannedRuntimeOf("File.chunks", "torb_file_chunks", "7.3")
+  entries.append plannedRuntimeOf("File.add", "torb_file_add", "7.3")
+  entries.append plannedRuntimeOf("File.end", "torb_file_end", "7.3")
 
-  entries.add optionalRuntimeOf("readLine", "torb_read_line", "bool torb_read_line(torb_text *out);")
+  entries.append optionalRuntimeOf("readLine", "torb_read_line", "bool torb_read_line(torb_text *out);")
   // The three streams a process is started with, as `Source`/`Sink` objects
-  entries.add plannedRuntimeOf("standardInput", "torb_standard_input", "7.3")
-  entries.add plannedRuntimeOf("standardOutput", "torb_standard_output", "7.3")
-  entries.add plannedRuntimeOf("standardError", "torb_standard_error", "7.3")
+  entries.append plannedRuntimeOf("standardInput", "torb_standard_input", "7.3")
+  entries.append plannedRuntimeOf("standardOutput", "torb_standard_output", "7.3")
+  entries.append plannedRuntimeOf("standardError", "torb_standard_error", "7.3")
 
   // `mkdir -p`: `torb build` has to create the directory it writes the C and the binary into, and "it is already
   // there" is success - so a caller that only wants a place to write never has to ask first
-  entries.add(fallibleRuntimeOf(
+  entries.append(fallibleRuntimeOf(
     "File.createDirectory",
     "torb_file_create_directory",
     "bool torb_file_create_directory(torb_text path, torb_text *error);",
   ))
 
-  entries.add(collectionRuntimeOf(
+  entries.append(collectionRuntimeOf(
     "Process.arguments",
     "torb_process_arguments",
     "torb_list torb_process_arguments(void);",
   ))
-  entries.add runtimeOf("Process.exit", "torb_process_exit", "void torb_process_exit(int64_t code);")
-  entries.add(optionalRuntimeOf(
+  entries.append runtimeOf("Process.exit", "torb_process_exit", "void torb_process_exit(int64_t code);")
+  entries.append(optionalRuntimeOf(
     "Process.executablePath",
     "torb_process_executable_path",
     "bool torb_process_executable_path(torb_text *out);",
@@ -859,7 +859,7 @@ fn fileEntries(var entries: List<NativeEntry>) {
    * over `runCollecting`, which answers the exit code and writes the output through a `var` parameter. What is native
    * is starting a process and collecting what it wrote, and nothing else.
    */
-  entries.add(runtimeOf(
+  entries.append(runtimeOf(
     "Process.runCollecting",
     "torb_process_run",
     "int64_t torb_process_run(torb_text command, torb_list arguments, torb_text *output, torb_text *failure);",
@@ -869,37 +869,37 @@ fn fileEntries(var entries: List<NativeEntry>) {
    * instead of a pipe. Collecting is the wrong shape for a driver: the program would print nothing until it ended,
    * its two streams would arrive merged, and a program that reads standard input would have nothing to read.
    */
-  entries.add(runtimeOf(
+  entries.append(runtimeOf(
     "Process.runInheriting",
     "torb_process_run_inheriting",
     "int64_t torb_process_run_inheriting(torb_text command, torb_list arguments, torb_text *failure);",
   ))
   // A child process whose pipes are read and written while it runs: the same `Source`/`Sink` objects a file has
-  entries.add plannedRuntimeOf("Process.start", "torb_process_start", "7.3")
-  entries.add plannedRuntimeOf("Child.input", "torb_child_input", "7.3")
-  entries.add plannedRuntimeOf("Child.output", "torb_child_output", "7.3")
-  entries.add plannedRuntimeOf("Child.errors", "torb_child_errors", "7.3")
-  entries.add plannedRuntimeOf("Child.wait", "torb_child_wait", "7.3")
-  entries.add plannedRuntimeOf("Child.close", "torb_child_close", "7.3")
+  entries.append plannedRuntimeOf("Process.start", "torb_process_start", "7.3")
+  entries.append plannedRuntimeOf("Child.input", "torb_child_input", "7.3")
+  entries.append plannedRuntimeOf("Child.output", "torb_child_output", "7.3")
+  entries.append plannedRuntimeOf("Child.errors", "torb_child_errors", "7.3")
+  entries.append plannedRuntimeOf("Child.wait", "torb_child_wait", "7.3")
+  entries.append plannedRuntimeOf("Child.close", "torb_child_close", "7.3")
 }
 
 /** `std/math`: everything is a thin wrapper over `<math.h>` in `number.c`, so there is one entry per function. */
 fn mathEntries(var entries: List<NativeEntry>) {
-  entries.add runtimeOf("power", "torb_math_power", "double torb_math_power(double base, double exponent);")
-  entries.add runtimeOf("exponential", "torb_math_exponential", "double torb_math_exponential(double value);")
-  entries.add runtimeOf("naturalLog", "torb_math_natural_log", "double torb_math_natural_log(double value);")
-  entries.add(runtimeOf(
+  entries.append runtimeOf("power", "torb_math_power", "double torb_math_power(double base, double exponent);")
+  entries.append runtimeOf("exponential", "torb_math_exponential", "double torb_math_exponential(double value);")
+  entries.append runtimeOf("naturalLog", "torb_math_natural_log", "double torb_math_natural_log(double value);")
+  entries.append(runtimeOf(
     "logarithm",
     "torb_math_logarithm",
     "double torb_math_logarithm(double value, double base);",
   ))
-  entries.add runtimeOf("sine", "torb_math_sine", "double torb_math_sine(double value);")
-  entries.add runtimeOf("cosine", "torb_math_cosine", "double torb_math_cosine(double value);")
-  entries.add runtimeOf("tangent", "torb_math_tangent", "double torb_math_tangent(double value);")
-  entries.add runtimeOf("arcSine", "torb_math_arc_sine", "double torb_math_arc_sine(double value);")
-  entries.add runtimeOf("arcCosine", "torb_math_arc_cosine", "double torb_math_arc_cosine(double value);")
-  entries.add runtimeOf("arcTangent", "torb_math_arc_tangent", "double torb_math_arc_tangent(double value);")
-  entries.add(runtimeOf(
+  entries.append runtimeOf("sine", "torb_math_sine", "double torb_math_sine(double value);")
+  entries.append runtimeOf("cosine", "torb_math_cosine", "double torb_math_cosine(double value);")
+  entries.append runtimeOf("tangent", "torb_math_tangent", "double torb_math_tangent(double value);")
+  entries.append runtimeOf("arcSine", "torb_math_arc_sine", "double torb_math_arc_sine(double value);")
+  entries.append runtimeOf("arcCosine", "torb_math_arc_cosine", "double torb_math_arc_cosine(double value);")
+  entries.append runtimeOf("arcTangent", "torb_math_arc_tangent", "double torb_math_arc_tangent(double value);")
+  entries.append(runtimeOf(
     "arcTangent2",
     "torb_math_arc_tangent2",
     "double torb_math_arc_tangent2(double y, double x);",
@@ -913,56 +913,56 @@ fn mathEntries(var entries: List<NativeEntry>) {
  * of a monotonic reading is not something a comparison intrinsic can give.
  */
 fn timeEntries(var entries: List<NativeEntry>) {
-  entries.add(runtimeOf(
+  entries.append(runtimeOf(
     "Instant.equals",
     "torb_instant_equals",
     "bool torb_instant_equals(torb_instant first, torb_instant second);",
   ))
-  entries.add(orderingRuntimeOf(
+  entries.append(orderingRuntimeOf(
     "Instant.compare",
     "torb_instant_compare",
     "int32_t torb_instant_compare(torb_instant first, torb_instant second);",
   ))
-  entries.add(runtimeOf(
+  entries.append(runtimeOf(
     "Instant.subtract",
     "torb_instant_subtract",
     "torb_duration torb_instant_subtract(torb_instant first, torb_instant second, torb_location at);",
   ))
-  entries.add(runtimeOf(
+  entries.append(runtimeOf(
     "Duration.equals",
     "torb_duration_equals",
     "bool torb_duration_equals(torb_duration first, torb_duration second);",
   ))
-  entries.add(orderingRuntimeOf(
+  entries.append(orderingRuntimeOf(
     "Duration.compare",
     "torb_duration_compare",
     "int32_t torb_duration_compare(torb_duration first, torb_duration second);",
   ))
-  entries.add runtimeOf("Duration.show", "torb_duration_show", "torb_text torb_duration_show(torb_duration duration);")
-  entries.add(runtimeOf(
+  entries.append runtimeOf("Duration.show", "torb_duration_show", "torb_text torb_duration_show(torb_duration duration);")
+  entries.append(runtimeOf(
     "Duration.seconds",
     "torb_duration_seconds",
     "double torb_duration_seconds(torb_duration duration);",
   ))
-  entries.add(runtimeOf(
+  entries.append(runtimeOf(
     "Int64.seconds",
     "torb_duration_of_seconds",
     "torb_duration torb_duration_of_seconds(int64_t seconds, torb_location at);",
   ))
-  entries.add runtimeOf("Clock.now", "torb_clock_now", "torb_instant torb_clock_now(void);")
+  entries.append runtimeOf("Clock.now", "torb_clock_now", "torb_instant torb_clock_now(void);")
   // Monotonic milliseconds from the first reading: the form a tool that measures its own work wants, and two numbers
   // (an `Instant` and a `Duration`) where one does
-  entries.add(runtimeOf(
+  entries.append(runtimeOf(
     "Clock.milliseconds",
     "torb_clock_milliseconds",
     "int64_t torb_clock_milliseconds(void);",
   ))
-  entries.add plannedRuntimeOf("sleep", "torb_sleep", "7.3")
+  entries.append plannedRuntimeOf("sleep", "torb_sleep", "7.3")
 }
 
 /** `std/environment`: capability filtering for the sandbox (`environment "APP_*"`) is a front-end concern of 7.4. */
 fn environmentEntries(var entries: List<NativeEntry>) {
-  entries.add(optionalRuntimeOf(
+  entries.append(optionalRuntimeOf(
     "Environment.get",
     "torb_environment_get",
     "bool torb_environment_get(torb_text name, torb_text *out);",
@@ -970,19 +970,19 @@ fn environmentEntries(var entries: List<NativeEntry>) {
 }
 
 fn plannedPackageEntries(var entries: List<NativeEntry>) {
-  entries.add plannedRuntimeOf("Task.await", "torb_task_await", "7.3")
-  entries.add plannedRuntimeOf("Task.map", "torb_task_map", "7.3")
-  entries.add plannedRuntimeOf("Task.flatMap", "torb_task_flat_map", "7.3")
-  entries.add plannedRuntimeOf("Task.all", "torb_task_all", "7.3")
-  entries.add plannedRuntimeOf("spawn", "torb_spawn", "7.3")
-  entries.add plannedRuntimeOf("all", "torb_task_all_pair", "7.3")
+  entries.append plannedRuntimeOf("Task.await", "torb_task_await", "7.3")
+  entries.append plannedRuntimeOf("Task.map", "torb_task_map", "7.3")
+  entries.append plannedRuntimeOf("Task.flatMap", "torb_task_flat_map", "7.3")
+  entries.append plannedRuntimeOf("Task.all", "torb_task_all", "7.3")
+  entries.append plannedRuntimeOf("spawn", "torb_spawn", "7.3")
+  entries.append plannedRuntimeOf("all", "torb_task_all_pair", "7.3")
   // A `Channel` hands out its two ends as `Source`/`Sink` objects: two natives instead of `send`/`receive`/`close`/
   // `collect`, because everything else a stream can do is TorbScript on top of them (docs/STREAMS.md)
-  entries.add plannedRuntimeOf("Channel.source", "torb_channel_source", "7.3")
-  entries.add plannedRuntimeOf("Channel.sink", "torb_channel_sink", "7.3")
+  entries.append plannedRuntimeOf("Channel.source", "torb_channel_source", "7.3")
+  entries.append plannedRuntimeOf("Channel.sink", "torb_channel_sink", "7.3")
 
-  entries.add plannedRuntimeOf("Expression.value", "torb_expression_value", "5.11")
-  entries.add plannedRuntimeOf("Expression.captures", "torb_expression_captures", "5.11")
+  entries.append plannedRuntimeOf("Expression.value", "torb_expression_value", "5.11")
+  entries.append plannedRuntimeOf("Expression.captures", "torb_expression_captures", "5.11")
 
   /*
    * `describe` and the four members of `Json` drive `Encode`, and every member of `Encoder`, `RecordEncoder` and
@@ -990,25 +990,25 @@ fn plannedPackageEntries(var entries: List<NativeEntry>) {
    * trait-typed value can be made unique (BACKEND's note of 5.7, step 5 of its chain). So they wait for 5.7 and not for
    * 5.10, whose half of the row was `Show`.
    */
-  entries.add plannedRuntimeOf("describe", "torb_describe", "5.7")
-  entries.add plannedRuntimeOf("Json.encode", "torb_json_encode", "5.7")
-  entries.add plannedRuntimeOf("Json.decode", "torb_json_decode", "5.7")
-  entries.add plannedRuntimeOf("Json.parse", "torb_json_parse", "5.7")
-  entries.add plannedRuntimeOf("Json.value", "torb_json_value", "5.7")
+  entries.append plannedRuntimeOf("describe", "torb_describe", "5.7")
+  entries.append plannedRuntimeOf("Json.encode", "torb_json_encode", "5.7")
+  entries.append plannedRuntimeOf("Json.decode", "torb_json_decode", "5.7")
+  entries.append plannedRuntimeOf("Json.parse", "torb_json_parse", "5.7")
+  entries.append plannedRuntimeOf("Json.value", "torb_json_value", "5.7")
 
   // `isSame` compares the identity of a `shared` object, which the checker allows nowhere else.
-  entries.add plannedIntrinsicOf("isSame", IntrinsicOperation.Equal, "5.9")
+  entries.append plannedIntrinsicOf("isSame", IntrinsicOperation.Equal, "5.9")
 
-  entries.add plannedRuntimeOf("SandboxCapabilities.modules", "torb_sandbox_modules", "7.4")
-  entries.add plannedRuntimeOf("SandboxCapabilities.files", "torb_sandbox_files", "7.4")
-  entries.add plannedRuntimeOf("SandboxCapabilities.environment", "torb_sandbox_environment", "7.4")
-  entries.add plannedRuntimeOf("SandboxCapabilities.limits", "torb_sandbox_limits", "7.4")
-  entries.add plannedRuntimeOf("Script.apply", "torb_script_apply", "7.4")
-  entries.add plannedRuntimeOf("Sandbox.load", "torb_sandbox_load", "7.4")
+  entries.append plannedRuntimeOf("SandboxCapabilities.modules", "torb_sandbox_modules", "7.4")
+  entries.append plannedRuntimeOf("SandboxCapabilities.files", "torb_sandbox_files", "7.4")
+  entries.append plannedRuntimeOf("SandboxCapabilities.environment", "torb_sandbox_environment", "7.4")
+  entries.append plannedRuntimeOf("SandboxCapabilities.limits", "torb_sandbox_limits", "7.4")
+  entries.append plannedRuntimeOf("Script.apply", "torb_script_apply", "7.4")
+  entries.append plannedRuntimeOf("Sandbox.load", "torb_sandbox_load", "7.4")
 
-  entries.add plannedRuntimeOf("get", "torb_http_get", "8")
-  entries.add plannedRuntimeOf("post", "torb_http_post", "8")
-  entries.add plannedRuntimeOf("request", "torb_http_request", "8")
+  entries.append plannedRuntimeOf("get", "torb_http_get", "8")
+  entries.append plannedRuntimeOf("post", "torb_http_post", "8")
+  entries.append plannedRuntimeOf("request", "torb_http_request", "8")
 }
 
 /** The whole manifest, in the order the sections above build it. */
@@ -1082,11 +1082,11 @@ public fn renderNativesHeader(entries: List<NativeEntry>): String {
     }
     if const .Runtime(function) = entry.target {
       if !hasPrototype(prototypes, function) {
-        symbols.add function
+        symbols.append function
         prototypes.set function, entry.prototype
         users.set function, []
       }
-      users[function].add(entry.name)
+      users[function].append(entry.name)
     }
   }
 
@@ -1106,11 +1106,11 @@ public fn renderNativesHeader(entries: List<NativeEntry>): String {
     "",
   ]
   for symbol in sortedNames(symbols) {
-    lines.add "/* {sortedNames(users[symbol]).joined(separator: ", ")} */"
-    lines.add prototypes[symbol]
+    lines.append "/* {sortedNames(users[symbol]).joined(separator: ", ")} */"
+    lines.append prototypes[symbol]
   }
-  lines.add ""
-  lines.add "#endif /* TORB_NATIVES_H */"
+  lines.append ""
+  lines.append "#endif /* TORB_NATIVES_H */"
   lines.joined(separator: "\n") + "\n"
 }
 

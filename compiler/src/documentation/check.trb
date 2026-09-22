@@ -39,23 +39,23 @@ public type CheckedDocumentation {
  */
 public fn checkDocumentation(documentation: Documentation, exists: PathExists): CheckedDocumentation {
   var problems = documentation.problems
-  problems.addAll shapeProblems(documentation)
-  problems.addAll nameProblems(documentation)
-  problems.addAll skillRoleProblems(documentation)
+  problems.appendAll shapeProblems(documentation)
+  problems.appendAll nameProblems(documentation)
+  problems.appendAll skillRoleProblems(documentation)
   for page in documentation.pages {
-    problems.addAll schemaProblems(documentation, page)
+    problems.appendAll schemaProblems(documentation, page)
   }
-  problems.addAll linkProblems(documentation, exists)
+  problems.appendAll linkProblems(documentation, exists)
   const indexes = generateIndexes documentation
-  problems.addAll indexes.problems
-  problems.addAll staleIndexes(documentation, indexes)
+  problems.appendAll indexes.problems
+  problems.appendAll staleIndexes(documentation, indexes)
   const collected = collectSnippets documentation
-  problems.addAll collected.problems
-  problems.addAll verifySyntax(collected.snippets)
+  problems.appendAll collected.problems
+  problems.appendAll verifySyntax(collected.snippets)
   var skipped: List<String> = []
   for snippet in collected.snippets {
     if snippet.kind == SnippetKind.Skipped {
-      skipped.add "{snippet.path}:{snippet.line}: {snippet.reason}"
+      skipped.append "{snippet.path}:{snippet.line}: {snippet.reason}"
     }
   }
   CheckedDocumentation(
@@ -93,7 +93,7 @@ public fn checkSnippets(
   }
   const typed = typeCheckSnippets standardLibrary, clean, true
   var problems = typed.problems
-  problems.addAll(nativeSnippetProblems(typed, options)?)
+  problems.appendAll(nativeSnippetProblems(typed, options)?)
   Ok problems
 }
 
@@ -106,7 +106,7 @@ fn withoutBrokenSyntax(snippets: List<Snippet>): List<Snippet> {
   for snippet in snippets {
     const own = verifySyntax([snippet])
     if own.isEmpty() {
-      kept.add snippet
+      kept.append snippet
     }
   }
   kept

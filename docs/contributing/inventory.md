@@ -189,7 +189,7 @@ The learning path, in order, mirroring `examples/tour/src/*.trb`. Every page has
 | `language/collections-and-iteration/maps-and-sets.md` | Maps and sets | reference | The literals, insertion order, and equality | `std/collections/src/map.trb` |
 | `language/collections-and-iteration/stacks-and-queues.md` | Stacks and queues | reference | `push`/`pop`, `enqueue`/`dequeue` and their participles | `std/collections/src/queue.trb` |
 | `language/collections-and-iteration/slices.md` | Slices | reference | `list[from..to]` as a value and as a path | `CONCEPT.md#collections-and-iteration` |
-| `language/collections-and-iteration/iterating.md` | Iterating | reference | `for`, `Iterable`, `Iterator`, and what is evaluated once | `std/iteration/src/iteration.trb` |
+| `language/collections-and-iteration/iterating.md` | Iterating | reference | `for`, `Iterate`, `Iterator`, and what is evaluated once | `std/iteration/src/iteration.trb` |
 | `language/collections-and-iteration/pipelines.md` | Pipelines | reference | Source, lazy stage, terminal operation | `CONCEPT.md#pipelines-and-collectors` |
 | `language/collections-and-iteration/collectors.md` | Collectors | reference | `collect`, and how to write one | `std/iteration/src/collectors.trb` |
 | `language/concurrency-and-streams/tasks.md` | Tasks | reference | `Task<Value>`, `await()`, and where it is allowed | `CONCEPT.md#concurrency-draft` |
@@ -236,7 +236,7 @@ markers so that milestone 8's `torb doc` can fill it.
 | `standard-library/text.md` | std/text | `Char` and `String` | `std/text/src/lib.trb` |
 | `standard-library/number.md` | std/number | Every numeric type and `Bits` | `std/number` |
 | `standard-library/collections.md` | std/collections | The collection traits and implementations | `std/collections` |
-| `standard-library/iteration.md` | std/iteration | `Iterable`, the stages, the collectors | `std/iteration` |
+| `standard-library/iteration.md` | std/iteration | `Iterate`, the stages, the collectors | `std/iteration` |
 | `standard-library/encoding.md` | std/encoding | `Encode`, `Decode`, the encoders | `std/encoding` |
 | `standard-library/expression.md` | std/expression | Quotations, `assert`, `nameOf` | `std/expression` |
 | `standard-library/task.md` | std/task | Tasks and channels | `std/task` |

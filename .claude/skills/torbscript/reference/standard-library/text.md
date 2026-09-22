@@ -54,8 +54,8 @@ belongs here, because not every `Int64` is a Unicode scalar value (surrogates, a
 public native type String
   with Equals, Compare, Hash, Show, Add, Slice
 {
-  fn chars(): Iterable<Char>
-  fn bytes(): Iterable<UInt8>
+  fn chars(): Iterate<Char>
+  fn bytes(): Iterate<UInt8>
   fn byteLength(): Int
   fn isEmpty(): Bool
   fn slice(range: Bounds<Int>): String
@@ -80,10 +80,10 @@ public native type String
 UTF-8 text. There is no `length()` and no `text[i]` on purpose: say what is being counted (`chars()`, `bytes()`). A
 position comes from searching and is a byte offset, and slicing with one is O(1) and shares the storage with the
 original. **A `String` is always valid UTF-8** - the only ways to build one are a literal, a slice at a character
-boundary, `String.from(Iterable<Char>)` and a runtime function that validates, so reading bytes that are not UTF-8 is an
+boundary, `String.from(Iterate<Char>)` and a runtime function that validates, so reading bytes that are not UTF-8 is an
 `IoError` and there is no replacement character anywhere in the language. `showNested()` is the text itself in double
 quotes with escapes; `show()` (from `Show`) is the text unquoted. `String.from(characters)` and
-`characters.to<String>()` come from `extend String with From<Iterable<Char>>`.
+`characters.to<String>()` come from `extend String with From<Iterate<Char>>`.
 
 ## Related
 

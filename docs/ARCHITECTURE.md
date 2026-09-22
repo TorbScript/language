@@ -160,7 +160,7 @@ The language has value semantics; identity is the marked exception (`shared type
   channel: storage with count 1 moves, shared storage is copied once. (To be measured against "atomic counts only for
   storage that was ever sent".)
 - **Last use is a move.** The lowering to IR marks the last use of every binding. A moved value keeps its count at 1,
-  so `list = list.added(x)` and the default participles (`var result = self`) change in place instead of copying.
+  so `list = list.appended(x)` and the default participles (`var result = self`) change in place instead of copying.
   This is what makes the functional style as fast as the mutating one, and it has to be identical in both back ends.
 - No tracing garbage collector and no cycle collector. **`close()` is the one destructor** (planned,
   [DESTRUCTORS.md](DESTRUCTORS.md)): only a `shared type` may have one, the last release runs it, and a slot whose

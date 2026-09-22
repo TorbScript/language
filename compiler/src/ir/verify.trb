@@ -36,7 +36,7 @@ public fn verifyFunction(program: IrProgram, function: IrFunction): List<String>
   // A `native fn` the runtime provides is a signature and nothing else: there is no body to say anything about
   if const .Runtime(_) = function.kind {
     if !function.blocks.isEmpty() {
-      found.add "{function.name}: a function of the runtime has no body"
+      found.append "{function.name}: a function of the runtime has no body"
     }
     return found
   }
@@ -44,18 +44,18 @@ public fn verifyFunction(program: IrProgram, function: IrFunction): List<String>
   // back end's, so there is no body here either
   if const .ConstantCell(initializer) = function.kind {
     if !function.blocks.isEmpty() {
-      found.add "{function.name}: the accessor of a constant has no body"
+      found.append "{function.name}: the accessor of a constant has no body"
     }
     if !program.hasFunction(initializer) {
-      found.add "{function.name}: the initializer of the constant is not in the program"
+      found.append "{function.name}: the initializer of the constant is not in the program"
       return found
     }
     const built = program.functionAt initializer
     if built.signature.result != function.signature.result {
-      found.add "{function.name}: the initializer of the constant produces another type"
+      found.append "{function.name}: the initializer of the constant produces another type"
     }
     if !built.signature.parameters.isEmpty() {
-      found.add "{function.name}: the initializer of the constant takes arguments"
+      found.append "{function.name}: the initializer of the constant takes arguments"
     }
     return found
   }
@@ -74,7 +74,7 @@ public fn verifyFunction(program: IrProgram, function: IrFunction): List<String>
 public fn verifyProgram(program: IrProgram): List<String> {
   var found: List<String> = []
   for function in program.functions {
-    found.addAll verifyFunction(program, function)
+    found.appendAll verifyFunction(program, function)
   }
   found
 }
@@ -82,25 +82,25 @@ public fn verifyProgram(program: IrProgram): List<String> {
 fn verifyParameters(program: IrProgram, function: IrFunction, var found: List<String>) {
   const parameters = function.signature.parameters
   if function.slots.length() < parameters.length() {
-    found.add "{function.name}: the signature has {parameters.length()} parameters and the function only {function.slots.length()} slots"
+    found.append "{function.name}: the signature has {parameters.length()} parameters and the function only {function.slots.length()} slots"
     return
   }
   for index in 0..parameters.length() {
     const slot = function.slots[index]
     if slot.role != SlotRole.Parameter(index) {
-      found.add "{function.name}: slot %{index} has to be parameter {index}"
+      found.append "{function.name}: slot %{index} has to be parameter {index}"
     }
     if slot.annotation != parameters[index].annotation {
       const wanted = describeIrType program, parameters[index].annotation
       const actual = describeIrType program, slot.annotation
-      found.add "{function.name}: parameter {index} is `{wanted}` and its slot is `{actual}`"
+      found.append "{function.name}: parameter {index} is `{wanted}` and its slot is `{actual}`"
     }
   }
   for index in 0..function.slots.length() {
     const annotation = function.slots[index].annotation
     match program.typeAt(annotation) {
-      .NeverType => found.add "{function.name}: slot %{index} has the type `Never`, which has no values"
-      .ConstantValue(_, _) => found.add "{function.name}: slot %{index} holds a const argument, which is not a value"
+      .NeverType => found.append "{function.name}: slot %{index} has the type `Never`, which has no values"
+      .ConstantValue(_, _) => found.append "{function.name}: slot %{index} holds a const argument, which is not a value"
       _ => {}
     }
   }
@@ -109,7 +109,7 @@ fn verifyParameters(program: IrProgram, function: IrFunction, var found: List<St
 /** The shape of the graph: every edge points at a block that exists, and a switch has one target per value. */
 fn verifyGraph(program: IrProgram, function: IrFunction, var found: List<String>) {
   if function.blocks.isEmpty() {
-    found.add "{function.name}: a function needs at least the entry block"
+    found.append "{function.name}: a function needs at least the entry block"
     return
   }
   for index in 0..function.blocks.length() {
@@ -123,7 +123,7 @@ fn verifyGraph(program: IrProgram, function: IrFunction, var found: List<String>
       }
       .Switch(_, values, targets, otherwise) => {
         if values.length() != targets.length() {
-          found.add "{at}: the switch has {values.length()} values and {targets.length()} targets"
+          found.append "{at}: the switch has {values.length()} values and {targets.length()} targets"
         }
         for target in targets {
           checkTarget function, found, at, target
@@ -144,7 +144,7 @@ fn verifyReachability(program: IrProgram, function: IrFunction, var found: List<
     }
     const block = function.blocks[index]
     if !block.instructions.isEmpty() || !isUnreachableTerminator(block.terminator) {
-      found.add "{function.name} b{index}: nothing reaches this block, and it is not an `unreachable` marker"
+      found.append "{function.name} b{index}: nothing reaches this block, and it is not an `unreachable` marker"
     }
   }
 }
@@ -158,7 +158,7 @@ fn isUnreachableTerminator(terminator: Terminator): Bool {
 
 fn checkTarget(function: IrFunction, var found: List<String>, at: String, target: BlockId) {
   if !function.hasBlock(target) {
-    found.add "{at}: there is no block b{target.value}"
+    found.append "{at}: there is no block b{target.value}"
   }
 }
 
@@ -167,22 +167,22 @@ fn checkReturn(program: IrProgram, function: IrFunction, var found: List<String>
   match program.typeAt(result) {
     .VoidType => {
       if value.isSome() {
-        found.add "{at}: the function returns `Void`, so `return` carries no value"
+        found.append "{at}: the function returns `Void`, so `return` carries no value"
       }
     }
-    .NeverType => found.add "{at}: the function returns `Never`, so it may not return at all"
+    .NeverType => found.append "{at}: the function returns `Never`, so it may not return at all"
     _ => {
       match value {
-        None => found.add "{at}: the function returns `{describeIrType(program, result)}`, so `return` needs a value"
+        None => found.append "{at}: the function returns `{describeIrType(program, result)}`, so `return` needs a value"
         Some(argument) => {
           if !function.hasSlot(argument.slot) {
-            found.add "{at}: there is no slot %{argument.slot.value}"
+            found.append "{at}: there is no slot %{argument.slot.value}"
             return
           }
           const actual = function.typeOfSlot argument.slot
           if actual != result {
             const wanted = describeIrType program, result
-            found.add "{at}: the function returns `{wanted}` and `return` carries `{describeIrType(program, actual)}`"
+            found.append "{at}: the function returns `{wanted}` and `return` carries `{describeIrType(program, actual)}`"
           }
         }
       }
@@ -209,7 +209,7 @@ public fn reachableBlocks(function: IrFunction): List<Bool> {
         continue
       }
       reachable.set target, true
-      pending.add target
+      pending.append target
     }
   }
   reachable
@@ -223,9 +223,9 @@ public fn successorsOf(block: Block): List<Int> {
     .Switch(_, _, targets, otherwise) => {
       var all: List<Int> = []
       for target in targets {
-        all.add target.value
+        all.append target.value
       }
-      all.add otherwise.value
+      all.append otherwise.value
       all
     }
     _ => []
@@ -235,7 +235,7 @@ public fn successorsOf(block: Block): List<Int> {
 fn filledBooleans(count: Int, value: Bool): List<Bool> {
   var filled: List<Bool> = []
   for _ in 0..count {
-    filled.add value
+    filled.append value
   }
   filled
 }
@@ -253,7 +253,7 @@ fn verifyDefinedness(program: IrProgram, function: IrFunction, var found: List<S
   const defines = definitionsOf program, function, slotCount
   var definedIn: List<List<Bool>> = []
   for index in 0..blockCount {
-    definedIn.add filledBooleans(slotCount, index != 0)
+    definedIn.append filledBooleans(slotCount, index != 0)
   }
   definedIn.set 0, parameterSlots(function, slotCount)
   var rounds = 0
@@ -262,7 +262,7 @@ fn verifyDefinedness(program: IrProgram, function: IrFunction, var found: List<S
     isChanged = false
     rounds = rounds + 1
     if rounds > blockCount + 2 {
-      found.add "{function.name}: the definedness of the slots did not settle"
+      found.append "{function.name}: the definedness of the slots did not settle"
       return
     }
     for index in 1..blockCount {
@@ -309,13 +309,13 @@ fn verifyDefinedness(program: IrProgram, function: IrFunction, var found: List<S
 
 fn checkDefined(function: IrFunction, var found: List<String>, defined: List<Bool>, at: String, slot: Slot) {
   if !function.hasSlot(slot) {
-    found.add "{at}: there is no slot %{slot.value}"
+    found.append "{at}: there is no slot %{slot.value}"
     return
   }
   if defined[slot.value] {
     return
   }
-  found.add "{at}: %{slot.value} is used before it is defined on every path"
+  found.append "{at}: %{slot.value} is used before it is defined on every path"
 }
 
 fn parameterSlots(function: IrFunction, slotCount: Int): List<Bool> {
@@ -334,12 +334,12 @@ fn parameterSlots(function: IrFunction, slotCount: Int): List<Bool> {
 fn predecessorsOf(function: IrFunction): List<List<Int>> {
   var predecessors: List<List<Int>> = []
   for _ in 0..function.blocks.length() {
-    predecessors.add([])
+    predecessors.append([])
   }
   for index in 0..function.blocks.length() {
     for target in successorsOf(function.blocks[index]) {
       if target >= 0 && target < predecessors.length() {
-        predecessors[target].add(index)
+        predecessors[target].append(index)
       }
     }
   }
@@ -363,7 +363,7 @@ fn definitionsOf(program: IrProgram, function: IrFunction, slotCount: Int): List
         }
       }
     }
-    defines.add written
+    defines.append written
   }
   defines
 }
@@ -395,7 +395,7 @@ public fn outParameterSlotsOf(program: IrProgram, instruction: Instruction): Lis
       continue
     }
     if const Some(place) = arguments[index].place {
-      found.add place.base
+      found.append place.base
     }
   }
   found
@@ -451,17 +451,17 @@ public fn usedSlots(instruction: Instruction): List<Slot> {
     .MakeUnique(reference) => slotsOfReference reference
     .Call(_, _, arguments, witnesses, _) => {
       var used = slotsOfArguments arguments
-      used.addAll slotsOfWitnesses(witnesses)
+      used.appendAll slotsOfWitnesses(witnesses)
       used
     }
     .CallClosure(_, callee, arguments) => {
       var used = [callee]
-      used.addAll slotsOfArguments(arguments)
+      used.appendAll slotsOfArguments(arguments)
       used
     }
     .CallWitness(_, witness, _, arguments) => {
       var used = slotsOfWitness witness
-      used.addAll slotsOfArguments(arguments)
+      used.appendAll slotsOfArguments(arguments)
       used
     }
     .Intrinsic(_, _, arguments, _) => arguments
@@ -474,33 +474,33 @@ public fn usedSlots(instruction: Instruction): List<Slot> {
         return [value.slot]
       }
       var used = slotsOfReference reference
-      used.add value.slot
+      used.append value.slot
       used
     }
     .Tag(_, source) => [source]
     .Closure(_, _, captures, _) => {
       var used: List<Slot> = []
       for capture in captures {
-        used.addAll slotsOfCapture(capture)
+        used.appendAll slotsOfCapture(capture)
       }
       used
     }
     .BoxNew(_, value) => [value.slot]
     .TraitValue(_, value, tables) => {
       var used = [value.slot]
-      used.addAll slotsOfWitnesses(tables)
+      used.appendAll slotsOfWitnesses(tables)
       used
     }
     .ContainerNew(_, _, _) => []
     .TakeOut(_, container, key, _) => {
       var used = slotsOfReference container
-      used.add key
+      used.append key
       used
     }
     .PutBack(container, key, value, _) => {
       var used = slotsOfReference container
-      used.add key
-      used.add value
+      used.append key
+      used.append value
       used
     }
     .Panic(message, _) => [message.slot]
@@ -565,8 +565,8 @@ fn slotsOfArguments(arguments: List<Argument>): List<Slot> {
   for argument in arguments {
     // The base of a place is the slot the argument names, and an index into it is read at the call site as well
     match argument.place {
-      Some(place) => used.addAll slotsOfReference(place)
-      None => used.add argument.slot
+      Some(place) => used.appendAll slotsOfReference(place)
+      None => used.append argument.slot
     }
   }
   used
@@ -577,7 +577,7 @@ public fn slotsOfReference(reference: Reference): List<Slot> {
   var used = [reference.base]
   for step in reference.steps {
     if const .Element(_, index, _, _) = step {
-      used.add index
+      used.append index
     }
   }
   used
@@ -586,7 +586,7 @@ public fn slotsOfReference(reference: Reference): List<Slot> {
 fn slotsOfWitnesses(witnesses: List<WitnessSource>): List<Slot> {
   var used: List<Slot> = []
   for witness in witnesses {
-    used.addAll slotsOfWitness(witness)
+    used.appendAll slotsOfWitness(witness)
   }
   used
 }
@@ -631,7 +631,7 @@ fn verifyInstruction(
   match instruction {
     .Constant(target, value) => {
       if !program.hasStatic(value) {
-        found.add "{at}: there is no static value s{value.value}"
+        found.append "{at}: there is no static value s{value.value}"
         return
       }
       expectType program, function, found, at, target, program.staticAt(value).annotation, "the constant"
@@ -644,18 +644,18 @@ fn verifyInstruction(
       const annotation = typeOfReference program, function, found, at, reference
       if const Some(inner) = annotation {
         if !isManagedType(program, inner) {
-          found.add "{at}: `makeUnique` needs a place that is counted, and `{describeIrType(program, inner)}` is not"
+          found.append "{at}: `makeUnique` needs a place that is counted, and `{describeIrType(program, inner)}` is not"
         }
       }
     }
     .Call(target, callee, arguments, witnesses, site) => {
       if !program.hasFunction(callee) {
-        found.add "{at}: there is no function t{callee.value}"
+        found.append "{at}: there is no function t{callee.value}"
         return
       }
       if const Some(location) = site {
         if !program.hasLocation(location) {
-          found.add "{at}: there is no location for the call"
+          found.append "{at}: there is no location for the call"
         }
       }
       const signature = program.functionAt(callee).signature
@@ -664,7 +664,7 @@ fn verifyInstruction(
     }
     .CallClosure(target, callee, arguments) => {
       if !function.hasSlot(callee) {
-        found.add "{at}: there is no slot %{callee.value}"
+        found.append "{at}: there is no slot %{callee.value}"
         return
       }
       const annotation = function.typeOfSlot callee
@@ -673,18 +673,18 @@ fn verifyInstruction(
           const shape = program.signatureAt signature
           verifyCall program, function, found, at, target, shape, arguments, [], "the closure in %{callee.value}"
         }
-        _ => found.add "{at}: %{callee.value} is `{describeIrType(program, annotation)}` and not a closure"
+        _ => found.append "{at}: %{callee.value} is `{describeIrType(program, annotation)}` and not a closure"
       }
     }
     .CallWitness(_, witness, member, _) => {
       if member < 0 {
-        found.add "{at}: a witness member index cannot be negative"
+        found.append "{at}: a witness member index cannot be negative"
       }
       verifyWitness program, function, found, at, witness
     }
     .Intrinsic(target, intrinsic, arguments, location) => {
       if !program.hasLocation(location) {
-        found.add "{at}: there is no location for the intrinsic"
+        found.append "{at}: there is no location for the intrinsic"
       }
       verifyIntrinsic program, function, found, at, target, intrinsic, arguments
     }
@@ -705,24 +705,24 @@ fn verifyInstruction(
     }
     .Tag(target, source) => {
       if !function.hasSlot(source) || !function.hasSlot(target) {
-        found.add "{at}: a tag needs two slots that exist"
+        found.append "{at}: a tag needs two slots that exist"
         return
       }
       const annotation = function.typeOfSlot source
       if !isVariantType(program, annotation) {
-        found.add "{at}: `tag` needs a value of a variant layout, and %{source.value} is `{describeIrType(program, annotation)}`"
+        found.append "{at}: `tag` needs a value of a variant layout, and %{source.value} is `{describeIrType(program, annotation)}`"
       }
       if !isIntegerType(program, function.typeOfSlot(target)) {
-        found.add "{at}: a tag is an integer"
+        found.append "{at}: a tag is an integer"
       }
     }
     .Closure(target, callee, captures, _) => {
       if !program.hasFunction(callee) {
-        found.add "{at}: there is no function t{callee.value}"
+        found.append "{at}: there is no function t{callee.value}"
         return
       }
       if !function.hasSlot(target) {
-        found.add "{at}: there is no slot %{target.value}"
+        found.append "{at}: there is no slot %{target.value}"
         return
       }
       const annotation = function.typeOfSlot target
@@ -730,43 +730,43 @@ fn verifyInstruction(
         .Closure(signature) => {
           verifyClosure program, function, found, at, callee, captures, signature
         }
-        _ => found.add "{at}: a closure value is not `{describeIrType(program, annotation)}`"
+        _ => found.append "{at}: a closure value is not `{describeIrType(program, annotation)}`"
       }
     }
     .BoxNew(target, value) => {
       if !function.hasSlot(target) || !function.hasSlot(value.slot) {
-        found.add "{at}: a box needs two slots that exist"
+        found.append "{at}: a box needs two slots that exist"
         return
       }
       const annotation = function.typeOfSlot target
       match program.typeAt(annotation) {
         .Box(item) => expectType program, function, found, at, value.slot, item, "the boxed value"
         .Lazy(item) => expectType program, function, found, at, value.slot, item, "the lazy value"
-        _ => found.add "{at}: %{target.value} is `{describeIrType(program, annotation)}` and not a box"
+        _ => found.append "{at}: %{target.value} is `{describeIrType(program, annotation)}` and not a box"
       }
     }
     .TraitValue(target, value, tables) => {
       if !function.hasSlot(target) || !function.hasSlot(value.slot) {
-        found.add "{at}: a trait-typed value needs two slots that exist"
+        found.append "{at}: a trait-typed value needs two slots that exist"
         return
       }
       const annotation = function.typeOfSlot target
       match program.typeAt(annotation) {
         .Object(bounds) => {
           if bounds.length() != tables.length() {
-            found.add "{at}: `{describeIrType(program, annotation)}` has {bounds.length()} bounds and {tables.length()} witness tables were given"
+            found.append "{at}: `{describeIrType(program, annotation)}` has {bounds.length()} bounds and {tables.length()} witness tables were given"
           }
           for table in tables {
             verifyWitness program, function, found, at, table
           }
         }
-        _ => found.add "{at}: %{target.value} is `{describeIrType(program, annotation)}` and not a trait-typed value"
+        _ => found.append "{at}: %{target.value} is `{describeIrType(program, annotation)}` and not a trait-typed value"
       }
     }
     // A fresh container: the target has to *be* that container, and one descriptor per type argument of it
     .ContainerNew(target, kind, elements) => {
       if !function.hasSlot(target) {
-        found.add "{at}: `new` needs a target slot that exists"
+        found.append "{at}: `new` needs a target slot that exists"
         return
       }
       const annotation = function.typeOfSlot target
@@ -776,18 +776,18 @@ fn verifyInstruction(
         _ => []
       }
       if elements.length() != arguments.length() {
-        found.add "{at}: `new` has {elements.length()} descriptors for {arguments.length()} type arguments"
+        found.append "{at}: `new` has {elements.length()} descriptors for {arguments.length()} type arguments"
         return
       }
       for index in 0..elements.length() {
         if !program.hasElement(elements[index]) {
-          found.add "{at}: `new` names an element descriptor that is not in the program"
+          found.append "{at}: `new` names an element descriptor that is not in the program"
           continue
         }
         const descriptor = program.elementAt elements[index]
         if descriptor.item != arguments[index] {
           const wanted = describeIrType program, arguments[index]
-          found.add "{at}: the descriptor `{descriptor.name}` is not the one of `{wanted}`"
+          found.append "{at}: the descriptor `{descriptor.name}` is not the one of `{wanted}`"
         }
       }
     }
@@ -797,7 +797,7 @@ fn verifyInstruction(
         expectRuntime program, found, at, inner, kind
       }
       if !function.hasSlot(key) || !function.hasSlot(target) {
-        found.add "{at}: `takeOut` needs a key slot and a target slot that exist"
+        found.append "{at}: `takeOut` needs a key slot and a target slot that exist"
       }
     }
     .PutBack(container, key, value, kind) => {
@@ -806,27 +806,27 @@ fn verifyInstruction(
         expectRuntime program, found, at, inner, kind
       }
       if !function.hasSlot(key) || !function.hasSlot(value) {
-        found.add "{at}: `putBack` needs a key slot and a value slot that exist"
+        found.append "{at}: `putBack` needs a key slot and a value slot that exist"
       }
     }
     .Panic(message, location) => {
       if !program.hasLocation(location) {
-        found.add "{at}: there is no location for the panic"
+        found.append "{at}: there is no location for the panic"
       }
       if !function.hasSlot(message.slot) {
-        found.add "{at}: there is no slot %{message.slot.value}"
+        found.append "{at}: there is no slot %{message.slot.value}"
         return
       }
       if !isTextType(program, function.typeOfSlot(message.slot)) {
-        found.add "{at}: the message of a panic is a `String`"
+        found.append "{at}: the message of a panic is a `String`"
       }
     }
     .Suspend(_, awaited) => {
       if function.kind != FunctionKind.TaskResume {
-        found.add "{at}: only the body of a task suspends"
+        found.append "{at}: only the body of a task suspends"
       }
       if !function.hasSlot(awaited) {
-        found.add "{at}: there is no slot %{awaited.value}"
+        found.append "{at}: there is no slot %{awaited.value}"
       }
     }
   }
@@ -844,7 +844,7 @@ fn verifyCall(
   callee: String,
 ) {
   if arguments.length() != signature.parameters.length() {
-    found.add "{at}: {callee} takes {signature.parameters.length()} arguments and {arguments.length()} were given"
+    found.append "{at}: {callee} takes {signature.parameters.length()} arguments and {arguments.length()} were given"
   } else {
     for index in 0..arguments.length() {
       const parameter = signature.parameters[index]
@@ -853,14 +853,14 @@ fn verifyCall(
         continue
       }
       if arguments[index].place.isSome() {
-        found.add "{at}: parameter {index} of {callee} takes a value, so argument {index} carries no place"
+        found.append "{at}: parameter {index} of {callee} takes a value, so argument {index} carries no place"
         continue
       }
       expectType program, function, found, at, arguments[index].slot, parameter.annotation, "argument {index}"
     }
   }
   if witnesses.length() != signature.witnesses.length() {
-    found.add "{at}: {callee} takes {signature.witnesses.length()} witness tables and {witnesses.length()} were given"
+    found.append "{at}: {callee} takes {signature.witnesses.length()} witness tables and {witnesses.length()} were given"
   }
   for witness in witnesses {
     verifyWitness program, function, found, at, witness
@@ -869,12 +869,12 @@ fn verifyCall(
   match target {
     None => {
       if !returnsNothing {
-        found.add "{at}: {callee} produces `{describeIrType(program, signature.result)}` and nothing takes it"
+        found.append "{at}: {callee} produces `{describeIrType(program, signature.result)}` and nothing takes it"
       }
     }
     Some(slot) => {
       if returnsNothing {
-        found.add "{at}: {callee} produces no value, so nothing can take one"
+        found.append "{at}: {callee} produces no value, so nothing can take one"
         return
       }
       expectType program, function, found, at, slot, signature.result, "the result"
@@ -900,19 +900,19 @@ fn checkPlaceArgument(
   const place = match argument.place {
     Some(inner) => inner
     None => {
-      found.add "{at}: parameter {index} of {callee} is a `var` parameter, so argument {index} has to be a place"
+      found.append "{at}: parameter {index} of {callee} is a `var` parameter, so argument {index} has to be a place"
       return
     }
   }
   if place.base != argument.slot {
-    found.add "{at}: argument {index} of {callee} names %{argument.slot.value} and its place starts at %{place.base.value}"
+    found.append "{at}: argument {index} of {callee} names %{argument.slot.value} and its place starts at %{place.base.value}"
     return
   }
   // A place carries no count, so it is never `owned`. `last` is about the *base* and not about the path: where the
   // caller's own value dies at the call (`printGraph found.checker` as the last use of `found`) the ownership pass marks
   // it and puts the `Release` after the instruction, which is the ordinary rule for a borrowed operand
   if argument.ownership != Ownership.Borrowed {
-    found.add "{at}: argument {index} of {callee} is a place, which carries no count and is therefore borrowed"
+    found.append "{at}: argument {index} of {callee} is a place, which carries no count and is therefore borrowed"
   }
   const annotation = match typeOfReference(program, function, found, at, place) {
     Some(inner) => inner
@@ -924,7 +924,7 @@ fn checkPlaceArgument(
     return
   }
   const shown = describeIrType program, wanted
-  found.add "{at}: parameter {index} of {callee} is `{shown}` and its place is `{describeIrType(program, annotation)}`"
+  found.append "{at}: parameter {index} of {callee} is `{shown}` and its place is `{describeIrType(program, annotation)}`"
 }
 
 /**
@@ -952,25 +952,25 @@ fn verifyClosure(
     None => 0
   }
   if target.signature.parameters.length() != shape.parameters.length() + first {
-    found.add "{at}: `{target.name}` does not take the parameters of `{describeIrType(program, resultTypeOfSignature(program, signature))}`"
+    found.append "{at}: `{target.name}` does not take the parameters of `{describeIrType(program, resultTypeOfSignature(program, signature))}`"
     return
   }
   for index in 0..shape.parameters.length() {
     const declared = target.signature.parameters[index + first]
     const wanted = shape.parameters[index]
     if declared.annotation != wanted.annotation || declared.isReference != wanted.isReference {
-      found.add "{at}: parameter {index} of `{target.name}` is not the parameter the closure type declares"
+      found.append "{at}: parameter {index} of `{target.name}` is not the parameter the closure type declares"
     }
   }
   if target.signature.result != shape.result {
-    found.add "{at}: `{target.name}` does not answer what the closure type declares"
+    found.append "{at}: `{target.name}` does not answer what the closure type declares"
   }
   const fields = match layout {
     Some(inner) => program.layoutAt(inner).fields
     None => []
   }
   if fields.length() != captures.length() {
-    found.add "{at}: the environment of `{target.name}` holds {fields.length()} values and {captures.length()} were captured"
+    found.append "{at}: the environment of `{target.name}` holds {fields.length()} values and {captures.length()} were captured"
     return
   }
   for index in 0..captures.length() {
@@ -981,12 +981,12 @@ fn verifyClosure(
       }
     }
     if !function.hasSlot(slot) {
-      found.add "{at}: there is no slot %{slot.value}"
+      found.append "{at}: there is no slot %{slot.value}"
       continue
     }
     if function.typeOfSlot(slot) != fields[index].annotation {
       const shown = describeIrType program, fields[index].annotation
-      found.add "{at}: the environment of `{target.name}` keeps `{shown}` and %{slot.value} is `{describeIrType(program, function.typeOfSlot(slot))}`"
+      found.append "{at}: the environment of `{target.name}` keeps `{shown}` and %{slot.value} is `{describeIrType(program, function.typeOfSlot(slot))}`"
     }
   }
 }
@@ -1018,17 +1018,17 @@ fn verifyWitness(program: IrProgram, function: IrFunction, var found: List<Strin
   match witness.root {
     .Table(table) => {
       if !program.hasWitnessTable(table) {
-        found.add "{at}: there is no witness table w{table.value}"
+        found.append "{at}: there is no witness table w{table.value}"
       }
     }
     .Parameter(index) => {
       if index < 0 || index >= function.signature.witnesses.length() {
-        found.add "{at}: the function has no witness parameter {index}"
+        found.append "{at}: the function has no witness parameter {index}"
       }
     }
     .Value(place, bound) => {
       if !function.hasSlot(place.base) {
-        found.add "{at}: there is no slot %{place.base.value}"
+        found.append "{at}: there is no slot %{place.base.value}"
         return
       }
       const annotation = match typeOfReference(program, function, found, at, place) {
@@ -1040,12 +1040,12 @@ fn verifyWitness(program: IrProgram, function: IrFunction, var found: List<Strin
       match program.typeAt(annotation) {
         .Object(bounds) => {
           if bound < 0 || bound >= bounds.length() {
-            found.add "{at}: `{describeIrType(program, annotation)}` has no bound {bound}"
+            found.append "{at}: `{describeIrType(program, annotation)}` has no bound {bound}"
           }
         }
         _ => {
           const shown = describeIrType program, annotation
-          found.add "{at}: the witness of %{place.base.value} is `{shown}` and carries no witness table"
+          found.append "{at}: the witness of %{place.base.value} is `{shown}` and carries no witness table"
         }
       }
     }
@@ -1063,33 +1063,33 @@ fn verifyConstruct(
   fields: List<Argument>,
 ) {
   if !program.hasLayout(layout) {
-    found.add "{at}: there is no layout T{layout.value}"
+    found.append "{at}: there is no layout T{layout.value}"
     return
   }
   const shape = program.layoutAt layout
   if !shape.variants.isEmpty() && !shape.hasVariant(variant) {
-    found.add "{at}: `{shape.name}` has no variant {variant}"
+    found.append "{at}: `{shape.name}` has no variant {variant}"
     return
   }
   if shape.variants.isEmpty() && variant != 0 {
-    found.add "{at}: `{shape.name}` is a record, so its variant is 0"
+    found.append "{at}: `{shape.name}` is a record, so its variant is 0"
     return
   }
   const wanted = shape.fieldsOfConstruction variant
   if wanted.length() != fields.length() {
-    found.add "{at}: `{shape.name}` is built from {wanted.length()} fields and {fields.length()} were given"
+    found.append "{at}: `{shape.name}` is built from {wanted.length()} fields and {fields.length()} were given"
   } else {
     for index in 0..fields.length() {
       expectType program, function, found, at, fields[index].slot, wanted[index].annotation, "the field `{wanted[index].name}`"
     }
   }
   if !function.hasSlot(target) {
-    found.add "{at}: there is no slot %{target.value}"
+    found.append "{at}: there is no slot %{target.value}"
     return
   }
   const annotation = function.typeOfSlot target
   if layoutOfType(program, annotation) != Some(layout) {
-    found.add "{at}: `{shape.name}` was built into %{target.value}, which is `{describeIrType(program, annotation)}`"
+    found.append "{at}: `{shape.name}` was built into %{target.value}, which is `{describeIrType(program, annotation)}`"
   }
 }
 
@@ -1105,19 +1105,19 @@ fn verifyIntrinsic(
   const name = describeIntrinsic intrinsic
   const wanted = operandCountOf intrinsic.operation
   if wanted >= 0 && arguments.length() != wanted {
-    found.add "{at}: `{name}` takes {wanted} operands and {arguments.length()} were given"
+    found.append "{at}: `{name}` takes {wanted} operands and {arguments.length()} were given"
   }
   for slot in arguments {
     if !function.hasSlot(slot) {
-      found.add "{at}: there is no slot %{slot.value}"
+      found.append "{at}: there is no slot %{slot.value}"
       return
     }
   }
   if needsNumericKind(intrinsic.operation) && intrinsic.kind.isNone() {
-    found.add "{at}: `{name}` needs to say which numeric type it works on"
+    found.append "{at}: `{name}` needs to say which numeric type it works on"
   }
   if !allowsNumericKind(intrinsic.operation) && intrinsic.kind.isSome() {
-    found.add "{at}: `{name}` has only one form, so it names no numeric type"
+    found.append "{at}: `{name}` has only one form, so it names no numeric type"
   }
   if const .TextConcat = intrinsic.operation {
     verifyPartOperands program, function, found, at, name, arguments
@@ -1133,15 +1133,15 @@ fn verifyIntrinsic(
   // `print` writes its parts and answers nothing at all, so a target would be a slot nothing could ever be put in
   if producesNoValue(intrinsic.operation) {
     if target.isSome() {
-      found.add "{at}: `{name}` produces no value, and a slot was given for one"
+      found.append "{at}: `{name}` produces no value, and a slot was given for one"
     }
     return
   }
   match target {
-    None => found.add "{at}: `{name}` produces a value and nothing takes it"
+    None => found.append "{at}: `{name}` produces a value and nothing takes it"
     Some(slot) => {
       if !function.hasSlot(slot) {
-        found.add "{at}: there is no slot %{slot.value}"
+        found.append "{at}: there is no slot %{slot.value}"
         return
       }
       verifyIntrinsicResult program, function, found, at, name, intrinsic, arguments, slot
@@ -1208,7 +1208,7 @@ fn verifySameOperands(
   }
   const one = describeIrType program, first
   const other = describeIrType program, second
-  found.add "{at}: `{name}` compares `{one}` with `{other}`"
+  found.append "{at}: `{name}` compares `{one}` with `{other}`"
 }
 
 fn isShiftOperation(operation: IntrinsicOperation): Bool {
@@ -1246,7 +1246,7 @@ fn verifyTextOperands(
   for slot in arguments {
     const annotation = function.typeOfSlot slot
     if !isTextType(program, annotation) {
-      found.add "{at}: `{name}` joins strings, and %{slot.value} is `{describeIrType(program, annotation)}`"
+      found.append "{at}: `{name}` joins strings, and %{slot.value} is `{describeIrType(program, annotation)}`"
     }
   }
 }
@@ -1267,7 +1267,7 @@ fn verifyPartOperands(
     const annotation = function.typeOfSlot slot
     if textPartKindOf(program, annotation).isNone() {
       const what = "a string or a value the runtime shows"
-      found.add "{at}: `{name}` joins {what}, and %{slot.value} is `{describeIrType(program, annotation)}`"
+      found.append "{at}: `{name}` joins {what}, and %{slot.value} is `{describeIrType(program, annotation)}`"
     }
   }
 }
@@ -1291,7 +1291,7 @@ fn verifyIntrinsicResult(
     .TextByteLength => expectInteger program, found, at, actual, what
     .TextConcat => {
       if !isTextType(program, actual) {
-        found.add "{at}: {what} is a `String`, and %{slot.value} is `{describeIrType(program, actual)}`"
+        found.append "{at}: {what} is a `String`, and %{slot.value} is `{describeIrType(program, actual)}`"
       }
     }
     .LazyForce => {
@@ -1302,12 +1302,12 @@ fn verifyIntrinsicResult(
         expectType program, function, found, at, slot, item, what
         return
       }
-      found.add "{at}: `{name}` needs a lazy cell, and %{arguments[0].value} is not one"
+      found.append "{at}: `{name}` needs a lazy cell, and %{arguments[0].value} is not one"
     }
     _ => {
       if isComparisonOperation(intrinsic.operation) || isBooleanOperation(intrinsic.operation) {
         if !isBooleanType(program, actual) {
-          found.add "{at}: {what} is a `Bool`, and %{slot.value} is `{describeIrType(program, actual)}`"
+          found.append "{at}: {what} is a `Bool`, and %{slot.value} is `{describeIrType(program, actual)}`"
         }
         return
       }
@@ -1398,7 +1398,7 @@ fn expectSame(
   what: String,
 ) {
   if !function.hasSlot(target) || !function.hasSlot(source) {
-    found.add "{at}: {what} needs two slots that exist"
+    found.append "{at}: {what} needs two slots that exist"
     return
   }
   const annotation = function.typeOfSlot source
@@ -1415,14 +1415,14 @@ fn expectType(
   what: String,
 ) {
   if !function.hasSlot(slot) {
-    found.add "{at}: there is no slot %{slot.value}"
+    found.append "{at}: there is no slot %{slot.value}"
     return
   }
   const actual = function.typeOfSlot slot
   if actual == wanted {
     return
   }
-  found.add "{at}: {what} is `{describeIrType(program, wanted)}` and %{slot.value} is `{describeIrType(program, actual)}`"
+  found.append "{at}: {what} is `{describeIrType(program, wanted)}` and %{slot.value} is `{describeIrType(program, actual)}`"
 }
 
 /**
@@ -1440,14 +1440,14 @@ fn expectManaged(
   what: String,
 ) {
   if !function.hasSlot(slot) {
-    found.add "{at}: there is no slot %{slot.value}"
+    found.append "{at}: there is no slot %{slot.value}"
     return
   }
   const annotation = function.typeOfSlot slot
   if containsCountedType(program, annotation) {
     return
   }
-  found.add "{at}: `{what}` needs a value that is counted, and `{describeIrType(program, annotation)}` is not"
+  found.append "{at}: `{what}` needs a value that is counted, and `{describeIrType(program, annotation)}` is not"
 }
 
 /** The operand of a conversion: the form the intrinsic names, and a `Char` where that form is its own `UInt32`. */
@@ -1461,7 +1461,7 @@ fn expectConversionSource(
   name: String,
 ) {
   if !function.hasSlot(slot) {
-    found.add "{at}: there is no slot %{slot.value}"
+    found.append "{at}: there is no slot %{slot.value}"
     return
   }
   const annotation = function.typeOfSlot slot
@@ -1469,7 +1469,7 @@ fn expectConversionSource(
     return
   }
   const wanted = describeNumericKind kind
-  found.add "{at}: `{name}` works on `{wanted}`, and %{slot.value} is `{describeIrType(program, annotation)}`"
+  found.append "{at}: `{name}` works on `{wanted}`, and %{slot.value} is `{describeIrType(program, annotation)}`"
 }
 
 /** A numeric operand or result: the type has to be exactly the form the intrinsic names. */
@@ -1483,7 +1483,7 @@ fn expectNumeric(
   name: String,
 ) {
   if !function.hasSlot(slot) {
-    found.add "{at}: there is no slot %{slot.value}"
+    found.append "{at}: there is no slot %{slot.value}"
     return
   }
   const annotation = function.typeOfSlot slot
@@ -1491,7 +1491,7 @@ fn expectNumeric(
     return
   }
   const wanted = describeNumericKind kind
-  found.add "{at}: `{name}` works on `{wanted}`, and %{slot.value} is `{describeIrType(program, annotation)}`"
+  found.append "{at}: `{name}` works on `{wanted}`, and %{slot.value} is `{describeIrType(program, annotation)}`"
 }
 
 /**
@@ -1526,7 +1526,7 @@ fn expectInteger(program: IrProgram, var found: List<String>, at: String, annota
   if isIntegerType(program, annotation) {
     return
   }
-  found.add "{at}: {what} is an integer, and `{describeIrType(program, annotation)}` is not"
+  found.append "{at}: {what} is an integer, and `{describeIrType(program, annotation)}` is not"
 }
 
 fn expectRuntime(program: IrProgram, var found: List<String>, at: String, annotation: IrTypeId, kind: RuntimeKind) {
@@ -1535,7 +1535,7 @@ fn expectRuntime(program: IrProgram, var found: List<String>, at: String, annota
       return
     }
   }
-  found.add "{at}: the container is `{describeIrType(program, annotation)}` and not the one the step names"
+  found.append "{at}: the container is `{describeIrType(program, annotation)}` and not the one the step names"
 }
 
 /** The type a place has, or `None` when the path does not fit the value it starts from. */
@@ -1547,7 +1547,7 @@ public fn typeOfReference(
   reference: Reference,
 ): IrTypeId? {
   if !function.hasSlot(reference.base) {
-    found.add "{at}: there is no slot %{reference.base.value}"
+    found.append "{at}: there is no slot %{reference.base.value}"
     return None
   }
   var current = function.typeOfSlot reference.base
@@ -1558,7 +1558,7 @@ public fn typeOfReference(
         current = inner
       }
       None => {
-        found.add "{at}: `{describeIrType(program, current)}` has no {describeStep(program, step)}"
+        found.append "{at}: `{describeIrType(program, current)}` has no {describeStep(program, step)}"
         return None
       }
     }

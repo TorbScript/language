@@ -378,11 +378,11 @@ public type CollectionLiteral {
   case InlineArray(item: TypeId, size: Int)
   /**
    * `const names: Set<String> = ["a", "b"]`: the default list is built and handed to the `from` of the target, which is
-   * the one protocol a collection target has (concept: no `Collectable`). `witness` is that `From<Iterable<Item>>`
+   * the one protocol a collection target has (concept: no `Collectable`). `witness` is that `From<Iterate<Item>>`
    * implementation, so the `from` to call is `memberOfImplementation(witness, "from")` exactly as for every other trait
    * member.
    */
-  case FromIterable(target: TypeId, item: TypeId, witness: Witness)
+  case FromIterate(target: TypeId, item: TypeId, witness: Witness)
 }
 
 // --- Places and the mutation rules ----------------------------------------------------------------------------------
@@ -1125,12 +1125,12 @@ public type Checker {
   }
 
   var fn addSignature(signature: Signature): SignatureId {
-    signatures.add signature
+    signatures.append signature
     SignatureId(signatures.length() - 1)
   }
 
   var fn addTypeSignature(signature: TypeSignature): TypeSignatureId {
-    typeSignatures.add signature
+    typeSignatures.append signature
     TypeSignatureId(typeSignatures.length() - 1)
   }
 
@@ -1148,7 +1148,7 @@ public type Checker {
     if diagnostics[module.value].any({ _.span == problem.span }) {
       return
     }
-    diagnostics[module.value].add(problem)
+    diagnostics[module.value].append(problem)
   }
 
   var fn recordType(module: ModuleId, at: Span, id: TypeId) {
@@ -1185,7 +1185,7 @@ public type Checker {
   /** Adaptations apply in the order they were added, which is the order the lowering has to replay them in. */
   var fn recordAdaptation(module: ModuleId, at: Span, adaptation: Adaptation) {
     const known = tables[module.value].adaptations.get(at) ?? []
-    tables[module.value].adaptations.set(at, known.added(adaptation))
+    tables[module.value].adaptations.set(at, known.appended(adaptation))
   }
 
   fn adaptationsAt(module: ModuleId, at: Span): List<Adaptation> {
@@ -1258,14 +1258,14 @@ public type Checker {
     if diagnostics[module.value].any({ found => found.span == at && found.message == shown }) {
       return
     }
-    diagnostics[module.value].add(problem)
+    diagnostics[module.value].append(problem)
   }
 
   /** Records the type of an expression and gives it back, which is what every branch of the checker ends with. */
   var fn typed(at: Span, id: TypeId): TypeId {
     tables[module.value].expressionTypes.set(at, id)
     if hasVariables && pendingSpans.last() != Some(at) {
-      pendingSpans.add at
+      pendingSpans.append at
     }
     id
   }
@@ -1273,22 +1273,22 @@ public type Checker {
   var fn typedPattern(at: Span, id: TypeId) {
     tables[module.value].patternTypes.set(at, id)
     if hasVariables && pendingSpans.last() != Some(at) {
-      pendingSpans.add at
+      pendingSpans.append at
     }
   }
 
   var fn resolved(at: Span, resolution: Resolution) {
     tables[module.value].resolutions.set(at, resolution)
     if hasVariables && pendingSpans.last() != Some(at) {
-      pendingSpans.add at
+      pendingSpans.append at
     }
   }
 
   var fn adapted(at: Span, adaptation: Adaptation) {
     const known = tables[module.value].adaptations.get(at) ?? []
-    tables[module.value].adaptations.set(at, known.added(adaptation))
+    tables[module.value].adaptations.set(at, known.appended(adaptation))
     if hasVariables && pendingSpans.last() != Some(at) {
-      pendingSpans.add at
+      pendingSpans.append at
     }
   }
 
@@ -1303,12 +1303,12 @@ public type Checker {
       if const .Literal(_) = adaptation {
         continue
       }
-      kept.add adaptation
+      kept.append adaptation
     }
-    kept.add Adaptation.Literal(annotation)
+    kept.append Adaptation.Literal(annotation)
     tables[module.value].adaptations.set(at, kept)
     if hasVariables && pendingSpans.last() != Some(at) {
-      pendingSpans.add at
+      pendingSpans.append at
     }
   }
 
@@ -1320,7 +1320,7 @@ public type Checker {
   var fn recordTypeArguments(at: Span, arguments: List<TypeId>) {
     tables[module.value].typeArguments.set(at, arguments)
     if hasVariables && pendingSpans.last() != Some(at) {
-      pendingSpans.add at
+      pendingSpans.append at
     }
   }
 
@@ -1332,7 +1332,7 @@ public type Checker {
   var fn recordWitnesses(at: Span, found: List<Witness>) {
     tables[module.value].witnesses.set(at, found)
     if hasVariables && pendingSpans.last() != Some(at) {
-      pendingSpans.add at
+      pendingSpans.append at
     }
   }
 
@@ -1407,7 +1407,7 @@ public type Checker {
   var fn recordCollectionLiteral(at: Span, found: CollectionLiteral) {
     tables[module.value].collectionLiterals.set(at, found)
     if hasVariables && pendingSpans.last() != Some(at) {
-      pendingSpans.add at
+      pendingSpans.append at
     }
   }
 
@@ -1490,7 +1490,7 @@ public type Checker {
 
   /** A fresh variable for one generic parameter of one call. Ids are never reused: an interned form names one. */
   var fn newVariable(name: String, owner: String, at: Span, isConst: Bool = false): TypeId {
-    variables.add VariableState(name, owner, at, isConst: isConst)
+    variables.append VariableState(name, owner, at, isConst: isConst)
     const identifier = VariableId(variables.length() - 1)
     hasVariables = true
     types.intern TypeForm.Variable(identifier)
@@ -1571,7 +1571,7 @@ public type Checker {
   // --- Scopes --------------------------------------------------------------------------------------------------------
 
   var fn openScope() {
-    scopeStarts.add locals.length()
+    scopeStarts.append locals.length()
   }
 
   var fn closeScope() {
@@ -1585,10 +1585,10 @@ public type Checker {
 
   /** A binding gets an id, and the name it is reachable under. */
   var fn declareBinding(binding: LocalBinding): BindingId {
-    bindings.add binding
+    bindings.append binding
     const identifier = BindingId(bindings.length() - 1)
     if !binding.name.isEmpty() && binding.name != "_" {
-      locals.add Local(binding.name, LocalKind.Bound(identifier))
+      locals.append Local(binding.name, LocalKind.Bound(identifier))
     }
     identifier
   }
@@ -1596,7 +1596,7 @@ public type Checker {
   /** A `fn`, `type` or `trait` of a block, and a generic parameter: a name of the scope that is not a value. */
   var fn declareLocalSymbol(name: String, symbol: SymbolId) {
     if !name.isEmpty() {
-      locals.add Local(name, LocalKind.Declared(symbol))
+      locals.append Local(name, LocalKind.Declared(symbol))
     }
   }
 
@@ -1736,7 +1736,7 @@ public type Checker {
     var found: List<BindingId> = []
     for index in start..locals.length() {
       if const .Bound(binding) = locals[index].kind {
-        found.add binding
+        found.append binding
       }
     }
     found
@@ -1790,10 +1790,10 @@ public fn newChecker(program: Program, resolutions: List<Map<Span, SymbolId>>): 
     for definition in program.definitions[module.id.value] {
       bySpan.set definition.span, definition.symbol
     }
-    definitions.add bySpan
-    typePositions.add([:])
-    tables.add Tables()
-    diagnostics.add([])
+    definitions.append bySpan
+    typePositions.append([:])
+    tables.append Tables()
+    diagnostics.append([])
   }
   const broken = Signature SymbolId(0), [], FunctionForm([], invalid), [], None, false, false, false
   const brokenType = TypeSignature SymbolId(0), [], invalid, [], [], [], [], [:], false, false

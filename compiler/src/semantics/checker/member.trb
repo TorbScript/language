@@ -65,7 +65,7 @@ public fn recordDelegation(var checker: Checker, at: Span, candidate: Candidate)
  * Object safety, checked **per call and not per type**: a trait may always be used as a type, and what cannot be
  * done with a value of one is call a member that needs a second value of the same concrete type (`equals`, `compare`) or
  * a `static` member (`Type.from`). Everything else keeps its meaning, so `List<Show & Hash>` stays a legal type
- * and `items.added(x)` stays a legal call - the result is a value of the same trait type.
+ * and `items.appended(x)` stays a legal call - the result is a value of the same trait type.
  *
  * The second half holds for **every** receiver, not only a trait-typed one: a `static fn` is reached through the
  * type and through nothing else (CONCEPT.md, "Types, Values and Reflection", names `Point.tryFrom(...)` as the one
@@ -339,9 +339,9 @@ fn traitMember(var checker: Checker, receiver: TypeId, name: String, isStatic: B
 
 /**
  * **A `static fn` the type writes itself is one candidate of the set and not the whole answer.** `String` declares
- * `static fn from(value: Iterable<Char>)` in its own body, as part of `with From<Iterable<Char>>`, and rule 2 of the
+ * `static fn from(value: Iterate<Char>)` in its own body, as part of `with From<Iterate<Char>>`, and rule 2 of the
  * lookup finds it and stops - so `String.from(path)` picked that one implementation and reported that a `Path` is not
- * an `Iterable<Char>`, while the same conversion through a bound (`where String: From<Value>`) resolved. The two
+ * an `Iterate<Char>`, while the same conversion through a bound (`where String: From<Value>`) resolved. The two
  * lists are merged here, at the lookup, and the call site decides between them like any other overload set.
  *
  * Only for a `static` member. An instance member is the hottest question of the pass and has no such form: what a
@@ -352,14 +352,14 @@ fn withTraitOverloads(var checker: Checker, receiver: TypeId, name: String, own:
   for candidate in traitMembers(checker, receiver, name, true) {
     var isKnown = false
     for known in merged {
-      // The same **declaration**, not only the same shape: `with From<Iterable<Char>>` on the type puts one `static
+      // The same **declaration**, not only the same shape: `with From<Iterate<Char>>` on the type puts one `static
       // fn from` in its body, and the lookup finds that one symbol twice - once directly and once through the trait
       if known.annotation == candidate.annotation || declarationOf(known) == declarationOf(candidate) {
         isKnown = true
       }
     }
     if !isKnown {
-      merged.add candidate
+      merged.append candidate
     }
   }
   if merged.length() == 1 {
@@ -381,7 +381,7 @@ fn declarationOf(candidate: Candidate): Int {
  * The candidates one name has among the traits of a type, one per distinct signature, in the order they were found.
  *
  * Two traits of one receiver that declare one name are an overload set only where neither is the other's supertrait
- * (`From<Int8>` beside `From<Char>`). Where one is - `List.sorted` answering `Self` over `Iterable.sorted` answering a
+ * (`From<Int8>` beside `From<Char>`). Where one is - `List.sorted` answering `Self` over `Iterate.sorted` answering a
  * lazy stage - the subtrait's declaration **overrides** the one it inherits, and the inherited one is not a second
  * candidate. `traitsOf` lists a bound before its supertraits, so the overriding one is always the one already found.
  */
@@ -408,8 +408,8 @@ fn traitMembers(var checker: Checker, receiver: TypeId, name: String, isStatic: 
       }
     }
     if !isKnown {
-      found.add candidate
-      through.add bound
+      found.append candidate
+      through.append bound
     }
   }
   found
@@ -530,7 +530,7 @@ fn memberCandidate(
   // The parameters of the owner are filled in; the ones the member declares itself are what a call site solves
   var generics: List<ParameterId> = []
   for index in own..signature.generics.length() {
-    generics.add signature.generics[index]
+    generics.append signature.generics[index]
   }
   const bounds = if mapping.isEmpty() {
     signature.bounds
@@ -688,7 +688,7 @@ fn caseCandidate(
 /** `Point.area` is `(self: Point) => Int`, `p.area` is `() => Int`: the same member, read through a type or a value. */
 fn withReceiver(var checker: Checker, receiver: TypeId, form: FunctionForm, isVarSelf: Bool): FunctionForm {
   var parameters = [ParameterForm(Some("self"), ParameterMode.Receiver(isVarSelf), receiver)]
-  parameters.addAll form.parameters
+  parameters.appendAll form.parameters
   FunctionForm parameters, form.result
 }
 
@@ -723,7 +723,7 @@ fn constructorForm(
   for field in shape.fields {
     const annotation = substitute checker.types, field.annotation, mapping
     const hasDefault = allOptional || field.hasDefault
-    parameters.add ParameterForm(Some(field.name), ParameterMode.Value, annotation, hasDefault)
+    parameters.append ParameterForm(Some(field.name), ParameterMode.Value, annotation, hasDefault)
   }
   FunctionForm parameters, owner
 }
@@ -737,7 +737,7 @@ public fn fieldsOf(var checker: Checker, owner: TypeId): List<FieldSignature> {
       const mapping = argumentMapping shape.generics, arguments
       var found: List<FieldSignature> = []
       for field in shape.fields {
-        found.add field.copy(annotation: substitute(checker.types, field.annotation, mapping))
+        found.append field.copy(annotation: substitute(checker.types, field.annotation, mapping))
       }
       found
     }
@@ -756,7 +756,7 @@ public fn caseNamed(var checker: Checker, owner: TypeId, name: String): CaseSign
         if variant.name == name {
           var fields: List<FieldSignature> = []
           for field in variant.fields {
-            fields.add field.copy(annotation: substitute(checker.types, field.annotation, mapping))
+            fields.append field.copy(annotation: substitute(checker.types, field.annotation, mapping))
           }
           return Some variant.copy(fields: fields)
         }
@@ -816,10 +816,10 @@ public fn memberNames(var checker: Checker, of: TypeId): List<String> {
     const identifier = typeSignatureOf checker, symbol
     const shape = checker.typeSignature identifier
     for field in shape.fields {
-      names.add field.name
+      names.append field.name
     }
     for (name, _) in shape.members {
-      names.add name
+      names.append name
     }
   }
   const extensions = inherentExtensionsOf checker, of
@@ -828,7 +828,7 @@ public fn memberNames(var checker: Checker, of: TypeId): List<String> {
     for (name, _) in members {
       // A foreign extension only offers what this file named, so nothing unreachable is suggested
       if extensionMemberOf(checker, index, of, name).isSome() {
-        names.add name
+        names.append name
       }
     }
   }
@@ -839,7 +839,7 @@ public fn memberNames(var checker: Checker, of: TypeId): List<String> {
       if isVisible {
         const identifier = typeSignatureOf checker, symbol
         for (name, _) in checker.typeSignature(identifier).members {
-          names.add name
+          names.append name
         }
       }
     }
@@ -851,7 +851,7 @@ public fn memberNames(var checker: Checker, of: TypeId): List<String> {
 public fn lookupTraitNamespace(var checker: Checker, owner: TypeId, name: String): Candidate? {
   buildImplementations checker
   var candidates = checker.implementations.open
-  candidates.addAll checker.implementations.inherentOpen
+  candidates.appendAll checker.implementations.inherentOpen
   for index in candidates {
     const implementation = checker.implementations.all[index]
     const member = match implementation.members.get(name) {

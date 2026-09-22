@@ -81,7 +81,7 @@ A **member of a witness table** used to be on that list and no longer is. Its si
 the erased receiver to the payload and calls exactly that signature - so round P6 stopped trying to move it and copies
 it instead: the pass runs twice, and between the two runs every frozen function a direct call already names gets a copy
 under a name no table holds (`specializeFrozenCallees`). The table keeps the original, the direct call site gets the
-copy, and the second run reads the copy's result as an ordinary location. `ArrayList.iterator` is what that is for, and
+copy, and the second run reads the copy's result as an ordinary location. `ArrayList.iterate` is what that is for, and
 the cursor of a `for` over a list, a map, a set or a string is a record on the frame since (finding 5).
 
 ### 1.5 What is checked
@@ -147,7 +147,7 @@ same machine code. Each row says **holds** or **does not hold** and names the ev
 | `for index in 0..n` | **holds** | No `Range` value and no iterator: `%4 = intrinsic less.i64 %2, %3` and a counted back edge - the same three blocks the hand written `while` loop lowers to, and `%2 = intrinsic add.i64.unchecked %2, %10` for the increment, because the head of the loop bounds it (finding 8) |
 | A closure that captures nothing | **holds** | `s1.environment = NULL` - no allocation, and the thunk is a `static` function gcc can inline |
 | Calling a closure through a parameter | **holds** | `benchmarks/closure` is **0.98x** against a C function pointer plus a context struct |
-| **A closure that captures and does not escape** | **holds** where the callee is known not to keep it | `torb_environment_on_frame((torb_environment *)&s1_environment, NULL)` and no `torb_allocate`: the environment is a local of the frame. A closure a callee *stores* - which every `Iterable.map` does - is a block, because the pointer would outlive nothing |
+| **A closure that captures and does not escape** | **holds** where the callee is known not to keep it | `torb_environment_on_frame((torb_environment *)&s1_environment, NULL)` and no `torb_allocate`: the environment is a local of the frame. A closure a callee *stores* - which every `Iterate.map` does - is a block, because the pointer would outlive nothing |
 | **`x = f(x)` at the last use** | **holds** | `%5 = call ..._appended(%0 owned last)` and no `retain` in front of it: the assignment defines `%0`, so the argument is the last use and the `makeUnique` inside the callee finds a count of one. `benchmarks/accumulate` allocates **20 blocks and copies 1.05 MB** for 60 000 appends, where the C twin does 16 and 1.05 MB |
 | **A retain or release of a literal** | **holds** | A slot whose every definition is a `Constant` is left out of the counted set, so the body of `Indexed.at` holds no `torb_text_release` of the message its `expect` carries |
 | **String interpolation** | **holds** | `const torb_text_part parts[4] = { { .kind = TORB_PART_TEXT, .text = s5 }, { .kind = TORB_PART_SIGNED, .signed_value = s1_index }, ... }` and one `torb_text_concat_parts`: **2 000 003 allocations** for 2 000 000 interpolations, which is the one `String` each of them answers |
@@ -156,7 +156,7 @@ same machine code. Each row says **holds** or **does not hold** and names the ev
 | **The dispatch of a collection literal** | **holds** | `[1, 2, 3]` is written as `Object(List<Int64>)` and is a `List(Int64)` by the time a back end sees it: `%0 = move %1`, and `numbers[index]` two functions away is `call n_std_..._ArrayList_get__Int64(%0 borrowed, %1 borrowed)` inside an `Indexed.at` gcc inlines. No box, no table, no indirect call |
 | **A trait-typed value with one implementation** | **holds** | A local written as the trait, a result of the trait and a parameter of the trait are one class and one concrete value (`compiler/tests/devirtualize.test.trb`). A `var fn` member on one is the ordinary `var` path: `call t_..._Tally_bump(&%0 borrowed)` |
 | **A list literal, used as a list** | **does not hold** | The dispatch is gone and the rest is not: `numbers[index]` is still a bounds check, an `Option` and an `expect` per element against a load, and the C twin vectorizes its sum. `benchmarks/list-index` lost **31%** of its time (28.56x to 19.70x against its twin in one session) |
-| **The cursor of `for value in collection`** | **holds** | `slot %2 local iterator: Record(T_..._ListIterator__Int64)` and `%4 = call t_..._ListIterator_next__Int64(&%2 borrowed)`: no box, no `makeUnique` in the head, no indirect call. A list, a map, a set and a `String` all do this, and so does a user `Iterable`. `benchmarks/list-iterate` allocates **24 blocks** for 40 loops where it allocated 64 - the same 24 `benchmarks/list-index` allocates for the same data |
+| **The cursor of `for value in collection`** | **holds** | `slot %2 local iterator: Record(T_..._ListIterator__Int64)` and `%4 = call t_..._ListIterator_next__Int64(&%2 borrowed)`: no box, no `makeUnique` in the head, no indirect call. A list, a map, a set and a `String` all do this, and so does a user `Iterate`. `benchmarks/list-iterate` allocates **24 blocks** for 40 loops where it allocated 64 - the same 24 `benchmarks/list-index` allocates for the same data |
 | **`for value in collection` as a whole** | **does not hold** | The `Option` per turn and the cross-unit `torb_list_get` are what is left, and gcc cannot see through either: `list-iterate` is **44x** against a pointer walk that vectorizes, which is 1.9x the counted index loop over the same list. Round P11 (a `for` over a concrete list as a counted loop over `Element` steps) is what removes the rest |
 | **A field of a record in a list** | **does not hold**, and it is the *read* that is left | `points[index].y = v` is `makeUnique` of the list and one store through an `Element` step; the record never moves. `benchmarks/record-write` lost **59%** of its time for it and is **12.61x**, and what is left of the ratio is the `Indexed.at` on the right-hand side - a call, a bounds check and a copy of the record for one field |
 | **A nested index write** | **does not hold**, and no allocation is left | `grid[row][column] = v` writes into the grid's own storage: **7 688 813 allocations became 8 813** - all of them the construction of the grid - and 31.65 GB of copying became 13.3 MB. What is left is that the row of a `List<List<Int>>` is still an `Object` box - it goes *into* the outer list, which the devirtualization may not follow - so the write is one `makeUnique` of that box at the element's address and one indirect call |
@@ -182,7 +182,7 @@ worth, what it risks, and the test that pins it.
 | 2 | A collection literal is a trait-typed value | was 13x to 48x, one box per literal, one indirect call per access | a whole-program devirtualization over the IR | **done, round P5** |
 | 3 | A nested index write copies the row | was >451x, 2 allocations per write | an `Element` path step into the concrete list | **done, round P7** |
 | 4 | A field of a record in a list | was 52x | the same `Element` path step | **done, round P7** |
-| 5 | `for` over a collection | was one box per loop and a `makeUnique` per turn | a copy of the frozen `iterator()` for the direct call sites | **done, round P6** |
+| 5 | `for` over a collection | was one box per loop and a `makeUnique` per turn | a copy of the frozen `iterate()` for the direct call sites | **done, round P6** |
 | 6 | String interpolation | was 3 allocations per interpolation | a text part that is still a number | **done, round P4** |
 | 7 | A non-escaping closure environment | was one allocation per closure made | the environment on the frame | **done, round P3** |
 | 8 | Overflow checks that cannot fire | was 2.37x on call-heavy code | a local range analysis over the IR | **done, round P8** for the arithmetic; the bounds check is open |
@@ -438,7 +438,7 @@ the `Option` of `get` - not this finding.
 **What was generated.**
 
 ```text
-%3 = callWitness value %0 bound 0 member 5()     # iterator(): an Object(Iterator<T>) on the heap
+%3 = callWitness value %0 bound 0 member 5()     # iterate(): an Object(Iterator<T>) on the heap
 b1:
   makeUnique %3                                  # every turn
   %5 = callWitness value %3 bound 0 member 0()   # next(): an indirect call answering an Option
@@ -446,8 +446,8 @@ b1:
   switch %6 case 0 b2, otherwise b4
 ```
 
-Round P5 had already removed all of that for an `Iterable` **nothing boxes**, and the containers of `std/` were the
-case that was left: `ArrayList.iterator` is a member of the `Iterable` table, a table member's signature may not move,
+Round P5 had already removed all of that for an `Iterate` **nothing boxes**, and the containers of `std/` were the
+case that was left: `ArrayList.iterate` is a member of the `Iterate` table, a table member's signature may not move,
 and so the member answered the boxed `Iterator<Item>` however concrete its receiver was.
 
 **What is generated now.**
@@ -482,7 +482,7 @@ other function and nothing but a `Call` this pass wrote ever points at one, so c
 contiguous tail of `FunctionId`s over the `Call` instructions and nothing else. It is the same ledger finding 12 is
 about, and it belongs in that round.
 
-**What it covers.** A list, a map, a set, a `String`'s `chars()` and every user `Iterable`. `Iterable.filter` is a
+**What it covers.** A list, a map, a set, a `String`'s `chars()` and every user `Iterate`. `Iterate.filter` is a
 table member too, so a stage of a pipeline is answered as a `Record(Filtered)` now rather than a box.
 
 **Level 3 turned out to be unnecessary.** The plan was a dominator walk that hoists a `makeUnique` out of a loop head.
@@ -589,7 +589,7 @@ its index in every table of the value's trait, which is the whole set because th
 predicate. A witness whose tables cannot be named keeps every argument. Everything that cannot be proved is proved
 false.
 
-`Iterable.map` is the case that shows why the second half is needed: the closure is `local`, and `map` builds it into a
+`Iterate.map` is the case that shows why the second half is needed: the closure is `local`, and `map` builds it into a
 `Mapped` record it answers, which the frame may answer on. Its parameter is `Owned`, so the environment is a block.
 
 **The gain.** One allocation per closure creation, and the environment's fields become locals that gcc can keep in
@@ -685,10 +685,10 @@ and `compiler/tests/lower.test.trb` pins the counted loop with `add.i64.unchecke
 
 ```text
 %1 = closure t_closure__..._0 captures() local
-%2 = call t_std_..._Iterable_map__...(%0 owned last, %1 owned last)     # a Mapped record, boxed
+%2 = call t_std_..._Iterate_map__...(%0 owned last, %1 owned last)     # a Mapped record, boxed
 %3 = closure t_closure__..._1 captures() local
 %4 = callWitness value %2 bound 0 member 1(%3 borrowed last)            # a Filtered record, boxed
-%5 = call t_std_..._Iterable_sum__...(%4 borrowed last)
+%5 = call t_std_..._Iterate_sum__...(%4 borrowed last)
 ```
 
 and driving it allocates a `FilteredIterator`, a `MappedIterator` and a `ListIterator`, each boxed.
@@ -698,7 +698,7 @@ and driving it allocates a `FilteredIterator`, a `MappedIterator` and a `ListIte
 the outermost cursor one, and per element two indirect calls and three `Option` round trips. The ratio against the
 fused loop is **21.77x**.
 
-**Why the three that are left.** `Iterable.map` and `Iterable.filter` are reached with `Self` bound to the **trait
+**Why the three that are left.** `Iterate.map` and `Iterate.filter` are reached with `Self` bound to the **trait
 type**, so their one instance builds a `Mapped`/`Filtered` record around a trait-typed `self` - a value in a **field**,
 which the devirtualization may not follow, and the `source` of a stage's *iterator* is a field of the same shape. So
 the stage that is answered to the caller is peeled, and what sits inside it is not.
@@ -960,7 +960,7 @@ Each round is one agent's work, in this order. A round names the files it touche
 | **P3** | F7: a closure environment the callee cannot keep, on the frame | `backend/c/body.trb`, `runtime/memory.c`, `runtime/include/torb.h` | **done** | - |
 | **P4** | F6: a text part that is still a number | `ir/layout.trb`, `ir/lower/text.trb`, `ir/verify.trb`, `backend/c/body.trb`, `runtime/text.c` | **done** | - |
 | **P5** | F2: the whole-program devirtualization | new `ir/devirtualize.trb`, `ir/lower/lower.trb`, `backend/c/body.trb`, `backend/c/emit.trb`, `runtime/map.c` | **done** | - |
-| **P6** | F5: a copy of the frozen `iterator()` for the direct call sites | `ir/devirtualize.trb` | **done** | - |
+| **P6** | F5: a copy of the frozen `iterate()` for the direct call sites | `ir/devirtualize.trb` | **done** | - |
 | **P7** | F3 and F4: an `Element` path step into a concrete list | new `ir/elements.trb`, `ir/ir.trb`, `ir/lower/place.trb`, `backend/c/body.trb`, `runtime/list.c` | **done** | - |
 | **P8** | F8: the range analysis that removes an overflow check that cannot fire | new `ir/ranges.trb`, `ir/ir.trb`, `ir/print.trb`, `backend/c/body.trb` | **done** for the arithmetic; the bounds check of `a[index]` is open | - |
 | **P9** | F10: `TakeOut`/`PutBack` on the map, and the member that reaches it | `ir/lower/place.trb`, `runtime/map.c`, `std/collections` | an IR snapshot, `benchmarks/map-count` | after the VM |

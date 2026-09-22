@@ -1,12 +1,12 @@
 ---
 title: std/iteration
-summary: Iterable and Iterator, the lazy stages between them, and the collectors a pipeline ends in.
+summary: Iterate and Iterator, the lazy stages between them, and the collectors a pipeline ends in.
 kind: package
 status: stable
 order: 50
 keywords:
   - std/iteration
-  - Iterable
+  - Iterate
   - Iterator
   - Stage
   - Accumulator
@@ -28,7 +28,7 @@ already in scope through the prelude.
 ## Import
 
 ```trb fragment
-use Iterator, Iterable, Length from "std/iteration"
+use Iterator, Iterate, Length from "std/iteration"
 use Accumulator, ListAccumulator, collector, into, listing from "std/iteration"
 use counting, summing, groupingBy, joining from "std/iteration"
 use Stage, mapping, filtering, taking from "std/iteration"
@@ -59,25 +59,25 @@ public trait Length {
 `Iterator` is a cursor over a sequence: a stateful value, so whoever pulls from one holds it in a `var`. `Length` is
 just a count, shared by every collection and by `Range<Int>`.
 
-### Iterable
+### Iterate
 
 ```trb fragment
-public trait Iterable<Item> {
-  fn iterator(): Iterator<Item>
-  fn map<Output>(transform: (value: Item) => Output): Iterable<Output>
-  fn filter(predicate: (value: Item) => Bool): Iterable<Item>
-  fn flatMap<Output>(transform: (value: Item) => Iterable<Output>): Iterable<Output>
-  fn filterMap<Output>(transform: (value: Item) => Output?): Iterable<Output>
-  fn mapWhile<Output>(transform: (value: Item) => Output?): Iterable<Output>
-  fn take(amount: Int): Iterable<Item>
-  fn skip(amount: Int): Iterable<Item>
-  fn takeWhile(predicate: (value: Item) => Bool): Iterable<Item>
-  fn zip<Output>(other: Iterable<Output>): Iterable<(Item, Output)>
-  fn indexed(): Iterable<(index: Int, item: Item)>
-  fn sorted<Key: Compare>(by: (value: Item) => Key): Iterable<Item>
-  fn through<Output>(stage: Stage<Item, Output>): Iterable<Output>
+public trait Iterate<Item> {
+  fn iterate(): Iterator<Item>
+  fn map<Output>(transform: (value: Item) => Output): Iterate<Output>
+  fn filter(predicate: (value: Item) => Bool): Iterate<Item>
+  fn flatMap<Output>(transform: (value: Item) => Iterate<Output>): Iterate<Output>
+  fn filterMap<Output>(transform: (value: Item) => Output?): Iterate<Output>
+  fn mapWhile<Output>(transform: (value: Item) => Output?): Iterate<Output>
+  fn take(amount: Int): Iterate<Item>
+  fn skip(amount: Int): Iterate<Item>
+  fn takeWhile(predicate: (value: Item) => Bool): Iterate<Item>
+  fn zip<Output>(other: Iterate<Output>): Iterate<(Item, Output)>
+  fn indexed(): Iterate<(index: Int, item: Item)>
+  fn sorted<Key: Compare>(by: (value: Item) => Key): Iterate<Item>
+  fn through<Output>(stage: Stage<Item, Output>): Iterate<Output>
   fn collect<Output>(into: Accumulator<Item, Output>): Output
-  fn to<Target: From<Iterable<Item>>>(): Target
+  fn to<Target: From<Iterate<Item>>>(): Target
   fn toList(): List<Item>
   fn toSet(): Set<Item> where Item: Hash
   fn joined(separator: String = ""): String where Item: Show
@@ -93,10 +93,10 @@ public trait Iterable<Item> {
 }
 ```
 
-Everything that works with `for ... in` and the spread operator (`...`). Only `iterator` is required; every other
-member is a default. A pipeline has three parts: a source (any `Iterable`), zero or more lazy stages (`map`, `filter`,
+Everything that works with `for ... in` and the spread operator (`...`). Only `iterate` is required; every other
+member is a default. A pipeline has three parts: a source (any `Iterate`), zero or more lazy stages (`map`, `filter`,
 `take`, `sorted`, ...) that run nothing and store nothing, and one terminal operation (`collect`, `toList`, `fold`,
-...) that pulls the values through. Stages answer an `Iterable` again, so a pipeline is a value that can be passed
+...) that pulls the values through. Stages answer an `Iterate` again, so a pipeline is a value that can be passed
 around, extended and iterated more than once. `sorted` is lazy as a stage but has to buffer every value the moment it
 is iterated, unlike the rest.
 
@@ -109,12 +109,12 @@ public trait Stage<Input, Output> {
 }
 ```
 
-The middle of a pipeline, written once for both the pull side (`Iterable.through`) and the push side of a stream
+The middle of a pipeline, written once for both the pull side (`Iterate.through`) and the push side of a stream
 (`Source.through`, see [std/stream](stream.md)): it turns an `Accumulator<Output, Final>` into an
 `Accumulator<Input, Final>` and never asks where its `Input`s come from. `mapping`, `filtering`, `filterMapping`,
 `mappingWhile`, `flatMapping`, `taking`, `takingWhile`, `skipping`, `indexing` and `chunking` are the stages this
 package provides as functions rather than as members of `Stage`, because a member of a trait used as a namespace would
-have to fix the trait's own type arguments. The per-stage iterators behind `Iterable.map` and its neighbors
+have to fix the trait's own type arguments. The per-stage iterators behind `Iterate.map` and its neighbors
 (`Mapped`, `Filtered`, ...) are still separate code from these `Stage` values until the native back end compiles a
 generic member reached through a trait-typed value (`onto<Final>`); until then the two mean the same thing.
 
@@ -138,11 +138,11 @@ An `Accumulator` is what to do with a pipeline's values **and** the state of doi
 `start()`. `isDone()` defaults to `false` and is asked before the first value and after every `add`, which is what lets
 `taking`, `first` and `find` end a pipeline over an infinite or expensive source instead of reading it to the end.
 Because values are pushed one at a time, the same accumulators work for anything that produces values over time - an
-`Iterable`, a `Source`, an event stream.
+`Iterate`, a `Source`, an event stream.
 
-A `Collection` is not one; an accumulator that gathers into a collection is a type beside it, as `Collector` and
+A collection is not one; an accumulator that gathers into a collection is a type beside it, as `Collector` and
 `Collectors.toList()` are in Java. `ListAccumulator<Item>` is the one this package ships and `listing()` answers it;
-`into<Target>()` is the general one for any `From<Iterable<Item>>` target - it gathers into a `List` and calls
+`into<Target>()` is the general one for any `From<Iterate<Item>>` target - it gathers into a `List` and calls
 `Target.from` once at the end. A package that owns a collection may ship its own, and a caller **names** it at the
 call. `collector(initial, finish:, step:)` writes one the functional way, as a fold with a final step:
 
@@ -162,8 +162,8 @@ public fn groupingBy<Item, Key: Hash>(key: (value: Item) => Key): Grouping<Item,
 
 ### Staged and Queueing
 
-`Iterable.through(stage)` answers a `Staged`, which is an `Iterable` again. `collect` on it is fused - the stage wraps
-the accumulator directly, with no queue in between - while `iterator()` needs a small queue, because one
+`Iterate.through(stage)` answers a `Staged`, which is an `Iterate` again. `collect` on it is fused - the stage wraps
+the accumulator directly, with no queue in between - while `iterate()` needs a small queue, because one
 value pushed in can become none or many coming out while the caller asks for exactly one. `Queueing` is the
 `Accumulator` that tail of a staged pipeline pushes into.
 

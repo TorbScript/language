@@ -76,7 +76,7 @@ fn <builder>(configure: (var self: <Receiver>) => Void): <Receiver> {
      private var items: List<String> = []
 
      var fn item(name: String) {
-       items.add name
+       items.append name
      }
    }
 

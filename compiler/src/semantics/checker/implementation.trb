@@ -343,7 +343,7 @@ fn innerWitnesses(
     const subject = substitute checker.types, inner.subject, mapping
     for capability in inner.traits {
       const wanted = substitute checker.types, capability, mapping
-      witnesses.add witnessDeep(checker, subject, wanted, depth + 1)
+      witnesses.append witnessDeep(checker, subject, wanted, depth + 1)
     }
   }
   witnesses
@@ -356,7 +356,7 @@ fn witnessOfBound(checker: Checker, annotation: TypeId, bound: TypeId): Witness 
   Witness.Object annotation, bound
 }
 
-/** The arguments of a trait as they are for one type: the `Other` and `Output` of `Add`, the `Item` of `Iterable`. */
+/** The arguments of a trait as they are for one type: the `Other` and `Output` of `Add`, the `Item` of `Iterate`. */
 public fn traitArgumentsOf(var checker: Checker, annotation: TypeId, capability: SymbolId): List<TypeId>? {
   resolveTrait(checker, annotation, capability).argumentsOf()
 }
@@ -437,7 +437,7 @@ fn declaredVoidOf(var checker: Checker, annotation: TypeId): TypeId? {
 }
 
 /** What the bounds of a trait-typed value or of a generic parameter say about one trait. */
-/** The arguments a bound was written with: `From<Iterable<Int>>` gives `[Iterable<Int>]`, a bare `Show` gives `[]`. */
+/** The arguments a bound was written with: `From<Iterate<Int>>` gives `[Iterate<Int>]`, a bare `Show` gives `[]`. */
 public fn appliedArgumentsOf(checker: Checker, bound: TypeId): List<TypeId> {
   match checker.types.form(bound) {
     .Nominal(_, arguments) => arguments
@@ -466,15 +466,15 @@ fn boundArgumentsOf(
 }
 
 /**
- * The `Item` of the `Iterable<Item>` a type can be built from, where exactly one of its `From` implementations takes
+ * The `Item` of the `Iterate<Item>` a type can be built from, where exactly one of its `From` implementations takes
  * one.
  *
  * `From` is the one trait a type may implement several times - `Int.from` exists for five widths, and
  * `extend<Target> Target with From<Never>` adds one to *every* type - so "what is the argument of `From` for this type"
- * has no single answer and `resolveTrait` rightly says `Ambiguous`. "Which of them takes an `Iterable`" does have one,
+ * has no single answer and `resolveTrait` rightly says `Ambiguous`. "Which of them takes an `Iterate`" does have one,
  * and that is the collection protocol a literal and `to<Target>()` ask about.
  */
-public fn iterableSourceOf(var checker: Checker, annotation: TypeId, iterable: SymbolId): TypeId? {
+public fn iterateSourceOf(var checker: Checker, annotation: TypeId, iterable: SymbolId): TypeId? {
   buildImplementations checker
   const conversion = checker.wellKnown.from?
   const head = headSymbolOf checker, annotation
@@ -490,13 +490,13 @@ public fn iterableSourceOf(var checker: Checker, annotation: TypeId, iterable: S
     if given.length() != 1 {
       continue
     }
-    const item = match itemOfIterableBound(checker, given[0], iterable) {
+    const item = match itemOfIterateBound(checker, given[0], iterable) {
       Some(inner) => inner
       None => {
         continue
       }
     }
-    // Two implementations that both take an `Iterable` are an overlap, which `checkCoherence` reports at their
+    // Two implementations that both take an `Iterate` are an overlap, which `checkCoherence` reports at their
     // declarations - so nothing is said here and nothing is guessed either
     if const Some(other) = found {
       if other != item {
@@ -543,14 +543,14 @@ public fn fallibleFailuresOf(var checker: Checker, annotation: TypeId, source: T
     }
     const failure = resolveType checker, given[1]
     if !found.contains(failure) {
-      found.add failure
+      found.append failure
     }
   }
   found
 }
 
-/** The `Item` of an `Iterable<Item>` in a type position, which is a trait value of one bound. */
-fn itemOfIterableBound(var checker: Checker, annotation: TypeId, iterable: SymbolId): TypeId? {
+/** The `Item` of an `Iterate<Item>` in a type position, which is a trait value of one bound. */
+fn itemOfIterateBound(var checker: Checker, annotation: TypeId, iterable: SymbolId): TypeId? {
   const bounds = match checker.types.form(annotation) {
     .Traits(found) => found
     _ => [annotation]
@@ -655,7 +655,7 @@ fn matchTarget(
  *
  * `extend<Item: Show> List<Item> with Show` does: `show` takes `self`, so an `ArrayList<Int>` reaches it through the
  * coercion of its receiver - which is exactly what "makes every list showable" means (CONCEPT, "Traits").
- * `extend<Item> List<Item> with From<Iterable<Item>>` does **not**: `From.from` has no `self` and answers `Self`, so for
+ * `extend<Item> List<Item> with From<Iterate<Item>>` does **not**: `From.from` has no `self` and answers `Self`, so for
  * an `ArrayList<Int>` it would answer "some `List`" and not an `ArrayList`. That implementation belongs to the
  * trait-typed value alone, and `List.from(...)` and `to<List<Int>>()` are what reach it.
  *
@@ -984,7 +984,7 @@ public fn supertraitsOfBound(var checker: Checker, bound: TypeId, own: TypeId): 
   }
   var found: List<TypeId> = []
   for supertrait in shape.traits {
-    found.add substitute(checker.types, supertrait.capability, mapping)
+    found.append substitute(checker.types, supertrait.capability, mapping)
   }
   found
 }
@@ -993,8 +993,8 @@ public fn supertraitsOfBound(var checker: Checker, bound: TypeId, own: TypeId): 
  * Whether `supertrait` is one of `bound`'s, transitively - the question member lookup asks when one name is declared
  * by two traits of one receiver.
  *
- * `List<Item>` comes `with Collection<Item>` and `Collection` with `Iterable`, and both `List` and `Iterable` declare
- * `sorted`: the one in `List` answers `Self` and the one in `Iterable` answers a lazy stage. They are not two
+ * `List<Item>` comes `with Iterate<Item>`, and both `List` and `Iterate` declare
+ * `sorted`: the one in `List` answers `Self` and the one in `Iterate` answers a lazy stage. They are not two
  * signatures of one overload set, they are a member and the member it overrides, so the more derived one wins.
  */
 public fn isSupertraitOfBound(var checker: Checker, bound: TypeId, supertrait: TypeId, own: TypeId): Bool {
@@ -1086,7 +1086,7 @@ fn addImplementorTraits(var checker: Checker, var found: List<TypeId>, annotatio
       }
       const applied = substitute checker.types, declared, mapping
       if !found.contains(applied) {
-        found.add applied
+        found.append applied
       }
       break
     }
@@ -1138,7 +1138,7 @@ public fn appliedTraitsOf(var checker: Checker, annotation: TypeId, capability: 
   var found: List<TypeId> = []
   for bound in traitsOf(checker, annotation) {
     if hasHead(checker, bound, capability) && !found.contains(bound) {
-      found.add bound
+      found.append bound
     }
   }
   found
@@ -1175,7 +1175,7 @@ public fn writtenTraitsOf(var checker: Checker, annotation: TypeId, capability: 
     }
     const applied = substitute checker.types, declared, mapping
     if hasHead(checker, applied, capability) && !found.contains(applied) {
-      found.add applied
+      found.append applied
     }
   }
   found
@@ -1195,7 +1195,7 @@ fn addBlanketTrait(
   declared: TypeId,
 ) {
   // Only for a **concrete** type. What a generic parameter has is what its bounds say and nothing else - a blanket
-  // would give `Target` of `fn to<Target: From<Iterable<Item>>>` a second `From` (`From<Never>`, which every type has)
+  // would give `Target` of `fn to<Target: From<Iterate<Item>>>` a second `From` (`From<Never>`, which every type has)
   // and turn `Target.from(self)` into an ambiguity that no call site can resolve
   if !isConcrete(checker, annotation) {
     return
@@ -1213,7 +1213,7 @@ fn addBlanketTrait(
     return
   }
   if !found.contains(applied) {
-    found.add applied
+    found.append applied
   }
 }
 
@@ -1252,7 +1252,7 @@ fn addClosure(var checker: Checker, var found: List<TypeId>, bound: TypeId, own:
   if depth > 8 || found.contains(bound) {
     return
   }
-  found.add bound
+  found.append bound
   const supertraits = supertraitsOfBound checker, bound, own
   for supertrait in supertraits {
     addClosure(checker, found, supertrait, own, depth + 1)
@@ -1282,11 +1282,11 @@ fn directTraitsOf(var checker: Checker, annotation: TypeId): List<TypeId> {
         if conversion.isSome() && isTextConversionBound(checker, bound) {
           continue
         }
-        found.add bound
+        found.append bound
       }
       if const Some(generated) = conversion {
         if !found.contains(generated) {
-          found.add generated
+          found.append generated
         }
       }
       found
@@ -1312,7 +1312,7 @@ fn directTraitsOf(var checker: Checker, annotation: TypeId): List<TypeId> {
         }
         const applied = substitute checker.types, declared, mapping
         if !found.contains(applied) {
-          found.add applied
+          found.append applied
         }
       }
       found
@@ -1408,7 +1408,7 @@ fn deriveFor(var checker: Checker, annotation: TypeId, capability: SymbolId, wan
   if const Some(known) = checker.derivedIndex.get(key) {
     return Resolved.Found ImplementationId(known), argumentsOfBound(checker, bound)
   }
-  checker.derived.add DerivedImplementation(annotation, bound, members)
+  checker.derived.append DerivedImplementation(annotation, bound, members)
   // A derived implementation is an ordinary one for everything that comes after: it answers, and it is indexed
   const module = checker.module
   const package = checker.program.graph.at(module).package
@@ -1722,7 +1722,7 @@ public fn inherentExtensionsOf(var checker: Checker, annotation: TypeId): List<I
     if !isExtensionNamedHere(checker, implementation.package, owner, here, head) {
       continue
     }
-    found.add index
+    found.append index
   }
   checker.visibleExtensions.set key, found
   found
@@ -1847,10 +1847,10 @@ public fn checkCoherence(var checker: Checker) {
 }
 
 /**
- * `trait Mound<Item> with From<Iterable<Item>>` promises `From` for **every** `Item`, because a trait's own `with`
+ * `trait Mound<Item> with From<Iterate<Item>>` promises `From` for **every** `Item`, because a trait's own `with`
  * list is what member lookup reads - so `Mound.from(values)` resolves for any `Item` at all. An implementation of that
  * supertrait for the trait type may therefore not be narrower than the promise:
- * `extend<Item: Hash> Mound<Item> with From<Iterable<Item>>` delivers it for some `Item` and nothing delivers it for
+ * `extend<Item: Hash> Mound<Item> with From<Iterate<Item>>` delivers it for some `Item` and nothing delivers it for
  * the rest, and `Mound.from([Opaque("a")])` type checked with no implementation behind it.
  *
  * Only the plain case is reported: an implementation that carries bounds for a trait whose own generics carry none. A
@@ -2011,7 +2011,7 @@ fn checkOverlaps(var checker: Checker) {
     }
     if const Some(capability) = capabilitySymbolOf(checker, implementation.capability) {
       var known = groups.get(capability.value) ?? []
-      known.add index
+      known.append index
       groups.set capability.value, known
     }
   }
@@ -2273,7 +2273,7 @@ fn checkRequirements(
     match providerOf(checker, index, name) {
       Some(provider) => compareSignatures checker, index, bound, name, member, provider, mapping
       None => {
-        // `trait Queue<Item> with Collection<Item>` writes `add` itself: a default of any trait in the closure is the
+        // `trait List<Item> with MutableSlice` writes `slice` itself: a default of any trait in the closure is the
         // implementation of the requirement, and nothing is asked of the type
         if hasDefaultInClosure(checker, closure, name) || isProvidedOtherwise(checker, index, bound) {
           continue
@@ -2318,7 +2318,7 @@ fn defaultOfClosure(var checker: Checker, closure: List<TypeId>, name: String): 
 
 /**
  * The default that stands in for a member a *supertrait* requires and no implementation writes.
- * `Accumulator.finish` is required by `Accumulator` and written with a body by its **subtrait** `Collection`, and
+ * `Slice.slice` is required by `Slice` and written with a body by its **subtrait** `List`, and
  * `checkRequirements` accepts exactly that through `hasDefaultInClosure` - so a back end that looked only in the
  * implementation of the requiring trait and in that trait itself would refuse a program the checker approved. The trait
  * closure is walked in the order it was built, nearest the type first.
@@ -2577,7 +2577,7 @@ fn describeRequirement(
       Some(label) => "{label}: {shown}"
       None => shown
     }
-    parts.add(match parameter.mode {
+    parts.append(match parameter.mode {
       .Var => "var {named}"
       .Lazy => "lazy {named}"
       .Variadic => "...{named}"
