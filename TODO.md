@@ -3929,3 +3929,10 @@ Wenn nicht, was bedeutet, bewirkt es?
     `collect` verlangt `Accumulator`; `into<List<..>>()` baut den Adapter. Prüfen: Verhältnis zu `std/stream`s `Sink`
     (async `add`) - bewusst nicht `Accept`, wie `Source` nicht `Iterable` ist. Name `Accept` ist Geschmack
     (Alternativen `Receive`, `Fill`). Läuft mit C4.
+  - **Terminologie glattgezogen (Nutzer will das):** vier Richtungs-Traits, zwei pro Zeitachse - `Iterable`/`Accept`
+    (synchron, Wert) und `Source`/`Sink` (asynchron, shared, fehlbar); zwei zeitlose Lauf-Traits - `Collector`
+    (Beschreibung, zustandslos, `start()`) und `Accumulator` (Zustand eines Laufs, `with Accept`, `finish`/`isDone`),
+    von beiden Zeitachsen benutzt. `finish()` nur noch am `Accumulator`; `Sink.finish()` wird `close()` (Streamende
+    ist kein Ergebnis). Tabelle nach `docs/COLLECTIONS.md`. **Zu proben in C2b:** `Collector` und `Accumulator`
+    verschmelzen - die Beschreibung ist der Anfangszustand, jede Kopie ein Lauf (Wertsemantik), spart einen Trait und
+    `start()`; `groupingBy(...).then(downstream)` kopiert den Downstream pro Gruppe statt ihn zu starten.
