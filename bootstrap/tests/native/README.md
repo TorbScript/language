@@ -72,19 +72,6 @@ A behaviour the native back end cannot run at all does not belong here; it belon
 snapshot. A long program that exercises many things at once belongs in `bootstrap/tests/scripts/`, which the native
 `torb run` runs on its own.
 
-## `stage-0-only/`
-
-One subdirectory, and it is not an exception to the contract - it is a waiting room. A program lands there when **the C
-back end cannot produce the behaviour yet and stage 0 already answers what the language says**: there is nothing to
-build, and the program still pins the answer instead of waiting for the back end. `tools/conformance.sh` does not
-build these programs - it lists each one as skipped, with the reason from its own doc comment below. Each one says in
-its doc comment why it is there and what has to exist for it to move up one directory, and moving it is the whole
-change.
-
-| Program | Why it waits |
-|---------|--------------|
-| `error-chain.trb` | A top-level `?` whose error carries `Error` prints one `  caused by:` line per link of `cause()`. The back end's `reportFailure` writes the first line and exits; the loop over `cause()` on top of it is not lowered yet |
-
 ## `binary-only/`
 
 The other side of the same coin, and the other thing that is not an exception: a program lands there when the two
@@ -209,6 +196,7 @@ panic.
 |---------|--------------|
 | `errors.trb` | `Option` and `Result` through `?`, `??` and the patterns over them |
 | `top-level-error.trb` | A top-level `?` that fails: `error: <the error through Show>` and exit code **1** - not a panic |
+| `error-chain.trb` | A top-level `?` whose error carries `Error` prints one `  caused by:` line per link of `cause()`, until `cause()` answers `None` |
 
 **Panics** - `panic: <message>`, the site, exit code **101**, and nothing else runs.
 

@@ -18,8 +18,8 @@
 # That comparison dies with stage 0 (CONTRIBUTING's gate policy: "parity of messages ... is no longer a goal"); what
 # survives it is the recorded expectation, which is what this script compares against.
 #
-# `bootstrap/tests/native/stage-0-only/` programs are not built at all - the native back end cannot produce their
-# behaviour yet - and are listed as skipped, with the reason from their own doc comment.
+# A behaviour the native back end cannot produce yet has no program here at all - it belongs in `compiler/tests/` as
+# an IR snapshot until the back end gap is closed (`bootstrap/tests/native/README.md`, "Adding a program").
 #
 # POSIX sh. Runs in Git Bash on Windows and on Linux/macOS.
 #
@@ -332,25 +332,9 @@ $file: no result was written (the runner crashed?)"
   fi
 done <"$list"
 
-# `stage-0-only/`: the native back end cannot produce the behaviour yet, so there is nothing to build. Listed with the
-# reason from the program's own doc comment (bootstrap/tests/native/README.md, "stage-0-only/").
-skip_directory="$directory/stage-0-only"
+# Nothing is skipped any more: every program under `bootstrap/tests/native/` builds natively (RUST-EXIT slice 5). The
+# count stays in the summary line below so a future waiting-room program has somewhere to report itself again.
 skipped=0
-if [ -d "$skip_directory" ]; then
-  for file in "$skip_directory"/*.trb; do
-    [ -f "$file" ] || continue
-    case "$file" in */project.trb) continue ;; esac
-    skipped=$((skipped + 1))
-    reason=$(
-      awk '/Why this is stage-0-only:/, /\*\//' "$file" \
-        | sed -e 's/\*\///' -e 's/^[ \t]*\* \{0,1\}//' -e 's/\*\*Why this is stage-0-only:\*\*[ \t]*//' \
-        | tr '\n' ' ' \
-        | sed -e 's/  */ /g' -e 's/ *$//'
-    )
-    [ -n "$reason" ] || reason="see the doc comment of $file"
-    say "skipped (stage-0-only): $file - $reason"
-  done
-fi
 
 if [ -n "$failures" ]; then
   say "$failures"

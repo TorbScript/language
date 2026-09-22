@@ -39,7 +39,7 @@ suites beside it. Every use of it in the repository:
 | `cargo test -p torb-syntax --test grammar` - 347 lines of grammar unit tests in Rust | The self-hosted parser's own tests in `compiler/tests` | no, but the cases have to be **read** before the file goes, and the ones that are not covered moved |
 | `bootstrap/tests/native/` - the programs of the conformance suite | Moves to `tests/conformance/` (slice 6). The programs are TorbScript and outlive the runner | no |
 | `bootstrap/tests/scripts/` - two long programs (370 lines) run on stage 0 alone | `torb run`, natively. They are a smoke test of the language, not of stage 0 | no |
-| `bootstrap/tests/native/stage-0-only/` - one program whose behaviour only stage 0 produces | The C back end lowering the `cause()` loop of a top-level `?` (slice 5), after which the program moves up one directory | **yes**, but it is one program and one loop |
+| `bootstrap/tests/native/stage-0-only/` - one program whose behaviour only stage 0 produced | The C back end lowers the `cause()` loop of a top-level `?` (slice 5); the program moved up one directory and the now-empty `stage-0-only/` is gone | no - done |
 | `bootstrap/tests/lexer-cases/`, `parser-cases/` | Fixtures of the Rust front end; they go with it after the grammar cases are read | no |
 | `.vscode/tasks.json` - two tasks that run `cargo run --release -q -- ...` | The same two commands on the native binary | no |
 | `.vscode/extensions/torbscript` - `torb highlight --stdin`, and a search for the binary | The search looks under `build/release/` first and keeps the two old locations behind it (slice 4) | no - done |
@@ -48,10 +48,10 @@ suites beside it. Every use of it in the repository:
 | `docs/` front matter - ten pages carry `bootstrap/README.md` or a `bootstrap/crates/...` path in `source:`, and the docs gate asserts those paths exist | Repointed at the compiler's own sources (slice 6). `torb-run.md` and `torb-test.md` are already repointed | no |
 | `compiler/CONTRIBUTING.md`, `bootstrap/README.md`, `docs/ARCHITECTURE.md`, `docs/BACKEND.md` - the command lists and the description of the two-stage world | Rewritten in slice 6 | no |
 
-**Two things block the exit**, and neither is in this table. The first is one lowering gap (`error-chain.trb`, slice
-5). The second is not a use of stage 0 at all but a property of it: stage 0 is what **produces** the first `torb`
-today, and section 4 is about replacing that. `canon` (slice 3), `highlight` (slice 4) and the conformance runner
-(slice 2) are done.
+**Nothing in this table blocks the exit any more.** The one lowering gap (`error-chain.trb`, slice 5) is closed, and
+the other thing that was never a use of stage 0 at all but a property of it - stage 0 is what **produced** the first
+`torb` - is answered by section 4's seed. `canon` (slice 3), `highlight` (slice 4) and the conformance runner (slice
+2) are done. What is left is slice 6, the deletion itself.
 
 ---
 
@@ -120,9 +120,8 @@ implemented. **Does not block the exit.**
 
 | Where | How many | What it is | Blocks? |
 |---|---|---|---|
-| `bootstrap/tests/native/` | 74 programs | The conformance suite: every program built and run with the native compiler, compared against its `.expected`/`.stderr`/`.exit`/`.leaks` | no - done. The programs never blocked; the **runner** did, and `tools/conformance.sh` is it (slice 2) |
+| `bootstrap/tests/native/` | 82 programs | The conformance suite: every program built and run with the native compiler, compared against its `.expected`/`.stderr`/`.exit`/`.leaks` - `error-chain.trb` among them since slice 5 closed the one gap that kept it out | no - done. The programs never blocked; the **runner** did, and `tools/conformance.sh` is it (slice 2) |
 | `bootstrap/tests/native/binary-only/` | 2 programs | Behaviour the two implementations answer **deliberately** differently: a failing `assert` showing a non-scalar capture, and `into()` through the blanket implementation of `Into`. Both are cases stage 0 cannot answer because it has no types | no - they are already native-only, and after the exit they are ordinary programs of the suite |
-| `bootstrap/tests/native/stage-0-only/` | 1 program | `error-chain.trb`: a top-level `?` whose error carries `Error` prints one `  caused by:` line per link of `cause()`. The back end's `reportFailure` writes the first line and exits | **yes** - it is the one behaviour that would be lost. The loop over `cause()` is the whole gap (slice 5) |
 | `bootstrap/tests/scripts/` | 2 programs, 370 lines | Long programs that exercise many things at once, on stage 0 alone | no - they run natively with `torb run` |
 
 ### 2.4 The test packages, built natively
@@ -134,14 +133,15 @@ Every test package in the repository, built and run with the native test runner 
 | `compiler/tests` | **1538 passed, 0 failed (55 files)** | 205 s | - |
 | `std/geometry/tests` | **71 passed, 0 failed (2 files)** | 14 s | - |
 | `std/linear/tests` | **98 passed, 0 failed (3 files)** | 13 s | - |
-| `std/path/tests` | does not build | 8 s | `internal error: ... argument 0 is Object(Iterable<Char>) and %0 is Record(Path)` - a `Path` passed where an `Iterable<Char>` is expected is not boxed into its witness. A **bug**, not a gap: the verifier caught a malformed body |
-| `std/stream/tests` | does not build | 9 s | `onto`, which is not in the witness table of a trait-typed value |
-| `examples/encoding-lab/tests` | does not build | 8 s | `describe` used as a function value, which the back end cannot build an instance of |
-| `examples/game-engine/tests` | does not build | 8 s | a conversion through `From` |
+| `std/path/tests` | does not build | 8 s | `internal error: ... textOf__T_std_x2f_path_path_Path b0: argument 0 is Object(Iterable<Char>) and %0 is Record(Path)` - `textOf<Value>(value: Value): String where String: From<Value>` calls `String.from value`, and instantiated with `Value = Path` the back end reaches `String`'s `From<Iterable<Char>>` implementation instead of its `From<Path>` one, so an unboxed `Path` record arrives where a boxed `Iterable<Char>` is expected: `String` implements the *target* trait `From` more than once, and the instance a `where` bound reaches is the wrong one of the two. A **bug**, not a gap: the verifier caught a malformed body, and it is devirtualization/witness-resolution territory rather than one lowering site |
+| `std/stream/tests` | does not build | 9 s | `` `onto`, which is not in the witness table of a trait-typed value `` (at `std/stream/tests/bytes.test.trb:48:10`) - `lines().onto(Collected())` calls `Stage<Input, Output>.onto<Final>`, which is itself **generic**, on a trait-typed receiver; a witness table has one fixed slot per member and cannot hold one instance per `Final` a caller might choose, so a generic trait member has no table slot to dispatch through at all. One more of the "generic function or member of a generic type" occurrences of section 2.1, not a single call site |
+| `examples/encoding-lab/tests` | does not build | 8 s | `` `describe` used as a function value, which the back end cannot build an instance of `` (at `examples/encoding-lab/tests/lab.test.trb:43:31`) - `structureOf(Order.describe)` takes the generic `static fn describe<Target: Describer>(var target: Target)` as a bare function value, with `Target` to be solved only from the *expected* closure type of `structureOf`'s parameter and not from any call's own arguments; `instanceFor` in `ir/lower/closure.trb`'s `lowerNamedFunctionValue` has no type argument to substitute there and answers `None`. Another occurrence of the same generic-member limit, at the one place a generic member is taken as a value instead of called |
+| `examples/game-engine/tests` | does not build | 8 s | `` a conversion through `From` `` (at `examples/game-engine/tests/world.test.trb:23:24`) - `(1.0, 2.0).into()` carries the `Adaptation.Convert` the checker records for the blanket `Into`, and `canReplayAdaptations` in `ir/lower/expression.trb:332` refuses **every** `.Convert` outside of a top-level `?` unconditionally: the general lowering of a `From`/`Into` coercion recorded as an adaptation does not exist anywhere in the back end yet. `?` performs its own conversion by hand (`ir/lower/match.trb`'s `convertedError`); nothing else does, so this is the one missing general case behind the whole family of `.into()` conversions outside `?`, not a single call site |
 
 Three of the seven build and pass; the compiler's own is the big one and it is green. Of the four that do not, one
 (`std/path`) is a bug of the lowering rather than a missing feature and belongs in the lowering follow-up; the other
-three are three of the 19 constructs of section 2.1, each blocking exactly one file.
+three are occurrences of the 19 constructs of section 2.1 - two of them the same generic-member limit - each blocking
+exactly one file.
 
 **None of the four blocks the exit.** They are packages whose tests only stage 0 can run *today*, and every one of them
 is a back-end gap tracked as a back-end gap. Keeping a second implementation of the language so that four test files
@@ -299,11 +299,11 @@ Each slice is one agent, in order. The estimate is the work, not the machine tim
 | 2 | **The gates run on the native compiler.** `tools/conformance.sh` (POSIX `sh`) replaces the three `cargo test` suites: conformance compares a native run against `.expected`/`.stderr`/`.exit`/`.leaks` and no longer against stage 0; `tools/gates.sh a`/`b` sequence tier A and tier B; the fixpoint is `tools/bootstrap.sh`; `suite` and `self_hosted` are dropped, and section 6 says what they defended | The conformance suite green from `tools/conformance.sh`, on the same 74 programs (75 with `binary-only/`, one `stage-0-only/` skipped) | **done** |
 | 3 | **`canon` ported to TorbScript, done.** The five rules of `bootstrap/crates/torb-cli/src/canon` on the self-hosted parser, in `compiler/src/canon`, with the same rule flags, the same `--check`, and the same "apply one edit, parse again, keep it only if the tree is unchanged" safety - the tree comparison reads the generated `Show` of the syntax tree with every span and `CallStyle` erased, so no second dumper was needed | `torb canon --check ..` from the native binary reports the same files stage 0's reports - zero | done |
 | 4 | **`highlight` ported.** `compiler/src/highlight/` - 1 717 lines of TorbScript, and 545 more for the 32 tests the Rust file carried inside it - and the extension looking for the native binary first | Both implementations answer with the same JSON over every `.trb` file of the repository | **done** |
-| 5 | **The one lowering gap.** `reportFailure` walks `cause()` and writes one `  caused by:` line per link, after which `bootstrap/tests/native/stage-0-only/error-chain.trb` moves up one directory | The conformance suite with 75 programs and no `stage-0-only/` | half a round |
+| 5 | **The one lowering gap.** `reportFailure` walks `cause()` and writes one `  caused by:` line per link, after which `bootstrap/tests/native/stage-0-only/error-chain.trb` moved up one directory and the now-empty `stage-0-only/` is gone | The conformance suite with `error-chain.trb` built and run natively like every other program | **done** |
 | 6 | **The deletion.** `bootstrap/tests/` moves to `tests/`, `bootstrap/crates` is deleted, and every reference is rewritten: `compiler/CONTRIBUTING.md`, `bootstrap/README.md` (what survives of it), `docs/ARCHITECTURE.md`, `docs/BACKEND.md`, the ten `source:` entries in `docs/`, `.vscode/tasks.json`, `benchmarks/run.sh`, and this document | Every gate green from the native binary alone, with no Rust toolchain on the machine | 1 round |
 
-**Slices 1 through 4 are done.** What is left is 5 and 6: the one lowering gap, and the deletion, which needs 5 (and
-2, 3, 4, already done) before it.
+**Slices 1 through 5 are done.** What is left is 6, the deletion: `bootstrap/crates` still exists (frozen, and no
+longer needed to produce a seed or run a gate), and it is what this last slice removes.
 
 ### 5.1 What slice 4 decided, and what it measured
 

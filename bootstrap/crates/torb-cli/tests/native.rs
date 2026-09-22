@@ -11,10 +11,7 @@
 //! into binary mode on Windows, so a compiled binary writes the same bytes into a pipe that stage 0 writes. Only the
 //! expectation *files* are folded, because git may check one out with either ending.
 //!
-//! `bootstrap/tests/native/README.md` is the contract this test enforces, and how a program is added to it. The one
-//! subdirectory, `stage-0-only/`, is a waiting room rather than an exception: a program lands there when the back end
-//! cannot produce the behaviour yet and stage 0 already answers what the language says, and the second test below runs
-//! those on stage 0 alone.
+//! `bootstrap/tests/native/README.md` is the contract this test enforces, and how a program is added to it.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -194,35 +191,6 @@ fn every_native_program_behaves_like_it_does_on_stage_0() {
     // Nothing here is read after the loop, and a temporary directory per process would otherwise pile up
     let _ = std::fs::remove_dir_all(&output);
     let _ = std::fs::remove_dir_all(&twice);
-}
-
-/// The programs of `bootstrap/tests/native/stage-0-only/`, which are run and compared on stage 0 alone.
-///
-/// A program lands there when the C back end cannot produce the behaviour *yet* and stage 0 already answers what the
-/// language says - so there is nothing to compare, and the program still pins the answer instead of waiting. Each one
-/// says in its doc comment why it is there and what has to exist for it to move up one directory. The three
-/// expectation files are read exactly as they are above.
-#[test]
-fn every_stage_0_only_program_matches_its_expectations() {
-    let directory = repository().join("bootstrap/tests/native/stage-0-only");
-    let files = programs(&directory);
-    assert!(!files.is_empty(), "expected the programs that only stage 0 can run");
-    for file in &files {
-        let name = file.file_stem().expect("a file name").to_str().expect("UTF-8 name").to_string();
-        let interpreted = torb(&["run", file.to_str().expect("UTF-8 path")]);
-        let code = interpreted.status.code().expect("an exit code");
-        if let Some(expected) = expected_file(file, "expected") {
-            assert!(text(&interpreted.stdout) == expected, "unexpected output of {name}:\n{}", text(&interpreted.stdout));
-        }
-        if let Some(expected) = expected_file(file, "exit") {
-            assert!(code.to_string() == expected.trim(), "{name} left with {code}, expected {}", expected.trim());
-        }
-        let reported = without_library_positions(&text(&interpreted.stderr));
-        match expected_file(file, "stderr") {
-            Some(expected) => assert!(reported == expected, "unexpected stderr of {name}:\n{reported}"),
-            None => assert!(reported.is_empty(), "{name} writes to stderr and has no `.stderr` file:\n{reported}"),
-        }
-    }
 }
 
 /// The programs of `bootstrap/tests/native/binary-only/`, which are built and run as a binary alone.

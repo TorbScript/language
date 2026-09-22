@@ -572,6 +572,66 @@ group "`?` at the top level of an entry file" {
   }
 }
 
+/**
+ * `?` at the top level of an entry file whose error is the trait-typed `Error`: the report above walks `cause()` and
+ * writes one `  caused by:` line per link, through the witness table each concrete error carries, until `cause()`
+ * answers `None` - the default the trait declares. `bootstrap/tests/native/error-chain.trb` is what really prints and
+ * really leaves with 1.
+ */
+group "`?` at the top level walking the `cause()` chain of a trait-typed `Error`" {
+  test "one witness call per link, until `cause()` answers `None`" {
+    const source = r"""
+      type FileError with Error {
+        path: String
+
+        fn show(): String {
+          "{path}: no such file"
+        }
+      }
+
+      type ConfigError with Error {
+        inner: FileError
+
+        fn show(): String {
+          "the configuration could not be read"
+        }
+
+        fn cause(): Error? {
+          Some inner
+        }
+      }
+
+      fn started(): Result<Int, Error> {
+        Fail ConfigError(FileError("app.trb"))
+      }
+
+      const port = started()?
+
+      print port
+      """
+    assert(unsupportedIn(source) == [])
+    const text = irOf source, "t_acme_x2f_app_main"
+    // The first line: `error: ` through the witness table's `show` (member 1), exactly as a concrete error's is
+    assert text.contains("constant s_literal__String_error_x3a__x20_")
+    assert text.contains("callWitness value %4 bound 0 member 1()")
+    assert text.contains("intrinsic printErrorParts")
+    // The loop: `cause` (member 0) is called again in the block it jumps back to, so one call answers the whole chain
+    assert text.contains("b3: # acme/app/src/main.trb:25 cause")
+    assert text.contains("%7 = callWitness value %4 bound 0 member 0()")
+    assert text.contains("%8 = tag %7")
+    assert text.contains("switch %8 case 0 b4, otherwise b5")
+    // One link: the payload of `Some` replaces the slot `cause()` was called on, and `  caused by: ` is shown the same way
+    assert text.contains("b4: # acme/app/src/main.trb:25 caused")
+    assert text.contains("%4 = read %7.Some.value")
+    assert text.contains("constant s_literal__String__x20__x20_caused_x20_by_x3a__x20_")
+    assert text.contains("jump b3")
+    // `cause()` answering `None` ends the chain in the exit the concrete case already had
+    assert text.contains("b5: # acme/app/src/main.trb:25 done")
+    assert text.contains("intrinsic exitWithCode")
+    assert text.contains("unreachable")
+  }
+}
+
 group "What a pattern cannot reach yet" {
   test "`if var` waits for the places of 5.9b" {
     const other = r"""

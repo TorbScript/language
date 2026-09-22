@@ -24,9 +24,9 @@ use DecisionGraph, DecisionNode, NodeId, decisionTreeOf from "../decision"
 use FunctionBuilder, addLocal, addTemporary, addBlock from "../build"
 use emit from "../build"
 use layoutOfType, numericKindOf from "../verify"
-use instanceOfSymbol from "../instances"
+use instanceOfSymbol, isClosedType from "../instances"
 use emitCall, lowerConstruct, lowerDispatched from "./call"
-use dispatchedOn, resultTypeOf from "./generic"
+use dispatchedOn, resultTypeOf, boundsOfTraitValue from "./generic"
 use traitsOf from "../../semantics/checker/implementation"
 use fieldsOf, caseNamed from "../../semantics/checker/member"
 use itemOfSubject from "../../semantics/checker/pattern"
@@ -1121,11 +1121,11 @@ public fn lowerTry(
  *
  * Three decisions are written into this shape:
  *
- * - **The report is one line, because the error is a concrete type here.** Walking `cause()` needs the error as a
- *   trait-typed `Error` value, and what an entry file has in hand is an `IoError` or whatever its own type is - so there
- *   is nothing to walk, which is what BACKEND's note of 5.3 says about it. A `?` whose error *is* the trait value gets
- *   the chain, and that is one loop over `cause()` on top of this (the `Error` trait is object safe: `cause(self)`
- *   answers an `Error?` and mentions `Self` nowhere).
+ * - **The chain below the first line only walks where the error is trait-typed.** What an entry file has in hand is
+ *   an `IoError`, a `StartupError`, or whatever its own type is; only where that type is the trait value `Error`
+ *   itself does `cause()` have a table to be called through, so the report is one line for a concrete error and one
+ *   line per link of `cause()` for a trait-typed one (the `Error` trait is object safe: `cause(self)` answers an
+ *   `Error?` and mentions `Self` nowhere).
  * - **Ending the program is an intrinsic and not a call of `Process.exit`.** An entry file that never imports
  *   `std/process` has no name for that function, and what happens here is the language's own behaviour - so both back
  *   ends get it out of the IR (`IntrinsicOperation.ExitWithCode`).
@@ -1168,7 +1168,11 @@ fn lowerTopLevelTry(
   target
 }
 
-/** `error: <the error>` to stderr and exit code 1. Nothing follows it, so the block ends `unreachable`. */
+/**
+ * `error: <the error>` to stderr, then one `  caused by: <the cause>` line per link of `cause()` where the error is
+ * the trait-typed `Error` (the doc comment of [lowerTopLevelTry] says why only that case walks). Exit code 1 and
+ * nothing follows it, so the block ends `unreachable`.
+ */
 fn reportFailure(
   var lowering: Lowering,
   var builder: FunctionBuilder,
@@ -1182,30 +1186,126 @@ fn reportFailure(
   const fields = shape.fieldsOfVariant failure
   var parts: List<Slot> = []
   parts.add constantSlot(lowering, builder, None, StaticContents.Literal(LiteralValue.Text("error: ")), text)
+  var chain: (Slot, TypeId)? = None
   // A `None` carries nothing, so the line is the prefix alone: `x?` on an `Option` says that there was no value
   if const Some(field) = fields.first() {
     const carried = addTemporary builder, field.annotation
     const step = PathStep.Variant subjectLayout, failure, 0
     emit builder, Instruction.Read(carried, Reference(subject, [step]))
-    const shown = match shownFailure(lowering, builder, carried, at) {
+    const (shown, failed) = match shownFailure(lowering, builder, carried, at) {
       Some(found) => found
       None => {
         return
       }
     }
     parts.add shown
+    if !boundsOfTraitValue(lowering, failed).isEmpty() {
+      chain = Some((carried, failed))
+    }
   }
   // One part and not two: `printError` joins its parts with a space, and `error: ` already ends in one
   const line = intrinsicSlot lowering, builder, None, IntrinsicOperation.TextConcat, None, parts, text, at
   emitIntrinsic lowering, builder, None, IntrinsicOperation.PrintErrorParts, None, [line], at
+  if const Some((current, failed)) = chain {
+    lowerCauseChain lowering, builder, current, failed, at
+    if !lowering.isSupported {
+      return
+    }
+  }
   const integer = lowering.program.internType IrType.Integer(64, true)
   const code = integerSlot lowering, builder, 1, integer
   emitIntrinsic lowering, builder, None, IntrinsicOperation.ExitWithCode, None, [code], at
   finishBlock lowering, builder, Terminator.Unreachable
 }
 
-/** The error through `Show`, which is the same member an interpolation calls (`ir/lower/text.trb`). */
-fn shownFailure(var lowering: Lowering, var builder: FunctionBuilder, carried: Slot, at: Span): Slot? {
+/**
+ * One `  caused by: <the cause>` line per link of `Error.cause()`, for as long as it answers `Some` - the chain
+ * [lowerTopLevelTry] promises for a top-level `?` whose error arrived as the trait-typed `Error`. `current` is read
+ * again at the head of every pass, so the loop needs no binding of its own for "the error of this link": the same
+ * slot is written with the next one and the block that calls `cause()` is simply entered again.
+ */
+fn lowerCauseChain(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  current: Slot,
+  failed: TypeId,
+  at: Span,
+) {
+  const bound = match errorBoundOf(lowering) {
+    Some(found) => found
+    None => {
+      reportUnsupported lowering, "`Error`, which the prelude does not declare", at
+      return
+    }
+  }
+  const dispatched = match dispatchedOn(lowering, failed, bound, "cause", at) {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  const causeType = resultTypeOf lowering, dispatched
+  if !isClosedType(lowering, causeType) {
+    reportUnsupported lowering, "a `cause()` whose type the back end cannot close", at
+    return
+  }
+  const option = irTypeOfClosed lowering, causeType
+  const layout = match variantLayoutOfType(lowering, option) {
+    Some(found) => found
+    None => {
+      reportUnsupported lowering, "`cause()` that does not answer an `Option`", at
+      return
+    }
+  }
+  const some = variantNamed lowering, layout, "Some"
+  if some < 0 {
+    reportUnsupported lowering, "`cause()` that does not answer an `Option`", at
+    return
+  }
+  const text = lowering.program.internType IrType.Text
+  const integer = lowering.program.internType IrType.Integer(64, true)
+  const location = locationOf lowering, at
+  const check = addBlock builder, "cause", Some(location)
+  const inner = addBlock builder, "caused", Some(location)
+  const done = addBlock builder, "done", Some(location)
+  const pulled = addTemporary builder, option
+  const tag = addTemporary builder, integer
+  finishBlock lowering, builder, Terminator.Jump(check)
+  continueIn lowering, builder, check
+  const places: List<Reference?> = [None]
+  const _ = lowerDispatched lowering, builder, Some(pulled), at, dispatched, [current], places, option
+  if !lowering.isSupported {
+    return
+  }
+  emit builder, Instruction.Tag(tag, pulled)
+  finishBlock lowering, builder, Terminator.Switch(tag, [some], [inner], done)
+  continueIn lowering, builder, inner
+  emit builder, Instruction.Read(current, Reference(pulled, [PathStep.Variant(layout, some, 0)]))
+  var parts: List<Slot> = []
+  parts.add constantSlot(lowering, builder, None, StaticContents.Literal(LiteralValue.Text("  caused by: ")), text)
+  const shown = showSlot lowering, builder, current, failed, at
+  if !lowering.isSupported {
+    return
+  }
+  parts.add shown
+  const line = intrinsicSlot lowering, builder, None, IntrinsicOperation.TextConcat, None, parts, text, at
+  emitIntrinsic lowering, builder, None, IntrinsicOperation.PrintErrorParts, None, [line], at
+  finishBlock lowering, builder, Terminator.Jump(check)
+  continueIn lowering, builder, done
+}
+
+/** `Error` as a bound, which `cause()` is dispatched against exactly as `Show.show` is against `Show` (`text.trb`). */
+fn errorBoundOf(var lowering: Lowering): TypeId? {
+  const symbol = lowering.checker.wellKnown.symbolNamed("Error")?
+  const empty: List<TypeId> = []
+  Some lowering.checker.nominal(symbol, empty)
+}
+
+/**
+ * The error through `Show`, which is the same member an interpolation calls (`ir/lower/text.trb`), together with the
+ * checker type it was shown at - which is what says whether the error is trait-typed and has a `cause()` to walk.
+ */
+fn shownFailure(var lowering: Lowering, var builder: FunctionBuilder, carried: Slot, at: Span): (Slot, TypeId)? {
   const module = lowering.module
   const written = match lowering.checker.expressionType(module, at) {
     Some(found) => found
@@ -1220,7 +1320,7 @@ fn shownFailure(var lowering: Lowering, var builder: FunctionBuilder, carried: S
   if !lowering.isSupported {
     return None
   }
-  Some shown
+  Some((shown, failed))
 }
 
 /**

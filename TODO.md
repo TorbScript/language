@@ -3467,6 +3467,48 @@ Wenn nicht, was bedeutet, bewirkt es?
     verwandelt (bei großen Dateien mit vielen Aufrufen entsprechend oft), und das im self-gehosteten Backend teurer
     ist als Rusts abgeleitetes `Debug` - eine Folgearbeit für wer als Nächstes an der generierten `Show` sitzt, kein
     Fehler dieser Portierung. `bootstrap/crates` bleibt unverändert, eingefroren, nur zum Vergleich.
+  - **Erledigt (Scheibe 5, die eine Lowering-Lücke):** `reportFailure` in `compiler/src/ir/lower/match.trb` läuft die
+    `cause()`-Kette jetzt ab, statt nach der ersten `error:`-Zeile abzubrechen. Ursache war nicht `reportFailure`
+    selbst, sondern dass es die Kette nie versucht hat: die neue `lowerCauseChain` fragt `dispatchedOn` nach `cause`
+    auf dem Bound `Error` - genau die Dispatch-Maschine, die ein `for` schon für `iterator`/`next` benutzt -, baut
+    einen Block, der `cause()` per Witness-Tabelle aufruft, den zurückgegebenen `Option<Error>`-Tag prüft, bei `Some`
+    `  caused by: <Show des Payloads>` druckt und ins selbe `current`-Slot zurückschreibt, und bei `None` in den
+    bestehenden Exit-Pfad (Code 1) springt - ein Registerplatz wird pro Kettenglied wiederverwendet, keine Rekursion
+    im IR. `shownFailure` gibt jetzt zusätzlich den geprüften Fehlertyp zurück, damit `reportFailure` weiß, ob der
+    Fehler überhaupt Trait-typisiert ist (nur dann gibt es eine Tabelle zum Ablaufen; ein konkreter Fehler bleibt
+    weiterhin eine Zeile, wie `top-level-error.trb` es pinnt). `bootstrap/tests/native/stage-0-only/error-chain.trb`
+    ist nach `bootstrap/tests/native/error-chain.trb` gezogen, das jetzt leere `stage-0-only/` gelöscht, die
+    README-Tabelle unter "Errors" ergänzt, `tools/conformance.sh` und der eine `stage-0-only`-Test in
+    `bootstrap/crates/torb-cli/tests/native.rs` entfernt (dort stand `assert(!files.is_empty())`, was mit leerem
+    Verzeichnis sofort geplatzt wäre). Ein neuer IR-Test in `compiler/tests/lower-match.test.trb` pinnt die genaue
+    Blockform (zwei zusätzliche Blöcke `cause`/`caused`, ein `callWitness ... member 0()` pro Glied, der `jump`
+    zurück, der Ausstieg bei `None`); dafür bekam die Miniatur-Prelude in `compiler/tests/harness.trb` erstmals einen
+    `Error`-Trait (angehängt ganz am Ende, wegen des Kommentars dort über zeilenfeste Tests). **Gates:** `sh
+    tools/gates.sh a` grün (`check ..` 9 s, `check --statistics ..` 9 s, `test compiler/tests` 195 s mit dem neuen
+    Test macht 1639 von 1639, die zwei nativ baubaren std/Beispiel-Pakete 16 s, beide Docs-Gates zusammen 2 s, native
+    `canon --check` 18 s); Tier B einmal: `tools/conformance.sh` 296 s (alle Programme unter `bootstrap/tests/native/`
+    inklusive des gezogenen `error-chain.trb`, plus `binary-only/`, 0 gescheitert), `sh tools/bootstrap.sh` 211 s
+    (Fixpunkt hält, byte-identisches `program.c`), `sh runtime/build.sh` 5 s.
+  - **RUST-EXIT 2.4 geprüft, keines der vier Pakete geschlossen** (mehr als eine Lowering-Stelle je Fall, und
+    Zweifel davon liegen erkennbar in der Devirtualisierungs-Arbeit anderer Agenten dieser Runde):
+    `std/path/tests` bleibt ein **Fehler**, kein Loch - `textOf<Value>(value: Value): String where String:
+    From<Value>` ruft `String.from value`, und für `Value = Path` trifft der Rückwärtspfad `String`s
+    `From<Iterable<Char>>`-Implementierung statt `From<Path>`: `String` implementiert das Ziel-Trait `From` mehr als
+    einmal, und die über den `where`-Bound erreichte Instanz ist die falsche der beiden - Witness-Auflösung, nicht
+    eine einzelne Lowering-Stelle. `std/stream/tests`: `lines().onto(Collected())` ruft
+    `Stage<Input, Output>.onto<Final>`, das selbst generisch ist, auf einem Trait-typisierten Empfänger - eine
+    Witness-Tabelle hat einen festen Platz pro Mitglied und keinen pro Instanziierung von `Final`, also noch ein
+    Vorkommen von "generische Funktion oder Mitglied eines generischen Typs" aus Abschnitt 2.1. `examples/encoding-
+    lab/tests`: `structureOf(Order.describe)` nimmt die generische `static fn describe<Target: Describer>(var
+    target: Target)` als bloßen Funktionswert, wobei `Target` nur aus dem *erwarteten* Funktionstyp von
+    `structureOf`s Parameter zu erschließen wäre und nicht aus einem Aufrufargument - `instanceFor` in
+    `ir/lower/closure.trb`s `lowerNamedFunctionValue` hat dort kein Typargument zum Einsetzen und antwortet `None`.
+    `examples/game-engine/tests`: `(1.0, 2.0).into()` trägt die `Adaptation.Convert`, die der Checker für das
+    Pauschal-`Into` aufzeichnet, und `canReplayAdaptations` in `ir/lower/expression.trb:332` verweigert **jedes**
+    `.Convert` außerhalb eines `?` auf oberster Ebene bedingungslos - die allgemeine Lowering einer
+    `From`/`Into`-Umwandlung als Adaptation existiert im Backend noch nirgends; `?` baut seine Umwandlung von Hand
+    (`ir/lower/match.trb`s `convertedError`), sonst niemand. Alle vier Diagnosen mit exakter Fundstelle stehen jetzt
+    in `docs/RUST-EXIT.md` Abschnitt 2.4.
 - (Antworten des Nutzers auf alle offenen Fragen, 2026-09-22) **Entschieden (Nutzer):**
   - CONCURRENCY 1: `std/parallel` eigenes Package - ja. 2: **doch ins Prelude** ("cooles und wichtiges Tool für
     schnellen Parallelismus, in C# gern unterschätzt; `Parallel.For`/`Parallel.ForEach` sind toll") - also auch
