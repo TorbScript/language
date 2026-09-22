@@ -1,6 +1,6 @@
 /**
  * The `torb` command line: one `match` over `Process.arguments()` at the bottom of this file, and one function per
- * subcommand above it - `check`, `build`, `run`, `test`, `ir`, `natives --header`, `parse`, `tokens`, `ast`,
+ * subcommand above it - `check`, `build`, `run`, `test`, `new`, `ir`, `natives --header`, `parse`, `tokens`, `ast`,
  * `highlight`, and the `docs` family from `./documentation`. This file has no exported declarations: it is the
  * entry point of the toolchain itself.
  *
@@ -24,6 +24,7 @@ use lowerChecked, loweredText, loweredProblems, statisticsLines from "./ir/lower
 use BuildOptions, Profile, profileNamed, build from "./cli/build"
 use RunOptions, runProgram from "./cli/run"
 use TestOptions, runTests from "./cli/test"
+use NewOptions, runNew from "./cli/new"
 use insertOwnership from "./ir/ownership"
 use verifyOwnedProgram from "./ir/ownership-verify"
 use nativeEntries, renderNativesHeader from "./backend/c/natives"
@@ -52,6 +53,8 @@ fn printUsage() {
   printError "  torb test [path]...    Build every *.test.trb below the paths into one binary and run it"
   printError "                         --profile dev|release, --release (default: dev)"
   printError "                         --jobs N: accepted and ignored - one binary is one process"
+  printError "  torb new <name>        Scaffold a package: project.trb, src/main.trb, tests/main.test.trb"
+  printError "                         refuses if <name> already exists"
   printError "  torb ir <path>...      Print the typed IR of what the back end lowers, and what it does not yet"
   printError "                         --statistics: only the counts, without the IR itself"
   printError "                         --no-ownership: the IR the lowering writes, before the ownership pass"
@@ -379,6 +382,18 @@ fn runOptionsOf(arguments: List<String>): RunOptions? {
 }
 
 /**
+ * `torb new <name>`: the one argument is both the directory `torb new` writes and the package's `name`. `None`
+ * without it, which is the whole usage error - there is no flag to parse.
+ */
+fn newOptionsOf(arguments: List<String>): NewOptions? {
+  const name = arguments.first() ?? ""
+  if name.isEmpty() {
+    return None
+  }
+  Some NewOptions(name)
+}
+
+/**
  * `torb natives --header [directory]`: the generated half of the contract between the lowering and the runtime
  * (BACKEND 3.7). The header is a pure function of the manifest, so writing it is reading one table and one `writeText` -
  * and `compiler/tests/natives.test.trb` asserts that the file on disk is what this writes, which is what keeps the two
@@ -449,6 +464,19 @@ match Process.arguments() {
       None => Process.exit 2
     }
     const code = runTests(options)?
+    if code != 0 {
+      Process.exit code
+    }
+  }
+  ["new", ...more] => {
+    const options = match newOptionsOf(more) {
+      Some(found) => found
+      None => {
+        printUsage()
+        Process.exit 2
+      }
+    }
+    const code = runNew(options)?
     if code != 0 {
       Process.exit code
     }

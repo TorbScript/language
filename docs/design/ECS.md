@@ -41,7 +41,7 @@ they refuse to do: forget the type of a value.
 - **[12. What the language and the compiler must provide](#12-what-the-language-and-the-compiler-must-provide)**
 - **[13. Slices](#13-slices)** — each one lands green
 - **[14. What this is not](#14-what-this-is-not)**
-- **[15. Open, for the owner](#15-open-for-the-owner)**
+- **[15. What the owner decided](#15-what-the-owner-decided)**
 
 Two packages carry the capability claims below. [`examples/ecs-probe`](../examples/ecs-probe) is the storage, five
 systems, a structural change during a query, a snapshot, a rollback and a name-to-installer registry.
@@ -1484,52 +1484,52 @@ the engine packages and none of it blocks the ECS.
 - **Not parallel, for now.** [Section 6](#6-systems-and-scheduling) says exactly how far away that is, and which of
   the two parallelisms an ECS wants.
 
-## 15. Open, for the owner
+## 15. What the owner decided
 
-Everything technical above is decided and the reason is written next to it. These are the questions of taste and
-direction.
+Everything technical above is decided and the reason is written next to it. These nine were questions of taste and
+direction, and the owner answered them on 2026-09-22.
 
 1. **`query2`/`query3`/`query4`, or four words?** The digit is the arity the way `Vector2`'s is the width, and three
    of the four names disappear when the pack lands. The alternative is `query`, `pairs`, `triples`, `quadruples`,
    which reads better at a call site (`for (entity, position, velocity) in pairs(space, motion)`) and stops saying
    "query".
-   **Decided:** `pairs`, `triples`, `quadruples` — readable at the call site, and the digit disappears with
+   **Decided (2026-09-22):** `pairs`, `triples`, `quadruples` — readable at the call site, and the digit disappears with
    variadics anyway. The one-column form keeps the name it has: `query`.
 2. **`Store<Component>` and "column group", or other words?** A package ships a `Places`, a `Sprites`, a `Motions`;
    the other candidates are `Storage`, `Columns` and Bevy's own `Plugin`. The word is going to be in every package's
    public surface, so it is worth one look.
-   **Decided:** `Store<Component>` stays; a package's column group is called `Columns` — `Places` and `Sprites` are
+   **Decided (2026-09-22):** `Store<Component>` stays; a package's column group is called `Columns` — `Places` and `Sprites` are
    examples of one, and the concept word in running prose is "columns".
 3. **Does `std/ecs` ever ship a `World` of its own?** The set of component types is the program's, so no. But the
    first thing a newcomer asks for is a `World()` that works without declaring anything, and the only way to give them
    one is a fixed set of components in the package.
-   **Decided:** no — `std/ecs` ships no `World`. The newcomer gets `examples/ecs-starter`, a copyable template
+   **Decided (2026-09-22):** no — `std/ecs` ships no `World`. The newcomer gets `examples/ecs-starter`, a copyable template
    instead of a fixed set of components baked into the package.
 4. **Is `std/scene` its own package, or a module of `std/ecs`?** Separate here, so that a game can use the data
    layer alone and so that nothing in `std/ecs` names `SceneNode`. The cost is one more name in a game's
    dependencies.
-   **Decided:** `std/scene` is its own package.
+   **Decided (2026-09-22):** `std/scene` is its own package.
 5. **May a scene file name `std/linear` and `std/time`?** [Section 9](#9-scenes) says yes, because `Vector2(1.0, 2.0)`
    has to be writable. It also means a scene file can compute, loop and call trigonometry, which is the point of
    choosing a language and also the reason a scene can be slow to load.
-   **Decided:** yes — a scene may name both. A scene that loads slowly is what PROJECT.md's resource size warning
+   **Decided (2026-09-22):** yes — a scene may name both. A scene that loads slowly is what PROJECT.md's resource size warning
    is for.
 6. **Does the ECS get events at all, or does a program write its own?** `Events<Event>` is thirty lines and every game
    writes it; putting it in the package makes the package bigger and the decision harder to reverse. It is also what
    [section 8](#8-the-behaviour-layer) puts in place of Godot's signals, which argues for keeping it.
-   **Decided:** `Events<Event>` is in the package — it replaces Godot's signals.
+   **Decided (2026-09-22):** `Events<Event>` is in the package — it replaces Godot's signals.
 7. **Is `GlobalTransform2` a component or a field?** Separate here, so that "what the author set" and "what the frame
    computed" cannot be confused. It costs a second column and a second lookup per entity.
-   **Decided:** `GlobalTransform2` is its own component.
+   **Decided (2026-09-22):** `GlobalTransform2` is its own component.
 8. **Where does the frame loop live?** `Schedule.run` steps a world once. Who calls it, how the fixed accumulator is
    fed, and whether `std/ecs` ships a loop at all is a question about `std/render` and the platform, not about the ECS
    — but it is the first thing a program needs and it is currently nobody's.
-   **Decided:** the frame loop lives in `std/scene` — `ready`/`process` with a fixed accumulator; `std/ecs` knows
+   **Decided (2026-09-22):** the frame loop lives in `std/scene` — `ready`/`process` with a fixed accumulator; `std/ecs` knows
    only `Schedule.run`. A pure-ECS game writes its own ten-line loop, the way a Bevy game without `DefaultPlugins`
    does.
 9. **Does a node see the whole world, or the columns it declares?** [Section 8](#8-the-behaviour-layer) hands
    `var world: World` to `process`, which is one type parameter on `SceneNode` and total access. The alternative is
    a node that names bounds the way a system does, which is more honest and makes `SceneNode` harder to implement
    and a tree harder to type.
-   **Decided:** a node sees the whole world (`var world: World` in `process`); access sets belong to systems, where
+   **Decided (2026-09-22):** a node sees the whole world (`var world: World` in `process`); access sets belong to systems, where
    they buy parallelism, and a node stays sequential.

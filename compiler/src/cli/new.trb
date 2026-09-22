@@ -1,0 +1,68 @@
+/**
+ * `torb new`: scaffolds a package - `project.trb`, a `src/main.trb` that prints a greeting, and a
+ * `tests/main.test.trb` with one passing test - so that starting a project is one command instead of copying an
+ * example by hand and editing its name everywhere.
+ *
+ * The three files are ordinary text and name nothing about the workspace the command runs in, so the package they
+ * describe finds the toolchain's own `std/` and `runtime/` the way any standalone project does, searched for above
+ * the new directory, the working directory and `torb` itself: `torb new` works the same inside this repository and
+ * in an empty directory anywhere else.
+ */
+
+use File, IoError from "std/fs"
+
+/** What `torb new` needs from the command line: the one name that becomes both the directory and the package name. */
+public type NewOptions {
+  /** The directory `torb new` creates, and the package's `name` in the `project.trb` it writes. */
+  name: String
+}
+
+/**
+ * `<name>/project.trb`, `<name>/src/main.trb` and `<name>/tests/main.test.trb`. Refuses with an error and changes
+ * nothing where `<name>` already exists, so a typo on the command line never writes into a directory that was there
+ * for another reason.
+ */
+public fn runNew(options: NewOptions): Result<Int, IoError> {
+  if File.exists(options.name) {
+    printError "error: `{options.name}` already exists"
+    return Ok 1
+  }
+  File.createDirectory("{options.name}/src")?
+  File.createDirectory("{options.name}/tests")?
+  File.writeText("{options.name}/project.trb", manifestFor(options.name))?
+  File.writeText("{options.name}/src/main.trb", mainFor(options.name))?
+  File.writeText("{options.name}/tests/main.test.trb", testFor(options.name))?
+  print "wrote {options.name}/project.trb, {options.name}/src/main.trb, {options.name}/tests/main.test.trb"
+  Ok 0
+}
+
+/** The `project.trb` of a new package: a name, a version, one binary built from `src/main.trb`, and its tests. */
+public fn manifestFor(name: String): String {
+  """
+    name "{name}"
+    version "0.1.0"
+
+    build \{
+      input "src/main.trb"
+    \}
+    test \{
+      input "tests"
+    \}
+    """
+}
+
+/** The `src/main.trb` of a new package: a script, so it needs no `fn main` and prints the one line itself. */
+public fn mainFor(name: String): String {
+  "print \"Hello, {name}\"\n"
+}
+
+/** The `tests/main.test.trb` of a new package: one passing test, in the bare `use test from "std/test"` form. */
+public fn testFor(name: String): String {
+  """
+    use test from "std/test"
+
+    test "{name} runs" \{
+      assert(1 + 1 == 2)
+    \}
+    """
+}

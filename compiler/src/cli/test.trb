@@ -19,7 +19,7 @@
 
 use File, IoError from "std/fs"
 use Process from "std/process"
-use normalizePath, joinPath from "../project/path"
+use normalizePath, joinPath, parentPath from "../project/path"
 use BuildOptions, Profile, build, buildFailedCode from "./build"
 
 /**
@@ -42,7 +42,13 @@ public fn runTests(options: TestOptions): Result<Int, IoError> {
   const first = options.paths.first() ?? "tests"
   // Where a run of several packages puts its binary: the first path is the one the command line names first, and the
   // key of the cache the binary is not - a test run is asked for, so it is built
-  const output = joinPath normalizePath(first), "build/{options.profile.name()}/tests"
+  // A single test file names no directory of its own, so its binary goes beside it
+  const directory = if first.endsWith(".trb") {
+    parentPath normalizePath(first)
+  } else {
+    normalizePath first
+  }
+  const output = joinPath directory, "build/{options.profile.name()}/tests"
   const built = build(
     BuildOptions(options.paths, output: output, isTestRun: true, saysWhatItWrote: false, profile: options.profile),
   )?

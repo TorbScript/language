@@ -26,6 +26,7 @@ design, which is in internals. A page here is about what you type and what comes
 
 - **[The torb command](the-torb-command.md)** - Every subcommand of the toolchain, what it does today, and which of them are still planned.
 - **[Verify your work](verifying-your-work.md)** - The commands that decide whether TorbScript you wrote is correct and in the formatter canon, in the order to run them.
+- **[torb new](torb-new.md)** - torb new scaffolds a package - project.trb, a src/main.trb that prints a greeting, and a tests/main.test.trb with one passing test - refusing where the name already exists.
 - **[torb check](torb-check.md)** - torb check resolves every module, import and name in a type position, types every expression, and reports one block per diagnostic - the gate every other command trusts.
 - **[torb run](torb-run.md)** - torb run builds a file or a project into a cache and executes it, passing the rest of the command line, the three streams and the exit code through.
 - **[torb build](torb-build.md)** - torb build type checks a program, lowers it to C, and hands the C to whatever compiler it finds - one file in, one native binary out, nothing to configure.

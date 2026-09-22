@@ -37,7 +37,7 @@ value like any other, and there are no async keywords.
 - **[12. What the checker does not enforce](#12-what-the-checker-does-not-enforce)** — four probes, all green, all wrong
 - **[13. What the language, the IR and the runtime must provide](#13-what-the-language-the-ir-and-the-runtime-must-provide)**
 - **[14. Slices](#14-slices)** — what fits 7.3, what waits for 7.7
-- **[15. Open, for the owner](#15-open-for-the-owner)**
+- **[15. What the owner decided](#15-what-the-owner-decided)**
 - **[16. Runtime ABI, as built](#16-runtime-abi-as-built)** — what the compiler lowers a task to, and what 7.7 changes
 
 Every snippet below was run against the checker, in `tests/language/` so that `std` resolves, with the
@@ -1229,19 +1229,19 @@ real timer rather than only its type - driven by hand-written state machines in 
 say before real IO exists. `Task.within`'s *type* lands with slice A2, because `Cancelled` and `TimedOut` are what the
 migration writes against; its timer is slice G's.
 
-## 15. Open, for the owner
+## 15. What the owner decided
 
-Everything technical above was decided and the reason is written next to it. These are the questions where the answer
-is taste or direction. The eight that were asked have been answered; the answer is recorded under each, and the
-document above carries it.
+Everything technical above was decided and the reason is written next to it. These eight were questions of taste or
+direction, and the owner answered them on 2026-09-22; the answer is recorded under each, and the document above
+carries it.
 
 1. **`std/parallel` as a package of its own**, against putting `parallel()` in `std/task`. The argument for the split
    is in section 10: concurrency and throughput are two subjects, and the import is a statement about what a file
    spends. The cost is one more package in `std` and one more import line.
-   **Decided:** a package of its own.
+   **Decided (2026-09-22):** a package of its own.
 2. **`parallel()` in the prelude.** Sixteen names in every file, against one import at the point where a program
    decides to use the machine.
-   **Decided:** in the prelude — "a cool and important tool for fast parallelism that C# users underestimate". The
+   **Decided (2026-09-22):** in the prelude — "a cool and important tool for fast parallelism that C# users underestimate". The
    count in the objection was wrong and section 10 has the correction: the prelude costs **two lines**, because `map`,
    `filter` and the rest are members of `Parallel` and `parallel` is an extension member imported by its qualified
    name. `windows`, `Window` and `Plain` stay imports. The counterparts of `Parallel.For` and `Parallel.ForEach` are
@@ -1249,20 +1249,20 @@ document above carries it.
    one `extend<Item> Iterate<Item>`; there is no `parallelFor`, and section 4 argues why.
 3. **The name `Plain`** for "nothing reference counted inside". The alternatives considered were `Inline` (which the IR
    already uses for a different property — it also caps the size) and `Uncounted` (accurate and ugly).
-   **Decided:** `Plain`.
+   **Decided (2026-09-22):** `Plain`.
 4. **`pause()` against `yield`.** The word is spent on a generator keyword the moment a function takes it, and CONCEPT
    keeps that question open. If generators are never going to use the word, `yield()` is the name everybody else uses.
    *(Note, 2026-09-22: the back-edge check of section 8 took the second job over - every loop of a `Task` function is
    cancellable without `pause()`, which is now for fairness only.)*
-   **Decided:** `pause()`. Section 9 gives it a second job under question 8: it is the cancellation point of a
+   **Decided (2026-09-22):** `pause()`. Section 9 gives it a second job under question 8: it is the cancellation point of a
    computation that has no other one.
 5. **64 as the default chunk count.** It has to be a fixed number for the determinism of section 4; whether it is 64,
    32 or 256 is a measurement nobody has taken yet, and it is a number that cannot be changed later without changing
    every `Float` result a program recorded.
-   **Decided:** 64, to be measured before 7.7 and fixed by that measurement.
+   **Decided (2026-09-22):** 64, to be measured before 7.7 and fixed by that measurement.
 6. **Whether `parallel()` should ever be unordered.** The answer here is no, argued from determinism. PLINQ, rayon and
    Java's parallel streams all default the other way, so it is worth one look.
-   **Decided:** never unordered — "that is the point".
+   **Decided (2026-09-22):** never unordered — "that is the point".
 7. ~~**Whether the field case of ECS gap 8 is wanted at all**~~ — **answered by [ECS.md](ECS.md) section 6: it is
    wanted, and it is the smaller half.** A system's unit of work is a column group and not a window, because a system
    reads several columns and row *n* of one has nothing to do with row *n* of another, and a component that holds a
@@ -1270,11 +1270,11 @@ document above carries it.
    checker already rejects two `var` arguments naming one path — so ECS gap 8 narrows to the barrier of gap 7 above,
    exposed as a fixed-arity call whose subjects are several `var` parameters, and the two parallelisms stay separate.
 8. **Whether a `Task` should be cancellable in v1.**
-   **Decided: every task is cancellable** — "then there are not two worlds again". Section 8 is that design, and it
+   **Decided (2026-09-22): every task is cancellable** — "then there are not two worlds again". Section 8 is that design, and it
    replaced the channel close as the answer rather than joining it: closing a channel stays the end of a stream, and
    stopping a task is `task.cancel()`.
 
-### Open, from the answer to question 8
+### Decided, from the answer to question 8
 
 9. **`Never` leaves the asynchronous side.** Section 8: a failure type that cannot carry a `Cancelled` cannot be the
    failure of work that waits, so `Channel`'s reading end becomes a `Source<Item, Cancelled>` and `Source`/`Sink` carry
@@ -1283,7 +1283,7 @@ document above carries it.
    true about *waiting*. The alternative is a rule that `?` on a `Cancelled` with no conversion available stops the
    waiting task instead of converting, which keeps `Never` and makes `?` mean two things; this document rejects it for
    the second reason and names it here because the first reason is real.
-   **Decided:** yes — `Never` leaves the asynchronous side. `Cancelled` is the floor of every asynchronous failure:
+   **Decided (2026-09-22):** yes — `Never` leaves the asynchronous side. `Cancelled` is the floor of every asynchronous failure:
    one `?`, one world, the same place Swift's `async throws` lands once it is everywhere.
 10. **The name `outcome`** for "wait, and fold a cancellation into the task's own failure". It is the one member the
     `Task<Result<Value, Failure>>` shape needs, `(task.await()?)?` is what it replaces, and a postfix `?` on an
@@ -1291,11 +1291,11 @@ document above carries it.
     because `??` is the fallback, and `await()?.into()` is `?.`, the optional chain. `outcome` was chosen over
     `awaited` (one letter from `await`, and the language spends that distance on the value/mutating pair) and over
     `value` (which says nothing about the failure).
-    **Decided:** `outcome()` stays.
+    **Decided (2026-09-22):** `outcome()` stays.
 11. **`cancel()` and `within` as `var fn`s**, so that the right to stop a task is visible at the binding
     (`var worker = spawn { … }`) and a `const` handle is the read-only view. The cost is that a `Task` somebody may
     cancel cannot be held in a `const`, including inside a collection somebody else reads.
-    **Decided:** `var fn`s, both of them — the same rule `source.next()` has: the right to change is held as `var`,
+    **Decided (2026-09-22):** `var fn`s, both of them — the same rule `source.next()` has: the right to change is held as `var`,
     and a `const` handle is the read-only view.
 
 ## 16. Runtime ABI, as built

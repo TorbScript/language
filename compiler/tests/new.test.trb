@@ -1,0 +1,30 @@
+/**
+ * Tests for `torb new`'s three templates: `manifestFor`, `mainFor` and `testFor` render the name that was given, with
+ * no interpolation left over and no brace escaped wrongly into the output.
+ */
+
+use test, group from "std/test"
+use manifestFor, mainFor, testFor from "../src/cli/new"
+
+group "torb new" {
+  test "the manifest names the package and points build and test at their directories" {
+    const manifest = manifestFor "acme"
+    assert manifest.contains("name \"acme\"")
+    assert manifest.contains("build \{")
+    assert manifest.contains("input \"src/main.trb\"")
+    assert manifest.contains("test \{")
+    assert manifest.contains("input \"tests\"")
+  }
+
+  test "the entry file is a script that prints a greeting with the name, and nothing else" {
+    assert(mainFor("acme") == "print \"Hello, acme\"\n")
+  }
+
+  test "the test file uses the bare `test` form and asserts something true" {
+    const source = testFor "acme"
+    assert source.startsWith("use test from \"std/test\"")
+    assert source.contains("test \"acme runs\" \{")
+    assert source.contains("assert(1 + 1 == 2)")
+    assert(!source.contains("group"))
+  }
+}

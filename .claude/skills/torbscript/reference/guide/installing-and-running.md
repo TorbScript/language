@@ -7,12 +7,14 @@ order: 10
 keywords:
   - install
   - torb run
+  - torb new
   - project.trb
   - hello world
 source:
   - README.md
   - tools/bootstrap.sh
   - CONCEPT.md#project-layout
+  - compiler/src/cli/new.trb
 ---
 
 The toolchain is one binary called `torb`. `torb run` compiles a file to a native executable and starts it in one
@@ -67,29 +69,46 @@ why there is no module initialization order in the language.
 
 ## Create a project
 
-A project is a directory with a `project.trb` and a `src/`:
+`torb new <name>` is the start: it writes a project for you, in the shape [`torb run`](../tooling/torb-run.md) and
+[`torb test`](../tooling/torb-test.md) already know how to build.
+
+```console
+$ torb new hello
+wrote hello/project.trb, hello/src/main.trb, hello/tests/main.test.trb
+```
 
 ```text
 hello/
 ├ src/
-├─ main.trb        Entry point for running
+├─ main.trb          print "Hello, hello"
 ├ tests/
-├─ hello.test.trb
-└ project.trb
+├─ main.test.trb      use test from "std/test", one passing test
+└ project.trb          name "hello", build { input "src/main.trb" }, test { input "tests" }
+```
+
+Run it by naming its directory:
+
+```console
+$ torb run hello
+Hello, hello
 ```
 
 `project.trb` is a TorbScript file, not a configuration language. It runs against a built-in `Project` value in a
 sandbox with no access to files or the network, so a tool can read it safely:
 
 ```trb
-name "acme/hello"
+name "hello"
 version "0.1.0"
 ```
 
-`name "acme/hello"` writes the field `name`. That is a **property command**: a call on a field does not call the field,
-it writes it. The names are `owner/name`, because an owner is a verified namespace of a registry.
+`name "hello"` writes the field `name`. That is a **property command**: a call on a field does not call the field, it
+writes it. `torb new` writes the bare name it was given; a package meant to be published uses `owner/name` instead,
+because an owner is a verified namespace of a registry. See [torb new](../tooling/torb-new.md) for the rest of what it
+writes and why.
 
-`src/main.trb` is what runs:
+## Extend it
+
+`src/main.trb` is what runs. Replace the one line `torb new` wrote with a function the test below can call:
 
 ```trb
 public fn greeting(name: String): String {
@@ -99,9 +118,7 @@ public fn greeting(name: String): String {
 print greeting("World")
 ```
 
-`public` is what lets the test below import `greeting`: a declaration is private to its file unless it says otherwise.
-
-Run the project by naming its directory:
+`public` is what lets the test import `greeting`: a declaration is private to its file unless it says otherwise.
 
 ```console
 $ torb run hello
@@ -110,7 +127,8 @@ Hello, World!
 
 ## Write a test
 
-A test file is a script made of `test` and `group` calls, and the only assertion is `assert`:
+A test file is a script made of `test` and `group` calls, and the only assertion is `assert`. Replace the placeholder
+test `torb new` wrote in `tests/main.test.trb` with one that calls `greeting`:
 
 ```trb skip it imports the `src/main.trb` of the project this page creates, which one snippet of this documentation cannot provide
 use test from "std/test"
