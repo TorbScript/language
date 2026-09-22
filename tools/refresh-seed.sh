@@ -66,10 +66,10 @@ if ! output=$("$binary" check "$probe/probe.trb" 2>&1); then
   fail "$binary cannot check a one-line program, so it does not become the seed"
 fi
 case "$output" in
-  "1 files, no problems"*) ;;
+  "1 file, no problems"* | "1 files, no problems"*) ;;
   *)
     say "$output"
-    fail "$binary answered something else than \"1 files, no problems\" for a one-line program"
+    fail "$binary answered something else than \"1 file, no problems\" for a one-line program"
     ;;
 esac
 
