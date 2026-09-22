@@ -3492,3 +3492,16 @@ Wenn nicht, was bedeutet, bewirkt es?
   **Wird gelöst:** `docs/CONCURRENCY.md` Abschnitt 8 umbauen + std/task-Oberfläche + Doku-Snippets (`await()?`).
   - ECS: prüfen, ob das kontrollierte `Any` elegant umgangen werden kann; moderne Engines wie **Bevy** mit
     analysieren (neben Unity/Godot). 17 (`chcp 850`) wird getestet, wenn alles fertig ist.
+  - **Erledigt:** `docs/CONCURRENCY.md` trägt den Abbruch: Abschnitt 8 neu geschrieben (Flag, kooperativer Halt am
+    Suspendierpunkt, Elternkette samt Inbox und Hauptaufgabe, kein `detached`, `await(): Result<Value, Cancelled>`,
+    `Cancelled`/`TimedOut`, `within` bricht wirklich ab, `Task.all` bricht den Rest bei einem Abbruch ab, Verwerfen
+    bricht weiterhin nicht ab, Vergleichstabelle Go/C#/Kotlin/Swift/tokio/Erlang); Abschnitt 6 (Region bricht als
+    Ganzes ab und wartet trotzdem am Barrier), 7 (Abbruch bei Poller, Completion-Port, Blocking-Pool, Timer - der
+    Frame wird erst frei, wenn niemand mehr hineinschreibt), 9 (`pause()` ist auch der Abbruchpunkt), 10, 12 (vierte
+    Sonde), 13 (Lücken 13-17), 14 (Slice A2) und 15 (alle acht Antworten eingetragen). Alle Snippets gegen den
+    Checker geprüft. Zwei Funde: `await()??` ist ein Parsefehler (`??` ist der Fallback-Operator), deshalb der neue
+    `Task.outcome()`; und `?` wandelt heute in `Never` und in einen ungebundenen Typparameter um, was es nicht darf.
+    `std/task/src/lib.trb` **unverändert**: die Typänderung von `await()` erzeugt 80 Probleme in 8 Dateien
+    (`std/stream`, `std/http`, `std/fs`, `examples/`) - die Migration steht als Lücke 16 und Slice A2 im Dokument.
+    Neue Geschmacksfragen für dich: 9 (`Never` verschwindet von der asynchronen Seite), 10 (Name `outcome`),
+    11 (`cancel()`/`within` als `var fn`).

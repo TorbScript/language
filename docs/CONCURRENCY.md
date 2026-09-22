@@ -26,18 +26,18 @@ value like any other, and there are no async keywords.
 - **[5. `Merge`](#5-merge)** — the associative join, and which collectors have one
 - **[6. Borrowing instead of copying](#6-borrowing-instead-of-copying)** — the region, and the four rules that make it sound
 - **[7. The world reaches the run queue](#7-the-world-reaches-the-run-queue)** — completion, readiness, and the blocking pool
-- **[8. Waiting, stopping, failing](#8-waiting-stopping-failing)** — timeouts, cancellation, panics, `Task.all`, backpressure
+- **[8. Waiting, stopping, failing](#8-waiting-stopping-failing)** — cancellation, timeouts, panics, `Task.all`, backpressure
 - **[9. Load balance and long computations](#9-load-balance-and-long-computations)**
 - **[10. What the standard library looks like](#10-what-the-standard-library-looks-like)**
 - **[11. Where this comes from](#11-where-this-comes-from)** — Go, Rust, C#, Java, BEAM, JavaScript, Swift, Kotlin
-- **[12. What the checker does not enforce](#12-what-the-checker-does-not-enforce)** — three probes, all green, all wrong
+- **[12. What the checker does not enforce](#12-what-the-checker-does-not-enforce)** — four probes, all green, all wrong
 - **[13. What the language, the IR and the runtime must provide](#13-what-the-language-the-ir-and-the-runtime-must-provide)**
 - **[14. Slices](#14-slices)** — what fits 7.3, what waits for 7.7
 - **[15. Open, for the owner](#15-open-for-the-owner)**
 
 Every snippet below was run against the checker, in `bootstrap/tests/scripts/` so that `std` resolves, with the
 proposed declarations written out in the probe file. A snippet marked **type checks today** was accepted as written;
-where one is not, the prose names the gap of section 13 that is in its way. The three probes of section 12 are the ones
+where one is not, the prose names the gap of section 13 that is in its way. The four probes of section 12 are the ones
 that were accepted and should not have been.
 
 ---
@@ -181,12 +181,38 @@ const total = numbers
   .map({ expensive _ })
   .filter({ _ > 0 })
   .sum()
-  .await()
+  .await()?
 ```
 
 **type checks today** against a locally declared `Parallel<Item>` and an `extend<Item> Iterable<Item>` that carries
 `parallel` — the extension is found on a `List<Int>`, which is worth saying because ECS gap 3 is that a *blanket*
-`extend<World: Bound> World` is not. An extension of an instantiated trait is a different thing and it works.
+`extend<World: Bound> World` is not. An extension of an instantiated trait is a different thing and it works. The `?`
+is section 8: a terminal answers a `Task` and every task is cancellable, so `await()` answers a `Result`. A script may
+write it at its top level, which was probed too.
+
+### `Parallel.For` and `Parallel.ForEach`, without a second name
+
+C#'s two most-used parallel constructs are a counted loop and a loop over a collection, and both are a pipeline whose
+terminal is `forEach`:
+
+```trb fragment
+(0..rows).parallel().forEach({ shade(_) }).await()?        // Parallel.For
+cells.parallel().forEach({ shade(_) }).await()?            // Parallel.ForEach
+```
+
+**type checks today**, the range and the list alike: `Range<Int>` is an `Iterable<Int>`, so the same
+`extend<Item> Iterable<Item>` carries `parallel` on both and nothing has to be written twice.
+
+**There is no `parallelFor`.** A second spelling would buy the word "for" and cost the thing this section is about: a
+`parallelFor` is not a pipeline, so it has no `map`, no `filter`, no `chunk:` and no `workers:` without growing its own
+copies of them — which is exactly how `Parallel.For` ended up with `ParallelOptions`, `ParallelLoopState` and
+`ParallelLoopResult` beside it. The pipeline form has the two knobs already, and `.forEach()` is where a loop with no
+result ends in the sequential vocabulary too.
+
+**What C# gets from those types and where it is here.** `ParallelLoopState.Break()` is `find` (section 4: the first
+match in input order, and later chunks that cannot change the answer are never started); `Stop()` is
+`task.cancel()` (section 8); the thread-local `localInit`/`localFinally` overloads are `collect(collector(...))` with a
+`Merge` (section 5), which is the same idea with the associativity written down.
 
 **Everything a `Parallel` does, it does with the names it already has.** `map`, `filter`, `filterMap`, `flatMap`,
 `collect`, `toList`, `count`, `sum`, `minBy`, `maxBy`, `find`, `forEach`. Nothing is called `AsParallel`,
@@ -394,6 +420,12 @@ The calling worker is therefore busy for the length of the region, and it spends
 workers: it runs window 0 itself. So N workers give N-way parallelism with nothing idle, which is what
 `ForkJoinPool.invoke` and rayon's `join` do for the same reason.
 
+**Cancelling a region does not shorten it below the barrier.** Section 8 makes every task cancellable, and the three
+facts above are the reason a cancelled region still joins: each chunk stops at its next suspension point, and the
+region returns when the last of them has stopped. A cancellation that let the caller return early would hand out a
+window into a heap the caller is free to change, which is the one thing the borrow is built to prevent. So
+cancellation shortens the *work* and not the *scope*, and that is why this design has no detached task (section 8).
+
 `parallel()` is different: it takes its input **by value** and holds no `var` access, so its terminal may answer a
 `Task` and the caller's worker is free while the region runs. What the caller is suspended on is this region, and
 nothing else can resume it, so the pipeline's own value cannot be freed underneath the workers.
@@ -461,6 +493,23 @@ directory reads, name resolution, and waiting on a child process where the platf
 issuing task's heap and that the task keeps alive across the `await`, it writes into that, and it sets the ready flag.
 So nothing is ever allocated outside a worker's heap and the pool needs no memory model of its own.
 
+**Cancelling a task that is waiting for the world** is section 8's rule plus one fact: a frame may not be released
+while somebody outside the language may still write into it. The three mechanisms answer differently and the difference
+is worth a table, because getting it wrong is a use-after-free rather than a missed wakeup:
+
+| Waiting on | What `cancel()` does |
+|---|---|
+| a readiness poller (epoll, kqueue) | the registration is removed, the task is made ready, and it stops at that point. Nothing was handed to the kernel, so there is nothing to wait for |
+| a completion port (IOCP, io_uring) | **the buffer was handed to the kernel.** The request is cancelled (`CancelIoEx`, `IORING_OP_ASYNC_CANCEL`) and the task stops **when the completion arrives**, whichever way it arrives; the result is discarded. The frame is released there and not before |
+| the blocking pool | **the thread cannot be interrupted.** The task is marked, the pool thread runs to its end, and the frame is released and the result discarded when it returns. So `cancel()` on a name resolution frees the waiter's *core* at once and its *frame* when the platform is done |
+| a timer | the timer is removed from the wheel and the task stops at that point |
+
+The two "not before" rows are the price of the model rather than of cancellation: section 7 says a pool thread has no
+heap and writes into a buffer that belongs to the issuing task's heap, and a cancellation that released that heap block
+early would be exactly the race the per-worker heaps exist to make impossible. **A cancelled task therefore frees its
+worker immediately and its memory at the next honest moment**, and the documentation has to say so instead of promising
+that `cancel()` returns everything at once.
+
 **`offload` is the same pool, offered to a program** that has to call a C library that blocks:
 
 ```trb fragment
@@ -482,49 +531,269 @@ programs for tasks are therefore IO-free by construction, which is what `10-asyn
 
 ## 8. Waiting, stopping, failing
 
-**Dropping a `Task` does not cancel it.** A `spawn` starts the work immediately, so a `Task` is a handle to something
-already running; dropping the handle means nobody will read the result. Anything else would make the moment a
-reference count reaches zero observable, and CONCEPT says it is not.
-
-**There is no `task.cancel()`.** The state machine has no point at which its frame can be torn down without running the
-cleanup that the language deliberately does not have: there are no destructors, so a cancelled task would either leak
-what it held or need unwinding, and both are machinery this language spent effort avoiding. **Cancellation is a channel
-close**, which STREAMS already uses for exactly this: a task that should be stoppable reads from a channel, closing it
-makes the next `add` or `next` fail with `ChannelClosed`, the `?` returns and the task ends. `Source.produce` is that
-pattern and it needs no token, no scope and no signal.
-
-**A timeout stops the waiting, not the work:**
+**Every task is cancellable, and there is one kind of task.** A `Task<Value>` carries a cancellation flag and
+`task.cancel()` sets it. Nothing else distinguishes one task from another: there is no token to thread through a
+signature, no scope to open, no detached variant and no second `spawn`. A design in which only some work can be stopped
+is two worlds, and the whole of this document is about not having two of anything.
 
 ```trb fragment
-/** The value if the task finished within the limit, `None` otherwise. The task keeps running either way. */
-fn within(limit: Duration): Task<Value?>
+/** Asks the task to stop at its next suspension point. A request and not a kill; asking twice changes nothing. */
+native var fn cancel()
 ```
 
-**type checks today.** Saying so plainly is better than the alternative, because it is what a deadline does to a
-goroutine that ignores its context too — the difference is that here the type says `Value?` and the documentation says
-"keeps running", instead of a name that suggests the work stopped.
+**It is a `var fn`**, so a task somebody intends to stop sits in a `var` binding — `var worker = spawn { … }` — and a
+`const` handle is the read-only view every shared object has (STREAMS section 2). That puts the right to cancel at the
+binding, where a reader sees it, and it is the same rule that makes `source.next()` a `var fn`.
 
-**A panic inside a task ends the process.** It prints the task's own trace and exits 101, like a panic anywhere else,
-and it does **not** become the awaiter's `Result`. A recoverable panic at a task boundary would be `try`/`catch` let in
-through a side door, and the one place a panic is recoverable stays the sandbox, where the VM is interpreting and the
-script has a heap of its own (BACKEND 5.4).
+### Where the flag is read
 
-**`Task.all` waits for every task.** It does not stop at the first failure, because there is nothing to stop *with* —
-see cancellation above. Its answer is `Task<List<Value>>`, so for fallible work `Value` is a `Result` and the collapse
-is the conversion `std/core` already has:
+**The suspension points are the cancellation points**, and the state machine already has every one of them:
+
+| Point | What it is |
+|---|---|
+| `await()` | on any task, which is also every `Source` and `Sink` verb |
+| `pause()` | section 9 — the cooperative point a long loop puts in itself |
+| a channel `add` or `next` | where an item crosses a heap boundary |
+| an IO wait | the poller and the blocking pool, section 7 |
+
+Before the worker resumes a task it reads the flag. If it is set, the state machine **stops**: the frame is released
+exactly as a finished task's frame is released, every live value in it goes with it, and the handle answers
+`Fail Cancelled` to whoever waits.
+
+**That is the whole implementation, and the reason it is that small is section 1.** A stackless task keeps every live
+value *in its frame*, so there is no stack to unwind, no destructor to run — the language has none, and CONCEPT's
+"a release never runs user code" is what makes this free — and nothing to leak, because releasing the frame is the
+ordinary release. A green-threaded design would need an unwind here, which is the machinery this language spent
+section 2 avoiding.
+
+**A computation that never suspends runs to its end.** `grind(1_000_000)` with no `pause()` ignores `cancel()` the way
+it ignores everything else, and that is the same trade section 9 makes about preemption rather than a second one:
+interrupting a task that does not suspend needs a stack to unwind, and a task has none. **`pause()` in the loop is what
+makes a computation cancellable**, and it is one line — which is a second reason for it to exist and the reason
+question 4 of section 15 was worth answering.
+
+### Cancellation is structured
+
+**A task's parent is the task that ran its `spawn`**, and cancelling a parent cancels its children.
+
+**What "parent" means when `spawn` puts a message in another worker's inbox** (section 9): the parent is decided at the
+`spawn`, not at the first run. The inbox message carries the spawning task's identity beside its captures, and the
+target worker links the child to it when it copies the captures in. So a task that is still in an inbox is already a
+child, and **a child whose parent is cancelled before the child's first run is cancelled before its first state** — it
+never executes a line, and the message is dropped instead of copied. Placement stays free, because an identity is not a
+heap block: it is a worker number and a counter, copied like an `Int`.
+
+**A task spawned at the top level of an entry file or a script** has the **main task** as its parent, which the runtime
+makes for the entry file itself. There is therefore no task without a parent and no special case in the rule. A program
+does not cancel its main task; it ends.
+
+**A region is cancelled as a whole.** `parallel()`'s terminal answers a `Task`, and cancelling that task cancels the
+region: every chunk stops at its next suspension point and the fork-join barrier returns when all of them have
+stopped — **the barrier still waits**, and section 6 is why it has to. A window is a borrowed pointer into the caller's
+heap that is sound only because the caller is suspended inside the call for the whole duration; a cancellation that let
+the caller return while a worker still held a window would be the use-after-free the four rules exist to prevent. So
+cancelling a region is "ask every chunk to stop, then join", never "abandon". `windows` has no `Task` of its own to
+cancel (it answers `Void` and blocks its caller), so it is stopped by cancelling its caller, at the same barrier.
+
+**There is no detached task in v1.** Swift has `Task.detached` and this design rejects it, for a reason that is specific
+to this document rather than a matter of taste: the borrow of section 6 rests on "a child cannot outlive its region",
+and a child that may opt out of its parent is a child that may outlive it. One `Task.detached` inside a `windows` body
+would turn every window into a dangling pointer. The work `detached` is reached for — something that should outlive the
+request that started it — is spelled by spawning it from the main task, which every program has, and that spelling is
+visible at the place the decision is made instead of at the place the work is written.
+
+### It is visible in the type
 
 ```trb fragment
-const loaded: Result<List<User>, HttpError> = Task.all(fetches).await().into()
+/** Waits for the value, or answers `Cancelled` when the task stopped instead of finishing. */
+native fn await(): Result<Value, Cancelled>
+
+/** A task that stopped at a suspension point because somebody asked it to. */
+public type Cancelled with Show, Error {
+  /** `"the task was cancelled"`. */
+  fn show(): String {
+    "the task was cancelled"
+  }
+}
+```
+
+**type checks today**, with the members on a stand-in `Job<Value>` and bodies in place of the natives. So a waiter
+writes `task.await()?` or matches, and the compiler makes it decide — which is the point of answering a `Result` rather
+than a `Value?` or a sentinel.
+
+**`Cancelled` carries no reason**, and that is a decision. A reason field would be an open set nobody can match
+exhaustively, and the one reason with a name of its own — a deadline — belongs to the function that made the deadline,
+where it is `TimedOut` (below). What a bystander can honestly learn is that the value will not arrive; who asked for
+that and why is the canceller's knowledge, not the waiter's.
+
+**A waiter that is itself cancelled has no failure at all.** If task A awaits task B and A is cancelled, A's `await()`
+does not answer: A stops at that suspension point and its frame is released, the ordinary case of the rule above. So
+`Fail Cancelled` is observed in exactly one situation — **the awaited task was cancelled and the waiter was not** — and
+never as a cancellation of one's own. That is why there is one failure value and not a pair.
+
+### The `Task<Result<Value, Failure>>` shape, and the one member it needs
+
+Fallible asynchronous work answers `Task<Result<Value, Failure>>`, and `await()` makes that
+`Result<Result<Value, Failure>, Cancelled>`: two unwraps. The obvious spelling does not exist —
+
+```text
+error: Expected `Int64`, found `Result<Int64, Cancelled>`
+  --> probe.trb:47:6
+   |
+47 |   Ok(job.await()??)
+   |      ^^^^^^^^^^^^^
+```
+
+— because `??` is the fallback operator and lexes as one token. `(task.await()?)?` **type checks today** and reads
+badly in the place it would occur most, which is every pull of every stream. So `std/task` carries one member for the
+shape:
+
+```trb fragment
+extend<Value, Failure: From<Cancelled>> Task<Result<Value, Failure>> {
+  /** Waits, and folds a cancellation into the task's own failure: `source.next().outcome()?`. */
+  fn outcome(): Result<Value, Failure>
+}
+```
+
+**type checks today on the real `Task`** — an extension of a doubly instantiated generic is accepted, and so is the body
+that matches `await()` and converts through `From`. It is not a second vocabulary: it is `await()` plus the conversion
+the `?` would have applied anyway, written once instead of at every call site. And it is not an overload, because the
+language has one name per member and this one is `outcome` — what the task ended with, its own failure or a
+cancellation, folded into one channel.
+
+```trb fragment
+fn total(var reports: Source<Int, ReportError>): Task<Result<Int, ReportError>> {
+  var sum = 0
+  while const Some(size) = reports.next().outcome()? {
+    sum = sum + size
+    pause().await()?
+  }
+  Ok sum
+}
+```
+
+**type checks today against the real `Source` and the real `Task`**, with `outcome` declared as above and a
+`ReportError` that carries `From<Cancelled>` — so the shape this design asks of `std/stream` is one the checker already
+accepts, and only `await()`'s own result type is missing. The loop is cancellable twice over: at the pull, and at the
+`pause()`.
+
+### `Cancelled` is the floor of every asynchronous failure type
+
+The bound on `outcome` is the honest consequence and it has to be said out loud: **`Failure: From<Cancelled>`**, the
+same shape `Source.produce` already carries for `ChannelClosed` (STREAMS section 8). A failure type that cannot carry a
+cancellation cannot be the failure of work that waits — and `Never` is such a type. So **`Channel`'s reading end is a
+`Source<Item, Cancelled>` and not a `Source<Item, Never>`**, and `Source`/`Sink`'s `Failure` parameter carries the
+bound. STREAMS' decided answer 5 is untouched (the `extend<Target> Target with From<Never>` blanket is about `Never` as
+a *source* of a conversion, and there is still nothing to write); what changes is that no asynchronous read promises
+`Never` any more, because with universal cancellation that promise is false. Swift reaches the same place from the
+other side: its `AsyncSequence.next()` is `async throws`, and a failure channel on everything asynchronous is the price
+of being able to stop it.
+
+**The checker does not enforce this today**, which is probe 4 of section 12 and the reason the migration below looks
+smaller than it is.
+
+### `within`: a deadline cancels the task
+
+```trb fragment
+/** Cancels the task once the limit has passed. A task that finished first is unaffected. */
+native var fn within(limit: Duration): Task<Result<Value, TimedOut>>
+
+/** A deadline that passed. */
+public type TimedOut with Show, Error {
+  /** How long the waiter was willing to wait. */
+  limit: Duration
+
+  /** `"the task did not finish within {limit}"`. */
+  fn show(): String {
+    "the task did not finish within {limit}"
+  }
+}
+```
+
+**type checks today.** `within` races the task against a timer on the caller's own timer wheel, and the three outcomes
+have three spellings:
+
+| `worker.within(2.seconds()).await()` | What happened |
+|---|---|
+| `Ok(Ok(value))` | the task finished inside the limit |
+| `Ok(Fail(TimedOut))` | the limit passed first, and `within` cancelled the task |
+| `Fail(Cancelled)` | somebody else cancelled the task, or the waiter's own `within` task was cancelled |
+
+**`TimedOut` carries the limit** because the one thing a reader of a log wants is the number that was too small, and
+`within` is the only place in this design that knows it. **It is `var fn`** for the same reason `cancel()` is: it can
+stop the task.
+
+The name still says what happens, and the documentation no longer has to say "the task keeps running". A deadline that
+leaves the work running is what a `context` does to a goroutine that ignores it; here the deadline is the cancel.
+
+### `Task.all`
+
+**`Task.all` waits for every task, and cancels the ones it still waits for when one of them is cancelled.**
+
+Its answer is `Task<List<Value>>` and there is no failure channel in it, so "stop at the first failure" is not
+something `Task.all` can see: for fallible work `Value` is a `Result`, and a `Fail` is an ordinary value that it
+collects like any other. Swift's task group cancels on the first `throw` because a throw reaches its scope;
+`join_all` and rayon do not cancel at all. This design is neither, and the reason is the one vocabulary: **a
+cancellation is the only event `Task.all` can observe that makes its own answer impossible to build**, because a list
+with a hole in it is not a `List<Value>`. So it answers `Fail Cancelled` and stops paying for results nobody can use.
+
+Determinism is not spent on this: the answer is the whole list or `Fail Cancelled`, and how far each of the others got
+before it stopped is not observable in the language — the same argument section 4 makes about the chunk that `find`
+never starts.
+
+```trb fragment
+const loaded: Result<List<User>, HttpError> = (Task.all(fetches).await()?).into()
 ```
 
 `extend<Value, Failure, Target: From<Iterable<Value>>> Result<Target, Failure> with From<Iterable<Result<Value,
 Failure>>>` is in `std/core/src/result.trb` today. No second API, and the shape is honest about the fact that every
-task ran.
+task that was not cancelled ran to its end.
+
+**The parentheses are the second lexing trap and not a style**: `await()?.into()` lexes the `?.` as the optional chain
+and answers `` error: `?.` needs an `Option`, and `Result<…, Cancelled>` is not one ``, which was probed. Together with
+`??` that is two places where a postfix `?` on an `await()` runs into an operator that starts with the same character,
+and it is the second argument for `outcome`: the member that folds the two failures answers one `Result`, so nothing
+follows a `?` that the lexer can mistake for something else.
+
+### Dropping a `Task` still does not cancel it
+
+A `spawn` starts the work immediately, so a `Task` is a handle to something already running; dropping the handle means
+nobody will read the result. Anything else would make the moment a reference count reaches zero observable, and CONCEPT
+says it is not.
+
+**The argument is stronger with `cancel()` than without it.** The one thing that made drop-cancels tempting is that
+there was no other way to stop work; there is one now, it is a method with a name, and it is written where the decision
+is made rather than falling out of a scope's end. And the case drop-cancel is actually reached for — a child that
+should die with the work that started it — is the parent link above, which stops the child whether or not anybody still
+holds its handle. tokio's "drop the future and it is gone" is the mirror image of this and it is rejected for CONCEPT's
+reason, not for a preference: a language whose releases run no user code cannot make one release run the most important
+piece of user code there is.
+
+### Panics are unchanged
+
+**A panic inside a task ends the process.** It prints the task's own trace and exits 101, like a panic anywhere else,
+and it does **not** become the awaiter's `Result` — `Cancelled` is a request that was honoured, and a panic is a bug,
+and folding one into the other would make every `await()?` a `catch`. The one place a panic is recoverable stays the
+sandbox, where the VM is interpreting and the script has a heap of its own (BACKEND 5.4).
+
+### Where cancellation comes from
+
+| System | Taken | Rejected, and why |
+|---|---|---|
+| **Go** (`context.Context`) | Cooperative, checked at the points the program already has | The token in every signature. A `ctx` parameter is a colour by another name, and it is forgotten exactly where it matters; the flag rides with the task |
+| **C#** (`CancellationToken`, `CancellationTokenSource`) | The split between *asking* and *observing* | Two types and a parameter for what is one bit on a handle; `ThrowIfCancellationRequested()` in a body that already has suspension points |
+| **Kotlin** (`Job`, `CancellationException`) | Structured: a child of a cancelled job is cancelled | An exception that propagates invisibly and that a `catch (e: Exception)` swallows by accident. Here it is a `Result` the compiler makes the waiter handle |
+| **Swift** (structured cancellation, `Task.detached`) | Cancellation as a request the task notices at `await`; parent cancels children; a region cancelled as a whole | `Task.detached`, because the borrow of section 6 needs "no child outlives its region" to be true without exception |
+| **Rust / tokio** (drop the future) | Nothing | Cancellation at an unobservable moment. A drop that stops work makes a reference count reaching zero the most important event in the program, which CONCEPT says it is not |
+| **Erlang** (`exit/2`, kill) | Nothing | A kill that a process cannot decline needs somebody to clean up after it. Per-process heaps make that affordable there and a per-*worker* heap does not: a task killed mid-frame would leave its allocations in a heap somebody else is still using |
 
 **Backpressure is the `Channel`, unchanged** (STREAMS section 3): `add` finishes when the reader has taken the item,
 capacity 0 is a rendezvous. Between two workers it has a second job: a channel `add` is where a value crosses a heap
 boundary, so the capacity is also the bound on how much memory is in flight between two heaps. A program that wants
-that bound writes a number; a program that does not care writes 0 and gets lock-step.
+that bound writes a number; a program that does not care writes 0 and gets lock-step. **Closing a channel stays what it
+is** — the end of a stream, and the way a producer learns that nobody wants its items. It is not also the way to stop a
+task: `Source.produce`'s relay closing its producer (STREAMS section 7) is a stream ending, `task.cancel()` is a task
+stopping, and the two read the same only in the one case where the task exists to feed the stream.
 
 ## 9. Load balance and long computations
 
@@ -561,15 +830,15 @@ public fn pause(): Task<Void>
 ```
 
 ```trb fragment
-fn grind(rounds: Int): Task<Int> {
+fn grind(rounds: Int): Task<Result<Int, Cancelled>> {
   var total = 0
   for round in 0..rounds {
     total = total + round * round
     if round.remainder(1024) == 0 {
-      pause().await()
+      pause().await()?
     }
   }
-  total
+  Ok total
 }
 ```
 
@@ -578,13 +847,18 @@ it costs one state split and no runtime machinery. **It is called `pause` and no
 `yield` open as a *keyword* for generators, and spending the word on a function would close a question that has nothing
 to do with this one.
 
+**`pause()` is also the cancellation point of a computation that has no other one** (section 8): the worker reads the
+flag before it resumes, so the `?` on `pause().await()` is where a loop that does nothing but arithmetic learns that
+somebody asked it to stop. The line costs a state split and buys both fairness and cancellability, which is why it is
+the answer to "how do I make this loop stoppable" and not a second mechanism.
+
 **There is no preemption.** A worker cannot interrupt a task that does not suspend, because interrupting one needs a
 stack to unwind and a task has none. This is the same trade Rust and JavaScript make and the opposite of Go's and
 BEAM's, and it is decided by the stackless choice of section 1 rather than being a separate decision.
 
 ## 10. What the standard library looks like
 
-**`std/task`** keeps what it has — `Task`, `spawn`, `all`, `Channel`, `ChannelClosed` — and gains four things:
+**`std/task`** keeps what it has — `Task`, `spawn`, `all`, `Channel`, `ChannelClosed` — and gains this:
 
 ```trb fragment
 /** How many workers this process runs, and how many threads its blocking pool has. Both fixed at start. */
@@ -593,17 +867,47 @@ public type Workers {
   native static fn blocking(): Int
 }
 
-/** Puts this task at the back of its worker's queue and lets the rest run. */
+/** Puts this task at the back of its worker's queue, lets the rest run, and notices a cancellation. */
 public native fn pause(): Task<Void>
 
 /** Runs the body on the blocking pool. It gets copies, cannot reach a shared object, and cannot `await`. */
 public native fn offload<Value>(body: () => Value): Task<Value>
 
-extend<Value> Task<Value> {
-  /** The value if the task finished within the limit, `None` otherwise. The task keeps running either way. */
-  native fn within(limit: Duration): Task<Value?>
+/** A task that stopped at a suspension point because somebody asked it to. */
+public type Cancelled with Show, Error {}
+
+/** A deadline that passed. */
+public type TimedOut with Show, Error {
+  limit: Duration
+}
+
+public native shared type Task<Value> {
+  /** Waits for the value, or answers `Cancelled` when the task stopped instead of finishing. */
+  native fn await(): Result<Value, Cancelled>
+
+  /** Asks the task to stop at its next suspension point. A request and not a kill. */
+  native var fn cancel()
+
+  /** Cancels the task once the limit has passed. A task that finished first is unaffected. */
+  native var fn within(limit: Duration): Task<Result<Value, TimedOut>>
+
+  // `map`, `flatMap` and `all` unchanged
+}
+
+extend<Value, Failure: From<Cancelled>> Task<Result<Value, Failure>> {
+  /** Waits, and folds a cancellation into the task's own failure: `source.next().outcome()?`. */
+  fn outcome(): Result<Value, Failure>
 }
 ```
+
+**`await()`, `cancel()`, `within` and `outcome` are not in `std/task/src/lib.trb` yet**, and the reason is a migration
+rather than a doubt: changing `await()`'s result from `Value` to `Result<Value, Cancelled>` was probed against the
+whole repository and produces **80 problems in 8 files** — `std/stream` (`source.trb` 27, `sink.trb` 10, `bytes.trb` 2),
+`std/http` 9, `std/fs` 1, `examples/tour/src/13-streams.trb` 14, `examples/tour/src/10-async.trb` 13 and
+`examples/game-engine/src/main.trb` 4. `compiler/src` and `compiler/tests` are untouched, because the checker's own
+tests declare a `Task` of their own. Every one of those is `.await()` becoming `.outcome()` or `.await()?`, plus the
+`Source<Item, Never>` change of section 8 — one commit, and it belongs with the slice that writes `outcome`, not with a
+document.
 
 **`std/iteration`** gains `Merge` (section 5) and the implementations for the collectors that have one. `Merge` belongs
 here rather than beside `parallel()` because it is synchronous, it says nothing about tasks, and it is useful on its
@@ -644,16 +948,36 @@ public shared type Window<Item> with Length, Indexed<Int, Item> {}
 **The whole `Parallel` trait, the `Merge` trait and the `Iterable` extension type check today** as written, with bodies
 that panic. `windows` type checks with a named `fn` as the body; with a closure it is gap 5.
 
-**A package of its own, and not in the prelude.** `std/task` is about one thing waiting for another; `std/parallel` is
-about one thing going faster. Merging them is what makes a task library feel like a threading library. And the import
-is the statement — `use parallel from "std/parallel"` in a file says "this file spends your cores", which is exactly
-what `use File from "std/fs"` says about the disk. Sixteen names in every file to save one import line is the trade
-STREAMS made for `Source` and `Sink` because they are *vocabulary*; `parallel()` is not vocabulary, it is a decision.
+**A package of its own, and in the prelude.** The two halves of that are not in tension, and the count is what settles
+it: the prelude does not need sixteen names, it needs **two lines**.
 
-**Natives.** `Workers.count`, `Workers.blocking`, `pause`, `offload`, `Task.within`, the fork-join barrier, `Window`'s
-two members, and the poller. Everything else — `Parallel` and all of its stages, the chunk arithmetic, `Merge` and
-every collector's implementation of it, the borrow-or-copy decision as far as the standard library can see it — is
-TorbScript over those. That keeps the count at the level the natives-stay-few rule wants.
+```trb fragment
+public use Parallel from "std/parallel"
+public use Iterable.parallel from "std/parallel"
+```
+
+`map`, `filter`, `sum` and the rest are *members of `Parallel`*, so they cost nothing in a file scope, and `parallel`
+itself is an extension member imported by its qualified name — the form the prelude already uses for
+`public use Int64.seconds from "std/time"`. `windows`, `Window` and `Plain` stay imports, because a borrowed section of
+a buffer is not something a program reaches for by accident.
+
+**And `numbers.parallel().map { … }` should not need an import line.** A pipeline that spends the machine is the same
+sentence as a pipeline that does not, one word longer, and the word is the whole documentation. Hiding it behind an
+import is how `Parallel.For` and `AsParallel` became things people know about and do not use: the cost of finding out
+that they exist is paid once per programmer, and a prelude pays it once per language. The package stays separate for
+what a package is for — `std/task` is one thing waiting for another, `std/parallel` is one thing going faster, and
+merging them is what makes a task library feel like a threading library — and the prelude decides what is in scope,
+which is a different question with a different answer.
+
+That is the one place this design spends a name to save a decision, and it is spent on the tool that is otherwise
+underused.
+
+**Natives.** `Workers.count`, `Workers.blocking`, `pause`, `offload`, `Task.cancel`, `Task.within`, the fork-join
+barrier, `Window`'s two members, and the poller. Everything else — `Parallel` and all of its stages, the chunk
+arithmetic, `Merge` and every collector's implementation of it, `Task.outcome`, `Cancelled`, `TimedOut`, the
+borrow-or-copy decision as far as the standard library can see it — is TorbScript over those. Cancellation adds exactly
+**two** natives to the list (`cancel` and `within`) and one bit to a structure that already exists, which is the
+measure of how little a cooperative design costs when the machine is already a state machine.
 
 ## 11. Where this comes from
 
@@ -666,14 +990,15 @@ TorbScript over those. That keeps the count at the level the natives-stay-few ru
 | **Java** (virtual threads; parallel streams on a common pool) | `Collector` and its combiner as the shape of a reduction | A stack per virtual thread. **The common-pool problem**: parallel streams share one JVM-wide pool, so one library's blocking work starves another's. Here the pool is the program's, sized by the program, and blocking work has a pool of its own |
 | **Erlang / BEAM** (per-process heaps, copied messages) | The memory model, almost exactly: a heap per scheduler, copying at the boundary, no shared mutable state, plain counts | A heap per *process* rather than per worker — millions of tiny heaps, and a migration story. Preemptive reduction counting, which needs a stack |
 | **JavaScript** (event loop; workers; structured clone; transferables) | The event loop per worker; transfer instead of copy when the sender gives the value up, which is `Channel`'s rule | One loop and no cores by default; and the split between the loop's language and the worker's, which this language does not have — a task and a worker task are the same thing |
-| **Swift** (structured concurrency, task groups, actors) | Structured parallelism: a region whose children cannot outlive it, which is what makes the borrow sound | Actors, because confinement of a `shared type` to its task already gives what an actor gives, without a second calling convention. Task groups with cancellation, until cancellation exists |
+| **Swift** (structured concurrency, task groups, actors) | Structured parallelism: a region whose children cannot outlive it, which is what makes the borrow sound; cancellation as a request the task notices at its next `await`, and a parent that cancels its children | Actors, because confinement of a `shared type` to its task already gives what an actor gives, without a second calling convention. `Task.detached`, which would let a child outlive the region whose heap it borrowed |
 | **Kotlin** (coroutines, dispatchers, `limitedParallelism`) | A bound per operation (`parallel(workers:)` is `limitedParallelism`) | Dispatchers as a value passed around: a task here belongs to the worker that made it, so there is nothing to choose. `suspend` as a function colour — `Task<Value>` is a return type, which is the whole point |
 
 ## 12. What the checker does not enforce
 
-Three probes, all accepted by the checker as written, and all of them things CONCEPT says are errors. Together they
-mean that **"data races are impossible by construction" rests on nothing today.** They are listed first because a
-reader of CONCEPT would otherwise assume the opposite.
+Four probes, all accepted by the checker as written, and all of them things the design says are errors. The first three
+mean that **"data races are impossible by construction" rests on nothing today**; the fourth is what makes section 8's
+migration look smaller than it is. They are listed first because a reader of CONCEPT would otherwise assume the
+opposite.
 
 **1. `await()` placement.**
 
@@ -711,6 +1036,29 @@ const task = spawn {
 `check` answers `1 files, no problems`, for a `shared type Counter` with a `var fn bump()`. CONCEPT says shared objects
 are confined to the task that created them; nothing checks it. The layout already computes `containsShared` for this
 purpose (BACKEND 1.3) — the fixpoint exists, the rule that reads it does not.
+
+**4. `?` converts a failure into `Never` and into an unbounded type parameter.**
+
+```trb fragment
+fn intoNever(outcome: Result<Int, Alpha>): Result<Int, Never> {
+  Ok(outcome?)
+}
+
+fn intoGeneric<Failure>(outcome: Result<Int, Alpha>): Result<Int, Failure> {
+  Ok(outcome?)
+}
+```
+
+`check` answers `1 files, no problems` for both, while the same `?` into a named second failure type is rejected with
+`` `Alpha` does not convert into `Beta` `` and the suggestion to write the `From`. So the rule exists and it has two
+holes: a bare type parameter, where the bound is what should carry the requirement, and `Never`, which has no values
+and therefore cannot be the target of any conversion at all.
+
+This is not a cost of cancellation and it is older than section 8, but section 8 is where it matters: with `await()`
+answering a `Result<Value, Cancelled>`, `Failure: From<Cancelled>` is the bound that makes an asynchronous pipeline
+type-correct, and today a signature that omits it type checks anyway. The migration measured in section 10 is therefore
+a lower bound — **80 problems is what the checker finds, not what the design requires.** *Smallest fix:* the `?`
+conversion asks the bound of a type parameter instead of accepting it, and refuses `Never` as a target.
 
 ## 13. What the language, the IR and the runtime must provide
 
@@ -766,17 +1114,53 @@ point 6). It is not a cost of this design and it blocks `Parallel` from compilin
 observable in the language. It has to be observable *somewhere*, or nobody can find the pipeline that copies. One
 counter per run, printed by the profile that BACKEND 6.3's timing work introduces.
 
+**13. The cancellation flag and the check at every suspension point.** One bit in the task structure, set by
+`Task.cancel` and read by the worker before it resumes a task. Where it is set, the state machine does not resume: the
+frame is released and the handle is completed with `Fail Cancelled`. *Smallest fix:* one field, one branch in the
+resume path of `runtime/task.c` and of `vm/task.trb`, and the same branch reached from the four points of section 8 —
+which are the only places a task is ever resumed, so it is one branch and not four.
+
+**14. The parent link.** `spawn` records the spawning task's identity in the inbox message beside the captures (gap 9),
+and the target worker links the child when it copies them in. A cancelled parent cancels its children; a child whose
+parent is already cancelled at first run is dropped without running a line. *Smallest fix:* two integers in the message
+and a child list per task — the list is the parent's own heap block, so it needs no atomic, because a task's children
+are spawned by that task alone.
+
+**15. Waking a task that waits for the world.** Section 7's table: remove the registration on a readiness poller,
+`CancelIoEx`/`IORING_OP_ASYNC_CANCEL` on a completion port with the frame released at the completion, and a discard
+flag on a blocking-pool job. *Smallest fix:* one cancel entry point per mechanism in `runtime/io.c`, behind the one
+interface gap 8 introduces.
+
+**16. `Cancelled`, `TimedOut`, `Task.await`'s result, `Task.cancel`, `Task.within` and `Task.outcome`** in
+`std/task`, with the migration section 10 measures: `.await()` becomes `.outcome()` or `.await()?` at 80 measured
+places in `std/stream`, `std/http`, `std/fs` and `examples/`, and `Channel`'s reading end becomes a
+`Source<Item, Cancelled>`. *Smallest fix:* one commit over `std/`, gated by `check .` and `docs check docs`.
+
+**17. `?` asks the bound.** Probe 4 of section 12: the `?` conversion accepts a bare type parameter and `Never` as a
+target. Until it does not, `Failure: From<Cancelled>` is documentation rather than a rule. *Smallest fix:* the
+conversion lookup consults the type parameter's bound, and `Never` is refused as a conversion target with the message
+that it has no values.
+
 ## 14. Slices
 
-**Before the VM — nothing in this document needs bytecode.** Gaps 1, 2 and 3 are checker work on `compiler/src`, they
-close the three probes of section 12, and they can land at any time. Gate: each probe becomes a `trb error` block with
-its diagnostic, plus a checker test per rule.
+**Before the VM — nothing in this document needs bytecode.** Gaps 1, 2, 3 and 17 are checker work on `compiler/src`,
+they close the four probes of section 12, and they can land at any time. Gate: each probe becomes a `trb error` block
+with its diagnostic, plus a checker test per rule. **Gap 17 comes first of the four**, because gap 16's migration is
+only verifiable once `?` asks the bound.
 
 **With 7.3 (one worker, one heap).** The state machine, `Task`, `spawn`, `await`, `Channel` and the FIFO queue are
 7.3's own scope. Added here:
 
 - **Slice A — `pause()`.** One state split in the lowering, one enqueue in the runtime and the VM. Gate: a script whose
   two tasks interleave in a fixed order, identical on stage 0, in C and in the VM.
+- **Slice A2 — cancellation** (gaps 13, 14 and 16), and it comes before `parallel()` rather than after it. With one
+  worker the flag, the check at each suspension point, the parent link and the whole `std/task` surface are all
+  testable, and they pin the type of `await()` before anything else is written against it — the same de-risking
+  argument slice C makes for the pipeline. Gate: a task cancelled at each of the four suspension points stops there
+  and its waiter reads `Fail Cancelled`; a cancelled parent's child never runs a line; a loop with a `pause()` stops
+  and a loop without one does not; `check .` and `docs check docs` are green after the 80-place migration; and the
+  live-block counter is zero after every one of them. **The order matters:** every `await()` written before this slice
+  has to be rewritten after it.
 - **Slice B — `Merge` and the collectors.** Pure `std/iteration`, no runtime and no back end. Gate: a test per
   collector asserting `merge(a, b)` equals the sequential run over the concatenation, including the empty-chunk rule.
 - **Slice C — `Parallel` and `parallel()`, running sequentially.** With one worker a region is a loop over the chunks
@@ -793,36 +1177,74 @@ its diagnostic, plus a checker test per rule.
   cores; and the live-block counter is zero after each.
 - **Slice F — `Plain`, `Window`, `windows`** (gaps 4, 5, 6). Gate: a data-parallel scale over a million `Float`s with
   zero copies (the counter of gap 12 at zero), zero live blocks, and the same output as the sequential loop.
-- **Slice G — IO** (gap 8). Gate: the conformance suite unchanged, plus a program that reads eight files at once and
-  prints them in a fixed order, on all three platforms.
+- **Slice G — IO** (gap 8) **and the cancellation of a task that waits for the world** (gap 15). Gate: the conformance
+  suite unchanged, plus a program that reads eight files at once and prints them in a fixed order, on all three
+  platforms; and a cancelled read on each of the three mechanisms, with the live-block counter at zero afterwards —
+  which is what proves the "not before" rows of section 7 rather than assuming them.
 - **Slice H — the inbox and stealing** (gap 9), with the measurements of section 9. Gate: the skewed-cost benchmark
-  within its stated factor, and the fraction of stolen tasks reported.
+  within its stated factor, and the fraction of stolen tasks reported. The parent link of gap 14 travels in the same
+  message, so this slice re-runs slice A2's parent tests with the inbox in place.
 
 **`offload` and `Task.within`** ride with slice G: both need the blocking pool or a timer, and neither has anything to
-say before real IO exists.
+say before real IO exists. `Task.within`'s *type* lands with slice A2, because `Cancelled` and `TimedOut` are what the
+migration writes against; its timer is slice G's.
 
 ## 15. Open, for the owner
 
 Everything technical above was decided and the reason is written next to it. These are the questions where the answer
-is taste or direction.
+is taste or direction. The eight that were asked have been answered; the answer is recorded under each, and the
+document above carries it.
 
 1. **`std/parallel` as a package of its own**, against putting `parallel()` in `std/task`. The argument for the split
    is in section 10: concurrency and throughput are two subjects, and the import is a statement about what a file
    spends. The cost is one more package in `std` and one more import line.
-2. **`parallel()` stays out of the prelude.** Sixteen names in every file, against one import at the point where a
-   program decides to use the machine.
+   **Decided:** a package of its own.
+2. **`parallel()` in the prelude.** Sixteen names in every file, against one import at the point where a program
+   decides to use the machine.
+   **Decided:** in the prelude — "a cool and important tool for fast parallelism that C# users underestimate". The
+   count in the objection was wrong and section 10 has the correction: the prelude costs **two lines**, because `map`,
+   `filter` and the rest are members of `Parallel` and `parallel` is an extension member imported by its qualified
+   name. `windows`, `Window` and `Plain` stay imports. The counterparts of `Parallel.For` and `Parallel.ForEach` are
+   `(0..rows).parallel().forEach { … }` and `cells.parallel().forEach { … }`, both of which type check today over the
+   one `extend<Item> Iterable<Item>`; there is no `parallelFor`, and section 4 argues why.
 3. **The name `Plain`** for "nothing reference counted inside". The alternatives considered were `Inline` (which the IR
    already uses for a different property — it also caps the size) and `Uncounted` (accurate and ugly).
+   **Decided:** `Plain`.
 4. **`pause()` against `yield`.** The word is spent on a generator keyword the moment a function takes it, and CONCEPT
    keeps that question open. If generators are never going to use the word, `yield()` is the name everybody else uses.
+   **Decided:** `pause()`. Section 9 gives it a second job under question 8: it is the cancellation point of a
+   computation that has no other one.
 5. **64 as the default chunk count.** It has to be a fixed number for the determinism of section 4; whether it is 64,
    32 or 256 is a measurement nobody has taken yet, and it is a number that cannot be changed later without changing
    every `Float` result a program recorded.
+   **Decided:** 64, to be measured before 7.7 and fixed by that measurement.
 6. **Whether `parallel()` should ever be unordered.** The answer here is no, argued from determinism. PLINQ, rayon and
    Java's parallel streams all default the other way, so it is worth one look.
+   **Decided:** never unordered — "that is the point".
 7. **Whether the field case of ECS gap 8 is wanted at all** — two *different* systems over disjoint fields at the same
    time, against data parallelism inside one system, which is what section 6 builds. The answer decides whether ECS
    gap 8 is narrowed to a window split or stays as it stands.
-8. **Whether a `Task` should be cancellable in v1.** Section 8 says no and offers the channel close instead. A task
-   scope with real cancellation is a large piece of design and it is the one thing Swift has that this document
-   deliberately does not.
+   **Open**, and it is decided with the ECS document rather than here, against a target level of Godot and Unity.
+8. **Whether a `Task` should be cancellable in v1.**
+   **Decided: every task is cancellable** — "then there are not two worlds again". Section 8 is that design, and it
+   replaced the channel close as the answer rather than joining it: closing a channel stays the end of a stream, and
+   stopping a task is `task.cancel()`.
+
+### Open, from the answer to question 8
+
+9. **`Never` leaves the asynchronous side.** Section 8: a failure type that cannot carry a `Cancelled` cannot be the
+   failure of work that waits, so `Channel`'s reading end becomes a `Source<Item, Cancelled>` and `Source`/`Sink` carry
+   `where Failure: From<Cancelled>`. That overturns a promise STREAMS makes in its own words — "the reading end cannot
+   fail; a closed channel is the end of the stream, not a failure" — which stays true about *closing* and stops being
+   true about *waiting*. The alternative is a rule that `?` on a `Cancelled` with no conversion available stops the
+   waiting task instead of converting, which keeps `Never` and makes `?` mean two things; this document rejects it for
+   the second reason and names it here because the first reason is real.
+10. **The name `outcome`** for "wait, and fold a cancellation into the task's own failure". It is the one member the
+    `Task<Result<Value, Failure>>` shape needs, `(task.await()?)?` is what it replaces, and a postfix `?` on an
+    `await()` runs into an operator that starts with the same character twice over: `await()??` is a parse error
+    because `??` is the fallback, and `await()?.into()` is `?.`, the optional chain. `outcome` was chosen over
+    `awaited` (one letter from `await`, and the language spends that distance on the value/mutating pair) and over
+    `value` (which says nothing about the failure).
+11. **`cancel()` and `within` as `var fn`s**, so that the right to stop a task is visible at the binding
+    (`var worker = spawn { … }`) and a `const` handle is the read-only view. The cost is that a `Task` somebody may
+    cancel cannot be held in a `const`, including inside a collection somebody else reads.
