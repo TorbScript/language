@@ -184,19 +184,16 @@ extend<Value: Show, Failure: Show> Result<Value, Failure> with Show {
  */
 extend<Value, Failure, Target: From<Iterable<Value>>> Result<Target, Failure> with From<Iterable<Result<Value, Failure>>> {
   static fn from(value: Iterable<Result<Value, Failure>>): Result<Target, Failure> {
-    var failure: Failure? = None
-    const target = Target.from(value.mapWhile { item =>
-      match item {                       // The pipeline is lazy: this runs while `Target.from` pulls
-        Ok(success) => Some success
+    // The values are gathered first: a lazy stage that noted the failure would have to capture a `var` it outlives
+    var found: List<Value> = []
+    for item in value {
+      match item {
+        Ok(success) => found.add success
         Fail(error) => {
-          failure = Some error
-          None
+          return Fail error
         }
       }
-    })
-    match failure {
-      Some(error) => Fail error
-      None => Ok target
     }
+    Ok Target.from(found)
   }
 }

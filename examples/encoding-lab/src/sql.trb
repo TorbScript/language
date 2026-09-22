@@ -130,9 +130,10 @@ public type Sql {
   fn insert<Value: Encode>(value: Value): SqlStatement {
     var target = ColumnEncoder()
     value.encode target
+    const encoded = target.values
     const names = columns.map({ _.name }).toList()
     const placeholders = columns.map({ _ => "?" }).toList()
-    const parameters = columns.map { column => target.values.get(column.path) ?? EncodedValue.Nothing }
+    const parameters = columns.map { column => encoded.get(column.path) ?? EncodedValue.Nothing }
     const columnList = names.joined separator: ", "
     const placeholderList = placeholders.joined separator: ", "
     const text = "INSERT INTO {tableName} ({columnList}) VALUES ({placeholderList})"

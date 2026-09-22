@@ -29,7 +29,7 @@ use ModuleId from "../module"
 use SymbolId from "../symbols"
 use resolveImport from "../graph"
 use TypeId, FunctionForm, FieldSignature, ParameterId from "./type"
-use Checker, Candidate, TypeScope from "./context"
+use Checker, Candidate, TypeScope, Unseen from "./context"
 use Target from "./name"
 use signatureOf, typeSignatureOf, aliasTargetOf, resultOf from "./signature"
 use fieldsOf, caseNamed, caseNamesOf from "./member"
@@ -1390,10 +1390,27 @@ public fn checkSharedIdentity(var checker: Checker, target: Target, arguments: L
       return
     }
   }
-  if checker.absorbs(annotation) || isSharedType(checker, annotation) {
+  if checker.absorbs(annotation) || hasKnownIdentity(checker, annotation) {
     return
   }
   const shown = checker.describe annotation
+  // A type parameter and a value of a `shared trait` may be an object or a value, and on a value the answer would expose
+  // storage - so what the checker cannot tell is refused, exactly as `spawn` refuses it from the other side
+  const isUnknown = match checker.types.form(annotation) {
+    .Parameter(_) => true
+    .Traits(_) => isSharedType checker, annotation
+    _ => false
+  }
+  if isUnknown {
+    checker.reportHere(
+      Diagnostic.error("`isSame` compares identity, and a `{shown}` may be a value", at)
+        .withNote(
+          "Only a `shared type` has an identity, and a value may stand behind `{shown}`. Take the `shared type` itself,"
+            + " or compare with `==`"
+        )
+    )
+    return
+  }
   checker.reportHere(
     Diagnostic.error("`isSame` compares identity, and a `{shown}` is a value", at)
       .withNote("Use `==`: two values are the same when their content is. Only a `shared type` has an identity")
@@ -1531,6 +1548,149 @@ fn sharedInside(var checker: Checker, annotation: TypeId): Bool {
     }
   }
   false
+}
+
+/**
+ * What a task cannot see inside a type: a type parameter, a function value or a value of a `shared trait`, wherever it
+ * stands - the type itself, a generic argument, a field, a field of a case. Each of the three may hide an object: a
+ * `shared type` may fill the parameter, a function value may have captured one, and one may be behind the trait. A task
+ * takes only what it can see is a value (CONCEPT, "Concurrency"), so `spawn` asks this before [containsShared].
+ *
+ * `Task` and `Channel` are skipped for the reason [containsShared] skips them, and the first thing found is the answer.
+ */
+public fn unseenInside(var checker: Checker, annotation: TypeId): Unseen {
+  if const Some(known) = checker.unseenContents.get(annotation.value) {
+    return known
+  }
+  if checker.unseenRunning.containsKey(annotation.value) {
+    checker.unseenCycles = checker.unseenCycles + 1
+    return Unseen.Nothing
+  }
+  checker.unseenRunning.set annotation.value, true
+  const cycles = checker.unseenCycles
+  const found = unseenOf checker, annotation
+  checker.unseenRunning.remove annotation.value
+  if checker.unseenCycles == cycles {
+    checker.unseenContents.set annotation.value, found
+  }
+  found
+}
+
+fn unseenOf(var checker: Checker, annotation: TypeId): Unseen {
+  const arguments = match checker.types.form(annotation) {
+    .Parameter(_) => {
+      return Unseen.TypeParameter
+    }
+    .Function(_) => {
+      return Unseen.FunctionValue
+    }
+    .Tuple(fields) => {
+      var parts: List<TypeId> = []
+      for field in fields {
+        parts.add field.annotation
+      }
+      return firstUnseen checker, parts
+    }
+    .Traits(bounds) => {
+      if isSharedType(checker, annotation) {
+        return Unseen.SharedTrait
+      }
+      var parts: List<TypeId> = []
+      for bound in bounds {
+        parts.addAll argumentsOfType(checker, bound)
+      }
+      return firstUnseen checker, parts
+    }
+    .Nominal(symbol, given) => {
+      if checker.wellKnown.isTaskHandle(symbol) {
+        return Unseen.Nothing
+      }
+      given
+    }
+    _ => {
+      return Unseen.Nothing
+    }
+  }
+  var parts = arguments
+  for field in fieldsOf(checker, annotation) {
+    parts.add field.annotation
+  }
+  for name in caseNamesOf(checker, annotation) {
+    if const Some(variant) = caseNamed(checker, annotation, name) {
+      for field in variant.fields {
+        parts.add field.annotation
+      }
+    }
+  }
+  firstUnseen checker, parts
+}
+
+/**
+ * Why a task cannot take a value of this type, as the end of a sentence (`a Connection has an identity`), or `None`
+ * where it can: an object, something that holds one, or something that may ([unseenInside]).
+ */
+public fn taskProblemOf(var checker: Checker, annotation: TypeId): String? {
+  if !isNothingUnseen(unseenInside(checker, annotation)) {
+    return Some "may hold an object"
+  }
+  if !containsShared(checker, annotation) {
+    return None
+  }
+  if isSharedType(checker, annotation) {
+    return Some "has an identity"
+  }
+  Some "holds an object"
+}
+
+/** The note under [taskProblemOf]'s message: what the task could take instead. */
+public fn taskNoteOf(var checker: Checker, annotation: TypeId): String {
+  match unseenInside(checker, annotation) {
+    .TypeParameter => {
+      "A type parameter may be filled with a `shared type`, and a task only takes what it can see is a value. Give"
+        + " the value a concrete type, or build it inside the closure"
+    }
+    .FunctionValue => {
+      "What a function value captured is not part of its type. A closure written right there may cross, and so may a"
+        + " function-typed parameter - its callers are checked instead"
+    }
+    .SharedTrait => {
+      "A `shared type` may stand behind a `shared trait`, and a task only takes what it can see is a value. Pass the"
+        + " concrete type, or build the value inside the closure"
+    }
+    .Nothing => {
+      "A task gets copies, and an object is not copied. `Task` and `Channel` are what crosses between tasks: make the"
+        + " object inside the closure, or send what it holds through a `Channel`"
+    }
+  }
+}
+
+fn firstUnseen(var checker: Checker, parts: List<TypeId>): Unseen {
+  for part in parts {
+    const found = unseenInside checker, part
+    if !isNothingUnseen(found) {
+      return found
+    }
+  }
+  Unseen.Nothing
+}
+
+fn isNothingUnseen(found: Unseen): Bool {
+  match found {
+    .Nothing => true
+    _ => false
+  }
+}
+
+/**
+ * Whether a type is **known** to have an identity: a `shared type` itself. A type parameter and a value of a `shared
+ * trait` may be either an object or a value, so the checker cannot tell - and `isSame`, which exposes storage on a
+ * value, takes only what it can tell. `spawn` asks the mirror question ([unseenInside]) and refuses the same two.
+ */
+public fn hasKnownIdentity(var checker: Checker, annotation: TypeId): Bool {
+  match checker.types.form(annotation) {
+    .Nominal(symbol, _) => isSharedDeclaration checker, symbol
+    _ => false
+  }
 }
 
 /**

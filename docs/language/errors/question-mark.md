@@ -153,6 +153,41 @@ print firstLine("project.trb")
    surrounding "function" is the file itself; see [Errors at the top level](top-level-errors.md) for what happens to
    the failure there.
 
+8. **`?` inside a closure returns from the closure, so the closure has to produce an `Option` or a `Result`.** The
+   failure goes to whoever runs the closure, never past it to the function around it. Where the closure's result is
+   written down (`const read: (String) => Result<Int, String> = { ... }`) it is checked at the `?`; where it is
+   inferred, it is checked once the closure is: a closure that turns out to produce anything else is an error at the
+   `?`, because the failure would have nowhere to go.
+
+   ```trb check
+   fn parse(text: String): Result<Int, String> {
+     match Int.tryFrom(text) {
+       Ok(number) => Ok number
+       Fail(_) => Fail "not a number: {text}"
+     }
+   }
+
+   const doubled: (String) => Result<Int, String> = { text => Ok(parse(text)? * 2) }
+   print doubled("21")
+   ```
+
+   ```trb error
+   fn parse(text: String): Result<Int, String> {
+     match Int.tryFrom(text) {
+       Ok(number) => Ok number
+       Fail(_) => Fail "not a number: {text}"
+     }
+   }
+
+   fn total(texts: List<String>): Int {
+     texts.map({ parse(_)? }).toList().sum()
+   }
+   // error: `?` returns from this closure, and the closure produces `Int64`
+   ```
+
+   Handle the failure inside the closure with `match` or `??`, or let the closure produce the `Result` and decide
+   outside it (`texts.map({ parse(_) })`).
+
 ## What this is not
 
 **`?` is not `try`, and there is no `catch`.** It does not unwind a call stack, and nothing runs on the way out beyond
@@ -192,9 +227,9 @@ fn total(values: List<String>): List<Int> {
 // error: `?` needs a function that returns an `Option` or a `Result`, and this one returns `List<Int64>`
 ```
 
-This is only checked against a written result type: a function whose result is inferred - one that is not `public`
-and not a trait method, see [Declaring a function](../functions/declaring-a-function.md) - still accepts a `?` that
-has nowhere to go, because the checker has not yet decided the result type at the point it would need to reject it.
+A function whose result is inferred - one that is not `public` and not a trait method, see
+[Declaring a function](../functions/declaring-a-function.md) - is held to the same rule once its result is known: a
+`?` in a body that turns out to produce neither an `Option` nor a `Result` is rejected at the `?`.
 
 ## Related
 

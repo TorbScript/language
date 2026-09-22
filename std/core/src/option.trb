@@ -190,11 +190,16 @@ extend<Value: Show> Option<Value> with Show {
  */
 extend<Value, Target: From<Iterable<Value>>> Option<Target> with From<Iterable<Value?>> {
   static fn from(value: Iterable<Value?>): Target? {
-    var complete = true
-    const target = Target.from(value.mapWhile { item =>
-      complete = item.isSome()           // The pipeline is lazy: this runs while `Target.from` pulls
-      item
-    })
-    if complete { Some target } else { None }
+    // The values are gathered first: a lazy stage that noted the `None` would have to capture a `var` it outlives
+    var found: List<Value> = []
+    for item in value {
+      match item {
+        Some(present) => found.add present
+        None => {
+          return None
+        }
+      }
+    }
+    Some Target.from(found)
   }
 }

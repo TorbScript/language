@@ -1,0 +1,640 @@
+/**
+ * Where a closure may go, and where a function value may go. Two things may not go everywhere: a closure that shares a
+ * `var` binding, and anything that crosses into a task.
+ *
+ * **A closure that captures a `var` binding does not escape.** A local `var`, a `var` parameter, the receiver of a
+ * `var fn`, a `var` parameter of a closure around it: the closure shares that binding with the scope it was written in,
+ * so it may only run while that scope does. It may stand straight as the argument of a call whose parameter only calls
+ * it - `items.forEach { total = total + _ }`, `using file { ... }`, every block of a DSL - and nowhere else. Bound to a
+ * name, stored, returned, built into a collection or a case, handed to `spawn` or to a parameter that keeps it, it is an
+ * error. That is what keeps a `var` binding a variable instead of a hidden shared object: two copies of a value never
+ * share one through a closure, a closure never changes a binding while a `var` access to it runs, and a task never
+ * gets one.
+ *
+ * **A parameter only calls a closure** when it has a function type, its function has a body, and that body only ever
+ * calls it: `action(value)`, `action value`, inside a closure that itself only runs during the call, or handed on by
+ * name to a parameter that only calls it. Everything else keeps it - `Mapped self, transform` stores it, `[action]`
+ * builds it into a list, `Some(action)` into a case - and so does a function without a body, a parameter whose type is
+ * not a function type (`add(item: Item)`), a constructor, and a function value whose declaration nothing names.
+ *
+ * **What crosses into a task.** `spawn` takes only what it can see is a value (`call.trb`), and a function-typed
+ * parameter that a `spawn` closure captures is the one function value it takes: whatever fills that parameter crosses
+ * as well, so the captures of a closure handed to it are held to the same rule at every call.
+ *
+ * Both answers are facts of a callee's body, and a body is not necessarily checked before its callers - the bodies of
+ * the standard library are checked on demand. So the questions are written down while the bodies are checked (an
+ * [EscapeCheck] per closure argument that needs an answer, a [ParameterForward] per parameter handed on by name, a
+ * [FunctionValueCheck] per other function value) and answered once at the end ([settleEscapes]): every callee they ask
+ * about is checked first, the two facts are propagated to a fixpoint, and only then is anything reported.
+ */
+
+use Span from "../../syntax/source"
+use Diagnostic from "../../syntax/diagnostic"
+use Expression from "../../syntax/ast"
+use SymbolId from "../symbols"
+use TypeId, ParameterForm, ImplementationId from "./type"
+use Checker, BindingId, LocalBinding, Capture, ClosureKind, Resolution from "./context"
+use ArgumentSite, EscapeCheck, ParameterForward, FunctionValueCheck from "./context"
+use signatureOf, typeSignatureOf from "./signature"
+use checkBodyOf from "./statement"
+use memberOfImplementation from "./implementation"
+use taskProblemOf, taskNoteOf from "./declaration"
+use resolveType from "./unify"
+
+// --- While the bodies are checked -----------------------------------------------------------------------------------
+
+/**
+ * The function-typed parameters of a declared function, by their bindings: what a closure argument arrives as, and
+ * what the body may keep. `from` is where the parameters' bindings begin.
+ */
+public fn declareParameterOwners(var checker: Checker, symbol: SymbolId, from: Int, parameters: List<ParameterForm>) {
+  var index = 0
+  var position = from
+  while position < checker.bindings.length() {
+    if !checker.bindings[position].isReceiver {
+      if index < parameters.length() && isFunctionType(checker, parameters[index].annotation) {
+        checker.parameterOwners.set position, (symbol.value, index)
+      }
+      index = index + 1
+    }
+    position = position + 1
+  }
+}
+
+/**
+ * Whether the closure may outlive the call it stands in, and what that means for what it captured. It is `Local` when
+ * it is written straight as the argument of a call - every receiver closure, every DSL block, every pipeline stage -
+ * which is also what lets a back end put its environment on the stack, and `Escaping` everywhere else.
+ *
+ * An escaping closure may capture no `var` binding at all. A local one may, as long as the parameter it fills only
+ * calls it - which only the callee's body says, so that part waits for [settleEscapes].
+ */
+public fn noteClosureKind(var checker: Checker, at: Span, captures: List<Capture>) {
+  const isLocal = checker.argumentClosures.containsKey at
+  const kind = if isLocal { ClosureKind.Local } else { ClosureKind.Escaping }
+  checker.recordClosureKind at, kind
+  var held: List<String> = []
+  var firstHeld: LocalBinding? = None
+  var parameters: List<(Int, Int)> = []
+  var unseen: List<(String, TypeId)> = []
+  for capture in captures {
+    const binding = checker.binding capture.binding
+    if binding.isVar {
+      held.add heldName(binding)
+      if firstHeld.isNone() {
+        firstHeld = Some binding
+      }
+    }
+    if const Some(owner) = checker.parameterOwners.get(capture.binding.value) {
+      parameters.add owner
+      continue
+    }
+    if !binding.isVar && taskProblemOf(checker, binding.annotation).isSome() {
+      const item = (binding.name, binding.annotation)
+      unseen.add item
+    }
+  }
+  if !isLocal {
+    for parameter in parameters {
+      checker.keptParameters.set parameter, true
+    }
+    if const Some(binding) = firstHeld {
+      reportEscaping checker, binding, at
+    }
+    return
+  }
+  const site = checker.closureSites.get(at) ?? ArgumentSite.Filled(Resolution.Deferred, -1, "", "")
+  // A configuring block runs in place, and a `spawn` closure is held to its own rule by the call (`call.trb`)
+  if isAppliedSite(site) || isSpawnSite(checker, site) {
+    return
+  }
+  if held.isEmpty() && parameters.isEmpty() && unseen.isEmpty() {
+    return
+  }
+  checker.escapeChecks.add EscapeCheck(checker.module, at, site, held, parameters, unseen)
+}
+
+/**
+ * A function-typed parameter read as a value instead of being called. Handed straight on as the argument of a call it
+ * is kept where that parameter keeps it; anything else - a binding, a field, a collection, a `return` - keeps it.
+ */
+public fn noteParameterUse(var checker: Checker, binding: BindingId, at: Span) {
+  const owner = match checker.parameterOwners.get(binding.value) {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  if const Some(site) = checker.nameSite {
+    if checker.nameSiteAt == at {
+      checker.parameterForwards.add ParameterForward(owner, site)
+      return
+    }
+  }
+  checker.keptParameters.set owner, true
+}
+
+/**
+ * A function value handed to a function-typed parameter that is not a closure written right there. A declared function,
+ * a constructor and a case capture nothing, and a parameter is followed by name ([noteParameterUse]); anything else
+ * has captures its type does not show, which only matters where the parameter hands it to a task.
+ */
+public fn noteFunctionArgument(var checker: Checker, value: Expression, annotation: TypeId, site: ArgumentSite) {
+  const wanted = resolveType checker, annotation
+  if !isFunctionType(checker, wanted) {
+    return
+  }
+  if const .Name(_) = value.kind {
+    const resolution = checker.resolutionHere(value.span) ?? Resolution.Deferred
+    match resolution {
+      .Callable(symbol, _, _) => {
+        if isFunctionSymbol(checker, symbol) {
+          return
+        }
+      }
+      .Construct(_) => {
+        return
+      }
+      .CaseOf(_, _) => {
+        return
+      }
+      .Local(binding) => {
+        if checker.parameterOwners.containsKey(binding.value) {
+          return
+        }
+      }
+      _ => {}
+    }
+  }
+  checker.functionValueChecks.add FunctionValueCheck(checker.module, value.span, site)
+}
+
+/**
+ * A binding a `spawn` closure captures. A function-typed parameter crosses into the task, so whatever fills it has to
+ * be something a task may take - which every call of the function is then held to. Answers whether it was one.
+ */
+public fn noteTaskParameter(var checker: Checker, binding: BindingId): Bool {
+  const owner = match checker.parameterOwners.get(binding.value) {
+    Some(found) => found
+    None => {
+      return false
+    }
+  }
+  checker.keptParameters.set owner, true
+  checker.crossingParameters.set owner, true
+  true
+}
+
+// --- At the end of the pass -----------------------------------------------------------------------------------------
+
+/** What a call site reaches: the declarations that may run, or a kind of callee that says enough by itself. */
+type Callees {
+  /** A configuring property command: the block runs in place and is dropped. */
+  case Applied
+  /** A function value or something that could not be resolved: nothing is known about what it does. */
+  case Unknown
+  /** A constructor or a case: the argument becomes part of the value. */
+  case Storing
+  /** The functions that may run: one, or every implementation of a trait member. */
+  case Declared(members: List<SymbolId>)
+}
+
+/**
+ * Answers every question [noteClosureKind], [noteParameterUse] and [noteFunctionArgument] wrote down. First the bodies
+ * they ask about are checked - and a body checked here may write down questions of its own - then the facts "keeps
+ * what it is handed" and "hands it to a task" are propagated along the parameters that are handed on until nothing
+ * changes, and only then are the closures and function values that went where they may not reported.
+ */
+public fn settleEscapes(var checker: Checker) {
+  var escapeCallees: List<Callees> = []
+  var forwardCallees: List<Callees> = []
+  var valueCallees: List<Callees> = []
+  var isGrowing = true
+  while isGrowing {
+    isGrowing = false
+    while escapeCallees.length() < checker.escapeChecks.length() {
+      const site = checker.escapeChecks[escapeCallees.length()].site
+      escapeCallees.add calleesChecked(checker, site)
+      isGrowing = true
+    }
+    while forwardCallees.length() < checker.parameterForwards.length() {
+      const site = checker.parameterForwards[forwardCallees.length()].site
+      forwardCallees.add calleesChecked(checker, site)
+      isGrowing = true
+    }
+    while valueCallees.length() < checker.functionValueChecks.length() {
+      const site = checker.functionValueChecks[valueCallees.length()].site
+      valueCallees.add calleesChecked(checker, site)
+      isGrowing = true
+    }
+  }
+  var isChanging = true
+  while isChanging {
+    isChanging = false
+    for index in 0..checker.parameterForwards.length() {
+      const forward = checker.parameterForwards[index]
+      const position = positionOf forward.site
+      if markParameter(checker, forward.parameter, forwardCallees[index], position) {
+        isChanging = true
+      }
+    }
+    for index in 0..checker.escapeChecks.length() {
+      const check = checker.escapeChecks[index]
+      const position = positionOf check.site
+      for parameter in check.parameters {
+        if markParameter(checker, parameter, escapeCallees[index], position) {
+          isChanging = true
+        }
+      }
+    }
+  }
+  for index in 0..checker.escapeChecks.length() {
+    reportEscapeCheck checker, checker.escapeChecks[index], escapeCallees[index]
+  }
+  for index in 0..checker.functionValueChecks.length() {
+    const check = checker.functionValueChecks[index]
+    if crossesThrough(checker, valueCallees[index], positionOf(check.site)) {
+      reportCrossingValue checker, check
+    }
+  }
+}
+
+/** The callees of a site, with every body among them checked, so that what it keeps and hands on is known. */
+fn calleesChecked(var checker: Checker, site: ArgumentSite): Callees {
+  const callees = calleesOf checker, site
+  if const .Declared(members) = callees {
+    for member in members {
+      checkBodyOf checker, member
+    }
+  }
+  callees
+}
+
+/**
+ * Carries both facts of a site over to a parameter that was handed to it: kept where the site keeps, crossing where it
+ * crosses. Answers whether anything changed, which is what keeps the fixpoint going.
+ */
+fn markParameter(var checker: Checker, parameter: (Int, Int), callees: Callees, position: Int): Bool {
+  var isChanged = false
+  if !checker.keptParameters.containsKey(parameter) && keepsThrough(checker, callees, position) {
+    checker.keptParameters.set parameter, true
+    isChanged = true
+  }
+  if !checker.crossingParameters.containsKey(parameter) && crossesThrough(checker, callees, position) {
+    checker.crossingParameters.set parameter, true
+    isChanged = true
+  }
+  isChanged
+}
+
+fn calleesOf(var checker: Checker, site: ArgumentSite): Callees {
+  const resolution = match site {
+    .Applied => {
+      return Callees.Applied
+    }
+    .Filled(found, _, _, _) => found
+  }
+  match resolution {
+    .Callable(symbol, _, dispatch) => {
+      // A field that holds a closure is called as a `Callable` too, and says nothing about its body
+      if !isFunctionSymbol(checker, symbol) {
+        return Callees.Unknown
+      }
+      match dispatch {
+        .Direct => Callees.Declared([symbol])
+        .Implementation(implementation, _) => {
+          const name = checker.symbolAt(symbol).name
+          const member = memberOfImplementation(checker, implementation, name) ?? symbol
+          Callees.Declared([member])
+        }
+        .Object(bound, _) => Callees.Declared traitMembersOf(checker, symbol, bound)
+        .Forwarded(_, bound, _) => Callees.Declared traitMembersOf(checker, symbol, bound)
+      }
+    }
+    .Construct(_) | .CaseOf(_, _) | .CopyOf(_) => Callees.Storing
+    _ => Callees.Unknown
+  }
+}
+
+/**
+ * Every declaration a call of a trait member through a witness table may run: the default of the trait, the default a
+ * trait that extends it declares in its place (`List` overrides members of `Iterable`), and the member every
+ * implementation of one of those traits provides. A requirement nothing implements answers nothing, and then nothing
+ * can run to keep or to hand on what the call is given.
+ */
+fn traitMembersOf(var checker: Checker, symbol: SymbolId, bound: TypeId): List<SymbolId> {
+  var members: List<SymbolId> = []
+  addWithBody checker, members, symbol
+  const capability = match checker.types.form(bound) {
+    .Nominal(found, _) => found
+    _ => {
+      return members
+    }
+  }
+  const name = checker.symbolAt(symbol).name
+  var traits: List<SymbolId> = []
+  for index in 0..checker.implementations.all.length() {
+    const implementation = checker.implementations.all[index]
+    const head = match implementation.capability {
+      Some(found) => headOf checker, found
+      None => None
+    }
+    const implemented = match head {
+      Some(found) => found
+      None => {
+        continue
+      }
+    }
+    if !extendsTrait(checker, implemented, capability, 0) {
+      continue
+    }
+    if !traits.contains(implemented) {
+      traits.add implemented
+      const shape = checker.typeSignature typeSignatureOf(checker, implemented)
+      if const Some(own) = shape.members.get(name) {
+        addWithBody checker, members, own
+      }
+    }
+    match memberOfImplementation(checker, ImplementationId(index), name) {
+      Some(member) => addWithBody checker, members, member
+      None => {
+        // A `native type` provides the member through the runtime, with nothing declared: the requirement stands for
+        // it, and having no body it keeps what it is handed
+        if implementation.isNative && !members.contains(symbol) {
+          members.add symbol
+        }
+      }
+    }
+  }
+  members
+}
+
+/** A declaration that may run, once: one without a body is a requirement, and what fills it is listed on its own. */
+fn addWithBody(var checker: Checker, var members: List<SymbolId>, member: SymbolId) {
+  if members.contains(member) || !isFunctionSymbol(checker, member) {
+    return
+  }
+  if checker.signature(signatureOf(checker, member)).hasBody || isNativeMember(checker, member) {
+    members.add member
+  }
+}
+
+/** A `native` member has no body either, but it is what runs: it is listed, and it keeps what it is handed. */
+fn isNativeMember(var checker: Checker, member: SymbolId): Bool {
+  match checker.siteOf(member) {
+    Some(site) => {
+      match site.kind {
+        .Owned(_, _, declared) => declared.modifiers.isNative
+        .Declared(declaration) => declaration.modifiers.isNative
+        _ => false
+      }
+    }
+    None => false
+  }
+}
+
+/** Whether `capability` is the `wanted` trait or extends it, through any number of supertraits. */
+fn extendsTrait(var checker: Checker, capability: SymbolId, wanted: SymbolId, depth: Int): Bool {
+  if capability == wanted {
+    return true
+  }
+  if depth > 16 {
+    return false
+  }
+  if !isTraitSymbol(checker, capability) {
+    return false
+  }
+  const shape = checker.typeSignature typeSignatureOf(checker, capability)
+  for supertrait in shape.traits {
+    if const Some(head) = headOf(checker, supertrait.capability) {
+      if extendsTrait(checker, head, wanted, depth + 1) {
+        return true
+      }
+    }
+  }
+  false
+}
+
+fn headOf(checker: Checker, annotation: TypeId): SymbolId? {
+  if const .Nominal(symbol, _) = checker.types.form(annotation) {
+    return Some symbol
+  }
+  None
+}
+
+fn isTraitSymbol(checker: Checker, symbol: SymbolId): Bool {
+  match checker.symbolAt(symbol).kind {
+    .Trait => true
+    _ => false
+  }
+}
+
+/** Whether any declaration of the site keeps what fills the parameter. */
+fn keepsThrough(var checker: Checker, callees: Callees, position: Int): Bool {
+  match callees {
+    .Applied => false
+    .Unknown => true
+    .Storing => true
+    .Declared(members) => {
+      for member in members {
+        if keepsParameter(checker, member, position) {
+          return true
+        }
+      }
+      false
+    }
+  }
+}
+
+fn keepsParameter(var checker: Checker, member: SymbolId, position: Int): Bool {
+  const signature = checker.signature signatureOf(checker, member)
+  const parameter = match signature.form.parameters.get(position) {
+    Some(found) => found
+    None => {
+      return true
+    }
+  }
+  if !signature.hasBody || !isFunctionType(checker, parameter.annotation) {
+    return true
+  }
+  const key = (member.value, position)
+  checker.keptParameters.containsKey key
+}
+
+/**
+ * Whether any declaration of the site hands what fills the parameter to a task. A value that becomes part of another
+ * one does not cross by itself - a task that took *that* value is refused for the function inside it - so only a
+ * function-typed parameter crosses: one a `spawn` closure captures, or a `native` one of the task library.
+ */
+fn crossesThrough(var checker: Checker, callees: Callees, position: Int): Bool {
+  match callees {
+    .Applied => false
+    .Unknown => true
+    .Storing => false
+    .Declared(members) => {
+      for member in members {
+        if crossesParameter(checker, member, position) {
+          return true
+        }
+      }
+      false
+    }
+  }
+}
+
+fn crossesParameter(var checker: Checker, member: SymbolId, position: Int): Bool {
+  const signature = checker.signature signatureOf(checker, member)
+  const parameter = match signature.form.parameters.get(position) {
+    Some(found) => found
+    None => {
+      return false
+    }
+  }
+  if !isFunctionType(checker, parameter.annotation) {
+    return false
+  }
+  if !signature.hasBody {
+    return isTaskNative checker, member
+  }
+  const key = (member.value, position)
+  checker.crossingParameters.containsKey key
+}
+
+/** A `native` of the module `spawn` is declared in: `Task.map` runs its closure where the task finishes. */
+fn isTaskNative(var checker: Checker, member: SymbolId): Bool {
+  const spawn = match checker.wellKnown.spawn {
+    Some(found) => found
+    None => {
+      return false
+    }
+  }
+  checker.symbolAt(member).module == checker.symbolAt(spawn).module
+}
+
+// --- Messages -------------------------------------------------------------------------------------------------------
+
+fn reportEscaping(var checker: Checker, binding: LocalBinding, at: Span) {
+  const held = heldName binding
+  if !binding.isParameter {
+    checker.reportHere Diagnostic.error("This closure captures {held} and may outlive it", at).withNote(sharingNote())
+    return
+  }
+  checker.reportHere(
+    Diagnostic.error("This closure captures {held} and may outlive the call", at)
+      .withNote(
+        "A reference is second-class: only a closure written straight as the argument of a call that just calls it"
+          + " may hold one"
+      )
+  )
+}
+
+fn reportEscapeCheck(var checker: Checker, check: EscapeCheck, callees: Callees) {
+  const position = positionOf check.site
+  const (callee, parameter) = namesOf check.site
+  if const Some(held) = check.held.first() {
+    if keepsThrough(checker, callees, position) {
+      const problem = match callees {
+        .Storing => Diagnostic.error "This closure captures {held}, and `{callee}` stores it", check.at
+        .Declared(_) => {
+          Diagnostic.error "This closure captures {held}, and `{callee}` keeps its `{parameter}`", check.at
+        }
+        _ => Diagnostic.error "This closure captures {held}, and the function it is handed to may keep it", check.at
+      }
+      checker.report check.module, problem.withNote(sharingNote())
+      return
+    }
+  }
+  if check.unseen.isEmpty() || !crossesThrough(checker, callees, position) {
+    return
+  }
+  for (name, annotation) in check.unseen {
+    const held = taskProblemOf(checker, annotation) ?? "holds an object"
+    const shown = checker.describe annotation
+    const note = taskNoteOf checker, annotation
+    checker.report(
+      check.module,
+      Diagnostic.error("`{callee}` runs this closure as a task, so it cannot take `{name}`: a `{shown}` {held}", check.at)
+        .withNote(note)
+    )
+  }
+}
+
+fn reportCrossingValue(var checker: Checker, check: FunctionValueCheck) {
+  const (callee, _) = namesOf check.site
+  checker.report(
+    check.module,
+    Diagnostic.error("`{callee}` runs this function value as a task, and what it captured is not part of its type", check.at)
+      .withNote(
+        "A task only takes what it can see is a value. Hand in a closure written right there, whose captures are"
+          + " checked, a declared function, or a function-typed parameter"
+      )
+  )
+}
+
+fn sharingNote(): String {
+  "A closure that shares a `var` binding may only run while the binding exists, so it may only be the argument of a"
+    + " parameter that just calls it. Hand the value to a `var` parameter instead, or let the closure return what it"
+    + " computed"
+}
+
+/** How a message names a captured `var` binding. */
+fn heldName(binding: LocalBinding): String {
+  if binding.isReceiver {
+    return "the receiver `self`"
+  }
+  if binding.isParameter {
+    return "the `var` parameter `{binding.name}`"
+  }
+  "the `var` binding `{binding.name}`"
+}
+
+// --- Small questions ------------------------------------------------------------------------------------------------
+
+fn isFunctionType(var checker: Checker, annotation: TypeId): Bool {
+  const resolved = resolveType checker, annotation
+  match checker.types.form(resolved) {
+    .Function(_) => true
+    _ => false
+  }
+}
+
+fn isFunctionSymbol(checker: Checker, symbol: SymbolId): Bool {
+  match checker.symbolAt(symbol).kind {
+    .Function => true
+    _ => false
+  }
+}
+
+fn isAppliedSite(site: ArgumentSite): Bool {
+  match site {
+    .Applied => true
+    _ => false
+  }
+}
+
+fn isSpawnSite(checker: Checker, site: ArgumentSite): Bool {
+  const spawn = match checker.wellKnown.spawn {
+    Some(found) => found
+    None => {
+      return false
+    }
+  }
+  if const .Filled(.Callable(symbol, _, _), _, _, _) = site {
+    return symbol == spawn
+  }
+  false
+}
+
+fn positionOf(site: ArgumentSite): Int {
+  match site {
+    .Applied => -1
+    .Filled(_, position, _, _) => position
+  }
+}
+
+fn namesOf(site: ArgumentSite): (String, String) {
+  match site {
+    .Applied => ("", "")
+    .Filled(_, _, callee, parameter) => (callee, parameter)
+  }
+}

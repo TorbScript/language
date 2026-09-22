@@ -153,7 +153,7 @@ that answers the question. A page marked (planned) describes a feature that does
 ## language/functions
 
 - `language/functions/arguments.md` - **Arguments and labels** (reference): An argument is passed positionally or by label, positional arguments always come first, and a label matches a parameter by name rather than by position.
-- `language/functions/closures.md` - **Closures** (reference): A brace in expression position is always a closure, its parameters are inferred from the expected type or written out, and it captures a const binding as a copy and a var binding as a box shared with its scope.
+- `language/functions/closures.md` - **Closures** (reference): A brace in expression position is always a closure with inferred or written parameters; it captures a const binding as a copy and a var binding as itself, which only a closure handed to a parameter that just calls it may do.
 - `language/functions/declaring-a-function.md` - **Declaring a function** (reference): fn declares a function with a mandatory parameter type on every parameter; the last expression of the body is the result, and a public function or a trait method must always spell out its return type.
 - `language/functions/default-values.md` - **Default values** (reference): A parameter default is an expression that runs at every call which omits the argument, in the scope of the declaration, without self and without the other parameters.
 - `language/functions/index.md` - **Functions** (index): Declaring a function, its arguments and defaults, variadic parameters, closures, trailing closures, parameter modes and quoted expressions.

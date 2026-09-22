@@ -84,10 +84,10 @@ const closures = r"""
 
   fn counted(times: Int): Int {
     var hits = 0
-    const bump = {
-      hits = hits + 1
-    }
-    bump()
+    const _ = applied(times, { step =>
+      hits = hits + step
+      hits
+    })
     hits
   }
 
@@ -271,15 +271,15 @@ group "A captured `var` binding" {
           slot %0 parameter times: Int64
           slot %1 temporary: Int64
           slot %2 local hits: Record(T_box__Int64)
-          slot %3 local bump: Closure(() -> Void)
-          slot %4 temporary: Void
+          slot %3 temporary: Closure((Int64) -> Int64)
+          slot %4 temporary: Int64
           slot %5 temporary: Int64
         b0: # acme/app/src/main.trb:13 body
           %1 = constant s_literal__Int64_0
           %2 = construct T_box__Int64 (%1 borrowed)
           retain %2
-          %3 = closure t_closure__t_acme_x2f_app_main_counted_0 captures(%2 boxed) escaping
-          callClosure %3()
+          %3 = closure t_closure__t_acme_x2f_app_main_counted_0 captures(%2 boxed) local
+          %4 = call t_acme_x2f_app_main_applied(%0 borrowed, %3 borrowed last) at acme/app/src/main.trb:15:13
           release %3
           %5 = read %2.value
           release %2
@@ -291,20 +291,21 @@ group "A captured `var` binding" {
   test "is never made unique: the closure and the frame have to see one variable (gap 19)" {
     assert(
       ownedIrOf(closures, "t_closure__t_acme_x2f_app_main_counted_0") == r"""
-        fn t_closure__t_acme_x2f_app_main_counted_0(environment: Record(T_environment__t_closure__t_acme_x2f_app_main_counted_0) borrowed) -> Void {
+        fn t_closure__t_acme_x2f_app_main_counted_0(environment: Record(T_environment__t_closure__t_acme_x2f_app_main_counted_0) borrowed, Int64 borrowed) -> Int64 {
           slot %0 parameter environment: Record(T_environment__t_closure__t_acme_x2f_app_main_counted_0)
-          slot %1 local hits: Record(T_box__Int64)
-          slot %2 temporary: Int64
+          slot %1 parameter: Int64
+          slot %2 local hits: Record(T_box__Int64)
           slot %3 temporary: Int64
           slot %4 temporary: Int64
+          slot %5 temporary: Int64
         b0: # acme/app/src/main.trb:15 closure
-          %1 = read %0.hits
-          %2 = read %1.value
-          %3 = constant s_literal__Int64_1
-          %4 = intrinsic add.i64 %2, %3 at acme/app/src/main.trb:16:12
-          write %1.value = %4 borrowed
-          release %1
-          return
+          %2 = read %0.hits
+          %3 = read %2.value
+          %4 = intrinsic add.i64 %3, %1 at acme/app/src/main.trb:16:12
+          write %2.value = %4 borrowed
+          %5 = read %2.value
+          release %2
+          return %5 borrowed
         }"""
     )
   }

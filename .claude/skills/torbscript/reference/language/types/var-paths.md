@@ -75,7 +75,8 @@ print counter.count
 
 3. **A reference is second-class: it exists only as a `var` parameter or a `var fn` receiver, for the duration of one call.**
    It cannot be stored in a field, returned, or captured by a closure that outlives the call - which is exactly what
-   keeps the language free of lifetimes and dangling references.
+   keeps the language free of lifetimes and dangling references. A closure may capture one only where it stands
+   straight as the argument of a call whose parameter only calls it (rule 4), and the checker enforces it.
 
    ```trb error
    type Counter {
@@ -88,22 +89,21 @@ print counter.count
    // error: This closure captures the receiver `self` and may outlive the call
    ```
 
-4. **A closure that captures a `var` binding may not escape its scope** - the same rule, and the same conservative
-   check, as for a `var` parameter: the closure has to be written directly as the argument of a call that does not
-   store it. The binding is shared between the closure and its scope for that call, and the call counts as an access
-   to it. *Decided, and not yet enforced by the checker*: until it is, a closure that captures a `var` binding can
-   still be bound to a name, stored or returned, and the binding then lives in a counted box - the aliasing, the race
-   through `spawn` and the cycles that come from that are the reason for the rule.
+4. **A captured `var` binding follows the same rule as a reference.** The closure shares the binding with its scope
+   rather than copying it, so it may only run while the binding exists: it may stand straight as the argument of a call
+   whose parameter only calls it (`items.forEach { total = total + _ }`, a receiver closure, a block of a DSL), and it
+   may not be bound to a name, stored, returned or handed to a parameter that keeps it. See
+   [Closures](../functions/closures.md), rule 8.
 
-   ```trb skip decided, not yet enforced by the checker
-   fn makeCounter(): () => Int {
+   ```trb error
+   fn counter(): () => Int {
      var count = 0
      {
        count = count + 1
        count
      }
    }
-   // error (planned): the closure captures `count`, a `var` binding, and escapes its scope
+   // error: This closure captures the `var` binding `count` and may outlive it
    ```
 
    State that has to outlive its scope is a [shared type](shared-types.md), which says it has an identity; recursion is

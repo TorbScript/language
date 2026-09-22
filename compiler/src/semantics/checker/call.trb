@@ -16,7 +16,7 @@ use Diagnostic from "../../syntax/diagnostic"
 use Expression, Argument, CallStyle from "../../syntax/ast"
 use editDistance from "../resolve-types"
 use TypeId, FunctionForm, ParameterForm, ParameterMode, ParameterId, Bound, Witness from "./type"
-use Checker, Expectation, Resolution, Adaptation, Dispatch, Candidate from "./context"
+use Checker, Expectation, Resolution, Adaptation, Dispatch, Candidate, ArgumentSite from "./context"
 use Target, targetOfCandidate from "./name"
 use hasCases, caseNamesOf from "./member"
 use checkExpression, inferExpression, deferExpression, deferArguments, optionValueOf from "./expression"
@@ -27,10 +27,11 @@ use propertyWrite from "./command"
 use openReceiverAccess, openArgumentAccess, closeAccessesTo, checkCallReads, isDeclaredVar from "./place"
 use resultOf from "./signature"
 use noteArgumentClosures from "./mutation"
+use noteTaskParameter, noteFunctionArgument from "./escape"
 use taskValueOf from "./statement"
 use isQuotation, openThunk, closeThunk from "./quote"
 use checkConstruction, checkSharedIdentity, requireSharedFields from "./declaration"
-use containsShared, isSharedType from "./declaration"
+use taskProblemOf, taskNoteOf from "./declaration"
 use capsuleNotesOf from "./derive"
 
 /** Which parameter every written argument fills, and what the call adds to what was written. */
@@ -124,7 +125,7 @@ public fn checkCall(
   // The closure that fills `spawn`'s parameter becomes a task, which its own type does not say: the call does
   const savedTaskArgument = checker.isTaskArgument
   checker.isTaskArgument = isSpawnTarget checker, target
-  checkArguments checker, inner, arguments, plan, calleeName, isDiscarded, call
+  checkArguments checker, inner, arguments, plan, target.resolution, calleeName, isDiscarded, call
   checker.isTaskArgument = savedTaskArgument
   // A `var` field with an identity needs a `var` path, wherever the constructor is called from. After the
   // arguments, because the paths it asks about are the ones checking them recorded
@@ -664,6 +665,8 @@ fn checkArguments(
   form: FunctionForm,
   arguments: List<Argument>,
   plan: ArgumentPlan,
+  /** The callee as it resolved: what a closure argument records, so that its verdict can ask the callee's body. */
+  resolution: Resolution,
   callee: String,
   isDiscarded: Bool,
   /** Which call this is, so that two `var` accesses of it are told from an access of the call around it. */
@@ -673,8 +676,8 @@ fn checkArguments(
   noteArgumentClosures checker, arguments
   // The ordinary arguments first, then the closures: every `var` access of the call is open by the time a closure of it
   // runs, and every read of an ordinary argument has ended before the accesses begin (the Swift model of exclusivity)
-  checkArgumentPass checker, form, arguments, plan, false, callee, isDiscarded, call
-  checkArgumentPass checker, form, arguments, plan, true, callee, isDiscarded, call
+  checkArgumentPass checker, form, arguments, plan, false, resolution, callee, isDiscarded, call
+  checkArgumentPass checker, form, arguments, plan, true, resolution, callee, isDiscarded, call
 }
 
 fn checkArgumentPass(
@@ -683,6 +686,7 @@ fn checkArgumentPass(
   arguments: List<Argument>,
   plan: ArgumentPlan,
   isClosurePass: Bool,
+  resolution: Resolution,
   /** The name of the callee: what the exclusivity message calls the change, and what quotes a quoted argument. */
   callee: String,
   isDiscarded: Bool,
@@ -721,7 +725,19 @@ fn checkArgumentPass(
       checker.quotingOwner = callee
       checker.quotingParameter = parameter.name ?? ""
     }
+    // Where a closure or a function value goes decides whether it may capture a `var` binding (`escape.trb`)
+    const site = ArgumentSite.Filled(resolution, position, callee, parameter.name ?? "")
+    if isClosurePass {
+      checker.closureSites.set at, site
+    } else if isNameArgument(argument) {
+      checker.nameSite = Some site
+      checker.nameSiteAt = at
+    }
     const _ = checkExpression checker, argument.value, inner
+    checker.nameSite = None
+    if !isClosurePass {
+      noteFunctionArgument checker, argument.value, annotation, site
+    }
     // A `var` argument is a path into the caller's value, and it owns that path for the rest of the call
     if isVarArgument(parameter.mode) {
       const named = parameter.name ?? ""
@@ -758,6 +774,13 @@ fn isReceiverArgument(mode: ParameterMode): Bool {
 fn isVariadicParameter(mode: ParameterMode): Bool {
   match mode {
     .Variadic => true
+    _ => false
+  }
+}
+
+fn isNameArgument(argument: Argument): Bool {
+  match argument.value.kind {
+    .Name(_) => true
     _ => false
   }
 }
@@ -843,6 +866,10 @@ fn requireTaskCaptures(var checker: Checker, target: Target, arguments: List<Arg
         reportTaskVariable checker, binding.name, at
         continue
       }
+      // A function-typed parameter crosses, and every caller of the function hands in what may cross instead
+      if noteTaskParameter(checker, capture.binding) {
+        continue
+      }
       requireTaskValue checker, binding.annotation, binding.name, at
     }
     // A top-level binding is not captured at all: it is one place the whole file shares, so a `var` one is the same
@@ -890,20 +917,20 @@ fn reportTaskVariable(var checker: Checker, name: String, at: Span) {
  * target worker has to be a value, and an object is not copied - both tasks would hold the same one, which is the
  * race the design says cannot happen. `Task` and `Channel` are the exceptions, because they are what a value crosses
  * *through*.
+ *
+ * **A task takes only what it can see is a value.** A type parameter, a function value and a value of a `shared trait`
+ * may each hide an object, and nothing at the `spawn` says which - so they are refused as well ([taskProblemOf]).
  */
 fn requireTaskValue(var checker: Checker, annotation: TypeId, name: String, at: Span) {
-  if !containsShared(checker, annotation) {
-    return
+  const held = match taskProblemOf(checker, annotation) {
+    Some(found) => found
+    None => {
+      return
+    }
   }
   const shown = checker.describe annotation
-  const held = if isSharedType(checker, annotation) { "has an identity" } else { "holds an object" }
-  checker.reportHere(
-    Diagnostic.error("`spawn` cannot take `{name}` with it: a `{shown}` {held}", at)
-      .withNote(
-        "A task gets copies, and an object is not copied. `Task` and `Channel` are what crosses between tasks: make"
-          + " the object inside the closure, or send what it holds through a `Channel`"
-      )
-  )
+  const note = taskNoteOf checker, annotation
+  checker.reportHere Diagnostic.error("`spawn` cannot take `{name}` with it: a `{shown}` {held}", at).withNote(note)
 }
 
 /** `...expression` spreads any `Iterable<Item>` into a variadic parameter; a collection is never spread implicitly. */

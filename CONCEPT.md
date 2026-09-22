@@ -636,7 +636,10 @@ const clamp = { x: Int, low: Int, high: Int =>     // The body is a list of stat
 - Parameter types are inferred from the expected type. A closure without an expected type must annotate them.
 - The return type is always inferred. If it needs to be spelled out, annotate the binding or use a local `fn`
   (which is the "full form" of a function anyway, and can be passed by name).
-- `return` inside a closure returns from the closure. There is no non-local return.
+- `return` inside a closure returns from the closure. There is no non-local return. **`?` returns from the closure
+  too** (enforced): the closure then has to produce an `Option` or a `Result`, checked at the `?` where the result is
+  written down and once the closure is checked where it is inferred - a closure that produces anything else has nowhere
+  for the failure to go. The same holds for a `fn` whose result is inferred.
 - `=>` has exactly three jobs: function types (`(Int) => Int`), closure parameters (`{ x => ... }`) and match arms.
 - **A `fn` inside a block is not a closure.** It is the same declaration as at the top level and sees the same things: its
   own parameters and its file. A local `fn` is therefore the way to write a helper that must not capture; a closure is
@@ -1069,14 +1072,17 @@ samples[1..4].sort { _ }             // A range is a path, too: sorts this part 
   back - without a copy. This is what other languages need mutable slices and spans for.
 - **References are second-class.** They only exist as a `var` parameter or a `var fn` receiver, for the duration of a call.
   They cannot be stored in a field, returned, or captured by a closure that is stored. So there are no lifetimes, no
-  borrow checker, and nothing can dangle. (A captured `var` binding is not a reference either, and it does not outlive
-  its scope - see below.)
-- **A closure that captures a reference may not escape, and the compiler decides that per closure.** A closure may
-  capture a `var` parameter or a `var fn` receiver only when it cannot outlive the call; conservatively that is a closure
-  written directly as the argument of a call that does not store it, which is exactly what the receiver closures, the
-  DSLs and the pipeline stages are. Everything else captures copies; a captured `var` binding is shared with its
-  scope and never leaves it (see below). The decision is recorded, because it is also what lets an implementation put
-  the closure's environment on the stack.
+  borrow checker, and nothing can dangle. A captured `var` binding follows the same rule (see below).
+- **A closure that captures a `var` binding may not escape, and the compiler decides that per closure** (enforced). A
+  `var` parameter, a `var fn` receiver, a local `var` and a `var` parameter of a closure around it are all the same:
+  such a closure may stand straight as the argument of a call whose parameter **only calls it**, and nowhere else - not
+  bound to a name, stored in a field, a collection or a case, returned, handed to `spawn` or to a parameter that keeps
+  it. A parameter only calls its closure when it has a function type, its function has a body, and that body calls it,
+  calls it inside a closure that itself only runs during the call, or hands it on by name to a parameter that only
+  calls it - which is exactly what the receiver closures, the DSLs, `forEach` and `using` are. A lazy stage
+  (`map`, `filter`) keeps its closure in the stage it answers. Whether a parameter keeps what it is handed is a fact of
+  the callee's body, so the checker answers it once every body it depends on is checked. The decision is recorded,
+  because it is also what lets an implementation put the closure's environment on the stack.
 - **Exclusivity:** while a `var` access to a path is running, the same path (or a path above or below it) cannot be
   accessed in any other way. **The access of a call begins once all of its arguments have been evaluated**, so
   everything the arguments *read* has already finished and `items.removeAt(items.length() - 1)` is ordinary code. What
@@ -1096,35 +1102,12 @@ samples[1..4].sort { _ }             // A range is a path, too: sorts this part 
   instead, for one turn of the body; see [Collections and Iteration](#collections-and-iteration).
 - Closures capture `const` bindings as copies. A captured `var` binding is shared between the closure and its scope -
   the one place where a variable is shared. Closures passed to `spawn` cannot capture `var` bindings.
-- **A closure that captures a `var` binding may not escape its scope** - the rule a `var` parameter already has, with
-  the same conservative check (decided 2026-09-22, not yet enforced by the checker): the closure has to be written
-  directly as the argument of a call that does not store it - a receiver closure, a DSL block, a pipeline stage,
-  `update`'s change. Bound to a name, returned, stored in a field or a collection, or handed to `spawn`, it is
-  rejected. The call it is passed to counts as an access to the binding, so exclusivity sees it, and the binding is
-  exempt from the dead-change rule: the read can be anywhere. The escaping box this replaces let two copies of a value
-  share state, let a `spawn` race through it, bypassed exclusivity (`const clear = { list = [] }` passed beside
-  `list`), and let a recursive closure bound to its own `var` keep itself alive with no collector to reclaim it.
-  Recursion is a local `fn`, which captures nothing. **State that has to outlive its scope is a `shared type`**, which
-  says that it has an identity:
-
-  ```trb
-  fn makeCounter(): () => Int {
-    var count = 0
-    {
-      count = count + 1
-      count
-    }                                // Compile error: the closure captures `count` and escapes
-  }
-
-  shared type Counter {
-    private(var) count: Int = 0
-
-    var fn bump(): Int {
-      count = count + 1
-      count
-    }
-  }
-  ```
+- **A captured `var` binding is shared only while the binding exists.** Because a closure that captures one never
+  escapes (above), two copies of a value never share a variable through a closure they hold, a closure never changes a
+  binding while a `var` access to it runs - the closure argument is checked against the accesses of its own call - and
+  a task never reaches one. The binding is exempt from the dead-change rule: the read can be anywhere the call runs the
+  closure. What has to outlive the scope is handed to a `var` parameter or returned. **State that has to outlive its scope is a `shared type`**, which
+  says that it has an identity; recursion is a local `fn`, which captures nothing.
 - **The copy trap** is the price of values, for everybody who comes from a language with references:
 
   ```trb
@@ -2337,6 +2320,14 @@ const channel = Channel<Int>(capacity: 8)        // a stream in memory: `channel
 - Values are passed freely between tasks: a task gets copies, so there is nothing to race for. `shared type` objects
   (and values that contain one) are confined to the task that created them; `Channel` and `Task` are the exceptions
   that connect tasks. Closures passed to `spawn` cannot capture `var` bindings. Data races are impossible by construction.
+- **A task takes only what it can see is a value** (enforced). A type parameter may be filled with a `shared type`, a
+  function value does not say what it captured, and a `shared type` may stand behind a `shared trait` - so a `spawn`
+  closure captures none of the three, whatever the bounds say. The one function value that crosses is a function-typed
+  **parameter** the `spawn` closure captures: whatever fills it crosses too, so every call of the function is held to
+  the same rule (a closure it hands in may capture only what a task may take; a function value whose captures are not
+  visible is refused). `isSame` asks the mirror question and takes only a `shared type` itself: on a type parameter or
+  a `shared trait` value a value may stand behind it. One answer to "is this an object" per rule, and each rule takes
+  the reading that cannot go wrong.
 - **A `Channel` hands out the two ends of a stream:** `channel.source()` and `channel.sink()` are ordinary
   `Source`/`Sink` values, so everything of [Streams](#streams) works between two tasks without a second vocabulary. Each
   end is read or written through a `var` binding, because its verbs change it.
@@ -2834,11 +2825,10 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
 - An expression statement must have the type `Void` or `Never`, unless the call has a `var` receiver or a `var`
   argument. One rule instead of a list of discarded-value cases, and everything a `var` makes effectful stays
   writable (`parser.bump()`).
-- ~~A captured `var` binding is a shared box, not a reference: it may escape, it is reference counted, and it is
-  exempt from the dead-change rule.~~ **Superseded (2026-09-22):** a closure that captures a `var` binding may not
-  escape its scope, the rule a `var` parameter already has. The escaping box made copies of a value share state, let a
-  `spawn` race through it, bypassed exclusivity and formed cycles that no collector will reclaim; state that has to
-  escape is a `shared type`. The binding stays exempt from the dead-change rule. Decided, not yet enforced.
+- A captured `var` binding follows the rule of a reference: a closure that captures one does not escape (only the
+  argument of a parameter that just calls it), and it is exempt from the dead-change rule. Was: a shared box that may
+  escape - which let two copies of a value share a variable, let a bound closure change a binding during a `var`
+  access to it, carried a variable into a task through a function value, and leaked a closure that captured itself.
 - **The `var` access of a call begins after all of its arguments have been evaluated** (the model of Swift), not when
   the path is formed. So the reads inside the arguments have ended before it starts, and
   `items.removeAt(items.length() - 1)` and `f(checker, checker.count)` are legal; what is left is what really overlaps

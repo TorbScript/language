@@ -1,6 +1,6 @@
 ---
 title: Closures
-summary: A brace in expression position is always a closure, its parameters are inferred from the expected type or written out, and it captures a const binding as a copy and a var binding as a box shared with its scope.
+summary: A brace in expression position is always a closure with inferred or written parameters; it captures a const binding as a copy and a var binding as itself, which only a closure handed to a parameter that just calls it may do.
 kind: reference
 status: stable
 order: 50
@@ -67,8 +67,10 @@ print add(2, 3)
    [Declaring a function](declaring-a-function.md)); a `fn` declared by name can be passed exactly where a closure is
    expected.
 
-5. **`return` inside a closure returns from the closure, not from the function around it.** There is no non-local
-   return: the value `return` produces is the closure's own result, at the point the closure is called.
+5. **`return` and `?` inside a closure return from the closure, not from the function around it.** There is no
+   non-local return: the value `return` produces is the closure's own result, at the point the closure is called, and
+   a `?` hands its failure to whoever called the closure - so a closure with a `?` in it has to produce an `Option`
+   or a `Result` (see [The question mark operator](../errors/question-mark.md), rule 8).
 
    ```trb check
    const clamp = { x: Int, low: Int, high: Int =>
@@ -83,10 +85,30 @@ print add(2, 3)
 6. **A `const` binding is captured as a copy.** Reading it inside the closure never sees a later assignment to the
    outer name, because the outer name cannot be reassigned either (see [Bindings](../values-and-types/bindings.md)).
 
-7. **A `var` binding is captured as a box shared between the closure and the scope it was written in.** Both sides see
-   every change; this is the one place in the language where a value is shared rather than copied.
+7. **A `var` binding is captured as itself, shared between the closure and the scope it was written in.** Both sides
+   see every change; this is the one place in the language where a variable is shared rather than copied.
 
    ```trb check
+   fn total(numbers: List<Int>): Int {
+     var sum = 0
+     numbers.forEach { sum = sum + _ }
+     sum
+   }
+
+   print total([1, 2, 3])
+   ```
+
+8. **A closure that captures a `var` binding may only run while the binding exists, and the checker enforces it.** A
+   local `var`, a `var` parameter, a `var fn` receiver and a `var` parameter of a closure around it are all the
+   same: such a closure may stand straight as the argument of a call whose parameter **only calls it**, and nowhere
+   else. Bound to a name, stored in a field, a collection or a case, returned, handed to `spawn` or to a parameter that
+   keeps it, it is an error. A parameter only calls its closure when it has a function type, its function has a body,
+   and that body calls it (`action(value)`, `action value`), calls it inside a closure that itself only runs during
+   the call, or hands it on by name to a parameter that only calls it - which is what `forEach`, `using`, a receiver
+   closure and every block of a DSL do. A lazy stage keeps its closure: `items.map { ... }` stores it in the stage it
+   answers, so a closure given to `map` or `filter` may read a `var` only through a `const` copy of it.
+
+   ```trb error
    fn counter(): () => Int {
      var count = 0
      {
@@ -94,15 +116,8 @@ print add(2, 3)
        count
      }
    }
-
-   const next = counter()
-   print "{next()}, {next()}, {next()}"
+   // error: This closure captures the `var` binding `count` and may outlive it
    ```
-
-8. **Capturing a `var` parameter or a `var fn` receiver is only legal in a closure that cannot outlive the call.** Such a
-   closure is a reference to the caller's value, and a reference may not be stored or returned - only written
-   directly as the argument of a call that runs the closure and does not keep it, which is what a control structure,
-   a receiver closure and a pipeline stage all are.
 
    ```trb error
    fn makeIncrementer(var target: Int): () => Void {
@@ -112,6 +127,10 @@ print add(2, 3)
    }
    // error: This closure captures the `var` parameter `target` and may outlive the call
    ```
+
+   The fix is to hand the value to a `var` parameter of the function that runs the closure, or to let the closure
+   return what it computed. The rule is what keeps two copies of a value from ever sharing a variable through a closure
+   they hold, a closure from changing a binding while a `var` access to it runs, and a task from reaching one.
 
 ## What this is not
 

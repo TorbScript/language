@@ -25,7 +25,9 @@ use checkBlock, bodyExpectation, inferredResult, scopeHere, taskValueOf from "./
 use checkPattern from "./pattern"
 use requireIrrefutable from "./exhaustive"
 use typeFromReference from "./lowering"
-use markReferenceBindings, noteClosureKind from "./mutation"
+use markReferenceBindings from "./mutation"
+use noteClosureKind from "./escape"
+use settleTries from "./expression"
 
 /** `{ x => x + 1 }`, `{ _ * 2 }`, `{ value: Int => ... }`: the closure, checked against what is expected of it. */
 public fn checkClosure(var checker: Checker, closure: Closure, at: Span, expected: TypeId?): TypeId {
@@ -168,6 +170,10 @@ fn nameOfParameter(parameter: ClosureParameter): String? {
  * The body. `return` inside a closure returns from the closure, `break` cannot leave it (design 3.5), and the result is
  * what the body produces - unified with the result of the expected function type, which is usually a variable of the
  * call that takes the closure.
+ *
+ * **`?` returns from the closure too**, so the closure has to produce an `Option` or a `Result` for it to return. Where
+ * the result is pinned down that is checked at the `?`; where it is inferred it is only known at the end, so every `?`
+ * waits for it ([settleTries]).
  */
 fn checkClosureBody(
   var checker: Checker,
@@ -187,6 +193,8 @@ fn checkClosureBody(
   const savedReceiverBinding = checker.receiverBinding
   const savedAwaits = checker.awaitsTasks
   const savedTaskArgument = checker.isTaskArgument
+  const savedCollects = checker.collectsTries
+  const savedTries = checker.pendingTries
   // The result is inferred whenever the expected one is not pinned down yet, which is the ordinary case at a call. It
   // still flows into the body: `flatMap { _.manager.toList() }` learns its `Output` from the `Iterable<Output>` the
   // closure has to produce, and that is a coercion and not a unification
@@ -216,6 +224,8 @@ fn checkClosureBody(
   checker.isTaskArgument = false
   checker.returnTypes = []
   checker.loopDepth = 0
+  checker.collectsTries = true
+  checker.pendingTries = []
   checker.openScope()
   // A closure argument runs *during* the `var` access of its call, which is the one thing the Swift model of exclusivity
   // still holds a call responsible for once its arguments have been evaluated
@@ -244,6 +254,7 @@ fn checkClosureBody(
   var result = declared
   if isInferred {
     const value = inferredResult checker, outcome
+    settleTries checker, value, isClosure: true
     // What the closure *is* stays the function type that was asked for: the body produced the value inside the `Task`
     result = if isTask { taskOf checker, value } else { value }
   }
@@ -261,6 +272,8 @@ fn checkClosureBody(
   checker.receiverBinding = savedReceiverBinding
   checker.awaitsTasks = savedAwaits
   checker.isTaskArgument = savedTaskArgument
+  checker.collectsTries = savedCollects
+  checker.pendingTries = savedTries
   checker.recordCaptures at, captures
   checker.recordDeclarationCaptures at, declarations
   // Whether the closure may outlive the call it stands in, and whether it may hold a reference

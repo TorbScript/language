@@ -433,8 +433,75 @@ public type Place {
 public type ClosureKind {
   /** Written straight as the argument of a call: its environment fits on the stack, and it may hold a reference. */
   case Local
-  /** Stored, returned or built anywhere else: it captures values and shared boxes only. */
+  /** Stored, returned or built anywhere else: it captures values only, never a `var` binding. */
   case Escaping
+}
+
+/**
+ * The parameter an argument fills, for the two questions only the callee's body answers: does it keep what it is
+ * handed, and does it hand it to a task (`escape.trb`).
+ */
+public type ArgumentSite {
+  /** A configuring property command (`database { ... }`): the block is applied to the field in place and dropped. */
+  case Applied
+  /** The call as it resolved, the parameter the argument fills, and the two names a message needs. */
+  case Filled(resolution: Resolution, position: Int, callee: String, parameter: String)
+}
+
+/**
+ * A closure written as an argument whose verdict waits for the callee: it captures a `var` binding, a function-typed
+ * parameter of the declaration around it, or something a task could not take. Answered at the end of the pass.
+ */
+public type EscapeCheck {
+  module: ModuleId
+  at: Span
+  site: ArgumentSite
+  /** The `var` bindings it captures, each as a message names it: "the `var` binding `count`". */
+  held: List<String>
+  /** The function-typed parameters of the declaration around it that it captures, as `(symbol, position)`. */
+  parameters: List<(Int, Int)>
+  /** The captures a task could not take, by name, with the type that says why. */
+  unseen: List<(String, TypeId)>
+}
+
+/** A function-typed parameter handed on by name: it is kept, or goes into a task, where the parameter it fills does. */
+public type ParameterForward {
+  parameter: (Int, Int)
+  site: ArgumentSite
+}
+
+/**
+ * A function value that is neither a closure written right there, nor a declared function, nor a parameter: what it
+ * captured is not in its type, so it may not fill a parameter that hands it to a task.
+ */
+public type FunctionValueCheck {
+  module: ModuleId
+  at: Span
+  site: ArgumentSite
+}
+
+/**
+ * What a task cannot see inside a type: whether a value of it holds an object is decided by something the type does not
+ * say. `spawn` takes only what it can see is a value (`unseenInside` in `declaration.trb`).
+ */
+public type Unseen {
+  case Nothing
+  /** A type parameter: whatever fills it may be a `shared type`. */
+  case TypeParameter
+  /** A function value: what it captured is not part of its type. */
+  case FunctionValue
+  /** A value of a `shared trait` (`Show`): a `shared type` may be behind it. */
+  case SharedTrait
+}
+
+/**
+ * One `?` of a body whose result is inferred: it returns from that body, so the result has to turn out an `Option` or
+ * a `Result` - which is only known once the whole body is checked.
+ */
+public type PendingTry {
+  at: Span
+  /** The error of the `Result` the `?` stands on, `None` for an `Option`. */
+  failure: TypeId?
 }
 
 /** One `var` access that is running. The stack of them is what the exclusivity rule asks (design 5.2). */
@@ -693,6 +760,9 @@ public type BodyState {
   isTopLevel: Bool = false
   /** Whether `await()` is allowed in this body (CONCEPT, "Concurrency"). */
   awaitsTasks: Bool = false
+  /** The `?` of an inferred body are its own: a body checked on demand must not settle the one it interrupted. */
+  collectsTries: Bool = false
+  pendingTries: List<PendingTry> = []
 }
 
 /**
@@ -866,6 +936,27 @@ public type Checker {
   var readBindings: Map<Int, Bool> = [:]
   /** The closures that stand straight as the argument of a call, by span: those are the ones that cannot escape. */
   var argumentClosures: Map<Span, Bool> = [:]
+  /** The parameter every closure argument fills, by the span of the closure (`escape.trb`). */
+  var closureSites: Map<Span, ArgumentSite> = [:]
+  /** The parameter the name that is being checked fills, while one argument that is a bare name is checked. */
+  var nameSite: ArgumentSite? = None
+  var nameSiteAt: Span = Span 0, 0
+  /**
+   * Which parameter of which declared function a binding is, by `BindingId.value`, as `(symbol, position)`. Only the
+   * function-typed ones: those are what a closure argument may arrive as, and what the body may keep.
+   */
+  var parameterOwners: Map<Int, (Int, Int)> = [:]
+  /** The function-typed parameters a body keeps outright - stores, returns, binds, or captures in a closure that does. */
+  var keptParameters: Map<(Int, Int), Bool> = [:]
+  /** The function-typed parameters a `spawn` closure captures: whatever fills one of them goes into a task. */
+  var crossingParameters: Map<(Int, Int), Bool> = [:]
+  var parameterForwards: List<ParameterForward> = []
+  var escapeChecks: List<EscapeCheck> = []
+  var functionValueChecks: List<FunctionValueCheck> = []
+  /** Whether a `?` of this body returns from it with a result that is still being inferred (a closure, a `fn`). */
+  var collectsTries: Bool = false
+  /** The `?` of the inferred body that is being checked, settled against its result once the body is done. */
+  var pendingTries: List<PendingTry> = []
 
   // --- Quotations -------------------------------------------------------------------------------------------------
 
@@ -965,6 +1056,13 @@ public type Checker {
   var sharedContents: Map<Int, Bool> = [:]
   var sharedRunning: Map<Int, Bool> = [:]
   var sharedCycles: Int = 0
+  /**
+   * What a task cannot see inside a type, by interned type id. Memoized and guarded against a type that contains itself
+   * exactly as `sharedContents` is.
+   */
+  var unseenContents: Map<Int, Unseen> = [:]
+  var unseenRunning: Map<Int, Bool> = [:]
+  var unseenCycles: Int = 0
   /** Every derived implementation that was generated, which the lowering has to emit the members of. */
   var derived: List<DerivedImplementation> = []
   /** `"{target}:{trait}"` to the index in `derived`, so one is generated once. */
@@ -1549,6 +1647,8 @@ public type Checker {
       runningClosures,
       isTopLevel,
       awaitsTasks,
+      collectsTries,
+      pendingTries,
     )
     module = inside
     locals = []
@@ -1570,6 +1670,8 @@ public type Checker {
     runningClosures = 0
     isTopLevel = false
     awaitsTasks = false
+    collectsTries = false
+    pendingTries = []
     saved
   }
 
@@ -1594,6 +1696,8 @@ public type Checker {
     runningClosures = saved.runningClosures
     isTopLevel = saved.isTopLevel
     awaitsTasks = saved.awaitsTasks
+    collectsTries = saved.collectsTries
+    pendingTries = saved.pendingTries
   }
 
   /** `self` in a method and in a receiver closure: the one binding a bare name may look members up on. */

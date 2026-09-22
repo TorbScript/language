@@ -1,0 +1,418 @@
+/**
+ * Where a closure may go (`semantics/checker/escape.trb`): a closure that captures a `var` binding stands straight as
+ * the argument of a call whose parameter only calls it and nowhere else, a task takes only what it can see is a value,
+ * and a `?` inside a closure returns from the closure.
+ *
+ * The callee's body is what says whether a parameter only calls what it is handed, so most of these sources declare the
+ * callee next to the closure - once one that only calls it, once one that keeps it.
+ */
+
+use test, group from "std/test"
+use probe, problems, notes from "./harness"
+
+/** A callee that only calls its closure, and one that keeps it in the list it answers. */
+const callees = r"""
+
+  fn run(action: () => Void) {
+    action()
+  }
+
+  fn wrap(action: () => Void): List<() => Void> {
+    [action]
+  }
+  """
+
+group "A closure that captures a `var` binding does not escape" {
+  test "bound to a name it may outlive the binding, and that is the error" {
+    const source = r"""
+      fn probe(): Int {
+        var count = 0
+        const bump = { count = count + 1 }
+        bump()
+        count
+      }
+      """
+    assert(problems(source) == ["This closure captures the `var` binding `count` and may outlive it"])
+    assert(
+      notes(source) == [
+        "A closure that shares a `var` binding may only run while the binding exists, so it may only be the argument "
+          + "of a parameter that just calls it. Hand the value to a `var` parameter instead, or let the closure return "
+          + "what it computed",
+      ]
+    )
+  }
+
+  test "returned, two copies of the value it lands in would share the binding" {
+    const source = r"""
+      type Counter {
+        bump: () => Int
+      }
+
+      fn makeCounter(): Counter {
+        var count = 0
+        Counter({
+          count = count + 1
+          count
+        })
+      }
+      """
+    assert(problems(source) == ["This closure captures the `var` binding `count`, and `Counter` stores it"])
+  }
+
+  test "a closure that calls itself through its own binding is the same escape" {
+    const source = r"""
+      fn countdown(): Int {
+        var step: (value: Int) => Int = { _ }
+        step = { value =>
+          if value <= 0 {
+            return 0
+          }
+          step(value - 1) + 1
+        }
+        step(3)
+      }
+      """
+    assert(problems(source) == ["This closure captures the `var` binding `step` and may outlive it"])
+  }
+
+  test "built into a collection it escapes as well" {
+    const source = "fn probe(): List<() => Void> \{\n  var count = 0\n  [\{ count = count + 1 \}]\n\}"
+    assert(problems(source) == ["This closure captures the `var` binding `count` and may outlive it"])
+  }
+
+  test "written straight as the argument of a parameter that only calls it, it may" {
+    const source = r"""
+      fn probe(): Int {
+        var count = 0
+        run { count = count + 1 }
+        count
+      }
+      """ + callees
+    assert problems(source).isEmpty()
+    const found = probe source
+    assert(found.closureKindOf("\{ count = count + 1 \}") == "local")
+  }
+
+  test "a parameter that keeps the closure is named with what keeps it" {
+    const source = r"""
+      fn probe(): List<() => Void> {
+        var count = 0
+        wrap { count = count + 1 }
+      }
+      """ + callees
+    assert(problems(source) == ["This closure captures the `var` binding `count`, and `wrap` keeps its `action`"])
+  }
+
+  test "a parameter whose type is a type parameter keeps what it is handed" {
+    const source = r"""
+      fn probe(var sink: List<() => Int>) {
+        var count = 0
+        sink.add {
+          count = count + 1
+          count
+        }
+      }
+      """
+    assert(problems(source) == ["This closure captures the `var` binding `count`, and `add` keeps its `value`"])
+  }
+
+  test "a case keeps its payload" {
+    const source = r"""
+      fn probe(var items: List<Int>): (() => Int)? {
+        Some {
+          items.add 1
+          items.length()
+        }
+      }
+      """
+    assert(problems(source) == ["This closure captures the `var` parameter `items`, and `Some` stores it"])
+  }
+
+  test "a closure that changes a binding while a `var` access to it runs is refused where it is bound" {
+    const source = r"""
+      fn apply(var target: List<Int>, action: () => Void) {
+        action()
+        target.add 1
+      }
+
+      fn probe(): List<Int> {
+        var list = [1, 2, 3]
+        const clear = { list = [] }
+        apply(list, clear)
+        list
+      }
+      """
+    assert(problems(source) == ["This closure captures the `var` binding `list` and may outlive it"])
+  }
+}
+
+/** Whether a parameter only calls its closure is a fact of its body, including what the body hands it on to. */
+group "What a callee does with its closure" {
+  test "a parameter handed on by name to one that only calls it only calls it too" {
+    const source = r"""
+      fn probe(): Int {
+        var count = 0
+        forward { count = count + 1 }
+        count
+      }
+
+      fn forward(action: () => Void) {
+        run action
+      }
+      """ + callees
+    assert problems(source).isEmpty()
+  }
+
+  test "handed on to one that keeps it, it is kept, and the message is at the closure that captured the binding" {
+    const source = r"""
+      fn probe(): Int {
+        var count = 0
+        const _ = forward { count = count + 1 }
+        count
+      }
+
+      fn forward(action: () => Void): List<() => Void> {
+        wrap action
+      }
+      """ + callees
+    assert(problems(source) == ["This closure captures the `var` binding `count`, and `forward` keeps its `action`"])
+  }
+
+  test "called inside a closure that only runs during the call, it is still only called" {
+    const source = r"""
+      fn probe(): Int {
+        var count = 0
+        twice { count = count + 1 }
+        count
+      }
+
+      fn twice(action: () => Void) {
+        run { action() }
+        run { action() }
+      }
+      """ + callees
+    assert problems(source).isEmpty()
+  }
+
+  test "a recursive callee that hands its closure to itself only calls it" {
+    const source = r"""
+      fn probe(): Int {
+        var count = 0
+        visit 3 {
+          count = count + 1
+        }
+        count
+      }
+
+      fn visit(depth: Int, action: () => Void) {
+        action()
+        if depth > 0 {
+          visit(depth - 1, action)
+        }
+      }
+      """
+    assert problems(source).isEmpty()
+  }
+
+  test "a trait member reached through a witness table keeps a closure where any implementation does" {
+    const source = r"""
+      trait Walk {
+        fn walk(action: () => Void) {
+          action()
+        }
+      }
+
+      type Quiet with Walk {}
+
+      type Keeping with Walk {
+        fn walk(action: () => Void) {
+          const kept = [action]
+          for each in kept {
+            each()
+          }
+        }
+      }
+
+      fn probe(walker: Walk): Int {
+        var count = 0
+        walker.walk { count = count + 1 }
+        count
+      }
+      """
+    assert(problems(source) == ["This closure captures the `var` binding `count`, and `walk` keeps its `action`"])
+  }
+
+  test "a block that configures a field runs in place, and one assigned to a field is stored" {
+    const source = r"""
+      type Limits {
+        var maximum: Int = 0
+      }
+
+      type Options {
+        var limits: Limits = Limits()
+        var onStart: () => Int = { 0 }
+      }
+
+      fn configured(var options: Options) {
+        var count = 0
+        options.limits {
+          count = count + 1
+          maximum count
+        }
+        options.onStart {
+          count
+        }
+      }
+      """
+    assert(problems(source) == ["This closure captures the `var` binding `count` and may outlive it"])
+  }
+}
+
+/**
+ * A task takes only what it can see is a value (CONCEPT, "Concurrency"). A type parameter, a function value and a
+ * value of a `shared trait` may each hide an object, so `spawn` refuses them all, and `isSame` - which needs to know
+ * there is an object - refuses what it cannot tell from the other side.
+ */
+group "What crosses into a task" {
+  test "a value of a type parameter may be an object, whatever fills it" {
+    const source = r"""
+      fn later<Value>(value: Value): Task<Int> {
+        const task = spawn {
+          const _ = value
+          1
+        }
+        task.await()
+      }
+      """
+    assert(problems(source) == ["`spawn` cannot take `value` with it: a `Value` may hold an object"])
+    assert(
+      notes(source) == [
+        "A type parameter may be filled with a `shared type`, and a task only takes what it can see is a value. Give "
+          + "the value a concrete type, or build it inside the closure",
+      ]
+    )
+  }
+
+  test "a bound by a `shared trait` makes it no more certain" {
+    const source = "fn later<Value: Close>(value: Value): Task<Value> \{\n  spawn(\{ value \}).await()\n\}"
+    assert(problems(source) == ["`spawn` cannot take `value` with it: a `Value` may hold an object"])
+  }
+
+  test "a function value does not say what it captured" {
+    const source = r"""
+      fn later(): Task<Int> {
+        const read = { 1 }
+        spawn({ read() }).await()
+      }
+      """
+    assert(problems(source) == ["`spawn` cannot take `read` with it: a `() => Int64` may hold an object"])
+  }
+
+  test "a function-typed parameter may cross, and every caller hands in what may" {
+    const source = r"""
+      shared type Counter {
+        var count: Int = 0
+      }
+
+      fn later(body: () => Int): Task<Int> {
+        spawn({ body() }).await()
+      }
+
+      fn one(): Int {
+        1
+      }
+
+      fn probe(): Task<Int> {
+        const counter = Counter()
+        const first = later({ 1 }).await()
+        const second = later(one).await()
+        const third = later({ counter.count }).await()
+        first + second + third
+      }
+      """
+    assert(
+      problems(source) == [
+        "`later` runs this closure as a task, so it cannot take `counter`: a `Counter` has an identity",
+      ]
+    )
+  }
+
+  test "a function value handed to such a parameter is refused, because what it captured is not in its type" {
+    const source = r"""
+      fn later(body: () => Int): Task<Int> {
+        spawn({ body() }).await()
+      }
+
+      fn probe(): Task<Int> {
+        const read = { 1 }
+        later(read).await()
+      }
+      """
+    assert(
+      problems(source) == [
+        "`later` runs this function value as a task, and what it captured is not part of its type",
+      ]
+    )
+  }
+
+  test "`isSame` refuses a type parameter from the other side: a value may fill it" {
+    const source = "fn same<Value>(first: Value, second: Value): Bool \{\n  isSame(first, second)\n\}"
+    assert(problems(source) == ["`isSame` compares identity, and a `Value` may be a value"])
+  }
+}
+
+/** `?` returns from the closure it stands in, so the closure has to produce an `Option` or a `Result` for it. */
+group "`?` inside a closure" {
+  const parse = r"""
+
+    fn parse(text: String): Result<Int, String> {
+      if text == "x" {
+        return Fail "bad"
+      }
+      Ok 1
+    }
+
+    fn convert(texts: List<String>, transform: (value: String) => Int): Int {
+      transform texts[0]
+    }
+    """
+
+  test "a closure whose result is inferred and is not an `Option` or a `Result` has nowhere to return the failure" {
+    const source = "fn probe(texts: List<String>): Int \{\n  convert texts \{ parse(_)? \}\n\}" + parse
+    assert(problems(source) == ["`?` returns from this closure, and the closure produces `Int64`"])
+    assert(
+      notes(source) == [
+        "`?` hands the failure to whoever runs the closure, so the closure has to produce an `Option` or a `Result`: "
+          + "end it in `Ok ...` or `Some ...`, or handle the failure right here with `match` or `??`",
+      ]
+    )
+  }
+
+  test "a closure whose result is written down is held to it at the `?`" {
+    const source = "fn probe(): Int \{\n  const read: (String) => Int = \{ parse(_)? \}\n  read(\"1\")\n\}" + parse
+    assert(problems(source) == ["`?` returns from this closure, and the closure produces `Int64`"])
+  }
+
+  test "a closure that produces a `Result` returns the failure from itself" {
+    const source = "fn probe(): Result<Int, String> \{\n"
+      + "  const doubled: (String) => Result<Int, String> = \{ text => Ok parse(text)? * 2 \}\n"
+      + "  doubled(\"1\")\n\}" + parse
+    assert problems(source).isEmpty()
+  }
+
+  test "an `Option` in a closure that produces a `Result` has no error to return" {
+    const source = "fn probe(): Result<Int, String> \{\n"
+      + "  const first: (List<Int>) => Result<Int, String> = \{ items => Ok firstOf(items)? \}\n"
+      + "  first([1])\n\}\n\nfn firstOf(items: List<Int>): Int? \{\n  None\n\}"
+    assert(problems(source) == ["`?` on an `Option` in a closure that produces `Result<Int64, String>`"])
+  }
+
+  test "a function whose result is inferred is held to what it turns out to produce" {
+    const source = "fn probe(text: String) \{\n  parse(text)?\n\}" + parse
+    assert(
+      problems(source) == [
+        "`?` needs a function that returns an `Option` or a `Result`, and this one returns `Int64`",
+      ]
+    )
+  }
+}

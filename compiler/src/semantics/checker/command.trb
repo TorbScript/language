@@ -20,7 +20,7 @@ use Diagnostic from "../../syntax/diagnostic"
 use Expression, Argument, CallStyle from "../../syntax/ast"
 use SymbolId from "../symbols"
 use TypeId, FunctionForm, ParameterForm, ParameterMode from "./type"
-use Checker, Resolution, PropertyWriteKind from "./context"
+use Checker, Resolution, PropertyWriteKind, ArgumentSite from "./context"
 use Target from "./name"
 use checkExpression, inferExpression, expectationOf from "./expression"
 use typeSignatureOf from "./signature"
@@ -95,6 +95,7 @@ fn writeField(
   // outlive the call". `onStart { ... }` is the other half and really does escape: it is *stored* in the field
   if const .Configure = kind {
     noteArgumentClosures checker, arguments
+    checker.closureSites.set arguments[0].value.span, ArgumentSite.Applied
   }
   const inner = match kind {
     .Configure => configurationOf checker, annotation, target.name, expression

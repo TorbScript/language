@@ -126,9 +126,11 @@ path cannot be accessed another way. The access of a call begins once all of its
 same call, and a closure argument that reaches the path the call is changing. What the compiler cannot prove is an error,
 and there is no check at runtime.
 
-**One thing does escape.** A `var` binding captured by a closure is a shared box, reference counted like a `shared type`
-object. It is the only sharing of a variable in the language, and it is exempt from the dead-change rule because the read
-can be anywhere.
+**Nothing escapes, not even a captured `var` binding.** A closure that captures a `var` binding shares it with its
+scope - the only sharing of a variable in the language - so it follows the rule of a reference: it may be the argument
+of a call that just calls it, and it is never bound, stored or returned. Otherwise two copies of a value could share a
+variable through a closure they hold, which is exactly the aliasing values exist to rule out. The binding is exempt from
+the dead-change rule, because the read can be anywhere the call runs the closure.
 
 ## Related
 

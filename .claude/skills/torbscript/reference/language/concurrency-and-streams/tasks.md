@@ -76,8 +76,8 @@ Task.all(tasks: Iterable<Task<Value>>): Task<List<Value>>
 
 4. **`spawn` gets a copy of everything its closure captures, and cannot capture a `var` binding.** Values are passed
    freely between tasks because a task never shares storage with the scope it was spawned from; only `Task` and
-   `Channel` connect two tasks. A captured `var` binding is the one value the language shares - a box that the closure
-   and the scope around it both reach - so a task that took one with it would be the data race this design does not
+   `Channel` connect two tasks. A captured `var` binding is the one variable the language shares - the closure and
+   the scope around it both reach it - so a task that took one with it would be the data race this design does not
    have. A top-level `var` is the same race for the same reason: it is one place the whole file shares. The checker
    rejects the capture itself, so one `spawn` is already too many and two are two messages:
 
@@ -132,6 +132,26 @@ Task.all(tasks: Iterable<Task<Value>>): Task<List<Value>>
    ```
 
    Make the object inside the closure, or send what it holds through a `Channel`.
+
+   **What the closure cannot see is a value is refused as well.** A type parameter may be filled with a `shared
+   type`, a function value does not say what it captured, and a `shared type` may stand behind a `shared trait` - so
+   a `spawn` closure may capture none of the three, whatever the bounds say:
+
+   ```trb error
+   fn later<Value>(value: Value): Task<Int> {
+     const task = spawn {
+       const _ = value
+       1
+     }
+     task.await()
+   }
+   // error: `spawn` cannot take `value` with it: a `Value` may hold an object
+   ```
+
+   The one function value a task takes is a **function-typed parameter** it captures: the parameter then crosses, and
+   every caller of the function is held to the rule instead - a closure it hands in may capture only what a task may
+   take, and a function value whose captures are not visible (a closure bound to a name, a field) is refused. A declared
+   function captures nothing and always may.
 
 6. **`all` waits for two tasks of different types at once; `Task.all` waits for a list of tasks of the same type.**
    Both answer their values in the order of the tasks, which is the order they were given in, not the order they

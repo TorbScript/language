@@ -16,7 +16,8 @@ use SymbolId from "../symbols"
 use TypeId, TypeForm, ParameterForm, ParameterId from "./type"
 use Checker, Expectation, LocalBinding, TypeScope, ResultRule from "./context"
 use checkExpression, inferExpression, checkCondition from "./expression"
-use expectationOf, isNested from "./expression"
+use expectationOf, isNested, settleTries from "./expression"
+use declareParameterOwners from "./escape"
 use isFullyKnown from "./name"
 use checkPattern, requireReadBindings from "./pattern"
 use requireIrrefutable from "./exhaustive"
@@ -546,6 +547,7 @@ public fn checkBodyOf(var checker: Checker, symbol: SymbolId) {
     signature.isVarSelf,
     signature.form.result,
     false,
+    declared: Some(symbol),
   )
 }
 
@@ -565,6 +567,8 @@ public fn checkFunctionBody(
   result: TypeId,
   isInferred: Bool,
   rule: ResultRule = ResultRule.Ordinary,
+  /** The function the body belongs to, which a closure handed to one of its parameters asks about (`escape.trb`). */
+  declared: SymbolId? = None,
 ): TypeId {
   const body = match function.body {
     Some(found) => found
@@ -579,14 +583,21 @@ public fn checkFunctionBody(
   const saved = checker.enterBody module, produced, isInferred, owner, rule
   // `await()` is allowed in a function that answers a `Task` and says so in its result type (CONCEPT, "Concurrency")
   checker.awaitsTasks = produced != result
+  // A `?` returns from the body, and where the result is inferred it is only settled once the result is known
+  checker.collectsTries = isInferred
   checker.openScope()
   declareGenerics checker, generics
+  const firstParameter = checker.bindings.length()
   declareBindingsFor checker, function.parameters, parameters, takesSelf, isVarSelf, owner
+  if const Some(symbol) = declared {
+    declareParameterOwners checker, symbol, firstParameter, parameters
+  }
   const inner = bodyExpectation checker, produced, isInferred
   const outcome = checkBlock checker, body, inner
   var found = outcome.annotation
   if isInferred {
     found = inferredResult checker, outcome
+    settleTries checker, found, isClosure: false
     // A `public` function and a trait method do not infer: the value the body ends in has to be declared
     requireDeclaredEnding checker, body, outcome
   } else {

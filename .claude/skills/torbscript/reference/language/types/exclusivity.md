@@ -120,6 +120,25 @@ print items
    // error: `list` is being changed by `apply` right now
    ```
 
+   `items.update(0) { ... }` holds a `var` access to `items` for as long as the closure runs, and a closure that
+   changes `items` itself is the second access. Different fields are fine; the same path, a path above or below it
+   are not.
+
+   ```trb error
+   var items = [1, 2, 3]
+   items.update(0) { value =>
+     items.add 4
+     value = value + 1
+   }
+   print items
+   // error: `items` is being changed by `update` right now
+   ```
+
+   This is checked where the closure is written, and it can be, because a closure that captures a `var` binding
+   never gets anywhere else: it is not bound to a name, stored or returned, and it is only handed to a parameter that
+   just calls it ([Closures](../functions/closures.md), rule 8). So `const clear = { items = [] }` followed by
+   `apply(items, clear)` is refused where `clear` is bound, before the call could run it inside its own access.
+
 ## What this is not
 
 **`items.swapAt(i, j)` is not the same call as `swap(items[i], items[j])`.** `swapAt` takes both indices as plain

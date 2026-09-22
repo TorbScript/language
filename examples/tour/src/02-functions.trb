@@ -72,18 +72,20 @@ fn fib(n: Int): Int {
 }
 const fibs = [1, 2, 3, 4, 5].map(fib)
 
-// Closures capture their scope
-/** A fresh counter: the closure it returns captures `count` and increments it on every call. */
-fn counter(): () => Int {
-  var count = 0
-  {
-    count = count + 1
-    count
-  }
+// Closures capture their scope: a `const` as a copy, a `var` as itself - but only while it exists
+/** Every number above `limit`: the closure reads `limit` from the function around it. */
+fn above(numbers: List<Int>, limit: Int): List<Int> {
+  numbers.filter({ _ > limit }).toList()
 }
 
-const next = counter()
-print "{next()}, {next()}, {next()}"      // 1, 2, 3
+/** The sum, counted by a closure that changes `sum`: `forEach` only calls it, so it may capture the `var`. */
+fn sumOf(numbers: List<Int>): Int {
+  var sum = 0
+  numbers.forEach { sum = sum + _ }
+  sum
+}
+
+print "{above([1, 5, 9], 4)}, {sumOf([1, 2, 3])}"      // [5, 9], 6
 
 // Higher-order functions
 /** Applies `f` to its own result: `twice(double)` is the function `x => double(double(x))`. */

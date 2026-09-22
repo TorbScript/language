@@ -355,16 +355,17 @@ group "Closures that may outlive their call (BACKEND gap 14)" {
     assert(
       notes(source)
         == [
-          "A reference is second-class: only a closure written straight as an argument of a call may hold one",
+          "A reference is second-class: only a closure written straight as the argument of a call that just calls it "
+            + "may hold one",
         ]
     )
     const found = probe source
     assert(found.closureKindOf("\{ target.increment() \}") == "escaping")
   }
 
-  test "an escaping closure that captures a `var` binding is fine: that is a shared box (gap 19)" {
+  test "an escaping closure may not capture a `var` binding either: it may only run while the binding exists" {
     const source = "fn probe(): () => Void \{\n  var total = 0\n  \{ total = 1 \}\n\}"
-    assert problems(source).isEmpty()
+    assert(problems(source) == ["This closure captures the `var` binding `total` and may outlive it"])
     const found = probe source
     assert(found.closureKindOf("\{ total = 1 \}") == "escaping")
     assert(found.capturesOf("\{ total = 1 \}") == ["var total"])

@@ -1,6 +1,7 @@
 /**
- * The two rules that need the whole body instead of one expression: a change nobody reads, and whether a closure may
- * outlive the call it stands in.
+ * The rule that needs the whole body instead of one expression: a change nobody reads. Where a closure may go is
+ * `escape.trb`; the marks it starts from - which closures stand straight as an argument, which bindings are captured
+ * and which are references - are set here.
  *
  * **Dead changes** keep the source-ordered reads and changes of every `var` value of one body, plus a mark for the
  * ones a loop brings a read back around to. A change is dead when no read follows it in source order and no read
@@ -25,7 +26,6 @@ use Argument from "../../syntax/ast"
 use SymbolId from "../symbols"
 use TypeId, SignatureId, SignatureState from "./type"
 use Checker, Place, PlaceRoot, BindingId, UseRoot, ValueUse, useKey from "./context"
-use Capture, ClosureKind from "./context"
 use isSharedType from "./declaration"
 use isDeclaredVar from "./place"
 
@@ -264,7 +264,7 @@ public fn noteArgumentClosures(var checker: Checker, arguments: List<Argument>) 
   }
 }
 
-/** A binding a closure reads is marked, because a captured `var` binding is a shared box and never dead. */
+/** A binding a closure reads is marked, because the closure may run anywhere its call runs it and the read is there. */
 public fn noteCapturedBinding(var checker: Checker, binding: BindingId) {
   checker.capturedBindings.set binding.value, true
 }
@@ -283,34 +283,5 @@ public fn markReferenceBindings(var checker: Checker, from: Int) {
       checker.bindings.set index, marked
     }
     index = index + 1
-  }
-}
-
-/**
- * Whether the closure may outlive the call it stands in. Conservatively it cannot when it is written straight as the
- * argument of a call - which is what every receiver closure, every DSL block and every pipeline stage is - and it can
- * everywhere else: bound to a name, stored in a field, returned, or built inside a collection literal.
- *
- * A closure that may escape may not capture a `var` parameter or the receiver of a `var fn`: those are references,
- * and a reference is second-class. Everything else it captures is a value or the shared box of a `var` binding.
- */
-public fn noteClosureKind(var checker: Checker, at: Span, captures: List<Capture>) {
-  const isLocal = checker.argumentClosures.containsKey at
-  if isLocal {
-    checker.recordClosureKind at, ClosureKind.Local
-    return
-  }
-  checker.recordClosureKind at, ClosureKind.Escaping
-  for capture in captures {
-    const binding = checker.binding capture.binding
-    if !binding.isParameter || !binding.isVar {
-      continue
-    }
-    const held = if binding.isReceiver { "the receiver `self`" } else { "the `var` parameter `{binding.name}`" }
-    checker.reportHere(
-      Diagnostic.error("This closure captures {held} and may outlive the call", at)
-        .withNote("A reference is second-class: only a closure written straight as an argument of a call may hold one")
-    )
-    return
   }
 }

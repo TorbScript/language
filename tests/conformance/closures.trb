@@ -2,8 +2,9 @@ use Process from "std/process"
 
 /**
  * The gate of milestone 5.8: closures as native code. A closure that captures nothing, one that captures a value, one
- * that shares a `var` binding through a box, one that is returned and called later, one stored in a field, function
- * values of a named function, a receiver closure, and a `lazy` argument that is forced zero times and once.
+ * that shares a `var` binding with the frame while the call it is handed to runs it, one that is returned and called
+ * later, one stored in a field, function values of a named function, a receiver closure, and a `lazy` argument that
+ * is forced zero times and once.
  *
  * `examples/config-dsl` cannot be the gate: it loads a receiver **script** through `Sandbox.load` (milestone 7.4) and
  * needs list literals, `for` over a collection and string interpolation on top of that. This is the same vocabulary
@@ -44,26 +45,27 @@ fn adder(amount: Int): (Int) => Int {
   { value => value + amount }
 }
 
+/** Runs `action` a number of times, and only calls it: a closure handed to it may share a `var` binding. */
+fn repeat(times: Int, action: () => Void) {
+  for _ in 0..times {
+    action()
+  }
+}
+
 /** A counter over a captured `var` binding: the closure and the frame see one variable (gap 19). */
 fn counted(times: Int): Int {
   var hits = 0
-  const bump = {
+  repeat times {
     hits = hits + 1
-  }
-  for _ in 0..times {
-    bump()
   }
   hits
 }
 
-/** A captured `var` binding of a record type, written through a field of the box. */
+/** A captured `var` binding of a record type, written through a field of the binding. */
 fn countedRecord(times: Int): Int {
   var counter = Counter()
-  const bump = {
+  repeat times {
     counter.hits = counter.hits + 1
-  }
-  for _ in 0..times {
-    bump()
   }
   counter.hits
 }
@@ -115,19 +117,21 @@ fn twiceForced(fallback: lazy Int): Int {
   fallback + fallback
 }
 
+/** One more run, counted in the caller's `runs`: what a `lazy` argument that did run leaves behind. */
+fn counting(var runs: Int): Int {
+  runs = runs + 1
+  7
+}
+
 /**
  * How often a `lazy` argument really ran: the thunk of `ignored` never does, the thunk of `twiceForced` does once
- * although the parameter is read twice. The side effect is a closure over a captured `var`, which is the only way a
+ * although the parameter is read twice. The side effect is a `var` argument inside the thunk, which is the only way a
  * `lazy` expression can be counted at all.
  */
 fn lazyRuns(): Int {
   var runs = 0
-  const bump = {
-    runs = runs + 1
-    7
-  }
-  const skipped = ignored 1, bump()
-  const forced = twiceForced bump()
+  const skipped = ignored 1, counting(runs)
+  const forced = twiceForced counting(runs)
   skipped + forced + runs * 100
 }
 

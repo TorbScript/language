@@ -91,7 +91,9 @@ shared type <Name> {
    an object; `Show` is a `shared trait`, so a shared object can still be printed.
 
 5. **`isSame` compares identity, and only a `shared type` has one.** Calling it on an ordinary value is rejected,
-   because the answer would expose whether that value's implementation happens to share storage.
+   because the answer would expose whether that value's implementation happens to share storage. A type parameter and
+   a value of a `shared trait` are rejected too: a value may stand behind either, and the checker cannot tell - the
+   same reason [`spawn`](../concurrency-and-streams/tasks.md) refuses them from the other side.
 
    ```trb error
    type Point {
@@ -103,6 +105,13 @@ shared type <Name> {
    const b = Point x: 1, y: 2
    print isSame(a, b)
    // error: `isSame` compares identity, and a `Point` is a value
+   ```
+
+   ```trb error
+   fn same<Value>(first: Value, second: Value): Bool {
+     isSame(first, second)
+   }
+   // error: `isSame` compares identity, and a `Value` may be a value
    ```
 
 6. **A `var fn` method of a `shared type` may answer a `Task`; the same method on a value may not.** A `var` on a
@@ -121,6 +130,11 @@ shared type <Name> {
    // error: `tick` changes `self` and answers a `Task`, and `Counter` is a value
    // error: The result of `spawn` is not used
    ```
+
+7. **A shared object stays in the task that made it.** `spawn` takes only what it can see is a value, so a shared
+   object, a value that holds one, and anything that may hide one - a type parameter, a function value, a value of a
+   `shared trait` - are refused where the closure captures them (see [Tasks](../concurrency-and-streams/tasks.md),
+   rule 5).
 
 ## What this is not
 

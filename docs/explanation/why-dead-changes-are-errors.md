@@ -103,10 +103,11 @@ defensive fallback either - it is dead code the same way a change nothing reads 
 `items[index].increment()`, `world.entities[id].health = 5`, and `items.update(index) { ... }` all change the original
 in place; none of them introduce a `var` binding that would need to be read back.
 
-**A `var` binding captured by a closure is the one exception, and it needs to be.** It is a shared box, not a copy, so
-the read that justifies a change to it can happen anywhere the closure is called from - there is no single line after
-which "never read again" could be decided. See [Why values instead of references](why-values-instead-of-references.md#consequences)
-for what that box is and why it is reference counted instead of copied.
+**A `var` binding captured by a closure is the one exception, and it needs to be.** The closure shares the binding
+instead of copying it, so the read that justifies a change to it can happen anywhere the call runs the closure - there
+is no single line after which "never read again" could be decided. See
+[Why values instead of references](why-values-instead-of-references.md#consequences) for why such a closure never
+outlives the binding.
 
 **A temporary is never a valid base for a change, which is a related but different error.** `iterator().next()` fails
 before the dead-change rule is even relevant, because the change would be lost with the temporary it was made in - see

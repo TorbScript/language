@@ -1,0 +1,59 @@
+use Process from "std/process"
+
+/**
+ * **`?` inside a closure returns from the closure**, never from the function around it: the failure goes to whoever
+ * runs the closure, and the closure produces the `Option` or the `Result` it returns. What it pins: a `Fail` of one
+ * call ends that call of the closure and nothing else, the calls after it run, a `None` does the same for an
+ * `Option`, and the program goes on after all of them - a `?` in a closure never ends it.
+ */
+fn parse(text: String): Result<Int, String> {
+  if text == "x" {
+    return Fail "not a number"
+  }
+  Ok text.byteLength()
+}
+
+/** Every text through `step`, each answer kept: a failure of one text is that text's answer. */
+fn eachOf(texts: List<String>, step: (text: String) => Result<Int, String>): List<Result<Int, String>> {
+  var answers: List<Result<Int, String>> = []
+  for text in texts {
+    answers.add step(text)
+  }
+  answers
+}
+
+/** The first item of each list through `step`, where an empty list has none. */
+fn firstOfEach(lists: List<List<Int>>, step: (items: List<Int>) => Int?): List<Int?> {
+  var answers: List<Int?> = []
+  for items in lists {
+    answers.add step(items)
+  }
+  answers
+}
+
+fn firstOf(items: List<Int>): Int? {
+  if items.isEmpty() {
+    return None
+  }
+  Some items[0]
+}
+
+const doubled = eachOf(["ab", "x", "abc"]) { text => Ok(parse(text)? * 2) }
+for answer in doubled {
+  match answer {
+    Ok(value) => print "ok {value}"
+    Fail(reason) => print "failed: {reason}"
+  }
+}
+
+const incremented = firstOfEach([[1, 2], [], [7]]) { items => Some(firstOf(items)? + 1) }
+for answer in incremented {
+  match answer {
+    Some(value) => print "some {value}"
+    None => print "none"
+  }
+}
+
+print "after"
+
+Process.exit 0

@@ -14,7 +14,7 @@ use Expression, Argument, CallStyle, TextSegment, Condition, Block, Statement fr
 use MatchArm, PrefixOperator, InfixOperator, Closure, TypeReference from "../../syntax/ast"
 use SymbolId from "../symbols"
 use TypeId, TypeForm, TupleField, LiteralValue, FunctionForm, ParameterForm, ParameterMode, Witness from "./type"
-use Checker, Expectation, Resolution, Adaptation, Dispatch, CollectionLiteral, TypeScope from "./context"
+use Checker, Expectation, Resolution, Adaptation, Dispatch, CollectionLiteral, TypeScope, PendingTry from "./context"
 use Target, deferredTarget, resolveName, symbolTarget, targetOfCandidate from "./name"
 use formOf, reportUnknownMember, isFullyKnown from "./name"
 use lookupMember, lookupStaticMember, recordDelegation, traitDispatchOf, requireObjectSafe from "./member"
@@ -30,6 +30,7 @@ use isQuotation, isQuotationValue, checkQuotation, openThunk, closeThunk from ".
 use checkBlock, checkDiscarded, scopeHere, taskValueOf from "./statement"
 use checkSubject from "./place"
 use markReferenceBindings from "./mutation"
+use noteParameterUse from "./escape"
 use checkPattern, requireReadBindings from "./pattern"
 use MatchArmPlan, armPlanOf, checkExhaustive, checkConditionPattern from "./exhaustive"
 use checkDeclaration from "./check"
@@ -99,6 +100,10 @@ fn evaluateExpression(var checker: Checker, expression: Expression, expected: Ex
     .Name(_) | .Member(_, _, _) => {
       const target = resolveTarget checker, expression, annotation
       checker.resolved expression.span, target.resolution
+      // A function-typed parameter read as a value instead of being called may be kept by the body (`escape.trb`)
+      if const .Local(binding) = target.resolution {
+        noteParameterUse checker, binding, expression.span
+      }
       valueOfTarget checker, target, expression.span
     }
     // `.Circle(1.0)`, `.None`: the case of the type that is expected here
@@ -2138,9 +2143,17 @@ fn tryType(var checker: Checker, inner: Expression, at: Span, expected: Expectat
       return checker.deferredType
     }
   }
-  // At the top level of an entry file and in a body whose result is inferred there is nothing to convert towards: the
-  // program ends with the error, or the enclosing result decides the conversion once it is known
+  // At the top level of an entry file there is nothing to convert towards: the program ends with the error. In a closure
+  // or a function whose result is inferred the `?` returns from that body, and the result it returns into is only
+  // known once the whole body is checked - so the `?` waits for it ([settleTries])
   if checker.isResultInferred {
+    if checker.collectsTries {
+      const failure = match resultPartsOf(checker, found) {
+        Some((_, error)) => Some error
+        None => None
+      }
+      checker.pendingTries.add PendingTry(at, failure)
+    }
     return value
   }
   const result = checker.resultType
@@ -2160,15 +2173,81 @@ fn tryType(var checker: Checker, inner: Expression, at: Span, expected: Expectat
     return value
   }
   if resultPartsOf(checker, result).isSome() {
-    const shown = checker.describe result
-    checker.reportHere(
-      Diagnostic.error("`?` on an `Option` in a function that returns `{shown}`", at)
-        .withNote("There is no error to return. Turn it into one first: `okOr(...)` gives the `Option` an error")
-    )
+    reportOptionIntoResult(checker, result, at, isClosure: !checker.closureFrames.isEmpty())
     return value
   }
   requireTryResult checker, result, at
   value
+}
+
+/**
+ * The `?` of a body whose result was inferred, once that result is known. Each one returns from the body, so the result
+ * has to be an `Option` for a `?` on an `Option`, and a `Result` whose error the failure converts into for one on a
+ * `Result` - the same two rules a written result is held to at the `?` itself. A result that is neither has nowhere
+ * for the failure to go, and the message stands at the `?`.
+ */
+public fn settleTries(var checker: Checker, result: TypeId, isClosure: Bool) {
+  const tries = checker.pendingTries
+  checker.pendingTries = []
+  if tries.isEmpty() {
+    return
+  }
+  const settled = resolveType checker, result
+  if checker.absorbs(settled) || settled == checker.neverType {
+    return
+  }
+  if const .Variable(_) = checker.types.form(settled) {
+    return
+  }
+  for pending in tries {
+    if const Some(error) = pending.failure {
+      if const Some((_, wanted)) = resultPartsOf(checker, settled) {
+        convertError checker, error, wanted, pending.at
+        continue
+      }
+      // What a written result allows at the `?` ([requireTryResult]) an inferred one allows as well
+      if optionValueOf(checker, settled).isSome() {
+        continue
+      }
+    } else {
+      if optionValueOf(checker, settled).isSome() {
+        continue
+      }
+      if resultPartsOf(checker, settled).isSome() {
+        reportOptionIntoResult checker, settled, pending.at, isClosure
+        continue
+      }
+    }
+    reportTryWithoutResult checker, settled, pending.at, isClosure
+  }
+}
+
+fn reportOptionIntoResult(var checker: Checker, result: TypeId, at: Span, isClosure: Bool) {
+  const shown = checker.describe result
+  const body = if isClosure { "a closure that produces" } else { "a function that returns" }
+  checker.reportHere(
+    Diagnostic.error("`?` on an `Option` in {body} `{shown}`", at)
+      .withNote("There is no error to return. Turn it into one first: `okOr(...)` gives the `Option` an error")
+  )
+}
+
+/** A `?` in a body whose result - written or inferred - is neither an `Option` nor a `Result`. */
+fn reportTryWithoutResult(var checker: Checker, result: TypeId, at: Span, isClosure: Bool) {
+  const shown = checker.describe result
+  if isClosure {
+    checker.reportHere(
+      Diagnostic.error("`?` returns from this closure, and the closure produces `{shown}`", at)
+        .withNote(
+          "`?` hands the failure to whoever runs the closure, so the closure has to produce an `Option` or a"
+            + " `Result`: end it in `Ok ...` or `Some ...`, or handle the failure right here with `match` or `??`"
+        )
+    )
+    return
+  }
+  checker.reportHere(
+    Diagnostic.error("`?` needs a function that returns an `Option` or a `Result`, and this one returns `{shown}`", at)
+      .withNote("`?` hands the failure back to the caller, so there has to be somewhere for it to go")
+  )
 }
 
 /**
@@ -2203,11 +2282,7 @@ fn requireTryResult(var checker: Checker, result: TypeId, at: Span) {
   if !isFullyKnown(checker, result) {
     return
   }
-  const shown = checker.describe result
-  checker.reportHere(
-    Diagnostic.error("`?` needs a function that returns an `Option` or a `Result`, and this one returns `{shown}`", at)
-      .withNote("`?` hands the failure back to the caller, so there has to be somewhere for it to go")
-  )
+  reportTryWithoutResult(checker, result, at, isClosure: !checker.closureFrames.isEmpty())
 }
 
 /**

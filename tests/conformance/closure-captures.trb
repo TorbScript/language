@@ -1,47 +1,69 @@
 use Process from "std/process"
 
 /**
- * **A captured `var` binding is one shared box, and everything else a closure captures is a copy.** That box is the one
- * place in the language where a variable is shared, so it is the one thing about a closure a program can observe.
+ * **A captured `var` binding is the binding itself, and everything else a closure captures is a copy.** That is the one
+ * place in the language where a variable is shared, so it is the one thing about a closure a program can observe - and
+ * it only lasts as long as the binding does: a closure that captures a `var` stands straight as the argument of a call
+ * that just calls it, and is never bound, stored or returned.
  *
- * What it pins: the closure sees a write the scope made after the closure was built, the scope sees a write the closure
- * made, two closures over the same binding see each other, a closure that a function *returns* keeps the box alive, the
- * binding of a `for` is fresh every turn (so a closure built in a turn keeps that turn's value), and a closure that
- * captures a `const` keeps a value nothing can reach any more.
+ * What it pins: the closure sees what the scope wrote before the call, the scope sees what the closure wrote, two
+ * closures of one call over the same binding see each other, a closure inside a closure reaches a binding from further
+ * out, the binding of a `for` is fresh every turn (so a closure built in a turn keeps that turn's value), and a closure
+ * that captures a `const` keeps a value nothing can reach any more.
  *
  * A closure that has to change something the *caller* holds does not capture it at all: it takes a `var` parameter,
- * which the last function shows. A reference is second-class, and a closure that a field keeps may not hold one.
+ * which the last function shows.
  */
+
+/** Runs `action` twice, and only calls it: a closure handed to it may capture a `var` binding. */
+fn twice(action: () => Void) {
+  action()
+  action()
+}
+
+/** What `read` answers. */
+fn reading(read: () => Int): Int {
+  read()
+}
+
+/** Three steps, then the reading: two closures of one call, over one binding. */
+fn stepsThenRead(step: () => Void, read: () => Int): Int {
+  step()
+  step()
+  step()
+  read()
+}
+
 fn sharedWithTheScope(): Int {
   var count = 1
-  const read = { count }
-  count = 10
-  read()
+  count = count * 10
+  reading { count }
 }
 
 fn sharedWithTheClosure(): Int {
   var count = 0
-  const step = { count = count + 5 }
-  step()
-  step()
+  twice {
+    count = count + 5
+  }
   count
 }
 
 fn sharedBetweenTwo(): Int {
   var count = 0
-  const step = { count = count + 1 }
-  const read = { count * 100 }
-  step()
-  step()
-  step()
-  read()
+  stepsThenRead({ count = count + 1 }, { count * 100 })
 }
 
-/** A box that outlives the call that made it: a closure a function returns keeps counting where it left off. */
-fn counter(): () => Int {
+/** A closure inside a closure: the inner one changes a binding of the function around both. */
+fn nested(): List<Int> {
   var count = 0
-  { count = count + 1
-    count }
+  var seen: List<Int> = []
+  twice {
+    [1, 2].forEach { step =>
+      count = count + step
+      seen.add count
+    }
+  }
+  seen
 }
 
 /** The binding of a `for` is a new one every turn, so a closure built in one turn keeps that turn's value. */
@@ -79,10 +101,7 @@ fn addedTo(var target: List<Int>, step: (Int) => Int) {
 print sharedWithTheScope()
 print sharedWithTheClosure()
 print sharedBetweenTwo()
-
-const next = counter()
-
-print next(), next(), next()
+print nested()
 print perTurn()
 
 const read = ofAConstant()

@@ -23,6 +23,7 @@ use checkPattern from "./pattern"
 use requireIrrefutable from "./exhaustive"
 use deferBlock from "./expression"
 use settleChanges from "./mutation"
+use settleEscapes from "./escape"
 use buildImplementations, checkCoherence, checkImplementations, extensionAt from "./implementation"
 use checkMemberImports from "./implementation"
 use scriptReceiverOf, checkReceiverScript from "./receiver"
@@ -68,6 +69,8 @@ public fn checkTypes(
   for module in modules {
     checkModule checker, module
   }
+  // Whether a closure argument may capture a `var` binding is a fact of its callee's body, which is known only now
+  settleEscapes checker
   const bodies = clock.taken()
   const shape = checker.shapeMilliseconds
   checker.timings.add Timing("bodies", bodies - shape)

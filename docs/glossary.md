@@ -81,9 +81,9 @@ What `Error.cause()` walks: an error that wraps another one hands it out, so a r
 
 ### Closure
 
-The one closure form, `{ ... }` in expression position, which captures a `const` binding as a copy and shares a `var`
-binding with its scope - and a closure that captures a `var` binding may not escape that scope (decided, not yet
-enforced). See [Closures](language/functions/closures.md).
+The one closure form, `{ ... }` in expression position, which captures a `const` binding as a copy and a `var`
+binding as itself - which only a closure handed to a parameter that just calls it may do. See
+[Closures](language/functions/closures.md).
 
 ### Coercion
 
