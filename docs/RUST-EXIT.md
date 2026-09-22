@@ -31,7 +31,7 @@ suites beside it. Every use of it in the repository:
 | `torb canon --check --rule ...` - the formatter canon, five rules, 1 341 lines of Rust with 561 more of tests | `canon` ported to TorbScript on the self-hosted parser (slice 3, done), then milestone 8's `torb format` | no - done |
 | `torb canon ..` - writing the canon | the same | no - done |
 | `torb highlight --stdin` - the editor extension's semantic tokens | The native binary's own `highlight` (slice 4) | no - done |
-| `cargo test --test native` - the conformance suite, 74 programs run both ways and compared | A gate runner that builds and runs each program natively and compares it with `.expected`, `.stderr`, `.exit` and the leak count (slice 2) | **yes** - the gate has to keep running, though what it compares against changes |
+| `cargo test --test native` - the conformance suite, 74 programs run both ways and compared | `tools/conformance.sh`, which builds and runs each program natively and compares it with `.expected`, `.stderr`, `.exit` and the leak count (slice 2) | no - done |
 | `cargo test --test suite` - stage 0's test report against the binary's, line by line | Nothing. Its subject is the agreement of two implementations, and after the exit there is one | no |
 | `cargo test --test self_hosted` - the self-hosted front end's `tokens`/`ast`/`parse` against the Rust front end's, over every `.trb` of the repository | Nothing, for the same reason. What it defends (the parser accepts the whole repository) is `torb parse ..` plus the parser's own tests | no |
 | `cargo test --test fixpoint` - stage 1 -> stage 2 -> stage 3, byte-identical C | `tools/bootstrap.sh`: seed -> `torb` -> `torb`, byte-identical C. The same comparison from one step fewer | no - done |
@@ -48,10 +48,10 @@ suites beside it. Every use of it in the repository:
 | `docs/` front matter - ten pages carry `bootstrap/README.md` or a `bootstrap/crates/...` path in `source:`, and the docs gate asserts those paths exist | Repointed at the compiler's own sources (slice 6). `torb-run.md` and `torb-test.md` are already repointed | no |
 | `compiler/CONTRIBUTING.md`, `bootstrap/README.md`, `docs/ARCHITECTURE.md`, `docs/BACKEND.md` - the command lists and the description of the two-stage world | Rewritten in slice 6 | no |
 
-**Three things block the exit.** The conformance runner is one piece of work (slice 2). The second is one lowering gap
-(`error-chain.trb`). The third is not in the table because it is not a use of stage 0 at all but a property of it:
-stage 0 is what **produces** the first `torb` today, and section 4 is about replacing that. `canon` (slice 3) and
-`highlight` (slice 4) are ported.
+**Two things block the exit**, and neither is in this table. The first is one lowering gap (`error-chain.trb`, slice
+5). The second is not a use of stage 0 at all but a property of it: stage 0 is what **produces** the first `torb`
+today, and section 4 is about replacing that. `canon` (slice 3), `highlight` (slice 4) and the conformance runner
+(slice 2) are done.
 
 ---
 
@@ -120,7 +120,7 @@ implemented. **Does not block the exit.**
 
 | Where | How many | What it is | Blocks? |
 |---|---|---|---|
-| `bootstrap/tests/native/` | 74 programs | The conformance suite: run both ways, compared byte for byte | The programs do not block; the **runner** does (slice 2) |
+| `bootstrap/tests/native/` | 74 programs | The conformance suite: every program built and run with the native compiler, compared against its `.expected`/`.stderr`/`.exit`/`.leaks` | no - done. The programs never blocked; the **runner** did, and `tools/conformance.sh` is it (slice 2) |
 | `bootstrap/tests/native/binary-only/` | 2 programs | Behaviour the two implementations answer **deliberately** differently: a failing `assert` showing a non-scalar capture, and `into()` through the blanket implementation of `Into`. Both are cases stage 0 cannot answer because it has no types | no - they are already native-only, and after the exit they are ordinary programs of the suite |
 | `bootstrap/tests/native/stage-0-only/` | 1 program | `error-chain.trb`: a top-level `?` whose error carries `Error` prints one `  caused by:` line per link of `cause()`. The back end's `reportFailure` writes the first line and exits | **yes** - it is the one behaviour that would be lost. The loop over `cause()` is the whole gap (slice 5) |
 | `bootstrap/tests/scripts/` | 2 programs, 370 lines | Long programs that exercise many things at once, on stage 0 alone | no - they run natively with `torb run` |
@@ -295,15 +295,15 @@ Each slice is one agent, in order. The estimate is the work, not the machine tim
 
 | # | What | Gate when it is done | Estimate |
 |---|---|---|---|
-| 1 | **The seed and the native driver.** `torb run` (build into a cache keyed on the sources, then execute with the arguments, the streams and the exit code passed through), `torb test` for any test package and several at once, `tools/bootstrap.sh`, `seed/` ignored, `Process.runInheriting` in the runtime | Tier A on the native binary; the chain seed -> `torb` -> `torb` with byte-identical C | **this round** |
-| 2 | **The gates run on the native compiler.** A gate runner - TorbScript, or `sh` where it only sequences commands - that replaces the three `cargo test` suites: conformance compares a native run against `.expected`/`.stderr`/`.exit`/`.leaks` and no longer against stage 0; the fixpoint becomes `tools/bootstrap.sh`; `suite` and `self_hosted` are dropped with a note in this document saying what they defended | The conformance suite green from the runner, on the same 74 programs | 1 round |
+| 1 | **The seed and the native driver.** `torb run` (build into a cache keyed on the sources, then execute with the arguments, the streams and the exit code passed through), `torb test` for any test package and several at once, `tools/bootstrap.sh`, `seed/` ignored, `Process.runInheriting` in the runtime | Tier A on the native binary; the chain seed -> `torb` -> `torb` with byte-identical C | **done** |
+| 2 | **The gates run on the native compiler.** `tools/conformance.sh` (POSIX `sh`) replaces the three `cargo test` suites: conformance compares a native run against `.expected`/`.stderr`/`.exit`/`.leaks` and no longer against stage 0; `tools/gates.sh a`/`b` sequence tier A and tier B; the fixpoint is `tools/bootstrap.sh`; `suite` and `self_hosted` are dropped, and section 6 says what they defended | The conformance suite green from `tools/conformance.sh`, on the same 74 programs (75 with `binary-only/`, one `stage-0-only/` skipped) | **done** |
 | 3 | **`canon` ported to TorbScript, done.** The five rules of `bootstrap/crates/torb-cli/src/canon` on the self-hosted parser, in `compiler/src/canon`, with the same rule flags, the same `--check`, and the same "apply one edit, parse again, keep it only if the tree is unchanged" safety - the tree comparison reads the generated `Show` of the syntax tree with every span and `CallStyle` erased, so no second dumper was needed | `torb canon --check ..` from the native binary reports the same files stage 0's reports - zero | done |
 | 4 | **`highlight` ported.** `compiler/src/highlight/` - 1 717 lines of TorbScript, and 545 more for the 32 tests the Rust file carried inside it - and the extension looking for the native binary first | Both implementations answer with the same JSON over every `.trb` file of the repository | **done** |
 | 5 | **The one lowering gap.** `reportFailure` walks `cause()` and writes one `  caused by:` line per link, after which `bootstrap/tests/native/stage-0-only/error-chain.trb` moves up one directory | The conformance suite with 75 programs and no `stage-0-only/` | half a round |
 | 6 | **The deletion.** `bootstrap/tests/` moves to `tests/`, `bootstrap/crates` is deleted, and every reference is rewritten: `compiler/CONTRIBUTING.md`, `bootstrap/README.md` (what survives of it), `docs/ARCHITECTURE.md`, `docs/BACKEND.md`, the ten `source:` entries in `docs/`, `.vscode/tasks.json`, `benchmarks/run.sh`, and this document | Every gate green from the native binary alone, with no Rust toolchain on the machine | 1 round |
 
-**Slices 1, 3 and 4 are done.** What is left is 2, 5 and 6: two rounds that can run side by side, and the deletion
-after them. Slice 6 needs 2 and 5.
+**Slices 1 through 4 are done.** What is left is 5 and 6: the one lowering gap, and the deletion, which needs 5 (and
+2, 3, 4, already done) before it.
 
 ### 5.1 What slice 4 decided, and what it measured
 
@@ -350,12 +350,19 @@ damaged sources - each file cut at three fractions of its length, plus fifteen h
 Written into `compiler/CONTRIBUTING.md` as the rule in force; repeated here because it is a decision of this plan and
 not of that file.
 
-- **Tier A, every round**: the build, `check ..` ("no problems"), `check --statistics ..` ("0 deferred"), the
-  compiler's own tests, the `std/` tests a change touched, `canon --check` with the five rules, and the two docs gates
-  where docs changed.
+- **Tier A, every round**: `sh tools/gates.sh a` - the build, `check ..` ("no problems"), `check --statistics ..`
+  ("0 deferred"), the compiler's own tests, the std/example tests that build natively, `canon --check` with the five
+  rules, and the two docs gates.
 - **Tier B, only a round that touches the IR, a back end or `runtime/`, exactly once**, by the agent and not again on
-  master: the native conformance suite, `suite`, `fixpoint`. On master tier B runs at most once per batch of merges, in
-  the background, and a red result is fixed forward.
+  master: `sh tools/gates.sh b` - `tools/conformance.sh` (the conformance suite), `tools/bootstrap.sh` (the fixpoint),
+  and the C runtime's own tests. On master tier B runs at most once per batch of merges, in the background, and a red
+  result is fixed forward.
+- **`suite` and `self_hosted` are dropped, not replaced** (slice 2). Both compared stage 0's own answer with the
+  binary's - the compiler's tests run from the interpreter against the same tests run from the binary, and the
+  self-hosted front end against the Rust one over every `.trb` of the repository - and with one of the two
+  implementations leaving, there is nothing left for either to compare. What each one defended survives elsewhere:
+  the compiler's tests are `torb test compiler/tests` on its own, and the self-hosted parser accepting the whole
+  repository is `torb parse ..` plus the parser's own tests in `compiler/tests`.
 - **Stage 0 is frozen.** It gets a language feature only where the compiler's own sources or tests need one to build,
   and a native only where the compiler needs one. Parity of *messages* between the two checkers is no longer a goal.
   `cargo fmt` and `cargo clippy` run where Rust files changed.

@@ -1,9 +1,7 @@
 # The Conformance Suite
 
-**One program, two implementations, one observable behaviour.** Every `.trb` file here is run twice - by the
-interpreter of stage 0 (`torb run <program>`) and as a native binary built through the C back end
-(`torb run ../compiler build <program>`) - and the two runs have to agree, byte for byte, about everything a program
-can be observed doing:
+**One program, one native binary, one observable behaviour.** Every `.trb` file here is built with the native
+compiler (`torb build <program>`), run, and compared against what is written down beside it:
 
 | What is compared | Where it is written down |
 |------------------|--------------------------|
@@ -13,10 +11,11 @@ can be observed doing:
 | whether the leak gate applies | `<program>.leaks`, which holds the reason it does not |
 
 **`\n` is `\n`.** Nothing about what a program wrote is normalised - the runtime puts standard output and standard
-error into binary mode on Windows (`torb_process_start`), so the bytes a binary writes into a pipe are the bytes stage
-0 writes. Only the expectation *files* are read with `\r\n` folded, because git may check one out with either ending.
+error into binary mode on Windows (`torb_process_start`), so the bytes a binary writes into a pipe are exactly what
+this compares against. Only the expectation *files* are read with `\r\n` folded, because git may check one out with
+either ending.
 
-Plus two things that are checked on the compiled side alone, because there is nothing to compare them with:
+Plus two things that are checked on the built program alone, because there is nothing to compare them with:
 
 - **Zero live blocks.** The binary is run a second time with `TORB_REPORT_LEAKS=1`, and the runtime's block counter has
   to be zero where the program ends. A program that panics is exempt, because a panic runs nothing (CONCEPT, "A panic
@@ -31,19 +30,24 @@ Plus two things that are checked on the compiled side alone, because there is no
 - **The emitted C is a pure function of the program.** `--emit-c` twice gives the same bytes, and no absolute path of
   any machine is in it.
 
-`bootstrap/crates/torb-cli/tests/native.rs` is the runner, `cargo test --release --test native` runs it, and a C
-compiler is what it needs (`$TORB_CC`, `clang`, `gcc`, `cc` - the order `torb build` uses).
+`tools/conformance.sh` is the runner (`sh tools/conformance.sh`, `sh tools/gates.sh b`), and a C compiler is what it
+needs (`$TORB_CC`, `clang`, `gcc`, `cc` - the order `torb build` uses).
 
 ## What is *not* compared
 
-**Nothing about what a program does.** The one thing that is read loosely is the **position inside a frame of `std/`**:
-a `.stderr` file writes `  at std/core/src/option.trb:_:_`, because a line of the standard library moves whenever a
-comment above it is edited, and what a program promises is *which file* panicked. Stage 0 loads no `std/` at all - it
-answers those bodies with a native - so it writes the file with no position, which reads the same way. A frame of the
-program itself keeps its exact line and column.
+**Nothing about what a program does beyond what is written down.** The expectation files were written from a native
+run, so a program that answers correctly *as the language defines it* is not distinguished here from one that
+answers consistently but wrongly - that is what `compiler/tests/` and the pages under `docs/language/` are for, and
+this suite alone never catches it.
 
-There is no allowance for a message, an exit code or an output. Until milestone 5.14 there was one - a program that
-panicked only had to *fail* on stage 0 - and closing it is what that milestone was.
+The one thing that is read loosely is the **position inside a frame of `std/`**: a `.stderr` file writes
+`  at std/core/src/option.trb:_:_`, because a line of the standard library moves whenever a comment above it is
+edited, and what a program promises is *which file* panicked, not which line - a comment added above a panic site
+would otherwise invalidate every `.stderr` file that panics through it. A frame of the program itself keeps its exact
+line and column.
+
+Beyond that folding, there is no allowance anywhere: a program that panics with the wrong message, or leaves with the
+wrong exit code, fails exactly as one that prints the wrong thing does.
 
 ## Adding a program
 
@@ -51,29 +55,31 @@ panicked only had to *fail* on stage 0 - and closing it is what that milestone w
    integer overflow" should find `overflow.trb` and read it in ten seconds. A program that pins six things pins none of
    them clearly.
 2. Write the `.trb` next to this file. It needs a **doc comment that says what it pins and why that is the language's
-   answer** - not what the back end does today. The file is checked (`torb run ../compiler check tests/native` from
-   `bootstrap/`), so it is ordinary, valid TorbScript, in the canon of the formatter.
+   answer** - not what the back end does today. The file is checked (`torb check bootstrap/tests/native` from the
+   repository root), so it is ordinary, valid TorbScript, in the canon of the formatter.
 3. End it in `Process.exit <code>` where the exit code is part of what is pinned, and compute the code from what the
    program measured where that is possible: a program whose answer is wrong then fails on the code as well as on the
    output.
-4. Run it both ways and write the three expectation files from the **compiled** run, with a `std/` position replaced by
-   `_:_`. Nothing else is folded: the runtime puts standard output and standard error into binary mode on Windows, so
-   what a binary writes into a pipe is `\n` exactly as stage 0 writes it. Then read them: an expectation nobody read is
-   a bug that was written down.
-5. `cargo test --release --test native`. A program that is wrong about the language fails on both sides at once, which
-   is the one case this suite cannot catch - that is what `compiler/tests/` and the pages under `docs/language/` are
-   for.
+4. `sh tools/conformance.sh --filter <name> --update` builds it, runs it and writes the three expectation files from
+   that run, with a `std/` position already folded to `_:_`. Nothing else is folded: the runtime puts standard output
+   and standard error into binary mode on Windows, so what the binary writes into a pipe is `\n` exactly as the file
+   then holds it. Then read them: an expectation nobody read is a bug that was written down.
+5. `sh tools/conformance.sh --filter <name>`. A program that is wrong about the language still passes, because the
+   files it is compared against were written from this same run - that is the one case this suite cannot catch by
+   itself, and `compiler/tests/` and the pages under `docs/language/` are what catches it instead.
 
-A behaviour that stage 0 cannot run at all does not belong here; it belongs in `compiler/tests/` as an IR snapshot. A
-long program that exercises many things at once belongs in `bootstrap/tests/scripts/`, which runs on stage 0 alone.
+A behaviour the native back end cannot run at all does not belong here; it belongs in `compiler/tests/` as an IR
+snapshot. A long program that exercises many things at once belongs in `bootstrap/tests/scripts/`, which the native
+`torb run` runs on its own.
 
 ## `stage-0-only/`
 
 One subdirectory, and it is not an exception to the contract - it is a waiting room. A program lands there when **the C
 back end cannot produce the behaviour yet and stage 0 already answers what the language says**: there is nothing to
-compare, and the program still pins the answer instead of waiting for the back end. The runner runs those programs on
-stage 0 and reads the same three expectation files. Each one says in its doc comment why it is there and what has to
-exist for it to move up one directory, and moving it is the whole change.
+build, and the program still pins the answer instead of waiting for the back end. `tools/conformance.sh` does not
+build these programs - it lists each one as skipped, with the reason from its own doc comment below. Each one says in
+its doc comment why it is there and what has to exist for it to move up one directory, and moving it is the whole
+change.
 
 | Program | Why it waits |
 |---------|--------------|
@@ -83,8 +89,9 @@ exist for it to move up one directory, and moving it is the whole change.
 
 The other side of the same coin, and the other thing that is not an exception: a program lands there when the two
 implementations answer **deliberately** differently, so there is nothing to compare and the divergence is still pinned
-instead of being untested. The runner builds and runs those programs as a binary alone and reads the same three
-expectation files. The leak gate does not run on them, because every one of them ends in a recovered panic.
+instead of being untested. `tools/conformance.sh` builds and runs those programs exactly like every other one and reads
+the same three expectation files. The leak gate does not run on them, because every one of them ends in a recovered
+panic.
 
 | Program | What differs, and why |
 |---------|-----------------------|

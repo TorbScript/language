@@ -41,30 +41,39 @@ false positive of the checker is a bug of the checker.
 the gates are the two tiers below rather than the whole list, because the list costs more than half an hour a round and
 most of it re-measures the Rust implementation that is being removed. They tighten again once the exit is done.
 
-**Tier A, every round.** The build, and then, from `bootstrap/`:
+**`tools/gates.sh` runs both tiers with the native binary**, from the repository root:
 
 ```text
-cargo build --release                                            # only where Rust files changed
-torb run ../compiler check ..                                    # "no problems"
-torb run ../compiler check --statistics ..                       # "0 deferred"
-torb test ../compiler/tests                                      # the compiler's own tests
-torb test ../std/<package>/tests                                 # every std package a change touched
-torb canon --check --rule calls --rule strings --rule imported-case-patterns --rule unused-bindings --rule loops ..
-torb run ../compiler docs check ../docs                          # where docs changed
-torb run ../compiler docs index --check ../docs                  # where docs changed
+sh tools/gates.sh a    # every round
+sh tools/gates.sh b    # a round that touches the IR, a back end or runtime/ - once, not again on master
 ```
 
-**Tier B, only a round that touches the IR, a back end or `runtime/`, and then exactly once** - by the agent that wrote
-the change, not again on master:
+One line per gate, with its time; the first red gate stops the run there and shows its output, so nothing after it
+runs.
 
-```text
-cargo test --release --test native -- --nocapture                # the conformance suite
-cargo test --release --test suite -- --ignored --nocapture       # the compiler's tests from the binary
-cargo test --release --test fixpoint -- --ignored --nocapture    # the three-stage fixpoint
-```
+**Tier A**: bootstraps `build/release/torb` with `sh tools/bootstrap.sh` if it is missing or older than the compiler's
+sources, then `check ..` ("no problems"), `check --statistics ..` ("0 deferred"), `test compiler/tests`, `test` of
+every std/example test package that builds natively (four do not yet - [docs/RUST-EXIT.md](../docs/RUST-EXIT.md)
+section 2.4 names the back-end gap each one is blocked on, and `gates.sh` prints the same reason and skips them), the
+two docs gates, and `canon --check` with the five rules. `canon` is a command of the self-hosted `torb`
+([compiler/src/canon](../compiler/src/canon)); `gates.sh` calls `build/release/torb canon` when `canon --help` works
+there and falls back to stage 0's frozen copy otherwise, so a checkout between slices needs nothing special.
+
+**Tier B**: `tools/conformance.sh` (the conformance suite - every program under `bootstrap/tests/native/`, and
+`binary-only/`, built and run natively and compared against its `.expected`/`.stderr`/`.exit`/`.leaks`; `--jobs`,
+`--filter` and `--update` are its own flags), `tools/bootstrap.sh` (the fixpoint: seed -> `torb` -> `torb`,
+byte-identical C), and `sh runtime/build.sh` (the C runtime's own tests).
 
 On master tier B runs at most once per batch of merges, in the background, and a red result is **fixed forward** rather
 than reverted: the batch is already in and the failing piece is named and repaired in the next round.
+
+**`cargo test --test suite` and `cargo test --test self_hosted` are dropped, not replaced.** Both compared stage 0's
+own answer with the binary's - the compiler's tests run from the interpreter against the same tests run from the
+binary, and the front end written in TorbScript against the Rust one over every `.trb` of the repository - and with
+one of the two implementations leaving, there is nothing left for either to compare. What each one defended survives
+elsewhere: the compiler's tests are `torb test compiler/tests` on its own, native and interpreted messages have not
+needed to agree since the gate policy below ("Stage 0 is frozen"), and the self-hosted parser accepting the whole
+repository is `torb parse ..` plus the parser's own tests in `compiler/tests`.
 
 **Stage 0 is frozen.** It receives a language feature only where the compiler's own sources or tests need it to build,
 and a native only where the compiler needs one. Parity of *messages* between the two checkers is no longer a goal: the
@@ -75,30 +84,11 @@ self-hosted checker's message is the language's, and stage 0's is whatever it wa
 [docs/PERFORMANCE.md](../docs/PERFORMANCE.md) and the size of the emitted C go into the round's report so that a
 regression is visible, and none of them fails a gate by itself.
 
-**Run tier A with the native binary.** `check ..` costs 8 s there against 59 s on stage 0, and the compiler's tests are
-one binary instead of 55 processes. From the repository root, with a `torb` built by `sh tools/bootstrap.sh` (or the
-seed itself, which is enough for everything but a change to the compiler):
-
-```text
-sh tools/bootstrap.sh                                 # seed -> torb -> torb, and the C of both compared
-./build/release/torb check .                          # "no problems"
-./build/release/torb check --statistics .             # "0 deferred"
-./build/release/torb test compiler/tests
-./build/release/torb test std/<package>/tests
-./build/release/torb canon --check --rule calls --rule strings --rule imported-case-patterns --rule unused-bindings --rule loops .
-./build/release/torb docs check docs
-./build/release/torb docs index --check docs
-```
-
-`canon` is a command of the self-hosted `torb`, ported onto the self-hosted parser
-([compiler/src/canon](../compiler/src/canon)). Stage 0's own copy is frozen and kept only so the two can be compared;
-the gate is the native one above.
-
-**The fixpoint is not in the list above, and it is what says the compiler is correct about itself.** It builds the
-compiler with stage 1, builds it again with the binary that came out, compares the two `program.c` byte for byte and lets
-stage 3 emit a third one - roughly a quarter of an hour, so it is `#[ignore]`d and run when a change could move the
-emitted C (the emitter, the lowering, the ownership pass, `std/`). A difference is reported as the first differing byte
-with the text around it in both files. `docs/BACKEND.md` ("What 6.2 decided") says what it has caught.
+**The fixpoint is what says the compiler is correct about itself.** `tools/bootstrap.sh` builds the compiler with the
+seed, builds it again with the binary that came out, and compares the two `program.c` byte for byte - the same
+comparison the earlier three-stage `cargo test --test fixpoint` made, one step fewer because a seed is already a
+`torb`. A difference is reported as the first differing byte with the text around it in both files. `docs/BACKEND.md`
+("What 6.2 decided") says what it has caught.
 
 **A cost that stage 0 hides is a cost only a compiled program pays.** Everything `natives.rs` answers with Rust while
 `std/` carries a TorbScript body for the same declaration is invisible to every test that runs on stage 0 - that is how a

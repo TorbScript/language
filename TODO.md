@@ -3360,6 +3360,36 @@ Wenn nicht, was bedeutet, bewirkt es?
     auf oberster Ebene, weil es keine Tests eines Pakets sind? (3) `torb run` liest und hasht bei jedem Start das
     ganze Workspace (0,17 s warm). Ist das der richtige Handel, oder soll der Schlüssel später nur die wirklich
     importierten Dateien umfassen und dafür einen Abhängigkeitsindex auf Platte pflegen?
+  - **Erledigt:** Scheibe 2 - die Gates laufen ohne `cargo test`. `tools/conformance.sh` (POSIX `sh`, läuft in Git
+    Bash und auf Linux/macOS) baut jedes Programm unter `bootstrap/tests/native/` (und `binary-only/`) mit der
+    nativen Binärdatei, führt es aus und vergleicht **nur noch gegen die Dateien** (`.expected`/`.stderr`/`.exit`/
+    `.leaks`), nicht mehr gegen Stage 0; `stage-0-only/` wird mit der Begründung aus dem Doc-Kommentar übersprungen
+    gemeldet. Zwei native Eigenschaften bleiben erhalten: null lebende Blöcke (außer wo `.stderr`/`.leaks` es
+    entschuldigen) und `--emit-c` zweimal byte-identisch. `--jobs` (Default 2, das Bauen ist gcc-lastig und die
+    Maschine wird geteilt), `--filter` und `--update` (schreibt die drei Erwartungsdateien aus dem nativen Lauf,
+    Positionen in `std/`-Rahmen schon auf `_:_` gefaltet). `tools/gates.sh a|b` reiht Tier A und Tier B mit der
+    nativen Binärdatei aneinander, eine Zeile pro Gate mit ihrer Zeit, stoppt beim ersten roten Gate mit der Ausgabe;
+    Tier A baut bei Bedarf neu (`sh tools/bootstrap.sh`), Tier B ruft `tools/conformance.sh`, den Fixpunkt und
+    `runtime/build.sh` auf. `--test suite` und `--test self_hosted` sind gestrichen statt ersetzt: beide verglichen
+    Stage 0s eigene Antwort mit der der Binärdatei, und mit einer der zwei Implementierungen bleibt nichts mehr zu
+    vergleichen; was sie verteidigten, lebt in `torb test compiler/tests` und `torb parse ..` weiter.
+    **Bewiesen:** `cargo test --release --test native` (3 Tests, 38 m 49 s, auf einer von anderen Agenten
+    mitbenutzten Maschine) und `tools/conformance.sh` über dieselben 76 Programme (75 gebaut und verglichen, 1
+    `stage-0-only` übersprungen) stimmen in jedem Urteil überein - keine einzige Abweichung. Mehrere Läufe fielen mit
+    `cc1.exe: out of memory` oder einem kurzzeitig verschwundenen `cc1.exe` teilweise durch, immer fremdverursacht
+    (parallele Builds anderer Agenten auf derselben Maschine, nach dem Merge sogar mitten in Tier B) und beim
+    erneuten, alleinigen `--jobs 1`-Lauf jedes Mal vollständig grün - dieselbe Falle, vor der die Anleitung dieser
+    Runde warnt. **Zeiten mit der nativen Binärdatei** (nach `git merge master`, mit Scheibe 3 und 4 im Baum): Tier A
+    ohne fälligen Neubau rund 4 min 40 s (`check ..` 8 s, `check --statistics ..` 8 s, `test compiler/tests` 220 s,
+    die zwei nativ baubaren std/Beispiel-Pakete zusammen 23 s - vier weitere bauen nicht, mit Begründung
+    übersprungen, RUST-EXIT 2.4 -, die zwei Docs-Gates 2 s, `canon --check` **nativ** 20 s); ein fälliger
+    `sh tools/bootstrap.sh` kostet zusätzlich um die 4-5 min. Tier B, alleine gelaufen: `tools/conformance.sh`
+    8 min 39 s (75 bestanden, 0 gescheitert), der Fixpunkt 4 min 21 s, `runtime/build.sh` 5 s (121 Tests). **Kein
+    Griff in `compiler/src` nötig:** `torb build --output`/`--emit-c` konnten schon alles, was der Runner braucht.
+    Master brachte mitten in dieser Runde Scheibe 3 (`canon`) und Scheibe 4 (`highlight`) nativ; `tools/gates.sh`
+    erkennt `torb canon --help` zur Laufzeit und wechselte danach von selbst von Stage 0 (2 s) auf die native
+    `canon` (20 s, langsamer als Stage 0 - TODO.md's Scheibe-3-Eintrag nennt den vermutlichen Grund: die generierte
+    `Show` wird pro Kandidaten-Änderung neu gebaut), ganz ohne Codeänderung an `tools/gates.sh`.
   - **Erledigt:** Scheibe 4 - `torb highlight` ist portiert und läuft als Befehl des selbstgehosteten Compilers
     (`compiler/src/highlight/`, 1 717 Zeilen TorbScript und 545 Zeilen Tests gegen 1 850 Zeilen Rust, die ihre Tests
     mit drin trugen). **Architektur: der reine Syntax-Resolver, nicht der Typprüfer** - gemessen, nicht geraten: eine
