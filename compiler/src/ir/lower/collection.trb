@@ -29,7 +29,7 @@ use borrowed, referenced from "../ir"
 use FunctionBuilder, addTemporary, addLocal, addBlock, emit from "../build"
 use elementFor from "../element"
 use memberOfType, traitMemberNamed from "../witness"
-use traitArgumentsOf from "../../semantics/checker/implementation"
+use traitArgumentsOf, witnessFor from "../../semantics/checker/implementation"
 use locationOf from "./context"
 use Lowering, reportUnsupported, irTypeOfClosed, substituted, voidTypeOf from "./context"
 use finishBlock, continueIn from "./context"
@@ -67,7 +67,10 @@ public fn lowerListLiteral(
       return unsupportedSlot lowering, builder, destination, "a list literal without an item type", at
     }
   }
-  lowerItemList lowering, builder, destination, items, item, bounds, annotation, at
+  // `appendedAll([4, 5])` expects an `Iterate<Int>`: the default list is built as a `List<Int>` and boxed as the
+  // supertrait that is expected, which is what the `from` of a trait `List` implements would have made of it
+  const appending = preludeType lowering, "List", [item]
+  lowerItemList lowering, builder, destination, items, item, bounds, annotation, at, appending
 }
 
 /**
@@ -87,8 +90,11 @@ public fn lowerItemList(
   bounds: List<TypeId>,
   annotation: IrTypeId,
   at: Span,
+  appending: TypeId? = None,
 ): Slot {
-  const bound = match bounds.first() {
+  // The trait whose `append` fills the buffer: the list's own, or `List<Item>` where the result is boxed as less
+  const chosen = if appending.isSome() { appending } else { bounds.first() }
+  const bound = match chosen {
     Some(found) => found
     None => {
       return unsupportedSlot lowering, builder, destination, "a list of a type that is not a `List`", at
@@ -296,11 +302,52 @@ fn isDefaultLiteral(var lowering: Lowering, at: Span): Bool {
       false
     }
     .FromIterate(target, _, _) => {
+      // A trait the default list implements is no conversion: the list is built and boxed as that trait
+      if isTraitOfDefaultList(lowering, target) {
+        return true
+      }
       const shown = lowering.checker.describe target
       reportUnsupported lowering, "a literal that is built through the `from` of `{shown}`", at
       false
     }
   }
+}
+
+/**
+ * Whether a target is a trait-typed value the default list is one of: `Iterate<Int>` for `appendedAll([4, 5])`. Every
+ * bound of it has to be a trait `List<Item>` has, or a trait `ArrayList` implements beside it.
+ */
+fn isTraitOfDefaultList(var lowering: Lowering, target: TypeId): Bool {
+  const bounds = match lowering.checker.types.form(substituted(lowering, target)) {
+    .Traits(found) => found
+    _ => {
+      return false
+    }
+  }
+  const bound = match bounds.first() {
+    Some(found) => found
+    None => {
+      return false
+    }
+  }
+  const item = match traitArgumentsOfBound(lowering, bound).first() {
+    Some(found) => found
+    None => {
+      return false
+    }
+  }
+  const container = match preludeType(lowering, "ArrayList", [item]) {
+    Some(found) => found
+    None => {
+      return false
+    }
+  }
+  for one in bounds {
+    if const .Unresolved = witnessFor(lowering.checker, container, one) {
+      return false
+    }
+  }
+  true
 }
 
 /** `["a": 1]`: a `TrieMap<Key, Value>` filled in written order, then coerced to the `Map<Key, Value>` the literal is. */

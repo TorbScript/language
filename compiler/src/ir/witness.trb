@@ -30,6 +30,7 @@ use witnessTableName from "./mangle"
 use instantiateTrait from "./instantiate"
 use instanceFor, isClosedType from "./instances"
 use Lowering, Generated, reportUnsupported, irTypeOfClosed, nativeNamed from "./lower/context"
+use GenericSlot, TableSource from "./lower/context"
 use generatedFunctionOf from "./lower/derive"
 use nativeFunctionOf, needsNativeWrapper from "./lower/native"
 
@@ -74,7 +75,9 @@ public fn witnessTableOf(var lowering: Lowering, subject: TypeId, bound: TypeId,
       return None
     }
   }
-  Some lowering.program.addWitnessTable(WitnessTable(name, applied, target, found, nested))
+  const added = lowering.program.addWitnessTable WitnessTable(name, applied, target, found, nested)
+  lowering.tableSources.set added.value, TableSource(subject, bound, implementation)
+  Some added
 }
 
 /**
@@ -140,6 +143,11 @@ fn membersOfTable(
   var found: List<FunctionId> = []
   for member in tableMembersOf(lowering, bound, subject) {
     const built = memberFunctionOf(lowering, subject, member.bound, implementation, member.member, at)?
+    found.append built
+  }
+  // Behind the fixed members: every member with type parameters of its own the program has called on this trait so far
+  for slot in lowering.genericSlots.get(traitIdOf(lowering, bound).value) ?? [] {
+    const built = genericMemberFunctionOf(lowering, subject, bound, implementation, slot, at)?
     found.append built
   }
   Some found
@@ -208,6 +216,11 @@ public fn providerOfMember(
   member: SymbolId,
   name: String,
 ): SymbolId {
+  // A **derived** implementation writes nothing, so a member another implementation of the target writes under the name
+  // is not its member: the `From<ConfigError>` of a wrapper case is not the `from` of the target's `From<String>`
+  if const .Derived = lowering.checker.implementations.at(implementation).origin {
+    return member
+  }
   if const Some(found) = declaredMemberOf(lowering, implementation, Some(member), name) {
     return found
   }
@@ -414,6 +427,9 @@ fn generatedForDerived(var lowering: Lowering, name: String, at: Span): Generate
   if name == "compare" {
     return Some Generated.Compare
   }
+  if name == "from" {
+    return Some Generated.Conversion
+  }
   if name == "encode" {
     const what = "a derived `encode`, whose `Encoder` is all `var self` members"
     reportUnsupported lowering, what, at
@@ -517,6 +533,13 @@ fn appliedArgumentsOf(
   bound: TypeId,
 ): List<TypeId> {
   if const Some(declaring) = lowering.checker.types.parameter(parameter).owner {
+    // The bound is the declaring trait itself: its arguments are the answer, and a type that implements the trait more
+    // than once (`AppError` made from a `ConfigError` and from a `Never`) has no other single one
+    if const .Nominal(symbol, given) = lowering.checker.types.form(bound) {
+      if symbol == declaring && isClosedType(lowering, bound) {
+        return given
+      }
+    }
     if const Some(found) = traitArgumentsOf(lowering.checker, subject, declaring) {
       return found
     }
@@ -872,6 +895,125 @@ public fn memberInValue(
       }
     }
   }
+  None
+}
+
+// --- Members with type parameters of their own -----------------------------------------------------------------------
+
+/**
+ * Where a member with type parameters of its own sits in the tables of one trait, for one list of arguments: behind the
+ * fixed members, one slot per list the program calls it with. `lines().onto(Collected())` asks `Stage.onto` for one
+ * `Final`, and every table of that `Stage<Input, Output>` - the ones built already and every one built later - gets the
+ * instance of its own type's `onto` for that `Final` at the same position.
+ *
+ * The set of lists is closed because the program is: a generic member is instantiated for the arguments a call site
+ * decided, exactly as a generic function is, and a table is static data emitted once the whole program is lowered.
+ */
+public fn genericSlotOf(
+  var lowering: Lowering,
+  bound: TypeId,
+  subject: TypeId,
+  member: SymbolId,
+  arguments: List<TypeId>,
+  at: Span,
+): Int? {
+  const applied = traitIdOf(lowering, bound).value
+  const fixed = tableMembersOf(lowering, bound, subject).length()
+  var slots = lowering.genericSlots.get(applied) ?? []
+  const key = genericSlotKey member, arguments
+  for index in 0..slots.length() {
+    if slots[index].key == key {
+      return Some(fixed + index)
+    }
+  }
+  const slot = GenericSlot member, arguments, key
+  const position = fixed + slots.length()
+  slots.append slot
+  lowering.genericSlots.set applied, slots
+  for index in 0..lowering.program.witnessTables.length() {
+    const table = lowering.program.witnessTables[index]
+    if table.applied.value != applied {
+      continue
+    }
+    const source = match lowering.tableSources.get(index) {
+      Some(found) => found
+      None => {
+        reportUnsupported lowering, "a witness table the back end cannot add a member to", at
+        return None
+      }
+    }
+    if table.members.length() != position {
+      reportUnsupported lowering, "a witness table whose members do not line up with its trait", at
+      return None
+    }
+    const built = genericMemberFunctionOf(lowering, source.subject, source.bound, source.implementation, slot, at)?
+    var members = table.members
+    members.append built
+    lowering.program.witnessTables.set index, table.copy(members: members)
+  }
+  Some position
+}
+
+fn genericSlotKey(member: SymbolId, arguments: List<TypeId>): String {
+  var parts = ["{member.value}"]
+  for argument in arguments {
+    parts.append "{argument.value}"
+  }
+  parts.joined separator: ":"
+}
+
+/** The instance of one generic slot for one table: the implementation's own member, with its own parameters filled in. */
+fn genericMemberFunctionOf(
+  var lowering: Lowering,
+  subject: TypeId,
+  bound: TypeId,
+  implementation: ImplementationId,
+  slot: GenericSlot,
+  at: Span,
+): FunctionId? {
+  const name = lowering.checker.symbolAt(slot.member).name
+  const provider = providerOfMember lowering, subject, implementation, slot.member, name
+  var mapping = memberMappingOf lowering, provider, subject, bound
+  const identifier = signatureOf lowering.checker, provider
+  const signature = lowering.checker.signature identifier
+  // The member's own parameters are the last ones of its signature: the ones before them belong to its owner
+  const first = signature.generics.length() - slot.arguments.length()
+  if first < 0 || !signature.hasBody {
+    reportUnsupported lowering, "`{name}`", at, "no instance of that member can be built"
+    return None
+  }
+  for index in 0..slot.arguments.length() {
+    mapping.set signature.generics[first + index], slot.arguments[index]
+  }
+  const built = instanceFor lowering, provider, mapping
+  if built.isNone() {
+    reportUnsupported lowering, "`{name}`", at, "no instance of that member can be built"
+  }
+  built
+}
+
+/**
+ * [memberInValue] for a member with type parameters of its own: the bound of the value whose trait declares it, and the
+ * slot of these arguments in its table.
+ */
+public fn genericMemberInValue(
+  var lowering: Lowering,
+  bounds: List<TypeId>,
+  subject: TypeId,
+  place: Reference,
+  member: SymbolId,
+  arguments: List<TypeId>,
+  at: Span,
+): MemberInValue? {
+  const name = lowering.checker.symbolAt(member).name
+  for index in 0..bounds.length() {
+    if traitMemberNamed(lowering, bounds[index], name) == Some(member) {
+      const position = genericSlotOf(lowering, bounds[index], subject, member, arguments, at)?
+      const empty: List<Int> = []
+      return Some MemberInValue(WitnessSource(WitnessRoot.Value(place, index), empty), position)
+    }
+  }
+  reportUnsupported lowering, "`{name}`", at, "a supertrait declares it, and it has type parameters of its own"
   None
 }
 

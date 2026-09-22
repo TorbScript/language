@@ -1,0 +1,82 @@
+/**
+ * **A method read through its type is the unbound function, and its receiver is its first parameter.**
+ * `Point.area(p)` is `p.area()`, `Point.scaled(p, offset: 1, factor: 3)` fills the other parameters by label as a call
+ * on the value would, and `Point.area` without a call is a function value of type `(self: Point) => Int` that
+ * `map` takes like any other.
+ *
+ * A static member of a trait reached through a type that implements it is a function value too, and a generic one is
+ * instantiated from the function type it is used as: `namesOf(Invoice.describe)` hands over `describe<Collector>`,
+ * because that is the only `Target` the expected `(var target: Collector) => Void` leaves open.
+ */
+
+use Process from "std/process"
+
+type Point {
+  x: Int
+  y: Int
+
+  fn area(): Int {
+    x * y
+  }
+
+  fn scaled(factor: Int, offset: Int = 0): Point {
+    Point(x * factor + offset, y * factor + offset)
+  }
+}
+
+trait Sink {
+  var fn take(text: String)
+}
+
+trait Describing {
+  static fn describe<Target: Sink>(var target: Target)
+}
+
+type Collector with Sink {
+  var items: List<String> = []
+
+  var fn take(text: String) {
+    items.append text
+  }
+}
+
+type Order {
+  id: Int
+
+  static fn describe<Target: Sink>(var target: Target) {
+    target.take "id"
+    target.take "total"
+  }
+}
+
+type Invoice {
+  number: Int
+}
+
+extend Invoice with Describing {
+  static fn describe<Target: Sink>(var target: Target) {
+    target.take "number"
+  }
+}
+
+fn namesOf(describe: (var target: Collector) => Void): List<String> {
+  var collector = Collector()
+  describe collector
+  collector.items
+}
+
+const p = Point 2, 3
+print Point.area(p)
+print Point.scaled(p, 2)
+print Point.scaled(p, offset: 1, factor: 3)
+
+// Without a call: a function value whose first parameter is the receiver
+print([p, Point(4, 5)].map(Point.area).toList())
+const area = Point.area
+print area(Point(6, 7))
+
+// A generic `static fn` as a value, of the type itself and of a trait it implements
+print namesOf(Order.describe)
+print namesOf(Invoice.describe)
+
+Process.exit(Point.area(p) - 6)

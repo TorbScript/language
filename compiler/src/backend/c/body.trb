@@ -346,44 +346,86 @@ public fn signatureHeadOf(program: IrProgram, function: IrFunction): String {
  * reference to is an error under `-Wunused-function -Werror`, not merely a wasted body. So it is not emitted at all,
  * which is also what the second ledger of finding 12 asks for.
  *
- * The answer is a **fixpoint**: a copy a kept function calls is kept, and a copy only another dead copy calls is not.
- * Everything that is not a copy is kept whatever names it, because the emitter decides nothing about those.
+ * The same holds for the `Indexed.at` instance an index path took an element out with: once the round trip is one
+ * `Element` step, a list the program only ever changes through `a[key]` leaves its reader with no call at all - and
+ * with it everything only the reader called (the `Option.expect` of its missing key).
+ *
+ * The answer is a **reachability**: the roots are what nothing calls and is neither a copy nor a reader (the entry, a
+ * test, a task body), and every member of a table and of an element descriptor. Everything a kept function names is
+ * kept, and what is left over is dead - a copy nothing calls, a reader nothing calls, and whatever only those called.
  */
 public fn keptFunctions(program: IrProgram): List<Bool> {
-  var kept: List<Bool> = []
-  for index in 0..program.functions.length() {
-    kept.append(!program.specializedFunctions.contains(index))
+  const count = program.functions.length()
+  var isLeftOut: List<Bool> = []
+  var isAnyLeftOut = false
+  for index in 0..count {
+    // An `Indexed.at` instance an index path asked for is dead once `ir/elements.trb` turned the round trip into one
+    // `Element` step, unless something else still calls it
+    const isReader = isElementReader program, program.functions[index]
+    const leftOut = program.specializedFunctions.contains(index) || isReader
+    isLeftOut.append leftOut
+    isAnyLeftOut = isAnyLeftOut || leftOut
   }
-  if program.specializedFunctions.isEmpty() {
+  var kept: List<Bool> = []
+  for _ in 0..count {
+    kept.append true
+  }
+  if !isAnyLeftOut {
     return kept
+  }
+  var isCalled: List<Bool> = []
+  for _ in 0..count {
+    isCalled.append false
+  }
+  for index in 0..count {
+    for called in calledFunctionsOf(program.functions[index]) {
+      if called.value >= 0 && called.value < count {
+        isCalled.set called.value, true
+      }
+    }
+  }
+  var pending: List<Int> = []
+  for index in 0..count {
+    const isRoot = !isCalled[index] && !isLeftOut[index]
+    kept.set index, isRoot
+    if isRoot {
+      pending.append index
+    }
   }
   // A table, a descriptor and a constant cell hold a function id the emitter writes out whatever calls it
   for table in program.witnessTables {
     for member in table.members {
-      keep kept, member
+      keepReached kept, pending, member
     }
   }
   for descriptor in program.elements {
     for member in descriptorFunctionsOf(descriptor) {
-      keep kept, member
+      keepReached kept, pending, member
     }
   }
-  var more = true
-  while more {
-    more = false
-    for index in 0..program.functions.length() {
-      if !kept[index] {
-        continue
-      }
-      for called in calledFunctionsOf(program.functions[index]) {
-        if called.value >= 0 && called.value < kept.length() && !kept[called.value] {
-          kept.set called.value, true
-          more = true
-        }
-      }
+  while !pending.isEmpty() {
+    const last = pending.length() - 1
+    const current = pending[last]
+    pending.removeAt last
+    for called in calledFunctionsOf(program.functions[current]) {
+      keepReached kept, pending, called
     }
   }
   kept
+}
+
+fn keepReached(var kept: List<Bool>, var pending: List<Int>, callee: FunctionId) {
+  if callee.value >= 0 && callee.value < kept.length() && !kept[callee.value] {
+    kept.set callee.value, true
+    pending.append callee.value
+  }
+}
+
+fn isElementReader(program: IrProgram, function: IrFunction): Bool {
+  if const Some(origin) = function.origin {
+    return program.elementReaders.contains origin.value
+  }
+  false
 }
 
 /** Every function one body names: what it calls, what a  points at, and a constant cell's initializer. */
@@ -414,12 +456,6 @@ fn descriptorFunctionsOf(descriptor: ElementDescriptor): List<FunctionId> {
     }
   }
   found
-}
-
-fn keep(var kept: List<Bool>, callee: FunctionId) {
-  if callee.value >= 0 && callee.value < kept.length() {
-    kept.set callee.value, true
-  }
 }
 
 /**

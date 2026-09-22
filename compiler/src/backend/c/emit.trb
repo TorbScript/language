@@ -25,6 +25,7 @@ use ElementId, ElementDescriptor from "../../ir/ir"
 use Layout, FieldLayout, containsCountedType from "../../ir/layout"
 use typeOfReference from "../../ir/verify"
 use keepingOf from "../../ir/kept"
+use referencesOf from "../../ir/elements"
 use hexDigits, objectTypeName, payloadLayoutName from "../../ir/mangle"
 use nativeEntries from "./natives"
 use CExpression, CStatement, CSwitchCase, CDeclaration, CMember, declarationOf, cStringOf from "./writer"
@@ -1449,7 +1450,19 @@ fn namedStaticsOf(program: IrProgram, functions: List<IrFunction>): List<StaticI
   for function in functions {
     for block in function.blocks {
       for instruction in block.instructions {
+        var named: List<StaticId> = []
         if const .Constant(_, value) = instruction {
+          named.append value
+        }
+        // An `Element` step panics with the message of the `Indexed.at` it replaced, whose body may not be emitted
+        for reference in referencesOf(instruction) {
+          for step in reference.steps {
+            if const .Element(_, _, missing, _) = step {
+              named.append missing
+            }
+          }
+        }
+        for value in named {
           if program.hasStatic(value) {
             const name = program.staticAt(value).name
             if !byName.containsKey(name) {

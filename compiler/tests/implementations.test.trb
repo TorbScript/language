@@ -709,16 +709,33 @@ group "Member lookup through a blanket implementation" {
   }
 
   /**
-   * **Still open, pinned so that the next round sees it move.** A `where` clause whose *subject* is a concrete type is
-   * a fact about that type inside the body, and the checker does not know it: `Path` has the `From<String>` that is
-   * written and not the `From<Source>` the clause promises. The facts of a `where` live per body, while "every trait a
-   * type has" is a program-wide memoized answer, so the two do not fit together without a table of their own.
+   * A `where` clause whose *subject* is a concrete type reaches a conversion through the bound it spells: `Path.from
+   * path` with a `Source` in hand is the `from` of `From<Source>`, and which implementation that is is decided where
+   * `open` is instantiated - not the `From<String>` that is written, which a `Source` is not.
    */
-  test "a `where` clause whose subject is a concrete type is not a fact the body may use yet" {
+  test "a `where` clause whose subject is a concrete type reaches the conversion it promises" {
     const source = "type Path \{\n  text: String\n\}\n\n"
       + "extend Path with From<String> \{\n  static fn from(value: String): Path \{\n    Path(value)\n  \}\n\}\n\n"
       + "fn open<Source>(path: Source): Path where Path: From<Source> \{\n  Path.from path\n\}\n\n"
       + "fn probe() \{\n  print open(\"a\").text\n\}"
-    assert(problems(source) == ["Expected `String`, found `Source`"])
+    assert problems(source).isEmpty()
+  }
+
+  /**
+   * `Type.from(value)` of a type that implements no `From` of its own finds the `From<Never>` every type has, and a
+   * value is no `Never`: the call is the same conversion `into()` makes, and it is reported the same way.
+   */
+  test "`Type.from` of a value the type is made from in no way is reported" {
+    const source = "type Point \{\n  x: Int\n\}\n\ntype Name \{\n  text: String\n\}\n\n"
+      + "fn probe() \{\n  print Point.from(Name(\"a\"))\n\}"
+    assert(problems(source) == ["`Name` does not convert into `Point`"])
+    assert(notes(source) == ["Add a case that wraps it, or `extend Point with From<Name>`"])
+  }
+
+  test "`Type.from` of the value a case wraps is the generated conversion" {
+    const source = "type ConfigError \{\n  message: String\n\}\n\n"
+      + "type AppError \{\n  case Config(cause: ConfigError)\n  case Startup(message: String)\n\}\n\n"
+      + "fn probe() \{\n  print AppError.from(ConfigError(\"a\"))\n\}"
+    assert problems(source).isEmpty()
   }
 }

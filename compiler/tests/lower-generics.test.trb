@@ -341,13 +341,14 @@ group "Monomorphization" {
   }
 }
 
-group "What a generic call cannot reach yet" {
+group "A member with generic parameters of its own" {
   /**
-   * A member with generic parameters of its own is not in a table: its call would need the witnesses of those parameters
-   * appended, which nothing passes. The checker allows it on a trait-typed value (a generic method is object safe, 4.4),
-   * so this is the one shape of a dynamic call that the back end has to refuse cleanly.
+   * A member with generic parameters of its own is one slot of the table per list of arguments the program calls it
+   * with: `value.pick(1)` on a trait-typed `Store` asks for the slot of `pick<Int64>`, and every table of `Store` gets
+   * the instance of its own type's `pick` for `Int64` there. The checker allows the call (a generic method is object
+   * safe, 4.4), and the closed program is what makes the set of slots finite.
    */
-  test "a member with generic parameters of its own is not in a table" {
+  test "is one slot of the table per list of arguments" {
     const source = r"""
       trait Store {
         fn size(): Int
@@ -355,15 +356,37 @@ group "What a generic call cannot reach yet" {
         fn pick<Value>(value: Value): Int
       }
 
+      type Shelf with Store {
+        fn size(): Int {
+          1
+        }
+
+        fn pick<Value>(value: Value): Int {
+          2
+        }
+      }
+
       fn picked(value: Store): Int {
-        value.pick(1)
+        value.pick(1) + value.pick("a")
+      }
+
+      fn used(): Int {
+        picked(Shelf())
       }
       """
-    const found = unsupportedIn source
-    assert(found.joined(separator: "; ")
-      == "`pick`, which is not in the witness table of a trait-typed value is not supported by the native back end yet")
+    assert unsupportedIn(source).isEmpty()
+    const found = instanceCountsOf source
+    var picks = 0
+    for (name, count) in found {
+      if name.startsWith("t_acme_x2f_app_main_Shelf_pick") {
+        picks = picks + count
+      }
+    }
+    assert(picks == 2)
   }
+}
 
+group "What a generic call cannot reach yet" {
   /**
    * The backstop of the worklist. A generic function that calls itself with a **bigger** type argument has no finite
    * instance set at all, and without a guard that is a build that never finishes rather than a message. The limit on the

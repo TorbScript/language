@@ -27,7 +27,7 @@ use substitute, substituteFunction, substituteBounds, sameType, hasVariable from
 use resolveTrait, resolveBound, traitsOf, traitArgumentsOf, isSupertraitOfBound from "./implementation"
 use requiresTraitName, isNamedHere from "./implementation"
 use inherentExtensionsOf, extensionMemberOf, mappingOfImplementation, buildImplementations from "./implementation"
-use importPathOf from "./implementation"
+use importPathOf, hasParameter, isConcrete from "./implementation"
 use requireVisibleMember from "./declaration"
 
 /**
@@ -503,6 +503,15 @@ fn dispatchOf(var checker: Checker, receiver: TypeId, capability: SymbolId, boun
     return Dispatch.Forwarded parameter, bound, []
   }
   if const .Traits(_) = checker.types.form(receiver) {
+    return Dispatch.Object bound, []
+  }
+  /*
+   * A concrete receiver and a bound that names a generic parameter: `String.from value` under `where String:
+   * From<Value>`. Which implementation runs is decided by what `Value` turns out to be, so no implementation is named
+   * here - naming one would pick `String`'s `From<Iterate<Char>>` for every instance. The bound goes on, and the back
+   * end resolves it under the arguments of the instance it lowers.
+   */
+  if isConcrete(checker, receiver) && hasParameter(checker, bound) {
     return Dispatch.Object bound, []
   }
   match resolveTrait(checker, receiver, capability) {

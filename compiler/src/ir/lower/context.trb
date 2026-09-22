@@ -15,7 +15,7 @@ use Span, LineIndex from "../../syntax/source"
 use Diagnostic from "../../syntax/diagnostic"
 use ModuleId from "../../semantics/module"
 use SymbolId from "../../semantics/symbols"
-use TypeId, ParameterId, Signature from "../../semantics/checker/type"
+use TypeId, ParameterId, Signature, ImplementationId from "../../semantics/checker/type"
 use Checker from "../../semantics/checker/context"
 use NativeEntry, nativeEntries from "../../backend/c/natives"
 use IrProgram, IrTypeId, IrType, Slot, BlockId, StaticId, StaticValue, StaticContents from "../ir"
@@ -77,11 +77,35 @@ public type Generated {
   case Identity
   case Copy
   /**
+   * The `from` of a `From` nobody wrote: the argument itself where it already is the target (the reflexive `From<Self>`
+   * every type has), and otherwise the one case of the target that wraps exactly one value of the source.
+   */
+  case Conversion
+  /**
    * An empty container over the element descriptors of the owner's type arguments: `ArrayList.withCapacity` and friends.
    * It is `Instruction.ContainerNew` and can be nothing else, because `torb_list_new` needs a descriptor and no
    * declaration of `std/` can name one.
    */
   case Container(kind: RuntimeKind)
+}
+
+/**
+ * One member with type parameters of its own, for one list of arguments: `Stage.onto` for one `Final`. It is one slot of
+ * every table of its trait.
+ */
+public type GenericSlot {
+  member: SymbolId
+  /** Closed checker types, one per type parameter the member declares itself. */
+  arguments: List<TypeId>
+  /** The member and the arguments by their ids, which is what tells two slots apart. */
+  key: String
+}
+
+/** The type, the bound and the implementation one witness table was built for. */
+public type TableSource {
+  subject: TypeId
+  bound: TypeId
+  implementation: ImplementationId
 }
 
 /** One generated member that is known to be needed and not built yet. */
@@ -241,6 +265,14 @@ public type Lowering {
   var nativeWrappers: Map<String, FunctionId> = [:]
   /** The witness tables that are being built right now: a supertrait that leads back to its own subtrait. */
   var buildingTables: Map<String, Bool> = [:]
+  /**
+   * The members with type parameters of their own that a trait-typed value was called through, by the `TraitId` of the
+   * table the value carries: each one is a slot behind the fixed members of every table of that trait, in the order the
+   * calls asked for them (`ir/witness.trb`, `genericSlotOf`).
+   */
+  var genericSlots: Map<Int, List<GenericSlot>> = [:]
+  /** What every witness table was built for, by its index: what a generic slot added after it fills in for it. */
+  var tableSources: Map<Int, TableSource> = [:]
   /**
    * The names under which some implementation of the program declares a member, which is the **closed-world** question
    * "does anything override this default" (`ir/witness.trb`, `overridesAnyMember`). Built once, from the whole program,

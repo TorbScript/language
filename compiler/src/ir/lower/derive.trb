@@ -46,16 +46,21 @@ public fn generatedFunctionOf(
 ): FunctionId? {
   const target = irTypeOfClosed lowering, subject
   const path = symbolPathOf lowering.checker, member
-  const name = functionName lowering.program, path, [target]
-  if const Some(found) = lowering.generatedInstances.get(name) {
-    return Some found
-  }
   const identifier = signatureOf lowering.checker, member
   const signature = lowering.checker.signature identifier
   const built = irSignatureUnder lowering, signature, mapping
   if built.parameters.isEmpty() {
     reportUnsupported lowering, "a generated member without a receiver", at
     return None
+  }
+  // A type has one generated `from` per source it is made from, so the source is part of the name
+  var arguments = [target]
+  if const .Conversion = kind {
+    arguments.append built.parameters[0].annotation
+  }
+  const name = functionName lowering.program, path, arguments
+  if const Some(found) = lowering.generatedInstances.get(name) {
+    return Some found
   }
   var builder = newFunction name, Some(member), built, "generated"
   const added = finishFunction lowering.program, builder
@@ -124,8 +129,47 @@ fn lowerGeneratedBody(
     .Show => showBody lowering, builder, request.subject, at
     .ShowNested => showBody lowering, builder, request.subject, at
     .Copy => reportUnsupported lowering, "a generated `copy`", at
+    .Conversion => conversionBody lowering, builder, at
     .Container(kind) => containerBody lowering, builder, request, kind, at
   }
+}
+
+/**
+ * The `from` of a `From` the language gives a type: the reflexive one answers its argument, and the one of a wrapper case
+ * builds that case around it (`AppError.Config(error)` for an `AppError` made from a `ConfigError`).
+ */
+fn conversionBody(var lowering: Lowering, var builder: FunctionBuilder, at: Span) {
+  const signature = builder.function.signature
+  const result = signature.result
+  const given = match signature.parameters.first() {
+    Some(found) => found.annotation
+    None => {
+      reportUnsupported lowering, "a generated `from` without a value to convert", at
+      return
+    }
+  }
+  if given == result {
+    terminate builder, Terminator.Return(Some(borrowed(Slot(0))))
+    return
+  }
+  const layout = match lowering.program.typeAt(result) {
+    .Variant(found) => found
+    _ => {
+      reportUnsupported lowering, "a generated `from` into a type without cases", at
+      return
+    }
+  }
+  const shape = lowering.program.layoutAt layout
+  for index in 0..shape.variants.length() {
+    const fields = shape.fieldsOfVariant index
+    if fields.length() == 1 && fields[0].annotation == given {
+      const target = addTemporary builder, result
+      emit builder, Instruction.Construct(target, layout, index, [borrowed(Slot(0))])
+      terminate builder, Terminator.Return(Some(borrowed(target)))
+      return
+    }
+  }
+  reportUnsupported lowering, "a generated `from` whose target has no case that wraps the source", at
 }
 
 /**

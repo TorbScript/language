@@ -419,12 +419,24 @@ fn fieldTypeOf(var lowering: Lowering, layout: LayoutId, index: Int): IrTypeId {
   lowering.program.layoutAt(layout).fields[index].annotation
 }
 
-/** The type a place of the lowering's own making ends in. Only field steps can stand in one, so this is the whole walk. */
+/**
+ * The type a place of the lowering's own making ends in: the field of a box, and the path an `if var` binds a name to,
+ * which goes through the fields of a case and the positions of a tuple as well.
+ */
 fn typeOfPlace(var lowering: Lowering, var builder: FunctionBuilder, place: Reference): IrTypeId {
   var annotation = builder.typeOfSlot place.base
   for step in place.steps {
-    if const .Field(layout, index) = step {
-      annotation = fieldTypeOf lowering, layout, index
+    match step {
+      .Field(layout, index) => {
+        annotation = fieldTypeOf lowering, layout, index
+      }
+      .TupleField(layout, index) => {
+        annotation = fieldTypeOf lowering, layout, index
+      }
+      .Variant(layout, variant, index) => {
+        annotation = lowering.program.layoutAt(layout).fieldsOfVariant(variant)[index].annotation
+      }
+      _ => {}
     }
   }
   annotation

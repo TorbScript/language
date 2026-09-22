@@ -632,22 +632,24 @@ group "`?` at the top level walking the `cause()` chain of a trait-typed `Error`
   }
 }
 
-group "What a pattern cannot reach yet" {
-  test "`if var` waits for the places of 5.9b" {
+group "`if var`" {
+  /**
+   * The names of an `if var` are paths into the subject: `inner` is read as the payload of `current` where it stands,
+   * and the value is never copied into a binding of its own.
+   */
+  test "binds a path into its subject and no copy" {
     const other = r"""
       fn taken(value: Int?): Int {
         var current = value
         if var Some(inner) = current {
+          inner = inner + 1
           return inner
         }
         0
       }
       """
-    assert(
-      unsupportedIn(other)
-        == [
-          "`if var`, which binds a path into its subject is not supported by the native back end yet",
-        ]
-    )
+    assert unsupportedIn(other).isEmpty()
+    const text = irOf other, "t_acme_x2f_app_main_taken"
+    assert text.contains("write %1.Some.value")
   }
 }

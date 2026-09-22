@@ -63,10 +63,10 @@ runs.
 or older than a file it is built from (`compiler/src`, `std/`, the runtime's `.c`/`.h`, the manifests - never anything
 under a `build/` directory), then `check .` ("no problems"), `check --statistics .` ("0 deferred"),
 `check tests/conformance tests/language`, `test compiler/tests` (which pins the recovery of the lexer and the parser
-over `tests/lexer-cases/` and `tests/parser-cases/` as well), `test` of every std/example test package that builds
-natively (four do not - [docs/RUST-EXIT.md](../docs/RUST-EXIT.md) section 2.4 names the back-end gap each one is
-blocked on, and `gates.sh` prints the same reason and skips them), every program of `tests/language/` run with
-`torb run` against its `.expected` (both are skipped today, with the back-end gap printed), the three docs gates
+over `tests/lexer-cases/` and `tests/parser-cases/` as well), `test` of every std/example test package (all of them
+build natively; one that waits for a back-end gap is named in [docs/RUST-EXIT.md](../docs/RUST-EXIT.md) section 2.4 and
+in the `broken` list of `gates.sh`, which skips it), every program of `tests/language/` run with
+`torb run` against its `.expected` (`language.trb` is skipped today, with the back-end gaps printed), the three docs gates
 (`docs check`, `docs index --check`, `docs skill --check`), and `canon --check` with the five rules. Everything it
 builds only to run it once is built with the `dev` profile.
 

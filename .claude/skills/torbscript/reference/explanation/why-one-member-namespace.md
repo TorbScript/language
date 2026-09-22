@@ -14,9 +14,6 @@ source:
   - CONCEPT.md#members-a-method-is-a-constant-that-holds-a-closure
 ---
 
-> **Not built natively yet.** A method called through its type, `Point.area(p)`, is not built by the native back end
-> yet, so `torb run` refuses the examples here that use it. `torb check` accepts them, and the rules are the language's.
-
 Java gives a type two namespaces, one for fields and one for methods, so `name` and `name()` can both exist on the
 same class and mean different things. TorbScript gives a type one, and this page argues for why collapsing the two
 namespaces into one is what makes the rest of the member syntax work at all.

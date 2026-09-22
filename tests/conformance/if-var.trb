@@ -1,0 +1,56 @@
+/**
+ * **`if var` binds paths into its subject, not copies.** `if var Some(counter) = holder.current` makes `counter` the
+ * payload that stays in `holder.current`: a `var fn` called on it, a field assigned through it and the name assigned as
+ * a whole all change the subject, and the subject shows it afterwards. A case with several fields binds each one as a
+ * path of its own, and a subject that does not match changes nothing and runs the `else`.
+ */
+
+use Process from "std/process"
+
+type Counter {
+  var count: Int = 0
+
+  var fn increment() {
+    count = count + 1
+  }
+}
+
+type Slot {
+  case Filled(counter: Counter, label: String)
+  case Empty
+}
+
+type Holder {
+  var current: Counter? = None
+  var slot: Slot = .Empty
+}
+
+var holder = Holder()
+holder.current = Some Counter()
+if var Some(counter) = holder.current {
+  counter.increment()
+  counter.increment()
+  counter.count = counter.count + 10
+}
+print holder.current
+
+holder.slot = .Filled(Counter(), "first")
+if var .Filled(counter, label) = holder.slot {
+  counter.increment()
+  label = "{label}!"
+  print label
+} else {
+  print "empty"
+}
+print holder.slot
+
+var nothing: Counter? = None
+if var Some(counter) = nothing {
+  counter.increment()
+} else {
+  print "nothing to change"
+}
+print nothing
+
+const changed = holder.current?.count ?? 0
+Process.exit(changed - 12)

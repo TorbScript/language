@@ -8,8 +8,8 @@
 #
 # Tier A: bootstrap if `build/release/torb` is missing or older than a file it is built from (the compiler's sources,
 # `std/`, the runtime), `check .`, `check --statistics .`, `check tests/conformance tests/language`,
-# `test compiler/tests`, `test` of the std/example packages that build natively (the ones that do not are named in
-# docs/RUST-EXIT.md section 2.4 and skipped here with the same reason), the programs of `tests/language/` against their
+# `test compiler/tests`, `test` of the std/example packages (one that waits for a back-end gap is named in
+# docs/RUST-EXIT.md section 2.4 and skipped here), the programs of `tests/language/` against their
 # `.expected`, the three docs gates, and `canon --check` with the five rules. Every binary that is only built to be run
 # once is built with `--profile dev`, which `torb test` and `torb run` do by default.
 #
@@ -127,9 +127,9 @@ if [ "$tier" = "a" ]; then
   gate "check tests/conformance tests/language" "$torb" check tests/conformance tests/language
   gate "test compiler/tests" "$torb" test compiler/tests
 
-  # docs/RUST-EXIT.md section 2.4: four of the six candidate packages do not build natively yet, each blocked by one
-  # back-end gap that is tracked on its own and does not block the exit. The other two are combined into one binary.
-  broken="std/path/tests std/stream/tests examples/encoding-lab/tests examples/game-engine/tests"
+  # docs/RUST-EXIT.md section 2.4: every candidate package builds natively, and they are combined into one binary. A
+  # package named here is skipped, which is for one that waits for a back-end gap RUST-EXIT 2.4 names.
+  broken=""
   buildable=""
   for candidate in std/*/tests examples/*/tests; do
     [ -d "$candidate" ] || continue
@@ -140,17 +140,12 @@ if [ "$tier" = "a" ]; then
   done
   # shellcheck disable=SC2086
   gate "test (std/example packages, native)" "$torb" test $buildable
-  say "  skipped, do not build natively yet (docs/RUST-EXIT.md 2.4): std/path/tests (a Path is not boxed into its"
-  say "  witness), std/stream/tests (onto outside a witness table), examples/encoding-lab/tests (describe as a"
-  say "  function value), examples/game-engine/tests (a conversion through From)"
 
-  # Both smoke programs are blocked by back-end gaps (findings B7 and a `From` conversion that lowers a slot of type
-  # `Never`); the runner is here so that each one is compared the moment it builds.
-  language_broken="tests/language/basics.trb tests/language/language.trb"
+  # `language.trb` is blocked by two back-end gaps; the runner is here so that it is compared the moment it builds.
+  language_broken="tests/language/language.trb"
   gate "tests/language against .expected (native)" language_programs "$torb"
-  say "  skipped, do not build natively yet: tests/language/basics.trb (an assignment to a top-level var from a"
-  say "  function), tests/language/language.trb (the same, a var receiver through a slice, and an internal error:"
-  say "  the From conversion of AppError lowers a slot of type Never)"
+  say "  skipped, does not build natively yet: tests/language/language.trb (a var receiver through a slice of a"
+  say "  trait-typed list, and a field of a shared object written through a top-level const from a function)"
 
   gate "docs check" "$torb" docs check docs
   gate "docs index --check" "$torb" docs index --check docs

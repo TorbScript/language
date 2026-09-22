@@ -1,0 +1,29 @@
+/**
+ * **A number narrows into a smaller integer type through `TryFrom`, and bytes become text again.** `UInt8.tryFrom(200)`
+ * is a byte and `UInt8.tryFrom(256)` a `NumberRangeError` whose message is the value that did not fit - for every width,
+ * signed and unsigned, and for a `UInt64` above the largest `Int64`. `tryInto()` is the same conversion from the value's
+ * side. Bytes made that way decode back into the `String` they spell, and a byte that starts no UTF-8 sequence is a
+ * `Utf8Error` at its offset.
+ */
+
+use Process from "std/process"
+use textOf from "std/stream"
+
+print UInt8.tryFrom(200), UInt8.tryFrom(256), UInt8.tryFrom(-1)
+print Int8.tryFrom(-128), Int8.tryFrom(300)
+print Int16.tryFrom(40000), UInt16.tryFrom(40000), UInt32.tryFrom(-5), UInt64.tryFrom(5)
+const largest = UInt64.tryFrom("18446744073709551615").expect("the largest UInt64 is a UInt64")
+print Int64.tryFrom(largest)
+
+// A byte from the value's side, and text from bytes
+const converted: Result<UInt8, NumberRangeError> = 7.tryInto()
+print converted
+var bytes: List<UInt8> = []
+for code in [104, 105, 0xC3, 0xA4] {
+  bytes.append UInt8.tryFrom(code).expect("a byte")
+}
+print textOf(bytes)
+bytes.append UInt8.tryFrom(0xFF).expect("a byte")
+print textOf(bytes)
+
+Process.exit(bytes.length() - 5)

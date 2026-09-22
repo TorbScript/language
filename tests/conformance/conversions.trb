@@ -1,0 +1,106 @@
+/**
+ * **A conversion is the `from` of the target, however it is written.** `value.into()` calls the `From` of the type the
+ * value is used at, `value.tryInto()` its `TryFrom`, and `Type.from(value)` the same member by name - so the three
+ * spellings of one conversion run one body.
+ *
+ * Which body that is follows the source, not the order implementations are written in: a type made from several sources
+ * has one `from` per source, and a `where String: From<Value>` bound reaches the implementation of the `Value` a caller
+ * chose. A case that wraps exactly one value is a conversion nobody writes, both through `Type.from` and through
+ * `into()`; the reflexive `From<Self>` every type has hands the value back.
+ */
+
+use Process from "std/process"
+use From, Into, TryFrom from "std/core"
+
+type Vector {
+  x: Float
+  y: Float
+}
+
+extend Vector with From<(Float, Float)> {
+  static fn from(value: (Float, Float)): Vector {
+    Vector value.0, value.1
+  }
+}
+
+extend Vector with From<Float> {
+  static fn from(value: Float): Vector {
+    Vector value, value
+  }
+}
+
+type Name {
+  text: String
+}
+
+extend String with From<Name> {
+  static fn from(value: Name): String {
+    "name {value.text}"
+  }
+}
+
+type Percent {
+  value: Int
+}
+
+extend Percent with TryFrom<Int, String> {
+  static fn tryFrom(value: Int): Result<Percent, String> {
+    if value < 0 || value > 100 {
+      return Fail "{value} is not a percentage"
+    }
+    Ok Percent(value)
+  }
+}
+
+type ConfigError {
+  message: String
+}
+
+type AppError {
+  case Config(cause: ConfigError)
+  case Startup(message: String)
+}
+
+fn lengthOf(vector: Vector): Float {
+  vector.x + vector.y
+}
+
+/** The `From` a caller's `Value` has, which is decided at every call and never inside of this body. */
+fn textOf<Value>(value: Value): String where String: From<Value> {
+  String.from value
+}
+
+/** A parameter that takes everything a `Vector` can be made from, converted through the trait it is typed with. */
+fn widened(given: Into<Vector>): Vector {
+  Into.into given
+}
+
+// `into()` where a value is declared, and where an argument is expected
+const fromPair: Vector = (1.0, 2.0).into()
+const fromOne: Vector = 3.0.into()
+print fromPair, fromOne
+print lengthOf((4.0, 5.0).into())
+
+// `Type.from` by name picks the implementation by its argument
+print Vector.from((6.0, 7.0)), Vector.from(8.0)
+
+// A bound on a concrete type reaches the implementation of the caller's type, not the one `String` writes itself
+print textOf(Name("ada"))
+const characters = ['h', 'i']
+const letters: Iterate<Char> = characters
+print textOf(letters)
+
+// `tryInto()` is the `TryFrom` of the target
+const accepted: Result<Percent, String> = 42.tryInto()
+const refused: Result<Percent, String> = 142.tryInto()
+print accepted, refused
+
+// The case that wraps a `ConfigError` is its conversion, by name and through `into()`
+print AppError.from(ConfigError("by name"))
+const converted: AppError = ConfigError("into").into()
+print converted
+
+// A trait-typed parameter converts through its own table
+print widened((9.0, 1.0)), widened(Vector(2.0, 2.0))
+
+Process.exit(textOf(Name("")).byteLength() - 5)

@@ -282,6 +282,21 @@ fn numericSuffix(kind: NumericKind): String {
 }
 
 /**
+ * The narrowing conversions of an `Int64` besides `Int32`'s: the type, the suffix of its checked runtime function, and
+ * the C type the function writes (`torb_number.h`).
+ */
+fn narrowingConversions(): List<(String, String, String)> {
+  [
+    ("Int8", "i8", "int8_t"),
+    ("Int16", "i16", "int16_t"),
+    ("UInt8", "u8", "uint8_t"),
+    ("UInt16", "u16", "uint16_t"),
+    ("UInt32", "u32", "uint32_t"),
+    ("UInt64", "u64", "uint64_t"),
+  ]
+}
+
+/**
  * The members of `Numeric` for one width, which every integer and float type comes `with`. Arithmetic is an
  * intrinsic, and `show` and the conversion from text are the runtime's. `compare` is not here: on the integers it is
  * generated, on `Float64` it is a runtime function, because a total order with `nan` in it is not a comparison
@@ -418,6 +433,19 @@ fn conversionEntries(var entries: List<NativeEntry>) {
     "Int32.tryFrom(Int64)",
     "torb_convert_i64_i32_checked",
     "bool torb_convert_i64_i32_checked(int64_t value, int32_t *out, torb_text *message);",
+  ))
+  // The other narrowings of an `Int64`, and the one of a `UInt64` into an `Int64`: the runtime checks every one of them
+  for (owner, suffix, spelling) in narrowingConversions() {
+    entries.append(fallibleRuntimeOf(
+      "{owner}.tryFrom(Int64)",
+      "torb_convert_i64_{suffix}_checked",
+      "bool torb_convert_i64_{suffix}_checked(int64_t value, {spelling} *out, torb_text *message);",
+    ))
+  }
+  entries.append(fallibleRuntimeOf(
+    "Int64.tryFrom(UInt64)",
+    "torb_convert_u64_i64_checked",
+    "bool torb_convert_u64_i64_checked(uint64_t value, int64_t *out, torb_text *message);",
   ))
   entries.append(fallibleRuntimeOf(
     "Int64.tryFrom(Float64)",

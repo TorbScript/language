@@ -45,8 +45,22 @@ torb_instant torb_clock_now(void);
 int32_t torb_compare_f64(double first, double second);
 /* Int64.tryFrom(Float64) */
 bool torb_convert_f64_i64_checked(double value, int64_t *out, torb_text *message);
+/* Int16.tryFrom(Int64) */
+bool torb_convert_i64_i16_checked(int64_t value, int16_t *out, torb_text *message);
 /* Int32.tryFrom(Int64) */
 bool torb_convert_i64_i32_checked(int64_t value, int32_t *out, torb_text *message);
+/* Int8.tryFrom(Int64) */
+bool torb_convert_i64_i8_checked(int64_t value, int8_t *out, torb_text *message);
+/* UInt16.tryFrom(Int64) */
+bool torb_convert_i64_u16_checked(int64_t value, uint16_t *out, torb_text *message);
+/* UInt32.tryFrom(Int64) */
+bool torb_convert_i64_u32_checked(int64_t value, uint32_t *out, torb_text *message);
+/* UInt64.tryFrom(Int64) */
+bool torb_convert_i64_u64_checked(int64_t value, uint64_t *out, torb_text *message);
+/* UInt8.tryFrom(Int64) */
+bool torb_convert_i64_u8_checked(int64_t value, uint8_t *out, torb_text *message);
+/* Int64.tryFrom(UInt64) */
+bool torb_convert_u64_i64_checked(uint64_t value, int64_t *out, torb_text *message);
 /* Duration.compare */
 int32_t torb_duration_compare(torb_duration first, torb_duration second);
 /* Duration.equals */

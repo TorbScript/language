@@ -18,12 +18,12 @@ use editDistance from "../resolve-types"
 use TypeId, FunctionForm, ParameterForm, ParameterMode, ParameterId, Bound, Witness from "./type"
 use Checker, Expectation, Resolution, Adaptation, Dispatch, Candidate, ArgumentSite from "./context"
 use Target, targetOfCandidate from "./name"
-use hasCases, caseNamesOf from "./member"
+use hasCases, caseNamesOf, boundMember from "./member"
 use checkExpression, inferExpression, deferExpression, deferArguments, optionValueOf from "./expression"
 use resolveTarget, expectationOf from "./expression"
 use substituteFunction, substituteBounds, sameType, unify, resolveType, resolveTypes, openVariableOf from "./unify"
-use suppressVariables from "./unify"
-use witnessFor, isConcrete, traitArgumentsOf, fitsType from "./implementation"
+use hasVariable, suppressVariables from "./unify"
+use witnessFor, isConcrete, traitArgumentsOf, fitsType, resolveBound, hasParameter from "./implementation"
 use propertyWrite from "./command"
 use openReceiverAccess, openArgumentAccess, closeAccessesTo, checkCallReads, isDeclaredVar from "./place"
 use resultOf from "./signature"
@@ -76,6 +76,7 @@ public fn checkCall(
   // The expected type of the whole call reaches the callee, which is what makes `Some(keyword)` an `Option<Keyword>`
   const wanted = expected.annotationOf()
   var target = resolveTarget checker, callee, wanted
+  target = withGeneratedConversion checker, target, arguments, expression.span
   if !target.overloads.isEmpty() {
     // The chosen one is bound first and assigned after: `chooseOverload` reads the target it is given rather than
     // taking it over, so writing its answer straight back into the same binding would overwrite a value the call is
@@ -151,6 +152,109 @@ public fn checkCall(
   checker.resolved expression.span, resolution
   recordPlan checker, expression.span, inner, plan
   resolveType checker, inner.result
+}
+
+/**
+ * `AppError.from(error)`, where a case of `AppError` wraps the error. The `From` of a wrapper case and the reflexive
+ * `From<Self>` are generated the first time something asks for them, so the lookup of `from` may not have seen the one
+ * this call means - and where the only `from` it found is the one of `From<Never>`, which every type has, the argument
+ * would be taken for a `Never` without a word. The argument says which conversion is meant, so it is asked for here; a
+ * value that converts into the type in no way is reported, as `into()` and `?` report it.
+ */
+fn withGeneratedConversion(var checker: Checker, target: Target, arguments: List<Argument>, at: Span): Target {
+  if target.name != "from" || arguments.length() != 1 || target.takesSelf {
+    return target
+  }
+  const argument = arguments[0]
+  if argument.isSpread || isClosureArgument(argument) || argument.label.isSome() {
+    return target
+  }
+  const form = match target.form {
+    Some(found) => found
+    None => {
+      return target
+    }
+  }
+  const owner = form.result
+  if !isConcrete(checker, owner) {
+    return target
+  }
+  const candidates = if target.overloads.isEmpty() { [form] } else { formsOf target.overloads }
+  const given = inferExpression checker, argument.value
+  if checker.absorbs(given) {
+    return target
+  }
+  const conversion = match checker.wellKnown.from {
+    Some(found) => found
+    None => {
+      return target
+    }
+  }
+  const bound = checker.nominal conversion, [given]
+  /*
+   * `String.from value` under `where String: From<Value>`: a value of a type parameter fits every candidate, and the one
+   * the type writes itself would win the tie - `From<Iterate<Char>>` for every `Value`. The bound the call spells is the
+   * answer, and which implementation it reaches is decided by the instance that is lowered.
+   */
+  if !isConcrete(checker, given) {
+    if !hasParameter(checker, given) || hasVariable(checker, given) {
+      return target
+    }
+    if hasExactParameter(checker, candidates, given) {
+      return target
+    }
+    if const Some(candidate) = boundMember(checker, owner, bound, "from") {
+      return targetOfCandidate checker, candidate, target.name
+    }
+    return target
+  }
+  // A `from` the lookup found already takes it: the ordinary call, or the ordinary choice between overloads
+  for candidate in candidates {
+    if const Some(parameter) = candidate.parameters.first() {
+      if parameter.annotation != checker.neverType && fitsType(checker, given, parameter.annotation) {
+        return target
+      }
+    }
+  }
+  if const .Found(implementation, _) = resolveBound(checker, owner, bound) {
+    if const Some(candidate) = boundMember(checker, owner, bound, "from") {
+      // The implementation the bound names, and not the one an answer about the trait kept from before it existed
+      const dispatch = Dispatch.Implementation implementation, []
+      return targetOfCandidate checker, candidate.copy(dispatch: dispatch), target.name
+    }
+  }
+  // Only where nothing else would say it: an overload set that takes none of it has its own message
+  if target.overloads.isEmpty() {
+    const shown = checker.describe given
+    const wanted = checker.describe owner
+    checker.reportHere(
+      Diagnostic.error("`{shown}` does not convert into `{wanted}`", at)
+        .withNote("Add a case that wraps it, or `extend {wanted} with From<{shown}>`")
+    )
+  }
+  target
+}
+
+/** Whether one of the forms takes exactly this type as its one parameter. */
+fn hasExactParameter(var checker: Checker, candidates: List<FunctionForm>, given: TypeId): Bool {
+  for candidate in candidates {
+    if const Some(parameter) = candidate.parameters.first() {
+      if sameType(checker.types, parameter.annotation, given) {
+        return true
+      }
+    }
+  }
+  false
+}
+
+fn formsOf(candidates: List<Candidate>): List<FunctionForm> {
+  var found: List<FunctionForm> = []
+  for candidate in candidates {
+    if const Some(form) = candidate.form {
+      found.append form
+    }
+  }
+  found
 }
 
 /**

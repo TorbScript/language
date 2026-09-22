@@ -14,7 +14,7 @@ use TypeId, TypeForm, ParameterId, ImplementationId from "../../semantics/checke
 use Dispatch from "../../semantics/checker/context"
 use signatureOf from "../../semantics/checker/signature"
 use traitArgumentsOf, witnessFor, matchTypePattern from "../../semantics/checker/implementation"
-use defaultInClosureOf from "../../semantics/checker/implementation"
+use defaultInClosureOf, resolveTrait from "../../semantics/checker/implementation"
 use substitute from "../../semantics/checker/unify"
 use IrTypeId, IrType, Slot, TraitId, LayoutId, Instruction, WitnessSource, WitnessRoot, owned from "../ir"
 use Reference from "../ir"
@@ -50,6 +50,11 @@ public type Dispatched {
   bounds: List<TypeId> = []
   /** The type the member is reached on, substituted. */
   subject: TypeId? = None
+  /**
+   * The arguments of the member's own type parameters, where a dynamic call reaches a member that has some: the slot
+   * of the table is the one for exactly these (`ir/witness.trb`, `genericSlotOf`).
+   */
+  ownArguments: List<TypeId> = []
 }
 
 /**
@@ -88,6 +93,11 @@ public fn dispatchedMember(
           if const .Implementation(one, _, _) = witnessFor(lowering.checker, found, applied) {
             return memberOfImplementationDispatch lowering, symbol, typeArguments, one, Some(found), applied, at
           }
+        }
+        // A concrete receiver whose bound named a generic parameter (`String.from value` under `where String:
+        // From<Value>`): the checker could not know the implementation, and the instance's arguments decide it here
+        if !isTraitValueType(lowering, found) {
+          return resolvedDispatch lowering, symbol, typeArguments, found, applied, at
         }
       }
       dynamicDispatch lowering, symbol, typeArguments, applied, subject, at
@@ -246,8 +256,12 @@ fn implementingReceiver(
     }
   }
   const declaring = lowering.checker.types.parameter(parameter).owner?
-  const _ = traitArgumentsOf(lowering.checker, applied, declaring)?
-  Some applied
+  // A type may implement the trait more than once (`String` is made from an `Iterate<Char>` and from a `Path`), and then
+  // it names no single list of arguments - but it still is what `Self` stands for
+  match resolveTrait(lowering.checker, applied, declaring) {
+    .Found(_, _) | .Bounded(_) | .Ambiguous(_, _) => Some applied
+    .Missing => None
+  }
 }
 
 fn targetOfImplementation(var lowering: Lowering, implementation: ImplementationId): TypeId? {
@@ -362,6 +376,19 @@ fn dynamicDispatch(
       if const .Implementation(found, _, _) = witnessFor(lowering.checker, target, bound) {
         return memberOfImplementationDispatch lowering, symbol, typeArguments, found, Some(target), bound, at
       }
+      // A member with type parameters of its own has one slot per list of arguments the program calls it with
+      if !typeArguments.isEmpty() {
+        var own: List<TypeId> = []
+        var isClosed = true
+        for argument in typeArguments {
+          const applied = substituted lowering, argument
+          isClosed = isClosed && isClosedType(lowering, applied)
+          own.append applied
+        }
+        if isClosed {
+          return Some Dispatched(member, mapping, bound, "", None, true, bounds, Some(target), own)
+        }
+      }
       const what = "`{name}`, which is not in the witness table of a trait-typed value"
       reportUnsupported lowering, what, at
       return None
@@ -438,6 +465,16 @@ fn boundOfImplementation(var lowering: Lowering, implementation: ImplementationI
     Some(inner) => inner
     None => {
       return capability
+    }
+  }
+  // The implementation's own parameters, read off the type it was reached on, say which of several implementations of
+  // one trait this is: `AppError` is made from a `ConfigError` and from a `String`, and asking the trait for "its"
+  // arguments on `AppError` has no single answer
+  var mapping: Map<ParameterId, TypeId> = [:]
+  if matchTypePattern(lowering.checker, found.target, target, found.generics, mapping) {
+    const applied = substitute lowering.checker.types, capability, mapping
+    if isClosedType(lowering, applied) {
+      return applied
     }
   }
   const arguments = traitArgumentsOf(lowering.checker, target, symbol) ?? []

@@ -32,12 +32,12 @@ use collidesWithPlace, writtenResult, lowerPropertyWrite, makeOwnersUnique, putB
 use FunctionBuilder, emit, addTemporary from "../build"
 use layoutOfType, conversionKindOf from "../verify"
 use describeIrType from "../print"
-use memberInValue, derivedKindOf, generatedKindOf from "../witness"
+use memberInValue, genericMemberInValue, derivedKindOf, generatedKindOf from "../witness"
 use generatedFunctionOf from "./derive"
 use instanceFor, needsReference, isMonomorphic, isClosedType from "../instances"
 use nativeFunctionOf from "./native"
 use Lowering, Generated, reportUnsupported, locationOf, nativeNamed, producesValue, substituted from "./context"
-use irTypeOfClosed from "./context"
+use irTypeOfClosed, typeAtSpan, voidTypeOf from "./context"
 use isNeverType, finishBlock, borrowedArguments from "./context"
 use lowerValue, valueSlot, unsupportedSlot, abandonedSlot, voidSlot from "./expression"
 use variantIndexOf from "./match"
@@ -148,7 +148,13 @@ fn lowerCallable(
   typeArguments: List<TypeId>,
   dispatch: Dispatch,
 ): Slot {
-  const receiver = receiverTypeOf lowering, callee
+  // `Point.area(p)`: a method read through its type is the unbound function, and its receiver is the first argument
+  const receiverWritten = isReceiverWritten lowering, callee, symbol, arguments
+  const receiver = if receiverWritten {
+    lowering.checker.expressionType lowering.module, arguments[0].value.span
+  } else {
+    receiverTypeOf lowering, callee
+  }
   const at = expression.span
   // `print` and `printError` are variadic, but a variadic call ordinarily builds a list (`ir/lower/collection.trb`);
   // the parts are shown here instead, on the fast path `ir/lower/text.trb` explains
@@ -179,7 +185,24 @@ fn lowerCallable(
   var places: List<Reference?> = []
   // What a place of this call took out of a container and has to put back once the call has run
   var taken: List<TakenElement> = []
-  if signature.takesSelf {
+  if receiverWritten && signature.takesSelf {
+    const value = arguments[0].value
+    if signature.isVarSelf {
+      const declared = typeAtSpan(lowering, value.span) ?? voidTypeOf(lowering)
+      const path = match argumentReference(lowering, builder, value, declared, "a `var` receiver") {
+        Some(found) => found
+        None => {
+          return abandonedSlot lowering, builder, destination
+        }
+      }
+      operands.append path.reference.base
+      places.append Some(path.reference)
+      taken.appendAll path.taken
+    } else {
+      operands.append lowerValue(lowering, builder, value)
+      places.append None
+    }
+  } else if signature.takesSelf {
     if signature.isVarSelf {
       const path = match receiverReference(lowering, builder, callee, "a `var` receiver") {
         Some(found) => found
@@ -203,7 +226,8 @@ fn lowerCallable(
     }
   }
   const plan = dispatched.mapping
-  const written = lowerArgumentSlots lowering, builder, expression, arguments, signature, plan
+  const shifted = receiverWritten && signature.takesSelf
+  const written = lowerArgumentSlots lowering, builder, expression, arguments, signature, plan, receiverWritten: shifted
   if !lowering.isSupported {
     return abandonedSlot lowering, builder, destination
   }
@@ -270,6 +294,145 @@ public fn lowerDispatched(
     }
   }
   emitCall lowering, builder, destination, function, operands, annotation, at, places
+}
+
+/**
+ * Whether the receiver of a method is its first argument: `Point.area(p)` and `Into.into(url)`, a member that takes
+ * `self` read through the name of a type or of a trait instead of on a value.
+ */
+fn isReceiverWritten(var lowering: Lowering, callee: Expression, symbol: SymbolId, arguments: List<Argument>): Bool {
+  if arguments.isEmpty() {
+    return false
+  }
+  const base = match callee.kind {
+    .Member(found, _, isOptional) => {
+      if isOptional {
+        return false
+      }
+      found
+    }
+    _ => {
+      return false
+    }
+  }
+  // The name of a type in front of the dot is its constructor, and the name of a trait the type itself. A call there
+  // (`Rectangle(a, b).covering(c)`) resolves to the constructor as well, and is a value
+  if const .Call(_, _, _) = base.kind {
+    return false
+  }
+  const module = lowering.module
+  match lowering.checker.resolutionAt(module, base.span) {
+    Some(.TypeOf(_)) | Some(.Construct(_)) => {
+      const identifier = signatureOf lowering.checker, symbol
+      lowering.checker.signature(identifier).takesSelf
+    }
+    _ => false
+  }
+}
+
+/**
+ * `value.into()` and `value.tryInto()`: the `from` (or `tryFrom`) of the target, called with the value. The checker
+ * records the conversion as `Adaptation.Convert` and resolves the call to the target's member, but the member is static
+ * and the value is its argument and not its receiver, so the call is built here and not by `lowerCallable`.
+ *
+ * Which implementation of the target runs is asked again under the instance that is being lowered, with the bound the
+ * source spells out (`From<(Float, Float)>`): a type made from several sources has one `from` per source, and inside a
+ * generic function the source is only known here.
+ */
+public fn lowerConversionCall(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  expression: Expression,
+  method: SymbolId,
+  annotation: IrTypeId,
+): Slot {
+  const at = expression.span
+  const module = lowering.module
+  const base = match conversionReceiverOf(expression) {
+    Some(found) => found
+    None => {
+      return unsupportedSlot lowering, builder, destination, "a conversion through `From` without a value", at
+    }
+  }
+  const written = lowering.checker.expressionType module, base.span
+  const produced = lowering.checker.expressionType module, at
+  const (source, result) = match (written, produced) {
+    (Some(one), Some(other)) => (substituted(lowering, one), substituted(lowering, other))
+    _ => {
+      return unsupportedSlot lowering, builder, destination, "a conversion through `From` without a type", at
+    }
+  }
+  const name = memberNameOf lowering, method
+  const conversion = match conversionBoundOf(lowering, name, source, result) {
+    Some(found) => found
+    None => {
+      const what = "a conversion through `{name}` the back end cannot resolve"
+      return unsupportedSlot lowering, builder, destination, what, at
+    }
+  }
+  const value = lowerValue lowering, builder, base
+  if !lowering.isSupported {
+    return abandonedSlot lowering, builder, destination
+  }
+  const dispatched = match dispatchedOn(lowering, conversion.target, conversion.bound, name, at) {
+    Some(found) => found
+    None => {
+      return abandonedSlot lowering, builder, destination
+    }
+  }
+  lowerDispatched lowering, builder, destination, at, dispatched, [value], [None], annotation
+}
+
+/** The value in front of `.into()`, where the expression is such a call. */
+fn conversionReceiverOf(expression: Expression): Expression? {
+  const callee = match expression.kind {
+    .Call(found, _, _) => found
+    _ => {
+      return None
+    }
+  }
+  match callee.kind {
+    .Member(base, _, _) => Some base
+    .Generic(inner, _) => {
+      if const .Member(base, _, _) = inner.kind {
+        return Some base
+      }
+      None
+    }
+    _ => None
+  }
+}
+
+/** The type a conversion makes, and the trait of it that makes it from the source. */
+type ConversionBound {
+  target: TypeId
+  bound: TypeId
+}
+
+/**
+ * `From<Source>` on the result of `into()`, and `TryFrom<Source, Failure>` on the `Ok` side of the result of
+ * `tryInto()`: the one implementation the conversion reaches, spelled out.
+ */
+fn conversionBoundOf(var lowering: Lowering, name: String, source: TypeId, result: TypeId): ConversionBound? {
+  if name == "from" {
+    const conversion = lowering.checker.wellKnown.from?
+    return Some ConversionBound(result, lowering.checker.nominal(conversion, [source]))
+  }
+  if name == "tryFrom" {
+    const tryFrom = lowering.checker.wellKnown.tryFrom?
+    const arguments = match lowering.checker.types.form(result) {
+      .Nominal(_, found) => found
+      _ => {
+        return None
+      }
+    }
+    if arguments.length() != 2 {
+      return None
+    }
+    return Some ConversionBound(arguments[0], lowering.checker.nominal(tryFrom, [source, arguments[1]]))
+  }
+  None
 }
 
 /**
@@ -398,7 +561,16 @@ fn lowerWitnessCall(
   }
   const bounds = dispatched.bounds
   const member = dispatched.member
-  const found = match memberInValue(lowering, bounds, subject, receiver, member) {
+  // A member with type parameters of its own sits in the slot of the arguments this call decided
+  const located = if dispatched.ownArguments.isEmpty() {
+    memberInValue lowering, bounds, subject, receiver, member
+  } else {
+    genericMemberInValue lowering, bounds, subject, receiver, member, dispatched.ownArguments, at
+  }
+  if !lowering.isSupported {
+    return abandonedSlot lowering, builder, destination
+  }
+  const found = match located {
     Some(inner) => inner
     None => {
       const name = memberNameOf lowering, member
@@ -642,17 +814,32 @@ public fn lowerArgumentSlots(
   var lowering: Lowering,
   var builder: FunctionBuilder,
   expression: Expression,
-  arguments: List<Argument>,
+  written: List<Argument>,
   signature: Signature,
   mapping: Map<ParameterId, TypeId> = [:],
+  receiverWritten: Bool = false,
 ): CallOperands {
   const module = lowering.module
   const count = signature.form.parameters.length()
-  const targets = match lowering.checker.argumentTargetsAt(module, expression.span) {
+  const planned = match lowering.checker.argumentTargetsAt(module, expression.span) {
     Some(found) => found
     None => {
       reportUnsupported lowering, "a call without an argument plan", expression.span
       return CallOperands([], [])
+    }
+  }
+  // `Point.translate(p, deltaX: 1)`: the plan counts the receiver as parameter 0 and as the first argument, and the
+  // caller has lowered it already - so both lists lose it and every position moves down by one
+  var targets = planned
+  var arguments = written
+  if receiverWritten {
+    targets = []
+    for index in 1..planned.length() {
+      targets.append(planned[index] - 1)
+    }
+    arguments = []
+    for index in 1..written.length() {
+      arguments.append written[index]
     }
   }
   const references = referenceParametersOf signature

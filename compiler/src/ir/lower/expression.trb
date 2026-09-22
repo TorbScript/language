@@ -32,7 +32,7 @@ use functionName, mangledName from "../mangle"
 use symbolPathOf from "../instantiate"
 use Lowering, reportUnsupported, locationOf, typeAtSpan, voidTypeOf from "./context"
 use internStatic, isNeverType, isVoidType, finishBlock, continueIn, irTypeOfClosed from "./context"
-use lowerCall, lowerOperator, lowerConstruct, lowerCaseValue from "./call"
+use lowerCall, lowerOperator, lowerConstruct, lowerCaseValue, lowerConversionCall from "./call"
 use objectTypeOf, lowerTraitValue, closedBounds from "./generic"
 use lowerBlockInto from "./statement"
 use lowerListLiteral, lowerMapLiteral, lowerIndexRead from "./collection"
@@ -87,6 +87,10 @@ fn lowerInnerExpression(
   // Every literal, including a negated one, is static data: the checker already decided which type it adapted to
   if isLiteralExpression(expression) {
     return lowerLiteral lowering, builder, destination, expression
+  }
+  // `value.into()`: the checker resolved it to the target's `from`, which takes the value as its argument
+  if const Some(method) = conversionMethodOf(lowering, expression) {
+    return lowerConversionCall lowering, builder, destination, expression, method, annotation
   }
   // `a?.m` and `a?.m(...)` are control flow over the `Option`, and the member is lowered inside the arm that has a value
   if const Some(chain) = optionalChainOf(lowering, expression) {
@@ -224,6 +228,33 @@ public fn lowerUncoercedValue(var lowering: Lowering, var builder: FunctionBuild
   lowerInnerExpression lowering, builder, expression, destination, annotation
 }
 
+/**
+ * The member of a `?.`, lowered once more on the payload (`lowerOptionalMember`): the same expression into the slot its
+ * answer goes to, **without** a coercion the checker recorded at its span. That coercion belongs to the whole `a?.m` -
+ * `print names.first()?.byteLength()` shows the `Option` - and replaying it here would box the payload's answer as the
+ * trait the `Option` is shown through.
+ */
+public fn lowerOptionalMemberValue(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  expression: Expression,
+  destination: Slot,
+): Slot {
+  if !lowering.isSupported {
+    return abandonedSlot lowering, builder, Some(destination)
+  }
+  const annotation = match typeAtSpan(lowering, expression.span) {
+    Some(found) => found
+    None => {
+      return unsupportedSlot lowering, builder, Some(destination), "an expression without a type", expression.span
+    }
+  }
+  if !canReplayAdaptations(lowering, expression) {
+    return abandonedSlot lowering, builder, Some(destination)
+  }
+  lowerInnerExpression lowering, builder, expression, Some(destination), annotation
+}
+
 /** The bounds `Adaptation.ToTraitValue` recorded at an expression, or an empty list where it recorded none. */
 fn traitValueBoundsOf(var lowering: Lowering, expression: Expression): List<TypeId> {
   const module = lowering.module
@@ -345,7 +376,7 @@ fn canReplayAdaptations(var lowering: Lowering, expression: Expression): Bool {
   const module = lowering.module
   const adaptations = lowering.checker.adaptationsAt module, at
   // `?` converts the error out of the very adaptation this would refuse, and a `??` inlines the thunk of its fallback
-  const convertsItself = isTryExpression expression
+  const convertsItself = isTryExpression(expression) || isCallExpression(expression)
   const inlinesThunk = lowering.inlinedThunks.containsKey at
   // `assert` lowers its condition as the ordinary expression it was checked as, and owns the message of a failure
   const inlinesQuotation = lowering.inlinedQuotations.containsKey at
@@ -371,6 +402,30 @@ fn canReplayAdaptations(var lowering: Lowering, expression: Expression): Bool {
 }
 
 // --- Literals -------------------------------------------------------------------------------------------------------
+
+/**
+ * The member a `.into()` or a `.tryInto()` converts through, where this expression is one: a call the checker recorded
+ * a conversion at. A `?` converts on its own (`ir/lower/match.trb`), and is never this.
+ */
+fn conversionMethodOf(var lowering: Lowering, expression: Expression): SymbolId? {
+  if !isCallExpression(expression) {
+    return None
+  }
+  const module = lowering.module
+  for adaptation in lowering.checker.adaptationsAt(module, expression.span) {
+    if const .Convert(_, method) = adaptation {
+      return Some method
+    }
+  }
+  None
+}
+
+fn isCallExpression(expression: Expression): Bool {
+  match expression.kind {
+    .Call(_, _, _) => true
+    _ => false
+  }
+}
 
 fn isTryExpression(expression: Expression): Bool {
   match expression.kind {
@@ -483,8 +538,8 @@ fn lowerReference(
     }
     .Field(_, field) => lowerFieldRead lowering, builder, destination, expression, field, annotation
     .TupleField(_, index) => lowerTupleRead lowering, builder, destination, expression, index, annotation
-    .Callable(symbol, _, _) => {
-      lowerNamedFunctionValue lowering, builder, destination, expression, symbol, annotation
+    .Callable(symbol, _, dispatch) => {
+      lowerNamedFunctionValue lowering, builder, destination, expression, symbol, annotation, dispatch
     }
     .CaseOf(owner, variant) => lowerCaseValue lowering, builder, destination, expression, owner, variant, annotation
     // `byPath.get(path).map(ModuleId)`: the constructor itself, as a function value

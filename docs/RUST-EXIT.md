@@ -100,6 +100,14 @@ The 19 constructs in `examples`, by how often they occur:
 
 Thirteen of the 35 are one feature - tasks - and the other 22 are a long tail of one and two.
 
+**Re-measured over the whole repository (`torb ir --statistics .`) on 2026-09-23**, before and after the rounds that
+lowered `From`/`Into` conversions, generic trait members, `if var` and the narrowing conversions of `std/number`: from
+27 384 of 27 440 functions with **56** constructs not supported and one internal error (`std/path`'s `textOf`, which made
+the run leave with 1) to 28 755 of 28 797 with **42** and none. Gone are the conversion through `From`, `onto` outside a
+witness table, `describe` as a function value, `if var`, `record` outside a witness table, `tryFrom` between numbers, an
+argument that fills no parameter (`Point.area(p)`) and a literal built through the `from` of an `Iterate`; twenty of the
+42 left are bodies whose result is a `Task`.
+
 **None of this blocks the exit.** A construct the back end does not lower is a gap of the back end and is tracked as
 one; that stage 0 happens to interpret it is not a reason to keep 14 435 lines of Rust. The proof is the first row of
 the table: **the compiler lowers completely**, so it, its tests and every gate are already independent of stage 0. The
@@ -147,22 +155,22 @@ Every test package in the repository, built and run with the native test runner 
 | `compiler/tests` | **1538 passed, 0 failed (55 files)** | 205 s | - |
 | `std/geometry/tests` | **71 passed, 0 failed (2 files)** | 14 s | - |
 | `std/linear/tests` | **98 passed, 0 failed (3 files)** | 13 s | - |
-| `std/path/tests` | does not build | 8 s | `internal error: ... textOf__T_std_x2f_path_path_Path b0: argument 0 is Object(Iterate<Char>) and %0 is Record(Path)` - `textOf<Value>(value: Value): String where String: From<Value>` calls `String.from value`, and instantiated with `Value = Path` the back end reaches `String`'s `From<Iterate<Char>>` implementation instead of its `From<Path>` one, so an unboxed `Path` record arrives where a boxed `Iterate<Char>` is expected: `String` implements the *target* trait `From` more than once, and the instance a `where` bound reaches is the wrong one of the two. A **bug**, not a gap: the verifier caught a malformed body, and it is devirtualization/witness-resolution territory rather than one lowering site |
-| `std/stream/tests` | does not build | 9 s | `` `onto`, which is not in the witness table of a trait-typed value `` (at `std/stream/tests/bytes.test.trb:48:10`) - `lines().onto(Collected())` calls `Stage<Input, Output>.onto<Final>`, which is itself **generic**, on a trait-typed receiver; a witness table has one fixed slot per member and cannot hold one instance per `Final` a caller might choose, so a generic trait member has no table slot to dispatch through at all. One more of the "generic function or member of a generic type" occurrences of section 2.1, not a single call site |
-| `examples/encoding-lab/tests` | does not build | 8 s | `` `describe` used as a function value, which the back end cannot build an instance of `` (at `examples/encoding-lab/tests/lab.test.trb:43:31`) - `structureOf(Order.describe)` takes the generic `static fn describe<Target: Describer>(var target: Target)` as a bare function value, with `Target` to be solved only from the *expected* closure type of `structureOf`'s parameter and not from any call's own arguments; `instanceFor` in `ir/lower/closure.trb`'s `lowerNamedFunctionValue` has no type argument to substitute there and answers `None`. Another occurrence of the same generic-member limit, at the one place a generic member is taken as a value instead of called |
-| `examples/game-engine/tests` | does not build | 8 s | `` a conversion through `From` `` (at `examples/game-engine/tests/world.test.trb:23:24`) - `(1.0, 2.0).into()` carries the `Adaptation.Convert` the checker records for the blanket `Into`, and `canReplayAdaptations` in `ir/lower/expression.trb:332` refuses **every** `.Convert` outside of a top-level `?` unconditionally: the general lowering of a `From`/`Into` coercion recorded as an adaptation does not exist anywhere in the back end yet. `?` performs its own conversion by hand (`ir/lower/match.trb`'s `convertedError`); nothing else does, so this is the one missing general case behind the whole family of `.into()` conversions outside `?`, not a single call site |
+| `std/path/tests` | **59 passed, 0 failed (2 files)** | 8 s | - (built since the `From` round: `textOf<Value>(value: Value): String where String: From<Value>` calls `String.from value`, and the checker picked `String`'s own `From<Iterate<Char>>` for every `Value` because a value of a type parameter fits every candidate of the overload set. A static `from` whose argument is a type parameter now resolves through the bound the call spells, `From<Value>`, as a `Dispatch.Object` the lowering answers under the instance's arguments - `From<Path>` for `Value = Path`) |
+| `std/stream/tests` | **10 passed, 0 failed (1 file)** | 9 s | - (built since the generic-member round: `lines().onto(Collected())` calls `Stage<Input, Output>.onto<Final>`, which is itself **generic**, on a trait-typed receiver. A witness table holds such a member as one slot per list of arguments the program calls it with, behind the fixed members, and every table of the trait - the ones built already and every one built later - gets the instance of its own type's member at that position (`genericSlotOf` in `ir/witness.trb`). The set is closed because the program is: a slot is instantiated for the arguments a call site decided, exactly as a generic function is) |
+| `examples/encoding-lab/tests` | **37 passed, 0 failed (1 file)** | 8 s | - (built since the generic-member round: `structureOf(Order.describe)` takes the generic `static fn describe<Target: Describer>(var target: Target)` of the `Describe` implementation as a function value; the lowering reaches the implementation's member through the dispatch the checker recorded and reads `Target` off the function type the value is used as. Behind it stood `if var`, which `std/iteration`'s `FlatMappedIterator` uses: its names are paths into the subject through `Lowering.references`, not copies) |
+| `examples/game-engine/tests` | **6 passed, 0 failed (1 file)** | 8 s | - (built since the `From` round: `value.into()` and `value.tryInto()` are lowered as the call of the target's `from`/`tryFrom` with the value as its argument, `lowerConversionCall` in `ir/lower/call.trb`, resolved again under the instance with the bound the source spells. Behind it stood a second gap: an `Indexed.at` instance an index path asked for was left without a call once `ir/elements.trb` made the round trip one `Element` step, and a `static` function nothing calls is an error under `-Werror` - `keptFunctions` is now a reachability over the call graph and leaves it out) |
 
-**Re-measured on 2026-09-22, after the exit:** `std/path/tests` and `std/stream/tests` still stop with exactly the two
-messages above; the other rows were not re-run.
+**Re-measured on 2026-09-22, after the `From` and generic-member rounds:** every row builds and passes natively, and
+`tools/gates.sh` skips none of them.
 
-Three of the seven build and pass; the compiler's own is the big one and it is green. Of the four that do not, one
-(`std/path`) is a bug of the lowering rather than a missing feature and belongs in the lowering follow-up; the other
-three are occurrences of the 19 constructs of section 2.1 - two of them the same generic-member limit - each blocking
-exactly one file.
+All seven build and pass; the compiler's own is the big one. The four that did not were one bug of the lowering
+(`std/path`, a `where` bound that reached the wrong `From`) and three occurrences of the constructs of section 2.1 - a
+conversion through `From`, and the generic-member limit twice, once in a table and once as a function value - and each
+is closed, with a conformance program of its own (`conversions`, `methods-through-types`, `generic-trait-members`, `if-var`).
 
-**None of the four blocks the exit.** They are packages whose tests only stage 0 can run *today*, and every one of them
-is a back-end gap tracked as a back-end gap. Keeping a second implementation of the language so that four test files
-keep running is the trade this whole document argues against - and the gate that has to keep running, the conformance
+**None of the four blocked the exit.** They were packages whose tests only stage 0 could run, and every one of them
+was a back-end gap tracked as a back-end gap. Keeping a second implementation of the language so that four test files
+kept running was the trade this whole document argues against - and the gate that has to keep running, the conformance
 suite, is not among them.
 
 **Found by running this, and it is a bug of the runtime rather than a gap of the back end:** on Windows, a child

@@ -23,6 +23,8 @@ use SymbolId from "../../semantics/symbols"
 use ModuleId from "../../semantics/module"
 use TypeId, ParameterId, Signature, ParameterMode from "../../semantics/checker/type"
 use signatureOf from "../../semantics/checker/signature"
+use matchTypePattern from "../../semantics/checker/implementation"
+use Dispatch from "../../semantics/checker/context"
 use IrProgram, IrTypeId, IrType, IrSignature, IrSignatureId, IrParameter, Ownership from "../ir"
 use Slot, BlockId, LayoutId, FunctionId, FunctionKind from "../ir"
 use Instruction, Terminator, Reference, PathStep, Capture, Argument as IrArgument, borrowed from "../ir"
@@ -34,12 +36,13 @@ use layoutOfType from "../verify"
 use describeIrType from "../print"
 use closureFunctionName, constructorFunctionName, resumeFunctionName from "../mangle"
 use instanceFor, cellTypeFor from "../instances"
-use Lowering, reportUnsupported, locationOf, irTypeOf from "./context"
+use Lowering, reportUnsupported, locationOf, irTypeOf, substituted from "./context"
 use isVoidType, finishBlock, continueIn, producesValue, borrowedArguments from "./context"
 use lowerValue, lowerExpression, valueSlot, unsupportedSlot, abandonedSlot, voidSlot from "./expression"
 use lowerBody from "./function"
 use lowerPatternBinding from "./match"
 use lowerDefaultOfSource from "./call"
+use dispatchedMember from "./generic"
 use argumentReference, putBackElements, TakenElement from "./place"
 use taskValueOf, resumeSignatureOf, buildTaskConstructor, numberSuspensions, taskResultElement from "./task"
 use isTaskBodyClosure from "./task"
@@ -454,15 +457,31 @@ public fn lowerNamedFunctionValue(
   expression: Expression,
   symbol: SymbolId,
   annotation: IrTypeId,
+  dispatch: Dispatch = Dispatch.Direct,
 ): Slot {
   const identifier = signatureOf lowering.checker, symbol
-  const signature = lowering.checker.signature identifier
-  if signature.takesSelf {
+  const written = lowering.checker.signature identifier
+  // `Point.area` read through its type is the unbound function, whose first parameter is the receiver: nothing to bind
+  if written.takesSelf && !isReadThroughType(lowering, expression) {
     const name = lowering.checker.symbolAt(symbol).name
     const what = "`{name}` used as a function value, which would have to bind its receiver"
     return unsupportedSlot lowering, builder, destination, what, expression.span
   }
-  const function = match instanceFor(lowering, symbol, lowering.substitution) {
+  // `Order.describe` names the requirement of `Describe`, and the implementation the checker found says which body runs
+  var member = symbol
+  var start = lowering.substitution
+  if !written.hasBody {
+    if const .Implementation(_, _) = dispatch {
+      const receiver = receiverTypeOfValue lowering, expression
+      if const Some(dispatched) = dispatchedMember(lowering, symbol, [], dispatch, receiver, expression.span) {
+        member = dispatched.member
+        start = dispatched.mapping
+      }
+    }
+  }
+  const signature = lowering.checker.signature signatureOf(lowering.checker, member)
+  const mapping = valueMappingOf lowering, expression, signature, start
+  const function = match instanceFor(lowering, member, mapping) {
     Some(found) => found
     None => {
       const name = lowering.checker.symbolAt(symbol).name
@@ -478,6 +497,81 @@ public fn lowerNamedFunctionValue(
   const target = valueSlot lowering, builder, destination, annotation
   emit builder, Instruction.Closure(target, function, [], false)
   target
+}
+
+/** The type in front of the dot of a function value, where there is one: what a trait's member is reached on. */
+fn receiverTypeOfValue(var lowering: Lowering, expression: Expression): TypeId? {
+  if const .Member(base, _, _) = expression.kind {
+    return lowering.checker.expressionType lowering.module, base.span
+  }
+  None
+}
+
+/** Whether a member is read through the name of a type or a trait (`Point.area`) instead of on a value. */
+fn isReadThroughType(var lowering: Lowering, expression: Expression): Bool {
+  const base = match expression.kind {
+    .Member(found, _, _) => found
+    _ => {
+      return false
+    }
+  }
+  // `Rectangle(a, b).area` is a member of a value the constructor built, whose call resolves to the constructor too
+  if const .Call(_, _, _) = base.kind {
+    return false
+  }
+  match lowering.checker.resolutionAt(lowering.module, base.span) {
+    Some(.TypeOf(_)) | Some(.Construct(_)) => true
+    _ => false
+  }
+}
+
+/**
+ * The substitution a function value is built under: the instance's own, plus whatever the function type the value is
+ * used as says about the parameters of the declaration. `structureOf(Order.describe)` hands over
+ * `describe<Target: Describer>` where a `(var target: Structures) => Void` is expected, and no call of it says what
+ * `Target` is - the type of the value does, parameter by parameter, and so does the receiver of `Box.unwrap` for a
+ * generic `Box<Item>`.
+ */
+fn valueMappingOf(
+  var lowering: Lowering,
+  expression: Expression,
+  signature: Signature,
+  start: Map<ParameterId, TypeId>,
+): Map<ParameterId, TypeId> {
+  var mapping = start
+  if signature.generics.isEmpty() {
+    return mapping
+  }
+  const written = match lowering.checker.expressionType(lowering.module, expression.span) {
+    Some(found) => found
+    None => {
+      return mapping
+    }
+  }
+  const applied = substituted lowering, written
+  const form = match lowering.checker.types.form(applied) {
+    .Function(found) => found
+    _ => {
+      return mapping
+    }
+  }
+  var offset = 0
+  if signature.takesSelf {
+    if const Some(owner) = signature.owner {
+      if const Some(receiver) = form.parameters.first() {
+        const _ = matchTypePattern lowering.checker, owner, receiver.annotation, signature.generics, mapping
+      }
+    }
+    offset = 1
+  }
+  const declared = signature.form.parameters
+  for index in 0..declared.length() {
+    if const Some(given) = form.parameters.get(index + offset) {
+      const _ = matchTypePattern lowering.checker, declared[index].annotation, given.annotation, signature.generics, mapping
+    }
+  }
+  const _ = matchTypePattern lowering.checker, signature.form.result, form.result, signature.generics, mapping
+  mapping
 }
 
 /**

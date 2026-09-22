@@ -1,0 +1,115 @@
+/**
+ * **A trait member with type parameters of its own is called through a trait-typed value like any other.**
+ * `step.onto(folder)` on a `Step<Int, Int>` reaches the `onto` of whatever type the value holds, instantiated for the
+ * `Final` the call decides - a `Counted` folds into an `Int`, a `Listed` into a `List<Int>`, through the one value.
+ *
+ * Which body runs is the value's, never the static type's, so two stages behind the same trait type answer differently,
+ * and a stage that wraps another one calls its `onto` again for the same `Final`.
+ */
+
+use Process from "std/process"
+
+trait Folder<Item, Final> {
+  var fn add(value: Item)
+
+  fn finish(): Final
+}
+
+trait Step<Input, Output> {
+  fn onto<Final>(downstream: Folder<Output, Final>): Folder<Input, Final>
+}
+
+type Counted with Folder<Int, Int> {
+  var total: Int = 0
+
+  var fn add(value: Int) {
+    total = total + value
+  }
+
+  fn finish(): Int {
+    total
+  }
+}
+
+type Listed with Folder<Int, List<Int>> {
+  var items: List<Int> = []
+
+  var fn add(value: Int) {
+    items.append value
+  }
+
+  fn finish(): List<Int> {
+    items
+  }
+}
+
+type Doubling with Step<Int, Int> {
+  fn onto<Final>(downstream: Folder<Int, Final>): Folder<Int, Final> {
+    DoublingFolder downstream
+  }
+}
+
+type DoublingFolder<Final> with Folder<Int, Final> {
+  var downstream: Folder<Int, Final>
+
+  var fn add(value: Int) {
+    downstream.add(value * 2)
+  }
+
+  fn finish(): Final {
+    downstream.finish()
+  }
+}
+
+type Skipping with Step<Int, Int> {
+  fn onto<Final>(downstream: Folder<Int, Final>): Folder<Int, Final> {
+    SkippingFolder downstream
+  }
+}
+
+type SkippingFolder<Final> with Folder<Int, Final> {
+  var downstream: Folder<Int, Final>
+  var isSkipped: Bool = true
+
+  var fn add(value: Int) {
+    if !isSkipped {
+      downstream.add value
+    }
+    isSkipped = !isSkipped
+  }
+
+  fn finish(): Final {
+    downstream.finish()
+  }
+}
+
+/** Two steps as one: the second wraps the folder first, and the first wraps what that answers. */
+type Both with Step<Int, Int> {
+  first: Step<Int, Int>
+  second: Step<Int, Int>
+
+  fn onto<Final>(downstream: Folder<Int, Final>): Folder<Int, Final> {
+    first.onto second.onto(downstream)
+  }
+}
+
+fn run<Final>(step: Step<Int, Int>, folder: Folder<Int, Final>): Final {
+  var driven = step.onto folder
+  for value in [1, 2, 3, 4] {
+    driven.add value
+  }
+  driven.finish()
+}
+
+const doubling: Step<Int, Int> = Doubling()
+const skipping: Step<Int, Int> = Skipping()
+print run(doubling, Counted()), run(doubling, Listed())
+print run(skipping, Counted()), run(skipping, Listed())
+print run(Both(skipping, doubling), Listed())
+
+var direct = doubling.onto Counted()
+direct.add 5
+const total = direct.finish()
+print total
+
+Process.exit(total - 10)

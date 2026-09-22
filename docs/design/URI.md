@@ -1371,7 +1371,9 @@ Gaps 1 to 9 are the type; gaps 10 to 13 are the driver layer of section 11.
 3. **`Into<Uri>` as a parameter type type checks and does not build.** Probe 4, with two internal errors in the
    lowering. *Smallest fix:* the checker condition of `docs/design/PATH.md` section 5 (let a receiver whose own type is
    `Into<Target>` resolve `into` through its witness), and then a lowering for it. The interim signature is the
-   concrete `Uri`, which costs nothing once gap 2 is closed.
+   concrete `Uri`, which costs nothing once gap 2 is closed. **The back-end half is closed:** both spellings of probe 4,
+   `url.into()` and `Into.into(url)`, build natively, and a `Uri` handed in as itself goes through the reflexive
+   `From<Uri>`, which the back end generates (`tests/conformance/conversions.trb`).
 4. **A derived `encode` is not compiled by the native back end.** `Json.encode(uri)` type checks and answers *"a
    derived `encode`, whose `Encoder` is all `var self` members is not supported by the native back end yet"*. So the
    capsule's `Encode`/`Decode` exist in the checker and not in a binary. *Smallest fix:* it is the encoding redesign
@@ -1381,7 +1383,8 @@ Gaps 1 to 9 are the type; gaps 10 to 13 are the driver layer of section 11.
    `List<UInt8>`) cannot make one from a number. The one way around it, `UInt8.tryFrom("{value}")`, type checks and
    answers *"`torb_parse_u64`: parameter 2 of the runtime is a `uint64_t *` where the lowering passes a `uint8_t *`"*.
    *Smallest fix:* five `extend … with TryFrom<Int64, NumberRangeError>` in `std/number`, one per type that lacks
-   one. The probe carries its own UTF-8 decoder over `Int` because of this.
+   one. The probe carries its own UTF-8 decoder over `Int` because of this. **Closed:** the five exist and build
+   natively, over the runtime's checked conversions (`tests/conformance/narrowing.trb`).
 6. **`Char` has no ASCII predicate.** `isLetter()` and `isDigit()` are Unicode-wide, so `'ä'.isLetter()` is `true` —
    which is wrong for a scheme, for `unreserved` and for a hexadecimal digit. Every such test in the probe is written
    as a code-point range. *Smallest fix:* `isAscii()`, `isAsciiLetter()`, `isAsciiDigit()` and `hexadecimalValue()`

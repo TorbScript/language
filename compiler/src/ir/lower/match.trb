@@ -35,8 +35,10 @@ use Lowering, reportUnsupported, locationOf, irTypeOf, booleanTypeOf, isVoidType
 use irTypeOfClosed, substituted from "./context"
 use finishBlock, continueIn, enterLoop, leaveLoop from "./context"
 use lowerExpression, lowerValue, valueSlot, unsupportedSlot, abandonedSlot, voidSlot from "./expression"
+use lowerOptionalMemberValue from "./expression"
 use constantSlot, emitIntrinsic, intrinsicSlot, integerSlot from "./expression"
 use lowerBlockInto from "./statement"
+use referenceAt from "./place"
 use showSlot from "./text"
 
 /** Everything one walk of a decision graph needs, so that no function of it takes ten parameters. */
@@ -145,8 +147,7 @@ public fn lowerIfBinding(
   annotation: IrTypeId,
 ): Slot {
   if isVar {
-    const what = "`if var`, which binds a path into its subject"
-    return unsupportedSlot lowering, builder, destination, what, expression.span
+    return lowerIfVarBinding lowering, builder, destination, expression, pattern, value, then, otherwise, annotation
   }
   const plan = match planOfPattern(lowering, pattern) {
     Some(found) => found
@@ -180,6 +181,122 @@ public fn lowerIfBinding(
   continueIn lowering, builder, thenBlock
   const wanted = if otherwise.isSome() { Some target } else { None }
   lowerBlockInto lowering, builder, then, wanted
+  const thenDiverged = lowering.isDiverged
+  if !thenDiverged {
+    finishBlock lowering, builder, Terminator.Jump(join)
+  }
+  continueIn lowering, builder, elseBlock
+  var elseDiverged = false
+  if const Some(alternative) = otherwise {
+    const _ = lowerExpression lowering, builder, alternative, Some(target)
+    elseDiverged = lowering.isDiverged
+  }
+  if !elseDiverged {
+    finishBlock lowering, builder, Terminator.Jump(join)
+  }
+  continueIn lowering, builder, join
+  lowering.isDiverged = thenDiverged && elseDiverged
+  target
+}
+
+/**
+ * `if var Some(inner) = current { inner.next() }`: the same test as `if const`, and every name of the pattern is a
+ * **path into the subject** instead of a copy - `inner` is `current`'s payload, so `inner.next()` advances the iterator
+ * that stays in `current`.
+ *
+ * The test reads the subject once; the names are entries of `Lowering.references`, the table a binding reached through a
+ * place goes through, so every use of one forms its path from the subject again (and makes the owners on it unique at
+ * that moment, as every `var` path does). Nothing is bound by value, so no second count of the payload is alive while
+ * the body changes it.
+ */
+fn lowerIfVarBinding(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  expression: Expression,
+  pattern: Pattern,
+  value: Expression,
+  then: Block,
+  otherwise: Expression?,
+  annotation: IrTypeId,
+): Slot {
+  const plan = match planOfPattern(lowering, pattern) {
+    Some(found) => found
+    None => {
+      const what = "an `if var` the checker recorded no plan for"
+      return unsupportedSlot lowering, builder, destination, what, pattern.span
+    }
+  }
+  const arm = match plan.arms.first() {
+    Some(found) => found
+    None => {
+      const what = "an `if var` the checker recorded no plan for"
+      return unsupportedSlot lowering, builder, destination, what, pattern.span
+    }
+  }
+  if arm.branches.length() != 1 {
+    const what = "`if var` over alternatives, whose names are paths into different cases"
+    return unsupportedSlot lowering, builder, destination, what, pattern.span
+  }
+  const branch = arm.branches[0]
+  const subject = match referenceAt(lowering, builder, value, "`if var`") {
+    Some(found) => found
+    None => {
+      return abandonedSlot lowering, builder, destination
+    }
+  }
+  if !subject.taken.isEmpty() {
+    const what = "`if var` on an element of a container, which would have to be put back"
+    return unsupportedSlot lowering, builder, destination, what, value.span
+  }
+  // Every name as a path from the subject, before anything is emitted that could not be undone
+  var named: List<(Span, Reference)> = []
+  for binding in branch.bindings {
+    var steps = subject.reference.steps
+    var current = subject.annotation
+    for step in binding.path {
+      const resolved = match resolvedStepOn(lowering, current, step, pattern.span) {
+        Some(found) => found
+        None => {
+          return abandonedSlot lowering, builder, destination
+        }
+      }
+      steps.append resolved.step
+      current = resolved.annotation
+    }
+    const declared = lowering.checker.binding(binding.binding).at
+    const place = Reference subject.reference.base, steps
+    named.append((declared, place))
+  }
+  // The test itself binds nothing: the names are the paths above, not copies of what they lead to
+  const bare = plan.copy arms: [arm.copy(branches: [branch.copy(bindings: [])])]
+  const scrutinee = addTemporary builder, subject.annotation
+  emit builder, Instruction.Read(scrutinee, subject.reference)
+  const location = locationOf lowering, expression.span
+  const target = match otherwise {
+    Some(_) => valueSlot lowering, builder, destination, annotation
+    None => {
+      match destination {
+        Some(_) => voidSlot lowering, builder, destination
+        None => abandonedSlot lowering, builder, destination
+      }
+    }
+  }
+  const thenBlock = addBlock builder, "then", Some(location)
+  const elseBlock = addBlock builder, "else", Some(location)
+  const join = addBlock builder, "join", Some(location)
+  const graph = decisionTreeOf bare
+  const walk = Walk bare, graph, [None], scrutinee, [thenBlock], Some(elseBlock), [], pattern.span, location
+  emitWalk lowering, builder, walk
+  continueIn lowering, builder, thenBlock
+  for (declared, place) in named {
+    lowering.references.set declared, place
+  }
+  const wanted = if otherwise.isSome() { Some target } else { None }
+  lowerBlockInto lowering, builder, then, wanted
+  for (declared, _) in named {
+    const _ = lowering.references.remove declared
+  }
   const thenDiverged = lowering.isDiverged
   if !thenDiverged {
     finishBlock lowering, builder, Terminator.Jump(join)
@@ -993,12 +1110,16 @@ fn resolveStep(
   step: PatternStep,
   at: Span,
 ): ResolvedStep? {
+  resolvedStepOn lowering, builder.typeOfSlot(base), step, at
+}
+
+/** One step of a pattern from a value of this type, as a step of a path and the type it leads to. */
+fn resolvedStepOn(var lowering: Lowering, owner: IrTypeId, step: PatternStep, at: Span): ResolvedStep? {
   // An item of a list is no step of a path at all: a list has no layout, and reading from one is a call
   if isItemStep(step) {
     reportUnsupported lowering, "an item of a list as a step of a path", at
     return None
   }
-  const owner = builder.typeOfSlot base
   const layout = match layoutOfType(lowering.program, owner) {
     Some(found) => found
     None => {
@@ -1577,7 +1698,7 @@ public fn lowerOptionalMember(
   }
   lowering.optionalReceivers.set at, payload
   lowering.optionalReceiverTypes.set at, payloadValue
-  const _ = lowerExpression lowering, builder, expression, Some(answered)
+  const _ = lowerOptionalMemberValue lowering, builder, expression, answered
   const removed = lowering.optionalReceivers.remove at
   const removedType = lowering.optionalReceiverTypes.remove at
   if removed.isNone() || removedType.isNone() {
