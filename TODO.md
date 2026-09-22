@@ -4002,3 +4002,6 @@ Wenn nicht, was bedeutet, bewirkt es?
     braucht nur `T: From<Sequence<Item>>` (Standard sammelt in eine Liste), ein Package kann einen spezialisierten
     `HashSetAccumulator` mitliefern, ohne dass `Set` ihn kennt. C1 wird damit teilweise zurückgedreht - an die
     laufende Runde weitergegeben.
+  - **Entschieden (Nutzer): `peek()` bei Stack UND Queue. `Collection`-Trait wird gestrichen** - als Bound nirgends
+    gebraucht (zwei Tour-Zeilen = `Sequence<Item> & Length`), als Überbegriff nur Doku. List/Set/Map/Stack/Queue erben
+    direkt `Sequence` + `Length`, `clear`/`compact` je selbst; das Wort bleibt für Prosa und den Package-Namen.
