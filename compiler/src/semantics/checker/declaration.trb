@@ -17,6 +17,7 @@
  */
 
 use Span from "../../syntax/source"
+use staticKeyword from "../../syntax/token"
 use Diagnostic from "../../syntax/diagnostic"
 use Name, Modifiers, Visibility, Declaration, Member, Binding, Argument, Expression from "../../syntax/ast"
 use requireSharedSource from "./place"
@@ -30,7 +31,7 @@ use TypeId, FunctionForm, FieldSignature, ParameterId from "./type"
 use Checker, Candidate, TypeScope from "./context"
 use Target from "./name"
 use signatureOf, typeSignatureOf, aliasTargetOf, resultOf from "./signature"
-use fieldsOf from "./member"
+use fieldsOf, caseNamed, caseNamesOf from "./member"
 use substitute from "./unify"
 use typeFromReference from "./lowering"
 use implementsBound from "./implementation"
@@ -187,6 +188,9 @@ public fn checkConstruction(var checker: Checker, target: Target, arguments: Lis
   if fields.isEmpty() {
     return
   }
+  if isCopy {
+    requireLabeledCopy checker, fields, arguments
+  }
   if isInsideType(checker, owner) {
     return
   }
@@ -196,11 +200,18 @@ public fn checkConstruction(var checker: Checker, target: Target, arguments: Lis
       if isPublicField(field) || field.hasDefault {
         continue
       }
+      // A `shared type` implements `shared trait`s alone, so `TryFrom` is not among the factories it can have: what a
+      // caller of one gets is a `static fn` of the type
+      const factory = if isSharedTarget(checker, owner) {
+        "`{shown}.open(...)`"
+      } else {
+        "`{shown}.tryFrom(...)`"
+      }
       checker.reportHere(
         Diagnostic.error("`{shown}` cannot be constructed here: `{field.name}` is private and has no default", at)
           .withNote(
-            "Only `{shown}` itself can pass a private field. What a caller gets is a factory of the type"
-              + " (`{shown}.tryFrom(...)`)"
+            "Only `{shown}` itself can pass a private field. What a caller gets is a factory of the type, a"
+              + " `{staticKeyword} fn` that makes one ({factory})"
           )
       )
       return
@@ -253,6 +264,32 @@ public fn requireSharedFields(var checker: Checker, target: Target, arguments: L
   }
 }
 
+/**
+ * `copy` names every field it changes. It has the shape of the constructor with every field optional, so a positional
+ * argument would silently fill the first one - and `order.copy(5)` reads as "copy and change something", which is the
+ * one thing it must not be allowed to mean.
+ */
+fn requireLabeledCopy(var checker: Checker, fields: List<FieldSignature>, arguments: List<Argument>) {
+  var position = 0
+  for argument in arguments {
+    if argument.label.isSome() {
+      continue
+    }
+    const name = match fields.get(position) {
+      Some(field) => field.name
+      None => ""
+    }
+    position = position + 1
+    if name.isEmpty() {
+      continue
+    }
+    checker.reportHere(
+      Diagnostic.error("`copy` takes labeled arguments: `copy({name}: ...)`", argument.value.span)
+        .withNote("`copy` changes the fields it is given and keeps the rest, so every one of them is named")
+    )
+  }
+}
+
 fn fieldNamed(fields: List<FieldSignature>, name: String): FieldSignature? {
   for field in fields {
     if field.name == name {
@@ -294,8 +331,126 @@ fn reportPrivateArguments(
 fn reportPrivateField(var checker: Checker, shown: String, name: String, at: Span) {
   checker.reportHere(
     Diagnostic.error("`{name}` is private to `{shown}`, so it cannot be passed from here", at)
-      .withNote("A private field is set by the type itself: `Self({name}: ...)` inside of `{shown}`")
+      .withNote(
+        "A private field is set where the type is declared: in the body of `{shown}`, or in an `extend` of it in the"
+          + " package that declares it"
+      )
   )
+}
+
+// --- A type that contains itself --------------------------------------------------------------------------------
+
+/**
+ * **A type that contains itself by value has no value.** `type Node { value: Int, next: Node }` needs a `Node` before
+ * it can make one, and so does every chain of types that leads back to where it started. Nothing in such a program is
+ * wrong at a call site, so it is reported at the declaration that closes the circle.
+ *
+ * A **case** is what stops a circle: `Option<Node>` contains a `Node` in `Some` and nothing in `None`, so a linked
+ * list writes `next: Node?` and a tree writes its recursion through a case. A collection, a function, a `shared type`
+ * and a trait type stop it too, because none of them holds its value inside of the record.
+ */
+public fn requireInhabitedType(var checker: Checker, symbol: SymbolId, at: Span) {
+  const identifier = typeSignatureOf checker, symbol
+  const shape = checker.typeSignature identifier
+  if shape.isNative || shape.isShared {
+    return
+  }
+  if isInhabited(checker, shape.own, []) {
+    return
+  }
+  const shown = checker.symbolAt(symbol).name
+  var report = Diagnostic.error "`{shown}` contains itself, so no value of it can ever be built", at
+  if const Some(field) = circularFieldOf(checker, shape.own) {
+    const annotation = checker.describe field.annotation
+    report = report.withNote(
+      "`{field.name}: {annotation}` holds another `{shown}`, and that one holds another. Write the step as"
+        + " `{annotation}?`, put it in a `List<{annotation}>`, or give `{shown}` a case that holds no `{shown}`"
+    )
+  }
+  checker.reportHere report
+}
+
+/** The first field of the type that cannot be filled, which is the one a reader has to change. */
+fn circularFieldOf(var checker: Checker, own: TypeId): FieldSignature? {
+  const fields = fieldsOf checker, own
+  for field in fields {
+    if !isInhabited(checker, field.annotation, []) {
+      return Some field
+    }
+  }
+  None
+}
+
+/**
+ * Whether a value of this type can be built at all, as the least fixed point over the field graph: a type that is
+ * already on the path counts as uninhabited, so a circle that nothing breaks answers `false` and one that a case
+ * breaks answers `true`.
+ */
+fn isInhabited(var checker: Checker, annotation: TypeId, path: List<SymbolId>): Bool {
+  const (symbol, _) = match checker.types.form(annotation) {
+    .Nominal(found, given) => (found, given)
+    .Tuple(items) => {
+      for item in items {
+        if !isInhabited(checker, item.annotation, path) {
+          return false
+        }
+      }
+      return true
+    }
+    // A type parameter, a trait type, a function and everything the language provides hold no record of their own
+    _ => {
+      return true
+    }
+  }
+  for seen in path {
+    if seen == symbol {
+      return false
+    }
+  }
+  if checker.inhabitedTypes.containsKey(annotation.value) {
+    return true
+  }
+  const identifier = typeSignatureOf checker, symbol
+  const shape = checker.typeSignature identifier
+  // A native type is storage the runtime owns, and a `shared type` is reached through its identity: neither one puts
+  // a value of the type it names inside of the record
+  if shape.isNative || shape.isShared {
+    return true
+  }
+  var walked = path
+  walked.add symbol
+  if !shape.cases.isEmpty() {
+    const variants = caseNamesOf checker, annotation
+    for variant in variants {
+      const found = caseNamed checker, annotation, variant
+      const fields = match found {
+        Some(one) => one.fields
+        None => {
+          continue
+        }
+      }
+      if allInhabited(checker, fields, walked) {
+        checker.inhabitedTypes.set annotation.value, true
+        return true
+      }
+    }
+    return false
+  }
+  const fields = fieldsOf checker, annotation
+  const answer = allInhabited checker, fields, walked
+  if answer {
+    checker.inhabitedTypes.set annotation.value, true
+  }
+  answer
+}
+
+fn allInhabited(var checker: Checker, fields: List<FieldSignature>, path: List<SymbolId>): Bool {
+  for field in fields {
+    if !isInhabited(checker, field.annotation, path) {
+      return false
+    }
+  }
+  true
 }
 
 /**
@@ -720,6 +875,7 @@ fn requireOneNamespace(
   repeated: String?,
 ) {
   var declared: Map<String, Bool> = [:]
+  var fields: Map<String, Bool> = [:]
   for member in members {
     const name = memberNameOf member
     if name.text.isEmpty() {
@@ -728,6 +884,14 @@ fn requireOneNamespace(
     if declared.containsKey(name.text) {
       var problem = Diagnostic.error("`{name.text}` is already declared in `{owner}`", name.span)
         .withNote("A type has one namespace of members: a field, a `const`, a `fn` and a case cannot share a name")
+      // `private items` next to `fn items()`: the rule holds for a private field too, because making a field public
+      // or private is not supposed to break a caller - so the two need two names
+      if fields.containsKey(name.text) && isFunctionMember(member) {
+        problem = problem.withNote(
+          "That holds for a `private` field as well: making a field private or public must not change what a caller"
+            + " writes, so one of the two needs another name"
+        )
+      }
       // `type Sketch with Draw<Paper> & Draw<Screen>` writing two `draw`s: the two members belong to two
       // implementations and not to one body, and the form that has a body per implementation is `extend`
       if const Some(capability) = repeated {
@@ -740,6 +904,16 @@ fn requireOneNamespace(
       continue
     }
     declared.set name.text, true
+    if const .Field(_) = member.kind {
+      fields.set name.text, true
+    }
+  }
+}
+
+fn isFunctionMember(member: Member): Bool {
+  match member.kind {
+    .Function(_) => true
+    _ => false
   }
 }
 
@@ -1204,6 +1378,14 @@ public fn isSharedType(var checker: Checker, annotation: TypeId): Bool {
 /** A bound is shared when the trait it names is a `shared trait`. */
 fn isSharedBound(var checker: Checker, bound: TypeId): Bool {
   match headSymbolOf(checker, bound) {
+    Some(symbol) => isSharedDeclaration checker, symbol
+    None => false
+  }
+}
+
+/** Whether the type a constructor builds has an identity, which decides which factory a message can suggest. */
+fn isSharedTarget(var checker: Checker, owner: TypeId): Bool {
+  match headSymbolOf(checker, owner) {
     Some(symbol) => isSharedDeclaration checker, symbol
     None => false
   }

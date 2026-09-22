@@ -1,0 +1,46 @@
+/**
+ * **The generated constructor is an ordinary function value, with its labels and its defaults.** `names.map User`
+ * takes the constructor where a function is expected, and a constructor that is bound to a name keeps everything a
+ * call of it by name would have: a field can be filled by label, in any order, and a field with a default can be left
+ * out of the call.
+ *
+ * A default belongs to the declaration and never to a type, so the value only carries one while the declaration it
+ * was read from is known - which is exactly what a name bound to a constructor is.
+ */
+
+use Process from "std/process"
+
+type User {
+  name: String
+}
+
+type Point {
+  x: Int
+  y: Int
+}
+
+type Config {
+  host: String
+  port: Int = 80
+  secure: Bool = false
+}
+
+// The constructor where a function is expected
+const names = ["ada", "alan"]
+print names.map(User).toList()
+
+// ...and bound to a name, called positionally
+const make = Point
+print make(1, 2)
+
+// A field with a default, left out of a call of the value
+const makeConfig = Config
+print makeConfig("h")
+print makeConfig("h", 8080)
+
+// The labels survive too, in whatever order they are written
+print makeConfig("h", secure: true)
+print makeConfig(host: "h", secure: true, port: 9)
+
+const built = makeConfig "h", 9, true
+Process.exit(built.port - 9)

@@ -265,6 +265,51 @@ fn every_binary_only_program_matches_its_expectations() {
     let _ = std::fs::remove_dir_all(&output);
 }
 
+/// **What a program printed comes before the panic that ended it.** The runner above reads the two streams apart, so
+/// the order *between* them is not something it can see: this builds `panic-after-output.trb` and runs it with both
+/// of them redirected into one file, which is what a terminal and a log do.
+#[test]
+fn a_panic_is_written_after_everything_the_program_printed() {
+    let root = repository();
+    let Some(_) = c_compiler() else {
+        eprintln!("no C compiler found (TORB_CC, clang, gcc, cc) - skipping");
+        return;
+    };
+    let file = root.join("bootstrap/tests/native/panic-after-output.trb");
+    let output = scratch("torb-native-panic-order");
+    let target = output.join("panic-after-output");
+    let target_text = target.to_str().expect("UTF-8 path").to_string();
+    let compiler_path = root.join("compiler");
+    let built =
+        torb(&["run", compiler_path.to_str().expect("UTF-8 path"), "build", file.to_str().expect("UTF-8 path"), "--output", &target_text]);
+    assert!(
+        built.status.success(),
+        "torb build failed:
+{}
+{}",
+        text(&built.stdout),
+        text(&built.stderr)
+    );
+    let merged = output.join("both.txt");
+    let stream = std::fs::File::create(&merged).expect("a writable scratch file");
+    let errors = stream.try_clone().expect("a second handle on the same file");
+    let status = Command::new(binary_of(&target))
+        .stdout(std::process::Stdio::from(stream))
+        .stderr(std::process::Stdio::from(errors))
+        .status()
+        .expect("the compiled program runs");
+    assert!(status.code() == Some(101), "expected a panic, left with {:?}", status.code());
+    let written = std::fs::read_to_string(&merged).expect("what the program wrote");
+    let printed = written.find("after the default was passed over").expect("the last line the program printed");
+    let panicked = written.find("panic: a default that panics").expect("the panic");
+    assert!(
+        printed < panicked,
+        "the panic was written before the output:
+{written}"
+    );
+    let _ = std::fs::remove_dir_all(&output);
+}
+
 /// A panic inside the standard library names a line of `std/`, and that line moves whenever a comment above it is
 /// edited. What a program promises is *which file* of the library panics, so the position in a `std/` frame reads
 /// `_:_` in a `.stderr` file; a frame of the program itself keeps its position.

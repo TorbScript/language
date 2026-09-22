@@ -1386,10 +1386,20 @@ match list {
   [only] => "one element: {only}"
   [first, ...rest] => "{first} and {rest.length()} more"
 }
+
+match config {                             // `...` stands for the fields the pattern does not name
+  Config(port: 443, ...) => "secure"
+  Config(host, ...) => host
+}
 ```
 
-- **Fields are matched by position, and a label that is present must name the field at that position.**
-  `Point(y: 0, x: 1)` is an error, not a silent swap: a pattern mirrors the constructor, where labels are checked.
+- **A pattern mirrors the constructor.** A sub-pattern without a label fills the next field from the left, a labeled one
+  names the field it matches, and the labeled ones follow the positional ones - the very rule the arguments of a call
+  follow. A field named twice and a label that names no field are errors.
+- **A pattern that does not name every field ends in `...`.** `Config(host, ...)` matches a `Config` of any number of
+  fields and binds the first one; a pattern that names fewer fields without the `...` is an error whose note writes the
+  pattern with it. The `...` comes last, comes once, and binds nothing - the fields it stands for decide nothing, so
+  such a pattern still covers the whole type. It is the spelling a list pattern already has for the same idea.
 - **An arm that can never be reached is an error** ("This arm is never reached"), for the same reason as a dead
   change or a discarded value - with value semantics it is always a mistake, never a defensive line.
 
@@ -2789,6 +2799,27 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
   guesswork, so the checker says it once per declaration instead. **There is no MACRO_CASE**: a module constant is
   `maxSize`, and the message about `MAX_SIZE` says that rather than only naming the first letter. A pattern binding
   needs no check of its own, because the parser reads an uppercase name there as a case to begin with.
+- **A pattern that does not name every field of what it matches ends in `...`** (`Config(host, ...)`), and a labeled
+  sub-pattern names its field instead of documenting a position. Before this, a pattern had to name every field, so a
+  field added to a type broke every pattern over it while a constructor call was free to leave a defaulted field out -
+  "a pattern mirrors the constructor" was true of labels and false of arity. Silent omission was rejected for the
+  reason `_` exists at all: leaving something out has to be written down, or a pattern that was meant to be complete
+  and a pattern that was not read the same. The spelling is the one a list pattern already has, and the `...` binds
+  nothing there either: the fields behind it are heterogeneous and named, so there is no rest value to give a name to.
+- **An optional field without a default is required, and `None` is written at the call.** `Person("Ada")` for
+  `nickname: String?` is an error whose message shows both fixes. "May be absent" and "may be left out of the call" are
+  two different promises, and only the declaration makes the second one: a field that is meant to be optional at every
+  call writes `= None` once, and everything else says at the call site that it knows the value is missing. Making `?`
+  imply a default would also make one field's type decide something about every caller of the type.
+- **The generated constructor is a function value with its labels and its defaults** (`names.map User`,
+  `const make = Config`), and a call of such a value may leave a defaulted field out. A default belongs to a
+  declaration and never to a type, so the value carries one exactly while the declaration behind it is known - which
+  is what a name bound to a constructor is. Where two declarations could have minted the same function type, the back
+  end refuses the call instead of guessing which defaults are meant.
+- **A type that contains itself by value is an error at the declaration.** `type Node { value: Int, next: Node }` needs
+  a `Node` before one can be built, and the answer is `Node?`, a `List<Node>`, or a case that holds no `Node` - which
+  is how a recursive type is written anyway. It was previously diagnosed nowhere: stage 0 overflowed its stack and the
+  back end reported an internal error.
 - **A binding of a refutable pattern that is never read is an error** - in an arm of a `match`, in an `if const`/`if
   var`, in a `while const`. A lowercase name in a pattern always binds, so `limit =>` matches every value and shadows
   the constant `limit` instead of comparing with it, and whether the guard or the body reads the binding is the only

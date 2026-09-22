@@ -374,6 +374,18 @@ fn resolveUncached(var checker: Checker, annotation: TypeId, capability: SymbolI
   if checker.absorbs(annotation) {
     return Resolved.Missing
   }
+  // A literal type **is** its base at run time: `"tcp" | "udp"` is a `String`, so its `Show`, `Equals`, `Hash` and
+  // `Compare` are the ones of `String` and not bodies generated for it. The one trait that belongs to the literal type
+  // itself is the conversion from text, which `directTraitsOf` puts in place of the base's own
+  if const .Literals(base, _) = checker.types.form(annotation) {
+    var isConversion = false
+    if const Some(found) = wanted {
+      isConversion = isTextConversionBound checker, found
+    }
+    if !isConversion {
+      return resolveUncached checker, base, capability, wanted
+    }
+  }
   // Every signature says `Void` as `TypeForm.VoidType`, which no `extend` can name: the question is about the
   // `native type Void` the standard library declares, and that is where its `Show` comes from
   const subject = declaredVoidOf(checker, annotation) ?? annotation

@@ -158,11 +158,14 @@ fn written_operator(operator: BinaryOperator) -> &'static str {
 pub struct Arguments {
     pub positional: Vec<Value>,
     pub labeled: Vec<(&'static str, Value)>,
+    /// Whether a `...` was written. A spread fills a variadic parameter, and a constructor has none, so the
+    /// constructor has to refuse what the flattening above it can no longer see.
+    pub has_spread: bool,
 }
 
 impl Arguments {
     pub fn positional(values: Vec<Value>) -> Arguments {
-        Arguments { positional: values, labeled: Vec::new() }
+        Arguments { positional: values, labeled: Vec::new(), has_spread: false }
     }
 
     /// The argument at a position, or the one with the label of that parameter.
@@ -1200,7 +1203,7 @@ impl Interpreter {
             }
             None => Err(failure(format!("`.{}` has fields: `.{}(...)`", implicit.name, implicit.name))),
             Some((positional, labeled)) => {
-                self.construct(info, Some(case), Arguments { positional: positional.clone(), labeled: labeled.clone() })
+                self.construct(info, Some(case), Arguments { positional: positional.clone(), labeled: labeled.clone(), has_spread: false })
             }
         }
     }
@@ -1259,7 +1262,7 @@ impl Interpreter {
                 environment.declare(name, value.clone(), is_var);
                 Ok(true)
             }
-            PatternKind::ImplicitVariant { name, fields } => {
+            PatternKind::ImplicitVariant { name, fields, has_rest } => {
                 // The values stay where they are: copying them out was an allocation per `Some(x)` and per `.Case(x)`
                 let payload: &[Value] = match (name.text.as_str(), value) {
                     ("Some", Value::Option(Some(inner))) => std::slice::from_ref(&**inner),
@@ -1273,14 +1276,15 @@ impl Interpreter {
                     },
                     _ => return Ok(false),
                 };
-                if fields.len() > payload.len() {
+                if fields.len() != payload.len() && !(*has_rest && fields.len() < payload.len()) {
                     return self.fail(
                         environment,
                         pattern.span,
-                        format!("`.{}` has {} fields, the pattern has {}", name.text, payload.len(), fields.len()),
+                        format!("`.{}` has {} fields and this pattern names {}", name.text, payload.len(), fields.len()),
                     );
                 }
-                for (field, item) in fields.iter().zip(payload) {
+                for (field, position) in fields.iter().zip(pattern_positions(fields, value)) {
+                    let Some(item) = payload.get(position) else { return Ok(false) };
                     if !self.bind_pattern(&field.pattern, item, environment, is_var)? {
                         return Ok(false);
                     }
@@ -1345,7 +1349,7 @@ impl Interpreter {
                 }
                 Ok(true)
             }
-            PatternKind::Variant { path, fields } => {
+            PatternKind::Variant { path, fields, has_rest } => {
                 let name = path.last().map_or("", |name| name.text.as_str());
                 // The parser made a bare uppercase name a case, by its first letter. Stage 0 has no checker, so a name
                 // that is nowhere is reported here instead of quietly matching nothing.
@@ -1371,14 +1375,15 @@ impl Interpreter {
                     }
                     _ => return Ok(false),
                 };
-                if fields.len() > payload.len() {
+                if fields.len() != payload.len() && !(*has_rest && fields.len() < payload.len()) {
                     return self.fail(
                         environment,
                         pattern.span,
-                        format!("`{name}` has {} fields, the pattern has {}", payload.len(), fields.len()),
+                        format!("`{name}` has {} fields and this pattern names {}", payload.len(), fields.len()),
                     );
                 }
-                for (field, item) in fields.iter().zip(payload) {
+                for (field, position) in fields.iter().zip(pattern_positions(fields, value)) {
+                    let Some(item) = payload.get(position) else { return Ok(false) };
                     if !self.bind_pattern(&field.pattern, item, environment, is_var)? {
                         return Ok(false);
                     }
@@ -1774,6 +1779,7 @@ impl Interpreter {
                 Some(label) => result.labeled.push((&label.text, value)),
                 None if argument.is_spread => {
                     let items = natives::items_of(&value);
+                    result.has_spread = true;
                     result.positional.extend(self.located(items, environment, argument.value.span)?);
                 }
                 None => result.positional.push(value),
@@ -2181,6 +2187,19 @@ impl Interpreter {
         if let Some((label, _)) = arguments.labeled.iter().find(|(label, _)| !fields.iter().any(|field| field.name == *label)) {
             return Err(failure(format!("`{}` has no field `{label}`", info.name)));
         }
+        // The two the type checker refuses and an untyped interpreter used to take quietly: one field with two
+        // values, and a `...` into a constructor, which has no variadic field to collect it
+        for (index, (label, _)) in arguments.labeled.iter().enumerate() {
+            let is_repeated = arguments.labeled[..index].iter().any(|(earlier, _)| earlier == label)
+                || fields.iter().position(|field| field.name == *label).is_some_and(|position| position < arguments.positional.len());
+            if is_repeated {
+                return Err(failure(format!("`{label}` already has an argument")));
+            }
+        }
+        if arguments.has_spread {
+            let name = fields.first().map_or("a field", |field| field.name);
+            return Err(failure(format!("`{name}` is not a variadic parameter, so `...` cannot spread into it")));
+        }
         let mut values = Vec::with_capacity(fields.len());
         for (position, field) in fields.iter().enumerate() {
             let value = match (arguments.get(position, field.name), field.default) {
@@ -2487,6 +2506,31 @@ fn flatten_option(value: Value) -> Value {
         Value::Option(_) => value,
         other => Value::some(other),
     }
+}
+
+/// Which field every written sub-pattern matches: the positional ones fill the fields from the left, a labeled one
+/// names the field it matches. A value whose fields have no names - an `Option`, a `Result` - keeps every sub-pattern
+/// where it stands, which is what the type checker allows there anyway.
+fn pattern_positions(fields: &[ast::FieldPattern], value: &Value) -> Vec<usize> {
+    let named = match value {
+        Value::Object(object) => object.info.fields_of(object.case),
+        _ => &[],
+    };
+    let mut positions = Vec::with_capacity(fields.len());
+    let mut next = 0;
+    for field in fields {
+        match &field.label {
+            Some(label) => match named.iter().position(|one| one.name == label.text) {
+                Some(found) => positions.push(found),
+                None => positions.push(usize::MAX),
+            },
+            None => {
+                positions.push(next);
+                next += 1;
+            }
+        }
+    }
+    positions
 }
 
 /// Whether an imported name is the very case this object is: a constructor where the case has fields, the one value

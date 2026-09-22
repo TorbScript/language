@@ -1,0 +1,60 @@
+/**
+ * **A pattern that does not name every field of what it matches ends in `...`.** The `...` stands for the fields
+ * behind the ones that are named, it decides nothing, and it is what keeps a field added to a type from breaking every
+ * pattern over that type.
+ *
+ * A pattern mirrors the constructor in the other half of this too: a sub-pattern without a label fills the next field
+ * from the left, a labeled one names the field it matches, and the labeled ones follow the positional ones.
+ */
+
+use Process from "std/process"
+
+type Config {
+  host: String
+  port: Int
+  secure: Bool
+}
+
+type Shape {
+  case Circle(radius: Int)
+  case Rectangle(width: Int, height: Int)
+  case Empty
+}
+
+fn described(config: Config): String {
+  match config {
+    Config(port: 443, ...) => "the secure port"
+    Config(host, ...) => "over {host}"
+  }
+}
+
+fn measured(shape: Shape): Int {
+  match shape {
+    .Circle(...) => 1
+    .Rectangle(width, ...) => width
+    .Empty => 0
+  }
+}
+
+print described(Config("a", 443, true))
+print described(Config("b", 80, false))
+print measured(Shape.Circle(9))
+print measured(Shape.Rectangle(4, 5))
+print measured(Shape.Empty)
+
+// A `...` behind every field at all, which stands for nothing and still reads
+match Config("c", 1, false) {
+  Config(host, port, secure, ...) => print "{host} {port} {secure}"
+}
+
+// ...and in a binding, where the fields that are left out simply bind nothing
+const Config(only, ...) = Config "d", 2, true
+print only
+
+// A labeled sub-pattern names its field wherever it stands
+const total = match Config("e", 3, false) {
+  Config(secure: true, ...) => 0
+  Config(port: found, host: place, ...) => found + place.byteLength()
+}
+print total
+Process.exit(total - 4)

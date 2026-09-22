@@ -154,12 +154,73 @@ group "Cases of a type" {
     assert problems(source).isEmpty()
   }
 
-  test "a label in a pattern has to name the field at that position" {
+  /** A pattern mirrors the constructor, where a labeled argument names its field wherever it stands. */
+  test "a label in a pattern names the field it matches, in whatever order they are written" {
     const source = inBody(r"""
       const sum = match Point(1, 2) {
         Point(y: a, x: b) => a + b
       }""")
-    assert(problems(source) == ["This position is `x`, not `y`", "This position is `y`, not `x`"])
+    assert problems(source).isEmpty()
+  }
+
+  test "a label that names no field of the type" {
+    const source = inBody(r"""
+      const sum = match Point(1, 2) {
+        Point(x, z: b) => x + b
+      }""")
+    assert(problems(source) == ["`Point` has no field `z`"])
+  }
+
+  /**
+   * A pattern that does not name every field ends in `...`, exactly as a list pattern says the same thing about its
+   * items. What the `...` stands for decides nothing, so such a pattern still covers the whole type.
+   */
+  test "a `...` stands for the fields the pattern does not name, and covers them" {
+    const source = inBody(r"""
+      const sum = match Point(1, 2) {
+        Point(x, ...) => x
+      }""")
+    assert problems(source).isEmpty()
+    const only = inBody(r"""
+      const sum = match Point(1, 2) {
+        Point(...) => 0
+      }""")
+    assert problems(only).isEmpty()
+  }
+
+  test "a `...` works with a labeled sub-pattern, and the value it names still decides" {
+    const source = inBody(r"""
+      const sum = match Point(1, 2) {
+        Point(y: 0, ...) => 0
+        _ => 1
+      }""")
+    assert problems(source).isEmpty()
+    const missing = inBody(r"""
+      const sum = match Point(1, 2) {
+        Point(y: 0, ...) => 0
+      }""")
+    assert(problems(missing) == ["`match` does not handle `Point(_, _)`"])
+  }
+
+  test "a pattern that names fewer fields without a `...`" {
+    const source = inBody(r"""
+      const sum = match Point(1, 2) {
+        Point(x) => x
+      }""")
+    assert(problems(source) == ["`Point` has 2 fields and this pattern names 1"])
+    assert(
+      notes(source) == ["A pattern that does not name every field ends in `...`: `Point(x, ...)`"]
+    )
+  }
+
+  test "a `...` on a case of a type, where the fields it does not name still decide nothing" {
+    const source = inBody(r"""
+      const found = match Shape.Empty {
+        .Circle(...) => 1
+        .Rectangle(width, ...) => width
+        .Empty => 0.0
+      }""")
+    assert problems(source).isEmpty()
   }
 
   test "a type that has no constructors at all is only covered by a wildcard" {
@@ -546,6 +607,6 @@ group "One root cause, one message" {
       const shown = match Shape.Empty {
         .Circle(_, _) => 1
       }""")
-    assert(problems(source) == ["`Circle` has 1 field, 2 patterns were given"])
+    assert(problems(source) == ["`Circle` has 1 field and this pattern names 2"])
   }
 }

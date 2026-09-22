@@ -2075,11 +2075,13 @@ _Decision:_ accepted.
 The concept shows `Point(x: 0, y: 0)` as a pattern ("Cases, types (positional or labeled)"), but
 `compiler/src/syntax/parser/patterns.trb:76` drops the label ("the label is documentation, fields are matched by
 position"), so `Point(y: 0, x: 1)` silently matches `x = 0`.
-_Proposal:_ keep the label in the tree (a `FieldPattern { label: Name?, pattern: Pattern }`) and check it: fields are
-matched by position, and a label that is present must be the name of the field at that position. _Reason:_ a label
-that is not checked is worse than none; patterns should mirror the constructor, where labels are checked.
+_Proposal:_ keep the label in the tree (a `FieldPattern { label: Name?, pattern: Pattern }`) and check it. _Reason:_ a
+label that is not checked is worse than none; patterns should mirror the constructor, where labels are checked.
 
-_Decision:_ accepted.
+_Decision:_ accepted, and "mirrors the constructor" is the whole rule: a sub-pattern without a label fills the next
+field from the left, a labeled one names the field it matches, and the labeled ones follow the positional ones -
+exactly what an argument list does. A pattern that does not name every field ends in `...` (CONCEPT, "Algebraic Data
+Types and Pattern Matching").
 
 **17. Named tuples and type identity.**
 "Built-in Types": a label is "a name for `.0`, nothing more", and destructuring is positional. So is

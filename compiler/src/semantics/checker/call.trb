@@ -18,7 +18,8 @@ use editDistance from "../resolve-types"
 use TypeId, FunctionForm, ParameterForm, ParameterMode, ParameterId, Bound, Witness from "./type"
 use Checker, Expectation, Resolution, Adaptation, Dispatch, Candidate from "./context"
 use Target, targetOfCandidate from "./name"
-use checkExpression, inferExpression, deferExpression, deferArguments from "./expression"
+use hasCases, caseNamesOf from "./member"
+use checkExpression, inferExpression, deferExpression, deferArguments, optionValueOf from "./expression"
 use resolveTarget, expectationOf from "./expression"
 use substituteFunction, substituteBounds, sameType, unify, resolveType, resolveTypes, openVariableOf from "./unify"
 use witnessFor, isConcrete, traitArgumentsOf, fitsType from "./implementation"
@@ -81,6 +82,7 @@ public fn checkCall(
     Some(found) => found
     // A call of something that is not a function, which nothing here can resolve
     None => {
+      reportUncallable checker, target, expression.span
       checker.resolved callee.span, target.resolution
       const _ = checker.typed callee.span, target.annotation
       deferArguments checker, arguments
@@ -139,6 +141,53 @@ public fn checkCall(
   checker.resolved expression.span, resolution
   recordPlan checker, expression.span, inner, plan
   resolveType checker, inner.result
+}
+
+/**
+ * A callee that is not a function at all. Two everyday mistakes land here and used to leave the expression without a
+ * type, which the checker then reported as a bug of the compiler: a case that has no fields, which is the value
+ * itself, and a type parameter, which stands for a type the caller chooses and brings no constructor with it.
+ */
+fn reportUncallable(var checker: Checker, target: Target, at: Span) {
+  if checker.hasDiagnosticAt(at) {
+    return
+  }
+  match target.resolution {
+    // `Shape.Empty()`, `None()`: a case without fields is a value, and `Shape.Empty` is how it is written
+    .CaseOf(owner, variant) => {
+      const shown = "{checker.describe(owner)}.{checker.symbolAt(variant).name}"
+      checker.reportHere(
+        Diagnostic.error("`{shown}` has no fields, so it is a value and not a function", at)
+          .withNote("Write it without the parentheses: `{shown}`")
+      )
+    }
+    .TypeOf(owner) => reportUncallableType checker, target, owner, at
+    _ => {}
+  }
+}
+
+/** `Item()` inside a generic body, and `Shape()` of a type that is constructed through its cases. */
+fn reportUncallableType(var checker: Checker, target: Target, owner: TypeId, at: Span) {
+  const shown = checker.describe owner
+  if const .Parameter(_) = checker.types.form(owner) {
+    checker.reportHere(
+      Diagnostic.error("`{shown}` is a type parameter, so it has no constructor here", at)
+        .withNote(
+          "`{shown}` stands for whatever type the caller decided on, and its fields are not known at this"
+            + " declaration. Take the value, or a function that makes one, as a parameter"
+        )
+    )
+    return
+  }
+  if hasCases(checker, owner) {
+    var report = Diagnostic.error "`{shown}` is constructed through one of its cases", at
+    if const Some(first) = caseNamesOf(checker, owner).first() {
+      report = report.withNote "Write the case: `{shown}.{first}(...)`"
+    }
+    checker.reportHere report
+    return
+  }
+  checker.reportHere Diagnostic.error("`{shown}` is a type, not a function", at)
 }
 
 /** A call that produces nothing was written for its effect, whatever position it stands in. */
@@ -461,6 +510,9 @@ fn matchArguments(
   var variadicFrom = -1
   var next = 0
   var hasSurplus = false
+  // A label that names nothing has its own message, and the field it should have filled is empty because of it: the
+  // arity would be a second message about one mistake
+  var hasUnknownLabel = false
   for index in 0..arguments.length() {
     const argument = arguments[index]
     if index == trailing {
@@ -470,7 +522,8 @@ fn matchArguments(
     if const Some(label) = argument.label {
       const position = indexOfParameter parameters, label.text
       if position < 0 {
-        reportUnknownLabel checker, target.name, parameters, label.text, label.span
+        reportUnknownLabel checker, target, parameters, filled, label.text, label.span
+        hasUnknownLabel = true
         targets.add(-1)
         continue
       }
@@ -512,7 +565,7 @@ fn matchArguments(
     placeTrailingClosure checker, target, parameters, filled, targets, trailing, closure
   }
   var defaults: List<Int> = []
-  var isMissing = false
+  var missing: List<Int> = []
   for position in 0..parameters.length() {
     if filled[position] {
       continue
@@ -525,10 +578,10 @@ fn matchArguments(
     if const .Variadic = parameters[position].mode {
       continue
     }
-    isMissing = true
+    missing.add position
   }
-  if hasSurplus || isMissing {
-    reportArity checker, target.name, parameters, arguments.length(), at
+  if (hasSurplus || !missing.isEmpty()) && !hasUnknownLabel {
+    reportArity checker, target, parameters, missing, arguments.length(), hasSurplus, at
   }
   ArgumentPlan targets, defaults, variadic, variadicFrom
 }
@@ -545,7 +598,7 @@ fn placeTrailingClosure(
 ) {
   const last = parameters.length() - 1
   if last < 0 {
-    reportArity(checker, target.name, parameters, trailing + 1, at)
+    reportArity(checker, target, parameters, [], trailing + 1, true, at)
     return
   }
   if filled[last] {
@@ -938,7 +991,26 @@ fn isReordered(targets: List<Int>): Bool {
 
 // --- Messages -------------------------------------------------------------------------------------------------------
 
-fn reportArity(var checker: Checker, name: String, parameters: List<ParameterForm>, given: Int, at: Span) {
+/**
+ * Too few arguments, or too many. A call that fills a **constructor** always hears the field names, because the
+ * counts alone cannot say what is wrong with it: `DefaultInMiddle(1, 3)` gives two arguments to a type that takes
+ * two, and the `3` still lands in `b` while `c` stays empty. Everything else keeps the counts, and falls back to the
+ * names where the two would contradict each other.
+ */
+fn reportArity(
+  var checker: Checker,
+  target: Target,
+  parameters: List<ParameterForm>,
+  missing: List<Int>,
+  given: Int,
+  hasSurplus: Bool,
+  at: Span,
+) {
+  if isConstruction(target) {
+    reportFieldArity checker, target, parameters, missing, given, hasSurplus, at
+    return
+  }
+  const name = target.name
   var required = 0
   for parameter in parameters {
     const isOptional = parameter.hasDefault || isVariadic(parameter)
@@ -946,7 +1018,20 @@ fn reportArity(var checker: Checker, name: String, parameters: List<ParameterFor
       required = required + 1
     }
   }
-  const takes = if required == 1 { "1 argument" } else { "{required} arguments" }
+  // `f(1, 3)` of `fn f(a: Int, b: Int = 2, c: Int)`: the counts agree and an argument is still missing, because the
+  // `3` filled `b`. Naming what is empty is the only message that is true here
+  if !hasSurplus && given >= required {
+    checker.reportHere Diagnostic.error("`{name}` has no argument for {listOfNames(parameters, missing)}", at)
+    return
+  }
+  const takes = if hasSurplus && required != parameters.length() {
+    const most = parameters.length()
+    if most == 1 { "at most 1 argument" } else { "at most {most} arguments" }
+  } else if required == 1 {
+    "1 argument"
+  } else {
+    "{required} arguments"
+  }
   const was = if given == 0 {
     "none were given"
   } else if given == 1 {
@@ -960,6 +1045,130 @@ fn reportArity(var checker: Checker, name: String, parameters: List<ParameterFor
     report = report.withNote "`{name}` is a method: call it on a value, or declare it `{staticKeyword} fn`"
   }
   checker.reportHere report
+}
+
+/** Whether the call builds a value out of the fields of a type: its constructor, its `copy`, or one of its cases. */
+fn isConstruction(target: Target): Bool {
+  match target.resolution {
+    .Construct(_) => true
+    .CopyOf(_) => true
+    .CaseOf(_, _) => true
+    _ => false
+  }
+}
+
+/**
+ * The same two mistakes at a constructor, said with the fields: which ones have no value, which ones have a default
+ * and may therefore be left out, and - where that is what happened - that a positional argument filled a field with a
+ * default and the one behind it stayed empty.
+ */
+fn reportFieldArity(
+  var checker: Checker,
+  target: Target,
+  parameters: List<ParameterForm>,
+  missing: List<Int>,
+  given: Int,
+  hasSurplus: Bool,
+  at: Span,
+) {
+  const name = target.name
+  if hasSurplus {
+    const has = if parameters.length() == 1 { "1 field" } else { "{parameters.length()} fields" }
+    const was = if given == 1 { "1 argument was given" } else { "{given} arguments were given" }
+    checker.reportHere Diagnostic.error("`{name}` has {has}, {was}", at).withNote(defaultedNote(parameters))
+    return
+  }
+  const fields = if missing.length() == 1 { "the field" } else { "the fields" }
+  var report = Diagnostic.error "`{name}` has no value for {fields} {listOfNames(parameters, missing)}", at
+  if const Some(note) = skippedDefaultNote(checker, name, parameters, missing, given) {
+    report = report.withNote note
+  }
+  for position in missing {
+    if const Some(note) = optionalWithoutDefaultNote(checker, name, parameters[position]) {
+      report = report.withNote note
+    }
+  }
+  checker.reportHere report.withNote(defaultedNote(parameters))
+}
+
+/**
+ * A positional argument fills the next field in order, so a field with a default is only passed over by naming the one
+ * behind it. That is the mistake `DefaultInMiddle(1, 3)` makes, and the note writes the call that was meant.
+ */
+fn skippedDefaultNote(
+  var checker: Checker,
+  name: String,
+  parameters: List<ParameterForm>,
+  missing: List<Int>,
+  given: Int,
+): String? {
+  if given == 0 {
+    return None
+  }
+  const empty = missing.first()?
+  var skipped: String? = None
+  for position in 0..empty {
+    if parameters[position].hasDefault {
+      skipped = parameters[position].name
+    }
+  }
+  const over = skipped?
+  const wanted = parameters[empty].name ?? ""
+  Some(
+    "A positional argument fills the next field in order, and `{over}` has a default: name the field to pass it"
+      + " over (`{name}(..., {wanted}: ...)`)"
+  )
+}
+
+/**
+ * An optional field without a default is required, and writing `None` at the call is what says so. This is the one
+ * missing field a reader is likely to have expected to be optional, so the message shows both ways out.
+ */
+fn optionalWithoutDefaultNote(var checker: Checker, name: String, parameter: ParameterForm): String? {
+  if parameter.hasDefault {
+    return None
+  }
+  const field = parameter.name?
+  const inner = optionValueOf(checker, parameter.annotation)?
+  const shown = checker.describe inner
+  Some(
+    "`{field}` is optional in `{name}` and has no default, so it is still required: write `{field}: None` here,"
+      + " or give the field one (`{field}: {shown}? = None`)"
+  )
+}
+
+/** Which fields may be left out, for the message that says what is required. */
+fn defaultedNote(parameters: List<ParameterForm>): String {
+  var defaulted: List<Int> = []
+  var required: List<Int> = []
+  for position in 0..parameters.length() {
+    if parameters[position].hasDefault {
+      defaulted.add position
+    } else {
+      required.add position
+    }
+  }
+  if defaulted.isEmpty() {
+    return "Every field is required here: {listOfNames(parameters, required)}"
+  }
+  if required.isEmpty() {
+    return "Every field has a default: {listOfNames(parameters, defaulted)}"
+  }
+  "Required: {listOfNames(parameters, required)}. With a default, and so optional: {listOfNames(parameters, defaulted)}"
+}
+
+/** `` `host` ``, `` `host` and `port` ``, `` `host`, `port` and `secure` ``: the names of the positions, for a message. */
+fn listOfNames(parameters: List<ParameterForm>, positions: List<Int>): String {
+  var names: List<String> = []
+  for position in positions {
+    names.add "`{parameters[position].name ?? "?"}`"
+  }
+  if names.length() <= 1 {
+    return names.first() ?? "`?`"
+  }
+  const last = names[names.length() - 1]
+  const front = names.slice(0..names.length() - 1)
+  "{front.joined(separator: ", ")} and {last}"
 }
 
 /** Whether the first parameter is the receiver: what tells a method from a function of the same shape. */
@@ -992,24 +1201,30 @@ fn isVariadic(parameter: ParameterForm): Bool {
 
 fn reportUnknownLabel(
   var checker: Checker,
-  name: String,
+  target: Target,
   parameters: List<ParameterForm>,
+  filled: List<Bool>,
   label: String,
   at: Span,
 ) {
-  var problem = Diagnostic.error "`{name}` has no parameter `{label}`", at
-  if const Some(similar) = nearestParameter(parameters, label) {
+  const what = if isConstruction(target) { "field" } else { "parameter" }
+  var problem = Diagnostic.error "`{target.name}` has no {what} `{label}`", at
+  if const Some(similar) = nearestParameter(parameters, filled, label) {
     problem = problem.withNote "Did you mean `{similar}`?"
   }
   checker.reportHere problem
 }
 
-fn nearestParameter(parameters: List<ParameterForm>, label: String): String? {
+/**
+ * The parameter the label was most likely meant to be, which is only ever one that is still empty: suggesting the one
+ * the call has already given by name sends the reader to a line that is right.
+ */
+fn nearestParameter(parameters: List<ParameterForm>, filled: List<Bool>, label: String): String? {
   var best: String? = None
   var distance = 3
-  for parameter in parameters {
-    const name = parameter.name ?? ""
-    if name.isEmpty() || name == label {
+  for index in 0..parameters.length() {
+    const name = parameters[index].name ?? ""
+    if name.isEmpty() || name == label || filled[index] {
       continue
     }
     const found = editDistance(name, label, distance - 1)

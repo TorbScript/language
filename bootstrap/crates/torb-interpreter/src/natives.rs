@@ -1040,7 +1040,8 @@ fn object_method(receiver: &Value, name: &str, arguments: &Arguments) -> Eval<Op
     let fields = object.info.fields_of(object.case);
     let mut copy = (**object).clone();
     if !arguments.positional.is_empty() {
-        return Err(failure("`copy` takes labeled arguments: `copy(x: 1)`"));
+        let name = fields.first().map_or("field", |field| field.name);
+        return Err(failure(format!("`copy` takes labeled arguments: `copy({name}: ...)`")));
     }
     for (label, value) in &arguments.labeled {
         match fields.iter().position(|field| field.name == *label) {

@@ -119,6 +119,7 @@ panic.
 | `matching.trb` | Everything a decision tree decides besides a case: literals, ranges, tuples, guards, bindings |
 | `match-order.trb` | The first arm that matches wins, a false guard falls through, and a guard runs only for its own arm |
 | `list-patterns.trb` | `[]`, `[only]`, `[first, second]`, `[first, ...rest]`, `[first, ..., last]`, a literal item |
+| `rest-patterns.trb` | `Config(host, ...)`: the `...` that stands for the fields a pattern does not name, and a labeled sub-pattern that names its own field |
 | `nested-list-patterns.trb` | A list pattern **inside** another one: in a case field, in a record field, in a tuple, inside another list, with a rest, under a guard, and in an instance of a generic |
 | `states.trb` | A state machine over unit cases, `if const` and `while const` |
 | `adts.trb` | A recursive algebraic data type and the decision trees over it |
@@ -177,6 +178,9 @@ panic.
 | `derived.trb` | The generated `Show`, `Equals` and `Hash` of a record, a case and a tuple |
 | `capsule.trb` | The capsule standard: private fields with no default, a `static fn` factory, accessors, and the one conversion pair in both directions |
 | `case-defaults.trb` | A case constructor whose field takes its default |
+| `constructor-values.trb` | The generated constructor as a function value: the labels and the defaults survive |
+| `module-destructuring.trb` | A top-level binding that destructures is one constant per name, each one its own part of the value |
+| `literal-union-show.trb` | A literal type is its base at run time: its `Show`, `Equals` and `Hash` are the base's |
 | `constants.trb` | Top-level `const`s of every shape, from a function and from the top level, and the mutated copy of one |
 | `generic-constants.trb` | A `const` of a generic type is one value per type argument, named after the arguments the read decided |
 | `show-compound.trb` | `Show` of everything compound, and of a type whose field carries the name of a member |
@@ -208,6 +212,7 @@ panic.
 | Program | What it pins |
 |---------|--------------|
 | `panic.trb` | `panic "..."`: the message, the site in the program, and that nothing after it runs |
+| `panic-after-output.trb` | Everything the program printed is written before the panic is |
 | `overflow.trb` | ``arithmetic overflow in `*` `` |
 | `negate-overflow.trb` | ``arithmetic overflow in `-` ``: the smallest `Int64` has no positive counterpart |
 | `division-by-zero.trb` | ``division by zero in `/` `` |

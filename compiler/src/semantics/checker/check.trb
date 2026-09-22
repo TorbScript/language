@@ -26,7 +26,7 @@ use settleChanges from "./mutation"
 use buildImplementations, checkCoherence, checkImplementations, extensionAt from "./implementation"
 use checkMemberImports from "./implementation"
 use scriptReceiverOf, checkReceiverScript from "./receiver"
-use checkShape from "./declaration"
+use checkShape, requireInhabitedType from "./declaration"
 use checkSpelling from "./spelling"
 
 /**
@@ -234,6 +234,9 @@ public fn checkDeclaration(var checker: Checker, scope: TypeScope, declaration: 
     }
     .Type(typeDeclaration) => {
       checkTypeBody checker, scope, typeDeclaration.name.span, typeDeclaration.members
+      if const Some(symbol) = checker.resolvedName(scope.module, typeDeclaration.name.span) {
+        requireInhabitedType checker, symbol, typeDeclaration.name.span
+      }
     }
     .Trait(traitDeclaration) => {
       checkTypeBody checker, scope, traitDeclaration.name.span, traitDeclaration.members
@@ -288,7 +291,7 @@ fn checkMembers(var checker: Checker, scope: TypeScope, known: Map<String, Symbo
     match member.kind {
       .Field(field) => {
         const annotation = typeFromReference checker, field.annotation, scope.forType()
-        checkDefault checker, scope, field.default, Some(annotation)
+        checkFieldDefault checker, scope, field.default, Some(annotation)
       }
       // The annotation of a `const` member is its signature; a `const` that got no id keeps the ordinary way
       .Constant(binding) => {
@@ -309,7 +312,7 @@ fn checkMembers(var checker: Checker, scope: TypeScope, known: Map<String, Symbo
       .Case(caseDeclaration) => {
         for field in caseDeclaration.fields {
           const annotation = typeFromReference checker, field.annotation, scope.forType()
-          checkDefault checker, scope, field.default, Some(annotation)
+          checkFieldDefault checker, scope, field.default, Some(annotation)
         }
       }
     }
@@ -365,6 +368,17 @@ fn checkDefaults(var checker: Checker, scope: TypeScope, function: FunctionDecla
     }
     checkDefault checker, scope, parameter.default, annotation
   }
+}
+
+/**
+ * The default of a **field**. It is evaluated without `self` and without the other fields, so a name that is a field
+ * of the same type is a mistake with a message of its own - which is what `isFieldDefault` is for.
+ */
+fn checkFieldDefault(var checker: Checker, scope: TypeScope, default: Expression?, annotation: TypeId?) {
+  const outer = checker.isFieldDefault
+  checker.isFieldDefault = true
+  checkDefault checker, scope, default, annotation
+  checker.isFieldDefault = outer
 }
 
 fn checkDefault(var checker: Checker, scope: TypeScope, default: Expression?, annotation: TypeId?) {

@@ -31,12 +31,15 @@ fn parseSinglePattern(var parser: Parser): Pattern {
       PatternKind.Wildcard
     }
     .Identifier => parseNameOrVariant parser
-    // `.Circle(radius)`, `.Empty`
+    // `.Circle(radius)`, `.Empty`, `.Rectangle(width, ...)`
     .Dot => {
       parser.bump()
       const name = parser.name()
-      const fields = if parser.eat(TokenKind.ParenOpen) { parseVariantFields parser } else { [] }
-      PatternKind.ImplicitVariant name, fields
+      if !parser.eat(TokenKind.ParenOpen) {
+        return Pattern PatternKind.ImplicitVariant(name, [], false), start.to(parser.previousSpan())
+      }
+      const written = parseVariantFields parser
+      PatternKind.ImplicitVariant name, written.fields, written.hasRest
     }
     .ParenOpen => {
       parser.bump()
@@ -66,11 +69,12 @@ fn parseNameOrVariant(var parser: Parser): PatternKind {
     path.add parser.name()
   }
   if parser.eat(TokenKind.ParenOpen) {
-    return PatternKind.Variant path, parseVariantFields(parser)
+    const written = parseVariantFields parser
+    return PatternKind.Variant path, written.fields, written.hasRest
   }
   // A name that starts with an uppercase letter is never a binding: it is a case the scope has to know (`None`)
   if path.length() > 1 || startsUpperCase(path[0].text) {
-    return PatternKind.Variant path, []
+    return PatternKind.Variant path, [], false
   }
   PatternKind.Binding path[0].text
 }
@@ -86,13 +90,39 @@ fn startsUpperCase(text: String): Bool {
   }
 }
 
-fn parseVariantFields(var parser: Parser): List<FieldPattern> {
-  parser.commaSeparated TokenKind.ParenClose, parseVariantField
+/** The fields a constructor pattern names, and whether it ends in the `...` that stands for the rest of them. */
+type WrittenFields {
+  fields: List<FieldPattern>
+  hasRest: Bool
 }
 
 /**
- * `Circle(radius: r)`: the label is kept, the type checker will verify it names the field at this position. Fields
- * are still matched by position, never by label.
+ * `Point(x, y)`, `Circle(radius: r)`, `Config(host, ...)`: the fields that are named, and the `...` that says the
+ * rest of them are not. A `...` comes last and comes once, which is the rule a list pattern has for its own.
+ */
+fn parseVariantFields(var parser: Parser): WrittenFields {
+  var hasRest = false
+  const written = parser.commaSeparated(TokenKind.ParenClose, { parser =>
+    if !parser.eat(TokenKind.Ellipsis) {
+      if hasRest {
+        const at = parser.span()
+        parser.error "A `...` comes last in a pattern: it stands for every field behind it", at
+      }
+      return Some parseVariantField(parser)
+    }
+    if hasRest {
+      const at = parser.previousSpan()
+      parser.error "A pattern can only have one `...`", at
+    }
+    hasRest = true
+    None
+  })
+  WrittenFields written.filterMap({ _ }).toList(), hasRest
+}
+
+/**
+ * `Circle(radius: r)`: the label is kept, and the type checker decides which field the sub-pattern matches - the
+ * positional ones from the left, the labeled ones by name.
  */
 fn parseVariantField(var parser: Parser): FieldPattern {
   var label: Name? = None

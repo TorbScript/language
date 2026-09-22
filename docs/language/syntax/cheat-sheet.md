@@ -119,8 +119,9 @@ _name                                        binds and keeps the name; nothing h
 Case(field)                                  an imported case; never binds
 .Case(field)                                 a case of the type being matched
 Type.Case(field)                             a case written out
-Type(field, other)                           a type read backwards
-Type(label: value)                           a label that has to name the field at that position
+Type(field, other)                           a type read backwards, field by field
+Type(label: value)                           a labeled sub-pattern; the labeled ones follow the positional ones
+Type(field, ...)                             `...` stands for every field the pattern does not name
 (a, b)                                       a tuple
 [first, ...rest]                             a list, with a rest
 []                                           the empty list

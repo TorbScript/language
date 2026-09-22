@@ -67,13 +67,62 @@ Self(<field>, ...)                   // The constructor, from inside the type
    ```
 
 2. **A field with a default value can be left out of the call**, positionally or by label. `Account "Ada"` leaves
-   `nickname` at `""`.
+   `nickname` at `""`. A field **without** a default is required, whatever its type: an optional field is `None` only
+   when it is written `= None`, because "may be absent" and "may be left out of the call" are two different promises
+   and only the declaration can make the second one.
 
-3. **A field default is evaluated at every construction, in a scope without `self` and without the other fields.** So
+   ```trb error
+   type Person {
+     name: String
+     nickname: String?
+   }
+
+   const wrong = Person("Ada")
+   // error: `Person` has no value for the field `nickname`
+   ```
+
+   The message says both ways out: write the absence at the call (`Person("Ada", nickname: None)`), or give the field
+   a default and leave it out everywhere (`nickname: String? = None`).
+
+   ```trb
+   type Person {
+     name: String
+     nickname: String? = None
+   }
+
+   print Person("Ada")
+   print Person("Alan", nickname: Some("al"))
+   ```
+
+3. **Positional arguments fill the fields from the left; a field with a default in the middle is passed over by
+   naming the one behind it.**
+
+   ```trb error
+   type Server {
+     host: String
+     port: Int = 80
+     retries: Int
+   }
+
+   const wrong = Server("a", 3)
+   // error: `Server` has no value for the field `retries`
+   ```
+
+   ```trb
+   type Server {
+     host: String
+     port: Int = 80
+     retries: Int
+   }
+
+   print Server("a", retries: 3)
+   ```
+
+4. **A field default is evaluated at every construction, in a scope without `self` and without the other fields.** So
    the order the fields are declared in is not observable from a default, and a default that depends on another field
    has to be a factory function instead of a field default.
 
-4. **The constructor is usable from outside the type if and only if every `private` field has a default.** A `private`
+5. **The constructor is usable from outside the type if and only if every `private` field has a default.** A `private`
    field with a default can be left out, and leaving it out is the only way outside code ever reaches this
    constructor.
 
@@ -87,7 +136,7 @@ Self(<field>, ...)                   // The constructor, from inside the type
    print session.token
    ```
 
-5. **Naming a `private` field is refused wherever it is named, including by position in the constructor.** Reaching
+6. **Naming a `private` field is refused wherever it is named, including by position in the constructor.** Reaching
    the constructor and naming one of its `private` fields are two different permissions - the first rule is about
    which fields have to be left out, this one is about what happens when they are not.
 
@@ -101,10 +150,10 @@ Self(<field>, ...)                   // The constructor, from inside the type
    // error: `hits` is private to `Session`, so it cannot be passed from here
    ```
 
-6. **Inside the type, `Self(...)` is the constructor and every field can be passed**, `private` ones included - that is
+7. **Inside the type, `Self(...)` is the constructor and every field can be passed**, `private` ones included - that is
    how `Email.tryFrom` builds the value nothing outside can.
 
-7. **Everything that is not the constructor is a static factory function**: a member of the type declared `static`. `Email.tryFrom` answers a `Result` because a constructor cannot fail; a factory can.
+8. **Everything that is not the constructor is a static factory function**: a member of the type declared `static`. `Email.tryFrom` answers a `Result` because a constructor cannot fail; a factory can.
 
 ## What this is not
 

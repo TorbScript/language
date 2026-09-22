@@ -19,7 +19,7 @@ use Expression, Argument, FunctionDeclaration, Field from "../../syntax/ast"
 use SymbolId from "../../semantics/symbols"
 use TypeId, TypeForm, ParameterId, Signature, FieldSignature from "../../semantics/checker/type"
 use substitute from "../../semantics/checker/unify"
-use Resolution, Dispatch from "../../semantics/checker/context"
+use Resolution, Dispatch, DefaultSource from "../../semantics/checker/context"
 use signatureOf, typeSignatureOf from "../../semantics/checker/signature"
 use fieldsOf from "../../semantics/checker/member"
 use NativeEntry, DerivedKind from "../../backend/c/natives"
@@ -1136,6 +1136,57 @@ fn readFieldOf(var lowering: Lowering, var builder: FunctionBuilder, base: Slot,
 }
 
 /** The default of a field, which is written in the declaration of its type. */
+/**
+ * The default of one parameter of a function **value**: `const makeConfig = Config` keeps the defaults of `Config`, so
+ * `makeConfig("h")` fills `port` with the default of that field. The declaration is the one the checker noted for the
+ * function type ([DefaultSource]); a constructor's defaults are its fields' and everything else's are its parameters'.
+ */
+public fn lowerDefaultOfSource(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  source: DefaultSource,
+  index: Int,
+  at: Span,
+): Slot? {
+  match source {
+    .Constructed(owner) => {
+      const fields = fieldsOf lowering.checker, owner
+      const field = match fields.get(index) {
+        Some(found) => found
+        None => {
+          reportUnsupported lowering, "a function value with a parameter that is no field", at
+          return None
+        }
+      }
+      const written = match fieldDefaultOf(lowering, field.symbol) {
+        Some(found) => found
+        None => {
+          reportUnsupported lowering, "a function value whose field has no default", at
+          return None
+        }
+      }
+      const substitution = ownerSubstitutionOf lowering, owner
+      Some lowerForeignExpression(lowering, builder, field.symbol, written, substitution)
+    }
+    .Declared(symbol) => {
+      const defaults = declaredDefaults lowering, symbol
+      const written = match defaults.get(index) ?? None {
+        Some(found) => found
+        None => {
+          reportUnsupported lowering, "a function value whose parameter has no default", at
+          return None
+        }
+      }
+      const empty: Map<ParameterId, TypeId> = [:]
+      Some lowerForeignExpression(lowering, builder, symbol, written, empty)
+    }
+    .Ambiguous => {
+      reportUnsupported lowering, "a function value whose defaults two declarations could have written", at
+      None
+    }
+  }
+}
+
 fn fieldDefaultOf(var lowering: Lowering, field: SymbolId): Expression? {
   const site = lowering.checker.siteOf(field)?
   if const .Owned(_, _, member) = site.kind {

@@ -89,16 +89,23 @@ group "Bindings" {
     assert(problems(source) == ["An exported `const` binds one name"])
   }
 
-  test "a label in a pattern has to name the field at that position" {
+  /**
+   * A pattern mirrors the constructor: a sub-pattern without a label fills the next field from the left, a labeled one
+   * names its own field, and the labeled ones follow the positional ones.
+   */
+  test "a positional sub-pattern in front of a labeled one, which is the order a call has" {
     const source = "type Point \{\n  x: Int\n  y: Int\n\}\n\n"
-      + "fn probe(place: Point) \{\n  const Point(y: across, x: down) = place\n\}"
-    assert(
-      problems(source) == ["This position is `x`, not `y`", "This position is `y`, not `x`"]
-    )
-    assert(
-      notes(source)
-        == ["The fields of a case are matched by position; a label has to name the field at that position"]
-    )
+      + "fn probe(place: Point) \{\n  const Point(y: across, x: down) = place\n  print across, down\n\}"
+    assert problems(source).isEmpty()
+    const wrong = "type Point \{\n  x: Int\n  y: Int\n\}\n\n"
+      + "fn probe(place: Point) \{\n  const Point(y: across, down) = place\n  print across, down\n\}"
+    assert(problems(wrong) == ["A pattern names the fields in order first, and by label after that"])
+  }
+
+  test "one field named twice" {
+    const source = "type Point \{\n  x: Int\n  y: Int\n\}\n\n"
+      + "fn probe(place: Point) \{\n  const Point(x: across, x: down) = place\n  print across, down\n\}"
+    assert(problems(source) == ["`x` already has a pattern"])
   }
 
   test "a case of a type that is not there" {
@@ -110,7 +117,7 @@ group "Bindings" {
   test "a case that is given the wrong number of patterns" {
     const source = "type Shape \{\n  case Circle(radius: Int)\n\}\n\n"
       + "fn probe(shape: Shape) \{\n  match shape \{\n    .Circle(_, _) => print \"circle\"\n  \}\n\}"
-    assert(problems(source) == ["`Circle` has 1 field, 2 patterns were given"])
+    assert(problems(source) == ["`Circle` has 1 field and this pattern names 2"])
   }
 
   test "an imported case is bare in a pattern, with fields and without" {

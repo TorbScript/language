@@ -343,11 +343,11 @@ fn pattern(node: &Pattern) -> String {
             list(items, pattern),
             option(rest, |rest| format!("RestPattern(position: {}, name: {})", rest.position, option(&rest.name, name))),
         ),
-        PatternKind::Variant { path, fields } => {
-            format!("Variant(path: {}, fields: {})", list(path, name), list(fields, field_pattern))
+        PatternKind::Variant { path, fields, has_rest } => {
+            format!("Variant(path: {}, fields: {}, hasRest: {has_rest})", list(path, name), list(fields, field_pattern))
         }
-        PatternKind::ImplicitVariant { name: case, fields } => {
-            format!("ImplicitVariant(name: {}, fields: {})", name(case), list(fields, field_pattern))
+        PatternKind::ImplicitVariant { name: case, fields, has_rest } => {
+            format!("ImplicitVariant(name: {}, fields: {}, hasRest: {has_rest})", name(case), list(fields, field_pattern))
         }
         PatternKind::Or(patterns) => format!("Alternatives(patterns: {})", list(patterns, pattern)),
         PatternKind::Error => "Invalid".to_string(),

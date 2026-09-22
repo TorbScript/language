@@ -155,6 +155,19 @@ public type Resolution {
 }
 
 /**
+ * Where the defaults of a **function value** come from. A default is an expression of a declaration and not part of a
+ * type, so a value of a function type only knows them while the declaration behind it is known.
+ */
+public type DefaultSource {
+  /** The generated constructor of a type: the defaults are the defaults of its fields. */
+  case Constructed(owner: TypeId)
+  /** A `fn`, a method or a case: the defaults are the ones its parameters declare. */
+  case Declared(symbol: SymbolId)
+  /** Two declarations mint the same function type, so a value of it says nothing about which defaults are meant. */
+  case Ambiguous
+}
+
+/**
  * Which of the three forms a property command is. There is no case where a line could mean two of them: a command on
  * a field writes it, and a trailing closure on one configures its value in place unless the field holds a function.
  */
@@ -802,6 +815,11 @@ public type Checker {
   /** Whether the body that is being checked is the statement sequence of a file. */
   var isTopLevel: Bool = false
   /**
+   * Whether the expression that is being checked is the default of a **field**. A default is evaluated without `self`
+   * and without the other fields, so a name that is a field of the same type has a message of its own there.
+   */
+  var isFieldDefault: Bool = false
+  /**
    * Whether `await()` is allowed where the checker stands: in a body whose declared result is a `Task<...>`, at the top
    * level of an entry file or a script, and inside every closure - a closure may be the body a callee runs *as* a task
    * (`spawn { ... }`, `Source.produce { sink => ... }`) and nothing in the language says which ones.
@@ -871,6 +889,18 @@ public type Checker {
    * every parameter, and the same member is read over and over - so the answer is kept.
    */
   var signatureTypes: Map<Int, TypeId> = [:]
+  /**
+   * Where a **function value** of a type finds its defaults, by the interned function type: `const make = Config` keeps
+   * the labels and the defaults of `Config`, and `make("h")` has to be able to reach them. A second declaration that
+   * mints the very same function type writes `Ambiguous` here, so a lookup either names one declaration or nothing.
+   */
+  var defaultSources: Map<Int, DefaultSource> = [:]
+  /**
+   * The types a value can be built of, by interned type id. Only `true` is kept: "a value of this exists" holds
+   * whatever the walk that asked already had on its path, while "it does not" is the answer of one walk and of the
+   * circle that walk was inside of.
+   */
+  var inhabitedTypes: Map<Int, Bool> = [:]
 
   // --- Traits and implementations -----------------------------------------------------------------------------------
 
@@ -1244,6 +1274,31 @@ public type Checker {
 
   fn flattenedOptionalAt(module: ModuleId, at: Span): Bool? {
     tables[module.value].flattenedOptionals.get(at)
+  }
+
+  /**
+   * Notes where a function value of this type would find its defaults. Two declarations that mint the same function
+   * type leave `Ambiguous` behind, whichever order they were seen in.
+   */
+  var fn noteDefaultSource(annotation: TypeId, source: DefaultSource) {
+    const known = defaultSources.get annotation.value
+    match known {
+      Some(found) => {
+        if found != source {
+          defaultSources.set annotation.value, DefaultSource.Ambiguous
+        }
+      }
+      None => defaultSources.set annotation.value, source
+    }
+  }
+
+  /** The one declaration a function value of this type carries the defaults of, if there is exactly one. */
+  fn defaultSourceOf(annotation: TypeId): DefaultSource? {
+    const found = defaultSources.get(annotation.value)?
+    if const .Ambiguous = found {
+      return None
+    }
+    Some found
   }
 
   /** A variable that was solved: every table of the statement is walked once at its end, through these. */

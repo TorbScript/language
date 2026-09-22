@@ -424,6 +424,48 @@ group "Diagnostics" {
     assert(problems("type Probe \{\n  field: String<Int>\n\}") == ["`String` takes no type arguments, 1 was given"])
   }
 
+  /**
+   * A value of a type that holds one of its own needs one before it can be made. A case is what breaks the circle, so
+   * `next: Node?` and a recursive type with a case that holds nothing are both fine.
+   */
+  test "a type that contains itself by value" {
+    const source = "type Node \{\n  value: Int\n  next: Node\n\}"
+    assert(problems(source) == ["`Node` contains itself, so no value of it can ever be built"])
+    assert(
+      notes(source)
+        == [
+          "`next: Node` holds another `Node`, and that one holds another. Write the step as `Node?`, put it in a"
+            + " `List<Node>`, or give `Node` a case that holds no `Node`",
+        ]
+    )
+  }
+
+  test "a circle of two types is the same mistake, and an `Option` or a list breaks it" {
+    assert(
+      problems("type First \{\n  second: Second\n\}\n\ntype Second \{\n  first: First\n\}")
+        == [
+          "`First` contains itself, so no value of it can ever be built",
+          "`Second` contains itself, so no value of it can ever be built",
+        ]
+    )
+    assert problems("type Link \{\n  value: Int\n  next: Link? = None\n\}").isEmpty()
+    assert problems("type Tree \{\n  value: Int\n  children: List<Tree> = []\n\}").isEmpty()
+    assert problems("type Chain \{\n  case Node(value: Int, next: Chain)\n  case End\n\}").isEmpty()
+  }
+
+  /** A field default is evaluated on its own, so the order the fields are declared in is not observable from one. */
+  test "a field default that reads another field" {
+    const source = "type Bag \{\n  items: List<Int>\n  length: Int = items.length()\n\}"
+    assert(problems(source) == ["A field default cannot read the field `items`"])
+    assert(
+      notes(source)
+        == [
+          "Every default is evaluated on its own, so the order of the fields is not observable. A value that is"
+            + " computed from another field is made by a `static fn` factory",
+        ]
+    )
+  }
+
   test "a type parameter is a type, not a type constructor" {
     assert(
       problems("type Holder<Item> \{\n  field: Item<Int>\n\}")

@@ -438,10 +438,10 @@ public type PatternKind {
   case TuplePattern(items: List<Pattern>)
   /** `[first, ...rest]` */
   case ListPattern(items: List<Pattern>, rest: RestPattern?)
-  /** `Some(x)`, `Shape.Circle(radius)`, `Point(x, y)` */
-  case Variant(path: List<Name>, fields: List<FieldPattern>)
-  /** `.Circle(radius)`, `.Empty`: a case of the type of the value */
-  case ImplicitVariant(name: Name, fields: List<FieldPattern>)
+  /** `Some(x)`, `Shape.Circle(radius)`, `Point(x, y)`, `Config(host, ...)` */
+  case Variant(path: List<Name>, fields: List<FieldPattern>, hasRest: Bool = false)
+  /** `.Circle(radius)`, `.Empty`, `.Rectangle(width, ...)`: a case of the type of the value */
+  case ImplicitVariant(name: Name, fields: List<FieldPattern>, hasRest: Bool = false)
   /** `1 | 2 | 3` */
   case Alternatives(patterns: List<Pattern>)
   case Invalid
@@ -455,8 +455,9 @@ public type RestPattern {
 }
 
 /**
- * `Point(x: 0, y: 0)`: the label is documentation today. The type checker will verify that it names the field at
- * this position; fields are still matched by position, never by label.
+ * `Point(x: 0, y: 0)`: one sub-pattern, with the label it was written with. Which field it matches is the type
+ * checker's answer: a sub-pattern without a label fills the next field from the left and a labeled one names its
+ * own, exactly as an argument of the constructor does.
  */
 public type FieldPattern {
   label: Name?

@@ -16,6 +16,7 @@
 
 use Span from "../syntax/source"
 use Expression, Argument, TextSegment, PrefixOperator, InfixOperator from "../syntax/ast"
+use Pattern, FieldPattern from "../syntax/ast"
 use SymbolId from "../semantics/symbols"
 use LiteralValue, TypeId, ParameterId from "../semantics/checker/type"
 use bindingOfSite, resultOf, signatureOf from "../semantics/checker/signature"
@@ -586,10 +587,95 @@ public fn staticOfConstant(var lowering: Lowering, symbol: SymbolId, owner: Type
   const value = evaluateConstant lowering, binding.value
   lowering.module = outer
   lowering.substitution = around
-  const found = value?
+  const whole = value?
+  // `const Point(x, y) = Point(1, 2)`: the names share one initializer, and each of them is one field of what it
+  // evaluates to. Without this every name of the binding would be the whole value under its own type
+  const declaredAt = lowering.checker.symbolAt(symbol).span
+  const found = componentOfBinding(lowering, binding.pattern, declaredAt, whole)?
   const identifier = namedStatic lowering, name, found.contents, annotation
   lowering.constants.set instance.key, identifier
   Some identifier
+}
+
+/**
+ * The part of a compile-time value that one name of a destructuring binding stands for. A pattern that is a plain name
+ * is the whole value, and every other one is a walk into the fields of the aggregate, position by position.
+ */
+fn componentOfBinding(
+  var lowering: Lowering,
+  pattern: Pattern,
+  at: Span,
+  whole: ConstantValue,
+): ConstantValue? {
+  const steps = fieldPathTo(pattern, at)?
+  var found = whole
+  for step in steps {
+    const (_, _, fields) = match found.contents {
+      .Aggregate(layout, variant, given) => (layout, variant, given)
+      _ => {
+        return None
+      }
+    }
+    const identifier = fields.get(step)?
+    if !lowering.program.hasStatic(identifier) {
+      return None
+    }
+    const inner = lowering.program.staticAt identifier
+    found = ConstantValue inner.contents, inner.annotation
+  }
+  Some found
+}
+
+/**
+ * The field positions that lead from the value of a binding to the name declared at `at`: empty for a pattern that is
+ * the name itself, `[1]` for the `y` of `Point(x, y)`, and one step per level for a pattern inside a pattern.
+ */
+public fn fieldPathTo(pattern: Pattern, at: Span): List<Int>? {
+  match pattern.kind {
+    .Binding(_) => {
+      if pattern.span.start == at.start {
+        const whole: List<Int> = []
+        return Some whole
+      }
+      None
+    }
+    .TuplePattern(items) => pathIntoPatterns items, at
+    .Variant(_, fields, _) => pathIntoFields fields, at
+    .ImplicitVariant(_, fields, _) => pathIntoFields fields, at
+    _ => None
+  }
+}
+
+fn pathIntoPatterns(items: List<Pattern>, at: Span): List<Int>? {
+  for index in 0..items.length() {
+    if const Some(inner) = fieldPathTo(items[index], at) {
+      var steps = [index]
+      steps.addAll inner
+      return Some steps
+    }
+  }
+  None
+}
+
+/**
+ * A **labeled** sub-pattern names the field it matches rather than the position it stands in, and which field that is
+ * only the checker knows - so a binding that writes one has no static path here and takes the ordinary route through
+ * a constant cell, where the pattern is taken apart by the plan the checker recorded.
+ */
+fn pathIntoFields(fields: List<FieldPattern>, at: Span): List<Int>? {
+  for field in fields {
+    if field.label.isSome() {
+      return None
+    }
+  }
+  for index in 0..fields.length() {
+    if const Some(inner) = fieldPathTo(fields[index].pattern, at) {
+      var steps = [index]
+      steps.addAll inner
+      return Some steps
+    }
+  }
+  None
 }
 
 // --- Reading a value ------------------------------------------------------------------------------------------------

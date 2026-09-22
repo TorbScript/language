@@ -79,6 +79,12 @@ static TORB_NORETURN void torb_finish_panic(const char *message, torb_location a
   if (torb_hook != NULL) {
     torb_hook(buffer);
   }
+  /*
+   * Everything the program printed comes first. Standard output is buffered when it is a pipe or a file, standard
+   * error is not, so without this the two streams of a program that panics arrive in the wrong order: the panic on
+   * top and the output of the lines that ran before it underneath.
+   */
+  fflush(stdout);
   /* The same path `print` takes: a console sees the message as the text it is, a pipe sees exactly these bytes */
   torb_write_line_error(buffer, strlen(buffer));
   fflush(stderr);

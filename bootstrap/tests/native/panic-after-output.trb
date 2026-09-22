@@ -1,0 +1,23 @@
+/**
+ * **Everything a program printed before it panicked is written before the panic is.** A panic is a report about a
+ * program that already ran, so the lines it ran come first: standard output is flushed before the two lines of the
+ * panic go to standard error.
+ *
+ * What the runner here compares is the two streams apart; the order between them is asserted in
+ * `bootstrap/crates/torb-cli/tests/native.rs`, which runs this very program with both of them in one file.
+ */
+
+type Fragile {
+  safe: Int = 1
+  risky: Int = refuse()
+}
+
+fn refuse(): Int {
+  panic "a default that panics"
+}
+
+print "before"
+print Fragile(risky: 2)
+print "after the default was passed over"
+print Fragile()
+print "never reached"

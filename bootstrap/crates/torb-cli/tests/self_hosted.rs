@@ -169,6 +169,39 @@ fn an_uppercase_pattern_name_that_is_no_case_fails_loudly() {
     assert!(problem.contains("`Nome` is not a case in scope"), "{problem}");
 }
 
+/// Stage 0 has no checker, so what the type checker refuses about a **constructor call** has to be refused where the
+/// call runs: one field with two values, a `...` into a constructor - which has no variadic field to collect one -
+/// and a positional argument to `copy`, which changes the fields it is given and keeps the rest.
+#[test]
+fn a_constructor_call_stage_0_runs_is_refused_where_the_checker_refuses_it() {
+    let cases = [
+        ("Point(x: 1, x: 2)", "`x` already has an argument"),
+        ("Point(...values)", "`x` is not a variadic parameter, so `...` cannot spread into it"),
+        ("Point(1, 2).copy(5)", "`copy` takes labeled arguments: `copy(x: ...)`"),
+    ];
+    for (written, expected) in cases {
+        let script = std::env::temp_dir().join(format!("torb-constructor-{}-{}.trb", std::process::id(), expected.len()));
+        let source = format!(
+            "type Point {{
+  x: Int
+  y: Int = 0
+}}
+
+const values = [1, 2]
+print values.length()
+print {written}
+"
+        );
+        std::fs::write(&script, source).expect("a writable scratch file");
+        let output =
+            Command::new(env!("CARGO_BIN_EXE_torb")).args(["run", script.to_str().expect("UTF-8 path")]).output().expect("torb runs");
+        let _ = std::fs::remove_file(&script);
+        assert!(!output.status.success(), "expected `{written}` to fail, printed {}", String::from_utf8_lossy(&output.stdout));
+        let problem = String::from_utf8_lossy(&output.stderr);
+        assert!(problem.contains(expected), "`{written}` said {problem}");
+    }
+}
+
 #[test]
 fn the_tests_of_the_compiler_pass() {
     let tests = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../compiler/tests");

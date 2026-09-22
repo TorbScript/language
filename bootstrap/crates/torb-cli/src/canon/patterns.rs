@@ -25,7 +25,7 @@ pub fn edits(source: &str, file: &File, patterns: &[&Pattern]) -> Vec<Edit> {
     let mut edits: Vec<Edit> = patterns
         .iter()
         .filter_map(|pattern| {
-            let PatternKind::ImplicitVariant { name, fields } = &pattern.kind else { return None };
+            let PatternKind::ImplicitVariant { name, fields, .. } = &pattern.kind else { return None };
             // Only a case without a payload: `.Some(x)` is already written the way the parser reads it
             if !fields.is_empty() || !imported.contains(&name.text) {
                 return None;

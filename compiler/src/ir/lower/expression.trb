@@ -36,7 +36,7 @@ use lowerCall, lowerOperator, lowerConstruct, lowerCaseValue from "./call"
 use objectTypeOf, lowerTraitValue, closedBounds from "./generic"
 use lowerBlockInto from "./statement"
 use lowerListLiteral, lowerMapLiteral, lowerIndexRead from "./collection"
-use lowerMatch, lowerIfBinding, lowerTry, lowerCoalesce, lowerOptionalMember from "./match"
+use lowerMatch, lowerIfBinding, lowerTry, lowerCoalesce, lowerOptionalMember, lowerPatternBinding from "./match"
 use variantLayoutOfType from "./match"
 use lowerClosureValue, lowerNamedFunctionValue, lowerForcedRead, bindingReferenceOf from "./closure"
 use savedFrame, restoreFrame, enterBody from "./closure"
@@ -711,7 +711,8 @@ fn loweredConstantInitializer(var lowering: Lowering, constant: LoweredConstant)
   lowering.inlinedConstants.set constant.instance.key, true
   const location = locationOf lowering, value.span
   setBlockLocation inner, BlockId(0), Some(location)
-  const slot = lowerExpression lowering, inner, value, None
+  const built = lowerExpression lowering, inner, value, None
+  const slot = destructuredSlot lowering, inner, constant, built, value.span
   const produced = inner.function.typeOfSlot slot
   if lowering.isSupported && !lowering.isDiverged {
     finishBlock lowering, inner, Terminator.Return(Some(borrowed(slot)))
@@ -726,6 +727,33 @@ fn loweredConstantInitializer(var lowering: Lowering, constant: LoweredConstant)
   const written = inner.function
   inner.function = written.copy signature: IrSignature([], produced)
   Some finishFunction(lowering.program, inner)
+}
+
+/**
+ * `const Point(x, y) = Point(1, 2)` at the top of a module: the names share one initializer, so each of them is one
+ * constant that builds the whole value and keeps its own part of it. The value is taken apart exactly as a
+ * destructuring binding in a body is, and the slot the pattern bound this name into is what the constant produces.
+ */
+fn destructuredSlot(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  constant: LoweredConstant,
+  source: Slot,
+  at: Span,
+): Slot {
+  const pattern = constant.binding.pattern
+  if const .Binding(_) = pattern.kind {
+    return source
+  }
+  lowerPatternBinding lowering, builder, pattern, source, at
+  const declared = lowering.checker.symbolAt(constant.symbol).span
+  match lowering.slots.get(declared) {
+    Some(found) => found
+    None => {
+      reportUnsupported lowering, "a top-level binding that takes a value apart", at
+      source
+    }
+  }
 }
 
 /** What the initializer of one constant is built from: everything that is known before its body is walked. */

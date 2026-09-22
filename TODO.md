@@ -2762,6 +2762,26 @@ Wenn nicht, was bedeutet, bewirkt es?
     Features. (e) Offen bleibt danach nur NORMALISIERUNG/VALIDIERUNG bei offenem Konstruktor - dazu mache ich dir
     einen eigenen Vorschlag, wenn du (d) gesehen hast.
 
+  - **Erledigt (Runde "Konstruktor-Bugs + `...` im Pattern"):** (1) positionales `copy` wird vom Typprüfer
+    abgelehnt, mit derselben Meldung wie Stage 0; (2) ein Typ, der sich selbst enthält, ist ein Fehler an der
+    Deklaration (Bewohnbarkeit als kleinster Fixpunkt, eine `case` bricht den Kreis); (3) die Bounds eines Typs
+    reisen am Konstruktor-Target mit und werden am Aufruf geprüft; (4) beide ICE-Pfade haben eigene Meldungen
+    (`Shape.Empty()` ist ein Wert, `Item()` ist ein Typparameter); (5) eine Modul-Destrukturierung ist pro Namen
+    EIN Feld des Werts - sowohl als statische Daten als auch über die Konstanten-Zelle; (6) ein Literal-Union-Typ
+    löst seine Traits über seine BASIS auf, also `String.show` statt eines generierten; (7) die Runtime flusht
+    stdout vor der Panik-Zeile; (8) die Aritätsmeldung eines Konstruktoraufrufs nennt die Felder, sagt "required
+    vs. mit Default" und schlägt bei einem übersprungenen Default den Aufruf mit Label vor, und ein unbekanntes
+    Label erzeugt nur noch EINEN Fehler mit einem noch freien Feld als Vorschlag; (9) die kleinen Meldungsfehler
+    ("N fields and this pattern names M", "field" statt "parameter", `static fn`-Factory statt `tryFrom` beim
+    `shared type`, "wo der Typ deklariert ist" statt "inside of X"); (10) Stage 0 lehnt doppeltes Label und Spread
+    im Konstruktor mit denselben Meldungen ab; (11) ein Konstruktor als Funktionswert behält Labels UND Defaults
+    auch nativ (`Checker.defaultSourceOf` merkt sich die Deklaration je Funktionstyp, mehrdeutig = klarer Befund).
+    Dazu die Entscheidungen: optionales Feld ohne Default bleibt Pflicht (Meldung zeigt beide Wege), `...` im
+    Pattern in beiden Parsern/Prüfern/Stage 0/Highlighting/TextMate, ein Pattern spiegelt jetzt ganz den
+    Konstruktor (Label benennt sein Feld, Labels hinter den positionalen), generiertes `Show` druckt alle Felder
+    (geprüft, stimmte schon), Feld-Default liest kein anderes Feld (neue Meldung mit `static fn`-Hinweis),
+    privates Feld darf nicht heißen wie eine Methode (geprüft, Meldung schlägt jetzt Umbenennen vor).
+
 - (`project.trb` - Entscheidungen zu `docs/PROJECT.md`, 2026-09-22) **Entschieden (Nutzer: "deine Punkte passen so"):**
   1. **Programme stehen in der Konfiguration, nicht in einer Pfad-Konvention** (kommt selten vor und blockiert sonst
      Namen): `src/main.trb` bleibt das eine semantische Default-Programm; weitere per

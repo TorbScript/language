@@ -25,12 +25,12 @@ impl Parser<'_> {
                 PatternKind::Wildcard
             }
             TokenKind::Identifier => self.name_or_variant_pattern(),
-            // `.Circle(radius)`, `.Empty`
+            // `.Circle(radius)`, `.Empty`, `.Rectangle(width, ...)`
             TokenKind::Dot => {
                 self.bump();
                 let name = self.name();
-                let fields = if self.eat(TokenKind::ParenOpen) { self.variant_fields() } else { Vec::new() };
-                PatternKind::ImplicitVariant { name, fields }
+                let (fields, has_rest) = if self.eat(TokenKind::ParenOpen) { self.variant_fields() } else { (Vec::new(), false) };
+                PatternKind::ImplicitVariant { name, fields, has_rest }
             }
             TokenKind::ParenOpen => {
                 self.bump();
@@ -64,26 +64,42 @@ impl Parser<'_> {
             path.push(self.name());
         }
         if self.eat(TokenKind::ParenOpen) {
-            return PatternKind::Variant { path, fields: self.variant_fields() };
+            let (fields, has_rest) = self.variant_fields();
+            return PatternKind::Variant { path, fields, has_rest };
         }
         // A name that starts with an uppercase letter is never a binding: it is a case the scope has to know (`None`)
         if path.len() > 1 || starts_upper_case(&path[0].text) {
-            return PatternKind::Variant { path, fields: Vec::new() };
+            return PatternKind::Variant { path, fields: Vec::new(), has_rest: false };
         }
         PatternKind::Name(path.remove(0).text)
     }
 
-    /// The fields of `Circle(radius: r)`: the label is kept, the type checker will verify it names the field at
-    /// this position. Fields are still matched by position, never by label.
-    fn variant_fields(&mut self) -> Vec<FieldPattern> {
-        self.comma_separated(TokenKind::ParenClose, |parser| {
+    /// The fields of `Circle(radius: r)` and the `...` of `Config(host, ...)`: the label is kept, and the type
+    /// checker decides which field a sub-pattern matches. A `...` comes last and comes once - the rule a list
+    /// pattern has for its own.
+    fn variant_fields(&mut self) -> (Vec<FieldPattern>, bool) {
+        let mut has_rest = false;
+        let written = self.comma_separated(TokenKind::ParenClose, |parser| {
+            if parser.eat(TokenKind::Ellipsis) {
+                if has_rest {
+                    let span = parser.previous_span();
+                    parser.error("A pattern can only have one `...`", span);
+                }
+                has_rest = true;
+                return None;
+            }
+            if has_rest {
+                let span = parser.span();
+                parser.error("A `...` comes last in a pattern: it stands for every field behind it", span);
+            }
             let label = (*parser.kind() == TokenKind::Identifier && *parser.kind_at(1) == TokenKind::Colon).then(|| {
                 let label = parser.name();
                 parser.bump();
                 label
             });
-            FieldPattern { label, pattern: parser.pattern() }
-        })
+            Some(FieldPattern { label, pattern: parser.pattern() })
+        });
+        (written.into_iter().flatten().collect(), has_rest)
     }
 
     /// `[]`, `[first, second]`, `[first, ...rest]`, `[..., last]`

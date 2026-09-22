@@ -10,8 +10,10 @@ const connect = "fn connect(host: String, port: Int = 80, timeout: Int = 30): In
 
 const largest = "fn largest(first: Int, ...rest: Int): Int \{\n  first\n\}\n\n"
 
+const skipping = "fn skipping(host: String, port: Int = 80, retries: Int): Int \{\n  port + retries\n\}\n\n"
+
 fn inBody(body: String): String {
-  "{connect}fn probe() \{\n{body}\n\}"
+  "{connect}{skipping}fn probe() \{\n{body}\n\}"
 }
 
 group "Calling a function" {
@@ -56,8 +58,21 @@ group "Calling a function" {
 
   test "too many and too few arguments" {
     assert(problems(inBody("  const port = connect()")) == ["`connect` takes 1 argument, none were given"])
+    // Two of the three parameters have a default, so what a surplus argument is too many for is the whole list
     assert(
-      problems(inBody("  const port = connect(\"a\", 1, 2, 3)")) == ["`connect` takes 1 argument, 4 were given"]
+      problems(inBody("  const port = connect(\"a\", 1, 2, 3)"))
+        == ["`connect` takes at most 3 arguments, 4 were given"]
+    )
+  }
+
+  /**
+   * `connect("a", 1)` of `fn connect(host: String, port: Int = 80, timeout: Int = 5)` is two arguments for a function
+   * that takes one, and `timeout` still has its default - so counting says nothing here and the message names what is
+   * empty instead.
+   */
+  test "a parameter behind one with a default that was filled positionally" {
+    assert(
+      problems(inBody("  const port = skipping(\"a\", 1)")) == ["`skipping` has no argument for `retries`"]
     )
   }
 
@@ -150,7 +165,7 @@ group "Constructors, cases and `copy`" {
   }
 
   test "a field that does not exist" {
-    assert(problems("{point}fn probe(): Point \{\n  Point(1, z: 2)\n\}") == ["`Point` has no parameter `z`"])
+    assert(problems("{point}fn probe(): Point \{\n  Point(1, z: 2)\n\}") == ["`Point` has no field `z`"])
   }
 
   test "`Self` constructs the type it stands in" {
@@ -179,6 +194,88 @@ group "Constructors, cases and `copy`" {
   test "the field of a case is checked like any other argument" {
     const source = "type Shape \{\n  case Circle(radius: Int)\n\}\n\nfn probe(): Shape \{\n  Shape.Circle(\"two\")\n\}"
     assert(problems(source) == ["Expected `Int64`, found `String`"])
+  }
+
+  /** `copy` changes the fields it is given and keeps the rest, so a positional argument has no meaning there. */
+  test "`copy` takes labeled arguments and nothing else" {
+    const source = "{point}fn probe(place: Point): Point \{\n  place.copy(3)\n\}"
+    assert(problems(source) == ["`copy` takes labeled arguments: `copy(x: ...)`"])
+    assert(
+      notes(source) == ["`copy` changes the fields it is given and keeps the rest, so every one of them is named"]
+    )
+  }
+
+  /** Every mistake that leaves a field empty names the field, because the counts alone cannot say what is wrong. */
+  test "a constructor call that leaves a field empty names it, and says which fields have a default" {
+    const config = "type Config \{\n  host: String\n  port: Int = 80\n  secure: Bool = false\n\}\n\n"
+    const source = "{config}fn probe(): Config \{\n  Config()\n\}"
+    assert(problems(source) == ["`Config` has no value for the field `host`"])
+    assert(
+      notes(source) == ["Required: `host`. With a default, and so optional: `port` and `secure`"]
+    )
+  }
+
+  test "a positional argument that filled a defaulted field, with the call that was meant" {
+    const middle = "type Middle \{\n  a: Int\n  b: Int = 2\n  c: Int\n\}\n\n"
+    const source = "{middle}fn probe(): Middle \{\n  Middle(1, 3)\n\}"
+    assert(problems(source) == ["`Middle` has no value for the field `c`"])
+    assert(
+      notes(source)
+        == [
+          "A positional argument fills the next field in order, and `b` has a default: name the field to pass it over"
+            + " (`Middle(..., c: ...)`)",
+          "Required: `a` and `c`. With a default, and so optional: `b`",
+        ]
+    )
+  }
+
+  /**
+   * An optional field without a default stays required: "may be absent" and "may be left out of the call" are two
+   * promises, and only the declaration makes the second one.
+   */
+  test "an optional field without a default is required, and the message shows both fixes" {
+    const person = "type Person \{\n  name: String\n  nickname: String?\n\}\n\n"
+    const source = "{person}fn probe(): Person \{\n  Person(\"Ada\")\n\}"
+    assert(problems(source) == ["`Person` has no value for the field `nickname`"])
+    assert(
+      notes(source)
+        == [
+          "`nickname` is optional in `Person` and has no default, so it is still required: write `nickname: None`"
+            + " here, or give the field one (`nickname: String? = None`)",
+          "Every field is required here: `name` and `nickname`",
+        ]
+    )
+  }
+
+  test "too many arguments say what the whole list can take, not only what is required" {
+    const config = "type Config \{\n  host: String\n  port: Int = 80\n\}\n\n"
+    const source = "{config}fn probe(): Config \{\n  Config(\"a\", 1, 2)\n\}"
+    assert(problems(source) == ["`Config` has 2 fields, 3 arguments were given"])
+  }
+
+  /** `Shape.Empty` is the value itself, and used to leave the call without a type at all. */
+  test "a case without fields, called" {
+    const source = "type Shape \{\n  case Circle(radius: Int)\n  case Empty\n\}\n\n"
+      + "fn probe(): Shape \{\n  Shape.Empty()\n\}"
+    assert(problems(source) == ["`Shape.Empty` has no fields, so it is a value and not a function"])
+    assert(notes(source) == ["Write it without the parentheses: `Shape.Empty`"])
+  }
+
+  /** A type parameter stands for a type the caller chooses, so its constructor is not in scope here. */
+  test "a type parameter, called" {
+    const source = "fn make<Item>(): Item \{\n  Item()\n\}"
+    assert(problems(source) == ["`Item` is a type parameter, so it has no constructor here"])
+  }
+
+  /** The bound on a type's own parameter holds at a constructor call too, where the argument is inferred. */
+  test "a type argument of a constructor call that does not satisfy the bound" {
+    // The type itself is named nowhere, so the walk over the type positions of the module sees nothing: what reports
+    // this is the call, where the argument was inferred
+    const source = "trait Weigh \{\n  fn weight(): Int\n\}\n\n"
+      + "type Heavy<Item: Weigh> \{\n  item: Item\n\}\n\ntype Feather \{\}\n\n"
+      + "fn probe() \{\n  const wrong = Heavy(Feather())\n  print wrong.item\n\}"
+    assert(problems(source) == ["`Feather` does not implement `Weigh`"])
+    assert(notes(source) == ["`Heavy` asks for it"])
   }
 }
 

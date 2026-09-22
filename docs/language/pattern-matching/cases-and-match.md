@@ -133,8 +133,26 @@ match <subject> {
 8. **An arm that can never be reached is an error.** Like a dead change and a discarded value, an unreachable arm is
    always a mistake rather than a defensive line.
 
-9. **Fields are matched by position, and a label that is present has to name the field at that position.**
-   `Point(y: 0, x: 1)` is an error, not a silent swap.
+9. **A pattern mirrors the constructor.** A sub-pattern without a label fills the next field from the left, a labeled
+   one names the field it matches, and the labeled ones follow the positional ones - the rule the arguments of a call
+   follow. A pattern that does not name every field ends in `...`:
+
+   ```trb
+   type Config {
+     host: String
+     port: Int
+     secure: Bool
+   }
+
+   fn described(config: Config): String {
+     match config {
+       Config(port: 443, ...) => "the secure port"
+       Config(host, ...) => "over {host}"
+     }
+   }
+
+   print described(Config("a", 80, false))
+   ```
 
 10. **Directly inside the braces of a `match`, a line that starts with `.` starts an arm.** Everywhere else a leading
     `.` continues the line above. So the value of an arm that spans a call chain goes into a block:

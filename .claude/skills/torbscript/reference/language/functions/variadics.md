@@ -86,7 +86,7 @@ fn <name>(..., ...<name>: <Type>): <ReturnType> { ... }
    }
 
    print describe(1, 2, "totals")
-   // error: `describe` takes 1 argument, 3 were given
+   // error: `describe` has no argument for `label`
    ```
 
 ## What this is not

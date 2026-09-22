@@ -615,6 +615,8 @@ and a function *type* still names it: `(self: Point) => Int` and `(var self: Con
 | `fn of(): Self` inside a type body | `static fn of(): Self` | without `static` it is a method |
 | `const origin = Point(0, 0)` in a type body | `static origin = Point(0, 0)` | `const` in a type body is a field |
 | `type point`, `fn Distance` | `type Point`, `fn distance` | the first letter of a name is a rule, not a convention |
+| `Config(host)` for a type of three fields | `Config(host, ...)` | a pattern that does not name every field ends in `...` |
+| `Person("Ada")` where `nickname: String?` | `Person("Ada", nickname: None)` | an optional field without a default is required |
 
 ### How to check yourself
 

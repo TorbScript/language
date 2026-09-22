@@ -48,8 +48,9 @@ _name                             binds and keeps the name as documentation; not
 <name> if <condition>             binds, and requires the guard to hold as well
 _                                  matches anything, binds nothing
 (<pattern>, <pattern>, ...)       a tuple, matched by position
-Type(<pattern>, ...)              a case of the matched type, or the one constructor of `Type`, by position
-Type(<field>: <pattern>, ...)     the same, with the field named; the label has to match the field at that position
+Type(<pattern>, <pattern>)        a case of the matched type, or the one constructor of `Type`, field by field
+Type(<field>: <pattern>)          the same, with the field named; the labeled ones follow the positional ones
+Type(<pattern>, ...)              a trailing `...` stands for every field the pattern does not name
 [<pattern>, ...]                  a list of exactly that many items
 [<pattern>, ..., ...rest]         a list of at least that many items; `rest` binds what is between as a `List`
 ```
@@ -177,11 +178,66 @@ Type(<field>: <pattern>, ...)     the same, with the field named; the label has 
    print quadrant((1, 1))
    ```
 
-8. **`Type(...)` matches a case of the matched type, or reads the one constructor of a type backwards**, matching its
-   fields by position exactly as [Cases and match](cases-and-match.md) describes for `.Case(...)`. A label in front of
-   a field pattern has to name the field at that position; it never reorders anything.
+8. **`Type(...)` matches a case of the matched type, or reads the one constructor of a type backwards.** A pattern
+   mirrors the constructor: a sub-pattern without a label fills the next field from the left, a labeled one names the
+   field it matches, and the labeled ones follow the positional ones - the very rule the arguments of a call follow.
 
-9. **A list pattern `[p1, p2, ...]` matches a list of exactly that many items.** `[p1, ...rest]` matches a list of at
+   ```trb check
+   type Config {
+     host: String
+     port: Int
+     secure: Bool
+   }
+
+   fn described(config: Config): String {
+     match config {
+       Config(host, 443, true) => "{host}, secure"
+       Config(host, port, secure: false) => "{host}:{port}"
+       _ => "?"
+     }
+   }
+
+   print described(Config("a", 443, true))
+   ```
+
+9. **A pattern that does not name every field ends in `...`.** The `...` stands for the fields behind the ones that
+   are named, it decides nothing, and it comes last and comes once. Without it a field added to a type would break
+   every pattern over that type; with it a pattern says which of the two it means - the fields I need, or all of them.
+
+   ```trb check
+   type Config {
+     host: String
+     port: Int
+     secure: Bool
+   }
+
+   fn described(config: Config): String {
+     match config {
+       Config(port: 443, ...) => "the secure port"
+       Config(host, ...) => "over {host}"
+     }
+   }
+
+   print described(Config("a", 80, false))
+   ```
+
+   ```trb error
+   type Config {
+     host: String
+     port: Int
+     secure: Bool
+   }
+
+   fn hostOf(config: Config): String {
+     match config {
+       Config(host) => host
+     }
+   }
+   print hostOf(Config("a", 80, false))
+   // error: `Config` has 3 fields and this pattern names 1
+   ```
+
+10. **A list pattern `[p1, p2, ...]` matches a list of exactly that many items.** `[p1, ...rest]` matches a list of at
    least that many, and `rest` binds everything from that position on as a `List` of the item type. An item can also
    follow the rest - `[first, ...middle, last]` - in which case it is matched counting from the back, and the pattern
    needs a `_` arm alongside it: the checker does not fold "at least this many, from both ends" into the exhaustiveness

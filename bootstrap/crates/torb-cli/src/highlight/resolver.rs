@@ -877,7 +877,7 @@ impl Resolver {
                 }
             }
             PatternKind::Or(alternatives) => alternatives.iter().for_each(|item| self.pattern(item, role, is_var)),
-            PatternKind::Variant { path, fields } => {
+            PatternKind::Variant { path, fields, .. } => {
                 self.variant_pattern_path(path);
                 for field in fields {
                     if let Some(label) = &field.label {
@@ -886,7 +886,7 @@ impl Resolver {
                     self.pattern(&field.pattern, role, is_var);
                 }
             }
-            PatternKind::ImplicitVariant { name, fields } => {
+            PatternKind::ImplicitVariant { name, fields, .. } => {
                 self.push(name.span, "enumMember", &self.prelude_modifiers(&name.text));
                 for field in fields {
                     if let Some(label) = &field.label {

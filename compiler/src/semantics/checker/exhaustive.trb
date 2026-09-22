@@ -18,10 +18,10 @@ use Span from "../../syntax/source"
 use Diagnostic from "../../syntax/diagnostic"
 use Pattern, FieldPattern, RestPattern, MatchArm, Expression from "../../syntax/ast"
 use SymbolId from "../symbols"
-use TypeId, LiteralValue, literalKey, describeLiteral from "./type"
+use TypeId, FieldSignature, LiteralValue, literalKey, describeLiteral from "./type"
 use Checker, BindingId from "./context"
 use caseNamed, fieldsOf, typeNameOf from "./member"
-use itemOfSubject, declaredCaseName from "./pattern"
+use itemOfSubject, declaredCaseName, fieldPatternTargets from "./pattern"
 use literalOf from "./lowering"
 use Normal, Constructor, Matrix, isUseful, missingValues, describeNormal from "./usefulness"
 
@@ -405,12 +405,12 @@ fn normalizedPatterns(
       const constructor = Constructor.ListOf items.length(), rest.isSome()
       productOf constructor, columns
     }
-    .Variant(path, fields) => {
+    .Variant(path, fields, hasRest) => {
       const name = path[path.length() - 1]
-      normalizedVariant checker, state, name.text, fields, subject, pattern.span
+      normalizedVariant checker, state, name.text, fields, hasRest, subject, pattern.span
     }
-    .ImplicitVariant(name, fields) => {
-      normalizedVariant checker, state, name.text, fields, subject, pattern.span
+    .ImplicitVariant(name, fields, hasRest) => {
+      normalizedVariant checker, state, name.text, fields, hasRest, subject, pattern.span
     }
     .Alternatives(patterns) => {
       var found: List<Normal> = []
@@ -460,6 +460,7 @@ fn normalizedVariant(
   var state: Normalizing,
   name: String,
   fields: List<FieldPattern>,
+  hasRest: Bool,
   subject: TypeId,
   at: Span,
 ): List<Normal> {
@@ -484,15 +485,60 @@ fn normalizedVariant(
     state.isBroken = true
     return [Normal.Anything]
   }
-  if types.length() != fields.length() {
+  // `Config(host, ...)` names some of the fields, and the `...` stands for the rest: those decide nothing, so the
+  // matrix gets a wildcard in each of their columns
+  if types.length() != fields.length() && !(hasRest && fields.length() < types.length()) {
     state.isBroken = true
     return [Normal.Anything]
   }
+  const anything: List<Normal> = [Normal.Anything]
+  const arranged = arrangedFields checker, name, fields, subject, types.length()
   var columns: List<List<Normal>> = []
-  for index in 0..fields.length() {
-    columns.add normalizedPatterns(checker, state, fields[index].pattern, types[index])
+  for index in 0..types.length() {
+    const written = arranged.get(index) ?? None
+    match written {
+      Some(found) => columns.add normalizedPatterns(checker, state, found, types[index])
+      None => columns.add anything
+    }
   }
   productOf constructor, columns
+}
+
+/**
+ * The written sub-patterns in **declaration** order, `None` where no sub-pattern names that field. A positional one
+ * fills the next field from the left and a labeled one names its own, which is the rule `checkFieldPatterns` decided
+ * and reported about - this only replays it.
+ */
+fn arrangedFields(
+  var checker: Checker,
+  name: String,
+  fields: List<FieldPattern>,
+  subject: TypeId,
+  count: Int,
+): List<Pattern?> {
+  var found: List<Pattern?> = []
+  for _ in 0..count {
+    found.add None
+  }
+  const declared = fieldsOfPattern checker, name, subject
+  const targets = fieldPatternTargets checker, name, fields, declared, reports: false
+  for index in 0..fields.length() {
+    const position = targets.get(index) ?? -1
+    if position < 0 || position >= count {
+      continue
+    }
+    found.set position, Some(fields[index].pattern)
+  }
+  found
+}
+
+/** The fields the name of a pattern stands for: those of the case it names, or those of the type itself. */
+fn fieldsOfPattern(var checker: Checker, name: String, subject: TypeId): List<FieldSignature> {
+  const declared = declaredCaseName checker, name
+  if const Some(variant) = caseNamed(checker, subject, declared) {
+    return variant.fields
+  }
+  fieldsOf checker, subject
 }
 
 /** Every combination of the alternatives of the arguments: `(a | b, c | d)` is four patterns of one constructor. */
@@ -644,11 +690,11 @@ fn branchesOf(
     }
     .TuplePattern(items) => tupleBranches checker, items, subject, path
     .ListPattern(items, rest) => listBranches checker, items, rest, subject, path
-    .Variant(qualified, fields) => {
+    .Variant(qualified, fields, _) => {
       const name = qualified[qualified.length() - 1]
       variantBranches checker, name.text, fields, subject, path
     }
-    .ImplicitVariant(name, fields) => variantBranches checker, name.text, fields, subject, path
+    .ImplicitVariant(name, fields, _) => variantBranches checker, name.text, fields, subject, path
     .Alternatives(patterns) => {
       var found: List<PatternBranch> = []
       for alternative in patterns {
@@ -758,35 +804,34 @@ fn variantBranches(
   if const Some(variant) = caseNamed(checker, subject, declaredName) {
     const check = PatternCheck.IsCase subject, variant.symbol
     branches = [PatternBranch([PatternTest(path, check)], [])]
-    for index in 0..fields.length() {
-      const field = variant.fields.get index
-      const inner = match field {
-        Some(found) => found.annotation
-        None => checker.deferredType
+    const arranged = arrangedFields checker, name, fields, subject, variant.fields.length()
+    for index in 0..variant.fields.length() {
+      const written = match arranged.get(index) ?? None {
+        Some(found) => found
+        None => {
+          continue
+        }
       }
-      const symbol = match field {
-        Some(found) => found.symbol
-        None => variant.symbol
-      }
-      const step = PatternStep.CaseField subject, variant.symbol, index, symbol
-      const grown = branchesOf checker, fields[index].pattern, inner, path.added(step)
+      const field = variant.fields[index]
+      const step = PatternStep.CaseField subject, variant.symbol, index, field.symbol
+      const grown = branchesOf checker, written, field.annotation, path.added(step)
       branches = combined branches, grown
     }
     return branches
   }
   // `Point(x, y)` and `Self(value)`: the one constructor of the type, which needs no test
   const declared = fieldsOf checker, subject
-  for index in 0..fields.length() {
-    const field = declared.get index
-    const inner = match field {
-      Some(found) => found.annotation
-      None => checker.deferredType
+  const arranged = arrangedFields checker, name, fields, subject, declared.length()
+  for index in 0..declared.length() {
+    const written = match arranged.get(index) ?? None {
+      Some(found) => found
+      None => {
+        continue
+      }
     }
-    const step = match field {
-      Some(found) => PatternStep.Field subject, index, found.symbol
-      None => PatternStep.TupleField subject, index
-    }
-    const grown = branchesOf checker, fields[index].pattern, inner, path.added(step)
+    const field = declared[index]
+    const step = PatternStep.Field subject, index, field.symbol
+    const grown = branchesOf checker, written, field.annotation, path.added(step)
     branches = combined branches, grown
   }
   branches

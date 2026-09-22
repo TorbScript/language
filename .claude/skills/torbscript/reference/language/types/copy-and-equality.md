@@ -84,10 +84,25 @@ value.copy(<field>: <value>, ...)
    changed and every other field kept; a `private` field cannot be passed to `copy` from outside, for the same reason
    it cannot be passed to the constructor.
 
-4. **Values that are equal must have equal hashes.** `Hash` is generated together with `Equals`, from the same fields
+4. **Every argument of `copy` is labeled.** It changes the fields it is given and keeps the rest, so a positional
+   argument would quietly fill the first field of the type - which is the one thing `a.copy(5)` must not be allowed to
+   mean.
+
+   ```trb error
+   type Point {
+     x: Int
+     var y: Int = 0
+   }
+
+   const a = Point(1, 2)
+   const wrong = a.copy(5)
+   // error: `copy` takes labeled arguments: `copy(x: ...)`
+   ```
+
+5. **Values that are equal must have equal hashes.** `Hash` is generated together with `Equals`, from the same fields
    in the same order, so the contract holds automatically instead of being an obligation on the writer.
 
-5. **What copying costs is not part of the language.** A small value is copied directly; the storage behind a `List`
+6. **What copying costs is not part of the language.** A small value is copied directly; the storage behind a `List`
    or a `String` is shared until something writes to it. Both give the same answer to `==` and to every rule above, so
    nothing here depends on which one the implementation chose.
 

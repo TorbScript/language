@@ -490,15 +490,18 @@ pub enum PatternKind {
         items: Vec<Pattern>,
         rest: Option<RestPattern>,
     },
-    /// `Some(x)`, `Shape.Circle(radius)`, `Point(x, y)`
+    /// `Some(x)`, `Shape.Circle(radius)`, `Point(x, y)`, `Config(host, ...)`
     Variant {
         path: Vec<Name>,
         fields: Vec<FieldPattern>,
+        /// The pattern ends in `...`, so the fields it does not name match anything.
+        has_rest: bool,
     },
-    /// `.Circle(radius)`, `.Empty`: a case of the type of the value
+    /// `.Circle(radius)`, `.Empty`, `.Rectangle(width, ...)`: a case of the type of the value
     ImplicitVariant {
         name: Name,
         fields: Vec<FieldPattern>,
+        has_rest: bool,
     },
     /// `1 | 2 | 3`
     Or(Vec<Pattern>),
@@ -512,8 +515,9 @@ pub struct RestPattern {
     pub name: Option<Name>,
 }
 
-/// `Point(x: 0, y: 0)`: the label is documentation today. The type checker will verify that it names the field at
-/// this position; fields are still matched by position, never by label.
+/// `Point(x: 0, y: 0)`: one sub-pattern, with the label it was written with. Which field it matches is the type
+/// checker's answer: a sub-pattern without a label fills the next field from the left and a labeled one names its
+/// own, exactly as an argument of the constructor does.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FieldPattern {
     pub label: Option<Name>,

@@ -1,0 +1,40 @@
+/**
+ * **A top-level binding that destructures declares one constant per name, and each one is its own part of the value.**
+ * `const Point(x, y) = Point(1, 2)` declares `x` and `y`, both of them `Int`, and the value they share is built once.
+ *
+ * It holds for a value the compiler can evaluate into static data and for one it cannot, and for a tuple exactly as
+ * for a type read backwards - the pattern says which part each name stands for, and nothing about the pattern makes
+ * the whole value the value of one of its names.
+ */
+
+use Process from "std/process"
+
+type Point {
+  x: Int
+  y: Int
+}
+
+type Config {
+  host: String
+  port: Int = 80
+  secure: Bool = false
+}
+
+const Point(x, y) = Point 1, 2
+const Config(host, port, secure) = Config "h"
+const (first, second) = (10, "ten")
+// A field the pattern reaches through another pattern, and one a label names instead of a position
+const Config(letters, ...) = Config "nested"
+const Config(secure: safely, ...) = Config "labeled", 1, true
+
+fn probe(): Int {
+  x + y + port
+}
+
+print "{x} {y}"
+print "{host} {port} {secure}"
+print "{first} {second}"
+print letters
+print safely
+print probe()
+Process.exit(probe() - 83)

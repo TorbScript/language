@@ -39,6 +39,7 @@ use isVoidType, finishBlock, continueIn, producesValue, borrowedArguments from "
 use lowerValue, lowerExpression, valueSlot, unsupportedSlot, abandonedSlot, voidSlot from "./expression"
 use lowerBody from "./function"
 use lowerPatternBinding from "./match"
+use lowerDefaultOfSource from "./call"
 use argumentReference, putBackElements, TakenElement from "./place"
 
 // --- Which `var` bindings become boxes ------------------------------------------------------------------------------
@@ -569,28 +570,42 @@ public fn lowerClosureCall(
     }
   }
   const shape = lowering.program.signatureAt signature
-  if shape.parameters.length() != arguments.length() {
-    const what = "a call of a closure value that takes its arguments in another order"
+  const count = shape.parameters.length()
+  // `make(port: 9, host: "h")` and `makeConfig("h")`: a function value keeps the labels and the defaults of the
+  // declaration it was read from, so the arguments are put where the checker's plan says and what is left takes its
+  // default (`defaultSourceOf`)
+  const targets = closureArgumentTargets lowering, expression, arguments, count
+  if targets.length() != arguments.length() {
+    const what = "a call of a closure value without an argument plan"
     return unsupportedSlot lowering, builder, destination, what, expression.span
   }
-  var slots: List<Slot> = []
+  var slots: List<Slot?> = []
   var places: List<Reference?> = []
+  for _ in 0..count {
+    slots.add None
+    places.add None
+  }
   // What a `var` argument took out of a container and has to put back once the closure has run
   var taken: List<TakenElement> = []
   for index in 0..arguments.length() {
     const value = arguments[index].value
+    const position = targets[index]
+    if position < 0 || position >= count {
+      const what = "a call of a closure value with an argument that fills no parameter"
+      return unsupportedSlot lowering, builder, destination, what, expression.span
+    }
     // `commaSeparated(closer, parse: (var Parser) => Item)`: a `var` parameter of a closure type takes a place, exactly
     // as a `var` parameter of a declaration does - the closure writes through the caller's own storage
-    if shape.parameters[index].isReference {
-      const annotation = shape.parameters[index].annotation
-      const path = match argumentReference(lowering, builder, value, annotation, "a `var` argument") {
+    if shape.parameters[position].isReference {
+      const inner = shape.parameters[position].annotation
+      const path = match argumentReference(lowering, builder, value, inner, "a `var` argument") {
         Some(found) => found
         None => {
           return abandonedSlot lowering, builder, destination
         }
       }
-      slots.add path.reference.base
-      places.add Some(path.reference)
+      slots.set position, Some(path.reference.base)
+      places.set position, Some(path.reference)
       taken.addAll path.taken
       continue
     }
@@ -598,12 +613,98 @@ public fn lowerClosureCall(
     if !lowering.isSupported {
       return abandonedSlot lowering, builder, destination
     }
-    slots.add slot
-    places.add None
+    slots.set position, Some(slot)
   }
-  const result = emitClosureCall lowering, builder, destination, holder, slots, places, annotation
+  const filled = closureDefaults lowering, builder, callee, slots, expression.span
+  if !lowering.isSupported {
+    return abandonedSlot lowering, builder, destination
+  }
+  const result = emitClosureCall lowering, builder, destination, holder, filled, places, annotation
   putBackElements lowering, builder, taken
   result
+}
+
+/**
+ * Which parameter every written argument fills. The checker records it for every call; where it did not, and the
+ * counts agree, the arguments fill the parameters from the left.
+ */
+fn closureArgumentTargets(
+  var lowering: Lowering,
+  expression: Expression,
+  arguments: List<Argument>,
+  count: Int,
+): List<Int> {
+  const module = lowering.module
+  if const Some(found) = lowering.checker.argumentTargetsAt(module, expression.span) {
+    return found
+  }
+  if arguments.length() != count {
+    return []
+  }
+  var straight: List<Int> = []
+  for index in 0..arguments.length() {
+    straight.add index
+  }
+  straight
+}
+
+/**
+ * The parameters of a closure value that no argument filled. A default is an expression of a declaration and never part
+ * of a type, so the value only has one while the checker could say which declaration it was read from
+ * (`Checker.defaultSourceOf`). Where it could not, the call is a clean finding instead of a wrong program.
+ */
+fn closureDefaults(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  callee: Expression,
+  slots: List<Slot?>,
+  at: Span,
+): List<Slot> {
+  var found: List<Slot> = []
+  var isMissing = false
+  for entry in slots {
+    if entry.isNone() {
+      isMissing = true
+    }
+  }
+  if !isMissing {
+    for entry in slots {
+      match entry {
+        Some(slot) => found.add slot
+        None => {}
+      }
+    }
+    return found
+  }
+  const module = lowering.module
+  const annotation = match lowering.checker.expressionType(module, callee.span) {
+    Some(inner) => inner
+    None => {
+      reportUnsupported lowering, "a call of a closure value the checker gave no type", at
+      return []
+    }
+  }
+  const source = match lowering.checker.defaultSourceOf(annotation) {
+    Some(inner) => inner
+    None => {
+      reportUnsupported lowering, "a call of a function value that leaves a defaulted parameter out", at
+      return []
+    }
+  }
+  for index in 0..slots.length() {
+    if const Some(slot) = slots[index] {
+      found.add slot
+      continue
+    }
+    const filled = match lowerDefaultOfSource(lowering, builder, source, index, at) {
+      Some(inner) => inner
+      None => {
+        return []
+      }
+    }
+    found.add filled
+  }
+  found
 }
 
 /** One `CallClosure`, with the result where it belongs and `Void` for a closure that answers nothing. */

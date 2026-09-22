@@ -276,7 +276,7 @@ group "Cases" {
       .Match(_, arms) => {
         assert(arms.length() == 3)
         match arms[0].pattern.kind {
-          .ImplicitVariant(name, fields) => {
+          .ImplicitVariant(name, fields, ...) => {
             assert(name.text == "Circle")
             assert(fields.length() == 1)
           }
@@ -363,7 +363,7 @@ group "Cases" {
   test "in a pattern the first letter decides: uppercase is a case, lowercase binds" {
     match bound("const area = match shape \{ None => 0 \}") {
       .Match(_, arms) => match arms[0].pattern.kind {
-        .Variant(path, fields) => {
+        .Variant(path, fields, ...) => {
           assert(path.map({ _.text }).toList() == ["None"])
           assert fields.isEmpty()
         }
@@ -391,7 +391,7 @@ group "Cases" {
   test "a label in a variant pattern is kept, not discarded" {
     match bound("const area = match shape \{ Point(x: 0, y: 0) => 0 \}") {
       .Match(_, arms) => match arms[0].pattern.kind {
-        .Variant(_, fields) => {
+        .Variant(_, fields, ...) => {
           assert(fields.length() == 2)
           assert(fields[0].label.map({ _.text }) == Some("x"))
           assert(fields[1].label.map({ _.text }) == Some("y"))
@@ -403,7 +403,7 @@ group "Cases" {
     // Without a label, fields are still matched by position
     match bound("const area = match shape \{ .Circle(radius) => radius \}") {
       .Match(_, arms) => match arms[0].pattern.kind {
-        .ImplicitVariant(_, fields) => {
+        .ImplicitVariant(_, fields, ...) => {
           assert(fields.length() == 1)
           assert fields[0].label.isNone()
         }
@@ -411,6 +411,41 @@ group "Cases" {
       }
       other => panic "Unexpected tree: {other}"
     }
+  }
+
+  /** `Config(host, ...)`: the `...` stands for the fields the pattern does not name, and it comes last and once. */
+  test "a `...` at the end of a constructor pattern" {
+    match bound("const found = match config \{ Config(host, ...) => host \}") {
+      .Match(_, arms) => match arms[0].pattern.kind {
+        .Variant(_, fields, hasRest) => {
+          assert(fields.length() == 1)
+          assert hasRest
+        }
+        other => panic "Unexpected pattern: {other}"
+      }
+      other => panic "Unexpected tree: {other}"
+    }
+    match bound("const found = match shape \{ .Rectangle(...) => 0 \}") {
+      .Match(_, arms) => match arms[0].pattern.kind {
+        .ImplicitVariant(_, fields, hasRest) => {
+          assert fields.isEmpty()
+          assert hasRest
+        }
+        other => panic "Unexpected pattern: {other}"
+      }
+      other => panic "Unexpected tree: {other}"
+    }
+  }
+
+  test "a `...` that is not last, and one that is written twice" {
+    assert(
+      messages("const found = match config \{ Config(..., host) => host \}")
+        == ["A `...` comes last in a pattern: it stands for every field behind it"]
+    )
+    assert(
+      messages("const found = match config \{ Config(host, ..., ...) => host \}")
+        == ["A pattern can only have one `...`"]
+    )
   }
 }
 

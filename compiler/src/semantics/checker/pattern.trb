@@ -57,10 +57,10 @@ public fn checkPattern(var checker: Checker, pattern: Pattern, subject: TypeId, 
         }
       }
     }
-    .Variant(path, fields) => {
+    .Variant(path, fields, hasRest) => {
       const name = path[path.length() - 1]
       // `None`: a bare uppercase name is resolved through the scope, so a misspelled case is not a catch-all
-      if path.length() == 1 && fields.isEmpty() {
+      if path.length() == 1 && fields.isEmpty() && !hasRest {
         if !isNameInScope(checker, name.text) {
           reportUnknownCase checker, name, subject
           return
@@ -70,9 +70,11 @@ public fn checkPattern(var checker: Checker, pattern: Pattern, subject: TypeId, 
           return
         }
       }
-      variantPattern checker, name, fields, subject, pattern.span, isVar
+      variantPattern checker, name, fields, hasRest, subject, pattern.span, isVar
     }
-    .ImplicitVariant(name, fields) => variantPattern checker, name, fields, subject, pattern.span, isVar
+    .ImplicitVariant(name, fields, hasRest) => {
+      variantPattern checker, name, fields, hasRest, subject, pattern.span, isVar
+    }
     // `1 | 2 | 3`: every alternative matches the same value, so every one of them is checked against its type
     .Alternatives(patterns) => alternativePatterns checker, patterns, subject, isVar
     .Invalid => {}
@@ -415,6 +417,7 @@ fn variantPattern(
   var checker: Checker,
   name: Name,
   fields: List<FieldPattern>,
+  hasRest: Bool,
   subject: TypeId,
   at: Span,
   isVar: Bool,
@@ -425,14 +428,14 @@ fn variantPattern(
   if const Some(variant) = caseNamed(checker, subject, declared) {
     // A private field cannot be read from outside the type, in a pattern as anywhere else
     requireVisibleFields checker, subject, name.text, variant.fields, at
-    checkFieldPatterns checker, name.text, fields, variant.fields, at, isVar
+    checkFieldPatterns checker, name.text, fields, hasRest, variant.fields, at, isVar
     return
   }
   // `Point(x, y)` and `Self(value)`: the one constructor of the type, read backwards
   if name.text == "Self" || typeNameOf(checker, subject) == Some(name.text) {
     const declared = fieldsOf checker, subject
     requireVisibleFields checker, subject, name.text, declared, at
-    checkFieldPatterns checker, name.text, fields, declared, at, isVar
+    checkFieldPatterns checker, name.text, fields, hasRest, declared, at, isVar
     return
   }
   if hasCases(checker, subject) {
@@ -446,37 +449,146 @@ fn variantPattern(
 }
 
 /**
- * The fields of a case are matched by position; a label that is written has to name the field at that position,
- * because a label that is not checked is worse than none.
+ * **A pattern mirrors the constructor**: a sub-pattern without a label fills the next field from the left, a labeled
+ * one names the field it matches, and the labeled ones follow the positional ones - the very rule the arguments of a
+ * call follow, so `Config(port: 80, ...)` reads there exactly as `Config(port: 80)` reads at a construction.
+ *
+ * **A pattern that does not name every field ends in `...`** (`Config(host, ...)`), exactly as a list pattern says the
+ * same thing about its items. Without it a field added to a type would break every pattern over it, and with it a
+ * pattern says which of the two it means: the fields I need, or all of them.
  */
 fn checkFieldPatterns(
   var checker: Checker,
   name: String,
   written: List<FieldPattern>,
+  hasRest: Bool,
   declared: List<FieldSignature>,
   at: Span,
   isVar: Bool,
 ) {
-  if written.length() != declared.length() {
+  const targets = fieldPatternTargets checker, name, written, declared
+  const isShorter = written.length() < declared.length()
+  if written.length() != declared.length() && !(hasRest && isShorter) {
     const has = if declared.length() == 1 { "1 field" } else { "{declared.length()} fields" }
-    const given = if written.length() == 1 { "1 pattern" } else { "{written.length()} patterns" }
-    checker.reportHere Diagnostic.error("`{name}` has {has}, {given} were given", at)
+    var report = Diagnostic.error "`{name}` has {has} and this pattern names {written.length()}", at
+    if isShorter {
+      report = report.withNote(
+        "A pattern that does not name every field ends in `...`: `{name}({namedSoFar(written, declared)}...)`"
+      )
+    }
+    checker.reportHere report
   }
   for index in 0..written.length() {
     const field = written[index]
-    if index >= declared.length() {
-      const inner = checker.deferredType
-      checkPattern checker, field.pattern, inner, isVar
-      continue
+    const position = targets.get(index) ?? -1
+    const inner = match declared.get(position) {
+      Some(found) => found.annotation
+      None => checker.deferredType
     }
-    if const Some(label) = field.label {
-      if label.text != declared[index].name {
-        checker.reportHere(
-          Diagnostic.error("This position is `{declared[index].name}`, not `{label.text}`", label.span)
-            .withNote("The fields of a case are matched by position; a label has to name the field at that position")
-        )
+    checkPattern checker, field.pattern, inner, isVar
+  }
+}
+
+/**
+ * Which field every written sub-pattern matches: the positional ones from the left, then the labeled ones by name.
+ * `-1` stands for one that matches nothing.
+ *
+ * `reports` is off where the answer is only replayed - the exhaustiveness pass asks the same question a second time,
+ * over a pattern this one has already said everything about.
+ */
+public fn fieldPatternTargets(
+  var checker: Checker,
+  name: String,
+  written: List<FieldPattern>,
+  declared: List<FieldSignature>,
+  reports: Bool = true,
+): List<Int> {
+  var targets: List<Int> = []
+  var filled: List<Bool> = []
+  for _ in declared {
+    filled.add false
+  }
+  var next = 0
+  var hasLabel = false
+  for field in written {
+    const label = match field.label {
+      Some(found) => found
+      None => {
+        // `Config(host, port: 80)`: the positional ones come first, which is what a call does too
+        if hasLabel && reports {
+          checker.reportHere(
+            Diagnostic.error("A pattern names the fields in order first, and by label after that", field.pattern.span)
+              .withNote("`{name}(first, second, third: ...)`, the way the arguments of a call are written")
+          )
+        }
+        if next >= declared.length() {
+          targets.add(-1)
+          next = next + 1
+          continue
+        }
+        filled.set next, true
+        targets.add next
+        next = next + 1
+        continue
       }
     }
-    checkPattern checker, field.pattern, declared[index].annotation, isVar
+    hasLabel = true
+    const position = indexOfField declared, label.text
+    if position < 0 {
+      if reports {
+        checker.reportHere Diagnostic.error("`{name}` has no field `{label.text}`", label.span)
+      }
+      targets.add(-1)
+      continue
+    }
+    if filled[position] {
+      if reports {
+        checker.reportHere Diagnostic.error("`{label.text}` already has a pattern", label.span)
+      }
+      targets.add(-1)
+      continue
+    }
+    filled.set position, true
+    targets.add position
+  }
+  targets
+}
+
+fn indexOfField(declared: List<FieldSignature>, name: String): Int {
+  for index in 0..declared.length() {
+    if declared[index].name == name {
+      return index
+    }
+  }
+  -1
+}
+
+/** The fields the pattern already names, for the note that shows it with the `...` it is missing. */
+fn namedSoFar(written: List<FieldPattern>, declared: List<FieldSignature>): String {
+  var names: List<String> = []
+  for index in 0..written.length() {
+    names.add shownFieldPattern(written[index], declared.get(index))
+  }
+  if names.isEmpty() {
+    return ""
+  }
+  "{names.joined(separator: ", ")}, "
+}
+
+/** One written field, as the note writes it back: the name it binds, `_`, or the field's own name for anything else. */
+fn shownFieldPattern(written: FieldPattern, declared: FieldSignature?): String {
+  const inner = match written.pattern.kind {
+    .Binding(name) => name
+    .Wildcard => "_"
+    _ => {
+      match declared {
+        Some(field) => field.name
+        None => "_"
+      }
+    }
+  }
+  match written.label {
+    Some(label) => "{label.text}: {inner}"
+    None => inner
   }
 }

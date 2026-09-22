@@ -44,7 +44,19 @@ value.show(): String
 1. **A `type` shows as `Type(field: value, ...)`, every field in declaration order.** `Card(label: "Ada", initial: 'A')`
    - the same text `copy` and the constructor would take back.
 
-2. **A case shows as `Case(field: value, ...)`, or its bare name when it has none.**
+2. **Every field is in it, `private` ones included, wherever the value is printed.** `Show` is the debug form of a
+   value and `Equals` and `Hash` read the same fields, so hiding one here would make a printed value disagree with
+   what the type is. A type whose field is a secret writes its own `Show` instead of relying on the generated one.
+
+   ```trb
+   type Email {
+     private value: String
+   }
+
+   print Email("info@example.test")      // Email(value: "info@example.test")
+   ```
+
+3. **A case shows as `Case(field: value, ...)`, or its bare name when it has none.**
 
    ```trb
    type Shape {
@@ -56,7 +68,7 @@ value.show(): String
    print Shape.Empty            // Empty
    ```
 
-3. **A collection has its own bracket, not the type's.** A `List` is `[a, b]`, a `Map` is `["k": v]` and `[:]` when it
+4. **A collection has its own bracket, not the type's.** A `List` is `[a, b]`, a `Map` is `["k": v]` and `[:]` when it
    is empty. Both come from the collection's own `Show`, generated from the same fixed shapes so a value inside one
    nests correctly.
 
@@ -65,7 +77,7 @@ value.show(): String
    print(["a": 1, "b": 2])
    ```
 
-4. **Inside another value's `Show`, only `String` and `Char` differ from their own `show()`.** A `String` is quoted
+5. **Inside another value's `Show`, only `String` and `Char` differ from their own `show()`.** A `String` is quoted
    with escapes and a `Char` is in single quotes, so `["a", "b"]` stays readable while `"{name}"` is still the text
    itself with nothing added around it.
 
@@ -74,10 +86,10 @@ value.show(): String
    print(["Ada", "Grace"])    // ["Ada", "Grace"]
    ```
 
-5. **`Option` shows as `Some(x)` or `None`.** These are the same names the value is matched with, so a printed value
+6. **`Option` shows as `Some(x)` or `None`.** These are the same names the value is matched with, so a printed value
    and a pattern for it read the same way.
 
-6. **A `Float` always carries a decimal point or an exponent.** `1.0` shows as `1.0`, never `1`, so a reader can tell a
+7. **A `Float` always carries a decimal point or an exponent.** `1.0` shows as `1.0`, never `1`, so a reader can tell a
    `Float` from an `Int` on sight. `-0.0` keeps its sign, and a division by zero shows as `inf`, `-inf` or `nan`.
 
 ## What this is not

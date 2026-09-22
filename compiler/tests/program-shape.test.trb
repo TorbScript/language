@@ -625,7 +625,14 @@ group "Defaults are evaluated without a receiver (gap 26)" {
         height: Int = width
       }
       """
-    assert(problems(source) == ["Cannot find `width` here"])
+    assert(problems(source) == ["A field default cannot read the field `width`"])
+    assert(
+      notes(source)
+        == [
+          "Every default is evaluated on its own, so the order of the fields is not observable. A value that is"
+            + " computed from another field is made by a `static fn` factory",
+        ]
+    )
   }
 
   test "a parameter default cannot read another parameter" {
@@ -712,7 +719,11 @@ group "One namespace of members" {
     assert(problems(source) == ["`title` is already declared in `Report`"])
     assert(
       notes(source)
-        == ["A type has one namespace of members: a field, a `const`, a `fn` and a case cannot share a name"]
+        == [
+          "A type has one namespace of members: a field, a `const`, a `fn` and a case cannot share a name",
+          "That holds for a `private` field as well: making a field private or public must not change what a caller"
+            + " writes, so one of the two needs another name",
+        ]
     )
   }
 

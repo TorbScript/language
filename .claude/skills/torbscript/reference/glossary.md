@@ -381,8 +381,10 @@ under the same bare name. See [Packages](language/modules-and-packages/packages.
 
 ### Rest pattern
 
-The `...name` part of a list pattern, such as `[first, ...rest]`, which binds the items it does not name individually
-as a `List`. See [Pattern forms](language/pattern-matching/pattern-forms.md).
+The `...` of a pattern, which stands for the parts the pattern does not name. In a list pattern it may take a name
+(`[first, ...rest]`) and then binds those items as a `List`; in a constructor pattern it takes none
+(`Config(host, ...)`), because the fields behind it are named and heterogeneous. See
+[Pattern forms](language/pattern-matching/pattern-forms.md).
 
 ### Result
 
