@@ -1,0 +1,258 @@
+/**
+ * The devirtualization: when a trait-typed value loses its box, and when it keeps it.
+ *
+ * A value whose payload the whole program agrees on is that payload - the `traitValue` becomes a plain copy, the slots,
+ * the parameters and the result take the concrete type, and every `callWitness` becomes the direct `call` of the member
+ * the table named. What is asked here is both halves of that: the shapes that lose the box, and the shapes that may not.
+ *
+ * The **annotation is not what decides it.** `const value: Sized = Small(1)` is written as the trait and still loses its
+ * box, because nothing the analysis cannot follow is done with it. What decides it is where the value goes: a field, a
+ * closure, a record, a narrowing coercion, or a function whose signature something other than a `Call` of the program
+ * reaches.
+ */
+
+use test, group from "std/test"
+use irOf, ownedIrOf, textOf from "./lower-harness"
+
+const declarations = r"""
+  trait Sized {
+    fn size(): Int
+  }
+
+  type Small with Sized {
+    amount: Int
+
+    fn size(): Int {
+      amount
+    }
+  }
+  """
+
+fn program(body: String): String {
+  "{declarations}\n{body}"
+}
+
+group "what loses its box" {
+  /** The annotation says the trait and the value never leaves the frame, so the slot is the payload itself. */
+  test "a value written as the trait, used in its own frame, is the payload" {
+    const source = program(r"""
+      fn total(): Int {
+        const value: Sized = Small(1)
+        value.size()
+      }
+      """)
+    assert(
+      ownedIrOf(source, "t_acme_x2f_app_main_total") == r"""
+        fn t_acme_x2f_app_main_total() -> Int64 {
+          slot %0 local value: Record(T_acme_x2f_app_main_Small)
+          slot %1 temporary: Int64
+          slot %2 temporary: Record(T_acme_x2f_app_main_Small)
+          slot %3 temporary: Int64
+        b0: # acme/app/src/main.trb:13 body
+          %1 = constant s_literal__Int64_1
+          %2 = construct T_acme_x2f_app_main_Small (%1 borrowed)
+          %0 = copy %2
+          %3 = call t_acme_x2f_app_main_Small_size(%0 borrowed)
+          return %3 borrowed
+        }"""
+    )
+  }
+
+  /**
+   * The value travels: it is boxed in one function, handed back as the trait and read in another, and all three
+   * positions are one class. That is what makes the analysis whole-program rather than a peephole over one body - the
+   * literal of a collection is built in one function and indexed in the next one in every program there is.
+   */
+  test "a result and a parameter of the trait become the payload together" {
+    const source = program(r"""
+      fn made(): Sized {
+        Small(1)
+      }
+
+      fn total(): Int {
+        sizeOf(made())
+      }
+
+      fn sizeOf(value: Sized): Int {
+        value.size()
+      }
+      """)
+    assert(
+      irOf(source, "t_acme_x2f_app_main_total") == r"""
+        fn t_acme_x2f_app_main_total() -> Int64 {
+          slot %0 temporary: Record(T_acme_x2f_app_main_Small)
+          slot %1 temporary: Int64
+        b0: # acme/app/src/main.trb:17 body
+          %0 = call t_acme_x2f_app_main_made() at acme/app/src/main.trb:18:10
+          %1 = call t_acme_x2f_app_main_sizeOf(%0 borrowed) at acme/app/src/main.trb:18:3
+          return %1 borrowed
+        }"""
+    )
+    assert(
+      irOf(source, "t_acme_x2f_app_main_sizeOf") == r"""
+        fn t_acme_x2f_app_main_sizeOf(value: Record(T_acme_x2f_app_main_Small) borrowed) -> Int64 {
+          slot %0 parameter value: Record(T_acme_x2f_app_main_Small)
+          slot %1 temporary: Int64
+        b0: # acme/app/src/main.trb:21 body
+          %1 = call t_acme_x2f_app_main_Small_size(%0 borrowed)
+          return %1 borrowed
+        }"""
+    )
+  }
+
+  /**
+   * A **`var fn`** member through a table is a thunk that takes the address of the payload inside the box, and the
+   * caller makes the box unique first. Devirtualized it is the ordinary `var` path of a concrete value: the place is the
+   * slot, and there is no box left to make unique.
+   */
+  test "a member that writes through its receiver is the place the slot is" {
+    const source = r"""
+      trait Counter {
+        var fn bump()
+
+        fn value(): Int
+      }
+
+      type Tally with Counter {
+        var count: Int = 0
+
+        var fn bump() {
+          count = count + 1
+        }
+
+        fn value(): Int {
+          count
+        }
+      }
+
+      fn counted(): Int {
+        var tally: Counter = Tally()
+        tally.bump()
+        tally.value()
+      }
+      """
+    assert(
+      ownedIrOf(source, "t_acme_x2f_app_main_counted") == r"""
+        fn t_acme_x2f_app_main_counted() -> Int64 {
+          slot %0 local tally: Record(T_acme_x2f_app_main_Tally)
+          slot %1 temporary: Int64
+          slot %2 temporary: Record(T_acme_x2f_app_main_Tally)
+          slot %3 temporary: Void
+          slot %4 temporary: Int64
+        b0: # acme/app/src/main.trb:19 body
+          %1 = constant s_literal__Int64_0
+          %2 = construct T_acme_x2f_app_main_Tally (%1 borrowed)
+          %0 = copy %2
+          call t_acme_x2f_app_main_Tally_bump(&%0 borrowed)
+          %4 = call t_acme_x2f_app_main_Tally_value(%0 borrowed)
+          return %4 borrowed
+        }"""
+    )
+  }
+}
+
+group "what keeps its box" {
+  /**
+   * A field keeps the type its layout gave it, so a value that is built into a record is boxed where it is built and
+   * read back out as the trait. Peeling the slot would not reach the storage inside the layout at all.
+   */
+  test "a value that is built into a record is boxed, and the read out of it dispatches" {
+    const source = program(r"""
+      type Holder {
+        inner: Sized
+      }
+
+      fn held(): Int {
+        const holder = Holder(Small(1))
+        holder.inner.size()
+      }
+      """)
+    assert(
+      ownedIrOf(source, "t_acme_x2f_app_main_held") == r"""
+        fn t_acme_x2f_app_main_held() -> Int64 {
+          slot %0 local holder: Record(T_acme_x2f_app_main_Holder)
+          slot %1 temporary: Int64
+          slot %2 temporary: Record(T_acme_x2f_app_main_Small)
+          slot %3 temporary: Object(Sized)
+          slot %4 temporary: Object(Sized)
+          slot %5 temporary: Int64
+        b0: # acme/app/src/main.trb:17 body
+          %1 = constant s_literal__Int64_1
+          %2 = construct T_acme_x2f_app_main_Small (%1 borrowed)
+          %3 = traitValue %2 borrowed tables(table w_acme_x2f_app_main_Sized__T_acme_x2f_app_main_Small)
+          %0 = construct T_acme_x2f_app_main_Holder (%3 owned last)
+          %4 = read %0.inner
+          release %0
+          %5 = callWitness value %4 bound 0 member 0()
+          release %4
+          return %5 borrowed
+        }"""
+    )
+  }
+
+  /**
+   * Two implementations in one place are what a run-time dispatch is for: the class has two producers that disagree
+   * about the payload, so it keeps its box and the call stays a member of the table the value carries.
+   */
+  test "two implementations that meet in one parameter keep the dispatch" {
+    const source = program(r"""
+      type Fixed with Sized {
+        fn size(): Int {
+          9
+        }
+      }
+
+      fn sizeOf(value: Sized): Int {
+        value.size()
+      }
+
+      fn total(): Int {
+        sizeOf(Small(1)) + sizeOf(Fixed())
+      }
+      """)
+    assert(
+      irOf(source, "t_acme_x2f_app_main_sizeOf") == r"""
+        fn t_acme_x2f_app_main_sizeOf(value: Object(Sized) borrowed) -> Int64 {
+          slot %0 parameter value: Object(Sized)
+          slot %1 temporary: Int64
+        b0: # acme/app/src/main.trb:19 body
+          %1 = callWitness value %0 bound 0 member 0()
+          return %1 borrowed
+        }"""
+    )
+  }
+
+  /**
+   * A member of a **witness table** keeps its signature whatever flows through it: its thunk casts the erased receiver
+   * to the payload of that table and calls exactly that signature, and a call site of a dispatch knows the member's
+   * index and not its declaration. So the `Sized` a boxed value answers is the box the table promises.
+   */
+  test "a member a table points at keeps the signature the thunk calls" {
+    const source = program(r"""
+      trait Wrapping {
+        fn inner(): Sized
+      }
+
+      type Wrapper with Wrapping {
+        fn inner(): Sized {
+          Small(1)
+        }
+      }
+
+      fn innerOf(value: Wrapping): Int {
+        value.inner().size()
+      }
+
+      fn total(): Int {
+        innerOf(Wrapper())
+      }
+      """)
+    const text = textOf source
+    assert(
+      text.contains(
+        "fn t_acme_x2f_app_main_Wrapper_inner(self: Record(T_acme_x2f_app_main_Wrapper) borrowed)"
+          + " -> Object(Sized)"
+      )
+    )
+  }
+}

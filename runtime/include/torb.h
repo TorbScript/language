@@ -725,6 +725,14 @@ bool torb_map_remove(torb_map *map, const void *key, void *out);
 void torb_map_clear(torb_map *map);
 
 /**
+ * Make the table's storage unique so a write may go through in place, which is what a `var` path through a map needs
+ * before it is formed. Every write of the table does the same thing on its own, so this is only what the IR's
+ * `MakeUnique` of a map-typed place becomes.
+ */
+void torb_map_make_unique(torb_map *map);
+void torb_set_make_unique(torb_set *set);
+
+/**
  * `map[key].add(x)`: take the value out, change it, put it back - without a copy (BACKEND 2.3). `take_out` moves the
  * value out and leaves the entry reserved; `put_back` stores it again. `*out` is owned between the two calls.
  */

@@ -16,10 +16,13 @@ sh run.sh                    # everything
 sh run.sh list-index         # one program
 RUNS=9 sh run.sh             # more repetitions; the fastest of them is what is printed
 sh run.sh --allocations      # also count how often each side called malloc
+TORB=../seed/torb.exe TORB_COMPILER= sh run.sh    # build the programs with a `torb` binary directly
 ```
 
-It needs stage 0 built (`cargo build --release` in `bootstrap/`) and a C compiler on the `PATH` (`$TORB_CC`, then
-`clang`, `gcc`, `cc` - the order `torb build` uses). Everything it writes lands in `out/`, which is not checked in:
+It needs a compiler and a C compiler on the `PATH` (`$TORB_CC`, then `clang`, `gcc`, `cc` - the order `torb build`
+uses). `$TORB` is the compiler and `$TORB_COMPILER` the package it runs; stage 0 (`cargo build --release` in
+`bootstrap/`) is the default for both. An **empty** `$TORB_COMPILER` says `$TORB` is a `torb` binary already and is
+called directly, which is how two builds of the compiler are measured against each other. Everything it writes lands in `out/`, which is not checked in:
 `out/<program>/program.c` is the C the back end emitted, `out/<program>/build.log` is what `torb build` said.
 
 ## Reading the table

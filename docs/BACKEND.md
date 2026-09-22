@@ -262,6 +262,13 @@ no `.Forwarded` that reaches an `.Object` can be monomorphized. The lowering fol
   says what they do.
 - **Const generic arguments** are part of the key and become integer/text constants in the body. `Array<Float, 16>`
   and `Array<Float, 16>` are one instance.
+- **A trait-typed value whose payload the whole program agrees on is that payload.** `ir/devirtualize.trb` runs between
+  the lowering and the ownership pass: it joins every slot and every function result a value flows between into one
+  class, and a class whose producers are all a `TraitValue` of the same payload with the same static tables loses its
+  box - the slots, the parameters and the result take the concrete type, the `TraitValue` becomes a `Copy`, and every
+  `CallWitness` becomes the direct `Call` of the member the table names. So dictionary passing is what a value with two
+  implementations in one place costs, not what every collection literal costs.
+  ([docs/PERFORMANCE.md](PERFORMANCE.md) finding 2.)
 
 ### 1.5 Mangling
 

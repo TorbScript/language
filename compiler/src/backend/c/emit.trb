@@ -623,7 +623,11 @@ fn emitWitnessTable(
     CExpression.Name nestedName
   }
   const initializer = CExpression.Initializer([drop, retain, size, inner, array])
-  write emission, CDeclaration.StaticData("static const torb_witness_table", table.name, initializer)
+  // The table itself has **external** linkage while its two arrays are `static`: once the devirtualization has turned
+  // the last dispatch through a table into a direct call, nothing in the translation unit names that table any more, and
+  // a `static const` nothing reads is an error under `-Wunused-const-variable -Werror`. Its name is mangled and unique,
+  // so there is nothing for it to collide with, and the member that nobody calls is what finding 12 removes for real
+  write emission, CDeclaration.StaticData("const torb_witness_table", table.name, initializer)
 }
 
 // --- The thunks of the closures -------------------------------------------------------------------------------------

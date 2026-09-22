@@ -7,6 +7,12 @@
 #   RUNS=9 sh run.sh          more repetitions; the fastest of them is what is printed
 #   sh run.sh --allocations   also link a counted copy of each binary and print how often it allocated
 #
+# $TORB is the compiler that builds the programs and $TORB_COMPILER the package it runs. An **empty**
+# $TORB_COMPILER means $TORB is a `torb` binary already and is called directly, which is what compares two builds of
+# the compiler against each other:
+#
+#   TORB=../seed/torb.exe TORB_COMPILER= sh run.sh
+#
 # It is POSIX sh and works under Git Bash on Windows. Nothing here is wired into `cargo test`: these are measurements,
 # not gates, and a number that moves with the machine does not belong in a test.
 
@@ -16,7 +22,7 @@ here=$(dirname "$0")
 cd "$here" || exit 1
 
 torb=${TORB:-../bootstrap/target/release/torb.exe}
-compiler=${TORB_COMPILER:-../compiler}
+compiler=${TORB_COMPILER-../compiler}
 runs=${RUNS:-5}
 out=${OUT:-out}
 
@@ -108,7 +114,12 @@ build_both() {
   build_directory="$out/$build_program"
   reason=""
   mkdir -p "$build_directory" || exit 1
-  if ! "$torb" run "$compiler" build "$build_program.trb" --output "$build_directory/$build_program" \
+  if [ -n "$compiler" ]; then
+    set -- run "$compiler" build
+  else
+    set -- build
+  fi
+  if ! "$torb" "$@" "$build_program.trb" --output "$build_directory/$build_program" \
       > "$build_directory/build.log" 2>&1; then
     reason=$(grep -m1 '^error:' "$build_directory/build.log" || echo "see $build_directory/build.log")
     return 1

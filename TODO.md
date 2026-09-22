@@ -3196,6 +3196,36 @@ Wenn nicht, was bedeutet, bewirkt es?
     Verifier meldete einen internen Fehler; jetzt ein Closure-Aufruf, mit IR-Test und
     `bootstrap/tests/native/curried-call.trb`. Belege, Rundenplan und die neue Messtabelle stehen in
     `docs/PERFORMANCE.md`; offen bleiben P5 (Devirtualisierung, der Hebel für alles andere) bis P12.
+  - **Erledigt:** Runde P5 (Befund 2, Devirtualisierung) - der Hebel, auf den P6 bis P9 gewartet haben. Neu ist
+    `compiler/src/ir/devirtualize.trb`, ein Pass zwischen Senkung und Ownership, und er ist **programmweit** statt ein
+    Guckloch: ein Ort ist jeder Slot jeder Funktion plus jedes Funktionsergebnis, Orte werden verschmolzen, wo ein Wert
+    zwischen ihnen fließt (Argument -> Parameter, Ergebnis -> Aufrufstelle, `return`, `read`/`write` des ganzen Slots),
+    und eine Klasse, deren Erzeuger alle ein `traitValue` DESSELBEN Payloads mit DENSELBEN statischen Tabellen sind,
+    verliert ihre Box: Slots, Parameter und Ergebnis bekommen den konkreten Typ, das `traitValue` wird ein `copy` (am
+    letzten Gebrauch ein `move`), und jedes `callWitness` wird der direkte `call` des Members, den die Tabelle nannte.
+    **Die Annotation entscheidet nicht:** `const items: List<Int> = [...]` verliert die Box wie jedes andere Literal -
+    entscheidend ist, wohin der Wert geht, nicht wie die Bindung geschrieben ist. An der Sprache ändert sich nichts: der
+    Checker ist unangetastet, der Typ eines Literals bleibt das Trait, Diagnosen und `Show` sagen, was sie sagten.
+    **Gemessen** mit `benchmarks/run.sh --allocations`, beide Seiten mit einem `torb`-Binary direkt gebaut (dafür kennt
+    `run.sh` jetzt ein leeres `$TORB_COMPILER`), bestes aus je neun Läufen, torb-Spalte vorher -> nachher:
+    `list-index` 398 548 -> **274 965** (-31%), `record-write` 1 250 692 -> **867 464** (-31%), `map-count`
+    335 158 -> **267 214** (-20%), `pipeline` 802 284 -> **696 741** (-13%, und 125 -> **105** Allokationen),
+    `list-iterate` 1 002 058 -> **884 384** (-12%); `arithmetic`, `closure`, `wrapper`, `call-depth` und
+    `interpolation` unverändert. Die C-Zwillinge liefen in dieser Sitzung etwa doppelt so schnell wie in der des Audits,
+    deshalb sind die Verhältnisse nur innerhalb der neuen Tabelle vergleichbar - die torb-Spalte und die
+    Allokationsspalte sind die Aussage. **Keine Vertragszeile kippt auf "hält"**, aber die Ursache ist eine andere
+    geworden: was übrig ist, sind der `Option`-Umweg und die Bereichsprüfung eines Index (Befund 8), das
+    Lesen-Kopieren-Zurückschreiben eines Elements (Befunde 3 und 4) und die eine Stelle, an die der Pass nicht darf -
+    ein **Member einer Witness-Tabelle**, gegen dessen Signatur der Thunk jeder dynamischen Aufrufstelle gebaut ist.
+    Genau das ist `ArrayList.iterator`, und deshalb bleibt `for` über eine Liste ein Kasten pro Schleife (Befund 5,
+    Runde P6: entweder eine spezialisierte Kopie eines eingefrorenen Members oder `iterator()` gibt `ListIterator`
+    statt des Traits zurück). Das C des Compilers selbst: **274 875 Bytes kleiner** bei gleichen Quellen
+    (63 265 243 gegen 62 990 368), der Fixpunkt hält in drei Schritten, `suite` (Stage 0 gegen Binary über die
+    1645 Tests) 774 s mit 0 Fehlern, Konformanzsuite 84 von 84 mit Leak-Gate. Zwei Zeilen in den Backends gehörten
+    dazu: eine Witness-Tabelle wird mit **externer** Bindung emittiert (eine, die der Pass unerreichbar macht, wäre
+    sonst ein `static const`, das niemand liest - Fehler unter `-Wunused-const-variable -Werror`), und
+    `torb_map_make_unique`/`torb_set_make_unique` kamen neben `torb_list_make_unique` dazu, weil ein `var`-Pfad durch
+    eine konkrete Map denselben Einzeiler braucht wie eine Liste. Offen bleiben P6 bis P12.
 
 - (Performance-Audit, 2026-09-22) Der obige Befund war der Anlass für eine systematische Messung: wo tut der erzeugte
   Code vermeidbare Arbeit? Ergebnis sind `docs/PERFORMANCE.md` (Kostenmodell, Zero-Cost-Vertrag mit hält/hält-nicht,

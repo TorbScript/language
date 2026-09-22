@@ -377,6 +377,10 @@ void torb_map_clear(torb_map *map) {
   map->storage = empty;
 }
 
+void torb_map_make_unique(torb_map *map) {
+  torb_map_prepare(map);
+}
+
 bool torb_map_take_out(torb_map *map, const void *key, void *out) {
   torb_map_storage *storage;
   uint32_t free_bucket = 0u;
@@ -496,6 +500,10 @@ bool torb_set_remove(torb_set *set, const void *item) {
 
 void torb_set_clear(torb_set *set) {
   torb_map_clear(set);
+}
+
+void torb_set_make_unique(torb_set *set) {
+  torb_map_make_unique(set);
 }
 
 bool torb_set_next(torb_set set, uint32_t *cursor, const void **item) {

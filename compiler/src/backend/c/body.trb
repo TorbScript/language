@@ -934,8 +934,9 @@ fn makeUniqueStatements(
     const made = CExpression.Call CExpression.Name("torb_make_unique"), [place, sizeOf(name), retain, drop]
     return [CStatement.Assignment(place, CExpression.Cast("{name} *", made))]
   }
-  if isListType(program, annotation) {
-    const made = CExpression.Call CExpression.Name("torb_list_make_unique"), [CExpression.AddressOf(place)]
+  const symbol = containerMadeUniqueSymbol program, annotation
+  if !symbol.isEmpty() {
+    const made = CExpression.Call CExpression.Name(symbol), [CExpression.AddressOf(place)]
     return [CStatement.Evaluate(made)]
   }
   if isObjectType(program, annotation) {
@@ -1018,16 +1019,27 @@ fn sizeOf(name: String): CExpression {
   CExpression.Call CExpression.Name("sizeof"), [CExpression.Name(name)]
 }
 
-fn isListType(program: IrProgram, id: IrTypeId): Bool {
+/**
+ * The runtime function that makes one container's storage unique, or the empty name for a type that is no container.
+ *
+ * Every write of a container prepares its own storage, so these are no-ops wherever the write follows immediately; they
+ * are what a `MakeUnique` of a container-typed place becomes, and a `var` path that is formed before the write needs
+ * exactly them.
+ */
+fn containerMadeUniqueSymbol(program: IrProgram, id: IrTypeId): String {
   if !program.hasType(id) {
-    return false
+    return ""
   }
   if const .Runtime(kind, _) = program.typeAt(id) {
-    if const .ListStorage = kind {
-      return true
+    match kind {
+      .ListStorage => "torb_list_make_unique"
+      .MapStorage => "torb_map_make_unique"
+      .SetStorage => "torb_set_make_unique"
+      _ => ""
     }
+  } else {
+    ""
   }
-  false
 }
 
 // --- Calls ----------------------------------------------------------------------------------------------------------

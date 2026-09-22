@@ -60,7 +60,13 @@ group "`a[key]`" {
       }
 
       fn used(): Int {
-        cell(Grid(1))
+        cell(Grid(1)) + cell(Other())
+      }
+
+      type Other with Indexed<Int, Int> {
+        fn at(key: Int): Int {
+          key
+        }
       }
       """
     assert(
@@ -355,7 +361,7 @@ group "`for` over a collection" {
         fn t_acme_x2f_app_main_total(values: Record(T_acme_x2f_app_main_Three) borrowed) -> Int64 {
           slot %0 parameter values: Record(T_acme_x2f_app_main_Three)
           slot %1 local sum: Int64
-          slot %2 local iterator: Object(Iterator<Int64>)
+          slot %2 local iterator: Record(T_acme_x2f_app_main_Counting)
           slot %3 local value: Int64
           slot %4 temporary: Variant(T_std_x2f_prelude_types_Option__Int64)
           slot %5 temporary: Int64
@@ -364,8 +370,7 @@ group "`for` over a collection" {
           %2 = call t_acme_x2f_app_main_Three_iterator(%0 borrowed) at acme/app/src/main.trb:18:3
           jump b1
         b1: # acme/app/src/main.trb:18 for
-          makeUnique %2
-          %4 = callWitness value %2 bound 0 member 0()
+          %4 = call t_acme_x2f_app_main_Counting_next(&%2 borrowed)
           %5 = tag %4
           switch %5 case 0 b2, otherwise b3
         b2: # acme/app/src/main.trb:18 body
@@ -416,7 +421,7 @@ group "`for` over a collection" {
         fn t_acme_x2f_app_main_total(values: Record(T_acme_x2f_app_main_Three) borrowed) -> Int64 {
           slot %0 parameter values: Record(T_acme_x2f_app_main_Three)
           slot %1 local sum: Int64
-          slot %2 local iterator: Object(Iterator<Int64>)
+          slot %2 local iterator: Record(T_acme_x2f_app_main_Counting)
           slot %3 local value: Int64
           slot %4 temporary: Variant(T_std_x2f_prelude_types_Option__Int64)
           slot %5 temporary: Int64
@@ -430,8 +435,7 @@ group "`for` over a collection" {
           %2 = call t_acme_x2f_app_main_Three_iterator(%0 borrowed) at acme/app/src/main.trb:18:3
           jump b1
         b1: # acme/app/src/main.trb:18 for
-          makeUnique %2
-          %4 = callWitness value %2 bound 0 member 0()
+          %4 = call t_acme_x2f_app_main_Counting_next(&%2 borrowed)
           %5 = tag %4
           switch %5 case 0 b2, otherwise b3
         b2: # acme/app/src/main.trb:18 body
@@ -465,10 +469,11 @@ group "`for` over a collection" {
     const source = r"""
       type Texts with Iterator<String> {
         var seen: Int = 0
+        var tag: String = "a"
 
         var fn next(): String? {
           seen = seen + 1
-          if seen > 2 { None } else { Some("a") }
+          if seen > 2 { None } else { Some(tag) }
         }
       }
 
@@ -487,7 +492,7 @@ group "`for` over a collection" {
       }
       """
     const shown = ownedIrOf source, "t_acme_x2f_app_main_lengths"
-    assert shown.contains("b2: # acme/app/src/main.trb:18 body")
+    assert shown.contains("b2: # acme/app/src/main.trb:19 body")
     assert shown.contains("release %3")
     assert shown.contains("release %2")
   }

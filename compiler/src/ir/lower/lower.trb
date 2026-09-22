@@ -12,6 +12,7 @@ use Checked from "../../semantics/check"
 use Package, Workspace from "../../project/workspace"
 use relativePath, pathName from "../../project/path"
 use IrProgram, Instruction from "../ir"
+use devirtualizeProgram from "../devirtualize"
 use finishProgram, isManagedType from "../layout"
 use verifyProgram, typeOfReference from "../verify"
 use printProgram from "../print"
@@ -40,6 +41,11 @@ public fn lowerWorkspace(
     }
   }
   finishProgram lowering.program
+  // Both back ends read the IR after this, so a value whose concrete type the program decides is that type from here
+  // on: the boxes and the indirect calls of docs/PERFORMANCE.md finding 2 are gone before anything else looks
+  devirtualizeProgram lowering.program
+  // After the devirtualization, because a payload that turned out not to be counted leaves a `makeUnique` behind that
+  // the box it replaced did need
   dropUncountedMakeUnique lowering.program
   lowering
 }

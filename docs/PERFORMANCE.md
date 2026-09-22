@@ -64,9 +64,19 @@ A generic call whose witness is known is monomorphized: `Vector2<Int>` is a `str
 per bound, and every member call is a load of a function pointer out of a table plus an indirect call, which no C
 compiler devirtualizes because the table is read out of the value.
 
-A collection literal is the second kind. `[1, 2, 3]` has the type `List<Int>`, and `List` is a trait, so the literal's
-IR type is `Object(List<Int64>)`: a heap box holding the `torb_list`, plus one witness pointer. Finding 2 is that, and
-findings 3, 4, 5, 9 and 10 wait on it.
+A collection literal **was** the second kind. `[1, 2, 3]` has the type `List<Int>`, and `List` is a trait, so the
+lowering writes `Object(List<Int64>)`: a heap box holding the `torb_list`, plus one witness pointer. Round P5 takes
+that box back off again wherever the program says which container is inside it
+(`compiler/src/ir/devirtualize.trb`, finding 2): every slot and every function result a value flows between is one
+class, and a class whose producers are all one payload with the same static tables becomes that payload - slots,
+parameters, result, and every `callWitness` on it the direct `call` of the member the table named.
+
+**Dictionary passing is therefore what two implementations in one place cost, not what a collection costs.** What
+still boxes is what the analysis may not follow: a value in a **field** of a record, a value a closure captures, a
+value narrowed to another trait, a value two implementations meet in, and every parameter and result of a function
+something other than a `Call` of the program reaches - a member of a witness table above all, whose thunk casts the
+erased receiver to the payload and calls exactly that signature. `ArrayList.iterator` is one of those, which is why
+`for` over a list still allocates an iterator (finding 5, round P6).
 
 ### 1.5 What is checked
 
@@ -90,10 +100,11 @@ which of those checks are provably unnecessary.
 | `{ _ * 2 }` capturing nothing | a code pointer and `NULL` | 0 | 0 |
 | `{ _ * factor }` as the argument of a call | a code pointer and an environment on the frame | 1 release | 0 |
 | `{ _ * factor }` stored, returned or kept by the callee | a code pointer and a heap environment | 1 release | **1** |
-| `numbers[index]` on a literal list | indirect call, `get`, an `Option`, `expect` | 0 | 0 |
+| `numbers[index]` on a literal list | a direct call, `get`, an `Option`, `expect` | 0 | 0 |
 | `for value in numbers` | a boxed iterator, then `MakeUnique` and an indirect call per turn | 1 per turn | **1 per loop** |
-| `numbers[index] = v` | `MakeUnique`, indirect call | 1 per write | 0 |
+| `numbers[index] = v` | `MakeUnique`, a direct call | 1 per write | 0 |
 | `grid[row][column] = v` | read the row (retain), `MakeUnique` (**copies it**), write it back | 4 per write | **2 per write** |
+| `for value in numbers` where nothing else implements the trait | a concrete cursor on the frame, a direct `next` | 0 | 0 |
 | `"{a} and {b}"` of numbers, `Bool`, `Char` or text | one concatenation over the values themselves | 0 | **1** |
 | `"{a} and {b}"` of a type with its own `Show` | one `Show.show` per such part, then one concatenation | - | **those parts + 1** |
 | `map[key] ?? 0` then `map.set key, n` | two probes, the key hashed twice | 1 | 0 or 1 |
@@ -126,15 +137,20 @@ same machine code. Each row says **holds** or **does not hold** and names the ev
 | **A retain or release of a literal** | **holds** | A slot whose every definition is a `Constant` is left out of the counted set, so the body of `Indexed.at` holds no `torb_text_release` of the message its `expect` carries |
 | **String interpolation** | **holds** | `const torb_text_part parts[4] = { { .kind = TORB_PART_TEXT, .text = s5 }, { .kind = TORB_PART_SIGNED, .signed_value = s1_index }, ... }` and one `torb_text_concat_parts`: **2 000 003 allocations** for 2 000 000 interpolations, which is the one `String` each of them answers |
 | **Integer overflow checking** | **does not hold in general** | Free where arithmetic is not the bottleneck (`arithmetic` 0.95x), and **2.37x** where it is (`call-depth`). A C twin isolates it: the same recursion is 0.21 s plain, 0.38 s with all three operations checked, 0.28 s with only the addition - which is the only one that can overflow |
-| **A list literal, used as a list** | **does not hold** | `[1, 2, 3]` is `Object(List<Int64>)`: one heap box on top of the list, and `numbers[index]` is `callWitness value %0 bound 0 member 15`. `benchmarks/list-index` is **13.12x** |
-| **`for value in collection`** | **does not hold** | A heap-allocated `Object(Iterator<T>)`, then `makeUnique %3` and an indirect call every turn. `benchmarks/list-iterate` is **47.95x**, and slower than the counted index loop over the same data |
-| **A field of a record in a list** | **does not hold** | `points[index].y = v` reads the element out, writes the temporary and writes it back through two indirect calls. `benchmarks/record-write` is **47.53x** |
-| **A nested index write** | **does not hold** | `grid[row][column] = v` copies the whole row, because the grid still holds it: **7 688 814 allocations and 31.7 GB copied** where the C twin does 803 and 5.1 MB |
-| **A pipeline of `map` and `filter`** | **does not hold** | One boxed stage record and one boxed iterator per stage: five allocations per pipeline, and one indirect call per stage per element. `benchmarks/pipeline` is **18.26x** |
+| **The dispatch of a collection literal** | **holds** | `[1, 2, 3]` is written as `Object(List<Int64>)` and is a `List(Int64)` by the time a back end sees it: `%0 = move %1`, and `numbers[index]` two functions away is `call n_std_..._ArrayList_get__Int64(%0 borrowed, %1 borrowed)` inside an `Indexed.at` gcc inlines. No box, no table, no indirect call |
+| **A trait-typed value with one implementation** | **holds** | A local written as the trait, a result of the trait and a parameter of the trait are one class and one concrete value (`compiler/tests/devirtualize.test.trb`). A `var fn` member on one is the ordinary `var` path: `call t_..._Tally_bump(&%0 borrowed)` |
+| **A list literal, used as a list** | **does not hold** | The dispatch is gone and the rest is not: `numbers[index]` is still a bounds check, an `Option` and an `expect` per element against a load, and the C twin vectorizes its sum. `benchmarks/list-index` lost **31%** of its time (28.56x to 19.70x against its twin in one session) |
+| **`for value in collection`** | **does not hold** | `ArrayList.iterator` is a member of the `Iterable` table and a table member's signature may not move, so it still answers a heap `Object(Iterator<T>)` and every turn is a `makeUnique` plus an indirect call. `benchmarks/list-iterate` lost **12%**, which is what happened around the loop and not in it. A user `Iterable` that nothing boxes is already a concrete cursor and a direct `next` |
+| **A field of a record in a list** | **does not hold** | `points[index].y = v` still reads the element out, writes the temporary and writes it back - two direct calls now instead of two indirect ones. `benchmarks/record-write` lost **31%** of its time |
+| **A nested index write** | **does not hold** | `grid[row][column] = v` copies the whole row, because the grid still holds it: **7 688 813 allocations and 31.7 GB copied** where the C twin does 803 and 5.1 MB. The element of a `List<List<Int>>` is storage the container owns, so it keeps its box |
+| **A pipeline of `map` and `filter`** | **does not hold** | Four allocations per pipeline instead of five, and one indirect call per stage per element: the stages are built around a trait-typed `self` in a **field** and their iterators come out of table members. `benchmarks/pipeline` is **28.67x** and lost 13% |
 
-Every row that does not hold has one cause: **a value whose concrete type the compiler knows is boxed behind a trait
-anyway**, and everything that reads or writes through it is an indirect call the C compiler cannot see through. That is
-finding 2 - the overflow checks are the one exception, and they are finding 8.
+Every row that does not hold **used to** have one cause: a value whose concrete type the compiler knows, boxed behind a
+trait anyway. Round P5 removed that cause wherever the program decides the payload, and the rows above are what is
+underneath it: the `Option` round trip and the bounds check of an index (finding 8 and a standard library question),
+the read-copy-write of an element (findings 3 and 4), and the one place the devirtualization may not go - a **member of
+a witness table**, whose signature the thunk of every dispatch is built against. That last one is what `iterator()` is,
+and it is why the two loop rows moved least.
 
 ---
 
@@ -146,17 +162,17 @@ worth, what it risks, and the test that pins it.
 | # | Pattern | Cost | Fix | Effort |
 |---|---------|------|-----|--------|
 | 1 | `x = f(x)` at the last use | was >231x, 120 006 allocations, 20 GB copied | a `Write` with no steps defines its base | **done, round P1** |
-| 2 | A collection literal is a trait-typed value | 13x to 48x, and 66 830 bytes of C where 3 748 would do | a devirtualization peephole over the IR | large |
-| 3 | A nested index write copies the row | 82x, 2 allocations per write | an `Element` path step into the concrete list | medium, waits on 2 |
-| 4 | A field of a record in a list | 48x | the same `Element` path step | small, waits on 3 |
-| 5 | `for` over a collection | 48x, one box per loop, a `makeUnique` per turn | the concrete iterator, then a counted loop | medium, waits on 2 |
+| 2 | A collection literal is a trait-typed value | was 13x to 48x, one box per literal, one indirect call per access | a whole-program devirtualization over the IR | **done, round P5** |
+| 3 | A nested index write copies the row | >451x, 2 allocations per write | an `Element` path step into the concrete list | medium |
+| 4 | A field of a record in a list | 52x | the same `Element` path step | small, waits on 3 |
+| 5 | `for` over a collection | 66x, one box per loop, a `makeUnique` per turn | the concrete iterator, then a counted loop | medium |
 | 6 | String interpolation | was 3 allocations per interpolation | a text part that is still a number | **done, round P4** |
 | 7 | A non-escaping closure environment | was one allocation per closure made | the environment on the frame | **done, round P3** |
 | 8 | Overflow checks that cannot fire | 2.37x on call-heavy code, 1.3x of it removable | a local range analysis | medium |
-| 9 | A pipeline of stages | 18x, five allocations per pipeline | falls out of 2 and 5 | none of its own |
-| 10 | A map read-modify-write, and `map[key].field = v` | 4.89x, the key hashed twice | `TakeOut`/`PutBack` on the map | medium, waits on 2 |
+| 9 | A pipeline of stages | 29x, four allocations per pipeline | falls out of 5 | none of its own |
+| 10 | A map read-modify-write, and `map[key].field = v` | 6.4x, the key hashed twice | `TakeOut`/`PutBack` on the map | medium |
 | 11 | A `Release` of a literal text | was one call per list index read | a dead-count rule in the ownership pass | **done, round P2** |
-| 12 | Witness members that nothing calls | 48 thunks in a three-line program | whole-program member liveness | large |
+| 12 | Witness members that nothing calls | 24 thunks in a three-line program, and every table emitted | whole-program member liveness | large |
 | 13 | Reference counts cannot be inlined | measured: -14% to +9%, no decision | nothing yet | - |
 | 14 | A module `const` rebuilt where it is read | 63% of a read, already fixed | recorded, not open | - |
 
@@ -200,81 +216,120 @@ was not emptied, which is the invariant in one sentence; `compiler/tests/ownersh
 and `reassignment.trb`, `participle.trb` and `counted.trb` of the conformance suite run every shape of an overwrite
 with the leak gate on.
 
-### F2. A collection literal is a trait-typed value, so every access is an indirect call
+### F2. A collection literal is a trait-typed value, and the program says which one
 
 **Pattern.** `var x = [1, 2, 3]`, `var m: Map<String, Int> = [:]` - every collection in every program.
 
-**What is generated.** The checker gives `[1, 2, 3]` the type `List<Int>`, which is a *trait*, so the IR type is
+**What was generated.** The checker gives `[1, 2, 3]` the type `List<Int>`, which is a *trait*, so the IR type is
 `Object(List<Int64>)` and the lowering coerces the freshly built `ArrayList` into a box.
 `compiler/src/ir/lower/collection.trb` says so in its own module comment: "The **type of a literal is a trait-typed
 value** ... it does *not* name the implementation."
 
 ```text
 %1 = new List(d_Int64)
-...
 %0 = traitValue %1 owned last tables(table w_std_x2f_collections_list_List__List_Int64_Int64)
-%17 = callWitness value %16 bound 0 member 15(%14 borrowed)
+makeUnique %0
+callWitness value %0 bound 0 member 3(%6 borrowed)
 ```
 
-```c
-T_payload__List_Int64 *box = (T_payload__List_Int64 *)torb_allocate(sizeof(T_payload__List_Int64), TORB_BLOCK_OBJECT);
-box->f_value = s2;
-s5.data = (torb_object *)box;
-s5.w0 = &w_std_x2f_collections_list_List__List_Int64_Int64;
-...
-s17 = ((T_object__... (*)(void *, int64_t))s16.w0->members[15])(s16.data, s14);
+**What is generated now.** `compiler/src/ir/devirtualize.trb`, between `lowerWorkspace` and `insertOwnership`:
+
+```text
+%1 = new List(d_Int64)
+%0 = move %1
+makeUnique %0
+call n_std_x2f_collections_list_ArrayList_add__Int64(&%0 borrowed, %6 borrowed)
 ```
 
-**The cost.** One allocation per literal, one indirect call per access, and - because a witness table has to be filled -
-every member of every trait in the bound set is instantiated whether the program calls it or not (finding 12).
-`const numbers = [1, 2, 3]  print numbers.length()` emits **66 830 bytes of C in 77 definitions, 48 of them witness
-thunks**. The same program with a function instead of a list emits **3 748 bytes in 3 definitions and no thunks**.
+and `numbers[index]`, two functions away, is `call n_std_x2f_collections_list_ArrayList_get__Int64(%0 borrowed, %1
+borrowed)` inside an `Indexed.at` whose `self` is a `List(Int64)` - a call gcc inlines, which is what makes the bounds
+check and the `Option` visible to it at all.
 
-There is no way out of it in the source: `const numbers: ArrayList<Int> = [1, 2, 3]` is refused with
-``a list literal of a type that is not a `List` is not supported by the native back end yet``.
+**How it decides.** The unit is not a slot but a **class of locations**: every slot of every function plus the result
+of every function, joined wherever a value flows between two of them - an argument into a parameter, a result out of a
+call, a `Return`, a `Read` or a `Write` of the whole slot. A class loses its box when every producer is a `TraitValue`
+of the **same** payload with the **same** static tables and nothing in it is poisoned. Then the slots, the parameters
+and the result take the payload's type, the `TraitValue` becomes a `Copy` - a `Move` at its last use - and every
+`CallWitness` on it becomes the direct `Call` of the member the table named, with the receiver as the first argument
+and as a *place* where the member takes `var self`.
 
-**The fix.** A devirtualization peephole over the IR of one function, in a new `compiler/src/ir/devirtualize.trb` run
-between `lowerWorkspace` and `insertOwnership`: a slot of type `Object(bounds)` that is **defined by a `TraitValue` in
-the same function** and whose every use is a `CallWitness`, a `Read`, a `Write` or an argument of a callee that could
-take the payload type, is replaced by its payload, every `CallWitness` on it by the direct `Call` of the member the
-table names, and the `TraitValue` itself is deleted. Nothing about the type system changes; the pass answers a question
-the IR already contains.
+Everything the analysis cannot follow poisons what stands in it: a value built into a record, captured by a closure,
+narrowed to another trait, handed to an erased ABI (a `CallClosure`, or any argument of a `CallWitness`), read out of a
+path, or taken out of a container. So does every parameter and result of a function that something other than a `Call`
+of the program reaches - a **member of a witness table** above all, whose thunk casts the erased receiver to the
+payload and calls exactly that signature, and with it a function a `Closure` points at, a function of the runtime, a
+helper of an element descriptor and the accessor of a module `const`. Two implementations that meet in one place
+poison it too, which is the case dictionary passing exists for.
 
-**The gain.** It is the enabling change for findings 3, 4, 5, 9 and 10, so its own share is the smaller half: the box
-per literal, the indirect call per access, and the instances the witness table no longer has to be filled with. The
-rows it moves are `list-index` (13.12x), `list-iterate` (47.95x), `record-write` (47.53x) and `pipeline` (18.26x).
+**The annotation is not what decides it.** `const items: List<Int> = [1, 2, 3]` loses its box like every other literal:
+what the analysis follows is where a value *goes*, not how a binding was written. `benchmarks/list-index` writes `var
+numbers: List<Int> = []`, hands it out of `filled()` as `List<Int>` and indexes it in `total(numbers: List<Int>)`, and
+all five positions - the local, the result, the temporary, the parameter, and the `self` of the `Indexed.at` instance -
+are one class holding one `torb_list`.
 
-**The risk.** A `TraitValue` whose slot escapes - returned, stored in a field, captured by an escaping closure, passed
-to a parameter that is declared as the trait - may not be peeled. The pass has to be conservative in exactly the way the
-capture analysis already is, and a wrong answer here is a wrong program and not a slow one. That is what makes it its
-own round with its own gate.
+**Nothing about the language changed.** The checker is untouched, the type of a literal is still the trait, and the
+diagnostics, `Show` and every message say what they said. Two things in the *output* moved: the IR text, and one line
+of the C back end - a witness table is emitted with **external** linkage now, because a table the devirtualization made
+unreachable would otherwise be a `static const` that nothing reads, which is an error under
+`-Wunused-const-variable -Werror`. The runtime gained `torb_map_make_unique` and `torb_set_make_unique` beside
+`torb_list_make_unique`, because a `var` path through a concrete map needs the same one-line call a list already had.
 
-**The test.** An IR snapshot in `compiler/tests/`: the IR of `var x = [1, 2, 3]  print x[1]` holds no `traitValue` and
-no `callWitness`. Plus the size of the emitted C for that program as a budget.
+**What it costs and what it bought.** Section 4 has the table. The shape of it: `list-index` **-31%** (399 ms to
+275 ms) and `record-write` **-31%** (1.25 s to 0.87 s) with the same allocation counts, because what went away is the
+dispatch and not a block; `map-count` **-20%**, `pipeline` **-13%** and `list-iterate` **-12%**. `pipeline` also loses
+one of its five allocations per pipeline (125 to 105 for 20 pipelines), because the `Filtered` stage is a record now
+instead of a box. The compiler's own `program.c` is **274 875 bytes smaller** for the same
+sources (63 265 243 against 62 990 368), which is what the direct calls and the boxes that are not built save; the
+three-line list program of finding 12 goes from 25 696 to 25 102 bytes and keeps all 24 of its witness thunks, because
+a table that nothing reaches is still emitted. That is finding 12 and round P10, and it is now the biggest single item
+in the C of a small program.
+
+**The risk.** A class that is peeled although something still needs the box is a wrong program. Three things hold it:
+the analysis poisons by construction (a position it does not recognize is poisoned, never ignored), every question the
+IR verifier would ask about the direct call is asked *before* the rewrite - the member has to be a plain function of
+the program with no witness parameters, the receiver exactly the payload, every argument the type its parameter
+declares, the result what the slot at the call site holds - and a class that fails any of them is poisoned instead of
+half rewritten.
+
+**What is left on the table.** A class is all or nothing: one use that has to be a box keeps the box for every
+other use of the same value. Boxing **at that use instead** - inserting a `TraitValue` in front of the one argument, the
+one field or the one return that needs it - would cover `rows.add cells` in `benchmarks/nested-write`, where the inner
+list is peeled everywhere except where it goes into the outer one. It costs one allocation at the point of escape and
+nothing anywhere else, so it is worth measuring rather than assuming; it is the first thing to try if a later round
+wants more of this finding.
+
+**The test.** `compiler/tests/devirtualize.test.trb` pins both halves: a value written as the trait and used in its own
+frame is the payload, a result and a parameter of the trait become the payload together, a `var fn` member is the
+ordinary `var` path of a concrete value - and, on the other side, a value built into a record keeps its box, two
+implementations in one parameter keep the dispatch, and a member of a witness table keeps the signature its thunk
+calls. `compiler/tests/lower-collections.test.trb` pins the loop whose cursor is concrete, and the conformance suite
+runs all 84 programs with the leak gate on.
 
 ### F3. A nested index write copies the inner container
 
 **Pattern.** `grid[row][column] = value`, `world.entities[id].health = 1`, `rows[i].add(x)`.
 
-**What is generated.**
+**What is generated.** After round P5 the **outer** list is concrete and its `set` is a direct call; the row is an
+element of a container and therefore still a trait-typed value, so the copy is unchanged.
 
 ```text
-%16 = read %0
-%17 = callWitness value %16 bound 0 member 15(%14 borrowed)   # Indexed.at - retains the row
-release %16
-makeUnique %17                                                # count is 2, so this COPIES the row
-callWitness value %17 bound 0 member 13(%15 borrowed, %18 borrowed)
+%10 = read %0
+%11 = call t_std_..._Indexed_at__...(%10 borrowed last, %4 borrowed)   # the row - retains it
+release %10
+...
+makeUnique %11                                                # count is 2, so this COPIES the row
+callWitness value %11 bound 0 member 8(%7 borrowed, %15 borrowed)
 makeUnique %0
-callWitness value %0 bound 0 member 13(%14 borrowed, %17 owned last)
+call n_std_x2f_collections_list_ArrayList_set__...(&%0 borrowed, %4 borrowed, %11 owned last)
 ```
 
 **The cost.** O(width of the row) per write. `benchmarks/nested-write` writes 3 840 000 cells of an 800 x 800 grid and
-pays **7 688 814 allocations and 31.7 GB copied** for it, against 803 allocations and 5.1 MB in C: **two allocations per
-write** - the object box and the row's storage - and **82x** the time.
+pays **7 688 813 allocations and 31.7 GB copied** for it, against 803 allocations and 5.1 MB in C: **two allocations per
+write** - the object box of the row and the row's storage - and two to three orders of magnitude of the time.
 
-**The fix.** `compiler/src/ir/lower/place.trb` already says why it cannot be done today, in the doc comment of
+**The fix.** `compiler/src/ir/lower/place.trb` says why it could not be done before round P5, in the doc comment of
 `TakenElement`: "the container of a path is almost always a **trait-typed** value ... whose payload the back end may not
-index". After finding 2 the container is a concrete `Runtime(List, Item)`, and the existing `Instruction.TakeOut` /
+index". It is a concrete `Runtime(ListStorage, Item)` now, so the existing `Instruction.TakeOut` /
 `Instruction.PutBack` with `RuntimeKind.List` - or a `PathStep.Element` after one `MakeUnique` on the outer list, which
 is what BACKEND 1.6 writes down - replaces the read-copy-write round trip with an interior pointer.
 `torb_list_element_reference` is already in `runtime/list.c`.
@@ -292,17 +347,19 @@ asserts no `makeUnique` stands on a row the container still holds.
 
 **Pattern.** `points[index].y = value` - how every entity-component loop is written.
 
-**What is generated.** `Indexed.at` into a temporary, `write %20.x`, then `MutableIndexed.set` back:
+**What is generated.** `Indexed.at` into a temporary, `write %8.y`, then `MutableIndexed.set` back - both of them a
+direct call since round P5, and still a round trip:
 
 ```text
-%20 = callWitness value %19 bound 0 member 15(%18 borrowed)
-write %20.x = %21 borrowed
-makeUnique %10
-callWitness value %10 bound 0 member 13(%18 borrowed, %20 borrowed)
+%8 = call t_std_..._Indexed_at__...(%7 borrowed last, %4 borrowed)
+write %8.y = %12 borrowed
+makeUnique %0
+call n_std_x2f_collections_list_ArrayList_set__...(&%0 borrowed, %4 borrowed, %8 borrowed)
 ```
 
-**The cost.** Two indirect calls, two bounds checks and a copy of the record in each direction, for what is one store.
-`benchmarks/record-write` is **47.53x**, and one of the two worst ratios in the table that are not quadratic.
+**The cost.** Two calls, two bounds checks and a copy of the record in each direction, for what is one store.
+`benchmarks/record-write` lost **31%** of its time when the two calls became direct (75.60x to 52.43x against its twin
+in one session); what is left is the round trip itself.
 
 **The fix.** The same as finding 3: an `Element` path step into the concrete list, so the write goes through an interior
 pointer and the record never moves.
@@ -328,6 +385,11 @@ b1:
   switch %6 case 0 b2, otherwise b4
 ```
 
+Round P5 already removes all of that for an `Iterable` **nothing boxes**: the cursor is the concrete record on the
+frame and `next` is a direct call through the place the cursor is, which is what
+`compiler/tests/lower-collections.test.trb` pins. The containers of `std/` are the case that is left, and the reason is
+named in the fix below.
+
 ```c
 s3_iterator.data = (torb_object *)torb_make_unique(s3_iterator.data, s3_iterator.w0->size,
                                                    s3_iterator.w0->retain_children, s3_iterator.w0->drop);
@@ -341,8 +403,12 @@ loop** over the same list, which is the opposite of what a reader expects.
 
 **The fix.** Three levels, each worth doing on its own.
 
-1. After finding 2 the receiver is concrete, so `iterator()` is a direct call answering a `ListIterator<Item>` - an
-   `inline` record - and `next()` is a direct call the C compiler inlines. The box and the `makeUnique` are gone.
+1. The receiver is concrete since round P5, but `iterator()` is a **member of the `Iterable` table**, and a table
+   member's signature may not move: its thunk casts the erased receiver to the payload and calls exactly that
+   signature. So `ArrayList.iterator` still answers the boxed `Iterator<Item>`. Two ways out, and P6 picks one: a
+   **specialized copy** of a frozen member for the call sites that know the payload - the table keeps the original -
+   or `ArrayList.iterator` declaring `ListIterator<Item>` rather than the trait, which makes the answer concrete by
+   construction and the table's entry a one-line coercion.
 2. A `for` over a value whose concrete type is the runtime list lowers to a **counted loop over `Element` steps**, the
    way `for index in 0..n` already lowers to a counted loop with no `Range` in it
    (`compiler/src/ir/lower/statement.trb`). That is the last indirect call.
@@ -499,14 +565,20 @@ the panic programs of the conformance suite unchanged.
 
 and driving it allocates a `FilteredIterator`, a `MappedIterator` and a `ListIterator`, each boxed.
 
-**The cost.** `benchmarks/pipeline` allocates 125 blocks for 20 pipelines against 25 for the same data read once:
-**five allocations per pipeline**, and per element three indirect calls and three `Option` round trips. The ratio against
-the fused loop is **18.26x**.
+**The cost.** `benchmarks/pipeline` allocates 105 blocks for 20 pipelines against 25 for the same data read once:
+**four allocations per pipeline** after round P5 made the `Filtered` stage a record instead of a box, and per element
+three indirect calls and three `Option` round trips. The ratio against the fused loop is **28.67x**, and the round took
+13% of the time off it.
 
-**The fix.** Findings 2 and 5 remove the boxes and turn the three `next()` calls into direct calls that gcc can inline
-into one loop, which is stage fusion without a fusion pass. What stays is the `Option` per stage per element, which an
-`Iterator` that answers "is there one" and "the value" separately would remove - a standard library question and not a
-back end one.
+**Why only one of the five.** `Iterable.map` and `Iterable.filter` are reached with `Self` bound to the **trait type**,
+so their one instance builds a `Mapped`/`Filtered` record around a trait-typed `self` - a value in a **field**, which
+the devirtualization may not follow. The stage that is answered is peeled where its own consumer is concrete, which is
+the one that went. The rest waits on finding 5: the three iterators are all answered by table members.
+
+**The fix.** Finding 5 removes the remaining boxes and turns the three `next()` calls into direct calls that gcc can
+inline into one loop, which is stage fusion without a fusion pass. What stays is the `Option` per stage per element,
+which an `Iterator` that answers "is there one" and "the value" separately would remove - a standard library question
+and not a back end one.
 
 **The gain.** From about twenty times a hand-written loop to whatever the `Option` round trip leaves.
 
@@ -519,22 +591,23 @@ back end one.
 **Pattern.** `const seen = counts.get(word) ?? 0` then `counts.set word, seen + 1` - the word counter every program
 has. And `byName[key].count = 5`.
 
-**What is generated.** For the second one, `Indexed.at`, a write to the temporary, then `MutableIndexed.set` - two
-probes of the table, with the key constant materialized twice:
+**What is generated.** The map is a concrete `Map(Key, Value)` since round P5 and both probes are direct calls of the
+runtime's own functions, so what is left is that there are **two** of them:
 
 ```text
-%8 = callWitness value %7 bound 0 member 13(%6 borrowed)
-write %8.count = %9 borrowed
-makeUnique %0
-callWitness value %0 bound 0 member 11(%6 borrowed last, %8 borrowed)
+%11 = call n_std_x2f_collections_map_TrieMap_get__String_Int64(%1 borrowed, %7 borrowed)
+...
+makeUnique %1
+call n_std_x2f_collections_map_TrieMap_set__String_Int64(&%1 borrowed, %7 borrowed, %14 borrowed)
 ```
 
-**The cost.** `benchmarks/map-count` is **4.89x** against one probe of an open addressing table, and allocates 50 110
-blocks against 50 004.
+**The cost.** `benchmarks/map-count` is **6.39x** against one probe of an open addressing table, and allocates 50 108
+blocks against 50 004. Round P5 took 20% of its time off - both probes are direct calls of `torb_map_get` and
+`torb_map_set` now - and what is left is that there are two probes and two hashes.
 
 **The fix.** `Instruction.TakeOut` / `PutBack` with `RuntimeKind.Map` - the two instructions exist in the IR for exactly
 this and are reached by nothing - plus a `torb_map_slot` in `runtime/map.c` that answers an interior pointer valid until
-the next write to the table. After finding 2 the receiver is concrete, which is what the instructions need. For the
+the next write to the table. The receiver is concrete now, which is what the instructions needed. For the
 read-modify-write, a `Map` member that reaches the same mechanism (`getOrInsert`, or `update(key) { }`), so that a user
 who writes the two-step form keeps it and a user who writes the one-step form gets one probe.
 
@@ -582,14 +655,16 @@ stand side by side, and the extended verifier would report a leak if a slot that
 
 ### F12. A witness table instantiates every member, called or not
 
-**Pattern.** Every trait-typed value, so - until finding 2 - every collection.
+**Pattern.** Every trait-typed value. Since round P5 a collection literal is not one any more, and the tables are
+emitted anyway - which is what makes this the biggest single item left in the C of a small program.
 
 **What is generated.** `w_std_..._List__List_Int64_Int64` holds seventeen members, among them `filter`, `toList`,
 `forEach`, `count`, `insert`, `removeAt`, `reverse` and `compact`. A program that only calls `add` and `length` gets an
 instance and a thunk for all seventeen, because the table has to be filled.
 
-**The cost.** The three-line program of finding 2 is 66 830 bytes of C in 77 definitions, **48 of them witness thunks**,
-against 3 748 bytes in 3 definitions without the list. At the scale of the compiler itself,
+**The cost.** The three-line program of finding 2 is **25 102 bytes of C with 24 witness thunks** in it, against 3 424
+bytes and none for the same program with a function instead of a list. Round P5 took 594 bytes off it and not one
+thunk, because a table nothing reaches is still emitted. At the scale of the compiler itself,
 [BACKEND 6.3](BACKEND.md) measured witness thunks at 17.7% of 65 MB before they were keyed on the member rather than the
 table, and generic instances at 18.1%.
 
@@ -641,29 +716,46 @@ initializer is not static data is built once and read with a retain, in both bac
 `benchmarks/` holds one program per pattern and the C a careful C programmer would write for the same work.
 `sh benchmarks/run.sh --allocations` produces this; `benchmarks/README.md` says how to read it.
 
-Windows 11, 16 cores, gcc 13.2.0 (MinGW-W64 x86_64-ucrt-posix-seh), `-std=c11 -O2 -g0 -Wall -Wextra`, stage 0 built
-from this worktree. Times are the fastest of five runs, in microseconds, net of the process floor that `nothing.trb`
-measures (torb 72 165, c 70 538). The **allocations** column is the one that does not move with the machine; this run
-shared the machine with another build of the compiler, so a row whose two sides are close - `arithmetic`, `wrapper`,
-`closure` - can come out either side of 1.00x, and the rows further down carry more noise than the audit's first run
-did. The column to compare a later run against is the last one.
+Windows 11, 16 cores, gcc 13.2.0 (MinGW-W64 x86_64-ucrt-posix-seh), `-std=c11 -O2 -g0 -Wall -Wextra`. Both sides are
+built by a `torb` binary directly (`TORB_COMPILER=`), **before** by the compiler of the previous commit and **after** by
+the compiler round P5 produced, so the two columns differ by this round and by nothing else. Times are the fastest of
+**nine** runs, in microseconds, net of the process floor that `nothing.trb` measures.
 
-| Program | torb | c | ratio | torb allocations | c allocations |
-|---------|-----:|--:|------:|-----------------:|--------------:|
-| `arithmetic` | 199 450 | 207 979 | **0.95x** | 3 | 2 |
-| `wrapper` | 190 172 | 194 509 | **0.97x** | 3 | 2 |
-| `closure` | 176 167 | 179 556 | **0.98x** | 3 | 2 |
-| `interpolation` | 362 493 | 197 482 | **1.83x** | 2 000 003 | 2 |
-| `call-depth` | 428 936 | 180 589 | **2.37x** | 3 | 2 |
-| `accumulate` | 8 939 | under 2 000 | **>4.46x** | 20 (1.05 MB) | 16 (1.05 MB) |
-| `map-count` | 383 286 | 78 230 | **4.89x** | 50 110 | 50 004 |
-| `list-index` | 452 784 | 34 490 | **13.12x** | 25 | 3 |
-| `pipeline` | 872 349 | 47 755 | **18.26x** | 125 | 3 |
-| `record-write` | 1 355 326 | 28 513 | **47.53x** | 24 | 3 |
-| `list-iterate` | 1 084 314 | 22 612 | **47.95x** | 65 | 3 |
-| `nested-write` | 1 273 013 | 15 486 | **82.20x** | 7 688 814 (31.7 GB) | 803 (5.1 MB) |
+The **c** column is one number for both sides, because it is the same binary: the fastest of the eighteen runs the two
+sweeps made of it. That is what makes the two ratios comparable with each other - and what makes them *not* comparable
+with the table this one replaces, because the machine ran the C twins about twice as fast in this session as in the
+audit's. **Read the torb column and the allocation column**; the ratio says where a row stands today and not how it
+moved.
 
-What rounds P1 to P4 moved, against the audit's own first run of the same suite:
+| Program | torb before | torb after | c | ratio before | ratio after | allocations before | after |
+|---------|------------:|-----------:|--:|------------:|------------:|-------------------:|------:|
+| `arithmetic` | 188 970 | 186 003 | 178 172 | 1.06x | **1.04x** | 3 | 3 |
+| `closure` | 154 477 | 155 835 | 153 987 | 1.00x | **1.01x** | 3 | 3 |
+| `wrapper` | 165 616 | 178 541 | 175 537 | 0.94x | **1.02x** | 3 | 3 |
+| `interpolation` | 259 615 | 260 332 | 158 119 | 1.64x | **1.65x** | 2 000 003 | 2 000 003 |
+| `call-depth` | 361 403 | 359 877 | 143 290 | 2.52x | **2.51x** | 3 | 3 |
+| `accumulate` | 7 729 | 1 | under 2 000 | >3.86x | **>0.00x** | 20 (1.05 MB) | **19** |
+| `map-count` | 335 158 | 267 214 | 41 800 | 8.02x | **6.39x** | 50 110 | **50 108** |
+| `list-index` | 398 548 | 274 965 | 13 954 | 28.56x | **19.70x** | 25 | **24** |
+| `pipeline` | 802 284 | 696 741 | 24 300 | 33.01x | **28.67x** | 125 | **105** |
+| `record-write` | 1 250 692 | 867 464 | 16 544 | 75.60x | **52.43x** | 24 | **23** |
+| `list-iterate` | 1 002 058 | 884 384 | 13 329 | 75.18x | **66.35x** | 65 | **64** |
+| `nested-write` | 902 720 | 903 639 | under 2 000 | >451.36x | **>451.82x** | 7 688 814 (31.7 GB) | **7 688 813** |
+
+What round P5 moved, in the column that is a property of the program and not of the machine:
+
+| Program | torb time | what the devirtualization removed |
+|---------|----------:|-----------------------------------|
+| `list-index` | **-31%** | every access through the box: `Indexed.at` takes a `List(Int64)` and calls `torb_list_get` directly, and gcc inlines the whole chain |
+| `record-write` | **-31%** | the two indirect calls of the read-copy-write; the round trip itself is finding 4 |
+| `map-count` | **-20%** | the two probes are direct calls of `torb_map_get` and `torb_map_set`; that there are two of them is finding 10 |
+| `pipeline` | **-13%**, 125 to **105** allocations | one boxed stage per pipeline: `Filtered` is a record now. The other four wait on finding 5 |
+| `list-iterate` | **-12%** | the calls around the loop, not the loop: `ArrayList.iterator` is a table member and still answers a box (finding 5) |
+| `accumulate` | one allocation | both sides are under the floor; the allocation column is the statement there |
+| `nested-write` | unchanged | the outer list is concrete and its `set` is direct, and the copy of the row is all of the cost (finding 3) |
+| every other program | unchanged | there is no trait-typed value in them |
+
+What rounds P1 to P4 had moved, against the audit's own first run of the same suite:
 
 | Program | allocations before | after | what removed them |
 |---------|-------------------:|------:|-------------------|
@@ -673,9 +765,6 @@ What rounds P1 to P4 moved, against the audit's own first run of the same suite:
 | `closure` | 5 | **3** | P3, and the one interpolation of its own output |
 | every other program | 4 to 7 688 815 | one fewer | P4: the line each of them prints is one allocation |
 
-The times moved with them: `accumulate` from 462 812 microseconds to 8 939 - a quadratic shape became a linear one -
-and `interpolation` from 455 035 to 362 493. Nothing else in the suite is a shape any of the four rounds touches.
-
 Four things this table does not say on its own:
 
 - **A ratio with a `>` in front of it is a lower bound.** The C twin of that row does a few hundred microseconds of
@@ -684,13 +773,14 @@ Four things this table does not say on its own:
   statement there.
 - **The C twins of `list-index`, `list-iterate` and `pipeline` vectorize.** gcc turns a sum over an array into a vector
   reduction, and no program whose elements come back from a call can do that. Part of those three ratios is the
-  vectorization and not the dispatch - which is an argument for finding 2 rather than against it, because a direct call
-  the compiler can inline is what makes the reduction visible again.
-- **The ratios are steadier than the absolute times, and the allocation column is exact.** Three runs of the suite on
-  the same machine moved `call-depth` between 0.39 s and 1.00 s with its twin moving by the same factor, while its ratio
-  stayed between 2.40x and 2.57x. A run that shares the machine with another build moves both sides and moves them by
-  different amounts, so a ratio that is close to 1 can come out either side of it. Read the allocation column first; the
-  microseconds are there so a later run can be compared against the same shape of number.
+  vectorization and not the dispatch, and round P5 is what makes the question askable at all: the calls are direct now,
+  so what stands between the loop and a reduction is the bounds check and the `Option` of `get` (findings 8 and 5) and
+  no longer a function pointer out of a table.
+- **The ratios are steadier than the absolute times, and the allocation column is exact.** Four sweeps of the suite in
+  one session moved the C twin of `list-iterate` between 13 329 and 28 870 microseconds with nothing about it changing,
+  and the torb side of the same row between 883 725 and 1 070 142. A run that shares the machine with another build
+  moves both sides and moves them by different amounts. Read the allocation column first; the microseconds are there so
+  a later run can be compared against the same shape of number, measured the same way.
 - **Nothing here is run under `cargo test`.** Section 6 says which of these numbers should become a gate and in which
   shape.
 
@@ -706,8 +796,8 @@ Each round is one agent's work, in this order. A round names the files it touche
 | **P2** | F11: a static value is never counted | `ir/liveness.trb`, `ir/ownership.trb` | **done** | - |
 | **P3** | F7: a closure environment the callee cannot keep, on the frame | `backend/c/body.trb`, `runtime/memory.c`, `runtime/include/torb.h` | **done** | - |
 | **P4** | F6: a text part that is still a number | `ir/layout.trb`, `ir/lower/text.trb`, `ir/verify.trb`, `backend/c/body.trb`, `runtime/text.c` | **done** | - |
-| **P5** | F2: the devirtualization peephole | new `ir/devirtualize.trb`, `ir/lower/lower.trb`, `cli/build.trb` | the fixpoint, the conformance suite, an IR snapshot with no `traitValue`, the size of the smallest list program | **yes** - P6 to P9 all wait on it |
-| **P6** | F5 levels 1 and 3: the concrete iterator, and the hoisted `makeUnique` | `ir/ownership.trb`, `ir/lower/statement.trb` | an IR snapshot with no `makeUnique` in a loop head, `benchmarks/list-iterate` | yes |
+| **P5** | F2: the whole-program devirtualization | new `ir/devirtualize.trb`, `ir/lower/lower.trb`, `backend/c/body.trb`, `backend/c/emit.trb`, `runtime/map.c` | **done** | - |
+| **P6** | F5 levels 1 and 3: the concrete iterator, and the hoisted `makeUnique` | `ir/witness.trb`, `ir/devirtualize.trb`, `ir/ownership.trb` | an IR snapshot with no `makeUnique` in a loop head, `benchmarks/list-iterate` | yes |
 | **P7** | F3 and F4: an `Element` path step into a concrete list | `ir/lower/place.trb`, `runtime/list.c` | a native program with a `.leaks`-style companion, an IR snapshot, `benchmarks/nested-write` | yes |
 | **P8** | F8: the range analysis that removes a check that cannot fire | `ir/lower/expression.trb` or a new `ir/ranges.trb` | the panic programs of the conformance suite, `benchmarks/call-depth` | yes |
 | **P9** | F10: `TakeOut`/`PutBack` on the map, and the member that reaches it | `ir/lower/place.trb`, `runtime/map.c`, `std/collections` | an IR snapshot, `benchmarks/map-count` | after the VM |
@@ -716,7 +806,7 @@ Each round is one agent's work, in this order. A round names the files it touche
 | **P12** | F13 again, on the code P5 to P7 leave behind | `runtime/include/torb.h` | the benchmark table | after the VM |
 
 **Before milestone 7** are P1 to P8: each of them is a property of the IR or of the runtime that the VM will read the
-same way, so doing them first means the VM is written against the shape that stays. P1 to P4 are done and the rows they
+same way, so doing them first means the VM is written against the shape that stays. P1 to P5 are done and the rows they
 moved are in section 4. **After** are P9 to P12: P9 and P11
 change what a construct lowers to and are better decided once there are two back ends to answer to, P10's whole-program
 dead-member scan is a code-size fix that only the C back end pays for, and P12 is a measurement whose answer changes
@@ -724,6 +814,21 @@ once P5 to P7 have run.
 
 Finding 9 (the pipeline) has no round of its own: it is what P5 and P6 leave behind, and `benchmarks/pipeline` is how it
 is read.
+
+**What P5 left for P6 and P7.** The two rounds no longer wait on anything, and each of them now has one named obstacle.
+
+- **P6** is a *table member* problem before it is a loop problem. `iterator()` is in the table of `Iterable`, so
+  `ArrayList.iterator` is frozen: its thunk casts the erased receiver to the payload and calls exactly that signature,
+  and the devirtualization may not move it. Its result is the boxed `Iterator<Item>`, so a `for` over a list still
+  allocates one cursor per loop and pays a `makeUnique` and an indirect call per turn. A user `Iterable` whose
+  implementation nothing boxes is already concrete today (`compiler/tests/lower-collections.test.trb` pins the loop with
+  a `Record` cursor and a direct `next`), so what P6 has to add is a **specialized copy** of a frozen member for the
+  call sites that know the payload - the table keeps the original, the direct call site gets the clone - or the same
+  thing by construction: `ArrayList.iterator` declaring `ListIterator<Item>` rather than the trait.
+- **P7** is unchanged in shape and cheaper than it was: the outer container of `grid[row][column] = v` and of
+  `points[index].y = v` is a concrete `Runtime(ListStorage, Item)` now, which is exactly the receiver
+  `Instruction.TakeOut`/`PutBack` and a `PathStep.Element` need. What is still a trait-typed value is the **element**
+  of `List<List<Int>>`, because an element sits in storage the container owns and no slot rewrite reaches it.
 
 ---
 
@@ -736,6 +841,8 @@ A number that nobody measures again goes back. Four of these belong in the gates
 The three that matter most:
 
 - `x = f(x)` at the last use shows `owned last` and no `retain` (`compiler/tests/ownership.test.trb`).
+- A value whose payload the program decides holds no `traitValue` and no `callWitness`, and one that escapes as the trait
+  holds both (`compiler/tests/devirtualize.test.trb`).
 - No `makeUnique` stands on a container the surrounding frame still holds - the "no copy on a shared row" rule.
 - No loop head holds a `makeUnique`.
 

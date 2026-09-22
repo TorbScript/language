@@ -713,7 +713,13 @@ group "Trait-typed values" {
       value.size()
     }
 
-    const _ = sizeOf(Small(1))
+    type Large with Sized {
+      fn size(): Int {
+        9
+      }
+    }
+
+    const _ = sizeOf(Small(1)) + sizeOf(Large())
     """
 
   test "a trait-typed value is the boxed payload and one table pointer per bound" {
@@ -752,7 +758,7 @@ group "Trait-typed values" {
     )
     assert(
       text.contains(
-        "static const torb_witness_table w_acme_x2f_app_main_Sized__T_acme_x2f_app_main_Small ="
+        "const torb_witness_table w_acme_x2f_app_main_Sized__T_acme_x2f_app_main_Small ="
           + " \{ NULL, NULL, sizeof(T_payload__T_acme_x2f_app_main_Small), NULL,"
           + " w_acme_x2f_app_main_Sized__T_acme_x2f_app_main_Small_members \};"
       )
@@ -800,13 +806,19 @@ group "Trait-typed values" {
         value.size()
       }
 
-      const _ = sizeOf(Tagged("ab"))
+      type Plain with Sized {
+        fn size(): Int {
+          7
+        }
+      }
+
+      const _ = sizeOf(Tagged("ab")) + sizeOf(Plain())
       """
     const text = ownedCOf counted
     assert text.contains("torb_release(s2.data, s2.w0->drop);")
     assert(
       text.contains(
-        "static const torb_witness_table w_acme_x2f_app_main_Sized__T_acme_x2f_app_main_Tagged = \{"
+        "const torb_witness_table w_acme_x2f_app_main_Sized__T_acme_x2f_app_main_Tagged = \{"
           + " D_T_payload__T_acme_x2f_app_main_Tagged, R_T_payload__T_acme_x2f_app_main_Tagged,"
           + " sizeof(T_payload__T_acme_x2f_app_main_Tagged), NULL,"
           + " w_acme_x2f_app_main_Sized__T_acme_x2f_app_main_Tagged_members \};"

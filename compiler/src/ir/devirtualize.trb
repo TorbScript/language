@@ -1,0 +1,1135 @@
+/**
+ * Devirtualization: a trait-typed value whose payload the whole program agrees on is that payload.
+ *
+ * A collection literal is typed as the **trait** - `[1, 2, 3]` is a `List<Int>` and `List` is a trait - so the lowering
+ * builds an `ArrayList`, boxes it behind one witness pointer per bound, and every access through it is a load of a
+ * function pointer out of a table plus an indirect call that no C compiler can see through (docs/PERFORMANCE.md,
+ * finding 2). The concrete type is right there in the `TraitValue` that made the box.
+ *
+ * This pass answers the question the IR already contains. It is a **whole-program** analysis and not a peephole over
+ * one body, because the value travels: a literal is built in one function, handed back as the trait, and indexed in
+ * another. So the unit is not a slot but a **class of locations** - every slot of every function, plus the result of
+ * every function - joined wherever a value flows from one to the other. A class whose producers are all a `TraitValue`
+ * of the same payload with the same static tables, and whose every use is one a concrete value can serve, loses its
+ * box: the slots, the parameters and the result take the payload's type, the `TraitValue` becomes a `Copy`, and every
+ * `CallWitness` on it becomes the direct `Call` of the member the table names.
+ *
+ * Everything that cannot be proved is proved false. A value that is stored in a field, captured, handed to a closure,
+ * built into a record, narrowed to another trait or read out of a path **poisons** its class, and so does every
+ * location of a function whose signature may not move - a member of a witness table (its thunk casts the erased
+ * receiver to the payload and calls exactly that signature), a function a `Closure` points at, a function of the
+ * runtime, a helper of an element descriptor and the accessor of a module `const`. A wrong answer here is a wrong
+ * program and not a slow one, so a position the analysis does not understand poisons what stands in it.
+ *
+ * It runs between the lowering and the ownership pass, and that order is what makes the counts come out: the modes of
+ * a direct call are read off the callee's signature, which is what `insertOwnership` does next, so the retain a witness
+ * thunk owed its arguments becomes the caller's ordinary `Move` or `Retain` and nothing needs a rule of its own.
+ *
+ * # Related
+ *
+ * - [Peeling] - what the analysis knows about one class of locations.
+ * - [directCallOf] - the call a `CallWitness` becomes, and every reason it may not.
+ */
+
+use IrProgram, IrFunction, IrSignature, IrTypeId, Slot, FunctionId from "./ir"
+use Instruction, Reference, Argument, Capture from "./ir"
+use WitnessSource, WitnessTableId from "./ir"
+use borrowed, referenced from "./ir"
+use resultModeOf from "./layout"
+
+/**
+ * The whole pass: join the locations, decide which classes hold one concrete value, and rewrite the bodies that do.
+ *
+ * It is written to run exactly once over a lowered program, in front of `insertOwnership`. Running it afterwards would
+ * read the `Retain`s and `Release`s that pass inserted as ordinary uses of a value.
+ */
+public fn devirtualizeProgram(var program: IrProgram) {
+  if program.functions.isEmpty() {
+    return
+  }
+  const places = locationsOf program
+  var peeling = newPeeling program, places
+  collectProgram peeling, places, program
+  settleClasses peeling
+  // Twice, because the refusals below poison a class through its root and every location of it has to hear about it
+  flattenClasses peeling
+  refuseUnresolvedCalls peeling, places, program
+  flattenClasses peeling
+  rewriteProgram peeling, places, program
+}
+
+// --- Where a trait-typed value can sit --------------------------------------------------------------------------------
+
+/**
+ * A **location** is one place a trait-typed value sits: a slot of a function, or the result of one. This is the map
+ * from those places to the integer the analysis addresses them by, and it never changes while the analysis runs - which
+ * is what lets every question about a slot be asked beside the tables that do change.
+ */
+type Locations {
+  /** Per function: where its slots begin in the location space, and how many slots it has. */
+  var slotBase: List<Int> = []
+  var slotCount: List<Int> = []
+  /** Per slot of the program, in function order: its location, or `-1` where the slot is no trait-typed value. */
+  var ofSlot: List<Int> = []
+  /** Per function: the location of its result, or `-1`. */
+  var ofResult: List<Int> = []
+  /** How many locations there are. */
+  var count: Int = 0
+}
+
+/** The location space of one program: one id per trait-typed slot, one per trait-typed result, in function order. */
+fn locationsOf(program: IrProgram): Locations {
+  var places = Locations()
+  for index in 0..program.functions.length() {
+    const function = program.functions[index]
+    const base = places.ofSlot.length()
+    places.slotBase.add base
+    places.slotCount.add function.slots.length()
+    for declaration in function.slots {
+      if isObjectType(program, declaration.annotation) {
+        const at = places.count
+        places.ofSlot.add at
+        places.count = at + 1
+        continue
+      }
+      places.ofSlot.add(-1)
+    }
+    if isObjectType(program, function.signature.result) {
+      const at = places.count
+      places.ofResult.add at
+      places.count = at + 1
+      continue
+    }
+    places.ofResult.add(-1)
+  }
+  places
+}
+
+/** The location of one slot of one function, or `-1` where that slot holds no trait-typed value. */
+fn slotLocation(places: Locations, function: Int, slot: Slot): Int {
+  if function < 0 || function >= places.slotCount.length() {
+    return -1
+  }
+  if slot.value < 0 || slot.value >= places.slotCount[function] {
+    return -1
+  }
+  places.ofSlot[places.slotBase[function] + slot.value]
+}
+
+/** The same for a target that a call may not have at all. */
+fn targetLocation(places: Locations, function: Int, target: Slot?): Int {
+  match target {
+    Some(slot) => slotLocation places, function, slot
+    None => -1
+  }
+}
+
+/** The location of the result of one function, or `-1`. */
+fn resultLocation(places: Locations, function: Int): Int {
+  if function < 0 || function >= places.ofResult.length() {
+    return -1
+  }
+  places.ofResult[function]
+}
+
+/** Whether a type is a trait-typed value, which is the only thing this pass has anything to say about. */
+fn isObjectType(program: IrProgram, annotation: IrTypeId): Bool {
+  if const .Object(_) = program.typeAt(annotation) {
+    return true
+  }
+  false
+}
+
+// --- What the analysis decides ----------------------------------------------------------------------------------------
+
+/**
+ * The classes of locations and what each of them holds. Everything is a flat list over the location ids, because a
+ * value has no identity and a table addressed by an integer is what keeps the whole pass a walk over lists.
+ */
+type Peeling {
+  /** The union-find over the locations: `parent[at] == at` at a root. */
+  var parent: List<Int> = []
+  /** A location no concrete value can serve. Carried to the roots once every join is done. */
+  var poisoned: List<Bool> = []
+  /** The trait-typed type a location was declared with, so that two that disagree can never become one slot. */
+  var declared: List<Int> = []
+  /** Per root: the payload type every producer of the class agreed on, or `-1`. */
+  var payload: List<Int> = []
+  /** Per root: which entry of `tableSets` the producers agreed on, or `-1`. */
+  var tables: List<Int> = []
+  /** The witness tables of every box the pass saw, and the key each of them is compared by. */
+  var tableSets: List<List<WitnessSource>> = []
+  var tableKeys: List<String> = []
+  /** What each box said about the location it wrote. */
+  var producers: List<Producer> = []
+}
+
+/** One box: the location it defines, the type of its payload, and which entry of `tableSets` it was built with. */
+type Producer {
+  location: Int
+  payload: Int
+  tables: Int
+}
+
+fn newPeeling(program: IrProgram, places: Locations): Peeling {
+  var peeling = Peeling()
+  for at in 0..places.count {
+    peeling.parent.add at
+    peeling.poisoned.add false
+    peeling.declared.add(-1)
+    peeling.payload.add(-1)
+    peeling.tables.add(-1)
+  }
+  for index in 0..program.functions.length() {
+    const function = program.functions[index]
+    for position in 0..function.slots.length() {
+      const location = slotLocation places, index, Slot(position)
+      if location >= 0 {
+        peeling.declared.set location, function.slots[position].annotation.value
+      }
+    }
+    const answer = resultLocation places, index
+    if answer >= 0 {
+      peeling.declared.set answer, function.signature.result.value
+    }
+  }
+  peeling
+}
+
+// --- The union-find ---------------------------------------------------------------------------------------------------
+
+/** The root of a location's class, with the path compressed behind it. Iterative: a chain is as long as a program is. */
+fn findRoot(var peeling: Peeling, location: Int): Int {
+  var root = location
+  while peeling.parent[root] != root {
+    root = peeling.parent[root]
+  }
+  var at = location
+  while peeling.parent[at] != root {
+    const next = peeling.parent[at]
+    peeling.parent.set at, root
+    at = next
+  }
+  root
+}
+
+/**
+ * Two locations a value flows between become one class. Two that were declared with **different** trait-typed values
+ * never can, so joining those poisons both instead - the lowering writes a narrowing coercion where that happens, and a
+ * class that held two types could name no payload at all.
+ */
+fn join(var peeling: Peeling, first: Int, second: Int) {
+  const left = findRoot peeling, first
+  const right = findRoot peeling, second
+  if left == right {
+    return
+  }
+  if peeling.declared[left] != peeling.declared[right] {
+    peeling.poisoned.set left, true
+    peeling.poisoned.set right, true
+  }
+  peeling.parent.set left, right
+}
+
+/**
+ * A value that flows between two positions, where either of them may be no trait-typed value at all. A trait-typed
+ * position whose partner is not one is a position this pass cannot follow, so what stands in it is poisoned.
+ */
+fn flows(var peeling: Peeling, first: Int, second: Int) {
+  if first < 0 && second < 0 {
+    return
+  }
+  if first < 0 {
+    peeling.poisoned.set second, true
+    return
+  }
+  if second < 0 {
+    peeling.poisoned.set first, true
+    return
+  }
+  join peeling, first, second
+}
+
+/** A location no concrete value can serve. `-1` holds no trait-typed value and needs nothing. */
+fn poison(var peeling: Peeling, location: Int) {
+  if location >= 0 {
+    peeling.poisoned.set location, true
+  }
+}
+
+/**
+ * Every location's own answer, written down from the root of its class, so that nothing after this asks the union-find
+ * anything. It is idempotent: a root already carries its own answer, and a location that was poisoned stays poisoned.
+ */
+fn flattenClasses(var peeling: Peeling) {
+  for at in 0..peeling.parent.length() {
+    const root = findRoot peeling, at
+    if peeling.poisoned[root] {
+      peeling.poisoned.set at, true
+      continue
+    }
+    const payload = peeling.payload[root]
+    peeling.payload.set at, payload
+    const tables = peeling.tables[root]
+    peeling.tables.set at, tables
+  }
+}
+
+/** Whether a location ended up in a class that holds one concrete payload. Ask it after [flattenClasses]. */
+fn isPeeled(peeling: Peeling, location: Int): Bool {
+  if location < 0 {
+    return false
+  }
+  !peeling.poisoned[location] && peeling.payload[location] >= 0
+}
+
+/** The payload type of a peeled location. Only ask where [isPeeled] answered `true`. */
+fn payloadOf(peeling: Peeling, location: Int): IrTypeId {
+  IrTypeId peeling.payload[location]
+}
+
+/** The witness tables the value of a peeled location was boxed with. */
+fn tablesOf(peeling: Peeling, location: Int): List<WitnessSource> {
+  const index = peeling.tables[location]
+  if index < 0 || index >= peeling.tableSets.length() {
+    return []
+  }
+  peeling.tableSets[index]
+}
+
+// --- Collecting -------------------------------------------------------------------------------------------------------
+
+/** Every function of the program: what its signature forbids, and what every instruction of its body says. */
+fn collectProgram(var peeling: Peeling, places: Locations, program: IrProgram) {
+  const frozen = frozenFunctionsOf program
+  for index in 0..program.functions.length() {
+    const function = program.functions[index]
+    collectSignature peeling, places, function, index, frozen[index]
+    for block in function.blocks {
+      for instruction in block.instructions {
+        collectInstruction peeling, places, program, function, index, instruction
+      }
+      if const .Return(value) = block.terminator {
+        if const Some(argument) = value {
+          const source = slotLocation places, index, argument.slot
+          const answer = resultLocation places, index
+          flows peeling, source, answer
+        }
+      }
+    }
+  }
+}
+
+/**
+ * The functions whose signature may not move, because something other than a `Call` of the program reaches them:
+ *
+ * - a **member of a witness table**, whose thunk casts the erased receiver to the payload of that table and calls
+ *   exactly this signature (`backend/c/emit.trb`);
+ * - a function a **`Closure`** points at, which is called through the erased ABI of a closure value;
+ * - the retain, release, equals and hash of an **element descriptor**, which the one C list and the one C hash table
+ *   call through a function pointer whose shape they fixed;
+ * - a function of the **runtime**, whose signature belongs to the natives manifest, and the `resume` of a task, whose
+ *   state machine a back end drives;
+ * - the accessor of a module `const` and the initializer it names, because the cell between the two lives in the back
+ *   end and nothing in the IR ties their signatures together.
+ */
+fn frozenFunctionsOf(program: IrProgram): List<Bool> {
+  const count = program.functions.length()
+  var frozen: List<Bool> = []
+  for _ in 0..count {
+    frozen.add false
+  }
+  for index in 0..program.witnessTableCount() {
+    const members = program.witnessTables[index].members
+    for member in members {
+      freeze frozen, member
+    }
+  }
+  for descriptor in program.elements {
+    freezeOptional frozen, descriptor.retain
+    freezeOptional frozen, descriptor.release
+    freezeOptional frozen, descriptor.equals
+    freezeOptional frozen, descriptor.hash
+  }
+  for index in 0..count {
+    const function = program.functions[index]
+    match function.kind {
+      .Plain => {}
+      .Runtime(_) => freeze frozen, FunctionId(index)
+      .TaskResume => freeze frozen, FunctionId(index)
+      .ConstantCell(initializer) => {
+        freeze frozen, FunctionId(index)
+        freeze frozen, initializer
+      }
+    }
+    for block in function.blocks {
+      for instruction in block.instructions {
+        if const .Closure(_, callee, _, _) = instruction {
+          freeze frozen, callee
+        }
+      }
+    }
+  }
+  frozen
+}
+
+fn freeze(var frozen: List<Bool>, function: FunctionId) {
+  if function.value >= 0 && function.value < frozen.length() {
+    frozen.set function.value, true
+  }
+}
+
+fn freezeOptional(var frozen: List<Bool>, function: FunctionId?) {
+  if const Some(found) = function {
+    freeze frozen, found
+  }
+}
+
+/**
+ * What a signature says about the locations of its own function: a parameter of a frozen function and its result cannot
+ * move, and neither can an **out** parameter or one the runtime takes by address, whose shape belongs to the C
+ * implementation and not to the program.
+ */
+fn collectSignature(
+  var peeling: Peeling,
+  places: Locations,
+  function: IrFunction,
+  index: Int,
+  isFrozen: Bool,
+) {
+  const parameters = function.signature.parameters
+  for position in 0..parameters.length() {
+    if !isFrozen && !parameters[position].isOut && !parameters[position].isByAddress {
+      continue
+    }
+    const location = slotLocation places, index, Slot(position)
+    poison peeling, location
+  }
+  if isFrozen {
+    const answer = resultLocation places, index
+    poison peeling, answer
+  }
+}
+
+/** One instruction: which positions a value flows between, and which of them no concrete value can serve. */
+fn collectInstruction(
+  var peeling: Peeling,
+  places: Locations,
+  program: IrProgram,
+  function: IrFunction,
+  index: Int,
+  instruction: Instruction,
+) {
+  match instruction {
+    // A static of a trait-typed type is built by no `TraitValue`, so nothing here says what is inside it
+    .Constant(target, _) => {
+      const location = slotLocation places, index, target
+      poison peeling, location
+    }
+    .Move(target, source) => {
+      const left = slotLocation places, index, target
+      const right = slotLocation places, index, source
+      flows peeling, left, right
+    }
+    .Copy(target, source) => {
+      const left = slotLocation places, index, target
+      const right = slotLocation places, index, source
+      flows peeling, left, right
+    }
+    .Retain(_) => {}
+    .Release(_) => {}
+    // A `makeUnique` of the whole slot is what a `var self` member needs, and a concrete value needs the same one; one
+    // through a path reaches storage inside a layout, which peeling a slot does not move
+    .MakeUnique(reference) => {
+      if !reference.steps.isEmpty() {
+        const location = slotLocation places, index, reference.base
+        poison peeling, location
+      }
+    }
+    .Call(target, callee, arguments, witnesses, _) => {
+      collectCall peeling, places, program, index, target, callee, arguments, witnesses
+    }
+    // The callee of a closure value is a slot, so no call site can read the signature it will reach
+    .CallClosure(target, _, arguments) => {
+      const location = targetLocation places, index, target
+      poison peeling, location
+      poisonArguments peeling, places, index, arguments
+    }
+    .CallWitness(target, witness, _, arguments) => {
+      const location = targetLocation places, index, target
+      poison peeling, location
+      collectWitnessReceiver peeling, places, index, witness
+      poisonArguments peeling, places, index, arguments
+    }
+    .Intrinsic(target, _, arguments, _) => {
+      const location = targetLocation places, index, target
+      poison peeling, location
+      for slot in arguments {
+        const operand = slotLocation places, index, slot
+        poison peeling, operand
+      }
+    }
+    // A field keeps the type its layout gave it, so a value that is built into a record stays boxed
+    .Construct(_, _, _, fields) => poisonArguments peeling, places, index, fields
+    .Read(target, reference) => {
+      const left = slotLocation places, index, target
+      const right = slotLocation places, index, reference.base
+      if reference.steps.isEmpty() {
+        flows peeling, left, right
+      } else {
+        poison peeling, left
+        poison peeling, right
+      }
+    }
+    .Write(reference, value) => {
+      const left = slotLocation places, index, reference.base
+      const right = slotLocation places, index, value.slot
+      if reference.steps.isEmpty() {
+        flows peeling, left, right
+      } else {
+        poison peeling, left
+        poison peeling, right
+      }
+    }
+    .Tag(_, source) => {
+      const location = slotLocation places, index, source
+      poison peeling, location
+    }
+    .Closure(_, _, captures, _) => {
+      for capture in captures {
+        const location = captureLocation places, index, capture
+        poison peeling, location
+      }
+    }
+    .BoxNew(_, value) => {
+      const location = slotLocation places, index, value.slot
+      poison peeling, location
+    }
+    .TraitValue(target, value, tables) => {
+      collectTraitValue peeling, places, function, index, target, value, tables
+    }
+    .ContainerNew(_, _, _) => {}
+    .TakeOut(target, container, key, _) => {
+      const answer = slotLocation places, index, target
+      poison peeling, answer
+      const owner = slotLocation places, index, container.base
+      poison peeling, owner
+      const at = slotLocation places, index, key
+      poison peeling, at
+    }
+    .PutBack(container, key, value, _) => {
+      const owner = slotLocation places, index, container.base
+      poison peeling, owner
+      const at = slotLocation places, index, key
+      poison peeling, at
+      const inner = slotLocation places, index, value
+      poison peeling, inner
+    }
+    .Panic(message, _) => {
+      const location = slotLocation places, index, message.slot
+      poison peeling, location
+    }
+    .Suspend(_, awaited) => {
+      const location = slotLocation places, index, awaited
+      poison peeling, location
+    }
+  }
+}
+
+/** The slot a capture reads, whichever of the three kinds it is. */
+fn captureLocation(places: Locations, index: Int, capture: Capture): Int {
+  match capture {
+    .Value(slot) => slotLocation places, index, slot
+    .Boxed(slot) => slotLocation places, index, slot
+    .Place(reference) => slotLocation places, index, reference.base
+  }
+}
+
+/**
+ * A call of a known function: every argument flows into the callee's own parameter slot and the result out of its
+ * result. A `var` parameter is the same edge through a place, as long as the place is the whole slot - a path into a
+ * record ends in storage the layout owns, which no rewrite of a slot reaches.
+ */
+fn collectCall(
+  var peeling: Peeling,
+  places: Locations,
+  program: IrProgram,
+  index: Int,
+  target: Slot?,
+  callee: FunctionId,
+  arguments: List<Argument>,
+  witnesses: List<WitnessSource>,
+) {
+  const answer = targetLocation places, index, target
+  if !program.hasFunction(callee) {
+    poison peeling, answer
+    poisonArguments peeling, places, index, arguments
+    return
+  }
+  const produced = resultLocation places, callee.value
+  flows peeling, answer, produced
+  const parameters = program.functionAt(callee).signature.parameters
+  for position in 0..arguments.length() {
+    const argument = arguments[position]
+    const here = slotLocation places, index, argument.slot
+    if position >= parameters.length() {
+      poison peeling, here
+      continue
+    }
+    const there = slotLocation places, callee.value, Slot(position)
+    if parameters[position].isReference {
+      collectReferenceArgument peeling, places, index, argument, here, there
+      continue
+    }
+    if argument.place.isSome() {
+      poison peeling, here
+      poison peeling, there
+      continue
+    }
+    flows peeling, here, there
+  }
+  // A table read out of a value and passed on as a dictionary is a use this pass does not rewrite
+  for source in witnesses {
+    if const .Value(place, _) = source.root {
+      const location = slotLocation places, index, place.base
+      poison peeling, location
+    }
+  }
+}
+
+/** The argument of a `var` parameter: the whole slot flows into the callee's, and a path into one does not. */
+fn collectReferenceArgument(
+  var peeling: Peeling,
+  places: Locations,
+  index: Int,
+  argument: Argument,
+  here: Int,
+  there: Int,
+) {
+  const place = match argument.place {
+    Some(found) => found
+    None => {
+      poison peeling, here
+      poison peeling, there
+      return
+    }
+  }
+  const base = slotLocation places, index, place.base
+  if !place.steps.isEmpty() {
+    poison peeling, base
+    poison peeling, there
+    return
+  }
+  flows peeling, base, there
+}
+
+/**
+ * The receiver of a call through a witness table. It is the one use a concrete value serves, because the table names
+ * the member - as long as the table is read out of the **whole slot**: a table inside a field belongs to a box the
+ * layout holds, which peeling the slot does not reach.
+ */
+fn collectWitnessReceiver(var peeling: Peeling, places: Locations, index: Int, witness: WitnessSource) {
+  if const .Value(place, _) = witness.root {
+    if !place.steps.isEmpty() {
+      const location = slotLocation places, index, place.base
+      poison peeling, location
+    }
+  }
+}
+
+/** Every argument of a call whose ABI erases what it is handed, which is every position a concrete value cannot fill. */
+fn poisonArguments(var peeling: Peeling, places: Locations, index: Int, arguments: List<Argument>) {
+  for argument in arguments {
+    const location = slotLocation places, index, argument.slot
+    poison peeling, location
+    if const Some(place) = argument.place {
+      const base = slotLocation places, index, place.base
+      poison peeling, base
+    }
+  }
+}
+
+/**
+ * What a box says about the slot it wrote: the type of its payload, and the tables it was built with. A payload that is
+ * **itself** a trait-typed value is a narrowing coercion - a `List<Item>` handed on as an `Iterable<Item>` - and
+ * neither side of one can lose its box, because the tables of the narrower value are read out of the wider one.
+ */
+fn collectTraitValue(
+  var peeling: Peeling,
+  places: Locations,
+  function: IrFunction,
+  index: Int,
+  target: Slot,
+  value: Argument,
+  tables: List<WitnessSource>,
+) {
+  const answer = slotLocation places, index, target
+  const inner = slotLocation places, index, value.slot
+  if inner >= 0 {
+    poison peeling, answer
+    poison peeling, inner
+    return
+  }
+  if answer < 0 {
+    return
+  }
+  if !function.hasSlot(value.slot) {
+    poison peeling, answer
+    return
+  }
+  const key = tableKeyOf tables
+  if key.isEmpty() {
+    poison peeling, answer
+    return
+  }
+  const payload = function.typeOfSlot value.slot
+  peeling.tableSets.add tables
+  peeling.tableKeys.add key
+  const at = peeling.tableSets.length() - 1
+  peeling.producers.add Producer(answer, payload.value, at)
+}
+
+/**
+ * How one set of witness tables is compared with another. It is empty exactly where a table is **not** static data of
+ * the program - one the caller passed, or one read out of another value - because such a box names no member a direct
+ * call could reach.
+ */
+fn tableKeyOf(tables: List<WitnessSource>): String {
+  var key = "s"
+  for source in tables {
+    const table = match source.root {
+      .Table(found) => found
+      _ => {
+        return ""
+      }
+    }
+    key = key + "t{table.value}"
+    for step in source.steps {
+      key = key + ".{step}"
+    }
+    key = key + ";"
+  }
+  key
+}
+
+// --- Deciding ---------------------------------------------------------------------------------------------------------
+
+/**
+ * The classes, once every join is done: the poison of any location is the poison of its class, and a class keeps the
+ * payload and the tables its producers agree on. Two producers that disagree - two implementations of one trait boxed
+ * into one place - leave the class boxed, which is the answer a run-time dispatch is there for.
+ */
+fn settleClasses(var peeling: Peeling) {
+  for at in 0..peeling.parent.length() {
+    if !peeling.poisoned[at] {
+      continue
+    }
+    const root = findRoot peeling, at
+    peeling.poisoned.set root, true
+  }
+  const producers = peeling.producers
+  for producer in producers {
+    const root = findRoot peeling, producer.location
+    if peeling.poisoned[root] {
+      continue
+    }
+    if peeling.payload[root] < 0 {
+      peeling.payload.set root, producer.payload
+      peeling.tables.set root, producer.tables
+      continue
+    }
+    if peeling.payload[root] != producer.payload {
+      peeling.poisoned.set root, true
+      continue
+    }
+    const here = peeling.tableKeys[producer.tables]
+    const known = peeling.tableKeys[peeling.tables[root]]
+    if known != here {
+      peeling.poisoned.set root, true
+    }
+  }
+}
+
+/**
+ * The last question, asked once every class has its payload: does every witness call on it really name a function a
+ * direct call can reach, and does a result that changes still come back the same way?
+ *
+ * A class that fails either one is poisoned rather than half rewritten. Nothing else depends on the answer - a class is
+ * decided by its own producers and its own uses, and every argument of a witness call is poisoned already - so one pass
+ * is enough.
+ */
+fn refuseUnresolvedCalls(var peeling: Peeling, places: Locations, program: IrProgram) {
+  for index in 0..program.functions.length() {
+    const function = program.functions[index]
+    refuseMovedResult peeling, places, program, function, index
+    for block in function.blocks {
+      for instruction in block.instructions {
+        if const .CallWitness(target, witness, member, arguments) = instruction {
+          refuseCall peeling, places, program, function, index, target, witness, member, arguments
+        }
+      }
+    }
+  }
+}
+
+/**
+ * A result whose payload is returned differently from the box it was in. Whether a result comes back in a register or
+ * through a pointer the caller passes first follows from its size (BACKEND 3.2), and the slot the second form writes
+ * through belongs to the caller - so a result that would change form keeps its box instead.
+ */
+fn refuseMovedResult(
+  var peeling: Peeling,
+  places: Locations,
+  program: IrProgram,
+  function: IrFunction,
+  index: Int,
+) {
+  const answer = resultLocation places, index
+  if !isPeeled(peeling, answer) {
+    return
+  }
+  const payload = payloadOf peeling, answer
+  const before = resultModeOf program, function.signature.result
+  const after = resultModeOf program, payload
+  if before == after {
+    return
+  }
+  const root = findRoot peeling, answer
+  peeling.poisoned.set root, true
+}
+
+fn refuseCall(
+  var peeling: Peeling,
+  places: Locations,
+  program: IrProgram,
+  function: IrFunction,
+  index: Int,
+  target: Slot?,
+  witness: WitnessSource,
+  member: Int,
+  arguments: List<Argument>,
+) {
+  const receiver = witnessReceiverLocation peeling, places, index, witness
+  if receiver < 0 {
+    return
+  }
+  const direct = directCallOf peeling, places, program, function, index, target, witness, member, arguments
+  if direct.isSome() {
+    return
+  }
+  const root = findRoot peeling, receiver
+  peeling.poisoned.set root, true
+}
+
+/** The location of the value a witness call reads its table out of, where that value is one this pass peels. */
+fn witnessReceiverLocation(
+  peeling: Peeling,
+  places: Locations,
+  index: Int,
+  witness: WitnessSource,
+): Int {
+  const place = match witness.root {
+    .Value(found, _) => found
+    _ => {
+      return -1
+    }
+  }
+  if !place.steps.isEmpty() {
+    return -1
+  }
+  const location = slotLocation places, index, place.base
+  if !isPeeled(peeling, location) {
+    return -1
+  }
+  location
+}
+
+/**
+ * The call one dispatch through a table really is, once the payload is known - and `None` wherever the direct call
+ * would not be the same call.
+ *
+ * Every question the verifier asks afterwards is asked here instead, because a call that does not type is a malformed
+ * program and not a slower one: the member has to be a plain function of the program that takes no witness tables, its
+ * receiver has to be exactly the payload, every argument has to have the type its parameter declares, and the result
+ * has to be what the slot at the call site holds.
+ */
+fn directCallOf(
+  peeling: Peeling,
+  places: Locations,
+  program: IrProgram,
+  function: IrFunction,
+  index: Int,
+  target: Slot?,
+  witness: WitnessSource,
+  member: Int,
+  arguments: List<Argument>,
+): Instruction? {
+  const (place, bound) = match witness.root {
+    .Value(found, at) => (found, at)
+    _ => {
+      return None
+    }
+  }
+  const receiver = slotLocation places, index, place.base
+  const payload = payloadOf peeling, receiver
+  const tables = tablesOf peeling, receiver
+  const table = tableAt(program, tables, bound, witness.steps)?
+  const holder = program.witnessTableAt table
+  if member < 0 || member >= holder.members.length() {
+    return None
+  }
+  const callee = holder.members[member]
+  if !program.hasFunction(callee) {
+    return None
+  }
+  const found = program.functionAt callee
+  if !isPlainFunction(found) {
+    return None
+  }
+  const signature = found.signature
+  if !signature.witnesses.isEmpty() {
+    return None
+  }
+  if signature.parameters.length() != arguments.length() + 1 {
+    return None
+  }
+  const first = signature.parameters[0]
+  if first.isOut || first.isByAddress || first.annotation != payload {
+    return None
+  }
+  if !argumentsFit(function, signature, arguments) {
+    return None
+  }
+  if !answersTheSame(program, function, target, signature.result) {
+    return None
+  }
+  var given: List<Argument> = []
+  if first.isReference {
+    given.add referenced(Reference(place.base, []))
+  } else {
+    given.add borrowed(place.base)
+  }
+  given.addAll arguments
+  Some Instruction.Call(target, callee, given, [])
+}
+
+/** A body of the program's own, which is the one kind whose signature says everything a call site needs. */
+fn isPlainFunction(function: IrFunction): Bool {
+  if const .Plain = function.kind {
+    return true
+  }
+  false
+}
+
+/**
+ * Whether the arguments a dispatch was written with fit the member's own parameters. They are the arguments of the
+ * erased call, and every trait-typed one of them is poisoned, so their types are the types they will still have.
+ */
+fn argumentsFit(function: IrFunction, signature: IrSignature, arguments: List<Argument>): Bool {
+  for position in 0..arguments.length() {
+    const parameter = signature.parameters[position + 1]
+    const argument = arguments[position]
+    if parameter.isOut || parameter.isByAddress {
+      return false
+    }
+    if !function.hasSlot(argument.slot) {
+      return false
+    }
+    if parameter.isReference {
+      const place = match argument.place {
+        Some(given) => given
+        None => {
+          return false
+        }
+      }
+      if !place.steps.isEmpty() || place.base != argument.slot {
+        return false
+      }
+      if function.typeOfSlot(place.base) != parameter.annotation {
+        return false
+      }
+      continue
+    }
+    if argument.place.isSome() {
+      return false
+    }
+    if function.typeOfSlot(argument.slot) != parameter.annotation {
+      return false
+    }
+  }
+  true
+}
+
+/** Whether the slot the call site writes its answer into is exactly what the member produces. */
+fn answersTheSame(program: IrProgram, function: IrFunction, target: Slot?, result: IrTypeId): Bool {
+  match target {
+    Some(slot) => {
+      if !function.hasSlot(slot) {
+        return false
+      }
+      function.typeOfSlot(slot) == result
+    }
+    None => isVoidLike program, result
+  }
+}
+
+fn isVoidLike(program: IrProgram, result: IrTypeId): Bool {
+  match program.typeAt(result) {
+    .VoidType => true
+    .NeverType => true
+    _ => false
+  }
+}
+
+/**
+ * The table one witness source names, once the value's own tables are known: the table of the bound it reads, then one
+ * `nested` step per supertrait the lowering walked down - the walk the C back end makes at the same place.
+ */
+fn tableAt(
+  program: IrProgram,
+  tables: List<WitnessSource>,
+  bound: Int,
+  steps: List<Int>,
+): WitnessTableId? {
+  if bound < 0 || bound >= tables.length() {
+    return None
+  }
+  const source = tables[bound]
+  var current = match source.root {
+    .Table(found) => found
+    _ => {
+      return None
+    }
+  }
+  for step in source.steps {
+    current = nestedTable(program, current, step)?
+  }
+  for step in steps {
+    current = nestedTable(program, current, step)?
+  }
+  if !program.hasWitnessTable(current) {
+    return None
+  }
+  Some current
+}
+
+fn nestedTable(program: IrProgram, table: WitnessTableId, step: Int): WitnessTableId? {
+  if !program.hasWitnessTable(table) {
+    return None
+  }
+  const nested = program.witnessTableAt(table).nested
+  if step < 0 || step >= nested.length() {
+    return None
+  }
+  const found = nested[step]?
+  if !program.hasWitnessTable(found) {
+    return None
+  }
+  Some found
+}
+
+// --- Rewriting --------------------------------------------------------------------------------------------------------
+
+/** Every function the analysis decided something about, with its slots, its signature and its body rewritten. */
+fn rewriteProgram(peeling: Peeling, places: Locations, var program: IrProgram) {
+  const count = program.functions.length()
+  for index in 0..count {
+    if !changesAnything(peeling, places, index) {
+      continue
+    }
+    rewriteFunction peeling, places, program, index
+  }
+}
+
+/** Whether a function has anything to change, so that a body nothing touches is never copied for nothing. */
+fn changesAnything(peeling: Peeling, places: Locations, index: Int): Bool {
+  for position in 0..places.slotCount[index] {
+    const location = slotLocation places, index, Slot(position)
+    if isPeeled(peeling, location) {
+      return true
+    }
+  }
+  const answer = resultLocation places, index
+  isPeeled peeling, answer
+}
+
+fn rewriteFunction(peeling: Peeling, places: Locations, var program: IrProgram, index: Int) {
+  const original = program.functions[index]
+  var function = original
+  var parameters = function.signature.parameters
+  for position in 0..original.slots.length() {
+    const location = slotLocation places, index, Slot(position)
+    if !isPeeled(peeling, location) {
+      continue
+    }
+    const payload = payloadOf peeling, location
+    const declaration = original.slots[position]
+    function.slots.set position, declaration.copy(annotation: payload)
+    if const .Parameter(at) = declaration.role {
+      if at >= 0 && at < parameters.length() {
+        const parameter = parameters[at]
+        parameters.set at, parameter.copy(annotation: payload)
+      }
+    }
+  }
+  var signature = function.signature.copy parameters: parameters
+  const answer = resultLocation places, index
+  if isPeeled(peeling, answer) {
+    const payload = payloadOf peeling, answer
+    signature = signature.copy result: payload
+  }
+  const mode = resultModeOf program, signature.result
+  function = function.copy signature: signature.copy(resultMode: mode)
+  for block in 0..original.blocks.length() {
+    const instructions = original.blocks[block].instructions
+    var written: List<Instruction> = []
+    var isChanged = false
+    for instruction in instructions {
+      const rewritten = rewrittenInstruction peeling, places, program, original, index, instruction
+      match rewritten {
+        Some(found) => {
+          written.add found
+          isChanged = true
+        }
+        None => written.add instruction
+      }
+    }
+    if isChanged {
+      function.blocks[block].instructions = written
+    }
+  }
+  program.functions.set index, function
+}
+
+/**
+ * One instruction of a body whose slots have moved: a box that is now a plain copy, and a dispatch through a table that
+ * is now the direct call of the member the table named. `None` where nothing changes.
+ *
+ * The arguments keep the modes the lowering gave them - every one of them borrowed - because `insertOwnership` decides
+ * them next out of the callee's own signature. That is what removes the retain a witness thunk owed its arguments: the
+ * erased ABI borrows everything and the thunk makes up the difference, and a direct call has no difference to make up.
+ */
+fn rewrittenInstruction(
+  peeling: Peeling,
+  places: Locations,
+  program: IrProgram,
+  function: IrFunction,
+  index: Int,
+  instruction: Instruction,
+): Instruction? {
+  if const .TraitValue(target, value, _) = instruction {
+    const location = slotLocation places, index, target
+    if isPeeled(peeling, location) {
+      return Some Instruction.Copy(target, value.slot)
+    }
+    return None
+  }
+  if const .CallWitness(target, witness, member, arguments) = instruction {
+    const receiver = witnessReceiverLocation peeling, places, index, witness
+    if receiver < 0 {
+      return None
+    }
+    return directCallOf peeling, places, program, function, index, target, witness, member, arguments
+  }
+  None
+}
