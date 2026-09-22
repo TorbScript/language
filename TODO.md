@@ -3922,3 +3922,10 @@ Wenn nicht, was bedeutet, bewirkt es?
     und beendet beim Auslösen den Prozess mit Exit 1 OHNE Diagnose - weder Closure-Wert noch Funktionsfehler; (b)
     nativ nicht unterstützt: Zuweisung an ein Top-Level-`var` aus einer Funktion, und `if var` mit Pfad ins Subjekt
     (in `std/iteration` `flatMap`). Außerdem: `loop` ohne `break` ist `Never` und erfüllt jeden Typ.
+  - **Nutzer (2026-09-22):** mag Accumulators, aber nicht, dass Collections standardmäßig `finish()` und `isDone()`
+    haben - verwirrend. **Entschieden (ich): Scheibe C2b** - `Accumulator` an der Naht teilen: `trait Accept<Item>`
+    (nur `var fn add`, plus die Defaults `addAll`/`added`/`addedAll`), `Accumulator<Item, Output> with Accept<Item>`
+    (`finish`, `isDone`). `Collection` erbt `Accept`, nicht mehr `Accumulator`; füllende Treiber verlangen `Accept`,
+    `collect` verlangt `Accumulator`; `into<List<..>>()` baut den Adapter. Prüfen: Verhältnis zu `std/stream`s `Sink`
+    (async `add`) - bewusst nicht `Accept`, wie `Source` nicht `Iterable` ist. Name `Accept` ist Geschmack
+    (Alternativen `Receive`, `Fill`). Läuft mit C4.
