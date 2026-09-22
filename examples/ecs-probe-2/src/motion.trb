@@ -1,0 +1,65 @@
+/**
+ * A second package, with a component of its own and a system over two packages' components.
+ *
+ * `movement` is the shape that matters: it names two [Store] bounds and nothing about whose world it runs on, so any
+ * program that holds a group for each of the two can run it.
+ */
+
+use Column, Entity, Store from "./ecs"
+use Position, Vector2 from "./space"
+
+/** How fast something moves, in units per second. */
+public type Velocity with Equals, Show {
+  value: Vector2
+}
+
+/** How long something still exists, in seconds. */
+public type Lifetime with Equals, Show {
+  remaining: Float
+}
+
+/** This package's column group. */
+public type Motions {
+  var velocities: Column<Velocity> = Column()
+  var lifetimes: Column<Lifetime> = Column()
+}
+
+extend Motions with Store<Velocity> {
+  fn column(): Column<Velocity> {
+    velocities
+  }
+
+  var fn attach(entity: Entity, value: Velocity) {
+    velocities.put entity, value
+  }
+
+  var fn detach(entity: Entity) {
+    velocities.remove entity
+  }
+}
+
+/**
+ * The package system. Two bounds, two subjects, and no world type anywhere in the signature.
+ *
+ * # Examples
+ *
+ *     var places = Places()
+ *     var motions = Motions()
+ *     const ship = Entity(1)
+ *     places.attach ship, Position(Vector2(0.0, 0.0))
+ *     motions.attach ship, Velocity(Vector2(1.0, 0.0))
+ *     movement places, motions, 0.5
+ *     assert(places.column().get(ship) == Some(Position(Vector2(0.5, 0.0))))
+ */
+public fn movement<Space, Motion>(var space: Space, motion: Motion, elapsed: Float)
+  where Space: Store<Position>, Motion: Store<Velocity> {
+  const moving = motion.column()
+  for row in 0..moving.length() {
+    const entity = moving.ownerAt row
+    const velocity = moving.valueAt row
+    if const Some(here) = space.column().get(entity) {
+      const moved = Vector2(here.value.x + velocity.value.x * elapsed, here.value.y + velocity.value.y * elapsed)
+      space.attach entity, Position(moved)
+    }
+  }
+}

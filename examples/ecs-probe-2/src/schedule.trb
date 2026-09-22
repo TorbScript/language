@@ -1,0 +1,42 @@
+/**
+ * Two systems over two disjoint column groups of one world, as one call with two `var` parameters.
+ *
+ * The checker proves the two subjects disjoint at the call site - `both world.places, world.places, ...` is
+ * *"`world.places` is being changed by `both` right now"* - so the only thing a parallel schedule adds to this shape
+ * is "and these two run on different workers".
+ */
+
+use Entity from "./ecs"
+use Places, Position, Vector2 from "./space"
+use Motions, Velocity from "./motion"
+
+/** The fork-join shape a parallel schedule wants: two subjects, two bodies, one proof of disjointness. */
+public fn both<First, Second>(
+  var first: First,
+  var second: Second,
+  run: (var subject: First) => Void,
+  alongside: (var subject: Second) => Void,
+) {
+  run first
+  alongside second
+}
+
+/** One system over the places group: everything falls to the ground line. */
+public fn settle(var places: Places) {
+  const column = places.positions
+  for row in 0..column.length() {
+    const entity = column.ownerAt row
+    const here = column.valueAt row
+    places.positions.put entity, Position(Vector2(here.value.x, 0.0))
+  }
+}
+
+/** Another system, over a group the first one does not touch: everything slows by half. */
+public fn halve(var motions: Motions) {
+  const column = motions.velocities
+  for row in 0..column.length() {
+    const entity = column.ownerAt row
+    const moving = column.valueAt row
+    motions.velocities.put entity, Velocity(Vector2(moving.value.x * 0.5, moving.value.y * 0.5))
+  }
+}

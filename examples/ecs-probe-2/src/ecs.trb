@@ -1,0 +1,117 @@
+/**
+ * The open part of the data layer: [Entity], one dense [Column] per component type, and the [Store] bound a package
+ * asks a world for.
+ *
+ * Nothing here knows a component type. Everything here is generic over one, so every member is monomorphized and no
+ * value is ever held under a type that was forgotten.
+ */
+
+/** What components are attached to. */
+public type Entity with Equals, Hash, Show {
+  index: Int
+  /** Counts up every time `index` is handed out again, so a stale handle is detectable. */
+  generation: Int = 0
+}
+
+/**
+ * One component type's dense column: the values in insertion order, the entity each row belongs to, and the row each
+ * entity occupies.
+ *
+ * # Pitfalls
+ *
+ * Removing swaps the last row into the hole, so a system must not remember a row number across a `remove`.
+ */
+public type Column<Component> {
+  private(var) owners: List<Entity> = []
+  private(var) values: List<Component> = []
+  private(var) rows: Map<Entity, Int> = [:]
+  private(var) stamps: List<Int> = []
+  private(var) clock: Int = 0
+
+  /** Puts `value` under `entity`, replacing whatever was there. */
+  var fn put(entity: Entity, value: Component) {
+    clock = clock + 1
+    match rows.get(entity) {
+      Some(row) => {
+        values[row] = value
+        stamps[row] = clock
+      }
+      None => {
+        rows[entity] = values.length()
+        owners.add entity
+        values.add value
+        stamps.add clock
+      }
+    }
+  }
+
+  /** Takes `entity`'s value out, swapping the last row into the hole. */
+  var fn remove(entity: Entity) {
+    if const Some(row) = rows.get(entity) {
+      const last = values.length() - 1
+      const moved = owners[last]
+      owners[row] = moved
+      values[row] = values[last]
+      stamps[row] = stamps[last]
+      owners.removeAt last
+      values.removeAt last
+      stamps.removeAt last
+      rows.remove entity
+      if row != last {
+        rows[moved] = row
+      }
+    }
+  }
+
+  fn get(entity: Entity): Component? {
+    match rows.get(entity) {
+      Some(row) => values.get row
+      None => None
+    }
+  }
+
+  fn has(entity: Entity): Bool {
+    rows.containsKey entity
+  }
+
+  fn length(): Int {
+    values.length()
+  }
+
+  fn ownerAt(row: Int): Entity {
+    owners[row]
+  }
+
+  fn valueAt(row: Int): Component {
+    values[row]
+  }
+
+  /** What the clock stood at after the last write of any row. */
+  fn version(): Int {
+    clock
+  }
+
+  /** The entities whose value was written after `stamp`. Change detection, without a second data structure. */
+  fn changedSince(stamp: Int): Iterable<Entity> {
+    (0..values.length()).filterMap { row =>
+      if stamps[row] > stamp { Some owners[row] } else { None }
+    }
+  }
+}
+
+/**
+ * What a package asks of a world: a column of one component type the package owns.
+ *
+ * A package declares its own components and bounds its systems by this trait, so a program admits the package by
+ * holding a group that carries it. That is the whole of the open component set, and it needs no erasure.
+ */
+public trait Store<Component> {
+  fn column(): Column<Component>
+  var fn attach(entity: Entity, value: Component)
+  var fn detach(entity: Entity)
+}
+
+/** Whose space an entity's transform is written in. A hierarchy is a component, not a second structure. */
+public type Parent {
+  entity: Entity
+}

@@ -3505,3 +3505,31 @@ Wenn nicht, was bedeutet, bewirkt es?
     (`std/stream`, `std/http`, `std/fs`, `examples/`) - die Migration steht als Lücke 16 und Slice A2 im Dokument.
     Neue Geschmacksfragen für dich: 9 (`Never` verschwindet von der asynchronen Seite), 10 (Name `outcome`),
     11 (`cancel()`/`within` als `var fn`).
+
+  - **Erledigt:** `docs/ECS.md` neu geschrieben (15 Abschnitte) um die Entscheidung herum, plus
+    `examples/ecs-probe-2` (7 Dateien, `check`/`run`/`build` grün) als Beleg. **Das kontrollierte `Any` wird nicht
+    gebraucht.** Datenschicht: ein Package bringt seine Komponententypen, eine **Spaltengruppe** (ein
+    `Column<Component>`-Feld je eigener Komponente) und seine Systeme mit, die nur über `Store<Component>`-Schranken
+    reden; ein Programm nimmt ein Package mit **einem Feld** auf. Nichts wird gelöscht, alles monomorphisiert, die
+    Welt bleibt ein Wert (Snapshot = Bindung, Rollback = Zuweisung). Verhaltensschicht: Godots Node-Baum, aber
+    typisiert - ein `Node`-Trait, Knoten sind Werte, ein `Column<Node>` verbindet beide Schichten; **kein Downcast**,
+    weil ein Elternknoten typisierte Felder statt Pfade hält und alles Querschnittliche über Spalten läuft. Beides
+    läuft im Probe-Package, heterogener Baum inklusive In-place-Änderung durch ein Trait-Element.
+    **Sieben Proben, zwei Überraschungen:** (1) die Erasure-Route ist im Checker inzwischen **dicht** - die alte
+    Lücke 5 ist geschlossen und die Diagnose nennt die Regel; Lücke 3 (Blanket-Implementierung) und Lücke 11
+    (lokaler `type`, Typalias über Import) sind ebenfalls zu. (2) Lücke 1 ist **keine Checker-Lücke mehr**: zwei
+    `Store`-Implementierungen auf einem Typ lösen korrekt auf (über Argumenttyp *und* erwarteten Typ, negativ
+    geprüft), es kollidiert nur noch der **Mangler** (`World_attach` trägt keine Trait-Argumente im Namen) - eine
+    Änderung in `compiler/src/ir/mangle.trb`, dieselbe wie LINEAR-Punkt 16. Die Listen-Variante
+    (`World<(Position, Velocity)>` mit `Has<C>`) ist tot: eine Trait-Implementierung auf einem **Tupel** wird
+    angenommen, erfüllt aber keine Schranke (neue Lücke 13), und Packs sind fünf Parse-Fehler. Neue Lücke 12:
+    abgeleitetes und **weitergereichtes** `Store` (ein Feld, dessen Typ `Store<C>` trägt, verleiht es nach oben).
+    **CONCURRENCY Frage 7 beantwortet:** der Feld-Fall ist gewollt und die kleinere Hälfte - die Arbeitseinheit
+    eines Systems ist eine Spaltengruppe, nicht ein Fenster, und Komponenten mit Handle/String/Verhalten sind nicht
+    `Plain`; der Beweis steht schon (`both world.places, world.places, ...` wird abgelehnt), es fehlt nur die
+    Fork-Join-Barriere. Antwort steht als eine Zeile in `docs/CONCURRENCY.md` Abschnitt 15.
+    **Offene Fragen an dich** stehen in Abschnitt 15 von `docs/ECS.md` (nur Geschmack): `query2/3/4` gegen
+    `pairs/triples`, das Wort für `Store`/Spaltengruppe, ob `std/ecs` je eine eigene `World` mitbringt, ob
+    `std/node` ein eigenes Package ist, ob eine Szenendatei `std/linear` nennen darf, ob `Events` ins Package
+    gehören, `GlobalTransform2` als Komponente oder Feld, wo die Frame-Schleife lebt, und ob ein Knoten die ganze
+    Welt sieht oder nur die Gruppen, die er nennt.

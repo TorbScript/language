@@ -1,0 +1,81 @@
+/**
+ * What a package that owns a component type ships: the type, a group that stores it, and the [Store] implementation
+ * that lends the group to anybody's world.
+ *
+ * This stands for `acme/space`. Nothing in it names the program, and the program names it once.
+ */
+
+use Column, Entity, Parent, Store from "./ecs"
+
+/** A point in the plane. Local, because a probe does not depend on `std/linear`. */
+public type Vector2 with Equals, Show {
+  x: Float
+  y: Float
+}
+
+/** Where something is, in the space of its parent. */
+public type Position with Equals, Show {
+  value: Vector2
+}
+
+/** Where something is, in the space of the world. Written by `propagate`, never by hand. */
+public type GlobalPosition with Equals, Show {
+  value: Vector2
+}
+
+/** The package's column group: one field per component the package owns, plus the tree it maintains. */
+public type Places {
+  var positions: Column<Position> = Column()
+  var globals: Column<GlobalPosition> = Column()
+  var parents: Column<Parent> = Column()
+}
+
+extend Places with Store<Position> {
+  fn column(): Column<Position> {
+    positions
+  }
+
+  var fn attach(entity: Entity, value: Position) {
+    positions.put entity, value
+  }
+
+  var fn detach(entity: Entity) {
+    positions.remove entity
+  }
+}
+
+extend Places {
+  /** Every entity that has a position, every parent in front of its children. */
+  fn depthOrder(): List<Entity> {
+    var ordered: List<Entity> = []
+    var placed: Set<Entity> = Set.of()
+    for row in 0..positions.length() {
+      place positions.ownerAt(row), self, ordered, placed
+    }
+    ordered
+  }
+
+  /** One pass in depth order: a child reads a global its parent has already written. */
+  var fn propagate() {
+    for entity in depthOrder() {
+      const local = positions.get(entity)?.value ?? Vector2(0.0, 0.0)
+      const base = match parents.get(entity) {
+        Some(parent) => globals.get(parent.entity)?.value ?? Vector2(0.0, 0.0)
+        None => Vector2 0.0, 0.0
+      }
+      globals.put entity, GlobalPosition(Vector2(base.x + local.x, base.y + local.y))
+    }
+  }
+}
+
+/** Puts `entity` behind its parent chain, and every entity of that chain behind its own. */
+fn place(entity: Entity, places: Places, var ordered: List<Entity>, var placed: Set<Entity>) {
+  if placed.contains(entity) {
+    return
+  }
+  placed.add entity
+  if const Some(parent) = places.parents.get(entity) {
+    place parent.entity, places, ordered, placed
+  }
+  ordered.add entity
+}

@@ -1221,10 +1221,12 @@ document above carries it.
 6. **Whether `parallel()` should ever be unordered.** The answer here is no, argued from determinism. PLINQ, rayon and
    Java's parallel streams all default the other way, so it is worth one look.
    **Decided:** never unordered — "that is the point".
-7. **Whether the field case of ECS gap 8 is wanted at all** — two *different* systems over disjoint fields at the same
-   time, against data parallelism inside one system, which is what section 6 builds. The answer decides whether ECS
-   gap 8 is narrowed to a window split or stays as it stands.
-   **Open**, and it is decided with the ECS document rather than here, against a target level of Godot and Unity.
+7. ~~**Whether the field case of ECS gap 8 is wanted at all**~~ — **answered by [ECS.md](ECS.md) section 6: it is
+   wanted, and it is the smaller half.** A system's unit of work is a column group and not a window, because a system
+   reads several columns and row *n* of one has nothing to do with row *n* of another, and a component that holds a
+   handle, a string or a behaviour is not `Plain` and cannot be windowed at all. The proof is not missing — the
+   checker already rejects two `var` arguments naming one path — so ECS gap 8 narrows to the barrier of gap 7 above,
+   exposed as a fixed-arity call whose subjects are several `var` parameters, and the two parallelisms stay separate.
 8. **Whether a `Task` should be cancellable in v1.**
    **Decided: every task is cancellable** — "then there are not two worlds again". Section 8 is that design, and it
    replaced the channel close as the answer rather than joining it: closing a channel stays the end of a stream, and

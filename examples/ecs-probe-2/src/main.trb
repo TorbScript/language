@@ -1,0 +1,74 @@
+/**
+ * The program: it lists the packages' column groups once, and everything else it gets from them.
+ *
+ * Every line below is a claim `docs/ECS.md` makes. `torb check .`, `torb run .` and `torb build .` are all green,
+ * and the interpreter and the binary print the same bytes. What the language cannot do yet is in the README and not
+ * in this package, because a package that does not build proves nothing.
+ */
+
+use Column, Entity, Parent from "./ecs"
+use Places, Position, GlobalPosition, Vector2 from "./space"
+use Motions, Velocity, movement from "./motion"
+use both, settle, halve from "./schedule"
+use Node, Ship, Sprite, step, walk from "./behaviour"
+
+/** One program, two packages' groups, one entity counter. Nothing in it is a component type of the program's own. */
+public type World {
+  var places: Places = Places()
+  var motions: Motions = Motions()
+  var behaviours: Column<Node> = Column()
+  private(var) nextIndex: Int = 1
+
+  var fn spawn(): Entity {
+    const entity = Entity nextIndex
+    nextIndex = nextIndex + 1
+    entity
+  }
+
+  var fn despawn(entity: Entity) {
+    places.positions.remove entity
+    places.globals.remove entity
+    places.parents.remove entity
+    motions.velocities.remove entity
+    motions.lifetimes.remove entity
+    behaviours.remove entity
+  }
+}
+
+var world = World()
+
+const ship = world.spawn()
+world.places.attach ship, Position(Vector2(0.0, 0.0))
+world.motions.attach ship, Velocity(Vector2(1.0, 0.0))
+
+const turret = world.spawn()
+world.places.attach turret, Position(Vector2(0.25, 0.0))
+world.places.parents.put turret, Parent(ship)
+
+// A package's system over two packages' components, on a world neither package knows.
+const stamp = world.places.positions.version()
+movement world.places, world.motions, 0.5
+world.places.propagate()
+print "moved: {world.places.globals.get(ship)} {world.places.globals.get(turret)}"
+print "changed since the frame began: {world.places.positions.changedSince(stamp).count()}"
+
+// Two systems over two disjoint groups, in one call the checker proves disjoint.
+both world.places, world.motions, settle, halve
+print "settled: {world.places.positions.get(ship)} {world.motions.velocities.get(ship)}"
+
+// A world is a value, so a snapshot is a binding and a rollback is an assignment.
+const snapshot = world
+world.despawn ship
+print "after the despawn: {world.places.positions.length()}, in the snapshot: {snapshot.places.positions.length()}"
+world = snapshot
+print "after the rollback: {world.places.positions.length()}"
+
+// The behaviour layer: a heterogeneous tree of values, changed in place, and stored in a column of the data layer.
+var carrier = Ship "ship", Vector2(0.0, 0.0)
+carrier.mounted.add Sprite("hull", Vector2(0.0, 0.0))
+carrier.mounted.add Sprite("turret", Vector2(0.25, 0.0))
+world.behaviours.put ship, carrier
+world.behaviours.put turret, Sprite("free", Vector2(0.0, 0.0))
+
+print "the tree: {walk(carrier)}"
+print "one frame: {step(world.behaviours, 0.25)}"

@@ -1,0 +1,107 @@
+/**
+ * The behaviour layer: a [Node] is a value, a tree is a value, and dispatch is a trait call.
+ *
+ * Openness here is a trait type and not an erased one: a package declares its own node type, says `with Node`, and
+ * the tree holds it without ever asking what it is. `node.asSprite()` does not exist and is not needed - a parent
+ * reaches a child of a type it cares about through a field of its own, and everything cross-cutting goes through
+ * the columns of the data layer.
+ */
+
+use Column, Entity from "./ecs"
+use Vector2 from "./space"
+
+/** One trait, three members, and everything a scene tree does. */
+public trait Node {
+  fn name(): String
+  /** What a test and an inspector read instead of a downcast. */
+  fn report(): String
+  var fn process(elapsed: Float)
+  fn children(): List<Node>
+}
+
+public type Sprite with Node {
+  var label: String
+  var at: Vector2
+  var frame: Int = 0
+
+  fn name(): String {
+    label
+  }
+
+  fn report(): String {
+    "{label} frame {frame} at {at.x}"
+  }
+
+  var fn process(elapsed: Float) {
+    frame = frame + 1
+    at = Vector2(at.x + elapsed, at.y)
+  }
+
+  fn children(): List<Node> {
+    []
+  }
+}
+
+/** A node with children of a type it does not know: the openness the behaviour layer is for. */
+public type Ship with Node {
+  var label: String
+  var at: Vector2
+  var mounted: List<Node> = []
+
+  fn name(): String {
+    label
+  }
+
+  fn report(): String {
+    "{label} at {at.x}"
+  }
+
+  /** The changing walk is written by the node, because the node knows its own children. */
+  var fn process(elapsed: Float) {
+    at = Vector2(at.x + elapsed * 2.0, at.y)
+    for index in 0..mounted.length() {
+      mounted[index].process(elapsed)
+    }
+  }
+
+  fn children(): List<Node> {
+    mounted
+  }
+}
+
+/** The reading walk is written once, for every node type there will ever be. */
+public fn walk(node: Node): List<String> {
+  var names = [node.name()]
+  for child in node.children() {
+    names.addAll walk(child)
+  }
+  names
+}
+
+extend Column<Node> {
+  var fn runAt(row: Int, elapsed: Float) {
+    values[row].process(elapsed)
+  }
+
+  fn reportAt(row: Int): String {
+    values[row].report()
+  }
+}
+
+/**
+ * Where the two layers meet: the behaviours are a column like any other, so a behaviour is attached to an entity and
+ * a frame of the behaviour layer is a system of the data layer.
+ */
+public fn step(var behaviours: Column<Node>, elapsed: Float): List<String> {
+  var reports: List<String> = []
+  for row in 0..behaviours.length() {
+    behaviours.runAt row, elapsed
+    reports.add behaviours.reportAt(row)
+  }
+  reports
+}
+
+/** What a behaviour column is keyed by, so the two layers agree on who is who. */
+public fn ownersOf(behaviours: Column<Node>): List<Entity> {
+  (0..behaviours.length()).map({ behaviours.ownerAt _ }).toList()
+}
