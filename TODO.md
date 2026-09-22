@@ -4005,3 +4005,6 @@ Wenn nicht, was bedeutet, bewirkt es?
   - **Entschieden (Nutzer): `peek()` bei Stack UND Queue. `Collection`-Trait wird gestrichen** - als Bound nirgends
     gebraucht (zwei Tour-Zeilen = `Sequence<Item> & Length`), als Überbegriff nur Doku. List/Set/Map/Stack/Queue erben
     direkt `Sequence` + `Length`, `clear`/`compact` je selbst; das Wort bleibt für Prosa und den Package-Namen.
+  - **Nutzer: nicht `Sequence`** - Set und Map sind keine Sequenzen. Umbenennungsziel ist **`Iterate`** (Grundwort-Regel:
+    `Hash` für `hash()`, also `Iterate` für `iterator()`); Alternative: `Iterable` als die eine benannte Ausnahme
+    behalten. An die Runde weitergegeben; Nutzer kann noch widersprechen.
