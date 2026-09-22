@@ -667,9 +667,11 @@ nothing links to.
 - **Not case insensitive, on any platform, ever.** Section 1 says why.
 - **Not a glob and not a matcher.** `std/*` in a `project.trb` is a pattern over paths and stays a `String` the
   workspace reader interprets. A pattern language is a package of its own if it is ever wanted.
-- **Not a URL, and not a module import path.** `use Path from "std/path"` names a package and a module inside it; it is
-  resolved by the workspace and it is not a `Path`. The two look alike and mean different things, which is why
-  `Graph.resolveImport` keeps its own `String`.
+- **Not a URL, and not a module import path.** A URL is `docs/URI.md`'s `Uri`, which is its own type because a path
+  is platform-dependent — separators, drive letters, UNC shares — and a URI is not; the two are joined by two
+  fallible conversions (`Uri.tryFrom(path)`, `Path.tryFrom(uri)`) and never merged. `use Path from "std/path"` is a
+  third thing again: it names a package and a module inside it, it is resolved by the workspace, and it is neither a
+  `Path` nor a `Uri`, which is why `Graph.resolveImport` keeps its own `String`.
 - **Not a byte path.** There is no `OsString`, there are no non-UTF-8 components, and a directory entry whose name is
   not UTF-8 is an error rather than a value. The cost is that such a file cannot be named; the benefit is that
   `Path`, `String` and every back end need no rule for broken text, which is the same trade `String` already made.

@@ -1,0 +1,206 @@
+/**
+ * The probe of `docs/URI.md`, run on stage 0 and as a compiled binary: parsing and normalization, reference
+ * resolution, `Path` both ways, `Equals`/`Hash`/`Compare` on a capsule, and the shapes `Url` and `Urn` would take.
+ */
+
+use Uri, Authority, UriError from "./uri"
+use Urn from "./urn"
+use Path from "std/path"
+use fileUriOf, pathOf from "./file"
+
+parsing()
+normalization()
+resolution()
+paths()
+collections()
+refinements()
+encoding()
+
+/** Every row of the document's parsing table, printed as `input -> scheme | authority | path | query | fragment`. */
+fn parsing() {
+  print "----- parsing"
+  const inputs = [
+    "https://example.test/a/b?q=1#top",
+    "HTTP://Example.TEST:80/a/./b/../c",
+    "https://user:secret@example.test:8443/",
+    "file:///C:/Users/ada/notes.txt",
+    "file://server/share/x",
+    "mailto:ada@example.test",
+    "urn:uuid:f81d4fae-7dec-11d0-a765-00a0c91e6bf6",
+    "git+ssh://git@example.test/project/x.git",
+    "data:text/plain,hello",
+    "//example.test/a",
+    "/a/b",
+    "../a/b",
+    "a/b",
+    "",
+    "?q=1",
+    "#top",
+    "https://example.test/a%2Fb/%7euser/%c3%a4",
+    "https://example.test/path with spaces",
+  ]
+  for input in inputs {
+    match Uri.tryFrom(input) {
+      Ok(uri) => print "  {input.showNested()} -> {shapeOf(uri)}"
+      Fail(problem) => print "  {input.showNested()} -> refused: {problem}"
+    }
+  }
+  const refused = ["https://münchen.test/a", "https://example.test/a%zz", "https://example.test:http/a"]
+  for input in refused {
+    print "  {input.showNested()} -> {Uri.tryFrom(input)}"
+  }
+}
+
+/** `scheme | authority | path | query | fragment`, with `-` for what is absent. */
+fn shapeOf(uri: Uri): String {
+  const scheme = uri.scheme() ?? "-"
+  const authority = match uri.authority() {
+    Some(found) => found.show().showNested()
+    None => "-"
+  }
+  const path = uri.path().showNested()
+  const query = uri.query() ?? "-"
+  const fragment = uri.fragment() ?? "-"
+  "{scheme} | {authority} | {path} | {query} | {fragment}   shows as {uri.show().showNested()}"
+}
+
+/** What construction normalizes, and what the explicit `normalized()` adds on top of it. */
+fn normalization() {
+  print "----- normalization"
+  const pairs = [
+    ("HTTP://Example.TEST/a", "http://example.test/a"),
+    ("https://example.test/a/./b/../c", "https://example.test/a/c"),
+    ("https://example.test/../../a", "https://example.test/a"),
+    ("https://example.test/%7Eada", "https://example.test/~ada"),
+    ("https://example.test/%7eada", "https://example.test/~ada"),
+    ("https://example.test/a%2fb", "https://example.test/a%2Fb"),
+  ]
+  for (input, expected) in pairs {
+    const shown = match Uri.tryFrom(input) {
+      Ok(uri) => uri.show()
+      Fail(problem) => problem.show()
+    }
+    print "  {input.showNested()} -> {shown.showNested()} (expected {expected.showNested()}): {shown == expected}"
+  }
+  const withPort = Uri.tryFrom "http://example.test:80/a"
+  const withoutPort = Uri.tryFrom "http://example.test/a"
+  print "  a default port survives construction: {withPort != withoutPort}"
+  const first = expected(withPort).normalized()
+  const second = expected(withoutPort).normalized()
+  print "  ...and normalized() drops it: {first} == {second} is {first == second}"
+}
+
+/** RFC 3986 section 5.4, the normal examples, resolved against its own base. */
+fn resolution() {
+  print "----- resolution"
+  const base = expected Uri.tryFrom("http://a/b/c/d;p?q")
+  const references = ["g", "./g", "g/", "/g", "//g", "?y", "#s", "g?y#s", ";x", "../g", "../../g", "../../../g", ""]
+  for reference in references {
+    const shown = match expected(Uri.tryFrom(reference)).resolved(against: base) {
+      Ok(uri) => uri.show()
+      Fail(problem) => problem.show()
+    }
+    print "  {reference.showNested()} against {base} -> {shown}"
+  }
+  const relative = expected Uri.tryFrom("http://a/b/c/x/y")
+  print "  {relative} relative to {base} -> {relative.relativeTo(base)}"
+  const noScheme = expected Uri.tryFrom("/b/c/d")
+  const refused = expected(Uri.tryFrom("g")).resolved(against: noScheme)
+  print "  a base with no scheme -> {refused}"
+}
+
+/** `Path` -> `Uri` is total and `Uri` -> `Path` is not, which is why they are not a conversion pair. */
+fn paths() {
+  print "----- paths"
+  const paths = ["C:/Users/ada/notes.txt", "/usr/bin/torb", "src/main.trb", "//server/share/x", "a b/ü.txt"]
+  for text in paths {
+    const path = Path.from text
+    const uri = expected fileUriOf(path)
+    const back = match pathOf(uri) {
+      Ok(found) => found.show()
+      Fail(problem) => problem.show()
+    }
+    print "  {path} -> {uri} -> {back}   round trip: {back == path.show()}"
+  }
+  const notAFile = expected Uri.tryFrom("https://example.test/a")
+  print "  {notAFile} -> {pathOf(notAFile)}"
+}
+
+/** A capsule as a `Map` key and in a `sort`, which is what `Equals`, `Hash` and `Compare` are for. */
+fn collections() {
+  print "----- collections"
+  var seen: Map<Uri, Int> = [:]
+  const texts = [
+    "https://example.test/b",
+    "https://example.test/a",
+    "https://EXAMPLE.test/a",
+    "https://example.test/a/./",
+    "http://example.test/a",
+  ]
+  for text in texts {
+    const uri = expected Uri.tryFrom(text)
+    seen.update(uri, 0, { found => found = found + 1 })
+  }
+  print "  {texts.length()} texts made {seen.length()} keys"
+  const sorted = seen.keys().sorted({ _ }).toList()
+  for uri in sorted {
+    print "  {uri} seen {seen.get(uri) ?? 0}"
+  }
+}
+
+/** `isUrl()` and `isUrn()` as questions, and `Urn` as the one refinement that has members a `Uri` cannot have. */
+fn refinements() {
+  print "----- refinements"
+  const texts = [
+    "https://example.test/a",
+    "urn:uuid:f81d4fae-7dec-11d0-a765-00a0c91e6bf6",
+    "urn:isbn:0451450523",
+    "mailto:ada@example.test",
+    "/a/b",
+  ]
+  for text in texts {
+    const uri = expected Uri.tryFrom(text)
+    const urn = match Urn.tryFrom(uri) {
+      Ok(found) => "{found.namespace()} / {found.specific()}"
+      Fail(problem) => "{problem}"
+    }
+    print "  {uri}: isUrl={uri.isUrl()} isUrn={uri.isUrn()} urn={urn}"
+  }
+  const identifier = expected Urn.tryFrom(expected(Uri.tryFrom("urn:uuid:f81d4fae-7dec-11d0-a765-00a0c91e6bf6")))
+  // `const back: Uri = identifier.into()` type checks and the native back end refuses it:
+  // "a conversion through `From` is not supported by the native back end yet". Written out, it builds.
+  const back = Uri.from identifier
+  print "  a Urn converts back into a Uri infallibly: {back}"
+}
+
+/**
+ * The capsule rule with three conversions on one type: `Uri` has `TryFrom<String>`, `TryFrom<Path>` and
+ * `From<Urn>`, and only `String` is a **pair**, because a pair needs the source to have an infallible `From<Uri>`
+ * and neither `Path` nor `Urn` has one. So `Uri` keeps its `Decode`, and `Urn`'s own pair is `Uri`.
+ */
+fn encoding() {
+  print "----- encoding"
+  print "  Uri has Encode: {hasEncode<Uri>()}, Decode: {hasDecode<Uri>()}"
+  print "  Urn has Encode: {hasEncode<Urn>()}, Decode: {hasDecode<Urn>()}"
+  print "  Authority is data, so it has both from its fields: {hasDecode<Authority>()}"
+  // `Json.encode(uri)` and `Json.decode<Uri>(text)` type check and the native back end refuses the first:
+  // "a derived `encode`, whose `Encoder` is all `var self` members is not supported by the native back end yet".
+}
+
+/** Asks the checker for `Decode` and nothing else. */
+fn hasDecode<Value: Decode>(): Bool {
+  true
+}
+
+/** Asks the checker for `Encode` and nothing else. */
+fn hasEncode<Value: Encode>(): Bool {
+  true
+}
+
+/** The value of an `Ok`, and a panic for a `Fail` - a probe checks its own inputs and this one has no bad ones. */
+fn expected<Value, Failure: Show>(outcome: Result<Value, Failure>): Value {
+  match outcome {
+    Ok(value) => value
+    Fail(problem) => panic "the probe's own input was refused: {problem}"
+  }
+}

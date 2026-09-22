@@ -21,6 +21,7 @@ documents:
   - ../PATH.md
   - ../PROJECT.md
   - ../RESOURCES.md
+  - ../URI.md
 ---
 
 The toolchain is written in TorbScript and lives in `compiler/`. It compiles itself; stage 0, the untyped tree-walking
@@ -66,5 +67,6 @@ a rule nothing holds either side to.
 - **[File Paths](../PATH.md)**
 - **[The Project File](../PROJECT.md)**
 - **[Resources](../RESOURCES.md)**
+- **[Uniform Resource Identifiers](../URI.md)**
 
 <!-- torb:index:end -->

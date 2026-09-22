@@ -3660,3 +3660,26 @@ Wenn nicht, was bedeutet, bewirkt es?
     (nach der Struktur wie ArrayList/TrieList). 6 Tour behält Stack/Queue. **Wird gelöst:** Scheiben C1-C8 nach P5
     und der Checker-Runde; dazu die zwei Checker-Löcher (Supertrait ohne Implementierung; zwei Instanzen eines
     Traits auf einem Typ) und der O(n)-`removeAt 0` in staged.trb/source.trb.
+
+  - **Erledigt:** `docs/URI.md` steht (15 Abschnitte), registriert in `docs/internals/index.md`; `docs/PATH.md`
+    ("Not a URL") und `docs/RESOURCES.md` (stabiler Name) zeigen darauf. Probe-Paket `examples/uri-probe` - Parser,
+    Normalisierung, RFC-3986-Auflösung, `Path` in beide Richtungen, `Map<Uri, Int>`, `Urn` - prüft sauber, ist im
+    Kanon und läuft als natives Binärprogramm. **Entschieden:** RFC 3986 statt WHATWG (neun Unterschiede mit
+    Tabelle; die Reparaturen sind eine Funktion `repaired(text)`, kein Modus); EIN Typ `Uri` als URI-REFERENZ (Schema
+    ist `String?`, wie `Path.root()`), `Url` ist nur die Frage `isUrl()`, `Urn` ist eine eigene dünne Kapsel;
+    Normalisierung bei der Konstruktion nur für RFC 3986 §6.2.2 (Fakten), Standard-Ports und leerer Pfad erst in
+    `normalized()` (Vermutungen); `Path` bleibt eigener Typ, beide Richtungen sind `TryFrom` und deshalb **kein**
+    zweites Konversionspaar - `Uri` behält `Decode` (gemessen); Literal-Regel als **geschlossene Liste** (`Path`,
+    `Uri`, `Regex`, Ressourcentypen, Literal-Unions) statt "jeder Typ mit `TryFrom<String>`", weil der Prüfer die
+    std-Typen schlicht IMPORTIEREN kann (`compiler/` hängt schon an `std/fs`, `std/io`, `std/time`) und die
+    allgemeine Regel Konstantenauswertung von Benutzercode bräuchte (VM, 7.x); `std/http` nimmt `Uri` und verliert
+    `HttpError.InvalidUrl`, `std/fs` bleibt bei `Path`; `Identifier` (nicht `Uid`) mit FESTEM Fehlertyp, Erzeugung
+    nimmt `Random` und `Instant` als Argumente (damit braucht die Sandbox keine Regel), Empfehlung UUIDv7 vor `Ulid`.
+    Neun gemessene Lücken, u.a.: `UInt8` hat in `std/number` GAR KEINE verengende Konversion und
+    `UInt8.tryFrom(text)` baut nativ nicht; `Char` hat keine ASCII-Prädikate; ein `fn main()` im Einstiegsmodul
+    erzeugt C, das eine nie emittierte Funktion ruft; ein abgeleitetes `encode` baut nativ nicht; ein Typparameter,
+    der nur in einer Schranke vorkommt, ist nicht inferierbar; die Kapsel-Regel kann ihr `Decode`-Paar nicht
+    BENENNEN - mit IDNA wird `Path` zum zweiten Paar und `Uri` verliert `Decode` lautlos. Überraschung: ein
+    statisches Trait-Mitglied über eine Schranke (`Value.tryFrom(text)`) prüft UND baut nativ, anders als
+    `docs/ENCODING.md` Abschnitt 13 nahelegt. Sieben Scheiben; Geschmacksfragen offen (u.a. ob ein universeller
+    Öffner `open(uri)` gewollt ist - das Dokument lässt `std/fs` bei `Path`).

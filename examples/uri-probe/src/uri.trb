@@ -1,0 +1,678 @@
+/**
+ * A probe of the `Uri` capsule of `docs/URI.md`: RFC 3986, parsed by hand, normalized at construction, with
+ * `Show`, `Equals`, `Hash` and `Compare` over what the value holds.
+ *
+ * It is a probe and not the package: it covers the forms the document's tables name and nothing else, it has no
+ * IDNA, and its percent-encoder handles the components the tables reach.
+ */
+
+use Error from "std/core"
+
+/** The `[userInfo "@"] host [":" port]` of a URI, and the reason a host of `""` is a value. */
+public type Authority with Show, Equals, Hash {
+  /** Everything before the `@`, normalized. `None` where the authority has no `@`. */
+  userInfo: String?
+  /** The registered name or IP literal, lower case. `""` is a value: `file:///x` has an empty host. */
+  host: String
+  /** The port, where one is written out. */
+  port: Int?
+
+  /** The canonical text of the authority, without the `//` in front of it. */
+  fn show(): String {
+    const front = match userInfo {
+      Some(found) => "{found}@"
+      None => ""
+    }
+    const back = match port {
+      Some(found) => ":{found}"
+      None => ""
+    }
+    "{front}{host}{back}"
+  }
+}
+
+/**
+ * A URI reference per RFC 3986: a scheme that may be absent, an authority that may be absent, a path that is always
+ * there, and a query and a fragment that may be absent.
+ *
+ * It is a **capsule**: every field is private and without a default, so [Uri.tryFrom] is the one way in and
+ * [Uri.show] is the way out. What it holds is syntax-normalized (RFC 3986 section 6.2.2), so `==`, `hash()` and
+ * `compare()` are over the normalized form without asking for it.
+ */
+public type Uri with Show, Equals, Hash, Compare {
+  /** The scheme, lower case. `None` for a relative reference. [Uri.scheme] reads it. */
+  private storedScheme: String?
+  /** The authority. `None` where the reference has no `//`. [Uri.authority] reads it. */
+  private storedAuthority: Authority?
+  /** The path, normalized. Always there, and `""` for `mailto:` with no path. [Uri.path] reads it. */
+  private storedPath: String
+  /** Everything after the first `?` and before the `#`. [Uri.query] reads it. */
+  private storedQuery: String?
+  /** Everything after the first `#`. [Uri.fragment] reads it. */
+  private storedFragment: String?
+
+  /** The scheme, lower case. `None` for a relative reference. */
+  fn scheme(): String? {
+    storedScheme
+  }
+
+  /** The authority, where the reference has one. */
+  fn authority(): Authority? {
+    storedAuthority
+  }
+
+  /** The host of the authority, where there is one. */
+  fn host(): String? {
+    storedAuthority?.host
+  }
+
+  /** The port that is written out, which is not the port a scheme defaults to. */
+  fn port(): Int? {
+    storedAuthority?.port
+  }
+
+  /** The path. Always there, and `""` where the reference has none. */
+  fn path(): String {
+    storedPath
+  }
+
+  /** Everything between the first `?` and the `#`, as RFC 3986 leaves it: one opaque string. */
+  fn query(): String? {
+    storedQuery
+  }
+
+  /** Everything after the first `#`. */
+  fn fragment(): String? {
+    storedFragment
+  }
+
+  /** Whether the reference has a scheme, which is what RFC 3986 calls a URI rather than a relative reference. */
+  fn isAbsolute(): Bool {
+    storedScheme.isSome()
+  }
+
+  /** Whether the reference has a host and a hierarchical path: the question `Url` would have been a type for. */
+  fn isUrl(): Bool {
+    storedScheme.isSome() && storedAuthority.isSome()
+  }
+
+  /** Whether the scheme is `urn`, which is the question `Urn` is a type for. */
+  fn isUrn(): Bool {
+    storedScheme == Some("urn")
+  }
+
+  /** The path split at its `/`, with the empty leading segment of an absolute path dropped. */
+  fn segments(): List<String> {
+    var kept: List<String> = []
+    for segment in storedPath.split("/") {
+      if !segment.isEmpty() {
+        kept.add segment
+      }
+    }
+    kept
+  }
+
+  /**
+   * The query read as `application/x-www-form-urlencoded`, which is a convention of HTML forms and not part of
+   * RFC 3986 - which is why it is a member a caller asks for and not what [Uri.query] answers.
+   */
+  fn queryParameters(): Map<String, List<String>> {
+    var table: Map<String, List<String>> = [:]
+    const text = storedQuery ?? ""
+    if text.isEmpty() {
+      return table
+    }
+    for pair in text.split("&") {
+      if pair.isEmpty() {
+        continue
+      }
+      const name = pair.substringBefore("=") ?? pair
+      const value = pair.substringAfter("=") ?? ""
+      table.update(name, [], { found => found.add value })
+    }
+    table
+  }
+
+  /** The first value of a query parameter, which is what almost every caller of [Uri.queryParameters] wants. */
+  fn queryParameter(name: String): String? {
+    queryParameters().get(name)?.first()
+  }
+
+  /**
+   * RFC 3986 section 6.2.3, scheme-based normalization: a port that is the scheme's default is dropped and an empty
+   * path under an authority becomes `/`. It is a member and not part of construction, because the default port of a
+   * scheme is a fact about five schemes and not a fact about URIs.
+   */
+  fn normalized(): Uri {
+    const authority = withoutDefaultPort(storedAuthority, storedScheme ?? "")
+    const path = if storedPath.isEmpty() && authority.isSome() { "/" } else { storedPath }
+    Uri storedScheme, authority, path, storedQuery, storedFragment
+  }
+
+  /**
+   * This reference resolved against `base`, per RFC 3986 section 5.3.
+   *
+   * # Errors
+   *
+   * - [UriError.NoBase] where `base` has no scheme, which section 5.2.1 requires of a base.
+   */
+  fn resolved(against: Uri): Result<Uri, UriError> {
+    if against.storedScheme.isNone() {
+      return Fail UriError.NoBase(against.show())
+    }
+    if storedScheme.isSome() {
+      return Ok Uri(storedScheme, storedAuthority, withoutDotSegments(storedPath), storedQuery, storedFragment)
+    }
+    if storedAuthority.isSome() {
+      return Ok(Uri(
+        against.storedScheme,
+        storedAuthority,
+        withoutDotSegments(storedPath),
+        storedQuery,
+        storedFragment,
+      ))
+    }
+    if storedPath.isEmpty() {
+      const query = if storedQuery.isSome() { storedQuery } else { against.storedQuery }
+      return Ok(Uri(
+        against.storedScheme,
+        against.storedAuthority,
+        against.storedPath,
+        query,
+        storedFragment,
+      ))
+    }
+    const merged = if storedPath.startsWith("/") { storedPath } else { mergedPath against, storedPath }
+    Ok(Uri(
+      against.storedScheme,
+      against.storedAuthority,
+      withoutDotSegments(merged),
+      storedQuery,
+      storedFragment,
+    ))
+  }
+
+  /**
+   * This URI as seen from `base`: the shortest reference that [Uri.resolved] turns back into this one. `None` where
+   * the two have different schemes or different authorities, which nothing relative can bridge.
+   */
+  fn relativeTo(base: Uri): Uri? {
+    if storedScheme != base.storedScheme || storedAuthority != base.storedAuthority {
+      return None
+    }
+    const here = segments()
+    const there = base.segments()
+    var common = 0
+    while common < here.length() - 1 && common < there.length() - 1 && here[common] == there[common] {
+      common = common + 1
+    }
+    var walked: List<String> = []
+    for _ in common..(there.length() - 1) {
+      walked.add ".."
+    }
+    for index in common..here.length() {
+      walked.add here[index]
+    }
+    Some Uri(None, None, walked.joined(separator: "/"), storedQuery, storedFragment)
+  }
+
+  /** The canonical text: what RFC 3986 section 5.3 calls the recomposition of the components. */
+  fn show(): String {
+    var text = match storedScheme {
+      Some(found) => "{found}:"
+      None => ""
+    }
+    if const Some(found) = storedAuthority {
+      text = "{text}//{found}"
+    }
+    text = "{text}{storedPath}"
+    if const Some(found) = storedQuery {
+      text = "{text}?{found}"
+    }
+    if const Some(found) = storedFragment {
+      text = "{text}#{found}"
+    }
+    text
+  }
+
+  /** Scheme, then authority, then path, then query, then fragment, each on the normalized form the value holds. */
+  fn compare(other: Uri): Ordering {
+    var answer = optionCompare storedScheme, other.storedScheme
+    if answer != .Equal {
+      return answer
+    }
+    answer = optionCompare storedAuthority?.show(), other.storedAuthority?.show()
+    if answer != .Equal {
+      return answer
+    }
+    answer = storedPath.compare other.storedPath
+    if answer != .Equal {
+      return answer
+    }
+    answer = optionCompare storedQuery, other.storedQuery
+    if answer != .Equal {
+      return answer
+    }
+    optionCompare storedFragment, other.storedFragment
+  }
+}
+
+/** What a text is refused for, and what a resolution refuses. */
+public type UriError with Show, Error {
+  /** The text before the first `:` is not `ALPHA *( ALPHA / DIGIT / "+" / "-" / "." )`. */
+  case InvalidScheme(text: String)
+  /** A `%` that is not followed by two hexadecimal digits. */
+  case InvalidEscape(text: String)
+  /** A host that is not ASCII, which needs IDNA and is out of this design's first version. */
+  case NonAsciiHost(host: String)
+  /** The text after the `:` of an authority is not a number. */
+  case InvalidPort(text: String)
+  /** [Uri.resolved] was given a base with no scheme, which RFC 3986 section 5.2.1 requires. */
+  case NoBase(base: String)
+  /** A `Path` was asked for from a URI that is not a `file:` URI. */
+  case NotAFile(uri: String)
+  /** The bytes a percent escape named are not UTF-8, so there is no `String` for them. */
+  case NotText(reason: String)
+  /** A `Urn` was asked for from a URI whose scheme is not `urn`, or whose body has no second `:`. */
+  case NotAUrn(uri: String)
+
+  /** One line, naming the text that was refused. */
+  fn show(): String {
+    match self {
+      .InvalidScheme(text) => "`{text}` is not a scheme"
+      .InvalidEscape(text) => "`{text}` has a `%` that is not followed by two hexadecimal digits"
+      .NonAsciiHost(host) => "`{host}` is not an ASCII host, and IDNA is not part of this version"
+      .InvalidPort(text) => "`{text}` is not a port"
+      .NoBase(base) => "`{base}` has no scheme, so nothing can be resolved against it"
+      .NotAFile(uri) => "`{uri}` is not a `file:` URI"
+      .NotText(reason) => "a percent escape named bytes that are not UTF-8: {reason}"
+      .NotAUrn(uri) => "`{uri}` is not a `urn:`"
+    }
+  }
+}
+
+/**
+ * A text read as a URI reference, normalized on the way in: the scheme and the host lower case, every percent
+ * escape upper case with the unreserved ones decoded, and the dot segments of an absolute path removed.
+ *
+ * # Examples
+ *
+ *     print Uri.tryFrom("HTTP://Example.COM/a/./b/../c?q=1#top")
+ *
+ * # Errors
+ *
+ * - [UriError.InvalidScheme], [UriError.InvalidEscape], [UriError.NonAsciiHost], [UriError.InvalidPort].
+ */
+extend Uri with TryFrom<String, UriError> {
+  static fn tryFrom(value: String): Result<Uri, UriError> {
+    var rest = value
+    var fragment: String? = None
+    if const Some(mark) = rest.indexOf("#") {
+      const decoded = normalizedComponent(rest[(mark + 1)..], "!$&'()*+,;=:@/?")?
+      fragment = Some decoded
+      rest = rest[0..mark]
+    }
+    var query: String? = None
+    if const Some(mark) = rest.indexOf("?") {
+      const decoded = normalizedComponent(rest[(mark + 1)..], "!$&'()*+,;=:@/?")?
+      query = Some decoded
+      rest = rest[0..mark]
+    }
+    var scheme: String? = None
+    if const Some(mark) = schemeEndOf(rest) {
+      scheme = Some rest[0..mark].toLowerCase()
+      rest = rest[(mark + 1)..]
+    } else if rest.contains(":") && !rest.startsWith("/") && !rest.contains("/") {
+      return Fail UriError.InvalidScheme(rest.substringBefore(":") ?? rest)
+    }
+    var authority: Authority? = None
+    if rest.startsWith("//") {
+      const body = rest[2..]
+      const cut = body.indexOf("/") ?? body.byteLength()
+      authority = Some(authorityOf(body[0..cut])?)
+      rest = body[cut..]
+    }
+    const path = normalizedComponent(rest, "!$&'()*+,;=:@/")?
+    Ok Uri(scheme, authority, if path.startsWith("/") { withoutDotSegments path } else { path }, query, fragment)
+  }
+}
+
+/** The way back out, and with [Uri.tryFrom] the one conversion pair of the capsule. */
+extend String with From<Uri> {
+  static fn from(value: Uri): String {
+    value.show()
+  }
+}
+
+/** The offset of the `:` that ends a scheme, and `None` where the text has no scheme in front of it. */
+fn schemeEndOf(text: String): Int? {
+  const characters = text.chars().toList()
+  var index = 0
+  while index < characters.length() {
+    const character = characters[index]
+    if character == ':' {
+      return if index == 0 { None } else { Some index }
+    }
+    if character == '/' || character == '?' || character == '#' {
+      return None
+    }
+    const fits = if index == 0 { isAsciiLetter character } else { isSchemeCharacter character }
+    if !fits {
+      return None
+    }
+    index = index + 1
+  }
+  None
+}
+
+/** `[userInfo "@"] host [":" port]`, with the host lower case and every part normalized. */
+fn authorityOf(text: String): Result<Authority, UriError> {
+  var rest = text
+  var userInfo: String? = None
+  if const Some(mark) = rest.lastIndexOf("@") {
+    const decoded = normalizedComponent(rest[0..mark], "!$&'()*+,;=:")?
+    userInfo = Some decoded
+    rest = rest[(mark + 1)..]
+  }
+  var port: Int? = None
+  const bracket = if rest.startsWith("[") { (rest.indexOf("]") ?? 0) + 1 } else { 0 }
+  if const Some(mark) = rest[bracket..].lastIndexOf(":") {
+    const digits = rest[(bracket + mark + 1)..]
+    rest = rest[0..(bracket + mark)]
+    if !digits.isEmpty() {
+      const number = Int.tryFrom(digits).mapError({ _ => UriError.InvalidPort digits })?
+      port = Some number
+    }
+  }
+  if !isAscii(rest) {
+    return Fail UriError.NonAsciiHost(rest)
+  }
+  const host = normalizedComponent(rest.toLowerCase(), "!$&'()*+,;=:[]")?
+  Ok Authority(userInfo, host, port)
+}
+
+/**
+ * RFC 3986 section 6.2.2 over one component: an existing escape is upper cased and decoded where the byte it names
+ * is unreserved, a character the component may hold is kept, and everything else is encoded as UTF-8.
+ */
+fn normalizedComponent(text: String, safe: String): Result<String, UriError> {
+  const characters = text.chars().toList()
+  var out = ""
+  var index = 0
+  while index < characters.length() {
+    const character = characters[index]
+    if character != '%' {
+      out = if isUnreserved(character) || safe.contains("{character}") {
+        "{out}{character}"
+      } else {
+        "{out}{percentEncoded(character)}"
+      }
+      index = index + 1
+      continue
+    }
+    if index + 2 >= characters.length() {
+      return Fail UriError.InvalidEscape(text)
+    }
+    const value = escapeValueOf characters[index + 1], characters[index + 2]
+    if const Some(found) = value {
+      out = "{out}{escapeOf(found)}"
+      index = index + 3
+      continue
+    }
+    return Fail UriError.InvalidEscape(text)
+  }
+  Ok out
+}
+
+/** What the two characters after a `%` are worth, and `None` where one of them is not a hexadecimal digit. */
+fn escapeValueOf(high: Char, low: Char): Int? {
+  const first = hexValueOf(high)?
+  const second = hexValueOf(low)?
+  Some(first * 16 + second)
+}
+
+/** A decoded byte written back: the character itself where it is unreserved, and `%XX` with upper-case hex else. */
+fn escapeOf(byte: Int): String {
+  const character = Char.tryFrom(byte) ?? '?'
+  if byte < 128 && isUnreserved(character) {
+    return "{character}"
+  }
+  "%{hexOf(byte)}"
+}
+
+/**
+ * One text as a URI path segment: everything a segment may not hold, `/` and `%` included, percent-encoded as
+ * UTF-8. It is total, which the normalizing [Uri.tryFrom] is not.
+ */
+public fn encodedSegment(text: String): String {
+  var out = ""
+  for character in text.chars() {
+    out = if isUnreserved(character) || "!$&'()*+,;=:@".contains("{character}") {
+      "{out}{character}"
+    } else {
+      "{out}{percentEncoded(character)}"
+    }
+  }
+  out
+}
+
+/**
+ * Every percent escape of a text decoded, as bytes and then as UTF-8.
+ *
+ * # Errors
+ *
+ * - [UriError.NotText] where the decoded bytes are not UTF-8, which `%FF` alone already is.
+ */
+public fn percentDecoded(text: String): Result<String, UriError> {
+  const characters = text.chars().toList()
+  var values: List<Int> = []
+  var index = 0
+  while index < characters.length() {
+    const character = characters[index]
+    var value: Int? = None
+    if character == '%' && index + 2 < characters.length() {
+      value = escapeValueOf characters[index + 1], characters[index + 2]
+    }
+    if const Some(found) = value {
+      values.add found
+      index = index + 3
+      continue
+    }
+    for byte in "{character}".bytes() {
+      values.add Int.from(byte)
+    }
+    index = index + 1
+  }
+  textOfBytes values
+}
+
+/**
+ * A list of byte values read as UTF-8.
+ *
+ * `std/stream`'s `textOf(bytes)` is what this would be and the probe cannot reach it: `Bytes` is `List<UInt8>`,
+ * `std/number` has no narrowing conversion into `UInt8` at all, and the one way around that -
+ * `UInt8.tryFrom("{value}")` - is refused by the native back end ("`torb_parse_u64`: parameter 2 of the runtime is
+ * a `uint64_t *` where the lowering passes a `uint8_t *`"). So the probe carries its own decoder over `Int`.
+ */
+fn textOfBytes(values: List<Int>): Result<String, UriError> {
+  var characters: List<Char> = []
+  var index = 0
+  while index < values.length() {
+    const first = values[index]
+    const width = utf8WidthOf first
+    if width == 0 || index + width > values.length() {
+      return Fail UriError.NotText("byte {first} at offset {index}")
+    }
+    var code = match width {
+      1 => first
+      2 => first - 192
+      3 => first - 224
+      _ => first - 240
+    }
+    for step in 1..width {
+      const next = values[index + step]
+      if next < 128 || next > 191 {
+        return Fail UriError.NotText("byte {next} at offset {index + step}")
+      }
+      code = code * 64 + (next - 128)
+    }
+    characters.add(Char.tryFrom(code) ?? '?')
+    index = index + width
+  }
+  Ok String.from(characters)
+}
+
+/** How many bytes long the UTF-8 sequence a byte starts is, and `0` where it starts none. */
+fn utf8WidthOf(byte: Int): Int {
+  if byte < 128 {
+    return 1
+  }
+  if byte >= 192 && byte < 224 {
+    return 2
+  }
+  if byte >= 224 && byte < 240 {
+    return 3
+  }
+  if byte >= 240 && byte < 248 {
+    return 4
+  }
+  0
+}
+
+/** Every byte of one character's UTF-8, as `%XX`. */
+fn percentEncoded(character: Char): String {
+  var out = ""
+  for byte in "{character}".bytes() {
+    out = "{out}%{hexOf(Int.from(byte))}"
+  }
+  out
+}
+
+/** One byte as two upper-case hexadecimal digits. */
+fn hexOf(byte: Int): String {
+  const digits = "0123456789ABCDEF"
+  const high = byte / 16
+  const low = byte % 16
+  "{digits[high..(high + 1)]}{digits[low..(low + 1)]}"
+}
+
+/** What one hexadecimal digit is worth, and `None` for anything else. */
+fn hexValueOf(character: Char): Int? {
+  const code = Int.from character
+  if code >= 48 && code <= 57 {
+    return Some(code - 48)
+  }
+  if code >= 65 && code <= 70 {
+    return Some(code - 55)
+  }
+  if code >= 97 && code <= 102 {
+    return Some(code - 87)
+  }
+  None
+}
+
+/** `ALPHA / DIGIT / "-" / "." / "_" / "~"`, which RFC 3986 section 2.3 calls unreserved. */
+fn isUnreserved(character: Char): Bool {
+  const code = Int.from character
+  const digit = code >= 48 && code <= 57
+  isAsciiLetter(character) || digit || character == '-' || character == '.' || character == '_' || character == '~'
+}
+
+/** An ASCII letter, which `Char.isLetter` is not: it answers `true` for every letter Unicode has. */
+fn isAsciiLetter(character: Char): Bool {
+  const code = Int.from character
+  (code >= 65 && code <= 90) || (code >= 97 && code <= 122)
+}
+
+/** `ALPHA / DIGIT / "+" / "-" / "."`, what a scheme may hold after its first character. */
+fn isSchemeCharacter(character: Char): Bool {
+  const code = Int.from character
+  const digit = code >= 48 && code <= 57
+  isAsciiLetter(character) || digit || character == '+' || character == '-' || character == '.'
+}
+
+/** Whether every character of a text is ASCII, which a host has to be until there is IDNA. */
+fn isAscii(text: String): Bool {
+  for character in text.chars() {
+    if Int.from(character) > 127 {
+      return false
+    }
+  }
+  true
+}
+
+/** RFC 3986 section 5.2.4, `remove_dot_segments`, as text: it reads nothing and follows nothing. */
+fn withoutDotSegments(path: String): String {
+  const absolute = path.startsWith "/"
+  const trailing = path.endsWith("/") || path.endsWith("/.") || path.endsWith("/..")
+  var kept: List<String> = []
+  for segment in path.split("/") {
+    if segment.isEmpty() || segment == "." {
+      continue
+    }
+    if segment != ".." {
+      kept.add segment
+      continue
+    }
+    const above = kept.last() ?? ".."
+    if above != ".." {
+      kept.removeAt(kept.length() - 1)
+      continue
+    }
+    if !absolute {
+      kept.add ".."
+    }
+  }
+  var text = kept.joined separator: "/"
+  if absolute {
+    text = "/{text}"
+  }
+  if trailing && !text.endsWith("/") {
+    text = "{text}/"
+  }
+  text
+}
+
+/** RFC 3986 section 5.3, `merge`: the reference below everything of the base's path up to its last `/`. */
+fn mergedPath(base: Uri, reference: String): String {
+  if base.authority().isSome() && base.path().isEmpty() {
+    return "/{reference}"
+  }
+  match base.path().lastIndexOf("/") {
+    Some(mark) => "{base.path()[0..(mark + 1)]}{reference}"
+    None => reference
+  }
+}
+
+/** The authority with a port dropped where it is the scheme's default, for the five schemes IANA fixes one for. */
+fn withoutDefaultPort(authority: Authority?, scheme: String): Authority? {
+  const found = authority?
+  // `found.port?` would be a `?` on the *authority's* option inside a function that answers one, so an authority
+  // without a port would return `None` and the authority would vanish. The probe wrote that bug once.
+  if defaultPortOf(scheme) != found.port || found.port.isNone() {
+    return authority
+  }
+  Some Authority(found.userInfo, found.host, None)
+}
+
+/** The port a scheme defaults to, for the five schemes that have one fixed. */
+fn defaultPortOf(scheme: String): Int? {
+  match scheme {
+    "http" => Some 80
+    "https" => Some 443
+    "ws" => Some 80
+    "wss" => Some 443
+    "ftp" => Some 21
+    _ => None
+  }
+}
+
+/** Two optional texts compared, with `None` before every `Some`. */
+fn optionCompare(here: String?, there: String?): Ordering {
+  match (here, there) {
+    (None, None) => .Equal
+    (None, Some(_)) => .Less
+    (Some(_), None) => .Greater
+    (Some(first), Some(second)) => first.compare second
+  }
+}

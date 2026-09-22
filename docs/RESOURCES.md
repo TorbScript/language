@@ -490,6 +490,9 @@ Using the same text the panic paths use is not a saving of code, it is a saving 
 a file's name in an error message is a file's name in an error message, whether the error is a panic or a missing
 resource.
 
+A stable name is not a URI and gets no scheme of its own: `docs/URI.md` section 14 says why there is no `embedded:`
+and no `resource:`, and its section 9 is the general form of the literal rule this document's section 3 states.
+
 - **Two literals that resolve to one file are one resource.** The identity is the stable name after normalization, so
   `"./hero.png"` and `"./a/../hero.png"` in one file, and a literal in two packages that reaches the same file, all
   name the same resource; it ships once and is embedded once. A `..` is allowed as long as it does not leave the
