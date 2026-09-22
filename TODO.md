@@ -3607,3 +3607,17 @@ Wenn nicht, was bedeutet, bewirkt es?
     `Stack`/`Queue` + Implementierungen, `Indexed`/`Slice`, `Array`, `Buffer`, `Source`/`Sink`), Doppelwörter, was
     `Collection` leistet, Vergleich mit Rust/Swift/Kotlin/Scala/Clojure, Zielentwurf mit Probes, Migrationsscheiben.
     Fest: ein Wort pro Bedeutung; Konstruktor-Defaults über `Self`; Stack/Queue als Traits.
+- (Regex und YAML, 2026-09-22) **Nutzer:** Regular Expressions einplanen, vielleicht als natives Konstrukt wie in JS;
+  YAML für Frontmatter, also noch vor `std/markdown`.
+  - **Entschieden (ich): `std/yaml` vor `std/markdown`**, als Format-Package auf `Encode`/`Decode` (braucht die
+    Encoding-Neugestaltung). YAML 1.2 Core Schema OHNE Anker, Aliase, Tags - Frontmatter, Konfiguration und CI
+    brauchen sie nicht, und Voll-YAML ist berüchtigt (Norwegen-Problem). `docs check` liest Frontmatter dann per
+    `Decode` in einen Typ statt über den handgeschriebenen Leser in `documentation/markdown.trb`.
+  - **Entschieden (ich): `std/regex`, KEIN Syntax-Literal.** Gründe: `/` kollidiert mit der Division (JS braucht
+    Parser-Heuristiken, die Lexer/Highlighting/canon/LSP alle nachbauen müssten); die Sprache hat keine
+    Sonder-Literale (Pfade, Dauern, URLs sind Werte); Raw Strings `r"d+"` existieren genau dafür. Was das Literal
+    bringt - Prüfung zur Compile-Zeit - kommt über die Ressourcen-Regel: ein String-LITERAL an einem `Regex`-Parameter
+    wird beim Bauen kompiliert und geprüft (ungültiges Muster = Compile-Fehler), ein `String`-Wert zur Laufzeit gibt
+    `Result`. Engine in TorbScript mit RE2-Semantik (linear, keine Backreferences), Unicode, identisch in
+    Interpreter und nativ; Named Groups über `Decode` in Typen. Reihenfolge: Encoding-Neugestaltung → yaml → regex
+    → markdown. **Offen (Nutzer):** einverstanden mit "kein Literal"?
