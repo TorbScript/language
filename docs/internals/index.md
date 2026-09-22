@@ -17,6 +17,7 @@ documents:
   - ../ECS.md
   - ../CONCURRENCY.md
   - ../COLLECTIONS.md
+  - ../LOOPS.md
 
   - ../PATH.md
   - ../PROJECT.md
@@ -63,6 +64,7 @@ has observable run-time behaviour and no program in that suite is a rule nothing
 - **[Entities, Components and Scenes](../ECS.md)**
 - **[Concurrency and Parallelism](../CONCURRENCY.md)**
 - **[Collections](../COLLECTIONS.md)**
+- **[Loops as Expressions](../LOOPS.md)**
 - **[File Paths](../PATH.md)**
 - **[The Project File](../PROJECT.md)**
 - **[Resources](../RESOURCES.md)**

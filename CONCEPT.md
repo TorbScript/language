@@ -2864,10 +2864,12 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
 - `yield`: a function that answers a `Source` and produces items with `yield` would be the same state machine `Task`
   already is, so it costs little. Not in v1, because `Source.produce { sink => ... }` covers the cases (and with
   `capacity: 0` it *is* lock-step generation), and a second way to write a producer is worth less than one obvious way.
-  Decide when a real generator is awkward to write with `produce`.
+  Decide when a real generator is awkward to write with `produce`. See docs/LOOPS.md, which examines a loop expression
+  as the spelling that would carry it.
 - `for` over a `Source`: there is no place in a `for` head for the `?` the pull needs, so v1 has
   `while const Some(item) = source.next().await()? { ... }`. Swift needs `for try await` for exactly this. Reconsider if
-  a spelling turns up that keeps `await` and `?` visible without a keyword combination.
+  a spelling turns up that keeps `await` and `?` visible without a keyword combination. See docs/LOOPS.md section 8 for
+  one such spelling and what it would cost.
 - `_` as a type argument, meaning "infer this one": `Array<Int, _>`, `Map<String, _>`. A CANDIDATE, nothing more. The
   case for it is the inline storage primitive, where the item type is worth writing and the size is not
   (`const zeros: Array<Int, _> = [0, 0, 0]`), and the same shape turns up wherever one argument of several is obvious.

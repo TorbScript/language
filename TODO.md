@@ -3893,3 +3893,32 @@ Wenn nicht, was bedeutet, bewirkt es?
     `Source.produce`); kein äußeres `var` ändern (spawn-Regel); `if` ohne `else` als letzter Ausdruck.
   - **Wird gelöst - läuft:** Design-Dokument `docs/LOOPS.md` (Opus) mit Probes, vor 7.3, damit die Transformation
     einmal gebaut wird.
+  - **Erledigt:** `docs/LOOPS.md` steht, mit Probes gegen den echten Checker. **Empfehlung: eager, nicht lazy** - ein
+    `for`/`while`/`loop` in Ausdrucksposition läuft dort, wo es steht, und antwortet `List<Body>`; in Statement-Position
+    ist es die Schleife von heute. Damit funktionieren `var` ändern, `return`, `?`, `break`, `continue` und die
+    Auswertungsreihenfolge alle ohne eine einzige Sonderregel, weil der Body derselbe Block in derselben Funktion
+    bleibt - genau die drei Einwände. Deine beiden Beispiele gehen wörtlich durch (`List` erfüllt ein `Iterable`-
+    Ergebnis), und `.filter` danach ist die normale faule Pipeline. Die Senkung ist `var result = []` plus die Schleife,
+    die es schon gibt: **kein IR-Knoten, kein Back-End, keine Runtime, unabhängig von 7.3** - vier Lücken statt
+    vierzehn. Preis, offen benannt: `loop { }` ist damit NICHT der unendliche Generator (Fibonacci bleibt
+    `Source.produce` oder ein 12-zeiliges `type`-Paar, das heute prüft und läuft), eine Schleife als Ausdruck kann keine
+    unendliche Quelle laufen (dafür ist die Pipeline da), eine Materialisierung mehr, und CONCEPTs zwei offene Fragen
+    (`yield`, `for` über `Source`) schließen sich dadurch NICHT. Die drei Lektionen aus dreizehn Sprachen (Tabelle in
+    Abschnitt 3): keine Sprache lässt EINE Syntax beides bedeuten (Python Klammer, F# Delimiter, Racket Formname,
+    Elixir Modul); Scalas "folgt der Quelle" ist hier nicht übertragbar, weil unser `map` immer faul ist; und jede
+    Sprache, in der die Schleife selbst ein Ausdruck ist (Rust, Zig), meint damit EINEN Endwert via `break value` - was
+    `break value` hier endgültig vergibt. Der faule Entwurf steht als Abschnitt 8 vollständig da (Zustandsmaschine,
+    dieselbe wie 7.3 mit drei geänderten Parametern, `Iterable` statt `Iterator`, asynchron = `Source`) - als
+    informierte Alternative, nicht als Empfehlung. Zwei Funde nebenbei: `?` in einem Closure prüft durch und beendet
+    beim Auslösen das Programm mit Exit 1 ohne jede Diagnose (Lücke 5, älter als dieses Dokument); und ein `loop` ohne
+    `break` erfüllt als `Never` jeden erwarteten Typ, weshalb Regel 8 ausgeschrieben werden muss. **Sechs
+    Geschmacksfragen** in Abschnitt 12, die erste trägt den Rest: eager gegen den faulen Entwurf.
+  - **Zurückgestellt (Nutzer): "lassen wir erst mal, behalten aber im Hinterkopf, dass for-Schleifen ein Ziel für
+    Expression-Dasein und Iterator-Protokoll-Integration sind."** `docs/LOOPS.md` ist gemergt als Aufzeichnung:
+    Empfehlung EAGER (`List<Body>`, läuft wo es steht; `var`/`return`/`?` funktionieren; kein IR-Knoten, unabhängig
+    von 7.3); Vergleichstabelle mit 13 Sprachen ("keine Sprache lässt eine Syntax beides bedeuten"); die lazy
+    Variante als Abschnitt 8 mit der Zustandsmaschine. Wieder aufnehmen nach 7.3.
+  - **Zwei echte Bugs aus den Probes (Wird gelöst - Checker/Lowering-Folgerunde):** (a) `?` in einer Closure typt
+    und beendet beim Auslösen den Prozess mit Exit 1 OHNE Diagnose - weder Closure-Wert noch Funktionsfehler; (b)
+    nativ nicht unterstützt: Zuweisung an ein Top-Level-`var` aus einer Funktion, und `if var` mit Pfad ins Subjekt
+    (in `std/iteration` `flatMap`). Außerdem: `loop` ohne `break` ist `Never` und erfüllt jeden Typ.
