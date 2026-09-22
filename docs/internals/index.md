@@ -16,6 +16,7 @@ documents:
   - ../LINEAR.md
   - ../ECS.md
   - ../CONCURRENCY.md
+  - ../COLLECTIONS.md
 
   - ../PATH.md
   - ../PROJECT.md
@@ -61,6 +62,7 @@ a rule nothing holds either side to.
 - **[Linear Algebra and Geometry](../LINEAR.md)**
 - **[Entities, Components and Scenes](../ECS.md)**
 - **[Concurrency and Parallelism](../CONCURRENCY.md)**
+- **[Collections](../COLLECTIONS.md)**
 - **[File Paths](../PATH.md)**
 - **[The Project File](../PROJECT.md)**
 - **[Resources](../RESOURCES.md)**

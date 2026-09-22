@@ -1,0 +1,823 @@
+# Collections
+
+One family, from the cursor to the byte buffer. This is the specification of `std/iteration`, `std/collections` and the
+part of `std/core` the language itself reaches into — which traits exist, what each one is for, which words they spend,
+and what has to change so that one meaning has one word. Nothing here decides a question of the runtime: every trait is
+an ordinary trait and every implementation is an ordinary type.
+
+```text
+                      Iterable<Item>            Length              Accumulator<Item, Output>
+                      iterator()                length()            add(), finish()
+                            └───────────────────┬──┴────────────────────────┘
+                                        Collection<Item>
+                                        a finite thing you can fill
+              ┌──────────────┬──────────────┼──────────────┬──────────────┐
+           List<Item>     Set<Item>    Map<Key, Value>  Stack<Item>    Queue<Item>
+           ordered        unique       keyed            last in        first in
+           + Indexed      + Slice
+```
+
+- **[1. The inventory](#1-the-inventory)** — every trait and type, who uses it, and what it costs
+- **[2. Where the others are](#2-where-the-others-are)** — Rust, Swift, Kotlin, Scala, Clojure, Java
+- **[3. The target design](#3-the-target-design)** — the tree, the words, construction, iteration, indexing, ergonomics
+- **[4. What the language must provide](#4-what-the-language-must-provide)** — numbered gaps, smallest fix each
+- **[5. Slices](#5-slices)** — one agent each, with gates
+- **[6. Open, for the owner](#6-open-for-the-owner)**
+
+Every declaration below was written into a probe file under `bootstrap/tests/scripts/` — where the workspace makes
+`std` resolve — and run through `build/release/torb check`. A snippet marked **type checks today** was accepted as
+written; where one is not, the prose names the gap of section 4 that stands in its way, and every diagnostic quoted is
+the compiler's own, word for word. The fenced blocks of this page are not type checked by `docs check`, which lexes
+them and nothing more; that is why the probes exist.
+
+---
+
+## 1. The inventory
+
+### 1.1 The tree as it is
+
+```text
+std/iteration
+  Iterator<Item>              next()                                                 1 member
+  Iterable<Item>              iterator() + 12 lazy stages + 14 terminals            27 members
+  Length                      length(), isEmpty(), isNotEmpty()                      3 members
+  Accumulator<Item, Output>   add(), finish(), isDone()                              3 members
+  Collector<Item, Output>     start()                                                1 member
+  Stage<Input, Output>        onto(), then()                                         2 members
+  Staged<Input, Item>         the driver of Iterable.through                        (public, not exported)
+  Queueing<Item>              the tail of a pulled stage chain
+  Mapped Filtered FilterMapped MappedWhile FlatMapped Taken Skipped TakenWhile Zipped Sorted
+                              one Iterable type and one Iterator type each         (public, not exported)
+  Grouping<Item, Key>         groupingBy(...) before then(...)
+
+std/collections
+  Collection<Item>            with Iterable, Length, Accumulator<Item, Self>         8 members
+    List<Item>                with MutableIndexed<Int, Item>, MutableSlice          18 members
+      ArrayList  TrieList  ListIterator
+    Set<Item>                                                                       10 members
+      TrieSet  HashSet  SetIterator  HashSetIterator
+    Map<Key, Value>           with MutableIndexed<Key, Value>                       13 members
+      TrieMap  HashMap  MapIterator  HashMapIterator
+    Stack<Item>                                                                      7 members
+      ArrayStack
+    Queue<Item>                                                                      7 members
+      ArrayQueue
+
+std/core
+  Indexed<Key, Value>         get(), at()            a[key]
+  MutableIndexed<Key, Value>  set()                  a[key] = v
+  Slice                       slice()                a[from..to]
+  MutableSlice                replace(), compact()   a[from..to] = v
+  Array<Item, const Size>     with Iterable, Length, MutableIndexed<Int, Item>
+  Range RangeFrom RangeTo Bounds<Value>  RangeIterator
+
+std/stream
+  Source<Item, Failure>       next()                 the asynchronous Iterator
+  Sink<Item, Failure>         add(), finish()        the asynchronous Accumulator
+  Pulling Pushing Buffered Staged<Input, Item, Failure>
+  Bytes = List<UInt8>
+
+planned
+  Buffer<Item>                ECS gap 9, BACKEND — an in-place write when there is one owner, swapRemove
+  Window<Item>                CONCURRENCY section 6 — Length and Indexed, and nothing that resizes
+  Parallel<Item>              CONCURRENCY section 10 — the Iterable vocabulary, terminals answer a Task
+  Merge<Item, Output>         CONCURRENCY section 5 — with Collector, one associative merge
+```
+
+### 1.2 Who is bounded by what, outside its own file
+
+The greps are the surprise of this section.
+
+| Trait | Used as a bound or a field type outside the file that declares it |
+|---|---|
+| `Iterable<Item>` | everywhere — 80-odd sites across `std`, the compiler and the examples |
+| `Iterator<Item>` | every `iterator()` result, and the tour's own `Countdown` |
+| `Accumulator<Item, Output>` | `std/stream` (four framers), `std/json`, the tests |
+| `Collector<Item, Output>` | `Iterable.collect`, `Grouping.then`, `std/stream` |
+| `Length` | **nowhere as a bound.** Three `with` lists name it: `Collection`, `Array`, `Range<Int>` |
+| `Collection<Item>` | **two lines, both in the tour**: `examples/tour/src/07-collections.trb:67` and `:76` |
+| `Stack<Item>`, `Queue<Item>` | **the tour only**, `07-collections.trb:82` and `:233`–`248`. Nothing else in the repository constructs one |
+
+The compiler is the largest TorbScript program that exists, and where it needs a stack or a queue it writes a `List`:
+`compiler/src/ir/witness.trb:940` is `steps.removeAt(steps.length() - 1)`, `compiler/src/documentation/skill.trb:315`
+is `kept.removeAt 0`, and `std/iteration/staged.trb:115` and `std/stream/src/source.trb:362` both drain a queue with
+`waiting.removeAt 0` — which is O(n) per item and is the shape `ArrayQueue` exists to replace.
+
+### 1.3 What a `List<Item>` carries, and what can be dispatched
+
+`Iterable` declares 27 members. `torb ir` of a three-line program over a `List<UInt8>` prints the witness tables, and
+they are shorter than the traits:
+
+```text
+witness w_..._Iterable__List_UInt8_UInt8 Iterable<UInt8> for List(UInt8)
+  members(iterator, filter, toList, forEach) nested()
+witness w_..._Slice__List_UInt8 Slice for List(UInt8) members() nested()
+witness w_..._MutableSlice__List_UInt8 MutableSlice for List(UInt8) members(compact) nested(Slice)
+witness w_..._List__List_UInt8_UInt8 List<UInt8> for List(UInt8)
+  members(insert, removeAt, reverse, add, clear, iterator, filter, toList, forEach,
+          length, isEmpty, finish, set, get, compact) nested(...)
+```
+
+**Four of `Iterable`'s 27 members are in its witness table.** The other 23 are generic (`map<Output>`, `fold<State>`,
+`collect<Output>`) or answer `Self`, and neither is a witness slot: a generic member's own witnesses would have to be
+appended to the table, and a thunk that boxes a `Self` result cannot know the other bounds of the value it was called
+on. They are dispatched statically with `Self` bound to the *trait* type, which is what makes `List.sort` and
+`List.slice` reachable on a `List<Item>` value at all (`std/collections/src/list.trb`, the doc comments of `sort` and
+`slice` say so).
+
+The consequence for this document: **`Slice`'s witness table is empty, and `MutableSlice`'s holds only `compact`.**
+Both traits exist to bind an operator, not to be dispatched through.
+
+One more number from the same dump: `element d_UInt8 UInt8 size 1 align 1`. A `List<UInt8>` stores one byte per item,
+so `Bytes` already costs what a byte buffer costs.
+
+### 1.4 One meaning, several words
+
+| Meaning | Words today | Where |
+|---|---|---|
+| put an item in | `add`, `addAll`, `push`, `enqueue`, `insert`, `set`, `merge`, `union` | `Collection`, `Stack`, `Queue`, `List`, `Map`, `Set` |
+| take an item out | `remove`, `removeAt`, `removeAll`, `pop`, `dequeue`, `retainAll`, `clear` | `Collection`, `List`, `Set`, `Map`, `Stack`, `Queue` |
+| how many | `length`, `count` | `Length`, `Iterable` |
+| the next item without taking it | `first`, `peek` | `Iterable`, `Stack`, `Queue` |
+| is it in there | `contains`, `containsAll`, `containsKey`, `isSubsetOf` | `Collection`, `Map`, `Set` |
+| the participle of adding | `added`, `addedAll`, `pushed`, `enqueued`, `inserted`, `updated`, `merged`, `union` | five traits |
+| the participle of removing | `removed`, `removedAt`, `popped`, `dequeued` | four traits |
+| join two partial results | `merge` (`Map`), `merge` (`Merge`, CONCURRENCY 5) | one word, two meanings |
+
+Four of these are exact synonyms, with the proof in the body:
+
+- `Stack.push` is `add`. The body of `Stack.add` is `push value`.
+- `Queue.enqueue` is `add`. The body of `Queue.add` is `enqueue value`.
+- `Stack.peek` and `Queue.peek` are `Iterable.first`. Both bodies are `first()`.
+- `Map.merge` is `Collection.addAll`. The body of `Map.merge` is `addAll other`, and `Map.merged` is `addedAll`.
+- `Set.union` is `Collection.addedAll`. The body is `addedAll other`.
+- `Set.isSubsetOf(other)` is `other.containsAll(self)`. The body is `all other.contains`.
+
+`Stack.pushed` and `Queue.enqueued` are one line each and that line is `added value`.
+
+### 1.5 The asymmetries
+
+1. **`sorted` is the one participle that does not answer `Self`.** `Iterable.sorted(by:)` is a lazy stage answering
+   `Iterable<Item>`, and `List` does not override it. So the verb `list.sort { … }` leaves a `List` and its participle
+   does not:
+
+   ```text
+   error: `Iterable<Int64>` does not implement `List<Int64>`
+    --> probe.trb:4:27
+     |
+   4 | const sorted: List<Int> = numbers.sorted({ _ })
+     |                           ^^^^^^^^^^^^^^^^^^^^^
+   ```
+
+2. **`removeAt` answers the item, `removedAt` drops it.** For a list that is defensible — `list[index]` is there to be
+   read first — and it is why `Stack.popped` and `Queue.dequeued` had to answer `(Item, Self)?` instead.
+3. **`Map.set` has no participle of its own name**, so the participle is `updated`. That is written down in the source
+   and is the right call; it is listed here because it is the one place the rule bends.
+4. **`Collection.add` is a re-declaration.** `Collection` comes `with Accumulator<Item, Self>`, which already requires
+   `var fn add(value: Item)`. The trait declares it a second time.
+5. **`Collection.finish` is `self`,** which is the whole of being an `Accumulator`. It is one line and it is correct.
+6. **`Stack` and `Queue` each declare their own `of`,** because `List.of` cannot be shared — see 1.6.
+7. **`Staged` names two types in two packages**: `std/iteration/staged.trb`'s `Staged<Input, Item>` and
+   `std/stream/src/source.trb`'s `Staged<Input, Item, Failure>`. Only the second is re-exported by its `lib.trb`; the
+   first is `public` and unreachable from outside its package. `std/iteration` re-exports `Queueing`, which is the same
+   kind of implementation detail, and not `Staged`.
+8. **Two iterator types per collection.** `MapIterator`/`HashMapIterator` and `SetIterator`/`HashSetIterator` are the
+   same twenty lines twice, because `TrieMap` and `HashMap` are two `native type`s while the trie does not exist and a
+   value of one is not a value of the other. The source says so.
+9. **Traits with one implementation**: `Stack` (`ArrayStack`), `Queue` (`ArrayQueue`). `Slice` and `MutableSlice` have
+   no dispatchable member at all.
+
+### 1.6 The two defects that started this
+
+**(a) `Stack.add` and `Stack.push`, `Queue.add` and `Queue.enqueue`.** Section 1.4 has the bodies. `add` comes from
+`Collection`, which a stack needs so that `addAll`, a collector and a channel can fill it; `push` and `enqueue` are the
+words the data structure is famous for. Both are declared, and one is implemented in terms of the other.
+
+**(b) `List.of` builds an `ArrayList` for every implementation.** The declaration is
+
+```trb fragment
+static fn of(...items: Item): List<Item> {
+  items
+}
+```
+
+— a `static fn` default whose result type is the *trait* and whose body is a list literal, which is an `ArrayList`. So
+`TrieList.of(1, 2)` is not a `TrieList`, and the checker says so exactly:
+
+```text
+error: Expected `TrieList<Int64>`, found `List<Int64>`
+ --> probe.trb:3:29
+  |
+3 | const made: TrieList<Int> = TrieList.of(1, 2)
+  |                             ^^^^^^^^^^^^^^^^^
+```
+
+`List.filled` has the same shape and the same defect. `Set.of`, `Map.of`, `Stack.of` and `Queue.of` avoid it by naming
+the default implementation in the body (`TrieSet.from items`, `ArrayStack.from items`), which is the same bug written
+so that it cannot be seen: an implementation that inherits `of` gets somebody else's type.
+
+### 1.7 What `Collection` adds over its own supertraits
+
+`Collection<Item> with Iterable<Item>, Length, Accumulator<Item, Self>` declares eight members. Subtract what the
+supertraits already give:
+
+| Member | What it is |
+|---|---|
+| `add` | already required by `Accumulator` |
+| `finish` | already required by `Accumulator`; the body is `self` |
+| `clear` | **its own, and required** |
+| `addAll` | a default over `add` |
+| `added`, `addedAll` | the participles — they need `Self`, so they need a trait |
+| `contains`, `containsAll` | defaults over `any`, with `Item: Equals` |
+
+So the honest answer is: **`Collection` adds `clear`, and it is the home of the participles.** As a *bound* it buys
+nothing that cannot be written out, and the two tour lines were probed both ways:
+
+```trb fragment
+fn describe<Item>(items: Iterable<Item> & Length): String
+fn fillWithSquares<Target: Accumulator<Int, Target>>(var target: Target, upTo: Int)
+```
+
+**type checks today**, and runs: the probe prints `3 items` for a list and `1 items` for a map. That is the measure of
+what `Collection` is worth as a bound, and it is why section 3 keeps it for a different reason than the one it has.
+
+## 2. Where the others are
+
+**Rust.** `Iterator` is one required method and about seventy-five provided ones; `IntoIterator` is what `for` takes,
+`FromIterator` is what `collect` targets and `Extend` is bulk `add`. There is no collection trait: a signature names
+`Vec<T>`, `&[T]` or `impl IntoIterator`. `Vec::push`, `VecDeque::push_back`, `HashSet::insert` and `BinaryHeap::push`
+are four words for one meaning, chosen per type.
+
+*Taken:* one required method plus many provided ones on `Iterator` — `Iterable` is built that way. `FromIterator` is
+`From<Iterable<Item>>`, and `Extend` is `addAll`. *Rejected:* having no collection trait. With value semantics a
+parameter is already read-only, so `fn lookup(table: Map<String, Int>)` costs nothing and says everything; Rust needs
+`&[T]` because it has to say who owns the storage. And `VecDeque` as a second concrete type is the thing `List` as a
+trait makes unnecessary — see section 3.4.
+
+**Swift.** `Sequence`, `Collection`, `BidirectionalCollection`, `RandomAccessCollection`, `MutableCollection`,
+`RangeReplaceableCollection`, `SetAlgebra` — six protocols and an `Index` associated type before a type can be
+iterated with an index. `Array`, `ArraySlice` and `ContiguousArray` are value types with copy-on-write, and
+swift-collections adds `Deque`, `OrderedSet` and `OrderedDictionary`.
+
+*Taken:* everything about the memory model. **A Swift `Array` is our `ArrayList`**: a value, copied on assignment,
+sharing storage until a write. The slice-shares-storage rule is the same one, and `ArraySlice`'s indices-do-not-reset
+trap is the one thing this language fixed by making a slice start at zero again. *Rejected:* the protocol ladder.
+Swift's `Collection` is about **traversal cost** — `startIndex`, `index(after:)`, and a `BidirectionalCollection` for
+walking backwards — while ours is about **filling**. Sorting the implementations by cost is what the *implementation
+name* does here (`ArrayList` against `TrieList`), and a cost is not a shape. Also rejected:
+`RangeReplaceableCollection` as the home of `append` — a protocol named after one method that then carries another.
+
+**Kotlin.** `Iterable`, `Collection` (`size`, `isEmpty`, `contains`, `containsAll`, `iterator`), `MutableCollection`
+(`add`, `remove`, `addAll`, `removeAll`, `retainAll`, `clear`), then `List`/`MutableList`, `Set`/`MutableSet`,
+`Map`/`MutableMap`. `Sequence` is the lazy vocabulary beside the eager `Iterable` one. `ArrayDeque<E>` is a
+`MutableList<E>`.
+
+*Taken:* Kotlin's `Collection` is almost exactly the one this document keeps, and **`ArrayDeque` being a
+`MutableList` rather than a trait of its own is the precedent for section 3.4.** *Rejected:* the read/write split as
+two traits. `const` and `var` already say it, on the binding, which is CONCEPT's rule and needs no second name per
+kind. Also rejected: two vocabularies for one pipeline — Kotlin has `map` twice, eager on `Iterable` and lazy on
+`Sequence`, and a reader has to know which one is in hand. Here the stages of `Iterable` are lazy and there is one.
+
+**Scala 2.13.** The redesign: `IterableOnce`, `Iterable`, `Seq`, `IndexedSeq`, `LinearSeq`, `Set`, `Map`, with
+`IterableFactory` and `Builder` replacing `CanBuildFrom`. `mutable.Stack` was deprecated in 2.12 in favour of `List`
+and reinstated in 2.13 on top of the freshly added `ArrayDeque`; `Queue` exists immutable and mutable. `+:`, `:+`,
+`++`, `++:` and `:::` are five operators for prepend, append and concatenate.
+
+*Taken:* `IterableFactory.from` is exactly the construction rule of section 3.5, and the 2.13 story is the warning
+this document is written against: a collection library is redone when the *construction* mechanism is wrong, not when
+a method is missing. *Rejected:* the operator zoo — CONCEPT already forbids `+` on a list, because `Add.add` and
+`add(value)` would be one member. Also rejected: the strict/lazy `view` split, for Kotlin's reason. **And the
+deprecation of `Stack` is the finding of section 1.2 in another language**: nothing reaches for it when a list is
+there.
+
+**Clojure.** Persistent vectors, lists, maps and sets. `conj` adds "where it is efficient" — the end of a vector, the
+front of a list — and `peek`/`pop` take from the same end `conj` put it. `into` is `From<Iterable<Item>>`, and
+transducers are `Stage`.
+
+*Taken:* **`conj` is `add`, and `peek`/`pop` are the structure's own end.** Clojure is the language that already did
+what section 3.3 proposes: one verb whose position the data structure decides, with the structure's name carrying the
+word. Transducers are `Stage`, which `std/iteration` took already (STREAMS section 12 says so). *Rejected:* letting
+one call site mean two things. `(conj [1 2] 3)` is `[1 2 3]` and `(conj '(1 2) 3)` is `(3 1 2)`, and only the runtime
+value says which. Here the *type* says it: a `Stack` and a `Queue` are two traits and a signature names one.
+
+**Java, the anti-example.** `Collection` has `add`/`remove`/`contains`/`size`. `Queue` adds `offer`/`poll`/`peek`
+beside `add`/`remove`/`element`, which differ only in throwing against answering `null`. `Deque` then has, for the
+head alone: `addFirst`, `offerFirst`, `push` to insert; `removeFirst`, `pollFirst`, `pop`, `remove`, `poll` to take;
+`getFirst`, `peekFirst`, `element`, `peek` to look — **twelve names for three operations at one end.** And
+`java.util.Stack extends Vector`, which is a synchronised list nobody wants, kept because it cannot be removed.
+
+*Taken:* nothing. *Rejected:* all of it, and the reason it happened is worth naming. Java needed two names per
+operation because it had no `Option`: one form throws and one answers `null`. This language has `Option`, so
+`remove(): Item?` is the only form there is. It needed `push`/`pop` on `Deque` so that `Deque` could replace `Stack`
+without changing call sites. And it needed `Deque` at all because `LinkedList` and `ArrayList` are classes rather than
+implementations of one trait.
+
+## 3. The target design
+
+### 3.1 The tree
+
+```text
+                      Iterable<Item>            Length              Accumulator<Item, Output>
+                      iterator()                length()            add(), finish(), isDone()
+                            └───────────────────┬──┴────────────────────────┘
+                                   Collection<Item>
+                                   clear() + the participles + contains + count
+        ┌──────────────┬──────────────┬─────────┴────┬──────────────┐
+     List<Item>     Set<Item>    Map<Key, Value>  Stack<Item>    Queue<Item>
+     + MutableIndexed<Int, Item>  + MutableIndexed  add/remove()  add/remove()
+     + MutableSlice               <Key, Value>
+     ArrayList                 TrieSet    TrieMap   ArrayStack    ArrayQueue
+     TrieList                  HashSet    HashMap   ConsStack     BankersQueue
+     RingList
+```
+
+Nothing is added to the tree and nothing is taken out of it. What changes is inside the boxes.
+
+### 3.2 `Collection` stays, and its job is one sentence
+
+**A `Collection` is a finite thing you can fill, and it is where the participles live.**
+
+```trb fragment
+public trait Collection<Item>
+  with Iterable<Item>, Length, Accumulator<Item, Self>
+{
+  /** Removes every value, in place. */
+  var fn clear()
+
+  /** Gives the value storage of its own, sized exactly to its length. */
+  var fn compact()
+
+  /** The size is known, so counting does not walk. */
+  fn count(): Int {
+    length()
+  }
+
+  var fn addAll(values: Iterable<Item>)
+  fn added(value: Item): Self
+  fn addedAll(values: Iterable<Item>): Self
+  fn contains(value: Item): Bool where Item: Equals
+  fn containsAll(values: Iterable<Item>): Bool where Item: Equals
+  fn finish(): Self
+}
+```
+
+Four decisions are in that block.
+
+**`add` is not declared here.** `Accumulator<Item, Self>` requires it and one declaration is enough. The trait keeps
+`finish`, whose body is `self`, because that is the half of `Accumulator` a collection has to answer for itself.
+
+**`count()` answers `length()`.** `Iterable.count()` walks every value; on anything that knows its size that is the
+wrong answer to give a reader who wrote the shorter word. A subtrait may write a supertrait's default — `Collection`
+already does it for `Accumulator.finish`, and `compiler/src/ir/witness.trb:195` and
+`compiler/src/semantics/checker/implementation.trb:2176` are the two places that make it work. It was probed as a
+whole trait and **type checks today**, and the probe runs natively and prints `2`.
+
+**`compact` moves here from `MutableSlice`.** Giving a value storage of its own is a property of every copy-on-write
+container, not of being sliceable, and it was the only dispatchable member `MutableSlice` had (section 1.3). After the
+move `Slice` and `MutableSlice` are pure operator markers, which is what `Slice` already is.
+
+**`contains` and `containsAll` stay.** They are the only members that let a caller ask a question of any collection
+without knowing which kind it is, the `Item: Equals` bound keeps them off the types that cannot answer, and `Set` and
+`Map` override `contains` natively. `isSubsetOf` goes: it is `other.containsAll(self)` written backwards and nothing
+calls it.
+
+**What `Collection` is not.** It is not the bound to reach for. Section 1.7 shows both tour lines written without it,
+and the rule that follows is: **a signature asks for the smallest thing it uses.** `Iterable<Item>` to read,
+`Iterable<Item> & Length` to read and size, `Accumulator<Item, Self>` to fill, `Collection<Item>` when it really needs
+both ends and the participles.
+
+### 3.3 `Stack` and `Queue`: two words, not eight
+
+Both traits are `Collection<Item>` plus one verb and one participle.
+
+```trb fragment
+public trait Stack<Item> with Collection<Item> {
+  /** Builds a stack from its arguments; the last item ends up on top. */
+  static fn of(...items: Item): Self where Self: From<Iterable<Item>> {
+    Self.from items
+  }
+
+  /** Removes the item the structure gives next - for a stack the top - and answers it. */
+  var fn remove(): Item?
+
+  /** The participle of `remove`: the item, and the rest. */
+  fn removed(): (Item, Self)? {
+    var rest = self
+    const taken = rest.remove()?
+    Some((taken, rest))
+  }
+}
+```
+
+`Queue<Item>` is the same block with "front" for "top" and "the first item ends up at the front". **Type checks
+today**, with two implementations of `Stack` — an array one and a persistent cons list — and the participle chain
+`kept.added(3).removed()`.
+
+**Eight words become two.** `push`, `pop`, `enqueue`, `dequeue`, `pushed`, `popped`, `enqueued`, `dequeued` and `peek`
+are gone. `add` comes from `Collection`, `added` comes from `Collection`, `remove()` and `removed()` are here, and
+**`peek` is `Iterable.first()`** — which is what `peek`'s body already was, and which works because both iterators run
+in the order the structure hands items out.
+
+**The type name carries the word.** `stack.remove()` and `queue.remove()` read correctly in both places because the
+receiver says which end is meant, exactly as `conj` does in Clojure and `removeFirst` does not have to in Kotlin.
+
+**The collision with `Set.remove(value)` and `List.remove(value)` is not one, and the language enforces that.** A type
+may not carry both spellings, because a type has one member namespace:
+
+```text
+error: `remove` is already declared in `Both`
+  --> probe.trb:28:10
+   |
+28 |   var fn remove(): Item? {
+   |          ^^^^^^
+   = A type has one namespace of members: a field, a `const`, a `fn` and a case cannot share a name
+```
+
+That is the right outcome. A type is a stack or a set, never both, and the compiler says so at the declaration rather
+than leaving a reader to work out which `remove` a call means. **`take()` was the alternative and it is worse**:
+`Iterable.take(amount)` is a lazy stage every pipeline uses, so `stack.take()` beside `items.take(10)` would put one
+word on two meanings — the defect this document exists to remove.
+
+**The participle rule, stated.** A participle answers the changed copy. Where the verb also answers a value that
+cannot be got back afterwards, the participle answers the pair. `list.removedAt(index)` answers `Self`, because
+`list[index]` is there to be read first; `stack.removed()` answers `(Item, Self)?`, because a stack has no index.
+
+**What can implement them.** A trait exists so that there can be more than one, and there can be:
+
+| Implementation | `add` | `remove` | `added` (a kept copy) | For |
+|---|---|---|---|---|
+| `ArrayStack` — a `List` used from the end | amortised O(1) | O(1) | O(n), the list is copied | the worklist, the default |
+| `ConsStack` — a persistent cons list | O(1) | O(1) | **O(1), the tail is shared** | backtracking, undo, a parser's context |
+| `ArrayQueue` — a ring buffer | amortised O(1) | O(1) | O(n) | the breadth-first worklist, the default |
+| `BankersQueue` — two cons lists, front and rear reversed | O(1) | amortised O(1) | **O(1) amortised, shared** | a queue kept in many versions |
+| `TrieList` used as either | O(log n) | O(log n) | O(log n) | neither — a trie pays for indexing nobody uses here |
+
+The last row is the honest one: `TrieList` is the wrong structure for a stack or a queue. A trie buys cheap copies of
+a *big indexed* value, and a stack has no index; a cons list buys the same cheap copy for a fraction of the constant.
+So `TrieList` stays a `List` implementation and the persistent stack and queue are their own types.
+
+The array implementations are written in plain TorbScript over a `List`, which is how `ArrayStack` and `ArrayQueue`
+already work and is why `runtime/list.c` stays the one storage the family is built on.
+
+### 3.4 No `Deque` trait, and no `PriorityQueue` trait
+
+**A deque is a `List` implementation.** Java needed `Deque` because `ArrayList` and `LinkedList` are classes; Kotlin
+did not, and made `ArrayDeque` a `MutableList`. Here `List` is a trait and the whole point of a trait is that the cost
+profile is the implementation's business: `RingList` is a `List` whose `insert 0` and `removeAt 0` are O(1), and every
+signature that says `List<Item>` takes it. A `Deque` *trait* would add a fourth name for each end (`addFirst`,
+`addLast`, `removeFirst`, `removeLast`) on top of `add`, `insert`, `removeAt` and `last`, which is section 2's Java
+row happening here. And it could not extend `Stack` anyway: `List.remove(value)` and `Stack.remove()` cannot live in
+one type.
+
+**A priority queue is not a `Queue`.** A `Queue`'s contract is that items come out in the order they went in; a heap
+breaks it. It is also not worth a trait, because a trait with one implementation is the smell listed in section 1.5 —
+so it is a type, and the ordering is a value it carries rather than a bound on `Item`:
+
+```trb fragment
+public type Ordered<Item> with Collection<Item> {
+  private var items: List<Item> = []
+  private key: (value: Item) => Int
+
+  /** Builds an empty one ordered by `key`. */
+  static fn by(key: (value: Item) => Int): Ordered<Item> {
+    Self([], key)
+  }
+
+  var fn add(value: Item)
+  /** Removes the value with the smallest key and answers it. */
+  var fn remove(): Item?
+}
+```
+
+**Type checks today** and runs natively, printing `2` and `Some(1)` for `add 3`, `add 1`, `count()`, `remove()`. It
+carries the same two words as `Stack` and `Queue` without claiming either contract, and `Ordered.by { … }` says at the
+construction site what "next" means — which is the same thing `List.sort(by:)` does and needs no `Compare` bound on
+`Item`.
+
+### 3.5 Construction: one rule
+
+**Every factory of a trait builds `Self`, through `From<Iterable<Item>>`.**
+
+```trb fragment
+static fn of(...items: Item): Self where Self: From<Iterable<Item>> {
+  Self.from items
+}
+
+static fn filled(count: Int, value: Item): Self where Self: From<Iterable<Item>> {
+  Self.from((0..count).map({ _ => value }))
+}
+```
+
+The requirement is on the **member** and not on the trait. That is forced: `Set<Item>` cannot require
+`From<Iterable<Item>>` of every `Item`, because `TrieSet.from` needs `Item: Hash` and the trait's own implementation
+is `extend<Item: Hash> Set<Item> with From<Iterable<Item>>`. A trait-level requirement was probed and is a hole in the
+checker — see gap 3.
+
+Three things follow, and all three were probed.
+
+**`TrieList.of(1, 2)` builds a `TrieList`.** That is defect (b), fixed by the result type alone.
+
+**`List.of(1, 2, 3)` keeps working and needs no diagnostic.** `Self` is bound to the trait type there, and the trait
+type has its own `From` — `extend<Item> List<Item> with From<Iterable<Item>>`, which already exists and already picks
+`ArrayList`. The probe declares a trait with the member-level `where`, an `extend … with From` beside it, and calls
+the factory on the trait: `const onTheTrait: Pushdown<Int> = Pushdown.of(1, 2)` **type checks today**. So the rule is
+behaviour-preserving for every call site in the repository and changes the answer only where the answer was wrong.
+
+**It does not compile natively yet, and neither does the shape it replaces.** `ArrayStack.of(1, 2, 3)`, written
+against `std` as it stands, is refused by the back end:
+
+```text
+error: `ArrayList.add`, whose declaration is not monomorphic is not supported by the native back end yet
+internal error: The generic parameter `Item` was not substituted before the back end saw it
+```
+
+`TrieList.of(1, 2)` is refused with the same two lines. A trait's `static fn` default reached through an
+implementation type does not monomorphize today, so this is gap 1 and it is a debt the family already carries rather
+than a cost of the change.
+
+**Literals are untouched.** `[1, 2]` is a `List<Int>` and builds an `ArrayList`; `["a": 1]` is a `Map<String, Int>`
+and builds a `TrieMap`; `[1, 2, 2, 3]` against an expected `Set<Int>` goes through `Set.from`. Whether the *static
+type* of a literal should be the concrete implementation is
+[PERFORMANCE](PERFORMANCE.md)'s question, and finding 2 answers it: the fix is a devirtualization peephole over the
+IR, and "Nothing about the type system changes; the pass answers a question the IR already contains." Round **P5** is
+where that is decided. This design asks one thing of P5 and asks for nothing else: **that `[1, 2]` keep the static
+type `List<Int>`**, because every factory above returns `Self` and a literal whose type was `ArrayList<Int>` would
+make `const numbers: List<Int> = [1, 2]` a conversion instead of a value.
+
+Whether the default map implementation should be `TrieMap` while the default list implementation is `ArrayList` is a
+separate question and is left alone: both are documented aliases of the flat structures until the tries exist, so the
+inconsistency is in the names and not in the behaviour.
+
+### 3.6 Iteration
+
+**One vocabulary, and the differences are justified.** `Iterator.next` and `Source.next`, `Accumulator.add`/`finish`
+and `Sink.add`/`finish`, `Collector` and `Stage` shared between both worlds — STREAMS section 1 has the table and
+nothing in it changes. The one word that is not shared is `Iterable.iterator`, because a `Source` *is* the flow and
+has nothing to hand out.
+
+**`Staged` is one name in two packages and stays one.** `std/iteration`'s `Staged<Input, Item>` loses `public`: it is
+the return type of `Iterable.through`, which is declared as `Iterable<Output>`, so nothing outside the package needs
+the name. `std/stream`'s `Staged<Input, Item, Failure>` keeps it and keeps its export. `Queueing` stays public and
+exported, because a driver outside `std/iteration` reaches it (STREAMS section 13, point 6) — and that asymmetry
+becomes the rule rather than an accident: **a type is `public` when something outside the package names it, and not
+otherwise.** The ten stage types (`Mapped`, `Filtered`, …) are `public` and re-exported by nothing, so they lose
+`public` too, which is what their own `lib.trb` already says: "The stage types themselves are not exported."
+
+**One iterator type per collection stays two while there are two tables.** `MapIterator` and `HashMapIterator` are the
+same twenty lines because `TrieMap` and `HashMap` are two `native type`s and a value of one is not a value of the
+other. That is a consequence of the trie not existing, and it disappears with the trie; it is not a design decision to
+reverse.
+
+**What `for` needs.** [PERFORMANCE](PERFORMANCE.md) finding 5 measures a `for` over a collection at 47.95x a pointer
+walk: a boxed `Object(Iterator<T>)` per loop, a `makeUnique` per turn, an `Option` round trip per item. Round **P6**
+fixes levels 1 and 3 and **P11** fixes level 2. This design makes P6's job easier in exactly one way and it is worth
+saying: **`ListIterator` is an `inline` record of two fields** — the list and an index — so once the receiver is
+concrete, `iterator()` is a direct call answering a value and `next()` is a direct call the C compiler can inline.
+Every iterator in `std/collections` has that shape already (`items` plus a cursor, held by value), and the rule to
+keep is: **an iterator is a record of the container and a position, never a type with storage of its own.**
+
+The one thing P6 and P9 leave behind is the `Option` per item, and PERFORMANCE says where the answer would be: an
+`Iterator` that answers "is there one" and "the value" separately. That is a question for `std/iteration` and it is
+not opened here, because it doubles the required surface of every iterator to save a tag.
+
+### 3.7 Indexing and slicing
+
+**The four traits are the right cut, and the probe is why.** Folding `Slice` into a second instantiation of `Indexed`
+— `Indexed<Bounds<Int>, Self>` beside `Indexed<Int, Item>` — is the obvious simplification and it does not work. The
+declaration is accepted and then both operators stop resolving:
+
+```text
+error: `Twice` does not implement `Indexed`, so `a[key]` has no meaning for it
+error: `Twice` does not implement `Slice`, so `a[from..to]` has no meaning for it
+  = Operators are traits: a type has the ones it comes `with`, and nothing else
+```
+
+Two instantiations of one trait on one type would collide in the member namespace anyway — one `get` each — which is
+the same rule section 3.3 relies on. So `a[key]` and `a[from..to]` stay two operators bound to two traits, and
+`MutableIndexed` and `MutableSlice` stay the writing halves. After `compact` moves to `Collection` (section 3.2),
+`MutableSlice` is exactly `replace`.
+
+**`list[i]` panics and `get` is the `Option`.** That is decided, it is what `Indexed.at`'s doc comment says, and
+nothing here touches it.
+
+**What each storage is for.**
+
+| | What it is | Size | Traits | Reach for it |
+|---|---|---|---|---|
+| `Array<Item, const Size>` | inline slots, the count in the type | fixed at compile time | `Iterable`, `Length`, `MutableIndexed` | vectors, matrices, colours, hashes, foreign structs |
+| `List<Item>` | the growable sequence, copy on write | any | `Collection`, `MutableIndexed`, `MutableSlice` | everything that grows |
+| `Buffer<Item>` (planned) | a `List` with an in-place promise and `swapRemove` | any | `Collection`, `MutableIndexed`, `MutableSlice` | ECS columns, tensors, frame budgets |
+| `Window<Item>` (planned) | a borrowed section of a `Buffer`, for one call | fixed for the region | `Length`, `Indexed` — **and nothing that resizes** | data parallelism inside one system |
+| `Bytes` = `List<UInt8>` | a list of bytes | any | everything `List` has | stream chunks, encodings, HTTP bodies |
+
+`Array` is not a collection and is in `std/core` because the language refers to it — a list literal against an
+expected `Array` writes straight into the inline slots. `Buffer` is ECS gap 9 and BACKEND's heap kernel; its three
+promises are an in-place write when there is one owner, two disjoint `var` windows, and `swapRemove` without a shift.
+`Window` is CONCURRENCY section 6, and its whole definition is what it does *not* have: no `add`, no `insert`, no
+`removeAt`, because a resize would reallocate the caller's block from another thread.
+
+**`Bytes` stays `List<UInt8>`.** The objection is that a byte buffer should not pay a list's per-element cost, and it
+does not: `torb ir` prints `element d_UInt8 UInt8 size 1 align 1`, so a `List<UInt8>` is byte-packed storage with a
+length. What a real byte buffer would add over it is the `Buffer` promise — an in-place write when there is one owner
+— and that is gap 8 for every element type, not a second type for one. So `Bytes` becomes `Buffer<UInt8>` when
+`Buffer` exists, and the alias is the only line that changes.
+
+### 3.8 Accumulation
+
+**One `add`, and `Accumulator` owns it.** `Collection` does not re-declare it (section 3.2). `Accumulator<Item, Output>`
+keeps `add`, `finish` and `isDone`; a `Collection` is an `Accumulator<Item, Self>` whose `finish` is `self`, which is
+what makes a collector, a channel and a stream sink able to fill any of them.
+
+**`Collector` is unchanged**, and `Merge<Item, Output> with Collector<Item, Output>` (CONCURRENCY section 5) goes
+beside it in `std/iteration` when `parallel()` arrives. That forces one rename here: **`Map.merge` and `Map.merged`
+are deleted.** Their bodies are `addAll other` and `addedAll other`, so the words they occupy are already taken by
+`Collection`, and `Merge.merge` is a different meaning — joining two partial results of one collector. One word, one
+meaning, and the caller writes `ages.addAll(more)` and `ages.addedAll(more)`.
+
+**`Set`'s algebra stays a triple.** `union`, `intersection` and `difference` are nouns that never change either
+operand, and `union` happens to be `addedAll`. Dropping it alone would leave two thirds of a vocabulary everybody
+knows, and a reader who writes `a.union(b)` is saying something about sets rather than about filling. The doc comment
+says which `Collection` member it is, as it does today.
+
+### 3.9 Ten call sites, side by side
+
+| | Today | Target |
+|---|---|---|
+| build a list | `List.of(1, 2, 3)`, `[1, 2, 3]` | unchanged |
+| build a specific one | `TrieList.of(1, 2)` — **an `ArrayList`** | `TrieList.of(1, 2)` — a `TrieList` |
+| add | `list.add(x)`, `list.added(x)` | unchanged |
+| add to a stack | `stack.push(x)` **or** `stack.add(x)` | `stack.add(x)` |
+| take from a stack | `stack.pop()` | `stack.remove()` |
+| take from a queue | `queue.dequeue()` | `queue.remove()` |
+| look without taking | `stack.peek()` **or** `stack.first()` | `stack.first()` |
+| keep the old version | `stack.pushed(x)`, `stack.popped()` | `stack.added(x)`, `stack.removed()` |
+| iterate | `for item in items { … }` | unchanged |
+| index, slice | `list[i]`, `list.get(i)`, `list[1..4]` | unchanged |
+| map, filter, sum | `items.filter({…}).map({…}).sum()` | unchanged |
+| sort | `list.sort({…})`; `list.sorted({…})` is an **`Iterable`** | `list.sorted({…})` is a `List` |
+| group | `items.groupBy({…})`, `collect(groupingBy({…}))` | unchanged |
+| join | `items.joined(separator: ", ")` | unchanged |
+| how many | `list.length()`; `list.count()` **walks** | `list.count()` answers `length()` |
+| merge two maps | `ages.merge(more)` | `ages.addAll(more)` |
+
+The table is the argument for the size of this change. Eleven of sixteen rows are unchanged, because the family is
+right; the five that move are the ones where a reader had a choice of words and the two where the answer was wrong.
+
+### 3.10 What the design may not cost
+
+1. **A literal keeps its concrete implementation.** Section 3.5: P5 devirtualizes the IR, the type system stays.
+2. **`for` without a boxed iterator.** Section 3.6: every iterator stays an inline record of a container and a
+   position, so P6 has a direct call to make.
+3. **Participles stay moves.** `stack = stack.added(x)` at the last use is a `Move` and the `makeUnique` inside finds
+   a count of one — PERFORMANCE finding 1, round P1, done. Nothing in section 3.3 takes a receiver by anything other
+   than value, so the rule keeps applying.
+4. **Copy on write, per structure.** `ArrayList` copies its buffer, `TrieList` copies one path, `ConsStack` copies
+   nothing, `ArrayStack` copies its list. The table of section 3.3 is the contract, and the doc comment of each
+   implementation is where a caller reads it.
+5. **One `list.c`.** `ArrayList`, `TrieList`, `ArrayStack`, `ArrayQueue`, `ConsStack` and `BankersQueue` are all a
+   `List` or are written over one. The runtime gains nothing from this document.
+6. **`TrieList` becomes a real trie**, or it loses the name. While it is a documented alias of `ArrayList` the cost
+   table of section 3.3 is a promise the implementation does not keep, and defect (b) was only visible because
+   somebody tried to build one.
+
+## 4. What the language must provide
+
+**Gap 1. A trait's `static fn` default does not monomorphize through an implementation type.**
+`ArrayStack.of(1, 2, 3)` and `TrieList.of(1, 2)`, both written against `std` as it stands, are refused with
+`` `ArrayList.add`, whose declaration is not monomorphic is not supported by the native back end yet`` and an
+`internal error: The generic parameter `Item` was not substituted before the back end saw it`.
+*Smallest fix:* substitute `Self` and the trait's type parameters into the default's body before the back end sees
+it — the instance already exists, since the same default called on the trait type compiles.
+*Blocks:* the construction rule of section 3.5, and `ArrayStack.of` today.
+
+**Gap 2. A `static fn` reached through a trait-typed `Self` is in no witness table.**
+`Self.from items` inside a default whose `Self` is the trait type is refused with
+`` `from`, which is not in the witness table of a trait-typed value is not supported by the native back end yet``.
+*Smallest fix:* the checker already resolved which `from` is meant — the trait's own
+`extend<Item> List<Item> with From<Iterable<Item>>` — so the lowering has to carry that resolution to a direct call
+instead of asking the table for a static member.
+*Blocks:* `List.of` and `Set.of` under section 3.5.
+
+**Gap 3. A trait may require a supertrait that nothing implements for every parameter.**
+`trait Mound<Item> with From<Iterable<Item>>` whose only implementation is `extend<Item: Hash> Mound<Item> with From<…>`
+is accepted, and `Mound.from([Opaque("a")])` for an `Opaque` with no `Hash` **type checks** — there is no
+implementation for it. It fails at the back end with gap 2's message, which is the wrong message at the wrong time.
+*Smallest fix:* when a trait names a supertrait in its own `with` list, check the `extend`s of the trait type against
+its own parameters, the way an implementation's `with` list is checked.
+*This is the probe that was accepted and should not have been.*
+
+**Gap 4. Two instantiations of one trait on one type are accepted and then resolve to nothing.**
+`type Twice with Indexed<Int, Int>, Indexed<Bounds<Int>, Twice>` is accepted at the declaration although one `get`
+cannot satisfy both, and afterwards `twice[0]` reports `` `Twice` does not implement `Indexed` `` — the first
+instantiation is lost too.
+*Smallest fix:* report the duplicate at the `with` list with the message the member namespace already has
+(``already declared``), naming both instantiations.
+
+**Gap 5. `list.sorted(by:)` answers `Iterable<Item>`.** Section 1.5.
+*Smallest fix:* a `List.sorted(by:)` override answering `Self`, written over `sort`. It is a change to `std` and not
+to the language.
+
+**Gap 6. `Buffer<Item>`** — ECS gap 9 and [BACKEND](BACKEND.md)'s heap kernel: an in-place write where the storage has
+one owner, two disjoint `var` windows, and `swapRemove` without a shift. Section 3.7 depends on it for `Bytes` and for
+the ECS columns, and nothing else in this document does.
+
+**Gap 7. `Window<Item>` and `Plain`** — [CONCURRENCY](CONCURRENCY.md) gaps 4, 5 and 6. Section 3.7 names the shape;
+that document owns it.
+
+**Gap 8. `Merge<Item, Output>`** — [CONCURRENCY](CONCURRENCY.md) section 5. It arrives with `parallel()` and it needs
+`Map.merge` to be gone first, which is slice C4.
+
+**Gap 9. `for` over a concrete collection** — [PERFORMANCE](PERFORMANCE.md) findings 2 and 5, rounds P5, P6 and P11.
+Section 3.6 says what this family owes them: an iterator that is an inline record.
+
+## 5. Slices
+
+Each slice is one agent. The repository is bulk-edited with node scripts that check an exact match before they write —
+a PowerShell array has destroyed files here before — and every slice leaves the four gates green:
+`torb docs check docs`, `torb docs index --check docs`, `torb check .` with no problems, and
+`torb canon --check --rule calls --rule strings --rule imported-case-patterns --rule unused-bindings --rule loops .`
+reporting zero files.
+
+**C1 — the words of `Stack` and `Queue`.** Delete `push`, `pop`, `enqueue`, `dequeue`, `pushed`, `popped`,
+`enqueued`, `dequeued` and `peek`; declare `remove(): Item?` and `removed(): (Item, Self)?`. Files:
+`std/collections/src/stack.trb`, `queue.trb`, `examples/tour/src/07-collections.trb`, CONCEPT.md's verb table and
+collection tree, and the `standard-library` and `language` pages that name the old words.
+*Gate:* the four above, plus `torb test compiler/tests` and the tour's own expected output.
+*Estimate:* small — the grep of section 1.2 says there are fourteen call sites in the whole repository.
+
+**C2 — `Collection`'s job.** Remove the re-declared `add`, add the `count` default, move `compact` in from
+`MutableSlice`, delete `Set.isSubsetOf`, delete `Map.merge` and `Map.merged`. Files:
+`std/collections/src/collection.trb`, `set.trb`, `map.trb`, `std/core/src/operators.trb`, and every caller of
+`merge`/`merged` (there are none outside `std/collections`).
+*Gate:* the four, plus an IR check that `Collection`'s witness table lost nothing it had.
+*Estimate:* small.
+
+**C3 — `List.sorted`, and the participle rule written down.** Gap 5, plus one paragraph in
+`docs/language/` stating when a participle answers `Self` and when it answers the pair.
+*Gate:* the four, plus a conformance program in `bootstrap/tests/native/` that sorts a `List` and keeps it a `List`.
+*Estimate:* small.
+
+**C4 — the back end, gaps 1 and 2.** `compiler/src/ir/lower/generic.trb` and `compiler/src/ir/witness.trb`: a trait's
+`static fn` default monomorphized through an implementation type, and a static member of a trait type resolved to a
+direct call. This is the slice the construction rule waits on, and it pays a debt the family already carries —
+`ArrayStack.of(1, 2, 3)` does not compile today.
+*Gate:* the four, plus the fixpoint, plus a conformance program that calls `.of` on a trait, on the default
+implementation and on a second implementation.
+*Estimate:* medium, and it is the one slice that touches `compiler/`.
+
+**C5 — construction builds `Self`.** After C4: `of` and `filled` on `List`, `Set`, `Map`, `Stack` and `Queue` become
+`Self` with `where Self: From<Iterable<Item>>`. Files: the five trait files, CONCEPT.md's creation list, the tour.
+*Gate:* the four, plus a conformance program asserting `TrieList.of(1, 2)` is a `TrieList` and
+`List.of(1, 2)` is an `ArrayList`.
+*Estimate:* small once C4 has landed.
+
+**C6 — the checker, gaps 3 and 4.** Two diagnostics, both in
+`compiler/src/semantics/checker/implementation.trb`. They are independent of everything above.
+*Gate:* the four, plus a compiler test per diagnostic pinning its exact text.
+*Estimate:* small.
+
+**C7 — the implementations that make the traits worth having.** `RingList` (a `List` with O(1) at both ends),
+`ConsStack`, `BankersQueue`, `Ordered`. Each is plain TorbScript over a `List` and each needs one benchmark against
+the array implementation.
+*Gate:* the four, plus `bootstrap/tests/native/` programs and a row in `benchmarks/`.
+*Estimate:* medium, and it is the slice that proves the owner's fixed point — a trait exists so that there can be more
+than one implementation.
+
+**C8 — visibility.** `std/iteration`'s `Staged` and the ten stage types lose `public`; the rule of section 3.6 goes in
+`std/iteration/src/lib.trb`'s module comment.
+*Gate:* the four.
+*Estimate:* small, and it must run after C2 so that two agents do not edit `std/iteration` at once.
+
+The order is C1, C2, C3 and C6 in parallel; then C4; then C5; C7 and C8 whenever there is room. Only C4 touches the
+compiler, and only C7 adds a type.
+
+## 6. Open, for the owner
+
+Everything technical above is decided and argued. These six are taste and direction.
+
+**1. `remove()` on a stack and a queue.** Section 3.3 spends one word for "the item the structure gives next", so
+`stack.remove()` and `queue.remove()` read alike and `Set.remove(value)` is a different member of a different trait.
+The alternative is to keep a verb per structure (`pop`, `dequeue`) and accept that `add` and `push` are both there.
+Clojure's `pop` and Kotlin's `removeFirst` are the two precedents, and they disagree.
+
+**2. `Stack` and `Queue` become structurally identical.** Both are `Collection<Item>` plus `remove()` and `removed()`;
+only the contract differs. That is deliberate — the type name carries the word — but it means a shared supertrait
+could be declared and is not. Should there be one, named after its method, so that "a worklist, either way" is
+writable?
+
+**3. `Set.union`.** Its body is `addedAll`. It stays because `union`, `intersection` and `difference` are a vocabulary
+and two thirds of one is worse than three thirds with an overlap. The other reading is that one word per meaning
+admits no exception.
+
+**4. The name of the ordered structure.** `Ordered.by { _.priority }`, or `Heap`, or `Priority`. `Ordered` says what
+the contract is and not how it is built, which is the rule every other implementation name breaks on purpose
+(`ArrayList`, `TrieMap`).
+
+**5. The name of the deque implementation.** `RingList` says the structure, which matches `ArrayList` and `TrieList`.
+`ArrayDeque` says the word everybody knows and would be the only implementation name in the family that names a
+contract rather than a structure.
+
+**6. Whether the tour keeps `Stack` and `Queue`.** They are the only two places in the repository that construct one
+(section 1.2), and the compiler writes `list.removeAt(list.length() - 1)` instead. Scala deprecated `mutable.Stack`
+for exactly this reason and then brought it back. The traits stay either way — that is the fixed point — but the tour
+could show `ConsStack` doing something a `List` cannot, which is the honest case for them.

@@ -3635,3 +3635,22 @@ Wenn nicht, was bedeutet, bewirkt es?
     `std/random` und die Uhr (Sandbox/Determinismus beachten).
   - **Wird gelöst - läuft:** Design-Dokument `docs/URI.md` (Opus) mit Probes, Auswirkungen auf PATH/RESOURCES/PROJECT/
     http/fs, Scheiben. Danach Umsetzung nach der Encoding-Neugestaltung.
+
+  - **Erledigt:** `docs/COLLECTIONS.md` steht (6 Abschnitte, in `docs/internals/index.md` registriert, alle Gates
+    grün). Bestandsaufnahme mit Belegen: `Collection` als Schranke steht in genau zwei Tour-Zeilen, `Stack`/`Queue`
+    werden nirgends außerhalb der Tour gebaut (der Compiler selbst nimmt `list.removeAt(length()-1)`), und von
+    `Iterable`s 27 Membern liegen 4 in der Witness-Tabelle. Neun Wortdopplungen mit Auflösung: `push`/`pop`/
+    `enqueue`/`dequeue`/`pushed`/`popped`/`enqueued`/`dequeued`/`peek` fallen weg (Stack/Queue bekommen `add` aus
+    `Collection` und `remove(): Item?` + `removed(): (Item, Self)?`; `peek` ist `Iterable.first()`), `Map.merge`/
+    `merged` und `Set.isSubsetOf` werden gelöscht, `count()` antwortet `length()`, `compact` wandert zu `Collection`.
+    `Collection` bleibt - seine eine Aufgabe ist, Heimat der Partizipien zu sein (es fügt über
+    `Iterable + Length + Accumulator<Item, Self>` nur `clear` hinzu). Kein `Deque`-Trait (ein Deque ist eine
+    `List`-Implementierung, wie Kotlins `ArrayDeque`), keine `PriorityQueue` (der Typ `Ordered.by { ... }`).
+    Konstruktor-Regel wie vorgeschlagen, aber mit `where Self: From<Iterable<Item>>` **am Member** statt am Trait -
+    am Trait geht nicht, weil `Set.from` `Item: Hash` braucht. **`List.of` am Trait bleibt aufrufbar und braucht
+    keine Diagnose** (geprüft): `Self` bindet dort den Trait-Typ, und der hat sein eigenes `From`. Alles geprobt
+    gegen `build/release/torb check`; die Probes sind gelöscht. Neun nummerierte Lücken, u. a. zwei
+    Back-End-Lücken, die schon heute `ArrayStack.of(1, 2, 3)` und `TrieList.of(1, 2)` nicht kompilieren lassen, und
+    zwei Checker-Löcher (ein Trait darf ein Supertrait fordern, das für seine Parameter niemand implementiert; zwei
+    Instanziierungen eines Traits an einem Typ werden angenommen und schalten danach beide ab). Acht Scheiben
+    C1-C8, nur C4 fasst `compiler/` an. Sechs Geschmacksfragen am Ende für dich.
