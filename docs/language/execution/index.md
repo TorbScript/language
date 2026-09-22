@@ -1,6 +1,6 @@
 ---
 title: Execution
-summary: The parts of running a program that are a rule of the language rather than an implementation detail - evaluation order, what a copy costs, the tail-call guarantee, and why there are no destructors.
+summary: The parts of running a program that are a rule of the language rather than an implementation detail - evaluation order, what a copy costs, the tail-call guarantee, and when a destructor runs.
 kind: index
 status: stable
 order: 110
@@ -23,6 +23,6 @@ syntax, then numbered rules, then what the construct is not.
 - **[Evaluation order](evaluation-order.md)** - Evaluation order is source order - the receiver first, then the arguments as they are written, then the parameter defaults - so a side effect in an argument is exactly as predictable as reading the line.
 - **[What a copy costs](copies.md)** - A copy always behaves the same way, but what it costs depends on the shape of the type - inline for a small fixed-size value, copy-on-write for heap-backed storage, and never for a shared type.
 - **[Tail calls and the frame limit](tail-calls.md)** - Direct self-recursion in tail position is guaranteed to run without growing the stack, and every other call counts against a per-task frame limit of 100000 that panics with stack overflow when it is reached.
-- **[There are no destructors](no-destructors.md)** - Close is an ordinary method and using is an ordinary function, so the nesting of using blocks is the only destruction order the language ever promises - a value going out of scope runs no code at all.
+- **[Destructors - close() runs at the last release](no-destructors.md)** _(planned)_ - A shared type's close() is its destructor - the runtime runs it exactly once when the last reference goes away, user code never calls it, and using pins that moment to the end of a block.
 
 <!-- torb:index:end -->

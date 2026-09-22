@@ -1,5 +1,7 @@
 # Uniform Resource Identifiers
 
+**Status: proposed** — there is no `std/uri` yet; the probes of this document were run against the checker only.
+
 **A URI is a value, and a text that is not one is refused at the door.** That is the whole design of `std/uri`: one
 capsule for RFC 3986, normalized at construction, so that `==`, `hash()` and `compare()` are over the canonical form
 without anybody asking for it — and so that a signature that takes a `Uri` cannot be handed a typo.
@@ -1164,7 +1166,8 @@ error: making a value of this type unique is not supported by the native back en
 The first message is a design input and not a defect: **a writing member that answers a `Task` forces the whole
 capability onto a `shared trait`**, which forces every driver to be a `shared type`, which is why the trait is written
 `shared` above. The rest is the native back end, which lowers neither a `Task` nor a user-written `shared type` — so
-the asynchronous layer is checked and runs on stage 0 only. `std/storage` therefore lands **after** CONCURRENCY's
+the asynchronous layer type checks and runs nowhere until milestone 7.3 (stage 0, which ran it when this was written,
+has been deleted). `std/storage` therefore lands **after** CONCURRENCY's
 cancellation slice rather than before it: a capability trait whose signatures change from `Result` to
 `Task<Result<…>>` is the one change an ecosystem of third-party drivers cannot absorb, and there is no consumer
 waiting.
@@ -1416,7 +1419,8 @@ Gaps 1 to 9 are the type; gaps 10 to 13 are the driver layer of section 11.
     exact one is strictly more specific.
 12. **`Task` is not compiled by the native back end at all.** *"a body whose result is a `Task` is not supported by
     the native back end yet"* and *"`Task.await` is not supported by the native back end yet: the runtime does not
-    provide it"*. Every asynchronous signature in section 11 therefore type checks and runs on stage 0 only.
+    provide it"*. Every asynchronous signature in section 11 therefore type checks and runs nowhere until milestone
+    7.3 (it ran on stage 0 when this was written; stage 0 has been deleted).
     *Smallest fix:* it is `docs/CONCURRENCY.md`'s own work and not this document's; it is recorded because the driver
     layer is the first design that is asynchronous end to end.
 13. **`std/fs` has no `remove`, and `Sandbox` reads only a `Path`.** `FileStorage.delete` has no native to call, and

@@ -1,5 +1,7 @@
 # Resources
 
+**Status: proposed** — no resource type exists in `std` and the build copies or embeds nothing yet.
+
 **A file a program needs is named by a string literal, and the signature of the call says what kind of file it is.**
 `SpriteSheet.load("./hero.png")` ships the file next to the binary and reads it when the program runs;
 `SpriteSheet.embedded("./hero.png")` puts its bytes in the binary. Neither is an import, neither is a loader chosen by
@@ -688,11 +690,12 @@ every item below is.
   archive does not contain.
 - **Watch mode.** The resource set is a file set, so `torb build --watch` watches it. Today it can only watch `.trb`
   files, because they are the only files it knows exist.
-- **Stage 0.** `torb run` interprets from the source tree, so **the file is simply there**: a `Resource` resolves to
-  the file at its stable name inside the workspace, and nothing is copied. An `EmbeddedText` is read from the tree at
-  the moment its constant is first read. That is observationally identical except for one case — a program that
-  rewrites its own asset while it runs would see the new bytes on stage 0 and the old ones in a binary — which belongs
-  in the stage-0-versus-binary list, not in the language.
+- **The VM (milestone 7).** Today `torb run` builds natively, so a resource behaves exactly as in `torb build`. Once
+  the VM interprets from the source tree, **the file is simply there**: a `Resource` resolves to the file at its
+  stable name inside the workspace, and nothing is copied. An `EmbeddedText` is read from the tree at the moment its
+  constant is first read. That is observationally identical except for one case — a program that rewrites its own
+  asset while it runs would see the new bytes in the VM and the old ones in a binary — which belongs in the
+  VM-versus-binary list, not in the language. (Stage 0, deleted on 2026-09-22, behaved the way the VM will.)
 - **The C back end.** Static data, measured in probe 3: about six bytes of C per byte of payload, nothing breaking at
   1 MB or at 16 MB, 21 s and 196 s of build time respectively — about **twelve seconds of build time per embedded
   megabyte**. `torb build` reports the embedded total per program, and the project file sets two levels on it:

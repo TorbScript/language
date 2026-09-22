@@ -1,5 +1,8 @@
 # TorbScript Implementation Architecture
 
+**Status: implemented** — this is how the toolchain is built today, milestones 1 to 6 are done, and 7 and 8 are the
+ones ahead.
+
 **TorbScript is written in TorbScript.** The toolchain in [`compiler/`](../compiler) is the whole of it, and it
 compiles itself. The one external tool a checkout needs is a C compiler.
 
@@ -118,6 +121,12 @@ binary" rests on: both back ends consume the same, fully resolved program, and e
   same" is tested by running the conformance suite through both.
 - Generics: monomorphized where the type is known, dictionary passing where it is not (generic methods on
   trait-typed values, see Open Questions in the concept). Both back ends support both.
+- **Back ends after the VM (JavaScript, PHP) keep the language's semantics, not the host's.** The integer types keep
+  their fixed widths and panic on overflow exactly as in C - an answer in `TODO.md` once preferred JavaScript's
+  `number` for `Int`, and the fixed widths of CONCEPT's Built-in Types win over it, so a JavaScript `Int` is an exact
+  64-bit integer however it is represented. And a type that may contain a `Close` object stays reference counted
+  even where the host has a garbage collector, because the moment its `close()` runs is part of the program's meaning
+  (`docs/DESTRUCTORS.md` section 2a).
 
 ### Runtime and `native`
 
@@ -144,7 +153,7 @@ The language has value semantics; identity is the marked exception (`shared type
 | Storage (`ArrayList`, `String`, tries, big types) | Reference counted buffer. A copy shares it. A write goes through "make unique": in place if the count is 1, copy first otherwise |
 | `var` parameters, a `var fn` receiver, `a[i].x = 1`       | A reference into the frame of the caller. Never escapes (references are second-class), so it needs no counting and no lifetime tracking |
 | `shared type`                                    | Reference counted object with interior mutability. The only thing that can form cycles |
-| Cycles                                           | Trial deletion (Bacon/Rajan) over `shared` objects only. Values are never scanned |
+| Cycles                                           | Not collected, ever. Handles instead of references, receiver closures for stored callbacks, a leak report that names the types - `docs/DESTRUCTORS.md` section 9 |
 
 - **Reference counts are not atomic.** Every task owns its heap. Values that cross a task boundary are sent through a
   channel: storage with count 1 moves, shared storage is copied once. (To be measured against "atomic counts only for
@@ -152,8 +161,11 @@ The language has value semantics; identity is the marked exception (`shared type
 - **Last use is a move.** The lowering to IR marks the last use of every binding. A moved value keeps its count at 1,
   so `list = list.added(x)` and the default participles (`var result = self`) change in place instead of copying.
   This is what makes the functional style as fast as the mutating one, and it has to be identical in both back ends.
-- No tracing garbage collector, and no destructors: releasing storage never runs user code. What is deterministic in
-  the language is the cleanup that is written down (`using`, `Close`), not when a count reaches zero.
+- No tracing garbage collector and no cycle collector. **`close()` is the one destructor** (planned,
+  [DESTRUCTORS.md](DESTRUCTORS.md)): only a `shared type` may have one, the last release runs it, and a slot whose
+  type may contain one is released at the end of its scope in reverse declaration order rather than at its last use,
+  so the moment it runs is a line in the source. Every other release runs no user code and stays where the last-use
+  analysis puts it.
 
 ## Quality
 

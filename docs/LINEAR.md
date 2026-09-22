@@ -1,5 +1,8 @@
 # Linear Algebra and Geometry
 
+**Status: implemented** — `std/linear` and `std/geometry` exist and their tests pass natively; section 12 lists the
+language gaps that remain (items 10, 12 and 16 are still open) and section 13 the packages that come after.
+
 One vector type per width, over whatever number the program counts in. This is the specification of `std/linear` and
 `std/geometry`, of the scalar tower they stand on, and of the rule that decides which member exists for which scalar.
 Nothing here is a new feature of the language: the types are ordinary `type`s, the layering is ordinary conditional
@@ -142,8 +145,8 @@ without renaming anything. Where generic code needs pi, it takes `arcCosine` of 
 `Matrix3.affine` takes and `Matrix3.linearPart` answers, and it costs two vectors.
 
 **A matrix stores its columns as vectors, not as a flat array.** `Array<Item, const Size: Int>` was the alternative and a
-probe settled it: `Array` is implemented by **no back end** — the interpreter answers `Unknown name Array`, and the C back
-end's manifest marks every member of it planned — so nothing that uses one runs today. Beyond that, columns as vectors is
+probe settled it: `Array` is implemented by **no back end** — stage 0's interpreter answered `Unknown name Array` while
+it existed, and the C back end's manifest marks every member of it planned — so nothing that uses one runs today. Beyond that, columns as vectors is
 the better design: a column *is* where a basis vector lands, so `matrix.xAxis` is the answer to a question a caller
 actually asks, `matrix.applied(to: unitX)` and `matrix.xAxis` are the same value, and every column operation is vector
 arithmetic that already exists. `at(row, column)` is there for the loop that wants it, and `column(index)` and
@@ -192,11 +195,12 @@ Two entries in that table are compromises and say so in their `# Open`:
   rather than renaming it.
 - **A conversion is never given the same name in two instantiations of one type.** `toFloat` exists on
   `Vector2<Int>` and nowhere else, `toFixed` on `Vector2<Int>` and nowhere else, `rounded`/`floored`/`ceiling` on
-  `Vector2<Float>` and nowhere else. The reason is the interpreter, which has no types and therefore cannot tell
-  `extend Vector2<Int>` from `extend Vector2<Fixed>`; two `toFloat`s would make one of them silently answer the other's
-  arithmetic. The four constants (`zero`, `one`, `unitX`, `unitY`) do share their names across instantiations, because a
-  constant is worth it — and that is the one place where a program that runs on the interpreter has to write the
-  components out instead.
+  `Vector2<Float>` and nowhere else. The reason was stage 0's interpreter, which had no types and therefore could not
+  tell `extend Vector2<Int>` from `extend Vector2<Fixed>`; two `toFloat`s would have made one of them silently answer
+  the other's arithmetic. Stage 0 is gone and the VM of milestone 7 reads the typed IR, so the trap is gone with it; the
+  names stay, because each one says what it converts to. The four constants (`zero`, `one`, `unitX`, `unitY`) share
+  their names across instantiations, which was the one place where a program on stage 0 had to write the components
+  out instead.
 
 ## 5. Literals and inference
 
@@ -295,7 +299,8 @@ rotations; only what a *viewer* sees differs. Concretely, the library never has 
   `nan` at all — which is one more reason a lockstep simulation runs on it.
 - **`Fixed` is bit-identical everywhere.** Every operation on it, the square root and the trigonometry included, is
   integer arithmetic. The native gate programs `linear.trb`, `geometry.trb` and `grid-vectors.trb` compare the
-  interpreter against the compiled binary byte for byte, and that is the guarantee written down as a test.
+  compiled binary against their `.expected` byte for byte (they compared stage 0 against the binary until stage 0 was
+  deleted), the VM joins that comparison in milestone 7, and that is the guarantee written down as a test.
 
 ## 9. What is deliberately not in
 
@@ -377,8 +382,10 @@ every line of geometry deterministic by changing one type argument.
 
 ## 12. What the language and the compiler must provide
 
-In the order it hurt, each with a reproduction. The ones that are still open are in `examples/generic-scalar/`, which
-type checks and which `torb build` rejects; the rest quote the diagnostic that is the reproduction.
+In the order it hurt, each with a reproduction. `examples/generic-scalar/` was the reproduction of the generic ones;
+since items 2 and 14 closed it **builds and runs natively** and prints what it should, so it stays as the lines that
+would say so if they came back. The rest quote the diagnostic that is the reproduction. **Statuses re-verified on
+2026-09-22** with probes in `tests/language/` and a native build of the example.
 
 1. ~~An operator on a generic type does not lower.~~ **Closed.** `a + b` is `Add.add`, and which `add` runs is decided
    by the **operand** and not by the implementation that declares it: `extend<Scalar: Signed> Vector2<Scalar> with
@@ -386,7 +393,9 @@ type checks and which `torb build` rejects; the rest quote the diagnostic that i
    instance's arguments. `operandTypeOf` in `compiler/src/ir/lower/call.trb` therefore prefers the written operand
    wherever the target is not closed, and the operator form and the method form of one call are the same function -
    inside a generic body as well. `tests/conformance/generic-operators.trb` is the gate.
-2. **A numeric literal in a generic body is never adapted to the parameter.** `fn oneOf<Scalar: Numeric>(): Scalar
+2. ~~**A numeric literal in a generic body is never adapted to the parameter.**~~ **Closed with item 14.** `oneOf` and
+   `doubled` in `examples/generic-scalar/src/main.trb` build natively and print `1 1.0 6 3.0`. What it said:
+   `fn oneOf<Scalar: Numeric>(): Scalar
    { 1 }` type checks, the checker records `Int64` for the literal, and the back end then reports "the function returns
    `Float64` and `return` carries `Int64`" for the `Float64` instance. The substitution is not what is missing - there
    is no parameter in the recorded type to substitute - so this is the **checker's** half of item 14, and it closes
@@ -395,10 +404,13 @@ type checks and which `torb build` rejects; the rest quote the diagnostic that i
    `zeroOf` exists only because of this. Reproduction: `examples/generic-scalar/src/main.trb`, `oneOf` and `doubled`.
 3. ~~A `const` member of a generic type is not instantiated per type argument.~~ **Closed in the back end.**
    `Box<Int>.empty` and `Box<String>.empty` are one declaration and two values, and a binary keeps one cell per
-   instance, named after the arguments the read decided. The interpreter still answers the same value for every scalar,
-   which is item 6 seen from another side and is why the constants of this library live in concrete `extend`s.
+   instance, named after the arguments the read decided. Stage 0's interpreter answered the same value for every scalar
+   while it existed, which was item 6 seen from another side and is why the constants of this library live in concrete
+   `extend`s.
    `tests/conformance/generic-constants.trb` is the gate.
-4. **A type parameter's default is not used to reach a member of a concrete `extend`.** `Vector2.zero` where `zero` is
+4. ~~**A type parameter's default is not used to reach a member of a concrete `extend`.**~~ **Closed.** A bare
+   `Pair.zero` with `Item: Numeric = Float` checks and runs natively, printing `Pair(value: 0.0)`. What it said:
+   `Vector2.zero` where `zero` is
    declared in `extend Vector2<Float>` reports "Cannot infer `Scalar` of `Vector2`" *even with the annotation*
    `const origin: Vector2<Float> = Vector2.zero`; `Vector2<Float>.zero` works. Since the declaration says
    `Scalar: Numeric = Float`, the bare name has an answer. **Smallest change:** apply the declared defaults where a
@@ -411,23 +423,25 @@ type checks and which `torb build` rejects; the rest quote the diagnostic that i
    **by path**, and a `std/` package can only call functions from its own directory. That is why `zeroOf` is one line
    in `std/linear/src/scalar.trb` and one line in `std/geometry/src/scalar.trb` instead of living once in
    `std/number`, and why `std/geometry` reaches `std/linear` as `"../../linear/src/vector2"`.
-6. **The interpreter cannot tell two instantiations of one `extend` apart.** `Vector2<Int>.unitX` answers
-   `Vector2(x: 1.0, y: 0.0)` there, because `extend Vector2<Float>` was declared first. The library keeps this to the
-   four constants and gives every conversion a name of its own ([section 4](#4-naming)); a compiled program is correct
-   either way.
-7. **A static member cannot be reached through a type parameter.** `Scalar.zero()` inside a generic body answers
-   `Unknown name Scalar` in the interpreter, and `Vector2.from(other)` through `From` reports "a call of a trait member
-   without a receiver" in the back end. This is what makes `Real.unit()` an instance member that ignores `self`, and
-   what makes a `From` between two instantiations unreachable.
+6. ~~**The interpreter cannot tell two instantiations of one `extend` apart.**~~ **Gone with stage 0.** Stage 0's
+   untyped interpreter answered `Vector2(x: 1.0, y: 0.0)` for `Vector2<Int>.unitX`, because `extend Vector2<Float>`
+   was declared first. The VM of milestone 7 reads the typed IR and cannot make that mistake; the library still keeps
+   every conversion under a name of its own ([section 4](#4-naming)), because each name says what it converts to.
+7. **A static member cannot be reached through a type parameter.** `Scalar.zero()` inside a generic body answered
+   `Unknown name Scalar` on stage 0 (gone), and `Vector2.from(other)` through `From` reported "a call of a trait member
+   without a receiver" in the back end (not re-verified on 2026-09-22). This is what makes `Real.unit()` an instance
+   member that ignores `self`, and what makes a `From` between two instantiations unreachable.
 8. **`Float32` cannot carry `Real`.** It has no `squareRoot`, the C back end marks all eleven of its arithmetic members
    planned, and there is **no conversion from a `Float64` down to a `Float32`** at all, so no body can be written for one
    even through `Float64`. **Smallest change, in order:** a `Float32 with TryFrom<Float64, NumberRangeError>` native, then
    `Float32` arithmetic in the C back end.
-9. **`Array<Item, const Size: Int>` runs nowhere.** The interpreter answers `Unknown name Array` and the C back end marks
-   every member planned. It is the reason a matrix is fields and not storage, and it will be the reason `std/tensor` waits
+9. **`Array<Item, const Size: Int>` runs nowhere.** Stage 0 answered `Unknown name Array` while it existed, and the C
+   back end marks every member planned. It is the reason a matrix is fields and not storage, and it will be the reason `std/tensor` waits
    for `Buffer<Item>`.
-10. **A trait cannot require a constant.** `const pi: Self` inside a trait reports "A binding needs a value: there are no
-    uninitialized bindings and no default values". With it, `Real` would carry `pi`, `tau` and `epsilon` under the names
+10. **A trait cannot require a constant. Still open (2026-09-22).** `static pi: Self` inside a trait now reports "A
+    constant of the type needs a value — A trait cannot require one without a value yet: declare it in every
+    implementation", beside the older "A binding needs a value: there are no uninitialized bindings and no default
+    values" - a clearer refusal, not the feature. With it, `Real` would carry `pi`, `tau` and `epsilon` under the names
     the scalars already use, and `Scalar.pi` would work in a generic body.
 11. **A member-level `where` clause on a method of a generic `type` adds nothing.** `fn manhattanLength(): Scalar
     where Scalar: Signed` inside `type Vector2<Scalar: Numeric>` reports "`Scalar` has no member `absolute`" in its own
@@ -437,11 +451,17 @@ type checks and which `torb build` rejects; the rest quote the diagnostic that i
     Multiply<Vector2<Scalar>, Vector2<Scalar>>` next to `with Multiply` on the type is accepted and coherent, and then
     `matrix.multiply(vector)` reports "Expected `Matrix2<Float64>`, found `Vector2<Float64>`" while `matrix * vector`
     reports "`Matrix2<Float64>` does not implement `Multiply`". Overloading by a trait parameter is one of the two
-    overload forms the decision log keeps, so a call should find it.
+    overload forms the decision log keeps, so a call should find it. **Partly closed (2026-09-22):** the checker now
+    resolves the operator form (`scale * vector` beside `scale * scale` type checks), while the method form
+    `scale.multiply(vector)` is still refused, because one member name reaches the first instantiation
+    (`docs/COLLECTIONS.md` gap 4); natively the two bodies still collide on one mangled name, which is item 16.
 13. **Two small checker reports.** `const size = self.length()` inside a conditional `extend` does not infer the
     parameter although the annotation form does; and `print(x).round()` answers "The checker did not work out the type of
     this expression — this is a bug of the compiler" where it means "`Void` has no member `round`".
-14. **A type parameter accepts a value of any type at all.** `fn oneOf<Item: Numeric>(): Item { 1 }` type checks, and so
+14. ~~**A type parameter accepts a value of any type at all.**~~ **Closed.** A `String` or an unadapted `Int64`
+    returned as a type parameter is refused ("Expected `Item`, found `String`", "Expected `Item`, found `Int64`"), and
+    a literal against a `Numeric` parameter adapts to it. What it said: `fn oneOf<Item: Numeric>(): Item { 1 }` type
+    checks, and so
     does `fn textOf<Item: Numeric>(): Item { "x" }` and `fn boundless<Item>(): Item { 1 }`. The literal is not adapted to
     the parameter - the checker records `Int64` for it - and the return is then accepted against `Item` although nothing
     makes it one. That is the real cause of item 2: the back end has no fact to substitute, and the IR verifier is what
@@ -453,7 +473,8 @@ type checks and which `torb build` rejects; the rest quote the diagnostic that i
     one. The smallest reproduction is a generic type plus a concrete `extend` of it whose body constructs the type. The
     lowering answers it the way it answers a tuple's structural comparison - it asks `dispatchedOn` itself - so no
     program is blocked by it, and the missing record is still a record the checker owes.
-16. **Two `From` implementations on one type collide in the back end.** `extend Path with From<String>` next to
+16. **Two `From` implementations on one type collide in the back end. Still open (2026-09-22)**, and the same collision
+    is what stops item 12 natively. `extend Path with From<String>` next to
     `extend Path with From<Name>` are two declarations with one mangled name (`Path.from` carries no arguments of its
     own), and the C compiler rejects the second prototype. It is the same shape as item 12 seen from the emitter's end,
     and `compiler/src/ir/mangle.trb` is where a name would have to carry the implementation's own arguments.

@@ -1,5 +1,8 @@
 # Encoding
 
+**Status: partly implemented** — `Encode`, `Decode` and `Describe` are declared in `std/encoding` and type check, and
+`examples/encoding-lab` proves the design; derived implementations and the `std/json` natives do not run natively yet.
+
 **A value is its constructor call.** The compiler knows every type's constructor and offers it in three forms — written
 (`Encode`), read (`Decode`) and described without a value (`Describe`). That is the whole mechanism. There is no list of
 magic traits, no annotation, no second trait per format, and nothing in a type ever names a format.
@@ -35,7 +38,8 @@ what is special about ONE type in ONE format  ──→  a mapping VALUE in that
 The lab that proves all of this is [`examples/encoding-lab`](../examples/encoding-lab): the vocabulary declared locally,
 four sample types with the code the compiler would derive written out by hand, and seven formats — JSON, CSV, XML with a
 mapping DSL, a Protobuf-like packed binary format, SQL DDL with row binding, command line arguments and logfmt. It type
-checks, it runs on stage 0, and 34 tests assert the claims of this document one by one.
+checks, and 34 tests assert the claims of this document one by one. They ran on stage 0, which has been deleted;
+natively the test package does not build yet (`docs/RUST-EXIT.md` 2.4 names the construct that stops it).
 
 ---
 

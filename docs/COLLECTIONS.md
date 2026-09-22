@@ -1,30 +1,37 @@
 # Collections
 
+**Status: partly implemented** — C2b to C6 are in the code; the words per kind decided on 2026-09-22 (section 6b)
+revise C1 and C2 and land in the rename round, and `for var` (section 3.11) is decided and not implemented.
+
 One family, from the cursor to the byte buffer. This is the specification of `std/iteration`, `std/collections` and the
 part of `std/core` the language itself reaches into — which traits exist, what each one is for, which words they spend,
 and what has to change so that one meaning has one word. Nothing here decides a question of the runtime: every trait is
 an ordinary trait and every implementation is an ordinary type.
 
 ```text
-                      Iterable<Item>            Length
-                      iterator()                length()
-                            └───────────────────┬─┘
-                                        Collection<Item>
-                                        add(), clear(), the participles - a finite thing you can fill
+                      Iterate<Item>             Length                  (the words of section 6b,
+                      iterate()                 length()                 decided 2026-09-22)
               ┌──────────────┬──────────────┼──────────────┬──────────────┐
            List<Item>     Set<Item>    Map<Key, Value>  Stack<Item>    Queue<Item>
-           ordered        unique       keyed            last in        first in
-           + Indexed      + Slice
+           append         insert       set              push           enqueue
+           removeAt       remove       remove           pop, peek      dequeue, peek
+           + MutableIndexed            + MutableIndexed
+           + MutableSlice
 
                       Accumulator<Item, Output>   add(), finish(), isDone()
                       one run of a pipeline - a type BESIDE the collections, never one of them
 ```
 
-**Where the family stands.** Slices C1, C2, C2b, C3, C4, C5 and C6 are in: `Stack` and `Queue` spend `add`/`remove`
-and their participles, `Collection` owns `add`, `clear`, `compact`, `count`, `contains` and the participles,
-`List.sorted` answers `Self`, the checker rejects both holes of section 4, gaps 1 and 2 of the back end are closed and
-every factory answers `Self`. Sections 1 and 2 are the survey the design was argued from and are kept as written;
-section 3 is the design, and section 5 says which slices are still open.
+**Where the family stands.** Slices C2b, C3, C4, C5 and C6 are in: `List.sorted` answers `Self`, the checker rejects
+both holes of section 4, gaps 1 and 2 of the back end are closed, every factory answers `Self`, and the run and the
+container are told apart (`Accumulator` stands alone, `Collector` is merged into it). C1 and C2 are in the code as well
+— `Stack` and `Queue` spend `add`/`remove`, `Collection` owns `add`, `clear`, `compact`, `count`, `contains` and the
+participles — and **the owner's decision of 2026-09-22 revises both** (section 6b): every kind keeps its own words,
+the `Collection` trait is deleted, and `Iterable` becomes `Iterate`. That lands in the rename round (C2c, two commits,
+section 6a); until it has, the code and `docs/language` still show the C1/C2 words. `for var` (section 3.11) is
+decided and not implemented. Sections 1 and 2 are the survey the design was argued from and are kept as written;
+section 3 is the design with sections 3.2, 3.3 and the stack and queue rows of 3.9 superseded by 6b, and section 5
+says which slices are still open.
 
 - **[1. The inventory](#1-the-inventory)** — every trait and type, who uses it, and what it costs
 - **[2. Where the others are](#2-where-the-others-are)** — Rust, Swift, Kotlin, Scala, Clojure, Java
@@ -32,7 +39,8 @@ section 3 is the design, and section 5 says which slices are still open.
 - **[4. What the language must provide](#4-what-the-language-must-provide)** — numbered gaps, smallest fix each
 - **[5. Slices](#5-slices)** — one agent each, with gates
 - **[6a. What a rename of a name the compiler knows costs](#6a-what-a-rename-of-a-name-the-compiler-knows-costs)** — the seed, measured
-- **[6b. Commit 1 landed](#6b-commit-1-landed)** — the compiler accepts both names; where commit 2 finds the fallbacks
+- **[6b. The words per kind: the decision of 2026-09-22](#6b-the-words-per-kind-the-decision-of-2026-09-22)** — `Iterate`, one vocabulary per kind, no `Collection`
+- **[6c. Commit 1 landed](#6c-commit-1-landed)** — the compiler accepts both names; where commit 2 finds the fallbacks
 - **[6. Open, for the owner](#6-open-for-the-owner)**
 
 Every declaration below was written into a probe file under `tests/language/` — where the workspace makes
@@ -46,7 +54,8 @@ them and nothing more; that is why the probes exist.
 ## 1. The inventory
 
 *The survey the design of section 3 was argued from, with the greps and the probes that produced it. Where a slice of
-section 5 is marked done, section 3 and section 4 say what the family spends instead.*
+section 5 is marked done, section 3 and section 4 say what the family spends instead; section 6b is where the words
+ended up.*
 
 ### 1.1 The tree as it is
 
@@ -87,7 +96,7 @@ std/core
 
 std/stream
   Source<Item, Failure>       next()                 the asynchronous Iterator
-  Sink<Item, Failure>         add(), finish()        the asynchronous Accumulator
+  Sink<Item, Failure>         add(), end()           the asynchronous Accumulator (end() was finish() then)
   Pulling Pushing Buffered Staged<Input, Item, Failure>
   Bytes = List<UInt8>
 
@@ -331,23 +340,29 @@ implementations of one trait.
 ### 3.1 The tree
 
 ```text
-                      Iterable<Item>            Length
-                      iterator()                length()
-                            └───────────────────┬─┘
-                                   Collection<Item>
-                                   add() + clear() + the participles + contains + count
-        ┌──────────────┬──────────────┬─────────┴────┬──────────────┐
+                      Iterate<Item>             Length
+                      iterate()                 length()
+        ┌──────────────┬──────────────┬──────────────┬──────────────┐
      List<Item>     Set<Item>    Map<Key, Value>  Stack<Item>    Queue<Item>
-     + MutableIndexed<Int, Item>  + MutableIndexed  add/remove()  add/remove()
+     append          insert       set             push           enqueue
+     removeAt        remove       remove          pop, peek      dequeue, peek
+     + MutableIndexed<Int, Item>  + MutableIndexed
      + MutableSlice               <Key, Value>
      ArrayList                 TrieSet    TrieMap   ArrayStack    ArrayQueue
      TrieList                  HashSet    HashMap   ConsStack     BankersQueue
      RingList
 ```
 
-Nothing is added to the tree and nothing is taken out of it. What changes is inside the boxes.
+*This is the tree after section 6b.* The first version of this section kept `Collection<Item>` between the two
+reading traits and the five kinds, with `add()`, `clear()`, the participles, `contains` and `count` in it, and gave
+`Stack` and `Queue` the words `add`/`remove`. The owner's decision of 2026-09-22 took `Collection` out and gave every
+kind its own words; sections 3.2 and 3.3 below are kept as the argument that was made, each with a note.
 
 ### 3.2 `Collection` stays, and its job is one sentence
+
+> **Superseded by section 6b.** The `Collection` trait is deleted: as a bound nothing needs it (section 1.7), and as
+> the owner of `add` it put one word on five different meanings. `clear`, `compact` and `contains` are declared by each
+> kind that has them. The argument below is kept as it was made.
 
 **A `Collection` is a finite thing you can fill, and it is where the participles live.**
 
@@ -404,6 +419,10 @@ and the rule that follows is: **a signature asks for the smallest thing it uses.
 both ends and the participles.
 
 ### 3.3 `Stack` and `Queue`: two words, not eight
+
+> **Superseded by section 6b.** A stack spends `push`/`pop`/`peek` and a queue `enqueue`/`dequeue`/`peek`: "on top"
+> and "at the back" are different meanings, and the structure's own words say which. The cost table and the
+> implementations of this section are unchanged; only the words are. The argument below is kept as it was made.
 
 Both traits are `Collection<Item>` plus one verb and one participle.
 
@@ -567,10 +586,11 @@ inconsistency is in the names and not in the behaviour.
 
 ### 3.6 Iteration
 
-**One vocabulary, and the differences are justified.** `Iterator.next` and `Source.next`, `Accumulator.add`/`finish`
-and `Sink.add`/`finish`, `Collector` and `Stage` shared between both worlds — STREAMS section 1 has the table and
-nothing in it changes. The one word that is not shared is `Iterable.iterator`, because a `Source` *is* the flow and
-has nothing to hand out.
+**One vocabulary, and the differences are justified.** `Iterator.next` and `Source.next`, `Accumulator.add` and
+`Sink.add`, and `Stage` shared between both worlds — STREAMS section 1 has the table. An accumulator ends with
+`finish()`, which answers the result of the run, and a sink with `end()`, which answers only whether the end went
+through (6a says why it is not `close()`). The one word that is not shared is `Iterate.iterate` (`Iterable.iterator`
+until the rename round), because a `Source` *is* the flow and has nothing to hand out.
 
 **`Staged` is one name in two packages and stays one.** `std/iteration`'s `Staged<Input, Item>` loses `public`: it is
 the return type of `Iterable.through`, which is declared as `Iterable<Output>`, so nothing outside the package needs
@@ -703,11 +723,11 @@ of a factory member on every collector in the language.
 | build a list | `List.of(1, 2, 3)`, `[1, 2, 3]` | unchanged |
 | build a specific one | `TrieList.of(1, 2)` — **an `ArrayList`** | `TrieList.of(1, 2)` — a `TrieList` |
 | add | `list.add(x)`, `list.added(x)` | unchanged |
-| add to a stack | `stack.push(x)` **or** `stack.add(x)` | `stack.add(x)` |
-| take from a stack | `stack.pop()` | `stack.remove()` |
-| take from a queue | `queue.dequeue()` | `queue.remove()` |
-| look without taking | `stack.peek()` **or** `stack.first()` | `stack.first()` |
-| keep the old version | `stack.pushed(x)`, `stack.popped()` | `stack.added(x)`, `stack.removed()` |
+| add to a stack | `stack.push(x)` **or** `stack.add(x)` | `stack.push(x)` (6b; C1 had made it `stack.add(x)`) |
+| take from a stack | `stack.pop()` | `stack.pop()` (6b; C1 had made it `stack.remove()`) |
+| take from a queue | `queue.dequeue()` | `queue.dequeue()` (6b; C1 had made it `queue.remove()`) |
+| look without taking | `stack.peek()` **or** `stack.first()` | `stack.peek()`, `queue.peek()` (6b) |
+| keep the old version | `stack.pushed(x)`, `stack.popped()` | `stack.pushed(x)`, `stack.popped()` (6b) |
 | iterate | `for item in items { … }` | unchanged |
 | index, slice | `list[i]`, `list.get(i)`, `list[1..4]` | unchanged |
 | map, filter, sum | `items.filter({…}).map({…}).sum()` | unchanged |
@@ -736,6 +756,78 @@ right; the five that move are the ones where a reader had a choice of words and 
 6. **`TrieList` becomes a real trie**, or it loses the name. While it is a documented alias of `ArrayList` the cost
    table of section 3.3 is a promise the implementation does not keep, and defect (b) was only visible because
    somebody tried to build one.
+
+### 3.11 `for var`: every element in place
+
+**Decided 2026-09-22, not implemented.** `for var element in container` binds `element` to each **slot** of the
+container in turn, as a `var` reference, for the duration of one turn of the body — Rust's `iter_mut`, not Swift's
+`for var`, which binds a mutable *copy* and is the copy trap of CONCEPT's `var` paths written as a loop:
+
+```trb fragment
+var particles: List<Particle> = spawnParticles()
+
+for var particle in particles {
+  particle.position = particle.position + particle.velocity
+  particle.age = particle.age + 1
+}
+
+var stock: Map<String, Int> = ["apple": 3, "pear": 0]
+
+for (name, var count) in stock {
+  count = count + 10
+}
+```
+
+The first loop changes every particle of `particles` itself; the second changes every value of `stock` and leaves
+every key alone. Today both have to be written through the path — a loop over `0..particles.length()` whose body
+writes `particles[index].age` — or with `update`, which is what CONCEPT's "the variable of a `for` loop is a `const`"
+sends a reader to.
+
+**It is sugar over `MutableIndexed`, so it works for every container with slots.** The loop visits the keys of the
+container and opens `container[key]` as a `var` path for each of them — exactly the access `container[key].field = x`
+already is (CONCEPT, "`var` Paths"). That takes one member beside `set`: `MutableIndexed<Key, Value>` gains
+`fn keys(): Iterate<Key>`, the keys the loop visits, in iteration order. A `List`, an `Array` and a slice answer their
+indices as a `Range` (`0..length()`, no allocation), a `Map` answers its keys in insertion order. `Map.keys()` exists
+already with that signature; the member is called `keys` for a list too, because a trait has one name per member and
+an index *is* a list's key. **A user container joins by implementing that one trait**, and nothing else about the loop
+knows which container it is.
+
+**The rules.**
+
+1. **The container is a `var` path** — a `var` binding, a `var` parameter, a `var fn` receiver or a path through
+   `var` fields from one of those. A `const` container or a temporary is rejected, the same way `const` rejects every
+   other change.
+2. **The body may not touch the container otherwise.** While a turn holds `container[key]` open, reading or changing
+   `container` — or a path above or below it — in any other way is an exclusivity error, exactly as for a closure
+   argument of a call that changes a path (CONCEPT, "Exclusivity"). This is what makes it sound to hold a reference into
+   the storage: nothing in the body can grow, shrink, rehash or reassign the container under it. The check is static
+   and conservative, like every other exclusivity check.
+3. **The element is a reference, not a binding.** It is changed by assignment (`particle = Particle.resting`), through
+   its fields, and by `var fn` calls; it may be passed as a `var` argument and captured by a closure that does not
+   escape, and never stored, returned or captured by an escaping closure — the rules of a `var` parameter.
+4. **A `Map` keeps its keys constant.** The pattern is `(key, var value)`; `for var entry in map` is rejected, because
+   a key cannot change in place without moving the entry.
+5. **`Set` and plain `Iterate` sources are rejected, with a message that says why.** A set element cannot be changed
+   in place, because the change could change its hash and so its place; a plain `Iterate<Item>` has no slots at all:
+
+   ```text
+   error: `for var` changes the slots of a container, and a `Set` has none: an element's place depends on its value
+     = Remove the element and insert the changed one, or build a new set with `map`
+
+   error: `for var` needs a container with slots (`MutableIndexed`), and `items` is only an `Iterate<Int>`
+     = Build a new collection with `map`, or loop over a `List` held in a `var`
+   ```
+
+   *(Proposed.)*
+6. **`break`, `continue`, `return` and `?` mean what they mean in every `for`.** Leaving the loop closes the access
+   of the current turn, and nothing is written back that was not already written in place.
+
+**The lowering is an index loop over element paths.** No iterator object, no per-element copy, no `Option` per item:
+a list becomes `for index in 0..length()` whose body works on the element's address (the in-place index write of
+PERFORMANCE round P7), and a map walks its entry vector the same way. The keys are taken from the container before
+the first turn only in the sense that rule 2 guarantees they cannot change — no snapshot is made.
+
+*Slice:* C9 in section 5.
 
 ## 4. What the language must provide
 
@@ -828,18 +920,21 @@ a PowerShell array has destroyed files here before — and every slice leaves th
 `torb canon --check --rule calls --rule strings --rule imported-case-patterns --rule unused-bindings --rule loops .`
 reporting zero files.
 
-**C1 — the words of `Stack` and `Queue`. Done.** Both traits are `Collection<Item>` plus `remove(): Item?` and
-`removed(): (Item, Self)?`; `add` and `added` come from `Collection`, and looking without taking is
-`Iterable.first()`. `ArrayStack` and `ArrayQueue` write `add` and `remove` directly, `ArrayQueue`'s own count field is
-`storedLength` so that it does not stand in the way of `Collection.count()`, and the tour keeps its stack and its
-queue in the new words.
+**C1 — the words of `Stack` and `Queue`. Done, and revised by 6b.** Both traits became `Collection<Item>` plus
+`remove(): Item?` and `removed(): (Item, Self)?`; `add` and `added` came from `Collection`, and looking without taking
+was `Iterable.first()`. `ArrayStack` and `ArrayQueue` write `add` and `remove` directly, `ArrayQueue`'s own count field
+is `storedLength` so that it does not stand in the way of `Collection.count()`, and the tour keeps its stack and its
+queue in those words. **The rename round turns this back** into `push`/`pop`/`peek` and `enqueue`/`dequeue`/`peek`
+(section 6b); what stays of C1 is the one-verb-one-participle shape and the participle rule.
 
-**C2 — `Collection`'s job. Done.** `Collection` declares `clear`, `compact`, `count`, `addAll`, `added`, `addedAll`,
-`contains`, `containsAll` and `finish`, and `add` exactly once — in `Accumulator`. `compact` moved in from
-`MutableSlice`, which is now exactly `replace`; it is a **default that does nothing**, because a storage without spare
-room has nothing to hand back, and `ArrayList`, `TrieList`, `ArrayStack` and `ArrayQueue` override it. `count()`
-answers `length()`. `Set.isSubsetOf`, `Map.merge` and `Map.merged` are gone; the one caller outside `std` was
-`compiler/src/highlight/scope.trb`, which writes `addAll`.
+**C2 — `Collection`'s job. Done, and revised by 6b.** `Collection` declares `clear`, `compact`, `count`, `addAll`,
+`added`, `addedAll`, `contains` and `containsAll`, and `add` itself (since C2b it no longer comes from `Accumulator`).
+`compact` moved in from `MutableSlice`, which is now exactly `replace`; it is a **default that does nothing**, because
+a storage without spare room has nothing to hand back, and `ArrayList`, `TrieList`, `ArrayStack` and `ArrayQueue`
+override it. `count()` answers `length()`. `Set.isSubsetOf`, `Map.merge` and `Map.merged` are gone; the one caller
+outside `std` was `compiler/src/highlight/scope.trb`, which writes `addAll`. **The rename round deletes the trait**
+(section 6b): `clear`, `compact`, `contains` and `count` move into each kind that has them, and `Set.isSubsetOf`,
+`Map.merge` and `Map.merged` stay gone.
 
 **C3 — `List.sorted`, and the participle rule written down. Done.** Gap 5 above, the rule in
 `docs/language/types/verbs-and-participles.md` (a participle answers `Self`; where the verb also answers a value the
@@ -889,10 +984,21 @@ than one implementation.
 `start()` is deleted. `ListAccumulator<Item>` is the shipped gatherer and `into<Target>()` the general one.
 `Sink.finish()` became `Sink.end()` — see section 6a for why it is not `close()`.
 
-**C2c — the words per kind, and the two renames. Blocked on the seed, not started.** Section 6a has the measurement
-and the recipe.
+**C2c — the words per kind, and the rename. The rename round, two commits.** Section 6b has the decided words and 6a
+the recipe: commit 1 teaches the compiler both names (`Iterate` beside `Iterable`, `append` beside `add` for the list
+literal) and refreshes the seed; commit 2 sweeps `std`, the compiler, the examples, the tests and the docs with a
+checked script and drops the fallbacks. `Add` is not renamed.
+*Gate:* the four, the fixpoint, and no `Iterable`, `Collection<` or `iterator()` left outside the history of the
+records.
 
-What is left is C2c (after a seed refresh), then C7 and C8 whenever there is room. Only C7 adds a type.
+**C9 — `for var`** (section 3.11). The checker: the form in the `for` head, rules 1 to 6, the two rejection messages
+pinned. The standard library: `keys()` on `MutableIndexed`, answered by `List`, `Array`, the slices and `Map`. The
+lowering: an index loop whose body works on the element's address, no iterator. It is a syntax change and takes the
+two commits of 6a.
+*Gate:* a conformance program per container (list, array, slice, map values, a user `MutableIndexed`), a checker test
+per rejected shape, and `ir` of a list loop showing no iterator and no copy per element.
+
+What is left is C2c, then C9, then C7 and C8 whenever there is room. Only C7 adds a type.
 
 ## 6a. What a rename of a name the compiler knows costs
 
@@ -909,9 +1015,9 @@ Measured, not argued:
 
 | Rename | Sites | What happens with the current seed |
 |---|---|---|
-| `Iterable` → `Iterate` (or `Sequence`) | **872** in 146 files (394 in 83 `.trb`, 478 in 63 `.md`; `FromIterable`, `lowerForIterable`, `itemOfIterableBound`, `reportNotIterable`, `anyIterable` fall out of the same word-boundary sweep) | applied and reverted: `torb check .` went to **208 problems in 195 of 372 files** — every `for` loop and every collection literal stops resolving. An `Iterable` alias beside the new name makes it green again, which is the proof that the name is the only thing missing. |
-| `Add` → `Plus` (and `add` → `plus`) | 313 for `Add` alone | applied to `std/core` and reverted: `end - start + 1` in `std/core/src/range.trb` became "The checker did not work out the type of this expression". An alias does **not** help here, because the *member* name is wired too. |
-| `List.add` → `List.append` | ~1900 `.add` call sites | not attempted: `memberOfType(lowering, container, bound, "add", at)` is how a list literal is lowered, so the seed could not *build* the compiler at all. |
+| `Iterable` → `Iterate` (`Sequence` was the alternative, rejected: a `Set` and a `Map` are not sequences) — **decided** | **872** in 146 files (394 in 83 `.trb`, 478 in 63 `.md`; `FromIterable`, `lowerForIterable`, `itemOfIterableBound`, `reportNotIterable`, `anyIterable` fall out of the same word-boundary sweep) | applied and reverted: `torb check .` went to **208 problems in 195 of 372 files** — every `for` loop and every collection literal stops resolving. An `Iterable` alias beside the new name makes it green again, which is the proof that the name is the only thing missing. |
+| `Add` → `Plus` (and `add` → `plus`) — **no longer planned** | 313 for `Add` alone | applied to `std/core` and reverted: `end - start + 1` in `std/core/src/range.trb` became "The checker did not work out the type of this expression". An alias does **not** help here, because the *member* name is wired too. The rename existed to free `add` for the containers; with the words of 6b no container spends `add` any more, so `Add` stays (owner, 2026-09-22). |
+| `List.add` → `List.append` — **decided** | ~1900 `.add` call sites | not attempted: `memberOfType(lowering, container, bound, "add", at)` is how a list literal is lowered, so the seed could not *build* the compiler at all. |
 
 **The recipe, two commits.** First: teach the compiler both names (`symbolNamed("Iterate") ?? symbolNamed("Iterable")`
 and the same for the operator and the container member) and refresh the seed from that build. Second: sweep `std`,
@@ -923,10 +1029,52 @@ the `Accumulator`'s word", which is right; `close()` is not available for it. `S
 `var fn close()` is the **abrupt** end — it releases the target, cannot fail, and is what `using` calls — and a type
 has one namespace of members, so the graceful end (`Task<Result<Void, Failure>>`, flushes, reports) cannot share the
 name. `end()` says the same thing as `close` about a *stream* without claiming the word `Close` owns. The other way
-out would be to take `Close` off `Sink` and lose `using(sink)` and `Buffered`'s "release without flushing"; that is a
-question for the owner and not one the language decides.
+out would have been to take `Close` off `Sink`; the owner's decision that `close()` is the language's destructor
+(`docs/DESTRUCTORS.md`) settles it the other way: a sink keeps `Close`, its `close()` is the abrupt end the last release
+runs, and `end()` is the graceful one a program calls and awaits itself.
 
-## 6b. Commit 1 landed
+## 6b. The words per kind: the decision of 2026-09-22
+
+**Decided by the owner, recorded here; the code and `docs/language` follow in the rename round (C2c).**
+
+| Trait | Its own words | Participles (the rule of 3.3) |
+|---|---|---|
+| `Iterate<Item>` (was `Iterable`) | `iterate()` (was `iterator()`), and the stages and terminals it already has | — |
+| `List<Item>` | `append`, and the index words it has (`insert`, `removeAt`) | `appended`, `inserted`, `removedAt` |
+| `Set<Item>` | `insert`, `remove` | `inserted`, `removed` |
+| `Map<Key, Value>` | `set`, `remove` | `updated` for `set` (1.5 point 3), `removed` |
+| `Stack<Item>` | `push`, `pop`, `peek` | `pushed`, `popped(): (Item, Self)?` |
+| `Queue<Item>` | `enqueue`, `dequeue`, `peek` | `enqueued`, `dequeued(): (Item, Self)?` |
+| `Collection<Item>` | **deleted** | — |
+| `Add` (the operator) | **stays** — `Add` → `Plus` is no longer planned | — |
+
+The five kinds come `with Iterate<Item>, Length` directly, and `clear`, `compact`, `contains` and `count` are declared
+by each kind that has them instead of being inherited. `peek()` answers the item `pop()` or `dequeue()` would take,
+without taking it.
+
+**Why one vocabulary per kind.** "`add` for everything is a sledgehammer" (the owner): on top of a stack, at the back
+of a queue or a list, and somewhere in a set are four different meanings, and one word for all of them makes a reader
+look up the receiver's type to know what a call does. The words everybody knows for each structure say it at the call.
+The objection section 3.3 raised — Java's twelve names for three operations — was about several words for **one**
+meaning on one type; here every type has one word per meaning.
+
+**Why `Collection` goes.** As a bound it was never needed: section 1.2 found two uses, both in the tour, and section
+1.7 wrote both as `Iterate<Item> & Length` and an `Accumulator`. With every kind keeping its own verb there is no
+shared `add` left for it to own, and a trait that only groups is documentation. The word stays for prose and for the
+package name `std/collections`.
+
+**Why `Iterate` and `iterate()`.** A single-method trait is named like its method (`Hash` for `hash()`), and no trait
+name ends in `-able`. `Sequence` was the alternative and is rejected, because a `Set` and a `Map` are iterated and are
+not sequences.
+
+**Why `Add` stays.** The rename to `Plus` existed so that `a + b` and a container's `add(value)` would not be one member
+name. With `append`, `insert` and `push` no container spends `add` any more; `Accumulator.add` stays, and an
+accumulator is a run and not an operand of `+`.
+
+**What it revises.** C1 and C2 are turned back where they chose `add`/`remove` for stacks and queues and a shared
+`Collection`; 3.2 and 3.3 carry notes; questions 1 and 2 of section 6 are answered.
+
+## 6c. Commit 1 landed
 
 The renames the owner settled: the trait `Iterable` becomes `Iterate` and its member `iterator()` becomes `iterate()`
 (a single-method trait is named like its method), `List.add` becomes `append`, `Set.add` becomes `insert`, and
@@ -979,21 +1127,26 @@ them up, and no native row names a stack or a queue. The compiler's *messages* t
 
 ## 6. Open, for the owner
 
-Everything technical above is decided and argued. These six are taste and direction.
+Everything technical above is decided and argued. These six were taste and direction; the first two are answered.
 
 **1. `remove()` on a stack and a queue.** Section 3.3 spends one word for "the item the structure gives next", so
 `stack.remove()` and `queue.remove()` read alike and `Set.remove(value)` is a different member of a different trait.
 The alternative is to keep a verb per structure (`pop`, `dequeue`) and accept that `add` and `push` are both there.
 Clojure's `pop` and Kotlin's `removeFirst` are the two precedents, and they disagree.
+**Answered (2026-09-22):** a verb per structure — `push`/`pop`/`peek` and `enqueue`/`dequeue`/`peek` — and no `add`
+beside them, because no kind spends `add` any more (section 6b).
 
 **2. `Stack` and `Queue` become structurally identical.** Both are `Collection<Item>` plus `remove()` and `removed()`;
 only the contract differs. That is deliberate — the type name carries the word — but it means a shared supertrait
 could be declared and is not. Should there be one, named after its method, so that "a worklist, either way" is
 writable?
+**Answered (2026-09-22):** the premise is gone — with their own words the two traits are no longer identical, and
+`Collection` itself is deleted. No worklist supertrait.
 
 **3. `Set.union`.** Its body is `addedAll`. It stays because `union`, `intersection` and `difference` are a vocabulary
 and two thirds of one is worse than three thirds with an overlap. The other reading is that one word per meaning
-admits no exception.
+admits no exception. *(Still open. After 6b the overlap is with whatever bulk participle `Set` keeps beside
+`insert` — `insertedAll` if the rename round keeps one.)*
 
 **4. The name of the ordered structure.** `Ordered.by { _.priority }`, or `Heap`, or `Priority`. `Ordered` says what
 the contract is and not how it is built, which is the rule every other implementation name breaks on purpose

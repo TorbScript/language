@@ -1,5 +1,16 @@
 # The Back Ends (Milestones 5-7)
 
+**Status: historical** — the plan and the log of milestones 5 and 6, which are done, kept as the record of how the
+back end was built; the parts of milestone 7 that are still ahead are marked as such.
+
+> **A historical record.** This document was written while stage 0 — the Rust interpreter and front end under
+> `bootstrap/` — still existed, and most of it reads in that present tense: "compared with stage 0", "the gate runs on
+> stage 0 and natively". Stage 0 was deleted on 2026-09-22 (`docs/RUST-EXIT.md`); the C back end is the only
+> implementation today and the bytecode VM of milestone 7 will be the second. Where a row of section 6 or a gap of
+> section 7 decides something that still holds, it holds; where it describes stage 0, a cycle collector or "no
+> destructors", read it as history and follow the note beside it — `docs/DESTRUCTORS.md` and `docs/CONCURRENCY.md`
+> are where those questions are decided now.
+
 The typed IR, the C back end with its runtime, self-compilation, and the bytecode VM with tasks and the sandbox.
 Everything here consumes what the type checker produced ([docs/TYPECHECKER.md](TYPECHECKER.md) section 7.1) and nothing
 here decides a question of the language: the IR *is* the semantics, and two back ends read the same IR. That is what
@@ -207,7 +218,7 @@ public type Layout {
   fields: List<FieldLayout>                        // Variant layouts: one group per variant
   variants: List<VariantLayout>
   representation: Representation
-  /** Computed to a fixpoint over the field graph. Drives the `spawn`/`Channel` rules and the cycle collector. */
+  /** Computed to a fixpoint over the field graph. Drives the `spawn`/`Channel` rules. */
   containsShared: Bool
   containsCounted: Bool
 }
@@ -359,7 +370,7 @@ compares this text catches an ownership regression far earlier than a C-level te
 |----------------------------------------------------|:-------:|--------------------------------------------------|
 | `Integer`, `Float`, `Bool`, `Char`, `Void`, `FixedArray` of such, `Inline` layout of such | no | copied, never touched |
 | `Text`, `Runtime` (list, map, set, Task, Channel), `Boxed` layout, `Object`, `Closure` with an environment | yes | `Retain`/`Release`/`MakeUnique` |
-| `Shared`, `Box`                                    | yes, plus a color for the cycle collector | as above |
+| `Shared`, `Box`                                    | yes (the header's `color` stays unused: there is no cycle collector, section 2.4) | as above |
 | `Reference` (`var` parameter, a `var fn` receiver, `var` path) | **no**  | section 2.5                                      |
 
 - **A slot has exactly one owner.** Every operand position is `Borrowed` (the value must be live at that point; no
@@ -456,25 +467,24 @@ it out, change it, put it back - without a copy" (`var` Paths section). The lowe
 
 ### 2.4 Cycles
 
-Values cannot form cycles; only `Shared` objects and `Box`es can. **Bacon/Rajan synchronous cycle collection with
-trial deletion**, over those two kinds and nothing else:
+**There is no cycle collector, and there will not be one** (decided 2026-09-22, `docs/DESTRUCTORS.md` section 9). The
+plan written here first — Bacon/Rajan synchronous cycle collection with trial deletion over `Shared` objects and
+`Box`es, a color and a `trace` function per header, a candidate buffer per task — is withdrawn: a tracing pass over a
+plain-refcount heap would make the moment a destructor (`close()`) runs non-deterministic again.
 
-- The header of a `Shared` object and of a `Box` carries `count`, a color (`black`, `gray`, `white`, `purple`) and a
-  pointer to a `trace` function. Records, lists, maps and strings have no color and are never scanned.
-- `trace` is emitted per `Shared` layout and per `Box` item type, and visits only the fields that can *reach* a
-  `Shared` or `Box` - which the layout's `containsShared` flag says. For most layouts that is nothing, and the trace
-  function is `NULL`.
-- A `Release` that leaves a non-zero count on a colored object appends it to the task's **candidate buffer** (marking
-  it `purple`). The collector runs when the buffer passes a threshold (10 000 entries) and once at task shutdown:
-  mark gray with trial decrements, scan, collect white.
-- **Until milestone 7.7 the collector does not exist and a cycle leaks.** Correctness is unaffected, `compiler/` has
-  no `shared type` at all, and `torb build --report-leaks` prints the live block count at exit so a regression shows
-  up in the conformance suite.
+- Values cannot form cycles. A `Box` cannot either, once a closure that captures a `var` binding may not escape its
+  scope (CONCEPT, "`var` Paths and `var` Parameters"; decided, not yet enforced), so only `Shared` objects can.
+- Cycles between shared objects are designed out instead: trees and graphs hold handles (an `Entity`), a callback a
+  `shared type` stores takes its owner as a receiver, and `Weak<Target>` comes to `std` only if the leak reports show a
+  need.
+- **A leaked cycle is visible.** `torb build --report-leaks` prints the live block count at exit, the conformance suite
+  and every `std` test assert zero, and the report is to name the type of each block still alive.
+- The header's `color` field is `TORB_COLOR_NONE` for every block and stays until the header is next reorganised.
 
 ### 2.5 Non-atomic counts, per-task heaps, channel transfer
 
-Counts are plain integers. Every task owns a heap (a bump allocator with size-class free lists) and a candidate
-buffer; nothing is shared implicitly, so nothing has to be atomic. Blocks carry the id of their owning heap in the
+Counts are plain integers. Every task owns a heap (a bump allocator with size-class free lists); nothing is shared
+implicitly, so nothing has to be atomic. (The candidate buffer of the withdrawn cycle collector is gone with it.) Blocks carry the id of their owning heap in the
 header.
 
 `Channel.send(value)`: the value is a value, so either it is copied into the receiver's heap, or - when every counted
@@ -699,7 +709,7 @@ all of them. The rows `Int64.fromChar` and `Float64.fromFloat32` are named after
 runtime/
 ├ include/torb.h              Public header: header, text, list, map, closure, panic, task
 ├ include/torb_natives.h      Generated from the manifest (torb natives --header)
-├ memory.c                    Heap, header, retain/release/make-unique, immortal values, cycle candidates
+├ memory.c                    Heap, header, retain/release/make-unique, immortal values
 ├ panic.c                     torb_panic, overflow, bounds, the shadow stack, exit codes
 ├ text.c                      UTF-8, slices, concatenation, comparison, hashing, float and integer formatting
 ├ list.c  map.c               The one list and the one ordered hash table, over element descriptors
@@ -707,7 +717,6 @@ runtime/
 ├ console.c  process.c        print/printError, arguments, exit
 ├ file.c  clock.c  environment.c   std/fs, std/time, std/environment
 ├ task.c                      Scheduler, Task, Channel (milestone 7.3)
-├ collect.c                   Trial deletion (milestone 7.7)
 └ tests/
   ├ harness.h                 20 lines: TORB_CHECK, a counter, a main
   └ *_test.c                  One per source file
@@ -828,10 +837,12 @@ algorithm and the same order - so a program whose tasks do no real IO produces i
 and `10-async.trb` has a stable `.expected`. `Channel` is a ring buffer plus two waiter queues; `send` on a full
 channel and `receive` on an empty one suspend. `all(a, b)` and `Task.all` are ordinary functions over that.
 
-7.7 adds threads: one worker per core, one heap per worker, a task is pinned to the worker that created it (no work
-stealing - stealing would move a heap), `spawn` distributes round robin and copies the captures into the target heap,
-`await` across workers sets an atomic flag and enqueues on the owner. Only the channel transfer and the ready flags
-are atomic; counts stay plain (section 2.5).
+7.7 adds threads: one worker per core, one heap per worker, and a task that has **started** is pinned to its worker,
+because moving it would move a heap. `spawn` puts the task in a worker's inbox as a transferable message, and the
+worker that runs it first copies the captures into its own heap then — so a task that has not started yet owns nothing
+in any heap and **may be stolen by any idle worker** (`docs/CONCURRENCY.md` section 9 and slice H, which replaced the
+first plan here of round robin with no stealing at all). `await` across workers sets an atomic flag and enqueues on the
+owner. Only the channel transfer, the inbox and the ready flags are atomic; counts stay plain (section 2.5).
 
 ### 5.4 The sandbox
 
@@ -867,7 +878,8 @@ bytecode) and the VM into any binary that uses it. Nothing else does - the compi
 Each is one agent session: roughly 600-1500 lines of TorbScript or C plus tests. Tests are IR text snapshots
 (section 1.7), and C output that is compiled and run against expected stdout. The runnable conformance suite is
 `tests/language/*.trb` with their `.expected` files, extended by `.expected` files for the tour, and it is
-run against **stage 0, the C back end and later the VM** by the same runner.
+run against **the C back end and later the VM** by the same runner (and was run against stage 0 until stage 0 was
+deleted).
 
 | # | Scope | Files | Tests | Depends on |
 |---|---|---|---|---|
@@ -878,25 +890,25 @@ run against **stage 0, the C back end and later the VM** by the same runner.
 | **5.4** | **Done.** Ownership: the summary pass, liveness, `Copy`/`Move`/`Retain`/`Release` insertion, edge splitting, `MakeUnique`, and the verifier's ownership invariants | `ir/liveness.trb`, `ir/operand.trb`, `ir/ownership.trb`, `ir/ownership-verify.trb` | IR snapshots pinning every insertion point (45 tests in `ownership`, `liveness`, `operand`, `make-unique` and `ownership-verify`); hand-built wrong IR against every message of the verifier; the live-block counter is zero after every conformance script (from 5.3 on) | 5.2 |
 | **5.5** | **Done.** ADTs: variant layouts, the niche, `MatchPlan` to decision trees, guards and fallbacks, case constructors, `Option`/`Result`, `?` with its conversion, `??`, `if const`/`while const`, destructuring bindings | `ir/decision.trb`, `ir/lower/match.trb` | `compiler/tests/decision.test.trb` (6 decision trees as text), `lower-match.test.trb` (10 IR snapshots, every one through `verifyOwnedProgram`), `emit-c` additions; `tests/conformance/{adts,errors,matching,states}.trb` run natively with zero live blocks | 5.2, 5.4 |
 | **5.6** | **Done.** Generics: instance keys with type arguments, the worklist, witness tables, trait-typed values, per-bound sharing, derived `Show`/`Equals`/`Hash`/`compare`, trait defaults and overrides. **Gate: `tests/conformance/{traits,generics,derived}.trb`** - `basics.trb` needs 5.7 to 5.10 as well (see the note below) | `ir/witness.trb`, `ir/lower/generic.trb`, `ir/lower/derive.trb`, `backend/c/emit.trb` | `compiler/tests/lower-generics.test.trb` (8, instance counts among them), `emit-c` additions (5 pinned C snippets), three native gate programs with zero live blocks | 5.5 |
-| **5.7** | **The lists run.** The ABI of the containers, `var fn` members of a **trait-typed value**, the witness of a value as a *place*, element descriptors, `ContainerNew`, the list literal, `a[key]` reads, `for` over a collection, a range as a value; then **the bound on the instance set** (a default nothing overrides is no slot of a table), **nested tables**, `ArrayList.from` and `Range.iterator`/`length`/`show` as TorbScript. **Still open:** the map/set cursor (one new runtime function plus a `bool`-plus-two-outs convention, which also blocks every map and set literal), index paths, variadics and the spread. **Done in the long tail of 6.1:** list patterns, `String.chars`/`bytes`/`from` and `String.slice` (see the note at the end). **Gate: `tests/conformance/{collections,ranges,collection-index}.trb}` - `language.trb` is a stage-0 script and not a checked program (see the note)** | `ir/element.trb`, `ir/lower/{native,collection}.trb`, `ir/witness.trb`, `backend/c/{natives,emit}.trb`, `std/collections/src/list.trb`, `std/core/src/range.trb` | `tests/conformance/{natives,reassignment,trait-values,collections,ranges,collection-index}.trb`, `compiler/tests/{lower-natives,ir-elements,lower-generics}.test.trb`; `07-collections.trb` is two index-path findings away | 5.3, 5.6, 5.8 |
+| **5.7** | **The lists run.** The ABI of the containers, `var fn` members of a **trait-typed value**, the witness of a value as a *place*, element descriptors, `ContainerNew`, the list literal, `a[key]` reads, `for` over a collection, a range as a value; then **the bound on the instance set** (a default nothing overrides is no slot of a table), **nested tables**, `ArrayList.from` and `Range.iterator`/`length`/`show` as TorbScript. **Done since:** the map/set cursor with the map and set literals (`tests/conformance/maps-and-sets.trb`), index paths (`collection-places.trb`, and PERFORMANCE round P7's in-place write), variadics and the spread (`variadics.trb`). **Done in the long tail of 6.1:** list patterns, `String.chars`/`bytes`/`from` and `String.slice` (see the note at the end). **Gate: `tests/conformance/{collections,ranges,collection-index}.trb}` - `language.trb` is a stage-0 script and not a checked program (see the note)** | `ir/element.trb`, `ir/lower/{native,collection}.trb`, `ir/witness.trb`, `backend/c/{natives,emit}.trb`, `std/collections/src/list.trb`, `std/core/src/range.trb` | `tests/conformance/{natives,reassignment,trait-values,collections,ranges,collection-index}.trb`, `compiler/tests/{lower-natives,ir-elements,lower-generics}.test.trb`; `07-collections.trb` is two index-path findings away | 5.3, 5.6, 5.8 |
 | **5.8** | **Done.** Closures: closure conversion, environments, escaping or not, boxes for captured `var` bindings, `lazy` cells, function values, receiver closures, property commands. **Gate: `tests/conformance/{closures,counted-closures,dsl}.trb`** - `examples/config-dsl` loads a receiver *script* (7.4) and needs 5.7 and 5.10 besides (see the note below) | `ir/lower/closure.trb`, `ir/capture.trb` | `compiler/tests/lower-closures.test.trb` (19: the IR text, the pinned C, the findings); three native gate programs with zero live blocks | 5.6 |
 | **5.9a** | **Done.** `var` parameters and `var fn` receivers: a place as an argument, interior projections through fields, assignment and property commands through a path, `MakeUnique` per counted owner of the path | `ir/lower/place.trb` | `compiler/tests/lower-places.test.trb` (23: the IR text, the pinned C, the verifier's invariants); `tests/conformance/{places,place-counted}.trb` run natively with zero live blocks | 5.4 |
 | **5.9b** | The rest of the `var` paths: index paths (`TakeOut`/`PutBack`), slices as windows, `if var`/`while var`, `shared type` objects with their headers and trace functions, `FixedArray`, `Close`/`using` | `ir/lower/place.trb`, `runtime/memory.c` | `01-bindings-and-values.trb`, `03-types.trb`, `08-control-flow.trb` | 5.9a, 5.7 |
 | **5.10** | **Done, except what needs a collection.** Text: interpolation, `print`/`printError`, `Show` for every shape in the format of gap 23, float formatting in both back ends, `?.`. **Still open:** `describe`, derived `Encode`/`Decode` and the `std/json` natives, which all wait for 5.7 (see the note below) | `ir/lower/text.trb`, `ir/lower/match.trb`, `runtime/text.c` | `compiler/tests/lower-text.test.trb` (19); `tests/conformance/{interpolation,floats,optional-chain}.trb` run natively, compared with stage 0, zero live blocks | 5.6, 5.7 |
 | **5.11** | **The gate holds.** `assert` is lowered, `test`/`group` are functions of the runtime with a recovery point, `torb test <directory>` builds **one** binary for every test file and runs it, and `\n` is `\n` on both implementations. **Gate: `compiler/tests/*.test.trb` run from the native binary - 1482 passed, 0 failed (55 files), the same report as stage 0 line for line.** **Still open:** an `Expression<Value>` as a value - the static tree, `value()`, `captures()` - which nothing of `compiler/` needs | `ir/lower/quote.trb`, `ir/lower/match.trb`, `runtime/test.c`, `runtime/panic.c`, `runtime/console.c`, `cli/test.trb`, `backend/c/emit.trb` | `tests/conformance/{tests,test-failure,assert-values,nested-list-patterns}.trb`, `binary-only/assert-compound-capture.trb`, and the suite gate that compared the two reports | 5.10 |
 | **5.12** | **Done for what the compiler needs** (`File.createDirectory`, `Process.run`, `Clock.milliseconds` and the `.Fallible` shape of `std/fs`, see the note of 6.1's long tail). **Runtime half done.** The remaining std natives: `std/fs`, `std/io`, `std/process`, `std/time`, `std/math`, `std/environment`. **Gate: the tour runs** (01-09, 11, 12; `10-async` waits for 7.3) | `runtime/file.c`, `clock.c`, `environment.c`, `number.c` | `.expected` files for every tour module, run on stage 0 and natively | 5.3 (parallel with 5.8-5.11) |
-| **5.13** | The full driver: profiles, the content-hash cache, `torb run` as build-and-execute, `torb test`, output paths from `project.trb`, ICE reporting, `--emit-ir`, the `error:` report of a top-level `?` (it walks `cause()`) and `?` return traces in the debug profile | `cli/build.trb`, `cli/run.trb`, `project/manifest.trb` | Cache hit and miss, a deliberately broken emitter reports an ICE, an error chain of three prints three lines | 5.3 |
+| **5.13** | **Partly done; no profiles yet** (`cli/build.trb` passes `-O2` to every build). The full driver: profiles, the content-hash cache, `torb run` as build-and-execute, `torb test`, output paths from `project.trb`, ICE reporting, `--emit-ir`, the `error:` report of a top-level `?` (it walks `cause()`) and `?` return traces in the debug profile | `cli/build.trb`, `cli/run.trb`, `project/manifest.trb` | Cache hit and miss, a deliberately broken emitter reports an ICE, an error chain of three prints three lines | 5.3 |
 | **5.14** | **Done.** Conformance: one runner over stage 0 and the C back end that compares standard output, standard error and the exit code with nothing exempt; the panic format and every recorded divergence closed; `--emit-c` twice byte identical; no absolute path in the output | `runtime/text.c`, `tests/conformance/`, the runner | **57 gate programs**, each run twice and compared byte for byte | 5.1-5.13 |
-| **6.1** | Compile `compiler/` with stage 1: every missing intrinsic, every crash, every construct the compiler uses and the lowering does not cover yet. **Gate: a `torb` binary exists** | wherever it hurts | `torb check ..` from the new binary gives the same output as stage 1 | 5.14 |
+| **6.1** | **Done.** Compile `compiler/` with stage 1: every missing intrinsic, every crash, every construct the compiler uses and the lowering does not cover yet. **Gate: a `torb` binary exists** | wherever it hurts | `torb check ..` from the new binary gives the same output as stage 1 | 5.14 |
 | **6.2** | **Done.** The fixpoint: stage 2 compiles `compiler/` again, the two C files are compared byte for byte, stage 3 emits a third one. `bootstrap/` frozen | `std/iteration/src/concatenate.trb`, `runtime/platform.c` | **The fixpoint gate** | 6.1 |
 | **6.3** | **Measured, and one third of it done** (see "What 6.3 measured"): the flags stay, the translation unit is **not** sharded (4.3x faster to compile, 2.3x slower a binary), one witness thunk per member instead of per table entry (-13.3% of the C, -22% of the gcc), the module `const` of the lexer read once per file. **Left:** the mangled names (62.5% of the file), the element-type-blind collection defaults, `R_`/`D_` keyed on a layout's shape, `#line` behind a profile, a budget for `torb build` of the workspace. **The immortal counted static is done** (see the note of its own) | `backend/c/emit.trb`, `syntax/lexer.trb` | A timing test in the suite | 6.2 |
 | **7.1** | Bytecode: the format, the emitter from the IR, a disassembler for the snapshots | `backend/bytecode/*.trb` | Disassembly snapshots next to the IR snapshots | 6.2 |
-| **7.2** | The interpreter loop, `torb run` through the VM, the conformance suite through the VM. **Gate: stage 0, C and the VM agree on every script** | `vm/*.trb` | The full suite, three back ends | 7.1 |
+| **7.2** | The interpreter loop, `torb run` through the VM, the conformance suite through the VM. **Gate: C and the VM agree on every script** | `vm/*.trb` | The full suite, both back ends | 7.1 |
 | **7.3** | Tasks: the state-machine transformation in the lowering, `Task`/`spawn`/`await()`/`Channel`, the FIFO scheduler in C and in the VM. **Gate: `10-async.trb` in both back ends** | `ir/lower/task.trb`, `runtime/task.c`, `vm/task.trb` | `10-async.trb`, channel and ordering tests | 7.2 |
 | **7.4** | The sandbox: `Script<Value>` (gap 12 below), capability checks at import, limits as counters, panics recovered, embedding the front end | `std/sandbox`, `vm/sandbox.trb` | A script that loops forever, one that imports what it may not, one that panics | 7.2 |
 | **7.5** | `project.trb` as a receiver script: `Project` and friends as real types, the static reader deleted after a test asserts both agree | `project/model.trb`, `project/manifest.trb` | Every `project.trb` of the repository, both readers | 7.4 |
 | **7.6** | The REPL: the scope chain, the persistent frame, shadowing, generations of redeclared types | `cli/repl.trb`, `vm/session.trb` | A transcript test | 7.4 |
-| **7.7** | Threads and the cycle collector: workers, per-task heaps, channel transfer, trial deletion, the leak counter at zero for a program that builds a cycle | `runtime/collect.c`, `runtime/task.c` | Cycle and parallelism tests | 7.3 |
+| **7.7** | Threads: workers, per-worker heaps, channel transfer, the inbox and the stealing of unstarted tasks (`docs/CONCURRENCY.md` slice H). **No cycle collector** (section 2.4, `docs/DESTRUCTORS.md` section 9): the leak report names the type of every block still alive instead | `runtime/task.c` | Parallelism tests, and a leak report test for a program that builds a cycle | 7.3 |
 
 ```text
 5.1 ─► 5.2 ─► 5.3 ─┬─► 5.4 ─► 5.5 ─► 5.6 ─┬─► 5.7 ─┬─► 5.9b ┐
@@ -914,7 +926,7 @@ run against **stage 0, the C back end and later the VM** by the same runner.
 - **5.12's runtime half is done**: `runtime/file.c` (open handles), `clock.c`, `environment.c` and the math functions
   in `number.c` all exist and are `.Ready` in the manifest, with `runtime/tests` for each (see `runtime/README.md`
   for the representations chosen - nanosecond `Instant`/`Duration`, the `torb_file` `shared type`). The stream side of
-  a file (`File.create`/`chunks`/`add`/`finish`) stays `.Planned` for 7.3 with the rest of `std/stream`
+  a file (`File.create`/`chunks`/`add`/`end`) stays `.Planned` for 7.3 with the rest of `std/stream`
   (`docs/STREAMS.md` section 14), and `file.lines()` needs no native of its own any more. The tour itself still
   cannot run natively until the lowering this milestone does not touch (5.3's emitter, and whichever of 5.4-5.11 a
   module's constructs need) exists to call these symbols.
@@ -3830,7 +3842,11 @@ the only observable destruction order is the nesting of `using` blocks. Releases
 are not observable. _Reason:_ a destructor would need drop flags, a field order rule and a story for a panic in one -
 and `using` already covers everything that must be deterministic.
 
-_Decision:_ accepted.
+_Decision:_ accepted. **Superseded on 2026-09-22** by `docs/DESTRUCTORS.md`: `close()` is the destructor of a
+`shared type`, run by the last release. The three objections are answered there — a moved-out slot is cleared and is its
+own drop flag, fields are released in reverse declaration order, and a panic runs no `close()` — and a slot whose type
+may contain a `Close` object is released at the end of its scope in reverse declaration order instead of where
+section 2 puts other releases.
 
 **11. Overflow and division by zero in a compile-time constant.** Gap 27 fixed what is compile-time evaluable
 ("plus the arithmetic ... of the built-in number types"), and Built-in Types says "overflow that is written in the
@@ -3873,7 +3889,9 @@ stored by the callee. Everything else captures values and `Box`es. `ClosureKind.
 tables. _Reason:_ the lowering needs it to choose a stack environment (which is also the optimization that makes the
 DSL and the pipelines free), and without it the rule quoted above is unenforced.
 
-_Decision:_ accepted.
+_Decision:_ accepted. **Extended on 2026-09-22:** a closure that captures a `var` *binding* follows the same rule — it
+may only be `Local` — so "everything else captures values and `Box`es" narrows to values: a `Box` never outlives its
+scope. Decided, not yet enforced by the checker (CONCEPT, "`var` Paths and `var` Parameters").
 
 **15. `isSame` is callable on values.** `std/core/src/shared.trb`:
 `public native fn isSame<Object>(first: Object, second: Object): Bool`, with no bound. On a value the answer would
@@ -3920,7 +3938,8 @@ _Decision:_ accepted.
 
 **Risks, not gaps.**
 
-- **Stage 0 has to run the lowering.** It has no type checker, so a lowering bug shows up as a wrong C file, not as
+- **Stage 0 has to run the lowering** *(historical: stage 0 is deleted, and the self-hosted compiler runs its own
+  lowering)*. It has no type checker, so a lowering bug shows up as a wrong C file, not as
   an error. Mitigation: the IR text snapshots, an IR **verifier** (every slot defined before use, every block
   terminated, every managed slot released on every path) that runs in the debug profile of `torb build` and in the
   tests, and the live-block counter.

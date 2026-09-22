@@ -1,5 +1,8 @@
 # Concurrency and Parallelism
 
+**Status: partly implemented** — the checker rules of section 13 (gaps 1, 2, 3 and 17) are in; tasks, workers,
+`parallel()`, borrowing and cancellation with its back-edge checks are designed and not built (section 14).
+
 Many things waiting is one problem; one thing going faster is another. This is the specification of both: what a task
 is and what runs it, how many cores a program uses and who decides, how a pipeline is spread over them without copying
 its data, and where the world's input meets the run queue. `Task<Value>` is not a function colour — it is a return
@@ -269,27 +272,30 @@ reads two inputs and a stage has one.
 ## 5. `Merge`
 
 A chunked reduction needs a way to put two partial results together. The trait is named after its method and it is a
-requirement *on the collector*:
+requirement *on the accumulator*:
 
 ```trb fragment
 /**
- * Two partial results of one collector, joined. A `Collector` that carries it can be used by `parallel()`, by a
- * divide-and-conquer fold, and by anything else that runs a collector over pieces of its input.
+ * Two partial results of one accumulator, joined. An `Accumulator` that carries it can be used by `parallel()`, by a
+ * divide-and-conquer fold, and by anything else that runs an accumulator over pieces of its input.
  */
-public trait Merge<Item, Output> with Collector<Item, Output> {
+public trait Merge<Item, Output> with Accumulator<Item, Output> {
   /** Associative: `merge(merge(a, b), c)` is `merge(a, merge(b, c))`. Never called with an empty chunk's output. */
   fn merge(first: Output, second: Output): Output
 }
 ```
 
-**type checks today**, including a concrete implementation that delegates to `counting()` for `start()`.
+**Type checked** when it was written, as `Merge<Item, Output> with Collector<Item, Output>` with a concrete
+implementation that delegated to `counting()` for `start()`. `Collector` has since been merged into `Accumulator`
+(`docs/COLLECTIONS.md` 3.8a): an accumulator is a value, so each chunk runs on a copy of the one it was handed, and
+`start()` is gone. The declaration above is the same trait restated over the merged vocabulary.
 
 **The contract is three lines.**
 
 1. **`merge` is associative.** It does not have to be commutative, because
 2. **it is called in chunk order, left to right** — a fold over the chunk results, not a tree of arbitrary pairings.
 3. **It is never called with the output of an empty chunk.** A chunk of zero items is never made, and an empty input
-   produces zero chunks and takes the collector's own `start().finish()`. This is what makes `joining(separator:)`
+   produces zero chunks and takes the accumulator's own `finish()` on a fresh copy. This is what makes `joining(separator:)`
    implementable at all: without it every merge would have to decide whether a separator belongs between two pieces
    one of which is not there.
 
@@ -310,8 +316,7 @@ error: `combine` cannot be called on a `Combine<Int64, Int64>` value
    = It takes a second `Self`, and two values of a trait type need not have the same type
 ```
 
-A `Collector.start()` answers a trait-typed `Accumulator`, two of them need not have the same type, and there is no
-downcast to find out. Merging outputs has no such problem, and it has a second argument in its favour: the output is
+Two trait-typed `Accumulator`s need not have the same type, and there is no downcast to find out. Merging outputs has no such problem, and it has a second argument in its favour: the output is
 the thing that crosses a heap boundary anyway, so the merge runs exactly where the value arrives.
 
 **`merge` is a member of the collector**, so it has the collector's own configuration in hand. That is what lets
@@ -547,30 +552,43 @@ binding, where a reader sees it, and it is the same rule that makes `source.next
 
 ### Where the flag is read
 
-**The suspension points are the cancellation points**, and the state machine already has every one of them:
+**The suspension points and the loop back-edges are the cancellation points.** The state machine already has every
+suspension point, and the compiler adds one check per back-edge:
 
 | Point | What it is |
 |---|---|
 | `await()` | on any task, which is also every `Source` and `Sink` verb |
-| `pause()` | section 9 — the cooperative point a long loop puts in itself |
+| `pause()` | section 9 — the cooperative point a long loop puts in itself for fairness |
 | a channel `add` or `next` | where an item crosses a heap boundary |
 | an IO wait | the poller and the blocking pool, section 7 |
+| a loop back-edge | in every function whose result is a `Task` and every closure passed to `spawn`: the compiler inserts a check of the flag where a `for`, `while` or `loop` turns around |
 
-Before the worker resumes a task it reads the flag. If it is set, the state machine **stops**: the frame is released
-exactly as a finished task's frame is released, every live value in it goes with it, and the handle answers
-`Fail Cancelled` to whoever waits.
+Before the worker resumes a task it reads the flag, and at a back-edge the running task reads it itself. If it is set,
+the state machine **stops**: the frame is released exactly as a finished task's frame is released, every live value in
+it goes with it, and the handle answers `Fail Cancelled` to whoever waits.
+
+**This is what "cancellation is drop" means** (`docs/DESTRUCTORS.md` section 7): cancelling a task releases its
+*frame*, at its next suspension point or cancellation check, through the ordinary release. It does not mean that
+dropping the `Task` *handle* cancels anything — it does not, and the subsection below says why.
 
 **That is the whole implementation, and the reason it is that small is section 1.** A stackless task keeps every live
-value *in its frame*, so there is no stack to unwind, no destructor to run — the language has none, and CONCEPT's
-"a release never runs user code" is what makes this free — and nothing to leak, because releasing the frame is the
-ordinary release. A green-threaded design would need an unwind here, which is the machinery this language spent
-section 2 avoiding.
+value *in its frame*, so there is no stack to unwind and nothing to leak, because releasing the frame is the ordinary
+release. That release is also what runs the destructors: every value in the frame whose type has a `close()` is closed
+by it, synchronously, slots in reverse declaration order as at the end of a scope (`docs/DESTRUCTORS.md` sections 2
+and 7). A cancelled task's `end()` is never awaited, because there is no task left to resume once it would answer. A
+green-threaded design would need an unwind here, which is the machinery this language spent section 2 avoiding.
 
-**A computation that never suspends runs to its end.** `grind(1_000_000)` with no `pause()` ignores `cancel()` the way
-it ignores everything else, and that is the same trade section 9 makes about preemption rather than a second one:
-interrupting a task that does not suspend needs a stack to unwind, and a task has none. **`pause()` in the loop is what
-makes a computation cancellable**, and it is one line — which is a second reason for it to exist and the reason
-question 4 of section 15 was worth answering.
+**Every loop in a task is cancellable, with or without `pause()`.** The check at a back-edge is one load of the flag
+and one branch, and the branch leads to the same stop a suspension point leads to — the state that the loop is in is
+already a state of the machine, because a `Task` function is compiled to one. So `grind(1_000_000)` stops at its next
+turn once somebody asked, and "every task is cancellable" holds for a loop that never awaits.
+
+**A synchronous callee runs to its end.** A plain `fn` called from a task is not part of the state machine: it has no
+state to stop in, and stopping it in the middle would need a stack to unwind, which a task does not have. A long
+computation inside a synchronous function is therefore cancelled when it returns — at the caller's next back-edge or
+suspension point — and a loop that has to be stoppable in the middle is written in a function that answers a `Task`.
+That is the same trade section 9 makes about preemption rather than a second one. `pause()` is no longer what makes a
+loop cancellable; it stays what makes it *fair*, because a check reads a flag and does not give the worker away.
 
 ### Cancellation is structured
 
@@ -758,16 +776,18 @@ follows a `?` that the lexer can mistake for something else.
 ### Dropping a `Task` still does not cancel it
 
 A `spawn` starts the work immediately, so a `Task` is a handle to something already running; dropping the handle means
-nobody will read the result. Anything else would make the moment a reference count reaches zero observable, and CONCEPT
-says it is not.
+nobody will read the result. **The handle is not the frame**: the frame belongs to the scheduler until the task
+finishes or is cancelled, so releasing the last handle releases nothing the task holds and runs no `close()` of
+anything inside it. "Cancellation is drop" is about the frame (above), never about the handle.
 
 **The argument is stronger with `cancel()` than without it.** The one thing that made drop-cancels tempting is that
 there was no other way to stop work; there is one now, it is a method with a name, and it is written where the decision
 is made rather than falling out of a scope's end. And the case drop-cancel is actually reached for — a child that
 should die with the work that started it — is the parent link above, which stops the child whether or not anybody still
-holds its handle. tokio's "drop the future and it is gone" is the mirror image of this and it is rejected for CONCEPT's
-reason, not for a preference: a language whose releases run no user code cannot make one release run the most important
-piece of user code there is.
+holds its handle. tokio's "drop the future and it is gone" is the mirror image of this and it is rejected for a reason,
+not for a preference: a release here runs exactly one piece of user code, the `close()` of the value being released
+(`docs/DESTRUCTORS.md`), and making the release of a *handle* stop a whole other computation would turn the lifetime of
+every handle into a control-flow decision nobody wrote down.
 
 ### Panics are unchanged
 
@@ -784,7 +804,7 @@ sandbox, where the VM is interpreting and the script has a heap of its own (BACK
 | **C#** (`CancellationToken`, `CancellationTokenSource`) | The split between *asking* and *observing* | Two types and a parameter for what is one bit on a handle; `ThrowIfCancellationRequested()` in a body that already has suspension points |
 | **Kotlin** (`Job`, `CancellationException`) | Structured: a child of a cancelled job is cancelled | An exception that propagates invisibly and that a `catch (e: Exception)` swallows by accident. Here it is a `Result` the compiler makes the waiter handle |
 | **Swift** (structured cancellation, `Task.detached`) | Cancellation as a request the task notices at `await`; parent cancels children; a region cancelled as a whole | `Task.detached`, because the borrow of section 6 needs "no child outlives its region" to be true without exception |
-| **Rust / tokio** (drop the future) | Nothing | Cancellation at an unobservable moment. A drop that stops work makes a reference count reaching zero the most important event in the program, which CONCEPT says it is not |
+| **Rust / tokio** (drop the future) | Nothing | Cancellation at a moment nobody wrote down: the work stops wherever the last handle happens to go. Here releasing a handle stops nothing, and a cancelled frame is released at a suspension point or a back-edge check |
 | **Erlang** (`exit/2`, kill) | Nothing | A kill that a process cannot decline needs somebody to clean up after it. Per-process heaps make that affordable there and a per-*worker* heap does not: a task killed mid-frame would leave its allocations in a heap somebody else is still using |
 
 **Backpressure is the `Channel`, unchanged** (STREAMS section 3): `add` finishes when the reader has taken the item,
@@ -847,10 +867,11 @@ it costs one state split and no runtime machinery. **It is called `pause` and no
 `yield` open as a *keyword* for generators, and spending the word on a function would close a question that has nothing
 to do with this one.
 
-**`pause()` is also the cancellation point of a computation that has no other one** (section 8): the worker reads the
-flag before it resumes, so the `?` on `pause().await()` is where a loop that does nothing but arithmetic learns that
-somebody asked it to stop. The line costs a state split and buys both fairness and cancellability, which is why it is
-the answer to "how do I make this loop stoppable" and not a second mechanism.
+**`pause()` is not what makes a loop stoppable any more** (section 8): every loop back-edge of a function that answers
+a `Task` is a cancellation check the compiler inserts, so a loop that does nothing but arithmetic learns that somebody
+asked it to stop at its next turn, with or without a `pause()`. The `?` on `pause().await()` still answers `Cancelled`
+when the flag is set, and `pause()` stays the answer to "how do I let the other tasks of this worker run", which a check
+does not do.
 
 **There is no preemption.** A worker cannot interrupt a task that does not suspend, because interrupting one needs a
 stack to unwind and a task has none. This is the same trade Rust and JavaScript make and the opposite of Go's and
@@ -1124,11 +1145,13 @@ point 6). It is not a cost of this design and it blocks `Parallel` from compilin
 observable in the language. It has to be observable *somewhere*, or nobody can find the pipeline that copies. One
 counter per run, printed by the profile that BACKEND 6.3's timing work introduces.
 
-**13. The cancellation flag and the check at every suspension point.** One bit in the task structure, set by
-`Task.cancel` and read by the worker before it resumes a task. Where it is set, the state machine does not resume: the
-frame is released and the handle is completed with `Fail Cancelled`. *Smallest fix:* one field, one branch in the
-resume path of `runtime/task.c` and of `vm/task.trb`, and the same branch reached from the four points of section 8 —
-which are the only places a task is ever resumed, so it is one branch and not four.
+**13. The cancellation flag, the check at every suspension point, and the check at every back-edge.** One bit in the
+task structure, set by `Task.cancel` and read by the worker before it resumes a task. Where it is set, the state
+machine does not resume: the frame is released and the handle is completed with `Fail Cancelled`. *Smallest fix:* one
+field, one branch in the resume path of `runtime/task.c` and of `vm/task.trb`, and the same branch reached from the four
+suspension points of section 8 — which are the only places a task is ever resumed, so it is one branch and not four.
+Beside it, the lowering of a function whose result is a `Task` (and of a `spawn` closure) inserts a flag check at every
+loop back-edge that branches to the same stop; a synchronous function gets none.
 
 **14. The parent link.** `spawn` records the spawning task's identity in the inbox message beside the captures (gap 9),
 and the target worker links the child when it copies them in. A cancelled parent cancels its children; a child whose
@@ -1161,13 +1184,14 @@ only verifiable once `?` asks the bound.
 7.3's own scope. Added here:
 
 - **Slice A — `pause()`.** One state split in the lowering, one enqueue in the runtime and the VM. Gate: a script whose
-  two tasks interleave in a fixed order, identical on stage 0, in C and in the VM.
+  two tasks interleave in a fixed order, identical in C and in the VM.
 - **Slice A2 — cancellation** (gaps 13, 14 and 16), and it comes before `parallel()` rather than after it. With one
   worker the flag, the check at each suspension point, the parent link and the whole `std/task` surface are all
   testable, and they pin the type of `await()` before anything else is written against it — the same de-risking
   argument slice C makes for the pipeline. Gate: a task cancelled at each of the four suspension points stops there
-  and its waiter reads `Fail Cancelled`; a cancelled parent's child never runs a line; a loop with a `pause()` stops
-  and a loop without one does not; `check .` and `docs check docs` are green after the 80-place migration; and the
+  and its waiter reads `Fail Cancelled`; a cancelled parent's child never runs a line; a loop in a `Task` function
+  stops at its next back-edge with and without a `pause()`, and a loop inside a synchronous callee finishes before the
+  task stops; `check .` and `docs check docs` are green after the 80-place migration; and the
   live-block counter is zero after every one of them. **The order matters:** every `await()` written before this slice
   has to be rewritten after it.
 - **Slice B — `Merge` and the collectors.** Pure `std/iteration`, no runtime and no back end. Gate: a test per
@@ -1221,6 +1245,8 @@ document above carries it.
    **Decided:** `Plain`.
 4. **`pause()` against `yield`.** The word is spent on a generator keyword the moment a function takes it, and CONCEPT
    keeps that question open. If generators are never going to use the word, `yield()` is the name everybody else uses.
+   *(Note, 2026-09-22: the back-edge check of section 8 took the second job over - every loop of a `Task` function is
+   cancellable without `pause()`, which is now for fairness only.)*
    **Decided:** `pause()`. Section 9 gives it a second job under question 8: it is the cancellation point of a
    computation that has no other one.
 5. **64 as the default chunk count.** It has to be a fixed number for the determinism of section 4; whether it is 64,

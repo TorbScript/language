@@ -1,5 +1,8 @@
 # Entities, Components and Scenes
 
+**Status: proposed** — there is no `std/ecs` or `std/scene` yet; `examples/ecs-probe` and `examples/ecs-probe-2` are
+the probes, and the slices of section 13 wait on the language gaps of section 12.
+
 An open set of component types that **packages bring with them**, dense typed storage, queries that are ordinary
 pipelines, a behaviour tree of trait values above the data, and scenes that are TorbScript. This is the specification
 of `std/ecs` and `std/scene`, of what they expect from the value packages under them, and of the one thing

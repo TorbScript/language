@@ -1,5 +1,8 @@
 # The Type Checker (Milestone 4)
 
+**Status: implemented** — milestone 4 is done and this is its plan and log; the decided gaps of section 7 are still the
+rules the checker follows, except where a later note marks one superseded.
+
 One pass over the syntax trees of a workspace that decides everything the back ends must not decide: the type of
 every expression, the target of every call, and every rule of the language that is not syntax. It is written in
 TorbScript, in `compiler/src/semantics/checker/`.
@@ -2135,7 +2138,11 @@ reference counted, and it is the only sharing of a variable. The checker then tr
 closure as an access to the binding (exclusivity) and exempts the binding from the dead-change rule. _Reason:_ the
 implementation already has to do this; only the sentence about second-class references needs the exception.
 
-_Decision:_ accepted.
+_Decision:_ accepted. **Superseded on 2026-09-22:** a closure that captures a `var` binding may not escape its scope,
+the rule a `var` parameter already has. The escaping box let copies of a value share state, let a `spawn` race through
+it, bypassed exclusivity (`const clear = { list = [] }` passed beside `list`) and formed cycles no collector will ever
+reclaim; state that has to escape is a `shared type`. Decided, not yet enforced by the checker (CONCEPT, "`var` Paths
+and `var` Parameters").
 
 **20. Is a `var` binding to a `shared` object allowed to come from a `const` path?**
 "Identity": "A `const` binding to a shared object is a read-only view". Nothing forbids

@@ -1,5 +1,8 @@
 # Streams
 
+**Status: partly implemented** — `std/stream` declares the whole vocabulary and it type checks; nothing asynchronous
+runs before tasks arrive in milestone 7.3, and `Stage` does not compile natively yet (section 14, point 6).
+
 One flow, in one direction, with two ends. This is the specification of `std/stream` and of the `Stage` that
 `std/iteration` carries, of the contracts both ends promise, and of what HTTP, the file system, the standard streams, a
 child process and the formats look like once they all speak it. Nothing here decides a question of the language: the
@@ -40,12 +43,14 @@ public shared trait Source<Item, Failure> with Close {
 
 public shared trait Sink<Item, Failure> with Close {
   var fn add(item: Item): Task<Result<Void, Failure>>
-  var fn finish(): Task<Result<Void, Failure>>
+  var fn end(): Task<Result<Void, Failure>>
 }
 ```
 
-These are the asynchronous siblings of `Iterator` (`next`) and `Accumulator` (`add`, `finish`) — **the same verbs**, so
-nothing new has to be learned and the two worlds read alike:
+These are the asynchronous siblings of `Iterator` (`next`) and `Accumulator` (`add`) — **the same verbs**, so nothing
+new has to be learned and the two worlds read alike. The one word that differs is the ending: an accumulator's
+`finish()` answers the result of a run, a sink's `end()` answers only whether the end went through, because the end
+of a flow is not a result (section 3, and `docs/COLLECTIONS.md` 6a for why it is not `close()`).
 
 | Synchronous              | Asynchronous                      | Verb        |
 |--------------------------|-----------------------------------|-------------|
@@ -80,7 +85,7 @@ somebody asks. At the writing end it is the `await` on `add`: the task finishes 
 There is no `poll_ready`/`start_send`/`poll_flush` (Rust), no `desiredSize`/`highWaterMark` (Web Streams), no
 `request(n)` (Reactive Streams). A writer that is faster than its target waits by itself.
 
-**Buffering is always a wrapper.** `sink.buffered(capacity:)` answers a `Buffered`, which has `flush()`; `finish()`
+**Buffering is always a wrapper.** `sink.buffered(capacity:)` answers a `Buffered`, which has `flush()`; `end()`
 flushes, `close()` does not. "When was it actually written" is the one question a writer must be able to answer, so it
 is never a hidden property of a sink.
 
@@ -151,7 +156,7 @@ they happen, which is the same reason there is no `async` keyword in the languag
 
 ```trb
 var fn add(item: Item): Task<Result<Void, Failure>>
-var fn finish(): Task<Result<Void, Failure>>
+var fn end(): Task<Result<Void, Failure>>
 ```
 
 **The contract.**
@@ -159,19 +164,21 @@ var fn finish(): Task<Result<Void, Failure>>
 1. **`add` finishes when the target has taken the item.** That is the whole of backpressure.
 2. **`add` must not be called again before the task it answered has finished,** and items arrive in the order of the
    calls.
-3. **`finish()` is the graceful end.** Everything buffered is written, the target learns that no more is coming, and
-   whatever a buffered write could only report now is reported here. After `finish()`, `add` fails.
-4. **After a failure, neither `add` nor `finish` will succeed again.**
+3. **`end()` is the graceful end.** Everything buffered is written, the target learns that no more is coming, and
+   whatever a buffered write could only report now is reported here. After `end()`, `add` fails.
+4. **After a failure, neither `add` nor `end` will succeed again.**
 5. **`close()` is the abrupt end.** It releases the target, cannot fail, and does **not** flush. A sink that is closed
-   without being finished may have written less than it was given — that is exactly the difference between abandoning a
-   sink and finishing one, and it is why both exist.
-6. `finish()` may be called once. Calling it twice is a bug in the caller, like calling `add` after it.
+   without being ended may have written less than it was given — that is exactly the difference between abandoning a
+   sink and ending one, and it is why both exist. `close()` is the destructor (`docs/DESTRUCTORS.md`): it runs by
+   itself when the last holder releases the sink, and user code never calls it.
+6. `end()` may be called once. Calling it twice is a bug in the caller, like calling `add` after it.
 
 **Why two endings.** `Close` is what the language uses for a resource (`using`, CONCEPT), it is synchronous and it
-cannot fail — so it can run on a path that is already unwinding a failure. Finishing a stream can do neither: writing
+cannot fail — so it can run on a path that is already unwinding a failure. Ending a stream can do neither: writing
 out a buffer takes time and can fail, and that failure is the most important one a writer gets. Collapsing them would
-mean either a `close()` that can fail (and then `using` cannot use it) or a `finish()` that cannot (and then a failed
-flush is lost).
+mean either a `close()` that can fail (and then the runtime cannot run it on a release) or an `end()` that cannot (and
+then a failed flush is lost). Neither ending is implicit in a task: `using` never awaits `end()` (DESTRUCTORS section
+7), so a writer that wants the graceful end writes `sink.end().await()?` where it wants it.
 
 ## 4. `Stage`
 
@@ -289,11 +296,12 @@ fn through<Output>(stage: Stage<Item, Output>): Source<Output, Failure>       //
 
 Each answer has two halves:
 
-**`collect` is fused.** The stage wraps the collector's accumulator and every value goes straight through — one push per
-value, no queue, no intermediate collection:
+**`collect` is fused.** The stage wraps the accumulator it was handed and every value goes straight through — one push
+per value, no queue, no intermediate collection. An accumulator is a value, so `onto` wraps a copy and every run starts
+fresh (`docs/COLLECTIONS.md` 3.8a, where `Collector` and its `start()` were merged into `Accumulator`):
 
 ```trb
-var accumulator = stage.onto(collector.start())
+var accumulator = stage.onto(target)
 if accumulator.isDone() { return accumulator.finish() }
 for value in source {                    // ... or: while const Some(value) = upstream.next().await()?
   accumulator.add value
@@ -325,15 +333,19 @@ A reader that stops early — `take(5)`, a `find` that found it, a loop that bro
 what is above it, or a file handle or a socket stays open until the program ends. The language already has the
 mechanism, so streams use it and add nothing:
 
-- **`Source` and `Sink` both carry `Close`**, whose `var fn close()` is synchronous and cannot fail.
+- **`Source` and `Sink` both carry `Close`**, whose `var fn close()` is synchronous and cannot fail. It is the
+  destructor (`docs/DESTRUCTORS.md`): the runtime runs it when the last holder releases the end, and user code never
+  calls it.
 - **Every derived end closes the one it came from.** Each wrapper holds its upstream in a `var` field and closes it:
   `Staged`, `Stepping` (`then`), `Remapped` (`mapFailure`), `Checked`, `Buffered`. `Pulling` and `Pushing`, the two
   closure-shaped escape hatches, hold whatever is above or below them as a `Close?`.
-- **`using` is the form that does not forget it**, and it wants a `var` path:
+- **`using` is the form that pins the moment**: the name it binds cannot escape its block, so the release — and the
+  `close()` inside it — happens at the end of that block (DESTRUCTORS section 4). It never awaits `end()`; a writer
+  that wants the graceful end writes `sink.end().await()?` itself:
 
   ```trb
-  var file = File.open(path)?
-  using file { open => open.lines().take(5).toList().await() }
+  using file = File.open(path)?
+  const firstLines = file.lines().take(5).toList().await()?
   ```
 
 - **Closing a produced source ends its producer.** `Produced.close()` closes the relay channel, so the producer's next
@@ -344,9 +356,10 @@ mechanism, so streams use it and add nothing:
 - **A panic closes nothing** — the language runs no cleanup while a program falls over (CONCEPT, "Error Handling"), and
   a stream is no exception.
 
-What the language does *not* have is a way to interrupt an `await` that is already waiting. A `next()` that is in flight
-runs to its end; `close()` takes effect for everything after it. Interrupting a task is milestone 7's question and is
-listed in section 13.
+What the language does *not* have is a way to interrupt an `await` that is already waiting from inside the reader. A
+`next()` that is in flight runs to its end; the release of the source takes effect for everything after it. Cancelling
+the whole task is `docs/CONCURRENCY.md` section 8: the task's frame is released at its next suspension point or
+cancellation check, and every end it held is closed by that release.
 
 ## 8. Producing without generators
 
@@ -487,7 +500,7 @@ the same sources and sinks, so a pipeline between two programs is `first.output(
 
 **`std/encoding`, `std/json`.** Section 10.
 
-**Natives.** Only the real sources and sinks: `File.create`/`chunks`/`add`/`finish`, the three standard streams,
+**Natives.** Only the real sources and sinks: `File.create`/`chunks`/`add`/`end`, the three standard streams,
 `Process.start` and the `Child` pipes, `Channel.source`/`sink`, and later the socket. Everything else — the traits, the
 stages, the drivers, the framers, UTF-8, `Buffered`, `Body`'s conveniences — is TorbScript. Manifest entries for all of
 them are in `compiler/src/backend/c/natives.trb`, planned for 7.3.
@@ -562,10 +575,11 @@ and rename the ten factories afterwards.
 _Decision:_ no `for` in v1; `while const Some(item) = source.next().await()? { … }`. **The owner's call** if a spelling
 turns up that keeps the `?` visible.
 
-**4. Interrupting an `await` that is already waiting.** `close()` takes effect for everything after it, but a `next()`
-in flight runs to its end. Whether a task can be cancelled at all is milestone 7's question.
-_Decision:_ out of scope here; `close()` plus `ChannelClosed` covers the cases that matter (stop reading, stop
-producing).
+**4. Interrupting an `await` that is already waiting.** Releasing an end takes effect for everything after it, but a
+`next()` in flight runs to its end. Cancelling a task is decided in `docs/CONCURRENCY.md` section 8: its frame is
+released at the next suspension point or cancellation check.
+_Decision:_ out of scope here; the release of an end (its `close()`) plus `ChannelClosed` covers the cases that matter
+(stop reading, stop producing).
 
 **5. `?` on a `Result<Value, Never>`.** `Channel`'s reading end cannot fail, so `channel.source().next().await()`
 answers a `Result<Item?, Never>`, and `?` on it would need `Failure: From<Never>`.
@@ -595,7 +609,7 @@ _Decision:_ no read-ahead in v1. Milestone 7 may add it natively where the platf
 1. `Task`, `spawn`, `await()`, the state-machine transformation — as planned in BACKEND 7.3. Everything here rides on it.
 2. `Channel.source()` and `Channel.sink()` as native shared objects over the existing ring buffer plus waiter queues,
    including `ChannelClosed` when the reading end is closed, and capacity `0` as a real rendezvous.
-3. The `File` natives of the stream side: `create`, `chunks`, `add`, `finish`.
+3. The `File` natives of the stream side: `create`, `chunks`, `add`, `end`.
 4. `standardInput`, `standardOutput`, `standardError`.
 5. `Process.start` and the four `Child` members.
 6. **The back-end item of section 4:** a generic member reached through a trait-typed value (`Stage.onto<Final>`) needs a

@@ -896,11 +896,23 @@ unless user.isAdmin {
 }
 ```
 
-`using` is one of those functions, and its closure is a **receiver closure over the resource**:
-`fn using<Resource: Close, Value>(var resource: Resource, body: (var Resource) => Value): Value`. So the body reaches
-the members of the resource without naming it (`using File.open(path)? { writeLine "done" }`), and it may change it -
-which is what a resource is for. Passing a temporary to that `var` parameter is allowed: the callee is its only owner
-(see [`var` Paths](#var-paths-and-var-parameters)).
+**`using` is not one of those functions for long: it binds a name, so it becomes a declaration** (decided, not yet
+implemented - [docs/DESTRUCTORS.md](docs/DESTRUCTORS.md) section 4). `using file = File.open(path)?` binds `file` to
+an object whose release - and the `close()` that release runs - happens at the end of the block, and the checker
+refuses to let the name escape it (no field, no `return`, no escaping closure). `using` never awaits: a graceful end
+such as `sink.end().await()?` is a line of its own.
+
+```trb
+fn readConfig(path: String): Result<String, IoError> {
+  using file = File.open(path)?
+  file.readAll()
+}
+```
+
+Today `using` is still the function `fn using<Resource: Close, Value>(var resource: Resource, body: (var Resource) =>
+Value): Value` in `std/core`, whose closure takes the resource as an ordinary parameter
+(`using File.open(path)? { file => file.readAll() }`). It is deleted when the binding form lands; there is one
+`using`, not two.
 
 ## Types
 
@@ -1057,14 +1069,14 @@ samples[1..4].sort { _ }             // A range is a path, too: sorts this part 
   back - without a copy. This is what other languages need mutable slices and spans for.
 - **References are second-class.** They only exist as a `var` parameter or a `var fn` receiver, for the duration of a call.
   They cannot be stored in a field, returned, or captured by a closure that is stored. So there are no lifetimes, no
-  borrow checker, and nothing can dangle. (A captured `var` binding is the one thing that outlives a call, and it is
-  not a reference - see below.)
+  borrow checker, and nothing can dangle. (A captured `var` binding is not a reference either, and it does not outlive
+  its scope - see below.)
 - **A closure that captures a reference may not escape, and the compiler decides that per closure.** A closure may
   capture a `var` parameter or a `var fn` receiver only when it cannot outlive the call; conservatively that is a closure
   written directly as the argument of a call that does not store it, which is exactly what the receiver closures, the
-  DSLs and the pipeline stages are. Everything else captures copies, or the shared box of a captured `var` binding
-  (see below). The decision is recorded, because it is also what lets an implementation put the closure's environment
-  on the stack.
+  DSLs and the pipeline stages are. Everything else captures copies; a captured `var` binding is shared with its
+  scope and never leaves it (see below). The decision is recorded, because it is also what lets an implementation put
+  the closure's environment on the stack.
 - **Exclusivity:** while a `var` access to a path is running, the same path (or a path above or below it) cannot be
   accessed in any other way. **The access of a call begins once all of its arguments have been evaluated**, so
   everything the arguments *read* has already finished and `items.removeAt(items.length() - 1)` is ordinary code. What
@@ -1079,13 +1091,40 @@ samples[1..4].sort { _ }             // A range is a path, too: sorts this part 
   is fine - the callee is its only owner, so "copy in, copy out" is exact and nothing is written back anywhere:
   `using File.open(path)? { ... }`. The rule is about the base of a path (`f().x = 1`), not about ownership.
 - The variable of a `for` loop is a `const`. To change elements, use the path (`items[index].x = 1`,
-  `items.update(index) { ... }`) or build a new collection with `map`.
+  `items.update(index) { ... }`) or build a new collection with `map`. **`for var element in items`** (decided, not
+  yet implemented - [docs/COLLECTIONS.md](docs/COLLECTIONS.md) section 3.11) binds a `var` reference to each slot
+  instead, for one turn of the body; see [Collections and Iteration](#collections-and-iteration).
 - Closures capture `const` bindings as copies. A captured `var` binding is shared between the closure and its scope -
   the one place where a variable is shared. Closures passed to `spawn` cannot capture `var` bindings.
-- **A captured `var` binding is a shared box, not a reference.** It may escape (a closure that captures it can be
-  returned or stored), it is reference counted like a `shared type` object, and it is the only sharing of a
-  variable there is. Every call that may run such a closure counts as an access to the binding, and the binding is
-  exempt from the dead-change rule: the read can be anywhere.
+- **A closure that captures a `var` binding may not escape its scope** - the rule a `var` parameter already has, with
+  the same conservative check (decided 2026-09-22, not yet enforced by the checker): the closure has to be written
+  directly as the argument of a call that does not store it - a receiver closure, a DSL block, a pipeline stage,
+  `update`'s change. Bound to a name, returned, stored in a field or a collection, or handed to `spawn`, it is
+  rejected. The call it is passed to counts as an access to the binding, so exclusivity sees it, and the binding is
+  exempt from the dead-change rule: the read can be anywhere. The escaping box this replaces let two copies of a value
+  share state, let a `spawn` race through it, bypassed exclusivity (`const clear = { list = [] }` passed beside
+  `list`), and let a recursive closure bound to its own `var` keep itself alive with no collector to reclaim it.
+  Recursion is a local `fn`, which captures nothing. **State that has to outlive its scope is a `shared type`**, which
+  says that it has an identity:
+
+  ```trb
+  fn makeCounter(): () => Int {
+    var count = 0
+    {
+      count = count + 1
+      count
+    }                                // Compile error: the closure captures `count` and escapes
+  }
+
+  shared type Counter {
+    private(var) count: Int = 0
+
+    var fn bump(): Int {
+      count = count + 1
+      count
+    }
+  }
+  ```
 - **The copy trap** is the price of values, for everybody who comes from a language with references:
 
   ```trb
@@ -1698,8 +1737,9 @@ panic "unreachable"                                      // Bugs. Not catchable,
 - **A panic is output, so its format is part of the language:** to standard error, `panic: <message>`, then
   `  at src/file.trb:12:5` for the panic site and, in the debug profile, the frames of the task. The exit code is
   **101**, and both back ends agree on the text to the character because the conformance suite compares it.
-- **Nothing runs while a program falls over.** No destructor, no `Close`, no `using` cleanup - a panic is a bug, and
-  running more code in a broken program is how bugs get worse.
+- **Nothing runs while a program falls over.** No `close()`, no `using` cleanup - a panic is a bug, and running more
+  code in a broken program is how bugs get worse. The destructor ([docs/DESTRUCTORS.md](docs/DESTRUCTORS.md)) runs on
+  releases, and a panic releases nothing: the process ends.
 - **A panic aborts the process,** because the language has no supervision. The one exception is a sandboxed script: the
   VM is interpreting it and the script has a heap of its own, so the VM stops it and reports a `SandboxError`
   (see [Receiver Scripts and the Sandbox](#receiver-scripts-and-the-sandbox)).
@@ -1730,6 +1770,12 @@ panic "unreachable"                                      // Bugs. Not catchable,
 The collection types are **traits**, one per kind. Signatures, fields and bindings talk about traits, an
 implementation is only named where something is constructed. Collections are values like everything else: the binding
 decides whether they can be changed.
+
+**The words are decided and not yet swept** (owner, 2026-09-22 - [docs/COLLECTIONS.md](docs/COLLECTIONS.md) section
+6b): `Iterable` becomes `Iterate` with `iterate()`, the `Collection` trait is deleted, and every kind keeps its own
+words - `List` `append`, `Set` `insert`/`remove`, `Map` `set`/`remove`, `Stack` `push`/`pop`/`peek`, `Queue`
+`enqueue`/`dequeue`/`peek`. `Add` stays. The tree, the table and the examples below still show today's names until the
+rename round has swept them.
 
 ```text
 Iterable<Item>   Length
@@ -1811,6 +1857,13 @@ var index: Map<String, Int> = HashMap()                 // Trait as the type, im
 - `for x in xs` works with everything that is `Iterable<Item>`. **The subject is evaluated once, into a temporary,**
   so it is not an open `var` access: changing `xs` inside of the loop is safe and does not affect the loop, and the
   loop variable is a `const` copy of each item.
+- **`for var element in container` changes every element in place** (decided, not yet implemented -
+  [docs/COLLECTIONS.md](docs/COLLECTIONS.md) section 3.11). It binds a `var` reference to each slot for one turn of the
+  body - Rust's `iter_mut`, not Swift's `for var`, which binds a mutable copy. It is sugar over `MutableIndexed` plus
+  its `keys()`, so a `List`, an `Array`, a slice and the values of a `Map` (`for (key, var value) in map`) work, and a
+  user container joins by implementing that one trait; a `Set` and a plain `Iterable` are rejected with a message that
+  says why. The container has to be a `var` path, the body may not touch it any other way (exclusivity), and the loop
+  is lowered to an index loop over element paths - no iterator object, no copy per element.
 - Creation: literals, `List.of(1, 2, 3)`, `List.of(...iterable)`, `List.from(iterable)`, `iterable.toList()`,
   `HashMap()`, `Set.of(1, 2)`.
 - **A collection literal adapts to the type that is expected of it,** exactly as a number literal does, and the target
@@ -1935,7 +1988,7 @@ shared trait Source<Item, Failure> with Close {              // reading: `next`,
 
 shared trait Sink<Item, Failure> with Close {                // writing: `add`, like an Accumulator
   var fn add(item: Item): Task<Result<Void, Failure>>
-  var fn end(): Task<Result<Void, Failure>>                   // the graceful end; `finish` is the Accumulator's word
+  var fn end(): Task<Result<Void, Failure>>                   // the graceful end, answering no result
 }
 ```
 
@@ -1980,11 +2033,13 @@ while const Some(line) = lines.next().await()? {
   asks. At the writing end it is the `await` on `add`, which finishes when the target has taken the item. There is no
   credit protocol, no high-water mark, no `poll_ready`.
 - **Buffering is always a wrapper.** `sink.buffered(capacity:)` answers a `Buffered` with its own `flush()`;
-  `finish()` flushes and `close()` does not. "When was it actually written" has to be answerable.
-- **`close()` releases what is above or below,** synchronously and without failing, which is what `Close` and `using`
-  need. Every derived end closes the one it came from, so a reader that stops early (`take(5)`, a `find` that found it,
-  an abandoned loop) never leaves a file handle open. `finish()` is the graceful counterpart and can fail; `close()` is
-  the abrupt one and cannot. A sink that is closed without being finished may have written less than it was given.
+  `end()` flushes and `close()` does not. "When was it actually written" has to be answerable.
+- **`close()` releases what is above or below,** synchronously and without failing, which is what a destructor needs:
+  it is the one the last release runs ([docs/DESTRUCTORS.md](docs/DESTRUCTORS.md)). Every derived end closes the one
+  it came from, so a reader that stops early (`take(5)`, a `find` that found it, an abandoned loop) never leaves a file
+  handle open. `end()` is the graceful counterpart and can fail; `close()` is the abrupt one and cannot. A sink that
+  is closed without being ended may have written less than it was given, and nothing ends a sink implicitly - not
+  even `using`.
 
 ### The middle is written once: `Stage`
 
@@ -2240,7 +2295,8 @@ script.apply(config)?                                           // The body of t
 
 The language is extended by functions, not by macros or annotations:
 
-- Control structures are functions with closure or `lazy` parameters (`do`, `unless`, `retry`, `using`, `test`).
+- Control structures are functions with closure or `lazy` parameters (`do`, `unless`, `retry`, `test`, and `using`
+  until it becomes a binding - see [Blocks and Control Flow](#blocks-and-control-flow)).
 - DSLs are functions with receiver closures.
 - Operators are traits.
 - Code that needs to be _looked at_ instead of executed (query providers, `assert`, validation rules, change
@@ -2287,6 +2343,11 @@ const channel = Channel<Int>(capacity: 8)        // a stream in memory: `channel
 - **A `var fn` method may answer a `Task` when its type is shared, and only then** - see
   [Identity](#identity-shared-type). This is what lets a task change an object it holds; a value would have to write its
   change back when the call returns, which is before the task has run.
+- **Every task is cancellable** ([docs/CONCURRENCY.md](docs/CONCURRENCY.md) section 8). `task.cancel()` sets a flag,
+  and the task stops at its next suspension point or cancellation check: the compiler puts a check at every loop
+  back-edge of a function that answers a `Task`, so a loop that never awaits stops too, while a synchronous callee runs
+  to its end - there is no unwinding. Stopping releases the task's frame like a finished one's, which closes every
+  object it held ("cancellation is drop"). Dropping the `Task` *handle* cancels nothing: the handle is not the frame.
 
 ## Foreign Functions (Draft)
 
@@ -2388,13 +2449,19 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
   per-task frame limit (100 000 by default, `--stack-limit`) panics with "stack overflow" - a counter is the only way
   the VM, which has a frame list, and a native binary, which has a C stack, can agree on when that happens. An
   unspecified crash is not a semantics.
-- Memory: reference counting. Values cannot form cycles, so they need no cycle collection. Only `shared type`
-  objects (and `var` bindings captured by closures) are tracked by a cycle collector. Deterministic cleanup enables
-  `using file { ... }`.
-- **There are no destructors.** `Close` is an ordinary method, `using` an ordinary function, and the only observable
-  destruction order is the nesting of `using` blocks. When a reference count reaches zero is not observable, so a
-  release never runs user code - which is why there are no drop flags, no field order rule and no question what a
-  panic in a destructor would mean.
+- Memory: reference counting, and nothing else - no tracing collector and no cycle collector, now or later. Values
+  cannot form cycles, and a closure that captures a `var` binding may not escape its scope, so only `shared type`
+  objects can; [docs/DESTRUCTORS.md](docs/DESTRUCTORS.md) section 9 is how they are kept out: trees and graphs hold
+  handles instead of references, a stored callback takes its owner as a receiver, a leak is reported with the types
+  still alive, and `Weak<Target>` comes to `std` only if those reports show a need.
+- **`close()` is the one destructor** (decided, not yet implemented - [docs/DESTRUCTORS.md](docs/DESTRUCTORS.md)).
+  Only a `shared type` may implement `Close`; the last release runs `close()` exactly once; user code cannot call it,
+  and `self` cannot escape it. A slot whose type may contain a `Close` object is released at the end of its scope, in
+  reverse declaration order, and a temporary at the end of its statement - so the moment `close()` runs is a line in
+  the source and not a result of the liveness pass; every other slot is still released at its last use, which nothing
+  can observe. A released value closes itself first and then releases its fields in reverse declaration order.
+  `close()` never fails and never awaits: a graceful end is `end()`, called and awaited explicitly, and `using` never
+  awaits. Until slice R1 lands, `Close` is an ordinary method and `using` an ordinary function.
 - Value semantics say _what_ happens, not _how_. "A copy" is implemented depending on the shape of the type, and
   none of it is observable:
 
@@ -2413,6 +2480,33 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
 
 ## Decision Log
 
+- **`close()` is the destructor, and a release that runs one has a line** (2026-09-22; docs/DESTRUCTORS.md). Only a
+  `shared type` implements `Close`, the last release runs it once, user code cannot call it and `self` cannot escape
+  it. A slot whose type may contain a `Close` object is released at the end of its scope in reverse declaration order,
+  not at its last use, because otherwise where `close()` runs relative to the output would follow the liveness pass
+  and, through the Owned/Borrowed summary of a call, the bodies of callees; every other slot keeps last-use release.
+  Temporaries go at the end of their statement, fields in reverse declaration order, and a slice of storage that holds
+  `Close` objects copies instead of sharing. `using` is one binding form (the function goes) and never awaits; a
+  graceful end is an explicit `end().await()`. A back end with a garbage collector (JavaScript, PHP) still counts the
+  types that may contain `Close`.
+- **Cancellation is drop of the frame, not of the handle** (2026-09-22; docs/CONCURRENCY.md section 8). A cancelled
+  task's frame is released at its next suspension point or cancellation check; the compiler inserts a check at every
+  loop back-edge of a function that answers a `Task`, so every task is cancellable even when a loop never awaits, and a
+  synchronous callee runs to its end because there is nothing to unwind. Releasing a `Task` handle still cancels
+  nothing.
+- **A closure that captures a `var` binding may not escape its scope** (2026-09-22), the rule `var` parameters have.
+  The escaping box gave pure value code aliasing, races through `spawn`, an exclusivity bypass and cycles. State that
+  has to escape is a `shared type`. Decided, not yet enforced by the checker.
+- **`for var element in container`** (2026-09-22; docs/COLLECTIONS.md section 3.11) is a `var` reference to each slot,
+  sugar over `MutableIndexed` plus `keys()`, lowered to an index loop over element paths. Not Swift's mutable copy.
+  Decided, not yet implemented.
+- **Every collection kind keeps its own words, and `Iterable` is `Iterate`** (owner, 2026-09-22; docs/COLLECTIONS.md
+  section 6b). `iterate()`, `List.append`, `Set.insert`/`remove`, `Map.set`/`remove`, `Stack.push`/`pop`/`peek`,
+  `Queue.enqueue`/`dequeue`/`peek`; the `Collection` trait is deleted and `Add` stays (`Plus` is no longer planned).
+  "`add` for everything is a sledgehammer": on top, at the back and somewhere are different meanings. A single-method
+  trait is named like its method, and nothing ends in `-able`.
+- **A sink ends with `end()`** (was `finish()`): `finish` is the `Accumulator`'s word for the result of a run, and
+  `close()` is the destructor, so the graceful end of a flow needed a word of its own.
 - **An extension member is named where it is used.** Nothing a foreign package attaches is implicitly visible: a member
   belongs to the type everywhere when the package of the *type* attached it, and everywhere else the file writes
   `use String.shout from "acme/text"` or names the trait the member comes from. The earlier rule - "visible in every file
@@ -2466,9 +2560,10 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
 - Collectors are push-based (`Accumulator.add`), so they are not tied to `Iterable` and work for channels and streams.
 - **A stream is a word, not a type: what a signature names is one of its two ends,** `Source<Item, Failure>` or
   `Sink<Item, Failure>`. They are the asynchronous siblings of `Iterator` and `Accumulator` and carry the same verbs
-  (`next`, `add`, `finish`), and both are `shared trait`s with `Close`, because a stream has an identity and is consumed
-  once. `next` and `add` read their receiver and do not change it: an exclusive access cannot stay open across an
-  `await`.
+  (`next`, `add`), and both are `shared trait`s with `Close`, because a stream has an identity and is consumed once. A
+  sink ends with `end()` (was: `finish`, which is the `Accumulator`'s word for the result of a run - the end of a flow
+  is not a result). `next` and `add` are `var fn`s: for an object `var` is a permission and not an exclusive access, so
+  it may stay open across an `await` (the entry on `var fn` answering a `Task` below).
 - **A failure ends a stream and stands in the type, on both ends** (`Never` for an end that cannot fail), instead of in
   the item as in Rust. There, "what happens after an `Err`" has to be answered per implementation and every combinator
   exists twice.
@@ -2514,8 +2609,9 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
 - `.trb` instead of `.scr` (`.scr` is an executable screensaver on Windows and blocked by mail filters/AV)
 - `//`, `/* */`, `/** */` for docs. Block comments do not nest (they did at first: a `/*` inside of a doc comment, as
   in a glob pattern, then opens a comment nobody sees). Editors comment out code with `//`. `#` stays reserved.
-- One naming scheme for primitives (`Int`, `Float`, `Bool`, `String`), no lowercase aliases. Casing is a convention
-  (linter), not enforced by the compiler.
+- One naming scheme for primitives (`Int`, `Float`, `Bool`, `String`), no lowercase aliases. Casing is enforced by the
+  checker (was: a convention for a linter), because the first letter of a name in a pattern already decides whether it
+  binds or names a case - see [Lexical Structure](#lexical-structure).
 - Length numeric names (`Int32`) instead of C-style names (`Short`, `Long`, `Double`): the C# scheme pins `Int` to
   32 bit, but the default integer should be 64 bit in a scripting language.
 - The numeric types themselves always carry their width (`Int64`, never a special unsuffixed type). `Int`, `UInt`,
@@ -2648,7 +2744,10 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
 - `foreign` (C ABI, for everybody) next to `native` (implemented by the runtime, standard library only)
 - Dead changes are compile errors (changed but never read, discarded result of a `self` method)
 - `shared type`s only implement `shared trait`s, so a trait-typed value is a value
-- Cycle collector for `shared type` objects instead of `weak` references
+- No cycle collector and no `weak` keyword (was: a cycle collector for `shared type` objects instead of `weak`
+  references). A tracing pass would make the moment a destructor runs non-deterministic again; trees hold handles,
+  stored callbacks are receiver closures, leaks are reported by type, and `Weak<Target>` in `std` only if needed
+  (docs/DESTRUCTORS.md section 9)
 - Type parameters are written out (`Item`, `Key`, `Value`, `Failure`, `Output`)
 - `nameOf(expression)` through `Expression<Value>`, `typeName<Value>()` as a compile-time function
 - Variadics never unpack implicitly, spread (`...`) works on `Iterable`
@@ -2735,9 +2834,11 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
 - An expression statement must have the type `Void` or `Never`, unless the call has a `var` receiver or a `var`
   argument. One rule instead of a list of discarded-value cases, and everything a `var` makes effectful stays
   writable (`parser.bump()`).
-- A captured `var` binding is a shared box, not a reference: it may escape, it is reference counted, and it is
-  exempt from the dead-change rule. The one exception to "references are second-class" - the cycle collector had to
-  do this anyway.
+- ~~A captured `var` binding is a shared box, not a reference: it may escape, it is reference counted, and it is
+  exempt from the dead-change rule.~~ **Superseded (2026-09-22):** a closure that captures a `var` binding may not
+  escape its scope, the rule a `var` parameter already has. The escaping box made copies of a value share state, let a
+  `spawn` race through it, bypassed exclusivity and formed cycles that no collector will reclaim; state that has to
+  escape is a `shared type`. The binding stays exempt from the dead-change rule. Decided, not yet enforced.
 - **The `var` access of a call begins after all of its arguments have been evaluated** (the model of Swift), not when
   the path is formed. So the reads inside the arguments have ended before it starts, and
   `items.removeAt(items.length() - 1)` and `f(checker, checker.count)` are legal; what is left is what really overlaps
@@ -2774,12 +2875,13 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
   depend on the value. Full Unicode tables are milestone 8, and a compiled program would have to carry them.
 - `Map` and `Set` iterate in insertion order, in every implementation. The order reaches the output through `Show`, so
   it is language, not implementation - and it is the only order a reader can predict. It costs an index vector.
-- A panic prints `panic: <message>` and the site to stderr and exits with 101; nothing else runs (no destructor, no
-  `Close`). The message is output, so the conformance suite compares it. A top-level `?` is not a panic: `error: ...`
-  and exit code 1.
-- No destructors. `Close` is a method, `using` a function, and the only observable destruction order is the nesting of
-  `using` blocks. A destructor would need drop flags, a field order rule and a story for a panic inside one, and
-  `using` already covers everything that has to be deterministic.
+- A panic prints `panic: <message>` and the site to stderr and exits with 101; nothing else runs (no `close()`). The
+  message is output, so the conformance suite compares it. A top-level `?` is not a panic: `error: ...` and exit
+  code 1.
+- ~~No destructors. `Close` is a method, `using` a function, and the only observable destruction order is the nesting
+  of `using` blocks.~~ **Superseded:** `close()` is the destructor, run by the last release, on a `shared type` only
+  (docs/DESTRUCTORS.md, and the entries at the top of this log). The three objections have answers there: the slot is
+  its own drop flag, fields go in reverse declaration order, and a panic runs no `close()`.
 - `Sandbox.load` returns a `Script<Value>` instead of a closure, and `Script.apply(var value: Value)` returns a
   `Result<Void, SandboxError>`. A closure of type `(var self: Value) => Void` has nowhere to say that the step limit
   was hit or that the script panicked, and a sandbox whose failures abort the host is not a sandbox.

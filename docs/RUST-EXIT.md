@@ -1,5 +1,13 @@
 # The Exit of Stage 0
 
+**Status: historical** — the exit happened on 2026-09-22; this is the record of how it was decided and done.
+
+> **A historical record.** Stage 0 — the Rust interpreter, front end and test suites under `bootstrap/` — no longer
+> exists. Sections 1 to 6 are the inventory and the plan as they were written before the deletion, in the tense of
+> that moment, and section 7 is what the exit came to. What a checkout does today is in `CLAUDE.md` and
+> `tools/bootstrap.sh`; what is still open from here is marked where it stands (sections 2.2 and 2.4 carry
+> measurements from after the exit).
+
 `bootstrap/crates` was 14 560 lines of Rust in three crates, and this document is the record of removing it. What
 stays is the C back end and the C runtime: a C compiler is the one external tool a checkout needs, and everything
 above it - the front end, the checker, the lowering, the emitter, the driver, the formatter, the highlighter - is
@@ -20,8 +28,8 @@ on the same machine, and is there to be compared with the number beside it rathe
 
 ## 1. What stage 0 is used for, and what replaces it
 
-Stage 0 is a command (`torb` from `bootstrap/`) with six subcommands, a Rust front end under it, and four `cargo test`
-suites beside it. Every use of it in the repository:
+Stage 0 was a command (`torb` from `bootstrap/`) with six subcommands, a Rust front end under it, and four `cargo test`
+suites beside it. Every use of it in the repository, as it stood before the exit:
 
 | What uses stage 0 | What replaces it | Blocks the exit? |
 |---|---|---|
@@ -107,9 +115,16 @@ whole repository) leaves with `panic: arithmetic overflow in `-`` at `compiler/s
 ### 2.2 The natives that are `.Planned`
 
 `compiler/src/backend/c/natives.trb` marks a declaration of `std/` that the runtime does not implement yet as
-`NativeState.Planned(milestone)`, which makes using it a clean compile error instead of a missing C symbol. Six
-declarations carry it, all of them one feature: `Process.start` and the five members of `Child` - a child process whose
-three pipes are read and written while it runs (milestone 7.3).
+`NativeState.Planned(milestone)`, which makes using it a clean compile error instead of a missing C symbol. This
+section first said that six declarations carry it — `Process.start` and the five members of `Child`. **Measured again
+on 2026-09-22** by a grep of `plannedRuntimeOf(`/`plannedIntrinsicOf(` in `natives.trb`: **44 manifest lines, 71
+declarations**, because three of the lines are loops over a member list (`Float32` with 10 members and `Decimal` with
+11, both milestone 8; `Array` with 9, milestone 5.9b). The other 41 are `Float32.tryFrom(String)` and
+`Decimal.tryFrom(String)` (8), the stream side of `File` (`create`, `chunks`,
+`add`, and `finish` — which `std/fs` now declares as `end`, so the entry is stale), the three standard streams,
+`Process.start` and the five members of `Child`, `sleep`, `Task.await`/`map`/`flatMap`/`all`, `spawn`, `all`,
+`Channel.source`/`sink` (milestone 7.3); `Expression.value`/`captures` (5.11); `describe` and the four members of
+`Json` (5.7); `isSame` (5.9); the six members of the sandbox (7.4); and `get`/`post`/`request` of `std/http` (8).
 
 Nothing in the compiler, its tests or the gates uses them. `torb build` runs the C compiler through
 `Process.runCollecting`, and `torb run` and `torb test` run what they built through `Process.runInheriting`, which is
@@ -136,6 +151,9 @@ Every test package in the repository, built and run with the native test runner 
 | `std/stream/tests` | does not build | 9 s | `` `onto`, which is not in the witness table of a trait-typed value `` (at `std/stream/tests/bytes.test.trb:48:10`) - `lines().onto(Collected())` calls `Stage<Input, Output>.onto<Final>`, which is itself **generic**, on a trait-typed receiver; a witness table has one fixed slot per member and cannot hold one instance per `Final` a caller might choose, so a generic trait member has no table slot to dispatch through at all. One more of the "generic function or member of a generic type" occurrences of section 2.1, not a single call site |
 | `examples/encoding-lab/tests` | does not build | 8 s | `` `describe` used as a function value, which the back end cannot build an instance of `` (at `examples/encoding-lab/tests/lab.test.trb:43:31`) - `structureOf(Order.describe)` takes the generic `static fn describe<Target: Describer>(var target: Target)` as a bare function value, with `Target` to be solved only from the *expected* closure type of `structureOf`'s parameter and not from any call's own arguments; `instanceFor` in `ir/lower/closure.trb`'s `lowerNamedFunctionValue` has no type argument to substitute there and answers `None`. Another occurrence of the same generic-member limit, at the one place a generic member is taken as a value instead of called |
 | `examples/game-engine/tests` | does not build | 8 s | `` a conversion through `From` `` (at `examples/game-engine/tests/world.test.trb:23:24`) - `(1.0, 2.0).into()` carries the `Adaptation.Convert` the checker records for the blanket `Into`, and `canReplayAdaptations` in `ir/lower/expression.trb:332` refuses **every** `.Convert` outside of a top-level `?` unconditionally: the general lowering of a `From`/`Into` coercion recorded as an adaptation does not exist anywhere in the back end yet. `?` performs its own conversion by hand (`ir/lower/match.trb`'s `convertedError`); nothing else does, so this is the one missing general case behind the whole family of `.into()` conversions outside `?`, not a single call site |
+
+**Re-measured on 2026-09-22, after the exit:** `std/path/tests` and `std/stream/tests` still stop with exactly the two
+messages above; the other rows were not re-run.
 
 Three of the seven build and pass; the compiler's own is the big one and it is green. Of the four that do not, one
 (`std/path`) is a bug of the lowering rather than a missing feature and belongs in the lowering follow-up; the other

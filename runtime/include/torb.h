@@ -64,8 +64,9 @@
  * (BACKEND 2.5). `TORB_IMMORTAL_COUNT` marks static data, which is never retained, never released and never freed -
  * so a write through a static value always copies.
  *
- * `color` exists for the cycle collector of milestone 7.7 and is `TORB_COLOR_NONE` for everything that is never
- * scanned, which is every block this milestone creates. `kind` is for the leak report and for assertions.
+ * `color` is `TORB_COLOR_NONE` for every block. It was reserved for a cycle collector, and there will be none
+ * (docs/DESTRUCTORS.md section 9); the field stays until the header is next reorganised, because removing it changes
+ * the layout. `kind` is for the leak report and for assertions.
  */
 typedef struct torb_header {
   uint32_t count;

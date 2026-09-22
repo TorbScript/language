@@ -1,5 +1,8 @@
 # File Paths
 
+**Status: partly implemented** — slice 1 of section 8, `std/path` itself, is in; the boundary to `std/fs` and the
+compiler's own paths (slices 2 to 5) are not, and `std/path/tests` does not build natively yet (`docs/RUST-EXIT.md` 2.4).
+
 **A path is a root and a list of components, and never a string.** That is the whole design of `std/path`. Everything
 else follows from it: `joined` cannot be given a root, `parent` cannot fall off the top, `..` cannot be resolved by
 accident, and one text form is what a path shows on every platform while the operating system gets its own form at the
@@ -527,10 +530,10 @@ behaviour, whichever back end runs it". The programs to add: a shown path on eve
 relative one; a long path written and read back; a non-ASCII name written, listed and read back; a directory entry
 whose name is not UTF-8.
 
-`\\?\` must never appear in output. Stage 0 already strips it (`display_path`, `program.rs:71`) because
-`canonicalize()` produces it, and `docs/BACKEND.md` still lists it as a known divergence in a failure site. With
-`Path` the prefix exists only inside the conversion function and never reaches a value, so the divergence closes by
-construction rather than by a strip.
+`\\?\` must never appear in output. Stage 0 stripped it (`display_path` in its `program.rs`, deleted with stage 0)
+because `canonicalize()` produced it. The C runtime adds the prefix only inside its conversion to the platform's form
+(`runtime/platform.c`), so it never reaches a value, and with `Path` that stays true by construction rather than by a
+strip.
 
 **`std/fs` answers `Path` values.** The signatures the package gains:
 
@@ -564,9 +567,11 @@ back as `path.joined(name)`, sorted by the byte order of their names, which is w
 
 **A directory entry whose name is not valid UTF-8 is an `IoError`**, and this is a `# Pitfalls` entry on `list`:
 a `String` is always valid UTF-8 and a `Path` is made of `String`s, so there is no value for such a name and no
-replacement character is invented. Stage 0 silently mangles it today (`entry.file_name().to_string_lossy()`,
-`natives.rs:306`), which is a divergence from a C runtime that would hand the bytes on, and it closes in the same
-slice. What a program does about such an entry is its own decision: the error names the directory and the bytes.
+replacement character is invented. Stage 0 silently mangled it (`entry.file_name().to_string_lossy()` in its
+`natives.rs`, deleted with stage 0). The C runtime does not check either: the POSIX `torb_platform_list_directory`
+in `runtime/platform.c` hands the bytes on through `torb_text_from_cstring` without validating them, so a `String`
+that is not UTF-8 can reach a program today, and closing that is part of the same slice. What a program does about
+such an entry is its own decision: the error names the directory and the bytes.
 
 `Process` gains the parameter the outline names, which does not exist today:
 

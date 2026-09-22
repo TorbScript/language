@@ -1,5 +1,7 @@
 # Performance
 
+**Status: partly implemented** — rounds P1 to P8 are done (P8 for the arithmetic); P9 to P12 wait until after the VM.
+
 What a construct of TorbScript costs after lowering and `-O2`, which abstractions are free and which are not, and the
 findings that stand between the two. The goal this document is written against is
 [docs/ARCHITECTURE.md](ARCHITECTURE.md)'s: **fast and memory-frugal, almost on the level of a low-level language, with

@@ -81,6 +81,41 @@ print items
    // error: `pair[...]` is being changed by `swap` right now
    ```
 
+4. **A closure argument runs inside the access of its call, so it may not reach the path the call is changing.**
+   The call's access has begun by the time the closure runs, which is what makes changing `list` inside
+   `apply list { ... }` an error while two different fields of one value are fine. The same holds for a closure
+   that captures a `var` binding: it may only be passed directly as an argument (see
+   [var paths](var-paths.md) rule 4), so the call it is passed to is where the checker sees every access it makes.
+
+   ```trb check
+   fn apply(var target: List<Int>, action: () => Void) {
+     action()
+     target.add 1
+   }
+
+   var list = [1, 2]
+   var log: List<String> = []
+   apply list {
+     log.add "applied"
+   }
+   print list
+   print log
+   ```
+
+   ```trb error
+   fn apply(var target: List<Int>, action: () => Void) {
+     action()
+     target.add 1
+   }
+
+   var list = [1, 2]
+   apply list {
+     list.add 3
+   }
+   print list
+   // error: `list` is being changed by `apply` right now
+   ```
+
 ## What this is not
 
 **`items.swapAt(i, j)` is not the same call as `swap(items[i], items[j])`.** `swapAt` takes both indices as plain

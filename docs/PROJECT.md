@@ -1,5 +1,8 @@
 # The Project File
 
+**Status: partly implemented** — the toolchain reads the static subset of `project.trb` from the syntax tree; profiles,
+targets, the lock file and manifests that compute anything (which need the VM) are not built.
+
 **The names of the files say what a package produces, `project.trb` says what the names cannot, and a program is the
 one thing it says by hand.** A file called `lib.trb` is the library, a file called `main.trb` is the program, a file
 called `*.test.trb` is a test — and none of that needs a line in a manifest. What is left for the manifest is what no
@@ -827,11 +830,11 @@ file that is supposed to be stable would be the noisiest thing in the repository
   difference is lifetime and audience: `build/manifest-inputs.trb` is rewritten by every build and read by the next
   one, and `from { }` is written when the package is locked and read by whoever looks at the package.
 
-### Stage 0 has no sandbox
+### Nothing runs a receiver script yet
 
-Probe 21: `Sandbox` is ``Unknown name `Sandbox` `` on stage 0, and the native back end refuses `Script`. So none of
-this section runs until the VM does (7.x), and stage 0's reading of a `project.trb` stays what it is — a line scan for
-`name "..."`, used to build the stable path in a panic message.
+Probe 21 answered ``Unknown name `Sandbox` `` on stage 0, which has since been deleted, and the native back end refuses
+`Script`. So none of this section runs until the VM does (7.x), and until then the toolchain reads a `project.trb`
+with its static reader (`compiler/src/project/manifest.trb`), which takes the literal settings from the syntax tree.
 
 **What works before the VM exists is the static subset, which is every setting in the repository's own thirty-five
 manifests.** `language`, `name`, `prelude`, `dependencies`, `source`, `registry`, `workspace` and `program` — section

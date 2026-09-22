@@ -1,5 +1,8 @@
 # Destructors, `close()` and `using`
 
+**Status: proposed** — decided by the owner and made precise on 2026-09-22 after the language review; none of it is
+implemented yet (slices R1 to R3 in section 10).
+
 `close()` stops being a method somebody remembers to call and becomes the language's one destructor: the runtime's
 own reference count triggers it, exactly once, the moment the last holder of a value goes away. This reopens a
 decision this repository has recorded as settled three times over — [no-destructors.md](language/execution/no-destructors.md),
@@ -12,13 +15,14 @@ the record of why, and exactly what changes because of it.
    by a closing closure)              by a closure that escapes)
 
   the scope ends                     the last holder releases it      neither refcount ever reaches zero
-  → close() now, in source order     → close() then, wherever         → section 9: handles instead of
-    (Rust's Drop)                      that turns out to be              references, and a visible leak
-                                        (Swift's deinit)                 instead of a silent one
+  → close() now, in reverse          → close() then, wherever         → section 9: handles instead of
+    declaration order                  that turns out to be              references, and a visible leak
+    (Rust's Drop)                      (Swift's deinit)                  instead of a silent one
 ```
 
 - **[1. Today](#1-today)** — what `using` does now, what `Close` is, and that nothing forces a close
 - **[2. `close()` is the destructor](#2-close-is-the-destructor)** — reference counting, one heap per worker, one call site
+- **[2a. When exactly a release happens](#2a-when-exactly-a-release-happens)** — scope end in reverse declaration order, temporaries at the end of the statement, fields in reverse, no slice keeps `Close` storage
 - **[3. `close()` cannot be called by user code](#3-close-cannot-be-called-by-user-code)** — Rust's E0040, and the states a direct call would create
 - **[4. `using` binds a name that cannot escape its scope](#4-using-binds-a-name-that-cannot-escape-its-scope)** — the checker rejects a field, an escaping closure, a return
 - **[5. Only a `shared type` may implement `Close`](#5-only-a-shared-type-may-implement-close)** — a value has no identity to close twice
@@ -60,7 +64,7 @@ using Connection() { connection => connection.send "hello" }
 ```
 
 **type checks today**, and it is `no-destructors.md`'s own example. The function it calls is three lines and nothing
-more:
+more — and it goes: section 4 replaces it with a binding form, and there is one `using`, not two:
 
 ```text
 public fn using<Resource: Close, Value>(var resource: Resource, body: (var Resource) => Value): Value {
@@ -112,7 +116,9 @@ no destructors behind it"*:
 
 `docs/CONCURRENCY.md` section 8 leans on the same promise for an unrelated question — whether dropping a `Task`
 handle should cancel the task — and states it just as flatly: *"Anything else would make the moment a reference count
-reaching zero observable, and CONCEPT says it is not."* Three documents, one sentence, and this one reopens it.
+reaching zero observable, and CONCEPT says it is not."* Three documents, one sentence, and this one reopens it. (All
+three have since been brought in line: `no-destructors.md` is retired, gap 10 is superseded, and CONCURRENCY section 8
+argues from "the handle is not the frame" instead.)
 
 **Nothing stops a plain `type` from implementing `Close` either**, which is the sharper half of today's gap. `Close`
 being a `shared trait` restricts what a `shared type` may implement, not who may implement `Close`:
@@ -137,10 +143,11 @@ print b.used
 sharing space with one dead one. Section 5 is the fix.
 
 Finally, **the two-endings shape this document generalizes already exists**, written by hand, in `std/stream`.
-`docs/STREAMS.md` section 3 states the reason a `Sink` has both a `close()` and a `finish()`: *"`Close` is what the
+`docs/STREAMS.md` section 3 states the reason a `Sink` has both a `close()` and an `end()`: *"`Close` is what the
 language uses for a resource (`using`, CONCEPT), it is synchronous and it cannot fail — so it can run on a path that
-is already unwinding a failure. Finishing a stream can do neither... Collapsing them would mean either a `close()`
-that can fail (and then `using` cannot use it) or a `finish()` that cannot (and then a failed flush is lost)."`
+is already unwinding a failure. Ending a stream can do neither... Collapsing them would mean either a `close()` that
+can fail (and then the runtime cannot run it on a release) or an `end()` that cannot (and then a failed flush is
+lost)."*
 Section 7 adds that *"`close()` after the stream ended is allowed and does nothing"* and that every derived `Sink`
 and `Source` closes the one above or below it. `Sink<Item, Failure>` already carries `var fn end(): Task<Result<Void,
 Failure>>` beside `Close`. Sections 5 and 6 below turn this one package's convention into the language's rule.
@@ -161,12 +168,13 @@ one — fires at the identical point in both.
 **`close()` runs exactly once, when the last reference to the value goes away.** Two shapes, and they are the two
 halves of the diagram at the top of this document:
 
-- **A local that does not escape is released at scope end.** This is Rust's `Drop`: the value's last use is the end
-  of the block it was declared in, the release is inserted there by the same liveness pass that already inserts every
-  other `Release` (`docs/BACKEND.md` 5.4), and `close()` is one more call that release makes.
+- **A local that does not escape is released at scope end.** This is Rust's `Drop`: the slot is released at the end
+  of the block it was declared in — not at its last use, section 2a says why — and `close()` is one more call that
+  release makes.
 - **A value that escapes — stored in a field, captured by a closure that itself escapes — is closed by its last
   holder,** wherever in the program that holder's own count reaches zero. This is Swift's `deinit`: there is no fixed
-  line in the source for it, because the value outlived the scope that created it.
+  line in the source for it, because the value outlived the scope that created it. The slot it was bound to is still
+  released at the end of its scope; that release is simply not the last one.
 
 **Nothing can be forgotten, and that is the enforcement.** Today's `close()` is a method a program calls or does not;
 tomorrow's `close()` is a side effect of a release the runtime was always going to perform, whether the program
@@ -174,6 +182,74 @@ mentions `Close` or not. `no-destructors.md`'s two probes — a `Connection` bui
 `Connection` handed through `withConnection` — both still run today exactly as written, but `close()` now runs at the
 end of each: the first at the end of the block that built it, the second when `withConnection`'s own `using` releases
 it, which is the case that already worked.
+
+## 2a. When exactly a release happens
+
+"When the last reference goes away" is only a rule once every release has a place. These are the places, and each
+one is a rule the lowering follows and the conformance suite pins by printing from `close()`.
+
+**A slot whose type may contain a `Close` object is released at the end of its scope, in reverse declaration order.**
+Not at its last use. Today the ownership pass releases every counted slot right after its last use (`docs/BACKEND.md`
+2.2 and 5.4), and for a value without a destructor that is the right call: the release is invisible, and releasing
+early frees memory early. For a value with a destructor it would make the output of a program depend on an
+optimisation. Where `close()` prints, or flushes, or unlocks, relative to the program's other output would follow the
+liveness pass — and, through the Owned/Borrowed summary a call records for its arguments, on the *body* of every callee
+the value was passed to: changing whether a function keeps its argument would move another function's `close()`. The
+end of the scope is a line a reader can point to, and reverse declaration order is the order in which anything built
+on an earlier value is taken down before it — Rust's order for locals, for the same reason.
+
+- **"May contain" is a derived fact, like `containsShared`.** A type may contain a `Close` object when it is a `shared
+  type` that implements `Close`, when a field, a case payload or an element type may contain one, or when it is a
+  trait-typed value, whose implementation the slot does not know — conservatively, unless no implementation of that
+  trait in the program may contain one. A type parameter is no case of its own: the lowering asks the question per
+  instance, where the parameter is a concrete type. The layout computes the fact to a fixpoint over the field graph,
+  as it computes `containsShared` today.
+- **Every other slot keeps last-use release.** A `List<Int>`, a `String`, a `Point` and every value with no `Close`
+  inside are released where the liveness pass puts them now, so the optimisation stays for everything a destructor
+  cannot observe — which is almost every slot of almost every program, and every slot of the compiler.
+- **A move leaves nothing behind.** A slot whose value was moved out — returned, stored into a field or a collection,
+  handed to a callee that keeps it — is cleared by the move, and the release at the end of the scope finds nothing to
+  release. The slot is its own drop flag; there is no second one.
+
+**A temporary is released at the end of its statement.** A value that is produced and never bound —
+`Connection().send "hello"`, `File.open(path)?.readAll()` — lives until the statement that made it has finished, and
+is released there, temporaries in the reverse order of their creation. A temporary never outlives its line and never
+dies in the middle of it.
+
+**The fields of a released value are released in reverse declaration order.** When the count of a value reaches zero,
+its own `close()` runs first (if its type has one), and then its fields are released, the last declared field first;
+the elements of a collection are released from the last index to the first. A value is taken down in the reverse of
+the order it was built, so a field that was built from another field is gone before the one it was built from.
+
+**`self` cannot escape `close()`.** Inside `close()` the checker rejects storing `self` (in a field, a collection or
+anything that outlives the call), returning it, and capturing it in a closure. `close()` runs because the count reached
+zero; a `self` that got a new holder there would be an object that is being destroyed and is referenced at the same
+time — Swift's resurrection bug, which Swift answers with a crash at run time and this language answers at the
+declaration. `close()` may read and change the object's fields and call its other members, which is what closing is.
+
+```text
+error: `close` may not keep `self`: the object is being released
+  --> src/main.trb:6:15
+   |
+ 6 |     registry.add self
+   |                  ^^^^
+   = `close` runs because the last reference went away, so nothing may hold the object afterwards
+```
+
+*(Proposed.)*
+
+**No slice shares storage that holds `Close` objects.** A slice of a list shares the list's storage today
+(`docs/COLLECTIONS.md` 3.7); for an element type that may contain a `Close` object, slicing **copies** — the new list
+retains exactly the elements it holds and nothing else. Shared storage would keep every element of the original alive,
+and its `close()` deferred, for as long as any slice of it lives, so the moment an element closes would depend on the
+lifetime of a slice that never mentioned it. The copy costs a retain per element and happens only for such element
+types.
+
+**A back end with a garbage collector still counts these types.** JavaScript and PHP (after the VM) could leave every
+other value to the host's collector, but a type that may contain a `Close` object needs its reference count in every
+back end, because the moment its `close()` runs is part of the program's meaning and a tracing collector does not give
+one. The two sides are the same derived fact: counted where it may contain `Close`, the host's business everywhere
+else.
 
 ## 3. `close()` cannot be called by user code
 
@@ -211,7 +287,9 @@ written in.** That is a new binding form next to `const` and `var`, not a new sp
 of section 1 — `control-structures.md` rule 4 lists exactly six things the grammar knows how to bind (`const`, `var`,
 `fn`, `type`, `trait`, `extend`, `use`); this document adds a seventh, and rule 3's claim that `using` is *"written in
 ordinary TorbScript... neither one is special-cased by the checker"* stops being true the moment the escape check
-below exists.
+below exists. **There is one `using`, and it is this one:** the `using(resource) { … }` function of section 1 is
+deleted from `std/core/src/control.trb` in slice R2, and its call sites become bindings. Two forms would be two answers
+to "when does this close", and the binding form is the one that has a line.
 
 ```trb fragment
 fn readConfig(path: Path): Result<Config, IoError> {
@@ -315,8 +393,8 @@ program writes and waits for.
 
 **`docs/STREAMS.md` section 3 already gives the reason this split has to exist rather than one fallible ending**:
 *"`Close` is what the language uses for a resource... it is synchronous and it cannot fail — so it can run on a path
-that is already unwinding a failure. Finishing a stream can do neither... Collapsing them would mean either a
-`close()` that can fail (and then `using` cannot use it) or a `finish()` that cannot (and then a failed flush is
+that is already unwinding a failure. Ending a stream can do neither... Collapsing them would mean either a `close()`
+that can fail (and then the runtime cannot run it on a release) or an `end()` that cannot (and then a failed flush is
 lost)."* This document does not change that argument; it makes the split std/stream already lives by into the rule
 every `Close` implementation follows.
 
@@ -326,35 +404,41 @@ every `Close` implementation follows.
 either, and this design does not try to be the first. `close()` stays synchronous, always, even on a value that lived
 inside a task.
 
-**Inside a task, `using` is where the wait happens.** `using name = expression` awaits `end()` at the end of its
-scope, on the normal path and on a `?` that leaves through it — not `close()`, which still runs synchronously and
-unconditionally right after:
+**`using` never awaits, not even inside a task.** The end of a `using` scope releases the value, and the release runs
+`close()`, synchronously — nothing else. A graceful end that can wait or fail is a call the program writes where it
+wants it, and awaits there:
 
 ```trb fragment
 fn upload(items: Iterable<Bytes>, path: Path): Task<Result<Void, IoError>> {
-  using sink = File.create(path).await()?
+  using sink = File.create(path)?
   for item in items {
     sink.add(item).await()?
   }
+  sink.end().await()
 }
 ```
 
-*(Proposed; `sink`'s `end()` is awaited when this function returns normally or through the `?` inside the loop, and
-`close()` runs after it either way, as it always does.)*
+*(Proposed.)* On the normal path `end()` is awaited by the last line and `close()` runs at the end of the scope, where
+it does nothing because the sink has ended (section 6). On a `?` inside the loop the function leaves without `end()`:
+`close()` runs, the sink is abandoned rather than finished, and the caller has the failure that caused it. An implicit
+await at the end of a scope was the alternative and it is rejected: it would put a suspension point — and with it a
+cancellation point and a place other tasks run — on a line where nothing is written, and it would have to decide on
+its own what a failed `end()` on an already failing path means.
 
-**Cancellation is drop.** `docs/CONCURRENCY.md` section 1 already states why this costs nothing: *"A task is a
-stackless state machine... Its frame is a record on the heap of the worker that runs it."* Section 8 already states
-what a cancellation does to that frame: *"the frame is released exactly as a finished task's frame is released, every
-live value in it goes with it"* — and, at the time that was written, *"there is no stack to unwind, no destructor to
-run — the language has none... nothing to leak, because releasing the frame is the ordinary release."* Under this
-design the last clause is still true and the middle one is not: releasing the frame is still the ordinary release,
-and the ordinary release now runs `close()` on every counted value the frame held, synchronously, in the same pass
-that already walks those fields. A cancelled task's `end()` is never awaited — there is no more task left to resume
-once it answers — so a cancelled upload above leaves `sink` closed and its last bytes possibly unflushed, exactly the
-abrupt half of section 6's two endings and none of the graceful half. This is consistent with, and does not soften,
-*"every task is cancellable"* (`docs/CONCURRENCY.md` section 8): the two facts this document adds are that a
-cancelled task's values are released the moment it stops, and that release now does the same thing it always would
-have at the end of an ordinary scope.
+**Cancellation is drop — of the frame, not of the handle.** `docs/CONCURRENCY.md` section 1 already states why this
+costs nothing: *"A task is a stackless state machine... Its frame is a record on the heap of the worker that runs it."*
+Cancelling a task releases that frame at the task's next suspension point or cancellation check (section 8 there: the
+compiler puts a check at every loop back-edge of a function that answers a `Task`, so a loop that never awaits is still
+cancellable, and a synchronous callee runs to its end first — there is no unwinding). Releasing the frame is the
+ordinary release, and the ordinary release now runs `close()` on every value the frame held that has one,
+synchronously, slots in reverse declaration order exactly as at the end of a scope (section 2a). A cancelled task's
+`end()` is never awaited — there is no more task left to resume once it answers — so a cancelled upload above leaves
+`sink` closed and its last bytes possibly unflushed, exactly the abrupt half of section 6's two endings and none of the
+graceful half. **Dropping the `Task` handle still cancels nothing** (`docs/CONCURRENCY.md` section 8, "Dropping a
+`Task` still does not cancel it"): the handle is not the frame, and releasing the last handle releases nothing the task
+holds. This is consistent with, and does not soften, *"every task is cancellable"*: the two facts this document adds
+are that a cancelled task's values are released the moment it stops, and that release does the same thing it would
+have done at the end of an ordinary scope.
 
 ## 8. The cost: nothing for a type without `Close`
 
@@ -373,6 +457,12 @@ always going to generate.
 **Two shared objects holding each other are never released and never closed**, exactly as in Swift, and no measure
 below removes that fact — it narrows how often it is reached and makes it visible when it is. **`weak` is not the
 answer**, and the order below is the order to reach for each one in.
+
+**Values cannot form a cycle, and neither can a captured `var`.** A closure that captures a `var` binding may not
+escape its scope (CONCEPT, "`var` Paths and `var` Parameters"; decided 2026-09-22, not yet enforced by the checker), so
+the box of a captured `var` never outlives the scope that declared it and a recursive closure cannot hold itself alive.
+State that has to outlive its scope is a `shared type`, which is where every cycle there can be lives — and where the
+four measures below apply.
 
 **(a) Trees and graphs use handles, not references.** `docs/ECS.md` already writes the scene tree this way: a
 `Parent` component is `type Parent { entity: Entity }` — a handle into the world, not a counted pointer to another
@@ -409,26 +499,39 @@ heap would make `close()`'s timing non-deterministic again, undoing the whole of
 ## 10. Slices
 
 **R1 — the destructor in the runtime.** `Close` becomes real: `semantics/checker` adds the restriction that only a
-`shared type` may implement it (section 5) and rejects a direct call (section 3); `ir` marks a `Close`-implementing
-layout so the ownership pass knows to add the call; `backend/c` emits the one static call inside `D_<layout>`
-(section 8); `runtime/memory.c` needs no new field, because the count and the release path are the ones already
-there. Gate: every existing conformance program that builds a `Close` type today still passes with the destructor
-call added, and the live-block counter of section 9(c) is zero after each.
+`shared type` may implement it (section 5), rejects a direct call (section 3), and rejects keeping `self` inside
+`close()` (section 2a); `ir` computes "may contain `Close`" per layout to a fixpoint and marks a `Close`-implementing
+layout so the ownership pass knows to add the call; the ownership pass releases the slots of such types at the end of
+their scope in reverse declaration order instead of at their last use, releases temporaries at the end of their
+statement, and clears a slot on a move; `D_<layout>` releases fields in reverse declaration order and a collection's
+elements from the last to the first; a slice of a list whose element type may contain `Close` copies instead of
+sharing; `backend/c` emits the one static call inside `D_<layout>` (section 8); `runtime/memory.c` needs no new field,
+because the count and the release path are the ones already there. Gate: a conformance program per rule of section 2a
+that prints from `close()` and pins the order against the program's other output (scope end, two locals in reverse,
+a temporary at the end of its statement, fields in reverse, a moved slot, a slice); every existing conformance program
+still passes; the live-block counter of section 9(c) is zero after each; and `ir --statistics` shows no change in the
+number of releases for a program without a `Close` type.
 
-**R2 — the `using` escape check.** `using name = expression` becomes a seventh binding form next to the six
-`control-structures.md` names (section 4); the checker extends the `ClosureKind.Local | .Escaping` tracking of
+**R2 — `using` is a binding, and the function goes.** `using name = expression` becomes a seventh binding form next to
+the six `control-structures.md` names (section 4); the checker extends the `ClosureKind.Local | .Escaping` tracking of
 `docs/BACKEND.md` gap 14 to a name bound by `using`, rejecting a field store, a return, and capture by an escaping
-closure. Gate: a checker test per rejected shape, with the diagnostic's exact text pinned, and every existing
-`using resource { body => ... }` call site in `std` and the compiler still checks unchanged.
+closure. Every `using resource { body => ... }` call site in `std`, the compiler, the examples and the docs becomes a
+binding, and `fn using` is deleted from `std/core/src/control.trb` — a syntax change, so it takes the two commits of
+`docs/RUST-EXIT.md` 4.2. Gate: a checker test per rejected shape, with the diagnostic's exact text pinned, and no
+`using` call left in the repository.
 
-**R3 — `using` inside a task awaits `end()`, and cancellation drops.** The lowering of an asynchronous `using` block
-calls `end()` and awaits it at the normal exit and at a `?` that leaves through the block (section 7), and the task's
-cancellation path — already releasing a cancelled task's frame (`docs/CONCURRENCY.md` section 8) — runs `close()` on
-every value in it without awaiting `end()` first. Gate: a task cancelled while a `using`-bound `Sink` is open leaves
-it closed and never blocks on `end()`; a task that runs `using` to completion awaits `end()` exactly once; both are
-conformance programs comparing the two backends byte for byte.
+**R3 — cancellation drops.** The task's cancellation path — releasing a cancelled task's frame at the next suspension
+point or back-edge check (`docs/CONCURRENCY.md` section 8 and gap 13) — runs `close()` on every value in it through the
+ordinary release, in the order of section 2a, and never calls or awaits `end()`. Gate: a task cancelled while a
+`using`-bound `Sink` is open leaves it closed and never calls `end()`; a task that writes `sink.end().await()` and then
+reaches the end of the scope calls `end()` once and a `close()` that does nothing; a task cancelled inside a loop with
+no `await` stops at the next turn; all three are conformance programs whose output is compared byte for byte, in C and
+later in the VM.
 
 ## 11. Open, for the owner
 
 Nothing is open in this document. `weak`, a cycle collector, and calling `close()` from user code were all
-considered in section 9 and section 3 and answered there, not left for later.
+considered in section 9 and section 3 and answered there, not left for later. The review of 2026-09-22 found the
+first version underspecified — when exactly a release happens, what `self` may do in `close()`, whether `using` awaits,
+what a slice keeps alive, how many `using` forms there are — and section 2a, section 4, section 7 and the slices of
+section 10 carry the answers the lead decided.

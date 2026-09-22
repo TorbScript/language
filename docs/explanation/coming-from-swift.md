@@ -43,7 +43,7 @@ enum cases never need an import, and its protocols can grow an associated type t
 | `protocol Hashable` | `trait Hash` | a single-method trait is named after its method |
 | `willSet` / `didSet` | nothing to write | a change is already visible at the one place it happens: the verb |
 | `associatedtype Item` inside a protocol | `trait Container<Item> { }` | a type parameter on the trait, never an associated type |
-| `weak var` / `unowned let` | nothing to write | a cycle collector reclaims `shared type` objects |
+| `weak var` / `unowned let` | nothing to write, and no collector either | a tree holds handles, a stored callback takes its owner as a receiver, and a leaked cycle is reported by type |
 | `if case .some(let x) = opt` | `if const Some(x) = opt` | pattern position is spelled with `const`/`var`, not `case` |
 | `Codable` (`Encodable`/`Decodable`) | `Encode`/`Decode` | generated the same way; a renamed field is a hand-written pair, not `CodingKeys` |
 
@@ -233,8 +233,12 @@ lists what carries over would be an advertisement.
   is storage and a method computes, and the parentheses say which one you are looking at
   (`shape.area` is data, `shape.area()` would be the method syntax if `area` were computed). See
   [Property commands](../language/types/property-commands.md).
-- **`weak` and `unowned` references.** TorbScript's cycle collector reclaims `shared type` objects the way ARC could
-  not on its own, so nothing marks a reference as non-owning to break a cycle.
+- **`weak` and `unowned` references.** There is no cycle collector, and there will not be one: reference counting is
+  the whole memory model, as in ARC. Cycles are designed out instead of broken by hand - a tree or a graph holds
+  handles (an `Entity`) rather than references, a callback a `shared type` stores takes its owner as a receiver
+  instead of capturing it, a closure that captures a `var` binding may not escape its scope, and a cycle that is left
+  is reported with its type names when a test ends. A `Weak` type in `std` is held back until those reports show a
+  need for it.
 - **`-able` protocol names (`Hashable`, `Equatable`, `Comparable`).** A single-method trait is named after its
   method - `Hash`, `Equals`, `Compare` - which is also why the keyword is `with` and not `is` or `conforms to`.
 - **`Codable` synthesis with `CodingKeys`.** `Encode` and `Decode` are generated the same way `Codable` is, but there

@@ -1,5 +1,8 @@
 # Loops as Expressions
 
+**Status: proposed** — `for`, `while` and `loop` are statements only today; none of the slices of section 11 has
+started.
+
 `if` and `match` are statements and expressions; `for`, `while` and `loop` are statements only. This is the
 specification of what it would mean for the three loops to produce a value as well: what the value is, when the body
 runs, what `break`, `continue`, `return` and `?` mean inside one, and which of the two shapes the language can afford.

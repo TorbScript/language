@@ -65,11 +65,13 @@ and their "copy in, copy out" meaning is never executed literally.
 - **Lifetimes and a borrow checker**, as in Rust. They buy first-class references, which the language does not need once
   mutation needs a `var` path and every value is copied. They cost a concept that every reader and every error message has
   to carry.
-- **A `weak` reference.** Values cannot form cycles, so they need no cycle collection. Only `shared type` objects - and a
-  `var` binding captured by a closure - are tracked by a cycle collector.
-- **Destructors.** `Close` is a method and `using` is a function, so the only observable destruction order in the language
-  is the nesting of `using` blocks. A destructor would need drop flags, a rule about field order, and an answer to what a
-  panic inside one means.
+- **A `weak` reference, and a cycle collector.** Values cannot form cycles, and a closure that captures a `var` binding
+  may not escape its scope, so only `shared type` objects can. There is no cycle collector for them either: trees and
+  graphs hold handles instead of references, a stored callback takes its owner as a receiver, and a leaked cycle is
+  reported by type at the end of a test ([the destructors design record](../DESTRUCTORS.md), section 9).
+- **Destructors that run on any value.** A destructor exists, and only a `shared type` may have one: `close()`, run
+  exactly once by the last release (planned, [the destructors design record](../DESTRUCTORS.md)). A value is copied on
+  assignment and has no identity for a destructor to belong to.
 
 ## Consequences
 

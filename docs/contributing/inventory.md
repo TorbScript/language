@@ -220,7 +220,7 @@ the planned banner and is left out of the generated skill.
 | `language/execution/evaluation-order.md` | Evaluation order | reference | The order a reader sees, spelled out | `CONCEPT.md#execution-model` |
 | `language/execution/copies.md` | What a copy costs | reference | Which shape is copied and which shares storage | `CONCEPT.md#execution-model` |
 | `language/execution/tail-calls.md` | Tail calls and the frame limit | reference | What is guaranteed, and when the stack overflows | `CONCEPT.md#execution-model` |
-| `language/execution/no-destructors.md` | There are no destructors | reference | `Close`, `using`, and the only observable order | `CONCEPT.md#execution-model` |
+| `language/execution/no-destructors.md` | Destructors - close() runs at the last release (planned; the file keeps its old name until the records move) | reference | `close()` as the destructor, `using` as a binding, the release order | `docs/DESTRUCTORS.md` |
 | `language/extensibility/control-structures.md` | Control structures are functions | reference | `do`, `unless`, `retry`, `using`, and how to add one | `CONCEPT.md#extensibility` |
 | `language/extensibility/expression-trees.md` | Reading code instead of running it | reference | What a query provider gets, and what it cannot get | `CONCEPT.md#quoted-expressions-expressionvalue` |
 | `language/extensibility/foreign-functions.md` | Foreign functions | reference | `foreign`, the C ABI, and what a sandbox never grants | `CONCEPT.md#foreign-functions-draft` |
