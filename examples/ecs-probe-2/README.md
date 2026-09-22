@@ -1,6 +1,6 @@
 # ecs-probe-2
 
-The evidence for the decision in [`docs/ECS.md`](../../docs/ECS.md): **packages bring their own component types, and
+The evidence for the decision in [`docs/design/ECS.md`](../../docs/design/ECS.md): **packages bring their own component types, and
 the language needs no `Any` for it.** A package owns a component type, a column group that stores it and the systems
 over it; a program holds one field per package's group; a package system is bounded by `Store<Component>` and names no
 world type at all.
@@ -59,8 +59,8 @@ internal error: the generated C did not compile. This is a bug in torb, please r
   gcc: note: previous declaration of 't_..._World_attach' with type 'void(T_..._World *, T_..._Position)'
 ```
 
-`World.attach` carried no arguments of its own in the mangled name. That was gap 1 of `docs/ECS.md` and item 16 of
-`docs/LINEAR.md` section 12.
+`World.attach` carried no arguments of its own in the mangled name. That was gap 1 of `docs/design/ECS.md` and item 16 of
+`docs/design/LINEAR.md` section 12.
 
 **2. A world generic over a list of component types.** `type World<Components>` and `const world: World<(Position,
 Velocity)> = World()` both check and run, and a system `fn describe<Components>(world: World<Components>) where

@@ -29,7 +29,7 @@ second time, in a weaker language, and they go.
 - **[6. The specifier grammar](#6-the-specifier-grammar)** — what may stand in the quotes, and what is reserved
 - **[7. Where a dependency comes from](#7-where-a-dependency-comes-from)** — names in source, locations in the manifest
 - **[8. What a project file may read](#8-what-a-project-file-may-read)** — files and the environment, and the locked manifest that keeps installing free of code
-- **[9. Resources, as far as the project file is concerned](#9-resources-as-far-as-the-project-file-is-concerned)** — the output layout and the file list; `docs/RESOURCES.md` has the rest
+- **[9. Resources, as far as the project file is concerned](#9-resources-as-far-as-the-project-file-is-concerned)** — the output layout and the file list; `docs/design/RESOURCES.md` has the rest
 - **[10. The vocabulary](#10-the-vocabulary)** — every setting, its type, its default, and whether it is read statically
 - **[11. Workspaces and the lock file](#11-workspaces-and-the-lock-file)** — what a member inherits, what the lock pins
 - **[12. Migration](#12-migration)** — nine slices, each green on its own
@@ -116,7 +116,7 @@ Two further facts, each from a probe rather than from reading the code:
   (`std/*`, `../../../std/*`) work; the general case is not something the probes could make work.
 
 **Probes 19 to 21 are the ones this round added**, and together they say what the two new mechanisms cost. Probe 19 is
-the baseline for section 9 and for `docs/RESOURCES.md`: a string literal adapts to nothing, so a parameter type the
+the baseline for section 9 and for `docs/design/RESOURCES.md`: a string literal adapts to nothing, so a parameter type the
 compiler resolves is checker work that does not exist in any form yet. Probes 20 and 21 are the baseline for section
 8: `Sandbox.load` type checks perfectly — the generic argument, the trailing capability block, a path that is a
 computed variable, a path that names no file — and then runs on neither implementation. **The sandbox is a signature
@@ -169,7 +169,7 @@ about it.
 - From **Dart** and **Gleam**: the convention decides which file is *the* program, and the manifest stays small enough
   to read in one breath. Gleam's `gleam.toml` is the size a `project.trb` should be.
 - From **Zig**: `@embedFile`'s shape — a file named by a literal that the compiler resolves. That is
-  `docs/RESOURCES.md`, minus the part of Zig we must not take.
+  `docs/design/RESOURCES.md`, minus the part of Zig we must not take.
 - From **Deno**: the conclusion, not the mechanism. Deno shipped URL imports in source and then built an import map
   to get the locations back out of the source files. Taking the conclusion without repeating the experiment is the
   whole of section 7.
@@ -189,7 +189,7 @@ about it.
 - **An `exports` map** (JSR, Node). `"owner/name/path"` already is the surface, and `public` already decides what a
   module exports. A second list would be a second source of truth about the same thing, which is the disease of
   section 1.
-- **Loaders chosen by extension** (Node, bundlers). `docs/RESOURCES.md` says why.
+- **Loaders chosen by extension** (Node, bundlers). `docs/design/RESOURCES.md` says why.
 - **Cargo features and optional dependencies.** CONCEPT already rejected them: an optional integration is a package.
 - **`git`/`path`/`npm:` written on the dependency line.** We take the information and split it into two statements,
   so that "what I need" and "where it comes from" are two lines a reviewer can read separately (section 7).
@@ -476,7 +476,7 @@ word        = lowercase (lowercase | digit)*
 - **A relative specifier is file-relative and names a module without its extension**, which is what the note already
   says. `component` forbids a dot, so `"./logo.png"` is a grammar error with its own message instead of resolving to
   `src/logo.png.trb` (probe 16) or failing as a missing module (probe 15). No module in the repository has a dot in
-  its name, and reserving the dot is what keeps `use logo from "./logo.png"` unavailable — which `docs/RESOURCES.md`
+  its name, and reserving the dot is what keeps `use logo from "./logo.png"` unavailable — which `docs/design/RESOURCES.md`
   lists as a non-goal and not as a gap.
 - **A relative specifier may leave `src/`**, because section 3 widened a package to its whole directory. It may not
   leave the *package*: a `../` that climbs past the package directory is an error naming the package.
@@ -507,7 +507,7 @@ five look alike and are not the same language:
 | `dependencies { runtime "..." }` | `owner/name`, optionally followed by `":" requirement` — never a module path | nothing |
 | `source "...", ...` | the same `owner/name` | nothing |
 | `program "...", entry: "...", output: "..."` | a `segment` for the name; a **path** for `entry` and `output`, with the extension written and no `..` | the **project** |
-| a resource literal (`docs/RESOURCES.md`) | a **path**, not a module specifier: `./` or `../`, **with** the extension written | the **file** at compile time, recorded as **project**-relative |
+| a resource literal (`docs/design/RESOURCES.md`) | a **path**, not a module specifier: `./` or `../`, **with** the extension written | the **file** at compile time, recorded as **project**-relative |
 
 The last two rows are the ones that surprise, and they differ from each other on purpose. `program`'s `entry` is
 written in `project.trb`, which *is* the project directory, so it is project-relative and has nothing else it could
@@ -601,7 +601,7 @@ version Environment.get("CI_COMMIT_TAG") ?? File.readText("VERSION")?.trim() ?? 
 
 The toolchain is the **caller** of this receiver script, and a caller grants capabilities at the call site — which is
 CONCEPT's rule for the sandbox and not a new one. Written out, the grant is — with the member name
-`docs/RESOURCES.md` section 5 gives it, because the path of a `project.trb` is a directory somebody typed on a command
+`docs/design/RESOURCES.md` section 5 gives it, because the path of a `project.trb` is a directory somebody typed on a command
 line and is therefore *not* known when the toolchain is compiled:
 
 ```trb
@@ -617,7 +617,7 @@ const manifest = Sandbox.read<Project>(projectDirectory.joined("project.trb")) {
   (`trim`, `lines`, `split`); `std/environment` is `Environment.get(name): String?` and nothing else. `std/time`
   would be a clock, `std/process` a shell, `std/http` a network: each of those is a way for a manifest to reach
   something the project neither contains nor was handed, which is the line this grant draws.
-- **`files readOnly:` is the project directory, and `docs/PATH.md` section 7 is what "below" means.** The check is
+- **`files readOnly:` is the project directory, and `docs/design/PATH.md` section 7 is what "below" means.** The check is
   lexical — the *text* of the path does not leave the root — and the sandbox's own natives additionally refuse a
   component that is a symbolic link at open time, because section 7 names the sandbox as the one caller that must not
   accept the lexical gap. So `File.readText("../../etc/passwd")` is a `SandboxError` naming the path and the root, and
@@ -705,14 +705,14 @@ graph {
 ```
 
 - **`settings` is the evaluated `Project`, printed back as the command calls that would produce it**, in a fixed
-  order, every argument a plain string or number literal. This is `docs/ENCODING.md`'s principle one level up: a value
+  order, every argument a plain string or number literal. This is `docs/design/ENCODING.md`'s principle one level up: a value
   is its constructor call, and a receiver script is its settings. There is no second format, no `.toml`, no JSON.
 - **`settings` names its package, so a workspace root's lock has one block per member.** That is what CONCEPT's "one
   `project.lock.trb`, at the root" already asks for: one resolution for everybody (`graph`, once) and one set of
   settings per package (`settings`, per member). A published archive carries a lock with exactly one `settings` block
   and no `graph`.
 - **`settings` carries what a *consumer* needs and nothing else**: `language`, `version`, `prelude`,
-  `dependencies`, the `program` lines, the metadata, and the resource list (`docs/RESOURCES.md`, so a consumer sees
+  `dependencies`, the `program` lines, the metadata, and the resource list (`docs/design/RESOURCES.md`, so a consumer sees
   every non-code file a dependency carries without opening the archive). It carries **no `source` and no `registry`**
   — where a package comes from is the *building* project's decision, and a dependency that could republish its own
   `source` lines would be dependency confusion by another route — and **no `workspace`**, which is about a tree the
@@ -847,7 +847,7 @@ the tree.
 
 ## 9. Resources, as far as the project file is concerned
 
-**`docs/RESOURCES.md` is the design.** What belongs here is only what the project file, the build output and the
+**`docs/design/RESOURCES.md` is the design.** What belongs here is only what the project file, the build output and the
 specifier grammar have to say about it.
 
 - **A resource is named by a string literal at the call site and resolved by the compiler**, against the directory of
@@ -886,7 +886,7 @@ specifier grammar have to say about it.
   hundred files of two hundred kilobytes each — is exactly the case a per-file limit does not catch. One number for
   the thing that actually costs build time is better than two numbers that disagree about which one fired.
 
-  **The defaults are `4.megabytes()` and `64.megabytes()`, argued from measurement** (`docs/RESOURCES.md` probe 3:
+  **The defaults are `4.megabytes()` and `64.megabytes()`, argued from measurement** (`docs/design/RESOURCES.md` probe 3:
   1 MB embeds in a 21 s build, 16 MB in a 196 s build, so a megabyte of payload is about twelve seconds of build
   time). Four megabytes is roughly a minute of build — the point at which somebody notices a rebuild and deserves to
   be told why. Sixty-four is roughly thirteen minutes and about four hundred megabytes of generated C, which is past
@@ -1070,7 +1070,7 @@ are plain calls, and a block that is computed is one they refuse to touch with a
   reads them from the dependency's code. A manifest switch would be a second source of truth and the first thing to
   go stale.
 - **Build scripts, install scripts, code generators, loaders, asset lists.** Sections 8 and 9, and
-  `docs/RESOURCES.md`.
+  `docs/design/RESOURCES.md`.
 - **`input`, `output` as a whole-project setting, `target`.** Sections 3, 4 and 5.
 - **An exports list.** `public` and `"owner/name/path"` already are it.
 - **Feature flags and optional dependencies.** CONCEPT already decided: an optional integration is a package.
@@ -1126,7 +1126,7 @@ resolve against yet. What is decided here is what has to be pinned, not how it i
 
 Nine slices. Each one lands with the repository checking green, `torb test` passing, `canon --check` clean and the
 conformance suite comparing the two implementations. Slices 1 to 6 need nothing that does not exist; slices 7 and 8
-need the VM; slice 9 is `docs/RESOURCES.md`'s own plan.
+need the VM; slice 9 is `docs/design/RESOURCES.md`'s own plan.
 
 **All of this lands after the repository has moved to `static` and `var fn`**, because that round touches practically
 every `.trb` file and nothing should be rebased across it.
@@ -1141,13 +1141,13 @@ every `.trb` file and nothing should be rebased across it.
 | 6 | **Sources and the static subset.** `source` in `std/project` and in the static reader; a plain-string rule with a diagnostic for the nine static settings; `language`, `description`, `license`, `repository` | `std/project/src/lib.trb`, `compiler/src/project/manifest.trb`, `compiler/tests/project.test.trb` | **Low** on its own. It does not resolve anything — resolution needs the registry protocol, which is CONCEPT's open question |
 | 7 | **The manifest that reads.** The toolchain becomes a `Sandbox` caller: the grant of section 8 (files, the environment for the invoked project and its members only, three modules), the evaluation only when the static read is not enough, `build/manifest-inputs.trb` by name and hash, the diagnostics for a failing script | `compiler/src/project/*`, `compiler/src/cli/*`, `std/sandbox`, `std/environment`, the VM | **Highest, and blocked.** Probe 21: `Sandbox` runs on neither implementation, so this slice cannot start before 7.x. Nothing in the repository's own manifests needs it, which is what makes waiting free |
 | 8 | **The locked manifest.** `Lock` in `std/project` with its `settings` and `graph` sections; the deterministic printer that writes an evaluated `Project` back as literals in a fixed order; `torb lock` and `torb lock --check`; `torb publish` writing and verifying `settings` and printing `from`; both files travelling in an archive; the consumer side reading a dependency's `settings` instead of its `project.trb` | `std/project/src/lib.trb`, `compiler/src/project/*`, `compiler/src/cli/*` | **Medium, and it needs slice 7 in front of it.** The printer is the interesting half: "a value is its constructor call" has to hold for the whole vocabulary, `torb lock --check` is the gate that says it is deterministic, and `torb publish`'s static re-read is the one that says it round-trips |
-| 9 | **Resources.** `docs/RESOURCES.md`'s slices, which are a plan of their own | see that document | see that document |
+| 9 | **Resources.** `docs/design/RESOURCES.md`'s slices, which are a plan of their own | see that document | see that document |
 
 **The prose.** `docs/tooling/project-trb.md` (the settings table is rewritten), `torb-build.md`, `torb-run.md`,
 `torb-test.md`, `docs/language/modules-and-packages/{packages,top-level-code,use,workspaces}.md`,
 `docs/standard-library/project.md`, `docs/glossary.md`'s "entry file" and "package", `docs/guide/modules-and-packages.md`,
 `docs/how-to/{add-a-dependency,build-a-native-binary}.md`, CONCEPT's project layout, its `project.trb` example and
-four entries in its decision log. `docs/internals/index.md` lists this document and `docs/RESOURCES.md`, which is
+four entries in its decision log. `docs/internals/index.md` lists this document and `docs/design/RESOURCES.md`, which is
 already done, so that `docs check` never sees a design document nothing links to.
 
 ## 13. What this is not
@@ -1165,10 +1165,10 @@ already done, so that `docs check` never sees a design document nothing links to
 - **Not a place for capabilities.** What a script may do is granted at the call site that loads it — including
   when the caller is the toolchain and the script is `project.trb`. What a package may touch is visible from its
   imports. Neither is a setting.
-- **Not a loader system, and not an asset list.** `docs/RESOURCES.md` is written so that nobody has to reconstruct
+- **Not a loader system, and not an asset list.** `docs/design/RESOURCES.md` is written so that nobody has to reconstruct
   the argument, and neither an extension-loader table nor a `resources:` list is part of this design.
 - **Not a path type.** Every path in a `project.trb` and every specifier is a `String` the workspace reader
-  interprets; `std/path`'s `Path` is for files, and `docs/PATH.md` says why the two stay apart.
+  interprets; `std/path`'s `Path` is for files, and `docs/design/PATH.md` says why the two stay apart.
 - **Not a change to what `public` means.** A package's surface is still its `public` declarations, reached through
   `"owner/name"` and `"owner/name/path"`. Nothing here adds a way to hide a module or to expose one twice.
 - **Not a second manifest format, and not a third file.** There are two files a project has: `project.trb`, which a

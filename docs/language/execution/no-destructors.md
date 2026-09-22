@@ -11,13 +11,13 @@ keywords:
   - using
   - reference counting
 source:
-  - docs/DESTRUCTORS.md
+  - docs/design/DESTRUCTORS.md
   - std/core/src/control.trb
 ---
 
 > **Planned.** This feature is designed but not implemented. Nothing on this page runs today: `close()` is still an
 > ordinary method a program calls, and `using` is still an ordinary function over a closure. The decision and its
-> reasons are in [the destructors design record](../../DESTRUCTORS.md).
+> reasons are in [the destructors design record](../../design/DESTRUCTORS.md).
 
 `close()` is the one destructor of the language. The runtime's reference count triggers it, exactly once, when the
 last holder of an object goes away, and `using` binds a name whose release - and with it the `close()` - happens at

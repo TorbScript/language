@@ -6,7 +6,7 @@ implemented yet (slices R1 to R3 in section 10).
 `close()` stops being a method somebody remembers to call and becomes the language's one destructor: the runtime's
 own reference count triggers it, exactly once, the moment the last holder of a value goes away. This reopens a
 decision this repository has recorded as settled three times over — [no-destructors.md](language/execution/no-destructors.md),
-`docs/BACKEND.md` section 7's gap 10, and the drop-argument of `docs/CONCURRENCY.md` section 8 — and this document is
+`docs/BACKEND.md` section 7's gap 10, and the drop-argument of `docs/design/CONCURRENCY.md` section 8 — and this document is
 the record of why, and exactly what changes because of it.
 
 ```text
@@ -34,7 +34,7 @@ the record of why, and exactly what changes because of it.
 - **[11. Open, for the owner](#11-open-for-the-owner)**
 
 Every snippet marked **type checks today** was run against the real compiler, in `tests/language/` where `std`
-resolves, exactly as `docs/CONCURRENCY.md` and `docs/COLLECTIONS.md` probe theirs. Nothing in this document's decisions
+resolves, exactly as `docs/design/CONCURRENCY.md` and `docs/design/COLLECTIONS.md` probe theirs. Nothing in this document's decisions
 is implemented yet, so a snippet that shows the destructor itself is a `trb fragment` — lexed, not parsed against a
 grammar that does not have the form yet — and a diagnostic is hand-written and marked as proposed. That is the honest
 state of slice R1 in section 10: none of it exists, all of it is decided.
@@ -114,7 +114,7 @@ no destructors behind it"*:
 >
 > *Decision:* accepted.
 
-`docs/CONCURRENCY.md` section 8 leans on the same promise for an unrelated question — whether dropping a `Task`
+`docs/design/CONCURRENCY.md` section 8 leans on the same promise for an unrelated question — whether dropping a `Task`
 handle should cancel the task — and states it just as flatly: *"Anything else would make the moment a reference count
 reaching zero observable, and CONCEPT says it is not."* Three documents, one sentence, and this one reopens it. (All
 three have since been brought in line: `no-destructors.md` is retired, gap 10 is superseded, and CONCURRENCY section 8
@@ -143,7 +143,7 @@ print b.used
 sharing space with one dead one. Section 5 is the fix.
 
 Finally, **the two-endings shape this document generalizes already exists**, written by hand, in `std/stream`.
-`docs/STREAMS.md` section 3 states the reason a `Sink` has both a `close()` and an `end()`: *"`Close` is what the
+`docs/design/STREAMS.md` section 3 states the reason a `Sink` has both a `close()` and an `end()`: *"`Close` is what the
 language uses for a resource (`using`, CONCEPT), it is synchronous and it cannot fail — so it can run on a path that
 is already unwinding a failure. Ending a stream can do neither... Collapsing them would mean either a `close()` that
 can fail (and then the runtime cannot run it on a release) or an `end()` that cannot (and then a failed flush is
@@ -157,7 +157,7 @@ Failure>>` beside `Close`. Sections 5 and 6 below turn this one package's conven
 **Values are reference counted**, which is not new: `docs/BACKEND.md` 5.4 already inserts `Retain` and `Release`
 around every `Boxed`, `Text`, `Runtime` and `Closure`-with-an-environment operand, and 5.R1 already emits one
 `R_<layout>`/`D_<layout>` pair per counted layout, the retain and the release function a value's own fields are
-walked through. **There is one heap per worker thread** — `docs/CONCURRENCY.md` section 1: *"A worker... owns a heap:
+walked through. **There is one heap per worker thread** — `docs/design/CONCURRENCY.md` section 1: *"A worker... owns a heap:
 a bump allocator with size-class free lists, the blocks tagged with the owning heap's id"* — and **the counts are
 plain integers**, never atomic, because *"a task never leaves the worker that started it."* **There is no tracing
 collector, and there will not be one**: a plain refcount is the whole of the memory model, now and for as long as the
@@ -239,7 +239,7 @@ error: `close` may not keep `self`: the object is being released
 *(Proposed.)*
 
 **No slice shares storage that holds `Close` objects.** A slice of a list shares the list's storage today
-(`docs/COLLECTIONS.md` 3.7); for an element type that may contain a `Close` object, slicing **copies** — the new list
+(`docs/design/COLLECTIONS.md` 3.7); for an element type that may contain a `Close` object, slicing **copies** — the new list
 retains exactly the elements it holds and nothing else. Shared storage would keep every element of the original alive,
 and its `close()` deferred, for as long as any slice of it lives, so the moment an element closes would depend on the
 lifetime of a slice that never mentioned it. The copy costs a retain per element and happens only for such element
@@ -326,7 +326,7 @@ error: `file` is bound by `using`, so it cannot be stored in a field
 *(Proposed; both fragments above are shapes today's checker accepts without comment, because `using` binds nothing
 the checker tracks.)* A closure that captures `file` and is itself stored, returned, or spawned is refused the same
 way, and a `return file` out of the function is refused for the same reason a `return` of the `var` parameter in a
-fork-join region is refused today (`docs/CONCURRENCY.md` section 6, rule R1). None of this needs new machinery from
+fork-join region is refused today (`docs/design/CONCURRENCY.md` section 6, rule R1). None of this needs new machinery from
 nothing: `docs/BACKEND.md` section 7's gap 14 already gives the checker a per-closure `ClosureKind.Local | .Escaping`
 flag for a closure that captures a `var` reference, decided and accepted for exactly the reason this rule needs it —
 *"the checker records per closure whether it escapes... conservatively, when it is written directly as an argument of
@@ -382,7 +382,7 @@ value may not do is declare `close()` of its own, because it has no identity for
 **`var fn close()` stays exactly the signature it is today: no `Result`, no `Task`.** A type whose graceful end can
 fail, or must wait for one, offers `end()` beside it — `Sink.end(): Task<Result<Void, Failure>>`, which already
 exists and is not a new member this document invents. **After `end()` returns, `close()` is a no-op**, the same
-promise `docs/STREAMS.md` section 7 already states for a stream that ended on its own: *"`close()` after the stream
+promise `docs/design/STREAMS.md` section 7 already states for a stream that ended on its own: *"`close()` after the stream
 ended is allowed and does nothing. So a reader never has to know whether it read to the end."*
 
 **The comparison is Rust's `File`.** Dropping a `File` closes the descriptor silently and cannot fail; a program that
@@ -391,7 +391,7 @@ draws the same line at the same place: `close()` is what the runtime can always 
 during any release; `end()` is what the type's author can only promise conditionally, and asking for it is a call the
 program writes and waits for.
 
-**`docs/STREAMS.md` section 3 already gives the reason this split has to exist rather than one fallible ending**:
+**`docs/design/STREAMS.md` section 3 already gives the reason this split has to exist rather than one fallible ending**:
 *"`Close` is what the language uses for a resource... it is synchronous and it cannot fail — so it can run on a path
 that is already unwinding a failure. Ending a stream can do neither... Collapsing them would mean either a `close()`
 that can fail (and then the runtime cannot run it on a release) or an `end()` that cannot (and then a failed flush is
@@ -425,7 +425,7 @@ await at the end of a scope was the alternative and it is rejected: it would put
 cancellation point and a place other tasks run — on a line where nothing is written, and it would have to decide on
 its own what a failed `end()` on an already failing path means.
 
-**Cancellation is drop — of the frame, not of the handle.** `docs/CONCURRENCY.md` section 1 already states why this
+**Cancellation is drop — of the frame, not of the handle.** `docs/design/CONCURRENCY.md` section 1 already states why this
 costs nothing: *"A task is a stackless state machine... Its frame is a record on the heap of the worker that runs it."*
 Cancelling a task releases that frame at the task's next suspension point or cancellation check (section 8 there: the
 compiler puts a check at every loop back-edge of a function that answers a `Task`, so a loop that never awaits is still
@@ -434,7 +434,7 @@ ordinary release, and the ordinary release now runs `close()` on every value the
 synchronously, slots in reverse declaration order exactly as at the end of a scope (section 2a). A cancelled task's
 `end()` is never awaited — there is no more task left to resume once it answers — so a cancelled upload above leaves
 `sink` closed and its last bytes possibly unflushed, exactly the abrupt half of section 6's two endings and none of the
-graceful half. **Dropping the `Task` handle still cancels nothing** (`docs/CONCURRENCY.md` section 8, "Dropping a
+graceful half. **Dropping the `Task` handle still cancels nothing** (`docs/design/CONCURRENCY.md` section 8, "Dropping a
 `Task` still does not cancel it"): the handle is not the frame, and releasing the last handle releases nothing the task
 holds. This is consistent with, and does not soften, *"every task is cancellable"*: the two facts this document adds
 are that a cancelled task's values are released the moment it stops, and that release does the same thing it would
@@ -464,7 +464,7 @@ the box of a captured `var` never outlives the scope that declared it and a recu
 State that has to outlive its scope is a `shared type`, which is where every cycle there can be lives — and where the
 four measures below apply.
 
-**(a) Trees and graphs use handles, not references.** `docs/ECS.md` already writes the scene tree this way: a
+**(a) Trees and graphs use handles, not references.** `docs/design/ECS.md` already writes the scene tree this way: a
 `Parent` component is `type Parent { entity: Entity }` — a handle into the world, not a counted pointer to another
 `shared type` — so a parent-child relationship in `std/ecs` or `std/scene` can never form a reference cycle, because
 there is no reference in either direction to begin with. Rust's own answer to a tree with parent pointers is an arena
@@ -521,7 +521,7 @@ binding, and `fn using` is deleted from `std/core/src/control.trb` — a syntax 
 `using` call left in the repository.
 
 **R3 — cancellation drops.** The task's cancellation path — releasing a cancelled task's frame at the next suspension
-point or back-edge check (`docs/CONCURRENCY.md` section 8 and gap 13) — runs `close()` on every value in it through the
+point or back-edge check (`docs/design/CONCURRENCY.md` section 8 and gap 13) — runs `close()` on every value in it through the
 ordinary release, in the order of section 2a, and never calls or awaits `end()`. Gate: a task cancelled while a
 `using`-bound `Sink` is open leaves it closed and never calls `end()`; a task that writes `sink.end().await()` and then
 reaches the end of the scope calls `end()` once and a `close()` that does nothing; a task cancelled inside a loop with

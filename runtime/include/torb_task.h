@@ -1,5 +1,5 @@
 /*
- * torb_task.h - tasks, the scheduler, timers and channels: the runtime half of milestone 7.3 (docs/CONCURRENCY.md,
+ * torb_task.h - tasks, the scheduler, timers and channels: the runtime half of milestone 7.3 (docs/design/CONCURRENCY.md,
  * docs/BACKEND.md 5.3). Included from torb.h; nothing includes it directly.
  *
  * # What a task is
@@ -12,7 +12,7 @@
  *     result        one `Value`, laid out by the task's element descriptor; written once, when the task finishes
  *
  * The block's count is **the handles plus one reference the scheduler holds while the task has not completed**. So
- * releasing the last handle of a running task releases nothing the task holds (docs/CONCURRENCY.md section 8,
+ * releasing the last handle of a running task releases nothing the task holds (docs/design/CONCURRENCY.md section 8,
  * "Dropping a `Task` still does not cancel it"), and a completed task's block lives as long as somebody can still read
  * its result. The frame's bytes stay in the block until then, but nothing in them is live once the task completed.
  *
@@ -60,7 +60,7 @@
  * 1. **`task->state` is the one field the machine writes.** 0 is the entry. It is set before every suspension point
  *    to the state whose label follows it, and the switch at the top jumps there when the runtime resumes the task.
  * 2. **Every resume, and every point after a wait that answered `TORB_WAIT_READY`, starts with the cancellation check**
- *    `torb_task_cancelled(task)`, and so does every loop back-edge of the machine (docs/CONCURRENCY.md section 8). Where
+ *    `torb_task_cancelled(task)`, and so does every loop back-edge of the machine (docs/design/CONCURRENCY.md section 8). Where
  *    it is set, the machine releases what is live at that point - exactly as at a `return` - and answers
  *    `TORB_POLL_STOPPED`. The runtime releases nothing of the frame itself: it cannot know which slots are live.
  * 3. **After every wait the machine calls `torb_task_outcome` once**, before it reads anything the wait delivered. That
@@ -88,7 +88,7 @@
  *
  * # The scheduler
  *
- * One worker, one FIFO run queue, one heap (the pool of docs/CONCURRENCY.md is slices E to H of 7.7). A task that is
+ * One worker, one FIFO run queue, one heap (the pool of docs/design/CONCURRENCY.md is slices E to H of 7.7). A task that is
  * started or woken goes to the back of the queue; a timer that is due is woken before the next task is taken, in
  * deadline order. When the queue is empty and a timer is pending, the worker sleeps until the first deadline. When the
  * queue is empty, no timer is pending and the task being waited for has not completed, every task is waiting for
@@ -242,7 +242,7 @@ static inline bool torb_task_cancelled(const torb_task *task) {
  * can run, because a task that was never started cannot be released (its frame holds values only its machine knows).
  *
  * The **parent** is the task running now (none outside a task), and a task made by a cancelled parent is born
- * cancelled, so its first resume stops it before its first line (docs/CONCURRENCY.md section 8). `result` must be
+ * cancelled, so its first resume stops it before its first line (docs/design/CONCURRENCY.md section 8). `result` must be
  * static data. Panics where the block would not fit in 4 GiB.
  */
 torb_task *torb_task_new(torb_resume_function resume, size_t frame_size, const torb_element *result);
@@ -295,7 +295,7 @@ torb_outcome torb_task_outcome(torb_task *self);
 
 /**
  * `pause().await()` without the task in between: `self` goes to the back of the run queue. Always suspends; the
- * outcome is `TORB_OUTCOME_READY`. This is the one-state-split lowering docs/CONCURRENCY.md section 9 describes.
+ * outcome is `TORB_OUTCOME_READY`. This is the one-state-split lowering docs/design/CONCURRENCY.md section 9 describes.
  */
 torb_wait torb_task_pause(torb_task *self);
 
@@ -367,7 +367,7 @@ torb_channel *torb_channel_new(int64_t capacity, const torb_element *item, torb_
  * it must be a slot of the frame and not a C local). Ready, `TORB_OUTCOME_READY`, where a waiting receiver took it or
  * the buffer had room; ready, `TORB_OUTCOME_CLOSED`, where the reading end is closed or the writing end already ended,
  * and then the item was released. Otherwise `self` waits until a receiver takes it (READY) or the reading end is
- * closed (CLOSED): `add` finishes when the reader has taken the item (docs/STREAMS.md section 3).
+ * closed (CLOSED): `add` finishes when the reader has taken the item (docs/design/STREAMS.md section 3).
  */
 torb_wait torb_channel_send(torb_task *self, torb_channel *channel, void *item);
 

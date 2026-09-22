@@ -901,7 +901,7 @@ are never written.
 | `docs/language/functions/quoted-expressions.md` | `captures()` answers `List<EncodedValue>` |
 | `CONCEPT.md`, "Types, Values and Reflection" | the principle, the three traits, the derivation rule, the removal of the `XmlEncode` paragraph |
 | `CONCEPT.md`, Decision Log | one entry: a value is its constructor call, and format-specific facts live in the format |
-| `docs/STREAMS.md`, section 10 | `Format`'s two whole-value methods are renamed to `encode`/`decode`; the framing half is unchanged |
+| `docs/design/STREAMS.md`, section 10 | `Format`'s two whole-value methods are renamed to `encode`/`decode`; the framing half is unchanged |
 
 **What `assert` and `describe` become.** `assert` keeps its signature and reads `List<EncodedValue>` instead of
 `List<Encode>`; its message does not change. `describe` keeps its name and becomes

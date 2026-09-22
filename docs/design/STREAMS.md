@@ -50,7 +50,7 @@ public shared trait Sink<Item, Failure> with Close {
 These are the asynchronous siblings of `Iterator` (`next`) and `Accumulator` (`add`) — **the same verbs**, so nothing
 new has to be learned and the two worlds read alike. The one word that differs is the ending: an accumulator's
 `finish()` answers the result of a run, a sink's `end()` answers only whether the end went through, because the end
-of a flow is not a result (section 3, and `docs/COLLECTIONS.md` 6a for why it is not `close()`).
+of a flow is not a result (section 3, and `docs/design/COLLECTIONS.md` 6a for why it is not `close()`).
 
 | Synchronous              | Asynchronous                      | Verb        |
 |--------------------------|-----------------------------------|-------------|
@@ -169,7 +169,7 @@ var fn end(): Task<Result<Void, Failure>>
 4. **After a failure, neither `add` nor `end` will succeed again.**
 5. **`close()` is the abrupt end.** It releases the target, cannot fail, and does **not** flush. A sink that is closed
    without being ended may have written less than it was given — that is exactly the difference between abandoning a
-   sink and ending one, and it is why both exist. `close()` is the destructor (`docs/DESTRUCTORS.md`): it runs by
+   sink and ending one, and it is why both exist. `close()` is the destructor (`docs/design/DESTRUCTORS.md`): it runs by
    itself when the last holder releases the sink, and user code never calls it.
 6. `end()` may be called once. Calling it twice is a bug in the caller, like calling `add` after it.
 
@@ -298,7 +298,7 @@ Each answer has two halves:
 
 **`collect` is fused.** The stage wraps the accumulator it was handed and every value goes straight through — one push
 per value, no queue, no intermediate collection. An accumulator is a value, so `onto` wraps a copy and every run starts
-fresh (`docs/COLLECTIONS.md` 3.8a, where `Collector` and its `start()` were merged into `Accumulator`):
+fresh (`docs/design/COLLECTIONS.md` 3.8a, where `Collector` and its `start()` were merged into `Accumulator`):
 
 ```trb
 var accumulator = stage.onto(target)
@@ -334,7 +334,7 @@ what is above it, or a file handle or a socket stays open until the program ends
 mechanism, so streams use it and add nothing:
 
 - **`Source` and `Sink` both carry `Close`**, whose `var fn close()` is synchronous and cannot fail. It is the
-  destructor (`docs/DESTRUCTORS.md`): the runtime runs it when the last holder releases the end, and user code never
+  destructor (`docs/design/DESTRUCTORS.md`): the runtime runs it when the last holder releases the end, and user code never
   calls it.
 - **Every derived end closes the one it came from.** Each wrapper holds its upstream in a `var` field and closes it:
   `Staged`, `Stepping` (`then`), `Remapped` (`mapFailure`), `Checked`, `Buffered`. `Pulling` and `Pushing`, the two
@@ -358,7 +358,7 @@ mechanism, so streams use it and add nothing:
 
 What the language does *not* have is a way to interrupt an `await` that is already waiting from inside the reader. A
 `next()` that is in flight runs to its end; the release of the source takes effect for everything after it. Cancelling
-the whole task is `docs/CONCURRENCY.md` section 8: the task's frame is released at its next suspension point or
+the whole task is `docs/design/CONCURRENCY.md` section 8: the task's frame is released at its next suspension point or
 cancellation check, and every end it held is closed by that release.
 
 ## 8. Producing without generators
@@ -576,7 +576,7 @@ _Decision:_ no `for` in v1; `while const Some(item) = source.next().await()? { �
 turns up that keeps the `?` visible.
 
 **4. Interrupting an `await` that is already waiting.** Releasing an end takes effect for everything after it, but a
-`next()` in flight runs to its end. Cancelling a task is decided in `docs/CONCURRENCY.md` section 8: its frame is
+`next()` in flight runs to its end. Cancelling a task is decided in `docs/design/CONCURRENCY.md` section 8: its frame is
 released at the next suspension point or cancellation check.
 _Decision:_ out of scope here; the release of an end (its `close()`) plus `ChannelClosed` covers the cases that matter
 (stop reading, stop producing).

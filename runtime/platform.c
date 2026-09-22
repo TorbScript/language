@@ -100,7 +100,7 @@ wchar_t *torb_platform_wide(const char *text, size_t *capacity) {
 /**
  * UTF-16 back to UTF-8, NUL terminated. Result owned, freed with `torb_raw_free(result, *length + 1)`; `*length` is the
  * byte length without the NUL. `NULL` where the UTF-16 is not well formed - a name made of an unpaired surrogate has no
- * UTF-8 spelling, and a `String` is always valid UTF-8, so there is no value for such a name (`docs/PATH.md`).
+ * UTF-8 spelling, and a `String` is always valid UTF-8, so there is no value for such a name (`docs/design/PATH.md`).
  */
 char *torb_platform_utf8(const wchar_t *wide, size_t *length) {
   const int count = (int)wcslen(wide);
@@ -139,7 +139,7 @@ char *torb_platform_utf8(const wchar_t *wide, size_t *length) {
  * appears where the plain one cannot work at all.
  *
  * The extended form exists only inside this function and never reaches a value of the program: what a program sees is
- * the `/` form of `File.absolutePath` (`docs/PATH.md`, section 6).
+ * the `/` form of `File.absolutePath` (`docs/design/PATH.md`, section 6).
  *
  * Result owned like `torb_platform_wide`'s, and `NULL` for the same reason.
  */

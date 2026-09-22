@@ -10,7 +10,7 @@ keywords:
   - Stage
   - backpressure
 source:
-  - docs/STREAMS.md
+  - docs/design/STREAMS.md
 ---
 
 > **Planned.** This feature is designed but not implemented. Nothing on this page works today.

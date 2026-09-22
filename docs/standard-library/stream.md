@@ -15,7 +15,7 @@ source:
   - std/stream/src/source.trb
   - std/stream/src/sink.trb
   - std/stream/src/bytes.trb
-  - docs/STREAMS.md
+  - docs/design/STREAMS.md
 ---
 
 > **Not built natively yet.** A function whose body answers a `Task` is not built by the native back end yet, so `torb
@@ -53,10 +53,21 @@ public shared trait Source<Item, Failure> with Close {
   var fn through<Output>(stage: Stage<Item, Output>): Source<Output, Failure>
   var fn map<Output>(transform: (value: Item) => Output): Source<Output, Failure>
   var fn filter(predicate: (value: Item) => Bool): Source<Item, Failure>
+  var fn filterMap<Output>(transform: (value: Item) => Output?): Source<Output, Failure>
+  var fn mapWhile<Output>(transform: (value: Item) => Output?): Source<Output, Failure>
+  var fn take(amount: Int): Source<Item, Failure>
+  var fn takeWhile(predicate: (value: Item) => Bool): Source<Item, Failure>
+  var fn skip(amount: Int): Source<Item, Failure>
+  var fn indexed(): Source<(index: Int, item: Item), Failure>
+  var fn chunked(size: Int): Source<List<Item>, Failure>
   var fn then<Output>(step: (value: Item) => Task<Result<Output, Failure>>): Source<Output, Failure>
   var fn mapFailure<Other>(transform: (failure: Failure) => Other): Source<Item, Other>
   var fn collect<Output>(into: Accumulator<Item, Output>): Task<Result<Output, Failure>>
   var fn toList(): Task<Result<List<Item>, Failure>>
+  var fn count(): Task<Result<Int, Failure>>
+  var fn fold<State>(initial: State, combine: (State, Item) => State): Task<Result<State, Failure>>
+  var fn forEach(action: (value: Item) => Void): Task<Result<Void, Failure>>
+  var fn find(predicate: (value: Item) => Bool): Task<Result<Item?, Failure>>
   var fn into(var sink: Sink<Item, Failure>): Task<Result<Void, Failure>>
 
   static fn from(items: Iterate<Item>): Source<Item, Failure>
@@ -78,6 +89,13 @@ before somebody asks for it. `checked()` (an extension for `Source<Result<Item, 
 items into the stream's own failure, ending the stream there. `produce` is the one way to write a producer without
 generators: `body` runs as a task of its own and writes into a `Channel` (see [std/task](task.md)), with `capacity: 0`
 handing every item over directly, in lock-step with the consumer.
+
+The stages read exactly like `Iterate`'s: `filterMap` transforms and drops the items that answer `None`, `mapWhile`
+transforms until one does and ends the stream there, `take`/`takeWhile`/`skip` bound how much is read, `indexed`
+pairs every item with its position, and `chunked` groups items into lists of at most `size`, the last group being
+whatever is left. The terminal operations beyond `toList` are `count` (how many items arrived), `fold` (every item
+combined into a running state, left to right), `forEach` (an action run on every item as it arrives), and `find`
+(stops at the first match and leaves the rest of the stream unread).
 
 ### Sink
 
@@ -139,6 +157,20 @@ a `Source<Bytes, Failure>` - they need no `Task` themselves, only reading the `S
 A sequence that is still incomplete when the stream ends is reported as invalid UTF-8, at the offset it starts on - there
 is no more input coming to complete it. `textOf` is the short form for a whole chunk that has already arrived;
 `encodedText` is the reverse, and needs no decision because a `String` already is UTF-8.
+
+### `Sink<Bytes, Failure>`.addText, addLine
+
+```trb fragment
+extend<Failure> Sink<Bytes, Failure> {
+  var fn addText(text: String): Task<Result<Void, Failure>>
+  var fn addLine(text: String = ""): Task<Result<Void, Failure>>
+}
+```
+
+An extension of the *instantiated* trait, so it is there for every byte sink - a file, standard output, a socket, the
+input of a child process - and nowhere else. `addText` encodes `text` as UTF-8 and writes it, the text form of `add`;
+`addLine` calls it with `\n` appended, the byte a wire uses and not the line break of the operating system running the
+program.
 
 ## What is missing
 

@@ -65,7 +65,7 @@
  * so a write through a static value always copies.
  *
  * `color` is `TORB_COLOR_NONE` for every block. It was reserved for a cycle collector, and there will be none
- * (docs/DESTRUCTORS.md section 9); the field stays until the header is next reorganised, because removing it changes
+ * (docs/design/DESTRUCTORS.md section 9); the field stays until the header is next reorganised, because removing it changes
  * the layout. `kind` is for the leak report and for assertions.
  */
 typedef struct torb_header {
@@ -944,7 +944,7 @@ void torb_file_drop(void *block);
  * Windows and POSIX behind fourteen functions. `runtime/platform.c` is the only file with an `#ifdef _WIN32`.
  *
  * Every path and every text here is **UTF-8**, on both platforms. On Windows the file converts to UTF-16 and calls the
- * wide API, because the narrow one reads the code page of the machine and a `String` is UTF-8 (`docs/PATH.md`,
+ * wide API, because the narrow one reads the code page of the machine and a `String` is UTF-8 (`docs/design/PATH.md`,
  * section 6); on POSIX a path is bytes and there is nothing to convert.
  */
 
@@ -971,7 +971,7 @@ bool torb_platform_list_directory(const char *path, torb_list *out, const char *
 void *torb_platform_open_file(const char *path, bool writing, const char **message);
 /**
  * One file, or one directory that is empty, removed. Only `runtime/tests` calls this: `std/fs` has no `delete` and
- * `docs/PATH.md` does not give it one, so there is no native above the platform layer to route it through. It is here
+ * `docs/design/PATH.md` does not give it one, so there is no native above the platform layer to route it through. It is here
  * because a test that writes a file with a non-ASCII name cannot remove it with `remove` from `<stdio.h>` - that is the
  * narrow call, and the whole point of this layer is that the narrow calls are gone.
  */
@@ -1052,7 +1052,7 @@ bool torb_platform_executable_path(char **value, size_t *length);
 
 /**
  * The three functions of the boundary to Windows. They are in the header because `runtime/tests/platform_test.c` reads
- * them: what they answer is a decision of `docs/PATH.md` and not an implementation detail, so it is tested directly.
+ * them: what they answer is a decision of `docs/design/PATH.md` and not an implementation detail, so it is tested directly.
  * Nothing above `runtime/platform.c` calls them.
  */
 

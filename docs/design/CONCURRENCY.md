@@ -289,7 +289,7 @@ public trait Merge<Item, Output> with Accumulator<Item, Output> {
 
 **Type checked** when it was written, as `Merge<Item, Output> with Collector<Item, Output>` with a concrete
 implementation that delegated to `counting()` for `start()`. `Collector` has since been merged into `Accumulator`
-(`docs/COLLECTIONS.md` 3.8a): an accumulator is a value, so each chunk runs on a copy of the one it was handed, and
+(`docs/design/COLLECTIONS.md` 3.8a): an accumulator is a value, so each chunk runs on a copy of the one it was handed, and
 `start()` is gone. The declaration above is the same trait restated over the merged vocabulary.
 
 **The contract is three lines.**
@@ -569,14 +569,14 @@ Before the worker resumes a task it reads the flag, and at a back-edge the runni
 the state machine **stops**: the frame is released exactly as a finished task's frame is released, every live value in
 it goes with it, and the handle answers `Fail Cancelled` to whoever waits.
 
-**This is what "cancellation is drop" means** (`docs/DESTRUCTORS.md` section 7): cancelling a task releases its
+**This is what "cancellation is drop" means** (`docs/design/DESTRUCTORS.md` section 7): cancelling a task releases its
 *frame*, at its next suspension point or cancellation check, through the ordinary release. It does not mean that
 dropping the `Task` *handle* cancels anything — it does not, and the subsection below says why.
 
 **That is the whole implementation, and the reason it is that small is section 1.** A stackless task keeps every live
 value *in its frame*, so there is no stack to unwind and nothing to leak, because releasing the frame is the ordinary
 release. That release is also what runs the destructors: every value in the frame whose type has a `close()` is closed
-by it, synchronously, slots in reverse declaration order as at the end of a scope (`docs/DESTRUCTORS.md` sections 2
+by it, synchronously, slots in reverse declaration order as at the end of a scope (`docs/design/DESTRUCTORS.md` sections 2
 and 7). A cancelled task's `end()` is never awaited, because there is no task left to resume once it would answer. A
 green-threaded design would need an unwind here, which is the machinery this language spent section 2 avoiding.
 
@@ -788,7 +788,7 @@ is made rather than falling out of a scope's end. And the case drop-cancel is ac
 should die with the work that started it — is the parent link above, which stops the child whether or not anybody still
 holds its handle. tokio's "drop the future and it is gone" is the mirror image of this and it is rejected for a reason,
 not for a preference: a release here runs exactly one piece of user code, the `close()` of the value being released
-(`docs/DESTRUCTORS.md`), and making the release of a *handle* stop a whole other computation would turn the lifetime of
+(`docs/design/DESTRUCTORS.md`), and making the release of a *handle* stop a whole other computation would turn the lifetime of
 every handle into a control-flow decision nobody wrote down.
 
 ### Panics are unchanged

@@ -178,7 +178,7 @@ jump left behind released nothing. The directory is the exemption, instead of a 
 
 | Program | What it pins |
 |---------|--------------|
-| `paths.trb` | Every row of the parse table, every member including the two accessors of the capsule, `resolved(inside:)` in each of its outcomes, and the ten call-site rewrites of `docs/PATH.md` section 4 |
+| `paths.trb` | Every row of the parse table, every member including the two accessors of the capsule, `resolved(inside:)` in each of its outcomes, and the ten call-site rewrites of `docs/design/PATH.md` section 4 |
 
 **Tests** - `test` and `group` of `std/test`, whose report both implementations write from the same place.
 

@@ -24,7 +24,8 @@ repetition is a better trade than the abstraction that would remove it.
 same words for the same meanings, not because the language can abstract over "a type with a `map`."**
 
 - `map`, `flatMap`, `filter`, `forEach`, `orElse`/`??` and `toList()` mean the same thing on every one of them where
-  they exist at all - see the full table in [No higher-kinded types](../language/generics/no-higher-kinded-types.md).
+  they exist at all - [No higher-kinded types](../language/generics/no-higher-kinded-types.md) states the rule and
+  the exact signatures of `map` on `Option` and `Iterate`.
 - There are no higher-kinded types: no `Functor<F<_>>`, no `Monad`, no `Self<U>`. A type parameter is always a type,
   never a type constructor waiting for one more argument.
 - `Self` may still appear as a trait argument (`Accumulator<Item, Self>`), because there it names a concrete type, not
@@ -99,8 +100,7 @@ print(boxed.map({ _ * 2 }).value)
 ```
 
 **Bridging between the four shapes is a named function, not a generic combinator**, so `?`, `await()`, a collection
-target, and `filterMap` are what get reached for. See the table of substitutes in
-[No higher-kinded types](../language/generics/no-higher-kinded-types.md).
+target, and `filterMap` are what get reached for, as the paragraph above lists.
 
 **Adding a fifth shape to the standard library means picking the same names again, by convention, not by
 implementing an interface.** A new asynchronous stream type gets a `map` that means "transform what is inside," not a
@@ -108,8 +108,8 @@ implementing an interface.** A new asynchronous stream type gets a `map` that me
 
 ## Related
 
-- [No higher-kinded types](../language/generics/no-higher-kinded-types.md) - the shared vocabulary and the full
-  substitution table.
+- [No higher-kinded types](../language/generics/no-higher-kinded-types.md) - the rule as a testable fact, with the
+  exact signatures and the one diagnostic a `Functor` bound produces.
 - [Why there is no null](why-no-null.md) - `Option`, one of the four shapes this vocabulary covers.
 - [Why there are no exceptions](why-no-exceptions.md) - `Result`, another of the four.
 - [Pipelines](../language/collections-and-iteration/pipelines.md) - `Iterate`'s lazy `map`, the one that differs from

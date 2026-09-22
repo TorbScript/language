@@ -86,6 +86,11 @@ beyond its length. `ArrayList` is the default implementation, a contiguous growa
 slices until one of them is written to; `TrieList` is a bit-partitioned trie for a list kept in many versions at once,
 and is a documented alias of `ArrayList` until the trie exists.
 
+`ArrayList.withCapacity(capacity)` builds an empty list with room for `capacity` items before it has to grow again -
+what to reach for ahead of a loop of `append`s whose count is already known, instead of the default empty list that
+grows as it goes. `TrieList`, `TrieMap`, `HashMap`, `TrieSet` and `HashSet` each have the same static member, for the
+same reason.
+
 ### Map
 
 ```trb fragment

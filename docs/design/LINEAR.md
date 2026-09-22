@@ -454,7 +454,7 @@ would say so if they came back. The rest quote the diagnostic that is the reprod
     overload forms the decision log keeps, so a call should find it. **Partly closed (2026-09-22):** the checker now
     resolves the operator form (`scale * vector` beside `scale * scale` type checks), while the method form
     `scale.multiply(vector)` is still refused, because one member name reaches the first instantiation
-    (`docs/COLLECTIONS.md` gap 4). Natively the two bodies are two functions since item 16 closed.
+    (`docs/design/COLLECTIONS.md` gap 4). Natively the two bodies are two functions since item 16 closed.
 13. **Two small checker reports.** `const size = self.length()` inside a conditional `extend` does not infer the
     parameter although the annotation form does; and `print(x).round()` answers "The checker did not work out the type of
     this expression — this is a bug of the compiler" where it means "`Void` has no member `round`".
@@ -502,7 +502,7 @@ one list.
 the point and the tangent at a parameter, and flattening to a polyline within a tolerance. The same curves serve a canvas
 or an SVG *and* a motion along one, which is why it is one package and not two. `Fixed` matters here: a curve followed
 in lockstep has to land on the same point on both machines. The name is `std/curve` and not `std/path`, because
-`std/path` is the package of **file paths** ([docs/PATH.md](PATH.md)) and one word may mean one thing.
+`std/path` is the package of **file paths** ([docs/design/PATH.md](PATH.md)) and one word may mean one thing.
 
 **`std/animation`.** Easing functions, keyframes, tracks, tweens and a state machine, over a `trait Interpolate` that
 `Vector2`, `Quaternion`, `Angle`, `Fixed` and a colour all carry — `interpolated(toward:by:)` is already spelled that way

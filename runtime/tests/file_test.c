@@ -195,7 +195,7 @@ TORB_TEST(absolute_paths_are_text_arithmetic) {
     torb_text_release(extended);
     torb_text_release(share);
   }
-  /* A drive alone is its root, and a drive-relative path is read as absolute on that drive (docs/PATH.md section 2). */
+  /* A drive alone is its root, and a drive-relative path is read as absolute on that drive (docs/design/PATH.md section 2). */
   {
     torb_text drive = torb_text_from_cstring("c:");
     torb_text relative_on_drive = torb_text_from_cstring("C:foo\\bar");

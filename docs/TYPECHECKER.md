@@ -1906,7 +1906,7 @@ read.
 
 ### What the checker follow-up round adds
 
-Seven rules the checker did not enforce, gathered from the rounds that found them. Three are `docs/CONCURRENCY.md`
+Seven rules the checker did not enforce, gathered from the rounds that found them. Three are `docs/design/CONCURRENCY.md`
 section 12 (gaps 58, 67 and section 13's 1, 2, 3 and 17 above), two close gaps 53 and 68, and two are their own:
 
 - **`private` reaches one FILE, not one package** (the owner's decision). `isInsideDeclaration` asks whether the
@@ -2444,7 +2444,7 @@ _Decision:_ accepted (`mutation.trb`, `isCounted`). A value that merely *contain
 changing the value is still a change of a copy, and only the object inside it is shared.
 
 **49. May a `var fn` method answer a `Task`?**
-"Concurrency" and `docs/STREAMS.md` argued that it may not, because "an exclusive `var` access cannot stay open across an
+"Concurrency" and `docs/design/STREAMS.md` argued that it may not, because "an exclusive `var` access cannot stay open across an
 `await`" - which is why `Source.next` first took `self` and every stateful source of `std/stream` had to hide its state
 in the `var` bindings its closures captured. But the sentence is only true for a **value**: there a `var` is an exclusive
 in-out access whose "copy in, copy out" ends with the call. For a `shared type` there is no copy, `var` is the permission
@@ -2548,7 +2548,7 @@ it.
 
 The one thing that is left is that the language has no `move`: after `source.map(f)` the wrapper and the original both
 have a `var` path to the same object. That is not a hole in gap 20 (both are `var`) but the absence of linearity, and
-`docs/STREAMS.md` §2 says what the `Source` contract promises instead - one puller, consumed once. The narrower case of a
+`docs/design/STREAMS.md` §2 says what the `Source` contract promises instead - one puller, consumed once. The narrower case of a
 **value that contains a shared object** (`Option<Close>` in a `var` field) is not reached by gap 20 either, for the same
 reason gap 20 does not look inside values; nothing in `std/` relies on it, and it is a follow-up rather than a decision.
 
@@ -2873,7 +2873,7 @@ rule; a library that spawns a closure on your behalf (`Source.produce`) is not c
 58 already draws for `await()`. Nothing in the repository depended on the hole: `std/stream`s one `spawn` captures two
 `const`s.
 
-**Two more things a task may not take with it** were added with the rest of `docs/CONCURRENCY.md` section 12. A
+**Two more things a task may not take with it** were added with the rest of `docs/design/CONCURRENCY.md` section 12. A
 **top-level `var`** the closure reads is refused like a captured one: it is no capture at all - a declaration is one
 place the whole file shares and nothing copies it - so the closure records the declarations its body read next to its
 captures, and the rule asks both lists. And a capture whose type **contains a `shared type`** is refused, because a
@@ -2965,7 +2965,7 @@ _Decision:_ accepted, with two limits that the repository measured:
 every type now has must not fit every argument of `Type.from(...)` - and it is left out of the list a message offers,
 because nobody writes it and nobody can call it.
 
-**70. Four smaller gaps of `docs/LINEAR.md` section 12, and which of them were still there.**
+**70. Four smaller gaps of `docs/design/LINEAR.md` section 12, and which of them were still there.**
 _Decision:_ two were, two were not, and both halves are recorded because a stale gap costs the next round a day.
 
 - **A type parameter`s default reaches a member of a concrete `extend` (gap 4).** `Vector2.zero` where `zero` lives in

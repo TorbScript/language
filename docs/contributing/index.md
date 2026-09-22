@@ -37,6 +37,5 @@ about what a program *does* comes with a program there.
 - **[Add a page](adding-a-page.md)** - The seven steps from an empty file to a page that passes the gate, with a template for every kind of page to copy.
 - **[The docs commands](checks.md)** - What torb docs check, index, skill and bundle each do, which rules they decide, and which rules only a reviewer can decide.
 - **[The Agent Skill](the-skill.md)** - How torb docs skill turns this documentation into an Agent Skill, what it copies, what it leaves out, and how to install the result.
-- **[The page inventory](inventory.md)** - Every page the complete documentation needs, with its path, kind, scope and sources, grouped so that independent writers can each take one package.
 
 <!-- torb:index:end -->

@@ -25,6 +25,7 @@ one page that answers a question. Every page is written to be understandable on 
 - **[Task recipes](how-to/index.md)** - One page per task for somebody who already knows the language: the steps, the pitfalls, and one complete program that works.
 - **[Why the language is like this](explanation/index.md)** - The arguments behind the decisions, and the contrast pages for people and models arriving from Rust, Swift, Kotlin or TypeScript.
 - **[The toolchain](tooling/index.md)** - The torb command, the project files, and how to verify that what you wrote is correct and in the formatter canon.
+- **[Design records](design/index.md)** - The specification documents behind a language or library feature that is still being built, each opening with a status line that says how much of it exists today.
 - **[How the toolchain is built](internals/index.md)** - The compiler design documents, indexed where they live: the architecture, the type checker and the back end.
 - **[Writing the documentation](contributing/index.md)** - The rules, templates and commands for writing a page here, and the research they come from.
 

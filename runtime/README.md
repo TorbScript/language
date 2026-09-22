@@ -29,7 +29,7 @@ deliberately panics says `TORB_IGNORE_LEAKS()`, because a panic runs nothing on 
 | `include/torb.h`      | The public ABI: the header, `torb_text`, `torb_list`, `torb_map`, the closure and object shapes, panics, allocation, element descriptors, console, process, files, `torb_file`, `Instant`/`Duration`, `std/math` |
 | `include/torb_number.h` | The checked arithmetic of all eight integer widths as `static inline`, plus the conversions |
 | `include/torb_natives.h` | Generated from the manifest by `torb natives --header`. Do not edit                      |
-| `include/torb_task.h` | The task ABI of 7.3: the task block, the resume function a `Task` function is lowered to, the suspension primitives, `sleep`/`pause`/`cancel`/`within`, channels, the scheduler (`docs/CONCURRENCY.md` section 16) |
+| `include/torb_task.h` | The task ABI of 7.3: the task block, the resume function a `Task` function is lowered to, the suspension primitives, `sleep`/`pause`/`cancel`/`within`, channels, the scheduler (`docs/design/CONCURRENCY.md` section 16) |
 | `memory.c`            | Block header, non-atomic counts, retain/release/is-unique/make-unique, immortal values, the live-block counter - all of a heap's state in one `torb_heap`, so the worker pool of 7.7 gives each worker one |
 | `task.c`              | One worker: the FIFO run queue, the timer heap, waking and cancelling, the tasks the runtime writes itself (`sleep`, `pause`, `within`), channels, the end-of-program drain |
 | `panic.c`             | `torb_panic` and friends, the frame counter, exit code 101, the test hook                  |
@@ -47,7 +47,7 @@ deliberately panics says `TORB_IGNORE_LEAKS()`, because a panic runs nothing on 
 
 Not here yet, by design: `io.c` (the poller and the blocking pool, 7.7 slice G) and with it every stream over real IO
 (`standardInput`, `Process.start`, `File.chunks`). There is no `collect.c` and there will be none: the language has no
-cycle collector (`docs/DESTRUCTORS.md` section 9). `File.lines` is also still
+cycle collector (`docs/design/DESTRUCTORS.md` section 9). `File.lines` is also still
 `.Planned`, for 5.7 rather than 5.12: it answers `Result<Iterable<String>, IoError>`, and `Iterable` is a trait-typed
 value over an iterator type - the ABI 5.7 defines. Reading the whole file to fake a streaming iterator now would mean
 inventing that ABI early and probably wrong, so it waits. The manifest records every one of these as `.Planned` with

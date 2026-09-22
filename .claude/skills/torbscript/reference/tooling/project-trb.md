@@ -72,9 +72,10 @@ literal string argument with no `{...}` in it is.
 
 ### Workspaces
 
-A `workspace { members "..." }` names every project below it, each a directory or a `directory/*` for every project
-directly inside it. `project.trb` and `check`, `build` and `test` at the workspace root all work on every member this
-way, which is how the toolchain finds `std/` when it checks a package that only names a dependency on it.
+A `workspace { members "..." }` names every project below it - see
+[Workspace](../standard-library/project.md#workspace) for what a pattern matches. `check`, `build` and `test` at the
+workspace root all work on every member this way, which is how the toolchain finds `std/` when it checks a package
+that only names a dependency on it.
 
 ```trb
 name "acme/shop"

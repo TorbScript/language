@@ -92,6 +92,7 @@ reads the wall clock, which is a capability, and only an explicit `use` brings i
 
 ## Related
 
+- [std/prelude](../../standard-library/prelude.md) - every name this package re-exports today.
 - [use](use.md) - every form an import can take.
 - [Packages](packages.md) - what a package is, and how the prelude is one.
 - [Visibility](visibility.md) - `public`, which is what makes a name re-exportable at all.

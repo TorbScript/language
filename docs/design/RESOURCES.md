@@ -36,7 +36,7 @@ expected. A `String` variable is never one.
 
 This design adds one parameter kind to the checker and three types to a new `std/resource`, and it changes one
 signature that runs on neither implementation today (`Sandbox.load`). It adds no syntax, no keyword, no annotation and
-no build step. `docs/PROJECT.md` section 9 says what the project file and the build output layout have to say about
+no build step. `docs/design/PROJECT.md` section 9 says what the project file and the build output layout have to say about
 it; everything else is here.
 
 **The repository is migrating to `static` and `var fn`**, so a member that belongs to the type is written
@@ -236,7 +236,7 @@ out for now and says why.
 **A string literal whose expected type is a resource type is a resource.** This is the rule that already exists for
 numbers, applied to one more expected type: the literal takes its type from where it is written, and an expression
 that is not a literal takes no type from anywhere. There is no `Into<Resource>`, no `From<String>` and no coercion:
-`docs/PATH.md` records the same wish for `Path` and calls it a candidate for later, which is the same mechanism and
+`docs/design/PATH.md` records the same wish for `Path` and calls it a candidate for later, which is the same mechanism and
 would be the same decision.
 
 **Exactly these expressions are a resource literal:**
@@ -398,7 +398,7 @@ does, and it is.
   an optimization with the same interface; they are the two answers to "may this wait", and choosing one is the whole
   decision a caller makes.
 
-The comparison worth drawing is `docs/ENCODING.md`, where a decoder deliberately does *not* return a `Task`: a decoder
+The comparison worth drawing is `docs/design/ENCODING.md`, where a decoder deliberately does *not* return a `Task`: a decoder
 is handed bytes somebody else read, so waiting is not part of what it does and a `Task` there would describe the call
 wrongly. A resource read *is* the IO, so the `Task` describes it correctly. The rule is the same in both places — the
 return type says what the call does — and it lands on opposite answers because the calls are different.
@@ -455,9 +455,9 @@ public native type Sandbox {
   meaning and only loses the name. The name goes to the shipped case, which is the one that deserves the short word.
 - **Changing it costs nothing.** Probe 4: `Sandbox` runs on neither implementation, so there is no program to break.
 - **`project.trb` is a `read`, not a `load`.** The toolchain is handed a directory on a command line and finds a
-  `project.trb` in it; that path is not known when the toolchain is compiled. `docs/PROJECT.md` section 8's grant is
+  `project.trb` in it; that path is not known when the toolchain is compiled. `docs/design/PROJECT.md` section 8's grant is
   therefore written against `read`, and the locked manifest changes nothing about that.
-- **A scene file is a `load`.** `docs/ECS.md` writes `Sandbox.load<Scene<World>>("./scenes/level.trb")`, and under
+- **A scene file is a `load`.** `docs/design/ECS.md` writes `Sandbox.load<Scene<World>>("./scenes/level.trb")`, and under
   this design that literal is a `Resource`: the scene ships beside the game, the compiler type checks it at build time
   (section 7), and `instance "scenes/asteroid.trb"` stays what ECS says it is — a method of the receiver, resolved by
   the host against the scene root, and not a resource literal at all, because it is written in a *script* and a
@@ -470,7 +470,7 @@ works: a library's `SpriteSheet.embedded("./hero.png")` must find the library's 
 an application's `SpriteSheet.load("./hero.png")` must find the application's.
 
 - **A library's assets travel in its package.** They are files below the package directory, so they are part of what
-  is published (`docs/PROJECT.md` section 3), and the `settings` section of its `project.lock.trb` lists every one
+  is published (`docs/design/PROJECT.md` section 3), and the `settings` section of its `project.lock.trb` lists every one
   the package's own code names.
 - **An application's literal is the application's file**, even when it is passed to a library's function. The literal
   is written in the application, so it resolves there. Nothing about the library's location enters into it.
@@ -492,7 +492,7 @@ Using the same text the panic paths use is not a saving of code, it is a saving 
 a file's name in an error message is a file's name in an error message, whether the error is a panic or a missing
 resource.
 
-A stable name is not a URI and gets no scheme of its own: `docs/URI.md` section 14 says why there is no `embedded:`
+A stable name is not a URI and gets no scheme of its own: `docs/design/URI.md` section 14 says why there is no `embedded:`
 and no `resource:`, and its section 9 is the general form of the literal rule this document's section 3 states.
 
 - **Two literals that resolve to one file are one resource.** The identity is the stable name after normalization, so
@@ -501,10 +501,10 @@ and no `resource:`, and its section 9 is the general form of the literal rule th
   package.
 - **A resource outside the package directory is an error.** `"../../secrets/key.pem"` names a file that is not part of
   the package, so it cannot be published and the build cannot ship it. The message names the package and its
-  directory, exactly like section 6 of `docs/PROJECT.md` does for a `use` that climbs out.
+  directory, exactly like section 6 of `docs/design/PROJECT.md` does for a `use` that climbs out.
 - **Case is compared byte for byte, on every platform.** The compiler resolves a literal against the *listing* of the
   directory, not against the file system's own matching, so `"./Hero.png"` next to a file called `hero.png` is an
-  error on Windows and macOS too, where the open would have succeeded. `docs/PATH.md` already decided this for paths
+  error on Windows and macOS too, where the open would have succeeded. `docs/design/PATH.md` already decided this for paths
   ("not case insensitive, on any platform, ever"), and the reason is sharper here: the alternative is a build that
   works on the author's machine and fails on the deployment's, which is the single most expensive bug shape a resource
   system can have. It costs one directory listing per directory that holds a resource, cached for the build.
@@ -553,7 +553,7 @@ loses build-time checking by an edit somewhere unrelated and nothing says so.
 their signature's promise.**
 
 - A capability block is **statically readable** when every statement in it is a command call of a
-  `SandboxCapabilities` member whose arguments are plain literals. That is the same rule `docs/PROJECT.md` section 10
+  `SandboxCapabilities` member whose arguments are plain literals. That is the same rule `docs/design/PROJECT.md` section 10
   applies to the manifest's static nine, one level down, and it covers every capability block in the repository's
   documents and examples.
 - A block that is not statically readable is an **error at the call site**, naming the statement and pointing at
@@ -577,7 +577,7 @@ scope is the prelude plus the allowlist rather than the package.
   see each other; a script exports nothing and nothing can see it, so it is a leaf. Adding leaves is the cheapest
   thing that can happen to that algorithm.
 - **A cycle is impossible.** A script cannot be imported, so nothing can point back at one. Scene-to-scene nesting is
-  a run-time relation through the receiver (`instance` is a method, `docs/ECS.md`), not a graph edge — which is why
+  a run-time relation through the receiver (`instance` is a method, `docs/design/ECS.md`), not a graph edge — which is why
   ECS gives it a depth limit and a `SceneError` rather than a compile-time cycle check.
 - **The cost is that `torb check` now opens files that are not `.trb` modules**, and that a scene with a type error
   makes `torb check` red. Both are the feature.
@@ -621,7 +621,7 @@ loader is a `fn` and not a `static`, and the only thing lost is that the sheet i
 ### What the compiler may do, and what "pure" has to mean
 
 **With the VM, the compiler MAY evaluate such an initializer at build time and embed the result.** The embedding
-format is `docs/ENCODING.md`'s principle: a value is its constructor call, so the built `SpriteSheet` is written back
+format is `docs/design/ENCODING.md`'s principle: a value is its constructor call, so the built `SpriteSheet` is written back
 as the constructor call that produces it, and that call is what the binary holds. This is constant folding — the
 program behaves identically either way — and it turns a corrupt asset into a build error.
 
@@ -636,7 +636,7 @@ program behaves identically either way — and it turns a corrupt asset into a b
 3. **It is deterministic.** No clock, no environment, no process, no randomness, and no iteration order that depends
    on the address of anything — a map whose order came from pointer identity would make two builds of one commit
    differ, which is the one property the whole toolchain is built on. **The environment is closed here even though
-   `docs/PROJECT.md` section 8 opens it for a `project.trb`**, and the two are not in tension: a manifest's
+   `docs/design/PROJECT.md` section 8 opens it for a `project.trb`**, and the two are not in tension: a manifest's
    environment read produces a *setting*, which is recorded by name in the lock and visible to everybody who reads the
    package, while a folded initializer produces a value inside the binary that nothing records and nobody can see.
 4. **It does not panic.** A panic while folding is a **build error at the line of the constant**, carrying the panic's
@@ -651,7 +651,7 @@ program behaves identically either way — and it turns a corrupt asset into a b
 **What the value's type must satisfy**, so that "a value is its constructor call" can actually write it:
 
 - **It round-trips through its own constructor**: what `Encode` writes, `Decode` reads back as the same value. For a
-  type with the derived implementations (`docs/ENCODING.md` section 3) that is free. A type that implements `Encode`
+  type with the derived implementations (`docs/design/ENCODING.md` section 3) that is free. A type that implements `Encode`
   by hand is embeddable only if its hand-written form is still the constructor call `Decode` reads — and if it is not,
   the compiler cannot tell, so **a hand-written `Encode` disqualifies a type from folding** and the message names it.
 - **Every field's type satisfies the same, transitively**, including the items of a collection and the payload of a
@@ -685,7 +685,7 @@ every item below is.
 - **Packaging.** Each `Resource` is copied to `<program>.resources/<stable name>`; each `EmbeddedBytes` and
   `EmbeddedText` is emitted as static data. Nothing is guessed and nothing is listed twice.
 - **The published package's file list.** Every literal in the package's *own* files becomes a `resource "..."` line
-  in the `settings` section of its `project.lock.trb` (`docs/PROJECT.md` section 8), so a consumer sees the non-code
+  in the `settings` section of its `project.lock.trb` (`docs/design/PROJECT.md` section 8), so a consumer sees the non-code
   files of a dependency without evaluating anything, and `torb publish` refuses a package whose code names a file the
   archive does not contain.
 - **Watch mode.** The resource set is a file set, so `torb build --watch` watches it. Today it can only watch `.trb`
@@ -713,7 +713,7 @@ every item below is.
   about thirteen minutes and four hundred megabytes of generated C, which is the accident — an `assets/` directory
   embedded by a loop — rather than a trade anybody made. **The total is what is measured and a single file has no
   limit of its own**: one oversized file blows the total too, while a hundred files of two hundred kilobytes is
-  exactly what a per-file limit would miss. `docs/PROJECT.md` section 9 has the vocabulary, why the low level is a
+  exactly what a per-file limit would miss. `docs/design/PROJECT.md` section 9 has the vocabulary, why the low level is a
   line on the build report rather than a new diagnostic severity, and why neither setting is static.
 - **The conformance suite.** One program per behaviour, byte-identical on both implementations: an embedded text, an
   embedded binary whose bytes are not UTF-8, a shipped resource read successfully, a shipped resource that is missing
@@ -729,7 +729,7 @@ Six slices. Each one lands with the repository checking green, `torb test` passi
 conformance suite comparing the two implementations. Slices 1 to 4 need nothing that does not exist; slices 5 and 6
 need the VM (7.x).
 
-**All of this lands after the repository has moved to `static` and `var fn`, and after `docs/PROJECT.md`'s slices 1
+**All of this lands after the repository has moved to `static` and `var fn`, and after `docs/design/PROJECT.md`'s slices 1
 to 4**, because a resource's stable name is a package-relative path and section 3 of that document is what settles
 which files belong to a package.
 
@@ -743,7 +743,7 @@ which files belong to a package.
 | 6 | **L3.** The one new case in the module-constant purity rule; folding a pure initializer in the VM; the embedding through `Encode`; the six conditions as diagnostics | `compiler/src/semantics/checker/declaration.trb`, `compiler/src/ir/*`, the VM | **Blocked, and the largest.** It is compile-time evaluation with a fence around it, and every one of the six conditions is a message somebody will read |
 
 **The prose.** A new `docs/standard-library/resource.md`; `docs/standard-library/sandbox.md` (three members instead of
-one); `docs/tooling/torb-build.md` (the output layout and the embedded total); `docs/ECS.md`'s loader snippet;
+one); `docs/tooling/torb-build.md` (the output layout and the embedded total); `docs/design/ECS.md`'s loader snippet;
 CONCEPT's decision log gains one entry; `docs/internals/index.md` lists this document, which is already done.
 
 ## 11. What this is not
@@ -757,11 +757,11 @@ CONCEPT's decision log gains one entry; `docs/internals/index.md` lists this doc
   cyclic imports free and lets the checker compute exports to a fixpoint), and it needs the **checker to know a type
   before the code that produces it has run** — so either the loader declares types, which is meta-programming, or the
   checker evaluates arbitrary user code, which CONCEPT lists as a possible future and not a v1 feature.
-  `docs/PROJECT.md` section 6 reserves the dot in a module component so that this stays unavailable rather than
+  `docs/design/PROJECT.md` section 6 reserves the dot in a module component so that this stays unavailable rather than
   half-available.
 - **Not an asset pipeline.** Nothing converts, compresses, resizes, atlases or transcodes. A loader is a function, and
   a function is not a pipeline. A project that wants a texture atlas builds one and checks it in, or writes a program
-  that builds one and runs it — and that program is an ordinary `program` line (`docs/PROJECT.md` section 4), run by a
+  that builds one and runs it — and that program is an ordinary `program` line (`docs/design/PROJECT.md` section 4), run by a
   person, not a hook the build fires.
 - **Not a list in the manifest.** SwiftPM's `resources:` and Flutter's `assets:` are a second source of truth that can
   disagree with the call sites, and the disagreement is a run-time failure with a string in it.
@@ -773,7 +773,7 @@ CONCEPT's decision log gains one entry; `docs/internals/index.md` lists this doc
 - **Not a directory or a glob, yet.** Section 6 says what a `ResourceDirectory` would have to answer first, and what
   to write until then.
 - **Not a `Path`.** A resource has a *name*, not a path: it is project-relative, always `/`, and it is not a thing
-  `std/fs` will open for you. `docs/PATH.md`'s `Path` is for files the program is pointed at.
+  `std/fs` will open for you. `docs/design/PATH.md`'s `Path` is for files the program is pointed at.
 - **Not a change to how a script runs.** L2 checks a `.trb` resource at build time and changes nothing about
   execution: it still runs in the sandbox, at run time, with a heap and limits of its own, and `Script.apply` still
   reports what went wrong while it ran.
@@ -782,5 +782,5 @@ CONCEPT's decision log gains one entry; `docs/internals/index.md` lists this doc
 
 Nothing is open in this document. The three questions the previous round left — one embedding type or two, whether
 the `Task` on `Resource.bytes()` is the right trade, and whether an oversized embedding is a note or an error — are
-answered above and in `docs/PROJECT.md` section 9: two types, the `Task` stays (a return value is not a colour), and
+answered above and in `docs/design/PROJECT.md` section 9: two types, the `Task` stays (a return value is not a colour), and
 two configurable levels of which the upper one fails the build.

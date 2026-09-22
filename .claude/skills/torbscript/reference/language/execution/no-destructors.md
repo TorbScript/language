@@ -11,7 +11,7 @@ keywords:
   - using
   - reference counting
 source:
-  - docs/DESTRUCTORS.md
+  - docs/design/DESTRUCTORS.md
   - std/core/src/control.trb
 ---
 

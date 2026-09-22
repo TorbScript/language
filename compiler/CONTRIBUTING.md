@@ -111,7 +111,7 @@ by copying one of them into `seed/`. Never delete `seed/`, and never refresh it 
 syntax change, a new native, or renaming a std name the compiler looks up by string
 (`semantics/checker/wellknown.trb`, the operator traits in `checker/expression.trb`, the member lookups in
 `ir/lower/collection.trb`) is two commits: the first teaches both forms (or adds the native without using it), the
-seed is refreshed from it, and the second migrates (docs/COLLECTIONS.md 6a, docs/RUST-EXIT.md 4.2). A new flag of the
+seed is refreshed from it, and the second migrates (docs/design/COLLECTIONS.md 6a, docs/RUST-EXIT.md 4.2). A new flag of the
 driver is the same: `tools/bootstrap.sh` passes the seed nothing it may not know yet.
 
 **Build slots.** A C file of 8 MB or more - the compiler, a test suite of it - is compiled through

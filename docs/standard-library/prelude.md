@@ -12,13 +12,10 @@ source:
   - std/prelude/src/lib.trb
 ---
 
-`std/prelude` declares nothing of its own. Every name it re-exports lives in a package that can also be imported
-directly, and this file is the decision about what "one always needs": values, text, numbers, collections, pipelines,
-encoding, quotations, tasks, printing, mathematics, JSON and the two time values. **What a program can touch is not in
-here.** `std/fs`, `std/environment`, `std/process`, `std/io`, `std/http`, `std/sandbox` and `Clock` stay explicit
-imports, because there the import *is* the statement: "this file touches files" is readable at the top of the file, a
-sandbox is defined as "the prelude and nothing else", and a name that exists on one target and not on another would be
-a worse error than a missing import.
+`std/prelude` declares nothing of its own: every name it re-exports lives in a package that can also be imported
+directly. [The prelude](../language/modules-and-packages/the-prelude.md) is the rule - why the pure part of the
+standard library is in scope everywhere and a capability such as `std/fs` or `Clock` never is, and how a project
+replaces this package with another one. What follows here is exactly what `std/prelude` re-exports today.
 
 ## Import
 

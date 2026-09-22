@@ -29,7 +29,7 @@ torb format [path]...   The formatter (planned; no command line decided yet)
 
 ### What `torb canon` already covers
 
-[The formatter canon](the-formatter-canon.md)'s two decided rules - a call is a command wherever the grammar allows
+[The formatter canon](torb-canon.md)'s two decided rules - a call is a command wherever the grammar allows
 it, and a multi-line `"""` string is indented two spaces deeper than the line it starts on - are enforced today by
 `torb canon`, over the syntax tree, with a safety net that refuses any edit that would change what a program means.
 `torb format` is specified to enforce the same two rules the same way; nothing about them changes on the day it
@@ -60,7 +60,7 @@ $ torb canon --check .
 
 ## Related
 
-- [torb canon](torb-canon.md) - the command that enforces the same two rules today.
-- [The formatter canon](the-formatter-canon.md) - every rule of the canon in one place.
+- [torb canon](torb-canon.md) - the command that enforces the same two rules today, and every rule of the canon in
+  one place.
 - [Multi-line strings](../language/syntax/multi-line-strings.md) - the dedent whose layout `torb format` will own.
 - [The torb command](the-torb-command.md) - every subcommand, and which are still planned.

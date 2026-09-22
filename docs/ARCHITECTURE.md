@@ -127,7 +127,7 @@ binary" rests on: both back ends consume the same, fully resolved program, and e
   `number` for `Int`, and the fixed widths of CONCEPT's Built-in Types win over it, so a JavaScript `Int` is an exact
   64-bit integer however it is represented. And a type that may contain a `Close` object stays reference counted
   even where the host has a garbage collector, because the moment its `close()` runs is part of the program's meaning
-  (`docs/DESTRUCTORS.md` section 2a).
+  (`docs/design/DESTRUCTORS.md` section 2a).
 
 ### Runtime and `native`
 
@@ -154,7 +154,7 @@ The language has value semantics; identity is the marked exception (`shared type
 | Storage (`ArrayList`, `String`, tries, big types) | Reference counted buffer. A copy shares it. A write goes through "make unique": in place if the count is 1, copy first otherwise |
 | `var` parameters, a `var fn` receiver, `a[i].x = 1`       | A reference into the frame of the caller. Never escapes (references are second-class), so it needs no counting and no lifetime tracking |
 | `shared type`                                    | Reference counted object with interior mutability. The only thing that can form cycles |
-| Cycles                                           | Not collected, ever. Handles instead of references, receiver closures for stored callbacks, a leak report that names the types - `docs/DESTRUCTORS.md` section 9 |
+| Cycles                                           | Not collected, ever. Handles instead of references, receiver closures for stored callbacks, a leak report that names the types - `docs/design/DESTRUCTORS.md` section 9 |
 
 - **Reference counts are not atomic.** Every task owns its heap. Values that cross a task boundary are sent through a
   channel: storage with count 1 moves, shared storage is copied once. (To be measured against "atomic counts only for
@@ -163,7 +163,7 @@ The language has value semantics; identity is the marked exception (`shared type
   so `list = list.appended(x)` and the default participles (`var result = self`) change in place instead of copying.
   This is what makes the functional style as fast as the mutating one, and it has to be identical in both back ends.
 - No tracing garbage collector and no cycle collector. **`close()` is the one destructor** (planned,
-  [DESTRUCTORS.md](DESTRUCTORS.md)): only a `shared type` may have one, the last release runs it, and a slot whose
+  [DESTRUCTORS.md](design/DESTRUCTORS.md)): only a `shared type` may have one, the last release runs it, and a slot whose
   type may contain one is released at the end of its scope in reverse declaration order rather than at its last use,
   so the moment it runs is a line in the source. Every other release runs no user code and stays where the last-use
   analysis puts it.
@@ -227,6 +227,6 @@ The language has value semantics; identity is the marked exception (`shared type
    of file IO, and the manifest of natives that is the contract between it and the lowering.
 6. **Done:** the compiler compiles itself. The seed builds it, it builds itself again, and the two emit the same C.
 7. Bytecode and VM, tasks, channels, the sandbox (`Sandbox.load`, receiver scripts, `project.trb`). The runtime half
-   of streams comes with it: the specification and the declarations are in [docs/STREAMS.md](STREAMS.md) and
+   of streams comes with it: the specification and the declarations are in [docs/design/STREAMS.md](design/STREAMS.md) and
    `std/stream`, and section 14 there lists what 7 and 10 have to build.
 8. Formatter, language server, package manager.

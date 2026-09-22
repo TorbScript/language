@@ -13,7 +13,7 @@ keywords:
   - normalized
 source:
   - std/path/src/lib.trb
-  - docs/PATH.md
+  - docs/design/PATH.md
 ---
 
 `std/path` is `Path`: a root and the components between its separators, and never a string. `joined` cannot be given

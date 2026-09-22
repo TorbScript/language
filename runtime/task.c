@@ -10,7 +10,7 @@
  * for the waiters of a task and the queues of a channel, `queue_next` for the run queue), and a sender's item stays in
  * the slot of its frame until a receiver moves it out. The only buffers are a channel's ring and the timer heap.
  *
- * **Determinism** (docs/CONCURRENCY.md section 7): the run queue is FIFO, a task that is woken goes to its back, and
+ * **Determinism** (docs/design/CONCURRENCY.md section 7): the run queue is FIFO, a task that is woken goes to its back, and
  * timers that are due are woken in deadline order, ties in the order they were set, before the next task is taken. A
  * program that does no real IO and reads no clock therefore runs its tasks in one order on every machine.
  *

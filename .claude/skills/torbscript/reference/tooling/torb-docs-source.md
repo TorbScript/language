@@ -48,7 +48,7 @@ module, so it is skipped too.
 - **Every link resolves.** `[Iterator]`, `[List.append]` and `[Option.Some]` are resolved like a name at that place in the
   code: what the file declares, what it imports, the prelude, and `Type.member` through the type.
 - **Every example compiles.** The code indented by four spaces below `# Examples` is parsed, held to the
-  [formatter canon](the-formatter-canon.md) and type checked.
+  [formatter canon](torb-canon.md) and type checked.
 - **No comment tells the history of its own code.** `used to`, `formerly`, `previously`, `originally`, `at first`,
   `no longer`, `legacy`, `was renamed`, `milestone`, and a plan number behind `gap` or `round` are findings in a doc
   comment and in a `//` comment alike. A phrase matches whole words, and its last word matches its plural as well, so

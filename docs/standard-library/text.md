@@ -56,9 +56,12 @@ public native type String
 {
   fn chars(): Iterate<Char>
   fn bytes(): Iterate<UInt8>
+  fn charAt(offset: Int): Char?
+  fn byteAt(offset: Int): UInt8?
   fn byteLength(): Int
   fn isEmpty(): Bool
   fn slice(range: Bounds<Int>): String
+  fn sliceBytes(from: Int, to: Int): String
   fn contains(part: String): Bool
   fn startsWith(prefix: String): Bool
   fn endsWith(suffix: String): Bool
@@ -84,6 +87,12 @@ boundary, `String.from(Iterate<Char>)` and a runtime function that validates, so
 `IoError` and there is no replacement character anywhere in the language. `showNested()` is the text itself in double
 quotes with escapes; `show()` (from `Show`) is the text unquoted. `String.from(characters)` and
 `characters.to<String>()` come from `extend String with From<Iterate<Char>>`.
+
+`charAt(offset)` decodes the character that begins at a byte offset, or answers `None` at and past the end; an offset
+*inside* a character panics, like every other bad offset. `byteAt(offset)` answers the raw byte at that offset instead
+- a byte is never inside anything, so it never panics. `slice(range)` is `text[from..to]` with byte offsets and is
+ordinary TorbScript over `sliceBytes(from, to)`, the one native the runtime has for it; an offset on a UTF-8
+continuation byte, past `byteLength()`, or a start past the end each panic with the offset and the length named.
 
 ## Related
 

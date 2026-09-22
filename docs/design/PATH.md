@@ -85,7 +85,7 @@ through [`root()`](#3-the-members) and `components()`, and the accessor is what 
 
 **The capsule costs nothing here, because `Path` has a conversion pair.** `Path` has `From<String>` and `String` has
 `From<Path>` — the same text `show()` answers — so `Encode` and `Decode` are derived through that pair
-(`docs/ENCODING.md` section 3a): a path in a configuration file or in a JSON document is its text, which is what a
+(`docs/design/ENCODING.md` section 3a): a path in a configuration file or in a JSON document is its text, which is what a
 reader of that document expects and what a hand-written `encode` would have had to write anyway. `copy` and a `Path`
 pattern are closed with the constructor, and neither was part of this type's vocabulary: every member that changes a
 path answers a new one.
@@ -475,7 +475,7 @@ change and not a back-end one.
 **The second gap is `Into` on a concrete type behind a bound**, which probe 4 hit: the blanket
 `extend<Source, Target> Source with Into<Target> where Target: From<Source>` is not instantiated for a type parameter,
 so `path.into()` under `<Source: Into<Path>>` reaches neither back end. That is the same family as item 2 of
-`docs/ENCODING.md` section 13 ("a static trait member reached through a bound") and it is not on this design's path,
+`docs/design/ENCODING.md` section 13 ("a static trait member reached through a bound") and it is not on this design's path,
 because the trait-typed signature does not need it.
 
 **Until the first fix lands**, the interim signature is the concrete one and the conversion moves one character to the
@@ -672,7 +672,7 @@ nothing links to.
 - **Not case insensitive, on any platform, ever.** Section 1 says why.
 - **Not a glob and not a matcher.** `std/*` in a `project.trb` is a pattern over paths and stays a `String` the
   workspace reader interprets. A pattern language is a package of its own if it is ever wanted.
-- **Not a URL, and not a module import path.** A URL is `docs/URI.md`'s `Uri`, which is its own type because a path
+- **Not a URL, and not a module import path.** A URL is `docs/design/URI.md`'s `Uri`, which is its own type because a path
   is platform-dependent — separators, drive letters, UNC shares — and a URI is not; the two are joined by two
   fallible conversions (`Uri.tryFrom(path)`, `Path.tryFrom(uri)`) and never merged. `use Path from "std/path"` is a
   third thing again: it names a package and a module inside it, it is resolved by the workspace, and it is neither a

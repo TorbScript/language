@@ -13,7 +13,7 @@ keywords:
   - Fixed
 source:
   - std/linear/src/lib.trb
-  - docs/LINEAR.md
+  - docs/design/LINEAR.md
 ---
 
 `std/linear` is the vector arithmetic every geometric package builds on: `Vector2`, `Vector3`, `Vector4`, `Matrix2`,

@@ -37,6 +37,59 @@ Rules (calls and strings run by default):
 
 ## What it does
 
+### A call is a command wherever the grammar allows it
+
+Both a command call and a parenthesized one parse, so which one is written is a question of style, and the language
+answers it once instead of leaving it to a project's own preference. Every one of these has to hold, together: the
+call stands in command position - the start of a statement, the right of `=` in a binding or an assignment, after
+`return`, or after `=>`; the callee is a name or a member path; it has at least one argument, and the first one does
+not start with `(`, `[`, `-`, `!` or `.`; no argument has an operator at its top level; and every argument is on one
+line, except a trailing closure, which may run over several.
+
+```trb
+const role = Role name
+const email = Email.tryFrom text
+names.map Role
+print "Hello"
+```
+
+Everywhere else, a call keeps its parentheses: nested, because a command argument is an ordinary expression and does
+not itself become a command; without an argument; with an operator at the top level of an argument; over several
+lines; and in the head of an `if`, `for`, `while` or `match`.
+
+```trb
+Ok Some(x)                  // nested: the argument keeps its parentheses
+list.length()                // no arguments
+assert(sum == 3)              // an operator at the top level of the argument
+if ready(now) { }              // the head of an if
+```
+
+A call on a field is a [property command](../glossary.md#property-command) instead - `port 8080` writes the field,
+it does not call it - which is a fact about what the call means and not a choice of how to write it.
+
+### A multi-line string is indented
+
+The opening `"""` stays where it is; the content is two spaces deeper than the line the statement starts on; a
+closing `"""` that stands alone is aligned with the content. Because the dedent subtracts the indentation of the
+first content line, moving the whole block left or right changes nothing about the value - only how it reads next to
+the code around it.
+
+```trb
+fn generated(): String {
+  const header = """
+    #include <stdint.h>
+    """
+  header
+}
+```
+
+See [Multi-line strings](../language/syntax/multi-line-strings.md) for the four rules of the dedent itself; the two
+rules above say how the canon indents the source, which is a separate question from what the string is worth.
+
+Neither rule decides line length, blank lines or where a long call's arguments break across several lines - that is
+layout, and it stays [`torb format`](torb-format.md)'s alone, once milestone 8 replaces `canon` with it. A file
+`canon --check` accepts today can still be laid out differently once `torb format` exists.
+
 ### Rewriting, never generating
 
 `canon` moves parentheses and indentation over the existing syntax tree; it never reprints a file, so a comment, a
@@ -128,10 +181,19 @@ $ torb canon --check --rule calls --rule strings --rule imported-case-patterns -
 That is the tier A gate of [compiler/CONTRIBUTING.md](../../compiler/CONTRIBUTING.md), and `sh tools/gates.sh a` runs
 it with exactly those five rules.
 
+`torb docs check` (see [the docs commands](../contributing/checks.md)) holds every `trb` code block of this
+documentation to the call rule too, so a snippet in the wrong style is caught the same way a wrong type is:
+
+```console
+$ torb docs check docs
+178 pages, 24 folders, 484 snippets, no problems
+```
+
 ## Related
 
-- [The formatter canon](the-formatter-canon.md) - every rule of the canon in one place.
+- [torb format](torb-format.md) - the tool that replaces `canon` in milestone 8, and takes over layout as well.
 - [Command calls](../language/syntax/command-calls.md) - the rule `calls` enforces.
 - [Multi-line strings](../language/syntax/multi-line-strings.md) - the rule `strings` enforces.
 - [Pattern forms](../language/pattern-matching/pattern-forms.md) - the language rule `unused-bindings` sweeps for.
+- [The docs commands](../contributing/checks.md) - how this documentation's own snippets are held to the canon.
 - [Verify your work](verifying-your-work.md) - where `canon --check` sits among `check` and `test`.

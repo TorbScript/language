@@ -900,7 +900,7 @@ unless user.isAdmin {
 ```
 
 **`using` is not one of those functions for long: it binds a name, so it becomes a declaration** (decided, not yet
-implemented - [docs/DESTRUCTORS.md](docs/DESTRUCTORS.md) section 4). `using file = File.open(path)?` binds `file` to
+implemented - [docs/design/DESTRUCTORS.md](docs/design/DESTRUCTORS.md) section 4). `using file = File.open(path)?` binds `file` to
 an object whose release - and the `close()` that release runs - happens at the end of the block, and the checker
 refuses to let the name escape it (no field, no `return`, no escaping closure). `using` never awaits: a graceful end
 such as `sink.end().await()?` is a line of its own.
@@ -1098,7 +1098,7 @@ samples[1..4].sort { _ }             // A range is a path, too: sorts this part 
   `using File.open(path)? { ... }`. The rule is about the base of a path (`f().x = 1`), not about ownership.
 - The variable of a `for` loop is a `const`. To change elements, use the path (`items[index].x = 1`,
   `items.update(index) { ... }`) or build a new collection with `map`. **`for var element in items`** (decided, not
-  yet implemented - [docs/COLLECTIONS.md](docs/COLLECTIONS.md) section 3.11) binds a `var` reference to each slot
+  yet implemented - [docs/design/COLLECTIONS.md](docs/design/COLLECTIONS.md) section 3.11) binds a `var` reference to each slot
   instead, for one turn of the body; see [Collections and Iteration](#collections-and-iteration).
 - Closures capture `const` bindings as copies. A captured `var` binding is shared between the closure and its scope -
   the one place where a variable is shared. Closures passed to `spawn` cannot capture `var` bindings.
@@ -1721,7 +1721,7 @@ panic "unreachable"                                      // Bugs. Not catchable,
   `  at src/file.trb:12:5` for the panic site and, in the debug profile, the frames of the task. The exit code is
   **101**, and both back ends agree on the text to the character because the conformance suite compares it.
 - **Nothing runs while a program falls over.** No `close()`, no `using` cleanup - a panic is a bug, and running more
-  code in a broken program is how bugs get worse. The destructor ([docs/DESTRUCTORS.md](docs/DESTRUCTORS.md)) runs on
+  code in a broken program is how bugs get worse. The destructor ([docs/design/DESTRUCTORS.md](docs/design/DESTRUCTORS.md)) runs on
   releases, and a panic releases nothing: the process ends.
 - **A panic aborts the process,** because the language has no supervision. The one exception is a sandboxed script: the
   VM is interpreting it and the script has a heap of its own, so the VM stops it and reports a `SandboxError`
@@ -1754,7 +1754,7 @@ The collection types are **traits**, one per kind. Signatures, fields and bindin
 implementation is only named where something is constructed. Collections are values like everything else: the binding
 decides whether they can be changed.
 
-**Every kind has its own words** (owner, 2026-09-22 - [docs/COLLECTIONS.md](docs/COLLECTIONS.md) section 6b): `List`
+**Every kind has its own words** (owner, 2026-09-22 - [docs/design/COLLECTIONS.md](docs/design/COLLECTIONS.md) section 6b): `List`
 `append`, `Set` `insert`/`remove`, `Map` `set`/`remove`, `Stack` `push`/`pop`/`peek`, `Queue` `enqueue`/`dequeue`/`peek`.
 "`add` for everything is a sledgehammer": on top of a stack, at the back of a list and somewhere in a set are different
 meanings, and the word at the call says which one it is. There is no `Collection` trait above the five kinds.
@@ -1840,7 +1840,7 @@ var index: Map<String, Int> = HashMap()                 // Trait as the type, im
   so it is not an open `var` access: changing `xs` inside of the loop is safe and does not affect the loop, and the
   loop variable is a `const` copy of each item.
 - **`for var element in container` changes every element in place** (decided, not yet implemented -
-  [docs/COLLECTIONS.md](docs/COLLECTIONS.md) section 3.11). It binds a `var` reference to each slot for one turn of the
+  [docs/design/COLLECTIONS.md](docs/design/COLLECTIONS.md) section 3.11). It binds a `var` reference to each slot for one turn of the
   body - Rust's `iter_mut`, not Swift's `for var`, which binds a mutable copy. It is sugar over `MutableIndexed` plus
   its `keys()`, so a `List`, an `Array`, a slice and the values of a `Map` (`for (key, var value) in map`) work, and a
   user container joins by implementing that one trait; a `Set` and a plain `Iterate` are rejected with a message that
@@ -2017,7 +2017,7 @@ while const Some(line) = lines.next().await()? {
 - **Buffering is always a wrapper.** `sink.buffered(capacity:)` answers a `Buffered` with its own `flush()`;
   `end()` flushes and `close()` does not. "When was it actually written" has to be answerable.
 - **`close()` releases what is above or below,** synchronously and without failing, which is what a destructor needs:
-  it is the one the last release runs ([docs/DESTRUCTORS.md](docs/DESTRUCTORS.md)). Every derived end closes the one
+  it is the one the last release runs ([docs/design/DESTRUCTORS.md](docs/design/DESTRUCTORS.md)). Every derived end closes the one
   it came from, so a reader that stops early (`take(5)`, a `find` that found it, an abandoned loop) never leaves a file
   handle open. `end()` is the graceful counterpart and can fail; `close()` is the abrupt one and cannot. A sink that
   is closed without being ended may have written less than it was given, and nothing ends a sink implicitly - not
@@ -2092,7 +2092,7 @@ the producer's next `add` fail with `ChannelClosed`, which ends its body - that 
 
 The whole specification - the contracts of both ends, the table of what is synchronous, the drivers, and what was taken
 from Rust, C#, Swift, Scala, Java, Node, Web Streams and Bun and what was not - is in
-[docs/STREAMS.md](docs/STREAMS.md).
+[docs/design/STREAMS.md](docs/design/STREAMS.md).
 
 ## Modules and Packages
 
@@ -2333,7 +2333,7 @@ const channel = Channel<Int>(capacity: 8)        // a stream in memory: `channel
 - **A `var fn` method may answer a `Task` when its type is shared, and only then** - see
   [Identity](#identity-shared-type). This is what lets a task change an object it holds; a value would have to write its
   change back when the call returns, which is before the task has run.
-- **Every task is cancellable** ([docs/CONCURRENCY.md](docs/CONCURRENCY.md) section 8). `task.cancel()` sets a flag,
+- **Every task is cancellable** ([docs/design/CONCURRENCY.md](docs/design/CONCURRENCY.md) section 8). `task.cancel()` sets a flag,
   and the task stops at its next suspension point or cancellation check: the compiler puts a check at every loop
   back-edge of a function that answers a `Task`, so a loop that never awaits stops too, while a synchronous callee runs
   to its end - there is no unwinding. Stopping releases the task's frame like a finished one's, which closes every
@@ -2442,10 +2442,10 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
   takes, so it cannot keep a C stack from overflowing, and the check that can is one comparison per call.
 - Memory: reference counting, and nothing else - no tracing collector and no cycle collector, now or later. Values
   cannot form cycles, and a closure that captures a `var` binding may not escape its scope, so only `shared type`
-  objects can; [docs/DESTRUCTORS.md](docs/DESTRUCTORS.md) section 9 is how they are kept out: trees and graphs hold
+  objects can; [docs/design/DESTRUCTORS.md](docs/design/DESTRUCTORS.md) section 9 is how they are kept out: trees and graphs hold
   handles instead of references, a stored callback takes its owner as a receiver, a leak is reported with the types
   still alive, and `Weak<Target>` comes to `std` only if those reports show a need.
-- **`close()` is the one destructor** (decided, not yet implemented - [docs/DESTRUCTORS.md](docs/DESTRUCTORS.md)).
+- **`close()` is the one destructor** (decided, not yet implemented - [docs/design/DESTRUCTORS.md](docs/design/DESTRUCTORS.md)).
   Only a `shared type` may implement `Close`; the last release runs `close()` exactly once; user code cannot call it,
   and `self` cannot escape it. A slot whose type may contain a `Close` object is released at the end of its scope, in
   reverse declaration order, and a temporary at the end of its statement - so the moment `close()` runs is a line in
@@ -2471,7 +2471,7 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
 
 ## Decision Log
 
-- **`close()` is the destructor, and a release that runs one has a line** (2026-09-22; docs/DESTRUCTORS.md). Only a
+- **`close()` is the destructor, and a release that runs one has a line** (2026-09-22; docs/design/DESTRUCTORS.md). Only a
   `shared type` implements `Close`, the last release runs it once, user code cannot call it and `self` cannot escape
   it. A slot whose type may contain a `Close` object is released at the end of its scope in reverse declaration order,
   not at its last use, because otherwise where `close()` runs relative to the output would follow the liveness pass
@@ -2480,7 +2480,7 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
   `Close` objects copies instead of sharing. `using` is one binding form (the function goes) and never awaits; a
   graceful end is an explicit `end().await()`. A back end with a garbage collector (JavaScript, PHP) still counts the
   types that may contain `Close`.
-- **Cancellation is drop of the frame, not of the handle** (2026-09-22; docs/CONCURRENCY.md section 8). A cancelled
+- **Cancellation is drop of the frame, not of the handle** (2026-09-22; docs/design/CONCURRENCY.md section 8). A cancelled
   task's frame is released at its next suspension point or cancellation check; the compiler inserts a check at every
   loop back-edge of a function that answers a `Task`, so every task is cancellable even when a loop never awaits, and a
   synchronous callee runs to its end because there is nothing to unwind. Releasing a `Task` handle still cancels
@@ -2488,10 +2488,10 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
 - **A closure that captures a `var` binding may not escape its scope** (2026-09-22), the rule `var` parameters have.
   The escaping box gave pure value code aliasing, races through `spawn`, an exclusivity bypass and cycles. State that
   has to escape is a `shared type`. Decided, not yet enforced by the checker.
-- **`for var element in container`** (2026-09-22; docs/COLLECTIONS.md section 3.11) is a `var` reference to each slot,
+- **`for var element in container`** (2026-09-22; docs/design/COLLECTIONS.md section 3.11) is a `var` reference to each slot,
   sugar over `MutableIndexed` plus `keys()`, lowered to an index loop over element paths. Not Swift's mutable copy.
   Decided, not yet implemented.
-- **Every collection kind keeps its own words, and `Iterable` is `Iterate`** (owner, 2026-09-22; docs/COLLECTIONS.md
+- **Every collection kind keeps its own words, and `Iterable` is `Iterate`** (owner, 2026-09-22; docs/design/COLLECTIONS.md
   section 6b). `iterate()`, `List.append`, `Set.insert`/`remove`, `Map.set`/`remove`, `Stack.push`/`pop`/`peek`,
   `Queue.enqueue`/`dequeue`/`peek`; the `Collection` trait is deleted and `Add` stays (`Plus` is no longer planned).
   "`add` for everything is a sledgehammer": on top, at the back and somewhere are different meanings. A single-method
@@ -2739,7 +2739,7 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
 - No cycle collector and no `weak` keyword (was: a cycle collector for `shared type` objects instead of `weak`
   references). A tracing pass would make the moment a destructor runs non-deterministic again; trees hold handles,
   stored callbacks are receiver closures, leaks are reported by type, and `Weak<Target>` in `std` only if needed
-  (docs/DESTRUCTORS.md section 9)
+  (docs/design/DESTRUCTORS.md section 9)
 - Type parameters are written out (`Item`, `Key`, `Value`, `Failure`, `Output`)
 - `nameOf(expression)` through `Expression<Value>`, `typeName<Value>()` as a compile-time function
 - Variadics never unpack implicitly, spread (`...`) works on `Iterate`
@@ -2871,7 +2871,7 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
   code 1.
 - ~~No destructors. `Close` is a method, `using` a function, and the only observable destruction order is the nesting
   of `using` blocks.~~ **Superseded:** `close()` is the destructor, run by the last release, on a `shared type` only
-  (docs/DESTRUCTORS.md, and the entries at the top of this log). The three objections have answers there: the slot is
+  (docs/design/DESTRUCTORS.md, and the entries at the top of this log). The three objections have answers there: the slot is
   its own drop flag, fields go in reverse declaration order, and a panic runs no `close()`.
 - `Sandbox.load` returns a `Script<Value>` instead of a closure, and `Script.apply(var value: Value)` returns a
   `Result<Void, SandboxError>`. A closure of type `(var self: Value) => Void` has nowhere to say that the step limit
@@ -2960,11 +2960,11 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
 - `yield`: a function that answers a `Source` and produces items with `yield` would be the same state machine `Task`
   already is, so it costs little. Not in v1, because `Source.produce { sink => ... }` covers the cases (and with
   `capacity: 0` it *is* lock-step generation), and a second way to write a producer is worth less than one obvious way.
-  Decide when a real generator is awkward to write with `produce`. See docs/LOOPS.md, which examines a loop expression
+  Decide when a real generator is awkward to write with `produce`. See docs/design/LOOPS.md, which examines a loop expression
   as the spelling that would carry it.
 - `for` over a `Source`: there is no place in a `for` head for the `?` the pull needs, so v1 has
   `while const Some(item) = source.next().await()? { ... }`. Swift needs `for try await` for exactly this. Reconsider if
-  a spelling turns up that keeps `await` and `?` visible without a keyword combination. See docs/LOOPS.md section 8 for
+  a spelling turns up that keeps `await` and `?` visible without a keyword combination. See docs/design/LOOPS.md section 8 for
   one such spelling and what it would cost.
 - `_` as a type argument, meaning "infer this one": `Array<Int, _>`, `Map<String, _>`. A CANDIDATE, nothing more. The
   case for it is the inline storage primitive, where the item type is worth writing and the size is not

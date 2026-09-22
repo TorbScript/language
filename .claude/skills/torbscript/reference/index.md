@@ -6,6 +6,7 @@ that answers the question. A page marked (planned) describes a feature that does
 ## Contents
 
 - the root
+- design
 - explanation
 - guide
 - how-to
@@ -31,6 +32,10 @@ that answers the question. A page marked (planned) describes a feature that does
 ## The root
 
 - `glossary.md` - **Glossary** (glossary): Every term this documentation uses, one entry each, at most two sentences. The entry decides which word is correct.
+
+## design
+
+- `design/index.md` - **Design records** (index): The specification documents behind a language or library feature that is still being built, each opening with a status line that says how much of it exists today.
 
 ## explanation
 
@@ -180,7 +185,7 @@ that answers the question. A page marked (planned) describes a feature that does
 - `language/modules-and-packages/top-level-code.md` - **Top-level code** (reference): A statement outside every declaration is only allowed in an entry file, a script or a test file, and a top-level const of a module has to be known at compile time.
 - `language/modules-and-packages/use.md` - **use** (reference): use brings names into scope from a package or a file. Everything after from names a module; a path brings in a case of a type or a member another package attaches to it, and a use without names is an error.
 - `language/modules-and-packages/visibility.md` - **Visibility** (reference): A top-level declaration is private to its file unless marked public, and a public declaration may not expose a type that is private to its own file.
-- `language/modules-and-packages/workspaces.md` - **Workspaces** (reference): A workspace is one root project.trb naming several member projects, sharing one project.lock.trb so they can never resolve their dependencies apart.
+- `language/modules-and-packages/workspaces.md` - **Workspaces** (reference): A workspace is one root project.trb naming several member projects that check, build and test as a group; a shared project.lock.trb is designed for them but not read or written yet.
 
 ## language/pattern-matching
 
@@ -294,7 +299,6 @@ that answers the question. A page marked (planned) describes a feature that does
 - `tooling/index.md` - **The toolchain** (index): The torb command, the project files, and how to verify that what you wrote is correct and in the formatter canon.
 - `tooling/project-lock-trb.md` - **project.lock.trb** (tooling, planned): The file that is specified to pin the exact version, content hash and registry of every dependency, direct or transitive - no command reads or writes it yet.
 - `tooling/project-trb.md` - **project.trb** (tooling): The manifest of a project - name, dependencies, the workspace it belongs to, and what torb build and torb test read out of it today.
-- `tooling/the-formatter-canon.md` - **The formatter canon** (tooling): The one way every TorbScript source is written - a command wherever the grammar allows it, and a multi-line string indented two spaces deeper than the line it starts on.
 - `tooling/the-torb-command.md` - **The torb command** (tooling): Every subcommand of the toolchain, what it does today, and which of them are still planned.
 - `tooling/torb-build.md` - **torb build** (tooling): torb build type checks a program, lowers it to C, and hands the C to whatever compiler it finds - one file in, one native binary out, nothing to configure.
 - `tooling/torb-canon.md` - **torb canon** (tooling): torb canon rewrites sources into the formatter canon over the syntax tree, checks every edit against a second parse, and drops anything that would change what the program means.

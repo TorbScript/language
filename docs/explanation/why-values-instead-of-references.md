@@ -68,9 +68,9 @@ and their "copy in, copy out" meaning is never executed literally.
 - **A `weak` reference, and a cycle collector.** Values cannot form cycles, and a closure that captures a `var` binding
   may not escape its scope, so only `shared type` objects can. There is no cycle collector for them either: trees and
   graphs hold handles instead of references, a stored callback takes its owner as a receiver, and a leaked cycle is
-  reported by type at the end of a test ([the destructors design record](../DESTRUCTORS.md), section 9).
+  reported by type at the end of a test ([the destructors design record](../design/DESTRUCTORS.md), section 9).
 - **Destructors that run on any value.** A destructor exists, and only a `shared type` may have one: `close()`, run
-  exactly once by the last release (planned, [the destructors design record](../DESTRUCTORS.md)). A value is copied on
+  exactly once by the last release (planned, [the destructors design record](../design/DESTRUCTORS.md)). A value is copied on
   assignment and has no identity for a destructor to belong to.
 
 ## Consequences

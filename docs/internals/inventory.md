@@ -1,10 +1,10 @@
 ---
 title: The page inventory
-summary: Every page the complete documentation needs, with its path, kind, scope and sources, grouped so that independent writers can each take one package.
+summary: The historical work plan the documentation tree was written from, every page listed with its path, kind, scope and sources, grouped by the package a writer took.
 kind: explanation
 status: stable
 skill: omit
-order: 80
+order: 10
 keywords:
   - inventory
   - work plan
@@ -15,9 +15,11 @@ source:
   - std
 ---
 
-This is the work plan. Every page of the finished documentation is listed with the path it gets, the kind it is, the one
-line it has to answer, and where its facts come from. A page that exists today is marked `done` and is the example to
-copy from; everything else is open. A writer takes one package, writes its pages, and runs the gate.
+This was the work plan. Every page of the tree is listed here with the path it got, the kind it is, the one line it
+had to answer, and where its facts came from - split into thirteen packages so that independent writers could each
+take one without touching the same file. Every page listed here exists today, so this document is kept as a record
+of how the tree was planned rather than as an open queue; [Adding a page](../contributing/adding-a-page.md) is what a
+genuinely new page follows now.
 
 ## The decision
 
@@ -33,7 +35,7 @@ page is written to stand alone and the index it belongs to is generated.
 | 4 | `language/types/` | 13 | Nothing |
 | 5 | `language/traits/`, `language/generics/` | 14 | Nothing |
 | 6 | `language/pattern-matching/`, `language/errors/` | 13 | Nothing |
-| 7 | `language/collections-and-iteration/`, `language/concurrency-and-streams/` | 11 | `docs/STREAMS.md` for the streams pages |
+| 7 | `language/collections-and-iteration/`, `language/concurrency-and-streams/` | 11 | `docs/design/STREAMS.md` for the streams pages |
 | 8 | `language/modules-and-packages/`, `language/reflection/`, `language/configuration/`, `language/execution/`, `language/extensibility/` | 21 | Nothing |
 | 9 | `standard-library/` | 22 | The `std/` sources only |
 | 10 | `how-to/` | 14 | The reference, for the links |
@@ -194,7 +196,7 @@ The learning path, in order, mirroring `examples/tour/src/*.trb`. Every page has
 | `language/collections-and-iteration/collectors.md` | Collectors | reference | `collect`, and how to write one | `std/iteration/src/collectors.trb` |
 | `language/concurrency-and-streams/tasks.md` | Tasks | reference | `Task<Value>`, `await()`, and where it is allowed | `CONCEPT.md#concurrency-draft` |
 | `language/concurrency-and-streams/channels.md` | Channels | reference | What crosses a task boundary | `CONCEPT.md#concurrency-draft` |
-| `language/concurrency-and-streams/streams.md` | Streams | reference | Sources, stages and accumulators over time | `docs/STREAMS.md` |
+| `language/concurrency-and-streams/streams.md` | Streams | reference | Sources, stages and accumulators over time | `docs/design/STREAMS.md` |
 
 The three pages of `concurrency-and-streams/` are `status: planned` until the runtime has them. A planned page carries
 the planned banner and is left out of the generated skill.
@@ -220,7 +222,7 @@ the planned banner and is left out of the generated skill.
 | `language/execution/evaluation-order.md` | Evaluation order | reference | The order a reader sees, spelled out | `CONCEPT.md#execution-model` |
 | `language/execution/copies.md` | What a copy costs | reference | Which shape is copied and which shares storage | `CONCEPT.md#execution-model` |
 | `language/execution/tail-calls.md` | Tail calls and stack overflow | reference | What is guaranteed, and when the stack overflows | `CONCEPT.md#execution-model` |
-| `language/execution/no-destructors.md` | Destructors - close() runs at the last release (planned; the file keeps its old name until the records move) | reference | `close()` as the destructor, `using` as a binding, the release order | `docs/DESTRUCTORS.md` |
+| `language/execution/no-destructors.md` | Destructors - close() runs at the last release (planned; the file keeps its old name until the records move) | reference | `close()` as the destructor, `using` as a binding, the release order | `docs/design/DESTRUCTORS.md` |
 | `language/extensibility/control-structures.md` | Control structures are functions | reference | `do`, `unless`, `retry`, `using`, and how to add one | `CONCEPT.md#extensibility` |
 | `language/extensibility/expression-trees.md` | Reading code instead of running it | reference | What a query provider gets, and what it cannot get | `CONCEPT.md#quoted-expressions-expressionvalue` |
 | `language/extensibility/foreign-functions.md` | Foreign functions | reference | `foreign`, the C ABI, and what a sandbox never grants | `CONCEPT.md#foreign-functions-draft` |
@@ -321,8 +323,7 @@ because the failure is not ignorance but the habits of a language it does know.
 | `tooling/torb-run.md` | torb run | Running a project and a single file | `compiler/src/main.trb` |
 | `tooling/torb-build.md` | torb build | The C back end, the flags, the output | `compiler/src/cli/build.trb` |
 | `tooling/torb-test.md` | torb test | Where tests live and how they run | `std/test` |
-| `tooling/torb-canon.md` | torb canon | The canon, and the rules it can write | `compiler/src/canon/command.trb` |
-| `tooling/the-formatter-canon.md` | The formatter canon | Every rule of the canon in one place | `CONCEPT.md#formatter-canon` |
+| `tooling/torb-canon.md` | torb canon | The canon, the rules it can write, and every rule of the canon in one place | `compiler/src/canon/command.trb` |
 | `tooling/project-trb.md` | project.trb | Every field of the manifest | `std/project` |
 | `tooling/project-lock-trb.md` | project.lock.trb | What is pinned, and who may write it | `CONCEPT.md#packages-and-the-supply-chain` |
 | `tooling/torb-doc.md` | torb doc | Documentation from doc comments | `CONCEPT.md#toolchain` |
@@ -335,9 +336,10 @@ because the failure is not ignorance but the habits of a language it does know.
 
 For a writer taking a package:
 
-1. **Read [How to write here](writing.md) and [the front matter](front-matter.md) first.** They are short and they are
-   the whole contract.
-2. **Copy a template from [Add a page](adding-a-page.md)**, and copy the tone from the page marked `done` in your
+1. **Read [How to write here](../contributing/writing.md) and [the front matter](../contributing/front-matter.md)
+   first.** They are short and they are the whole contract.
+2. **Copy a template from [Add a page](../contributing/adding-a-page.md)**, and copy the tone from the page marked
+   `done` in your
    package. A page written like page 4 is the goal; a page written in a new style is a defect even when it is correct.
 3. **Take every fact from the `source` column.** Read the section of `CONCEPT.md` and the `std/` file, and run the
    example through the toolchain. Never write a snippet from memory.
@@ -350,8 +352,8 @@ For a writer taking a package:
 
 ## Related
 
-- [Add a page](adding-a-page.md) - the steps and the templates.
-- [How to write here](writing.md) - the writing rules.
-- [The front matter](front-matter.md) - the nine fields.
-- [The docs commands](checks.md) - the gate.
-- [How this documentation is structured](structure.md) - the tree and the kinds.
+- [Add a page](../contributing/adding-a-page.md) - the steps and the templates.
+- [How to write here](../contributing/writing.md) - the writing rules.
+- [The front matter](../contributing/front-matter.md) - the nine fields.
+- [The docs commands](../contributing/checks.md) - the gate.
+- [How this documentation is structured](../contributing/structure.md) - the tree and the kinds.

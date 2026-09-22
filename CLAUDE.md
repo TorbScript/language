@@ -29,7 +29,7 @@ Code rules, gates and repository operations: `compiler/CONTRIBUTING.md`.
 - A syntax change, a new native, a new driver flag the build uses, or renaming a std name the compiler looks up by
   string (`semantics/checker/wellknown.trb`, operator traits in `checker/expression.trb`, member lookups in
   `ir/lower/collection.trb`) takes two commits: teach both forms and refresh the seed, then migrate
-  (`docs/COLLECTIONS.md` 6a, `docs/RUST-EXIT.md` 4.2).
+  (`docs/design/COLLECTIONS.md` 6a, `docs/RUST-EXIT.md` 4.2).
 
 ## Traps
 

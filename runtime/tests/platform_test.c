@@ -6,7 +6,7 @@
  * `grüße.txt` is written, listed, read and removed the same way on both and the test says so without knowing which one
  * it is on. What follows them is the only `#ifdef _WIN32` outside `platform.c` in the whole runtime, and it is here
  * because `torb_platform_wide`, `torb_platform_utf8` and `torb_platform_system_path` answer a decision of
- * `docs/PATH.md` (section 6) rather than an implementation detail: which form a path crosses the boundary in.
+ * `docs/design/PATH.md` (section 6) rather than an implementation detail: which form a path crosses the boundary in.
  *
  * Everything is written under a scratch directory in the temporary directory of the machine and removed again, deepest
  * first - `torb_platform_remove` is what a test has instead of `remove`, which is narrow on Windows and could not

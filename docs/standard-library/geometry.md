@@ -13,7 +13,7 @@ keywords:
   - intersection
 source:
   - std/geometry/src/lib.trb
-  - docs/LINEAR.md
+  - docs/design/LINEAR.md
 ---
 
 `std/geometry` is the shapes and what they answer about each other: what contains a point, what two of them share, how

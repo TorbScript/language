@@ -309,6 +309,7 @@ question belongs to, then the one page that answers it:
 
 | Section | What is in it |
 |---------|---------------|
+| `reference/design/index.md` | The specification documents behind a language or library feature that is still being built, each opening with a status line that says how much of it exists today. |
 | `reference/explanation/index.md` | The arguments behind the decisions, and the contrast pages for people and models arriving from Rust, Swift, Kotlin or TypeScript. |
 | `reference/guide/index.md` | The learning path from nothing to a working program, in order, one step per page. |
 | `reference/how-to/index.md` | One page per task for somebody who already knows the language: the steps, the pitfalls, and one complete program that works. |

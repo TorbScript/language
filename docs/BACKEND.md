@@ -8,7 +8,7 @@ back end was built; the parts of milestone 7 that are still ahead are marked as 
 > stage 0 and natively". Stage 0 was deleted on 2026-09-22 (`docs/RUST-EXIT.md`); the C back end is the only
 > implementation today and the bytecode VM of milestone 7 will be the second. Where a row of section 6 or a gap of
 > section 7 decides something that still holds, it holds; where it describes stage 0, a cycle collector or "no
-> destructors", read it as history and follow the note beside it — `docs/DESTRUCTORS.md` and `docs/CONCURRENCY.md`
+> destructors", read it as history and follow the note beside it — `docs/design/DESTRUCTORS.md` and `docs/design/CONCURRENCY.md`
 > are where those questions are decided now.
 
 The typed IR, the C back end with its runtime, self-compilation, and the bytecode VM with tasks and the sandbox.
@@ -467,7 +467,7 @@ it out, change it, put it back - without a copy" (`var` Paths section). The lowe
 
 ### 2.4 Cycles
 
-**There is no cycle collector, and there will not be one** (decided 2026-09-22, `docs/DESTRUCTORS.md` section 9). The
+**There is no cycle collector, and there will not be one** (decided 2026-09-22, `docs/design/DESTRUCTORS.md` section 9). The
 plan written here first — Bacon/Rajan synchronous cycle collection with trial deletion over `Shared` objects and
 `Box`es, a color and a `trace` function per header, a candidate buffer per task — is withdrawn: a tracing pass over a
 plain-refcount heap would make the moment a destructor (`close()`) runs non-deterministic again.
@@ -840,7 +840,7 @@ channel and `receive` on an empty one suspend. `all(a, b)` and `Task.all` are or
 7.7 adds threads: one worker per core, one heap per worker, and a task that has **started** is pinned to its worker,
 because moving it would move a heap. `spawn` puts the task in a worker's inbox as a transferable message, and the
 worker that runs it first copies the captures into its own heap then — so a task that has not started yet owns nothing
-in any heap and **may be stolen by any idle worker** (`docs/CONCURRENCY.md` section 9 and slice H, which replaced the
+in any heap and **may be stolen by any idle worker** (`docs/design/CONCURRENCY.md` section 9 and slice H, which replaced the
 first plan here of round robin with no stealing at all). `await` across workers sets an atomic flag and enqueues on the
 owner. Only the channel transfer, the inbox and the ready flags are atomic; counts stay plain (section 2.5).
 
@@ -908,7 +908,7 @@ deleted).
 | **7.4** | The sandbox: `Script<Value>` (gap 12 below), capability checks at import, limits as counters, panics recovered, embedding the front end | `std/sandbox`, `vm/sandbox.trb` | A script that loops forever, one that imports what it may not, one that panics | 7.2 |
 | **7.5** | `project.trb` as a receiver script: `Project` and friends as real types, the static reader deleted after a test asserts both agree | `project/model.trb`, `project/manifest.trb` | Every `project.trb` of the repository, both readers | 7.4 |
 | **7.6** | The REPL: the scope chain, the persistent frame, shadowing, generations of redeclared types | `cli/repl.trb`, `vm/session.trb` | A transcript test | 7.4 |
-| **7.7** | Threads: workers, per-worker heaps, channel transfer, the inbox and the stealing of unstarted tasks (`docs/CONCURRENCY.md` slice H). **No cycle collector** (section 2.4, `docs/DESTRUCTORS.md` section 9): the leak report names the type of every block still alive instead | `runtime/task.c` | Parallelism tests, and a leak report test for a program that builds a cycle | 7.3 |
+| **7.7** | Threads: workers, per-worker heaps, channel transfer, the inbox and the stealing of unstarted tasks (`docs/design/CONCURRENCY.md` slice H). **No cycle collector** (section 2.4, `docs/design/DESTRUCTORS.md` section 9): the leak report names the type of every block still alive instead | `runtime/task.c` | Parallelism tests, and a leak report test for a program that builds a cycle | 7.3 |
 
 ```text
 5.1 ─► 5.2 ─► 5.3 ─┬─► 5.4 ─► 5.5 ─► 5.6 ─┬─► 5.7 ─┬─► 5.9b ┐
@@ -927,7 +927,7 @@ deleted).
   in `number.c` all exist and are `.Ready` in the manifest, with `runtime/tests` for each (see `runtime/README.md`
   for the representations chosen - nanosecond `Instant`/`Duration`, the `torb_file` `shared type`). The stream side of
   a file (`File.create`/`chunks`/`add`/`end`) stays `.Planned` for 7.3 with the rest of `std/stream`
-  (`docs/STREAMS.md` section 14), and `file.lines()` needs no native of its own any more. The tour itself still
+  (`docs/design/STREAMS.md` section 14), and `file.lines()` needs no native of its own any more. The tour itself still
   cannot run natively until the lowering this milestone does not touch (5.3's emitter, and whichever of 5.4-5.11 a
   module's constructs need) exists to call these symbols.
 
@@ -3718,7 +3718,7 @@ are bound, the body `Target.from self` is the ordinary static call `Path.from(te
   `tests/conformance/binary-only/blanket-into.trb` pins the compiled side.
 - **Stage 0 keeps one cell per `const` declaration and not one per type argument.** It has no types, so
   `Box<Int>.empty` and `Box<String>.empty` are one value there - which is the same cause as `extend Vector2<Float>` and
-  `extend Vector2<Int>` being indistinguishable for it (docs/LINEAR.md, section 12). `generic-constants.trb` stays a
+  `extend Vector2<Int>` being indistinguishable for it (docs/design/LINEAR.md, section 12). `generic-constants.trb` stays a
   program both implementations run because the value it reads is empty either way, and `std/linear` keeps every
   instantiation's constants in a concrete `extend` for the same reason.
 
@@ -3844,7 +3844,7 @@ the only observable destruction order is the nesting of `using` blocks. Releases
 are not observable. _Reason:_ a destructor would need drop flags, a field order rule and a story for a panic in one -
 and `using` already covers everything that must be deterministic.
 
-_Decision:_ accepted. **Superseded on 2026-09-22** by `docs/DESTRUCTORS.md`: `close()` is the destructor of a
+_Decision:_ accepted. **Superseded on 2026-09-22** by `docs/design/DESTRUCTORS.md`: `close()` is the destructor of a
 `shared type`, run by the last release. The three objections are answered there — a moved-out slot is cleared and is its
 own drop flag, fields are released in reverse declaration order, and a panic runs no `close()` — and a slot whose type
 may contain a `Close` object is released at the end of its scope in reverse declaration order instead of where

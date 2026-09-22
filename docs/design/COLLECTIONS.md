@@ -1030,7 +1030,7 @@ the `Accumulator`'s word", which is right; `close()` is not available for it. `S
 has one namespace of members, so the graceful end (`Task<Result<Void, Failure>>`, flushes, reports) cannot share the
 name. `end()` says the same thing as `close` about a *stream* without claiming the word `Close` owns. The other way
 out would have been to take `Close` off `Sink`; the owner's decision that `close()` is the language's destructor
-(`docs/DESTRUCTORS.md`) settles it the other way: a sink keeps `Close`, its `close()` is the abrupt end the last release
+(`docs/design/DESTRUCTORS.md`) settles it the other way: a sink keeps `Close`, its `close()` is the abrupt end the last release
 runs, and `end()` is the graceful one a program calls and awaits itself.
 
 ## 6b. The words per kind: the decision of 2026-09-22

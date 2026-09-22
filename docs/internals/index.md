@@ -11,19 +11,6 @@ documents:
   - ../BACKEND.md
   - ../RUST-EXIT.md
   - ../PERFORMANCE.md
-  - ../STREAMS.md
-  - ../ENCODING.md
-  - ../LINEAR.md
-  - ../ECS.md
-  - ../CONCURRENCY.md
-  - ../COLLECTIONS.md
-  - ../LOOPS.md
-
-  - ../PATH.md
-  - ../PROJECT.md
-  - ../RESOURCES.md
-  - ../URI.md
-  - ../DESTRUCTORS.md
 ---
 
 The toolchain is written in TorbScript and lives in `compiler/`, and it compiles itself from a seed. These are the
@@ -52,6 +39,10 @@ has observable run-time behaviour and no program in that suite is a rule nothing
 
 <!-- torb:index:begin -->
 
+## Pages
+
+- **[The page inventory](inventory.md)** - The historical work plan the documentation tree was written from, every page listed with its path, kind, scope and sources, grouped by the package a writer took.
+
 ## Design documents
 
 - **[TorbScript Implementation Architecture](../ARCHITECTURE.md)**
@@ -59,17 +50,5 @@ has observable run-time behaviour and no program in that suite is a rule nothing
 - **[The Back Ends (Milestones 5-7)](../BACKEND.md)**
 - **[The Exit of Stage 0](../RUST-EXIT.md)**
 - **[Performance](../PERFORMANCE.md)**
-- **[Streams](../STREAMS.md)**
-- **[Encoding](../ENCODING.md)**
-- **[Linear Algebra and Geometry](../LINEAR.md)**
-- **[Entities, Components and Scenes](../ECS.md)**
-- **[Concurrency and Parallelism](../CONCURRENCY.md)**
-- **[Collections](../COLLECTIONS.md)**
-- **[Loops as Expressions](../LOOPS.md)**
-- **[File Paths](../PATH.md)**
-- **[The Project File](../PROJECT.md)**
-- **[Resources](../RESOURCES.md)**
-- **[Uniform Resource Identifiers](../URI.md)**
-- **[Destructors, `close()` and `using`](../DESTRUCTORS.md)**
 
 <!-- torb:index:end -->

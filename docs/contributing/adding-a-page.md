@@ -23,9 +23,9 @@ index it belongs to updates itself.
    both ways is two pages. `contrast`, `tooling`, `package` and `glossary` are the four kinds that exist next to the
    four modes; [structure.md](structure.md) says what each folder is for.
 
-2. **Find the page in the [inventory](inventory.md)** and take its path, title, scope and sources from there. The
-   inventory is the work plan of the whole documentation; a page that is not in it needs a line added to it first, so
-   that two people cannot write the same page twice.
+2. **Find a similar page in [the inventory](../internals/inventory.md)** and take its path, title, scope and sources
+   as a pattern. It is the historical record of how the whole tree was planned, and every page in it exists today; a
+   genuinely new page has no line to copy and follows the rest of this page instead.
 
 3. **Create the file** at that path. A file name is lowercase with hyphens, because it is part of every link to the
    page. If the folder is new, create its `index.md` in the same change - a folder with no index is an error, and so is
@@ -340,4 +340,4 @@ order: <the position among its siblings>
 - [The front matter](front-matter.md) - every field and its rules.
 - [How to write here](writing.md) - the writing rules.
 - [The checks](checks.md) - what the gate decides.
-- [The inventory](inventory.md) - every page the documentation needs.
+- [The inventory](../internals/inventory.md) - every page the documentation needed, as a historical record.

@@ -40,17 +40,26 @@ fn firstArgument(): String? {
 public native type Process {
   static fn arguments(): List<String>
   static fn exit(code: Int): Never
+  static fn executablePath(): String?
   static fn run(command: String, arguments: List<String>): Result<ProcessOutput, IoError>
+  static fn runPassingThrough(command: String, arguments: List<String>): Result<Int, IoError>
   static fn start(command: String, arguments: List<String>): Result<Child, IoError>
 }
 ```
 
 `arguments()` is the command line arguments, without the program itself. `exit(code)` ends the program without closing
-open resources, which is why returning from the entry file is preferred. `run` runs a program to its end and collects
+open resources, which is why returning from the entry file is preferred. `executablePath()` is the absolute path of
+the running program's own executable, with `/` between its parts, or `None` where the operating system does not say
+(macOS, a BSD without `/proc`) rather than a guess from `arguments()`; it is how a program finds files it was
+installed beside - `torb` finds its `std/` and `runtime/` this way. `run` runs a program to its end and collects
 everything about it - the arguments are passed as they are, there is no shell, so nothing is interpreted and nothing
 has to be quoted. A program that could not be started at all is an `IoError`; a program that ran and failed is an exit
-code, which is why `torb build` can tell "there is no C compiler" from "the C compiler said no". `start` is for output
-too big to collect, or that has to be read while it arrives; `run` is the short form for everything else.
+code, which is why `torb build` can tell "there is no C compiler" from "the C compiler said no". `runPassingThrough`
+is the same run with this program's own three streams instead of collecting them: nothing is buffered, so the
+child's output appears while it writes it and a program reading standard input reads what the user is typing - a
+driver that calls another program, such as `torb build` calling the C compiler, uses this and not `run`. `start` is
+for output too big to collect, or that has to be read while it arrives; `run` and `runPassingThrough` are the short
+forms for everything else.
 
 ### ProcessOutput
 

@@ -41,7 +41,7 @@ without anybody asking for it — and so that a signature that takes a `Uri` can
 
 `std/uri` replaces no code, because there is none: the repository has three hand-written URI readers
 (`compiler/src/documentation/links.trb:38` classifies a link target with `startsWith("http://")`,
-`std/http`'s `HttpError.InvalidUrl` reports a text the native side could not take apart, and `docs/PROJECT.md`'s
+`std/http`'s `HttpError.InvalidUrl` reports a text the native side could not take apart, and `docs/design/PROJECT.md`'s
 `source "...", git: "..."` is a bare string). It is a package of its own and not part of `std/http`, because nothing in
 it touches a network.
 
@@ -86,7 +86,7 @@ different resource to every HTTP server there is.
 ### Probe 2 — three conversions on one capsule, and which of them is a pair
 
 `Uri` carries `TryFrom<String, UriError>`, `TryFrom<Path, UriError>` and `From<Urn>`, and `String` carries
-`From<Uri>`. The capsule rule (`docs/ENCODING.md` section 3a) says `Decode` comes from **exactly one** conversion
+`From<Uri>`. The capsule rule (`docs/design/ENCODING.md` section 3a) says `Decode` comes from **exactly one** conversion
 pair, so the question is whether three conversions are three pairs.
 
 ```text
@@ -133,13 +133,13 @@ error: Expected `Locator`, found `String`
    |            ^^^^^^^^^^^^^^^^^^^^^^^^
 ```
 
-**A literal adapts to nothing**, exactly as probe 1 of `docs/RESOURCES.md` found for a resource type — and a
+**A literal adapts to nothing**, exactly as probe 1 of `docs/design/RESOURCES.md` found for a resource type — and a
 `TryFrom<String, _>` on the target changes nothing about it. There is no partial mechanism to finish: section 9 is
-entirely new checker work, and it is the same work `docs/RESOURCES.md` slice 1 is.
+entirely new checker work, and it is the same work `docs/design/RESOURCES.md` slice 1 is.
 
 ### Probe 4 — `Into<Uri>` as a parameter type
 
-The signature `fn get(url: Into<Uri>)`, which is what `docs/PATH.md` section 5 wanted for `Path`. `Into.into(value)`
+The signature `fn get(url: Into<Uri>)`, which is what `docs/design/PATH.md` section 5 wanted for `Path`. `Into.into(value)`
 — the trait's member reached through the trait — is the one spelling that type checks, and it does not build:
 
 ```text
@@ -149,12 +149,12 @@ internal error: t_std_x2f_core_convert_from__...: slot %0 has the type `Never`, 
 ```
 
 So `Into<Uri>` is not available, the interim signature is the concrete `Uri`, and the ergonomics come from section 9's
-literal rule instead. This is the same gap `docs/PATH.md` section 5 measured, one milestone later and with the
+literal rule instead. This is the same gap `docs/design/PATH.md` section 5 measured, one milestone later and with the
 lowering's internal error in addition to the checker's refusal.
 
 ### Probe 5 — a `static fn` factory reached through a bound
 
-This one is the surprise, because `docs/ENCODING.md` section 13 lists it as missing.
+This one is the surprise, because `docs/design/ENCODING.md` section 13 lists it as missing.
 
 ```trb
 fn byBound<Value: TryFrom<String, Failure>, Failure>(text: String): Result<Value, Failure> {
@@ -268,7 +268,7 @@ written-out form when its source type is `String`, and the accessor is what a ca
 **What is taken.**
 
 - **Go's and Python's shape**: a URI reference is a value with parts, relative or absolute, and resolution is a
-  member. That is the only shape in the table where every member is total, which is the property `docs/PATH.md`
+  member. That is the only shape in the table where every member is total, which is the property `docs/design/PATH.md`
   already bought for `Path` and which section 3 keeps.
 - **Bun's and Deno's reach**: a URI is what a program passes around, not a string it re-parses at every boundary.
   Section 10 is how far that goes and where it stops.
@@ -370,7 +370,7 @@ no file system is guaranteed to reject any text; RFC 3986 *does* reject text, an
 and section 9 removes it for the case that matters, which is a literal.
 
 **Construction does RFC 3986 section 6.2.2, syntax-based normalization, and nothing else.** The rule is
-`docs/PATH.md`'s rule, applied again: **normalize what is a fact, and never guess.**
+`docs/design/PATH.md`'s rule, applied again: **normalize what is a fact, and never guess.**
 
 | What | Fact or guess | Where it happens |
 |---|---|---|
@@ -388,7 +388,7 @@ and section 9 removes it for the case that matters, which is a literal.
 
 The last two rows are the trade. `http://example.test:80/a` and `http://example.test/a` are two values, which
 surprises; putting a scheme-to-port table inside a construction would mean `std/uri` deciding that *your* scheme has a
-default port, and a construction that guesses is the one thing `docs/PATH.md` forbade. `normalized()` is one call,
+default port, and a construction that guesses is the one thing `docs/design/PATH.md` forbade. `normalized()` is one call,
 and the five schemes it knows (`http` 80, `https` 443, `ws` 80, `wss` 443, `ftp` 21) are the ones IANA fixes.
 
 **The table, copied from the probe.** `scheme | authority | path | query | fragment`, with `-` for what is absent.
@@ -564,12 +564,12 @@ Three reasons, in order of weight.
 1. **WHATWG URL is defined for the web and this type is not.** Its parser branches on a closed list of "special
    schemes" (`http`, `https`, `ws`, `wss`, `ftp`, `file`), and everything else takes a different path through the
    state machine — so `git+ssh://`, `urn:`, `mailto:` and `data:`, which are four of the ten rows in section 4's
-   table, are second-class there. `docs/PROJECT.md`'s `source "...", git: "..."` is exactly such a scheme.
+   table, are second-class there. `docs/design/PROJECT.md`'s `source "...", git: "..."` is exactly such a scheme.
 2. **A parser that repairs cannot refuse.** WHATWG's parser is written to make a browser's address bar work: it
    trims control characters, turns `\` into `/`, percent-encodes a space and lower cases what it feels like. Under
    section 9 a literal is checked at build time, and a checker whose parser repairs finds nothing to report.
 3. **WHATWG is a living standard.** Its behaviour has changed several times since 2012. A value type whose `==`
-   changes with a specification revision is not a value type, and `docs/PROJECT.md` section 8 already built the whole
+   changes with a specification revision is not a value type, and `docs/design/PROJECT.md` section 8 already built the whole
    toolchain on "two builds of one commit agree".
 
 **What a program meets, and what it does.**
@@ -611,7 +611,7 @@ around its absence.
 cannot have.**
 
 **`Url` is `isUrl()`**, which answers whether the reference has a scheme and an authority. It is not a type, for the
-reason `docs/PATH.md` section 4 gave for `RelativePath`: a `Url` capsule wrapping a `Uri` would have to carry
+reason `docs/design/PATH.md` section 4 gave for `RelativePath`: a `Url` capsule wrapping a `Uri` would have to carry
 `scheme`, `authority`, `host`, `port`, `path`, `segments`, `query`, `queryParameters`, `fragment`, `joined`,
 `normalized`, `resolved`, `relativeTo`, `show`, `compare`, `Encode` and `Decode` again, or a shared trait to carry
 them — seventeen members restated to express a condition that one sentence expresses. And what it would buy is
@@ -683,7 +683,7 @@ extend Path with TryFrom<Uri, UriError>
   and for nothing else. A relative reference becomes a relative path.
 
 **And because neither is a `From`, `Path` is not a second conversion pair of `Uri`.** The capsule rule needs the
-source to carry an infallible `From<Self>` (`docs/ENCODING.md` section 3a), so two `TryFrom`s make no pair at all and
+source to carry an infallible `From<Self>` (`docs/design/ENCODING.md` section 3a), so two `TryFrom`s make no pair at all and
 `Uri`'s `Decode` stays with `String`. Probe 2 measured it. This is a good outcome reached by a thin margin, and
 section 13 gap 9 is the part that should be fixed rather than relied on: once `std/idna` lands, `Path` into `Uri`
 becomes infallible, `Path` becomes a real pair, and `Uri` **silently loses `Decode`**. A rule where adding a total
@@ -704,15 +704,15 @@ All five round trip exactly. The last row is the signature doing its job.
 
 ## 9. A literal adapts to a checked type
 
-This is the language rule, and it has three users: `docs/RESOURCES.md`'s resource types, `TODO.md`'s `Regex`
+This is the language rule, and it has three users: `docs/design/RESOURCES.md`'s resource types, `TODO.md`'s `Regex`
 ("Regex und YAML, 2026-09-22"), and `Uri`.
 
 **The rule.** *A string literal whose expected type is one of a compiler-known set of types is a value of that type,
 parsed by the compiler where it is written. Anything that is not a literal is not.*
 
-That is `docs/RESOURCES.md` section 3 with four more expected types on the list, and it is the rule CONCEPT already
+That is `docs/design/RESOURCES.md` section 3 with four more expected types on the list, and it is the rule CONCEPT already
 has for numbers (`const ratio: Float = 1`) and for literal union types (`var status: Status = "online"`). Which
-expressions count is `docs/RESOURCES.md` section 3's table unchanged — a label changes nothing, a list literal's
+expressions count is `docs/design/RESOURCES.md` section 3's table unchanged — a label changes nothing, a list literal's
 elements each count, a default parameter counts and resolves against the *declaring* file, and a `const` initialized
 by a literal does **not**.
 
@@ -724,7 +724,7 @@ one that decides it.
 
 1. **The general rule needs the checker to run the code it is checking.** `Uri.tryFrom` is a function of the program
    under compilation; evaluating it at check time is constant evaluation of user code, which is the VM and milestone
-   7.x (`docs/RESOURCES.md` section 8 fences the same thing for a folded initializer, with six conditions). The
+   7.x (`docs/design/RESOURCES.md` section 8 fences the same thing for a folded initializer, with six conditions). The
    closed list needs none of it, because **its members are standard-library types the compiler may simply import**:
    `compiler/` already depends on `std/fs`, `std/io`, `std/process`, `std/time` and `std/environment`, and
    `use Uri from "std/uri"` in the checker is one more line. The checker then calls `Uri.tryFrom(text)` like any other
@@ -737,7 +737,7 @@ one that decides it.
    literal at every call site of every function that takes it is checked, from another file; removing it would
    un-check them with no diagnostic anywhere. A rule that wide has to be written at the type, and "written at the
    type" is an annotation, which CONCEPT does not have.
-4. **It contradicts what `docs/RESOURCES.md` already decided.** That document says, in section 3: *"There is no
+4. **It contradicts what `docs/design/RESOURCES.md` already decided.** That document says, in section 3: *"There is no
    `Into<Resource>`, no `From<String>` and no coercion"* — the trigger is the **expected type** and never a trait. The
    general rule would make a trait the trigger, and then a resource type would need a `TryFrom<String, _>` that means
    nothing (a resource's check is "does this file exist", not "does this text parse"). The closed list keeps one rule
@@ -749,19 +749,19 @@ one that decides it.
 |---|---|---|---|
 | a literal union type (`"tcp" \| "udp"`) | membership in a structural set | nothing | it ships |
 | `Path` | **none** — `From<String>` is infallible, so this is ergonomics only | the parameter kind | with the parameter kind |
-| `Resource`, `EmbeddedBytes`, `EmbeddedText` | the file exists, against a directory listing; UTF-8 for the text one | a directory listing per directory, cached | `docs/RESOURCES.md` slice 1 |
+| `Resource`, `EmbeddedBytes`, `EmbeddedText` | the file exists, against a directory listing; UTF-8 for the text one | a directory listing per directory, cached | `docs/design/RESOURCES.md` slice 1 |
 | `Uri` | `Uri.tryFrom(text)` answers `Ok` | the checker imports `std/uri` | with slice 2 of section 14 |
 | `Regex` | the pattern compiles | the checker imports `std/regex` | when `std/regex` exists |
 | a user's own `TryFrom<String, _>` type | `Type.tryFrom(text)` answers `Ok` | **the VM**, constant evaluation, and rules 1 to 3 above answered | 7.x, if ever |
 
 **The cost, stated plainly: every type on the list joins the fixpoint.** The compiler is written in TorbScript and
 compiles itself, so `std/uri` is code stage 1 type checks, the C back end emits, and the resulting binary runs while
-it compiles the next one — exactly what `docs/PATH.md` section 8 says about `std/path`. It has to be supported by both
+it compiles the next one — exactly what `docs/design/PATH.md` section 8 says about `std/path`. It has to be supported by both
 back ends before the literal rule lands, and probe 1 is the evidence that it is.
 
 ### The diagnostics
 
-Three messages, modelled on `docs/RESOURCES.md` section 3's three.
+Three messages, modelled on `docs/design/RESOURCES.md` section 3's three.
 
 ```text
 error: `https//example.test/x` is not a URI
@@ -799,7 +799,7 @@ would not have.
 ### What a non-literal does
 
 Nothing. A `String` value never converts, on its own or through `into()`, and the message above is what it gets. That
-is the same answer `docs/RESOURCES.md` gives and the same answer literal union types give, and there is exactly one
+is the same answer `docs/design/RESOURCES.md` gives and the same answer literal union types give, and there is exactly one
 rule for all of them.
 
 ## 10. Who takes a `Uri`
@@ -810,8 +810,8 @@ rule for all of them.
 | `http.post(url, body, headers)` | `url: String` | `url: Uri` | **no** |
 | `Request.url` | `String` | `Uri` | — |
 | `HttpError.InvalidUrl(message)` | a case of the error type | **deleted** | — |
-| `File.open/create/readText/writeText/list/…` | `path: String` | `path: Path` (`docs/PATH.md` slice 2) | **no** |
-| `Sandbox.embedded/load/read` | `path: String` | `EmbeddedText` / `Resource` / `Path` (`docs/RESOURCES.md` section 5) | **no** |
+| `File.open/create/readText/writeText/list/…` | `path: String` | `path: Path` (`docs/design/PATH.md` slice 2) | **no** |
+| `Sandbox.embedded/load/read` | `path: String` | `EmbeddedText` / `Resource` / `Path` (`docs/design/RESOURCES.md` section 5) | **no** |
 | `Storage.read/write/list/delete/exists` | there is no such package | `uri: Uri`, and the scheme picks the driver (section 11) | **no** |
 | `Connect.connect(uri)` | the same | `uri: Uri`, a connection string with its credentials in it (section 11) | **no** |
 | `Resource.name` | `String` | `String`, unchanged | — |
@@ -848,7 +848,7 @@ buys with `Bun.file(url)` is bought here by the conversion (`Path.tryFrom(uri)?`
 `File.readText("./config.trb")` read exactly as it does in Bun. **What a program that is handed a scheme it does not
 know in advance needs is a layer above `std/fs` rather than a wider signature in it**, and that layer is section 11.
 
-**Network imports are not proposed.** `docs/PROJECT.md` section 7 decided that source files name packages and
+**Network imports are not proposed.** `docs/design/PROJECT.md` section 7 decided that source files name packages and
 `project.trb` says where each comes from, and section 6 reserves every `scheme:` prefix with a message that points at
 the manifest. Nothing here reopens it: a `Uri` in a `source` line is the manifest side of that decision made typed,
 and `use X from "https://…"` keeps its grammar error. The argument stands as it did — a URL in a `use` means the type
@@ -1136,7 +1136,7 @@ From the probe, built and run:
   `docs/language/types/data-or-capsule.md` rule 4 already says "a capsule with a secret writes its own `Show`", and
   this is what writing one looks like when the value still has to be recoverable.
 
-### Asynchronous, per `docs/CONCURRENCY.md`
+### Asynchronous, per `docs/design/CONCURRENCY.md`
 
 Every driver operation reaches the outside world, so every one of them answers a `Task<Result<…, Failure>>` and every
 one of them is cancellable at its suspension points. That is CONCURRENCY section 8 applied without an exception:
@@ -1200,16 +1200,16 @@ between it and `MemoryStorage`. It is taste question 8.
 | Reached by | `uri.scheme()` | a project-relative literal the compiler resolved | the label, and the value is a `Uri` (section 10) |
 | Extensible by a package | **yes** | no | **no**, deliberately |
 
-- **`Resource` is not in this pattern at all.** `docs/RESOURCES.md` section 6 says the stable name is project-relative
+- **`Resource` is not in this pattern at all.** `docs/design/RESOURCES.md` section 6 says the stable name is project-relative
   text the build resolved: there is no `resource:` scheme and no run-time lookup by string, and that document's "Not a
   virtual file system" is untouched. A resource is a file the *author* chose at compile time; a `Storage` reference is
   one the program is handed while it runs. Merging them would put a compile-time guarantee behind a run-time table.
 - **The manifest's sources use the same *idea* and must keep a closed list.** `git:`, `path:` and `archive:` are
   schemes that pick a fetcher, which is exactly this section's picture — and the fetchers may not be a value a package
-  contributes, because `docs/PROJECT.md` section 8 requires that two builds of one commit agree. A build whose result
+  contributes, because `docs/design/PROJECT.md` section 8 requires that two builds of one commit agree. A build whose result
   depended on which fetcher the *builder* happened to have installed is the failure mode every plug-in-based build
   system has. So the toolchain validates the scheme with `Uri` and dispatches on a list it owns.
-- **`Sandbox` stays on `Path`, `Resource` and `EmbeddedText`** (`docs/RESOURCES.md` section 5), for the reason
+- **`Sandbox` stays on `Path`, `Resource` and `EmbeddedText`** (`docs/design/RESOURCES.md` section 5), for the reason
   `File.open` does. A script fetched through a `Storage` has no member to hand it to, which is gap 13.
 
 ### What other systems do
@@ -1366,16 +1366,16 @@ Gaps 1 to 9 are the type; gaps 10 to 13 are the driver layer of section 11.
    `NonAsciiHost`. *Smallest fix:* a package with Punycode (RFC 3492) and UTS #46 mapping, about three hundred lines
    plus a table. It is a slice of its own (section 14, slice 7) and it is what makes `Path` into `Uri` infallible,
    which is gap 9's trigger.
-2. **A string literal adapts to nothing.** Probe 3. *Smallest fix:* the parameter kind of `docs/RESOURCES.md`
+2. **A string literal adapts to nothing.** Probe 3. *Smallest fix:* the parameter kind of `docs/design/RESOURCES.md`
    slice 1, with the closed list of section 9 instead of three resource types.
 3. **`Into<Uri>` as a parameter type type checks and does not build.** Probe 4, with two internal errors in the
-   lowering. *Smallest fix:* the checker condition of `docs/PATH.md` section 5 (let a receiver whose own type is
+   lowering. *Smallest fix:* the checker condition of `docs/design/PATH.md` section 5 (let a receiver whose own type is
    `Into<Target>` resolve `into` through its witness), and then a lowering for it. The interim signature is the
    concrete `Uri`, which costs nothing once gap 2 is closed.
 4. **A derived `encode` is not compiled by the native back end.** `Json.encode(uri)` type checks and answers *"a
    derived `encode`, whose `Encoder` is all `var self` members is not supported by the native back end yet"*. So the
    capsule's `Encode`/`Decode` exist in the checker and not in a binary. *Smallest fix:* it is the encoding redesign
-   (`docs/ENCODING.md` section 14), and `std/uri` depends on it for `Decode` and on nothing else.
+   (`docs/design/ENCODING.md` section 14), and `std/uri` depends on it for `Decode` and on nothing else.
 5. **`std/number` has no narrowing conversion into `UInt8`.** `Int8.tryFrom(Int64)` and `Int32.tryFrom(Int64)` exist,
    `UInt8`, `UInt16`, `UInt32`, `UInt64`, `Int16` do not — so a package that produces `Bytes` (which is
    `List<UInt8>`) cannot make one from a number. The one way around it, `UInt8.tryFrom("{value}")`, type checks and
@@ -1421,12 +1421,12 @@ Gaps 1 to 9 are the type; gaps 10 to 13 are the driver layer of section 11.
     the native back end yet"* and *"`Task.await` is not supported by the native back end yet: the runtime does not
     provide it"*. Every asynchronous signature in section 11 therefore type checks and runs nowhere until milestone
     7.3 (it ran on stage 0 when this was written; stage 0 has been deleted).
-    *Smallest fix:* it is `docs/CONCURRENCY.md`'s own work and not this document's; it is recorded because the driver
+    *Smallest fix:* it is `docs/design/CONCURRENCY.md`'s own work and not this document's; it is recorded because the driver
     layer is the first design that is asynchronous end to end.
 13. **`std/fs` has no `remove`, and `Sandbox` reads only a `Path`.** `FileStorage.delete` has no native to call, and
     a script a program fetched through a `Storage` cannot be handed to `Sandbox` without being written to a file
     first. *Smallest fix:* `File.remove(path)` and `File.rename(from, to)` in `std/fs`; the `Sandbox` half belongs to
-    `docs/RESOURCES.md` and is named here so that it is not discovered twice.
+    `docs/design/RESOURCES.md` and is named here so that it is not discovered twice.
 
 ## 14. Migration
 
@@ -1440,17 +1440,17 @@ then it is an ordinary package nothing in `compiler/` depends on.
 | # | Slice | Files | Risk |
 |---|-------|-------|------|
 | 1 | **The package.** `Uri`, `Authority`, `UriError`, `Urn`, the parser, normalization, `resolved`/`relativeTo`, `Show`/`Equals`/`Hash`/`Compare`, `queryParameters`; the `Path` bridge; `std/text` gains the ASCII predicates of gap 6 and `std/number` the narrowing conversions of gap 5 | `std/uri/*`, `std/text/src/*`, `std/number/src/*`, `std/prelude/src/lib.trb` | **Low.** Probe 1 is this package, written out and built. `Decode` waits for gap 4, which is the encoding redesign, and nothing else in the slice does |
-| 2 | **The literal rule.** The parameter kind in the checker, the closed list with `Path`, `Uri` and the resource types, the three diagnostics, the recorded value in the IR; `compiler/` depends on `std/uri` | `compiler/src/semantics/checker/{expression,call}.trb`, `compiler/src/ir/*`, `compiler/project.trb`, `compiler/tests/check.test.trb` | **Highest of the eight.** It is a new parameter kind, probe 3 says there is nothing to build on, and it is the slice that puts `std/uri` in the fixpoint. It is the same work as `docs/RESOURCES.md` slice 1 and should be one round with it |
+| 2 | **The literal rule.** The parameter kind in the checker, the closed list with `Path`, `Uri` and the resource types, the three diagnostics, the recorded value in the IR; `compiler/` depends on `std/uri` | `compiler/src/semantics/checker/{expression,call}.trb`, `compiler/src/ir/*`, `compiler/project.trb`, `compiler/tests/check.test.trb` | **Highest of the eight.** It is a new parameter kind, probe 3 says there is nothing to build on, and it is the slice that puts `std/uri` in the fixpoint. It is the same work as `docs/design/RESOURCES.md` slice 1 and should be one round with it |
 | 3 | **`std/http`.** `get`, `post`, `request` and `Request.url` take a `Uri`; `HttpError.InvalidUrl` is deleted; the native side receives the canonical text | `std/http/src/lib.trb`, `compiler/src/backend/c/natives.trb`, `runtime/*` | **Low.** Three signatures and one error case, and every call site in the repository passes a literal |
-| 4 | **The manifest.** `source "...", git:/archive:/path:` and `registry "...", url:` are read as `Uri`s when the manifest is evaluated, so a typo is a manifest error and not a fetch failure; the lock records the canonical text | `compiler/src/project/*`, `docs/PROJECT.md` section 7 | **Low**, and it depends on `docs/PROJECT.md` slices 1 to 4 having landed |
+| 4 | **The manifest.** `source "...", git:/archive:/path:` and `registry "...", url:` are read as `Uri`s when the manifest is evaluated, so a typo is a manifest error and not a fetch failure; the lock records the canonical text | `compiler/src/project/*`, `docs/design/PROJECT.md` section 7 | **Low**, and it depends on `docs/design/PROJECT.md` slices 1 to 4 having landed |
 | 5 | **The documentation tooling.** `links.trb`'s four `startsWith` tests become `Uri.tryFrom(target)` and `resolved(against:)`, so an anchor, a relative link and an external link are told apart by the type | `compiler/src/documentation/links.trb` | **Medium.** The documentation gates compare generated text, so a changed classification changes output; the four cases have to answer exactly what they answer today |
 | 6 | **`std/identifier`.** `Identifier`, `Uuid`, `Ulid`, `IdentifierError`, the `urn:uuid:` bridge | `std/identifier/*`, and `std/random`, which has to exist first | **Blocked** on `std/random` (`TODO.md` line 1364). Everything else in it is probe 6, which builds |
 | 7 | **IDNA.** `std/idna` with Punycode and UTS #46; `Uri.tryFrom` accepts a non-ASCII host and stores its ASCII form; `repaired(text)` for the WHATWG differences of section 6; gap 9 is answered before `Path` into `Uri` becomes infallible | `std/idna/*`, `std/uri/src/*`, `compiler/src/semantics/checker/derive.trb` | **Medium.** The tables are the work, and gap 9 has to be closed in the same slice or `Uri` loses `Decode` without a diagnostic |
-| 8 | **The driver layer.** `Schemes` in `std/uri`; `std/storage` with `Storage`, `StorageFailure`, `Storage.registry`, `FileStorage` over `std/fs` and `MemoryStorage`; `Uri.text` beside `Uri.show` and `compare` over `text` (that half belongs to slice 1 and is written there) | `std/uri/src/*`, `std/storage/*`, `std/fs/src/lib.trb` for gap 13's `remove` | **Blocked** on gap 10 and on `docs/CONCURRENCY.md`'s cancellation slice. Probe 7 builds the synchronous form; landing it before the trait is asynchronous would change every driver's signature afterwards, which is the one change an ecosystem cannot absorb |
+| 8 | **The driver layer.** `Schemes` in `std/uri`; `std/storage` with `Storage`, `StorageFailure`, `Storage.registry`, `FileStorage` over `std/fs` and `MemoryStorage`; `Uri.text` beside `Uri.show` and `compare` over `text` (that half belongs to slice 1 and is written there) | `std/uri/src/*`, `std/storage/*`, `std/fs/src/lib.trb` for gap 13's `remove` | **Blocked** on gap 10 and on `docs/design/CONCURRENCY.md`'s cancellation slice. Probe 7 builds the synchronous form; landing it before the trait is asynchronous would change every driver's signature afterwards, which is the one change an ecosystem cannot absorb |
 
 **The prose.** A new `docs/standard-library/uri.md`, `docs/standard-library/identifier.md` and
-`docs/standard-library/storage.md`; `docs/PATH.md`'s "Not a URL" paragraph points here; `docs/RESOURCES.md`'s
-section 6 gains one sentence and its `Sandbox` section gains gap 13's; `docs/PROJECT.md` section 7's source table
+`docs/standard-library/storage.md`; `docs/design/PATH.md`'s "Not a URL" paragraph points here; `docs/design/RESOURCES.md`'s
+section 6 gains one sentence and its `Sandbox` section gains gap 13's; `docs/design/PROJECT.md` section 7's source table
 says the values are `Uri`s and that the fetchers stay a closed list; CONCEPT's decision log gains one entry for the
 literal rule and one for "a registry is a value"; `docs/internals/index.md` lists this document, which is done.
 
@@ -1483,13 +1483,13 @@ literal rule and one for "a registry is a value"; `docs/internals/index.md` list
 - **Not a query surface for databases.** `Connection` promises `close`, `ping` and `uri`, because that is all every
   driver can honestly promise. A program that queries names its driver and gets its typed API; `sqlx::AnyPool` is
   what the other choice looks like.
-- **Not a resource name.** `docs/RESOURCES.md` section 6's stable name is project-relative text that the build
+- **Not a resource name.** `docs/design/RESOURCES.md` section 6's stable name is project-relative text that the build
   resolved; it is not reached by a scheme, there is no `embedded:` or `resource:`, and there is no run-time lookup by
   string. That document's "Not a virtual file system" is unchanged.
-- **Not a module specifier.** `docs/PROJECT.md` section 6's grammar reserves every `scheme:` prefix with a message
+- **Not a module specifier.** `docs/design/PROJECT.md` section 6's grammar reserves every `scheme:` prefix with a message
   that points at the manifest, and section 10 above does not reopen it.
 - **Not `Encode`d as an object.** A `Uri` in a JSON document is its text, because a capsule is written as its source
-  type (`docs/ENCODING.md` section 3a). A reader of such a document sees `"https://example.test/a"` and not five
+  type (`docs/design/ENCODING.md` section 3a). A reader of such a document sees `"https://example.test/a"` and not five
   fields, which is what every other language's JSON does too.
 
 ## 16. Open
@@ -1504,7 +1504,7 @@ Everything technical above is decided. These are taste or direction, and only th
    a **capability trait per capability** rather than one `open(uri)`, there are **two** registry shapes because a
    resource URI and a service URI are read at different moments, and `Connection` promises only a lifecycle.
 2. **Does the prelude export `Uri`?** The document assumes yes: `Uri` and `UriError`, two names on top of 146, with
-   `Authority`, `Urn` and `repaired` behind `use … from "std/uri"`. That pairs with `docs/PATH.md` open question 2,
+   `Authority`, `Urn` and `repaired` behind `use … from "std/uri"`. That pairs with `docs/design/PATH.md` open question 2,
    which left `Path` out of the prelude — and the two belong together, because `File.readText("./config.trb")` and
    `http.get("https://…")` are the same ergonomics. The recommendation is both, which is four names.
 3. **`Identifier`, or `Uid`?** The rule says full words and no abbreviations, and `Uid` also means a POSIX user id.

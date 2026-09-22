@@ -21,7 +21,7 @@
 
 /*
  * The state of one heap. Everything the allocator knows lives here and nowhere else, so that the worker pool of 7.7
- * (docs/CONCURRENCY.md slices E-H) gives every worker one of these without touching a function below.
+ * (docs/design/CONCURRENCY.md slices E-H) gives every worker one of these without touching a function below.
  *
  * In 7.3 there is one worker, so there is one heap and `torb_heap_current` answers it; the call folds away. What the
  * pool slice changes, and all it changes here:
