@@ -1314,7 +1314,6 @@ fn shownFailure(var lowering: Lowering, var builder: FunctionBuilder, carried: S
       return None
     }
   }
-  // Hoisted: `showSlot` takes `lowering` by `var`, and stage 0 takes that argument before it evaluates the others
   const failed = errorTypeOf lowering, written
   const shown = showSlot lowering, builder, carried, failed, at
   if !lowering.isSupported {
@@ -1330,10 +1329,7 @@ fn shownFailure(var lowering: Lowering, var builder: FunctionBuilder, carried: S
  * subject's own type - which is what `Show` has to be dispatched on.
  */
 fn errorTypeOf(var lowering: Lowering, written: TypeId): TypeId {
-  // The substitution is taken out of `lowering` first: a `var` argument is taken before the other arguments are
-  // evaluated on stage 0 (CONTRIBUTING, trap 1), so reading a field of it in the same call reads a place that moved
-  const applied = substituted lowering, written
-  const arguments = match lowering.checker.types.form(applied) {
+  const arguments = match lowering.checker.types.form(substituted(lowering, written)) {
     .Nominal(_, given) => given
     _ => []
   }

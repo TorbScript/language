@@ -6,8 +6,7 @@
  *     }
  *
  * writes one line per test to standard output, `  ok      Vector2 > adds component-wise` or `  FAILED  ` plus the
- * message and the site, which is the format the interpreter of stage 0 prints to the byte: `torb test` compares the two
- * back ends by exactly these lines.
+ * message and the site.
  *
  * Both are functions of the runtime, because the runtime can call a closure: a closure value's `code` points at a thunk
  * with an erased environment, so a cast and a call are all that is needed. What is not ordinary is the **recovery

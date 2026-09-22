@@ -3,23 +3,21 @@
  * copies everything that is already in it - `n` appends copy `O(n²)` bytes. `concatenated` merges neighbours pairwise
  * instead, which copies every byte once per level of the tree and has `log n` levels.
  *
- * This is the program that decided milestone 6.2. `Iterable.joined` used to fold `result + separator + item.show()`, and
- * stage 0 never ran a line of it: `joined`, `String.from` and the whole `Iterable` surface are natives of the
- * interpreter, and Rust's `parts.join(separator)` walks the bytes once. So the emitted C was the only thing that ever
- * paid the square - and the compiler's own `program.c` is 786457 lines and 66 megabytes, which the binary spent hours
- * copying while it looked like a hang with no output at all.
+ * This is the program that decided milestone 6.2. `Iterable.joined` folded `result + separator + item.show()`, which
+ * copies what is already in `result` on every append - `n` appends pay `O(n²)` bytes - and the bug stayed invisible
+ * until it met a real case big enough to feel it: the compiler's own `program.c`, 786457 lines and 66 megabytes, which
+ * the binary spent hours copying while it looked like a hang with no output at all.
  *
  * The last block is a big join for exactly that reason: a fold takes seconds there and a merge tree takes none, so a
  * regression is visible in the time this file needs. Everything above it is the behaviour, which a fold got wrong in one
  * place too - a **leading empty piece** swallowed its separator, because "nothing yet" and "the empty text" are the same
  * value of a `String` accumulator and are two different pieces of a list.
  *
- * `concatenated` and the `joining` collector are the same fix and have no program here: stage 0 does not load `std/` at
- * all (its world is `natives.rs` plus `prelude.trb`), so a program that names either of them has nothing to be compared
- * against. What this file compares is exactly the two entries the interpreter answers with Rust's own `join`.
+ * `concatenated` and the `joining` collector are the same fix and have no program here. What this file pins is the
+ * two entries above, `joined` and `String.from`, byte for byte against `joined.expected`.
  */
 
-// --- `joined`, which stage 0 answers with a native ------------------------------------------------------------------
+// --- `joined` --------------------------------------------------------------------------------------------------------
 
 const empty: List<String> = []
 print empty.joined(separator: ", ")
@@ -48,7 +46,7 @@ print([true, false].joined(separator: " and "))
 print((0..4).joined(separator: "-"))
 print((1..4).map({ "n{_}" }).joined(separator: ", "))
 
-// --- `String.from`, the other one stage 0 answers with a native -----------------------------------------------------
+// --- `String.from` -----------------------------------------------------------------------------------------------
 
 print String.from("hällö wörld".chars())
 print String.from("".chars())

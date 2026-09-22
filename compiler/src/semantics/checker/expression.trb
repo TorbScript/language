@@ -88,14 +88,12 @@ fn evaluateExpression(var checker: Checker, expression: Expression, expected: Ex
     .IntegerLiteral(text) => integerLiteralType checker, text, false, annotation, expression.span
     .FloatLiteral(_) => floatLiteralType checker, annotation, expression.span
     .BoolLiteral(value) => {
-      const base = checker.booleanType()
-      adaptedLiteral checker, LiteralValue.Boolean(value), base, annotation, expression.span
+      adaptedLiteral checker, LiteralValue.Boolean(value), checker.booleanType(), annotation, expression.span
     }
     // `void` has one value and therefore no literal type to adapt to: it is always `Void`
     .VoidLiteral => checker.voidType
     .CharLiteral(value) => {
-      const base = checker.charType()
-      adaptedLiteral checker, LiteralValue.Character(value), base, annotation, expression.span
+      adaptedLiteral checker, LiteralValue.Character(value), checker.charType(), annotation, expression.span
     }
     .TextLiteral(segments) => textLiteralType checker, segments, annotation, expression.span
     .Name(_) | .Member(_, _, _) => {
@@ -2035,8 +2033,7 @@ fn ifType(
 public fn checkCondition(var checker: Checker, condition: Condition, isLoop: Bool) {
   match condition {
     .Test(expression) => {
-      const boolean = checker.booleanType()
-      const _ = checkExpression checker, expression, Expectation.Type(boolean)
+      const _ = checkExpression checker, expression, Expectation.Type(checker.booleanType())
     }
     // `if const Some(user) = lookup()`: the pattern is checked against the subject, and it has to be able to fail
     .Bind(isVar, pattern, value) => {
@@ -2069,8 +2066,7 @@ fn matchType(var checker: Checker, subject: Expression, arms: List<MatchArm>, ex
     const plan = armPlanOf checker, arm, found
     plans.add plan
     if const Some(guard) = arm.guard {
-      const boolean = checker.booleanType()
-      const _ = checkExpression checker, guard, Expectation.Type(boolean)
+      const _ = checkExpression checker, guard, Expectation.Type(checker.booleanType())
     }
     produced.add checkExpression(checker, arm.body, expected)
     requireReadBindings checker, bound
@@ -2269,8 +2265,7 @@ fn convertError(var checker: Checker, error: TypeId, wanted: TypeId, at: Span) {
       return
     }
   }
-  const bound = checker.nominal(from, [error])
-  const witness = witnessFor checker, wanted, bound
+  const witness = witnessFor checker, wanted, checker.nominal(from, [error])
   if const .Unresolved = witness {
     if const Some(bounds) = asTraits {
       const _ = coerceToTraits checker, error, bounds, at
@@ -2601,8 +2596,7 @@ fn conversionType(
       return target
     }
   }
-  const bound = checker.nominal(from, [source])
-  const witness = witnessFor checker, target, bound
+  const witness = witnessFor checker, target, checker.nominal(from, [source])
   if const .Unresolved = witness {
     if isConcrete(checker, source) && isConcrete(checker, target) {
       const given = checker.describe source
@@ -2831,8 +2825,7 @@ fn isUndecided(var checker: Checker, annotation: TypeId): Bool {
  * closure body still contributes everything a later lookup expects to find.
  */
 public fn deferExpression(var checker: Checker, expression: Expression) {
-  const deferred = checker.deferredType
-  const _ = checker.typed expression.span, deferred
+  const _ = checker.typed expression.span, checker.deferredType
   match expression.kind {
     .Generic(target, arguments) => {
       deferExpression checker, target

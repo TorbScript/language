@@ -3630,6 +3630,19 @@ Wenn nicht, was bedeutet, bewirkt es?
     noch als lebende Implementierung ("Stage 0 nimmt das `var`-Argument zuerst", "was Stage 0 nicht kann"). Sie
     kosten kein Gate (`torb docs source` ist noch keins) und gehören in die nächste Dokumentationswelle, zusammen mit
     den Hoists, die Falle 1 von Stage 0 erzwungen hat und die die Sprache nie verlangt hat.
+  - **Erledigt (Aufräumen nach dem Ausstieg):** Die 60 Fundstellen mit "stage 0"/"Stage 0" in `compiler/src/` (23,
+    19 Dateien), `compiler/tests/` (6), `tests/conformance/` (17 in 12 Dateien), `examples/` (12 in 6 Dateien),
+    `std/path/src/path.trb` (1) und `runtime/test.c` (1) sind umgeschrieben - jede sagt jetzt, was der Code heute
+    tut, keine Referenz auf Stage 0 bleibt außerhalb von `std/collections/src/map.trb` und `set.trb` sowie
+    `std/stream/tests/bytes.test.trb`, wo die laufende Umbenennungsrunde nicht gestört wurde. Von den Hoists, die
+    Falle 1 von Stage 0 erzwungen hat, sind 26 in `compiler/src/` eingebaut (`f(checker, checker.something)` statt
+    `const something = checker.something` davor); einer bleibt (`checker.types.intern` hinter einem verschachtelten
+    `var`-Empfänger in `semantics/checker/expression.trb`, zu unklar für eine sichere Inline-Änderung). Der
+    Pfad-Fixture `/repository/bootstrap` in `compiler/tests/project.test.trb` heißt jetzt `/repository/app`, und
+    `docs/LINEAR.md` Punkt 5 nennt jetzt den echten Grund für Pfad-Importe in `tests/conformance/` (kein
+    `dependencies`-Eintrag im Manifest, nicht Stage 0 - geprüft an `tests/conformance/project.trb` und
+    `tools/conformance.sh`). `torb docs source compiler/src` bleibt bei 9 Problemen in 125 Dateien und `docs source
+    std --tree std` bei 73 in 85, vor und nach der Runde gleich. `sh tools/gates.sh a` ist grün.
 - (Antworten des Nutzers auf alle offenen Fragen, 2026-09-22) **Entschieden (Nutzer):**
   - CONCURRENCY 1: `std/parallel` eigenes Package - ja. 2: **doch ins Prelude** ("cooles und wichtiges Tool für
     schnellen Parallelismus, in C# gern unterschätzt; `Parallel.For`/`Parallel.ForEach` sind toll") - also auch

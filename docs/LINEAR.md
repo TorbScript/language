@@ -404,12 +404,13 @@ type checks and which `torb build` rejects; the rest quote the diagnostic that i
    `Scalar: Numeric = Float`, the bare name has an answer. **Smallest change:** apply the declared defaults where a
    member access on a bare type name has nothing else to go on. Reproduction:
    `examples/generic-scalar/src/main.trb`, `extend Pair<Float>`.
-5. **The interpreter resolves no package import.** `use Vector2 from "std/linear"` answers `Unknown name Vector2` there,
-   because stage 0 replaces `std/` with its own natives. Everything of `std/` that has to run in the interpreter — a test
-   under `torb test`, a program of `tests/conformance/` — therefore imports **by path**, and a `std/` package can
-   only call functions from its own directory. That is why `zeroOf` is one line in `std/linear/src/scalar.trb` and one
-   line in `std/geometry/src/scalar.trb` instead of living once in `std/number`, and why `std/geometry` reaches
-   `std/linear` as `"../../linear/src/vector2"`.
+5. **A package may only import what its manifest names as a dependency.** `use Vector2 from "std/linear"` answers
+   `Unknown name Vector2` in a package that does not declare `std/linear` there - which is every package of `std/`
+   testing a sibling, and the workspace of `tests/conformance/`, since none of them declares a dependency at all
+   (a conformance program is one file with no manifest of its own). Everything of `std/` they need therefore imports
+   **by path**, and a `std/` package can only call functions from its own directory. That is why `zeroOf` is one line
+   in `std/linear/src/scalar.trb` and one line in `std/geometry/src/scalar.trb` instead of living once in
+   `std/number`, and why `std/geometry` reaches `std/linear` as `"../../linear/src/vector2"`.
 6. **The interpreter cannot tell two instantiations of one `extend` apart.** `Vector2<Int>.unitX` answers
    `Vector2(x: 1.0, y: 0.0)` there, because `extend Vector2<Float>` was declared first. The library keeps this to the
    four constants and gives every conversion a name of its own ([section 4](#4-naming)); a compiled program is correct

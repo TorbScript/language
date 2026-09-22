@@ -6,14 +6,12 @@
  * `BY HAND` means the type derives nothing and says so itself, which is `Email`: its constructor is closed and it has
  * no conversion pair. [Slug] is the capsule that has one, and its three forms are derived through it.
  *
- * Four places where stage 0 cannot run what the compiler would write, so the lab writes the same call with the one
- * lookup spelled out. All of them type check in the form the compiler uses - only running them needs types at run
- * time:
+ * Four places where the lab writes the same call with the one lookup spelled out, instead of the form the compiler
+ * would generate. Both forms type check identically:
  *
  * 1. A scalar field: the compiler writes `Int64.describe target` and `String.decode source`, a static trait member of
- *    an `extend` on a built-in type. Stage 0 answers "the bootstrap interpreter does not know `String.decode`", so the
- *    lab writes `target.int()` and `source.string()` - which is what those two members contain, and what a back end
- *    that knows the field's type statically may inline anyway.
+ *    an `extend` on a built-in type. The lab writes `target.int()` and `source.string()` instead - which is what
+ *    those two members contain, and what a back end that knows the field's type statically may inline anyway.
  * 2. A collection field: the compiler writes `List<String>.decode source`, whose body calls `Item.decode` through the
  *    bound. The lab calls `decodeSequence`/`decodeOptional` and hands the element's own `decode` in.
  * 3. A generic type's `decode` and `describe` (`Page<Item>`): written here as the compiler writes them, and exercised
@@ -90,9 +88,10 @@ public type Email with TryFrom<String, String> {
 
 /**
  * BY HAND, all three. Step 3 of the adjustment ladder is `type Email with Encode by value, Describe by value`, which
- * forwards writing and describing to the one field and is what a wrapper should write - the checker accepts it. Stage 0
- * runs a delegated method that takes a `var` parameter against a **copy** and drops the change without a word, so the
- * lab writes the two forwards out; `docs/ENCODING.md` records it.
+ * forwards writing and describing to the one field and is what a wrapper should write - the checker accepts it.
+ * Delegation of a method that takes a `var` parameter has to forward the path and not a **copy** (`docs/ENCODING.md`
+ * records the rule), which the lab does not yet rely on the derivation for - so it writes the two forwards out by
+ * hand instead.
  *
  * Reading is never delegated: `by value` would hand the field's `decode` back, which answers a `String` and not an
  * `Email`, and wrapping that would be exactly the check `parse` exists to force. So `decode` goes through `parse`, and
@@ -151,8 +150,8 @@ extend String with From<Slug> {
  * source value handed to the way in, and describing is the source's structure.
  *
  * The compiler writes `String.from(self)` where this body writes `text()`. They are the same value - the way back is
- * written in terms of the accessor - and `String.from` is a name stage 0 answers with a native of its own, which is
- * the fourth place in this file where the lab writes the same call with the one lookup spelled out.
+ * written in terms of the accessor - which is the fourth place in this file where the lab writes the same call with
+ * the one lookup spelled out.
  *
  * There is no `record` around it, and that is the point: a capsule is written **as** its source, so a `Slug` in a
  * document is the text and nothing else. The cost is that no type name reaches the format, so a mapping keyed by one
@@ -437,8 +436,8 @@ extend<Item: Encode> Page<Item> with Encode {
 }
 
 /**
- * DERIVED, and the one implementation in this file that **stage 0 cannot run**: `Item.decode` is a static trait member
- * reached through a bound. It type checks. `main.trb` exercises the monomorphized form.
+ * DERIVED, and the one implementation in this file that **the back end cannot run**: `Item.decode` is a static trait
+ * member reached through a bound. It type checks. `main.trb` exercises the monomorphized form by hand.
  */
 extend<Item: Decode> Page<Item> with Decode {
   static fn decode<Source: Decoder>(var source: Source): Result<Page<Item>, DecodeError> {
@@ -450,7 +449,7 @@ extend<Item: Decode> Page<Item> with Decode {
   }
 }
 
-/** DERIVED, same condition and the same limit on stage 0. */
+/** DERIVED, same condition and the same limit. */
 extend<Item: Describe> Page<Item> with Describe {
   static fn describe<Target: Describer>(var target: Target) {
     if !target.record("lab/Page") {

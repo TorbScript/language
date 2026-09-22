@@ -421,11 +421,16 @@ gated, and rewriting them would make the record wrong. Everywhere a sentence say
 
 ### 7.3 What still names stage 0 in the code
 
-**64 doc comments** in `compiler/src/`, `compiler/tests/`, `std/`, `examples/` and `tests/conformance/` still name
-stage 0 as a live implementation ("stage 0 takes the `var` argument first", "what stage 0 cannot do"). None of them
-costs a gate - `torb docs source` is not one yet - and they belong to the next documentation wave, together with the
-hoists that trap 1 of stage 0 forced and that the language never required: `f(checker, checker.something)` is legal
-TorbScript, and the `const` in front of it can go.
+The 64 doc comments this section counted, in `compiler/src/`, `compiler/tests/`, `std/path`, `examples/`,
+`tests/conformance/` and `runtime/test.c`, are rewritten to say what the code does today. `torb docs source
+compiler/src` stays at 9 problems in 125 files and `torb docs source std --tree std` at 73 in 85, so the count did
+not move. The hoists that trap 1 of stage 0 forced and that the language never required - `f(checker,
+checker.something)` is legal TorbScript, and the `const` in front of it can go - are inlined at 26 sites; one is left,
+a `checker.types.intern` behind a nested `var` receiver in `compiler/src/semantics/checker/expression.trb`, which is
+messier than the pattern and was not worth the risk.
+
+What still names stage 0: `std/collections/src/map.trb` and `set.trb`, and `std/stream/tests/bytes.test.trb` - a
+rename round is running in those three files, so this round left them alone.
 
 ### 7.4 What a round runs
 

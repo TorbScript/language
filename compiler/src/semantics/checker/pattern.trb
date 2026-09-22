@@ -289,8 +289,8 @@ fn isNameInScope(var checker: Checker, text: String): Bool {
 /**
  * `Fail =>` against a `DecisionNode` that happens to have a case of that name too: the scope says `Result.Fail`, the
  * matched type says `DecisionNode.Fail`, and matching by name would make the checker agree with an arm that no value
- * can ever reach - stage 0 and both back ends resolve the name, not the name plus the subject. So a bare name has to
- * name a case **of the matched type**, and everything else is written `.Fail`.
+ * can ever reach - both back ends resolve the name, not the name plus the subject. So a bare name has to name a case
+ * **of the matched type**, and everything else is written `.Fail`.
  */
 fn isCaseOfSubject(var checker: Checker, name: Name, subject: TypeId): Bool {
   if checker.absorbs(subject) {
@@ -443,8 +443,7 @@ fn variantPattern(
     checker.reportHere Diagnostic.error("`{shown}` has no case `{name.text}`", name.span)
   }
   for field in fields {
-    const inner = checker.deferredType
-    checkPattern checker, field.pattern, inner, isVar
+    checkPattern checker, field.pattern, checker.deferredType, isVar
   }
 }
 
