@@ -1842,9 +1842,10 @@ fn textCall(symbol: String, first: CExpression, second: CExpression): CExpressio
 }
 
 /**
- * Arithmetic is always checked, because overflow panics in every back end: every integer operation is the `static
- * inline` helper of `torb_number.h` for its width, with the source location of the operation in it. The float
- * operations are the C operators, which is what IEEE-754 semantics are.
+ * Arithmetic is checked unless the range analysis proved the check cannot fire: every integer operation is the `static
+ * inline` helper of `torb_number.h` for its width, with the source location of the operation in it, and an operation
+ * the IR marked unchecked is the plain C operator instead (`ir/ranges.trb`, docs/PERFORMANCE.md finding 8). The float
+ * operations are the C operators either way, which is what IEEE-754 semantics are.
  */
 fn arithmeticExpression(
   var emission: Emission,
@@ -1863,6 +1864,11 @@ fn arithmeticExpression(
   if isFloatingKind(kind) {
     const suffix = suffixOfNumeric kind
     return floatingExpression emission, intrinsic.operation, first, second, suffix
+  }
+  if !intrinsic.isChecked {
+    if const Some(found) = uncheckedExpression(intrinsic.operation, first, second) {
+      return Some found
+    }
   }
   if isUnsignedKind(kind) {
     if const .Negate = intrinsic.operation {
@@ -1884,6 +1890,27 @@ fn arithmeticExpression(
     given.add site
   }
   Some CExpression.Call(symbol, given)
+}
+
+/**
+ * The four integer operations that can overflow, as the plain C operators. `None` for every other operation, whose
+ * check is about something else than the width - a division by zero above all, which no range fact here decides.
+ *
+ * It is only reached for an operation the IR marked unchecked, and signed overflow is undefined behaviour in C - which
+ * is exactly why the analysis that marks one has to be conservative by construction.
+ */
+fn uncheckedExpression(
+  operation: IntrinsicOperation,
+  first: CExpression,
+  second: CExpression,
+): CExpression? {
+  match operation {
+    .Add => Some CExpression.Binary(first, "+", second)
+    .Subtract => Some CExpression.Binary(first, "-", second)
+    .Multiply => Some CExpression.Binary(first, "*", second)
+    .Negate => Some CExpression.Unary("-", first)
+    _ => None
+  }
 }
 
 fn floatingExpression(

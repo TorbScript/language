@@ -269,6 +269,13 @@ no `.Forwarded` that reaches an `.Object` can be monomorphized. The lowering fol
   `CallWitness` becomes the direct `Call` of the member the table names. So dictionary passing is what a value with two
   implementations in one place costs, not what every collection literal costs.
   ([docs/PERFORMANCE.md](PERFORMANCE.md) finding 2.)
+- **A frozen member gets a copy for the call sites that know the payload.** A member of a witness table may not move
+  its signature, so `ArrayList.iterator` answers the boxed `Iterator<Item>` however concrete the receiver is. The pass
+  therefore runs twice, and between the two runs `specializeFrozenCallees` copies every frozen function a **direct**
+  call already names and whose signature holds an `Object` - the table keeps the original, the direct call site gets
+  the copy, and the second run reads the copy's result and parameters as ordinary locations. That is what makes the
+  cursor of a `for` over a list, a map, a set or a string a record on the frame with a direct `next`
+  ([docs/PERFORMANCE.md](PERFORMANCE.md) finding 5).
 
 ### 1.5 Mangling
 
@@ -560,6 +567,14 @@ Multiplication uses `__int128` where it exists and a division check otherwise. D
 (Execution Model: "Integer overflow panics, in every back end"). `torb_panic` writes to stderr and calls `_exit(101)`
 without running anything (gap 9). Bounds checks on `list[i]`, `text[a..b]` and `Array` are likewise always on; a
 constant index into an `Array` is checked by the checker instead (gap 38).
+
+**A check that cannot fire is not emitted.** `ir/ranges.trb` is a forward interval analysis over one function - an
+integer constant, the operation that computed a slot, and the comparison a `Branch` stands on are its only facts - and
+an `Add`, `Subtract`, `Multiply` or `Negate` whose result provably fits its own width is marked `isChecked: false` on
+the `Intrinsic`. It prints as `add.i64.unchecked` and the C back end emits the plain operator for it. Nothing about the
+*semantics* moves: unknown is the whole range of the type, an operation whose exact result interval does not fit an
+`Int64` keeps its check, and a dropped check that could fire would be a missing panic - which is why the analysis
+widens rather than guesses at every step ([docs/PERFORMANCE.md](PERFORMANCE.md) finding 8).
 
 ### 3.4 Strings
 

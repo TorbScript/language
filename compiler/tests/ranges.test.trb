@@ -1,0 +1,109 @@
+/**
+ * The range analysis: which overflow check is dropped, and which one may not be.
+ *
+ * A check that is dropped although it could fire is a **missing panic**, which is an observable difference between two
+ * back ends - so both halves are asked here. What is written down is the IR text, where a dropped check reads
+ * `add.i64.unchecked`, and the conformance suite's `overflow.trb` is what says the kept ones still fire.
+ */
+
+use test, group from "std/test"
+use irOf from "./lower-harness"
+
+group "a check the ranges prove cannot fire" {
+  /**
+   * The shape of docs/PERFORMANCE.md finding 8: `index - 1` and `index - 2` stand under `if index < 2 { return index }`
+   * and cannot underflow, and the addition of the two results can overflow and keeps its check.
+   */
+  test "a guard in front of the arithmetic drops the two checks that cannot fire" {
+    const source = r"""
+      fn fibonacci(index: Int): Int {
+        if index < 2 {
+          return index
+        }
+        fibonacci(index - 1) + fibonacci(index - 2)
+      }
+      """
+    const text = irOf source, "t_acme_x2f_app_main_fibonacci"
+    assert text.contains("intrinsic subtract.i64.unchecked %0, %4")
+    assert text.contains("intrinsic subtract.i64.unchecked %0, %7")
+    assert text.contains("intrinsic add.i64 %6, %9")
+  }
+
+  /** Two constants: the sum is one value and it is inside `Int64`, so there is nothing to check. */
+  test "arithmetic on two known values is the plain operation" {
+    const source = r"""
+      fn total(): Int {
+        const first = 2
+        const second = 3
+        first * second
+      }
+      """
+    assert irOf(source, "t_acme_x2f_app_main_total").contains("intrinsic multiply.i64.unchecked")
+  }
+
+  /**
+   * The counter of a loop is bounded by the loop's own guard, and the loop of an *outer* counter does not take that
+   * away from it: widening is applied to the slots a loop writes and to no others.
+   */
+  test "the counter of a nested loop and the counter around it are both free" {
+    const source = r"""
+      fn total(width: Int, height: Int): Int {
+        var sum = 0
+        for row in 0..height {
+          for column in 0..width {
+            sum = sum + row
+          }
+        }
+        sum
+      }
+      """
+    const text = irOf source, "t_acme_x2f_app_main_total"
+    assert(text.split("add.i64.unchecked").length() == 3)
+    // `sum + row` is not one of them: nothing bounds `sum`
+    assert text.contains("%2 = intrinsic add.i64 %2, %3")
+  }
+}
+
+group "a check that stays" {
+  /** Two values the function knows nothing about can overflow, and nothing here may pretend otherwise. */
+  test "arithmetic on two parameters keeps every check" {
+    const source = r"""
+      fn total(first: Int, second: Int): Int {
+        first + second
+      }
+      """
+    const text = irOf source, "t_acme_x2f_app_main_total"
+    assert text.contains("intrinsic add.i64 %0, %1")
+    assert(!text.contains("unchecked"))
+  }
+
+  /**
+   * A guard says what it says on the side it holds, and nothing on the other one. `index > 0` leaves `index - 1` free
+   * and `index + 1` checked, because the upper end of `index` is still whatever an `Int64` allows.
+   */
+  test "a guard bounds one end and the other end keeps its check" {
+    const source = r"""
+      fn around(index: Int): Int {
+        if index > 0 {
+          return (index - 1) + (index + 1)
+        }
+        index
+      }
+      """
+    const text = irOf source, "t_acme_x2f_app_main_around"
+    assert text.contains("subtract.i64.unchecked")
+    assert text.contains("%7 = intrinsic add.i64 %0, %6")
+  }
+
+  /** A division checks its divisor and not a width, so no range of this analysis ever drops one. */
+  test "a division keeps its check although both operands are known" {
+    const source = r"""
+      fn half(): Int {
+        const value = 8
+        const two = 2
+        value / two
+      }
+      """
+    assert(!irOf(source, "t_acme_x2f_app_main_half").contains("unchecked"))
+  }
+}

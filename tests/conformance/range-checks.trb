@@ -1,0 +1,31 @@
+/**
+ * The overflow check the range analysis drops, and the one it may not: both in one program.
+ *
+ * `value - 1` under `if value < 2` and the counter of a `for` are emitted without a check (`ir/ranges.trb`), so what
+ * this pins first is that they still answer what they answered. The last line is an addition nothing bounds, and it
+ * panics exactly as it did before - a dropped check that could fire would be a missing panic, which is the one thing
+ * the analysis may not produce.
+ */
+
+fn step(value: Int): Int {
+  if value < 2 {
+    return value
+  }
+  (value - 1) + (value - 2)
+}
+
+fn counted(limit: Int): Int {
+  var total = 0
+  for index in 0..limit {
+    total = total + index
+  }
+  total
+}
+
+print step(7)
+print step(1)
+print counted(5)
+
+var big = 9223372036854775807
+big = big + counted(2)
+print big

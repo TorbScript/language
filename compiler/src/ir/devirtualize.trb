@@ -25,10 +25,17 @@
  * a direct call are read off the callee's signature, which is what `insertOwnership` does next, so the retain a witness
  * thunk owed its arguments becomes the caller's ordinary `Move` or `Retain` and nothing needs a rule of its own.
  *
+ * A frozen function is where the analysis used to stop, and `ArrayList.iterator` is the one that costs the most:
+ * a `for` over a list allocated a boxed cursor per loop and paid a `makeUnique` and an indirect call per turn, because
+ * the member answers `Iterator<Item>` and a table member's signature may not move. `specializeFrozenCallees` takes the
+ * signature out of the way instead of moving it: a **copy** of the member that no table names is free, the direct call
+ * sites get the copy, and the analysis runs a second time over a program where that result is an ordinary location.
+ *
  * # Related
  *
  * - [Peeling] - what the analysis knows about one class of locations.
  * - [directCallOf] - the call a `CallWitness` becomes, and every reason it may not.
+ * - [specializeFrozenCallees] - the copy of a frozen member that a direct call site may peel.
  */
 
 use IrProgram, IrFunction, IrSignature, IrTypeId, Slot, FunctionId from "./ir"
@@ -42,11 +49,23 @@ use resultModeOf from "./layout"
  *
  * It is written to run exactly once over a lowered program, in front of `insertOwnership`. Running it afterwards would
  * read the `Retain`s and `Release`s that pass inserted as ordinary uses of a value.
+ *
+ * The analysis runs twice, and the step in between is what the second run is for: the first run makes every dispatch a
+ * direct call that can be one, the specialization gives the frozen callees of those calls a copy of their own, and the
+ * second run peels the results and the parameters that were frozen only because a table named the original.
  */
 public fn devirtualizeProgram(var program: IrProgram) {
   if program.functions.isEmpty() {
     return
   }
+  peelProgram program
+  if specializeFrozenCallees(program) {
+    peelProgram program
+  }
+}
+
+/** One run of the analysis over the whole program: join, settle, refuse what does not resolve, rewrite. */
+fn peelProgram(var program: IrProgram) {
   const places = locationsOf program
   var peeling = newPeeling program, places
   collectProgram peeling, places, program
@@ -56,6 +75,148 @@ public fn devirtualizeProgram(var program: IrProgram) {
   refuseUnresolvedCalls peeling, places, program
   flattenClasses peeling
   rewriteProgram peeling, places, program
+}
+
+// --- A copy of a frozen member, for the call sites that know the payload -----------------------------------------------
+
+/**
+ * Every frozen function a direct call names, copied once under a name no table holds, with those calls redirected to
+ * the copy. Answers whether anything was copied, which is the only reason to run the analysis again.
+ *
+ * A **member of a witness table** is the case this exists for. Its thunk casts the erased receiver to the payload and
+ * calls exactly the signature the table was built against, so `collectSignature` poisons its parameters and its result
+ * - and `ArrayList.iterator` therefore answers the boxed `Iterator<Item>` even where the receiver has been a concrete
+ * list since the first run. A copy is free of that: nothing points at it but the call sites that were rewritten here,
+ * so the second run reads its result as an ordinary location and the cursor of a `for` becomes a record on the frame.
+ *
+ * Two things keep it honest. The original **stays** and every table still names it, so the erased ABI is untouched and
+ * a program that really dispatches pays what it paid. And only a call the first run already made **direct** is
+ * redirected, so a copy is made for a callee that is called and for no other - a copy nothing calls would be dead code
+ * in the emitted C.
+ *
+ * # Pitfalls
+ *
+ * The copy is worth its bytes only where the signature has something to peel, which is why a signature with no
+ * trait-typed value in it is left alone: copying `ArrayList.length` would duplicate a body and change nothing.
+ */
+fn specializeFrozenCallees(var program: IrProgram): Bool {
+  const frozen = frozenFunctionsOf program
+  const count = program.functions.length()
+  var clones: List<Int> = []
+  var isWanted = false
+  for _ in 0..count {
+    clones.add(-1)
+  }
+  for index in 0..count {
+    for block in program.functions[index].blocks {
+      for instruction in block.instructions {
+        if const .Call(_, callee, _, _, _) = instruction {
+          if isSpecializable(program, frozen, clones, callee) {
+            clones.set callee.value, 0
+            isWanted = true
+          }
+        }
+      }
+    }
+  }
+  if !isWanted {
+    return false
+  }
+  var taken: Set<String> = Set.of()
+  for function in program.functions {
+    taken.add function.name
+  }
+  for index in 0..count {
+    if clones[index] < 0 {
+      continue
+    }
+    const original = program.functions[index]
+    const name = specializedName taken, original.name
+    taken.add name
+    program.functions.add original.copy(name: name)
+    clones.set(index, program.functions.length() - 1)
+  }
+  redirectSpecializedCalls program, clones
+  true
+}
+
+/**
+ * Whether a copy of this callee could carry a concrete value where the original may not: it is frozen, it is a body of
+ * the program's own, and its signature holds a trait-typed value the second run could peel.
+ */
+fn isSpecializable(
+  program: IrProgram,
+  frozen: List<Bool>,
+  clones: List<Int>,
+  callee: FunctionId,
+): Bool {
+  if callee.value < 0 || callee.value >= clones.length() {
+    return false
+  }
+  if clones[callee.value] >= 0 || !frozen[callee.value] {
+    return false
+  }
+  if !program.hasFunction(callee) {
+    return false
+  }
+  const function = program.functionAt callee
+  if !isPlainFunction(function) || function.blocks.isEmpty() {
+    return false
+  }
+  hasObjectInSignature program, function.signature
+}
+
+/** Whether a signature mentions a trait-typed value at all, which is the only thing a copy of it could change. */
+fn hasObjectInSignature(program: IrProgram, signature: IrSignature): Bool {
+  if isObjectType(program, signature.result) {
+    return true
+  }
+  for parameter in signature.parameters {
+    if isObjectType(program, parameter.annotation) {
+      return true
+    }
+  }
+  false
+}
+
+/**
+ * A name for the copy that no other function of the program has. `_x24_` is how the mangler writes a `$`, which no name
+ * of a source can hold, and the counter behind it is what makes the answer true rather than merely likely.
+ */
+fn specializedName(taken: Set<String>, name: String): String {
+  var candidate = "{name}_x24_direct"
+  var counter = 2
+  while taken.contains(candidate) {
+    candidate = "{name}_x24_direct{counter}"
+    counter = counter + 1
+  }
+  candidate
+}
+
+/** Every direct call of a copied function, pointed at the copy. A table, a closure and a descriptor keep the original. */
+fn redirectSpecializedCalls(var program: IrProgram, clones: List<Int>) {
+  for index in 0..program.functions.length() {
+    const function = program.functions[index]
+    for block in 0..function.blocks.length() {
+      const instructions = function.blocks[block].instructions
+      var written: List<Instruction> = []
+      var isChanged = false
+      for instruction in instructions {
+        if const .Call(target, callee, arguments, witnesses, at) = instruction {
+          if callee.value >= 0 && callee.value < clones.length() && clones[callee.value] >= 0 {
+            const clone = FunctionId clones[callee.value]
+            written.add Instruction.Call(target, clone, arguments, witnesses, at)
+            isChanged = true
+            continue
+          }
+        }
+        written.add instruction
+      }
+      if isChanged {
+        program.functions[index].blocks[block].instructions = written
+      }
+    }
+  }
 }
 
 // --- Where a trait-typed value can sit --------------------------------------------------------------------------------

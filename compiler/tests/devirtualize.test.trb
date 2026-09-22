@@ -256,3 +256,95 @@ group "what keeps its box" {
     )
   }
 }
+
+/**
+ * The frozen member a direct call site gets a copy of. `ArrayList.iterator` is the one that pays for it: a table
+ * member's signature may not move, so the boxed `Iterator<Item>` it answers used to be the cursor of every `for` over a
+ * list. The copy no table names is free of that, and the second run of the analysis peels it.
+ */
+group "a copy of a frozen member" {
+  const iterated = program(r"""
+    type Counting with Iterator<Int> {
+      var seen: Int = 0
+
+      var fn next(): Int? {
+        seen = seen + 1
+        if seen > 3 { None } else { Some(seen) }
+      }
+    }
+
+    type Three with Iterable<Int> {
+      fn iterator(): Iterator<Int> {
+        Counting()
+      }
+    }
+
+    type Four with Iterable<Int> {
+      fn iterator(): Iterator<Int> {
+        Counting()
+      }
+    }
+
+    fn sumOf(values: Iterable<Int>): Int {
+      var sum = 0
+      for value in values {
+        sum = sum + value
+      }
+      sum
+    }
+
+    fn total(values: Three): Int {
+      var sum = 0
+      for value in values {
+        sum = sum + value
+      }
+      sum + sumOf(Three()) + sumOf(Four())
+    }
+    """)
+
+  /**
+   * Two implementations meet in the parameter of `sumOf`, so `Iterable<Int>` is a real dispatch here and both tables
+   * are built - which is what freezes `Three.iterator`. The loop of `total` calls it directly all the same, so the copy
+   * is what that call reaches: no box, a cursor on the frame, and a direct `next` through the place the cursor is.
+   */
+  test "a `for` whose iterable is concrete gets a cursor on the frame, although a table names the member" {
+    assert(
+      irOf(iterated, "t_acme_x2f_app_main_total").contains(
+        r"""
+          slot %2 local iterator: Record(T_acme_x2f_app_main_Counting)"""
+      )
+    )
+    assert(
+      irOf(iterated, "t_acme_x2f_app_main_total").contains(
+        r"""
+          %2 = call t_acme_x2f_app_main_Three_iterator_x24_direct(%0 borrowed)"""
+      )
+    )
+    // No `makeUnique` in the head of the loop, and no dispatch in it either: the cursor is a record of this frame
+    assert(!irOf(iterated, "t_acme_x2f_app_main_total").contains("makeUnique"))
+    assert(!irOf(iterated, "t_acme_x2f_app_main_total").contains("callWitness"))
+  }
+
+  /** The original stays exactly as the table's thunk calls it, which is what makes the copy safe rather than clever. */
+  test "the member the table names keeps the box it promised" {
+    const text = textOf iterated
+    assert(
+      text.contains(
+        "fn t_acme_x2f_app_main_Three_iterator(self: Record(T_acme_x2f_app_main_Three) borrowed)"
+          + " -> Object(Iterator<Int64>)"
+      )
+    )
+    assert(
+      text.contains(
+        "fn t_acme_x2f_app_main_Three_iterator_x24_direct(self: Record(T_acme_x2f_app_main_Three) borrowed)"
+          + " -> Record(T_acme_x2f_app_main_Counting)"
+      )
+    )
+  }
+
+  /** A dispatch that really is one is untouched: the box, the table and the `makeUnique` per turn are all still there. */
+  test "the loop over a value that two implementations meet in keeps its box" {
+    assert irOf(iterated, "t_acme_x2f_app_main_sumOf").contains("callWitness")
+    assert irOf(iterated, "t_acme_x2f_app_main_sumOf").contains("makeUnique")
+  }
+}

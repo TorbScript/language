@@ -1,0 +1,936 @@
+/**
+ * The range analysis: an integer operation whose operands cannot leave the width of their type is the plain operation.
+ *
+ * Every integer operation of TorbScript is checked, because an overflow panics and that is semantics and not a
+ * diagnostic (BACKEND 3.3). The check is `__builtin_add_overflow` plus a cold branch, and what it costs depends
+ * entirely on what else the code is doing: free where a loop is latency bound, and **2.37x** in a recursion whose whole
+ * body is three arithmetic operations and two calls (docs/PERFORMANCE.md, finding 8). In that recursion two of the
+ * three cannot fire at all - `index - 1` and `index - 2` stand under `if index < 2 { return index }` - and removing
+ * those two recovers about half of it.
+ *
+ * So this is a forward interval analysis over one function, and nothing more: what a slot can hold at one point, and an
+ * `Add`, `Subtract`, `Multiply` or `Negate` whose result provably fits its own type loses the check. The facts come
+ * from three places and no others - an integer constant, the operation that computed a slot, and the **comparison a
+ * `Branch` stands on**, which narrows its two operands in the two successors.
+ *
+ * **Unknown is the whole range of the type, never "no fact".** A slot the analysis does not follow holds anything its
+ * width allows, so a wrong answer is impossible by construction: every step widens rather than guesses, a loop is
+ * widened to the type's own bounds after its first round, and an operation whose exact result interval cannot even be
+ * written down as an `Int64` keeps its check. Dropping a check that could fire would be a **missing panic**, which is
+ * an observable difference between two back ends - the one mistake this file may not make.
+ *
+ * # Pitfalls
+ *
+ * The IR is not in SSA form: a slot is written again in a loop, and a `var` argument lets a callee write the caller's
+ * slot. Every instruction therefore **kills** what it may define before it says anything, and the guard of a `Branch`
+ * is read off the instruction immediately in front of it so that no fact can outlive the value it was about.
+ *
+ * # Related
+ *
+ * - [Interval] - what one slot can hold.
+ * - [narrowedByGuard] - what a comparison says about its operands in the two successors of a `Branch`.
+ */
+
+use IrProgram, IrFunction, Slot, Instruction, Argument, StaticId from "./ir"
+use Intrinsic, IntrinsicOperation, NumericKind from "./ir"
+use numericKindOf, successorsOf, definedSlot from "./verify"
+use postorderOf, filledFlags from "./liveness"
+
+/** How often a block may be re-entered before the analysis gives up on it. Widening settles a loop in three. */
+const roundLimit = 12
+
+/** How many rounds the narrowing after it may take. Every one of them only shrinks, so stopping early is safe. */
+const narrowingLimit = 4
+
+/**
+ * Every function of the program, with the checks its own ranges prove unnecessary dropped.
+ *
+ * It runs after the devirtualization, because a direct call is what makes a constant visible where a dispatch hid it,
+ * and before the ownership pass, which has nothing to say about an intrinsic either way.
+ */
+public fn dropProvableChecks(var program: IrProgram) {
+  for index in 0..program.functions.length() {
+    const function = program.functions[index]
+    if function.blocks.isEmpty() {
+      continue
+    }
+    const universes = universesOf program, function
+    if !hasTrackedSlot(universes) {
+      continue
+    }
+    const entries = settledEntries program, function, universes
+    rewriteFunction program, index, universes, entries
+  }
+}
+
+// --- What a slot can hold ---------------------------------------------------------------------------------------------
+
+/**
+ * The values a slot can hold at one point of a body: a closed interval over `Int64`, both ends included.
+ *
+ * It is exact arithmetic and never saturating: an operation whose result does not fit an `Int64` answers `None`
+ * instead, and a `None` is what keeps the check.
+ */
+type Interval {
+  low: Int
+  high: Int
+}
+
+/**
+ * Per slot: the whole range of its integer type, and whether it is one this analysis follows at all.
+ *
+ * `UInt64` is not followed, because its upper bound does not fit the `Int64` the intervals are computed in, and a
+ * floating point slot is not an integer to begin with.
+ */
+type Universes {
+  var range: List<Interval> = []
+  var tracked: List<Bool> = []
+  var kind: List<NumericKind?> = []
+}
+
+fn universesOf(program: IrProgram, function: IrFunction): Universes {
+  var found = Universes()
+  for declaration in function.slots {
+    const kind = numericKindOf program, declaration.annotation
+    const range = rangeOfKind kind
+    match range {
+      Some(interval) => {
+        found.range.add interval
+        found.tracked.add true
+        found.kind.add kind
+      }
+      None => {
+        found.range.add Interval(0, 0)
+        found.tracked.add false
+        found.kind.add None
+      }
+    }
+  }
+  found
+}
+
+fn hasTrackedSlot(universes: Universes): Bool {
+  for isTracked in universes.tracked {
+    if isTracked {
+      return true
+    }
+  }
+  false
+}
+
+/** The whole range of one numeric type, or `None` where it is not an integer this analysis can write down. */
+fn rangeOfKind(kind: NumericKind?): Interval? {
+  match kind {
+    Some(.Signed(width)) => {
+      if width >= 64 {
+        return Some Interval(Int.minimum, Int.maximum)
+      }
+      const bound = powerOfTwo(width - 1)?
+      Some Interval(0 - bound, bound - 1)
+    }
+    Some(.Unsigned(width)) => {
+      if width >= 64 {
+        return None
+      }
+      const bound = powerOfTwo(width)?
+      Some Interval(0, bound - 1)
+    }
+    _ => None
+  }
+}
+
+/** `2 ** exponent` for an exponent under 63, which is every width this analysis writes a bound for. */
+fn powerOfTwo(exponent: Int): Int? {
+  if exponent < 0 || exponent > 62 {
+    return None
+  }
+  var found = 1
+  for _ in 0..exponent {
+    found = found * 2
+  }
+  Some found
+}
+
+fn isEmpty(interval: Interval): Bool {
+  interval.low > interval.high
+}
+
+/** The interval that holds both, which is what two paths into one block agree on. */
+fn joined(left: Interval, right: Interval): Interval {
+  Interval left.low.min(right.low), left.high.max(right.high)
+}
+
+/** The values both allow. Empty where they allow none, which is a branch nothing can take. */
+fn intersected(left: Interval, right: Interval): Interval {
+  Interval left.low.max(right.low), left.high.min(right.high)
+}
+
+fn contains(outer: Interval, inner: Interval): Bool {
+  inner.low >= outer.low && inner.high <= outer.high
+}
+
+// --- Exact arithmetic over the bounds -----------------------------------------------------------------------------------
+
+/** The sum, or `None` where it does not fit an `Int64` - the answer that keeps a check. */
+fn addedExactly(left: Int, right: Int): Int? {
+  if right > 0 && left > Int.maximum - right {
+    return None
+  }
+  if right < 0 && left < Int.minimum - right {
+    return None
+  }
+  Some(left + right)
+}
+
+fn subtractedExactly(left: Int, right: Int): Int? {
+  if right < 0 && left > Int.maximum + right {
+    return None
+  }
+  if right > 0 && left < Int.minimum + right {
+    return None
+  }
+  Some(left - right)
+}
+
+/**
+ * The product, tested by division so that nothing is ever computed that does not fit. `0`, `1` and `-1` are separate
+ * because `Int.minimum` has no positive counterpart.
+ */
+fn multipliedExactly(left: Int, right: Int): Int? {
+  if left == 0 || right == 0 {
+    return Some 0
+  }
+  if left == 1 {
+    return Some right
+  }
+  if right == 1 {
+    return Some left
+  }
+  if left == -1 {
+    if right == Int.minimum {
+      return None
+    }
+    return Some(0 - right)
+  }
+  if right == -1 {
+    if left == Int.minimum {
+      return None
+    }
+    return Some(0 - left)
+  }
+  const fits = if left > 0 && right > 0 {
+    left <= Int.maximum / right
+  } else if left < 0 && right < 0 {
+    left >= Int.maximum / right
+  } else if left > 0 {
+    right >= Int.minimum / left
+  } else {
+    left >= Int.minimum / right
+  }
+  if !fits {
+    return None
+  }
+  Some(left * right)
+}
+
+/** The interval of a sum: both ends added, and `None` where either end leaves the `Int64` the analysis counts in. */
+fn addedInterval(left: Interval, right: Interval): Interval? {
+  const low = addedExactly(left.low, right.low)?
+  const high = addedExactly(left.high, right.high)?
+  Some Interval(low, high)
+}
+
+fn subtractedInterval(left: Interval, right: Interval): Interval? {
+  const low = subtractedExactly(left.low, right.high)?
+  const high = subtractedExactly(left.high, right.low)?
+  Some Interval(low, high)
+}
+
+/** The four corner products: a sign change swaps which end is which, so all four are computed and the extremes kept. */
+fn multipliedInterval(left: Interval, right: Interval): Interval? {
+  const first = multipliedExactly(left.low, right.low)?
+  const second = multipliedExactly(left.low, right.high)?
+  const third = multipliedExactly(left.high, right.low)?
+  const fourth = multipliedExactly(left.high, right.high)?
+  const low = first.min(second).min(third).min(fourth)
+  const high = first.max(second).max(third).max(fourth)
+  Some Interval(low, high)
+}
+
+fn negatedInterval(value: Interval): Interval? {
+  const low = subtractedExactly(0, value.high)?
+  const high = subtractedExactly(0, value.low)?
+  Some Interval(low, high)
+}
+
+// --- The transfer over one block ----------------------------------------------------------------------------------------
+
+/** What a `Branch` stands on: the comparison written immediately in front of it, and the two blocks it leads to. */
+type Guard {
+  operation: IntrinsicOperation
+  left: Slot
+  right: Slot
+  then: Int
+  otherwise: Int
+}
+
+/** Every slot's fact at the entry of every block, once the fixpoint has settled. */
+fn settledEntries(program: IrProgram, function: IrFunction, universes: Universes): List<List<Interval>> {
+  const blockCount = function.blocks.length()
+  const order = reverseOfPostorder function
+  const headers = loopWritesOf function, order
+  var entries: List<List<Interval>> = []
+  var exits: List<List<Interval>> = []
+  var visited = filledFlags blockCount, false
+  for _ in 0..blockCount {
+    entries.add universes.range
+    exits.add universes.range
+  }
+  var round = 0
+  var isChanged = true
+  while isChanged && round < roundLimit {
+    isChanged = false
+    round = round + 1
+    for block in order {
+      const proposed = entryOf function, universes, exits, visited, block
+      var settled = proposed
+      if visited[block] {
+        settled = widened universes, headers[block], entries[block], proposed
+        if settled == entries[block] {
+          continue
+        }
+      }
+      visited.set block, true
+      entries.set block, settled
+      exits.set block, exitOf(program, function, universes, block, settled)
+      isChanged = true
+    }
+  }
+  if round >= roundLimit {
+    return filledEntries universes, blockCount
+  }
+  // Narrowing: the widening blew every slot of a loop head to its type's bounds, including the ones the loop never
+  // writes. Re-reading the same equations from a settled answer can only shrink it and never leaves the true one
+  // behind, so a few rounds without widening give `_round` of a nested loop its own bounds back
+  var narrowing = 0
+  isChanged = true
+  while isChanged && narrowing < narrowingLimit {
+    isChanged = false
+    narrowing = narrowing + 1
+    for block in order {
+      if !visited[block] {
+        continue
+      }
+      const proposed = entryOf function, universes, exits, visited, block
+      if proposed == entries[block] {
+        continue
+      }
+      entries.set block, proposed
+      exits.set block, exitOf(program, function, universes, block, proposed)
+      isChanged = true
+    }
+  }
+  // A block the walk never reached holds whatever its type allows, which is what the lists were filled with
+  for block in 0..blockCount {
+    if !visited[block] {
+      entries.set block, universes.range
+    }
+  }
+  entries
+}
+
+fn filledEntries(universes: Universes, blockCount: Int): List<List<Interval>> {
+  var found: List<List<Interval>> = []
+  for _ in 0..blockCount {
+    found.add universes.range
+  }
+  found
+}
+
+/**
+ * Per block: the slots that the loop headed there writes, and an empty mask for every block that heads no loop.
+ *
+ * This is what widening is applied to, and applying it to anything else would be sound and useless. A block whose
+ * entry merely became *wider* because a predecessor did is no loop, and a slot a loop never writes has the same value
+ * on the back edge as on the way in - so the two rounds of the counter are the only thing that has to be given up. Give
+ * up more and the `_round` of an outer loop loses its bounds inside the inner one, which is where half the counters of
+ * a program are.
+ *
+ * A **back edge** is an edge to a block that stands earlier in reverse postorder, and the natural loop of one is its
+ * head plus every block that reaches the edge's source without passing the head. Source is structured, so every graph
+ * here is reducible and that is the whole loop (BACKEND 2.2).
+ */
+fn loopWritesOf(function: IrFunction, order: List<Int>): List<List<Bool>> {
+  const blockCount = function.blocks.length()
+  const slotCount = function.slots.length()
+  var position: List<Int> = []
+  var written: List<List<Bool>> = []
+  for _ in 0..blockCount {
+    position.add blockCount
+    written.add filledFlags(slotCount, false)
+  }
+  for index in 0..order.length() {
+    position.set order[index], index
+  }
+  for block in order {
+    for target in successorsOf(function.blocks[block]) {
+      if target < 0 || target >= blockCount || position[target] > position[block] {
+        continue
+      }
+      const body = naturalLoopOf function, target, block
+      var mask = written[target]
+      for member in 0..blockCount {
+        if body[member] {
+          markWrittenSlots function, mask, member
+        }
+      }
+      written.set target, mask
+    }
+  }
+  written
+}
+
+/** The head plus every block that reaches the source of the back edge without passing the head. */
+fn naturalLoopOf(function: IrFunction, head: Int, source: Int): List<Bool> {
+  const blockCount = function.blocks.length()
+  var body = filledFlags blockCount, false
+  body.set head, true
+  if source == head {
+    return body
+  }
+  var stack = [source]
+  body.set source, true
+  while !stack.isEmpty() {
+    const block = stack[stack.length() - 1]
+    stack.removeAt(stack.length() - 1)
+    for candidate in 0..blockCount {
+      if body[candidate] {
+        continue
+      }
+      var reaches = false
+      for target in successorsOf(function.blocks[candidate]) {
+        if target == block {
+          reaches = true
+        }
+      }
+      if reaches {
+        body.set candidate, true
+        stack.add candidate
+      }
+    }
+  }
+  body
+}
+
+/** Every slot one block writes, by the same two questions `resetWritten` asks of an instruction. */
+fn markWrittenSlots(function: IrFunction, var mask: List<Bool>, block: Int) {
+  for instruction in function.blocks[block].instructions {
+    if const Some(target) = definedSlot(instruction) {
+      markSlot mask, target
+    }
+    for slot in writtenThroughPlace(instruction) {
+      markSlot mask, slot
+    }
+  }
+}
+
+fn markSlot(var mask: List<Bool>, slot: Slot) {
+  if slot.value >= 0 && slot.value < mask.length() {
+    mask.set slot.value, true
+  }
+}
+
+/** The blocks in reverse postorder, which is the order a forward analysis reaches the fewest fixpoint rounds in. */
+fn reverseOfPostorder(function: IrFunction): List<Int> {
+  const postorder = postorderOf function
+  var order: List<Int> = []
+  for index in 0..postorder.length() {
+    order.add postorder[postorder.length() - 1 - index]
+  }
+  order
+}
+
+/**
+ * What the predecessors of a block agree on, each of them narrowed by the guard the edge came through. The entry block
+ * has no predecessor and starts with everything its slots' types allow.
+ */
+fn entryOf(
+  function: IrFunction,
+  universes: Universes,
+  exits: List<List<Interval>>,
+  visited: List<Bool>,
+  block: Int,
+): List<Interval> {
+  if block == 0 {
+    return universes.range
+  }
+  var found: List<Interval>? = None
+  for predecessor in 0..function.blocks.length() {
+    if !visited[predecessor] || !reaches(function, predecessor, block) {
+      continue
+    }
+    const given = narrowedByGuard function, universes, exits[predecessor], predecessor, block
+    match found {
+      None => {
+        found = Some given
+      }
+      Some(before) => {
+        found = Some joinedFacts(before, given)
+      }
+    }
+  }
+  match found {
+    Some(settled) => settled
+    None => universes.range
+  }
+}
+
+fn reaches(function: IrFunction, predecessor: Int, block: Int): Bool {
+  for target in successorsOf(function.blocks[predecessor]) {
+    if target == block {
+      return true
+    }
+  }
+  false
+}
+
+fn joinedFacts(left: List<Interval>, right: List<Interval>): List<Interval> {
+  var found: List<Interval> = []
+  for index in 0..left.length() {
+    found.add joined(left[index], right[index])
+  }
+  found
+}
+
+/**
+ * The facts of one edge, with what the guard of the predecessor says about its two operands written into them.
+ *
+ * A guard that leads to the same block on both sides says nothing, because the edge does not decide which side ran.
+ */
+fn narrowedByGuard(
+  function: IrFunction,
+  universes: Universes,
+  facts: List<Interval>,
+  predecessor: Int,
+  block: Int,
+): List<Interval> {
+  const guard = match guardOf(function, predecessor) {
+    Some(found) => found
+    None => {
+      return facts
+    }
+  }
+  if guard.then == guard.otherwise {
+    return facts
+  }
+  if block != guard.then && block != guard.otherwise {
+    return facts
+  }
+  narrowedFacts(universes, facts, guard, block == guard.then)
+}
+
+/** The comparison a `Branch` stands on: the instruction immediately in front of it, and only that one. */
+fn guardOf(function: IrFunction, block: Int): Guard? {
+  const body = function.blocks[block]
+  const (condition, then, otherwise) = match body.terminator {
+    .Branch(slot, first, second) => (slot, first.value, second.value)
+    _ => {
+      return None
+    }
+  }
+  const last = body.instructions.last()?
+  const (target, intrinsic, arguments) = match last {
+    .Intrinsic(found, operation, operands, _) => (found, operation, operands)
+    _ => {
+      return None
+    }
+  }
+  if target != Some(condition) {
+    return None
+  }
+  if !isComparison(intrinsic.operation) || !isTrackedKind(intrinsic.kind) {
+    return None
+  }
+  if arguments.length() != 2 {
+    return None
+  }
+  Some Guard(intrinsic.operation, arguments[0], arguments[1], then, otherwise)
+}
+
+fn isComparison(operation: IntrinsicOperation): Bool {
+  match operation {
+    .Less | .LessOrEqual | .Greater | .GreaterOrEqual | .Equal | .NotEqual => true
+    _ => false
+  }
+}
+
+fn isTrackedKind(kind: NumericKind?): Bool {
+  rangeOfKind(kind).isSome()
+}
+
+/**
+ * What one side of a comparison says about its two operands. `a < b` on the true side means `a <= b.high - 1` and
+ * `b >= a.low + 1`; the false side is `a >= b` read the same way.
+ *
+ * Nothing is narrowed where the bound cannot be written down exactly, and an arithmetic that would leave `Int64` there
+ * simply leaves the fact as it was.
+ */
+fn narrowedFacts(
+  universes: Universes,
+  facts: List<Interval>,
+  guard: Guard,
+  isTrue: Bool,
+): List<Interval> {
+  const left = guard.left.value
+  const right = guard.right.value
+  if !isSlotTracked(universes, left) || !isSlotTracked(universes, right) {
+    return facts
+  }
+  const operation = if isTrue {
+    guard.operation
+  } else {
+    negatedComparison guard.operation
+  }
+  var found = facts
+  match operation {
+    .Less => {
+      found = withUpperBound found, left, subtractedExactly(facts[right].high, 1)
+      found = withLowerBound found, right, addedExactly(facts[left].low, 1)
+    }
+    .LessOrEqual => {
+      found = withUpperBound found, left, Some(facts[right].high)
+      found = withLowerBound found, right, Some(facts[left].low)
+    }
+    .Greater => {
+      found = withLowerBound found, left, addedExactly(facts[right].low, 1)
+      found = withUpperBound found, right, subtractedExactly(facts[left].high, 1)
+    }
+    .GreaterOrEqual => {
+      found = withLowerBound found, left, Some(facts[right].low)
+      found = withUpperBound found, right, Some(facts[left].high)
+    }
+    .Equal => {
+      const both = intersected facts[left], facts[right]
+      found.set left, both
+      found.set right, both
+    }
+    _ => {}
+  }
+  found
+}
+
+/** The comparison that holds exactly where this one does not, which is what the `else` edge stands on. */
+fn negatedComparison(operation: IntrinsicOperation): IntrinsicOperation {
+  match operation {
+    .Less => IntrinsicOperation.GreaterOrEqual
+    .LessOrEqual => IntrinsicOperation.Greater
+    .Greater => IntrinsicOperation.LessOrEqual
+    .GreaterOrEqual => IntrinsicOperation.Less
+    .Equal => IntrinsicOperation.NotEqual
+    .NotEqual => IntrinsicOperation.Equal
+    _ => operation
+  }
+}
+
+fn withUpperBound(facts: List<Interval>, slot: Int, bound: Int?): List<Interval> {
+  var found = facts
+  if const Some(high) = bound {
+    found.set slot, Interval(facts[slot].low, facts[slot].high.min(high))
+  }
+  found
+}
+
+fn withLowerBound(facts: List<Interval>, slot: Int, bound: Int?): List<Interval> {
+  var found = facts
+  if const Some(low) = bound {
+    found.set slot, Interval(facts[slot].low.max(low), facts[slot].high)
+  }
+  found
+}
+
+fn isSlotTracked(universes: Universes, slot: Int): Bool {
+  slot >= 0 && slot < universes.tracked.length() && universes.tracked[slot]
+}
+
+/**
+ * Widening: at the head of a loop, a bound of a slot **the loop writes** that grew between two rounds is pushed to the
+ * bound of the slot's own type instead.
+ *
+ * Without it the counter of a loop grows by one every round and the fixpoint never arrives. With it the counter of
+ * `for index in 0..n` reaches `[0, Int.maximum]` after one round and stays there - and the guard of the loop narrows
+ * it back to `[0, n - 1]` inside the body, which is exactly the fact that makes `index + 1` free.
+ *
+ * `widen` is empty for every block that heads no loop, so the whole function is then the plain join.
+ */
+fn widened(
+  universes: Universes,
+  widen: List<Bool>,
+  before: List<Interval>,
+  proposed: List<Interval>,
+): List<Interval> {
+  var found: List<Interval> = []
+  for index in 0..proposed.length() {
+    const old = before[index]
+    const fresh = proposed[index]
+    const whole = universes.range[index]
+    if index >= widen.length() || !widen[index] {
+      found.add fresh
+      continue
+    }
+    // The old bound is kept where the new one is narrower, so the entry of a loop head only ever grows and the
+    // fixpoint cannot oscillate between two rounds
+    const low = if fresh.low < old.low {
+      whole.low
+    } else {
+      old.low
+    }
+    const high = if fresh.high > old.high {
+      whole.high
+    } else {
+      old.high
+    }
+    found.add Interval(low, high)
+  }
+  found
+}
+
+/** The facts at the end of a block: the entry facts run through every instruction of it. */
+fn exitOf(
+  program: IrProgram,
+  function: IrFunction,
+  universes: Universes,
+  block: Int,
+  entry: List<Interval>,
+): List<Interval> {
+  var facts = entry
+  for instruction in function.blocks[block].instructions {
+    facts = afterInstruction program, function, universes, facts, instruction
+  }
+  facts
+}
+
+/**
+ * One instruction: everything it may write is reset to what its type allows, and then the few shapes whose result this
+ * analysis knows write their own answer over it.
+ *
+ * The reset comes first and covers every slot a callee may write through a `var` argument, which is why a fact can
+ * never outlive the value it was about.
+ */
+fn afterInstruction(
+  program: IrProgram,
+  function: IrFunction,
+  universes: Universes,
+  facts: List<Interval>,
+  instruction: Instruction,
+): List<Interval> {
+  var found = resetWritten universes, facts, instruction
+  match instruction {
+    .Constant(target, value) => {
+      if const Some(known) = integerOfStatic(program, value) {
+        found = withFact universes, found, target, Interval(known, known)
+      }
+    }
+    .Move(target, source) => {
+      found = copiedFact universes, found, target, source
+    }
+    .Copy(target, source) => {
+      found = copiedFact universes, found, target, source
+    }
+    .Read(target, reference) => {
+      if reference.steps.isEmpty() {
+        found = copiedFact universes, found, target, reference.base
+      }
+    }
+    .Write(reference, value) => {
+      if reference.steps.isEmpty() {
+        found = copiedFact universes, found, reference.base, value.slot
+      }
+    }
+    .Intrinsic(target, intrinsic, arguments, _) => {
+      if const Some(slot) = target {
+        if const Some(known) = resultInterval(universes, found, intrinsic, arguments) {
+          found = withFact universes, found, slot, known
+        }
+      }
+    }
+    _ => {}
+  }
+  found
+}
+
+/** Everything one instruction may write, back to what the slot's own type allows. */
+fn resetWritten(universes: Universes, facts: List<Interval>, instruction: Instruction): List<Interval> {
+  var found = facts
+  if const Some(target) = definedSlot(instruction) {
+    found = resetSlot universes, found, target.value
+  }
+  for slot in writtenThroughPlace(instruction) {
+    found = resetSlot universes, found, slot.value
+  }
+  found
+}
+
+/**
+ * The slots an instruction writes through a place rather than into a target: the base of a `var` argument, of a
+ * `MakeUnique`, of a `Write` through a path, and of the two container instructions.
+ */
+fn writtenThroughPlace(instruction: Instruction): List<Slot> {
+  match instruction {
+    .MakeUnique(reference) => [reference.base]
+    .Write(reference, _) => [reference.base]
+    .TakeOut(_, container, _, _) => [container.base]
+    .PutBack(container, _, value, _) => [container.base, value]
+    .Call(_, _, arguments, _, _) => placeBasesOf arguments
+    .CallClosure(_, _, arguments) => placeBasesOf arguments
+    .CallWitness(_, _, _, arguments) => placeBasesOf arguments
+    _ => []
+  }
+}
+
+fn placeBasesOf(arguments: List<Argument>): List<Slot> {
+  var found: List<Slot> = []
+  for argument in arguments {
+    if const Some(place) = argument.place {
+      found.add place.base
+    }
+  }
+  found
+}
+
+fn resetSlot(universes: Universes, facts: List<Interval>, slot: Int): List<Interval> {
+  var found = facts
+  if isSlotTracked(universes, slot) {
+    found.set slot, universes.range[slot]
+  }
+  found
+}
+
+fn withFact(universes: Universes, facts: List<Interval>, slot: Slot, known: Interval): List<Interval> {
+  var found = facts
+  if isSlotTracked(universes, slot.value) {
+    const settled = intersected known, universes.range[slot.value]
+    if !isEmpty(settled) {
+      found.set slot.value, settled
+    }
+  }
+  found
+}
+
+fn copiedFact(universes: Universes, facts: List<Interval>, target: Slot, source: Slot): List<Interval> {
+  if !isSlotTracked(universes, source.value) {
+    return facts
+  }
+  withFact universes, facts, target, facts[source.value]
+}
+
+/** The integer one static value holds, or `None` where it is not an integer literal at all. */
+fn integerOfStatic(program: IrProgram, value: StaticId): Int? {
+  if !program.hasStatic(value) {
+    return None
+  }
+  if const .Literal(.Integer(found)) = program.staticAt(value).contents {
+    return Some found
+  }
+  None
+}
+
+/**
+ * The exact interval an arithmetic intrinsic produces, or `None` where the analysis has nothing to say - which is also
+ * the answer that keeps the check, because the same question decides both.
+ */
+fn resultInterval(
+  universes: Universes,
+  facts: List<Interval>,
+  intrinsic: Intrinsic,
+  arguments: List<Slot>,
+): Interval? {
+  if !isTrackedKind(intrinsic.kind) {
+    return None
+  }
+  if const .Negate = intrinsic.operation {
+    if arguments.length() != 1 || !isSlotTracked(universes, arguments[0].value) {
+      return None
+    }
+    return negatedInterval facts[arguments[0].value]
+  }
+  if arguments.length() != 2 {
+    return None
+  }
+  if !isSlotTracked(universes, arguments[0].value) || !isSlotTracked(universes, arguments[1].value) {
+    return None
+  }
+  const left = facts[arguments[0].value]
+  const right = facts[arguments[1].value]
+  match intrinsic.operation {
+    .Add => addedInterval left, right
+    .Subtract => subtractedInterval left, right
+    .Multiply => multipliedInterval left, right
+    _ => None
+  }
+}
+
+// --- Dropping the checks --------------------------------------------------------------------------------------------
+
+/** One function, walked once more with the settled facts: every operation that provably fits loses its check. */
+fn rewriteFunction(
+  var program: IrProgram,
+  index: Int,
+  universes: Universes,
+  entries: List<List<Interval>>,
+) {
+  const original = program.functions[index]
+  for block in 0..original.blocks.length() {
+    const instructions = original.blocks[block].instructions
+    var facts = entries[block]
+    var written: List<Instruction> = []
+    var isChanged = false
+    for instruction in instructions {
+      var kept = instruction
+      if const .Intrinsic(target, intrinsic, arguments, at) = instruction {
+        if intrinsic.isChecked && fitsWithoutCheck(universes, facts, intrinsic, arguments) {
+          kept = Instruction.Intrinsic target, intrinsic.copy(isChecked: false), arguments, at
+          isChanged = true
+        }
+      }
+      facts = afterInstruction program, original, universes, facts, instruction
+      written.add kept
+    }
+    if isChanged {
+      program.functions[index].blocks[block].instructions = written
+    }
+  }
+}
+
+/**
+ * Whether an operation's result cannot leave the width of its own type, which is the one thing that makes a check
+ * unnecessary rather than merely unlikely.
+ *
+ * Only the four operations that can overflow are asked: a division checks its divisor and not its width, and a
+ * comparison, a conversion and a bit operation carry no check to drop.
+ */
+fn fitsWithoutCheck(
+  universes: Universes,
+  facts: List<Interval>,
+  intrinsic: Intrinsic,
+  arguments: List<Slot>,
+): Bool {
+  match intrinsic.operation {
+    .Add | .Subtract | .Multiply | .Negate => {}
+    _ => {
+      return false
+    }
+  }
+  const produced = match resultInterval(universes, facts, intrinsic, arguments) {
+    Some(found) => found
+    None => {
+      return false
+    }
+  }
+  const whole = match rangeOfKind(intrinsic.kind) {
+    Some(found) => found
+    None => {
+      return false
+    }
+  }
+  contains whole, produced
+}

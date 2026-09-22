@@ -13,6 +13,7 @@ use Package, Workspace from "../../project/workspace"
 use relativePath, pathName from "../../project/path"
 use IrProgram, Instruction from "../ir"
 use devirtualizeProgram from "../devirtualize"
+use dropProvableChecks from "../ranges"
 use finishProgram, isManagedType from "../layout"
 use verifyProgram, typeOfReference from "../verify"
 use printProgram from "../print"
@@ -47,6 +48,9 @@ public fn lowerWorkspace(
   // After the devirtualization, because a payload that turned out not to be counted leaves a `makeUnique` behind that
   // the box it replaced did need
   dropUncountedMakeUnique lowering.program
+  // Last of the three, because a direct call is what makes a constant visible where a dispatch hid it: an overflow
+  // check the ranges of a function prove cannot fire is the plain operation from here on
+  dropProvableChecks lowering.program
   lowering
 }
 

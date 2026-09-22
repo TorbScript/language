@@ -173,6 +173,11 @@ group "Control flow" {
     assert irOf(source, "t_acme_x2f_app_main_either").contains("branch %2 then b2 else b1")
   }
 
+  /**
+   * The increment of the counter is `add.i64.unchecked`: the range analysis reads `index < limit` off the head of the
+   * loop, so `index + 1` cannot leave `Int64` and the overflow check of it is not emitted (`ir/ranges.trb`). The
+   * `total + index` inside the body keeps its check, because nothing bounds `total`.
+   */
   test "`for` over a range is a counter, a comparison and an increment, and `break` leaves it" {
     const source = r"""
       fn count(limit: Int): Int {
@@ -212,7 +217,7 @@ group "Control flow" {
           branch %6 then b5 else b6
         b3: # acme/app/src/main.trb:3 step
           %8 = constant s_literal__Int64_1
-          %2 = intrinsic add.i64 %2, %8 at acme/app/src/main.trb:3:3
+          %2 = intrinsic add.i64.unchecked %2, %8 at acme/app/src/main.trb:3:3
           jump b1
         b4: # acme/app/src/main.trb:3 done
           return %1 borrowed
@@ -414,7 +419,7 @@ group "The top level of a file" {
         b0: # acme/app/src/main.trb:1 entry
           %0 = constant s_literal__Int64_0
           %1 = constant s_literal__Int64_2
-          %0 = intrinsic add.i64 %0, %1 at acme/app/src/main.trb:5:11
+          %0 = intrinsic add.i64.unchecked %0, %1 at acme/app/src/main.trb:5:11
           %2 = copy %0
           return
         }"""
@@ -641,7 +646,10 @@ group "Real code" {
     // `Accumulator` that some implementation in the program actually overrides - never every default for every item
     // type. They *are* the footprint - the functions, the tables and the descriptors - and they are asserted exactly
     // so that an explosion fails a test instead of being noticed as a build time.
-    assert(found.program.functions.length() == 160)
+    // Eleven of these are the copies the devirtualization makes of a frozen member a direct call names
+    // (`specializeFrozenCallees`): the table keeps the original, the call site gets a body whose result and whose
+    // parameters may become concrete
+    assert(found.program.functions.length() == 171)
     assert(found.program.witnessTables.length() == 39)
     assert(found.program.elements.length() == 3)
     var blocked: List<String> = []

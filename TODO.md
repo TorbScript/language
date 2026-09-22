@@ -3226,6 +3226,53 @@ Wenn nicht, was bedeutet, bewirkt es?
     sonst ein `static const`, das niemand liest - Fehler unter `-Wunused-const-variable -Werror`), und
     `torb_map_make_unique`/`torb_set_make_unique` kamen neben `torb_list_make_unique` dazu, weil ein `var`-Pfad durch
     eine konkrete Map denselben Einzeiler braucht wie eine Liste. Offen bleiben P6 bis P12.
+  - **Erledigt (P6-P8):** Runde P6 (Befund 5, der konkrete Iterator) und Runde P8 (Befund 8, die Bereichsanalyse) sind
+    fertig; **P7 ist nicht angefasst**, dafür steht jetzt genau aufgeschrieben, was sie braucht. **P6** löst das
+    Tabellen-Member-Problem nicht, indem es die eingefrorene Signatur bewegt, sondern indem es das Member **kopiert**:
+    `devirtualizeProgram` lässt die Analyse zweimal laufen, und dazwischen gibt `specializeFrozenCallees` jeder
+    eingefrorenen Funktion, die ein **direkter** Aufruf schon nennt und in deren Signatur überhaupt ein `Object` steht,
+    eine Kopie unter einem Namen, den keine Tabelle hält (`..._x24_direct`). Die Tabelle behält das Original, also ist
+    die erased ABI unangetastet und ein Programm, das wirklich dynamisch verteilt, zahlt genau das, was es vorher
+    zahlte; der zweite Lauf liest Ergebnis und Parameter der Kopie als gewöhnliche Orte. Ergebnis: der Cursor jedes
+    `for` über eine Liste, eine Map, ein Set und `String.chars()` ist ein **Record im Frame**, `next` ein Direktaufruf
+    über die Stelle, an der der Cursor liegt, und im Schleifenkopf steht kein `makeUnique` mehr - **Stufe 3 des Befunds
+    (das Heraushieven des `makeUnique`) hat sich damit erledigt**, denn ein konkreter Cursor ist ein `inline`-Record
+    und trägt gar keinen Zähler. **P8** ist `compiler/src/ir/ranges.trb`, eine Vorwärts-Intervallanalyse pro Funktion
+    mit genau drei Faktenquellen (eine ganzzahlige Konstante, die Rechnung, die einen Slot gefüllt hat, und der
+    Vergleich, auf dem ein `Branch` steht), Fixpunkt in umgekehrter Postordnung mit **Widening nur am Schleifenkopf und
+    nur für die Slots, die diese Schleife schreibt** (sonst verliert der `_round` einer äußeren Schleife seine Grenzen
+    in der inneren), danach ein Narrowing-Durchgang. Eine `Add`/`Subtract`/`Multiply`/`Negate`, deren Ergebnis
+    nachweislich in die eigene Breite passt, bekommt `isChecked: false` am `Intrinsic`, druckt sich als
+    `add.i64.unchecked` und wird im C der nackte Operator. Unbekannt ist immer der ganze Bereich des Typs, nie "kein
+    Fakt", und jede Instruktion setzt zurück, was sie schreiben kann - ein weggelassener Check, der feuern könnte, wäre
+    ein **fehlender Panic**, und das ist das Einzige, was diese Datei nicht darf. **Gemessen** mit
+    `benchmarks/run.sh --allocations`, bestes aus je neun Läufen, torb-Spalte vorher -> nachher:
+    `list-iterate` 973 316 -> **824 263** (-15%) und **64 -> 24 Allokationen** (genau so viele wie `list-index` für
+    dieselben Daten), `pipeline` 775 016 -> **730 042** und 105 -> **85** Allokationen, `map-count` 321 215 ->
+    **315 487** und 50 108 -> **50 048**, `list-index` 319 127 -> **285 693** (-10%), `record-write` 964 893 ->
+    **917 379**, `nested-write` 1 037 760 -> **937 333** (beide warten auf P7, das ist die Maschine). **P8 bewegt die
+    Wanduhr bei gcc praktisch nicht**: `call-depth` 378 055 -> 370 960 (bestes aus je 15 Läufen), weil
+    `torb_subtract_i64` ein `static inline` ist und gccs eigene Value-Range-Propagation die beiden Zweige unter
+    `if (index < 2)` längst selbst wegfaltete - das C zeigt jetzt `s5 = s0_index - s4;` statt des Helfers, und der
+    Gewinn liegt dort, wo nichts faltet: in der VM und in einem C-Compiler ohne die Overflow-Builtins. **Was es
+    kostet:** das C des Compilers selbst ist **65 934 674** Bytes gegen 63 436 228 auf master (+3,9%); davon sind
+    815 813 Bytes die neue Quelle (`ranges.trb`) und **1 682 633 Bytes die 1 021 Kopien**, von denen **334 nichts
+    gebracht haben** - die aufzuräumen ist ein Remap eines zusammenhängenden Schwanzes von `FunctionId`s und gehört zu
+    Runde P10 (Befund 12). **Snapshots, die sich bewegt haben** (alle bewusst): zwei IR-Snapshots in
+    `compiler/tests/lower.test.trb` (`add.i64.unchecked` im Schrittblock einer Zählschleife) und die
+    Instanzzähler-Stolperdraht-Zeile ebendort (166 -> 177 Funktionen, elf davon Kopien). **Neu:**
+    `compiler/tests/ranges.test.trb` (sieben Tests: was fällt weg, was bleibt, ein Wächter, der nur ein Ende begrenzt,
+    eine Division), drei Tests in `compiler/tests/devirtualize.test.trb` (Cursor im Frame, das Original behält seine
+    Box, eine echte Dynamik behält Box und `makeUnique`) und `tests/conformance/range-checks.trb`, das beide Hälften in
+    einem Programm hält: eine bewachte Subtraktion und ein Schleifenzähler, deren Antworten festgeschrieben sind, und
+    eine Addition, die nichts begrenzt und weiterhin mit ``arithmetic overflow in `+` `` panikt. Gates: Tier A grün,
+    Tier B grün (Konformanz 84/84 mit Leak-Gate, Fixpunkt hält, Runtime-Tests). **Offen bleibt P7** - und Befund 3
+    nennt jetzt die drei Dinge, die sie beantworten muss: die Umschreibung ist ein Guckloch **nach** der
+    Devirtualisierung und keine Änderung der Senkung (zur Senkzeit ist der Container noch `Object(List<Int>)`), der
+    Panic eines Index außerhalb des Bereichs gehört `std/core` und muss `Key does not exist` an `option.trb` bleiben
+    (`torb_list_element_reference` sagt etwas anderes), und `PathStep.Element` hat im C-Backend noch gar keine
+    Umsetzung (`reportUnsupported`). Ebenso offen: die **zweite Hälfte von Befund 8**, die Bereichsprüfung von
+    `a[index]`, denn die ist ein `Option`, das die Standardbibliothek baut, und kein `Intrinsic` mit einem Flag.
 
 - (Performance-Audit, 2026-09-22) Der obige Befund war der Anlass für eine systematische Messung: wo tut der erzeugte
   Code vermeidbare Arbeit? Ergebnis sind `docs/PERFORMANCE.md` (Kostenmodell, Zero-Cost-Vertrag mit hält/hält-nicht,
