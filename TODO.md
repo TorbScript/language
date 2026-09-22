@@ -3654,3 +3654,9 @@ Wenn nicht, was bedeutet, bewirkt es?
     zwei Checker-Löcher (ein Trait darf ein Supertrait fordern, das für seine Parameter niemand implementiert; zwei
     Instanziierungen eines Traits an einem Typ werden angenommen und schalten danach beide ab). Acht Scheiben
     C1-C8, nur C4 fasst `compiler/` an. Sechs Geschmacksfragen am Ende für dich.
+  - **Entschieden (ich, aus den bisherigen Antworten; Nutzer kann widersprechen) zu COLLECTIONS Abschnitt 15:**
+    1 `remove()` statt Verb pro Struktur - ja. 2 gemeinsamer Supertrait Stack/Queue - nein (Zeremonie). 3 `Set.union`
+    bleibt (Tripel union/intersection/difference). 4 `Ordered` statt `Heap` (sagt was, nicht wie). 5 `RingList`
+    (nach der Struktur wie ArrayList/TrieList). 6 Tour behält Stack/Queue. **Wird gelöst:** Scheiben C1-C8 nach P5
+    und der Checker-Runde; dazu die zwei Checker-Löcher (Supertrait ohne Implementierung; zwei Instanzen eines
+    Traits auf einem Typ) und der O(n)-`removeAt 0` in staged.trb/source.trb.
