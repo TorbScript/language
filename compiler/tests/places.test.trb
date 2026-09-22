@@ -12,15 +12,23 @@
  */
 
 use test, group from "std/test"
-use probe, problems, notes from "./harness"
+use probe, problems, notes, problemsOf, notesOf from "./harness"
 
 const counter = "type Counter \{\n  var count: Int = 0\n  step: Int = 1\n\n"
   + "  var fn increment() \{\n    count = count + step\n  \}\n\n"
   + "  fn incremented(): Counter \{\n    copy(count: count + 1)\n  \}\n\}\n\n"
 
-const account = "type Account \{\n  private(var) balance: Int = 0\n  private var history: List<String> = []\n"
+const account = "public type Account \{\n  private(var) balance: Int = 0\n  private var history: List<String> = []\n"
   + "  private(var) audits: List<String> = []\n\n"
   + "  var fn deposit(amount: Int) \{\n    balance = balance + amount\n  \}\n\}\n\n"
+
+/**
+ * `Account` in a file of its own. `private` reaches as far as the file that declares it, so a rule about what code
+ * *outside* may do needs a second file to stand in.
+ */
+fn outsideAccount(body: String): Map<String, String> {
+  ["app/src/account.trb": account, "app/src/main.trb": "use Account from \"./account\"\n\n" + body]
+}
 
 /** A stream-shaped pair: a `shared trait` whose verbs change the object, and a wrapper that keeps one in a field. */
 const producer = "shared trait Producer with Close \{\n  var fn next(): Task<Int?>\n\n"
@@ -79,28 +87,28 @@ group "Fields" {
     assert(notes(source) == ["A field is `const` unless it is declared `var`, and a value is its data"])
   }
 
-  test "`private(var)` is written by the type itself and by an `extend` of it" {
+  test "`private(var)` is written by the type itself and by an `extend` of it in the same file" {
     const source = "{account}extend Account \{\n  var fn raise() \{\n    balance = balance + 1\n  \}\n\}"
     assert problems(source).isEmpty()
   }
 
   test "`private(var)` hands everybody else a const path" {
-    const source = "{account}fn probe(var target: Account) \{\n  target.balance = 10\n\}"
-    assert(problems(source) == ["`balance` can only be written by `Account`"])
+    const files = outsideAccount "fn probe(var target: Account) \{\n  target.balance = 10\n\}"
+    assert(problemsOf(files) == ["`balance` can only be written by `Account`"])
     assert(
-      notes(source) == ["`private(var)` hands out a read-only path: the field is public, its mutability is not"]
+      notesOf(files) == ["`private(var)` hands out a read-only path: the field is public, its mutability is not"]
     )
   }
 
   test "const is deep, so a verb on a `private(var)` collection is an error too" {
-    const source = "{account}fn probe(var target: Account) \{\n  target.audits.add(\"audit\")\n\}"
-    assert(problems(source) == ["`audits` can only be written by `Account`"])
+    const files = outsideAccount "fn probe(var target: Account) \{\n  target.audits.add(\"audit\")\n\}"
+    assert(problemsOf(files) == ["`audits` can only be written by `Account`"])
   }
 
   /** A field nothing outside may even name is 4.9's message, and one root cause gets one message. */
   test "a wholly `private` field says that it is private, and not a second time that it is const" {
-    const source = "{account}fn probe(var target: Account) \{\n  target.history.add(\"audit\")\n\}"
-    assert(problems(source) == ["`history` is private to `Account`"])
+    const files = outsideAccount "fn probe(var target: Account) \{\n  target.history.add(\"audit\")\n\}"
+    assert(problemsOf(files) == ["`history` is private to `Account`"])
   }
 
   test "a field of a field needs a `var` at every step" {

@@ -171,6 +171,46 @@ group "Command calls" {
     }
   }
 
+  /**
+   * An index in the middle of a member path is still a member path: `mounted[index].process elapsed` is the command
+   * form of `mounted[index].process(elapsed)`. The index joins the path only when a `.name` follows it, which is what
+   * leaves the rule above untouched.
+   */
+  test "an index in the middle of a member path is part of it" {
+    match expression("mounted[index].process elapsed") {
+      .Call(callee, arguments, CallStyle.Command) => {
+        assert(arguments.length() == 1)
+        match callee.kind {
+          .Member(inner, name, _) => {
+            assert(name.text == "process")
+            match inner.kind {
+              .Index(_, _) => {}
+              other => panic "Unexpected base: {other}"
+            }
+          }
+          other => panic "Unexpected callee: {other}"
+        }
+      }
+      other => panic "Unexpected tree: {other}"
+    }
+  }
+
+  test "several indexes in one path, and a nested one" {
+    match expression("grid[row][column].fill value") {
+      .Call(_, arguments, CallStyle.Command) => assert(arguments.length() == 1)
+      other => panic "Unexpected tree: {other}"
+    }
+    match expression("rows[at(index)].fill value") {
+      .Call(_, arguments, CallStyle.Command) => assert(arguments.length() == 1)
+      other => panic "Unexpected tree: {other}"
+    }
+  }
+
+  test "an index with no member after it is not a command, and a list argument still needs parentheses" {
+    assert(messages("mounted[index] elapsed").length() == 1)
+    assert(messages("print [1, 2]").length() == 1)
+  }
+
   test "the closure belongs to the command, not to its argument" {
     assert(messages("print numbers.map \{ _ * 2 \}.toList()").length() == 1)
     assert messages("print(numbers.map \{ _ * 2 \}.toList())").isEmpty()

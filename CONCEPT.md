@@ -1205,9 +1205,11 @@ account.balance = 1_000_000              // Compile error: only Account can writ
 - `private(var)` is a modifier of a field and of nothing else. On a member that has no `var` it has nothing to say
   and is an error. It also already *is* the `var`, so `private(var) var balance: Int` is an error: one of the two says
   it twice.
-- **`private` reaches as far as the type does.** A private member is visible in the body of its type and in every
-  `extend` of that type in the same package - an `extend` without a trait _is_ part of the type - and nowhere else.
-  The package is the unit of coherence, so it is the unit of privacy, too.
+- **`private` reaches as far as the file that declares it.** A private member is visible in the body of its type, in
+  an `extend` of that type written in the same file, and in the free functions of that file - and nowhere else. One
+  rule, and the same reach a `private` top-level declaration has: what is private is what its file can see. The
+  package is the unit of coherence and not the unit of privacy, because an `extend` in another file of the package
+  could otherwise write the fields a capsule's factory is the only way into.
 - **There are no getters, setters or properties.** A field is storage, a method computes, and the `()` tells which one
   it is (`list.length()` may cost something, `point.x` never does). No `get` prefixes; predicates are called
   `isEmpty()`/`hasX()`, mutators are verbs written `var fn`.
@@ -2656,6 +2658,14 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
   Swift (there is no `set` in this language, the thing that is private is the `var`), and not an own keyword
   (`guarded` was tried: one more word to learn for something the existing two words already say). It removed
   every "private field plus accessor method of nearly the same name" pair from the examples.
+- **`private` reaches one file, not one package.** An `extend Path` in another file of `std/path` could otherwise
+  write `Self(storedRoot: ..., storedComponents: ...)` and walk around the parser that is the only way into the
+  capsule. The package stays the unit of coherence; it is not the unit of privacy. It is also *one* rule instead of
+  two: a `private` member and a `private` top-level declaration now reach exactly as far as each other, so a free
+  function of the declaring file sees the private member as well - the border "only the type body and an `extend`"
+  is gone. Measured over the repository when the rule went on: one place, an `extend Column<Node>` of
+  `examples/ecs-probe-2` that wrote a `private(var)` field of another file, and it goes through the public members
+  now.
 - No properties, no computed getters, no validating setters (a setter cannot return a `Result`)
 - Fields are `const` by default
 - **Mutable value semantics: every `type` is a value, the binding decides about mutation** (Swift structs, Hylo).

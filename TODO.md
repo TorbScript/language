@@ -3699,3 +3699,48 @@ Wenn nicht, was bedeutet, bewirkt es?
     als Packages; Registrierung ist ein WERT, den das Programm baut (`Storage.registry([FileStorage.driver, ...])`),
     keine Selbstanmeldung (keine Reflexion, Top-Level nie importierbar); unbekanntes Schema = `Result`-Fehler mit
     Liste; `Show` einer Uri blendet das Passwort im `userInfo` aus. **Wird gelöst:** Abschnitt in `docs/URI.md`.
+- (Checker-Folgerunde, 2026-09-22) **Erledigt:** alle sieben Punkte, `check .` (362 Dateien) und
+  `check tests/native tests/scripts` (88) sauber, 1665 Compiler-Tests grün, Fixpunkt hält.
+  1. **Die drei Concurrency-Regeln** (`docs/CONCURRENCY.md` Abschnitt 12): (a) `await()` in einer gewöhnlichen
+     Closure ist jetzt ein Fehler ("only allowed in a closure that becomes a task", Notiz nennt `Task.all` und
+     `task.map`); eine Closure *ist* eine Task, wenn `spawn` sie bekommt oder wenn ihr **deklariertes** Ergebnis ein
+     `Task<...>` ist - damit sagt eine Bibliothek es im Parametertyp, und `Source.produce` nimmt jetzt
+     `(var sink) => Task<Result<Void, Failure>>` (die einzige std-Änderung der Runde, eine Zeile in
+     `std/stream/src/source.trb` plus `produceInto`). (b) Ein Top-Level-`var` in einer `spawn`-Closure wird jetzt
+     ebenso abgelehnt wie ein eingefangenes - es ist gar kein Capture, sondern der eine Platz, den die ganze Datei
+     teilt; die vier Zeilen aus Abschnitt 12 geben zwei Meldungen. (c) `containsShared` im Checker (gleicher
+     Fixpunkt wie das Layout, `Task` und `Channel` sind die Ausnahmen) lehnt ein Objekt in einer `spawn`-Closure ab
+     und ein `Channel<Item>` mit Identität. **Deine Frage - wo die Channel-Regel hängt:** am geschriebenen
+     `Channel<Item>`, nicht an `sink().add`. Der Item-Typ wird einmal geschrieben, das `add` an jeder Stufe einer
+     Pipeline - eine Meldung pro Item-Typ statt einer pro Aufruf.
+  2. **`private` auf Datei-Ebene** (deine Entscheidung vom 2026-09-22): `isInsideDeclaration` fragt nur noch, ob die
+     Deklaration im gerade geprüften Modul steht. Eine freie Funktion derselben Datei sieht das private Mitglied
+     jetzt auch, ein `extend` in einer anderen Datei des Packages nicht mehr. Drei Meldungen plus Notizen, `fields.md`
+     Regel 5, `visibility.md` Regel 4, `data-or-capsule.md`, CONCEPT (Regel + Entscheidungslog). **Im Repo brach eine
+     Stelle**, die die Messung von damals noch nicht kannte: das `extend Column<Node>` in
+     `examples/ecs-probe-2/src/behaviour.trb` schrieb ein `private(var)`-Feld aus `ecs.trb`; es geht jetzt über
+     `valueAt`/`ownerAt`/`put`. Elf Doku-Blöcke mussten umgeschrieben werden: ein Schnipsel der Doku ist **eine**
+     Datei, also kann `private` darin nicht mehr greifen - sie zeigen die Regel jetzt an echten std-Kapseln
+     (`Path`, `Workspace`, `ArrayQueue`).
+  3. **Konstanter Index außerhalb** ist ein Compile-Fehler: `[1, 2, 3][5]` ("this literal has 3 items"),
+     `array[7]` auf `Array<Int, 4>` wie bisher, und **negativ** jetzt auch (`numbers[-1]` ist ein `Unary(Negate, 1)`
+     und war deshalb durchgerutscht). Die Notiz nennt `get(index)`.
+  4. **`String.from(capsule)`** löst auf (TYPECHECKER 53/68). Die Überladungsmenge wird bei der **statischen**
+     Suche zusammengeführt: was der Typ selbst schreibt, plus jede `From<X>`-Implementierung seiner Traits. Die
+     Reihenfolge der Suche bleibt - das Mitglied aus dem Rumpf trägt `Candidate.preferred` und gewinnt ohne
+     Mehrdeutigkeitsmeldung, wenn kein Argument die Kandidaten trennt. Der Pitfall in `std/path` ist weg, das
+     Beispiel dort schreibt jetzt `String.from(path)` direkt.
+  5. **Cache-Invalidierung** (TYPECHECKER 68, LINEAR 15): **die Lücke war noch offen**, die Kapsel-Runde hatte
+     keinen Test dafür. `deriveFor` zählt jetzt eine `answerGeneration` hoch und wirft `traitClosures`,
+     `memberAnswers` und `memberMissing` weg; eine Antwort, die *während* einer Ableitung entstanden ist, wird
+     gegeben und nicht behalten; der Rekursionsschutz von `traitsOf` liegt in einer eigenen Tabelle. Beleg:
+     `const text = "{point}"` leitet `Show` ab, und `point.show()` danach war vorher
+     "`Point` has no member `show`". **Noch offen und benannt:** eine Mitgliedersuche *startet* keine Ableitung, also
+     ist `point.show()` ohne vorherige Interpolation weiterhin "has no member".
+  6. **`?` in `Never` und in einen nackten Typparameter** wird abgelehnt: `Never` hat keine Werte, und was ein
+     Typparameter kann, sagen seine Schranken (`where Failure: From<Alpha>` in der Notiz).
+  7. **`mounted[index].process elapsed`** parst. Ein Index mitten in einem Mitgliedspfad gehört dazu, auch mehrere
+     (`grid[row][column].fill value`); er gehört nur dazu, wenn ein `.name` folgt, damit `f [1]` weiter immer
+     Indizierung ist und `print [1, 2]` weiter die Klammern-Meldung gibt. Der Versuch ist spekulativ, und ein
+     `Parser` ist ein Wert - ihn zurückzusetzen macht Position und Diagnosen zusammen rückgängig.
+     `command-calls.md` Regel 2.

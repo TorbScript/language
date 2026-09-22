@@ -64,14 +64,25 @@ print "{server.host}:{server.port} has {server.connections} connections"
    `server.connections` reads the count, and because `const` is deep a copy taken out of it cannot be written back
    either.
 
-   ```trb error
+   ```trb
    type Server {
      private(var) connections: Int = 0
-   }
 
-   var server = Server()
-   server.connections = 1
-   // error: `connections` can only be written by `Server`
+     var fn accepted() {
+       connections = connections + 1
+     }
+   }
+   ```
+
+   `Workspace` of `std/project` is such a type, and "outside" means outside the file it is declared in (rule 5):
+
+   ```trb error
+   use Workspace from "std/project"
+
+   var workspace = Workspace()
+   workspace.memberPatterns = ["packages/*"]
+   print workspace.memberPatterns
+   // error: `memberPatterns` can only be written by `Workspace`
    ```
 
 4. **`private(var)` is the whole spelling: it already contains the `var`.** Writing `var` again on the same field is an
@@ -84,18 +95,31 @@ print "{server.host}:{server.port} has {server.connections} connections"
    // error: `private(var)` already says `var`
    ```
 
-5. **`private` reaches as far as the type does.** A `private` member is visible in the body of its type and in every
-   `extend` of that type in the same package, and nowhere else - reading it from outside is an error, not a shorter
-   view of it.
+5. **`private` reaches as far as the file that declares it.** A `private` member is visible in the body of its type,
+   in an `extend` of that type in the same file, and in the functions of that file - and nowhere else. Reading it from
+   another file is an error, not a shorter view of it. One rule, and it is the same reach a `private` top-level
+   declaration has: what is private is what its file can see.
 
    ```trb error
+   use Path from "std/path"
+
+   const path = Path.from "a/b"
+   print path.storedComponents
+   // error: `storedComponents` is private to `Path`
+   ```
+
+   Inside the file that declares it, nothing is hidden:
+
+   ```trb check
    type Server {
      private var log: List<String> = []
    }
 
-   var server = Server()
-   print server.log
-   // error: `log` is private to `Server`
+   fn entries(server: Server): Int {
+     server.log.length()
+   }
+
+   print entries(Server())
    ```
 
 6. **A field is a promise, not a first draft.** It is a parameter of the generated constructor, a position in a
@@ -118,14 +142,15 @@ type Account {
 }
 ```
 
-```trb error
-type Account {
-  private(var) balance: Int = 0
-}
+From another file there is no way in at all, and the deposit is the only door:
 
-var account = Account()
-account.balance = 1_000_000
-// error: `balance` can only be written by `Account`
+```trb error
+use Workspace from "std/project"
+
+var workspace = Workspace()
+workspace.memberPatterns = ["packages/*"]
+print workspace.memberPatterns
+// error: `memberPatterns` can only be written by `Workspace`
 ```
 
 ## Related

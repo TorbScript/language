@@ -24,11 +24,13 @@ use resolveTarget, expectationOf from "./expression"
 use substituteFunction, substituteBounds, sameType, unify, resolveType, resolveTypes, openVariableOf from "./unify"
 use witnessFor, isConcrete, traitArgumentsOf, fitsType from "./implementation"
 use propertyWrite from "./command"
-use openReceiverAccess, openArgumentAccess, closeAccessesTo, checkCallReads from "./place"
+use openReceiverAccess, openArgumentAccess, closeAccessesTo, checkCallReads, isDeclaredVar from "./place"
+use resultOf from "./signature"
 use noteArgumentClosures from "./mutation"
 use taskValueOf from "./statement"
 use isQuotation, openThunk, closeThunk from "./quote"
 use checkConstruction, checkSharedIdentity, requireSharedFields from "./declaration"
+use containsShared, isSharedType from "./declaration"
 use capsuleNotesOf from "./derive"
 
 /** Which parameter every written argument fills, and what the call adds to what was written. */
@@ -119,7 +121,11 @@ public fn checkCall(
   openReceiverAccess checker, callee, isVarReceiver, target.name, isDiscarded, call
   const plan = matchArguments checker, target, inner, arguments, expression.span
   const calleeName = target.name
+  // The closure that fills `spawn`'s parameter becomes a task, which its own type does not say: the call does
+  const savedTaskArgument = checker.isTaskArgument
+  checker.isTaskArgument = isSpawnTarget checker, target
   checkArguments checker, inner, arguments, plan, calleeName, isDiscarded, call
+  checker.isTaskArgument = savedTaskArgument
   // A `var` field with an identity needs a `var` path, wherever the constructor is called from. After the
   // arguments, because the paths it asks about are the ones checking them recorded
   requireSharedFields checker, target, arguments
@@ -334,6 +340,11 @@ fn chooseOverload(
   }
   const narrowed = narrowByResult checker, fitting, expected
   if narrowed.length() == 1 {
+    return targetOfCandidate checker, narrowed[0], target.name
+  }
+  // The member the type writes itself is the answer the lookup gives without an overload set at all, so where it is
+  // still standing the order of the lookup has decided and there is nothing to report
+  if narrowed[0].preferred {
     return targetOfCandidate checker, narrowed[0], target.name
   }
   // Nothing in the call tells them apart, so it is named: taking the first one silently is how a `Store<Position>`
@@ -785,11 +796,24 @@ fn requireAwaitAllowed(var checker: Checker, callee: Expression, name: String, a
   if taskValueOf(checker, receiver).isNone() {
     return
   }
+  // A closure is not a function that declares a result: where it stands is what says whether it becomes a task
+  if !checker.closureFrames.isEmpty() {
+    checker.reportHere(
+      Diagnostic.error("`await()` is only allowed in a closure that becomes a task", at)
+        .withNote(
+          "The closure handed to `spawn \{ ... \}` is one, and so is one whose result is declared a `Task`. To wait"
+            + " for many at once use `Task.all(tasks).await()`, and to go on when one finishes use"
+            + " `task.map \{ ... \}`"
+        )
+    )
+    return
+  }
+  const shown = checker.describe checker.resultType
   checker.reportHere(
     Diagnostic.error("`await()` is only allowed in a function that returns a `Task`", at)
       .withNote(
-        "A function that waits says so in its result type. `spawn \{ ... \}` starts a task, and the top level of an"
-          + " entry file or a script may wait for one"
+        "A function that waits says so in its result type, and this one produces `{shown}`. `spawn \{ ... \}` starts"
+          + " a task, and the top level of an entry file or a script may wait for one"
       )
   )
 }
@@ -804,42 +828,82 @@ fn requireAwaitAllowed(var checker: Checker, callee: Expression, name: String, a
  * lowering builds the environment from.
  */
 fn requireTaskCaptures(var checker: Checker, target: Target, arguments: List<Argument>) {
-  const spawn = match checker.wellKnown.spawn {
-    Some(found) => found
-    None => {
-      return
-    }
-  }
-  if const .Callable(symbol, _, _) = target.resolution {
-    if symbol != spawn {
-      return
-    }
-  } else {
+  if !isSpawnTarget(checker, target) {
     return
   }
   for argument in arguments {
     if !isClosureArgument(argument) {
       continue
     }
-    const captures = checker.capturesAt(checker.module, argument.value.span) ?? []
+    const at = argument.value.span
+    const captures = checker.capturesAt(checker.module, at) ?? []
     for capture in captures {
-      if !capture.isVar {
+      const binding = checker.bindings[capture.binding.value]
+      if capture.isVar {
+        reportTaskVariable checker, binding.name, at
         continue
       }
-      const binding = checker.bindings[capture.binding.value]
-      checker.reportHere(
-        Diagnostic.error(
-          "`spawn` cannot take the `var` binding `{binding.name}` with it",
-          argument.value.span,
-        )
-          .withNote(
-            "A task gets copies, so there is nothing to race for - and a captured `var` binding is the one value the"
-              + " language shares. Read it into a `const` before the closure (`const {binding.name}Now ="
-              + " {binding.name}`), or pass the changes through a `Channel`"
-          )
-      )
+      requireTaskValue checker, binding.annotation, binding.name, at
+    }
+    // A top-level binding is not captured at all: it is one place the whole file shares, so a `var` one is the same
+    // race, and one that holds an object hands that object to a second task
+    const declarations = checker.declarationCapturesAt(checker.module, at) ?? []
+    for symbol in declarations {
+      const name = checker.symbolAt(symbol).name
+      if isDeclaredVar(checker, symbol) {
+        reportTaskVariable checker, name, at
+        continue
+      }
+      const annotation = resultOf checker, symbol
+      requireTaskValue checker, annotation, name, at
     }
   }
+}
+
+/** Whether this call is the `spawn` of the standard library, which is the one task boundary the checker can see. */
+fn isSpawnTarget(checker: Checker, target: Target): Bool {
+  const spawn = match checker.wellKnown.spawn {
+    Some(found) => found
+    None => {
+      return false
+    }
+  }
+  if const .Callable(symbol, _, _) = target.resolution {
+    return symbol == spawn
+  }
+  false
+}
+
+fn reportTaskVariable(var checker: Checker, name: String, at: Span) {
+  checker.reportHere(
+    Diagnostic.error("`spawn` cannot take the `var` binding `{name}` with it", at)
+      .withNote(
+        "A task gets copies, so there is nothing to race for - and a captured `var` binding is the one value the"
+          + " language shares. Read it into a `const` before the closure (`const {name}Now = {name}`), or pass the"
+          + " changes through a `Channel`"
+      )
+  )
+}
+
+/**
+ * **A `shared type` is confined to the task that made it** (CONCEPT, "Concurrency"): what `spawn` copies into the
+ * target worker has to be a value, and an object is not copied - both tasks would hold the same one, which is the
+ * race the design says cannot happen. `Task` and `Channel` are the exceptions, because they are what a value crosses
+ * *through*.
+ */
+fn requireTaskValue(var checker: Checker, annotation: TypeId, name: String, at: Span) {
+  if !containsShared(checker, annotation) {
+    return
+  }
+  const shown = checker.describe annotation
+  const held = if isSharedType(checker, annotation) { "has an identity" } else { "holds an object" }
+  checker.reportHere(
+    Diagnostic.error("`spawn` cannot take `{name}` with it: a `{shown}` {held}", at)
+      .withNote(
+        "A task gets copies, and an object is not copied. `Task` and `Channel` are what crosses between tasks: make"
+          + " the object inside the closure, or send what it holds through a `Channel`"
+      )
+  )
 }
 
 /** `...expression` spreads any `Iterable<Item>` into a variadic parameter; a collection is never spread implicitly. */

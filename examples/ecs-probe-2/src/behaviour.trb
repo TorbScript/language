@@ -79,12 +79,17 @@ public fn walk(node: Node): List<String> {
 }
 
 extend Column<Node> {
+  // The column's rows are private to the file that declares them, so a behaviour is taken out, run and put back
+  // through the public members - which is what a system of another package would have to write as well
   var fn runAt(row: Int, elapsed: Float) {
-    values[row].process(elapsed)
+    var node = valueAt row
+    node.process elapsed
+    const owner = ownerAt row
+    put owner, node
   }
 
   fn reportAt(row: Int): String {
-    values[row].report()
+    valueAt(row).report()
   }
 }
 

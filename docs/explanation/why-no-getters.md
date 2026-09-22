@@ -102,14 +102,15 @@ print "{box.width} {box.area()}"
 
 **Writing a field from outside its type is rejected the same way whether the field is `private` or `private(var)`.**
 
-```trb error
-type Account {
-  private(var) balance: Int = 0
-}
+"Outside its type" is outside the file that declares it, because that is how far `private` reaches:
 
-var account = Account(balance: 0)
-account.balance = 100
-// error: `balance` can only be written by `Account`
+```trb error
+use Workspace from "std/project"
+
+var workspace = Workspace()
+workspace.memberPatterns = ["packages/*"]
+print workspace.memberPatterns
+// error: `memberPatterns` can only be written by `Workspace`
 ```
 
 **What might become computed later is a method from the start.** A field that a library might want to validate,

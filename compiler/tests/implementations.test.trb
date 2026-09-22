@@ -345,6 +345,25 @@ group "Derived implementations" {
       + "fn wrap(value: From<IoError>): Int \{\n  0\n\}"
     assert problems(source).isEmpty()
   }
+
+  /**
+   * An implementation is generated the first time somebody asks for it, which is **after** "every trait this type
+   * has" and "everything this type has" were already answered for the same type. Both answers are kept, and both are
+   * closed-world, so adding one has to throw them away: without that, the interpolation below derives `Show` and the
+   * `show()` after it is still told that the type has no such member.
+   */
+  test "member lookup is not served an answer from before a derived implementation existed" {
+    const source = "type Amount \{\n  value: Int\n\}\n\n"
+      + "fn probe(amount: Amount): String \{\n  const text = \"\{amount\}\"\n  text + amount.show()\n\}"
+    assert problems(source).isEmpty()
+  }
+
+  test "and neither is the trait closure the lookup walks" {
+    const source = "type Amount \{\n  value: Int\n\}\n\n"
+      + "fn shown(value: Show): String \{\n  value.show()\n\}\n\n"
+      + "fn probe(amount: Amount): String \{\n  const text = shown(amount)\n  text + amount.show()\n\}"
+    assert problems(source).isEmpty()
+  }
 }
 
 /**

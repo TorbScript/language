@@ -186,6 +186,7 @@ fn checkClosureBody(
   const savedReceiverType = checker.receiverType
   const savedReceiverBinding = checker.receiverBinding
   const savedAwaits = checker.awaitsTasks
+  const savedTaskArgument = checker.isTaskArgument
   // The result is inferred whenever the expected one is not pinned down yet, which is the ordinary case at a call. It
   // still flows into the body: `flatMap { _.manager.toList() }` learns its `Output` from the `Iterable<Output>` the
   // closure has to produce, and that is a coercion and not a unification
@@ -207,11 +208,12 @@ fn checkClosureBody(
   }
   checker.resultType = produced
   checker.isResultInferred = isInferred
-  // `await()` inside a closure is not reported, and cannot be: `spawn { ... }` runs its closure *as* a task, and so
-  // does `Source.produce { sink => ... }` - whose body type is an ordinary `(var Sink) => Result<Void, Failure>`, so
-  // nothing in the language says which closures a callee runs that way. The half that is decidable is the body a
-  // closure is not in, and that is the half this enforces
-  checker.awaitsTasks = true
+  // A closure is a body of its own, so it answers the placement question of `await()` for itself: a closure that
+  // *is* a task may wait - the one handed to `spawn`, and one whose declared result is a `Task<...>` - and every
+  // other one may not, because `tasks.map \{ _.await() \}` would block the worker that runs the pipeline
+  checker.awaitsTasks = isTask || checker.isTaskArgument
+  // Only the closure that fills this very argument is the task; one written inside its body is an ordinary closure
+  checker.isTaskArgument = false
   checker.returnTypes = []
   checker.loopDepth = 0
   checker.openScope()
@@ -247,6 +249,7 @@ fn checkClosureBody(
   }
   const last = checker.closureFrames.length() - 1
   const captures = checker.closureFrames[last].captures
+  const declarations = checker.closureFrames[last].declarations
   const _ = checker.closureFrames.removeAt last
   checker.runningClosures = checker.runningClosures - 1
   checker.closeScope()
@@ -257,7 +260,9 @@ fn checkClosureBody(
   checker.receiverType = savedReceiverType
   checker.receiverBinding = savedReceiverBinding
   checker.awaitsTasks = savedAwaits
+  checker.isTaskArgument = savedTaskArgument
   checker.recordCaptures at, captures
+  checker.recordDeclarationCaptures at, declarations
   // Whether the closure may outlive the call it stands in, and whether it may hold a reference
   noteClosureKind checker, at, captures
   if const Some(found) = expectedResult {

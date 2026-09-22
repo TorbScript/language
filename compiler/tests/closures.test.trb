@@ -253,6 +253,106 @@ group "`spawn` takes no `var` binding with it" {
     const source = "fn probe() \{\n  var seen = 0\n  const found = apply \{ \"\{seen + _\}\" \}\n\}\n{apply}"
     assert problems(source).isEmpty()
   }
+
+  /**
+   * A top-level `var` is not captured at all - it is one place the whole file shares and nothing copies it - so the
+   * capture list says nothing about it, and the rule has to ask the declarations the body read instead. This is the
+   * four-line data race of `docs/CONCURRENCY.md` section 12, written exactly as it stands there.
+   */
+  test "a top-level `var` is the same race, although it is a declaration and not a capture" {
+    const source = "var total = 0\nconst first = spawn \{ total = total + 1 \}\n"
+      + "const second = spawn \{ total = total + 1 \}\nprint first.await()\nprint second.await()"
+    assert(
+      problems(source) == [
+        "`spawn` cannot take the `var` binding `total` with it",
+        "`spawn` cannot take the `var` binding `total` with it",
+      ]
+    )
+  }
+
+  test "a top-level `const` is a copy like any other" {
+    const source = "const total = 1\nconst first = spawn \{ total + 1 \}\nprint first.await()"
+    assert problems(source).isEmpty()
+  }
+}
+
+/**
+ * **A `shared type` is confined to the task that made it** (CONCEPT, "Concurrency"): a task gets copies, and an
+ * object is not copied - both tasks would hold the same one. `Task` and `Channel` are the two exceptions, because
+ * they are what a value crosses *through*.
+ */
+group "`spawn` takes no object with it" {
+  const counter = "shared type Counter \{\n  var count: Int = 0\n\n"
+    + "  static fn open(): Self \{\n    Self()\n  \}\n\n  fn value(): Int \{\n    count\n  \}\n\}\n\n"
+
+  test "an object that is captured is named, with what it is" {
+    const source = "{counter}fn probe(): Task<Int> \{\n  const counter = Counter.open()\n"
+      + "  spawn(\{ counter.value() \}).await()\n\}"
+    assert(problems(source) == ["`spawn` cannot take `counter` with it: a `Counter` has an identity"])
+    assert(
+      notes(source) == [
+        "A task gets copies, and an object is not copied. `Task` and `Channel` are what crosses between tasks: make "
+          + "the object inside the closure, or send what it holds through a `Channel`",
+      ]
+    )
+  }
+
+  test "a value that holds one anywhere inside it is the same crossing" {
+    const source = "{counter}type Holder \{\n  counters: List<Counter>\n\}\n\n"
+      + "fn probe(): Task<Int> \{\n  const holder = Holder([Counter.open()])\n"
+      + "  spawn(\{ holder.counters.length() \}).await()\n\}"
+    assert(problems(source) == ["`spawn` cannot take `holder` with it: a `Holder` holds an object"])
+  }
+
+  test "a `Task` and a `Channel` are the two that may cross" {
+    const source = "fn probe(later: Task<Int>, relay: Channel<Int>): Task<Int> \{\n"
+      + "  spawn(\{ later.await() + relay.capacity \}).await()\n\}"
+    assert problems(source).isEmpty()
+  }
+
+  test "an object that is made inside the closure never crosses" {
+    const source = "{counter}fn probe(): Task<Int> \{\n"
+      + "  spawn(\{ Counter.open().value() \}).await()\n\}"
+    assert problems(source).isEmpty()
+  }
+}
+
+/**
+ * The item of a `Channel` crosses from one task to another, so it may not have an identity either. It is asked where
+ * `Channel<Item>` is written - a signature, an annotation, a construction - and not at `sink().add`, which would be
+ * a message per call instead of one per item type.
+ */
+group "A `Channel` carries no object" {
+  const counter = "shared type Counter \{\n  var count: Int = 0\n\n"
+    + "  static fn open(): Self \{\n    Self()\n  \}\n\}\n\n"
+
+  test "a construction names the item type, and that is where it is checked" {
+    const source = "{counter}fn probe(): Int \{\n  const relay = Channel<Counter>()\n  relay.capacity\n\}"
+    assert(problems(source) == ["A `Channel` cannot carry a `Counter`: it has an identity"])
+    assert(
+      notes(source) == [
+        "An item of a channel crosses from one task to another, and an object is never copied. Send what the object "
+          + "holds instead, or hand over a `Task` or a `Channel` - the two that may cross",
+      ]
+    )
+  }
+
+  test "a signature that writes one is checked as well" {
+    const source = "{counter}fn probe(relay: Channel<Counter>): Int \{\n  relay.capacity\n\}"
+    assert(problems(source) == ["A `Channel` cannot carry a `Counter`: it has an identity"])
+  }
+
+  test "a value that holds an object is refused for the same reason" {
+    const source = "{counter}type Holder \{\n  counter: Counter\n\}\n\n"
+      + "fn probe(relay: Channel<Holder>): Int \{\n  relay.capacity\n\}"
+    assert(problems(source) == ["A `Channel` cannot carry a `Holder`: it holds an object"])
+  }
+
+  test "a channel of values, and one of the two objects that may cross, are fine" {
+    const source = "fn probe(relay: Channel<Int>, nested: Channel<Task<Int>>): Int \{\n"
+      + "  relay.capacity + nested.capacity\n\}"
+    assert problems(source).isEmpty()
+  }
 }
 
 group "Control flow inside a closure" {

@@ -74,6 +74,14 @@ fn withOtherPackage(body: String): Map<String, String> {
   files
 }
 
+/**
+ * One declaration in a file of its own, and a `main.trb` that imports it. `private` reaches as far as the file that
+ * writes it, so every rule about what code *outside* may do needs a second file to stand in.
+ */
+fn outside(name: String, declaration: String, body: String): Map<String, String> {
+  ["app/src/declared.trb": declaration, "app/src/main.trb": "use {name} from \"./declared\"\n\n" + body]
+}
+
 group "A `private` member" {
   test "is visible in the body of its own type" {
     const files = withAccount(r"""
@@ -94,13 +102,43 @@ group "A `private` member" {
     assert(
       notesOf(files)
         == [
-          "A private member is visible in the body of its type and in every `extend` of that type in the same package,"
-            + " and nowhere else",
+          "A private member is visible in the file that declares `Account` - its body, an `extend` of it there, and"
+            + " the functions of that file - and nowhere else",
         ]
     )
   }
 
-  test "is visible in an `extend` of the same package, in whatever file it is written" {
+  /**
+   * One rule, and this is it: what is private is visible in its file. An `extend` there is part of the type, and so
+   * is a free function of the same file - the same reach a `private` top-level declaration has.
+   */
+  test "is visible in an `extend` and in a free function of the file that declares it" {
+    const files = [
+      "app/src/account.trb": account
+        + r"""
+
+          extend Account {
+            fn shown(): String {
+              history
+            }
+          }
+
+          public fn spentOf(account: Account): String {
+            account.history
+          }
+          """,
+      "app/src/main.trb": r"""
+        use Account, spentOf from "./account"
+
+        fn probe(account: Account): String {
+          account.shown() + spentOf(account)
+        }
+        """,
+    ]
+    assert problemsOf(files).isEmpty()
+  }
+
+  test "is invisible in an `extend` in another file of the same package" {
     const files = [
       "app/src/account.trb": account,
       "app/src/extra.trb": r"""
@@ -120,7 +158,7 @@ group "A `private` member" {
         }
         """,
     ]
-    assert problemsOf(files).isEmpty()
+    assert(problemsOf(files) == ["`history` is private to `Account`"])
   }
 
   test "is invisible in an `extend` of another package" {
@@ -152,36 +190,42 @@ group "A `private` member" {
     assert problemsOf(files).isEmpty()
   }
 
+  const counter = r"""
+    public type Counter {
+      var value: Int = 0
+
+      private fn step(): Int {
+        value + offset
+      }
+
+      private static offset: Int = 1
+    }
+    """
+
   test "a `private` method is hidden the same way" {
-    const source = r"""
-      fn probe(counter: Counter): Int {
-        counter.step()
-      }
-
-      type Counter {
-        var value: Int = 0
-
-        private fn step(): Int {
-          value + offset
+    const files = outside(
+      "Counter",
+      counter,
+      r"""
+        fn probe(counter: Counter): Int {
+          counter.step()
         }
-
-        private static offset: Int = 1
-      }
-      """
-    assert(problems(source) == ["`step` is private to `Counter`"])
+        """,
+    )
+    assert(problemsOf(files) == ["`step` is private to `Counter`"])
   }
 
   test "and so is a `private` constant, read through the type" {
-    const source = r"""
-      fn probe(): Int {
-        Counter.offset
-      }
-
-      type Counter {
-        private static offset: Int = 1
-      }
-      """
-    assert(problems(source) == ["`offset` is private to `Counter`"])
+    const files = outside(
+      "Counter",
+      counter,
+      r"""
+        fn probe(): Int {
+          Counter.offset
+        }
+        """,
+    )
+    assert(problemsOf(files) == ["`offset` is private to `Counter`"])
   }
 }
 
@@ -217,41 +261,45 @@ group "`private(var)`" {
   }
 
   test "a property command of one is refused from outside, too" {
-    const source = r"""
-      fn probe(): Options {
-        serve {
-          port 9000
+    const files = outside(
+      "Options",
+      r"""
+        public type Options {
+          private(var) port: Int = 80
         }
-      }
+        """,
+      r"""
+        fn probe(): Options {
+          serve {
+            port 9000
+          }
+        }
 
-      type Options {
-        private(var) port: Int = 80
-      }
-
-      fn serve(configure: (var self: Options) => Void): Options {
-        var found = Options()
-        configure(found)
-        found
-      }
-      """
-    assert(problems(source) == ["`port` can only be written by `Options`"])
+        fn serve(configure: (var self: Options) => Void): Options {
+          var found = Options()
+          configure(found)
+          found
+        }
+        """,
+    )
+    assert(problemsOf(files) == ["`port` can only be written by `Options`"])
   }
 }
 
 group "The constructor and `copy` (gap 24)" {
   test "a private field without a default makes the constructor unusable from outside" {
-    const source = r"""
-      fn probe(): Email {
-        Email("info@example.test")
-      }
-
-      type Email {
-        private value: String
-      }
-      """
-    assert(problems(source) == ["`Email` cannot be constructed here: `value` is private and has no default"])
+    const files = outside(
+      "Email",
+      "public type Email \{\n  private value: String\n\}\n",
+      r"""
+        fn probe(): Email {
+          Email("info@example.test")
+        }
+        """,
+    )
+    assert(problemsOf(files) == ["`Email` cannot be constructed here: `value` is private and has no default"])
     assert(
-      notes(source)
+      notesOf(files)
         == [
           "Only `Email` itself can pass a private field. What a caller gets is a factory of the type, a"
             + " `static fn` that makes one (`Email.tryFrom(...)`)",
@@ -272,22 +320,24 @@ group "The constructor and `copy` (gap 24)" {
     assert problems(source).isEmpty()
   }
 
-  test "a private field with a default may be omitted but not passed" {
-    const source = r"""
-      fn probe(): Token {
-        Token(value: "secret")
-      }
+  const token = "public type Token \{\n  private value: String = \"\"\n\}\n"
 
-      type Token {
-        private value: String = ""
-      }
-      """
-    assert(problems(source) == ["`value` is private to `Token`, so it cannot be passed from here"])
+  test "a private field with a default may be omitted but not passed" {
+    const files = outside(
+      "Token",
+      token,
+      r"""
+        fn probe(): Token {
+          Token(value: "secret")
+        }
+        """,
+    )
+    assert(problemsOf(files) == ["`value` is private to `Token`, so it cannot be passed from here"])
     assert(
-      notes(source)
+      notesOf(files)
         == [
-          "A private field is set where the type is declared: in the body of `Token`, or in an `extend` of it in the"
-            + " package that declares it",
+          "A private field is set in the file that declares `Token`: in its body, in an `extend` of it there, or in a"
+            + " function of that file",
         ]
     )
   }
@@ -306,30 +356,29 @@ group "The constructor and `copy` (gap 24)" {
   }
 
   test "a positional argument for a private field is refused as well" {
-    const source = r"""
-      fn probe(): Pair {
-        Pair(1, 2)
-      }
-
-      type Pair {
-        first: Int = 0
-        private second: Int = 0
-      }
-      """
-    assert(problems(source) == ["`second` is private to `Pair`, so it cannot be passed from here"])
+    const files = outside(
+      "Pair",
+      "public type Pair \{\n  first: Int = 0\n  private second: Int = 0\n\}\n",
+      r"""
+        fn probe(): Pair {
+          Pair(1, 2)
+        }
+        """,
+    )
+    assert(problemsOf(files) == ["`second` is private to `Pair`, so it cannot be passed from here"])
   }
 
   test "`copy` follows the constructor: a private field is not passable from outside" {
-    const source = r"""
-      fn probe(token: Token): Token {
-        token.copy(value: "other")
-      }
-
-      type Token {
-        private value: String = ""
-      }
-      """
-    assert(problems(source) == ["`value` is private to `Token`, so it cannot be passed from here"])
+    const files = outside(
+      "Token",
+      token,
+      r"""
+        fn probe(token: Token): Token {
+          token.copy(value: "other")
+        }
+        """,
+    )
+    assert(problemsOf(files) == ["`value` is private to `Token`, so it cannot be passed from here"])
   }
 
   test "`copy` of a public field is fine, private field without a default and all" {
@@ -349,22 +398,24 @@ group "The constructor and `copy` (gap 24)" {
 
 group "Patterns read fields, so `private` reaches them" {
   test "a pattern over a type with a private field is refused from outside" {
-    const source = r"""
-      fn probe(point: Point): Int {
-        match point {
-          Point(a, b) => a + b
+    const files = outside(
+      "Point",
+      "public type Point \{\n  x: Int\n  private y: Int = 0\n\}\n",
+      r"""
+        fn probe(point: Point): Int {
+          match point {
+            Point(a, b) => a + b
+          }
         }
-      }
-
-      type Point {
-        x: Int
-        private y: Int = 0
-      }
-      """
-    assert(problems(source) == ["`y` is private to `Point`, so this pattern cannot read it"])
+        """,
+    )
+    assert(problemsOf(files) == ["`y` is private to `Point`, so this pattern cannot read it"])
     assert(
-      notes(source)
-        == ["A pattern reads the fields of a value: a type with a private field is taken apart by its own members"]
+      notesOf(files)
+        == [
+          "A pattern reads the fields of a value: outside the file that declares `Point` a type with a private field"
+            + " is taken apart by its own members",
+        ]
     )
   }
 

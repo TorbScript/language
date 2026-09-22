@@ -53,7 +53,27 @@ A call is written as a command when **all five** of these hold. Otherwise it has
 
 1. **It stands in command position**: at the start of a statement, on the right of `=` in a binding or an assignment,
    after `return`, after `=>`, or as the default of a field of a type.
-2. **The callee is a name or a member path.** `a?.b` is not one, and neither is `pair.0` or `load<Config>`.
+2. **The callee is a name or a member path.** An index in the middle of one is part of it, because a member path with
+   an index in it is still a member path: `mounted[index].process elapsed` is the command form of
+   `mounted[index].process(elapsed)`, and so is `grid[row][column].fill value`. `a?.b` is not a member path, and
+   neither is `pair.0` or `load<Config>`.
+
+   ```trb
+   type Cell {
+     var value: Int
+
+     var fn fill(amount: Int) {
+       value = amount
+     }
+   }
+
+   var grid = [[Cell(0)]]
+   grid[0][0].fill 5
+   print grid
+   ```
+
+   An index the path **ends** in is not a callee: `mounted[index] elapsed` is the indexing of rule 3 and not a
+   command, exactly as `f [1]` is.
 3. **It has at least one argument, and the first one does not start with `(`, `[`, `-`, `!` or `.`.** `f [1]` is always
    indexing, `f -1` is always subtraction, and `f .Case` is always the member `f.Case`.
 4. **No argument has an operator at its top level.** `assert sum == 3` would read as `(assert sum) == 3`, so it is written

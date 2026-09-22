@@ -513,7 +513,7 @@ fn indexType(var checker: Checker, target: Expression, index: Expression, at: Sp
         return checker.deferredType
       }
       const _ = checkValue checker, key, arguments[0], index.span
-      requireIndexInBounds checker, receiver, index
+      requireIndexInBounds checker, receiver, target, index
       recordTraitCall checker, at, receiver, indexed, "at"
       arguments[1]
     }
@@ -525,46 +525,89 @@ fn indexType(var checker: Checker, target: Expression, index: Expression, at: Sp
 }
 
 /**
- * `identity[4]` on an `Array<Float, 4>`: the size is part of the type and the index was written as a literal, so this is
- * the one bounds check the checker can make - and `std/collections/src/array.trb` documents it as a compile error.
- * Everything else (a `List`, a computed index, a const parameter as the size) is the runtime's.
+ * **A constant index that is out of range is a compile error, not a panic.** Two things say how many items there are
+ * without running anything: an `Array<Item, Size>`, whose size is part of its type, and a collection literal that
+ * stands right there (`[1, 2, 3][5]`). Everything else - a `List` that was built, a computed index, a const parameter
+ * as the size - is the runtime's, and `std/collections/src/array.trb` documents the first half as a compile error.
+ *
+ * A negative index is counted here too: `numbers[-1]` is a `Unary(Negate, 1)` and not a literal, and there is no index
+ * below zero in any of these types.
  */
-fn requireIndexInBounds(var checker: Checker, receiver: TypeId, index: Expression) {
-  const (symbol, arguments) = match checker.types.form(receiver) {
-    .Nominal(found, given) => (found, given)
-    _ => {
+fn requireIndexInBounds(var checker: Checker, receiver: TypeId, target: Expression, index: Expression) {
+  const at = match constantIndexOf(index) {
+    Some(found) => found
+    None => {
       return
     }
   }
-  if checker.wellKnown.array != Some(symbol) || arguments.length() != 2 {
-    return
-  }
-  const size = match checker.types.form(arguments[1]) {
-    .Constant(.Integer(value), _) => value
-    _ => {
-      return
-    }
-  }
-  const written = match index.kind {
-    .IntegerLiteral(text) => text
-    _ => {
-      return
-    }
-  }
-  const at = match integerLiteral(written, false) {
-    Some(.Integer(value)) => value
-    _ => {
+  const (size, held) = match knownSizeOf(checker, receiver, target) {
+    Some(found) => found
+    None => {
       return
     }
   }
   if at >= 0 && at < size {
     return
   }
-  const shown = checker.describe receiver
+  const items = if size == 1 { "1 item" } else { "{size} items" }
   checker.reportHere(
-    Diagnostic.error("`{written}` is out of bounds: an `{shown}` has {size} items", index.span)
-      .withNote("The size of an `Array` is part of its type, so an index that is written out is checked here")
+    Diagnostic.error("`{at}` is out of bounds: {held} has {items}", index.span)
+      .withNote(
+        "How many items there are is known here, so an index that is written out is checked instead of panicking."
+          + " `get({at})` answers an `Option` instead"
+      )
   )
+}
+
+/** The number an index expression is, where it is written out: `numbers[7]` and `numbers[-1]`, and nothing else. */
+fn constantIndexOf(index: Expression): Int? {
+  const (text, isNegative) = match index.kind {
+    .IntegerLiteral(written) => (written, false)
+    .Unary(.Negate, inner) => match inner.kind {
+      .IntegerLiteral(written) => (written, true)
+      _ => {
+        return None
+      }
+    }
+    _ => {
+      return None
+    }
+  }
+  match integerLiteral(text, isNegative) {
+    Some(.Integer(value)) => Some value
+    _ => None
+  }
+}
+
+/** How many items the indexed value has, where that is known, and how a message names it. */
+fn knownSizeOf(var checker: Checker, receiver: TypeId, target: Expression): (Int, String)? {
+  // `[1, 2, 3][5]`: the literal is right there, so nothing has to be known about its type at all. A spread says
+  // nothing about how many items it brings, so a literal that has one is left alone
+  if const .ListLiteral(items) = target.kind {
+    for item in items {
+      if item.isSpread {
+        return None
+      }
+    }
+    return Some((items.length(), "this literal"))
+  }
+  const (symbol, arguments) = match checker.types.form(receiver) {
+    .Nominal(found, given) => (found, given)
+    _ => {
+      return None
+    }
+  }
+  if checker.wellKnown.array != Some(symbol) || arguments.length() != 2 {
+    return None
+  }
+  const size = match checker.types.form(arguments[1]) {
+    .Constant(.Integer(value), _) => value
+    _ => {
+      return None
+    }
+  }
+  const shown = checker.describe receiver
+  Some((size, "an `{shown}`"))
 }
 
 /**
@@ -2210,6 +2253,9 @@ fn convertError(var checker: Checker, error: TypeId, wanted: TypeId, at: Span) {
   if !isConcrete(checker, error) {
     return
   }
+  if reportUnconvertibleFailure(checker, error, wanted, at) {
+    return
+  }
   const asTraits = match checker.types.form(wanted) {
     .Traits(bounds) => Some bounds
     _ => None
@@ -2242,6 +2288,60 @@ fn convertError(var checker: Checker, error: TypeId, wanted: TypeId, at: Span) {
   if const Some(symbol) = method {
     checker.adapted at, Adaptation.Convert(witness, symbol)
   }
+}
+
+/**
+ * The two targets a `?` may not convert a failure into, and both of them type checked until this rule:
+ *
+ * - **`Never`**, which has no values at all and can therefore be the target of no conversion: a function that answers
+ *   `Result<Value, Never>` promises that it cannot fail, and a `?` in it breaks that promise.
+ * - **a bare type parameter**, where the *bound* is what carries the requirement. `fn run<Failure>(): Result<Void,
+ *   Failure>` says nothing about what `Failure` is made from, so `where Failure: From<Cancelled>` is the line to write
+ *   - and until it is written, a pipeline that looks type-correct is not.
+ *
+ * Answers whether it decided the question, so that the ordinary `From` lookup runs for every other target.
+ */
+fn reportUnconvertibleFailure(var checker: Checker, error: TypeId, wanted: TypeId, at: Span): Bool {
+  const given = checker.describe error
+  if const .NeverType = checker.types.form(wanted) {
+    checker.reportHere(
+      Diagnostic.error("`{given}` does not convert into `Never`", at)
+        .withNote(
+          "`Never` has no values, so nothing converts into it: a result of `Result<Value, Never>` says that this"
+            + " function cannot fail. Answer with a failure type, or handle the error here"
+        )
+    )
+    return true
+  }
+  match checker.types.form(wanted) {
+    .Parameter(_) => {}
+    _ => {
+      return false
+    }
+  }
+  const from = match checker.wellKnown.from {
+    Some(symbol) => symbol
+    None => {
+      return true
+    }
+  }
+  const bound = checker.nominal(from, [error])
+  match witnessFor(checker, wanted, bound) {
+    // The bound carries the conversion, so this is an ordinary one and the lookup below decides what it records
+    .Unresolved => {}
+    _ => {
+      return false
+    }
+  }
+  const shown = checker.describe wanted
+  checker.reportHere(
+    Diagnostic.error("`{given}` does not convert into `{shown}`", at)
+      .withNote(
+        "What a type parameter can do is what its bounds say. Write the conversion down at the declaration:"
+          + " `where {shown}: From<{given}>`"
+      )
+  )
+  true
 }
 
 /**

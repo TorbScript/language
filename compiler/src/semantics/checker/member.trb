@@ -168,7 +168,13 @@ fn findMember(var checker: Checker, receiver: TypeId, name: String, isStatic: Bo
   if const Some(known) = checker.memberAnswers.get(key) {
     return Some known
   }
+  const generation = checker.answerGeneration
   const found = searchMember checker, receiver, name, isStatic, at
+  // An implementation was generated while the search ran, so this answer was worked out against a world that has
+  // changed since: it is given, and it is not kept
+  if checker.answerGeneration != generation {
+    return found
+  }
   match found {
     Some(candidate) => checker.memberAnswers.set key, candidate
     None => checker.memberMissing.set key, true
@@ -202,6 +208,9 @@ fn searchMember(var checker: Checker, receiver: TypeId, name: String, isStatic: 
   }
   if const .Nominal(symbol, arguments) = checker.types.form(receiver) {
     if const Some(found) = nominalMember(checker, receiver, symbol, arguments, name, isStatic) {
+      if isStatic {
+        return Some withTraitOverloads(checker, receiver, name, found)
+      }
       return Some found
     }
   }
@@ -313,6 +322,63 @@ fn reportAmbiguousExtension(var checker: Checker, name: String, first: ModuleId,
  * decided by the argument at the call site, so the member becomes "needs its arguments" here.
  */
 fn traitMember(var checker: Checker, receiver: TypeId, name: String, isStatic: Bool): Candidate? {
+  const found = traitMembers checker, receiver, name, isStatic
+  const first = match found.first() {
+    Some(inner) => inner
+    None => {
+      return None
+    }
+  }
+  if found.length() == 1 {
+    return Some first
+  }
+  // `Int.from` is one name with five signatures, because `Int64` implements `From<Int32>`, `From<UInt8>` and three
+  // more: the argument decides which one is meant, and the call site picks (design 4.3)
+  Some first.copy(needsArguments: true, overloads: found)
+}
+
+/**
+ * **A `static fn` the type writes itself is one candidate of the set and not the whole answer.** `String` declares
+ * `static fn from(value: Iterable<Char>)` in its own body, as part of `with From<Iterable<Char>>`, and rule 2 of the
+ * lookup finds it and stops - so `String.from(path)` picked that one implementation and reported that a `Path` is not
+ * an `Iterable<Char>`, while the same conversion through a bound (`where String: From<Value>`) resolved. The two
+ * lists are merged here, at the lookup, and the call site decides between them like any other overload set.
+ *
+ * Only for a `static` member. An instance member is the hottest question of the pass and has no such form: what a
+ * type writes in its body is what `a.b` means, and a trait's member of the same name is its default.
+ */
+fn withTraitOverloads(var checker: Checker, receiver: TypeId, name: String, own: Candidate): Candidate {
+  var merged = [own.copy(preferred: true)]
+  for candidate in traitMembers(checker, receiver, name, true) {
+    var isKnown = false
+    for known in merged {
+      // The same **declaration**, not only the same shape: `with From<Iterable<Char>>` on the type puts one `static
+      // fn from` in its body, and the lookup finds that one symbol twice - once directly and once through the trait
+      if known.annotation == candidate.annotation || declarationOf(known) == declarationOf(candidate) {
+        isKnown = true
+      }
+    }
+    if !isKnown {
+      merged.add candidate
+    }
+  }
+  if merged.length() == 1 {
+    return own
+  }
+  own.copy needsArguments: true, overloads: merged
+}
+
+/** Which declaration a candidate is, where it is one: `-1` for the generated members, which have no symbol. */
+fn declarationOf(candidate: Candidate): Int {
+  match candidate.kind {
+    .Method(_, symbol) => symbol.value
+    .Constant(_, symbol) => symbol.value
+    _ => -1
+  }
+}
+
+/** The candidates one name has among the traits of a type, one per distinct signature, in the order they were found. */
+fn traitMembers(var checker: Checker, receiver: TypeId, name: String, isStatic: Bool): List<Candidate> {
   const bounds = traitsOf checker, receiver
   var found: List<Candidate> = []
   for bound in bounds {
@@ -332,18 +398,7 @@ fn traitMember(var checker: Checker, receiver: TypeId, name: String, isStatic: B
       found.add candidate
     }
   }
-  const first = match found.first() {
-    Some(inner) => inner
-    None => {
-      return None
-    }
-  }
-  if found.length() == 1 {
-    return Some first
-  }
-  // `Int.from` is one name with five signatures, because `Int64` implements `From<Int32>`, `From<UInt8>` and three
-  // more: the argument decides which one is meant, and the call site picks (design 4.3)
-  Some first.copy(needsArguments: true, overloads: found)
+  found
 }
 
 /**

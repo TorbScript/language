@@ -4,10 +4,11 @@
  *
  * Two questions, and they are separate:
  *
- * 1. **Visibility** ([requireVisibleMember], [isInsideDeclaration]). `private` reaches exactly as far as its type
- *    does - the body of the type and every `extend` of it in the same package - and `private(var)` hands out a
- *    read-only path instead of hiding the field. Whether the *path* that leads to a member may be written is a
- *    different question (`place.trb`'s mutability rules); whether this code may name the member at all is this one.
+ * 1. **Visibility** ([requireVisibleMember], [isInsideDeclaration]). `private` reaches exactly as far as the file that
+ *    declares it - the body of the type, an `extend` of it in that file, and the functions of that file - and
+ *    `private(var)` hands out a read-only path instead of hiding the field. Whether the *path* that leads to a member
+ *    may be written is a different question (`place.trb`'s mutability rules); whether this code may name the member at
+ *    all is this one.
  * 2. **Program shape** ([checkShape]). A `public` function declares its result type, top-level code lives in entry
  *    files and scripts, a top-level `const` of a module is compile-time evaluable, an `extend` adds constants and
  *    functions, `native` belongs to the standard library, and a `shared type` only implements `shared trait`s.
@@ -74,8 +75,8 @@ public fn requireVisibleMember(var checker: Checker, candidate: Candidate, name:
   checker.reportHere(
     Diagnostic.error("`{name}` is private to `{shown}`", span)
       .withNote(
-        "A private member is visible in the body of its type and in every `extend` of that type in the same package,"
-          + " and nowhere else"
+        "A private member is visible in the file that declares `{shown}` - its body, an `extend` of it there, and the"
+          + " functions of that file - and nowhere else"
       )
   )
 }
@@ -116,35 +117,21 @@ fn declaringTypeOf(checker: Checker, member: SymbolId, owner: TypeId): SymbolId?
 }
 
 /**
- * `private` reaches as far as the type does: the body of the declaration, and every `extend` of it in the
- * package that declares it - an `extend` without a trait *is* part of the type, and the package is already the unit of
- * coherence.
+ * **`private` reaches as far as the file that writes it.** What is private is visible in the file that declares it and
+ * nowhere else: in the body of the type, in an `extend` of it that stands in the same file, and in a free function of
+ * that file - one rule, and the same one a `private` top-level declaration already follows.
+ *
+ * The package is not the unit here, although it is the unit of coherence: an `extend Path` in another file of
+ * `std/path` could otherwise write `Self(storedRoot: ..., storedComponents: ...)` and walk around the parser that is
+ * the only way into the capsule.
  */
 public fn isInsideDeclaration(var checker: Checker, declaring: SymbolId): Bool {
   const declared = checker.symbolAt declaring
-  const there = match declared.module {
+  match declared.module {
+    Some(there) => there == checker.module
     // A name the language provides is declared in no file, and nothing about it is private
-    Some(found) => found
-    None => {
-      return true
-    }
+    None => true
   }
-  const here = checker.module
-  const mine = checker.program.graph.at(here).package
-  const theirs = checker.program.graph.at(there).package
-  if mine != theirs {
-    return false
-  }
-  const own = match checker.selfType {
-    Some(found) => found
-    None => {
-      return false
-    }
-  }
-  if const Some(head) = headSymbolOf(checker, own) {
-    return head == declaring
-  }
-  false
 }
 
 /** Whether the code that is being checked stands inside the type `owner`, or inside an `extend` of it. */
@@ -183,6 +170,10 @@ public fn checkConstruction(var checker: Checker, target: Target, arguments: Lis
     _ => {
       return
     }
+  }
+  // `Channel<Report>(capacity: 8)`: the item type is written here too, and the type it builds is what says so
+  if const Some(problem) = channelItemProblem(checker, owner, at) {
+    checker.reportHere problem
   }
   const fields = fieldsOf checker, owner
   if fields.isEmpty() {
@@ -332,8 +323,8 @@ fn reportPrivateField(var checker: Checker, shown: String, name: String, at: Spa
   checker.reportHere(
     Diagnostic.error("`{name}` is private to `{shown}`, so it cannot be passed from here", at)
       .withNote(
-        "A private field is set where the type is declared: in the body of `{shown}`, or in an `extend` of it in the"
-          + " package that declares it"
+        "A private field is set in the file that declares `{shown}`: in its body, in an `extend` of it there, or in a"
+          + " function of that file"
       )
   )
 }
@@ -476,7 +467,10 @@ public fn requireVisibleFields(
     }
     checker.reportHere(
       Diagnostic.error("`{field.name}` is private to `{name}`, so this pattern cannot read it", at)
-        .withNote("A pattern reads the fields of a value: a type with a private field is taken apart by its own members")
+        .withNote(
+          "A pattern reads the fields of a value: outside the file that declares `{name}` a type with a private field"
+            + " is taken apart by its own members"
+        )
     )
     return
   }
@@ -1372,6 +1366,153 @@ public fn isSharedType(var checker: Checker, annotation: TypeId): Bool {
     }
     .Nominal(symbol, _) => isSharedDeclaration checker, symbol
     _ => false
+  }
+}
+
+/**
+ * Whether a value of this type holds an object anywhere inside it: the type itself, a generic argument, a field, or a
+ * field of a case. **A `shared type` is confined to the task that made it** (CONCEPT, "Concurrency"), so this is the
+ * question a task boundary asks - the captures of a `spawn` closure, and the item type of a `Channel`.
+ *
+ * `Task` and `Channel` are the two exceptions, and they are exceptions because they are what a value crosses
+ * *through*: what one of them holds is copied or moved by the runtime at the crossing, and is not held here.
+ *
+ * This is the checker's half of the `containsShared` the layout computes (BACKEND 1.3), and it is memoized the same
+ * way. A type that contains itself answers `false` while its own answer is being worked out, and an answer that was
+ * reached through such a cycle is given and not kept.
+ */
+public fn containsShared(var checker: Checker, annotation: TypeId): Bool {
+  if const Some(known) = checker.sharedContents.get(annotation.value) {
+    return known
+  }
+  if checker.sharedRunning.containsKey(annotation.value) {
+    checker.sharedCycles = checker.sharedCycles + 1
+    return false
+  }
+  checker.sharedRunning.set annotation.value, true
+  const cycles = checker.sharedCycles
+  const found = sharedInside checker, annotation
+  checker.sharedRunning.remove annotation.value
+  if checker.sharedCycles == cycles {
+    checker.sharedContents.set annotation.value, found
+  }
+  found
+}
+
+fn sharedInside(var checker: Checker, annotation: TypeId): Bool {
+  const arguments = match checker.types.form(annotation) {
+    .Nominal(symbol, given) => {
+      if checker.wellKnown.isTaskHandle(symbol) {
+        return false
+      }
+      given
+    }
+    .Tuple(fields) => {
+      for field in fields {
+        if containsShared(checker, field.annotation) {
+          return true
+        }
+      }
+      return false
+    }
+    // `List<Counter>` is a trait-typed value: the trait is not shared, and what it was applied to may be
+    .Traits(bounds) => {
+      if isSharedType(checker, annotation) {
+        return true
+      }
+      for bound in bounds {
+        for argument in argumentsOfType(checker, bound) {
+          if containsShared(checker, argument) {
+            return true
+          }
+        }
+      }
+      return false
+    }
+    _ => {
+      return isSharedType checker, annotation
+    }
+  }
+  if isSharedType(checker, annotation) {
+    return true
+  }
+  for argument in arguments {
+    if containsShared(checker, argument) {
+      return true
+    }
+  }
+  const fields = fieldsOf checker, annotation
+  for field in fields {
+    if containsShared(checker, field.annotation) {
+      return true
+    }
+  }
+  const names = caseNamesOf checker, annotation
+  for name in names {
+    const variant = match caseNamed(checker, annotation, name) {
+      Some(found) => found
+      None => {
+        continue
+      }
+    }
+    for field in variant.fields {
+      if containsShared(checker, field.annotation) {
+        return true
+      }
+    }
+  }
+  false
+}
+
+/**
+ * **A `Channel` moves items between tasks, so an item may not have an identity.** A `shared type` is confined to the
+ * task that made it (CONCEPT, "Concurrency"): an item that held one would hand the same object to the reading end,
+ * which is the race the design says cannot happen.
+ *
+ * It is asked where `Channel<Item>` is **written** - a signature, an annotation, `Channel<Report>(capacity: 8)` - and
+ * not at `sink().add`: the item type is written once and the `add` that would carry it is written at every step of a
+ * pipeline, so this is one message where the other would be a message per call. `Task` and `Channel` are the two
+ * objects that may cross, so a `Channel<Channel<Report>>` is allowed and a `Channel<File>` is not.
+ *
+ * Answers the diagnostic instead of reporting it, because the two places that ask report into different modules.
+ */
+public fn channelItemProblem(var checker: Checker, built: TypeId, at: Span): Diagnostic? {
+  const channel = match checker.wellKnown.channel {
+    Some(found) => found
+    None => {
+      return None
+    }
+  }
+  const item = match checker.types.form(built) {
+    .Nominal(symbol, arguments) => {
+      if symbol != channel || arguments.length() != 1 {
+        return None
+      }
+      arguments[0]
+    }
+    _ => {
+      return None
+    }
+  }
+  if !containsShared(checker, item) {
+    return None
+  }
+  const shown = checker.describe item
+  const held = if isSharedType(checker, item) { "has an identity" } else { "holds an object" }
+  Some(
+    Diagnostic.error("A `Channel` cannot carry a `{shown}`: it {held}", at)
+      .withNote(
+        "An item of a channel crosses from one task to another, and an object is never copied. Send what the object"
+          + " holds instead, or hand over a `Task` or a `Channel` - the two that may cross"
+      )
+  )
+}
+
+/** The arguments a nominal type or a bound was applied to: the `Counter` of `List<Counter>`. */
+fn argumentsOfType(checker: Checker, annotation: TypeId): List<TypeId> {
+  match checker.types.form(annotation) {
+    .Nominal(_, arguments) => arguments
+    _ => []
   }
 }
 

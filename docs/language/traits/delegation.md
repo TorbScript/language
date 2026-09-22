@@ -88,21 +88,15 @@ const email = Email.tryFrom "info@example.test"
 print email
 ```
 
+A field that is `private` is readable in the file that declares it and nowhere else, whatever `by` wires to it -
+`Path` of `std/path` delegates nothing and hides its parts the same way:
+
 ```trb error
-type Email with Show by value, TryFrom<String, String> {
-  private value: String
+use Path from "std/path"
 
-  static fn tryFrom(text: String): Result<Email, String> {
-    if !text.contains("@") {
-      return Fail "'{text}' is not an email address"
-    }
-    Ok Self(text)
-  }
-}
-
-const email = Email.tryFrom("info@example.test").expect("bad email")
-print email.value
-// error: `value` is private to `Email`
+const path = Path.from "a/b"
+print path.storedComponents
+// error: `storedComponents` is private to `Path`
 ```
 
 ## Related

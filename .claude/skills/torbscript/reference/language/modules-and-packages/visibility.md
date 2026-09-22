@@ -70,9 +70,32 @@ print zero()
    // A module rejects this with: A module has no mutable state, so it has no top-level `var`
    ```
 
-4. **A `private` member of a `type` is visible inside every `use` of that type but is not part of what `public`
-   decides.** A file can `use` a type without being able to name its private fields either way, so hiding a field is
-   never undone by making the file itself `public`.
+4. **A `private` member of a `type` reaches as far as this rule does: its own file.** Both modifiers answer the same
+   question with the same unit - `public` says which of a file's declarations another file may name, `private` says
+   which of a type's members another file may name - so what is private is visible in the file that declares it, in
+   an `extend` of that type written there, and in the free functions of that file. A file can `use` a type without
+   being able to name its private fields either way, so hiding a field is never undone by making the file itself
+   `public`.
+
+   ```trb check
+   type Server {
+     private var log: List<String> = []
+   }
+
+   extend Server {
+     var fn record(line: String) {
+       log.add line
+     }
+   }
+
+   fn entries(server: Server): Int {
+     server.log.length()
+   }
+
+   var server = Server()
+   server.record "started"
+   print entries(server)
+   ```
 
 ## What this is not
 

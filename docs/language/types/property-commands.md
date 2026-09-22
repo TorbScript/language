@@ -83,14 +83,17 @@ options.tls true
 print options.tls
 ```
 
-```trb error
-type Options {
-  private tls: Bool = false
-}
+A command carries no permission of its own either: a field another file cannot name is not written by one, and one it
+may only read is not written by one. `private` reaches as far as the file that declares it
+([Fields](fields.md), rule 5).
 
-var options = Options()
-options.tls true
-// error: `tls` is private to `Options`
+```trb error
+use Workspace from "std/project"
+
+var workspace = Workspace()
+workspace.memberPatterns(["packages/*"])
+print workspace.memberPatterns
+// error: `memberPatterns` can only be written by `Workspace`
 ```
 
 ## Related

@@ -9,7 +9,7 @@
  */
 
 use test, group from "std/test"
-use probe, problems, notes from "./harness"
+use probe, problems, notes, problemsOf, notesOf from "./harness"
 
 /** The vocabulary of the tests: fields of every shape, one method, and a function that takes a receiver closure. */
 const options = "\ntype Limits \{\n  var maxConnections: Int = 100\n\}\n\n"
@@ -182,7 +182,7 @@ group "What a property command is not" {
  * Only the message says which of the two the author wrote.
  */
 group "A property command is a place that is written" {
-  const account = "\ntype Account \{\n  private(var) balance: Int = 0\n\n"
+  const account = "\npublic type Account \{\n  private(var) balance: Int = 0\n\n"
     + "  var fn deposit(amount: Int) \{\n    balance balance + amount\n  \}\n\}\n"
 
   test "the place the command writes is recorded under the span of the field" {
@@ -199,10 +199,14 @@ group "A property command is a place that is written" {
 
   test "a `private(var)` field is written by a command of its own type and by nobody else" {
     assert problems("{account}fn probe() \{\n  var held = Account()\n  held.deposit(1)\n  print held.balance\n\}").isEmpty()
-    const outside = "{account}fn probe(var held: Account) \{\n  held.balance 10\n\}"
-    assert(problems(outside) == ["`balance` can only be written by `Account`"])
+    // `private` reaches as far as the file that declares it, so "outside" is a second file
+    const outside = [
+      "app/src/account.trb": account,
+      "app/src/main.trb": "use Account from \"./account\"\n\nfn probe(var held: Account) \{\n  held.balance 10\n\}",
+    ]
+    assert(problemsOf(outside) == ["`balance` can only be written by `Account`"])
     assert(
-      notes(outside) == ["`private(var)` hands out a read-only path: the field is public, its mutability is not"]
+      notesOf(outside) == ["`private(var)` hands out a read-only path: the field is public, its mutability is not"]
     )
   }
 

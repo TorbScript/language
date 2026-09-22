@@ -68,6 +68,11 @@ public type WellKnown {
   /** A function that returns a `Task<Value>` has a body that produces the `Value` (concept, Concurrency). */
   task: SymbolId? = None
   /**
+   * `Task` and `Channel` are the two `shared type`s that may be held by more than one task, and therefore the two
+   * exceptions to the confinement rule: every other object stays in the task that made it.
+   */
+  channel: SymbolId? = None
+  /**
    * `spawn { ... }` starts a task, and the closure it is handed may capture no `var` binding: a task gets copies, and a
    * captured `var` is the one thing of the language that is shared (concept, Concurrency).
    */
@@ -116,6 +121,11 @@ public type WellKnown {
   fn isNever(symbol: SymbolId): Bool {
     neverSymbols.contains symbol
   }
+
+  /** The two shared types a value may be held by more than one task through: `Task` and `Channel`. */
+  fn isTaskHandle(symbol: SymbolId): Bool {
+    task == Some(symbol) || channel == Some(symbol)
+  }
 }
 
 /**
@@ -149,6 +159,7 @@ public fn wellKnownOf(program: Program): WellKnown {
     rangeTo: exports.get("RangeTo"),
     bounds: exports.get("Bounds"),
     task: exports.get("Task"),
+    channel: exports.get("Channel"),
     spawn: exports.get("spawn"),
     expression: exports.get("Expression"),
     encode: exports.get("Encode"),

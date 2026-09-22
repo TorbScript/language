@@ -73,9 +73,17 @@ extend <Source> with From<<Name>>        // ...and the pair is what `Encode` and
 1. **A `private` field without a default makes the type a capsule.** The constructor takes every field, a `private`
    field cannot be passed from outside and a field without a default cannot be left out, so outside code has no call it
    could write. A `private` field **with** a default leaves the constructor open: it is left out, and the type is data
-   with a hidden part.
+   with a hidden part. "Outside" is another file, because that is how far `private` reaches
+   ([Fields](fields.md), rule 5) - `Path` of `std/path` is the capsule the standard library writes:
 
    ```trb error
+   use Path from "std/path"
+
+   const wrong = Path(None, [])
+   // error: `Path` cannot be constructed here: `storedRoot` is private and has no default
+   ```
+
+   ```trb check
    type Percent {
      private value: Int
 
@@ -87,8 +95,7 @@ extend <Source> with From<<Name>>        // ...and the pair is what `Encode` and
      }
    }
 
-   const wrong = Percent(120)
-   // error: `Percent` cannot be constructed here: `value` is private and has no default
+   print Percent.tryFrom(120)
    ```
 
 2. **A capsule is four things written together**: `private` fields with no default, a `static fn` factory that is the
@@ -161,13 +168,13 @@ type Celsius with TryFrom<Int, String> {
 print Celsius.tryFrom(-300)
 ```
 
-```trb error
-type Celsius {
-  private storedDegrees: Int
-}
+From another file the constructor is not there at all, which is the whole point of the factory:
 
-const wrong = Celsius(-300)
-// error: `Celsius` cannot be constructed here: `storedDegrees` is private and has no default
+```trb error
+use Path from "std/path"
+
+const wrong = Path(None, [])
+// error: `Path` cannot be constructed here: `storedRoot` is private and has no default
 ```
 
 ## Related

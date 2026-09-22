@@ -170,6 +170,39 @@ group "A trait with a parameter, implemented more than once" {
     const found = probe source
     assert(found.typeOf("world.valueOf()") == "Option<String>")
   }
+
+  /**
+   * `String` writes `static fn from(value: Iterable<Char>)` in its own body, as part of `with From<Iterable<Char>>`,
+   * and `std/path` adds `extend String with From<Path>`. Rule 2 of the member lookup used to find the body's member
+   * and stop there, so `String.from(path)` reported that a `Path` is not an `Iterable<Char>`.
+   */
+  const capsule = "type Slug \{\n  text: String\n\}\n\n"
+    + "type Text with From<Iterable<Char>> \{\n  value: String\n\n"
+    + "  static fn from(value: Iterable<Char>): Text \{\n    Text(\"chars\")\n  \}\n\}\n\n"
+    + "extend Text with From<Slug> \{\n  static fn from(value: Slug): Text \{\n    Text(value.text)\n  \}\n\}\n\n"
+
+  test "an `extend ... with From<X>` is part of the overload set of a `static fn` the type writes itself" {
+    const source = "{capsule}fn probe(slug: Slug): Text \{\n  Text.from slug\n\}"
+    assert problems(source).isEmpty()
+    const found = probe source
+    assert(found.dispatchOf("Text.from") == "implementation Text: From<Slug>")
+  }
+
+  test "the member the type writes is still what its own argument reaches" {
+    const source = "{capsule}fn probe(letters: List<Char>): Text \{\n  Text.from letters\n\}"
+    assert problems(source).isEmpty()
+    const found = probe source
+    assert(found.typeOf("Text.from letters") == "Text")
+  }
+
+  /**
+   * The lookup order is not undone by the widening: rule 2 comes before rule 5, so where nothing in the call tells
+   * the candidates apart the member of the body is the answer, and it is not an ambiguity.
+   */
+  test "where the argument decides nothing, the member the type writes wins without a message" {
+    const source = "{capsule}fn probe<Value>(value: Value): Text where Text: From<Value> \{\n  Text.from value\n\}"
+    assert problems(source).isEmpty()
+  }
 }
 
 /**
@@ -382,15 +415,32 @@ group "Operators through their traits" {
   }
 
   test "an index of an `Array` that is written out is held against the size in its type" {
-    // `std/collections/src/array.trb` documents exactly this as a compile error. Everything else - a `List`, a computed
-    // index, a const parameter as the size - is the runtime's question
+    // `std/collections/src/array.trb` documents exactly this as a compile error. Everything else - a `List` that was
+    // built, a computed index, a const parameter as the size - is the runtime's question
     const source = "fn probe(values: Array<Float, 4>): Float \{\n  values[4]\n\}"
     assert(problems(source) == ["`4` is out of bounds: an `Array<Float64, 4>` has 4 items"])
     assert(
-      notes(source) == ["The size of an `Array` is part of its type, so an index that is written out is checked here"]
+      notes(source)
+        == [
+          "How many items there are is known here, so an index that is written out is checked instead of panicking."
+            + " `get(4)` answers an `Option` instead",
+        ]
     )
     assert problems("fn probe(values: Array<Float, 4>): Float \{\n  values[3]\n\}").isEmpty()
     assert problems("fn probe(values: Array<Float, 4>, at: Int): Float \{\n  values[at]\n\}").isEmpty()
+  }
+
+  test "a negative index that is written out is out of bounds too" {
+    const source = "fn probe(values: Array<Float, 4>): Float \{\n  values[-1]\n\}"
+    assert(problems(source) == ["`-1` is out of bounds: an `Array<Float64, 4>` has 4 items"])
+  }
+
+  test "a collection literal says how many items it has, so an index into one is checked as well" {
+    assert(problems(inBody("  print([1, 2, 3][5])")) == ["`5` is out of bounds: this literal has 3 items"])
+    assert(problems(inBody("  print([1, 2, 3][-1])")) == ["`-1` is out of bounds: this literal has 3 items"])
+    assert problems(inBody("  print([1, 2, 3][2])")).isEmpty()
+    // What a spread brings is not known here, so nothing is said about the literal it was spread into
+    assert problems(inBody("  const rest = [4, 5]\n  print([1, 2, ...rest][4])")).isEmpty()
   }
 
   test "a comparison asks for its trait like every other operator" {

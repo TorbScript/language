@@ -132,6 +132,14 @@ print identity[0]
 // error: `4` is out of bounds: an `Array<Float64, 4>` has 4 items
 ```
 
+A negative index is the same mistake, and so is an index into a collection literal that stands right there - both are
+known without running anything, and `get(index)` is the form that answers an `Option` instead of panicking.
+
+```trb error
+print([1, 2, 3][5])
+// error: `5` is out of bounds: this literal has 3 items
+```
+
 **`Array` is not `List` with extra syntax.** `Array` never grows and never allocates on the heap; a collection whose
 size is not known ahead of time is a `List`, a different type entirely, not an `Array` used differently.
 

@@ -1901,6 +1901,29 @@ read.
   in `exhaustive`, `statements`, `lower-match` and `check` bound names their arms never read, or used `fn Point()` to
   show two declarations of one name.
 
+### What the checker follow-up round adds
+
+Seven rules the checker did not enforce, gathered from the rounds that found them. Three are `docs/CONCURRENCY.md`
+section 12 (gaps 58, 67 and section 13's 1, 2, 3 and 17 above), two close gaps 53 and 68, and two are their own:
+
+- **`private` reaches one FILE, not one package** (the owner's decision). `isInsideDeclaration` asks whether the
+  declaration stands in the module that is being checked, and nothing else - so an `extend` of the same file sees the
+  private member, a free function of that file sees it too (it could not before), and an `extend` in another file of
+  the package no longer does. The three messages (`is private to`, `cannot be passed from here`,
+  `this pattern cannot read it`) say "in the file that declares `X`" in their notes. One place in the repository
+  wrote a `private(var)` field of another file, an `extend Column<Node>` of `examples/ecs-probe-2`, and it goes
+  through the public members now.
+- **A constant index that is out of range is a compile error and not a panic**, where how many items there are is
+  known without running anything: an `Array<Item, Size>`, whose size is part of its type, and a collection literal
+  that stands right there (`[1, 2, 3][5]`). A negative index is counted too - `numbers[-1]` is a `Unary(Negate, 1)`
+  and not a literal, which is why it used to slip through. The note names `get(index)`, the form that answers an
+  `Option`.
+- **A command call after an index** parses. `mounted[index].process elapsed` is the command form of
+  `mounted[index].process(elapsed)`, because an index in the middle of a member path is still a member path. The
+  index joins the path only when a `.name` follows it, which leaves rule 3 of the command canon alone: `f [1]` is
+  still always indexing, and `print [1, 2]` is still the error that says to write parentheses. The attempt is
+  speculative, and a `Parser` is a value, so taking it back undoes the position and the diagnostics together.
+
 ---
 
 ## 9. Spec gaps
@@ -2676,6 +2699,16 @@ takes it as a parameter (a top-level `const` of an entry file or a script gets i
 `checkClosureBody` sets it to `true`. `requireAwaitAllowed` in `call.trb` recognizes the call by the member's name plus a
 receiver that is a `Task`, which is the one thing that makes it this call. The rule found nothing in the repository.
 
+**The exemption for closures is gone**, and with it the missing piece this gap named. A closure answers the placement
+question for itself: the one `spawn` is handed becomes a task (the call says so, not the closure's type), and so does
+one whose **declared result** is a `Task<...>` - which is the way a signature says "this closure is run as a task".
+`Source.produce`'s `body` parameter is a `(var sink: Sink<Item, Failure>) => Task<Result<Void, Failure>>` now, and its
+own body still produces the `Result` directly, exactly as the body of a `fn` that answers a `Task` does. Every other
+closure is `` `await()` is only allowed in a closure that becomes a task ``, with `Task.all` and `task.map` in the
+note: `tasks.map({ _.await() })` would block the worker that pulls the pipeline, which is the case the rule exists
+for. One place in the repository had to change, the `Source.produce` of `examples/tour/src/13-streams.trb`, and it did
+not: only the signature it fills did.
+
 **59. Is `?` legal in a function whose result is neither an `Option` nor a `Result`?**
 CONCEPT says it is not, and 4.3 said nothing about it on purpose: `fetchUser(id).await()?` stands in a function that
 returns a `Task<Result<...>>`, and where `await()` is allowed was milestone 7's. So a `?` in a function that returns a
@@ -2833,6 +2866,15 @@ rule; a library that spawns a closure on your behalf (`Source.produce`) is not c
 58 already draws for `await()`. Nothing in the repository depended on the hole: `std/stream`s one `spawn` captures two
 `const`s.
 
+**Two more things a task may not take with it** were added with the rest of `docs/CONCURRENCY.md` section 12. A
+**top-level `var`** the closure reads is refused like a captured one: it is no capture at all - a declaration is one
+place the whole file shares and nothing copies it - so the closure records the declarations its body read next to its
+captures, and the rule asks both lists. And a capture whose type **contains a `shared type`** is refused, because a
+task gets copies and an object is not copied: `containsShared` in `declaration.trb` computes the same fixpoint the
+layout does (BACKEND 1.3), walking generic arguments, fields and case fields, with `Task` and `Channel` as the two
+exceptions. The same predicate answers for a `Channel<Item>`, asked where that type is **written** - a signature, an
+annotation, a construction - rather than at `sink().add`, so it is one message per item type instead of one per call.
+
 **68. What decides which implementation an overloaded call means?**
 The language keeps one overload form - a trait with a **parameter**, implemented more than once on one type - and the
 checker resolved only the case where the trait argument was the type of the **first** parameter. `game.attachAt true,
@@ -2869,9 +2911,26 @@ and it is memoized: asked before the run has derived the implementations it gene
 without them, and the witness tables of an unrelated program come out different - measured, the `Equals` instance of
 `std/core`s `Ordering` disappears from the lowering of `syntax/source.trb` (118 functions become 117). Reading the
 implementation index instead of `traitsOf` avoids that and runs into the second half: the signature of a trait may be
-built while this very member lookup is running, and `typeSignatureOf` panics. **The fix is one of two things, and both
-are their own round:** a `traitsOf` whose cache is invalidated when a derived implementation is added, or an overload
-set that is merged at the call site instead of in the lookup.
+built while this very member lookup is running, and `typeSignatureOf` panics.
+
+**Done, and it took both halves.** The caches are invalidated: `deriveFor` bumps an `answerGeneration` and throws away
+`traitClosures`, `memberAnswers` and `memberMissing`, and an answer that was *being* worked out while one was added is
+given and not kept. `traitsOf`'s recursion guard moved into a table of its own (`closuresRunning`), so throwing the
+answers away cannot remove it. The symptom that measured it: `"{point}"` derives `Show` for `Point`, and the
+`point.show()` after it used to be `` `Point` has no member `show` ``.
+
+On top of that the overload set is merged at the lookup, for a **`static`** member only: `withTraitOverloads` in
+`member.trb` adds every candidate the traits of the type provide to the one its body writes, dropping a duplicate by
+declaration or by signature. That is what `String.from(path)` needed - `String` writes `static fn
+from(value: Iterable<Char>)` in its own body for `with From<Iterable<Char>>`, and `std/path` adds
+`extend String with From<Path>`. The order of the lookup is not undone by it: the member the body writes carries
+`Candidate.preferred`, and where nothing in the call tells the candidates apart it is the answer and **no ambiguity is
+reported**, because rule 2 comes before rule 5. An instance member is untouched - it has no such form, and `a.b` is
+the hottest question of the pass.
+
+What is still open is one step away from it: a member lookup does not *start* a derivation, so `point.show()` in a
+program where nothing else asked for `Show` is still `` `Point` has no member `show` ``. The derivation happens where
+a trait is resolved, and the lookup walks the traits a type already has.
 
 **69. Does member lookup see a blanket implementation, and is there an inherent one?**
 `extend<World: Query> World with Pairs { fn doubled(): Int { ... } }` and then `game.doubled()` answered `` `Game`

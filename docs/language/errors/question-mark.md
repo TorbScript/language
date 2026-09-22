@@ -111,6 +111,29 @@ print firstLine("project.trb")
    // error: `ConfigError` does not convert into `AppError`
    ```
 
+   **Two failure types carry nothing, and a `?` into either of them is the same mistake.** `Never` has no values at
+   all, so a `Result<Value, Never>` promises that the function cannot fail; and a bare type parameter says nothing
+   about what it is made from, so the bound is where the conversion is written down (`where Failure: From<Cancelled>`).
+
+   ```trb error
+   type ConfigError {
+     case Missing(key: String)
+   }
+
+   fn readPort(): Result<Int, ConfigError> {
+     Fail ConfigError.Missing("port")
+   }
+
+   fn start<Failure>(): Result<Int, Failure> {
+     Ok(readPort()?)
+   }
+   print start<ConfigError>()
+   // error: `ConfigError` does not convert into `Failure`
+   ```
+
+   With the bound written down it is an ordinary conversion, and `Failure: From<ConfigError>` is what a caller then
+   has to satisfy.
+
 5. **`?` on an `Option` needs no conversion, because `None` carries no value to convert.** It only needs the
    surrounding function to answer an `Option` itself.
 

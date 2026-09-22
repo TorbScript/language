@@ -215,13 +215,18 @@ public shared trait Source<Item, Failure> with Close {
    *
    * `Failure: From<ChannelClosed>` because a consumer that stops pulling ends the producer, and that end needs a name
    * in the producer's own failure type.
+   *
+   * **The body answers a `Task`**, which is how it may `await()` the `add`s it writes: `await()` stands in a function
+   * whose result is a `Task` and in the closure `spawn` is handed, and nothing else in the language says that a
+   * callee runs a closure as a task. Its own body still produces the `Result`, exactly as the body of a `fn` that
+   * answers a `Task` does.
    */
   static fn produce(
     capacity: Int = 0,
-    body: (var sink: Sink<Item, Failure>) => Result<Void, Failure>,
+    body: (var sink: Sink<Item, Failure>) => Task<Result<Void, Failure>>,
   ): Source<Item, Failure> where Failure: From<ChannelClosed> {
     const relay = Channel<Item>(capacity: capacity)
-    Produced.of(relay, spawn({ produceInto relay, body }))
+    Produced.of(relay, spawn({ produceInto(relay, body).await() }))
   }
 
   /** A stream that ends immediately, without reading anything. */
@@ -234,10 +239,10 @@ public shared trait Source<Item, Failure> with Close {
 /** The body of a produced source, inside the task: the sink is made here, so no shared object crosses the boundary. */
 fn produceInto<Item, Failure: From<ChannelClosed>>(
   relay: Channel<Item>,
-  body: (var sink: Sink<Item, Failure>) => Result<Void, Failure>,
-): Result<Void, Failure> {
+  body: (var sink: Sink<Item, Failure>) => Task<Result<Void, Failure>>,
+): Task<Result<Void, Failure>> {
   var writing = relay.sink().mapFailure(Failure.from)
-  body writing
+  body(writing).await()
 }
 
 // --- A closure as a source --------------------------------------------------------------------------------------

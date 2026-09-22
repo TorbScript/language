@@ -845,8 +845,9 @@ group "A `static fn` is reached through the type" {
 /**
  * "`await()` is allowed in functions that return a `Task`, in closures passed to `spawn`, and at the top level of entry
  * files and scripts. Everywhere else it is a compile error: a function that waits says so in its return type."
- * (CONCEPT, "Concurrency"). A closure is exempt, because nothing in the language says which closures a callee runs *as*
- * a task - `spawn { ... }` does and so does `Source.produce { sink => ... }`, whose body type says nothing about it.
+ * (CONCEPT, "Concurrency"). A closure answers the same question for itself: the one `spawn` is handed becomes a task,
+ * and so does one whose *declared* result is a `Task` - which is how `Source.produce` says that it runs its body as
+ * one. Every other closure may not wait, because `tasks.map { _.await() }` would block the worker underneath it.
  */
 group "Where `await()` is allowed" {
   const task = "fn later(value: Int): Task<Int> \{\n  panic \"a task\"\n\}\n\n"
@@ -857,8 +858,8 @@ group "Where `await()` is allowed" {
     assert(
       notes(source)
         == [
-          "A function that waits says so in its result type. `spawn \{ ... \}` starts a task, and the top level of an"
-            + " entry file or a script may wait for one",
+          "A function that waits says so in its result type, and this one produces `Int64`. `spawn \{ ... \}` starts"
+            + " a task, and the top level of an entry file or a script may wait for one",
         ]
     )
   }
@@ -873,10 +874,36 @@ group "Where `await()` is allowed" {
     assert problems(source).isEmpty()
   }
 
-  test "a closure is exempt, because its callee may be the one that runs it as a task" {
+  /**
+   * An ordinary closure is not a task: `tasks.map \{ _.await() \}` would block the worker that pulls the pipeline,
+   * and the rule is what makes the two forms the note names the way to write it.
+   */
+  test "an ordinary closure may not wait, and the note names the two ways to write it" {
     const source = "{task}fn run(body: () => Int): Int \{\n  body()\n\}\n\n"
       + "fn sum(a: Int): Int \{\n  run \{ later(a).await() \}\n\}"
-    assert problems(source).isEmpty()
+    assert(problems(source) == ["`await()` is only allowed in a closure that becomes a task"])
+    assert(
+      notes(source)
+        == [
+          "The closure handed to `spawn \{ ... \}` is one, and so is one whose result is declared a `Task`. To wait"
+            + " for many at once use `Task.all(tasks).await()`, and to go on when one finishes use"
+            + " `task.map \{ ... \}`",
+        ]
+    )
+  }
+
+  test "the closure handed to `spawn` is a task, and so is one whose declared result is a `Task`" {
+    const spawned = "{task}fn sum(a: Int): Task<Int> \{\n  spawn(\{ later(a).await() \}).await()\n\}"
+    assert problems(spawned).isEmpty()
+    const declared = "{task}fn run(body: () => Task<Int>): Task<Int> \{\n  body().await()\n\}\n\n"
+      + "fn sum(a: Int): Task<Int> \{\n  run(\{ later(a).await() \}).await()\n\}"
+    assert problems(declared).isEmpty()
+  }
+
+  test "only the closure `spawn` is handed is the task, not one written inside its body" {
+    const source = "{task}fn run(body: () => Int): Int \{\n  body()\n\}\n\n"
+      + "fn sum(a: Int): Task<Int> \{\n  spawn(\{ run \{ later(a).await() \} \}).await()\n\}"
+    assert(problems(source) == ["`await()` is only allowed in a closure that becomes a task"])
   }
 
   test "a `const` of a module may not wait: it is folded at compile time" {

@@ -995,10 +995,12 @@ measure of how little a cooperative design costs when the machine is already a s
 
 ## 12. What the checker does not enforce
 
-Four probes, all accepted by the checker as written, and all of them things the design says are errors. The first three
-mean that **"data races are impossible by construction" rests on nothing today**; the fourth is what makes section 8's
-migration look smaller than it is. They are listed first because a reader of CONCEPT would otherwise assume the
-opposite.
+Four probes that were accepted by the checker as written, and all of them things the design says are errors. The first
+three meant that **"data races are impossible by construction" rested on nothing**; the fourth is what made section 8's
+migration look smaller than it is.
+
+**All four are rules of the checker now** (section 13's gaps 1, 2, 3 and 17). The probes are kept because they say what
+each rule is for, and every one of them is a test of `compiler/tests`. What each answers today stands under it.
 
 **1. `await()` placement.**
 
@@ -1008,9 +1010,10 @@ fn sumAll(tasks: List<Task<Int>>): Int {
 }
 ```
 
-The closure is not passed to `spawn` and the enclosing function does not answer a `Task`. `check` answers
-`1 files, no problems`. This gap was already queued before this document; it is named here because every `Parallel`
-closure depends on the same rule.
+The closure is not passed to `spawn` and the enclosing function does not answer a `Task`. It is now
+```await()` is only allowed in a closure that becomes a task``, with a note naming `Task.all` and `task.map`. A
+closure that *is* a task says so: the one `spawn` is handed, and one whose declared result is a `Task` — which is how
+`Source.produce` now declares its body, and it is what every `Parallel` closure will declare as well.
 
 **2. A `spawn` closure may capture a `var`.**
 
@@ -1020,8 +1023,9 @@ const first = spawn { total = total + 1 }
 const second = spawn { total = total + 1 }
 ```
 
-`check` answers `1 files, no problems`. This is the data race, written in four lines, and it is the rule the whole of
-section 4 leans on.
+This is the data race, written in four lines, and it is the rule the whole of section 4 leans on. Both lines are now
+```spawn` cannot take the `var` binding `total` with it``. A top-level `var` is not a capture at all — it is one place
+the whole file shares — so the rule asks the declarations the closure read as well as the bindings it captured.
 
 **3. A `shared type` crosses into a `spawn` closure.**
 
@@ -1033,9 +1037,11 @@ const task = spawn {
 }
 ```
 
-`check` answers `1 files, no problems`, for a `shared type Counter` with a `var fn bump()`. CONCEPT says shared objects
-are confined to the task that created them; nothing checks it. The layout already computes `containsShared` for this
-purpose (BACKEND 1.3) — the fixpoint exists, the rule that reads it does not.
+It is now ```spawn` cannot take `counter` with it: a `Counter` has an identity``, and a value that holds an object
+anywhere inside it says `holds an object` instead. The checker computes the same fixpoint the layout does
+(BACKEND 1.3), with `Task` and `Channel` as the two exceptions. A `Channel`’s item is checked where `Channel<Item>` is
+written — a signature, an annotation, a construction — rather than at `sink().add`, so it is one message per item type
+instead of one per call.
 
 **4. `?` converts a failure into `Never` and into an unbounded type parameter.**
 
@@ -1049,32 +1055,36 @@ fn intoGeneric<Failure>(outcome: Result<Int, Alpha>): Result<Int, Failure> {
 }
 ```
 
-`check` answers `1 files, no problems` for both, while the same `?` into a named second failure type is rejected with
-`` `Alpha` does not convert into `Beta` `` and the suggestion to write the `From`. So the rule exists and it has two
-holes: a bare type parameter, where the bound is what should carry the requirement, and `Never`, which has no values
-and therefore cannot be the target of any conversion at all.
+Both were accepted, while the same `?` into a named second failure type was rejected with
+`` `Alpha` does not convert into `Beta` ``. The two holes are closed: a bare type parameter is asked for its bound
+(```Alpha` does not convert into `Failure```, with `where Failure: From<Alpha>` as the note), and `Never` is refused
+as a target because it has no values at all.
 
 This is not a cost of cancellation and it is older than section 8, but section 8 is where it matters: with `await()`
 answering a `Result<Value, Cancelled>`, `Failure: From<Cancelled>` is the bound that makes an asynchronous pipeline
-type-correct, and today a signature that omits it type checks anyway. The migration measured in section 10 is therefore
-a lower bound — **80 problems is what the checker finds, not what the design requires.** *Smallest fix:* the `?`
-conversion asks the bound of a type parameter instead of accepting it, and refuses `Never` as a target.
+type-correct, and a signature that omitted it used to type check anyway. The migration measured in section 10 is
+therefore a lower bound — **80 problems is what the checker found then, not what the design requires.**
 
 ## 13. What the language, the IR and the runtime must provide
 
 In the order it hurts, each with the smallest fix.
 
-**1. The `await()` placement rule.** Checker. Allowed in a function whose result is `Task<…>`, in a closure passed to
-`spawn`, and at the top level of an entry file or script; an error everywhere else, naming the enclosing function's
-result type. *Smallest fix:* one predicate over the enclosing declaration, consulted where `await` resolves.
+**1. The `await()` placement rule. Done.** Allowed in a function whose result is `Task<…>`, in a closure passed to
+`spawn`, in a closure whose declared result is a `Task<…>`, and at the top level of an entry file or script; an error
+everywhere else, naming the enclosing function's result type. The third form is what a library declares when it runs
+a closure as a task: `Source.produce` takes a `(var sink: Sink<Item, Failure>) => Task<Result<Void, Failure>>`, and
+`Parallel` will say the same.
 
-**2. A `spawn` closure may not capture a `var`.** Checker. The capture analysis of the closure conversion already
-classifies every capture; this is a rejection of one class at one call site. *Smallest fix:* mark `spawn`'s parameter
-as a task boundary and refuse a captured `Box` there. The same mark serves `offload` and every `Parallel` closure.
+**2. A `spawn` closure may not capture a `var`. Done.** The capture analysis of the closure conversion classifies
+every capture, and a captured `var` is refused at `spawn`. A top-level `var` the body reads is refused with it: it is
+no capture at all, but one place the whole file shares, which is the same race. The rule serves `offload` and every
+`Parallel` closure once those exist.
 
-**3. `shared type` confinement across a task boundary.** Checker, reading `containsShared` off the layout — which is
-computed to a fixpoint already. `Task` and `Channel` are the two exceptions. Applies at `spawn`, at `offload`, at a
-`Channel`'s item type and at a region's body. *Smallest fix:* one predicate, four call sites.
+**3. `shared type` confinement across a task boundary. Done for `spawn` and `Channel`.** The checker computes
+`containsShared` itself, to the same fixpoint the layout does, with `Task` and `Channel` as the two exceptions. It is
+asked of every capture of a `spawn` closure, and of the item of a `Channel<Item>` wherever that type is written — a
+signature, an annotation, a construction — rather than at `sink().add`, which would be a message per call instead of
+one per item type. `offload` and a region's body are the same predicate at two more call sites.
 
 **4. `Plain`.** A marker trait the compiler grants for `containsCounted == false`, usable as a bound and never written
 by a user. *Smallest fix:* a synthetic trait id the checker answers for from the layout, the way it answers derived
@@ -1136,10 +1146,9 @@ interface gap 8 introduces.
 places in `std/stream`, `std/http`, `std/fs` and `examples/`, and `Channel`'s reading end becomes a
 `Source<Item, Cancelled>`. *Smallest fix:* one commit over `std/`, gated by `check .` and `docs check docs`.
 
-**17. `?` asks the bound.** Probe 4 of section 12: the `?` conversion accepts a bare type parameter and `Never` as a
-target. Until it does not, `Failure: From<Cancelled>` is documentation rather than a rule. *Smallest fix:* the
-conversion lookup consults the type parameter's bound, and `Never` is refused as a conversion target with the message
-that it has no values.
+**17. `?` asks the bound. Done.** Probe 4 of section 12: the `?` conversion consults a type parameter's bound instead
+of accepting it, and refuses `Never` as a conversion target because it has no values at all.
+`Failure: From<Cancelled>` is a rule now and not documentation.
 
 ## 14. Slices
 

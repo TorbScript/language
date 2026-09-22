@@ -182,6 +182,28 @@ public fn noteCapture(var checker: Checker, binding: BindingId) {
 }
 
 /**
+ * A top-level binding that a closure reads. It is **not** a capture: a declaration is one place the whole file
+ * shares, and nothing about it is copied into the closure - which is exactly why a closure that becomes a task may
+ * not reach a `var` one, nor one that holds an object. The list is per closure and the rule that reads it is at
+ * `spawn`.
+ */
+fn noteDeclarationCapture(var checker: Checker, symbol: SymbolId) {
+  if checker.closureFrames.isEmpty() {
+    return
+  }
+  var index = 0
+  while index < checker.closureFrames.length() {
+    const frame = checker.closureFrames[index]
+    if !frame.declarations.contains(symbol) {
+      var declarations = frame.declarations
+      declarations.add symbol
+      checker.closureFrames.set index, frame.copy(declarations: declarations)
+    }
+    index = index + 1
+  }
+}
+
+/**
  * A member of `self` that was written without it. The lowering puts the receiver back, so it is recorded here - and a
  * closure that reads a member of a receiver from further out captures that receiver like any other binding.
  */
@@ -271,6 +293,7 @@ public fn symbolTarget(
       const annotation = resultOf checker, symbol
       // A top-level `var` is a declaration and not a local, so its reads are counted here
       noteDeclaredRead checker, symbol, at
+      noteDeclarationCapture checker, symbol
       Target Resolution.Constant(symbol, None), annotation, form: formOf(checker, annotation), name: text
     }
     .Type => namedTypeTarget checker, symbol, text, at, expected, explicit

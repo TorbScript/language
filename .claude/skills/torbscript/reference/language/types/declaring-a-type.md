@@ -192,14 +192,15 @@ account.deposit 100
 print account.balance
 ```
 
-```trb error
-type Account {
-  private(var) balance: Int = 0
-}
+From another file the field is readable and nothing else - `private` reaches as far as the file that declares it:
 
-var account = Account()
-account.balance = 1_000_000
-// error: `balance` can only be written by `Account`
+```trb error
+use Workspace from "std/project"
+
+var workspace = Workspace()
+workspace.memberPatterns = ["packages/*"]
+print workspace.memberPatterns
+// error: `memberPatterns` can only be written by `Workspace`
 ```
 
 **A constructor is not a place for logic.** Validation, parsing and conversion are static factory functions, because a

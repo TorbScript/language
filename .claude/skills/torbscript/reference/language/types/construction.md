@@ -140,14 +140,14 @@ Self(<field>, ...)                   // The constructor, from inside the type
    the constructor and naming one of its `private` fields are two different permissions - the first rule is about
    which fields have to be left out, this one is about what happens when they are not.
 
-   ```trb error
-   type Session {
-     token: String
-     private hits: Int = 0
-   }
+   `private` reaches as far as the file that declares the type ([Fields](fields.md), rule 5), so the refusal is what
+   another file gets - `ArrayQueue` of `std/collections` keeps its slots to itself:
 
-   const wrong = Session(token: "abc", hits: 3)
-   // error: `hits` is private to `Session`, so it cannot be passed from here
+   ```trb error
+   use ArrayQueue from "std/collections"
+
+   const wrong = ArrayQueue<Int>(head: 3)
+   // error: `head` is private to `ArrayQueue<Int64>`, so it cannot be passed from here
    ```
 
 7. **Inside the type, `Self(...)` is the constructor and every field can be passed**, `private` ones included - that is
@@ -174,20 +174,13 @@ type Percent {
 }
 ```
 
+From another file the constructor of such a type is not reachable at all, and the factory is the only way in:
+
 ```trb error
-type Percent {
-  private value: Int
+use Path from "std/path"
 
-  static fn tryFrom(value: Int): Result<Percent, String> {
-    if value < 0 || value > 100 {
-      return Fail "{value} is not between 0 and 100"
-    }
-    Ok Self(value)
-  }
-}
-
-const wrong = Percent(120)
-// error: `Percent` cannot be constructed here: `value` is private and has no default
+const wrong = Path(None, [])
+// error: `Path` cannot be constructed here: `storedRoot` is private and has no default
 ```
 
 ## Related

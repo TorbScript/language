@@ -995,15 +995,24 @@ public fn traitsOf(var checker: Checker, annotation: TypeId): List<TypeId> {
   if const Some(known) = checker.traitClosures.get(annotation.value) {
     return known
   }
-  // The answer is put in first, so that a trait that mentions itself through `Self` cannot loop
-  checker.traitClosures.set annotation.value, []
+  // A trait that mentions itself through `Self` would otherwise loop. The guard is its own table, because the answers
+  // are thrown away whenever an implementation is generated and the guard must survive that
+  if checker.closuresRunning.containsKey(annotation.value) {
+    return []
+  }
+  checker.closuresRunning.set annotation.value, true
+  const generation = checker.answerGeneration
   var found: List<TypeId> = []
   const declared = directTraitsOf checker, annotation
   for bound in declared {
     addClosure checker, found, bound, annotation, 0
   }
   addImplementorTraits checker, found, annotation
-  checker.traitClosures.set annotation.value, found
+  checker.closuresRunning.remove annotation.value
+  // An implementation was generated while this ran, so what came out may be missing it: answer with it, keep nothing
+  if checker.answerGeneration == generation {
+    checker.traitClosures.set annotation.value, found
+  }
   found
 }
 
@@ -1401,7 +1410,25 @@ fn deriveFor(var checker: Checker, annotation: TypeId, capability: SymbolId, wan
   )
   const identifier = addOne checker, generated
   checker.derivedIndex.set key, identifier.value
+  forgetClosedAnswers checker
   Resolved.Found identifier, argumentsOfBound(checker, bound)
+}
+
+/**
+ * **An implementation was added, so every answer that assumed a closed world is stale.** [traitsOf] is "every trait
+ * this type has", and member lookup is "everything this type has" built on top of it: both are closed-world answers,
+ * and both are memoized. A derived implementation is generated the first time somebody asks for it, which is *after*
+ * those answers were already given - so a `Show` that is derived here would otherwise be missing from the closure of
+ * the type it was derived for, and the member lookup that walked that closure would keep saying "no such member".
+ *
+ * It costs nothing to be generous: a derived implementation is generated once per type and trait, so this runs a
+ * handful of times over a workspace, and what it throws away is rebuilt lazily by the next question.
+ */
+fn forgetClosedAnswers(var checker: Checker) {
+  checker.answerGeneration = checker.answerGeneration + 1
+  checker.traitClosures = [:]
+  checker.memberAnswers = [:]
+  checker.memberMissing = [:]
 }
 
 fn argumentsOfBound(checker: Checker, bound: TypeId): List<TypeId> {

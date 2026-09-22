@@ -84,6 +84,49 @@ group "`?` on a `Result`" {
   }
 }
 
+/**
+ * Two targets a failure cannot be converted into, and both of them type checked until this rule. Without them
+ * `Failure: From<Cancelled>` is documentation rather than something the checker asks for.
+ */
+group "`?` and a failure type that carries nothing" {
+  const alpha = "type Alpha \{\n  message: String\n\}\n\nfn read(): Result<Int, Alpha> \{\n  Ok(1)\n\}\n\n"
+
+  test "`Never` is not a conversion target: it has no values" {
+    const source = alpha + "fn probe(): Result<Int, Never> \{\n  Ok(read()?)\n\}"
+    assert(problems(source) == ["`Alpha` does not convert into `Never`"])
+    assert(
+      notes(source)
+        == [
+          "`Never` has no values, so nothing converts into it: a result of `Result<Value, Never>` says that this"
+            + " function cannot fail. Answer with a failure type, or handle the error here",
+        ]
+    )
+  }
+
+  test "a bare type parameter is not one either: what it can do is what its bounds say" {
+    const source = alpha + "fn probe<Failure>(): Result<Int, Failure> \{\n  Ok(read()?)\n\}"
+    assert(problems(source) == ["`Alpha` does not convert into `Failure`"])
+    assert(
+      notes(source)
+        == [
+          "What a type parameter can do is what its bounds say. Write the conversion down at the declaration:"
+            + " `where Failure: From<Alpha>`",
+        ]
+    )
+  }
+
+  test "with the bound written down it is an ordinary conversion" {
+    const source = alpha
+      + "fn probe<Failure: From<Alpha>>(): Result<Int, Failure> \{\n  Ok(read()?)\n\}"
+    assert problems(source).isEmpty()
+  }
+
+  test "a `Result<Value, Never>` without a `?` in it is fine: the promise is kept" {
+    const source = "fn probe(): Result<Int, Never> \{\n  Ok(1)\n\}"
+    assert problems(source).isEmpty()
+  }
+}
+
 group "`?` on an `Option`" {
   test "an `Option` in a function that returns one unwraps without a conversion" {
     const source = "fn find(): Int? \{\n  Some(1)\n\}\n\nfn probe(): Int? \{\n  const value = find()?\n  Some(value)\n\}"

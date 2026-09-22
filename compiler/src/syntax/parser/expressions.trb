@@ -70,7 +70,7 @@ public fn parseCommandExpression(var parser: Parser): Expression {
   parseExpression parser
 }
 
-/** `print`, `Email.parse`, `root.attribute` */
+/** `print`, `Email.parse`, `root.attribute`, `mounted[index].process` */
 fn parseCommandPath(var parser: Parser): Expression? {
   const isName = match parser.kind() {
     .Identifier | .Reserved(.SelfValue | .SelfType) => true
@@ -82,12 +82,50 @@ fn parseCommandPath(var parser: Parser): Expression? {
   const start = parser.span()
   var path = Expression ExpressionKind.Name(parser.text(start)), start
   parser.bump()
-  while parser.isAt(TokenKind.Dot) && isNameOrKeyword(parser.kindAt(1)) {
-    parser.bump()
-    const name = parser.nameOrKeyword()
-    path = Expression ExpressionKind.Member(path, name, isOptional: false), start.to(parser.previousSpan())
+  // Where the path last ended in a **name**. An index belongs to it only when a member follows, so a chain that ends
+  // in `[...]` is taken back to here - and a `Parser` is a value, so taking it back undoes the position and the
+  // diagnostics of the attempt together
+  var settled = parser
+  var settledPath = path
+  loop {
+    if parser.isAt(TokenKind.Dot) && isNameOrKeyword(parser.kindAt(1)) {
+      parser.bump()
+      const name = parser.nameOrKeyword()
+      path = Expression ExpressionKind.Member(path, name, isOptional: false), start.to(parser.previousSpan())
+      settled = parser
+      settledPath = path
+      continue
+    }
+    if parser.isAt(TokenKind.BracketOpen) {
+      if const Some(indexed) = parseIndexSegment(parser, path, start) {
+        path = indexed
+        continue
+      }
+    }
+    break
   }
-  Some path
+  parser = settled
+  Some settledPath
+}
+
+/**
+ * `mounted[index].process elapsed`: **an index in the middle of a member path is still a member path.** One index, or
+ * several, and the member after them is what the command calls.
+ *
+ * The index itself is parsed speculatively: `print [1, 2]` is not an index at all, and `values [0]` is one that no
+ * member follows. Both of those leave the path where it was, so `f [1]` is still always indexing and never a command
+ * with a list argument.
+ */
+fn parseIndexSegment(var parser: Parser, path: Expression, start: Span): Expression? {
+  const beforeIndex = parser
+  parser.bump()
+  const index = parser.withTrailingClosures true, parseExpression
+  if !parser.isAt(TokenKind.BracketClose) {
+    parser = beforeIndex
+    return None
+  }
+  parser.bump()
+  Some Expression(ExpressionKind.Index(path, index), start.to(parser.previousSpan()))
 }
 
 /**

@@ -233,6 +233,12 @@ public type Candidate {
   needsArguments: Bool = false
   /** The candidates of such an overload set, in the order they were found. */
   overloads: List<Candidate> = []
+  /**
+   * What the lookup would have answered on its own, before the overload set was widened by the traits of the type.
+   * A written argument may reach one of the others; where nothing tells them apart, this one is the answer and no
+   * ambiguity is reported, because the order of the lookup has already decided.
+   */
+  preferred: Bool = false
   /** How the member is reached: a member of the type itself, or one of a trait it implements. */
   dispatch: Dispatch = Dispatch.Direct
   /** Where the member is declared, for the ambiguity message about two extensions. */
@@ -305,6 +311,11 @@ public type ClosureFrame {
   implicitFrom: Int = 0
   /** The loop depth around the closure, so that a `break` in it can say that it cannot leave one (design 3.5). */
   enclosingLoopDepth: Int = 0
+  /**
+   * The top-level `var` declarations the body reads. They are not captures - a declaration is one place the whole
+   * file shares, and nothing copies it - which is exactly why a task may not reach one.
+   */
+  var declarations: List<SymbolId> = []
 }
 
 /** Everything the source does not spell out, in the order in which it applies. */
@@ -558,6 +569,11 @@ public type Tables {
    * an entry too: the thunk it becomes is a closure, and `Adaptation.Lazy` at the same span is what marks it as one.
    */
   var captures: Map<Span, List<Capture>> = [:]
+  /**
+   * Per closure span: the top-level `var` declarations its body reads. A declaration is not a binding and is not
+   * captured at all - it is one place the whole file shares - which is exactly why a task may not reach one.
+   */
+  var declarationCaptures: Map<Span, List<SymbolId>> = [:]
   /** Per quoted expression span: the tree and the captures the lowering has to build (design 4.8). */
   var quotations: Map<Span, Quotation> = [:]
   /** Per receiver closure span, and at `Span(0, 0)` for a receiver script: the binding its receiver is reached under. */
@@ -820,12 +836,18 @@ public type Checker {
    */
   var isFieldDefault: Bool = false
   /**
-   * Whether `await()` is allowed where the checker stands: in a body whose declared result is a `Task<...>`, at the top
-   * level of an entry file or a script, and inside every closure - a closure may be the body a callee runs *as* a task
-   * (`spawn { ... }`, `Source.produce { sink => ... }`) and nothing in the language says which ones.
-   * Everywhere else a function that waits has to say so in its result type (CONCEPT, "Concurrency").
+   * Whether `await()` is allowed where the checker stands: in a body whose declared result is a `Task<...>`, at the
+   * top level of an entry file or a script, in a closure whose declared result is a `Task<...>`, and in the closure
+   * that is handed to `spawn`. Everywhere else a function that waits has to say so in its result type (CONCEPT,
+   * "Concurrency") - a blocking `await()` anywhere would need a stack per task in every back end.
    */
   var awaitsTasks: Bool = false
+  /**
+   * Whether the argument that is being checked fills a parameter of `spawn`. `spawn`'s parameter is an ordinary
+   * `() => Value`, so the closure that stands there cannot tell from its own type that it becomes a task: the call
+   * says so, and this is how the call says it. It holds for that argument alone and not for its body.
+   */
+  var isTaskArgument: Bool = false
   /**
    * Every top-level `var` that something other than the statements of its own file reads: a function of the module, a
    * closure inside one, the initializer of a top-level `const`. A top-level `var` is a declaration and not a local, so
@@ -918,12 +940,31 @@ public type Checker {
   /** Every trait a type implements, transitively over supertraits, by interned type id. */
   var traitClosures: Map<Int, List<TypeId>> = [:]
   /**
+   * The types whose trait closure is being built right now: a trait that mentions itself through `Self` must not loop,
+   * and the guard is kept apart from the answers above so that throwing the answers away cannot remove it.
+   */
+  var closuresRunning: Map<Int, Bool> = [:]
+  /**
+   * Counts the implementations that were generated after the run had started. Every closed-world answer - "every trait
+   * this type has", "everything this type has" - is only valid for the generation it was computed in, so an answer
+   * that was worked out while one was added is given but not kept.
+   */
+  var answerGeneration: Int = 0
+  /**
    * Per trait symbol: whether an `extend` of a *trait type* with it serves the concrete implementers of that trait as
    * well. `Show` does, `From` does not - `from` has no `self` and answers `Self`.
    */
   var reachingTraits: Map<Int, Bool> = [:]
   /** The traits a generic parameter is bounded by, by `ParameterId.value`: what a member lookup on it may see. */
   var parameterBounds: Map<Int, List<TypeId>> = [:]
+  /**
+   * Whether a value of a type holds an object anywhere inside it, by interned type id: the question a task boundary
+   * asks. `sharedRunning` is the guard for a type that contains itself, and `sharedCycles` counts the times one was
+   * hit, so that an answer which was reached through a cycle is given and not kept.
+   */
+  var sharedContents: Map<Int, Bool> = [:]
+  var sharedRunning: Map<Int, Bool> = [:]
+  var sharedCycles: Int = 0
   /** Every derived implementation that was generated, which the lowering has to emit the members of. */
   var derived: List<DerivedImplementation> = []
   /** `"{target}:{trait}"` to the index in `derived`, so one is generated once. */
@@ -1204,6 +1245,15 @@ public type Checker {
   /** Which bindings of the scope around a closure its body reads, and which of them are `var`. */
   var fn recordCaptures(at: Span, found: List<Capture>) {
     tables[module.value].captures.set(at, found)
+  }
+
+  /** Which top-level `var` declarations the body of a closure reads: what a task boundary may not take with it. */
+  var fn recordDeclarationCaptures(at: Span, found: List<SymbolId>) {
+    tables[module.value].declarationCaptures.set(at, found)
+  }
+
+  fn declarationCapturesAt(module: ModuleId, at: Span): List<SymbolId>? {
+    tables[module.value].declarationCaptures.get(at)
   }
 
   fn capturesAt(module: ModuleId, at: Span): List<Capture>? {

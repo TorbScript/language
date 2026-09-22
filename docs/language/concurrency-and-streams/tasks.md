@@ -53,17 +53,33 @@ Task.all(tasks: Iterable<Task<Value>>): Task<List<Value>>
 2. **A task starts running as soon as it is created**, whether that is `spawn { ... }` or a call to a function that
    returns a `Task`. `await()` does not start anything; it only waits for a result that is already on its way.
 
-3. **`await()` belongs only in a function that returns a `Task`, in a closure passed directly to `spawn`, and at the
-   top level of an entry file or a script**, because a function that waits should say so in its own return type - the
-   same reasoning `?` follows for `Result`. The checker rejects it everywhere else: `` `await()` is only allowed in a
-   function that returns a `Task` ``. A closure of another shape that a library spawns on your behalf is not tracked
-   back to that task, so `await()` inside such a closure is still accepted; see below.
+3. **`await()` belongs only in a function that returns a `Task`, in a closure passed directly to `spawn`, in a closure
+   whose declared result is a `Task`, and at the top level of an entry file or a script**, because a function that
+   waits should say so in its own return type - the same reasoning `?` follows for `Result`. The checker rejects it
+   everywhere else: `` `await()` is only allowed in a function that returns a `Task` `` for a function, and
+   `` `await()` is only allowed in a closure that becomes a task `` for a closure.
+
+   An ordinary closure is not a task, and `tasks.map { _.await() }` is the mistake the rule is for: the closure runs
+   where the pipeline is pulled, so the wait would block the worker underneath it. `Task.all(tasks).await()` waits for
+   many at once, and `task.map { ... }` goes on when one finishes.
+
+   ```trb error
+   fn sumAll(tasks: List<Task<Int>>): Int {
+     tasks.map({ _.await() }).sum()
+   }
+   // error: `await()` is only allowed in a closure that becomes a task
+   ```
+
+   A library that runs a closure as a task says so in the parameter's type. `Source.produce` takes a
+   `(var sink: Sink<Item, Failure>) => Task<Result<Void, Failure>>`, and the `Task` in that type is what lets its body
+   wait - exactly as the result type of a `fn` does.
 
 4. **`spawn` gets a copy of everything its closure captures, and cannot capture a `var` binding.** Values are passed
    freely between tasks because a task never shares storage with the scope it was spawned from; only `Task` and
    `Channel` connect two tasks. A captured `var` binding is the one value the language shares - a box that the closure
    and the scope around it both reach - so a task that took one with it would be the data race this design does not
-   have. The checker rejects the capture itself, so one `spawn` is already too many and two are two messages:
+   have. A top-level `var` is the same race for the same reason: it is one place the whole file shares. The checker
+   rejects the capture itself, so one `spawn` is already too many and two are two messages:
 
    ```trb error
    fn counted(): Int {
@@ -90,7 +106,34 @@ Task.all(tasks: Iterable<Task<Value>>): Task<List<Value>>
    print counted().await()
    ```
 
-5. **`all` waits for two tasks of different types at once; `Task.all` waits for a list of tasks of the same type.**
+5. **A `spawn` closure takes no object with it, and a `Channel` carries none either.** A `shared type` is confined to
+   the task that made it: a task gets copies, and an object is not copied, so both tasks would reach the same one.
+   `Task` and `Channel` are the two exceptions, because they are what a value crosses *through*. The rule reaches a
+   value that holds an object anywhere inside it, and a channel is checked where its item type is written.
+
+   ```trb error
+   shared type Counter {
+     var count: Int = 0
+
+     static fn open(): Self {
+       Self()
+     }
+
+     fn value(): Int {
+       count
+     }
+   }
+
+   fn counted(): Task<Int> {
+     const counter = Counter.open()
+     spawn({ counter.value() }).await()
+   }
+   // error: `spawn` cannot take `counter` with it: a `Counter` has an identity
+   ```
+
+   Make the object inside the closure, or send what it holds through a `Channel`.
+
+6. **`all` waits for two tasks of different types at once; `Task.all` waits for a list of tasks of the same type.**
    Both answer their values in the order of the tasks, which is the order they were given in, not the order they
    finish in.
 
@@ -103,7 +146,7 @@ Task.all(tasks: Iterable<Task<Value>>): Task<List<Value>>
    print "{first} {second}"
    ```
 
-6. **A `var fn` method may answer a `Task` only when its type is a `shared type`.** A value's `var fn` receiver is a copy
+7. **A `var fn` method may answer a `Task` only when its type is a `shared type`.** A value's `var fn` receiver is a copy
    in and a copy back that ends with the call; a `Task` finishes later, so only an object - which has no copy to lose
    - can be changed this way. See [Shared types](../types/shared-types.md), rule 6.
 
@@ -127,11 +170,10 @@ fn sum(a: Int, b: Int): Int {
 // error: `await()` is only allowed in a function that returns a `Task`
 ```
 
-**A closure of another shape that a library spawns on your behalf is not tracked back to that task, so `await()`
-inside it is still accepted (TYPECHECKER gap 58).** `Source.produce`'s `body` parameter has type `(var sink:
-Sink<Item, Failure>) => Result<Void, Failure>` - not a function that returns a `Task`, and not the literal closure
-`spawn` is called with either, because `produce` wraps it in one of its own first. No signature can say "this closure
-runs inside a task later" yet, so the checker has nothing to check.
+**A library that runs a closure as a task says so in the parameter's type.** `Source.produce`'s `body` parameter is a
+`(var sink: Sink<Item, Failure>) => Task<Result<Void, Failure>>`, and the `Task` in it is what makes the `await()`
+inside legal - the same marker a `fn` carries in its result type. Its body still produces the `Result` directly, the
+way the body of such a `fn` does.
 
 ```trb check
 use Source, Sink from "std/stream"

@@ -18,6 +18,7 @@ use ParameterId, ParameterDeclaration from "./type"
 use Checker, TypeScope, TypePosition from "./context"
 use genericsOf, aliasTargetOf, selfTypeOf from "./signature"
 use substitute from "./unify"
+use channelItemProblem from "./declaration"
 
 /**
  * The type a `TypeReference` of the syntax tree stands for. Every reference is recorded by its span, which is what
@@ -26,10 +27,17 @@ use substitute from "./unify"
 public fn typeFromReference(var checker: Checker, reference: TypeReference, scope: TypeScope): TypeId {
   var built = buildType checker, reference, scope
   built = checkValueOrType checker, built, reference, scope
+  requireChannelItem checker, built, reference, scope
   if scope.records {
     checker.recordType scope.module, reference.span, built
   }
   built
+}
+
+fn requireChannelItem(var checker: Checker, built: TypeId, reference: TypeReference, scope: TypeScope) {
+  if const Some(problem) = channelItemProblem(checker, built, reference.span) {
+    checker.report scope.module, problem
+  }
 }
 
 /**
