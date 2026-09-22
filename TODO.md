@@ -3547,3 +3547,11 @@ Wenn nicht, was bedeutet, bewirkt es?
   - **Korrektur (Nutzer, 2026-09-22):** `std/node` / `Node` ist zu generisch (Baum-Primitive sollen später frei
     bleiben, Verwechslung mit Node.js); der Engine-Knoten gehört zur Engine. **Entschieden:** Package `std/scene`,
     Trait `SceneNode` (Godots Wort; zugleich der Name des Szenen-Dateiformats, das diesen Baum beschreibt).
+- (`TrieList.of` liefert eine `ArrayList`, 2026-09-22) Frage des Nutzers: erzeugt `TrieList.of(1, 2, 3, 4)` eine
+  `ArrayList`? **Antwort: ja** - `List.of` ist ein `static fn`-Default im Trait mit Rückgabetyp `List<Item>` und dem
+  Body `items` (ein Literal, also `ArrayList`); der Default wird vererbt. Heute harmlos (TrieList ist Alias), mit dem
+  echten Trie falsch. Zur Einordnung: `static fn` ohne Body ist Anforderung, mit Body vererbter Default - wie `fn`.
+  - **Wird gelöst - nächste std-Runde:** Konstruktor-Defaults in Traits gehen über `Self`:
+    `static fn of(...items: Item): Self { Self.from(items) }`, `From<Iterable<Item>>` als Anforderung von `List`;
+    dasselbe für `filled` und die Gegenstücke bei `Map`/`Set`. `List.of` am Trait selbst wird damit unaufrufbar
+    (wer keine Liste nennt, schreibt das Literal). Alle statischen Defaults in Traits prüfen, ob sie `Self` liefern.
