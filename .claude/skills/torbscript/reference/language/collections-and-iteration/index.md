@@ -28,6 +28,6 @@ over time, `Source` and `Sink`, which are in
 - **[Slices](slices.md)** - list[from..to] answers a List that shares storage and starts at index 0 again; as a var path the same expression is a window into the original instead.
 - **[Iterating](iterating.md)** - for pulls from Iterator.next() through Iterable.iterator(), and the subject of a for is evaluated once into a temporary, so changing it inside the loop does not affect what is walked.
 - **[Pipelines](pipelines.md)** - A pipeline is a source, zero or more lazy stages and exactly one terminal operation, and nothing runs until the terminal operation pulls a value through.
-- **[Collectors](collectors.md)** - A Collector describes what to do with the values of a pipeline; start() makes a fresh, push-based Accumulator for one run, and every Collection is one without extra work.
+- **[Collectors](collectors.md)** - An Accumulator describes what to do with the values of a pipeline and is the state of one run at the same time, because a value is a copy; collect fills a copy of the one it is given.
 
 <!-- torb:index:end -->

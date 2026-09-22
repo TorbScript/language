@@ -3871,6 +3871,59 @@ Wenn nicht, was bedeutet, bewirkt es?
     anderen ist. Nebenwirkung, gemessen: die Fußabdruck-Stolperdrähte in `lower.test.trb`/`ownership.test.trb` gehen
     von 118 auf 115 gelowerte Deklarationen und von 166 auf 160 Funktionen - weniger Defaults in der geschlossenen
     Welt, Witness-Tabellen unverändert bei 39.
+  - **Erledigt (C4, C5, C2b):** Alle Gates grün (Tier A und Tier B, Konformanz-Suite und Fixpunkt gelaufen).
+    **C4, Lücke 1 geschlossen:** ein `static fn`-Default eines Traits monomorphisiert jetzt über den
+    Implementierungstyp. Ursache war eine Zeile in `constructedReceiver` (`compiler/src/ir/lower/generic.trb`): vor
+    dem Punkt von `ArrayStack.of(...)` steht ein **Typ**, der Checker notiert dort den Typ seines *Konstruktors*, und
+    das Lowering nahm dessen Ergebnis nur dann als Empfänger, wenn sein Kopf der Kopf des Owners war. Ein statischer
+    Default gehört aber `Self`, und `Self` hat gar keinen Kopf - also fiel der Empfänger weg und mit ihm jedes
+    Trait-Argument, weshalb der Rumpf mit `Item` als Parameter instanziiert wurde. Neu daneben:
+    `implementingReceiver` - wenn der Owner das `Self` eines Traits ist, das Mitglied kein `self` nimmt und der
+    konstruierte Typ das deklarierende Trait wirklich implementiert, IST der Typ vor dem Punkt das, wofür `Self`
+    steht. Die zwei Bedingungen halten einen Funktions*wert* draußen (ein `show()` auf einer Closure nimmt `self`).
+    **Lücke 2 war schon zu** - gemessen am Compiler VOR dem Fix: der `.Object`-Zweig beantwortet ein statisches
+    Mitglied eines trait-getypten Typs längst über die eine Implementierung, die `witnessFor` nennt. Programm:
+    `tests/conformance/static-defaults.trb` (`.of` am Trait, an der Default-Implementierung, an einer zweiten, plus
+    ein Benutzer-Trait mit statischem Default an zwei Implementierern). **Ungeplant, aber nötig:** `TrieList.of`
+    antwortet jetzt einen `TrieList`, brauchte also `TrieList.from` - das war ein geplantes Native. `from` und
+    `iterator` sind jetzt gewöhnliches TorbScript über `withCapacity`/`get` (wie bei `ArrayList`, aus demselben
+    Grund), `TrieListIterator` ist der Cursor daneben; zwei Einträge weniger in `natives.trb`, das Runtime bleibt
+    unverändert. **C5:** `of`/`filled` auf `List`, `Set`, `Map`, `Stack`, `Queue` antworten `Self` über
+    `Self.from(...)`, mit `where Self: From<Iterable<Item>>` AM MEMBER; `List.of` am Trait bleibt aufrufbar (läuft
+    jetzt nativ im Konformanz-Programm). **C2b:** `Accumulator<Item, Output>` steht allein (`add`/`finish`/`isDone`),
+    `Collection` deklariert `add` selbst und implementiert `Accumulator` NICHT mehr - ein Behälter zeigt kein
+    `finish()` und kein `isDone()`. Kein `Fill`, kein `Accept`, auch kein `accumulator()` am `Collection`: was eine
+    Pipeline in eine Sammlung schreibt, ist ein Typ DANEBEN (`ListAccumulator<Item>` als der eine mitgelieferte,
+    `into<Target>()` als der allgemeine über `From<Iterable<Item>>`), also Javas `Collector`/`Collectors.toList()`.
+    **Probe `Collector` in `Accumulator` verschmelzen: ja, gemacht, `start()` gelöscht.** Die Probe lief als
+    natives Binärprogramm und hielt alle drei Bedingungen: eine Beschreibung treibt mehrere Läufe unabhängig
+    (`6`/`30`/`6`), `then(downstream)` gibt jeder Gruppe einen eigenen Lauf, eine endlose Quelle stoppt über
+    `isDone()` (`[0, 1, 2, 3]`, zweimal). Kosten, aufgeschrieben in COLLECTIONS 3.8a: der Typ unterscheidet eine
+    frische Beschreibung nicht mehr von einem halb gefüllten Lauf. **`Sink.finish()` heißt `end()` und nicht
+    `close()`** - `Sink` kommt `with Close`, dessen `var fn close()` das ABRUPTE Ende ist (gibt frei, kann nicht
+    fehlschlagen, ist was `using` ruft), und ein Typ hat einen Member-Namensraum. COLLECTIONS 6a nennt den Ausweg,
+    falls du `Close` von `Sink` nehmen willst.
+    **NICHT gemacht, mit Messung - drei Umbenennungen, EIN Grund (COLLECTIONS Abschnitt 6a):** der Compiler löst
+    eine Handvoll `std`-Namen über den literalen String auf, und der **Seed** kennt immer nur den alten.
+    `wellknown.trb` fragt die Prelude-Exporte nach `"Iterable"`, `expression.trb` löst `a + b` über das Symbol
+    `"Add"` und das Mitglied `"add"` auf, `lower/collection.trb` lowert jedes Listenliteral über das Mitglied
+    `"add"` von `ArrayList` (und jedes Map-Literal über `"set"`). (1) `Iterable` → `Iterate`/`Sequence`: **872
+    Stellen in 146 Dateien** (394 in 83 `.trb`, 478 in 63 `.md`; `FromIterable`, `lowerForIterable`,
+    `itemOfIterableBound`, `reportNotIterable`, `anyIterable` fallen aus demselben Wortgrenzen-Lauf). Angewandt und
+    wieder zurückgenommen: `torb check .` sprang auf **208 Probleme in 195 von 372 Dateien** - jede `for`-Schleife
+    und jedes Collection-Literal löst nicht mehr auf; ein Alias `Iterable` neben dem neuen Namen macht es sofort
+    wieder grün, was der Beweis ist. (2) `Add` → `Plus` (313 Stellen für `Add` allein): in `std/core` angewandt und
+    zurückgenommen - `end - start + 1` in `range.trb` wurde "The checker did not work out the type"; ein Alias hilft
+    hier NICHT, weil auch der Membername verdrahtet ist. (3) `List.add` → `append` (~1900 `.add`-Aufrufstellen): gar
+    nicht erst versucht, der Seed könnte den Compiler nicht einmal BAUEN. **Rezept, zwei Commits:** erst dem Compiler
+    beide Namen beibringen (`symbolNamed("Iterate") ?? symbolNamed("Iterable")` und dasselbe für Operator und
+    Container-Member) und den Seed aus diesem Build erneuern; dann `std`+Compiler+Doku in einem geprüften Skript
+    durchziehen und die Fallbacks löschen. Beides in EINEM Commit geht nicht, egal wie sorgfältig.
+    **Ebenfalls nicht gemacht, weil daran hängend:** die Wörter pro Sorte (`List.append`, `Stack.push`/`pop`,
+    `Queue.enqueue`/`dequeue`, `peek()` auf beiden) und das Löschen des `Collection`-Traits. `push`/`pop` und
+    `peek` allein wären zwar frei, aber `List.append` ist die Ankerzeile der Tabelle - zwei von fünf Zeilen
+    umzusetzen hätte die Familie an einem Tag in einen dritten Zwischenstand gebracht, den kein Dokument beschreibt.
+    Das ist Scheibe **C2c**, nach dem Seed-Refresh, in einem Zug.
 
   - **Erledigt:** `docs/URI.md` steht (15 Abschnitte), registriert in `docs/internals/index.md`; `docs/PATH.md`
     ("Not a URL") und `docs/RESOURCES.md` (stabiler Name) zeigen darauf. Probe-Paket `examples/uri-probe` - Parser,

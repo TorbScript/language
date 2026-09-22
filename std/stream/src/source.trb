@@ -5,7 +5,7 @@
  */
 
 use Shared from "std/core"
-use Stage, Collector, Accumulator, Queueing, collector, counting, listing from "std/iteration"
+use Stage, Accumulator, Queueing, collector, counting, listing from "std/iteration"
 use mapping, filtering, filterMapping, mappingWhile, taking, takingWhile, skipping, indexing, chunking from "std/iteration"
 use ChannelClosed from "std/task"
 use Sink from "./sink"
@@ -121,11 +121,11 @@ public shared trait Source<Item, Failure> with Close {
   // --- Terminal operations: reading the items -------------------------------------------------------------------
 
   /**
-   * The same `Collector`s the pull side uses, so every terminal operation is written once. The values are pushed into
-   * the accumulator as they arrive, and `isDone()` ends the pull as soon as the collector has seen enough.
+   * The same `Accumulator`s the pull side uses, so every terminal operation is written once. The values are pushed
+   * into a copy of it as they arrive, and `isDone()` ends the pull as soon as it has seen enough.
    */
-  var fn collect<Output>(collector: Collector<Item, Output>): Task<Result<Output, Failure>> {
-    var accumulator = collector.start()
+  var fn collect<Output>(into: Accumulator<Item, Output>): Task<Result<Output, Failure>> {
+    var accumulator = into
     if accumulator.isDone() {
       return Ok accumulator.finish()
     }
@@ -179,7 +179,7 @@ public shared trait Source<Item, Failure> with Close {
     while const Some(item) = next().await()? {
       sink.add(item).await()?
     }
-    sink.finish().await()
+    sink.end().await()
   }
 
   // --- Making one -----------------------------------------------------------------------------------------------
@@ -393,9 +393,9 @@ public shared type Staged<Input, Item, Failure> with Source<Item, Failure> {
     upstream.through stage.then(other)
   }
 
-  /** Fused: no queue, and `isDone()` from the collector reaches the source through the stage. */
-  var fn collect<Output>(collector: Collector<Item, Output>): Task<Result<Output, Failure>> {
-    var accumulator = stage.onto collector.start()
+  /** Fused: no queue, and `isDone()` from the accumulator reaches the source through the stage. */
+  var fn collect<Output>(into: Accumulator<Item, Output>): Task<Result<Output, Failure>> {
+    var accumulator = stage.onto into
     if accumulator.isDone() {
       return Ok accumulator.finish()
     }

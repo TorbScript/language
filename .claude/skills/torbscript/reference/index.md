@@ -77,7 +77,7 @@ Every page of the reference, with what it answers. Open the one page that answer
 
 - `how-to/add-a-dependency.md` - **Add a dependency** (how-to): Declare the package in project.trb before importing from it, tell a runtime dependency from a development one, and read what the imports of everything you depend on say it can reach.
 - `how-to/build-a-native-binary.md` - **Build a native binary** (how-to): Point torb build at the entry file, look at the generated C with --emit-c first if a C compiler is not on the machine yet, and read what the back end does not lower yet before you debug the program instead.
-- `how-to/collect-a-pipeline.md` - **Collect a pipeline into what you need** (how-to): Reach for the named terminal operation when there is one - toList, sum, joined, groupBy - and fall back to collect with a Collector for anything else, including your own accumulator.
+- `how-to/collect-a-pipeline.md` - **Collect a pipeline into what you need** (how-to): Reach for the named terminal operation when there is one - toList, sum, joined, groupBy - and fall back to collect with an Accumulator for anything else, including your own accumulator.
 - `how-to/convert-between-types.md` - **Convert between types** (how-to): Implement From when the conversion cannot fail and TryFrom when it can - text is a source like any other - and call to<Target>() to collect a pipeline into any type built from one.
 - `how-to/define-an-error-type.md` - **Define an error type** (how-to): Declare a type with one case per distinct failure, add Show and Error where a layer above needs to hand it further up, and let the generated From do the conversion at every ?.
 - `how-to/index.md` - **Task recipes** (index): One page per task for somebody who already knows the language: the steps, the pitfalls, and one complete program that works.
@@ -98,7 +98,7 @@ Every page of the reference, with what it answers. Open the one page that answer
 ## language/collections-and-iteration
 
 - `language/collections-and-iteration/collection-traits.md` - **The collection traits** (reference): Every kind of collection is a trait - List, Set, Map, Stack, Queue - so a signature names what a value can do, and only its construction names the data structure behind it.
-- `language/collections-and-iteration/collectors.md` - **Collectors** (reference): A Collector describes what to do with the values of a pipeline; start() makes a fresh, push-based Accumulator for one run, and every Collection is one without extra work.
+- `language/collections-and-iteration/collectors.md` - **Collectors** (reference): An Accumulator describes what to do with the values of a pipeline and is the state of one run at the same time, because a value is a copy; collect fills a copy of the one it is given.
 - `language/collections-and-iteration/index.md` - **Collections and iteration** (index): List, Map, Set, Stack and Queue as traits over a shared Iterable, plus slices, pipelines and collectors.
 - `language/collections-and-iteration/iterating.md` - **Iterating** (reference): for pulls from Iterator.next() through Iterable.iterator(), and the subject of a for is evaluated once into a temporary, so changing it inside the loop does not affect what is walked.
 - `language/collections-and-iteration/lists.md` - **Lists** (reference): List is the ordered, indexable sequence behind the literal [1, 2, 3], with ArrayList as the default implementation and a verb paired with a participle for every change.

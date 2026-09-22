@@ -17,7 +17,7 @@
 use Compare, Hash from "std/core"
 use From, Show from "std/core"
 use Add from "std/core"
-use Collector, groupingBy from "./collectors"
+use Accumulator, groupingBy from "./collectors"
 use concatenated from "./concatenate"
 use Stage from "./stage"
 use Staged from "./staged"
@@ -170,13 +170,15 @@ public trait Iterable<Item> {
   // --- Terminal operations ------------------------------------------------------------------------
 
   /**
-   * The general terminal operation: pulls the values through a [Collector].
+   * The general terminal operation: pulls the values into an [Accumulator].
    *
-   * `isDone()` is asked before the first value and after every `add`, so a collector that has seen enough (`taking`,
-   * `first`) stops the pull instead of reading a source to its end.
+   * The accumulator is taken by value, so what it fills is a copy and the caller's own value is untouched: collecting
+   * twice with one accumulator is two independent runs. `isDone()` is asked before the first value and after every
+   * `add`, so an accumulator that has seen enough (`taking`, `first`) stops the pull instead of reading a source to
+   * its end.
    */
-  fn collect<Output>(collector: Collector<Item, Output>): Output {
-    var accumulator = collector.start()
+  fn collect<Output>(into: Accumulator<Item, Output>): Output {
+    var accumulator = into
     if accumulator.isDone() {
       return accumulator.finish()
     }

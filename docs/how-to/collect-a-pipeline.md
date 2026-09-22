@@ -1,13 +1,13 @@
 ---
 title: Collect a pipeline into what you need
-summary: Reach for the named terminal operation when there is one - toList, sum, joined, groupBy - and fall back to collect with a Collector for anything else, including your own accumulator.
+summary: Reach for the named terminal operation when there is one - toList, sum, joined, groupBy - and fall back to collect with an Accumulator for anything else, including your own accumulator.
 kind: how-to
 status: stable
 order: 110
 keywords:
   - terminal operation
   - collect
-  - Collector
+  - Accumulator
   - toList
   - groupBy
 source:
@@ -16,22 +16,22 @@ source:
 ---
 
 Nothing in a pipeline runs until its terminal operation pulls the values through. Most of the time the result you
-need already has a name on `Iterable` itself; `collect` with a `Collector` is what is left for everything that does
+need already has a name on `Iterable` itself; `collect` with an `Accumulator` is what is left for everything that does
 not.
 
 ## Steps
 
 1. **Reach for the named terminal operation first.** `toList()`, `toSet()`, `to<Target>()` for any other
    `From<Iterable<Item>>`, `sum()`, `count()`, `joined(separator:)`, `fold(initial, combine)`, `first()`,
-   `find { ... }`, `any { ... }`, `all { ... }` and `groupBy { ... }` cover most pipelines without ever naming a
-   `Collector`.
+   `find { ... }`, `any { ... }`, `all { ... }` and `groupBy { ... }` cover most pipelines without ever naming an
+   `Accumulator`.
 
    ```trb fragment
    const total = orders.map { order => order.amount }.sum()
    const byCity = customers.groupBy { customer => customer.city }
    ```
 
-2. **Reach for `collect` with a standard-library `Collector` for a shape none of those name.** `counting()`,
+2. **Reach for `collect` with a standard-library `Accumulator` for a shape none of those name.** `counting()`,
    `summing { ... }`, `averaging { ... }`, `minBy { ... }`/`maxBy { ... }`, `partitioningBy { ... }`, and
    `groupingBy { ... }.then(downstream)` for one collector per group.
 
@@ -39,8 +39,8 @@ not.
    const stats = orders.collect(groupingBy { order: Order => order.city }.then(summing { order: Order => order.amount }))
    ```
 
-3. **Run the same collector more than once when several results come from one pipeline of values.** A `Collector` is
-   a reusable description; each call to `collect` starts a fresh `Accumulator` of its own.
+3. **Run the same accumulator more than once when several results come from one pipeline of values.** An
+   `Accumulator` is a value; each call to `collect` fills a copy of its own.
 
    ```trb fragment
    const amounts = summing { order: Order => order.amount }
@@ -48,7 +48,7 @@ not.
    const lastMonth = orders.filter { order => order.isLastMonth() }.collect(amounts)
    ```
 
-4. **Write `collector(initial, finish:, step:)` when the state a run needs is one value.** It answers a `Collector`
+4. **Write `collector(initial, finish:, step:)` when the state a run needs is one value.** It answers an `Accumulator`
    whose accumulator folds `step` over every value and applies `finish` once, which covers most custom aggregates
    without a type of their own.
 
@@ -60,15 +60,14 @@ not.
 - **`isDone()` is what lets a terminal operation stop early.** `first()`, `find { ... }` and `collect` behind
   `take(n)` never read a source to the end; a custom `Accumulator` that never overrides `isDone()` is asked to read
   everything, which is correct for a sum or a count and wrong for anything that could stop sooner.
-- **A `Collector` value is not itself a result.** `orders.collect(summing { order: Order => order.amount })` runs the
-  collector; the collector value on its own is a description that can be handed to `collect` again for a different
-  source.
-- **`fold` and a hand-written `Collector` do the same pull.** Reach for `fold` when the state is a simple running
-  value and there is only one call site; reach for a named `Collector` the moment two pipelines need the same
+- **An `Accumulator` value is not itself a result.** `orders.collect(summing { order: Order => order.amount })` runs
+  it; the value on its own is a description that can be handed to `collect` again for a different source.
+- **`fold` and a hand-written `Accumulator` do the same pull.** Reach for `fold` when the state is a simple running
+  value and there is only one call site; reach for a named `Accumulator` the moment two pipelines need the same
   aggregate, so the logic is written once.
-- **Every `Collection` is already an `Accumulator`.** `pipeline.collect(existingList)` needs no `into<...>()` wrapper
-  when the target is a `List`, `Set`, `Map`, `Stack` or `Queue` you already have, because `add` is the same verb and
-  `finish` answers `self`.
+- **A `Collection` is not an `Accumulator`.** `pipeline.collect(existingList)` is not a thing: name the accumulator
+  that gathers into one - `listing()` or `ListAccumulator<Item>()` for a list, `into<Set<Int>>()` for anything with
+  `From<Iterable<Item>>` - and add the result to what you already have.
 
 ## Full example
 
@@ -97,6 +96,6 @@ print highValue
 ## Related
 
 - [Pipelines](../language/collections-and-iteration/pipelines.md) - source, lazy stages and terminal operation, in full.
-- [Collectors](../language/collections-and-iteration/collectors.md) - `Collector`, `Accumulator`, and every standard
+- [Collectors](../language/collections-and-iteration/collectors.md) - `Accumulator` and every standard
   collector in one place.
 - [Sort by more than one key](sort-by-more-than-one-key.md) - a `sorted` stage in front of the same kind of pipeline.

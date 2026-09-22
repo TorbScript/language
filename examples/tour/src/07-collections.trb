@@ -194,14 +194,14 @@ const teams = employees.collect(groupingBy { employee: Employee => employee.depa
 
 print salaryByDepartment                 // ["Engineering": 250, "Operations": 90, "Research": 140]
 
-// Collectors are values: name them, pass them around, combine them
+// An accumulator is a value: name it, pass it around, collect with it twice - each run fills its own copy
 const salaryStatistics = groupingBy { employee: Employee => employee.department }.then(averaging { Float.from _.salary })
 print employees.collect(salaryStatistics)
 print(employees.filter { _.age < 50 }.collect(salaryStatistics))
 
-// Your own collector: a fold with a final step...
-/** A collector of your own: folds values into a list, then finishes by sorting it and taking the middle one. */
-fn median<Item>(value: (value: Item) => Int): Collector<Item, Int?> {
+// Your own accumulator: a fold with a final step...
+/** An accumulator of your own: folds values into a list, then finishes by sorting it and taking the middle one. */
+fn median<Item>(value: (value: Item) => Int): Accumulator<Item, Int?> {
   collector([], finish: { values: List<Int> => values.sorted { _ }.skip(values.length() / 2).first() }) {
     values, item => values.added value(item)
   }
@@ -219,7 +219,7 @@ const firstBigSquare = (1..)             // An infinite source
   .find { _ > 1000 }                     // Some(1764) - computed 42 squares, stored none
 
 // A stream is the same idea over values that have to be waited for (docs/STREAMS.md): the stages are the same
-// `Stage` values, `Collector` is shared, and only `await()` and `?` are added
+// `Stage` values, `Accumulator` is shared, and only `await()` and `?` are added
 var log = File.open("server.log")?
 const errors = log
   .lines()                               // A `Source<String, IoError>`: the file is never in memory as a whole

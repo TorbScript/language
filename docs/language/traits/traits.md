@@ -72,7 +72,7 @@ fn sum<Item: Add>(values: List<Item>)       a bound
 1. **A trait with one required method is named after that method.** `Hash` has `hash`, `Equals` has `equals`, `Compare`
    has `compare`, `Show` has `show`, `Add` has `add`, `Close` has `close`. There are no `-able` adjectives: `type Money
    with Equals, Hash, Compare` reads as what it is. A trait that is mainly used *as a type* is a noun instead: `Iterable`,
-   `Iterator`, `Collection`, `Collector`.
+   `Iterator`, `Collection`, `Accumulator`.
 
 2. **`with` is the only keyword for "implements" and for supertraits.** `trait Compare with Equals` says that every type
    with `Compare` also has `Equals`.

@@ -9,7 +9,7 @@ keywords:
   - Iterable
   - Iterator
   - Stage
-  - Collector
+  - Accumulator
   - pipeline
 source:
   - std/iteration/src/lib.trb
@@ -29,7 +29,7 @@ already in scope through the prelude.
 
 ```trb fragment
 use Iterator, Iterable, Length from "std/iteration"
-use Collector, Accumulator, collector, into, listing from "std/iteration"
+use Accumulator, ListAccumulator, collector, into, listing from "std/iteration"
 use counting, summing, groupingBy, joining from "std/iteration"
 use Stage, mapping, filtering, taking from "std/iteration"
 use concatenated from "std/iteration"
@@ -78,7 +78,7 @@ public trait Iterable<Item> {
   fn indexed(): Iterable<(index: Int, item: Item)>
   fn sorted<Key: Compare>(by: (value: Item) => Key): Iterable<Item>
   fn through<Output>(stage: Stage<Item, Output>): Iterable<Output>
-  fn collect<Output>(collector: Collector<Item, Output>): Output
+  fn collect<Output>(into: Accumulator<Item, Output>): Output
   fn to<Target: From<Iterable<Item>>>(): Target
   fn toList(): List<Item>
   fn toSet(): Set<Item> where Item: Hash
@@ -120,7 +120,7 @@ have to fix the trait's own type arguments. The per-stage iterators behind `Iter
 (`Mapped`, `Filtered`, ...) are still separate code from these `Stage` values until the native back end compiles a
 generic member reached through a trait-typed value (`onto<Final>`); until then the two mean the same thing.
 
-### Collector, Accumulator
+### Accumulator
 
 ```trb fragment
 public trait Accumulator<Item, Output> {
@@ -129,38 +129,43 @@ public trait Accumulator<Item, Output> {
   fn isDone(): Bool
 }
 
-public trait Collector<Item, Output> {
-  fn start(): Accumulator<Item, Output>
+public type ListAccumulator<Item> with Accumulator<Item, List<Item>> {
+  var fn add(value: Item)
+  fn finish(): List<Item>
 }
 ```
 
-A `Collector` is a reusable description of what to do with a pipeline's values; `start()` creates a fresh `Accumulator`
-for one run, held in a `var`. `isDone()` defaults to `false` and is asked before the first value and after every `add`,
-which is what lets `taking`, `first` and `find` end a pipeline over an infinite or expensive source instead of reading
-it to the end. Because values are pushed one at a time, the same collectors work for anything that produces values over
-time - an `Iterable`, a `Source`, an event stream.
+An `Accumulator` is what to do with a pipeline's values **and** the state of doing it, in one type: it is a value, so
+`collect` fills a copy of it and one accumulator drives as many independent runs as it is handed to. There is no
+`start()`. `isDone()` defaults to `false` and is asked before the first value and after every `add`, which is what lets
+`taking`, `first` and `find` end a pipeline over an infinite or expensive source instead of reading it to the end.
+Because values are pushed one at a time, the same accumulators work for anything that produces values over time - an
+`Iterable`, a `Source`, an event stream.
 
-`into<Target>()` collects into any `From<Iterable<Item>>`; `listing()` is `into<List<Item>>()`. `collector(initial,
-finish:, step:)` writes one the functional way, as a fold with a final step:
+A `Collection` is not one; an accumulator that gathers into a collection is a type beside it, as `Collector` and
+`Collectors.toList()` are in Java. `ListAccumulator<Item>` is the one this package ships and `listing()` answers it;
+`into<Target>()` is the general one for any `From<Iterable<Item>>` target - it gathers into a `List` and calls
+`Target.from` once at the end. A package that owns a collection may ship its own, and a caller **names** it at the
+call. `collector(initial, finish:, step:)` writes one the functional way, as a fold with a final step:
 
 ```trb fragment
-public fn counting<Item>(): Collector<Item, Int>
-public fn summing<Item, Total: Add & From<Int>>(value: (value: Item) => Total): Collector<Item, Total>
-public fn averaging<Item>(value: (value: Item) => Float): Collector<Item, Float?>
-public fn minBy<Item, Key: Compare>(key: (value: Item) => Key): Collector<Item, Item?>
-public fn maxBy<Item, Key: Compare>(key: (value: Item) => Key): Collector<Item, Item?>
-public fn joining(separator: String = "", prefix: String = "", suffix: String = ""): Collector<String, String>
-public fn partitioningBy<Item>(predicate: (value: Item) => Bool): Collector<Item, (List<Item>, List<Item>)>
+public fn counting<Item>(): Accumulator<Item, Int>
+public fn summing<Item, Total: Add & From<Int>>(value: (value: Item) => Total): Accumulator<Item, Total>
+public fn averaging<Item>(value: (value: Item) => Float): Accumulator<Item, Float?>
+public fn minBy<Item, Key: Compare>(key: (value: Item) => Key): Accumulator<Item, Item?>
+public fn maxBy<Item, Key: Compare>(key: (value: Item) => Key): Accumulator<Item, Item?>
+public fn joining(separator: String = "", prefix: String = "", suffix: String = ""): Accumulator<String, String>
+public fn partitioningBy<Item>(predicate: (value: Item) => Bool): Accumulator<Item, (List<Item>, List<Item>)>
 public fn groupingBy<Item, Key: Hash>(key: (value: Item) => Key): Grouping<Item, Key>
 ```
 
-`groupingBy` answers a `Grouping`, which has its own `then(downstream)` for a collector per group:
+`groupingBy` answers a `Grouping`, which has its own `then(downstream)` for a different one per group:
 `employees.collect(groupingBy { _.department }.then(averaging { _.salary }))`.
 
 ### Staged and Queueing
 
 `Iterable.through(stage)` answers a `Staged`, which is an `Iterable` again. `collect` on it is fused - the stage wraps
-the collector's accumulator directly, with no queue in between - while `iterator()` needs a small queue, because one
+the accumulator directly, with no queue in between - while `iterator()` needs a small queue, because one
 value pushed in can become none or many coming out while the caller asks for exactly one. `Queueing` is the
 `Accumulator` that tail of a staged pipeline pushes into.
 
@@ -185,6 +190,6 @@ print concatenated(["a", "b", "c"], ", ")
 
 ## Related
 
-- [std/collections](collections.md) - the collections that already are an `Iterable` and an `Accumulator`.
+- [std/collections](collections.md) - the collections a pipeline is gathered into.
 - [std/stream](stream.md) - `Stage` on the asynchronous side, `Source.through` and `Sink`.
 - [The standard library](index.md) - the other packages.

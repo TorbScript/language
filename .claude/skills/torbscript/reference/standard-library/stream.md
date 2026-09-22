@@ -54,7 +54,7 @@ public shared trait Source<Item, Failure> with Close {
   var fn filter(predicate: (value: Item) => Bool): Source<Item, Failure>
   var fn then<Output>(step: (value: Item) => Task<Result<Output, Failure>>): Source<Output, Failure>
   var fn mapFailure<Other>(transform: (failure: Failure) => Other): Source<Item, Other>
-  var fn collect<Output>(collector: Collector<Item, Output>): Task<Result<Output, Failure>>
+  var fn collect<Output>(into: Accumulator<Item, Output>): Task<Result<Output, Failure>>
   var fn toList(): Task<Result<List<Item>, Failure>>
   var fn into(var sink: Sink<Item, Failure>): Task<Result<Void, Failure>>
 

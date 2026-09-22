@@ -9,10 +9,10 @@ use Source from "./source"
  *     var file = File.create(path)?
  *     using file { target =>
  *       target.addLine("first").await()?
- *       target.finish().await()
+ *       target.end().await()
  *     }
  *
- * A sink has an identity and is finished once, so it is a `shared type`, and `add` and `finish` change it: they take
+ * A sink has an identity and is ended once, so it is a `shared type`, and `add` and `end` change it: they take
  * `var self`, exactly as `Accumulator.add` does. **A sink that is written to sits in a `var` binding**, and a `const`
  * handle is the read-only view every shared object has. A `var fn` method may answer a `Task` because for an object
  * `var` is a permission and not an exclusive access that ends with the call (CONCEPT, "Identity").
@@ -20,11 +20,12 @@ use Source from "./source"
  * - **Backpressure is the `await` on `add`.** The task finishes when the target has taken the item, not before, so a
  *   writer that is faster than its target waits by itself and nothing piles up.
  * - **Order is the order of the calls.** `add` must not be called again before the task it answered has finished.
- * - **`finish()` is the graceful end:** everything buffered is written, the target learns that no more is coming, and
- *   whatever went wrong on the way is reported here at the latest. After `finish()`, `add` fails.
- * - **A failure ends the stream.** After a failure neither `add` nor `finish` will succeed again.
+ * - **`end()` is the graceful end:** everything buffered is written, the target learns that no more is coming, and
+ *   whatever went wrong on the way is reported here at the latest. After `end()`, `add` fails. The word is not
+ *   `finish`, which belongs to [Accumulator] and answers a *result*: the end of a stream is not a value.
+ * - **A failure ends the stream.** After a failure neither `add` nor `end` will succeed again.
  * - **`close()` is the abrupt end:** it releases the target and cannot fail, which is what `Close` and `using` need.
- *   A sink that is closed without `finish()` may have written less than it was given - that is the point of the two.
+ *   A sink that is closed without `end()` may have written less than it was given - that is the point of the two.
  * - **Buffering is never implicit.** `sink.buffered(capacity:)` says it, and `Buffered.flush()` is where it is forced.
  * - **Whoever writes needs the permission - now or later.** `mapFailure` and `buffered` take `var self` as well,
  *   because the wrapper keeps the sink in a `var` field and writes into it afterwards. A chain is still one
@@ -40,9 +41,9 @@ public shared trait Sink<Item, Failure> with Close {
   var fn add(item: Item): Task<Result<Void, Failure>>
 
   /** No more items. Flushes, reports what is left to report, and makes every further `add` fail. */
-  var fn finish(): Task<Result<Void, Failure>>
+  var fn end(): Task<Result<Void, Failure>>
 
-  /** Everything an `Iterable` holds, in order. Does not finish the sink: a sink may be filled from several places. */
+  /** Everything an `Iterable` holds, in order. Does not end the sink: a sink may be filled from several places. */
   var fn addAll(items: Iterable<Item>): Task<Result<Void, Failure>> {
     for item in items {
       add(item).await()?
@@ -50,7 +51,7 @@ public shared trait Sink<Item, Failure> with Close {
     Ok void
   }
 
-  /** Reads `source` empty into this sink and finishes it: the same pump as `source.into(sink)`, from this side. */
+  /** Reads `source` empty into this sink and ends it: the same pump as `source.into(sink)`, from this side. */
   var fn fill(var source: Source<Item, Failure>): Task<Result<Void, Failure>> {
     source.into(self).await()
   }
@@ -108,7 +109,7 @@ public shared type Pushing<Item, Failure> with Sink<Item, Failure> {
   }
 
   /** Calls `complete`. */
-  var fn finish(): Task<Result<Void, Failure>> {
+  var fn end(): Task<Result<Void, Failure>> {
     complete().await()
   }
 
@@ -125,7 +126,7 @@ shared type Discarding<Item, Failure> with Sink<Item, Failure> {
     Ok void
   }
 
-  var fn finish(): Task<Result<Void, Failure>> {
+  var fn end(): Task<Result<Void, Failure>> {
     Ok void
   }
 
@@ -145,8 +146,8 @@ shared type Remapped<Item, Failure, Other> with Sink<Item, Other> {
     Ok(downstream.add(item).await().mapError(transform)?)
   }
 
-  var fn finish(): Task<Result<Void, Other>> {
-    Ok(downstream.finish().await().mapError(transform)?)
+  var fn end(): Task<Result<Void, Other>> {
+    Ok(downstream.end().await().mapError(transform)?)
   }
 
   var fn close() {
@@ -163,10 +164,10 @@ shared type Remapped<Item, Failure, Other> with Sink<Item, Other> {
  *     var out = standardOutput().buffered(capacity: 4096)
  *     out.addLine(report).await()?
  *     out.flush().await()?                   // now it is on the screen
- *     out.finish().await()?                  // ... and this flushes too
+ *     out.end().await()?                     // ... and this flushes too
  *
  * `close()` does **not** flush: it releases, and what was buffered is lost. That is the difference between abandoning
- * a sink and finishing it.
+ * a sink and ending it.
  *
  * # Pitfalls
  *
@@ -206,10 +207,10 @@ public shared type Buffered<Item, Failure> with Sink<Item, Failure> {
     Ok void
   }
 
-  /** Flushes, then finishes `downstream`. */
-  var fn finish(): Task<Result<Void, Failure>> {
+  /** Flushes, then ends `downstream`. */
+  var fn end(): Task<Result<Void, Failure>> {
     flush().await()?
-    downstream.finish().await()
+    downstream.end().await()
   }
 
   /** Releases `downstream` without flushing - whatever is still buffered is lost. */

@@ -6,28 +6,32 @@ and what has to change so that one meaning has one word. Nothing here decides a 
 an ordinary trait and every implementation is an ordinary type.
 
 ```text
-                      Iterable<Item>            Length              Accumulator<Item, Output>
-                      iterator()                length()            add(), finish()
-                            └───────────────────┬──┴────────────────────────┘
+                      Iterable<Item>            Length
+                      iterator()                length()
+                            └───────────────────┬─┘
                                         Collection<Item>
-                                        a finite thing you can fill
+                                        add(), clear(), the participles - a finite thing you can fill
               ┌──────────────┬──────────────┼──────────────┬──────────────┐
            List<Item>     Set<Item>    Map<Key, Value>  Stack<Item>    Queue<Item>
            ordered        unique       keyed            last in        first in
            + Indexed      + Slice
+
+                      Accumulator<Item, Output>   add(), finish(), isDone()
+                      one run of a pipeline - a type BESIDE the collections, never one of them
 ```
 
-**Where the family stands.** Slices C1, C2, C3 and C6 are in: `Stack` and `Queue` spend `add`/`remove` and their
-participles, `Collection` owns `clear`, `compact`, `count`, `contains` and the participles and declares `add` nowhere,
-`List.sorted` answers `Self`, and the checker rejects both holes of section 4. Sections 1 and 2 are the survey the
-design was argued from and are kept as written; section 3 is the design, and section 5 says which slices are still
-open.
+**Where the family stands.** Slices C1, C2, C2b, C3, C4, C5 and C6 are in: `Stack` and `Queue` spend `add`/`remove`
+and their participles, `Collection` owns `add`, `clear`, `compact`, `count`, `contains` and the participles,
+`List.sorted` answers `Self`, the checker rejects both holes of section 4, gaps 1 and 2 of the back end are closed and
+every factory answers `Self`. Sections 1 and 2 are the survey the design was argued from and are kept as written;
+section 3 is the design, and section 5 says which slices are still open.
 
 - **[1. The inventory](#1-the-inventory)** — every trait and type, who uses it, and what it costs
 - **[2. Where the others are](#2-where-the-others-are)** — Rust, Swift, Kotlin, Scala, Clojure, Java
 - **[3. The target design](#3-the-target-design)** — the tree, the words, construction, iteration, indexing, ergonomics
 - **[4. What the language must provide](#4-what-the-language-must-provide)** — numbered gaps, smallest fix each
 - **[5. Slices](#5-slices)** — one agent each, with gates
+- **[6a. What a rename of a name the compiler knows costs](#6a-what-a-rename-of-a-name-the-compiler-knows-costs)** — the seed, measured
 - **[6. Open, for the owner](#6-open-for-the-owner)**
 
 Every declaration below was written into a probe file under `tests/language/` — where the workspace makes
@@ -326,11 +330,11 @@ implementations of one trait.
 ### 3.1 The tree
 
 ```text
-                      Iterable<Item>            Length              Accumulator<Item, Output>
-                      iterator()                length()            add(), finish(), isDone()
-                            └───────────────────┬──┴────────────────────────┘
+                      Iterable<Item>            Length
+                      iterator()                length()
+                            └───────────────────┬─┘
                                    Collection<Item>
-                                   clear() + the participles + contains + count
+                                   add() + clear() + the participles + contains + count
         ┌──────────────┬──────────────┬─────────┴────┬──────────────┐
      List<Item>     Set<Item>    Map<Key, Value>  Stack<Item>    Queue<Item>
      + MutableIndexed<Int, Item>  + MutableIndexed  add/remove()  add/remove()
@@ -348,8 +352,11 @@ Nothing is added to the tree and nothing is taken out of it. What changes is ins
 
 ```trb fragment
 public trait Collection<Item>
-  with Iterable<Item>, Length, Accumulator<Item, Self>
+  with Iterable<Item>, Length
 {
+  /** Adds a value, in place. Where it goes is the structure's business. */
+  var fn add(value: Item)
+
   /** Removes every value, in place. */
   var fn clear()
 
@@ -366,14 +373,14 @@ public trait Collection<Item>
   fn addedAll(values: Iterable<Item>): Self
   fn contains(value: Item): Bool where Item: Equals
   fn containsAll(values: Iterable<Item>): Bool where Item: Equals
-  fn finish(): Self
 }
 ```
 
 Four decisions are in that block.
 
-**`add` is not declared here.** `Accumulator<Item, Self>` requires it and one declaration is enough. The trait keeps
-`finish`, whose body is `self`, because that is the half of `Accumulator` a collection has to answer for itself.
+**`add` is declared here and nowhere else, and `Accumulator` is gone from the `with` list.** A collection is a
+container, not a run: it has no result to give at the end and no `isDone()` to answer, so it shows neither. What
+gathers a pipeline into a collection is a type **beside** it - section 3.8.
 
 **`count()` answers `length()`.** `Iterable.count()` walks every value; on anything that knows its size that is the
 wrong answer to give a reader who wrote the shorter word. A subtrait may write a supertrait's default — `Collection`
@@ -633,12 +640,24 @@ length. What a real byte buffer would add over it is the `Buffer` promise — an
 
 ### 3.8 Accumulation
 
-**One `add`, and `Accumulator` owns it.** `Collection` does not re-declare it (section 3.2). `Accumulator<Item, Output>`
-keeps `add`, `finish` and `isDone`; a `Collection` is an `Accumulator<Item, Self>` whose `finish` is `self`, which is
-what makes a collector, a channel and a stream sink able to fill any of them.
+**One `add`, and `Collection` owns it.** `Accumulator<Item, Output>` stands alone with `add`, `finish` and `isDone`,
+and a `Collection` does **not** implement it. The two are different things: a collection is a container that values
+end up in, an accumulator is one *run* of a pipeline, with a result and a "far enough" question a container has no
+answer for. There is no trait between them either — no `Fill`, no `Accept` — because nothing outside a run needs
+"some thing with `add`": a driver that fills a caller's container takes that container's own type or an
+`Accumulator`, never an abstraction of `add`.
 
-**`Collector` is unchanged**, and `Merge<Item, Output> with Collector<Item, Output>` (CONCURRENCY section 5) goes
-beside it in `std/iteration` when `parallel()` arrives. That forces one rename here: **`Map.merge` and `Map.merged`
+**What gathers into a collection is a type beside it**, which is the `Collector`/`Collectors.toList()` model of Java.
+`ListAccumulator<Item>` is the one `std/iteration` ships and `listing()` answers it; `into<Target>()` is the general
+one for any `From<Iterable<Item>>` target — it gathers into a `List` and calls `Target.from` once at `finish()`. A
+package that owns a collection may ship an accumulator that writes straight into it (`HashSetAccumulator`, saving the
+intermediate list and the second pass over the duplicates); **nothing picks such a one up automatically**, and a
+caller who wants it names it at the call (`collect(HashSetAccumulator<Int>())`). Which run a pipeline makes is written
+down, never inferred from the target type — the alternative would be a second dispatch axis nobody can read at the
+call site.
+
+**`Collector` is gone, merged into `Accumulator`** — section 3.8a has the probe. `Merge<Item, Output> with
+Accumulator<Item, Output>` (CONCURRENCY section 5) goes beside it in `std/iteration` when `parallel()` arrives. That forces one rename here: **`Map.merge` and `Map.merged`
 are deleted.** Their bodies are `addAll other` and `addedAll other`, so the words they occupy are already taken by
 `Collection`, and `Merge.merge` is a different meaning — joining two partial results of one collector. One word, one
 meaning, and the caller writes `ages.addAll(more)` and `ages.addedAll(more)`.
@@ -647,6 +666,34 @@ meaning, and the caller writes `ages.addAll(more)` and `ages.addedAll(more)`.
 operand, and `union` happens to be `addedAll`. Dropping it alone would leave two thirds of a vocabulary everybody
 knows, and a reader who writes `a.union(b)` is saying something about sets rather than about filling. The doc comment
 says which `Collection` member it is, as it does today.
+
+### 3.8a `Collector` merged into `Accumulator`: the probe, and what it costs
+
+`Collector` described a run (`start(): Accumulator`) and `Accumulator` was the state of one. **With value semantics
+those are the same type**: a copy of a value is a fresh run, so `collect` fills a copy of what it was handed and
+`groupingBy(...).then(downstream)` copies the downstream per group instead of `start()`ing it.
+
+The question was decided by a probe and not by taste. A miniature of the whole vocabulary — a driver that copies what
+it is given, a fold-shaped accumulator, a bounded one that answers `isDone()`, a grouping one that copies its
+downstream per group, and an endless source — was written, type checked and **run as a native binary**. All three
+things that had to hold, held:
+
+| What had to hold | What the probe printed |
+|---|---|
+| one description drives several runs, independently | `6`, `30`, `6` for the same accumulator over three sources |
+| `then(downstream)` gives every group its own run | `[4: ["pear", "kiwi", "plum"], 3: ["fig"]]` and `[4: 3, 3: 1]` for two downstreams |
+| an endless source still stops on `isDone()` | `[0, 1, 2, 3]`, twice, from an infinite counter |
+
+Every collector of `std/iteration` was then written that way with no loss: `collector(initial, finish:, step:)`
+answers a `FoldAccumulator` whose `state` starts at `initial`, `into`/`listing` answer a fresh gatherer, `Grouping`
+keeps the downstream and copies it, and `Stage.onto` already took an `Accumulator` and was untouched. `start()` is
+deleted and one trait is gone.
+
+**The one thing it costs, written down:** the type no longer distinguishes a fresh description from a half-filled
+run. An accumulator that has already been `add`ed to and is then handed to `collect` or to `then` starts every run
+from what is in it. That is a footgun and not a breakage — the same one a partly consumed `Iterator` is — and the
+pitfall is in the doc comment of `Accumulator`. `Collector` would have bought a type that says "fresh", at the price
+of a factory member on every collector in the language.
 
 ### 3.9 Ten call sites, side by side
 
@@ -691,21 +738,31 @@ right; the five that move are the ones where a reader had a choice of words and 
 
 ## 4. What the language must provide
 
-**Gap 1. A trait's `static fn` default does not monomorphize through an implementation type.**
-`ArrayStack.of(1, 2, 3)` and `TrieList.of(1, 2)`, both written against `std` as it stands, are refused with
+**Gap 1. Closed.** A trait's `static fn` default now monomorphizes through an implementation type.
+`ArrayStack.of(1, 2, 3)` and `TrieList.of(1, 2)` were refused with
 `` `ArrayList.add`, whose declaration is not monomorphic is not supported by the native back end yet`` and an
 `internal error: The generic parameter `Item` was not substituted before the back end saw it`.
-*Smallest fix:* substitute `Self` and the trait's type parameters into the default's body before the back end sees
-it — the instance already exists, since the same default called on the trait type compiles.
-*Blocks:* the construction rule of section 3.5, and `ArrayStack.of` today.
 
-**Gap 2. A `static fn` reached through a trait-typed `Self` is in no witness table.**
-`Self.from items` inside a default whose `Self` is the trait type is refused with
-`` `from`, which is not in the witness table of a trait-typed value is not supported by the native back end yet``.
-*Smallest fix:* the checker already resolved which `from` is meant — the trait's own
-`extend<Item> List<Item> with From<Iterable<Item>>` — so the lowering has to carry that resolution to a direct call
-instead of asking the table for a static member.
-*Blocks:* `List.of` and `Set.of` under section 3.5.
+The cause was one line of `constructedReceiver` in `compiler/src/ir/lower/generic.trb`. What stands in front of the
+dot of `ArrayStack.of(...)` is a **type**, and the checker records the type of its *constructor* there; the lowering
+took that constructed type as the receiver only where its head was the head of the member's own owner. A trait's
+static default belongs to `Self`, which has no head at all, so the receiver was dropped — and with it every argument
+of the trait, so the body was instantiated with `Item` still a parameter.
+
+The fix is `implementingReceiver` beside it: where the owner is a trait's `Self` parameter, the member takes no
+`self`, and the constructed type really implements the declaring trait (the same question `memberMappingOf` asks to
+fill the trait's own arguments in), the type in front of the dot **is** what `Self` stands for — exactly as it is for
+an instance default. The two conditions are what keep a function *value* out: a closure's `show()` takes `self` and
+is never reached this way.
+
+**Gap 2. Closed, and it was closed before this round.** `Self.from items` inside a default whose `Self` is the trait
+type was expected to be refused with
+`` `from`, which is not in the witness table of a trait-typed value is not supported by the native back end yet``. It
+is not: the `.Object` branch of `dispatchedMember` already answers a **static** member of a trait-typed type with the
+one implementation `witnessFor` names, because there is no payload to erase and object safety keeps such a member out
+of every table anyway. Probed against the compiler as it stood *before* gap 1 was fixed: a trait with
+`static fn of(...): Self where Self: From<Iterable<Item>>` whose body is `Self.from items`, called on the trait,
+built and printed `[1, 2]`.
 
 **Gap 3. Closed.** A trait's own `with` list is a promise about **every** instantiation, because it is what member
 lookup reads — so an implementation of that supertrait *for the trait type* may not be narrower than the promise. The
@@ -788,19 +845,24 @@ answers `length()`. `Set.isSubsetOf`, `Map.merge` and `Map.merged` are gone; the
 copy cannot get back, it answers the pair) and in CONCEPT's verb table, and
 `tests/conformance/collection-words.trb` as the program that runs it.
 
-**C4 — the back end, gaps 1 and 2.** `compiler/src/ir/lower/generic.trb` and `compiler/src/ir/witness.trb`: a trait's
-`static fn` default monomorphized through an implementation type, and a static member of a trait type resolved to a
-direct call. This is the slice the construction rule waits on, and it pays a debt the family already carries —
-`ArrayStack.of(1, 2, 3)` does not compile today.
-*Gate:* the four, plus the fixpoint, plus a conformance program that calls `.of` on a trait, on the default
-implementation and on a second implementation.
-*Estimate:* medium, and it is the one slice that touches `compiler/`.
+**C4 — the back end, gaps 1 and 2. Done.** `implementingReceiver` in `compiler/src/ir/lower/generic.trb` (gap 1
+above); gap 2 turned out to be closed already and is now pinned. `tests/conformance/static-defaults.trb` is the
+program: `ArrayStack.of`, `TrieList.of`, `ArrayQueue.of`, `TrieSet.of`, `TrieMap.of`, `List.filled`,
+`ArrayList.filled`, the same members on the trait, and a user trait whose static default is called on **two**
+implementers and once on the trait itself.
 
-**C5 — construction builds `Self`.** After C4: `of` and `filled` on `List`, `Set`, `Map`, `Stack` and `Queue` become
-`Self` with `where Self: From<Iterable<Item>>`. Files: the five trait files, CONCEPT.md's creation list, the tour.
-*Gate:* the four, plus a conformance program asserting `TrieList.of(1, 2)` is a `TrieList` and
-`List.of(1, 2)` is an `ArrayList`.
-*Estimate:* small once C4 has landed.
+**`TrieList` lost two planned natives on the way.** `TrieList.of` answers a `TrieList`, which needs `TrieList.from`,
+which was `plannedRuntimeOf(..., "8")` — so it could not be built at all. `from` and `iterator` are now ordinary
+TorbScript over `withCapacity` and `get`, exactly as `ArrayList`'s are and for the same reason (`from` walks a
+trait-typed `Iterable` of the *program*, which a C function cannot do); `TrieListIterator` is the cursor beside
+`ListIterator`, the second of the pair section 1.5 point 8 describes. Two entries left
+`compiler/src/backend/c/natives.trb`, and the runtime gained nothing.
+
+**C5 — construction builds `Self`. Done.** `of` and `filled` on `List`, `Set`, `Map`, `Stack` and `Queue` answer
+`Self` through `Self.from(...)`, with `where Self: From<Iterable<Item>>` **on the member** (`Set.of` and `Map.of`
+carry their `Item: Hash`/`Key: Hash` beside it). `List.of` on the trait keeps working and needed no diagnostic, which
+section 3.5 had probed and the conformance program now runs natively: `Self` binds the trait type there and the trait
+has its own `From`.
 
 **C6 — the checker, gaps 3 and 4. Done.** The wording and the rule of each are under gap 3 and gap 4 above. The
 promise check is `checkTraitPromise` in `compiler/src/semantics/checker/implementation.trb`, run per implementation
@@ -820,8 +882,48 @@ than one implementation.
 *Gate:* the four.
 *Estimate:* small, and it must run after C2 so that two agents do not edit `std/iteration` at once.
 
-What is left is C4, then C5, then C7 and C8 whenever there is room. C4 is the one of those that touches the
-compiler, and only C7 adds a type.
+**C2b — the run and the container, told apart. Done.** `Accumulator<Item, Output>` stands alone (`add`, `finish`,
+`isDone`); `Collection` declares `add` itself and implements `Accumulator` nowhere, so a container no longer shows a
+`finish()` or an `isDone()` it has no answer for. `Collector` is merged into `Accumulator` (section 3.8a) and
+`start()` is deleted. `ListAccumulator<Item>` is the shipped gatherer and `into<Target>()` the general one.
+`Sink.finish()` became `Sink.end()` — see section 6a for why it is not `close()`.
+
+**C2c — the words per kind, and the two renames. Blocked on the seed, not started.** Section 6a has the measurement
+and the recipe.
+
+What is left is C2c (after a seed refresh), then C7 and C8 whenever there is room. Only C7 adds a type.
+
+## 6a. What a rename of a name the compiler knows costs
+
+Three renames were asked for in one round and all three are blocked by the **same** mechanism, which is worth writing
+down once because it decides the order of every future round that touches `std`'s vocabulary.
+
+**The compiler resolves a handful of `std` names by literal string.** `compiler/src/semantics/checker/wellknown.trb`
+asks the prelude's exports for `"Iterable"`; `checker/expression.trb` resolves `a + b` to the symbol named `"Add"`
+and the member named `"add"`; `ir/lower/collection.trb` lowers every list literal by asking `ArrayList` for the member
+named `"add"` and every map literal for `"set"`. A name in that set cannot be changed in `std` alone: the **seed** —
+the `torb` a checkout bootstraps from, which by definition predates the change — still looks for the old one.
+
+Measured, not argued:
+
+| Rename | Sites | What happens with the current seed |
+|---|---|---|
+| `Iterable` → `Iterate` (or `Sequence`) | **872** in 146 files (394 in 83 `.trb`, 478 in 63 `.md`; `FromIterable`, `lowerForIterable`, `itemOfIterableBound`, `reportNotIterable`, `anyIterable` fall out of the same word-boundary sweep) | applied and reverted: `torb check .` went to **208 problems in 195 of 372 files** — every `for` loop and every collection literal stops resolving. An `Iterable` alias beside the new name makes it green again, which is the proof that the name is the only thing missing. |
+| `Add` → `Plus` (and `add` → `plus`) | 313 for `Add` alone | applied to `std/core` and reverted: `end - start + 1` in `std/core/src/range.trb` became "The checker did not work out the type of this expression". An alias does **not** help here, because the *member* name is wired too. |
+| `List.add` → `List.append` | ~1900 `.add` call sites | not attempted: `memberOfType(lowering, container, bound, "add", at)` is how a list literal is lowered, so the seed could not *build* the compiler at all. |
+
+**The recipe, two commits.** First: teach the compiler both names (`symbolNamed("Iterate") ?? symbolNamed("Iterable")`
+and the same for the operator and the container member) and refresh the seed from that build. Second: sweep `std`,
+the compiler, the examples, the tests and the docs with a checked script, and drop the fallbacks. Neither commit is
+large; what cannot happen is both in one, and no amount of care inside one round changes that.
+
+**`Sink.finish()` is `end()` and not `close()`.** The decision was "a stream's end is not a result, and `finish` is
+the `Accumulator`'s word", which is right; `close()` is not available for it. `Sink` comes `with Close`, whose
+`var fn close()` is the **abrupt** end — it releases the target, cannot fail, and is what `using` calls — and a type
+has one namespace of members, so the graceful end (`Task<Result<Void, Failure>>`, flushes, reports) cannot share the
+name. `end()` says the same thing as `close` about a *stream* without claiming the word `Close` owns. The other way
+out would be to take `Close` off `Sink` and lose `using(sink)` and `Buffered`'s "release without flushing"; that is a
+question for the owner and not one the language decides.
 
 ## 6. Open, for the owner
 

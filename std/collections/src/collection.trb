@@ -1,8 +1,8 @@
 /**
  * The collection traits. These are the types that signatures, fields and bindings talk about:
  *
- *     Iterable<Item>   Length   Accumulator<Item, Self>
- *     └──────────────────┴───────────┘
+ *     Iterable<Item>   Length
+ *     └──────────────────┘
  *     Collection<Item>                 a finite number of values that can be filled
  *        ├─ List<Item>                 ArrayList (literal `[1, 2]`), TrieList
  *        ├─ Set<Item>                  TrieSet, HashSet
@@ -24,19 +24,18 @@
 
 use Equals from "std/core"
 use Iterable, Length from "std/iteration"
-use Accumulator from "std/iteration"
 
 /**
- * A finite number of values that can be filled, and the home of the participles. Only `clear`, `length` and
- * `iterator` are required beside the `add` of [Accumulator]; `addAll`, `added`, `addedAll`, `contains`,
- * `containsAll`, `count` and `compact` are defaults built on top of them.
+ * A finite number of values that can be filled. Only `add`, `clear`, `length` and `iterator` are required; `addAll`,
+ * `added`, `addedAll`, `contains`, `containsAll`, `count` and `compact` are defaults built on top of them.
  *
- * A collection already is an `Accumulator`: it has `add`, and it is its own result. So every collection can be the
- * target of a collector, a channel or an event stream, with the same `add`/`finish` vocabulary either way.
+ * **A collection is not an [Accumulator] and abstracts nothing about taking values.** It has no `finish()` and no
+ * `isDone()`, and there is no trait for "something with `add`": where a *run* has to be filled and then read back,
+ * that run is an [Accumulator] of its own, an ordinary type beside the collection (`ListAccumulator`,
+ * `into<Target>()`).
  *
  * It is not the bound to reach for. A signature asks for the smallest thing it uses: `Iterable<Item>` to read,
- * `Iterable<Item> & Length` to read and to size, `Accumulator<Item, Self>` to fill, and `Collection<Item>` where it
- * really needs both ends and the participles.
+ * `Iterable<Item> & Length` to read and to size, and `Collection<Item>` where it really needs to fill as well.
  *
  * # Examples
  *
@@ -48,11 +47,14 @@ use Accumulator from "std/iteration"
  *
  * - [List], [Map], [Set], [Stack], [Queue] - the traits built on top of it, one per kind.
  * - [Iterable] - the pipeline vocabulary (`map`, `filter`, `fold`, ...) every `Collection` inherits.
- * - [Accumulator] - where `add` comes from, so that one declaration of the verb is enough.
+ * - [Accumulator] - the state of one run of a pipeline, which is a type of its own and never a collection.
  */
 public trait Collection<Item>
-  with Iterable<Item>, Length, Accumulator<Item, Self>
+  with Iterable<Item>, Length
 {
+  /** Adds a value, in place. Where the value goes is the structure's business - the end, a bucket, the top. */
+  var fn add(value: Item)
+
   /** Removes every value, in place. */
   var fn clear()
 
@@ -106,9 +108,5 @@ public trait Collection<Item>
   fn containsAll(values: Iterable<Item>): Bool where Item: Equals {
     values.all contains
   }
-
-  /** A collection is its own [Accumulator], so filling it and reading it back out are the same value. */
-  fn finish(): Self {
-    self
-  }
 }
+

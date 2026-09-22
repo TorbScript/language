@@ -63,14 +63,19 @@ use Collection from "./collection"
 public trait List<Item>
   with Collection<Item>, MutableIndexed<Int, Item>, MutableSlice
 {
-  /** Builds a list from its arguments: `List.of(1, 2, 3)`, or with a spread, `List.of(...anyIterable)`. */
-  static fn of(...items: Item): List<Item> {
-    items
+  /**
+   * Builds a list from its arguments: `List.of(1, 2, 3)`, or with a spread, `List.of(...anyIterable)`.
+   *
+   * It answers `Self`, so `TrieList.of(1, 2)` is a `TrieList` and not somebody else's list. The requirement is on
+   * the member and not on the trait, because an implementation may need more of `Item` than `List` does.
+   */
+  static fn of(...items: Item): Self where Self: From<Iterable<Item>> {
+    Self.from items
   }
 
   /** Builds a list of `count` copies of `value`: `List.filled(3, "-")` is `["-", "-", "-"]`. */
-  static fn filled(count: Int, value: Item): List<Item> {
-    (0..count).map { position => value }.toList()
+  static fn filled(count: Int, value: Item): Self where Self: From<Iterable<Item>> {
+    Self.from((0..count).map({ position => value }))
   }
 
   // --- In place ------------------------------------------------------------------------------------
@@ -332,6 +337,24 @@ extend<Item: Hash> List<Item> with Hash {
 // --- Implementations -----------------------------------------------------------------------------------
 
 /**
+ * The cursor over a [TrieList]: the same twenty lines as [ListIterator], because `TrieList` and `ArrayList` are two
+ * `native type`s and a value of one is not a value of the other. It disappears with the trie, not before.
+ */
+public type TrieListIterator<Item> with Iterator<Item> {
+  /** The list this cursor walks. Held by value, so a later change to the original list is never seen here. */
+  items: TrieList<Item>
+  /** The index of the next item to answer. */
+  var index: Int = 0
+
+  /** The item at `index`, or `None` once it reaches the end. */
+  var fn next(): Item? {
+    const found = items.get index
+    index = index + 1
+    found
+  }
+}
+
+/**
  * The cursor over a contiguous list: the list it was made from, and the index of the next element.
  *
  * It is **TorbScript and not a runtime function**, because everything it needs already is one: `get` answers the element
@@ -430,8 +453,15 @@ public native type ArrayList<Item>
 public native type TrieList<Item>
   with List<Item>, From<Iterable<Item>>
 {
-  /** Same as [ArrayList.from]. */
-  native static fn from(items: Iterable<Item>): TrieList<Item>
+  /** Ordinary TorbScript, for the reason [ArrayList.from] gives: `items` is a trait-typed value of the program. */
+  static fn from(items: Iterable<Item>): TrieList<Item> {
+    var result: TrieList<Item> = TrieList.withCapacity 0
+    result.addAll items
+    result
+  }
+
+  /** An empty list, with room for `capacity` items before it has to grow again. */
+  native static fn withCapacity(capacity: Int): TrieList<Item>
 
   /** Same as [ArrayList.length]. */
   native fn length(): Int
@@ -439,8 +469,10 @@ public native type TrieList<Item>
   /** Same as [ArrayList.get]. */
   native fn get(index: Int): Item?
 
-  /** Same as [ArrayList.iterator]. */
-  native fn iterator(): Iterator<Item>
+  /** Ordinary TorbScript over `get`, exactly as [ArrayList.iterator] is: see [TrieListIterator]. */
+  fn iterator(): Iterator<Item> {
+    TrieListIterator self
+  }
 
   /** Same as [ArrayList.slice]. */
   native fn slice(range: Bounds<Int>): TrieList<Item>

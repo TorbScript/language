@@ -1,0 +1,124 @@
+/**
+ * A trait's `static fn` default, reached through an implementation type and through the trait itself.
+ *
+ * `of` is written once, in the trait, and answers `Self`. Called on the trait it builds the default implementation;
+ * called on an implementation type it builds that one - which is only true if the default is instantiated with `Self`
+ * bound to the type in front of the dot, so that the trait's own arguments reach the body. The body here goes through
+ * `Self.from`, a second static member reached on the same `Self`, so both halves of that run.
+ */
+
+use From from "std/core"
+
+/** Two implementations, so that one default body has to answer two types. */
+trait Pushdown<Item> with Collection<Item> {
+  /** Builds one from its arguments, whatever `Self` is. */
+  static fn of(...items: Item): Self where Self: From<Iterable<Item>> {
+    Self.from items
+  }
+
+  /** A second default over the first, to show that `Self` keeps its meaning one call deeper. */
+  static fn filled(count: Int, value: Item): Self where Self: From<Iterable<Item>> {
+    Self.from((0..count).map({ position => value }))
+  }
+
+  /** The name of the implementation, so that the answer says which type came back. */
+  fn kind(): String
+}
+
+/** The default implementation: what `Pushdown.of` answers when nothing narrower is asked for. */
+extend<Item> Pushdown<Item> with From<Iterable<Item>> {
+  static fn from(items: Iterable<Item>): Pushdown<Item> {
+    Pile.from items
+  }
+}
+
+type Pile<Item> with Pushdown<Item>, From<Iterable<Item>> {
+  private var items: List<Item> = []
+
+  static fn from(items: Iterable<Item>): Pile<Item> {
+    Self items.toList()
+  }
+
+  fn kind(): String {
+    "Pile"
+  }
+
+  var fn add(value: Item) {
+    items.add value
+  }
+
+  var fn clear() {
+    items.clear()
+  }
+
+  fn length(): Int {
+    items.length()
+  }
+
+  fn iterator(): Iterator<Item> {
+    items.iterator()
+  }
+}
+
+type Reversing<Item> with Pushdown<Item>, From<Iterable<Item>> {
+  private var items: List<Item> = []
+
+  static fn from(items: Iterable<Item>): Reversing<Item> {
+    Self items.toList().reversed().toList()
+  }
+
+  fn kind(): String {
+    "Reversing"
+  }
+
+  var fn add(value: Item) {
+    items.insert 0, value
+  }
+
+  var fn clear() {
+    items.clear()
+  }
+
+  fn length(): Int {
+    items.length()
+  }
+
+  fn iterator(): Iterator<Item> {
+    items.iterator()
+  }
+}
+
+fn theStandardLibraryFactories() {
+  // The annotation is half of what is pinned: the factory answers `Self`, so it is this type and not the default one
+  const stack: ArrayStack<Int> = ArrayStack.of 1, 2, 3
+  print stack.toList()
+  const list: TrieList<Int> = TrieList.of 1, 2
+  print list.toList()
+  const queue: ArrayQueue<Int> = ArrayQueue.of 1, 2, 3
+  print queue.toList()
+  const set: TrieSet<Int> = TrieSet.of 1, 2, 2
+  print set.length()
+  const entries: TrieMap<String, Int> = TrieMap.of(("a", 1), ("b", 2))
+  print entries.length()
+  // The same member on the trait keeps answering the default implementation
+  const onTheTrait: Stack<Int> = Stack.of 1, 2
+  print onTheTrait.toList()
+  print List.of(1, 2, 3)
+  print List.filled(3, "-")
+  const filled: ArrayList<Int> = ArrayList.filled 2, 7
+  print filled.toList()
+}
+
+fn aUserTraitOnTwoImplementers() {
+  const first: Pile<Int> = Pile.of 1, 2, 3
+  print "{first.kind()} {first.toList()}"
+  const second: Reversing<Int> = Reversing.of 1, 2, 3
+  print "{second.kind()} {second.toList()}"
+  const onTheTrait: Pushdown<Int> = Pushdown.of 1, 2
+  print "{onTheTrait.kind()} {onTheTrait.toList()}"
+  print Pile.filled(2, 7).toList()
+  print Reversing.filled(2, 7).kind()
+}
+
+theStandardLibraryFactories()
+aUserTraitOnTwoImplementers()

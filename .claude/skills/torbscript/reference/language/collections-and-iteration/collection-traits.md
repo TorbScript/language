@@ -37,9 +37,9 @@ print describe(index)
 ## Syntax
 
 ```text
-Iterable<Item>   Length   Accumulator<Item, Self>
-└────────────────────┴─────────────┘
-Collection<Item>                 clear, compact, count, the participles, contains
+Iterable<Item>   Length
+└────────────────────┘
+Collection<Item>                 add, clear, compact, count, the participles, contains
    ├─ List<Item>                 ArrayList (default), TrieList
    ├─ Set<Item>                  TrieSet (default), HashSet
    ├─ Map<Key, Value>            TrieMap (default), HashMap        a Collection<(Key, Value)>
@@ -53,22 +53,21 @@ Collection<Item>                 clear, compact, count, the participles, contain
    list; a `const` binding is the read-only list, a `var` binding is the same type with `add`, `remove` and the rest
    of the verbs available. See [Bindings](../values-and-types/bindings.md) for what decides that.
 
-2. **`Collection<Item>` requires only `clear`, `length` and `iterator` beside the `add` of `Accumulator`.** `addAll`,
-   `added`, `addedAll`, `contains`, `containsAll`, `count` and `compact` are default methods every implementation gets
-   for free, from `std/collections`'s own `Collection` trait. `add` is declared once, by `Accumulator`, and not a
-   second time here.
+2. **`Collection<Item>` requires only `add`, `clear`, `length` and `iterator`.** `addAll`, `added`, `addedAll`,
+   `contains`, `containsAll`, `count` and `compact` are default methods every implementation gets for free, from
+   `std/collections`'s own `Collection` trait.
 
 3. **`count()` answers `length()`.** `Iterable.count()` walks every value, which is the wrong answer to give a reader
    of a collection that knows its size, so `Collection` overrides it - a subtrait's member overrides the one it
    inherits rather than standing beside it.
 
-4. **Every `Collection` is also an `Accumulator`, so it is a valid target for a collector, a channel, or a stream's
-   `into`.** Its `finish()` answers `self`, which is what makes `list.collect(...)`-shaped code and
-   `channel.sink().fill(list)`-shaped code use the same vocabulary.
+4. **A `Collection` is not an `Accumulator`, and there is no trait for "something with `add`".** A container that is
+   merely filled has no result of a run to give and no `isDone()` to answer, so it shows neither. What gathers a
+   pipeline into one is a type of its own beside it - `ListAccumulator<Item>`, or `into<Target>()` for any
+   `From<Iterable<Item>>` target. See [Collectors](collectors.md).
 
 5. **`Collection` is not the bound to reach for.** A signature asks for the smallest thing it uses: `Iterable<Item>` to
-   read, `Iterable<Item> & Length` to read and to size, `Accumulator<Item, Self>` to fill, and `Collection<Item>` where
-   it really needs both ends and the participles.
+   read, `Iterable<Item> & Length` to read and to size, and `Collection<Item>` where it really needs to fill as well.
 
 6. **A trait asks nothing of its type parameters; the implementations and the factories do.** `Map<Key, Value>` places
    no bound on `Key`, but `TrieMap<Key: Hash, Value>` and `Map.of(...)` need `Key: Hash`, because only a data structure

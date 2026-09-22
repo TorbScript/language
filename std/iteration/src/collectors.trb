@@ -4,10 +4,15 @@
  *     employees.collect(groupingBy { _.department }.then(averaging { _.salary }))
  *     words.collect(joining(", "))
  *
- * A `Collector` is a description. `start()` creates a fresh `Accumulator` for one run (held in a `var`),
- * values are pushed into it one by one, `finish()` produces the result. Because values are pushed, `Collector` and
- * `Accumulator` are the synchronous counterpart of [Sink], which pushes the same way but may have to wait for the
- * other end to keep up.
+ * An [Accumulator] is both: the description of a run and the state of one. Values are pushed into it one at a time
+ * through `add`, and `finish()` produces the result. Because it is a **value**, a copy of it is a run of its own -
+ * which is why `collect` may be called twice with the same accumulator and why `groupingBy(...).then(downstream)`
+ * copies the downstream per group. Because values are pushed, an `Accumulator` is the synchronous counterpart of
+ * [Sink], which pushes the same way but may have to wait for the other end to keep up.
+ *
+ * A [Collection] is **not** one, and there is no trait for "something with `add`" either: an accumulator is a type of
+ * its own beside the collections, the way `Collector`/`Collectors.toList()` are in Java. `ListAccumulator` is the one
+ * this package ships; a package that owns a collection may ship its own beside it, and a caller names it.
  *
  * # Examples
  *
@@ -21,24 +26,37 @@ use Add from "std/core"
 use concatenated from "./concatenate"
 
 /**
- * The push-based state of one run of a [Collector]: values arrive one at a time through `add`, and `finish` produces
- * the result once they have all arrived. A `Collection` (`List`, `Set`, `Map`, `Stack`, `Queue`) is already an
- * `Accumulator`, because `add` is the same verb and `finish` answers `self`.
+ * What to do with the values of a pipeline, and the state of doing it: values arrive one at a time through `add`, and
+ * `finish` produces the result once they have all arrived. `collect(accumulator)` is the general terminal operation of
+ * [Iterable] - `toList`, `count`, `fold` and the rest are all written on top of it.
+ *
+ * **A description and a run are one type, because a value is a copy.** `collect` fills a copy of what it was given, so
+ * one accumulator may be collected with twice and the two runs never see each other, and `then(downstream)` needs no
+ * factory: it keeps the downstream and copies it per group.
+ *
+ * It stands alone. A [Collection] does not implement it: a container that is merely filled has no result of a run to
+ * give and no `isDone()` to answer, so what gathers into one is a type beside it ([ListAccumulator], [into]).
  *
  * # Examples
  *
- *     var total = summing { value: Int => value }.start()
- *     total.add 3
- *     total.add 4
- *     print total.finish()
+ *     const numbers = [1, 2, 3, 4, 5]
+ *     print numbers.collect(summing { value: Int => value })
+ *
+ * # Pitfalls
+ *
+ * - A description and a half-filled run have the same type, so an accumulator that has already been `add`ed to and is
+ *   then handed to `collect` or to `then` starts every run from what is in it. Build one where it is used
+ *   (`collect(listing())`), the way every collector of this package answers a fresh value.
  *
  * # Related
  *
- * - [Collector] - the reusable description that makes a fresh `Accumulator` for every run.
+ * - [ListAccumulator] - the one this package ships, and the shape a package writes for its own collection.
+ * - [groupingBy] - the one accumulator with a `then(downstream)` for a different one per group.
  */
 public trait Accumulator<Item, Output> {
   /** Pushes one more value in. */
   var fn add(value: Item)
+
   /** The result, once every value has been pushed in. Called exactly once, after the last `add`. */
   fn finish(): Output
 
@@ -55,52 +73,54 @@ public trait Accumulator<Item, Output> {
   }
 }
 
-/**
- * What to do with the values of a pipeline: reusable and stateless, it only describes a run. `collect(collector)` is
- * the general terminal operation of [Iterable] - `toList`, `count`, `fold` and the rest are all written on top of it.
- *
- * # Examples
- *
- *     const numbers = [1, 2, 3, 4, 5]
- *     print numbers.collect(summing { value: Int => value })
- *
- * # Related
- *
- * - [Accumulator] - the state one run makes, through `start()`.
- * - [groupingBy] - the one collector with a `then(downstream)` for a collector per group.
- */
-public trait Collector<Item, Output> {
-  /** A fresh `Accumulator` for one run. Called once per `collect`. */
-  fn start(): Accumulator<Item, Output>
-}
-
 // --- Collecting into collections ------------------------------------------------------------------
 
 /**
- * Collects into any type that can be created from an Iterable (`From<Iterable<Item>>`). `Target` can be given on its
- * own, the rest is inferred.
+ * Collects into anything a pipeline can be turned into (`From<Iterable<Item>>`), which every collection is.
+ * `Target` can be given on its own, the rest is inferred.
+ *
+ * It gathers into a `List` and calls `Target.from` once at the end, which is the answer that works for every target.
+ * A package that owns a collection may ship an accumulator that writes straight into it - [ListAccumulator] is the
+ * shape - and a caller who wants that one **names** it (`collect(ListAccumulator<Int>())`). Nothing picks it up
+ * automatically: which run a pipeline makes is written at the call, not inferred from the target.
  *
  * # Examples
  *
  *     const numbers = [3, 1, 2, 1]
  *     print numbers.collect(into<Set<Int>>())
  */
-public fn into<Target: From<Iterable<Item>>, Item>(): Collector<Item, Target> {
-  IntoCollector<Item, Target>()
+public fn into<Target: From<Iterable<Item>>, Item>(): Accumulator<Item, Target> {
+  IntoAccumulator<Item, Target>()
 }
 
-/** Shorthand for `into<List<Item>>()`. */
-public fn listing<Item>(): Collector<Item, List<Item>> {
-  into<List<Item>>()
+/** Shorthand for `ListAccumulator<Item>()`, which is what a pipeline ends in most often. */
+public fn listing<Item>(): Accumulator<Item, List<Item>> {
+  ListAccumulator<Item>()
 }
 
-type IntoCollector<Item, Target: From<Iterable<Item>>> with Collector<Item, Target> {
-  fn start(): Accumulator<Item, Target> {
-    IntoAccumulator<Item, Target>()
+/**
+ * Gathers the values into a `List` and answers it: the specialised accumulator this package ships, and the shape a
+ * package that owns a collection writes for its own (`HashSetAccumulator` writing straight into a set).
+ *
+ * # Examples
+ *
+ *     print [3, 1, 2].collect(ListAccumulator<Int>())
+ */
+public type ListAccumulator<Item> with Accumulator<Item, List<Item>> {
+  private var items: List<Item> = []
+
+  /** Appends to the list that is being gathered. */
+  var fn add(value: Item) {
+    items.add value
+  }
+
+  /** The list, as it stands after the last `add`. */
+  fn finish(): List<Item> {
+    items
   }
 }
 
-/** Buffers in a List and converts once at the end. */
+/** The general one: gathers into a `List` and converts once at the end, for a target that ships none of its own. */
 type IntoAccumulator<Item, Target: From<Iterable<Item>>> with Accumulator<Item, Target> {
   private var items: List<Item> = []
 
@@ -118,7 +138,7 @@ type IntoAccumulator<Item, Target: From<Iterable<Item>>> with Accumulator<Item, 
 /**
  * `State` is the starting point of every run. Every run works on its own copy.
  *
- *     fn counting<Item>(): Collector<Item, Int> {
+ *     fn counting<Item>(): Accumulator<Item, Int> {
  *       collector(0, finish: { _ }) { count, _ => count + 1 }
  *     }
  */
@@ -126,18 +146,8 @@ public fn collector<Item, State, Output>(
   initial: State,
   finish: (State) => Output,
   step: (State, Item) => State,
-): Collector<Item, Output> {
-  FoldCollector initial, step, finish
-}
-
-type FoldCollector<Item, State, Output> with Collector<Item, Output> {
-  initial: State
-  step: (State, Item) => State
-  complete: (State) => Output
-
-  fn start(): Accumulator<Item, Output> {
-    FoldAccumulator initial, step, complete
-  }
+): Accumulator<Item, Output> {
+  FoldAccumulator initial, step, finish
 }
 
 type FoldAccumulator<Item, State, Output> with Accumulator<Item, Output> {
@@ -157,24 +167,24 @@ type FoldAccumulator<Item, State, Output> with Accumulator<Item, Output> {
 // --- Aggregates ------------------------------------------------------------------------------------------
 
 /** How many values there are. */
-public fn counting<Item>(): Collector<Item, Int> {
+public fn counting<Item>(): Accumulator<Item, Int> {
   collector(0, finish: { _ }) { count, _ => count + 1 }
 }
 
 /** Every value, added together, starting from zero. */
-public fn summing<Item, Total: Add & From<Int>>(value: (value: Item) => Total): Collector<Item, Total> {
+public fn summing<Item, Total: Add & From<Int>>(value: (value: Item) => Total): Accumulator<Item, Total> {
   collector(Total.from(0), finish: { _ }) { sum, item => sum + value(item) }
 }
 
 /** `None` for an empty pipeline. */
-public fn averaging<Item>(value: (value: Item) => Float): Collector<Item, Float?> {
+public fn averaging<Item>(value: (value: Item) => Float): Accumulator<Item, Float?> {
   collector((0.0, 0), finish: { state => if state.1 == 0 { None } else { Some(state.0 / Float.from(state.1)) } }) {
     state, item => (state.0 + value(item), state.1 + 1)
   }
 }
 
 /** The value with the smallest key, or `None` for an empty pipeline. Keeps the earlier of two equal keys. */
-public fn minBy<Item, Key: Compare>(key: (value: Item) => Key): Collector<Item, Item?> {
+public fn minBy<Item, Key: Compare>(key: (value: Item) => Key): Accumulator<Item, Item?> {
   const initial: Item? = None
   collector(initial, finish: { _ }) { best, item =>
     match best {
@@ -185,7 +195,7 @@ public fn minBy<Item, Key: Compare>(key: (value: Item) => Key): Collector<Item, 
 }
 
 /** The value with the largest key, or `None` for an empty pipeline. Keeps the earlier of two equal keys. */
-public fn maxBy<Item, Key: Compare>(key: (value: Item) => Key): Collector<Item, Item?> {
+public fn maxBy<Item, Key: Compare>(key: (value: Item) => Key): Accumulator<Item, Item?> {
   const initial: Item? = None
   collector(initial, finish: { _ }) { best, item =>
     match best {
@@ -201,7 +211,7 @@ public fn maxBy<Item, Key: Compare>(key: (value: Item) => Key): Collector<Item, 
  * It buffers the pieces and concatenates once at the end, for the reason `concatenated` gives: a `String` is a value, so
  * appending to one copies everything that is already in it.
  */
-public fn joining(separator: String = "", prefix: String = "", suffix: String = ""): Collector<String, String> {
+public fn joining(separator: String = "", prefix: String = "", suffix: String = ""): Accumulator<String, String> {
   const initial: List<String> = []
   collector(initial, finish: { parts => prefix + concatenated(parts, separator) + suffix }) { parts, part =>
     parts.added part
@@ -209,7 +219,7 @@ public fn joining(separator: String = "", prefix: String = "", suffix: String = 
 }
 
 /** `(matching, rest)` */
-public fn partitioningBy<Item>(predicate: (value: Item) => Bool): Collector<Item, (List<Item>, List<Item>)> {
+public fn partitioningBy<Item>(predicate: (value: Item) => Bool): Accumulator<Item, (List<Item>, List<Item>)> {
   const initial: (List<Item>, List<Item>) = ([], [])
   collector(initial, finish: { _ }) { lists, item =>
     if predicate(item) { (lists.0.added(item), lists.1) } else { (lists.0, lists.1.added(item)) }
@@ -224,47 +234,48 @@ public fn partitioningBy<Item>(predicate: (value: Item) => Bool): Collector<Item
  *     groupingBy { _.department }.then(maxBy { _.salary }) // Map<String, Employee?>
  */
 public fn groupingBy<Item, Key: Hash>(key: (value: Item) => Key): Grouping<Item, Key> {
-  Grouping key
+  Grouping key, GroupingAccumulator(key, listing())
 }
 
 /**
- * The result of [groupingBy] before a downstream collector is chosen: a `Collector` on its own, into
+ * The result of [groupingBy] before a downstream accumulator is chosen: an `Accumulator` on its own, into
  * `Map<Key, List<Item>>`, and the place `then(downstream)` sits to collect each group differently.
  */
-public type Grouping<Item, Key: Hash> with Collector<Item, Map<Key, List<Item>>> {
+public type Grouping<Item, Key: Hash> with Accumulator<Item, Map<Key, List<Item>>> {
   /** Picks the group a value belongs to. */
   key: (value: Item) => Key
+  private var lists: GroupingAccumulator<Item, Key, List<Item>>
 
   /** Groups into a `List` per key, same as `then(listing())`. */
-  fn start(): Accumulator<Item, Map<Key, List<Item>>> {
-    then(listing()).start()
+  var fn add(value: Item) {
+    lists.add value
+  }
+
+  /** A `List` per key, in the order the keys were first seen. */
+  fn finish(): Map<Key, List<Item>> {
+    lists.finish()
   }
 
   /** Runs `downstream` once per group instead of collecting each one into a `List`. */
-  fn then<Output>(downstream: Collector<Item, Output>): Collector<Item, Map<Key, Output>> {
-    GroupingInto key, downstream
-  }
-}
-
-type GroupingInto<Item, Key: Hash, Output> with Collector<Item, Map<Key, Output>> {
-  key: (value: Item) => Key
-  downstream: Collector<Item, Output>
-
-  fn start(): Accumulator<Item, Map<Key, Output>> {
+  fn then<Output>(downstream: Accumulator<Item, Output>): Accumulator<Item, Map<Key, Output>> {
     GroupingAccumulator key, downstream
   }
 }
 
-/** A collector that is more than a fold is written as a type with `var` fields: here one accumulator per group. */
+/**
+ * An accumulator that is more than a fold is written as a type with `var` fields: here one run of `downstream` per
+ * group. There is no factory to call, because a value is a copy: the group that is seen first takes the downstream as
+ * it was given, and every further group takes another copy of the same starting state.
+ */
 type GroupingAccumulator<Item, Key: Hash, Output> with Accumulator<Item, Map<Key, Output>> {
   key: (value: Item) => Key
-  downstream: Collector<Item, Output>
+  downstream: Accumulator<Item, Output>
   var groups: Map<Key, Accumulator<Item, Output>> = [:]
 
   var fn add(value: Item) {
     const group = key(value)
     if !groups.containsKey(group) {
-      groups[group] = downstream.start()
+      groups[group] = downstream    // A copy, which is a run of its own: that is what `start()` used to be.
     }
     groups[group].add(value)           // Through the path. `var copy = groups[group]` would fill a copy.
   }

@@ -1481,7 +1481,7 @@ extend<Item> List<Item> with Show where Item: Show { ... }   // Type parameters 
 - **Naming:** a trait is a capability the type comes _with_, so a trait with a single required method is named like
   that method: `Hash` (`hash`), `Equals`, `Compare`, `Show`, `Add`, `From`, `Length`, `Close`. `type Money with Equals,
   Hash, Compare` reads as what it is. No `-able`/`-ible` adjectives. Traits that are mainly used _as types_ are nouns:
-  `Iterable`, `Iterator`, `Collection`, `List`, `Map`, `Collector`, `Accumulator`.
+  `Iterable`, `Iterator`, `Collection`, `List`, `Map`, `Accumulator`, `Stage`.
 - `with` is the only keyword for "implements" and for supertraits. Bounds use `where Item: Hash & Equals` or inline `<Item: Hash>`.
 - **Type parameters of a `type` and of a `trait` can have defaults** (`trait Add<Other = Self, Output = Self>`), so
   `with Add` means `Add<Self, Self>` and nobody writes it out. A default may name earlier parameters and `Self`, and
@@ -1490,7 +1490,7 @@ extend<Item> List<Item> with Show where Item: Show { ... }   // Type parameters 
   requirement for implementors - the member simply exists only where the clause holds, and a use that does not
   satisfy it reports the unmet bound. Same rule as for a conditional `extend`.
 - **`Self` is allowed in every type position inside a trait,** including as a trait argument
-  (`trait Collection<Item> with Iterable<Item>, Length, Accumulator<Item, Self>`). `Self` is a type, not a type
+  (`trait Collection<Item> with Iterable<Item>, Length`). `Self` is a type, not a type
   constructor, so this is not the `Self<U>` that ["One Vocabulary"](#one-vocabulary-instead-of-higher-kinded-types)
   rules out, and it costs nothing.
 - **Coherence:** you can only `extend X with Trait<Arguments...>` if your package owns `X`, or `Trait`, or a type that
@@ -1546,8 +1546,8 @@ extend<Item> List<Item> with Show where Item: Show { ... }   // Type parameters 
   parameter or in its result, or that has no `self`, cannot be called on a trait-typed value. So `List<Show & Hash>`
   and `fn audit(entry: Show & Encode)` stay legal, and only calls that have no meaning are rejected.
 - Functions without `self` in a trait: without a body they are a requirement for the implementing types
-  (`From.from`, `TryFrom.tryFrom`). With a body they are functions of the trait itself - the place for factories that pick
-  a default implementation (`List.of(1, 2)`, `Set.of("a")`).
+  (`From.from`, `TryFrom.tryFrom`). With a body they are defaults of the trait - the place for factories that answer
+  `Self` (`List.of(1, 2)` on the trait picks the default implementation, `TrieList.of(1, 2)` is a `TrieList`).
 - Because a trait is a type, it can be extended like one. `extend<Item> List<Item> with Show where Item: Show` makes every list
   showable, `extend<Item> List<Item> with From<Iterable<Item>>` makes `List<Item>` itself a valid target of `to<List<Item>>()`.
 - **Such an `extend` implements the trait for the trait-typed value, and reaches a concrete implementer only through the
@@ -1732,9 +1732,9 @@ implementation is only named where something is constructed. Collections are val
 decides whether they can be changed.
 
 ```text
-Iterable<Item>   Length   Accumulator<Item, Self>
-└──────────────────┴────────────┘
-Collection<Item>              clear, compact, count, contains, addAll, the participles
+Iterable<Item>   Length
+└──────────────────┘
+Collection<Item>              add, clear, compact, count, contains, addAll, the participles
    ├─ List<Item>              ArrayList (literal [1, 2]), TrieList
    ├─ Set<Item>               TrieSet, HashSet
    ├─ Map<Key, Value>      TrieMap (literal ["a": 1]), HashMap           a Collection<(Key, Value)>
@@ -1798,7 +1798,9 @@ var index: Map<String, Int> = HashMap()                 // Trait as the type, im
   write" is implemented. Every type that is built from them is a value without doing anything for it (`ArrayQueue`
   is a ring buffer in a `List`). `Array<Item, Size>` is not a collection but a small inline value, see
   [Const Parameters](#const-parameters-and-array).
-- Every `Collection` is an `Accumulator` and therefore a valid target for collectors and channels.
+- A `Collection` is **not** an `Accumulator`, and there is no trait for "something with `add`": a container that is
+  merely filled has no result of a run to give. What gathers a pipeline into one is a type beside it
+  (`ListAccumulator`, `into<Target>()`), the way `Collector`/`Collectors.toList()` are in Java.
 - Lists have no `+`: `Add.add` and `add(value)` would be the same member. Use `addedAll`.
 - `List`, `Set`, `Map`, `Option` and `Result` are `Show` wherever their items are, in the format of the generated
   `Show` (see [Values](#values)): `[1, 2]`, `{a, b}`, `["k": v]`, `Some(x)`.
@@ -1863,18 +1865,17 @@ const teams = employees.collect(groupingBy { _.department }.then(into<Set<Employ
 ```
 
 ```trb
-trait Collector<Item, Output> {             // A description
-  fn start(): Accumulator<Item, Output>
-}
-
-trait Accumulator<Item, Output> {           // The state of one run, held in a `var`
+trait Accumulator<Item, Output> {           // The description of a run AND its state: a value, so a copy is a run
   var fn add(value: Item)
   fn finish(): Output
+  fn isDone(): Bool { false }
 }
 ```
 
-- A collector is written either as a fold with a final step (`collector(initial, finish: { ... }) { state, value => ... }`),
-  or, if it needs more, as a type with `var` fields that is an `Accumulator`. Every `Collection` is one out of the box.
+- An accumulator is written either as a fold with a final step (`collector(initial, finish: { ... }) { state, value => ... }`),
+  or, if it needs more, as a type with `var` fields. There is no `start()`: `collect` fills a **copy** of what it was
+  given, so one value drives as many independent runs as it is handed to, and `groupingBy(...).then(downstream)`
+  copies the downstream per group.
 - Accumulators are _push-based_. The same collectors therefore work for everything that produces values over time,
   not only for iterables: `channel.source().collect(counting())`, a `Source` of [Streams](#streams), event streams.
 - The catch of laziness: a stage with side effects does nothing until it is pulled.
@@ -1901,7 +1902,7 @@ code runs against a database: the provider's `filter` takes an `Expression<(row:
 
 This is a convention of the standard library, not an abstraction of the language. There are **no higher-kinded types**
 (`Functor<F<_>>`, `Monad`), no `Self<U>`, no F-bounded tricks. (`Self` as a trait _argument_ is fine -
-`Accumulator<Item, Self>` names a type, not a type constructor, see [Traits](#traits).)
+`From<Iterable<Item>>` on `Self` names a type, not a type constructor, see [Traits](#traits).)
 
 - The operations look alike but are not the same: an Option is a value and `map` runs immediately, an Iterable is a
   pipeline and `map` runs when it is pulled. An abstraction over both would hide exactly that difference.
@@ -1932,9 +1933,9 @@ shared trait Source<Item, Failure> with Close {              // reading: `next`,
   var fn next(): Task<Result<Item?, Failure>>
 }
 
-shared trait Sink<Item, Failure> with Close {                // writing: `add`/`finish`, like an Accumulator
+shared trait Sink<Item, Failure> with Close {                // writing: `add`, like an Accumulator
   var fn add(item: Item): Task<Result<Void, Failure>>
-  var fn finish(): Task<Result<Void, Failure>>
+  var fn end(): Task<Result<Void, Failure>>                   // the graceful end; `finish` is the Accumulator's word
 }
 ```
 
@@ -2011,11 +2012,11 @@ const fromBody = body.through(activeNames).toList().await()?         // an HTTP 
   `add`, so `taking(10)`, `first()` and `find(...)` end a pipeline over an infinite or expensive source without pulling
   one value they will not deliver.
 - **The difference between the two worlds shrinks to two drivers:** `Iterable.through(stage)` (a loop) and
-  `Source.through(stage)` (a loop with `await`). `collect` runs *fused* - the stage wraps the collector's accumulator,
+  `Source.through(stage)` (a loop with `await`). `collect` runs *fused* - the stage wraps the accumulator itself,
   no queue - and `next()`/`iterator()` runs through a small queue, because one value pushed in can become many coming
   out while the caller asks for one. `map`, `filter`, `take`, ... on both traits are one-liners over `through`.
-- **`Collector` is shared,** so every terminal operation is written once: `source.collect(collector)`, `toList`,
-  `count`, `fold`, `find`, `forEach`.
+- **`Accumulator` is shared between both worlds,** so every terminal operation is written once:
+  `source.collect(accumulator)`, `toList`, `count`, `fold`, `find`, `forEach`.
 - **What exists:** `mapping`, `filtering`, `filterMapping`, `mappingWhile`, `flatMapping`, `taking`, `takingWhile`,
   `skipping`, `indexing`, `chunking` in `std/iteration`; `lines`, `decodedText`, `encodedText` in `std/stream`; and
   whatever a format provides. `zip` reads two sources and is therefore a driver, not a stage; `sorted` collects and

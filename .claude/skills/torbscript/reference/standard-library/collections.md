@@ -49,8 +49,9 @@ print numbers.reversed()
 
 ```trb fragment
 public trait Collection<Item>
-  with Iterable<Item>, Length, Accumulator<Item, Self>
+  with Iterable<Item>, Length
 {
+  var fn add(value: Item)
   var fn clear()
   var fn compact()
   fn count(): Int
@@ -62,11 +63,11 @@ public trait Collection<Item>
 }
 ```
 
-Only `clear`, `length` and `iterator` are required beside the `add` of `Accumulator`; everything else is a default.
-`add` is declared once, where it belongs, and a collection already is an `Accumulator` - it has `add`, and it is its
-own result - so every collection can be the target of a collector, a channel or an event stream. `added`/`addedAll`
-are the participles of `add`/`addAll`: a changed copy, usable through a `const` binding. `count()` answers `length()`
-rather than walking, and `compact()` hands back whatever storage a container holds beyond its length.
+Only `add`, `clear`, `length` and `iterator` are required; everything else is a default. A collection is **not** an
+`Accumulator`: it has no result of a run to give and no `isDone()` to answer, so what gathers a pipeline into one is a
+type beside it (`ListAccumulator`, `into<Target>()` - see [std/iteration](iteration.md)). `added`/`addedAll` are the
+participles of `add`/`addAll`: a changed copy, usable through a `const` binding. `count()` answers `length()` rather
+than walking, and `compact()` hands back whatever storage a container holds beyond its length.
 
 ### List
 

@@ -617,14 +617,9 @@ fn testEntries(var entries: List<NativeEntry>) {
  * `ArrayList` and `TrieList` share this implementation: the persistent variant does not exist yet, so the two are
  * observable apart only through performance - iteration order and `Show` are the same either way.
  */
-fn listEntries(var entries: List<NativeEntry>, owner: String, hasIterator: Bool) {
-  // `ArrayList.from` is ordinary TorbScript since the fourth round of 5.7, and it cannot be anything else: it walks a
-  // trait-typed `Iterable` of the *program* through a witness table, which a C function cannot do. `TrieList.from` waits
-  // for the trie itself, because nothing constructs a `TrieList` before it exists.
-  if hasIterator {
-    entries.add plannedRuntimeOf("{owner}.from", "torb_list_from_iterable", "8")
-    entries.add plannedRuntimeOf("{owner}.iterator", "torb_list_iterator", "8")
-  }
+fn listEntries(var entries: List<NativeEntry>, owner: String) {
+  // `from` and `iterator` are in neither list: both are ordinary TorbScript, and `from` cannot be anything else - it
+  // walks a trait-typed `Iterable` of the *program* through a witness table, which a C function cannot do.
   // `withCapacity` is the empty container, which is an instruction and no call: `torb_list_with_capacity` takes an
   // element descriptor that no declaration of `std/` can name. The capacity is a hint the first version drops.
   entries.add containerOf("{owner}.withCapacity", RuntimeKind.ListStorage)
@@ -754,8 +749,8 @@ fn setEntries(var entries: List<NativeEntry>, owner: String) {
 }
 
 fn collectionEntries(var entries: List<NativeEntry>) {
-  listEntries entries, "ArrayList", false
-  listEntries entries, "TrieList", true
+  listEntries entries, "ArrayList"
+  listEntries entries, "TrieList"
   mapEntries entries, "HashMap"
   mapEntries entries, "TrieMap"
   setEntries entries, "HashSet"

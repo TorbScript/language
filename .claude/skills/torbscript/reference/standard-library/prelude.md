@@ -59,7 +59,7 @@ public use Stack, ArrayStack, Queue, ArrayQueue from "std/collections"
 public use Iterator, Iterable, Length, Stage from "std/iteration"
 public use mapping, filtering, filterMapping, mappingWhile, flatMapping from "std/iteration"
 public use taking, takingWhile, skipping, indexing, chunking from "std/iteration"
-public use Collector, Accumulator, collector, into, listing from "std/iteration"
+public use Accumulator, ListAccumulator, collector, into, listing from "std/iteration"
 public use counting, summing, averaging, minBy, maxBy, joining, partitioningBy, groupingBy from "std/iteration"
 
 public use Encode, Decode, DecodeError, Format, describe from "std/encoding"

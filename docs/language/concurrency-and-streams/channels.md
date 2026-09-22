@@ -31,7 +31,7 @@ const producer = spawn {
   for value in 0..5 {
     writing.add(value).await()?
   }
-  writing.finish().await()
+  writing.end().await()
 }
 
 const total = channel.source().collect(counting()).await()

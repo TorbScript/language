@@ -8,7 +8,7 @@ traits are ordinary traits and the drivers are ordinary loops.
 ```text
                        Stage<Input, Output>          (synchronous, source-independent, a value)
                   ┌──────────── through ────────────┐
-Iterable<Item> ───┤                                 ├─── Collector<Item, Output>   ← the same collectors
+Iterable<Item> ───┤                                 │
  Source<Item, F> ─┘        onto(Accumulator)        └───  Accumulator<Item, Output>   ← the same accumulators
 ```
 
@@ -50,9 +50,9 @@ nothing new has to be learned and the two worlds read alike:
 | Synchronous              | Asynchronous                      | Verb        |
 |--------------------------|-----------------------------------|-------------|
 | `Iterator<Item>`         | `Source<Item, Failure>`           | `next`      |
-| `Accumulator<Item, Out>` | `Sink<Item, Failure>`             | `add`, `finish` |
+| `Accumulator<Item, Out>` | `Sink<Item, Failure>`             | `add`; `finish` against `end` |
 | `Iterable<Item>`         | — (a source *is* the flow)        | `iterator`  |
-| `Collector<Item, Out>`   | the same `Collector`              | `start`     |
+| `Collection<Item>`       | — (a flow is not a container)     | `add`       |
 | `Stage<Input, Output>`   | the same `Stage`                  | `onto`      |
 
 Five decisions carry everything below.
@@ -250,15 +250,14 @@ of the design (section 14), and `Decoder.sequence<Output>` in `std/encoding` has
 | | What it is | Where it lives |
 |---|---|---|
 | `Iterator`, `Iterable` | **synchronous** — pulled, no waiting | `std/iteration` |
-| `Accumulator` | **synchronous** — pushed into, `isDone()` ends it | `std/iteration` |
-| `Collector` | **blueprint** — `start()` makes an accumulator per run | `std/iteration` |
+| `Accumulator` | **synchronous** — pushed into, `isDone()` ends it; the description AND the state of one run | `std/iteration` |
 | `Stage` | **blueprint** — `onto()` makes an accumulator chain per run | `std/iteration` |
 | the stage factories (`mapping`, `taking`, `lines`, `Json.items`) | **blueprint** | `std/iteration`, `std/stream`, a format |
 | `Source.next` | **asynchronous** | `std/stream` |
-| `Sink.add`, `Sink.finish` | **asynchronous** | `std/stream` |
+| `Sink.add`, `Sink.end` | **asynchronous** | `std/stream` |
 | `source.then { … }` | **asynchronous** — the one stage-shaped thing that waits | `std/stream` |
 | `source.into(sink)`, `sink.fill(source)` | **asynchronous** — the pump | `std/stream` |
-| `source.collect/toList/count/fold/find/forEach` | **asynchronous drivers over synchronous collectors** | `std/stream` |
+| `source.collect/toList/count/fold/find/forEach` | **asynchronous drivers over synchronous accumulators** | `std/stream` |
 | `Encode`, `Decode`, `Encoder`, `Decoder` | **synchronous, unchanged** | `std/encoding` |
 | `Format.items`, `Format.encoded` | **blueprint** (`Stage`s) | `std/encoding` |
 | `Channel` | asynchronous, and the only native place stream state lives | `std/task` |
@@ -266,6 +265,18 @@ of the design (section 14), and `Decoder.sequence<Output>` in `std/encoding` has
 `Stage` lives in `std/iteration` and not in `std/stream` for two reasons: it is synchronous, and what it turns into what
 (`Accumulator` → `Accumulator`) is `std/iteration`'s own vocabulary. It also keeps the dependency one-way —
 `std/stream` needs `std/iteration`, never the other way round.
+
+### The three pairs, and what each one is about
+
+| | reading end | writing end | what it is about |
+|---|---|---|---|
+| **values, synchronous** | `Iterable` (`iterator()`) | `Collection` (`add`) | a finite thing that is there already |
+| **a flow, asynchronous** | `Source` (`next()`) | `Sink` (`add`, `end()`) | values over time, fallible, `shared` |
+| **one run** | — | `Accumulator` (`add`, `finish()`, `isDone()`) | what to do with the values, and how far it has got |
+
+`Accumulator` is used by **both** time axes: `iterable.collect(a)` and `source.collect(a)` are the same accumulator
+driven two ways. `finish()` is its word alone — a stream's end is `Sink.end()`, because the end of a flow is not a
+result. And `Collection` is not an `Accumulator`: the writing end of the value world is a container, not a run.
 
 ## 6. The drivers
 
@@ -482,7 +493,7 @@ stages, the drivers, the framers, UTF-8, `Buffered`, `Body`'s conveniences — i
 them are in `compiler/src/backend/c/natives.trb`, planned for 7.3.
 
 **The prelude** re-exports `Source`, `Sink` and `Bytes` from `std/stream`, `Stage` and the stage factories from
-`std/iteration`, and `Format` from `std/encoding`. They are *vocabulary*, exactly like `Iterable` and `Collector`: a
+`std/iteration`, and `Format` from `std/encoding`. They are *vocabulary*, exactly like `Iterable` and `Accumulator`: a
 signature that says which end of a stream it wants should be writable without an import, and the traits touch nothing by
 themselves. What touches something stays an import — `File`, `standardInput`, `http`, `Process` — because there the
 import *is* the statement "this file reads files", which is what reviews and `torb add` read and what the per-target
@@ -496,7 +507,7 @@ capability tables need.
 |---|---|
 | Rust (`Iterator`, `AsyncIterator`) | Pull-based, lazy, stages as values. `next()` answering an option. |
 | Clojure (transducers) | `Stage`: the middle piece hangs on the target, so it is source-independent and exists once. |
-| Java (`Stream`, `Collector`) | `Collector`/`Accumulator` shared between the worlds; the fused push driver is how Java's streams work inside. |
+| Java (`Stream`, `Collector`) | `Accumulator` shared between the worlds; the fused push driver is how Java's streams work inside. Java needs `Collector` and `Supplier` because a Java accumulator is a reference; here a copy is a run. |
 | C# (`IAsyncEnumerable`) | Asynchrony belongs to the *interface*, not to a second library of combinators. |
 | Swift (`AsyncSequence`, `AsyncStream`) | `Source.produce { sink => … }` is `AsyncStream`'s continuation, with a real capacity. |
 | Scala fs2 / Akka Streams | Backpressure as the default and not as an add-on; a pipeline as a value that can be reused. |
@@ -518,7 +529,7 @@ capability tables need.
 | Effect polymorphism / higher-kinded types (one set of combinators for both worlds) | This is Rust's unsolved "keyword generics". The language has no HKT on purpose (CONCEPT, "One Vocabulary instead of Higher-Kinded Types"); `Stage` shares the *logic* without sharing the names, which is the 90% that matters. |
 | A blocking `await()` with a stack per task (Go, Java's Loom) | Already rejected in CONCEPT: it needs a stack per task in every back end and does not fit a JavaScript target. |
 | `IntoStream`/`AsyncIterable` protocol sugar (`for await`) | See section 2: there is no place for the `?`. |
-| A separate async `Collector`/`Accumulator` | The collectors are push-based already, so they work unchanged for values that arrive over time. |
+| A separate async `Accumulator` | The accumulators are push-based already, so they work unchanged for values that arrive over time. |
 | Streaming a single value into a type (a "streaming decoder") | Section 10: it colours every decoder and saves only the text buffer. |
 
 ## 13. Open points

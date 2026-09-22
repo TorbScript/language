@@ -214,7 +214,40 @@ fn constructedReceiver(var lowering: Lowering, receiver: TypeId, symbol: SymbolI
   if headNameOfType(lowering, owner) == Some(built) {
     return Some applied
   }
-  None
+  implementingReceiver lowering, applied, owner, symbol
+}
+
+/**
+ * The type a **trait's** `static fn` default is reached through: `ArrayStack.of(1, 2, 3)`, where `of` is written in
+ * `trait Stack<Item>` and `ArrayStack` implements it.
+ *
+ * Such a member belongs to the trait's `Self`, which has no name of its own, so the head of the owner can never be the
+ * head of what stands in front of the dot and the receiver would be lost - and with it every argument of the trait, so
+ * that the body is instantiated with `Item` still a parameter and the back end sees an unsubstituted one. The type in
+ * front of the dot **is** what `Self` stands for, exactly as it is for an instance default.
+ *
+ * Two conditions keep a function *value* out, which is what the caller's own guard is for. The member takes no `self`,
+ * so a closure's `show()` is never reached this way; and the result type really implements the trait that declares the
+ * member, which is the same question `memberMappingOf` asks to fill the trait's own parameters in.
+ */
+fn implementingReceiver(
+  var lowering: Lowering,
+  applied: TypeId,
+  owner: TypeId,
+  symbol: SymbolId,
+): TypeId? {
+  if takesSelf(lowering, symbol) {
+    return None
+  }
+  const parameter = match lowering.checker.types.form(owner) {
+    .Parameter(found) => found
+    _ => {
+      return None
+    }
+  }
+  const declaring = lowering.checker.types.parameter(parameter).owner?
+  const _ = traitArgumentsOf(lowering.checker, applied, declaring)?
+  Some applied
 }
 
 fn targetOfImplementation(var lowering: Lowering, implementation: ImplementationId): TypeId? {
