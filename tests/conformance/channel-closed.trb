@@ -1,7 +1,9 @@
 /**
  * Closing the reading end of a `Channel` is how a producer learns that nobody wants its items any more: every `add`
  * after it - and the one that waits for a reader right then - fails with `ChannelClosed`, and what was buffered is
- * dropped. The items that never arrived are counted blocks, released by the channel, so nothing leaks.
+ * dropped. No program calls `close()`: the reader lets go of the end, and the release of the last reference runs it -
+ * here at the end of the function that read. The items that never arrived are counted blocks, released by the channel,
+ * so nothing leaks.
  */
 
 /** A value the program builds, so that its storage is counted and not the immortal storage of a literal. */
@@ -30,17 +32,21 @@ fn write(channel: Channel<String>): Task<String> {
   "wrote all {written}"
 }
 
+/** Reads `count` items and lets go of the reading end: the end of this function releases it, and that closes it. */
+fn readThenLetGo(channel: Channel<String>, count: Int): Task<Result<Void, Cancelled>> {
+  var reading = channel.source()
+  for _ in 0..count {
+    print(reading.next().outcome()?)
+  }
+  Ok void
+}
+
 const unbuffered = Channel<String>()
 const writer = write unbuffered
-var early = unbuffered.source()
-print(early.next().outcome()?)
-print(early.next().outcome()?)
-early.close()
+readThenLetGo(unbuffered, 2).outcome()?
 print(writer.await() ?? "cancelled")
 
 const buffered = Channel<String>(capacity: 3)
 const filler = write buffered
-var late = buffered.source()
-print(late.next().outcome()?)
-late.close()
+readThenLetGo(buffered, 1).outcome()?
 print(filler.await() ?? "cancelled")

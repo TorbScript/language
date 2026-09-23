@@ -104,7 +104,7 @@ print add(2, 3)
    else. Bound to a name, stored in a field, a collection or a case, returned, handed to `spawn` or to a parameter that
    keeps it, it is an error. A parameter only calls its closure when it has a function type, its function has a body,
    and that body calls it (`action(value)`, `action value`), calls it inside a closure that itself only runs during
-   the call, or hands it on by name to a parameter that only calls it - which is what `forEach`, `using`, a receiver
+   the call, or hands it on by name to a parameter that only calls it - which is what `forEach`, `unless`, a receiver
    closure and every block of a DSL do. A lazy stage keeps its closure: `items.map { ... }` stores it in the stage it
    answers, so a closure given to `map` or `filter` may read a `var` only through a `const` copy of it.
 

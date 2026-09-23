@@ -201,6 +201,7 @@ fn markReadSlots(program: IrProgram, function: IrFunction, var reads: List<Bool>
     .Copy(_, source) => markRead reads, source
     .Retain(slot) => markRead reads, slot
     .Release(slot) => markRead reads, slot
+    .EndOfScope(slot) => markRead reads, slot
     .MakeUnique(reference) => markReference reads, reference
     .Call(_, _, arguments, _, _) => markArguments reads, arguments
     .CallClosure(_, callee, arguments) => {
@@ -351,10 +352,12 @@ public fn signatureHeadOf(program: IrProgram, function: IrFunction): String {
  * with it everything only the reader called (the `Option.expect` of its missing key).
  *
  * The answer is a **reachability**: the roots are what nothing calls and is neither a copy nor a reader (the entry, a
- * test, a task body), and every member of a table and of an element descriptor. Everything a kept function names is
+ * test, a task body), and every member of a table and of an element descriptor. A `withheld` function is left out
+ * like a copy unless something reaches it: the `close()` of an object, which only the drop function of its layout
+ * calls. Everything a kept function names is
  * kept, and what is left over is dead - a copy nothing calls, a reader nothing calls, and whatever only those called.
  */
-public fn keptFunctions(program: IrProgram): List<Bool> {
+public fn keptFunctions(program: IrProgram, withheld: Set<Int>): List<Bool> {
   const count = program.functions.length()
   var isLeftOut: List<Bool> = []
   var isAnyLeftOut = false
@@ -362,7 +365,9 @@ public fn keptFunctions(program: IrProgram): List<Bool> {
     // An `Indexed.at` instance an index path asked for is dead once `ir/elements.trb` turned the round trip into one
     // `Element` step, unless something else still calls it
     const isReader = isElementReader program, program.functions[index]
-    const leftOut = program.specializedFunctions.contains(index) || isReader
+    // A destructor nothing calls: it is kept where something reaches it, or where the drop function that calls it is
+    // emitted (`emittedFunctionsOf`)
+    const leftOut = program.specializedFunctions.contains(index) || isReader || withheld.contains(index)
     isLeftOut.append leftOut
     isAnyLeftOut = isAnyLeftOut || leftOut
   }
@@ -857,6 +862,8 @@ fn instructionStatements(
       const place = slotExpression body, slot
       releaseStatements emission, program, typeOfSlot(body, slot), place
     }
+    // The ownership pass removes every one of them, so an emitted body never holds one
+    .EndOfScope(_) => []
     .MakeUnique(reference) => makeUniqueStatements emission, program, body, reference
     .Call(target, callee, arguments, witnesses, at) => {
       callStatements emission, program, body, target, callee, arguments, witnesses, at
@@ -1222,13 +1229,16 @@ public fn boxedLayoutOf(program: IrProgram, id: IrTypeId): LayoutId? {
   Some layout
 }
 
-/** The `torb_drop_function` of a layout: `NULL` where nothing inside it is counted, which is most layouts. */
+/**
+ * The `torb_drop_function` of a layout: `NULL` where nothing inside it is counted and it runs no destructor, which is
+ * most layouts.
+ */
 public fn dropFunctionOf(program: IrProgram, id: LayoutId): CExpression {
   if !program.hasLayout(id) {
     return nullPointer
   }
   const layout = program.layoutAt id
-  if !layout.containsCounted {
+  if !layout.containsCounted && !program.closeFunctions.containsKey(id.value) {
     return nullPointer
   }
   CExpression.Name "D_{layout.name}"

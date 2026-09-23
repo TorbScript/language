@@ -1,0 +1,325 @@
+/**
+ * The ends of scopes: where a binding whose value may hold a `Close` object is released (docs/design/DESTRUCTORS.md
+ * 2a). Such a binding is released at the end of the block it was declared in, in reverse declaration order, and not at
+ * its last use - so the moment its `close()` runs is a line of the source and never a result of the liveness pass.
+ *
+ * The lowering keeps a stack of the open blocks ([Lowering.scopes]) and writes one `EndOfScope` per such binding at
+ * every way out of a block: its end, a `return`, a `break` or `continue` out of it, a `?` that leaves the function, and
+ * the `stop` of a task. The names of a pattern belong to the arm, the `then` block or the loop body they are bound for.
+ * A temporary that may hold such an object ends with the statement that made it. What each end becomes - the release,
+ * or nothing where a move already emptied the slot - is the ownership pass's decision (`ir/ownership.trb`).
+ *
+ * Every other binding is left alone, so a function that holds no such value is lowered exactly as before.
+ *
+ * # Pitfalls
+ *
+ * A temporary that only some paths of its statement define (the arms of an `if` expression, the fallback of a `??`)
+ * keeps no end: the ownership pass releases it at its last use, because an end would release what another path never
+ * made. A closure captures by retaining, so a binding a closure captured is still held by its slot until its scope ends.
+ */
+
+use IrTypeId, Slot, Instruction, LayoutId, TraitId from "../ir"
+use FunctionBuilder, emit from "../build"
+use Lowering from "./context"
+use closeImplementers, traitsOfCloseImplementers from "../../semantics/checker/close"
+use TypeId, ParameterId from "../../semantics/checker/type"
+use memberOfType from "../witness"
+
+/** A block begins: the bindings declared from here on belong to it. */
+public fn openScope(var lowering: Lowering) {
+  lowering.scopes.append([])
+}
+
+/**
+ * A block ends: its scoped bindings end, the last declared first, where control still reaches the end - a block that
+ * left through a `return` or a `break` ended its scopes there already.
+ */
+public fn closeScope(var lowering: Lowering, var builder: FunctionBuilder) {
+  const last = lowering.scopes.length() - 1
+  if last < 0 {
+    return
+  }
+  if !lowering.isDiverged && lowering.isSupported {
+    endBindings builder, lowering.scopes[last]
+  }
+  const _ = lowering.scopes.removeAt last
+}
+
+/** A binding of the innermost block, if its value may hold a `Close` object. */
+public fn declareScoped(var lowering: Lowering, var builder: FunctionBuilder, slot: Slot) {
+  const last = lowering.scopes.length() - 1
+  if last < 0 {
+    return
+  }
+  if !mayHoldClose(lowering, builder.typeOfSlot(slot)) {
+    return
+  }
+  lowering.scopes[last].append(slot)
+}
+
+/**
+ * Every binding the lowering declared from slot `from` on, for a destructuring `const (reader, writer) = ...` whose
+ * names are bound through a plan: the temporaries of the plan are not bindings and stay out.
+ */
+public fn declareScopedFrom(var lowering: Lowering, var builder: FunctionBuilder, from: Int) {
+  var index = from
+  while index < builder.slotCount() {
+    if const .Local = builder.function.slots[index].role {
+      declareScoped lowering, builder, Slot(index)
+    }
+    index = index + 1
+  }
+}
+
+/** The bindings of a pattern, slots `from ..< to`, as bindings of the innermost block: an arm, the body of a loop. */
+public fn declareScopedBetween(var lowering: Lowering, var builder: FunctionBuilder, from: Int, to: Int) {
+  var index = from
+  while index < to {
+    declareScoped lowering, builder, Slot(index)
+    index = index + 1
+  }
+}
+
+/**
+ * The end of a statement: every temporary it made from slot `from` on that may hold a `Close` object, the last made
+ * first. A statement inside it ended its own already, and a temporary is ended once, by the innermost statement.
+ * One that is defined on only some paths through the statement - an arm of an `if` - is left to its last use by the
+ * ownership pass, which is what it gets without an end.
+ */
+public fn endTemporaries(var lowering: Lowering, var builder: FunctionBuilder, from: Int) {
+  if lowering.isDiverged || !lowering.isSupported {
+    return
+  }
+  var index = builder.slotCount() - 1
+  while index >= from {
+    if const .Temporary = builder.function.slots[index].role {
+      if !lowering.endedTemporaries.contains(index) && mayHoldClose(lowering, builder.typeOfSlot(Slot(index))) {
+        lowering.endedTemporaries.insert index
+        emit builder, Instruction.EndOfScope(Slot(index))
+      }
+    }
+    index = index - 1
+  }
+}
+
+/** A `return`, a `?` that leaves the function, the `stop` of a task: every open scope ends, the innermost first. */
+public fn endEveryScope(var lowering: Lowering, var builder: FunctionBuilder) {
+  if lowering.isDiverged {
+    return
+  }
+  var index = lowering.scopes.length() - 1
+  while index >= 0 {
+    endBindings builder, lowering.scopes[index]
+    index = index - 1
+  }
+}
+
+/** A `break` or a `continue`: the scopes opened inside the innermost loop end, the innermost first. */
+public fn endLoopScopes(var lowering: Lowering, var builder: FunctionBuilder) {
+  if lowering.isDiverged {
+    return
+  }
+  const depth = lowering.loopScopes.last() ?? 0
+  var index = lowering.scopes.length() - 1
+  while index >= depth {
+    endBindings builder, lowering.scopes[index]
+    index = index - 1
+  }
+}
+
+fn endBindings(var builder: FunctionBuilder, slots: List<Slot>) {
+  var index = slots.length() - 1
+  while index >= 0 {
+    emit builder, Instruction.EndOfScope(slots[index])
+    index = index - 1
+  }
+}
+
+// --- Which values may hold a `Close` object -------------------------------------------------------------------------
+
+/**
+ * Whether a value of this type may hold a `Close` object: an object of a `shared type` that implements `Close`, a
+ * record, a case, a tuple or a container with one inside, and a trait-typed value of a trait some implementer of
+ * `Close` implements. A closure is not asked into: what it captured is released with its environment.
+ *
+ * This is what the lowering can know while it runs, and it is the wider answer: the ownership pass narrows it with what
+ * the whole program turned out to box into a trait-typed value.
+ */
+public fn mayHoldClose(var lowering: Lowering, id: IrTypeId): Bool {
+  learnCloseFacts lowering
+  if lowering.closeTypes.isEmpty() {
+    return false
+  }
+  var search = Search()
+  holdsClose lowering, id, search
+}
+
+/** What the checker knows about `Close`, asked once per program. */
+fn learnCloseFacts(var lowering: Lowering) {
+  if lowering.closeFactsKnown {
+    return
+  }
+  const implementers = closeImplementers lowering.checker
+  lowering.closeTypes = implementers
+  lowering.closeTraits = traitsOfCloseImplementers lowering.checker, implementers
+  lowering.closeFactsKnown = true
+}
+
+/** Where the walk over the types stands: the types it is still answering, and whether it came back to one of them. */
+type Search {
+  var visiting: List<Int> = []
+  /** A `false` below a type that was revisited is not final: the type it came back to may still answer `true`. */
+  var revisited: Bool = false
+}
+
+fn holdsClose(var lowering: Lowering, id: IrTypeId, var search: Search): Bool {
+  if const Some(known) = lowering.closeHolding.get(id.value) {
+    return known
+  }
+  // A type that contains itself is answered by the rest of its fields
+  if search.visiting.contains(id.value) {
+    search.revisited = true
+    return false
+  }
+  const outer = search.revisited
+  search.revisited = false
+  search.visiting.append id.value
+  const answer = match lowering.program.typeAt(id) {
+    .SharedObject(layout) => isCloseLayout(lowering, layout) || layoutHoldsClose(lowering, layout, search)
+    .Record(layout) => layoutHoldsClose lowering, layout, search
+    .Variant(layout) => layoutHoldsClose lowering, layout, search
+    .Tuple(layout) => layoutHoldsClose lowering, layout, search
+    .FixedArray(item, _) => holdsClose lowering, item, search
+    .Box(inner) => holdsClose lowering, inner, search
+    .Lazy(inner) => holdsClose lowering, inner, search
+    .Runtime(_, arguments) => anyHoldsClose lowering, arguments, search
+    .Object(bounds) => anyCloseTrait(lowering, bounds) || anyTraitArgumentHolds(lowering, bounds, search)
+    _ => false
+  }
+  const last = search.visiting.length() - 1
+  const _ = search.visiting.removeAt last
+  if answer || !search.revisited {
+    lowering.closeHolding.set id.value, answer
+  }
+  search.revisited = outer || search.revisited
+  answer
+}
+
+fn anyHoldsClose(var lowering: Lowering, types: List<IrTypeId>, var search: Search): Bool {
+  for id in types {
+    if holdsClose(lowering, id, search) {
+      return true
+    }
+  }
+  false
+}
+
+fn layoutHoldsClose(var lowering: Lowering, layout: LayoutId, var search: Search): Bool {
+  var fields: List<IrTypeId> = []
+  for field in lowering.program.layoutAt(layout).fields {
+    fields.append field.annotation
+  }
+  anyHoldsClose lowering, fields, search
+}
+
+fn anyCloseTrait(var lowering: Lowering, bounds: List<TraitId>): Bool {
+  for bound in bounds {
+    if lowering.closeTraits.contains(lowering.program.traitAt(bound).symbol.value) {
+      return true
+    }
+  }
+  false
+}
+
+/** `List<Probe>`, `Iterate<Probe>`: what a trait-typed value of a collection holds is what its type arguments hold. */
+fn anyTraitArgumentHolds(var lowering: Lowering, bounds: List<TraitId>, var search: Search): Bool {
+  for bound in bounds {
+    const arguments = lowering.program.traitAt(bound).arguments
+    if anyHoldsClose(lowering, arguments, search) {
+      return true
+    }
+  }
+  false
+}
+
+/** Whether a layout is the object of a `shared type` that implements `Close`. */
+public fn isCloseLayout(var lowering: Lowering, layout: LayoutId): Bool {
+  match lowering.program.layoutAt(layout).origin {
+    Some(symbol) => lowering.closeTypes.contains symbol.value
+    None => false
+  }
+}
+
+// --- The destructor of every object that has one --------------------------------------------------------------------
+
+/**
+ * Asks for the `close()` of every `shared type` object of the program that implements `Close` and has none yet, and
+ * records it in [IrProgram.closeFunctions]: nothing in the program calls `close()`, so it is the release of the object
+ * that needs the instance (docs/design/DESTRUCTORS.md 8). Answers whether it asked for anything, because the bodies it
+ * adds to the worklist may bring new objects with them - the caller drains the worklist and asks again until it does not.
+ *
+ * A `native shared type` gets no entry: its `close` is a function of the runtime, and the runtime's drop function of its
+ * block already runs it.
+ */
+public fn requestCloseFunctions(var lowering: Lowering): Bool {
+  learnCloseFacts lowering
+  if lowering.closeTypes.isEmpty() {
+    return false
+  }
+  const close = match lowering.checker.wellKnown.symbolNamed("Close") {
+    Some(found) => found
+    None => {
+      return false
+    }
+  }
+  var subjects: Map<Int, TypeId> = [:]
+  for (key, value) in lowering.instantiation.memo {
+    subjects.set value.value, TypeId(key)
+  }
+  var isRequested = false
+  for index in 0..lowering.program.typeCount() {
+    const layout = match lowering.program.typeAt(IrTypeId(index)) {
+      .SharedObject(found) => found
+      _ => {
+        continue
+      }
+    }
+    if lowering.closeRequested.containsKey(layout.value) || !isCloseLayout(lowering, layout) {
+      continue
+    }
+    lowering.closeRequested.set layout.value, true
+    lowering.program.closingLayouts.insert layout.value
+    const subject = match subjects.get(index) {
+      Some(found) => found
+      None => {
+        continue
+      }
+    }
+    const symbol = match lowering.program.layoutAt(layout).origin {
+      Some(found) => found
+      None => {
+        continue
+      }
+    }
+    const declared = lowering.checker.symbolAt symbol
+    if const Some(module) = declared.module {
+      lowering.module = module
+    }
+    lowering.isSupported = true
+    const empty: Map<ParameterId, TypeId> = [:]
+    lowering.substitution = empty
+    const bound = lowering.checker.nominal close, []
+    const function = match memberOfType(lowering, subject, bound, "close", declared.span) {
+      Some(found) => found
+      None => {
+        continue
+      }
+    }
+    if const .Runtime(_) = lowering.program.functionAt(function).kind {
+      continue
+    }
+    lowering.program.closeFunctions.set layout.value, function
+    isRequested = true
+  }
+  isRequested
+}

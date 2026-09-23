@@ -31,18 +31,17 @@ public type ProcessOutput {
  *
  * # Examples
  *
- *     var child = Process.start("sort", ["-u"])?
- *     const result: Result<Void, IoError> = using child { running =>
- *       var input = running.input()
+ *     fn sortTwo(): Task<Result<Void, IoError>> {
+ *       using child = Process.start("sort", ["-u"])?
+ *       var input = child.input()
  *       input.addLine("banana").outcome()?
  *       input.addLine("apple").outcome()?
- *       input.finish().outcome()?
- *       const chunks = running.output().toList().outcome()?
- *       const code = running.wait().outcome()?
+ *       input.end().outcome()?
+ *       const chunks = child.output().toList().outcome()?
+ *       const code = child.wait().outcome()?
  *       print chunks.length(), code
- *       Ok(void)
+ *       Ok void
  *     }
- *     print result
  *
  * # Pitfalls
  *
@@ -50,7 +49,7 @@ public type ProcessOutput {
  * else's program is a decision and not a cleanup.
  */
 public native shared type Child with Close {
-  /** What the child reads. `finish()` closes its standard input, which is how most filters learn that they are done. */
+  /** What the child reads. `end()` closes its standard input, which is how most filters learn that they are done. */
   native fn input(): Sink<Bytes, IoError>
 
   /** What the child writes to standard output. */

@@ -26,6 +26,7 @@ use Layout, FieldLayout, containsCountedType from "../../ir/layout"
 use typeOfReference from "../../ir/verify"
 use keepingOf from "../../ir/kept"
 use referencesOf from "../../ir/elements"
+use closingOf from "../../ir/closing"
 use hexDigits, objectTypeName, payloadLayoutName from "../../ir/mangle"
 use nativeEntries from "./natives"
 use CExpression, CStatement, CSwitchCase, CDeclaration, CMember, declarationOf, cStringOf from "./writer"
@@ -98,7 +99,7 @@ public fn emittedProgramText(program: IrProgram, entry: String): String {
  * merely a wasted body.
  */
 public fn emittedFunctionsOf(program: IrProgram): List<IrFunction> {
-  const kept = keptFunctions program
+  const kept = keptWithDestructors program
   var found: List<IrFunction> = []
   for index in 0..program.functions.length() {
     const function = program.functions[index]
@@ -112,6 +113,43 @@ public fn emittedFunctionsOf(program: IrProgram): List<IrFunction> {
   }
   found.sort({ _.name })
   found
+}
+
+/**
+ * What [keptFunctions] keeps, with the `close()` of every object whose drop function the kept functions need.
+ *
+ * Nothing calls a destructor but the drop function of its layout, and a drop function is emitted only where something
+ * releases such an object - so a `close()` of an object the program never releases would be a `static` function
+ * nothing names, which `-Werror` refuses. They start out withheld, and each one whose drop function turns out to be
+ * needed joins the roots, until nothing changes: a destructor may release objects of its own.
+ */
+fn keptWithDestructors(program: IrProgram): List<Bool> {
+  var withheld: Set<Int> = Set.of()
+  for (_, function) in program.closeFunctions {
+    withheld.insert function.value
+  }
+  var kept = keptFunctions program, withheld
+  while !withheld.isEmpty() {
+    var functions: List<IrFunction> = []
+    for index in 0..program.functions.length() {
+      if kept[index] {
+        functions.append program.functions[index]
+      }
+    }
+    const demand = demandFlagsOf program, functions
+    var isChanged = false
+    for (layout, function) in program.closeFunctions {
+      if withheld.contains(function.value) && demand.dropped[layout] {
+        const _ = withheld.remove function.value
+        isChanged = true
+      }
+    }
+    if !isChanged {
+      break
+    }
+    kept = keptFunctions program, withheld
+  }
+  kept
 }
 
 /**
@@ -1099,6 +1137,7 @@ fn emitCountedHelpers(var emission: Emission, program: IrProgram, functions: Lis
   if demand.retained.isEmpty() && demand.dropped.isEmpty() {
     return
   }
+  const closing = closingOf program
   write emission, CDeclaration.Comment("Retaining and dropping the counted values inside a layout (docs/BACKEND.md 2.1).")
   for index in demand.retained {
     write emission, CDeclaration.Prototype(helperHeadOf("R_", program.layouts[index].name))
@@ -1106,11 +1145,19 @@ fn emitCountedHelpers(var emission: Emission, program: IrProgram, functions: Lis
   for index in demand.dropped {
     write emission, CDeclaration.Prototype(helperHeadOf("D_", program.layouts[index].name))
   }
+  // A drop function calls the destructor of its object, whose definition comes with the other functions further down
+  for index in demand.dropped {
+    if const Some(function) = program.closeFunctions.get(index) {
+      write emission, CDeclaration.Prototype(signatureHeadOf(program, program.functionAt(function)))
+    }
+  }
   for index in demand.retained {
     emitHelper emission, program, program.layouts[index], "R_", true
   }
   for index in demand.dropped {
-    emitHelper emission, program, program.layouts[index], "D_", false
+    const closer = program.closeFunctions.get index
+    const isReversed = closing.holdsLayout LayoutId(index)
+    emitDropHelper emission, program, program.layouts[index], closer, isReversed
   }
 }
 
@@ -1123,10 +1170,61 @@ fn emitHelper(var emission: Emission, program: IrProgram, layout: Layout, prefix
   var body: List<CStatement> = []
   const cast = CExpression.Cast "{layout.name} *", CExpression.Name("block")
   body.append CStatement.Declaration("{layout.name} *", "value", Some(cast))
-  const children = childStatements emission, program, layout, isRetain
+  const children = childStatements emission, program, layout, isRetain, false
   body.appendAll children
   const declaration = CDeclaration.Definition "", helperHeadOf(prefix, layout.name), body
   write emission, declaration
+}
+
+/**
+ * The drop function of a layout. An object whose type implements `Close` runs its destructor first, between the two
+ * halves that lend it a count while it runs (`torb_closing_begin`), and a layout that may hold such an object releases
+ * its fields in reverse declaration order (docs/design/DESTRUCTORS.md 2a and 8). Every other layout is released
+ * exactly as before, field by field in declaration order.
+ */
+fn emitDropHelper(
+  var emission: Emission,
+  program: IrProgram,
+  layout: Layout,
+  closer: FunctionId?,
+  isReversed: Bool,
+) {
+  if closer.isNone() && !isReversed {
+    emitHelper emission, program, layout, "D_", false
+    return
+  }
+  var body: List<CStatement> = []
+  const cast = CExpression.Cast "{layout.name} *", CExpression.Name("block")
+  body.append CStatement.Declaration("{layout.name} *", "value", Some(cast))
+  var children = childStatements emission, program, layout, false, isReversed
+  if const Some(function) = closer {
+    body.appendAll closeStatementsOf(program, function)
+    // The destructor read `value`, so a layout without a counted field needs no cast to `void` any more
+    if !layout.containsCounted {
+      children = []
+    }
+  }
+  body.appendAll children
+  const declaration = CDeclaration.Definition "", helperHeadOf("D_", layout.name), body
+  write emission, declaration
+}
+
+/** `torb_closing_begin(block)`, the call of `close()` with the object, and `torb_closing_end(block)`. */
+fn closeStatementsOf(program: IrProgram, function: FunctionId): List<CStatement> {
+  const callee = program.functionAt function
+  const block = CExpression.Name "block"
+  var argument = CExpression.Name "value"
+  if const Some(parameter) = callee.signature.parameters.first() {
+    // `var fn close()` takes the receiver as a place, and the place is this local
+    if parameter.isReference {
+      argument = CExpression.AddressOf argument
+    }
+  }
+  var statements: List<CStatement> = []
+  statements.append CStatement.Evaluate(CExpression.Call(CExpression.Name("torb_closing_begin"), [block]))
+  statements.append CStatement.Evaluate(CExpression.Call(CExpression.Name(callee.name), [argument]))
+  statements.append CStatement.Evaluate(CExpression.Call(CExpression.Name("torb_closing_end"), [block]))
+  statements
 }
 
 /**
@@ -1137,20 +1235,38 @@ fn emitHelper(var emission: Emission, program: IrProgram, layout: Layout, prefix
  * A helper of a layout nothing inside of which the ABI can count yet would have an empty body, and an unused parameter
  * is a warning, so it casts its own value to `void` once.
  */
-fn childStatements(var emission: Emission, program: IrProgram, layout: Layout, isRetain: Bool): List<CStatement> {
+fn childStatements(
+  var emission: Emission,
+  program: IrProgram,
+  layout: Layout,
+  isRetain: Bool,
+  isReversed: Bool,
+): List<CStatement> {
   var statements: List<CStatement> = []
   const value = CExpression.Name "value"
-  const common = if layout.variants.isEmpty() { layout.fields } else { layout.commonFields() }
+  var common = if layout.variants.isEmpty() { layout.fields } else { layout.commonFields() }
+  if isReversed {
+    common = reversedFields common
+  }
+  var fieldStatements: List<CStatement> = []
   for field in common {
     const place = CExpression.PointerMember value, memberNameOf(field)
     if const Some(statement) = childStatement(emission, program, place, field, isRetain) {
-      statements.append statement
+      fieldStatements.append statement
     }
+  }
+  // Reversed, the fields of a case were declared after the common ones and go first
+  if !isReversed {
+    statements.appendAll fieldStatements
   }
   var cases: List<CSwitchCase> = []
   for index in 0..layout.variants.length() {
     var found: List<CStatement> = []
-    for field in layout.fieldsOfVariant(index) {
+    var group = layout.fieldsOfVariant index
+    if isReversed {
+      group = reversedFields group
+    }
+    for field in group {
       // The group of a variant lives in the union, which is where its fields have to be reached
       const group = CExpression.Member CExpression.PointerMember(value, "payload"), variantMemberNameOf(index)
       const place = CExpression.Member group, memberNameOf(field)
@@ -1168,10 +1284,23 @@ fn childStatements(var emission: Emission, program: IrProgram, layout: Layout, i
     const tag = CExpression.PointerMember value, "tag"
     statements.append CStatement.Switch(tag, cases, [CStatement.Break])
   }
+  if isReversed {
+    statements.appendAll fieldStatements
+  }
   if statements.isEmpty() {
     statements.append CStatement.Evaluate(CExpression.Cast("void", value))
   }
   statements
+}
+
+fn reversedFields(fields: List<FieldLayout>): List<FieldLayout> {
+  var reversed: List<FieldLayout> = []
+  var index = fields.length() - 1
+  while index >= 0 {
+    reversed.append fields[index]
+    index = index - 1
+  }
+  reversed
 }
 
 /** The retain or the release of one counted field, and `None` for a field that carries no count at all. */
@@ -1205,11 +1334,22 @@ type HelperDemand {
   dropped: List<Int>
 }
 
+/** The same two sets as flags, by `LayoutId.value`. */
+type DemandFlags {
+  retained: List<Bool>
+  dropped: List<Bool>
+}
+
 /**
  * The layouts the emitted C really calls a helper of: every position that retains or releases a value, plus - because a
  * helper walks the fields of its layout - the layouts those fields need one of.
  */
 fn helperDemandOf(program: IrProgram, functions: List<IrFunction>, layouts: List<Bool>): HelperDemand {
+  const flags = demandFlagsOf program, functions
+  HelperDemand sortedLayouts(program, flags.retained, layouts), sortedLayouts(program, flags.dropped, layouts)
+}
+
+fn demandFlagsOf(program: IrProgram, functions: List<IrFunction>): DemandFlags {
   const count = program.layouts.length()
   var retains = filledFalse count
   var drops = filledFalse count
@@ -1239,6 +1379,7 @@ fn helperDemandOf(program: IrProgram, functions: List<IrFunction>, layouts: List
   for descriptor in program.elements {
     markLayoutOfHelper program, retains, descriptor.item
     markLayoutOfHelper program, drops, descriptor.item
+    markDestructor program, drops, descriptor.item
   }
   // A witness table names **both** helpers of the box its target is kept in: the drop function so that a release of an
   // erased value works, and the retain-children function so that making the payload of one unique works (5.7's note)
@@ -1249,7 +1390,7 @@ fn helperDemandOf(program: IrProgram, functions: List<IrFunction>, layouts: List
     }
   }
   closeHelperDemand program, retains, drops
-  HelperDemand sortedLayouts(program, retains, layouts), sortedLayouts(program, drops, layouts)
+  DemandFlags retains, drops
 }
 
 fn filledFalse(count: Int): List<Bool> {
@@ -1322,6 +1463,11 @@ fn markRetained(program: IrProgram, var retains: List<Bool>, id: IrTypeId) {
 fn markDropped(program: IrProgram, var drops: List<Bool>, id: IrTypeId) {
   const inner = countedFormOf program, id
   if const .SharedObject(layout) = program.typeAt(inner) {
+    // An object with a destructor has a drop function whether or not a field of it is counted
+    if program.closeFunctions.containsKey(layout.value) && program.hasLayout(layout) {
+      drops.set layout.value, true
+      return
+    }
     markLayoutFlag program, drops, layout
     return
   }
@@ -1977,6 +2123,18 @@ public fn runtimePrototypes(): Map<String, String> {
 }
 
 /** The layout of a type whose `R_`/`D_` pair something outside a function body calls: an element of a container. */
+/** An element that is an object with a destructor: its descriptor's release names the object's drop function. */
+fn markDestructor(program: IrProgram, var drops: List<Bool>, id: IrTypeId) {
+  if !program.hasType(id) {
+    return
+  }
+  if const .SharedObject(layout) = program.typeAt(countedFormOf(program, id)) {
+    if program.closeFunctions.containsKey(layout.value) && program.hasLayout(layout) {
+      drops.set layout.value, true
+    }
+  }
+}
+
 fn markLayoutOfHelper(program: IrProgram, var flags: List<Bool>, id: IrTypeId) {
   if !program.hasType(id) {
     return

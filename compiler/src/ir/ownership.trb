@@ -31,10 +31,11 @@ use IrProgram, IrFunction, FunctionKind, Ownership, Slot, SlotRole, SlotDeclarat
 use BlockId, Block, Instruction, Terminator, Argument, Reference from "./ir"
 use isManagedType, containsCountedType from "./layout"
 use isSharedStorage from "./capture"
-use usedSlots, definedSlot, successorsOf, reachableBlocks, typeOfReference from "./verify"
+use usedSlots, definedSlot, successorsOf, reachableBlocks, typeOfReference, usedByTerminator from "./verify"
 use Counted, LiveSets, countedSlotsOf, holdsCountedValue, livenessOf, filledFlags from "./liveness"
 use SlotFacts, Operand, slotFactsOf, operandsOf, withOperands from "./operand"
 use NativeTarget, nativeEntries from "../backend/c/natives"
+use Closing, closingOf from "./closing"
 
 // --- The whole pass -------------------------------------------------------------------------------------------------
 
@@ -48,8 +49,9 @@ use NativeTarget, nativeEntries from "../backend/c/natives"
  */
 public fn insertOwnership(var program: IrProgram) {
   summarizeParameters program
+  const closing = closingOf program
   for index in 0..program.functions.length() {
-    rewriteFunction program, index
+    rewriteFunction program, index, closing
   }
 }
 
@@ -364,14 +366,20 @@ type RewrittenBlock {
 }
 
 
-fn rewriteFunction(var program: IrProgram, index: Int) {
-  const original = program.functions[index]
+fn rewriteFunction(var program: IrProgram, index: Int, closing: Closing) {
+  const lowered = program.functions[index]
   // A function of the runtime is a signature and nothing else, and a body nothing reaches has nothing to own
-  if const .Runtime(_) = original.kind {
+  if const .Runtime(_) = lowered.kind {
     return
   }
-  if original.blocks.isEmpty() {
+  if lowered.blocks.isEmpty() {
     return
+  }
+  // The ends of scope the whole program does not need go first, so a function without one is exactly what it was
+  var original = lowered
+  if hasScopeEnds(lowered) {
+    original = withNeededScopeEnds program, closing, lowered
+    program.functions.set index, original
   }
   const before = countedSlotsOf program, original
   // Not one counted value anywhere: the function is left exactly as the lowering wrote it, down to the bytes of its
@@ -381,6 +389,9 @@ fn rewriteFunction(var program: IrProgram, index: Int) {
     return
   }
   var function = prepared program, original, before
+  if hasScopeEnds(function) {
+    function = resolvedScopeEnds program, function
+  }
   const facts = slotFactsOf program, function
   const counted = countedSlotsOf program, function
   const live = livenessOf program, function, counted
@@ -399,6 +410,7 @@ fn rewriteFunction(var program: IrProgram, index: Int) {
   }
   const conditional = conditionalOutSlotsOf program, function
   splitEdges function, counted, live, endDrops, blockCount, conditional
+  removeScopeEnds function
   program.functions.set index, function
 }
 
@@ -938,4 +950,300 @@ fn withEdge(terminator: Terminator, position: Int, block: BlockId): Terminator {
     }
     _ => terminator
   }
+}
+
+// --- The ends of scopes ---------------------------------------------------------------------------------------------
+
+/*
+ * A binding whose value may hold a `Close` object is released at the end of its scope, in reverse declaration order
+ * (docs/design/DESTRUCTORS.md 2a), and the lowering wrote an `EndOfScope` for it at every way out of its block. Here
+ * each of them becomes what it means:
+ *
+ * - where the value is still owned, the `EndOfScope` stays and is an ordinary use - the last one, so the rewrite puts
+ *   the `Release` right after it, and the next one's release after that;
+ * - where a move already took it - returned, stored, handed to a callee that keeps it - there is nothing left to
+ *   release, and it goes, so the move stays a move;
+ * - where some paths moved it and others did not, the binding keeps every one of its ends, and the moves on those
+ *   paths become retains: the slot is its own drop flag, and a flag it cannot have is paid for with one count.
+ *
+ * Which operands are moves is what the rewrite would decide without the ends of scope, so it is asked of the body
+ * without them; the ends that stay come after every such move on every path, which is what keeps each move a move.
+ */
+
+fn hasScopeEnds(function: IrFunction): Bool {
+  for block in function.blocks {
+    for instruction in block.instructions {
+      if const .EndOfScope(_) = instruction {
+        return true
+      }
+    }
+  }
+  false
+}
+
+/** The body without the ends of scope of bindings the program does not need them for: nothing they hold closes. */
+fn withNeededScopeEnds(program: IrProgram, closing: Closing, function: IrFunction): IrFunction {
+  const counted = countedSlotsOf program, function
+  var built = function
+  for index in 0..function.blocks.length() {
+    var kept: List<Instruction> = []
+    var isChanged = false
+    for instruction in function.blocks[index].instructions {
+      if const .EndOfScope(slot) = instruction {
+        if !counted.counts(slot) || !closing.holds(function.typeOfSlot(slot)) {
+          isChanged = true
+          continue
+        }
+      }
+      kept.append instruction
+    }
+    if isChanged {
+      built.blocks[index].instructions = kept
+    }
+  }
+  built
+}
+
+/** What becomes of the ends of scope, decided over the prepared body: kept where the value is owned, gone where moved. */
+fn resolvedScopeEnds(program: IrProgram, function: IrFunction): IrFunction {
+  const stripped = withoutScopeEnds function
+  const facts = slotFactsOf program, stripped
+  const counted = countedSlotsOf program, stripped
+  const live = livenessOf program, stripped, counted
+  const moves = movesOf program, facts, counted, live, stripped
+  const states = scopeStatesOf function, moves
+  // A binding that is moved on one path and not on another keeps all of its ends
+  var isPinned = filledFlags function.slots.length(), false
+  for block in 0..function.blocks.length() {
+    const instructions = function.blocks[block].instructions
+    for at in 0..instructions.length() {
+      if const .EndOfScope(slot) = instructions[at] {
+        if states[block][at] == stateMixed {
+          isPinned.set slot.value, true
+        }
+      }
+    }
+  }
+  var built = function
+  for block in 0..function.blocks.length() {
+    const instructions = function.blocks[block].instructions
+    var kept: List<Instruction> = []
+    var isChanged = false
+    for at in 0..instructions.length() {
+      const instruction = instructions[at]
+      if const .EndOfScope(slot) = instruction {
+        const state = states[block][at]
+        const isKept = state == stateOwned || state == stateMixed || (isPinned[slot.value] && state == stateMoved)
+        if !isKept {
+          isChanged = true
+          continue
+        }
+      }
+      kept.append instruction
+    }
+    if isChanged {
+      built.blocks[block].instructions = kept
+    }
+  }
+  built
+}
+
+fn withoutScopeEnds(function: IrFunction): IrFunction {
+  var built = function
+  for index in 0..function.blocks.length() {
+    var kept: List<Instruction> = []
+    for instruction in function.blocks[index].instructions {
+      if const .EndOfScope(_) = instruction {
+        continue
+      }
+      kept.append instruction
+    }
+    built.blocks[index].instructions = kept
+  }
+  built
+}
+
+/** Every `EndOfScope` left after the rewrite: each one stood where a release now follows it, or nothing had to. */
+fn removeScopeEnds(var function: IrFunction) {
+  if !hasScopeEnds(function) {
+    return
+  }
+  function = withoutScopeEnds function
+}
+
+/**
+ * What a scoped binding is at one point: no path reached it yet, never defined on the way here, owned, moved out, owned
+ * on some paths and moved on others, or defined on some paths only. The last one keeps no end at all: the value is
+ * released at its last use, as it would be without one, because an end there would release what one path never made.
+ */
+const stateUnreached = 0 - 1
+const stateUndefined = 0
+const stateOwned = 1
+const stateMoved = 2
+const stateMixed = 3
+const statePartial = 4
+
+fn joinedState(left: Int, right: Int): Int {
+  if left == stateUnreached || left == right {
+    return right
+  }
+  if right == stateUnreached {
+    return left
+  }
+  if left == stateUndefined || right == stateUndefined || left == statePartial || right == statePartial {
+    return statePartial
+  }
+  stateMixed
+}
+
+/**
+ * The slots the rewrite would move out of, per block and per instruction of the body without ends of scope: the same
+ * backwards walk as [rewriteBlock], asking [decideOperand] and keeping only the answer "owned, last".
+ */
+fn movesOf(
+  program: IrProgram,
+  facts: SlotFacts,
+  counted: Counted,
+  live: LiveSets,
+  function: IrFunction,
+): List<List<List<Slot>>> {
+  var found: List<List<List<Slot>>> = []
+  for index in 0..function.blocks.length() {
+    const block = function.blocks[index]
+    var perInstruction: List<List<Slot>> = []
+    for _ in block.instructions {
+      perInstruction.append([])
+    }
+    var alive = live.liveOut[index]
+    for slot in usedByTerminator(block.terminator) {
+      markAlive alive, counted, slot
+    }
+    var at = block.instructions.length() - 1
+    while at >= 0 {
+      const instruction = block.instructions[at]
+      const operands = operandsOf program, facts, instruction
+      if const .Panic(_, _) = instruction {
+        for operand in operands {
+          markAlive alive, counted, operand.slot
+        }
+        at = at - 1
+        continue
+      }
+      if const Some(target) = definedSlot(instruction) {
+        const position = counted.positionOf target
+        if position >= 0 {
+          alive.set position, false
+        }
+      }
+      var moved: List<Slot> = []
+      var position = operands.length() - 1
+      while position >= 0 {
+        const operand = operands[position]
+        var ignoredRetains: List<Instruction> = []
+        var ignoredReleases: List<Instruction> = []
+        const answer = decideOperand program, facts, counted, alive, ignoredRetains, ignoredReleases, operand
+        if answer.ownership == Ownership.Owned && answer.isLastUse {
+          moved.append operand.slot
+        }
+        markAlive alive, counted, operand.slot
+        position = position - 1
+      }
+      perInstruction.set at, moved
+      at = at - 1
+    }
+    found.append perInstruction
+  }
+  found
+}
+
+/**
+ * The state of every scoped binding at every `EndOfScope`, by block and by instruction (the entry of any other
+ * instruction is `stateUndefined` and unused): a forward walk from the entry to a fixpoint, where a definition makes a
+ * binding owned, a move makes it moved, and two paths that disagree make it mixed - or partial, where one of them never
+ * defined it.
+ */
+fn scopeStatesOf(function: IrFunction, moves: List<List<List<Slot>>>): List<List<Int>> {
+  const slotCount = function.slots.length()
+  const blockCount = function.blocks.length()
+  var entering: List<List<Int>> = []
+  for index in 0..blockCount {
+    // The entry is where nothing is defined yet; every other block is unreached until a path arrives
+    const initial = if index == 0 { stateUndefined } else { stateUnreached }
+    entering.append filledStates(slotCount, initial)
+  }
+  var isQueued = filledFlags blockCount, false
+  var queue: List<Int> = []
+  if blockCount > 0 {
+    queue.append 0
+    isQueued.set 0, true
+  }
+  var cursor = 0
+  while cursor < queue.length() {
+    const index = queue[cursor]
+    cursor = cursor + 1
+    isQueued.set index, false
+    const leaving = walkedBlock(function, moves, index, entering[index]).leaving
+    for target in successorsOf(function.blocks[index]) {
+      var joined = entering[target]
+      var isChanged = false
+      for slot in 0..slotCount {
+        const state = joinedState joined[slot], leaving[slot]
+        if state != joined[slot] {
+          joined.set slot, state
+          isChanged = true
+        }
+      }
+      if !isChanged {
+        continue
+      }
+      entering.set target, joined
+      if !isQueued[target] {
+        isQueued.set target, true
+        queue.append target
+      }
+    }
+  }
+  var found: List<List<Int>> = []
+  for index in 0..blockCount {
+    found.append walkedBlock(function, moves, index, entering[index]).seen
+  }
+  found
+}
+
+fn filledStates(count: Int, state: Int): List<Int> {
+  var filled: List<Int> = []
+  for _ in 0..count {
+    filled.append state
+  }
+  filled
+}
+
+/** One block, walked forwards: the states it leaves, and the state each of its instructions sees. */
+type WalkedBlock {
+  leaving: List<Int>
+  /** Per instruction: the state of the slot of an `EndOfScope`, and `stateUndefined` for every other one. */
+  seen: List<Int>
+}
+
+fn walkedBlock(function: IrFunction, moves: List<List<List<Slot>>>, index: Int, entering: List<Int>): WalkedBlock {
+  var states = entering
+  var seen: List<Int> = []
+  var stripped = 0
+  for instruction in function.blocks[index].instructions {
+    if const .EndOfScope(slot) = instruction {
+      seen.append states[slot.value]
+      continue
+    }
+    seen.append stateUndefined
+    for slot in moves[index][stripped] {
+      states.set slot.value, stateMoved
+    }
+    if const Some(target) = definedSlot(instruction) {
+      if target.value >= 0 && target.value < states.length() {
+        states.set target.value, stateOwned
+      }
+    }
+    stripped = stripped + 1
+  }
+  WalkedBlock states, seen
 }

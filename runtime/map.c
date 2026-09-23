@@ -70,18 +70,19 @@ static uint32_t torb_next_power_of_two(uint32_t value) {
   return power;
 }
 
+/* The entries in the reverse of the order they were inserted, the value before its key, as a list releases its elements. */
 static void torb_map_storage_drop(void *block) {
   torb_map_storage *storage = (torb_map_storage *)block;
   uint32_t index;
-  for (index = 0u; index < storage->entry_count; index += 1u) {
-    if (!torb_entry_alive(storage, index)) {
+  for (index = storage->entry_count; index > 0u; index -= 1u) {
+    if (!torb_entry_alive(storage, index - 1u)) {
       continue;
     }
-    if (storage->key->release != NULL) {
-      storage->key->release(torb_entry_key(storage, index));
-    }
     if (storage->value->release != NULL) {
-      storage->value->release(torb_entry_value(storage, index));
+      storage->value->release(torb_entry_value(storage, index - 1u));
+    }
+    if (storage->key->release != NULL) {
+      storage->key->release(torb_entry_key(storage, index - 1u));
     }
   }
   torb_raw_free(storage->buckets, (size_t)storage->bucket_count * sizeof(int32_t));

@@ -21,6 +21,7 @@ use printProgram from "../print"
 use Lowering, newLowering from "./context"
 use lowerEntryFunction, lowerInstance, seedModule from "./function"
 use lowerGenerated from "./derive"
+use requestCloseFunctions from "./scope"
 
 /** The whole lowering of a checked workspace: the entry functions first, then everything the worklist reaches. */
 public fn lowerWorkspace(
@@ -41,6 +42,10 @@ public fn lowerWorkspace(
       seedModule lowering, module
       drainPending lowering
     }
+  }
+  // Nothing calls a destructor, so the objects that have one ask for it once everything else is lowered
+  while requestCloseFunctions(lowering) {
+    drainPending lowering
   }
   finishProgram lowering.program
   // Both back ends read the IR after this, so a value whose concrete type the program decides is that type from here

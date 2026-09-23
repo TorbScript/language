@@ -30,10 +30,11 @@ fn outsideAccount(body: String): Map<String, String> {
 
 /** A stream-shaped pair: a `shared trait` whose verbs change the object, and a wrapper that keeps one in a field. */
 const producer = "shared trait Producer with Close \{\n  var fn next(): Task<Int?>\n\n"
+  + "  var fn pause() \{\n  \}\n\n"
   + "  var fn doubled(): Producer \{\n    Doubling self\n  \}\n\}\n\n"
   + "shared type Doubling with Producer \{\n  var upstream: Producer\n\n"
   + "  var fn next(): Task<Int?> \{\n    upstream.next().await()\n  \}\n\n"
-  + "  var fn close() \{\n    upstream.close()\n  \}\n\}\n\n"
+  + "  var fn close() \{\n  \}\n\}\n\n"
   + "shared type Counting with Producer \{\n  var seen: Int = 0\n\n"
   + "  var fn next(): Task<Int?> \{\n    seen = seen + 1\n    Some(seen)\n  \}\n\n"
   + "  var fn close() \{\n  \}\n\}\n\n"
@@ -207,7 +208,7 @@ group "Temporaries" {
   }
 
   test "a temporary with an identity is also a `var` argument, and the place says it is a temporary" {
-    const source = "{producer}fn drain(var source: Producer) \{\n  source.close()\n\}\n\n"
+    const source = "{producer}fn drain(var source: Producer) \{\n  source.pause()\n\}\n\n"
       + "fn probe() \{\n  drain(Counting())\n\}"
     assert problems(source).isEmpty()
     const found = probe source
@@ -226,13 +227,13 @@ group "Temporaries" {
 
 group "A shared object from a call (gap 52)" {
   test "a result is not a path, so a `var` binding of one is ordinary" {
-    const source = "{producer}fn probe() \{\n  var writable = Counting()\n  writable.close()\n\}"
+    const source = "{producer}fn probe() \{\n  var writable = Counting()\n  writable.pause()\n\}"
     assert problems(source).isEmpty()
   }
 
   test "the read-only view is a promise about a *path*, so a function that hands one out hands out a `var`" {
     const source = "{producer}fn view(): Producer \{\n  Counting()\n\}\n\n"
-      + "fn probe() \{\n  var writable = view()\n  writable.close()\n\}"
+      + "fn probe() \{\n  var writable = view()\n  writable.pause()\n\}"
     assert problems(source).isEmpty()
   }
 }
@@ -291,12 +292,12 @@ group "An object changes through any path it is reached through" {
     assert problems(field).isEmpty()
     const copied = "{holder}fn probe(target: Holder, view: Connection): Holder \{\n  target.copy(held: view)\n\}"
     assert problems(copied).isEmpty()
-    const traitTyped = "{producer}fn probe(view: Producer) \{\n  view.close()\n\}"
+    const traitTyped = "{producer}fn probe(view: Producer) \{\n  view.pause()\n\}"
     assert problems(traitTyped).isEmpty()
   }
 
   test "a `var` argument may rebind what it is given, so it still takes a `var` path" {
-    const source = "{producer}fn drain(var source: Producer) \{\n  source.close()\n\}\n\n"
+    const source = "{producer}fn drain(var source: Producer) \{\n  source.pause()\n\}\n\n"
       + "fn probe(view: Producer) \{\n  drain(view)\n\}"
     assert(problems(source) == ["`drain` changes `source`, and `view` is a `const`"])
   }

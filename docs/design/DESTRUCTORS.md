@@ -1,11 +1,17 @@
 # Destructors, `close()` and `using`
 
-**Status: proposed** — decided by the owner and made precise on 2026-09-22 after the language review; none of it is
-implemented yet (slices R1 to R3 in section 10).
+**Status: implemented in the C back end** — decided by the owner and made precise on 2026-09-22 after the language
+review. The checker half is in (2026-09-23, `compiler/src/semantics/checker/close.trb`): only a `shared type`
+implements `Close` (section 5), no program calls `close()` (section 3), `self` does not escape `close()` (section 2a),
+and `using name = expression` is a binding whose name does not escape its block, with `fn using` deleted from
+`std/core` (section 4). The release half is in too (2026-09-23): the drop function of an object runs its `close()`,
+bindings and temporaries are released at the ends of their scopes, fields and elements in reverse order, and a
+cancelled task's frame the same way (section 10, slices R1 and R3). What is still open is listed there: the copying
+slice of section 2a, and the type names in the leak report of section 9.
 
 `close()` stops being a method somebody remembers to call and becomes the language's one destructor: the runtime's
 own reference count triggers it, exactly once, the moment the last holder of a value goes away. This reopens a
-decision this repository has recorded as settled three times over — [no-destructors.md](language/execution/no-destructors.md),
+decision this repository has recorded as settled three times over — [no-destructors.md](language/execution/destructors.md),
 `docs/BACKEND.md` section 7's gap 10, and the drop-argument of `docs/design/CONCURRENCY.md` section 8 — and this document is
 the record of why, and exactly what changes because of it.
 
@@ -33,11 +39,15 @@ the record of why, and exactly what changes because of it.
 - **[10. Slices](#10-slices)** — R1 the runtime, R2 the escape check, R3 the task
 - **[11. Open, for the owner](#11-open-for-the-owner)**
 
+Section 1 is the record of the state this document started from: its three probes type checked on 2026-09-22 and
+are refused since the checker half landed - the `using` call because the function is gone, the direct `close()` calls
+by section 3, the `Ticket` by section 5.
+
 Every snippet marked **type checks today** was run against the real compiler, in `tests/language/` where `std`
-resolves, exactly as `docs/design/CONCURRENCY.md` and `docs/design/COLLECTIONS.md` probe theirs. Nothing in this document's decisions
-is implemented yet, so a snippet that shows the destructor itself is a `trb fragment` — lexed, not parsed against a
-grammar that does not have the form yet — and a diagnostic is hand-written and marked as proposed. That is the honest
-state of slice R1 in section 10: none of it exists, all of it is decided.
+resolves, exactly as `docs/design/CONCURRENCY.md` and `docs/design/COLLECTIONS.md` probe theirs. The snippets were
+written before any of it was implemented, so one that shows the destructor itself is a `trb fragment` and a diagnostic
+marked as proposed is hand-written. The diagnostics of sections 3 and 5 are now the checker's own, and the one of
+section 4 exists in the general form "`file` is bound by `using`, so it cannot be stored in a field", with its own note.
 
 ---
 
@@ -117,8 +127,9 @@ no destructors behind it"*:
 `docs/design/CONCURRENCY.md` section 8 leans on the same promise for an unrelated question — whether dropping a `Task`
 handle should cancel the task — and states it just as flatly: *"Anything else would make the moment a reference count
 reaching zero observable, and CONCEPT says it is not."* Three documents, one sentence, and this one reopens it. (All
-three have since been brought in line: `no-destructors.md` is retired, gap 10 is superseded, and CONCURRENCY section 8
-argues from "the handle is not the frame" instead.)
+three have since been brought in line: `no-destructors.md` became [destructors.md](language/execution/destructors.md),
+the page of the destructor, gap 10 is superseded, and CONCURRENCY section 8 argues from "the handle is not the frame"
+instead.)
 
 **Nothing stops a plain `type` from implementing `Close` either**, which is the sharper half of today's gap. `Close`
 being a `shared trait` restricts what a `shared type` may implement, not who may implement `Close`:
@@ -498,7 +509,26 @@ heap would make `close()`'s timing non-deterministic again, undoing the whole of
 
 ## 10. Slices
 
-**R1 — the destructor in the runtime.** `Close` becomes real: `semantics/checker` adds the restriction that only a
+**R1 — the destructor in the runtime.** *Status: done in the C back end (2026-09-23), except the slice. The checker
+half: sections 3, 5 and the `self` rule of 2a, with a test per rule in `compiler/tests/destructors.test.trb`. The
+release half: the lowering writes an `EndOfScope` for every binding whose type may hold a `Close` object at every way
+out of its block - the end, `return`, `?`, `break`, `continue`, the `stop` of a task - for the names of a pattern in
+the block they are bound for, and for such a temporary at the end of its statement (`ir/lower/scope.trb`); which types
+may hold one is a fixpoint over the whole program (`ir/closing.trb`); the ownership pass keeps an end as the last use
+where the value is still owned, drops it where a move emptied the slot, keeps every end of a binding that is moved on
+one path and not on another (the moves become retains there), and drops an end that some path reaches without the
+binding (`resolvedScopeEnds` in `ir/ownership.trb`). The lowering asks for the `close()` of every object layout that
+implements `Close` once everything else is lowered (`requestCloseFunctions`), and `emitDropHelper` in
+`backend/c/emit.trb` calls it statically between `torb_closing_begin` and `torb_closing_end` of `runtime/memory.c`,
+which lend the object a count while `close()` runs and panic where it kept one; a layout that may hold such an object
+releases its fields last to first, and a list and a map release their elements last to first. The C of every program
+of `benchmarks/` is byte for byte what it was. Every `close()` call `std` had was removed with the checker's rule
+(`Pushing`, `Remapped`, `Buffered` of `sink.trb`; `Pulling`, `Stepping`, `Remapped`, `Staged`, `Produced`,
+`Checked` of `source.trb`; `Body` of `std/http`; `File.write` of `std/fs`), and the release of the field makes each of
+those closes now. Open: a slice of a list whose elements may hold `Close` still shares the storage instead of copying,
+and a `native shared type` (`File`, `Child`) closes through the drop function of the runtime (`torb_file_drop`) once
+the back end lowers it - it does not yet. Tests: `tests/conformance/destructor-*.trb`, the group "The ends of scope" of
+`compiler/tests/ownership.test.trb`, and `runtime/tests/memory_test.c` and `list_test.c`.* `Close` becomes real: `semantics/checker` adds the restriction that only a
 `shared type` may implement it (section 5), rejects a direct call (section 3), and rejects keeping `self` inside
 `close()` (section 2a); `ir` computes "may contain `Close`" per layout to a fixpoint and marks a `Close`-implementing
 layout so the ownership pass knows to add the call; the ownership pass releases the slots of such types at the end of
@@ -512,7 +542,13 @@ a temporary at the end of its statement, fields in reverse, a moved slot, a slic
 still passes; the live-block counter of section 9(c) is zero after each; and `ir --statistics` shows no change in the
 number of releases for a program without a `Close` type.
 
-**R2 — `using` is a binding, and the function goes.** `using name = expression` becomes a seventh binding form next to
+**R2 — `using` is a binding, and the function goes.** *Status: done in the checker (2026-09-23). `using` is a
+contextual keyword - a binding only in front of a name and an `=` - so the syntax change needed no second commit: the
+seed never meets the form, because the compiler's sources do not use it. Refused: a field or collection store, a
+`return`, a binding to another name, a constructor, a case, a `var fn` or a member of a shared object it is handed to,
+a function value it is handed to, a closure that may outlive the block or that its callee keeps, and `using` at the
+top level of a file. What a call answers is not followed: a function that returns its argument can still carry the
+object out, which needs the Owned/Borrowed summary of the lowering.* `using name = expression` becomes a seventh binding form next to
 the six `control-structures.md` names (section 4); the checker extends the `ClosureKind.Local | .Escaping` tracking of
 `docs/BACKEND.md` gap 14 to a name bound by `using`, rejecting a field store, a return, and capture by an escaping
 closure. Every `using resource { body => ... }` call site in `std`, the compiler, the examples and the docs becomes a
@@ -520,7 +556,10 @@ binding, and `fn using` is deleted from `std/core/src/control.trb` — a syntax 
 `docs/RUST-EXIT.md` 4.2. Gate: a checker test per rejected shape, with the diagnostic's exact text pinned, and no
 `using` call left in the repository.
 
-**R3 — cancellation drops.** The task's cancellation path — releasing a cancelled task's frame at the next suspension
+**R3 — cancellation drops.** *Status: done in the C back end (2026-09-23): a stop path releases the frame's live slots
+the last declared first (`slotsOf` in `ir/suspension.trb`), a `stop` ends every open scope first, and
+`tests/conformance/destructor-cancelled-task.trb` pins a cancelled task closing what it held before its waiter hears
+of it.* The task's cancellation path — releasing a cancelled task's frame at the next suspension
 point or back-edge check (`docs/design/CONCURRENCY.md` section 8 and gap 13) — runs `close()` on every value in it through the
 ordinary release, in the order of section 2a, and never calls or awaits `end()`. Gate: a task cancelled while a
 `using`-bound `Sink` is open leaves it closed and never calls `end()`; a task that writes `sink.end().await()` and then

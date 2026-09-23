@@ -1,0 +1,58 @@
+/**
+ * Every way out of a block ends the bindings of the blocks it leaves: a `return` in the middle of a function, a `?`
+ * that hands a failure on, a `break` and a `continue`. Each one closes what it leaves behind, innermost block first and
+ * inside a block the last declared first, before the caller sees the answer.
+ */
+
+shared type Probe with Close {
+  name: String
+
+  var fn close() {
+    print "close {name}"
+  }
+}
+
+/** Returns from inside a nested block: both blocks end there. */
+fn early(isStopping: Bool): Int {
+  const outer = Probe "outer"
+  if isStopping {
+    const inner = Probe "inner"
+    print "returning early"
+    return 1
+  }
+  print "not early"
+  2
+}
+
+/** A `?` that fails leaves the function like a `return` does. */
+fn checked(answer: Result<Int, String>): Result<Int, String> {
+  const held = Probe "held"
+  const value = answer?
+  print "got {value}"
+  Ok value
+}
+
+/** `break` and `continue` end the scope of the loop body they leave. */
+fn looping() {
+  for index in 0..4 {
+    const turn = Probe "turn {index}"
+    if index == 1 {
+      continue
+    }
+    if index == 2 {
+      break
+    }
+    print "turn {index} done"
+  }
+  print "after the loop"
+}
+
+print early(isStopping: true)
+print "---"
+print early(isStopping: false)
+print "---"
+print checked(Fail("no answer"))
+print "---"
+print checked(Ok(3))
+print "---"
+looping()

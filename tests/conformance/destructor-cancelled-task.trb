@@ -1,0 +1,31 @@
+use sleep from "std/time"
+use pause from "std/task"
+
+/**
+ * Cancellation is drop: a task that is cancelled while it waits stops there, and the release of its frame closes what
+ * the frame held, the last declared first, before anybody who waits for the task hears that it was cancelled. `close()`
+ * runs synchronously and waits for nothing.
+ */
+
+shared type Probe with Close {
+  name: String
+
+  var fn close() {
+    print "close {name}"
+  }
+}
+
+/** Holds two probes across a long wait it never finishes. */
+fn holding(): Task<Int> {
+  using first = Probe "first"
+  using second = Probe "second"
+  print "holding {first.name} and {second.name}"
+  sleep(60.0).await() ?? void
+  print "the wait ended"
+  1
+}
+
+var task = holding()
+pause().await() ?? void
+task.cancel()
+print "cancelled: {task.await().isOk()}"

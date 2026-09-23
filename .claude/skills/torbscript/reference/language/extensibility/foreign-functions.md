@@ -63,8 +63,8 @@ foreign {
    it, the way it shows every other capability, and a `Sandbox` can never grant it (see [The sandbox](../configuration/the-sandbox.md)).
 
 6. **Memory a C library allocated is never freed by the runtime.** It is owned by a `shared type` with `Close`, and
-   `using` is what makes the cleanup deterministic - the same mechanism as any other resource
-   (see [There are no destructors](../execution/no-destructors.md)).
+   its `close()` - which the last release runs, and a `using` binding pins to the end of a block - is the cleanup, the
+   same mechanism as any other resource (see [Destructors](../execution/destructors.md)).
 
 7. **A closure without captures can be passed where C expects a function pointer; a closure with captures cannot.**
    C has no lifetime for what the closure would need to keep alive, so a callback with state is wrapped in a
@@ -93,6 +93,6 @@ native fn fastPath(): Int64
 ## Related
 
 - [The sandbox](../configuration/the-sandbox.md) - the one capability a sandboxed script can never be granted.
-- [There are no destructors](../execution/no-destructors.md) - `Close` and `using`, for memory a C library allocated.
+- [Destructors](../execution/destructors.md) - `Close` and `using`, for memory a C library allocated.
 - [Control structures are functions](control-structures.md) - the other half of "extended by functions, not macros".
 

@@ -34,6 +34,7 @@ use NativeTarget from "../../backend/c/natives"
 use Lowering, reportUnsupported, finishBlock, isVoidType, nativeNamed, irTypeOf, locationOf from "./context"
 use valueSlot, unsupportedSlot, abandonedSlot, lowerValue from "./expression"
 use lowerSpawnedClosure, closureSignatureOf from "./closure"
+use endEveryScope from "./scope"
 
 // --- Types ----------------------------------------------------------------------------------------------------------
 
@@ -288,6 +289,7 @@ public fn lowerStop(var lowering: Lowering, var builder: FunctionBuilder, destin
   if !lowering.isTaskBody {
     return unsupportedSlot lowering, builder, destination, "`stopAsCancelled` outside the body of a task", at
   }
+  endEveryScope lowering, builder
   finishBlock lowering, builder, Terminator.Stop
   abandonedSlot lowering, builder, destination
 }

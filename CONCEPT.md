@@ -904,11 +904,13 @@ unless user.isAdmin {
 }
 ```
 
-**`using` is not one of those functions for long: it binds a name, so it becomes a declaration** (decided, not yet
-implemented - [docs/design/DESTRUCTORS.md](docs/design/DESTRUCTORS.md) section 4). `using file = File.open(path)?` binds `file` to
+**`using` is not one of those functions: it binds a name, so it is a binding form next to `const` and `var`**
+([docs/design/DESTRUCTORS.md](docs/design/DESTRUCTORS.md) section 4). `using file = File.open(path)?` binds `file` to
 an object whose release - and the `close()` that release runs - happens at the end of the block, and the checker
-refuses to let the name escape it (no field, no `return`, no escaping closure). `using` never awaits: a graceful end
-such as `sink.end().await()?` is a line of its own.
+refuses to let the name escape it: no field, no collection, no `return`, no other name, no constructor, case, `var fn`
+or member of a shared object it is handed to, no closure that may outlive the block. `using` never awaits: a graceful
+end such as `sink.end().await()?` is a line of its own. `using` is a keyword only in front of a name and an `=`, and
+not at the top level of a file, whose block would be the whole program.
 
 ```trb
 fn readConfig(path: String): Result<String, IoError> {
@@ -917,10 +919,8 @@ fn readConfig(path: String): Result<String, IoError> {
 }
 ```
 
-Today `using` is still the function `fn using<Resource: Close, Value>(var resource: Resource, body: (var Resource) =>
-Value): Value` in `std/core`, whose closure takes the resource as an ordinary parameter
-(`using File.open(path)? { file => file.readAll() }`). It is deleted when the binding form lands; there is one
-`using`, not two.
+The checker enforces the binding, and the release at the end of the block runs `close()`. There is one `using`, not
+two: the function of the same name that took a closure is gone from `std/core`.
 
 ## Types
 
@@ -1082,7 +1082,7 @@ samples[1..4].sort { _ }             // A range is a path, too: sorts this part 
   bound to a name, stored in a field, a collection or a case, returned, handed to `spawn` or to a parameter that keeps
   it. A parameter only calls its closure when it has a function type, its function has a body, and that body calls it,
   calls it inside a closure that itself only runs during the call, or hands it on by name to a parameter that only
-  calls it - which is exactly what the receiver closures, the DSLs, `forEach` and `using` are. A lazy stage
+  calls it - which is exactly what the receiver closures, the DSLs, `forEach` and `unless` are. A lazy stage
   (`map`, `filter`) keeps its closure in the stage it answers. Whether a parameter keeps what it is handed is a fact of
   the callee's body, so the checker answers it once every body it depends on is checked. The decision is recorded,
   because it is also what lets an implementation put the closure's environment on the stack.
@@ -1098,7 +1098,7 @@ samples[1..4].sort { _ }             // A range is a path, too: sorts this part 
 - A temporary is not a `var` path: `iterate().next()` is a compile error, `var cursor = iterate()` comes first.
   (Changing something that is thrown away is always a mistake.) As the _argument_ of a `var` parameter a temporary
   is fine - the callee is its only owner, so "copy in, copy out" is exact and nothing is written back anywhere:
-  `using File.open(path)? { ... }`. The rule is about the base of a path (`f().x = 1`), not about ownership.
+  `drain(File.open(path)?)` for a `fn drain(var file: File)`. The rule is about the base of a path (`f().x = 1`), not about ownership.
 - The variable of a `for` loop is a `const`. To change elements, use the path (`items[index].x = 1`,
   `items.update(index) { ... }`) or build a new collection with `map`. **`for var element in items`** (decided, not
   yet implemented - [docs/design/COLLECTIONS.md](docs/design/COLLECTIONS.md) section 3.11) binds a `var` reference to each slot
@@ -1561,7 +1561,8 @@ extend<Item> List<Item> with Show where Item: Show { ... }   // Type parameters 
   ("fields and cases belong to the declaration of the type"), because exhaustiveness and the generated constructor
   have to be decidable from the declaration alone.
 - Traits are implemented by values. A `shared type` can only implement a `shared trait` (`shared trait Close`), and a
-  value of such a trait type counts as shared. So a `List<Item>` or an `Iterate<Item>` is always a value: nobody
+  value of such a trait type counts as shared. `Close` itself, and every trait that comes `with Close`, is implemented
+  by a `shared type` only: a value is copied on assignment, and two copies would close one resource twice. So a `List<Item>` or an `Iterate<Item>` is always a value: nobody
   changes it while you hold it, and it can be passed to another task.
 - Several traits can be one type: `fn audit(entry: Show & Encode)`, `List<Show & Hash>`. It is the `&` of bounds in
   type position, and only traits can be combined (two different types have no values in common) - `&` is to traits
@@ -2029,8 +2030,8 @@ while const Some(line) = lines.next().await()? {
 - **Buffering is always a wrapper.** `sink.buffered(capacity:)` answers a `Buffered` with its own `flush()`;
   `end()` flushes and `close()` does not. "When was it actually written" has to be answerable.
 - **`close()` releases what is above or below,** synchronously and without failing, which is what a destructor needs:
-  it is the one the last release runs ([docs/design/DESTRUCTORS.md](docs/design/DESTRUCTORS.md)). Every derived end closes the one
-  it came from, so a reader that stops early (`take(5)`, a `find` that found it, an abandoned loop) never leaves a file
+  it is the one the last release runs ([docs/design/DESTRUCTORS.md](docs/design/DESTRUCTORS.md)), and no program calls it. Every
+  derived end holds the one it came from in a field, which its release releases after its own `close()`, so a reader that stops early (`take(5)`, a `find` that found it, an abandoned loop) never leaves a file
   handle open. `end()` is the graceful counterpart and can fail; `close()` is the abrupt one and cannot. A sink that
   is closed without being ended may have written less than it was given, and nothing ends a sink implicitly - not
   even `using`.
@@ -2289,8 +2290,8 @@ script.apply(config)?                                           // The body of t
 
 The language is extended by functions, not by macros or annotations:
 
-- Control structures are functions with closure or `lazy` parameters (`do`, `unless`, `retry`, `test`, and `using`
-  until it becomes a binding - see [Blocks and Control Flow](#blocks-and-control-flow)).
+- Control structures are functions with closure or `lazy` parameters (`do`, `unless`, `retry`, `test`); `using` binds
+  a name, so it is a binding form instead - see [Blocks and Control Flow](#blocks-and-control-flow).
 - DSLs are functions with receiver closures.
 - Operators are traits.
 - Code that needs to be _looked at_ instead of executed (query providers, `assert`, validation rules, change
@@ -2457,14 +2458,14 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
   objects can; [docs/design/DESTRUCTORS.md](docs/design/DESTRUCTORS.md) section 9 is how they are kept out: trees and graphs hold
   handles instead of references, a stored callback takes its owner as a receiver, a leak is reported with the types
   still alive, and `Weak<Target>` comes to `std` only if those reports show a need.
-- **`close()` is the one destructor** (decided, not yet implemented - [docs/design/DESTRUCTORS.md](docs/design/DESTRUCTORS.md)).
+- **`close()` is the one destructor** ([docs/design/DESTRUCTORS.md](docs/design/DESTRUCTORS.md)).
   Only a `shared type` may implement `Close`; the last release runs `close()` exactly once; user code cannot call it,
   and `self` cannot escape it. A slot whose type may contain a `Close` object is released at the end of its scope, in
   reverse declaration order, and a temporary at the end of its statement - so the moment `close()` runs is a line in
   the source and not a result of the liveness pass; every other slot is still released at its last use, which nothing
   can observe. A released value closes itself first and then releases its fields in reverse declaration order.
   `close()` never fails and never awaits: a graceful end is `end()`, called and awaited explicitly, and `using` never
-  awaits. Until slice R1 lands, `Close` is an ordinary method and `using` an ordinary function.
+  awaits. A cancelled task's frame is released the same way, the last declared first.
 - Value semantics say _what_ happens, not _how_. "A copy" is implemented depending on the shape of the type, and
   none of it is observable:
 
@@ -2820,7 +2821,7 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
   zero-field constructor call `Void()` (it would make the only value of the language the one that has to be called into
   existence).
 - A temporary is a valid _argument_ for a `var` parameter and still not a valid _base of a path_.
-  `using File.open(path)? { ... }` is not an exception to "no dead changes": the callee is the only owner, so there
+  `drain(File.open(path)?)` is not an exception to "no dead changes": the callee is the only owner, so there
   is nowhere the change could have to be written back to.
 - `if var P = place` binds into the place, exactly like a `var` parameter. A mutable copy would make every `if var`
   a dead change by construction, starting with `FlatMappedIterator`.

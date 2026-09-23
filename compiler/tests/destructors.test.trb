@@ -1,0 +1,314 @@
+/**
+ * The checker's half of the destructor (docs/design/DESTRUCTORS.md): only a `shared type` implements `Close`, no
+ * program calls `close()`, `self` does not escape `close()`, and a name bound by `using` does not escape its block.
+ *
+ * Every message is pinned with the text its span covers, `message @ text`, because where a rule points is half of what
+ * it says: at the type, at the name of the call, at the name that would be kept, at the closure that would keep it.
+ */
+
+use test, group from "std/test"
+use problems, notes, workspaceWith from "./harness"
+use check from "../src/semantics/check"
+
+/** Every problem of `app` with the source text its span covers. */
+fn located(source: String): List<String> {
+  var found: List<String> = []
+  for file in check(workspaceWith(["app/src/main.trb": source]), ["app"]).files {
+    for diagnostic in file.diagnostics {
+      found.append "{diagnostic.message} @ {source[diagnostic.span.start..diagnostic.span.end]}"
+    }
+  }
+  found
+}
+
+const connection = r"""
+  shared type Connection with Close {
+    var open: Bool = true
+
+    fn send(text: String) {
+      print text
+    }
+
+    var fn close() {
+      open = false
+    }
+  }
+
+  """
+
+group "Only a `shared type` implements `Close`" {
+  test "a value type that implements it is refused at its name, with the reason" {
+    const source = r"""
+      type Ticket with Close {
+        var used: Bool = false
+
+        var fn close() {
+          used = true
+        }
+      }
+      """
+    assert(located(source) == ["`Close` may only be implemented by a `shared type` @ Ticket"])
+    assert(
+      notes(source)
+        == [
+          "A `Ticket` is copied on assignment, so two copies would give two closes of one resource, or one working on a"
+            + " resource the other already closed. Write `shared type Ticket`",
+        ]
+    )
+  }
+
+  test "a capsule is a value too, and so is an `extend` of one" {
+    const capsule = r"""
+      type Token with Close {
+        private secret: String
+
+        var fn close() {}
+      }
+      """
+    assert(problems(capsule) == ["`Close` may only be implemented by a `shared type`"])
+    const extended = r"""
+      type Ticket {
+        var used: Bool = false
+      }
+
+      extend Ticket with Close {
+        var fn close() {}
+      }
+      """
+    assert(problems(extended) == ["`Close` may only be implemented by a `shared type`"])
+  }
+
+  test "a trait that comes with `Close` is `Close` for this rule" {
+    const source = r"""
+      shared trait Resource with Close {
+        fn name(): String
+      }
+
+      type Pipe with Resource {
+        fn name(): String {
+          "pipe"
+        }
+
+        var fn close() {}
+      }
+      """
+    assert(located(source) == ["`Resource` comes with `Close`, which only a `shared type` may implement @ Pipe"])
+  }
+
+  test "a `shared type` implements it, directly and through a trait that comes with it" {
+    const through = r"""
+      shared trait Resource with Close {
+        fn name(): String
+      }
+
+      shared type Pipe with Resource {
+        fn name(): String {
+          "pipe"
+        }
+
+        var fn close() {}
+      }
+      """
+    assert problems(connection).isEmpty()
+    assert problems(through).isEmpty()
+  }
+}
+
+group "Nothing calls `close()`" {
+  test "a call by hand is refused at the name of the member" {
+    const source = connection + "fn probe() \{\n  const connection = Connection()\n  connection.close()\n\}\n"
+    assert(
+      located(source)
+        == [
+          "`close` runs automatically when the last reference to this value goes away, and cannot be called directly"
+            + " @ close",
+        ]
+    )
+    assert(notes(source) == ["To release a value early, let its scope end, or bind it with `using`"])
+  }
+
+  test "through a trait-typed value, a type parameter and the implicit receiver as well" {
+    const message = "`close` runs automatically when the last reference to this value goes away, and cannot be called directly"
+    assert(problems("fn probe(resource: Close) \{\n  resource.close()\n\}\n") == [message])
+    assert(problems("fn probe<Resource: Close>(resource: Resource) \{\n  resource.close()\n\}\n") == [message])
+    const implicit = r"""
+      shared type Door with Close {
+        var fn shut() {
+          close()
+        }
+
+        var fn close() {}
+      }
+      """
+    assert(problems(implicit) == [message])
+  }
+
+  test "not even inside `close()`: the fields are released after it, by the release itself" {
+    const source = connection + r"""
+      shared type Pair with Close {
+        var inner: Connection
+
+        var fn close() {
+          inner.close()
+        }
+      }
+      """
+    assert(
+      problems(source)
+        == ["`close` runs automatically when the last reference to this value goes away, and cannot be called directly"]
+    )
+  }
+
+  test "a `close` of a type without `Close` is an ordinary method" {
+    const source = r"""
+      shared type Door {
+        var open: Bool = true
+
+        var fn close() {
+          open = false
+        }
+      }
+
+      fn probe() {
+        const door = Door()
+        door.close()
+      }
+      """
+    assert problems(source).isEmpty()
+  }
+}
+
+group "`self` does not escape `close()`" {
+  const node = r"""
+    shared type Node with Close {
+      name: String
+      var others: List<Node> = []
+      var last: Node? = None
+      var later: (() => Void)? = None
+
+      fn reset() {
+        print name
+      }
+
+    """
+  const closing = "`close` may not keep `self`: the object is being released"
+
+  test "handed to a `var fn` that may keep it, stored in a case, bound to another name" {
+    const appended = node + "  var fn close() \{\n    others.append self\n  \}\n\}\n"
+    assert(located(appended) == ["{closing} @ self"])
+    assert(notes(appended) == ["`close` runs because the last reference went away, so nothing may hold the object afterwards"])
+    const stored = node + "  var fn close() \{\n    last = Some(self)\n  \}\n\}\n"
+    assert(located(stored) == ["{closing} @ self"])
+    const bound = node + "  var fn close() \{\n    const kept = self\n    kept.reset()\n  \}\n\}\n"
+    assert(located(bound) == ["{closing} @ self"])
+  }
+
+  test "captured by a closure that outlives the call" {
+    const escaping = node + "  var fn close() \{\n    const action = \{ reset() \}\n    action()\n  \}\n\}\n"
+    assert(located(escaping) == ["{closing} @ \{ reset() \}"])
+    const kept = node + "  var fn close() \{\n    later = Some(\{ reset() \})\n  \}\n\}\n"
+    assert(located(kept) == ["{closing} @ \{ reset() \}"])
+  }
+
+  test "reading the object, calling its members and handing it to a function that only uses it is closing" {
+    const source = "fn describe(node: Node): String \{\n  node.name\n\}\n\n" + node
+      + "  var fn close() \{\n    reset()\n    print describe(self)\n    print \"\{name\} \{others.length()\}\"\n  \}\n\}\n"
+    assert problems(source).isEmpty()
+  }
+}
+
+group "`using` binds a name that cannot escape its block" {
+  const kept = "`connection` is bound by `using`, so it cannot be"
+
+  test "the name is a `const` for everything that only uses it" {
+    const source = connection + r"""
+      fn describe(connection: Connection): String {
+        "connection"
+      }
+
+      fn twice(body: () => Void) {
+        body()
+        body()
+      }
+
+      fn probe() {
+        using connection = Connection()
+        connection.send "hello"
+        print describe(connection)
+        twice {
+          connection.send "again"
+        }
+      }
+      """
+    assert problems(source).isEmpty()
+  }
+
+  test "stored in a field, returned, bound to another name" {
+    const holder = "type Holder \{\n  var held: Connection\n\}\n\n"
+    const field = connection + holder + "fn probe(var holder: Holder) \{\n  using connection = Connection()\n"
+      + "  holder.held = connection\n\}\n"
+    assert(located(field) == ["{kept} stored in a field @ connection"])
+    assert(
+      notes(field)
+        == [
+          "`using` releases `connection` at the end of the block that bound it, so nothing may hold it past that line."
+            + " Bind it with `const` where it has to outlive the block",
+        ]
+    )
+    const returned = connection + "fn probe(): Connection \{\n  using connection = Connection()\n  connection\n\}\n"
+    assert(located(returned) == ["{kept} returned @ connection"])
+    const early = connection + "fn probe(): Connection \{\n  using connection = Connection()\n  return connection\n\}\n"
+    assert(located(early) == ["{kept} returned @ connection"])
+    const bound = connection + "fn probe() \{\n  using connection = Connection()\n  const other = connection\n"
+      + "  other.send \"x\"\n\}\n"
+    assert(located(bound) == ["{kept} bound to another name @ connection"])
+  }
+
+  test "built into a collection or a case, handed to a `var fn` that may keep it" {
+    const listed = connection + "fn probe() \{\n  using connection = Connection()\n  const all = [connection]\n"
+      + "  print all.length()\n\}\n"
+    assert(located(listed) == ["{kept} stored in a collection @ connection"])
+    const wrapped = connection + "fn probe(): Connection? \{\n  using connection = Connection()\n  Some(connection)\n\}\n"
+    assert(located(wrapped) == ["{kept} handed to `Some`, which stores it @ connection"])
+    const appended = connection + "fn probe(var pool: List<Connection>) \{\n  using connection = Connection()\n"
+      + "  pool.append connection\n\}\n"
+    assert(located(appended) == ["{kept} handed to `append`, which may keep it @ connection"])
+  }
+
+  test "captured by a closure that may outlive the block, or that the callee keeps" {
+    const escaping = connection + "fn probe() \{\n  using connection = Connection()\n"
+      + "  const later = \{ connection.send \"late\" \}\n  later()\n\}\n"
+    assert(located(escaping) == ["{kept} captured by a closure that may outlive it @ \{ connection.send \"late\" \}"])
+    const keeping = connection + "fn keep(action: () => Void): () => Void \{\n  action\n\}\n\n"
+      + "fn probe() \{\n  using connection = Connection()\n  const later = keep \{ connection.send \"late\" \}\n"
+      + "  later()\n\}\n"
+    assert(
+      located(keeping) == ["{kept} captured by a closure `keep` keeps @ \{ connection.send \"late\" \}"]
+    )
+  }
+
+  test "inside a closure and inside a block of a script it is the same binding" {
+    const inClosure = connection + "fn twice(body: () => Void) \{\n  body()\n  body()\n\}\n\n"
+      + "fn probe(): Connection? \{\n  var found: Connection? = None\n  twice \{\n    using connection = Connection()\n"
+      + "    found = Some(connection)\n  \}\n  found\n\}\n"
+    assert(located(inClosure) == ["{kept} handed to `Some`, which stores it @ connection"])
+    const inScript = connection + "if true \{\n  using connection = Connection()\n  const other = connection\n"
+      + "  other.send \"x\"\n\}\n"
+    assert(located(inScript) == ["{kept} bound to another name @ connection"])
+    const readOnly = connection + "if true \{\n  using connection = Connection()\n  connection.send \"x\"\n\}\n"
+    assert problems(readOnly).isEmpty()
+  }
+
+  test "the top level of a file is no block" {
+    const source = connection + "using connection = Connection()\nconnection.send \"hello\"\n"
+    assert(
+      located(source)
+        == ["`using` binds a name for the rest of a block, and the top level of a file is not one @ connection"]
+    )
+  }
+
+  test "`using` is still a name wherever no binding follows it" {
+    const source = "fn using(count: Int): Int \{\n  count + 1\n\}\n\nfn probe(): Int \{\n  using 1\n\}\n"
+    assert problems(source).isEmpty()
+  }
+}

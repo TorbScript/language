@@ -141,6 +141,19 @@ void torb_release(void *block, torb_drop_function drop) {
   torb_heap_current()->live_blocks -= 1;
 }
 
+void torb_closing_begin(void *block) {
+  torb_header *header = (torb_header *)block;
+  header->count = 1;
+}
+
+void torb_closing_end(void *block) {
+  torb_header *header = (torb_header *)block;
+  if (header->count != 1) {
+    torb_panic_text("internal error: `close` kept the object it was releasing", torb_location_unknown);
+  }
+  header->count = 0;
+}
+
 void torb_environment_on_frame(torb_environment *environment, torb_drop_function drop) {
   environment->header.count = 1u;
   environment->header.kind = (uint16_t)TORB_BLOCK_FRAME_ENVIRONMENT;

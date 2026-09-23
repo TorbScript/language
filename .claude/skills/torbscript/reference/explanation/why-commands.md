@@ -56,7 +56,7 @@ print checked(5)
 
 **Because a control structure and an ordinary call would otherwise need two different grammars.** `unless done { ... }`
 is a function call - `unless` takes a `Bool` and a closure - and it reads like a keyword only because the command form
-lets it. If commands did not exist, every control structure the standard library adds (`retry`, `using`, `do`) would
+lets it. If commands did not exist, every control structure the standard library adds (`retry`, `unless`, `do`) would
 need its own keyword, which is the opposite of [Control structures are functions](../language/extensibility/control-structures.md).
 
 **Because a configuration file gets its look from the same rule that makes `print "hello"` read naturally, not from a
@@ -113,7 +113,7 @@ position, because a bare name is always a reference and never a call - see
 ## Related
 
 - [Command calls](../language/syntax/command-calls.md) - the full grammar of a command, rule by rule.
-- [Control structures are functions](../language/extensibility/control-structures.md) - `unless`, `retry`, `using`
+- [Control structures are functions](../language/extensibility/control-structures.md) - `unless`, `retry`, `do`
   built from the same rule.
 - [Property commands](../language/types/property-commands.md) - the same command syntax writing a field instead of
   calling a method.

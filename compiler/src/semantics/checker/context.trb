@@ -468,6 +468,19 @@ public type EscapeCheck {
   parameters: List<(Int, Int)>
   /** The captures a task could not take, by name, with the type that says why. */
   unseen: List<(String, TypeId)>
+  /** The captured bindings that may not outlive their block: a `using` name, and `self` inside `close()`. */
+  scoped: List<BindingId> = []
+}
+
+/**
+ * A binding that may not outlive the block it belongs to (`scoped.trb`): nothing may store it, return it, bind it to
+ * another name or capture it in a closure that escapes.
+ */
+public type ScopedBinding {
+  /** `using file = File.open(path)?`: released at the end of its block (docs/design/DESTRUCTORS.md section 4). */
+  case Using
+  /** `self` inside `close()`: the object is being released (docs/design/DESTRUCTORS.md section 2a). */
+  case ClosingSelf
 }
 
 /** A function-typed parameter handed on by name: it is kept, or goes into a task, where the parameter it fills does. */
@@ -967,6 +980,8 @@ public type Checker {
   var parameterForwards: List<ParameterForward> = []
   var escapeChecks: List<EscapeCheck> = []
   var functionValueChecks: List<FunctionValueCheck> = []
+  /** The bindings that may not outlive their block, by `BindingId.value` (`scoped.trb`). Never cleared, like the rest. */
+  var scopedBindings: Map<Int, ScopedBinding> = [:]
   /** Whether a `?` of this body returns from it with a result that is still being inferred (a closure, a `fn`). */
   var collectsTries: Bool = false
   /** The `?` of the inferred body that is being checked, settled against its result once the body is done. */

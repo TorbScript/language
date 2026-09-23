@@ -27,6 +27,7 @@ use isClosedType from "../instances"
 use dispatchedOn, resultTypeOf from "./generic"
 use lowerDispatched from "./call"
 use iterateBoundOf, iteratorBoundOf from "./collection"
+use openScope, closeScope, declareScoped, declareScopedFrom, endEveryScope, endLoopScopes, endTemporaries from "./scope"
 
 /**
  * Every statement of a block, and the value of the block where somebody takes one. Nothing is emitted after a
@@ -50,7 +51,23 @@ public fn lowerBlockValue(var lowering: Lowering, var builder: FunctionBuilder, 
   lowerStatements lowering, builder, block, None
 }
 
+/**
+ * A block is a scope: the bindings it declares whose value may hold a `Close` object end where it ends
+ * (`ir/lower/scope.trb`), after the value of the block was produced.
+ */
 fn lowerStatements(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  block: Block,
+  destination: Slot?,
+): Slot? {
+  openScope lowering
+  const found = lowerStatementsOfScope lowering, builder, block, destination
+  closeScope lowering, builder
+  found
+}
+
+fn lowerStatementsOfScope(
   var lowering: Lowering,
   var builder: FunctionBuilder,
   block: Block,
@@ -105,11 +122,22 @@ fn discardsLastValue(
   !isVoidType(lowering, annotation) && !isNeverType(lowering, annotation)
 }
 
-/** One statement, dispatched on its kind. A `Declare` is reached through the worklist and emits nothing here. */
+/**
+ * One statement, dispatched on its kind. A `Declare` is reached through the worklist and emits nothing here.
+ *
+ * A statement is also the scope of the temporaries it made: one that may hold a `Close` object is released where the
+ * statement ends, the last made first (`endTemporaries`), and never in the middle of it.
+ */
 public fn lowerStatement(var lowering: Lowering, var builder: FunctionBuilder, statement: Statement) {
   if !lowering.isSupported {
     return
   }
+  const firstSlot = builder.slotCount()
+  lowerStatementKind lowering, builder, statement
+  endTemporaries lowering, builder, firstSlot
+}
+
+fn lowerStatementKind(var lowering: Lowering, var builder: FunctionBuilder, statement: Statement) {
   match statement.kind {
     // A `fn`, a `type` or a `trait` inside a block is reached through a call of it, so nothing is emitted here
     .Declare(_) => {}
@@ -144,7 +172,9 @@ fn lowerBinding(var lowering: Lowering, var builder: FunctionBuilder, binding: B
       if !lowering.isSupported {
         return
       }
+      const first = builder.slotCount()
       lowerPatternBinding lowering, builder, pattern, source, pattern.span
+      declareScopedFrom lowering, builder, first
       return
     }
   }
@@ -160,11 +190,15 @@ fn lowerBinding(var lowering: Lowering, var builder: FunctionBuilder, binding: B
   // A captured `var` binding is a reference that escapes)
   if isCapturedVariable(lowering, declared) {
     lowerBoxedBinding lowering, builder, declared, name, annotation, binding.value
+    if const Some(box) = lowering.boxes.get(declared) {
+      declareScoped lowering, builder, box
+    }
     return
   }
   const slot = addLocal builder, annotation, name
   const _ = lowerExpression lowering, builder, binding.value, Some(slot)
   lowering.slots.set declared, slot
+  declareScoped lowering, builder, slot
 }
 
 fn bindingNameOf(pattern: Pattern): String? {
@@ -298,6 +332,7 @@ fn lowerReturn(var lowering: Lowering, var builder: FunctionBuilder, value: Expr
   const expression = match value {
     Some(found) => found
     None => {
+      endEveryScope lowering, builder
       finishBlock lowering, builder, Terminator.Return(None)
       return
     }
@@ -305,6 +340,7 @@ fn lowerReturn(var lowering: Lowering, var builder: FunctionBuilder, value: Expr
   if isVoidType(lowering, result) {
     // `return Void` in a function that produces nothing: the value is evaluated and thrown away
     const _ = lowerValue lowering, builder, expression
+    endEveryScope lowering, builder
     finishBlock lowering, builder, Terminator.Return(None)
     return
   }
@@ -312,6 +348,8 @@ fn lowerReturn(var lowering: Lowering, var builder: FunctionBuilder, value: Expr
   if !lowering.isSupported {
     return
   }
+  // The value is produced before the scopes end, so a binding that is returned is moved out and not released
+  endEveryScope lowering, builder
   finishBlock lowering, builder, Terminator.Return(Some(borrowed(slot)))
 }
 
@@ -324,6 +362,7 @@ fn lowerBreak(var lowering: Lowering, var builder: FunctionBuilder, at: Span) {
     }
   }
   markBreak lowering
+  endLoopScopes lowering, builder
   finishBlock lowering, builder, Terminator.Jump(target)
 }
 
@@ -335,6 +374,7 @@ fn lowerContinue(var lowering: Lowering, var builder: FunctionBuilder, at: Span)
       return
     }
   }
+  endLoopScopes lowering, builder
   finishBlock lowering, builder, Terminator.Jump(target)
 }
 
@@ -603,10 +643,16 @@ fn lowerForIterate(
   continueIn lowering, builder, inner
   emit builder, Instruction.Read(value, Reference(pulled, [PathStep.Variant(layout, some, 0)]))
   enterLoop lowering, done, check
+  // The item is bound again every round, so every round ends it - and a `break` or a `continue` does too
+  openScope lowering
+  const firstSlot = builder.slotCount()
   if takesApart {
     lowerPatternBinding lowering, builder, pattern, value, pattern.span
   }
+  declareScoped lowering, builder, value
+  declareScopedFrom lowering, builder, firstSlot
   lowerBlockInto lowering, builder, body, None
+  closeScope lowering, builder
   const _ = leaveLoop lowering
   if !lowering.isDiverged {
     finishBlock lowering, builder, Terminator.Jump(check)

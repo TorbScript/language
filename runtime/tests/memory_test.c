@@ -256,6 +256,53 @@ TORB_TEST(the_stack_check_panics_below_the_limit) {
   torb_stack_limit = saved;
 }
 
+/** An object with a destructor, in the shape the C emitter writes its drop function (docs/design/DESTRUCTORS.md 8). */
+typedef struct closing_sample {
+  torb_header header;
+  int64_t closes;
+} closing_sample;
+
+static int64_t closing_sample_closes = 0;
+static bool closing_sample_keeps = false;
+
+/** The `close()`: it hands `self` to something that only uses it - one retain and one release - or keeps it. */
+static void closing_sample_close(closing_sample *self) {
+  closing_sample_closes += 1;
+  torb_retain(self);
+  if (!closing_sample_keeps) {
+    torb_release(self, NULL);
+  }
+}
+
+static void closing_sample_drop(void *block) {
+  closing_sample *value = (closing_sample *)block;
+  torb_closing_begin(block);
+  closing_sample_close(value);
+  torb_closing_end(block);
+}
+
+TORB_TEST(a_destructor_runs_once_although_it_retains_and_releases_self) {
+  size_t before = torb_live_block_count();
+  closing_sample *value = (closing_sample *)torb_allocate(sizeof(closing_sample), TORB_BLOCK_RECORD);
+  closing_sample_closes = 0;
+  closing_sample_keeps = false;
+  torb_retain(value);
+  torb_release(value, closing_sample_drop);
+  TORB_CHECK_INTEGER(closing_sample_closes, 0);
+  torb_release(value, closing_sample_drop);
+  TORB_CHECK_INTEGER(closing_sample_closes, 1);
+  TORB_CHECK_INTEGER(torb_live_block_count(), before);
+}
+
+TORB_TEST(a_destructor_that_keeps_self_panics) {
+  closing_sample *value = (closing_sample *)torb_allocate(sizeof(closing_sample), TORB_BLOCK_RECORD);
+  TORB_IGNORE_LEAKS();
+  closing_sample_keeps = true;
+  TORB_EXPECT_PANIC(torb_release(value, closing_sample_drop));
+  TORB_CHECK_PANIC_CONTAINS("`close` kept the object it was releasing");
+  closing_sample_keeps = false;
+}
+
 void torb_register_memory_tests(void) {
   TORB_ADD(allocation_starts_at_one_and_frees_at_zero);
   TORB_ADD(retain_and_release_balance);
@@ -273,4 +320,6 @@ void torb_register_memory_tests(void) {
   TORB_ADD(a_copied_closure_shares_its_environment);
   TORB_ADD(a_panic_hook_catches_a_panic_and_the_suite_goes_on);
   TORB_ADD(the_stack_check_panics_below_the_limit);
+  TORB_ADD(a_destructor_runs_once_although_it_retains_and_releases_self);
+  TORB_ADD(a_destructor_that_keeps_self_panics);
 }

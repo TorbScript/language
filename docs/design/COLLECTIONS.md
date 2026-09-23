@@ -1026,7 +1026,7 @@ large; what cannot happen is both in one, and no amount of care inside one round
 
 **`Sink.finish()` is `end()` and not `close()`.** The decision was "a stream's end is not a result, and `finish` is
 the `Accumulator`'s word", which is right; `close()` is not available for it. `Sink` comes `with Close`, whose
-`var fn close()` is the **abrupt** end — it releases the target, cannot fail, and is what `using` calls — and a type
+`var fn close()` is the **abrupt** end — it releases the target, cannot fail, and is what the last release runs — and a type
 has one namespace of members, so the graceful end (`Task<Result<Void, Failure>>`, flushes, reports) cannot share the
 name. `end()` says the same thing as `close` about a *stream* without claiming the word `Close` owns. The other way
 out would have been to take `Close` off `Sink`; the owner's decision that `close()` is the language's destructor

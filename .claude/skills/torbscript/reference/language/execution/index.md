@@ -23,7 +23,7 @@ syntax, then numbered rules, then what the construct is not.
 - **[Evaluation order](evaluation-order.md)** - Evaluation order is source order - the receiver first, then the arguments as they are written, then the parameter defaults - so a side effect in an argument is exactly as predictable as reading the line.
 - **[What a copy costs](copies.md)** - A copy always behaves the same way, but what it costs depends on the shape of the type - inline for a small fixed-size value, copy-on-write for heap-backed storage, and never for a shared type.
 - **[Tail calls and stack overflow](tail-calls.md)** - Direct self-recursion in tail position is guaranteed to run without growing the stack, and every other call uses a frame of its task's stack; a recursion that runs out of stack panics with stack overflow instead of crashing.
-- **[Destructors - close() runs at the last release](no-destructors.md)** _(planned)_ - A shared type's close() is its destructor - the runtime runs it exactly once when the last reference goes away, user code never calls it, and using pins that moment to the end of a block.
+- **[Destructors - close() runs at the last release](destructors.md)** - A shared type's close() is its destructor - it runs exactly once at the last release, user code never calls it, and a binding that holds one is released at the end of its block, the last declared first.
 
 <!-- torb:index:end -->
 

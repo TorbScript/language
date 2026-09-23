@@ -426,15 +426,9 @@ public const preludeSource = r"""
   /** Only a `shared type` has an identity, so this is callable on one and on nothing else (BACKEND gap 15). */
   public native fn isSame<Object>(first: Object, second: Object): Bool
 
-  /** Resources have an identity, so `using` takes a `var` and a temporary is a valid argument for one (gap 2). */
+  /** The destructor: only a `shared type` implements it, and nothing calls it but the last release. */
   public shared trait Close {
     var fn close()
-  }
-
-  public fn using<Resource: Close, Value>(var resource: Resource, body: (Resource) => Value): Value {
-    const result = body(resource)
-    resource.close()
-    result
   }
 
   public fn do<Value>(body: () => Value): Value {
@@ -543,7 +537,7 @@ public const workspace = [
     public use Set, TrieSet, TrieMap, TrieList from "./types"
     public use From, Into, TryFrom, TryInto, Encode, Decode, Length, Close, Task, Channel from "./types"
     public use Error from "./types"
-    public use print, printError, panic, using, do, assert, nameOf, Expression, spawn from "./types"
+    public use print, printError, panic, do, assert, nameOf, Expression, spawn from "./types"
     public use Void from "./types"
     public use isSame from "./types"
     public use Option.Some, Option.None from "./types"

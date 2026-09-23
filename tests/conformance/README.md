@@ -225,7 +225,19 @@ jump left behind released nothing. The directory is the exemption, instead of a 
 | `task-combinators.trb` | `map`, `flatMap`, `Task.all`, `all` and `outcome()` |
 | `task-thousand.trb` | A thousand tasks alive at once, and every block of them released |
 | `channel-ping-pong.trb` | A rendezvous channel alternates in lock-step, a buffered one carries every item once and in order, and `end()` is `None` for the reader |
-| `channel-closed.trb` | Closing the reading end fails every later `add` with `ChannelClosed` and releases what was buffered |
+| `channel-closed.trb` | Letting go of the reading end closes it: every later `add` fails with `ChannelClosed`, and what was buffered is released |
+| `destructor-cancelled-task.trb` | A cancelled task closes what its frame held, the last declared first, before its waiter hears that it was cancelled |
+
+**Destructors** - `close()` runs at the last release, and a binding that holds an object with one is released where its block ends.
+
+| Program | What it pins |
+|---------|--------------|
+| `destructor-scope-end.trb` | Two bindings close at the end of the block in reverse declaration order, not at their last use; a nested block ends its own; a returned object is closed by its new holder |
+| `destructor-early-exits.trb` | `return`, a failing `?`, `break` and `continue` close what they leave, innermost block first |
+| `destructor-fields-and-lists.trb` | An object closes itself and then its fields, the last declared first; a list closes its elements from the last to the first; a plain value releases a closeable field |
+| `destructor-using.trb` | `using` closes at the end of its block, and an unused binding lives to the end of its block too |
+| `destructor-patterns-and-temporaries.trb` | The names of `if const`, a `match` arm and a `for` end with their block; a temporary lives to the end of its statement |
+| `destructor-stream.trb` | A pipeline of `std/stream` stages closes its source through the release of the last stage, read to the end or cut short by `take` |
 
 **The outside world**
 

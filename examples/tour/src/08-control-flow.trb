@@ -4,7 +4,7 @@
  */
 
 use Clock from "std/time"
-use File from "std/fs"
+use File, IoError from "std/fs"
 
 const temperature = 23
 
@@ -83,8 +83,10 @@ const response = retry 3 {
   fetchStatus()
 }
 
-// A top-level `?` in a script ends the script with the error
-const content = using(File.open("notes.txt")?) { file =>
+// `using` is a binding, not a function: the name cannot leave its block, and the file is released where the block ends
+/** The whole of `notes.txt`, read through a file that is released at the end of this function. */
+fn readNotes(): Result<String, IoError> {
+  using file = File.open("notes.txt")?
   file.readAll()
 }
 

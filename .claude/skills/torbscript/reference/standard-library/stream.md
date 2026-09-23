@@ -116,7 +116,8 @@ public shared trait Sink<Item, Failure: From<Cancelled>> with Close {
 The writing end, the asynchronous sibling of `Accumulator`. Backpressure is the `await` on `add`: the task finishes
 once the target has taken the item, so a writer faster than its target waits by itself. `end()` is the graceful end
 - everything buffered is written, and whatever went wrong is reported here at the latest; `close()` (from `Close`) is
-the abrupt end, cannot fail, and may leave less written than `end()` would have. `buffered(capacity:)` answers a
+the abrupt end the last release runs - no program calls it - cannot fail, and may leave less written than `end()`
+would have. `buffered(capacity:)` answers a
 `Buffered`, whose own `flush()` is where "when was it actually written" gets an answer; `end()` flushes too, but
 `close()` does not.
 

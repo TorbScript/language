@@ -1,0 +1,77 @@
+/**
+ * The names a pattern binds belong to the block they are bound for - the `then` block of an `if const`, the arm of a
+ * `match`, the body of a `for` - and end with it. A value that is made and never bound is a temporary of its statement:
+ * it lives until the statement has finished, and not a moment longer.
+ */
+
+shared type Probe with Close {
+  name: String
+
+  fn touch() {
+    print "touch {name}"
+  }
+
+  var fn close() {
+    print "close {name}"
+  }
+}
+
+fn found(isThere: Bool): Probe? {
+  if isThere {
+    return Some Probe("found")
+  }
+  None
+}
+
+fn described(probe: Probe): String {
+  "described {probe.name}"
+}
+
+/** The name of an `if const` ends with its block, after the block's last line. */
+fn ifConst() {
+  if const Some(probe) = found(isThere: true) {
+    probe.touch()
+    print "in the block"
+  }
+  print "after the block"
+}
+
+/** The name of a `match` arm ends with the arm. */
+fn matching() {
+  match found(isThere: true) {
+    Some(probe) => {
+      probe.touch()
+      print "in the arm"
+    }
+    None => print "nothing"
+  }
+  print "after the match"
+}
+
+/**
+ * The item of a `for` ends with every round. The loop takes the list it walks - this is the list's last use, so it is
+ * moved and not retained - and the list goes where the loop ends, closing its objects the last first.
+ */
+fn looping() {
+  const probes = [Probe("one"), Probe("two")]
+  for probe in probes {
+    probe.touch()
+    print "round done"
+  }
+  print "after the loop"
+}
+
+/** A temporary lives to the end of its statement, even where its last use is earlier in it. */
+fn temporaries() {
+  print described(Probe("temporary")), "and the rest of the line"
+  Probe("chained").touch()
+  print "the next statement"
+}
+
+ifConst()
+print "---"
+matching()
+print "---"
+looping()
+print "---"
+temporaries()

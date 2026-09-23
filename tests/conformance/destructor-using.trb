@@ -1,0 +1,35 @@
+/**
+ * `using name = expression` binds a name that cannot leave its block, so the release of the object - and its
+ * `close()` - happens exactly where the block ends. A binding the program never mentions again still lives to the end
+ * of its block, and a scope that is all a function is ends with the function.
+ */
+
+shared type Connection with Close {
+  name: String
+
+  fn send(message: String) {
+    print "{name} sends {message}"
+  }
+
+  var fn close() {
+    print "{name} closed"
+  }
+}
+
+fn greet() {
+  using connection = Connection "first"
+  connection.send "hello"
+  print "sent"
+}
+
+fn twoConnections() {
+  using unused = Connection "unused"
+  using used = Connection "used"
+  used.send "again"
+  print "done with both"
+}
+
+greet()
+print "---"
+twoConnections()
+print "---"

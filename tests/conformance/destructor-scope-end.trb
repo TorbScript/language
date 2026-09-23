@@ -1,0 +1,57 @@
+/**
+ * `close()` is the destructor, and a binding whose value has one is released at the end of its block, the last
+ * declared first - not at its last use. So the moment an object closes is a line of the source: `first` is used for the
+ * last time before `second`, and still closes after it. A nested block ends its own bindings where it ends, and a value
+ * that is returned is not released by the function that made it: its new holder closes it.
+ */
+
+shared type Probe with Close {
+  name: String
+
+  fn touch() {
+    print "touch {name}"
+  }
+
+  var fn close() {
+    print "close {name}"
+  }
+}
+
+/** Two bindings: both are released where the block ends, in reverse declaration order. */
+fn twoBindings() {
+  const first = Probe "first"
+  const second = Probe "second"
+  first.touch()
+  second.touch()
+  print "end of the block"
+}
+
+/** A nested block ends its own bindings before the rest of the function goes on. */
+fn nestedBlock() {
+  const outer = Probe "outer"
+  if outer.name.byteLength() > 0 {
+    const inner = Probe "inner"
+    inner.touch()
+  }
+  print "after the inner block"
+  outer.touch()
+}
+
+/** The object is returned, so this function does not release it. */
+fn made(): Probe {
+  const probe = Probe "made"
+  probe.touch()
+  probe
+}
+
+twoBindings()
+print "---"
+nestedBlock()
+print "---"
+fn holdingWhatWasMade() {
+  const kept = made()
+  print "the caller holds it"
+  kept.touch()
+}
+holdingWhatWasMade()
+print "---"

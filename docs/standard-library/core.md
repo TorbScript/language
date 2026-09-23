@@ -184,22 +184,22 @@ by index and therefore order-dependent. See [Arrays and const parameters](../lan
 `isSame(first, second)` compares identity and works on a shared object only: on a value the answer would expose whether
 the implementation shares storage, so the compiler rejects it.
 
-### `do`, `unless`, `retry`, `using` and `Close`
+### `do`, `unless`, `retry` and `Close`
 
-Control structures that are ordinary functions, because only a construct that binds names or jumps is built in.
+Control structures that are ordinary functions, because only a construct that binds names or jumps is built in, and
+the destructor trait.
 
 ```trb fragment
 public fn do<Value>(body: () => Value): Value
 public fn unless(condition: Bool, body: () => Void)
 public fn retry<Value, Failure>(times: Int, action: () => Result<Value, Failure>): Result<Value, Failure>
-public fn using<Resource: Close, Value>(var resource: Resource, body: (var Resource) => Value): Value
 public shared trait Close { var fn close() }
 ```
 
-`using` takes a `var` resource and a closure that is handed the resource, calls the closure, then `close()`s the
-resource and answers what the closure answered: `using Connection() { connection => connection.send "hello" }`. Passing a temporary to that `var` parameter is
-allowed, because the callee is its only owner. There are no destructors, so the nesting of `using` blocks is the only
-observable destruction order in the language.
+`Close` is the destructor: only a `shared type` implements it, and no program calls `close()` - the last release of
+the object runs it. `using name = value` is the binding that pins that release to the end of a block; it is part of
+the grammar, not a function of `std/core` (see [Destructors](../language/execution/destructors.md), which also says
+what is built of it today).
 
 ## Related
 

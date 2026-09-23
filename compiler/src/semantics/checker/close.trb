@@ -1,0 +1,598 @@
+/**
+ * The rules of `Close`, the one destructor of the language (docs/design/DESTRUCTORS.md): who may implement it, that no
+ * program calls it, and what may not outlive the block it belongs to.
+ *
+ * - **Only a `shared type` implements `Close`** ([checkCloseImplementer]): a value is copied on assignment, so two
+ *   copies would close one resource twice. A trait that comes `with Close` - `Sink`, `Source` - counts as `Close`.
+ * - **Nothing calls `close()`** ([checkCloseCall]): the release of the last reference runs it, exactly once, and a
+ *   call by hand would invent the states between a first and a second close. Inside `close()` too.
+ * - **A scoped binding stays in its block** ([checkScopedUses]): a `using` name, and `self` inside `close()`. Such a
+ *   name may be read, be the receiver of a member, and be handed to a function that only uses it. It may not be
+ *   stored, returned, bound to another name, built into a collection or a new value, handed to a `var fn` or to a
+ *   member of a shared object (either of which may keep it), or to a function value, whose body nobody knows. A closure
+ *   that captures one is held to the rule of a closure that captures a `var` binding (`escape.trb`): it may only stand
+ *   as the argument of a parameter that just calls it.
+ *
+ * The walk reads the tree of a body after the body is checked, with the resolutions the check recorded, so it asks
+ * nothing twice and changes nothing the rest of the checker decided.
+ */
+
+use Span from "../../syntax/source"
+use Diagnostic from "../../syntax/diagnostic"
+use Block, Statement, Expression, Condition, Pattern, Argument, Binding from "../../syntax/ast"
+use SymbolId from "../symbols"
+use Checker, BindingId, ScopedBinding, Resolution from "./context"
+use signatureOf, typeSignatureOf from "./signature"
+use resolveTrait, headSymbolOf, isGenerated from "./implementation"
+use isSharedType from "./declaration"
+use resolveType from "./unify"
+
+// --- Who implements `Close` -----------------------------------------------------------------------------------------
+
+/**
+ * `type Ticket with Close`, `extend Ticket with Close` and `type Pipe with Sink<Bytes, IoError>` are refused where the
+ * target is not a `shared type`. A bare type parameter (a blanket) and a trait are no target of their own: what they
+ * cover is checked where it is declared.
+ */
+public fn checkCloseImplementer(var checker: Checker, index: Int) {
+  const implementation = checker.implementations.all[index]
+  if isGenerated(implementation) {
+    return
+  }
+  const close = match checker.wellKnown.symbolNamed("Close") {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  const capability = match implementation.capability {
+    Some(applied) => headSymbolOf checker, applied
+    None => None
+  }
+  const implemented = match capability {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  if !comesWithClose(checker, implemented, close, 0) {
+    return
+  }
+  const target = match headSymbolOf(checker, implementation.target) {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  if const .Type = checker.symbolAt(target).kind {
+    if checker.typeSignature(typeSignatureOf(checker, target)).isShared {
+      return
+    }
+    const name = checker.symbolAt(target).name
+    const capabilityName = checker.symbolAt(implemented).name
+    const message = if implemented == close {
+      "`Close` may only be implemented by a `shared type`"
+    } else {
+      "`{capabilityName}` comes with `Close`, which only a `shared type` may implement"
+    }
+    const problem = Diagnostic.error message, implementation.at
+    checker.report(
+      implementation.module,
+      problem.withNote(
+        "A `{name}` is copied on assignment, so two copies would give two closes of one resource, or one working on a"
+          + " resource the other already closed. Write `shared type {name}`"
+      )
+    )
+  }
+}
+
+/**
+ * The declarations that implement `Close`, by `SymbolId.value`: every target of an implementation of `Close` or of a
+ * trait that comes with it (`Sink`, `Source`). The back end asks it to know which objects run a destructor when they
+ * are released.
+ */
+public fn closeImplementers(var checker: Checker): Set<Int> {
+  var found: Set<Int> = Set.of()
+  const close = match checker.wellKnown.symbolNamed("Close") {
+    Some(inner) => inner
+    None => {
+      return found
+    }
+  }
+  for implementation in checker.implementations.all {
+    const capability = match implementation.capability {
+      Some(applied) => headSymbolOf checker, applied
+      None => None
+    }
+    const implemented = match capability {
+      Some(inner) => inner
+      None => {
+        continue
+      }
+    }
+    if !comesWithClose(checker, implemented, close, 0) {
+      continue
+    }
+    if const Some(target) = headSymbolOf(checker, implementation.target) {
+      found.insert target.value
+    }
+  }
+  found
+}
+
+/**
+ * The traits a `Close` object can be seen through, by `SymbolId.value`: `Close` itself, every trait an implementer of
+ * `Close` implements, and their supertraits. A trait-typed value of one of them may hold an object with a destructor;
+ * a value of any other trait cannot, because nothing that holds one implements it.
+ */
+public fn traitsOfCloseImplementers(var checker: Checker, implementers: Set<Int>): Set<Int> {
+  var found: Set<Int> = Set.of()
+  if const Some(close) = checker.wellKnown.symbolNamed("Close") {
+    found.insert close.value
+  }
+  for implementation in checker.implementations.all {
+    const target = match headSymbolOf(checker, implementation.target) {
+      Some(inner) => inner
+      None => {
+        continue
+      }
+    }
+    if !implementers.contains(target.value) {
+      continue
+    }
+    if const Some(applied) = implementation.capability {
+      if const Some(head) = headSymbolOf(checker, applied) {
+        addWithSupertraits checker, found, head, 0
+      }
+    }
+  }
+  found
+}
+
+fn addWithSupertraits(var checker: Checker, var found: Set<Int>, capability: SymbolId, depth: Int) {
+  if depth > 16 || found.contains(capability.value) {
+    return
+  }
+  found.insert capability.value
+  if const .Trait = checker.symbolAt(capability).kind {
+    const shape = checker.typeSignature typeSignatureOf(checker, capability)
+    for supertrait in shape.traits {
+      if const Some(head) = headSymbolOf(checker, supertrait.capability) {
+        addWithSupertraits(checker, found, head, depth + 1)
+      }
+    }
+  }
+}
+
+/** Whether the trait is `Close` or has it among its supertraits, at any depth. */
+fn comesWithClose(var checker: Checker, capability: SymbolId, close: SymbolId, depth: Int): Bool {
+  if capability == close {
+    return true
+  }
+  if depth > 16 {
+    return false
+  }
+  if const .Trait = checker.symbolAt(capability).kind {
+    const shape = checker.typeSignature typeSignatureOf(checker, capability)
+    for supertrait in shape.traits {
+      if const Some(head) = headSymbolOf(checker, supertrait.capability) {
+        if comesWithClose(checker, head, close, depth + 1) {
+          return true
+        }
+      }
+    }
+  }
+  false
+}
+
+// --- Nobody calls `close()` -----------------------------------------------------------------------------------------
+
+/**
+ * `connection.close()`, `upstream.close()`, and `close()` inside a method: every call of the member `Close` requires,
+ * through whatever implements it, is refused at the name. What a program writes to end something early is the end of a
+ * scope or a `using` binding; what a type offers for a graceful end that can fail or wait is `end()`.
+ */
+public fn checkCloseCall(var checker: Checker, resolution: Resolution, callee: Expression) {
+  const symbol = match resolution {
+    .Callable(found, _, _) => found
+    _ => {
+      return
+    }
+  }
+  if checker.symbolAt(symbol).name != "close" || !isCloseMember(checker, symbol) {
+    return
+  }
+  const at = match callee.kind {
+    .Member(_, name, _) => name.span
+    _ => callee.span
+  }
+  checker.reportHere(
+    Diagnostic.error(
+      "`close` runs automatically when the last reference to this value goes away, and cannot be called directly",
+      at,
+    ).withNote("To release a value early, let its scope end, or bind it with `using`")
+  )
+}
+
+/** The `close()` of `Close` itself, or the member of a type that implements it: no parameters, a receiver, `Close`. */
+public fn isCloseMember(var checker: Checker, symbol: SymbolId): Bool {
+  const close = match checker.wellKnown.symbolNamed("Close") {
+    Some(found) => found
+    None => {
+      return false
+    }
+  }
+  if checker.symbolAt(symbol).name != "close" {
+    return false
+  }
+  if const .Function = checker.symbolAt(symbol).kind {
+    const required = checker.typeSignature(typeSignatureOf(checker, close)).members.get("close")
+    if required == Some(symbol) {
+      return true
+    }
+    const signature = checker.signature signatureOf(checker, symbol)
+    if !signature.takesSelf || !signature.form.parameters.isEmpty() {
+      return false
+    }
+    const owner = match signature.owner {
+      Some(found) => found
+      None => {
+        return false
+      }
+    }
+    return match resolveTrait(checker, owner, close) {
+      .Found(_, _) | .Bounded(_) => true
+      _ => false
+    }
+  }
+  false
+}
+
+// --- What stays in its block ----------------------------------------------------------------------------------------
+
+/** `using file = ...` binds a name that may not outlive its block: marked where the binding is checked. */
+public fn markUsingBinding(var checker: Checker, binding: Binding) {
+  if !binding.scoped {
+    return
+  }
+  if const .Binding(name) = binding.pattern.kind {
+    if const Some(.Bound(identifier)) = checker.findLocal(name) {
+      checker.scopedBindings.set identifier.value, ScopedBinding.Using
+    }
+  }
+}
+
+/** `using` at the top level of a file: its block would be the whole program, and every function could reach it. */
+public fn reportTopLevelUsing(var checker: Checker, binding: Binding) {
+  if !binding.scoped {
+    return
+  }
+  checker.reportHere(
+    Diagnostic.error(
+      "`using` binds a name for the rest of a block, and the top level of a file is not one",
+      binding.pattern.span,
+    ).withNote("Write it inside the function whose block it belongs to, or bind the value with `const`")
+  )
+}
+
+/**
+ * Where a scoped name's value goes. `Stays` is every place that only uses it - a receiver, an operand, an argument of a
+ * function that does not keep it, an interpolation - and every other case says what would keep it.
+ */
+type Flow {
+  case Stays
+  case Returned
+  case ClosureResult
+  case Bound
+  case Field
+  case Element
+  case Tuple
+  case Assigned(name: String)
+  case Stored(callee: String)
+  case Kept(callee: String)
+}
+
+/** The uses of the scoped names in a body that was just checked. */
+public fn checkScopedUses(var checker: Checker, body: Block) {
+  walkBlock checker, body, Flow.Returned
+}
+
+/** A statement at the top level of a script, which is a body of its own. */
+public fn checkScopedStatement(var checker: Checker, statement: Statement) {
+  walkStatement checker, statement
+}
+
+/**
+ * Marks the receiver of a `close()` before its body is checked, so that a closure of the body is held to the rule as it
+ * is checked. Answers whether this is a `close()`: then its body is walked once it is checked.
+ */
+public fn markClosingSelf(var checker: Checker, declared: SymbolId?): Bool {
+  const symbol = match declared {
+    Some(found) => found
+    None => {
+      return false
+    }
+  }
+  if !isCloseMember(checker, symbol) {
+    return false
+  }
+  if const Some(receiver) = checker.receiverBinding {
+    checker.scopedBindings.set receiver.value, ScopedBinding.ClosingSelf
+  }
+  true
+}
+
+fn walkBlock(var checker: Checker, block: Block, flow: Flow) {
+  const count = block.statements.length()
+  for index in 0..count {
+    const statement = block.statements[index]
+    if index == count - 1 {
+      if const .Evaluate(expression) = statement.kind {
+        walkExpression checker, expression, flow
+        continue
+      }
+    }
+    walkStatement checker, statement
+  }
+}
+
+fn walkStatement(var checker: Checker, statement: Statement) {
+  match statement.kind {
+    // A nested `fn` sees nothing of this block, and its own body is walked when it is checked
+    .Declare(_) => {}
+    .Bind(binding) => {
+      const flow = if bindsNothing(binding.pattern) { Flow.Stays } else { Flow.Bound }
+      walkExpression checker, binding.value, flow
+    }
+    .Assign(target, value) => {
+      walkExpression checker, target, Flow.Stays
+      const flow = match target.kind {
+        .Member(_, _, _) => Flow.Field
+        .Index(_, _) => Flow.Element
+        .Name(text) => Flow.Assigned text
+        _ => Flow.Field
+      }
+      walkExpression checker, value, flow
+    }
+    .For(_, iterable, body) => {
+      walkExpression checker, iterable, Flow.Stays
+      walkBlock checker, body, Flow.Stays
+    }
+    .While(condition, body) => {
+      walkCondition checker, condition
+      walkBlock checker, body, Flow.Stays
+    }
+    .Loop(body) => walkBlock checker, body, Flow.Stays
+    .Return(value) => {
+      if const Some(returned) = value {
+        walkExpression checker, returned, Flow.Returned
+      }
+    }
+    .Break | .Continue => {}
+    .Evaluate(expression) => walkExpression checker, expression, Flow.Stays
+  }
+}
+
+fn walkCondition(var checker: Checker, condition: Condition) {
+  match condition {
+    .Test(expression) => walkExpression checker, expression, Flow.Stays
+    .Bind(_, pattern, value) => {
+      const flow = if bindsNothing(pattern) { Flow.Stays } else { Flow.Bound }
+      walkExpression checker, value, flow
+    }
+  }
+}
+
+fn walkExpression(var checker: Checker, expression: Expression, flow: Flow) {
+  match expression.kind {
+    .Name(_) => checkScopedName checker, expression.span, flow
+    .TextLiteral(segments) => {
+      for segment in segments {
+        if const .Interpolated(inner) = segment {
+          walkExpression checker, inner, Flow.Stays
+        }
+      }
+    }
+    .Generic(target, _) => walkExpression checker, target, Flow.Stays
+    .TupleLiteral(items) => walkArguments checker, items, Flow.Tuple
+    .ListLiteral(items) => walkArguments checker, items, Flow.Element
+    .MapLiteral(entries) => {
+      for (key, value) in entries {
+        walkExpression checker, key, Flow.Element
+        walkExpression checker, value, Flow.Element
+      }
+    }
+    .Member(target, _, _) => walkExpression checker, target, Flow.Stays
+    .Index(target, index) => {
+      walkExpression checker, target, Flow.Stays
+      walkExpression checker, index, Flow.Stays
+    }
+    .Call(callee, arguments, _) => {
+      walkExpression checker, callee, Flow.Stays
+      walkArguments checker, arguments, argumentFlow(checker, expression, callee)
+    }
+    .Unary(_, operand) => walkExpression checker, operand, Flow.Stays
+    // `a ?? b` is one of the two, so both go where the whole goes
+    .Binary(operator, left, right) => {
+      const inner = match operator {
+        .Coalesce => flow
+        _ => Flow.Stays
+      }
+      walkExpression checker, left, inner
+      walkExpression checker, right, inner
+    }
+    .RangeLiteral(start, end, _) => {
+      if const Some(found) = start {
+        walkExpression checker, found, Flow.Stays
+      }
+      if const Some(found) = end {
+        walkExpression checker, found, Flow.Stays
+      }
+    }
+    .Try(inner) => walkExpression checker, inner, flow
+    .Closure(closure) => walkBlock checker, closure.body, Flow.ClosureResult
+    .If(condition, then, otherwise) => {
+      walkCondition checker, condition
+      walkBlock checker, then, flow
+      if const Some(found) = otherwise {
+        walkExpression checker, found, flow
+      }
+    }
+    .Match(subject, arms) => {
+      var binds = false
+      for arm in arms {
+        if !bindsNothing(arm.pattern) {
+          binds = true
+        }
+      }
+      // `match file { found => ... }` binds the value to another name
+      const subjectFlow = if binds { Flow.Bound } else { Flow.Stays }
+      walkExpression checker, subject, subjectFlow
+      for arm in arms {
+        if const Some(guard) = arm.guard {
+          walkExpression checker, guard, Flow.Stays
+        }
+        walkExpression checker, arm.body, flow
+      }
+    }
+    .Block(block) => walkBlock checker, block, flow
+    _ => {}
+  }
+}
+
+fn walkArguments(var checker: Checker, arguments: List<Argument>, flow: Flow) {
+  for argument in arguments {
+    walkExpression checker, argument.value, flow
+  }
+}
+
+/**
+ * Where the arguments of a call go. A constructor, a case and `copy` store them in the value they build. A `var fn`
+ * changes its receiver and a member of a shared object may change the object, so either may keep what it is handed. A
+ * function value's body is unknown. Every other function - a free one, a `static fn`, a member of a value that does not
+ * change it - can keep an argument only in what it answers, which is where the value goes next and not this rule's.
+ */
+fn argumentFlow(var checker: Checker, call: Expression, callee: Expression): Flow {
+  const name = calleeName callee
+  const resolution = checker.resolutionHere(call.span) ?? Resolution.Deferred
+  match resolution {
+    .Construct(_) | .CaseOf(_, _) | .CopyOf(_) => Flow.Stored name
+    .Callable(symbol, _, _) => {
+      const kind = checker.symbolAt(symbol).kind
+      if const .Function = kind {
+        const signature = checker.signature signatureOf(checker, symbol)
+        if !signature.takesSelf {
+          return Flow.Stays
+        }
+        if signature.isVarSelf {
+          return Flow.Kept name
+        }
+        const receiver = match callee.kind {
+          .Member(target, _, _) => checker.expressionTypeHere target.span
+          _ => checker.selfType
+        }
+        if const Some(annotation) = receiver {
+          if isSharedType(checker, resolveType(checker, annotation)) {
+            return Flow.Kept name
+          }
+        }
+        return Flow.Stays
+      }
+      Flow.Kept name
+    }
+    .Deferred => Flow.Stays
+    _ => Flow.Kept name
+  }
+}
+
+fn calleeName(callee: Expression): String {
+  match callee.kind {
+    .Name(text) => text
+    .Member(_, name, _) => name.text
+    .ImplicitMember(name) => name.text
+    .Generic(target, _) => calleeName target
+    _ => "the function"
+  }
+}
+
+/** Whether a pattern binds no name at all - `_`, a literal, a case without fields: nothing is bound to the value. */
+fn bindsNothing(pattern: Pattern): Bool {
+  match pattern.kind {
+    .Binding(name) => name == "_"
+    .TuplePattern(items) => items.all bindsNothing
+    .ListPattern(items, rest) => {
+      if const Some(found) = rest {
+        if found.name.isSome() {
+          return false
+        }
+      }
+      items.all bindsNothing
+    }
+    .Variant(_, fields, _) => fields.all({ bindsNothing _.pattern })
+    .ImplicitVariant(_, fields, _) => fields.all({ bindsNothing _.pattern })
+    .Alternatives(patterns) => patterns.all bindsNothing
+    _ => true
+  }
+}
+
+/** A name that goes somewhere that keeps it, and is a scoped binding: that is the message. */
+fn checkScopedName(var checker: Checker, at: Span, flow: Flow) {
+  if const .Stays = flow {
+    return
+  }
+  const binding = match checker.resolutionHere(at) {
+    Some(.Local(found)) => found
+    _ => {
+      return
+    }
+  }
+  const scoped = match checker.scopedBindings.get(binding.value) {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  checker.reportHere scopedProblem(checker, binding, scoped, describeFlow(flow), at)
+}
+
+fn describeFlow(flow: Flow): String {
+  match flow {
+    .Stays => "used"
+    .Returned => "returned"
+    .ClosureResult => "the result of a closure"
+    .Bound => "bound to another name"
+    .Field => "stored in a field"
+    .Element => "stored in a collection"
+    .Tuple => "put into a tuple"
+    .Assigned(name) => "assigned to `{name}`"
+    .Stored(callee) => "handed to `{callee}`, which stores it"
+    .Kept(callee) => "handed to `{callee}`, which may keep it"
+  }
+}
+
+/**
+ * The one message of a scoped binding that would be kept, whatever keeps it: `what` says how ("returned", "captured
+ * by a closure that may outlive it").
+ */
+public fn scopedProblem(
+  checker: Checker,
+  binding: BindingId,
+  scoped: ScopedBinding,
+  what: String,
+  at: Span,
+): Diagnostic {
+  match scoped {
+    .ClosingSelf => {
+      Diagnostic.error("`close` may not keep `self`: the object is being released", at)
+        .withNote("`close` runs because the last reference went away, so nothing may hold the object afterwards")
+    }
+    .Using => {
+      const name = checker.binding(binding).name
+      Diagnostic.error("`{name}` is bound by `using`, so it cannot be {what}", at)
+        .withNote(
+          "`using` releases `{name}` at the end of the block that bound it, so nothing may hold it past that line."
+            + " Bind it with `const` where it has to outlive the block"
+        )
+    }
+  }
+}

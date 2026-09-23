@@ -30,6 +30,7 @@ use typeFromReference from "./lowering"
 use isQuotation from "./quote"
 use checkDeclaration from "./check"
 use requireDeclaredResult, allowsTopLevelCode from "./declaration"
+use markUsingBinding, markClosingSelf, checkScopedUses from "./close"
 
 /** What a block is worth: the type of its value, and whether control never reaches its end. */
 public type BlockResult {
@@ -216,6 +217,7 @@ fn checkBinding(var checker: Checker, binding: Binding) {
     bound = checker.deferredType
   }
   checkPattern checker, binding.pattern, bound, binding.isVar
+  markUsingBinding checker, binding
   // `const Point(x, y) = p` has no second way to go, so the pattern has to match every value
   requireIrrefutable checker, binding.pattern, bound, "The pattern of a binding", "value"
 }
@@ -601,8 +603,14 @@ public fn checkFunctionBody(
   if const Some(symbol) = declared {
     declareParameterOwners checker, symbol, firstParameter, parameters
   }
+  // `self` of a `close()` and a `using` name may not outlive their block (`close.trb`)
+  const isClosing = markClosingSelf checker, declared
+  const scopedBefore = checker.scopedBindings.length()
   const inner = bodyExpectation checker, produced, isInferred
   const outcome = checkBlock checker, body, inner
+  if isClosing || checker.scopedBindings.length() > scopedBefore {
+    checkScopedUses checker, body
+  }
   var found = outcome.annotation
   if isInferred {
     found = inferredResult checker, outcome

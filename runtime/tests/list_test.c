@@ -315,7 +315,36 @@ TORB_TEST(a_list_of_lists_of_strings_releases_the_whole_tree) {
   TORB_CHECK_INTEGER(torb_live_block_count(), before);
 }
 
+/* A descriptor whose release writes down which element went, so the order a list is taken down in can be read. */
+static int64_t released_order[4];
+static int64_t released_count = 0;
+
+static void element_recording_release(void *element) {
+  if (released_count < 4) {
+    released_order[released_count] = *(int64_t *)element;
+  }
+  released_count += 1;
+}
+
+static const torb_element element_recording = {
+  (uint32_t)sizeof(int64_t), (uint32_t)TORB_ALIGN_OF(int64_t), NULL, element_recording_release, NULL, NULL
+};
+
+TORB_TEST(a_list_releases_its_elements_from_the_last_to_the_first) {
+  torb_list list = torb_list_new(&element_recording);
+  released_count = 0;
+  add_whole(&list, 1);
+  add_whole(&list, 2);
+  add_whole(&list, 3);
+  torb_list_release(list);
+  TORB_CHECK_INTEGER(released_count, 3);
+  TORB_CHECK_INTEGER(released_order[0], 3);
+  TORB_CHECK_INTEGER(released_order[1], 2);
+  TORB_CHECK_INTEGER(released_order[2], 1);
+}
+
 void torb_register_list_tests(void) {
+  TORB_ADD(a_list_releases_its_elements_from_the_last_to_the_first);
   TORB_ADD(a_fresh_list_grows_and_answers_its_length);
   TORB_ADD(reading_past_the_end_panics_and_get_answers_false);
   TORB_ADD(a_write_goes_through_in_place_when_the_list_is_unique);

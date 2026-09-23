@@ -21,7 +21,7 @@ the syntax, then numbered rules, then what the construct is not.
 
 ## Pages
 
-- **[Control structures are functions](control-structures.md)** - do, unless, retry, using and test are ordinary functions with a closure or lazy parameter, so writing your own control structure is nothing more than writing a function that takes one and calling it with a trailing closure.
+- **[Control structures are functions](control-structures.md)** - do, unless, retry and test are ordinary functions with a closure or lazy parameter, so writing your own control structure is nothing more than writing a function that takes one and calling it with a trailing closure.
 - **[Reading code instead of running it](expression-trees.md)** - A query provider reads the typed tree of an Expression<Value> instead of running it, translates what it recognizes, and fails at its own runtime for a call it does not - the language cannot know in advance what a library can translate.
 - **[Foreign functions](foreign-functions.md)** _(planned)_ - foreign declares functions of a C library with the ABI as the contract, available to any package unlike native, but nothing links or calls one yet and its Pointer and CString types are not declared in std/ either.
 

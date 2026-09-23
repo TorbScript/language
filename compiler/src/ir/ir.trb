@@ -582,6 +582,15 @@ public type Instruction {
   case Copy(target: Slot, source: Slot)
   case Retain(slot: Slot)
   case Release(slot: Slot)
+  /**
+   * The scope of a binding whose value may hold a `Close` object ends here (docs/design/DESTRUCTORS.md 2a): a use that
+   * keeps the value alive to this line, so its release - and the `close()` inside that release - happens at the end of
+   * the block in reverse declaration order and never at a last use the liveness pass happened to find. The lowering
+   * writes one per such binding at every way out of its block; the ownership pass turns the one the value is still
+   * owned at into its `Release`, drops the one a move already emptied, and removes every one of them, so nothing after
+   * it ever sees this instruction.
+   */
+  case EndOfScope(slot: Slot)
   /** Before every write through a counted owner on a path, outermost first. A no-op when the count is one. */
   case MakeUnique(reference: Reference)
 
@@ -732,6 +741,18 @@ public type IrProgram {
    * cannot be built, but nothing about it is an internal error, which is what an entry in `problems` means.
    */
   var planned: List<String> = []
+  /**
+   * The `close()` of every `shared type` object that implements `Close`, by `LayoutId.value` of its layout: the
+   * destructor its release runs before it releases the fields (docs/design/DESTRUCTORS.md 2 and 8). A type without
+   * `Close` has no entry and its release is what it always was. A `native shared type` has none either - its runtime
+   * drop function closes the handle itself.
+   */
+  var closeFunctions: Map<Int, FunctionId> = [:]
+  /**
+   * Every layout whose object implements `Close`, by `LayoutId.value`, a `native shared type` among them: what the
+   * ownership pass asks to know which bindings are released at the end of their scope (`ir/closing.trb`).
+   */
+  var closingLayouts: Set<Int> = []
 
   // --- Types
 

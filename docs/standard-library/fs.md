@@ -70,8 +70,8 @@ public native shared type File with Close, Sink<Bytes, IoError> {
 }
 ```
 
-A file that is open has an identity - the handle of the operating system - so it is a `shared type`:
-`const text = using File.open(path)? { file => file.readAll() }`. An open file is both ends of a stream: `chunks()` and
+A file that is open has an identity - the handle of the operating system - so it is a `shared type` with `Close`:
+`using file = File.open(path)?` binds it for the rest of a block, and nothing calls `close()` by hand. An open file is both ends of a stream: `chunks()` and
 `lines()` read it, and a `File` *is* a `Sink<Bytes, IoError>` for writing, so everything that writes into a sink writes
 into a file (see [std/stream](stream.md)). Most code needs neither: `readText`, `writeText`, `exists`, `isDirectory`,
 `createDirectory` and `list` work on a path directly, without opening a handle. `absolutePath` is text arithmetic

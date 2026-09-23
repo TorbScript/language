@@ -1,0 +1,50 @@
+/**
+ * An object that is released runs its own `close()` first and then releases its fields, the last declared first; a
+ * list releases its elements from the last to the first. So a value is taken down in the reverse of the order it was
+ * built, and something built on another thing is gone before the thing it was built on.
+ */
+
+shared type Probe with Close {
+  name: String
+
+  var fn close() {
+    print "close {name}"
+  }
+}
+
+/** A closeable object that holds two others. */
+shared type Pair with Close {
+  left: Probe
+  right: Probe
+
+  var fn close() {
+    print "close the pair of {left.name} and {right.name}"
+  }
+}
+
+/** A plain value with a closeable object inside: it has no `close()` of its own, and its field is still released. */
+type Holder {
+  label: String
+  probe: Probe
+}
+
+fn pair() {
+  const both = Pair Probe("left"), Probe("right")
+  print "built the pair"
+}
+
+fn list() {
+  const probes = [Probe("a"), Probe("b"), Probe("c")]
+  print "built {probes.length()} probes"
+}
+
+fn holder() {
+  const held = Holder "holder", Probe("inside")
+  print "built the {held.label}"
+}
+
+pair()
+print "---"
+list()
+print "---"
+holder()

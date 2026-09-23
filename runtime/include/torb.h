@@ -271,6 +271,19 @@ void torb_retain(void *block);
  */
 void torb_release(void *block, torb_drop_function drop);
 
+/**
+ * The two halves around the destructor of an object (docs/design/DESTRUCTORS.md 2 and 8). The drop function of a
+ * `shared type` that implements `Close` calls `torb_closing_begin`, then the type's `close()`, then `torb_closing_end`,
+ * and only then releases the fields. `block` borrowed by both, and its count is zero when the drop function runs.
+ *
+ * `torb_closing_begin` lends the object a count of one while `close()` runs, so a retain and a release of `self` inside
+ * it - handing it to a function that only uses it - never reach zero a second time and never run the destructor again.
+ * `torb_closing_end` takes that count back, and panics where `close()` left the object with more: a new holder of an
+ * object that is being released, which the checker refuses and which would otherwise be a use after free.
+ */
+void torb_closing_begin(void *block);
+void torb_closing_end(void *block);
+
 /** `block` borrowed. True when this is the only owner, so a write may go through in place. `NULL` is unique. */
 bool torb_is_unique(const void *block);
 

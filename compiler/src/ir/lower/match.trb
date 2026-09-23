@@ -40,6 +40,7 @@ use constantSlot, emitIntrinsic, intrinsicSlot, integerSlot from "./expression"
 use lowerBlockInto from "./statement"
 use referenceAt from "./place"
 use showSlot from "./text"
+use endEveryScope, openScope, closeScope, declareScopedBetween from "./scope"
 
 /** Everything one walk of a decision graph needs, so that no function of it takes ten parameters. */
 type Walk {
@@ -105,9 +106,13 @@ public fn lowerMatch(
     guards.append arms[index].guard
   }
   const join = addBlock builder, "join", Some(location)
+  // The slots of every arm's names, so that the arm can be the scope they end in
+  var firstSlots: List<Int> = []
   for index in 0..arms.length() {
+    firstSlots.append builder.slotCount()
     declareBindings lowering, builder, plan, index
   }
+  firstSlots.append builder.slotCount()
   const graph = decisionTreeOf plan
   const walk = Walk plan, graph, guards, scrutinee, armBlocks, None, [], expression.span, location
   emitWalk lowering, builder, walk
@@ -117,7 +122,10 @@ public fn lowerMatch(
       continue
     }
     continueIn lowering, builder, armBlocks[index]
+    openScope lowering
+    declareScopedBetween lowering, builder, firstSlots[index], firstSlots[index + 1]
     const _ = lowerExpression lowering, builder, arms[index].body, Some(target)
+    closeScope lowering, builder
     if !lowering.isDiverged {
       finishBlock lowering, builder, Terminator.Jump(join)
       reaches = true
@@ -174,13 +182,19 @@ public fn lowerIfBinding(
   const thenBlock = addBlock builder, "then", Some(location)
   const elseBlock = addBlock builder, "else", Some(location)
   const join = addBlock builder, "join", Some(location)
+  const firstSlot = builder.slotCount()
   declareBindings lowering, builder, plan, 0
+  const lastSlot = builder.slotCount()
   const graph = decisionTreeOf plan
   const walk = Walk plan, graph, [None], scrutinee, [thenBlock], Some(elseBlock), [], pattern.span, location
   emitWalk lowering, builder, walk
   continueIn lowering, builder, thenBlock
   const wanted = if otherwise.isSome() { Some target } else { None }
+  // The names of the pattern belong to the block they are bound for, and end with it
+  openScope lowering
+  declareScopedBetween lowering, builder, firstSlot, lastSlot
   lowerBlockInto lowering, builder, then, wanted
+  closeScope lowering, builder
   const thenDiverged = lowering.isDiverged
   if !thenDiverged {
     finishBlock lowering, builder, Terminator.Jump(join)
@@ -340,7 +354,9 @@ public fn lowerWhileBinding(
   const check = addBlock builder, "while", Some(location)
   const inner = addBlock builder, "body", Some(location)
   const done = addBlock builder, "done", Some(location)
+  const firstSlot = builder.slotCount()
   declareBindings lowering, builder, plan, 0
+  const lastSlot = builder.slotCount()
   finishBlock lowering, builder, Terminator.Jump(check)
   continueIn lowering, builder, check
   const scrutinee = lowerValue lowering, builder, value
@@ -352,7 +368,11 @@ public fn lowerWhileBinding(
   emitWalk lowering, builder, walk
   continueIn lowering, builder, inner
   enterLoop lowering, done, check
+  // Every round binds the names again, so every round ends them - and a `break` or a `continue` does too
+  openScope lowering
+  declareScopedBetween lowering, builder, firstSlot, lastSlot
   lowerBlockInto lowering, builder, body, None
+  closeScope lowering, builder
   const _ = leaveLoop lowering
   if !lowering.isDiverged {
     finishBlock lowering, builder, Terminator.Jump(check)
@@ -1491,6 +1511,7 @@ fn emitFailure(
   }
   const failed = addTemporary builder, result
   lowerConstruct lowering, builder, failed, resultLayout, wantedFailure, fields
+  endEveryScope lowering, builder
   finishBlock lowering, builder, Terminator.Return(Some(borrowed(failed)))
 }
 

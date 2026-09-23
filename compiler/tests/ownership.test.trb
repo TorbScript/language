@@ -671,3 +671,188 @@ group "Real code" {
     assert(printProgram(owned.program) == printProgram(again.program))
   }
 }
+
+/**
+ * An object with a destructor, and the functions the group below lowers: its `close()` is the destructor, so a binding
+ * of it is released at the end of its block and never at its last use (docs/design/DESTRUCTORS.md 2a).
+ */
+const probeSource = r"""
+  shared type Probe with Close {
+    name: String
+
+    fn touch() {
+      print name
+    }
+
+    var fn close() {
+      print name
+    }
+  }
+
+  fn twoBindings() {
+    const first = Probe "first"
+    const second = Probe "second"
+    first.touch()
+    second.touch()
+  }
+
+  fn returned(): Probe {
+    const made = Probe "made"
+    made.touch()
+    made
+  }
+
+  fn early(isStopping: Bool) {
+    const kept = Probe "kept"
+    if isStopping {
+      return
+    }
+    kept.touch()
+  }
+
+  fn movedOnOnePath(isStoring: Bool): Probe? {
+    const probe = Probe "probe"
+    if isStoring {
+      return Some(probe)
+    }
+    None
+  }
+
+  fn plain(): Int {
+    const text = "{1}"
+    text.byteLength()
+  }
+  """
+
+group "The ends of scope: a binding with a destructor is released where its block ends" {
+  test "the lowering ends the scope of every such binding, the last declared first" {
+    assert(
+      irOf(probeSource, "t_acme_x2f_app_main_twoBindings") == r"""
+        fn t_acme_x2f_app_main_twoBindings() -> Void {
+          slot %0 local first: Shared(T_acme_x2f_app_main_Probe)
+          slot %1 temporary: String
+          slot %2 local second: Shared(T_acme_x2f_app_main_Probe)
+          slot %3 temporary: String
+          slot %4 temporary: Void
+        b0: # acme/app/src/main.trb:13 body
+          %1 = constant s_literal__String_first
+          %0 = construct T_acme_x2f_app_main_Probe (%1 borrowed)
+          %3 = constant s_literal__String_second
+          %2 = construct T_acme_x2f_app_main_Probe (%3 borrowed)
+          call t_acme_x2f_app_main_Probe_touch(%0 borrowed) at acme/app/src/main.trb:16:3
+          call t_acme_x2f_app_main_Probe_touch(%2 borrowed) at acme/app/src/main.trb:17:3
+          endOfScope %2
+          endOfScope %0
+          return
+        }"""
+    )
+  }
+
+  /** `first` is used for the last time before `second`, and still released after it. */
+  test "the end of a scope becomes the releases, in reverse declaration order" {
+    assert(
+      ownedIrOf(probeSource, "t_acme_x2f_app_main_twoBindings") == r"""
+        fn t_acme_x2f_app_main_twoBindings() -> Void {
+          slot %0 local first: Shared(T_acme_x2f_app_main_Probe)
+          slot %1 temporary: String
+          slot %2 local second: Shared(T_acme_x2f_app_main_Probe)
+          slot %3 temporary: String
+          slot %4 temporary: Void
+        b0: # acme/app/src/main.trb:13 body
+          %1 = constant s_literal__String_first
+          %0 = construct T_acme_x2f_app_main_Probe (%1 owned)
+          %3 = constant s_literal__String_second
+          %2 = construct T_acme_x2f_app_main_Probe (%3 owned)
+          call t_acme_x2f_app_main_Probe_touch(%0 borrowed) at acme/app/src/main.trb:16:3
+          call t_acme_x2f_app_main_Probe_touch(%2 borrowed) at acme/app/src/main.trb:17:3
+          release %2
+          release %0
+          return
+        }"""
+    )
+  }
+
+  test "a binding that is returned is moved out, and the end of its scope releases nothing" {
+    assert(
+      ownedIrOf(probeSource, "t_acme_x2f_app_main_returned") == r"""
+        fn t_acme_x2f_app_main_returned() -> Shared(T_acme_x2f_app_main_Probe) {
+          slot %0 local made: Shared(T_acme_x2f_app_main_Probe)
+          slot %1 temporary: String
+          slot %2 temporary: Void
+        b0: # acme/app/src/main.trb:20 body
+          %1 = constant s_literal__String_made
+          %0 = construct T_acme_x2f_app_main_Probe (%1 owned)
+          call t_acme_x2f_app_main_Probe_touch(%0 borrowed) at acme/app/src/main.trb:22:3
+          return %0 owned last
+        }"""
+    )
+  }
+
+  /** Without the end of its scope `kept` would die on the edge into the `return`, before nothing at all. */
+  test "a return in the middle of the block ends the scope there too" {
+    assert(
+      ownedIrOf(probeSource, "t_acme_x2f_app_main_early") == r"""
+        fn t_acme_x2f_app_main_early(isStopping: Bool borrowed) -> Void {
+          slot %0 parameter isStopping: Bool
+          slot %1 local kept: Shared(T_acme_x2f_app_main_Probe)
+          slot %2 temporary: String
+          slot %3 temporary: Void
+        b0: # acme/app/src/main.trb:26 body
+          %2 = constant s_literal__String_kept
+          %1 = construct T_acme_x2f_app_main_Probe (%2 owned)
+          branch %0 then b1 else b2
+        b1: # acme/app/src/main.trb:28 then
+          release %1
+          return
+        b2: # acme/app/src/main.trb:28 join
+          call t_acme_x2f_app_main_Probe_touch(%1 borrowed) at acme/app/src/main.trb:31:3
+          release %1
+          return
+        }"""
+    )
+  }
+
+  /** The move stays a move on the path that has it, and the other path releases at the end of the scope. */
+  test "a binding moved out on one path is released on the other" {
+    assert(
+      ownedIrOf(probeSource, "t_acme_x2f_app_main_movedOnOnePath") == r"""
+        fn t_acme_x2f_app_main_movedOnOnePath(isStoring: Bool borrowed) -> Variant(T_std_x2f_prelude_types_Option__T_acme_x2f_app_main_Probe) {
+          slot %0 parameter isStoring: Bool
+          slot %1 local probe: Shared(T_acme_x2f_app_main_Probe)
+          slot %2 temporary: String
+          slot %3 temporary: Void
+          slot %4 temporary: Variant(T_std_x2f_prelude_types_Option__T_acme_x2f_app_main_Probe)
+          slot %5 temporary: Variant(T_std_x2f_prelude_types_Option__T_acme_x2f_app_main_Probe)
+        b0: # acme/app/src/main.trb:34 body
+          %2 = constant s_literal__String_probe
+          %1 = construct T_acme_x2f_app_main_Probe (%2 owned)
+          branch %0 then b1 else b2
+        b1: # acme/app/src/main.trb:36 then
+          %4 = construct T_std_x2f_prelude_types_Option__T_acme_x2f_app_main_Probe.Some (%1 owned last)
+          return %4 owned last
+        b2: # acme/app/src/main.trb:36 join
+          %5 = construct T_std_x2f_prelude_types_Option__T_acme_x2f_app_main_Probe.None ()
+          release %1
+          return %5 owned last
+        }"""
+    )
+  }
+
+  /** A `String` has no destructor to observe, so it keeps the release right after its last use. */
+  test "a binding without a destructor is released at its last use, as before" {
+    assert(
+      ownedIrOf(probeSource, "t_acme_x2f_app_main_plain") == r"""
+        fn t_acme_x2f_app_main_plain() -> Int64 {
+          slot %0 local text: String
+          slot %1 temporary: Int64
+          slot %2 temporary: Int64
+        b0: # acme/app/src/main.trb:42 body
+          %1 = constant s_literal__Int64_1
+          %0 = intrinsic textConcat %1 at acme/app/src/main.trb:43:16
+          %2 = intrinsic textByteLength %0 at acme/app/src/main.trb:44:3
+          release %0
+          return %2 borrowed
+        }"""
+    )
+  }
+}

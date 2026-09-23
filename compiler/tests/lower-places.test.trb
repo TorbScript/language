@@ -54,7 +54,7 @@ fn emitterFindingsOf(source: String): List<String> {
   emitProgram(found.program, [ProgramEntry(entryName)]).unsupported
 }
 
-/** A resource with an identity, applied through `using`: the one generic `var` parameter of the standard library. */
+/** A resource with an identity, handed to a generic `var` parameter as a temporary. */
 const resources = r"""
   shared type Connection with Close {
     fn send(text: String) {
@@ -65,10 +65,14 @@ const resources = r"""
   }
 
   fn opened(): Int {
-    using(Connection(), { connection =>
+    applied(Connection(), { connection =>
       connection.send "hello"
       1
     })
+  }
+
+  fn applied<Resource: Close, Value>(var resource: Resource, body: (Resource) => Value): Value {
+    body(resource)
   }
   """
 
@@ -602,8 +606,8 @@ group "What the verifier demands of a place" {
 }
 
 /**
- * A `var` parameter of a **generic** declaration. `using<Resource: Close, Value>(var resource: Resource, ...)` is the
- * one in the standard library, and the type of the place a call forms for it is the *callee's* parameter type with the
+ * A `var` parameter of a **generic** declaration. `applied<Resource: Close, Value>(var resource: Resource, ...)` is
+ * one, and the type of the place a call forms for it is the *callee's* parameter type with the
  * callee's own instance arguments filled in - never the caller's substitution, which does not know `Resource` at all.
  * Reading it with the caller's made three internal errors out of one line: the parameter reached the back end
  * unsubstituted, the temporary the place was formed over became a `Void` slot, and the call passed a place of the
@@ -620,7 +624,7 @@ group "A `var` argument of a generic callee" {
         b0: # acme/app/src/main.trb:9 body
           %0 = construct T_acme_x2f_app_main_Connection ()
           %1 = closure t_closure__t_acme_x2f_app_main_opened_0 captures() local
-          %2 = call t_std_x2f_prelude_types_using__T_acme_x2f_app_main_Connection_Int64(&%0 borrowed last, %1 borrowed last) at acme/app/src/main.trb:10:3
+          %2 = call t_acme_x2f_app_main_applied__T_acme_x2f_app_main_Connection_Int64(&%0 borrowed last, %1 borrowed last) at acme/app/src/main.trb:10:3
           release %0
           release %1
           return %2 borrowed

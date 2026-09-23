@@ -112,6 +112,8 @@ public fn operandsOf(program: IrProgram, facts: SlotFacts, instruction: Instruct
     // What this pass inserted itself. They are not uses a position could decide anything about
     .Retain(_) => []
     .Release(_) => []
+    // The end of a scope reads the value and nothing else: its last use is where the release goes
+    .EndOfScope(slot) => [borrowedOperand(slot)]
     .MakeUnique(reference) => borrowedOperands placeSlotsOf(reference)
     .Call(_, callee, arguments, witnesses, _) => {
       var found = callOperands program, callee, arguments
@@ -315,6 +317,7 @@ public fn withOperands(instruction: Instruction, decided: List<Argument>): Instr
     .Copy(target, _) => movedOrCopied target, decidedAt(decided, 0)
     .Retain(_) => instruction
     .Release(_) => instruction
+    .EndOfScope(_) => instruction
     .MakeUnique(reference) => Instruction.MakeUnique withPlace(reference, decided, 0)
     .Call(target, callee, arguments, witnesses, at) => {
       Instruction.Call target, callee, takenArguments(arguments, decided, 0), witnesses, at

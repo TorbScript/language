@@ -1,0 +1,144 @@
+/**
+ * Which values of a lowered program may hold an object with a destructor: the fact that decides whether a binding is
+ * released at the end of its scope or at its last use (docs/design/DESTRUCTORS.md 2a).
+ *
+ * The lowering already wrote an `EndOfScope` for every binding whose type *may* hold a `Close` object, as far as it could
+ * tell while it ran. This is the narrower answer of the whole program, which the ownership pass reads before it decides
+ * anything: an object of a layout in [IrProgram.closingLayouts], and everything that holds one - a record, a case, a
+ * tuple, a container, a box. A trait-typed value holds one only where the program really boxes such a value into a
+ * trait-typed value somewhere, and a closure only where some environment captured one.
+ *
+ * A program without a single `Close` object answers `false` for every type, and its IR comes out of the ownership pass
+ * exactly as it would without any of this.
+ */
+
+use IrProgram, IrTypeId, LayoutId from "./ir"
+use LayoutKind from "./layout"
+use filledFlags from "./liveness"
+
+/** Per type of the program, whether a value of it may hold an object that runs `close()` when it is released. */
+public type Closing {
+  /** By `IrTypeId.value`. Empty where the program has no such object at all. */
+  holding: List<Bool>
+  /** By `LayoutId.value`: the layouts whose value holds one, which take their fields down in reverse order. */
+  layouts: List<Bool> = []
+
+  fn holds(id: IrTypeId): Bool {
+    id.value >= 0 && id.value < holding.length() && holding[id.value]
+  }
+
+  fn holdsLayout(id: LayoutId): Bool {
+    id.value >= 0 && id.value < layouts.length() && layouts[id.value]
+  }
+
+  fn isEmpty(): Bool {
+    holding.isEmpty()
+  }
+}
+
+/**
+ * The [Closing] of a program, to a fixpoint: a layout holds one when it is a closing layout or a field of it holds one,
+ * a type holds one when its layout or one of its arguments does, and the two answers a type alone cannot give - a
+ * trait-typed value, a closure - come from what the program boxes and what its environments hold.
+ */
+public fn closingOf(program: IrProgram): Closing {
+  if program.closingLayouts.isEmpty() {
+    return Closing([])
+  }
+  const typeCount = program.typeCount()
+  const layoutCount = program.layouts.length()
+  const boxed = boxedTypesOf program
+  var holding = filledFlags typeCount, false
+  var layoutHolds = filledFlags layoutCount, false
+  var isObjectHolding = false
+  var isClosureHolding = false
+  var isChanged = true
+  while isChanged {
+    isChanged = false
+    for index in 0..layoutCount {
+      if layoutHolds[index] {
+        continue
+      }
+      const layout = program.layouts[index]
+      var answer = program.closingLayouts.contains index
+      for field in layout.fields {
+        answer = answer || holdsNow(holding, field.annotation)
+      }
+      if answer {
+        layoutHolds.set index, true
+        isChanged = true
+        if layout.kind == LayoutKind.Environment {
+          isClosureHolding = true
+        }
+      }
+    }
+    for index in 0..typeCount {
+      if holding[index] {
+        continue
+      }
+      if typeHolds(program, IrTypeId(index), holding, layoutHolds, isObjectHolding, isClosureHolding) {
+        holding.set index, true
+        isChanged = true
+      }
+    }
+    if !isObjectHolding {
+      for id in boxed {
+        if holdsNow(holding, id) {
+          isObjectHolding = true
+          isChanged = true
+          break
+        }
+      }
+    }
+  }
+  Closing holding, layoutHolds
+}
+
+fn holdsNow(holding: List<Bool>, id: IrTypeId): Bool {
+  id.value >= 0 && id.value < holding.length() && holding[id.value]
+}
+
+fn typeHolds(
+  program: IrProgram,
+  id: IrTypeId,
+  holding: List<Bool>,
+  layoutHolds: List<Bool>,
+  isObjectHolding: Bool,
+  isClosureHolding: Bool,
+): Bool {
+  match program.typeAt(id) {
+    .SharedObject(layout) => layoutHolds[layout.value]
+    .Record(layout) => layoutHolds[layout.value]
+    .Variant(layout) => layoutHolds[layout.value]
+    .Tuple(layout) => layoutHolds[layout.value]
+    .FixedArray(item, _) => holdsNow holding, item
+    .Box(item) => holdsNow holding, item
+    .Lazy(item) => holdsNow holding, item
+    .Runtime(_, arguments) => arguments.any({ holdsNow holding, _ })
+    .Object(_) => isObjectHolding
+    .Closure(_) => isClosureHolding
+    _ => false
+  }
+}
+
+/** The types of every value the program boxes into a trait-typed value: what such a value may turn out to hold. */
+fn boxedTypesOf(program: IrProgram): List<IrTypeId> {
+  var found: List<IrTypeId> = []
+  var seen: Set<Int> = Set.of()
+  for function in program.functions {
+    for block in function.blocks {
+      for instruction in block.instructions {
+        if const .TraitValue(_, value, _) = instruction {
+          if function.hasSlot(value.slot) {
+            const annotation = function.typeOfSlot value.slot
+            if !seen.contains(annotation.value) {
+              seen.insert annotation.value
+              found.append annotation
+            }
+          }
+        }
+      }
+    }
+  }
+  found
+}

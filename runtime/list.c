@@ -42,13 +42,17 @@ static void torb_retain_elements(const torb_element *element, uint8_t *data, uin
   }
 }
 
+/*
+ * The last element first: a list is taken down in the reverse of the order it was built, so an element with a
+ * destructor closes after every element that was added after it (docs/design/DESTRUCTORS.md 2a).
+ */
 static void torb_release_elements(const torb_element *element, uint8_t *data, uint32_t count) {
   uint32_t index;
   if (element->release == NULL) {
     return;
   }
-  for (index = 0u; index < count; index += 1u) {
-    element->release(data + (size_t)index * (size_t)element->size);
+  for (index = count; index > 0u; index -= 1u) {
+    element->release(data + (size_t)(index - 1u) * (size_t)element->size);
   }
 }
 

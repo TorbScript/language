@@ -250,7 +250,7 @@ comparison.
   declares C functions and is a visible capability of a package.
 - **Macros.** `macro_rules!` and procedural macros have no counterpart, and that is a decision rather than a gap: names in
   TorbScript are resolved with the help of types, and a macro would have to run before name resolution. What macros are used
-  for is covered by functions with closure or `lazy` parameters (`do`, `unless`, `retry`, `using`), receiver closures for
+  for is covered by functions with closure or `lazy` parameters (`do`, `unless`, `retry`, `test`), receiver closures for
   builders, traits for operators, and `Expression<Value>` for code that has to be *read* instead of run.
 - **`#[derive(...)]` and attributes in general.** There are no annotations. `Equals`, `Hash`, `Show`, `copy`, `Encode` and
   `Decode` are generated when they can be, and everything else is written.

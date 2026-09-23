@@ -1248,6 +1248,9 @@ public type SavedFrame {
   breakTargets: List<BlockId>
   continueTargets: List<BlockId>
   loopBroke: List<Bool>
+  scopes: List<List<Slot>>
+  loopScopes: List<Int>
+  endedTemporaries: Set<Int>
   inlinedThunks: Map<Span, Bool>
   owner: String
   closureCount: Int
@@ -1278,6 +1281,9 @@ public fn savedFrame(var lowering: Lowering): SavedFrame {
     lowering.breakTargets,
     lowering.continueTargets,
     lowering.loopBroke,
+    lowering.scopes,
+    lowering.loopScopes,
+    lowering.endedTemporaries,
     lowering.inlinedThunks,
     lowering.owner,
     lowering.closureCount,
@@ -1314,6 +1320,9 @@ public fn enterBody(var lowering: Lowering, name: String) {
   lowering.breakTargets = []
   lowering.continueTargets = []
   lowering.loopBroke = []
+  lowering.scopes = []
+  lowering.loopScopes = []
+  lowering.endedTemporaries = Set.of()
   lowering.inlinedThunks = [:]
   lowering.owner = name
   lowering.closureCount = 0
@@ -1337,6 +1346,9 @@ public fn restoreFrame(var lowering: Lowering, saved: SavedFrame) {
   lowering.breakTargets = saved.breakTargets
   lowering.continueTargets = saved.continueTargets
   lowering.loopBroke = saved.loopBroke
+  lowering.scopes = saved.scopes
+  lowering.loopScopes = saved.loopScopes
+  lowering.endedTemporaries = saved.endedTemporaries
   lowering.inlinedThunks = saved.inlinedThunks
   lowering.owner = saved.owner
   lowering.closureCount = saved.closureCount

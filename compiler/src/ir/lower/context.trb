@@ -234,6 +234,27 @@ public type Lowering {
   var continueTargets: List<BlockId> = []
   /** Whether anything in the loop wrote a `break`: a `loop` without one never ends. */
   var loopBroke: List<Bool> = []
+  /**
+   * The blocks that are open in the body being lowered, innermost last, each with the bindings declared in it whose
+   * value may hold a `Close` object, in declaration order: what an `EndOfScope` is written for at every way out of the
+   * block (`ir/lower/scope.trb`).
+   */
+  var scopes: List<List<Slot>> = []
+  /** How many of `scopes` were open where each loop of `breakTargets` began, innermost last. */
+  var loopScopes: List<Int> = []
+  /** The temporaries whose statement already ended them, by slot index: each one ends once (`endTemporaries`). */
+  var endedTemporaries: Set<Int> = []
+  /**
+   * The declarations that implement `Close` and the traits an object of one can be seen through, by `SymbolId.value`,
+   * asked of the checker once per program (`closeFactsKnown`), and per IR type whether a value of it may hold such an
+   * object.
+   */
+  var closeTypes: Set<Int> = []
+  var closeTraits: Set<Int> = []
+  var closeFactsKnown: Bool = false
+  var closeHolding: Map<Int, Bool> = [:]
+  /** The layouts whose `close()` was asked for already, by `LayoutId.value` (`requestCloseFunctions`). */
+  var closeRequested: Map<Int, Bool> = [:]
   var unsupported: List<Unsupported> = []
   var unsupportedIndex: Map<String, Int> = [:]
   /** Errors of the program itself, in the order they were found. */
@@ -626,6 +647,7 @@ public fn enterLoop(var lowering: Lowering, exit: BlockId, step: BlockId) {
   lowering.breakTargets.append exit
   lowering.continueTargets.append step
   lowering.loopBroke.append false
+  lowering.loopScopes.append lowering.scopes.length()
 }
 
 /** Answers whether anything in the loop wrote a `break`, which is what says a `loop` can be left at all. */
@@ -634,6 +656,8 @@ public fn leaveLoop(var lowering: Lowering): Bool {
   const _ = lowering.breakTargets.removeAt last
   const other = lowering.continueTargets.length() - 1
   const _ = lowering.continueTargets.removeAt other
+  const opened = lowering.loopScopes.length() - 1
+  const _ = lowering.loopScopes.removeAt opened
   const index = lowering.loopBroke.length() - 1
   lowering.loopBroke.removeAt(index) ?? false
 }

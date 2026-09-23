@@ -158,8 +158,9 @@ Forwarding a trait's required members to the one field of a single-field type wi
 ### Destructor
 
 `close()` of a `shared type` that implements `Close`, run exactly once by the release of its last reference and never
-called by user code. Decided and not implemented yet; see
-[Destructors](language/execution/no-destructors.md).
+called by user code. The checker enforces who implements `Close` and that nothing calls it; the release that runs it
+is not built yet. See
+[Destructors](language/execution/destructors.md).
 
 ### Distinct type
 

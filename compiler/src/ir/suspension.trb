@@ -140,12 +140,19 @@ fn addUses(var live: List<Bool>, counted: Counted, slots: List<Slot>) {
   }
 }
 
+/**
+ * The live slots, the last declared first: a task that stops releases its frame in reverse declaration order, as the end
+ * of a scope does, so an object with a destructor closes after everything that was built on it (docs/design/DESTRUCTORS.md
+ * section 7, cancellation is drop).
+ */
 fn slotsOf(counted: Counted, live: List<Bool>): List<Slot> {
   var found: List<Slot> = []
-  for position in 0..counted.width() {
+  var position = counted.width() - 1
+  while position >= 0 {
     if live[position] {
       found.append counted.slots[position]
     }
+    position = position - 1
   }
   found
 }

@@ -40,12 +40,13 @@ extend IoError with From<Cancelled> {
 /**
  * A file that is open. It has an identity (the handle of the operating system), so it is a `shared type`:
  *
- *     const text = using File.open(path)? { file => file.readAll() }
- *
- *     var file = File.create(path)?
- *     using file { target =>
- *       target.fill(response.body.mapFailure(IoError.from)).outcome()
+ *     fn firstText(path: String): Result<String, IoError> {
+ *       using file = File.open(path)?
+ *       file.readAll()
  *     }
+ *
+ * The file closes when the last reference to it goes away - here at the end of `firstText`, because `using` keeps
+ * the name inside its block. Nothing calls `close()` by hand.
  *
  * An open file is both ends of a stream: `chunks()`/`lines()` read it, and the file *is* a `Sink<Bytes, IoError>` for
  * writing, so everything that writes into a sink writes into a file. Most code needs neither: the functions without
@@ -101,9 +102,7 @@ public native shared type File with Close, Sink<Bytes, IoError> {
    */
   static fn write(path: String, var source: Source<Bytes, IoError>): Task<Result<Void, IoError>> {
     var target = File.create(path)?
-    const outcome = target.fill(source).outcome()
-    target.close()
-    outcome
+    target.fill(source).outcome()
   }
 
   /**

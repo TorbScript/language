@@ -1,6 +1,6 @@
 ---
 title: Control structures are functions
-summary: do, unless, retry, using and test are ordinary functions with a closure or lazy parameter, so writing your own control structure is nothing more than writing a function that takes one and calling it with a trailing closure.
+summary: do, unless, retry and test are ordinary functions with a closure or lazy parameter, so writing your own control structure is nothing more than writing a function that takes one and calling it with a trailing closure.
 kind: reference
 status: stable
 order: 10
@@ -16,7 +16,7 @@ source:
 ---
 
 `if`, `for`, `while` and `match` are the only control flow built into the grammar, because they are the only forms
-that bind a name or jump. Everything that reads like a keyword beyond those four - `do`, `unless`, `retry`, `using` -
+that bind a name or jump. Everything that reads like a keyword beyond those four - `do`, `unless`, `retry`, `test` -
 is an ordinary function whose last parameter happens to be a closure.
 
 ## Example
@@ -63,13 +63,13 @@ fn <name>(..., body: () => <Type>) { ... }     a control structure: a function w
    print total
    ```
 
-3. **`retry`, `using` and `test` are written in ordinary TorbScript, in `std/core`, out of the same pieces.** `retry`
-   recurses in tail position, `using` calls the body and then `close()`s the resource
-   (see [There are no destructors](../execution/no-destructors.md)); neither one is special-cased by the checker.
+3. **`retry` and `test` are written in ordinary TorbScript, out of the same pieces.** `retry` recurses in tail
+   position, and neither one is special-cased by the checker. `using` is not one of them: it binds a name, so it is a
+   binding form next to `const` and `var` (see [Destructors](../execution/destructors.md)).
 
-4. **Only what binds a name or jumps is built into the grammar.** `const`, `var`, `fn`, `type`, `trait`, `extend` and
-   `use` share one shape, `modifier* keyword Name clauses* { body }`, because binding a name is the one thing a
-   function cannot do on a caller's behalf.
+4. **Only what binds a name or jumps is built into the grammar.** `const`, `var`, `using`, `fn`, `type`, `trait`,
+   `extend` and `use` bind one; the declarations share one shape, `modifier* keyword Name clauses* { body }`, because
+   binding a name is the one thing a function cannot do on a caller's behalf.
 
 5. **There are no macros, because names are resolved with the help of types.** A receiver, a named implicit
    parameter and an overload all need to know what a name refers to before a macro could rewrite anything, so a
@@ -102,5 +102,5 @@ fn repeat(times: Int, if: Bool) {
 
 - [Trailing closures](../functions/trailing-closures.md) - the syntax that makes a control structure read like one.
 - [Command calls](../syntax/command-calls.md) - the call form every control structure is written in.
-- [std/core](../../standard-library/core.md) - `do`, `unless`, `retry`, `using` and `Close`.
+- [std/core](../../standard-library/core.md) - `do`, `unless`, `retry` and `Close`.
 - [Declaring a function](../functions/declaring-a-function.md) - the one thing a control structure cannot replace: binding a name.

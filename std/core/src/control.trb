@@ -25,21 +25,42 @@ public fn retry<Value, Failure>(times: Int, action: () => Result<Value, Failure>
 }
 
 /**
- * Resources have an identity, so they are `shared type`s: `shared type File with Close { ... }`.
- * A `shared type` can only implement a `shared trait`, which keeps every other trait-typed value a value.
+ * The destructor of an object: what releases the resource behind it - a descriptor, a socket, a lock - once nothing
+ * holds the object any more.
+ *
+ * Only a `shared type` implements it, because a value is copied on assignment and two copies would close one resource
+ * twice. No program calls `close()`: the last release of the object runs it, and a program that wants that moment
+ * early lets the scope end or binds the object with `using name = value`, whose name cannot leave its block. Inside
+ * `close()`, `self` may not be stored, returned or captured by a closure that outlives the call.
+ *
+ * # Examples
+ *
+ *     shared type Connection with Close {
+ *       var isOpen: Bool = true
+ *
+ *       fn send(message: String) {
+ *         print message
+ *       }
+ *
+ *       var fn close() {
+ *         isOpen = false
+ *       }
+ *     }
+ *
+ *     fn greet() {
+ *       using connection = Connection()
+ *       connection.send "hello"
+ *     }
+ *
+ * # Open
+ *
+ * No back end runs `close()` at the last release yet (docs/design/DESTRUCTORS.md, slice R1), so a program that needs
+ * a resource released today has no way to ask for it.
  */
 public shared trait Close {
-  /** Releases the resource. Called once by [using] when its block ends, never automatically. */
+  /**
+   * Releases the resource. Runs exactly once, when the last reference to the object goes away; it returns nothing,
+   * cannot fail and never waits, and a type whose graceful end can do either offers `end()` beside it.
+   */
   var fn close()
-}
-
-/**
- * Closes the resource when the block is done.
- *
- *     const text = using File.open(path)? { file => file.readAll() }
- */
-public fn using<Resource: Close, Value>(var resource: Resource, body: (var Resource) => Value): Value {
-  const result = body resource
-  resource.close()
-  result
 }

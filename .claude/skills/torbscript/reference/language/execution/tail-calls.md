@@ -106,5 +106,5 @@ that, exactly as the accumulator pattern of `sum` above does for a single functi
 
 - [Result](../errors/result.md) - what a `panic` prints, and its exit code.
 - [Evaluation order](evaluation-order.md) - the other execution-model question answered without running the program.
-- [There are no destructors](no-destructors.md) - what a panic skips on its way out.
+- [Destructors](destructors.md) - what a panic skips on its way out.
 

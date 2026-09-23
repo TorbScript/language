@@ -36,10 +36,11 @@ use Sink from "./sink"
  *   afterwards. So a `const` source cannot be consumed by wrapping it either, which is what a read-only view
  *   promised. A chain still reads as one expression, because a **freshly produced object is a `var` path**: nothing
  *   is thrown away where there is no copy, and nobody else holds a view of something that was just made.
- * - **`close()` releases what is above.** A reader that stops early (`take`, an abandoned loop, a failure it handles)
- *   closes the source, and every source built here closes the one it reads from. `using` is the form that does not
- *   forget it. `close()` is synchronous, cannot fail and may be called after the stream ended; `finish()` on the other
- *   end is the graceful counterpart that can.
+ * - **`close()` releases what is above.** The last release of a source runs it, and no program calls it: a reader that
+ *   stops early (`take`, an abandoned loop, a failure it handles) lets go of the source, and every source built here
+ *   holds the one it reads from in a field, which its own release releases after it. `using` is the form that pins the
+ *   moment to the end of a block. `close()` is synchronous, cannot fail and may run after the stream ended; `end()` on
+ *   the other end is the graceful counterpart that can.
  *
  * # Related
  *
@@ -257,7 +258,7 @@ public shared type Pulling<Item, Failure> with Source<Item, Failure> {
   private step: () => Task<Result<Item?, Failure>>
   private var above: Close? = None
 
-  /** Wraps `step` as a source, and `above` as what `close()` releases. */
+  /** Wraps `step` as a source, and `above` as what releasing it releases. */
   static fn of(step: () => Task<Result<Item?, Failure>>, above: Close? = None): Pulling<Item, Failure> {
     Pulling step, above
   }
@@ -267,12 +268,8 @@ public shared type Pulling<Item, Failure> with Source<Item, Failure> {
     step().outcome()
   }
 
-  /** Releases `above`, if there is one. */
-  var fn close() {
-    if var Some(upstream) = above {
-      upstream.close()
-    }
-  }
+  /** Nothing of its own: `above` is a field, and the release of the source releases it right after this. */
+  var fn close() {}
 }
 
 /** `Source.from(items)`: the cursor of the iterable, in a `var` field. */
@@ -313,9 +310,7 @@ shared type Stepping<Input, Item, Failure> with Source<Item, Failure> {
     Ok None
   }
 
-  var fn close() {
-    upstream.close()
-  }
+  var fn close() {}
 }
 
 /** `source.mapFailure(transform)`. */
@@ -331,9 +326,7 @@ shared type Remapped<Item, Failure, Other> with Source<Item, Other> {
     Ok(upstream.next().outcome().mapError(transform)?)
   }
 
-  var fn close() {
-    upstream.close()
-  }
+  var fn close() {}
 }
 
 // --- A stage in front of a source --------------------------------------------------------------------------------
@@ -421,10 +414,8 @@ public shared type Staged<Input, Item, Failure> with Source<Item, Failure> {
     Ok accumulator.finish()
   }
 
-  /** Releases `upstream`. */
-  var fn close() {
-    upstream.close()
-  }
+  /** Nothing of its own: `upstream` is a field, and the release of the source releases it right after this. */
+  var fn close() {}
 }
 
 // --- A produced source ------------------------------------------------------------------------------------------
@@ -452,10 +443,11 @@ shared type Produced<Item, Failure: From<Cancelled>> with Source<Item, Failure> 
     Ok None
   }
 
-  /** Closing the channel makes the producer's next `add` fail with `ChannelClosed`, which ends its body. */
-  var fn close() {
-    writing.close()
-  }
+  /**
+   * Nothing of its own: `writing` is a field, and the release of the source releases it right after this. That closes
+   * the channel, which makes the producer's next `add` fail with `ChannelClosed` and ends its body.
+   */
+  var fn close() {}
 }
 
 // --- Fallible stages --------------------------------------------------------------------------------------------
@@ -490,7 +482,5 @@ shared type Checked<Item, Problem, Failure: From<Problem>> with Source<Item, Fai
     Ok None
   }
 
-  var fn close() {
-    upstream.close()
-  }
+  var fn close() {}
 }

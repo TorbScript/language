@@ -145,6 +145,17 @@ shared type <Name> {
    `shared trait` - are refused where the closure captures them (see [Tasks](../concurrency-and-streams/tasks.md),
    rule 5).
 
+8. **Only a `shared type` implements `Close`.** The destructor belongs to one object, and a value is copied on
+   assignment, so two copies would close one resource twice. The same holds for a trait that comes `with Close`, such
+   as `Sink` and `Source` (see [Destructors](../execution/destructors.md)).
+
+   ```trb error
+   type Ticket with Close {
+     var fn close() {}
+   }
+   // error: `Close` may only be implemented by a `shared type`
+   ```
+
 ## What this is not
 
 **A `shared type` is not the default choice for anything that gets passed around.** Almost nothing needs one: a value

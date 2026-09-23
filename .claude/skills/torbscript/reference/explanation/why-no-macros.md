@@ -22,7 +22,7 @@ different one, forced by how names are resolved.
 
 **The language is extended by functions, not by macros or annotations.**
 
-- Control structures are functions with closure or `lazy` parameters (`do`, `unless`, `retry`, `using`).
+- Control structures are functions with closure or `lazy` parameters (`do`, `unless`, `retry`, `test`).
 - DSLs are functions with receiver closures, and operators are traits.
 - Code that has to be read instead of run - a query provider, `assert`, a validation rule - takes an
   `Expression<Value>` parameter, which hands the function the typed tree of an already-resolved, already-checked
@@ -58,7 +58,7 @@ translate `users.filter { _.age >= 18 }` into SQL gets the typed tree of the clo
 see, and it cannot generate any code back into the program - only read what is already there.
 
 **Because control structures and DSLs already reach where most macro systems are reached for, without a second
-language inside the language.** `unless`, `retry` and `using` all look like keywords and are ordinary functions with
+language inside the language.** `unless`, `retry` and `test` all look like keywords and are ordinary functions with
 closure parameters; `port 8080` inside a configuration file is an ordinary command call on a field. Rust's
 `macro_rules!` and procedural macros exist largely to build exactly these two things - a custom control structure and
 a small DSL - and TorbScript reaches both through [command calls](why-commands.md) and
@@ -100,7 +100,7 @@ command calls has to change for that to be added later.
 - [Reading code instead of running it](../language/extensibility/expression-trees.md) - what `Expression<Value>`
   hands a function, and what it cannot.
 - [Control structures are functions](../language/extensibility/control-structures.md) - `do`, `unless`, `retry`,
-  `using`, and how to add one.
+  and how to add one.
 - [Why a call is written as a command](why-commands.md) - the syntax that makes a function read like a keyword.
 - [Why there is no reflection](why-no-reflection.md) - the same "no code that runs ahead of the type checker" argument
   applied to values instead of syntax.

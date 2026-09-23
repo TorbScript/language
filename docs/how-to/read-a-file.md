@@ -60,11 +60,14 @@ function of `File` that can fail answers a `Result`, so the failure travels up w
    ```
 
 6. **Use `File.open` and `using` only when you need the handle.** An open file has the identity of an operating-system
-   handle, so it is a `shared type` with `Close`, and `using` closes it at the end of the block. Most code does not need
-   one.
+   handle, so it is a `shared type` with `Close`. `using` binds it to a name that cannot leave the block, and the file
+   is released - and closed - where the block ends. Nothing calls `close()` by hand. Most code does not need a handle.
 
    ```trb fragment
-   const text = using File.open(path)? { file => file.readAll() }
+   fn firstText(path: String): Result<String, IoError> {
+     using file = File.open(path)?
+     file.readAll()
+   }
    ```
 
 ## Pitfalls

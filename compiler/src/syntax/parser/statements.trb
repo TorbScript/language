@@ -1,7 +1,8 @@
 /**
  * The grammar of statements: [parseStatementsUntil] for the body of a file or a [parseBlock], and [parseBinding]
  * for `const`/`var`. Everything that is not one of the keyword forms falls through to a command expression, so an
- * assignment and a bare call share one arm at the bottom of [parseStatement].
+ * assignment and a bare call share one arm at the bottom of [parseStatement] - except `using name = value`, whose
+ * `using` is a keyword only in front of a name and an `=` ([isAtUsingBinding]).
  */
 
 use Span from "../source"
@@ -85,6 +86,9 @@ fn parseStatement(var parser: Parser): Statement {
       StatementKind.Continue
     }
     _ => {
+      if isAtUsingBinding(parser) {
+        return Statement StatementKind.Bind(parseUsingBinding(parser)), start.to(parser.previousSpan())
+      }
       const target = parseCommandExpression parser
       if parser.eat(TokenKind.Equal) {
         StatementKind.Assign target, parseCommandExpression(parser)
@@ -102,6 +106,25 @@ public fn parseBinding(var parser: Parser): Binding {
   const isVar = parser.isAtKeyword Keyword.Var
   parser.bump()
   parseBindingBody parser, doc, isVar
+}
+
+/**
+ * `using file = File.open(path)?`. `using` is a contextual keyword: a binding only where a name and an `=` (or a `:`
+ * and a type) follow it, so every other `using` is still a name.
+ */
+fn isAtUsingBinding(parser: Parser): Bool {
+  if !parser.isAtWord("using") || parser.kindAt(1) != TokenKind.Identifier {
+    return false
+  }
+  parser.kindAt(2) == TokenKind.Equal || parser.kindAt(2) == TokenKind.Colon
+}
+
+/** `using name = value`: a `const` whose name may not escape its block. The position is at `using`. */
+fn parseUsingBinding(var parser: Parser): Binding {
+  const doc = parser.takeDoc()
+  parser.bump()
+  const binding = parseBindingBody parser, doc, false
+  Binding binding.doc, false, binding.pattern, binding.annotation, binding.value, scoped: true
 }
 
 /**

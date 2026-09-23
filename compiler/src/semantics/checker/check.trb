@@ -21,6 +21,7 @@ use typeFromReference from "./lowering"
 use checkBodyOf, checkInitializer, checkStatement from "./statement"
 use checkPattern from "./pattern"
 use requireIrrefutable from "./exhaustive"
+use reportTopLevelUsing, checkScopedStatement from "./close"
 use deferBlock, emptyLiteralOf from "./expression"
 use checkFieldDefaultConstant from "./constant"
 use settleChanges from "./mutation"
@@ -191,9 +192,17 @@ public fn statisticsOf(checker: Checker, module: ModuleId): Statistics {
 fn checkTopLevel(var checker: Checker, scope: TypeScope, statement: Statement) {
   match statement.kind {
     .Declare(declaration) => checkDeclaration checker, scope, declaration
-    .Bind(binding) => checkTopLevelBinding checker, scope, binding
+    .Bind(binding) => {
+      reportTopLevelUsing checker, binding
+      checkTopLevelBinding checker, scope, binding
+    }
     _ => {
+      const scopedBefore = checker.scopedBindings.length()
       const _ = checkStatement checker, statement
+      // A `using` inside a block of the script: its name may not outlive that block (`close.trb`)
+      if checker.scopedBindings.length() > scopedBefore {
+        checkScopedStatement checker, statement
+      }
     }
   }
 }

@@ -76,8 +76,10 @@ while const Some(item) = source.next().outcome()? { ... }
    other stage of [Pipelines](../collections-and-iteration/pipelines.md) work unchanged on both worlds.
 
 6. **`close()` releases what is above or below, synchronously and without failing; `end()` is the graceful end of
-   a `Sink` and can fail.** A reader that stops early (`take`, a `find` that found it, an abandoned loop) closes what
-   it was reading from; a sink that is closed without being finished may have written less than it was given.
+   a `Sink` and can fail.** No program calls `close()`: the last release of a stream runs it (see
+   [Destructors](../execution/destructors.md)). A reader that stops early (`take`, a `find` that found it, an
+   abandoned loop) lets go of what it was reading from, and its release closes it; a sink that is released without
+   being finished may have written less than it was given.
 
 ## What this is not
 

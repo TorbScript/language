@@ -106,10 +106,10 @@ const items: List<Int> = []
 unless items.isEmpty() { print "not empty" }
 ```
 
-Nothing about `unless` is special to the compiler - `do`, `retry` and `using` from the standard library are written
+Nothing about `unless` is special to the compiler - `do` and `retry` from the standard library are written
 the same way, as ordinary functions with a closure or a
 [`lazy`](../language/functions/parameter-modes.md) parameter. See
-[Control structures are functions](../language/extensibility/control-structures.md) for `retry` and `using`, and how a
+[Control structures are functions](../language/extensibility/control-structures.md) for `retry`, and how a
 function like this names its closure's implicit parameter.
 
 ## A configuration block is a receiver closure
@@ -145,8 +145,8 @@ nothing but a function call. See [Builders and DSLs](../language/configuration/b
 ## Next
 
 - [Modules and packages](modules-and-packages.md) - splitting a program into files and a project.
-- [Control structures are functions](../language/extensibility/control-structures.md) - `do`, `retry`, `using`, and how
-  to add your own.
+- [Control structures are functions](../language/extensibility/control-structures.md) - `do`, `retry`, and how to add
+  your own.
 - [Receiver closures](../language/configuration/receiver-closures.md) - the exact rule for how a name resolves inside
   one.
 

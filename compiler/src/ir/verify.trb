@@ -284,6 +284,11 @@ fn verifyDefinedness(program: IrProgram, function: IrFunction, var found: List<S
     const block = function.blocks[index]
     const at = "{function.name} b{index}"
     for instruction in block.instructions {
+      // The end of a temporary's statement may stand where one path of the statement never made it: the ownership
+      // pass drops such an end, so it reads nothing that has to be defined here
+      if const .EndOfScope(_) = instruction {
+        continue
+      }
       const outs = outParameterSlotsOf program, instruction
       for slot in usedSlots(instruction) {
         if !outs.contains(slot) {
@@ -448,6 +453,7 @@ public fn usedSlots(instruction: Instruction): List<Slot> {
     .Copy(_, source) => [source]
     .Retain(slot) => [slot]
     .Release(slot) => [slot]
+    .EndOfScope(slot) => [slot]
     .MakeUnique(reference) => slotsOfReference reference
     .Call(_, _, arguments, witnesses, _) => {
       var used = slotsOfArguments arguments
@@ -649,6 +655,8 @@ fn verifyInstruction(
     .Copy(target, source) => expectSame program, function, found, at, target, source, "a copy"
     .Retain(slot) => expectManaged program, function, found, at, slot, "retain"
     .Release(slot) => expectManaged program, function, found, at, slot, "release"
+    // Any binding may end its scope: whether its value holds a `Close` object is decided by the ownership pass
+    .EndOfScope(_) => {}
     .MakeUnique(reference) => {
       const annotation = typeOfReference program, function, found, at, reference
       if const Some(inner) = annotation {

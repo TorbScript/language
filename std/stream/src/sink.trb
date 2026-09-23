@@ -7,11 +7,9 @@ use Cancelled from "std/task"
 use Source from "./source"
 
 /**
- *     var file = File.create(path)?
- *     using file { target =>
- *       target.addLine("first").outcome()?
- *       target.end().outcome()
- *     }
+ *     using file = File.create(path)?
+ *     file.addLine("first").outcome()?
+ *     file.end().outcome()
  *
  * A sink has an identity and is ended once, so it is a `shared type`, and `add` and `end` change it: they take
  * `var self`, exactly as `Accumulator.add` does. **A sink that is written to sits in a `var` binding**, and a `const`
@@ -25,8 +23,9 @@ use Source from "./source"
  *   whatever went wrong on the way is reported here at the latest. After `end()`, `add` fails. The word is not
  *   `finish`, which belongs to [Accumulator] and answers a *result*: the end of a stream is not a value.
  * - **A failure ends the stream.** After a failure neither `add` nor `end` will succeed again.
- * - **`close()` is the abrupt end:** it releases the target and cannot fail, which is what `Close` and `using` need.
- *   A sink that is closed without `end()` may have written less than it was given - that is the point of the two.
+ * - **`close()` is the abrupt end:** it releases the target and cannot fail, which is what `Close` needs: the last
+ *   release of the sink runs it, and no program calls it. A sink that is released without `end()` may have written
+ *   less than it was given - that is the point of the two.
  * - **Buffering is never implicit.** `sink.buffered(capacity:)` says it, and `Buffered.flush()` is where it is forced.
  * - **Whoever writes needs the permission - now or later.** `mapFailure` and `buffered` take `var self` as well,
  *   because the wrapper keeps the sink in a `var` field and writes into it afterwards. A chain is still one
@@ -100,7 +99,7 @@ public shared type Pushing<Item, Failure> with Sink<Item, Failure> {
   private complete: () => Task<Result<Void, Failure>>
   private var below: Close? = None
 
-  /** Wraps `accept` and `complete` as a sink, and `below` as what `close()` releases. */
+  /** Wraps `accept` and `complete` as a sink, and `below` as what releasing it releases. */
   static fn of(
     accept: (item: Item) => Task<Result<Void, Failure>>,
     complete: () => Task<Result<Void, Failure>>,
@@ -119,12 +118,8 @@ public shared type Pushing<Item, Failure> with Sink<Item, Failure> {
     complete().outcome()
   }
 
-  /** Releases `below`, if there is one. */
-  var fn close() {
-    if var Some(target) = below {
-      target.close()
-    }
-  }
+  /** Nothing of its own: `below` is a field, and the release of the sink releases it right after this. */
+  var fn close() {}
 }
 
 shared type Discarding<Item, Failure> with Sink<Item, Failure> {
@@ -156,9 +151,8 @@ shared type Remapped<Item, Failure, Other> with Sink<Item, Other> {
     Ok(downstream.end().outcome().mapError(transform)?)
   }
 
-  var fn close() {
-    downstream.close()
-  }
+  /** Nothing of its own: `downstream` is a field, and the release of the sink releases it right after this. */
+  var fn close() {}
 }
 
 // --- Buffering ---------------------------------------------------------------------------------------------------
@@ -219,8 +213,9 @@ public shared type Buffered<Item, Failure> with Sink<Item, Failure> {
     downstream.end().outcome()
   }
 
-  /** Releases `downstream` without flushing - whatever is still buffered is lost. */
-  var fn close() {
-    downstream.close()
-  }
+  /**
+   * Nothing of its own, and no flush: whatever is still buffered is lost, and `downstream` is a field the release of
+   * the sink releases right after this.
+   */
+  var fn close() {}
 }

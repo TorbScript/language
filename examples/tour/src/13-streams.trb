@@ -121,13 +121,11 @@ extend ImportError with From<Cancelled> {
 /** Streams `url` straight into a file at `path`, without ever holding the whole response in memory. */
 fn download(url: String, path: String): Task<Result<Void, ImportError>> {
   var response = http.get(url).outcome()?
-  var file = File.create(path)?
-  const outcome = response.body
+  using file = File.create(path)?
+  response.body
     .mapFailure(ImportError.requestFailed)
     .into(file.mapFailure(ImportError.fileFailed))
     .outcome()
-  file.close()
-  outcome
 }
 
 // --- 2. Importing newline-separated JSON ----------------------------------------------------------
@@ -136,7 +134,7 @@ fn download(url: String, path: String): Task<Result<Void, ImportError>> {
 
 /** Counts the active users in a newline-separated JSON file, decoding one `User` at a time. */
 fn countActiveUsers(path: String): Task<Result<Int, ImportError>> {
-  var file = File.open(path)?
+  using file = File.open(path)?
   const total = file.chunks()
     .mapFailure(ImportError.fileFailed)
     .through(Json.items<User>())
@@ -144,7 +142,6 @@ fn countActiveUsers(path: String): Task<Result<Int, ImportError>> {
     .filter({ _.active })
     .count()
     .outcome()?
-  file.close()
   Ok total
 }
 
@@ -202,14 +199,12 @@ fn namesFrom(var body: Body): Task<Result<List<String>, ImportError>> {
 
 /** Writes `lines` to a file through a buffered sink, flushing only when the buffer says to. */
 fn writeReport(path: String, lines: Iterate<String>): Task<Result<Void, IoError>> {
-  var file = File.create(path)?
+  using file = File.create(path)?
   var out = file.buffered capacity: 4096
   for line in lines {
     out.addLine(line).outcome()?
   }
-  const outcome = out.end().outcome()
-  file.close()
-  outcome
+  out.end().outcome()
 }
 
 // What the whole file is about, in four lines

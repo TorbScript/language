@@ -34,6 +34,7 @@ use isQuotation, openThunk, closeThunk from "./quote"
 use checkConstruction, checkSharedIdentity from "./declaration"
 use taskProblemOf, taskNoteOf from "./declaration"
 use capsuleNotesOf from "./derive"
+use checkCloseCall from "./close"
 
 /** Which parameter every written argument fills, and what the call adds to what was written. */
 public type ArgumentPlan {
@@ -142,6 +143,8 @@ public fn checkCall(
   const solved = resolveTypes checker, instantiation.arguments
   // `isSame` compares identity, and only a `shared type` has one
   checkSharedIdentity checker, target, solved, expression.span
+  // `close()` runs at the last release and never by hand (`close.trb`)
+  checkCloseCall checker, target.resolution, callee
   if !solved.isEmpty() {
     checker.recordTypeArguments expression.span, solved
   }

@@ -40,6 +40,8 @@ use checkBodyOf from "./statement"
 use memberOfImplementation from "./implementation"
 use taskProblemOf, taskNoteOf from "./declaration"
 use resolveType from "./unify"
+use scopedProblem from "./close"
+use ModuleId from "../module"
 
 // --- While the bodies are checked -----------------------------------------------------------------------------------
 
@@ -82,6 +84,19 @@ public fn noteClosureKind(
   var firstHeld: LocalBinding? = None
   var parameters: List<(Int, Int)> = []
   var unseen: List<(String, TypeId)> = []
+  // A `using` name and the `self` of `close()` are held like a `var` binding, with a message of their own (`close.trb`)
+  var scoped: List<BindingId> = []
+  for capture in captures {
+    if checker.scopedBindings.containsKey(capture.binding.value) && !scoped.contains(capture.binding) {
+      scoped.append capture.binding
+    }
+  }
+  if !isLocal {
+    if const Some(binding) = scoped.first() {
+      reportScopedCapture checker, checker.module, binding, "captured by a closure that may outlive it", at
+      return
+    }
+  }
   // A top-level `var` the closure changes is held like a captured `var` binding: the closure may only run while its
   // statement does, or it could change the declaration while a `var` access to it is open
   for symbol in changedDeclarations {
@@ -127,14 +142,20 @@ public fn noteClosureKind(
     return
   }
   const site = checker.closureSites.get(at) ?? ArgumentSite.Filled(Resolution.Deferred, -1, "", "")
+  if isSpawnSite(checker, site) {
+    if const Some(binding) = scoped.first() {
+      reportScopedCapture checker, checker.module, binding, "captured by a task", at
+      return
+    }
+  }
   // A configuring block runs in place, and a `spawn` closure is held to its own rule by the call (`call.trb`)
   if isAppliedSite(site) || isSpawnSite(checker, site) {
     return
   }
-  if held.isEmpty() && parameters.isEmpty() && unseen.isEmpty() {
+  if held.isEmpty() && parameters.isEmpty() && unseen.isEmpty() && scoped.isEmpty() {
     return
   }
-  checker.escapeChecks.append EscapeCheck(checker.module, at, site, held, parameters, unseen)
+  checker.escapeChecks.append EscapeCheck(checker.module, at, site, held, parameters, unseen, scoped)
 }
 
 /**
@@ -554,6 +575,17 @@ fn reportEscaping(var checker: Checker, binding: LocalBinding, at: Span) {
 fn reportEscapeCheck(var checker: Checker, check: EscapeCheck, callees: Callees) {
   const position = positionOf check.site
   const (callee, parameter) = namesOf check.site
+  if const Some(binding) = check.scoped.first() {
+    if keepsThrough(checker, callees, position) {
+      const what = match callees {
+        .Storing => "captured by a closure `{callee}` stores"
+        .Declared(_) => "captured by a closure `{callee}` keeps"
+        _ => "captured by a closure the function it is handed to may keep"
+      }
+      reportScopedCapture checker, check.module, binding, what, check.at
+      return
+    }
+  }
   if const Some(held) = check.held.first() {
     if keepsThrough(checker, callees, position) {
       const problem = match callees {
@@ -592,6 +624,17 @@ fn reportCrossingValue(var checker: Checker, check: FunctionValueCheck) {
           + " checked, a declared function, or a function-typed parameter"
       )
   )
+}
+
+/** A closure that would keep a `using` name or the `self` of `close()` past its block: the message of `close.trb`. */
+fn reportScopedCapture(var checker: Checker, module: ModuleId, binding: BindingId, what: String, at: Span) {
+  const scoped = match checker.scopedBindings.get(binding.value) {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  checker.report module, scopedProblem(checker, binding, scoped, what, at)
 }
 
 fn sharingNote(): String {

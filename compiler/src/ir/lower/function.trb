@@ -26,6 +26,7 @@ use lowerBlockInto, lowerBlockValue, lowerStatement from "./statement"
 use capturedVariablesOf, capturedVariablesIn from "./closure"
 use staticOfConstant from "../constant"
 use taskValueOf as declaredTaskValueOf from "../../semantics/checker/statement"
+use openScope, closeScope from "./scope"
 
 /** The body of one instance. The stub is replaced only where everything in it could be lowered. */
 public fn lowerInstance(var lowering: Lowering, instance: Instance) {
@@ -153,6 +154,9 @@ public fn beginFunction(var lowering: Lowering, module: ModuleId) {
   lowering.breakTargets = []
   lowering.continueTargets = []
   lowering.loopBroke = []
+  lowering.scopes = []
+  lowering.loopScopes = []
+  lowering.endedTemporaries = Set.of()
   lowering.owner = ""
   lowering.closureCount = 0
   lowering.capturedVariables = [:]
@@ -262,12 +266,15 @@ public fn lowerEntryFunction(var lowering: Lowering, module: ModuleId): Function
       break
     }
   }
+  // The top level of an entry file is the block of its entry function: its bindings end where the file does
+  openScope lowering
   for statement in statements {
     if lowering.isDiverged || !lowering.isSupported {
       break
     }
     lowerTopLevel lowering, builder, statement
   }
+  closeScope lowering, builder
   if !lowering.isDiverged {
     finishBlock lowering, builder, Terminator.Return(None)
   }

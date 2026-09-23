@@ -425,19 +425,21 @@ group "A trait-typed value never becomes a type parameter" {
   }
 }
 
-group "`using` and other generic functions of the prelude" {
-  test "`using` with a temporary checks: a temporary is a valid argument for a `var` parameter (gap 2)" {
-    const source = "type File with Close \{\n  path: String\n\n"
+group "Generic functions with a `var` parameter, and the conversions of the prelude" {
+  test "a temporary is a valid argument for a generic `var` parameter (gap 2)" {
+    const source = "shared type File with Close \{\n  path: String\n\n"
       + "  static fn open(path: String): Result<File, String> \{\n    Ok(File(path))\n  \}\n\n"
       + "  fn readAll(): String \{\n    path\n  \}\n\n"
       + "  var fn close() \{\n  \}\n\}\n\n"
+      + "fn applied<Resource: Close, Value>(var resource: Resource, body: (Resource) => Value): Value \{\n"
+      + "  body(resource)\n\}\n\n"
       + "fn probe(path: String): Result<String, String> \{\n"
-      + "  const text = using File.open(path)? \{ file => file.readAll() \}\n  Ok(text)\n\}"
+      + "  const text = applied File.open(path)? \{ file => file.readAll() \}\n  Ok(text)\n\}"
     assert problems(source).isEmpty()
     const found = probe source
-    assert(found.typeOf("using File.open(path)? \{ file => file.readAll() \}") == "String")
-    assert(found.typeArgumentsOf("using File.open(path)? \{ file => file.readAll() \}") == ["File", "String"])
-    assert(found.witnessesOf("using File.open(path)? \{ file => file.readAll() \}") == ["File: Close"])
+    assert(found.typeOf("applied File.open(path)? \{ file => file.readAll() \}") == "String")
+    assert(found.typeArgumentsOf("applied File.open(path)? \{ file => file.readAll() \}") == ["File", "String"])
+    assert(found.witnessesOf("applied File.open(path)? \{ file => file.readAll() \}") == ["File: Close"])
   }
 
   test "`into()` and `to<Target>()` take their target from the expectation" {
