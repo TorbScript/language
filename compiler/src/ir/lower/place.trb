@@ -191,6 +191,11 @@ public fn pathPreludeAt(
       return None
     }
   }
+  if const .Temporary = place.root {
+    if place.steps.isEmpty() {
+      return temporaryPrelude lowering, builder, target
+    }
+  }
   const root = match rootReferenceOf(lowering, builder, place.root, what, at) {
     Some(found) => found
     None => {
@@ -204,6 +209,21 @@ public fn pathPreludeAt(
     }
   }
   Some PathPrelude(root, place.steps, keys)
+}
+
+/**
+ * A freshly produced object as the whole path: `source.through(stage).checked()`, where `checked` is a `var fn` and its
+ * receiver is what `through` answered. The checker allows it only where the value has an identity - a `shared type`,
+ * a `shared trait` value, a task, a file (`MutationProblem.TemporaryRoot` otherwise) - so a change through it is the
+ * object's and nothing is lost with the copy. The value goes into a hidden local of the frame and the path starts there;
+ * the ownership pass releases it after its last use, as it does every other temporary.
+ */
+fn temporaryPrelude(var lowering: Lowering, var builder: FunctionBuilder, target: Expression): PathPrelude? {
+  const slot = lowerValue lowering, builder, target
+  if !lowering.isSupported {
+    return None
+  }
+  Some PathPrelude(PlacePath(Reference(slot, []), builder.typeOfSlot(slot)))
 }
 
 /** The other half: every step walked, and every `a[key]` on the way taken out of its container. */

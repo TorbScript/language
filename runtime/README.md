@@ -196,13 +196,13 @@ storage of capacity zero. Shrinking that away would mean a fourth word in every 
 **A text and a list are at most 4 GiB and 2^32 elements.** `offset` and `length` are `uint32_t`, which keeps
 `torb_text` at 16 bytes. Both limits panic rather than wrap.
 
-**`Instant` and `Duration` are nanoseconds as a plain `int64_t`.** Both are native value types with no fields the
-language can see, so the representation is the runtime's choice: `torb_instant` is one monotonic reading from an
-unspecified per-process origin (only a difference of two is ever meaningful), `torb_duration` a signed span. About
-292 years fit before an `int64_t` nanosecond count overflows, which a monotonic clock within one process never
-approaches; `Instant.subtract` still reuses the checked `Int64` subtraction so that never-reached case panics rather
-than silently wrapping. `Duration.show()` is the fractional number of seconds through `torb_show_f64`, then `s`
-(`"1.5s"`), reusing the shortest round-tripping float formatting instead of a second one.
+**`Instant` and `Duration` are nanoseconds in an `Int64`, and records of the program.** `std/time` declares them as
+ordinary types over one private `Int64` field, so comparing, subtracting and showing them is TorbScript and the runtime
+only reads the clock: `torb_clock_now` answers one monotonic reading in nanoseconds from an unspecified per-process
+origin (only a difference of two is ever meaningful). About 292 years fit before an `int64_t` nanosecond count
+overflows, which a monotonic clock within one process never approaches, and the checked `Int64` arithmetic panics
+rather than wraps in that never-reached case. `torb_instant` and `torb_duration` stay the runtime's names for the
+deadlines and limits of `task.c`, and a `Duration` crosses into it as its number of nanoseconds.
 
 **`std/math` is thin wrappers over `<math.h>`, nothing more.** A domain error (`naturalLog(-1.0)`, `arcSine(2.0)`)
 answers `nan` the way libm already does, never a panic - the same rule `Float64.squareRoot` follows. Bit-identical

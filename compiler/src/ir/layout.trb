@@ -208,6 +208,7 @@ fn sizeOfRuntime(kind: RuntimeKind): Int {
     .SetStorage => pointerSize
     .TaskObject => pointerSize
     .ChannelObject => pointerSize
+    .FileHandle => pointerSize
     .ExpressionTree => pointerSize
     // A sign, an exponent and a counted digit block
     .DecimalNumber => pointerSize + 8
@@ -416,7 +417,8 @@ public fn containsSharedType(program: IrProgram, id: IrTypeId): Bool {
     .Tuple(layout) => program.layoutAt(layout).containsShared
     .FixedArray(item, size) => size > 0 && containsSharedType(program, item)
     .Lazy(item) => containsSharedType program, item
-    .Runtime(_, arguments) => arguments.any({ containsSharedType program, _ })
+    // A file is an object with an identity; the containers are values around what they hold
+    .Runtime(kind, arguments) => kind == RuntimeKind.FileHandle || arguments.any({ containsSharedType program, _ })
     _ => false
   }
 }

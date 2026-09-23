@@ -1,0 +1,117 @@
+/**
+ * Which conversion runs is decided by the types and never by a member's name alone.
+ *
+ * A `?` converts the error through the one `From` implementation of the error it hands on: a failure type that converts
+ * from two others has two members called `from`, and each `?` reaches the one for its own source. In a body that is
+ * generic over its failure the bound says that a conversion exists, and the types an instance puts in for the
+ * parameters say which one runs - for a `?` and for `Outer.from` handed on as a function value alike.
+ *
+ * And a trait member that shares its name with the `into()` of the prelude is still that trait's own member: a `Jug`
+ * converts into `Litres`, which gives it the prelude's `into()` as well, and the table of `Jug` as a `Poured` still
+ * holds the default of `Poured` - the two differ in their parameters, and `poured.into(3)` takes one.
+ */
+
+type Stopped with Show {
+  reason: String
+
+  fn show(): String {
+    "stopped ({reason})"
+  }
+}
+
+type Refused with Show {
+  fn show(): String {
+    "refused"
+  }
+}
+
+type Failure with Show {
+  what: String
+
+  fn show(): String {
+    "failure: {what}"
+  }
+}
+
+extend Failure with From<Stopped> {
+  static fn from(value: Stopped): Failure {
+    Failure "it stopped, {value.reason}"
+  }
+}
+
+extend Failure with From<Refused> {
+  static fn from(value: Refused): Failure {
+    Failure "it was refused"
+  }
+}
+
+fn stopping(): Result<Int, Failure> {
+  const value: Result<Int, Stopped> = Fail Stopped("too late")
+  Ok(value?)
+}
+
+fn refusing(): Result<Int, Failure> {
+  const value: Result<Int, Refused> = Fail Refused()
+  Ok(value?)
+}
+
+/** The failure is the caller's to choose; the bound is all the body knows about it. */
+fn refusingAny<Problem: From<Refused>>(): Result<Int, Problem> {
+  const value: Result<Int, Refused> = Fail Refused()
+  Ok(value?)
+}
+
+/** Both failures are the caller's; the bound between them is the conversion. */
+fn relayed<Problem, Outer: From<Problem>>(value: Result<Int, Problem>): Result<Int, Outer> {
+  Ok(value?)
+}
+
+/** `Outer.from` as a function value: the implementation the instance picked, handed on. */
+fn remapped<Problem, Outer: From<Problem>>(value: Result<Int, Problem>): Result<Int, Outer> {
+  value.mapError Outer.from
+}
+
+trait Poured {
+  fn amount(): Int
+
+  /** Shares its name with the `into()` of the prelude, and nothing else. */
+  fn into(glasses: Int): Int {
+    amount() / glasses
+  }
+}
+
+type Jug with Poured {
+  litres: Int
+
+  fn amount(): Int {
+    litres
+  }
+}
+
+type Litres with Show {
+  count: Int
+
+  fn show(): String {
+    "{count} l"
+  }
+}
+
+extend Litres with From<Jug> {
+  static fn from(value: Jug): Litres {
+    Litres value.litres
+  }
+}
+
+print stopping()
+print refusing()
+const chosen: Result<Int, Failure> = refusingAny()
+print chosen
+const stopped: Result<Int, Stopped> = Fail Stopped("relayed")
+const relayedFailure: Result<Int, Failure> = relayed stopped
+print relayedFailure
+const remappedFailure: Result<Int, Failure> = remapped Fail(Refused())
+print remappedFailure
+const poured: Poured = Jug 6
+print poured.into(3)
+const measured = Litres.from Jug(2)
+print measured

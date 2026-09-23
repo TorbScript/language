@@ -467,15 +467,20 @@ public fn lowerNamedFunctionValue(
     const what = "`{name}` used as a function value, which would have to bind its receiver"
     return unsupportedSlot lowering, builder, destination, what, expression.span
   }
-  // `Order.describe` names the requirement of `Describe`, and the implementation the checker found says which body runs
+  // `Order.describe` names the requirement of `Describe`, and the implementation the checker found says which body runs.
+  // `Failure.from` on a generic parameter names it through the parameter's bound, and the type this instance put in for
+  // the parameter says which implementation that is - the same resolution a call of it gets
   var member = symbol
   var start = lowering.substitution
   if !written.hasBody {
-    if const .Implementation(_, _) = dispatch {
-      const receiver = receiverTypeOfValue lowering, expression
-      if const Some(dispatched) = dispatchedMember(lowering, symbol, [], dispatch, receiver, expression.span) {
-        member = dispatched.member
-        start = dispatched.mapping
+    match dispatch {
+      .Direct => {}
+      _ => {
+        const receiver = receiverTypeOfValue lowering, expression
+        if const Some(dispatched) = dispatchedMember(lowering, symbol, [], dispatch, receiver, expression.span) {
+          member = dispatched.member
+          start = dispatched.mapping
+        }
       }
     }
   }
@@ -680,11 +685,26 @@ public fn lowerClosureCall(
     slots.append None
     places.append None
   }
+  // `rectangle.perimeter()` where `perimeter` is a constant that holds a receiver closure: the value in front of the dot
+  // is its first argument, and the written ones fill the parameters after it
+  var offset = 0
+  if const Some(receiver) = boundReceiverOf(lowering, callee, count) {
+    if shape.parameters[0].isReference {
+      const what = "a receiver closure in a constant whose receiver is `var`"
+      return unsupportedSlot lowering, builder, destination, what, expression.span
+    }
+    const bound = lowerValue lowering, builder, receiver
+    if !lowering.isSupported {
+      return abandonedSlot lowering, builder, destination
+    }
+    slots.set 0, Some(bound)
+    offset = 1
+  }
   // What a `var` argument took out of a container and has to put back once the closure has run
   var taken: List<TakenElement> = []
   for index in 0..arguments.length() {
     const value = arguments[index].value
-    const position = targets[index]
+    const position = targets[index] + offset
     if position < 0 || position >= count {
       const what = "a call of a closure value with an argument that fills no parameter"
       return unsupportedSlot lowering, builder, destination, what, expression.span
@@ -717,6 +737,42 @@ public fn lowerClosureCall(
   const result = emitClosureCall lowering, builder, destination, holder, filled, places, annotation
   putBackElements lowering, builder, taken
   result
+}
+
+/**
+ * The value a receiver closure held by a constant is applied to, where the constant is read through a value:
+ * `rectangle.perimeter` for `static perimeter: (self: Rectangle) => Int`. The checker types that read as the closure
+ * with its receiver bound - one parameter less than the constant holds - which is how it is told apart from a closure a
+ * field holds, whose parameters are all written at the call.
+ */
+fn boundReceiverOf(var lowering: Lowering, callee: Expression, count: Int): Expression? {
+  const base = match callee.kind {
+    .Member(found, _, _) => found
+    _ => {
+      return None
+    }
+  }
+  const module = lowering.module
+  match lowering.checker.resolutionAt(module, callee.span) {
+    Some(.Constant(_, _)) => {}
+    _ => {
+      return None
+    }
+  }
+  if isReadThroughType(lowering, callee) {
+    return None
+  }
+  const written = lowering.checker.expressionType(module, callee.span)?
+  const form = match lowering.checker.types.form(written) {
+    .Function(found) => found
+    _ => {
+      return None
+    }
+  }
+  if form.parameters.length() + 1 != count {
+    return None
+  }
+  Some base
 }
 
 /**

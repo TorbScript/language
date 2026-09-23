@@ -39,8 +39,8 @@ torb_char torb_char_to_upper_case(torb_char character);
 bool torb_char_try_from_i64(int64_t value, torb_char *out, torb_text *message);
 /* Clock.milliseconds */
 int64_t torb_clock_milliseconds(void);
-/* Clock.now */
-torb_instant torb_clock_now(void);
+/* monotonicNanoseconds */
+int64_t torb_clock_now(void);
 /* Float64.compare */
 int32_t torb_compare_f64(double first, double second);
 /* Int64.tryFrom(Float64) */
@@ -61,22 +61,12 @@ bool torb_convert_i64_u64_checked(int64_t value, uint64_t *out, torb_text *messa
 bool torb_convert_i64_u8_checked(int64_t value, uint8_t *out, torb_text *message);
 /* Int64.tryFrom(UInt64) */
 bool torb_convert_u64_i64_checked(uint64_t value, int64_t *out, torb_text *message);
-/* Duration.compare */
-int32_t torb_duration_compare(torb_duration first, torb_duration second);
-/* Duration.equals */
-bool torb_duration_equals(torb_duration first, torb_duration second);
-/* Int64.seconds */
-torb_duration torb_duration_of_seconds(int64_t seconds, torb_location at);
-/* Duration.seconds */
-double torb_duration_seconds(torb_duration duration);
-/* Duration.show */
-torb_text torb_duration_show(torb_duration duration);
 /* Environment.get */
 bool torb_environment_get(torb_text name, torb_text *out);
 /* File.absolutePath */
 bool torb_file_absolute_path(torb_text path, torb_text *out, torb_text *error);
 /* File.close */
-void torb_file_close(torb_file *self);
+void torb_file_close(torb_file **self);
 /* File.createDirectory */
 bool torb_file_create_directory(torb_text path, torb_text *error);
 /* File.exists */
@@ -88,7 +78,7 @@ bool torb_file_list(torb_text path, torb_list *out, torb_text *error);
 /* File.open */
 bool torb_file_open(torb_text path, torb_file **out, torb_text *error);
 /* File.readAll */
-bool torb_file_read_all(torb_file *self, torb_text *out, torb_text *error);
+bool torb_file_read_all(torb_file **self, torb_text *out, torb_text *path, torb_text *error);
 /* File.readText */
 bool torb_file_read_text(torb_text path, torb_text *out, torb_text *error);
 /* File.writeText */
@@ -105,12 +95,6 @@ uint64_t torb_hash_combine(uint64_t first, uint64_t second);
 uint64_t torb_hash_i64(int64_t value);
 /* UInt16.hash, UInt32.hash, UInt64.hash, UInt8.hash */
 uint64_t torb_hash_u64(uint64_t value);
-/* Instant.compare */
-int32_t torb_instant_compare(torb_instant first, torb_instant second);
-/* Instant.equals */
-bool torb_instant_equals(torb_instant first, torb_instant second);
-/* Instant.subtract */
-torb_duration torb_instant_subtract(torb_instant first, torb_instant second, torb_location at);
 /* Float64.isNaN */
 bool torb_is_nan_f64(double value);
 /* ArrayList.append, TrieList.append */
@@ -234,7 +218,7 @@ double torb_square_root_f64(double value);
 /* cancelTask */
 void torb_task_cancel(torb_task *self);
 /* completedWithin */
-torb_task *torb_task_completed_within(torb_task *self, torb_duration limit);
+torb_task *torb_task_completed_within(torb_task *self, int64_t limit);
 /* Task.await, Task.finished */
 bool torb_task_result(torb_task *task, void *out);
 /* test */

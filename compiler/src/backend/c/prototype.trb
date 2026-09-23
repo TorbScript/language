@@ -173,7 +173,7 @@ public fn matchPrototype(
   for index in 0..declared {
     const expected = cTypeOf program, signature.parameters[index].annotation
     const byPointer = signature.parameters[index].isReference || signature.parameters[index].isByAddress
-    const wanted = if byPointer { "{expected} *" } else { expected }
+    const wanted = if byPointer { pointerSpellingOf expected } else { expected }
     if !isSameParameter(wanted, prototype.parameters[index], byPointer) {
       return PrototypeMatch.Mismatch(
         "`{name}`: parameter {index + 1} of the runtime is a `{prototype.parameters[index]}`"
@@ -197,6 +197,17 @@ public fn matchPrototype(
     "`{name}`: the runtime takes one parameter more than the lowering passes,"
       + " and it is not the source location"
   )
+}
+
+/**
+ * The pointer to a value of this C type, spelled the way the manifest spells one: `torb_list *`, and `torb_file **` for
+ * the place of a value that is a pointer already.
+ */
+fn pointerSpellingOf(spelling: String): String {
+  if spelling.endsWith("*") {
+    return "{spelling}*"
+  }
+  "{spelling} *"
 }
 
 /**

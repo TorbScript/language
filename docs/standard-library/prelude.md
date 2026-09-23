@@ -66,7 +66,7 @@ public use print, printError from "std/console"
 public use * as math from "std/math"
 public use Json, JsonValue, JsonError from "std/json"
 public use Duration, Instant from "std/time"
-public use Int64.seconds from "std/time"
+public use Int64.seconds, Int64.milliseconds from "std/time"
 ```
 
 Every re-export keeps its original name, so `use Option from "std/prelude"` and `use Option from "std/core"` name the

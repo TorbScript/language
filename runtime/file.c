@@ -3,9 +3,10 @@
  * handle (`File.open`/`readAll`/`close`) that lets a program read a file without holding it in memory as one
  * `readText`.
  *
- * Every function answers false on failure and puts the message of the `IoError` into `*error` (owned). The `IoError`
- * record and the `Result` around it are layouts of the program, so the lowering builds them - a runtime function
- * never constructs a type of the language.
+ * Every function answers false on failure and puts the message of the `IoError` into `*error` (owned): the operating
+ * system's words alone, because the `path` of the `IoError` is the parameter of that name and its `show` writes the two
+ * together. The `IoError` record and the `Result` around it are layouts of the program, so the lowering builds them - a
+ * runtime function never constructs a type of the language.
  *
  * `readText` and `File.readAll` both validate UTF-8 and fail when the bytes are not: a `String` is always valid
  * UTF-8, so a file that is not is an `IoError` and never a replacement character (decided gap 7).
@@ -33,16 +34,8 @@ static char *torb_path_bytes(torb_text path, size_t *capacity) {
 }
 
 /** `<path>: <message>`, which is what `IoError.show()` prints. Result owned. */
-static torb_text torb_io_error(torb_text path, const char *message) {
-  torb_text parts[3];
-  torb_text result;
-  parts[0] = path;
-  parts[1] = torb_text_from_cstring(": ");
-  parts[2] = torb_text_from_cstring(message);
-  result = torb_text_concat(parts, 3u);
-  torb_text_release(parts[1]);
-  torb_text_release(parts[2]);
-  return result;
+static torb_text torb_io_message(const char *message) {
+  return torb_text_from_cstring(message);
 }
 
 bool torb_file_read_text(torb_text path, torb_text *out, torb_text *error) {
@@ -55,13 +48,13 @@ bool torb_file_read_text(torb_text path, torb_text *out, torb_text *error) {
   bool read = torb_platform_read_file(name, &bytes, &length, &message);
   torb_raw_free(name, capacity);
   if (!read) {
-    *error = torb_io_error(path, message);
+    *error = torb_io_message(message);
     return false;
   }
   if (!torb_text_try_from_bytes(bytes, length, out, &bad_offset)) {
     char detail[96];
     snprintf(detail, sizeof detail, "the byte at offset %lu is not valid UTF-8", (unsigned long)bad_offset);
-    *error = torb_io_error(path, detail);
+    *error = torb_io_message(detail);
     torb_raw_free(bytes, length);
     return false;
   }
@@ -77,7 +70,7 @@ bool torb_file_write_text(torb_text path, torb_text text, torb_text *error) {
   bool written = torb_platform_write_file(name, bytes, (size_t)text.length, &message);
   torb_raw_free(name, capacity);
   if (!written) {
-    *error = torb_io_error(path, message);
+    *error = torb_io_message(message);
     return false;
   }
   return true;
@@ -96,7 +89,7 @@ bool torb_file_create_directory(torb_text path, torb_text *error) {
   bool created = torb_platform_create_directory(name, &message);
   torb_raw_free(name, capacity);
   if (!created) {
-    *error = torb_io_error(path, message);
+    *error = torb_io_message(message);
     return false;
   }
   return true;
@@ -132,7 +125,7 @@ bool torb_file_list(torb_text path, torb_list *out, torb_text *error) {
   torb_raw_free(name, capacity);
   if (!listed) {
     torb_list_release(entries);
-    *error = torb_io_error(path, message);
+    *error = torb_io_message(message);
     return false;
   }
   torb_list_sort(&entries, torb_compare_text_elements, NULL);
@@ -181,7 +174,7 @@ bool torb_file_absolute_path(torb_text path, torb_text *out, torb_text *error) {
     size_t working_length = 0u;
     char *working = torb_platform_working_directory(&working_length);
     if (working == NULL) {
-      *error = torb_io_error(path, "the working directory could not be read");
+      *error = torb_io_message("the working directory could not be read");
       return false;
     }
     joined_capacity = working_length + (size_t)path.length + 2u;
@@ -293,7 +286,7 @@ bool torb_file_open(torb_text path, torb_file **out, torb_text *error) {
   FILE *handle = (FILE *)torb_platform_open_file(name, false, &message);
   torb_raw_free(name, capacity);
   if (handle == NULL) {
-    *error = torb_io_error(path, message);
+    *error = torb_io_message(message);
     return false;
   }
   {
@@ -305,22 +298,25 @@ bool torb_file_open(torb_text path, torb_file **out, torb_text *error) {
   return true;
 }
 
-bool torb_file_read_all(torb_file *self, torb_text *out, torb_text *error) {
+bool torb_file_read_all(torb_file **self, torb_text *out, torb_text *path, torb_text *error) {
+  torb_file *file = *self;
   size_t capacity = 65536u;
   size_t filled = 0u;
   uint8_t *buffer;
   size_t bad_offset = 0u;
-  if (self->handle == NULL) {
-    *error = torb_io_error(self->path, "the file is already closed");
+  if (file->handle == NULL) {
+    *path = torb_text_retained(file->path);
+    *error = torb_io_message("the file is already closed");
     return false;
   }
   buffer = (uint8_t *)torb_raw_allocate(capacity);
   for (;;) {
-    size_t read = fread(buffer + filled, 1u, capacity - filled, (FILE *)self->handle);
+    size_t read = fread(buffer + filled, 1u, capacity - filled, (FILE *)file->handle);
     filled += read;
     if (filled < capacity) {
-      if (ferror((FILE *)self->handle)) {
-        *error = torb_io_error(self->path, strerror(errno));
+      if (ferror((FILE *)file->handle)) {
+        *path = torb_text_retained(file->path);
+        *error = torb_io_message(strerror(errno));
         torb_raw_free(buffer, capacity);
         return false;
       }
@@ -341,7 +337,8 @@ bool torb_file_read_all(torb_file *self, torb_text *out, torb_text *error) {
   if (!torb_text_try_from_bytes(buffer, filled, out, &bad_offset)) {
     char detail[96];
     snprintf(detail, sizeof detail, "the byte at offset %lu is not valid UTF-8", (unsigned long)bad_offset);
-    *error = torb_io_error(self->path, detail);
+    *path = torb_text_retained(file->path);
+    *error = torb_io_message(detail);
     torb_raw_free(buffer, capacity);
     return false;
   }
@@ -349,15 +346,19 @@ bool torb_file_read_all(torb_file *self, torb_text *out, torb_text *error) {
   return true;
 }
 
-void torb_file_close(torb_file *self) {
-  if (self->handle != NULL) {
-    fclose((FILE *)self->handle);
-    self->handle = NULL;
+static void torb_file_close_handle(torb_file *file) {
+  if (file->handle != NULL) {
+    fclose((FILE *)file->handle);
+    file->handle = NULL;
   }
+}
+
+void torb_file_close(torb_file **self) {
+  torb_file_close_handle(*self);
 }
 
 void torb_file_drop(void *block) {
   torb_file *file = (torb_file *)block;
-  torb_file_close(file);
+  torb_file_close_handle(file);
   torb_text_release(file->path);
 }

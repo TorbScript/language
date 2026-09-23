@@ -1046,6 +1046,7 @@ public fn traitsOf(var checker: Checker, annotation: TypeId): List<TypeId> {
     addClosure checker, found, bound, annotation, 0
   }
   addImplementorTraits checker, found, annotation
+  found = withoutInheritedTextConversions checker, annotation, found
   checker.closuresRunning.remove annotation.value
   // An implementation was generated while this ran, so what came out may be missing it: answer with it, keep nothing
   if checker.answerGeneration == generation {
@@ -1339,6 +1340,26 @@ fn directTraitsOf(var checker: Checker, annotation: TypeId): List<TypeId> {
       found
     }
   }
+}
+
+/**
+ * A literal type is read from text by its own conversion and by no other. `directTraitsOf` puts it in place of the
+ * base's, but the base can carry one more through a supertrait - `Int64 with Signed` reaches `TryFrom<String,
+ * NumberParseError>` through `Numeric` - and `Level.tryFrom("2")` was then two candidates that both take a `String`.
+ */
+fn withoutInheritedTextConversions(var checker: Checker, annotation: TypeId, found: List<TypeId>): List<TypeId> {
+  if const .Literals(_, _) = checker.types.form(annotation) {
+    const generated = literalConversionBound checker
+    var kept: List<TypeId> = []
+    for bound in found {
+      if isTextConversionBound(checker, bound) && Some(bound) != generated {
+        continue
+      }
+      kept.append bound
+    }
+    return kept
+  }
+  found
 }
 
 /**

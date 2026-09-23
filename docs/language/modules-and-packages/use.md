@@ -14,9 +14,6 @@ source:
   - CONCEPT.md#modules-and-packages
 ---
 
-> **Not built natively yet.** `Duration` is not built by the native back end yet, so `torb run` refuses the examples
-> here that use it. `torb check` accepts them, and the rules are the language's.
-
 A file starts with no names but the ones the [prelude](the-prelude.md) already brought in. `use` adds more of them,
 one declaration per statement, and where they come from is always written next to them.
 

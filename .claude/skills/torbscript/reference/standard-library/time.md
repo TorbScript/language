@@ -14,12 +14,9 @@ source:
   - std/time/src/lib.trb
 ---
 
-> **Not built natively yet.** `Duration` and `Instant` are not built by the native back end yet, so `torb run` refuses
-> the examples here that use them. `torb check` accepts them, and the rules are the language's.
-
-`std/time` is wall-clock time: points in time (`Instant`) and the spans between them (`Duration`). `Instant` and
-`Duration` are values and are in the prelude; `Clock`, which reads the current time, is a capability and stays an
-explicit import.
+`std/time` is wall-clock time: points in time (`Instant`) and the spans between them (`Duration`). Both are a count of
+nanoseconds in an `Int64` and cost what the number costs. `Instant` and `Duration` are values and are in the prelude;
+`Clock`, which reads the current time, is a capability and stays an explicit import.
 
 ## Import
 
@@ -29,43 +26,52 @@ use Clock from "std/time"
 ```
 
 ```trb check
-const wait = 2.seconds()
+const wait = 2.seconds() + 500.milliseconds()
 print wait.seconds()
 ```
 
-`2.seconds()` is a member `std/time` adds to `Int64`, which `std/number` owns, so a file names where it comes from -
-except that the prelude already does (`public use Int64.seconds from "std/time"`), which is why the snippet above needs
-no `use` at all. `Duration.seconds` is a member of the type itself and needs nothing either way.
+`2.seconds()` and `500.milliseconds()` are members `std/time` adds to `Int64`, which `std/number` owns, so a file names
+where they come from - except that the prelude already does (`public use Int64.seconds, Int64.milliseconds from
+"std/time"`), which is why the snippet above needs no `use` at all. `Duration.seconds` is a member of the type itself
+and needs nothing either way.
 
 ## Declarations
 
 ### Instant
 
 ```trb fragment
-public native type Instant with Compare, Subtract<Instant, Duration> {}
+public type Instant with Compare, Subtract<Instant, Duration>, Add<Duration, Instant> {
+  private storedNanoseconds: Int64
+}
 ```
 
 A point in time. Only the difference between two `Instant`s is meaningful, never the value on its own -
-`end - start` is what `Subtract<Instant, Duration>` gives back.
+`end - start` is what `Subtract<Instant, Duration>` gives back, and `start + 2.seconds()` is a deadline. The field is
+private: an `Instant` comes from `Clock.now()` and from nowhere else.
 
 ### Duration
 
 ```trb fragment
-public native type Duration with Compare, Show {
+public type Duration with Compare, Show, Add, Subtract {
+  private storedNanoseconds: Int64
+
   fn seconds(): Float64
+  fn nanoseconds(): Int64
 }
 ```
 
-The span between two `Instant`s, or a length of time asked for on its own. `2.seconds()` comes from
-`extend Int64 { fn seconds(): Duration }`, which the prelude re-exports by name
-(`public use Int64.seconds from "std/time"`); mainly for sandbox and task limits.
+The span between two `Instant`s, or a length of time asked for on its own; signed, so a difference taken the wrong way
+round is negative. It shows as its seconds with an `s` behind them (`2.5s`), and two of them add and subtract.
+`2.seconds()` and `250.milliseconds()` come from `extend Int64 { fn seconds(): Duration }` and its sibling, which the
+prelude re-exports by name; mainly for sandbox and task limits. `nanoseconds()` is the exact count, which is what a
+`Duration` crosses into the runtime as (`Task.within`).
 
 ### Clock
 
 ```trb fragment
 public native type Clock {
   static fn now(): Instant
-  static fn milliseconds(): Int64
+  native static fn milliseconds(): Int64
 }
 ```
 

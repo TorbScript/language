@@ -33,7 +33,7 @@ use FunctionBuilder, emit, addTemporary from "../build"
 use layoutOfType, conversionKindOf from "../verify"
 use describeIrType from "../print"
 use memberInValue, genericMemberInValue, derivedKindOf, generatedKindOf from "../witness"
-use generatedFunctionOf from "./derive"
+use generatedFunctionOf, literalConversionOf from "./derive"
 use instanceFor, needsReference, isMonomorphic, isClosedType from "../instances"
 use nativeFunctionOf from "./native"
 use Lowering, Generated, reportUnsupported, locationOf, nativeNamed, producesValue, substituted from "./context"
@@ -274,6 +274,12 @@ public fn lowerDispatched(
     return lowerWitnessCall lowering, builder, destination, at, dispatched, operands, annotation, places
   }
   if !signature.hasBody {
+    // `Status.tryFrom(text)`: the conversion a literal type is given, generated from its members
+    if name == "tryFrom" && operands.length() == 1 && isTextSlot(lowering, builder, operands[0]) {
+      if const Some(generated) = literalConversionOf(lowering, dispatched.subject, at) {
+        return emitCall lowering, builder, destination, generated, operands, annotation, at
+      }
+    }
     if const Some(entry) = nativeNamed(lowering, owner, name, signature) {
       return lowerNativeCall lowering, builder, destination, at, operands, annotation, dispatched, entry, places
     }
@@ -294,6 +300,13 @@ public fn lowerDispatched(
     }
   }
   emitCall lowering, builder, destination, function, operands, annotation, at, places
+}
+
+fn isTextSlot(var lowering: Lowering, var builder: FunctionBuilder, slot: Slot): Bool {
+  match lowering.program.typeAt(builder.typeOfSlot(slot)) {
+    .Text => true
+    _ => false
+  }
 }
 
 /**

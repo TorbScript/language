@@ -58,7 +58,7 @@ public native shared type Task<Value> {
    * limit passed first. A task that finished first is unaffected. Cancelling the answer does not cancel this task.
    */
   var fn within(limit: Duration): Task<Result<Value, TimedOut>> {
-    const isInTime = completedWithin(self, limit).await() ?? false
+    const isInTime = completedWithin(self, limit.nanoseconds()).await() ?? false
     if !isInTime {
       return Fail TimedOut(limit)
     }
@@ -159,10 +159,11 @@ public native fn pause(): Task<Void>
 native fn cancelTask<Value>(task: Task<Value>)
 
 /**
- * Whether `task` completes within `limit`: `true` once it finished or was cancelled, `false` once the limit passed first,
- * and then `task` is cancelled. The runtime's timer is the one thing [Task.within] cannot write in TorbScript.
+ * Whether `task` completes within `nanoseconds`: `true` once it finished or was cancelled, `false` once the limit passed
+ * first, and then `task` is cancelled. The runtime's timer is the one thing [Task.within] cannot write in TorbScript;
+ * the limit crosses as the number a [Duration] holds.
  */
-native fn completedWithin<Value>(task: Task<Value>, limit: Duration): Task<Bool>
+native fn completedWithin<Value>(task: Task<Value>, nanoseconds: Int64): Task<Bool>
 
 /**
  * Ends the running task as cancelled: what a task that waited for a cancelled task and has no failure of its own to

@@ -300,10 +300,48 @@ fn memberOfImplementationDispatch(
   // `Slice.slice` is required by `Slice` and written by `List`, so a trait-typed list's slice would have nothing to call
   const member = providerOfMember lowering, target, implementation, symbol, name
   var mapping = memberMappingOf lowering, member, target, bound
+  addTraitOnlyArguments lowering, mapping, found.generics, found.capability, bound
   addOwnArguments lowering, mapping, member, typeArguments
   const empty: List<TypeId> = []
   const owner = ownerOfImplementation lowering, found.target, target, member
   Some Dispatched(member, mapping, bound, owner, Some(implementation), false, empty, Some(target))
+}
+
+/**
+ * The parameters of an implementation that only its **trait** mentions, read off the bound the call resolved:
+ * `extend<Value, Target: From<Iterate<Value>>> Option<Target> with From<Iterate<Value?>>` names `Target` in the type it
+ * extends and `Value` nowhere but in the trait, so matching the target alone leaves `Value` open and the member generic.
+ * `to<List<Int>?>()` over `Int?` items resolves `From<Iterate<Int?>>`, and that is what says `Value` is `Int`.
+ *
+ * The match is tried on a copy, so a bound of another trait (a subtrait the call happened to resolve) changes nothing.
+ */
+fn addTraitOnlyArguments(
+  var lowering: Lowering,
+  var mapping: Map<ParameterId, TypeId>,
+  generics: List<ParameterId>,
+  capability: TypeId?,
+  bound: TypeId,
+) {
+  const declared = match capability {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  var isOpen = false
+  for parameter in generics {
+    if !mapping.containsKey(parameter) {
+      isOpen = true
+    }
+  }
+  if !isOpen {
+    return
+  }
+  const applied = substituted lowering, bound
+  var trial = mapping
+  if matchTypePattern(lowering.checker, declared, applied, generics, trial) {
+    mapping = trial
+  }
 }
 
 /**

@@ -345,6 +345,9 @@ fn nominalType(
   const isVariant = !signature.cases.isEmpty()
   if signature.isNative && signature.fields.isEmpty() && !isVariant {
     const name = checker.symbolAt(symbol).name
+    if const Some(kind) = runtimeObjectOf(symbolPathOf(checker, symbol), signature) {
+      return program.internType IrType.Runtime(kind, [])
+    }
     const milestone = plannedNativeMilestone name
     if milestone.isEmpty() {
       program.reportProblem "The native type `{name}` has no representation in the back end"
@@ -449,23 +452,31 @@ fn primitiveType(
 }
 
 /**
+ * A `native shared type` outside of the prelude whose object the runtime owns end to end: `File` of `std/fs`, the
+ * `torb_file` of torb.h. The prelude's own (`Task`, `Channel`) are in the primitive table; this one is found by where
+ * it is declared, because the prelude does not export it.
+ */
+fn runtimeObjectOf(path: SymbolPath, signature: TypeSignature): RuntimeKind? {
+  if signature.isShared && path.package == "std/fs" && path.owners.isEmpty() && path.name == "File" {
+    return Some RuntimeKind.FileHandle
+  }
+  None
+}
+
+/**
  * The label that names when a `native type` without fields gets a representation, or the empty string for one that
  * should have had it already - which is an internal error of the compiler.
  *
  * A `native type` with neither fields nor cases is one the runtime owns end to end (BACKEND 5.1's list). Those the
  * primitive table knows are types already; these are the ones whose runtime side is not written yet, and using one
- * has to be a clean "not supported yet" and never an internal error. `Instant` and `Duration` are the odd ones:
- * `runtime/clock.c` has them as `int64_t` nanoseconds, so what is missing is only the lowering that maps them - which
- * is the row `std/time` sits in.
+ * has to be a clean "not supported yet" and never an internal error. `Clock` is never a value: it only holds the
+ * static members that read the clock.
  */
 fn plannedNativeMilestone(name: String): String {
   match name {
-    "Instant" => "5.12"
-    "Duration" => "5.12"
     "Clock" => "5.12"
     "Process" => "5.12"
     "Environment" => "5.12"
-    "File" => "5.9"
     "Json" => "5.10"
     "Script" => "7.4"
     "Sandbox" => "7.4"

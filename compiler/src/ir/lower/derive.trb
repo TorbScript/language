@@ -29,10 +29,13 @@ use describeIrType from "../print"
 use functionName from "../mangle"
 use symbolPathOf from "../instantiate"
 use irSignatureUnder, runtimeFunctionUnder from "../instances"
-use memberOfType from "../witness"
+use memberOfType, memberMappingOf, traitMemberNamed from "../witness"
+use literalConversionBound from "../../semantics/checker/implementation"
+use variantNamed from "./match"
+use listOfValues from "./collection"
 use elementFor from "../element"
 use Lowering, Generated, GeneratedRequest, reportUnsupported, locationOf from "./context"
-use irTypeOfClosed, internStatic, booleanTypeOf from "./context"
+use irTypeOfClosed, internStatic, booleanTypeOf, substituted from "./context"
 
 /** A generated member, added to the worklist the first time it is needed. One body per member per target type. */
 public fn generatedFunctionOf(
@@ -57,6 +60,14 @@ public fn generatedFunctionOf(
   var arguments = [target]
   if const .Conversion = kind {
     arguments.append built.parameters[0].annotation
+  }
+  // Every literal type of one base is that base at run time, so its members are what tells two `tryFrom`s apart
+  if const .LiteralParse = kind {
+    if const .Literals(_, values) = lowering.checker.types.form(subject) {
+      for value in values {
+        arguments.append lowering.program.internType(IrType.ConstantValue(value, target))
+      }
+    }
   }
   const name = functionName lowering.program, path, arguments
   if const Some(found) = lowering.generatedInstances.get(name) {
@@ -133,6 +144,7 @@ fn lowerGeneratedBody(
     .ShowNested => showBody lowering, builder, request.subject, at
     .Copy => reportUnsupported lowering, "a generated `copy`", at
     .Conversion => conversionBody lowering, builder, at
+    .LiteralParse => literalParseBody lowering, builder, request.subject, at
     .Container(kind) => containerBody lowering, builder, request, kind, at
   }
 }
@@ -173,6 +185,135 @@ fn conversionBody(var lowering: Lowering, var builder: FunctionBuilder, at: Span
     }
   }
   reportUnsupported lowering, "a generated `from` whose target has no case that wraps the source", at
+}
+
+/**
+ * The `tryFrom` a literal type is given (concept, Literal Types): `Status.tryFrom(text)` compares the text with every
+ * member as it is written and answers the member it equals - which is the value of the base type, because a literal type
+ * **is** its base at run time. A text that equals none fails with a `LiteralParseError` that names the text and every
+ * member, in the order the type keeps them: sorted, because `"a" | "b"` and `"b" | "a"` are one type. An `Int` or a
+ * `Char` member is compared as the text it is written as, `"42"` and `"a"`.
+ */
+fn literalParseBody(var lowering: Lowering, var builder: FunctionBuilder, subject: TypeId, at: Span) {
+  const values = match lowering.checker.types.form(subject) {
+    .Literals(_, found) => found
+    _ => {
+      reportUnsupported lowering, "a generated `tryFrom` of a type that is not a literal type", at
+      return
+    }
+  }
+  const signature = builder.function.signature
+  const result = signature.result
+  const layout = match lowering.program.typeAt(result) {
+    .Variant(found) => found
+    _ => {
+      reportUnsupported lowering, "a generated `tryFrom` whose result has no cases", at
+      return
+    }
+  }
+  const success = variantNamed lowering, layout, "Ok"
+  const failure = variantNamed lowering, layout, "Fail"
+  const shape = lowering.program.layoutAt layout
+  const isResult = success >= 0 && failure >= 0
+  if !isResult || shape.fieldsOfVariant(success).isEmpty() || shape.fieldsOfVariant(failure).isEmpty() {
+    reportUnsupported lowering, "a generated `tryFrom` whose result is not a `Result`", at
+    return
+  }
+  const payload = shape.fieldsOfVariant(success)[0].annotation
+  const text = Slot 0
+  const textType = builder.typeOfSlot text
+  const boolean = booleanTypeOf lowering
+  const location = locationOf lowering, at
+  var shownSlots: List<Slot> = []
+  for value in values {
+    const shown = addTemporary builder, textType
+    const written = internStatic lowering, StaticContents.Literal(LiteralValue.Text(literalText(value))), textType
+    emit builder, Instruction.Constant(shown, written)
+    shownSlots.append shown
+    const same = addTemporary builder, boolean
+    const equal = Intrinsic IntrinsicOperation.TextEqual, None
+    emit builder, Instruction.Intrinsic(Some(same), equal, [text, shown], location)
+    const found = addBlock builder, "member", Some(location)
+    const next = addBlock builder, "other", Some(location)
+    terminate builder, Terminator.Branch(same, found, next)
+    switchTo builder, found
+    const member = addTemporary builder, payload
+    const contents = internStatic lowering, StaticContents.Literal(value), payload
+    emit builder, Instruction.Constant(member, contents)
+    const answer = addTemporary builder, result
+    emit builder, Instruction.Construct(answer, layout, success, [borrowed(member)])
+    terminate builder, Terminator.Return(Some(borrowed(answer)))
+    switchTo builder, next
+  }
+  const error = shape.fieldsOfVariant(failure)[0].annotation
+  const errorLayout = match layoutOfType(lowering.program, error) {
+    Some(found) => found
+    None => {
+      reportUnsupported lowering, "a generated `tryFrom` whose failure has no layout", at
+      return
+    }
+  }
+  const errorShape = lowering.program.layoutAt errorLayout
+  const string = match lowering.checker.wellKnown.string {
+    Some(found) => lowering.checker.nominal found, []
+    None => {
+      reportUnsupported lowering, "a generated `tryFrom` without the `String` of the prelude", at
+      return
+    }
+  }
+  var fields: List<Argument> = []
+  for field in errorShape.fields {
+    if field.name == "text" {
+      fields.append borrowed(text)
+      continue
+    }
+    if field.name == "expected" {
+      const expected = match listOfValues(lowering, builder, shownSlots, string, field.annotation, at) {
+        Some(found) => found
+        None => {
+          return
+        }
+      }
+      fields.append borrowed(expected)
+      continue
+    }
+    const what = "a `LiteralParseError` with a field `{field.name}` a generated `tryFrom` cannot fill"
+    reportUnsupported lowering, what, at
+    return
+  }
+  const built = addTemporary builder, error
+  emit builder, Instruction.Construct(built, errorLayout, 0, fields)
+  const failed = addTemporary builder, result
+  emit builder, Instruction.Construct(failed, layout, failure, [borrowed(built)])
+  terminate builder, Terminator.Return(Some(borrowed(failed)))
+}
+
+/** A member of a literal type as the text it is written as: `online`, `42`, `a`. */
+fn literalText(value: LiteralValue): String {
+  match value {
+    .Text(inner) => inner
+    .Integer(inner) => "{inner}"
+    .Character(inner) => "{inner}"
+    .Boolean(inner) => "{inner}"
+  }
+}
+
+/**
+ * The generated `tryFrom` of a literal type, for a call of `tryFrom` on it with a text: the one member a literal type has
+ * that its base does not, and the one that no declaration anywhere writes a body for. The member that runs is the
+ * requirement of `TryFrom<String, LiteralParseError>` itself, whatever the dispatch reached - a `Char` literal type
+ * keeps the `TryFrom<Int64, NumberRangeError>` of `Char` beside it, and the text is what says which one is meant.
+ */
+public fn literalConversionOf(var lowering: Lowering, subject: TypeId?, at: Span): FunctionId? {
+  const given = subject?
+  const applied = substituted lowering, given
+  if const .Literals(_, _) = lowering.checker.types.form(applied) {
+    const bound = literalConversionBound(lowering.checker)?
+    const requirement = traitMemberNamed(lowering, bound, "tryFrom")?
+    const mapping = memberMappingOf lowering, requirement, applied, bound
+    return generatedFunctionOf lowering, Generated.LiteralParse, requirement, applied, bound, mapping, at
+  }
+  None
 }
 
 /**
@@ -798,7 +939,7 @@ fn compareBody(var lowering: Lowering, var builder: FunctionBuilder, subject: Ty
  * It is here and not in `ir/lower/native.trb` because the generated `compare` of a `String` already does exactly this
  * over the sign `torb_text_compare` answers, and a second answer to "which case is a negative sign" is how two back ends
  * start to disagree. Its other caller is the wrapper of a `.Runtime` comparison whose symbol answers a sign where the
- * declaration answers an `Ordering` - `Float64.compare`, `Instant.compare`, `Duration.compare`.
+ * declaration answers an `Ordering` - `Float64.compare`.
  */
 public fn orderingOutOfSign(
   var lowering: Lowering,

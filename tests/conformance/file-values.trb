@@ -1,0 +1,68 @@
+use File, IoError from "std/fs"
+use Process from "std/process"
+
+/**
+ * An open `File` is a value of a `shared type`: it can be held by a binding, passed to a function, kept in a field and
+ * in a list, and every holder reaches the same handle - reading through one moves the cursor all of them see. A `using`
+ * binding keeps it inside its block, and a file is closed when its last holder lets go, so no block and no handle is
+ * left behind. A file that cannot be opened is an `IoError` whose path is a field of
+ * its own and whose message is the operating system's words alone, so showing it names the path once.
+ *
+ * It works in a scratch directory under the working directory (`build/` is ignored by git).
+ */
+
+type Opened {
+  var file: File
+  label: String
+}
+
+/** The rest of the file through a holder that did not open it. */
+fn rest(var file: File): Result<String, IoError> {
+  file.readAll()
+}
+
+/** The whole file through a `using` binding. */
+fn readWhole(path: String): Result<String, IoError> {
+  using file = File.open(path)?
+  file.readAll()
+}
+
+fn run(): Result<Int, IoError> {
+  const directory = "build/native-tests-scratch/file-values"
+  File.createDirectory(directory)?
+  const path = "{directory}/text.txt"
+  File.writeText(path, "one\ntwo\n")?
+
+  // `using` binds a file that cannot leave its block, and it is closed when the block ends
+  const whole = readWhole(path)?
+  print whole.byteLength()
+
+  // Two holders of one file: what the first one read is gone for the second
+  var first = File.open(path)?
+  var second = first
+  const read = first.readAll()?
+  const left = rest(second)?
+  print "{read.byteLength()} {left.byteLength()}"
+
+  // In a field and in a list: the last release closes it, as it does for the two above
+  var kept = Opened(File.open(path)?, "kept")
+  const through = rest(kept.file)?
+  print "{kept.label}: {through.byteLength()}"
+  const files = [File.open(path)?, File.open(path)?]
+  print files.length()
+
+  // The failure names the path once: it is a field of its own, and the message is the operating system's words alone
+  match File.open("{directory}/missing.txt") {
+    Ok(_) => print "opened"
+    Fail(problem) => print "{problem.path} {problem.message.contains(problem.path)}"
+  }
+  Ok 0
+}
+
+match run() {
+  Ok(code) => Process.exit code
+  Fail(problem) => {
+    printError "error: {problem}"
+    Process.exit 1
+  }
+}

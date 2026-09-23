@@ -944,10 +944,14 @@ typedef struct torb_file {
 
 /** `path` borrowed. Opens for reading. Result owned (a fresh block of count 1); `*error` owned on failure. */
 bool torb_file_open(torb_text path, torb_file **out, torb_text *error);
-/** `self` borrowed: a `shared type` value is the one heap object, never copied. Reads everything left unread. */
-bool torb_file_read_all(torb_file *self, torb_text *out, torb_text *error);
-/** `self` borrowed. Idempotent. */
-void torb_file_close(torb_file *self);
+/**
+ * `self` borrowed, and passed as the place of the receiver the way every `var fn` receiver is: a `shared type` value is
+ * the one heap object, never copied. Reads everything left unread. On failure `*path` and `*error` are owned: the two
+ * fields of the `IoError`.
+ */
+bool torb_file_read_all(torb_file **self, torb_text *out, torb_text *path, torb_text *error);
+/** `self` borrowed, as the place of the receiver. Idempotent. */
+void torb_file_close(torb_file **self);
 /** The `torb_drop_function` of `torb_file`: closes the handle if `close` never ran, then releases `path`. */
 void torb_file_drop(void *block);
 
@@ -1081,18 +1085,20 @@ wchar_t *torb_platform_system_path(const char *path, size_t *capacity);
 /* ------------------------------------------------------------------------------------------------------- time --- */
 
 /**
- * `Instant`: one monotonic clock reading, in nanoseconds since an unspecified per-process origin - only the
- * difference of two is ever meaningful, never the value on its own (`std/time`'s own doc comment says so).
- * `Duration`: a signed nanosecond span, `Instant - Instant` or a length of time asked for directly
- * (`Int64.seconds()`). Both are native value types with no fields the language can see, so like `Instant`/`Duration`
- * being plain numbers rather than counted blocks, nanoseconds as `int64_t` is a free choice: about 292 years fit
- * before it overflows, which a monotonic clock reading within one process never approaches.
+ * The runtime's own names for the two spans of time it waits on: `torb_instant` one monotonic clock reading, in
+ * nanoseconds since an unspecified per-process origin, and `torb_duration` a signed nanosecond span. `Instant` and
+ * `Duration` of `std/time` are records of the program over exactly this `Int64`, so a limit crosses the boundary as
+ * the number (`Task.within`). About 292 years fit before it overflows, which a monotonic clock reading within one
+ * process never approaches.
  */
 typedef int64_t torb_instant;
 typedef int64_t torb_duration;
 
-/** The monotonic clock. Needs the `std/time` capability inside a sandboxed script (7.4). */
-torb_instant torb_clock_now(void);
+/**
+ * The monotonic clock in nanoseconds: what `Clock.now()` wraps. Needs the `std/time` capability inside a sandboxed
+ * script (7.4).
+ */
+int64_t torb_clock_now(void);
 
 /**
  * `Clock.milliseconds()`: monotonic milliseconds counted from the **first reading** of the process, which is the form
@@ -1100,22 +1106,6 @@ torb_instant torb_clock_now(void);
  * number twice and a subtraction; only differences are meaningful either way.
  */
 int64_t torb_clock_milliseconds(void);
-
-bool torb_instant_equals(torb_instant first, torb_instant second);
-/** -1, 0 or 1: the emitter maps it to `Ordering`. */
-int32_t torb_instant_compare(torb_instant first, torb_instant second);
-/** `first - second`. Reuses the checked `Int64` subtraction, so a difference that could never happen in practice
- * (billions of years apart) panics instead of silently wrapping. */
-torb_duration torb_instant_subtract(torb_instant first, torb_instant second, torb_location at);
-
-bool torb_duration_equals(torb_duration first, torb_duration second);
-int32_t torb_duration_compare(torb_duration first, torb_duration second);
-/** `"1.5s"`: fractional seconds with the shortest round-tripping decimal (`torb_show_f64`), then `s`. Result owned. */
-torb_text torb_duration_show(torb_duration duration);
-/** As a fractional number of seconds: `(Clock.now() - start).seconds()`. */
-double torb_duration_seconds(torb_duration duration);
-/** `Int64.seconds()`: whole seconds to a `Duration`. Panics on overflow like any other multiplication. */
-torb_duration torb_duration_of_seconds(int64_t seconds, torb_location at);
 
 /* ---------------------------------------------------------------------------------------------- environment --- */
 

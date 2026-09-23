@@ -1,0 +1,24 @@
+use sleep from "std/time"
+
+/**
+ * `within(limit)` races a task against a deadline. A task that finishes first answers `Ok(value)`; a limit that passes
+ * first answers `Fail(TimedOut)` and cancels the task, so whoever waits for it afterwards reads `Fail(Cancelled)` and
+ * the program does not wait for the rest of its sleep. The limit is part of the failure and shows in its message.
+ */
+
+/** Sleeps, then answers the name. */
+fn napping(seconds: Float, name: String): Task<String> {
+  sleep(seconds).await() ?? void
+  name
+}
+
+var quick = napping 0.01, "quick"
+print quick.within(1.seconds()).await()
+
+var slow = napping 30.0, "slow"
+match slow.within(50.milliseconds()).await() {
+  Ok(Ok(name)) => print "in time: {name}"
+  Ok(Fail(problem)) => print problem
+  Fail(problem) => print "the waiter: {problem}"
+}
+print slow.await().isOk()

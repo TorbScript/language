@@ -155,18 +155,18 @@ group "the manifest of natives" {
 
   /**
    * A comparison the **runtime** owns answers a sign and not an `Ordering`, which is a variant type of the program that no
-   * function of `runtime/` could build. There are exactly three: the total order over the floats with `nan` above
-   * everything (decided gap 5), and the two of `std/time`, whose `Instant` and `Duration` are both `int64_t` nanoseconds.
-   * Every other `compare` is `.Derived` and gets its two comparisons from the layout.
+   * function of `runtime/` could build. There is exactly one: the total order over the floats with `nan` above
+   * everything (decided gap 5). Every other `compare` is `.Derived` and gets its two comparisons from the layout, or is
+   * TorbScript, as those of `Instant` and `Duration` are.
    */
-  test "every comparison of the runtime answers a sign, and only those three do" {
+  test "every comparison of the runtime answers a sign, and only that one does" {
     var ordered: List<String> = []
     for entry in nativeEntries() {
       if const .Ordering = entry.result {
         ordered.append entry.name
       }
     }
-    assert(ordered == ["Float64.compare", "Instant.compare", "Duration.compare"])
+    assert(ordered == ["Float64.compare"])
     for name in ordered {
       // The prototype is what the emitter compares the wrapper's call against, so the sign has to be spelled in it
       assert prototypeOf(name).startsWith("int32_t ")

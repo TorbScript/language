@@ -117,7 +117,10 @@ public type IrType {
   case Box(item: IrTypeId)
   /** `lazy Value` as a parameter: a one-shot memo cell holding the thunk and, after the first use, the value. */
   case Lazy(item: IrTypeId)
-  /** What the runtime owns: the list, the ordered hash table, the set, `Task`, `Channel`, `Expression`, `Decimal`. */
+  /**
+   * What the runtime owns: the list, the ordered hash table, the set, `Task`, `Channel`, `File`, `Expression`,
+   * `Decimal`.
+   */
   case Runtime(kind: RuntimeKind, arguments: List<IrTypeId>)
   /**
    * A const generic argument: the `16` of `Array<Float, 16>`. It is not the type of any value - it stands in a type
@@ -140,6 +143,11 @@ public type RuntimeKind {
   case SetStorage
   case TaskObject
   case ChannelObject
+  /**
+   * `File` of `std/fs`: a `native shared type` whose whole representation is the runtime's (`torb_file`, header first),
+   * so a value is the pointer to that counted block, exactly as a task and a channel are.
+   */
+  case FileHandle
   /** `Expression<Value>`: a static tree plus the captures collected at the quotation site. */
   case ExpressionTree
   /** Exact base-10 arithmetic. Not implemented yet; using one is a clean compile error. */
@@ -737,7 +745,7 @@ public type IrProgram {
   var problems: List<String> = []
   /**
    * What is well formed but not implemented yet: a `native type` whose representation the runtime does not have
-   * (`Script`, `Sandbox`, `Instant`). It is a clean finding that names what is missing - a program that uses one
+   * (`Script`, `Sandbox`). It is a clean finding that names what is missing - a program that uses one
    * cannot be built, but nothing about it is an internal error, which is what an entry in `problems` means.
    */
   var planned: List<String> = []
@@ -1035,6 +1043,7 @@ public fn keyOfRuntimeKind(kind: RuntimeKind): String {
     .SetStorage => "set"
     .TaskObject => "task"
     .ChannelObject => "channel"
+    .FileHandle => "file"
     .ExpressionTree => "expression"
     .DecimalNumber => "decimal"
   }

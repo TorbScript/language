@@ -848,21 +848,21 @@ fn fileEntries(var entries: List<NativeEntry>) {
     "bool torb_file_absolute_path(torb_text path, torb_text *out, torb_text *error);",
   ))
   // `File` is a `shared type`: the runtime owns its whole representation (`torb_file` in torb.h, header first,
-  // retained and released generically like any other counted block) and its `torb_drop_function` is
-  // `torb_file_drop`, which closes the handle if `close` never ran - the language has no destructors, so a leaked
-  // reference must not leak the OS handle either. Emitting a call to one of these three still needs the `shared
-  // type` lowering of 5.9; the runtime side is ready now.
-  entries.append(runtimeOf(
+  // retained and released generically like any other counted block, `RuntimeKind.FileHandle` in the IR) and its
+  // `torb_drop_function` is `torb_file_drop`, which closes the handle if `close` never ran - so a reference nobody
+  // closed does not leak the OS handle either. A `var fn` receiver is its place, `torb_file **`, as for every other
+  // type; `readAll` has no parameter named `path`, so the runtime writes that field of the `IoError` too.
+  entries.append(fallibleRuntimeOf(
     "File.open",
     "torb_file_open",
     "bool torb_file_open(torb_text path, torb_file **out, torb_text *error);",
   ))
-  entries.append(runtimeOf(
+  entries.append(fallibleRuntimeOf(
     "File.readAll",
     "torb_file_read_all",
-    "bool torb_file_read_all(torb_file *self, torb_text *out, torb_text *error);",
+    "bool torb_file_read_all(torb_file **self, torb_text *out, torb_text *path, torb_text *error);",
   ))
-  entries.append runtimeOf("File.close", "torb_file_close", "void torb_file_close(torb_file *self);")
+  entries.append runtimeOf("File.close", "torb_file_close", "void torb_file_close(torb_file **self);")
   // The stream side of a file (docs/design/STREAMS.md). `chunks` answers a `Source<Bytes, IoError>` and `add`/`end` are the
   // `Sink` a `File` is, so all three are shared objects the runtime owns; `file.lines()` is TorbScript over `chunks`
   // and needs no native of its own.
@@ -950,49 +950,16 @@ fn mathEntries(var entries: List<NativeEntry>) {
 }
 
 /**
- * `std/time`: `Instant` and `Duration` are both `int64_t` nanoseconds in `clock.c` (see `runtime/README.md`), so none
- * of these members build a type of the program - `Instant.compare`/`Duration.compare` still answer `Ordering`
- * through a `.Runtime` entry rather than `.Derived`, the same exception `Float64.compare` is, because the ordering
- * of a monotonic reading is not something a comparison intrinsic can give.
+ * `std/time`: `Instant` and `Duration` are records of the program holding an `Int64` of nanoseconds, and everything they
+ * do is TorbScript over it. What is native is reading the monotonic clock (`torb_clock_now`, which answers the
+ * nanoseconds as an `int64_t`) and waiting.
  */
 fn timeEntries(var entries: List<NativeEntry>) {
   entries.append(runtimeOf(
-    "Instant.equals",
-    "torb_instant_equals",
-    "bool torb_instant_equals(torb_instant first, torb_instant second);",
+    "monotonicNanoseconds",
+    "torb_clock_now",
+    "int64_t torb_clock_now(void);",
   ))
-  entries.append(orderingRuntimeOf(
-    "Instant.compare",
-    "torb_instant_compare",
-    "int32_t torb_instant_compare(torb_instant first, torb_instant second);",
-  ))
-  entries.append(runtimeOf(
-    "Instant.subtract",
-    "torb_instant_subtract",
-    "torb_duration torb_instant_subtract(torb_instant first, torb_instant second, torb_location at);",
-  ))
-  entries.append(runtimeOf(
-    "Duration.equals",
-    "torb_duration_equals",
-    "bool torb_duration_equals(torb_duration first, torb_duration second);",
-  ))
-  entries.append(orderingRuntimeOf(
-    "Duration.compare",
-    "torb_duration_compare",
-    "int32_t torb_duration_compare(torb_duration first, torb_duration second);",
-  ))
-  entries.append runtimeOf("Duration.show", "torb_duration_show", "torb_text torb_duration_show(torb_duration duration);")
-  entries.append(runtimeOf(
-    "Duration.seconds",
-    "torb_duration_seconds",
-    "double torb_duration_seconds(torb_duration duration);",
-  ))
-  entries.append(runtimeOf(
-    "Int64.seconds",
-    "torb_duration_of_seconds",
-    "torb_duration torb_duration_of_seconds(int64_t seconds, torb_location at);",
-  ))
-  entries.append runtimeOf("Clock.now", "torb_clock_now", "torb_instant torb_clock_now(void);")
   // Monotonic milliseconds from the first reading: the form a tool that measures its own work wants, and two numbers
   // (an `Instant` and a `Duration`) where one does
   entries.append(runtimeOf(
@@ -1028,7 +995,7 @@ fn taskEntries(var entries: List<NativeEntry>) {
   entries.append(runtimeOf(
     "completedWithin",
     "torb_task_completed_within",
-    "torb_task *torb_task_completed_within(torb_task *self, torb_duration limit);",
+    "torb_task *torb_task_completed_within(torb_task *self, int64_t limit);",
   ))
   // A `Channel` hands out its two ends as `Source`/`Sink` objects, shared types of `std/task` over these four: one task
   // per item each way, because a machine waits for a task and for nothing else

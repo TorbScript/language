@@ -1,34 +1,134 @@
 /**
  * Wall-clock time: points in time (`Instant`) and the spans between them (`Duration`).
+ *
+ * Both are a count of nanoseconds in an `Int64` and nothing else, so they cost what the number costs: comparing and
+ * subtracting them is integer arithmetic, and only reading the clock goes to the operating system.
  */
 
-/** A point in time. Only differences between two `Instant`s are meaningful, never the value on its own. */
-public native type Instant with Compare, Subtract<Instant, Duration> {}
+/**
+ * A point in time. Only differences between two `Instant`s are meaningful, never the value on its own: it is a
+ * monotonic reading whose origin is chosen by the process.
+ *
+ * # Examples
+ *
+ *     use Clock from "std/time"
+ *
+ *     const start = Clock.now()
+ *     const later = start + 2.seconds()
+ *     print(later - start)
+ *
+ * # Related
+ *
+ * - [Clock.now] - where an `Instant` comes from.
+ * - [Duration] - what the difference of two of them is.
+ */
+public type Instant with Compare, Subtract<Instant, Duration>, Add<Duration, Instant> {
+  private storedNanoseconds: Int64
 
-/** The span between two `Instant`s, or a length of time asked for on its own (`2.seconds()`). */
-public native type Duration with Compare, Show {
+  /** Which of the two readings came first. */
+  fn compare(other: Instant): Ordering {
+    storedNanoseconds.compare other.storedNanoseconds
+  }
+
+  /** The span from `other` to this reading: negative where `other` is the later one. */
+  fn subtract(other: Instant): Duration {
+    Duration(storedNanoseconds - other.storedNanoseconds)
+  }
+
+  /** The point in time `other` after this one: a deadline, `Clock.now() + 2.seconds()`. */
+  fn add(other: Duration): Instant {
+    Instant(storedNanoseconds + other.nanoseconds())
+  }
+}
+
+/**
+ * The span between two `Instant`s, or a length of time asked for on its own (`2.seconds()`). It is signed: the
+ * difference of two readings taken the wrong way round is negative.
+ *
+ * # Examples
+ *
+ *     const wait = 2.seconds() + 500.milliseconds()
+ *     print wait
+ *     print(wait > 2.seconds())
+ *
+ * # Related
+ *
+ * - [Int64.seconds] - the short way to write one.
+ * - [Instant] - whose difference it is.
+ */
+public type Duration with Compare, Show, Add, Subtract {
+  private storedNanoseconds: Int64
+
   /** As a fractional number of seconds: `(Clock.now() - start).seconds()`. */
-  native fn seconds(): Float64
+  fn seconds(): Float64 {
+    Float64.from(storedNanoseconds) / 1_000_000_000.0
+  }
+
+  /** As a whole number of nanoseconds, which is exactly what it holds. */
+  fn nanoseconds(): Int64 {
+    storedNanoseconds
+  }
+
+  /** Which of the two spans is the shorter one. */
+  fn compare(other: Duration): Ordering {
+    storedNanoseconds.compare other.storedNanoseconds
+  }
+
+  /** The two spans one after the other. Panics where the sum does not fit, as every `Int64` addition does. */
+  fn add(other: Duration): Duration {
+    Duration(storedNanoseconds + other.storedNanoseconds)
+  }
+
+  /** How much longer this span is than `other`: negative where it is shorter. */
+  fn subtract(other: Duration): Duration {
+    Duration(storedNanoseconds - other.storedNanoseconds)
+  }
+
+  /** The seconds with an `s` behind them: `2.5s`. */
+  fn show(): String {
+    "{seconds()}s"
+  }
 }
 
 /** The short way to write a [Duration]: `2.seconds()` instead of a constructor. */
 extend Int64 {
-  /** A `Duration` of this many seconds: `2.seconds()`. Mainly for sandbox and task limits. */
-  native fn seconds(): Duration
+  /**
+   * A `Duration` of this many seconds: `2.seconds()`. Mainly for sandbox and task limits. More than about 292 years
+   * either way do not fit into the nanoseconds, and the `Int64` multiplication under it panics then.
+   */
+  fn seconds(): Duration {
+    Duration(self * 1_000_000_000)
+  }
+
+  /**
+   * A `Duration` of this many milliseconds: `250.milliseconds()`. The `Int64` multiplication under it panics where
+   * they do not fit into the nanoseconds.
+   */
+  fn milliseconds(): Duration {
+    Duration(self * 1_000_000)
+  }
 }
 
 /** The wall clock. Needs the `std/time` capability inside a sandboxed script. */
 public native type Clock {
   /** The current point in time. */
-  native static fn now(): Instant
+  static fn now(): Instant {
+    Instant monotonicNanoseconds()
+  }
 
   /**
    * Monotonic milliseconds, counted from the first reading. Only differences between two readings are meaningful, as
-   * for an `Instant` - this is the form a tool that measures its own work wants, where an `Instant` and a `Duration`
-   * would be two allocations per measurement (`torb check --timings`).
+   * for an `Instant` - this is the form a tool that measures its own work wants (`torb check --timings`), where a
+   * reading in milliseconds is the unit it prints.
    */
   native static fn milliseconds(): Int64
 }
+
+/**
+ * The monotonic clock of the operating system in nanoseconds, from an origin the process chooses. The one reading
+ * [Clock.now] cannot write in TorbScript.
+ */
+native fn monotonicNanoseconds(): Int64
 
 /** Suspends the running task for this many seconds. Needs `.await()`, like every `Task`. */
 public native fn sleep(seconds: Float64): Task<Void>

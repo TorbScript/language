@@ -1,0 +1,32 @@
+/**
+ * A `var fn` may be called on a value that was just produced when that value has an identity: a change through it is
+ * the object's own, so nothing is lost with a copy, and nobody else holds it yet. `counter().bumped()` changes the new
+ * counter and answers from it, and a chain of such calls - the shape of `source.through(stage).checked()` - changes
+ * each object once. The object lives as long as the call needs it and is released after it, so nothing leaks.
+ */
+
+shared type Counter {
+  var count: Int = 0
+
+  /** Counts one more and answers the new count. */
+  var fn bumped(): Int {
+    count = count + 1
+    count
+  }
+
+  /** Counts `times` more and answers itself, so that the next call goes to the same object. */
+  var fn advanced(times: Int): Counter {
+    count = count + times
+    self
+  }
+}
+
+fn counter(): Counter {
+  Counter()
+}
+
+print counter().bumped()
+print counter().advanced(3).bumped()
+const kept = Counter()
+print kept.advanced(2).advanced(2).bumped()
+print kept.count

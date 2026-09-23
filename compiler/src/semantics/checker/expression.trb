@@ -20,7 +20,7 @@ use formOf, reportUnknownMember, isFullyKnown from "./name"
 use lookupMember, lookupStaticMember, recordDelegation, traitDispatchOf, requireObjectSafe from "./member"
 use boundMember, dispatchOfBound from "./member"
 use traitArgumentsOf, witnessFor, isConcrete, implementsBound, iterateSourceOf from "./implementation"
-use fallibleFailuresOf, appliedTraitsOf, appliedArgumentsOf, fitsType from "./implementation"
+use fallibleFailuresOf, appliedTraitsOf, appliedArgumentsOf, fitsType, memberOfImplementation from "./implementation"
 use typeFromReference, integerLiteral from "./lowering"
 use typeSignatureOf from "./signature"
 use sameType, unify, resolveType, resolveTypes, hasVariable, openVariableOf, suppressVariables from "./unify"
@@ -2480,10 +2480,27 @@ fn convertError(var checker: Checker, error: TypeId, wanted: TypeId, at: Span) {
   if sameType(checker.types, error, wanted) {
     return
   }
-  if !isConcrete(checker, error) {
+  const isParameter = match checker.types.form(wanted) {
+    .Parameter(_) => true
+    _ => false
+  }
+  if !isConcrete(checker, error) && !isParameter {
     return
   }
   if reportUnconvertibleFailure(checker, error, wanted, at) {
+    return
+  }
+  // A failure that is a parameter of the body (`Failure: From<Cancelled>`, `Failure: From<Problem>`) converts through its
+  // bound, which the back end resolves under each instance
+  if isParameter {
+    if const Some(from) = checker.wellKnown.from {
+      const witness = witnessFor checker, wanted, checker.nominal(from, [error])
+      if const .Forwarded(_, _) = witness {
+        if const Some(symbol) = memberSymbolOf(checker, wanted, "from") {
+          checker.adapted at, Adaptation.Convert(witness, symbol)
+        }
+      }
+    }
     return
   }
   const asTraits = match checker.types.form(wanted) {
@@ -2513,10 +2530,24 @@ fn convertError(var checker: Checker, error: TypeId, wanted: TypeId, at: Span) {
     )
     return
   }
-  const method = memberSymbolOf checker, wanted, "from"
-  if const Some(symbol) = method {
+  if const Some(symbol) = conversionMemberOf(checker, witness, wanted, "from") {
     checker.adapted at, Adaptation.Convert(witness, symbol)
   }
+}
+
+/**
+ * The `from` or `tryFrom` a conversion calls: the member of the implementation the witness names. A type may convert
+ * from several sources (`extend ChannelClosed with From<Cancelled>` beside `From<ChannelClosed>`), and each of those
+ * implementations writes a member of the same name, so the name alone picks one of them at random - the implementation
+ * is what says which. Where the witness names none, the member of that name on the type is the answer.
+ */
+fn conversionMemberOf(var checker: Checker, witness: Witness, target: TypeId, name: String): SymbolId? {
+  if const .Implementation(implementation, _, _) = witness {
+    if const Some(found) = memberOfImplementation(checker, implementation, name) {
+      return Some found
+    }
+  }
+  memberSymbolOf checker, target, name
 }
 
 /**
@@ -2647,7 +2678,7 @@ fn fallibleConversionType(
     )
     return checker.invalidType
   }
-  if const Some(symbol) = memberSymbolOf(checker, target, "tryFrom") {
+  if const Some(symbol) = conversionMemberOf(checker, witness, target, "tryFrom") {
     checker.adapted expression.span, Adaptation.Convert(witness, symbol)
     checker.resolved expression.span, Resolution.Callable(symbol, [], Dispatch.Direct)
   }
@@ -2843,7 +2874,7 @@ fn conversionType(
     }
     return target
   }
-  if const Some(symbol) = memberSymbolOf(checker, target, "from") {
+  if const Some(symbol) = conversionMemberOf(checker, witness, target, "from") {
     checker.adapted expression.span, Adaptation.Convert(witness, symbol)
     checker.resolved expression.span, Resolution.Callable(symbol, [], Dispatch.Direct)
   }

@@ -324,18 +324,31 @@ fn declaredMemberOf(
 
 /**
  * Whether one declaration can be one member of a trait. The question is the one the checker's own requirement check
- * asks (`compareSignatures` in `semantics/checker/implementation.trb`): the two have to agree about `self`, and a field
- * takes none. Asking it here is what makes the back end find the very declaration that made the program legal.
+ * asks (`compareSignatures` in `semantics/checker/implementation.trb`): the two have to agree about `self` and about how
+ * many parameters there are, and a field takes none. Asking it here is what makes the back end find the very
+ * declaration that made the program legal.
+ *
+ * The count matters because a name is not a member: the blanket `Into` of the prelude gives **every** type an `into()`,
+ * and `Source.into(sink)` is a member of another trait that only shares the word. Taking the one for the other built
+ * the table of a source around a function that takes no sink.
  */
 public fn providesMember(var lowering: Lowering, member: SymbolId, provider: SymbolId): Bool {
   if member == provider {
     return true
   }
-  const wanted = signatureOf lowering.checker, member
-  const given = signatureOf lowering.checker, provider
-  const wantsSelf = lowering.checker.signature(wanted).takesSelf
-  const givesSelf = lowering.checker.signature(given).takesSelf
-  wantsSelf == givesSelf
+  // Each identifier first, on a line of its own: asking for a signature may compute it, and that writes the checker
+  const wantedIdentifier = signatureOf lowering.checker, member
+  const givenIdentifier = signatureOf lowering.checker, provider
+  const wanted = lowering.checker.signature wantedIdentifier
+  const given = lowering.checker.signature givenIdentifier
+  if wanted.takesSelf != given.takesSelf {
+    return false
+  }
+  // A field has no parameters of its own to compare, and what reads it is decided by `self` alone
+  if const .Field(_) = lowering.checker.symbolAt(provider).kind {
+    return true
+  }
+  wanted.form.parameters.length() == given.form.parameters.length()
 }
 
 /**

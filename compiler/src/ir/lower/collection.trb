@@ -227,6 +227,41 @@ fn lowerBuiltList(
 }
 
 /**
+ * A `List<Item>` of values that are in slots already, in that order: what a generated body builds where the source has no
+ * literal to lower - the members a `LiteralParseError` names. The same `ArrayList` a literal is, filled through `append`
+ * and coerced to `annotation`.
+ */
+public fn listOfValues(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  values: List<Slot>,
+  item: TypeId,
+  annotation: IrTypeId,
+  at: Span,
+): Slot? {
+  const bound = match preludeType(lowering, "List", [item]) {
+    Some(found) => found
+    None => {
+      reportUnsupported lowering, "a list without `List` in the prelude", at
+      return None
+    }
+  }
+  const container = implementationOf(lowering, "ArrayList", [item], at)?
+  const element = elementFor(lowering, item, false, at)?
+  const storage = addTemporary builder, irTypeOfClosed(lowering, container)
+  emit builder, Instruction.ContainerNew(storage, RuntimeKind.ListStorage, [element])
+  const adder = memberOfType(lowering, container, bound, "append", at)?
+  for value in values {
+    addInto lowering, builder, adder, storage, [value], at
+  }
+  const target = coerced lowering, builder, None, storage, [bound], container, annotation, at
+  if !lowering.isSupported {
+    return None
+  }
+  Some target
+}
+
+/**
  * `...values` in a list or in a variadic argument list: **one `append` per item**, which is what `List.appendAll` means.
  *
  * It is written out here rather than called, and the reason is the fourth round's decision about the tables: a default no

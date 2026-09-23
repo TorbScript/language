@@ -108,6 +108,25 @@ witness table, `describe` as a function value, `if var`, `record` outside a witn
 argument that fills no parameter (`Point.area(p)`) and a literal built through the `from` of an `Iterate`; twenty of the
 42 left are bodies whose result is a `Task`.
 
+**Measured again after the tasks round (main at `e8027c1`): 32 831 of 32 869 with 38**, and after the round that
+followed it **33 379 of 33 400 with 21** - **33 687 of 33 712 with 25** once the destructors round was merged, whose
+tour adds `Array.filled` three times and a const parameter read as a value (`0..Rows`), both of the `Array` gap below. Closed, each with a conformance program: `Duration` and `Instant` (records of
+`std/time` over an `Int64` of nanoseconds, arithmetic in TorbScript, one native reading of the monotonic clock;
+`time`, and `task-within` for `Task.within` in time and timed out), `File` as a value (`RuntimeKind.FileHandle`, the
+`torb_file` pointer released through its own drop; `file-values`), a `?` whose conversion is a `From` among several of
+the target or goes through the bound of a generic failure, a function value `Failure.from` on such a parameter, a
+witness table that took the prelude's `into()` for `Source.into(sink)` (`conversion-choice`), a member of an
+implementation whose parameter only its trait names - `to<List<Int>?>()` (`collect-through-wrappers`), a `var fn` on a
+freshly produced shared object (`temporary-receiver`), a receiver closure held by a constant and called through a
+value (`receiver-constant`) and `tryFrom` into a literal type (`literal-try-from`). Of the 21 left, 15 are natives
+the runtime does not provide yet by design (`Json.encode`/`decode`, `get` of `std/http`, the stream side of `File`,
+`standardInput`, `Expression.value`, `Array.filled`) or belong to 7.4 (`Script`, a receiver script); the others are a
+derived `encode` over a `var self` encoder, a quoted expression, a method taken as a bound function value
+(`rectangle.area` without a call) and the `Array` literal. **`Array<Item, Size>` is the one real design gap of the
+list** (BACKEND 5.9b): it has no C type yet, and giving it one is a struct per item type and size, per-item retain and
+release, an instruction that fills it, element paths with bounds checks, and an iterator for `iterate()` - which
+`Show`, `Equals` and `Hash` of `std/core` are written over.
+
 **None of this blocks the exit.** A construct the back end does not lower is a gap of the back end and is tracked as
 one; that stage 0 happens to interpret it is not a reason to keep 14 435 lines of Rust. The proof is the first row of
 the table: **the compiler lowers completely**, so it, its tests and every gate are already independent of stage 0. The

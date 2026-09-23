@@ -1028,6 +1028,7 @@ public fn retainStatement(program: IrProgram, id: IrTypeId, place: CExpression):
         // A task and a channel are counted blocks with the header first, so the generic retain is theirs
         .TaskObject => Some CStatement.Evaluate(CExpression.Call(CExpression.Name("torb_retain"), [place]))
         .ChannelObject => Some CStatement.Evaluate(CExpression.Call(CExpression.Name("torb_retain"), [place]))
+        .FileHandle => Some CStatement.Evaluate(CExpression.Call(CExpression.Name("torb_retain"), [place]))
         _ => None
       }
     }
@@ -1087,6 +1088,11 @@ public fn releaseStatement(program: IrProgram, id: IrTypeId, place: CExpression)
         .SetStorage => Some releasedBy(place, "torb_set_release")
         .TaskObject => Some releasedBy(place, "torb_task_release")
         .ChannelObject => Some releasedBy(place, "torb_channel_release")
+        // The generic release with the file's own drop, which closes the handle where `close` never ran (torb.h)
+        .FileHandle => {
+          const drop = CExpression.Name "torb_file_drop"
+          Some CStatement.Evaluate(CExpression.Call(CExpression.Name("torb_release"), [place, drop]))
+        }
         _ => None
       }
     }
@@ -1306,11 +1312,15 @@ fn isIdentityRuntime(program: IrProgram, id: IrTypeId): Bool {
   false
 }
 
-/** A task and a channel: a pointer to a counted block with an identity, where a container is a value around storage. */
+/**
+ * A task, a channel and a file: a pointer to a counted block with an identity, where a container is a value around
+ * storage.
+ */
 fn isIdentityKind(kind: RuntimeKind): Bool {
   match kind {
     .TaskObject => true
     .ChannelObject => true
+    .FileHandle => true
     _ => false
   }
 }

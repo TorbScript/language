@@ -15,7 +15,7 @@
 use Span from "../../syntax/source"
 use Expression, Block, MatchArm, Pattern from "../../syntax/ast"
 use SymbolId from "../../semantics/symbols"
-use TypeId, LiteralValue from "../../semantics/checker/type"
+use TypeId, TypeForm, LiteralValue from "../../semantics/checker/type"
 use optionValueOf from "../../semantics/checker/expression"
 use MatchPlan, PatternBranch, PatternCheck, PatternLiteral, PatternStep from "../../semantics/checker/exhaustive"
 use IrTypeId, IrType, Slot, BlockId, LocationId, Instruction, Terminator, Reference, PathStep from "../ir"
@@ -1519,6 +1519,10 @@ fn emitFailure(
  * The error of the subject as the error the enclosing body promises. The same type needs nothing; a different one is the
  * `From` the checker recorded at the `?`, and where that implementation is the *generated* one of a wrapper case there is
  * no function to call - the case itself is the conversion.
+ *
+ * Inside a generic body the checker could only say that the bound converts (`Failure: From<Cancelled>`): its witness is
+ * the parameter's, and the implementation that runs is the one of the type this instance put in for it - the same
+ * dispatch `into()` gets (`dispatchedOn`).
  */
 fn convertedError(
   var lowering: Lowering,
@@ -1534,7 +1538,14 @@ fn convertedError(
   const module = lowering.module
   const adaptations = lowering.checker.adaptationsAt module, at
   for adaptation in adaptations {
-    if const .Convert(_, method) = adaptation {
+    if const .Convert(witness, method) = adaptation {
+      if const .Forwarded(parameter, bound) = witness {
+        const written = lowering.checker.types.intern TypeForm.Parameter(parameter)
+        const target = substituted lowering, written
+        const applied = substituted lowering, bound
+        const dispatched = dispatchedOn(lowering, target, applied, "from", at)?
+        return Some lowerDispatched(lowering, builder, None, at, dispatched, [error], [None], wanted)
+      }
       if const Some(function) = instanceOfSymbol(lowering, method) {
         return Some emitCall(lowering, builder, None, function, [error], wanted, at)
       }

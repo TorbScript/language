@@ -14,10 +14,6 @@ source:
   - std/task/src/lib.trb
 ---
 
-> **Not built natively yet.** `Source.produce` builds its source out of a `Channel` and a trait-typed `Sink`, which the
-> native back end does not build yet, so `torb run` refuses the last example here. `torb check` accepts it, and the
-> rules are the language's.
-
 Asynchrony lives in the type system, not in a keyword. A function that returns `Task<Value>` may call `await()`
 inside its body, the same way a function that returns a `Result` may use `?`. Every task can be cancelled, so
 `await()` answers `Result<Value, Cancelled>`: `?` hands a cancellation on, `??` replaces it. One worker runs the tasks

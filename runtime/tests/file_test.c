@@ -120,8 +120,9 @@ TORB_TEST(reading_a_file_that_is_not_there_is_an_error_with_a_message) {
   torb_text out = torb_text_empty();
   torb_text error = torb_text_empty();
   TORB_CHECK(!torb_file_read_text(path, &out, &error));
-  TORB_CHECK(torb_text_byte_length(error) > torb_text_byte_length(path));
-  TORB_CHECK(torb_text_starts_with(error, path));
+  /* The message alone: the `IoError` the wrapper builds carries the path beside it */
+  TORB_CHECK(torb_text_byte_length(error) > 0);
+  TORB_CHECK(!torb_text_starts_with(error, path));
   TORB_CHECK(!torb_file_exists(path));
   TORB_CHECK(!torb_file_is_directory(path));
   torb_text_release(error);
@@ -221,8 +222,9 @@ TORB_TEST(opening_a_missing_file_is_an_error) {
   torb_file *file = NULL;
   torb_text error = torb_text_empty();
   TORB_CHECK(!torb_file_open(path, &file, &error));
-  TORB_CHECK(torb_text_byte_length(error) > torb_text_byte_length(path));
-  TORB_CHECK(torb_text_starts_with(error, path));
+  /* The message is the operating system's words alone: the `IoError` around it carries the path */
+  TORB_CHECK(torb_text_byte_length(error) > 0);
+  TORB_CHECK(!torb_text_starts_with(error, path));
   torb_text_release(error);
   torb_text_release(path);
 }
@@ -234,20 +236,23 @@ TORB_TEST(opening_reading_and_double_closing_a_file) {
   torb_text error = torb_text_empty();
   torb_file *file = NULL;
   torb_text read_back = torb_text_empty();
+  torb_text failed_path = torb_text_empty();
 
   TORB_CHECK(torb_file_write_text(path, contents, &error));
   TORB_CHECK(torb_file_open(path, &file, &error));
-  TORB_CHECK(torb_file_read_all(file, &read_back, &error));
+  TORB_CHECK(torb_file_read_all(&file, &read_back, &failed_path, &error));
   TORB_CHECK_TEXT(read_back, "line one\nline two\n");
   torb_text_release(read_back);
 
-  torb_file_close(file);
+  torb_file_close(&file);
   /* Reading a closed file follows the ordinary `Result`/`IoError` path, never a panic. */
   read_back = torb_text_empty();
-  TORB_CHECK(!torb_file_read_all(file, &read_back, &error));
+  TORB_CHECK(!torb_file_read_all(&file, &read_back, &failed_path, &error));
+  TORB_CHECK(torb_text_equal(failed_path, path));
+  torb_text_release(failed_path);
   torb_text_release(error);
   /* Closing an already-closed file is a no-op, not a panic. */
-  torb_file_close(file);
+  torb_file_close(&file);
 
   torb_release(file, torb_file_drop);
   remove_path(path);
@@ -314,7 +319,7 @@ TORB_TEST(creating_a_directory_makes_every_level_and_succeeds_twice) {
   torb_text_release(error);
 }
 
-/** A directory under a *file* cannot be created, and the failure carries the path and the libc message. */
+/** A directory under a *file* cannot be created, and the failure carries the libc message. */
 TORB_TEST(creating_a_directory_under_a_file_is_an_error_with_a_message) {
   torb_text directory = temporary_directory();
   torb_text path = path_in(directory, "torb-runtime-test-blocking.txt");
@@ -324,7 +329,7 @@ TORB_TEST(creating_a_directory_under_a_file_is_an_error_with_a_message) {
 
   TORB_CHECK(torb_file_write_text(path, contents, &error));
   TORB_CHECK(!torb_file_create_directory(under, &error));
-  TORB_CHECK(torb_text_byte_length(error) > torb_text_byte_length(under));
+  TORB_CHECK(torb_text_byte_length(error) > 0);
 
   remove_path(path);
   torb_text_release(contents);
