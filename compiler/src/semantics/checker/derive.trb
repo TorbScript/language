@@ -1,5 +1,5 @@
 /**
- * The implementations the language generates: `Equals`, `Hash`, `Show`, `Encode`, `Decode`, the `From` of a wrapper
+ * The implementations the language generates: `Equals`, `Hash`, `Show`, `Encode`, `Decode`, `Describe`, the `From` of a wrapper
  * case, and the members of a literal type. [derivableMembers] generates them *where they are used*, so nothing is
  * generated for a type nobody asks about, and a hand-written member always wins - resolution only gets here when no
  * declared implementation answered.
@@ -10,7 +10,9 @@
  * a recursive type is well defined, it just recurses at run time as the value does.
  *
  * The second thing is the **capsule**: a type whose constructor is closed from outside has no field list a caller
- * could be handed, so `Encode` and `Decode` are derived through its one conversion pair instead ([conversionPairOf]).
+ * could be handed, so `Encode`, `Decode` and `Describe` are derived through its one conversion pair instead
+ * ([conversionPairOf]). Every other type derives the three over the parameters its constructor takes from outside,
+ * which leaves a `private` field with a default out ([isPassable]).
  */
 
 use Visibility from "../../syntax/ast"
@@ -88,6 +90,9 @@ fn membersOf(name: String): List<String> {
   if name == "Decode" {
     return ["decode"]
   }
+  if name == "Describe" {
+    return ["describe"]
+  }
   if name == "From" {
     return ["from"]
   }
@@ -132,8 +137,9 @@ fn canDerive(
     // `Equals`, `Hash`, `Encode`, `Decode`, and the `Into` of its base above - and nothing else. `Compare` is
     // not among them: an order over three strings is a decision, exactly as it is for a `type`
     .Literals(_, _) => isLiteralTrait checker, name, wanted
-    // Tuples and function types cannot be declared, so what a `type` gets generated they get generated too
-    .Tuple(_) => everyFieldImplements checker, target, capability, wanted
+    // Tuples and function types cannot be declared, so what a `type` gets generated they get generated too - except a
+    // description: a tuple has no name and no field names a schema could hold
+    .Tuple(_) => name != "Describe" && everyFieldImplements(checker, target, capability, wanted)
     .Function(_) => name == "Show"
     .Nominal(symbol, _) => {
       const identifier = typeSignatureOf checker, symbol
@@ -157,10 +163,12 @@ fn canDerive(
           return true
         }
         // Without a pair the way **in** is refused, because the closed constructor is what protects the invariant,
-        // and the way **out** stays what it is for every type: the fields, which is the form `Show` takes too
+        // and so is the description of it. The way **out** stays what it is for every type: the fields, which is the
+        // form `Show` takes too
         return name == "Encode" && everyFieldImplements(checker, target, capability, wanted)
       }
-      everyFieldImplements checker, target, capability, wanted
+      // The three forms of an open constructor are over its parameters: a `private` field with a default is none
+      everyFieldImplements checker, target, capability, wanted, passableOnly: isEncoding(name)
     }
     _ => false
   }
@@ -184,7 +192,7 @@ fn isLiteralTrait(var checker: Checker, name: String, wanted: TypeId?): Bool {
       None => true
     }
   } else {
-    name == "Show" || name == "Equals" || name == "Hash" || name == "Encode" || name == "Decode"
+    name == "Show" || name == "Equals" || name == "Hash" || isEncoding(name)
   }
 }
 
@@ -209,9 +217,17 @@ public fn isConstructible(checker: Checker, fields: List<FieldSignature>): Bool 
   true
 }
 
-/** The two traits a capsule derives through its conversion pair instead of through its fields. */
+/** The three traits a capsule derives through its conversion pair instead of through its fields. */
 fn isEncoding(name: String): Bool {
-  name == "Encode" || name == "Decode"
+  name == "Encode" || name == "Decode" || name == "Describe"
+}
+
+/**
+ * Whether a field is a parameter of the constructor from outside: everything but a `private` one. `private(var)` is
+ * publicly readable and publicly constructible, so it is passable.
+ */
+public fn isPassable(field: FieldSignature): Bool {
+  field.visibility != Visibility.Private
 }
 
 /**
@@ -320,8 +336,17 @@ fn derivesThroughPair(var checker: Checker, target: TypeId, name: String): Bool 
   implementsBound checker, pair.source, bound
 }
 
-/** Every field of the type and of every one of its cases has to have the trait itself. */
-fn everyFieldImplements(var checker: Checker, target: TypeId, capability: SymbolId, wanted: TypeId?): Bool {
+/**
+ * Every field of the type and of every one of its cases has to have the trait itself. `passableOnly` asks only about
+ * the constructor's parameters from outside, which is what the three encoding forms are made of.
+ */
+fn everyFieldImplements(
+  var checker: Checker,
+  target: TypeId,
+  capability: SymbolId,
+  wanted: TypeId?,
+  passableOnly: Bool = false,
+): Bool {
   const bound = match wanted {
     Some(found) => found
     None => checker.nominal capability, []
@@ -343,6 +368,9 @@ fn everyFieldImplements(var checker: Checker, target: TypeId, capability: Symbol
         mapping.set shape.generics[position], arguments[position]
       }
       for field in shape.fields {
+        if passableOnly && !isPassable(field) {
+          continue
+        }
         const annotation = substitute checker.types, field.annotation, mapping
         if !fieldImplements(checker, annotation, target, bound) {
           return false

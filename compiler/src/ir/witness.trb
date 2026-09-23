@@ -413,16 +413,9 @@ fn isDerivedName(name: String): Bool {
 }
 
 /**
- * The members the language generates for a derived implementation.
- *
- * # Open
- *
- * `Encode` and `Decode` are not among them. A generated `encode` is
- * `encoder.record("User") \{ fields => fields.field("name", name) \}`, and every member of `Encoder`, `RecordEncoder`,
- * `SequenceEncoder` and `Decoder` takes a **`var self`** - which a witness table cannot hold until the payload box of a
- * trait-typed value can be made unique. A derived `decode` needs something more: `Decoder.record<Output>` has a generic
- * parameter of its own, so it is not object safe and can never be in a table at all - the trait has to hand the closure
- * a *concrete* decoder, or `decode` has to take one by generic parameter instead of as a trait-typed value.
+ * The members the language generates for a derived implementation. `encode`, `decode` and `describe` take their format
+ * as a type parameter of their own, so each is one body per (type, format) pair, built by `ir/lower/encoding.trb` and
+ * called directly - never through a table.
  */
 fn generatedForDerived(var lowering: Lowering, name: String, at: Span): Generated? {
   if name == "show" {
@@ -444,14 +437,13 @@ fn generatedForDerived(var lowering: Lowering, name: String, at: Span): Generate
     return Some Generated.Conversion
   }
   if name == "encode" {
-    const what = "a derived `encode`, whose `Encoder` is all `var self` members"
-    reportUnsupported lowering, what, at
-    return None
+    return Some Generated.Encode
   }
   if name == "decode" {
-    const what = "a derived `decode`, whose `Decoder` has generic members no table can hold"
-    reportUnsupported lowering, what, at
-    return None
+    return Some Generated.Decode
+  }
+  if name == "describe" {
+    return Some Generated.Describe
   }
   reportUnsupported lowering, "a derived `{name}` the back end does not generate", at
   None

@@ -127,6 +127,12 @@ list** (BACKEND 5.9b): it has no C type yet, and giving it one is a struct per i
 release, an instruction that fills it, element paths with bounds checks, and an iterator for `iterate()` - which
 `Show`, `Equals` and `Hash` of `std/core` are written over.
 
+**Re-measured after the encoding round** (docs/design/ENCODING.md section 14): from 32 843 of 32 881 functions with
+**38** constructs not supported to 33 876 of 33 913 with **37**. Gone are `Json.encode` (three occurrences) and the
+derived `encode`; new are the three members of `std/encoding` and `std/json` that write or read a `Decimal`, whose
+natives are planned for milestone 8 (`Decimal.show` twice, `Decimal.tryFrom(String)` once) and which a program reaches
+only by encoding a `Decimal`.
+
 **None of this blocks the exit.** A construct the back end does not lower is a gap of the back end and is tracked as
 one; that stage 0 happens to interpret it is not a reason to keep 14 435 lines of Rust. The proof is the first row of
 the table: **the compiler lowers completely**, so it, its tests and every gate are already independent of stage 0. The
@@ -145,13 +151,12 @@ whole repository) leaves with `panic: arithmetic overflow in `-`` at `compiler/s
 `NativeState.Planned(milestone)`, which makes using it a clean compile error instead of a missing C symbol. This
 section first said that six declarations carry it — `Process.start` and the five members of `Child`. **Measured again
 on 2026-09-22** by a grep of `plannedRuntimeOf(`/`plannedIntrinsicOf(` in `natives.trb`: **44 manifest lines, 71
-declarations**, because three of the lines are loops over a member list (`Float32` with 10 members and `Decimal` with
+declarations** (39 and 66 since `describe` and the four members of `Json` became TorbScript), because three of the lines are loops over a member list (`Float32` with 10 members and `Decimal` with
 11, both milestone 8; `Array` with 9, milestone 5.9b). The other 41 are `Float32.tryFrom(String)` and
 `Decimal.tryFrom(String)` (8), the stream side of `File` (`create`, `chunks`,
 `add`, and `finish` — which `std/fs` now declares as `end`, so the entry is stale), the three standard streams,
 `Process.start` and the five members of `Child`, `sleep`, `Task.await`/`map`/`flatMap`/`all`, `spawn`, `all`,
-`Channel.source`/`sink` (milestone 7.3); `Expression.value`/`captures` (5.11); `describe` and the four members of
-`Json` (5.7); `isSame` (5.9); the six members of the sandbox (7.4); and `get`/`post`/`request` of `std/http` (8).
+`Channel.source`/`sink` (milestone 7.3); `Expression.value`/`captures` (5.11); `isSame` (5.9); the six members of the sandbox (7.4); and `get`/`post`/`request` of `std/http` (8).
 
 Nothing in the compiler, its tests or the gates uses them. `torb build` runs the C compiler through
 `Process.runCollecting`, and `torb run` and `torb test` run what they built through `Process.runInheriting`, which is

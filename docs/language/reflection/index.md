@@ -21,7 +21,7 @@ example first, then the syntax, then numbered rules, then what the construct is 
 ## Pages
 
 - **[There is no reflection](no-reflection.md)** - A type never flows as a value, so there is no Type type, no typeof and no Class.forName - only four syntactic bridges connect a type to a value, all resolved at compile time.
-- **[Encode and Decode](encode-and-decode.md)** - Encode and Decode are generated the same way Equals and Show are, so a type describes itself to any format's Encoder and reads itself from its Decoder without a line of hand-written serialization code.
-- **[Encoder and Decoder](encoders.md)** - Encoder and Decoder each name every scalar the language has - bool, int, unsigned, float, decimal, string, bytes - plus the four shapes a value can take, sequence, map, record and variant.
+- **[Encode and Decode](encode-and-decode.md)** - A value is its constructor call, offered in three forms - Encode writes it, Decode reads it back, Describe describes it without a value - so a type works with every format without hand-written serialization code.
+- **[Encoder and Decoder](encoders.md)** - Encoder and Decoder each name every scalar the language has - bool, int, unsigned, float, decimal, string, bytes - plus the four shapes a value can take, sequence, map, record and variant, which open and are closed by finish.
 
 <!-- torb:index:end -->

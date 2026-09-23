@@ -1,0 +1,118 @@
+use Process from "std/process"
+use Structure, structureOf from "std/encoding"
+
+/**
+ * The derived `describe`, the capsule's forms through its conversion pair, and the naming option of a format, compiled
+ * to a native binary (docs/design/ENCODING.md, sections 3a, 5 and 8).
+ *
+ * What it pins: a record describes its parameters in declaration order with their doc comments and defaults, a type
+ * that contains itself describes itself once and refers to itself by name after that, a case lists its fields, and a
+ * `private` field with a default is not part of the description. A capsule is written, read and described as the
+ * source of its pair, and a failing `tryFrom` is the `DecodeError`. `Json(naming: .SnakeCase)` writes and reads the
+ * field names in snake case, and nothing on the type says so.
+ *
+ * The program leaves with the number of checks that failed.
+ */
+
+/** A category, which contains categories. */
+type Category {
+  /** What the category is called. */
+  name: String
+  /** The categories below this one. */
+  children: List<Category> = []
+  private summary: String = ""
+}
+
+/** A signal, with a case that carries a field. */
+type Signal {
+  case Off
+  /** On, at a level. */
+  case On(level: Int)
+}
+
+/** The data a `Celsius` is read from and written as. */
+type Reading {
+  degrees: Int
+}
+
+/** A temperature above absolute zero: a capsule, read through `tryFrom`. */
+type Celsius with TryFrom<Reading, String> {
+  private storedDegrees: Int
+
+  static fn tryFrom(value: Reading): Result<Celsius, String> {
+    if value.degrees < -273 {
+      return Fail "{value.degrees} is below absolute zero"
+    }
+    Ok Self(value.degrees)
+  }
+
+  /** The accessor the way back is written with. */
+  fn degrees(): Int {
+    storedDegrees
+  }
+}
+
+/** The way back out of a `Celsius`. */
+extend Reading with From<Celsius> {
+  static fn from(value: Celsius): Reading {
+    Reading value.degrees()
+  }
+}
+
+/** A setting whose field names are two words. */
+type Setting {
+  logLabel: String
+  maximumSize: Int = 10
+}
+
+var failed = 0
+
+/** Compares one text with what it should be, and counts a difference. */
+fn expect(actual: String, wanted: String): Int {
+  if actual == wanted {
+    return 0
+  }
+  print "expected {wanted}"
+  print "     got {actual}"
+  1
+}
+
+const category = structureOf<Category>()
+print category
+const reference = "Reference(\"torbscript/conformance/encoding-describe/Category\")"
+failed = failed + expect(
+  "{category}",
+  "Record(\"torbscript/conformance/encoding-describe/Category\", [name: Text, children: Sequence({reference})])",
+)
+const fields = category.recordFields()
+const documentation = fields.map({ _.description.documentation }).toList()
+failed = failed + expect("{documentation}", "[\"What the category is called.\", \"The categories below this one.\"]")
+failed = failed + expect("{fields.map({ _.isRequired() }).toList()}", "[true, false]")
+failed = failed + expect("{fields[1].description.default}", "Constant(value: [])")
+
+const signal = structureOf<Signal>()
+print signal
+failed = failed + expect(
+  "{signal}",
+  "Variant(\"torbscript/conformance/encoding-describe/Signal\", [Off(), On(level: Integer)])",
+)
+failed = failed + expect("{structureOf<Map<String, Int?>>()}", "Mapping(Text, Optional(Integer))")
+
+// A capsule is its source, in all three forms
+const json = Json()
+const warm = match Celsius.tryFrom(Reading(21)) {
+  Ok(found) => found
+  Fail(_) => panic "21 degrees are above absolute zero"
+}
+failed = failed + expect(json.encode(warm), r"""{"degrees":21}""")
+failed = failed + expect("{json.decode<Celsius>(r"""{"degrees": 30}""").map({ _.degrees() })}", "Ok(30)")
+failed = failed + expect("{json.decode<Celsius>(r"""{"degrees": -300}""")}", "Fail(-300 is below absolute zero)")
+failed = failed + expect("{structureOf<Celsius>()}", "Record(\"torbscript/conformance/encoding-describe/Reading\", [degrees: Integer])")
+
+// The naming option is the format's, in both directions
+const snake = Json naming: .SnakeCase
+failed = failed + expect(snake.encode(Setting("audit")), r"""{"log_label":"audit","maximum_size":10}""")
+failed = failed + expect("{snake.decode<Setting>(r"""{"log_label": "trace"}""")}", "Ok(Setting(logLabel: \"trace\", maximumSize: 10))")
+failed = failed + expect("{json.decode<Setting>(r"""{"log_label": "trace"}""")}", "Fail(logLabel: a value is needed)")
+
+Process.exit failed

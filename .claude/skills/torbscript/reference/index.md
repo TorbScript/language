@@ -56,7 +56,7 @@ that answers the question. A page marked (planned) describes a feature that does
 - `explanation/why-no-higher-kinded-types.md` - **Why there are no higher-kinded types** (explanation): Option, Result, Task and Iterate share method names by convention of the standard library rather than by a shared abstraction, because a kind system would cost local inference and readable errors for problems a script rarely has.
 - `explanation/why-no-macros.md` - **Why there are no macros** (explanation): Names are resolved with the help of types, which have to exist before resolution runs, so an AST macro generating code before that point cannot go together with the rest of the language - quoted expressions read code instead.
 - `explanation/why-no-null.md` - **Why there is no null** (explanation): Absence is Option<Value>, an ordinary case of an ordinary type, so a value is wrapped and unwrapped on purpose and nothing can be dereferenced without checking first.
-- `explanation/why-no-reflection.md` - **Why there is no reflection** (explanation): Types never flow as values, so nothing can inspect a type at runtime, and what reflection is reached for - serialization, config mapping, debug output - is covered by one generated trait pair, Encode and Decode, instead.
+- `explanation/why-no-reflection.md` - **Why there is no reflection** (explanation): Types never flow as values, so nothing can inspect a type at runtime; what reflection is reached for - serialization, schemas, debug output - is covered by three generated forms of a constructor, Encode, Decode and Describe.
 - `explanation/why-one-member-namespace.md` - **Why a method is a constant** (explanation): A method is structurally a constant of the type that holds a receiver closure, so a field and a method live in one namespace and cannot share a name, which is what lets a command call on a field write it instead of needing a second rule.
 - `explanation/why-traits-instead-of-inheritance.md` - **Why traits instead of inheritance** (explanation): A type comes with a trait instead of extending a base class, so composition and delegation replace an inheritance hierarchy, and a value can still be typed by capability without carrying a class it did not ask for.
 - `explanation/why-values-instead-of-references.md` - **Why values instead of references** (explanation): Every type is a value and the binding decides about mutation, which removes every mutable-and-immutable type pair at the price of one local, lintable trap.
@@ -89,7 +89,7 @@ that answers the question. A page marked (planned) describes a feature that does
 - `how-to/index.md` - **Task recipes** (index): One page per task for somebody who already knows the language: the steps, the pitfalls, and one complete program that works.
 - `how-to/parse-text-into-a-type.md` - **Parse text into a type** (how-to): Give the type a private field nothing outside can set directly, and implement TryFrom<String, Failure> so that Type.tryFrom(text) validates the text and answers a Result instead of a bare value.
 - `how-to/read-a-file.md` - **Read a file** (how-to): Read a whole file or its lines, hand the failure to the caller with the question mark operator, and turn an IoError into your own error type.
-- `how-to/read-and-write-json.md` - **Read and write JSON** (how-to): Json.encode and Json.decode<T> work on any Encode/Decode type for free; write the pair by hand only for a type whose generated constructor cannot express what a document may contain.
+- `how-to/read-and-write-json.md` - **Read and write JSON** (how-to): Json().encode and Json().decode<T> work on any Encode/Decode type for free; an option of the format spells the field names, and the pair is written by hand only where a constructor cannot say what a document may.
 - `how-to/set-up-a-workspace.md` - **Set up a workspace** (how-to): Name the member directories in the root project.trb, give each one its own project.trb, and depend on a sibling by name alone - the workspace resolves it from source.
 - `how-to/sort-by-more-than-one-key.md` - **Sort by more than one key** (how-to): Sort by a tuple key instead of a single field - a tuple's Compare is generated lexicographically by position, which a type never gets because an order is a decision, not a structure.
 - `how-to/use-a-type-as-a-map-key.md` - **Use a type as a map key** (how-to): An ordinary type is already a legal key once every field is Hash, which the compiler generates for free; a field that cannot be Hash is the one thing that rules a type out.
@@ -199,8 +199,8 @@ that answers the question. A page marked (planned) describes a feature that does
 
 ## language/reflection
 
-- `language/reflection/encode-and-decode.md` - **Encode and Decode** (reference): Encode and Decode are generated the same way Equals and Show are, so a type describes itself to any format's Encoder and reads itself from its Decoder without a line of hand-written serialization code.
-- `language/reflection/encoders.md` - **Encoder and Decoder** (reference): Encoder and Decoder each name every scalar the language has - bool, int, unsigned, float, decimal, string, bytes - plus the four shapes a value can take, sequence, map, record and variant.
+- `language/reflection/encode-and-decode.md` - **Encode and Decode** (reference): A value is its constructor call, offered in three forms - Encode writes it, Decode reads it back, Describe describes it without a value - so a type works with every format without hand-written serialization code.
+- `language/reflection/encoders.md` - **Encoder and Decoder** (reference): Encoder and Decoder each name every scalar the language has - bool, int, unsigned, float, decimal, string, bytes - plus the four shapes a value can take, sequence, map, record and variant, which open and are closed by finish.
 - `language/reflection/index.md` - **Reflection** (index): Why there is no runtime reflection, the four syntactic bridges that connect a type to a value instead, and the generated Encode and Decode pair that covers serialization.
 - `language/reflection/no-reflection.md` - **There is no reflection** (reference): A type never flows as a value, so there is no Type type, no typeof and no Class.forName - only four syntactic bridges connect a type to a value, all resolved at compile time.
 
@@ -270,7 +270,7 @@ that answers the question. A page marked (planned) describes a feature that does
 - `standard-library/collections.md` - **std/collections** (package): The collection traits every signature talks about, and the implementations that only show up where one is built.
 - `standard-library/console.md` - **std/console** (package): print and printError, the two functions that write to the standard streams.
 - `standard-library/core.md` - **std/core** (package): The bottom of the standard library: Option, Result, Error, the operator and conversion traits, and the control structures that are functions.
-- `standard-library/encoding.md` - **std/encoding** (package): Encode and Decode, the Encoder and Decoder a format implements, and Format for the streaming side.
+- `standard-library/encoding.md` - **std/encoding** (package): Encode, Decode and Describe, the Encoder, Decoder and Describer a format implements, EncodedValue and Structure for a value or a structure without its type, and Format for the streaming side.
 - `standard-library/environment.md` - **std/environment** (package): Environment, the one type that reads a process environment variable.
 - `standard-library/expression.md` - **std/expression** (package): Expression and ExpressionNode, the typed tree a quoted parameter hands over, plus assert and nameOf.
 - `standard-library/fs.md` - **std/fs** (package): File and IoError - whole-file helpers for what fits in memory, and a File as both ends of a byte stream.
@@ -279,7 +279,7 @@ that answers the question. A page marked (planned) describes a feature that does
 - `standard-library/index.md` - **The standard library** (index): One page per package of std, what each contains, and which of them are in scope everywhere without an import.
 - `standard-library/io.md` - **std/io** (package): Standard input and the streams every process is started with - readLine for the short form, Source and Sink for the rest.
 - `standard-library/iteration.md` - **std/iteration** (package): Iterate and Iterator, the lazy stages between them, and the collectors a pipeline ends in.
-- `standard-library/json.md` - **std/json** (package): Json for encoding and decoding, and JsonValue for the rare document whose shape is not known ahead of time.
+- `standard-library/json.md` - **std/json** (package): Json, a value with the options of the format, for encoding and decoding any Encode/Decode type, and JsonValue for the rare document whose shape is not known ahead of time.
 - `standard-library/linear.md` - **std/linear** (package): Vectors, matrices, quaternions and angles over one generic scalar, plus Fixed, the fixed-point scalar whose answers are the same bits everywhere.
 - `standard-library/math.md` - **std/math** (package): The functions on Float that read as an operation rather than a method, under the math namespace import.
 - `standard-library/number.md` - **std/number** (package): Every numeric type of the language, the traits their arithmetic and bit operations go through, and Real.

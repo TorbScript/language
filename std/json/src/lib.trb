@@ -1,58 +1,167 @@
 /**
- * JSON as a format: an implementation of the prelude's `Encoder`/`Decoder` (see "Types, Values and Reflection" in
- * CONCEPT.md), plus `JsonValue` for the rare case of a document whose shape is not known ahead of time.
+ * JSON as a format, written in TorbScript: an `Encoder` that writes the text, a parser into an `EncodedValue` that the
+ * shared `ValueDecoder` of `std/encoding` reads a typed value out of, and [JsonValue] for a document whose shape is not
+ * known ahead of time.
  *
- *     const text = Json.encode(user)
- *     const user = Json.decode<User>(text)?
+ *     const json = Json()
+ *     const text = json.encode user
+ *     const back = json.decode<User>(text)?
  *
- * `Json` is also a `Format<JsonError>` (`std/encoding`), which is what makes it work on a stream: `Json.items<User>()`
- * is a `Stage` that turns byte chunks into `User`s one at a time, over a top-level array as well as over concatenated
- * or newline-separated values.
+ * [Json] is a value with the options of the format - how field names are spelled, and whether a field nobody read is an
+ * error - so a convention of the format is never a property of a type. `Json` is also a `Format<JsonError>`, which is
+ * what makes it work on a stream: `Json.items<User>()` is a `Stage` that turns byte chunks into `User`s one at a time.
  */
 
 use Stage, Accumulator, mapping from "std/iteration"
 use Bytes, Utf8Error, textOf from "std/stream"
+use Naming, ValueDecoder, EncodedField from "std/encoding"
 
 /**
- * A JSON document without a fixed shape. `Encoder`/`Decoder` are driven by the type that is being read or written,
- * so they cannot express "whatever is there" - this ADT is the library type for that (config previews, diffing,
- * passthrough of fields nobody has a type for yet).
+ * JSON, with its options. The default writes every field under the name the type declares and ignores a field of the
+ * input that no type asked for.
+ *
+ * # Examples
+ *
+ *     type Point {
+ *       x: Int
+ *       y: Int
+ *     }
+ *
+ *     const json = Json()
+ *     const text = json.encode(Point(1, 2))
+ *     print text
+ *     print json.decode<Point>(text)
+ *
+ * # Related
+ *
+ * - [JsonValue] - a document without a type.
+ * - [JsonError] - what a failed `decode` or `parse` says.
+ */
+public type Json {
+  /** How the field names are written and read: `Naming.SnakeCase` writes `logLabel` as `log_label`. */
+  naming: Naming = Naming.Unchanged
+  /** Whether a field of the input that no type asked for is an error, instead of being ignored. */
+  strict: Bool = false
+
+  /** `value` as JSON text. */
+  fn encode<Value: Encode>(value: Value): String {
+    var target = JsonEncoder naming: naming
+    value.encode target
+    target.text()
+  }
+
+  /**
+   * Parses `text` and reads it as a `Value`. Fails on malformed JSON as well as on JSON that does not fit `Value`.
+   *
+   * # Errors
+   *
+   * A [JsonError] that is a syntax error for text that is not JSON, and one that holds the `DecodeError` - with the
+   * field chain it happened in - for JSON of the wrong shape.
+   */
+  fn decode<Value: Decode>(text: String): Result<Value, JsonError> {
+    const document = parsed(text)?
+    var source = ValueDecoder.of document, naming: naming, strict: strict
+    Value.decode(source).mapError(JsonError.decodeFailed)
+  }
+
+  /**
+   * Parses `text` into a [JsonValue], without knowing its shape.
+   *
+   * # Errors
+   *
+   * A syntax error, with the line it was found on.
+   */
+  fn parse(text: String): Result<JsonValue, JsonError> {
+    const document = parsed(text)?
+    Ok jsonValueOf(document)
+  }
+
+  /** Any `Encode` value as the [JsonValue] this format would write it as: to diff two versions of it structurally. */
+  fn value<Value: Encode>(value: Value): JsonValue {
+    parse(encode(value)) ?? JsonValue.Null
+  }
+
+  private fn parsed(text: String): Result<EncodedValue, JsonError> {
+    var parser = JsonParser text.chars().toList()
+    const document = parser.value()?
+    parser.skipWhitespace()
+    if !parser.atEnd() {
+      return Fail parser.failure("there is more than one value in this text")
+    }
+    Ok document
+  }
+}
+
+/**
+ * A JSON document without a fixed shape: config previews, diffing, passing on fields nobody has a type for yet.
+ * `Encoder` and `Decoder` are driven by a type, so "whatever is there" is this library type and nothing in the language.
  */
 public type JsonValue {
   case Null
   case Bool(value: Bool)
-  /** JSON does not distinguish integers from floating point, so every number is a `Float64`. */
+  /** JSON does not distinguish integers from floating point, so every number is a `Float64` here. */
   case Number(value: Float64)
   case String(value: String)
   case Array(items: List<JsonValue>)
   case Object(entries: Map<String, JsonValue>)
 }
 
-/** A `JsonValue` describes itself to any `Encoder`, not only `Json`'s own. */
+/** A `JsonValue` writes itself into any `Encoder`, not only `Json`'s own. A whole number is written as one. */
 extend JsonValue with Encode {
-  fn encode(var encoder: Encoder) {
+  fn encode<Target: Encoder>(var target: Target) {
     match self {
-      .Null => encoder.nothing()
-      .Bool(value) => encoder.bool value
-      .Number(value) => encoder.float value
-      .String(value) => encoder.string value
-      .Array(items) => encoder.sequence Some(items.length()) { sequence =>
-        for item in items {
-          sequence.item item
+      .Null => target.nothing()
+      .Bool(value) => target.bool value
+      .Number(value) => {
+        match Int64.tryFrom(value) {
+          Ok(whole) => target.int whole
+          Fail(_) => target.float value
         }
       }
-      .Object(entries) => encoder.map Some(entries.length()) { map =>
-        for (key, value) in entries {
-          map.entry key, value
+      .String(value) => target.string value
+      .Array(items) => {
+        target.sequence Some(items.length())
+        for item in items {
+          item.encode target
         }
+        target.finish()
+      }
+      .Object(entries) => {
+        target.map Some(entries.length())
+        for (key, value) in entries {
+          target.string key
+          value.encode target
+        }
+        target.finish()
       }
     }
   }
 }
 
+/** A parsed document as a `JsonValue`: an object's fields become its entries, and every number a `Float64`. */
+fn jsonValueOf(value: EncodedValue): JsonValue {
+  match value {
+    .Nothing => JsonValue.Null
+    .Bool(inner) => JsonValue.Bool inner
+    .Int(inner) => JsonValue.Number Float64.from(inner)
+    .Float(inner) => JsonValue.Number inner
+    .String(inner) => JsonValue.String inner
+    .Sequence(items) => JsonValue.Array items.map(jsonValueOf).toList()
+    .Record(_, fields) => {
+      var entries: Map<String, JsonValue> = [:]
+      for field in fields {
+        entries[field.name] = jsonValueOf field.value
+      }
+      JsonValue.Object entries
+    }
+    // A parser writes nothing else. A number beyond `Int64` keeps its text, which is what a reader can still use
+    other => JsonValue.String other.plain()
+  }
+}
+
 /**
- * What went wrong turning text into a value and back: malformed JSON text, or JSON that parsed fine but does not
- * fit the requested type.
+ * What went wrong turning text into a value: malformed JSON, or JSON that parsed fine but does not fit the requested
+ * type.
  */
 public type JsonError with Show, Error {
   private kind: JsonErrorKind
@@ -105,49 +214,562 @@ extend JsonError with From<Utf8Error> {
   }
 }
 
+/** Which of the three failures a [JsonError] is. */
 type JsonErrorKind {
   case Syntax(line: Int, message: String)
   case Decode(cause: DecodeError)
   case Text(cause: Utf8Error)
 }
 
-/** JSON reading and writing. A format is an implementation of `Encoder`/`Decoder` and never sees a type. */
-public native type Json {
-  /** Renders any `Encode` value as JSON text. */
-  native static fn encode(value: Encode): String
+// --- Writing ---------------------------------------------------------------------------------------------------------
+
+/**
+ * An `Encoder` that writes JSON text: a straight-line state machine with one frame per open bracket. Nothing is
+ * buffered but the pieces of the text, which are joined once at the end.
+ *
+ * A record opens on its first field, because a record that announces no field is a **wrapper** and JSON writes its
+ * value with nothing around it. A case without fields is its name as a text, and one with fields is externally tagged:
+ * `{"Rejected":{"reason":"..."}}`. A map's keys are texts, as JSON's are: a number or a truth value is quoted.
+ */
+type JsonEncoder with Encoder {
+  naming: Naming = Naming.Unchanged
+  private var pieces: List<String> = []
+  private var frames: List<JsonFrame> = []
+
+  fn text(): String {
+    pieces.joined separator: ""
+  }
+
+  var fn nothing() {
+    scalar "null"
+  }
+
+  var fn bool(value: Bool) {
+    scalar "{value}"
+  }
+
+  var fn int(value: Int64) {
+    scalar "{value}"
+  }
+
+  var fn unsigned(value: UInt64) {
+    scalar "{value}"
+  }
+
+  /** JSON has no infinity and no "not a number": such a value is written as `null`. */
+  var fn float(value: Float64) {
+    if (value - value).isNaN() {
+      scalar "null"
+      return
+    }
+    scalar "{value}"
+  }
+
+  var fn decimal(value: Decimal) {
+    scalar "{value}"
+  }
+
+  var fn string(value: String) {
+    const _key = before()
+    pieces.append quoted(value)
+  }
+
+  /** JSON has no bytes, so they travel as a sequence of numbers, which is what `ValueDecoder.bytes` reads back. */
+  var fn bytes(value: List<UInt8>) {
+    sequence Some(value.length())
+    for byte in value {
+      int Int64.from(byte)
+    }
+    finish()
+  }
+
+  var fn sequence(length: Int?) {
+    const _length = length
+    const _key = before()
+    pieces.append "["
+    frames.append JsonFrame(.Items)
+  }
+
+  var fn map(length: Int?) {
+    const _length = length
+    const _key = before()
+    pieces.append openBrace
+    frames.append JsonFrame(.Entries)
+  }
+
+  var fn record(typeName: String) {
+    const _typeName = typeName
+    const key = before()
+    frames.append JsonFrame(.Fields, key: key)
+  }
+
+  var fn variant(typeName: String, name: String) {
+    const _typeName = typeName
+    const key = before()
+    frames.append JsonFrame(.Variant, variantName: name, key: key)
+  }
+
+  var fn field(name: String) {
+    if frames.isEmpty() {
+      return
+    }
+    const last = frames.length() - 1
+    if frames[last].fields == 0 {
+      match frames[last].kind {
+        .Variant => pieces.append(openBrace + quoted(frames[last].variantName) + ":" + openBrace)
+        .Fields => pieces.append openBrace
+        _ => {}
+      }
+    }
+    if frames[last].fields > 0 {
+      pieces.append ","
+    }
+    frames[last].fields = frames[last].fields + 1
+    pieces.append(quoted(naming.applied(name)) + ":")
+    frames[last].expectingValue = true
+  }
+
+  var fn finish() {
+    if frames.isEmpty() {
+      return
+    }
+    const last = frames.length() - 1
+    const frame = frames[last]
+    frames = frames.removedAt last
+    match frame.kind {
+      .Items => pieces.append "]"
+      .Entries => pieces.append closeBrace
+      .Fields => {
+        if frame.fields > 0 {
+          pieces.append closeBrace
+        }
+      }
+      .Variant => {
+        if frame.fields == 0 {
+          pieces.append quoted(frame.variantName)
+        } else {
+          pieces.append(closeBrace + closeBrace)
+        }
+      }
+    }
+  }
+
+  /** A number, a truth value or `null`: quoted where it is the key of a map. */
+  private var fn scalar(text: String) {
+    if before() {
+      pieces.append "\"{text}\""
+      return
+    }
+    pieces.append text
+  }
 
   /**
-   * Parses `text` and decodes it as `Value`. Fails on malformed JSON as well as on JSON that does not fit `Value`.
-   *
-   *     match Json.decode<User>(text) {
-   *       Ok(user) => print user.name
-   *       Fail(error) => print "Rejected: {error}"
-   *     }
+   * The separator in front of the next value, and whether that value is the key of a map. Which separator belongs
+   * where is decided by the frame that is open; the value of a wrapper is a key where the wrapper is one.
    */
-  native static fn decode<Value: Decode>(text: String): Result<Value, JsonError>
+  private var fn before(): Bool {
+    if frames.isEmpty() {
+      return false
+    }
+    const last = frames.length() - 1
+    if frames[last].expectingValue {
+      frames[last].expectingValue = false
+      return false
+    }
+    match frames[last].kind {
+      .Fields => {
+        return frames[last].key
+      }
+      .Variant => {
+        return false
+      }
+      _ => {}
+    }
+    const count = frames[last].count
+    frames[last].count = count + 1
+    match frames[last].kind {
+      .Entries => {
+        if count > 0 {
+          pieces.append(if count % 2 == 1 { ":" } else { "," })
+        }
+        count % 2 == 0
+      }
+      _ => {
+        if count > 0 {
+          pieces.append ","
+        }
+        false
+      }
+    }
+  }
+}
 
-  /** Parses `text` into a `JsonValue`, without knowing its shape. */
-  native static fn parse(text: String): Result<JsonValue, JsonError>
+/** A brace cannot be written in a one-line string, so the two of them have a name. */
+const openBrace = "\{"
+const closeBrace = "\}"
 
-  /** Any `Encode` value as a `JsonValue` tree, e.g. to diff two versions of it structurally. */
-  native static fn value<Value: Encode>(value: Value): JsonValue
+/** One open `[`, `{`, record or variant of `JsonEncoder`, with what has been written into it so far. */
+type JsonFrame {
+  kind: JsonFrameKind
+  variantName: String = ""
+  /** Whether the record or case is the key of a map, which a wrapper around a number has to know. */
+  key: Bool = false
+  var count: Int = 0
+  /** How many fields were announced. A record that announced none is a wrapper and writes no braces. */
+  var fields: Int = 0
+  var expectingValue: Bool = false
+}
+
+/** What a `JsonFrame` is open as, which decides how `JsonEncoder.finish` closes it. */
+type JsonFrameKind {
+  case Items
+  case Entries
+  case Fields
+  case Variant
+}
+
+/**
+ * The text in JSON quotes. `"` and `\` are escaped, and so is every control character below U+0020 - the short form
+ * where JSON has one, `\u00XX` everywhere else. Everything else is written as it is, in UTF-8.
+ */
+fn quoted(value: String): String {
+  var pieces = ["\""]
+  var start = 0
+  var offset = 0
+  for character in value.chars() {
+    const escaped = escapeOf character
+    if !escaped.isEmpty() {
+      pieces.append value.sliceBytes(start, offset)
+      pieces.append escaped
+      start = offset + character.byteLength()
+    }
+    offset = offset + character.byteLength()
+  }
+  pieces.append value.sliceBytes(start, offset)
+  pieces.append "\""
+  pieces.joined separator: ""
+}
+
+/** How one character is escaped inside of JSON quotes, or an empty text where it is written as it is. */
+fn escapeOf(character: Char): String {
+  match character {
+    '"' => "\\\""
+    '\\' => "\\\\"
+    '\n' => "\\n"
+    '\r' => "\\r"
+    '\t' => "\\t"
+    other => {
+      const code = Int64.from other
+      if code >= 32 {
+        return ""
+      }
+      if code == 8 {
+        return "\\b"
+      }
+      if code == 12 {
+        return "\\f"
+      }
+      "\\u00{hexDigit(code / 16)}{hexDigit(code % 16)}"
+    }
+  }
+}
+
+fn hexDigit(value: Int64): String {
+  const digits = "0123456789abcdef"
+  digits[value..(value + 1)]
+}
+
+// --- Reading ---------------------------------------------------------------------------------------------------------
+
+/**
+ * A recursive-descent parser into an `EncodedValue`: an object is a record without a type name, a number without a
+ * fraction or an exponent is an `Int` (or an `Unsigned` beyond `Int64`), and every other number a `Float`.
+ */
+type JsonParser {
+  characters: List<Char>
+  var position: Int = 0
+
+  fn atEnd(): Bool {
+    position >= characters.length()
+  }
+
+  /** A syntax error at the current position, with its line. */
+  fn failure(message: String): JsonError {
+    var line = 1
+    const end = position.min characters.length()
+    for index in 0..end {
+      if characters[index] == '\n' {
+        line = line + 1
+      }
+    }
+    JsonError.syntax line, message
+  }
+
+  var fn skipWhitespace() {
+    while !atEnd() && isJsonWhitespace(characters[position]) {
+      position = position + 1
+    }
+  }
+
+  var fn value(): Result<EncodedValue, JsonError> {
+    skipWhitespace()
+    if atEnd() {
+      return Fail failure("the text ends where a value was expected")
+    }
+    const character = characters[position]
+    if character == '{' {
+      return object()
+    }
+    if character == '[' {
+      return array()
+    }
+    if character == '"' {
+      return Ok EncodedValue.String(text()?)
+    }
+    if character.isLetter() {
+      return word()
+    }
+    number()
+  }
+
+  private var fn object(): Result<EncodedValue, JsonError> {
+    position = position + 1
+    var fields: List<EncodedField> = []
+    skipWhitespace()
+    if !atEnd() && characters[position] == '}' {
+      position = position + 1
+      return Ok EncodedValue.Record("", fields)
+    }
+    loop {
+      skipWhitespace()
+      const key = text()?
+      skipWhitespace()
+      if atEnd() || characters[position] != ':' {
+        return Fail failure("a `:` belongs after the key {key.showNested()}")
+      }
+      position = position + 1
+      const found = value()?
+      fields.append EncodedField(key, found)
+      skipWhitespace()
+      if atEnd() {
+        return Fail failure("this object is not closed")
+      }
+      if characters[position] == ',' {
+        position = position + 1
+        continue
+      }
+      if characters[position] == '}' {
+        position = position + 1
+        return Ok EncodedValue.Record("", fields)
+      }
+      return Fail failure("a `,` or a `}` belongs after a field, not `{characters[position]}`")
+    }
+  }
+
+  private var fn array(): Result<EncodedValue, JsonError> {
+    position = position + 1
+    var items: List<EncodedValue> = []
+    skipWhitespace()
+    if !atEnd() && characters[position] == ']' {
+      position = position + 1
+      return Ok EncodedValue.Sequence(items)
+    }
+    loop {
+      const found = value()?
+      items.append found
+      skipWhitespace()
+      if atEnd() {
+        return Fail failure("this array is not closed")
+      }
+      if characters[position] == ',' {
+        position = position + 1
+        continue
+      }
+      if characters[position] == ']' {
+        position = position + 1
+        return Ok EncodedValue.Sequence(items)
+      }
+      return Fail failure("a `,` or a `]` belongs after an item, not `{characters[position]}`")
+    }
+  }
+
+  private var fn text(): Result<String, JsonError> {
+    if atEnd() || characters[position] != '"' {
+      return Fail failure("a text in quotes was expected")
+    }
+    position = position + 1
+    var out: List<Char> = []
+    while !atEnd() && characters[position] != '"' {
+      const character = characters[position]
+      if Int64.from(character) < 32 {
+        return Fail failure("a control character has to be escaped inside of a text")
+      }
+      if character != '\\' {
+        out.append character
+        position = position + 1
+        continue
+      }
+      position = position + 1
+      if atEnd() {
+        return Fail failure("this text ends in a backslash")
+      }
+      const escaped = characters[position]
+      position = position + 1
+      const plain = match escaped {
+        '"' => '"'
+        '\\' => '\\'
+        '/' => '/'
+        'n' => '\n'
+        't' => '\t'
+        'r' => '\r'
+        'b' => '\u{8}'
+        'f' => '\u{c}'
+        'u' => {
+          const decoded = unicodeEscape()?
+          out.append decoded
+          continue
+        }
+        other => {
+          return Fail failure("`\\{other}` is not an escape of JSON")
+        }
+      }
+      out.append plain
+    }
+    if atEnd() {
+      return Fail failure("this text is not closed")
+    }
+    position = position + 1
+    Ok String.from(out)
+  }
+
+  /** The four hex digits after `\u`, and a second escape after them where the first one is a high surrogate. */
+  private var fn unicodeEscape(): Result<Char, JsonError> {
+    const high = hexNumber()?
+    if high < 55296 || high > 57343 {
+      return characterOf high
+    }
+    if high > 56319 {
+      return Fail failure("a low surrogate needs a high one in front of it")
+    }
+    if position + 1 >= characters.length() || characters[position] != '\\' || characters[position + 1] != 'u' {
+      return Fail failure("a high surrogate needs a low one after it")
+    }
+    position = position + 2
+    const low = hexNumber()?
+    if low < 56320 || low > 57343 {
+      return Fail failure("a high surrogate needs a low one after it")
+    }
+    const code = 65536 + (high - 55296) * 1024 + (low - 56320)
+    characterOf code
+  }
+
+  /** The character of a code point an escape wrote. */
+  private fn characterOf(code: Int64): Result<Char, JsonError> {
+    match Char.tryFrom(code) {
+      Ok(found) => Ok found
+      Fail(_) => Fail failure("`{code}` is not a character")
+    }
+  }
+
+  private var fn hexNumber(): Result<Int64, JsonError> {
+    var value: Int64 = 0
+    for _ in 0..4 {
+      if atEnd() {
+        return Fail failure("`\\u` needs four hex digits")
+      }
+      const digit = hexValueOf characters[position]
+      if digit < 0 {
+        return Fail failure("`\\u` needs four hex digits, not `{characters[position]}`")
+      }
+      value = value * 16 + digit
+      position = position + 1
+    }
+    Ok value
+  }
+
+  private var fn word(): Result<EncodedValue, JsonError> {
+    var out: List<Char> = []
+    while !atEnd() && characters[position].isLetter() {
+      out.append characters[position]
+      position = position + 1
+    }
+    const found = String.from out
+    match found {
+      "true" => Ok EncodedValue.Bool(true)
+      "false" => Ok EncodedValue.Bool(false)
+      "null" => Ok EncodedValue.Nothing
+      other => Fail failure("`{other}` is not a JSON value")
+    }
+  }
+
+  private var fn number(): Result<EncodedValue, JsonError> {
+    var out: List<Char> = []
+    var floating = false
+    while !atEnd() {
+      const character = characters[position]
+      const belongs = character.isDigit() || character == '-' || character == '+' || character == '.'
+        || character == 'e' || character == 'E'
+      if !belongs {
+        break
+      }
+      if character == '.' || character == 'e' || character == 'E' {
+        floating = true
+      }
+      out.append character
+      position = position + 1
+    }
+    const found = String.from out
+    if found.isEmpty() {
+      return Fail failure("`{characters[position]}` does not begin a JSON value")
+    }
+    if !floating {
+      if const Ok(whole) = Int64.tryFrom(found) {
+        return Ok EncodedValue.Int(whole)
+      }
+      if const Ok(count) = UInt64.tryFrom(found) {
+        return Ok EncodedValue.Unsigned(count)
+      }
+    }
+    match Float64.tryFrom(found) {
+      Ok(number) => Ok EncodedValue.Float(number)
+      Fail(_) => Fail failure("`{found}` is not a number")
+    }
+  }
+}
+
+fn isJsonWhitespace(character: Char): Bool {
+  character == ' ' || character == '\n' || character == '\t' || character == '\r'
+}
+
+/** The value of one hex digit, or -1 for a character that is none. */
+fn hexValueOf(character: Char): Int64 {
+  const code = Int64.from character
+  if code >= 48 && code <= 57 {
+    return code - 48
+  }
+  if code >= 97 && code <= 102 {
+    return code - 87
+  }
+  if code >= 65 && code <= 70 {
+    return code - 55
+  }
+  -1
 }
 
 // --- JSON as a `Format`: the streaming side -------------------------------------------------------------------------
 
 /**
- * Everything a stream needs, written in TorbScript on top of the natives above: a framer that finds where one element
- * ends, and the ordinary `Decode` for the element itself. Nothing here is native - tracking depth, strings and escapes
- * is ordinary code, and a native would have to be rebuilt by every back end (CONTRIBUTING, "Natives stay few").
+ * Everything a stream needs: a framer that finds where one element ends, and the ordinary `Decode` for the element
+ * itself. The static members use the default options, `Json()`.
  */
 extend Json with Format<JsonError> {
-  static fn encodeAll(value: Encode): Bytes {
-    Json.encode(value).bytes().toList()
+  static fn encodeAll<Value: Encode>(value: Value): Bytes {
+    Json().encode(value).bytes().toList()
   }
 
   static fn decodeAll<Value: Decode>(bytes: Bytes): Result<Value, JsonError> {
     const text = textOf(bytes).mapError(JsonError.invalidText)?
-    Json.decode<Value>(text)
+    Json().decode<Value>(text)
   }
 
   /**
@@ -166,7 +788,7 @@ extend Json with Format<JsonError> {
    * written, and a reader would have to hold the whole thing to find one.
    */
   static fn encoded<Item: Encode>(): Stage<Item, Bytes> {
-    mapping { "{Json.encode(_)}\n".bytes().toList() }
+    mapping { "{Json().encode(_)}\n".bytes().toList() }
   }
 }
 
@@ -182,7 +804,7 @@ type JsonItems<Item: Decode> with Stage<Bytes, Result<Item, JsonError>> {
  * The framer: one pass over the bytes as they arrive, with exactly the state a JSON scanner needs - how deep the
  * brackets go, whether we are inside a string, and whether the last byte was a backslash. An element is complete when
  * the depth comes back to zero, and for a number, `true`, `false` or `null` at the first byte that cannot belong to it
- * any anymore.
+ * any more.
  */
 type JsonFramer<Item: Decode, Final> with Accumulator<Bytes, Final> {
   var downstream: Accumulator<Result<Item, JsonError>, Final>
@@ -233,11 +855,11 @@ type JsonFramer<Item: Decode, Final> with Accumulator<Bytes, Final> {
       inString = true
       return
     }
-    if byte == openBracket || byte == openBrace {
+    if byte == openBracket || byte == openBraceByte {
       depth = depth + 1
       return
     }
-    if byte == closeBracket || byte == closeBrace {
+    if byte == closeBracket || byte == closeBraceByte {
       depth = depth - 1
       if depth <= 0 {
         emit()
@@ -296,14 +918,14 @@ type JsonFramer<Item: Decode, Final> with Accumulator<Bytes, Final> {
       inString = true
       return
     }
-    if byte == openBracket || byte == openBrace {
+    if byte == openBracket || byte == openBraceByte {
       depth = 1
     }
   }
 
   private var fn emit() {
     const text = textOf(element).mapError(JsonError.invalidText)
-    const decoded = text.flatMap { Json.decode<Item>(_) }
+    const decoded = text.flatMap { Json().decode<Item>(_) }
     element = []
     started = false
     depth = 0
@@ -314,7 +936,7 @@ type JsonFramer<Item: Decode, Final> with Accumulator<Bytes, Final> {
 }
 
 fn isSeparator(byte: UInt8): Bool {
-  isWhitespaceByte(byte) || byte == commaByte || byte == closeBracket || byte == closeBrace
+  isWhitespaceByte(byte) || byte == commaByte || byte == closeBracket || byte == closeBraceByte
 }
 
 fn isWhitespaceByte(byte: UInt8): Bool {
@@ -330,5 +952,5 @@ const commaByte: UInt8 = 44
 const openBracket: UInt8 = 91
 const backslashByte: UInt8 = 92
 const closeBracket: UInt8 = 93
-const openBrace: UInt8 = 123
-const closeBrace: UInt8 = 125
+const openBraceByte: UInt8 = 123
+const closeBraceByte: UInt8 = 125

@@ -1,0 +1,39 @@
+/**
+ * [Naming]: how a format spells the field names a type declares. A convention of the format and never of the type,
+ * which is why it is an option a format value carries (`Json(naming: .SnakeCase)`) and nothing on a type mentions it.
+ */
+
+/**
+ * How a format writes a field name. The type declares `logLabel`; `SnakeCase` writes and reads `log_label`.
+ *
+ * # Examples
+ *
+ *     print Naming.SnakeCase.applied("logLabel")
+ */
+public type Naming {
+  /** The name as the type declares it. */
+  case Unchanged
+  /** Lower case, with a `_` in front of every letter that was upper case: `orderId` is `order_id`. */
+  case SnakeCase
+
+  /** The name as the format writes it. */
+  fn applied(name: String): String {
+    match self {
+      .Unchanged => name
+      .SnakeCase => snakeCaseOf name
+    }
+  }
+}
+
+/** `orderId` becomes `order_id`: an upper-case letter starts a new word, joined with `_` and lowered. */
+fn snakeCaseOf(name: String): String {
+  var pieces: List<String> = []
+  for character in name.chars() {
+    const lower = character.toLowerCase()
+    if lower != character && !pieces.isEmpty() {
+      pieces.append "_"
+    }
+    pieces.append lower.show()
+  }
+  pieces.joined separator: ""
+}

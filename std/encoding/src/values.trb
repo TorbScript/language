@@ -1,0 +1,702 @@
+/**
+ * A value without its type: [EncodedValue], the [Values] encoder that builds one, and the [ValueDecoder] that reads a
+ * typed value back out of one.
+ *
+ * `EncodedValue` is what a program holds where it has left the type behind - a quotation's captures, a field default
+ * in a schema, the text [rendered] shows. It is one format among many, an encoder that writes into memory, and nothing
+ * goes through it unless a program asks for a value without its type.
+ *
+ * `ValueDecoder` is the one `Decoder` every buffering format shares: a text format with unordered fields parses into an
+ * `EncodedValue` and hands it over, instead of writing a state machine of its own.
+ */
+
+use Show from "std/core"
+use Encode, Encoder, Decoder, DecodeError from "./lib"
+use Naming from "./naming"
+
+/**
+ * Any `Encode` value, held without its type. Every scalar of the vocabulary has a case, so nothing is lost: a narrow
+ * number is already widened, and a `Decimal` stays exact.
+ *
+ * # Examples
+ *
+ *     type Point {
+ *       x: Int
+ *       y: Int
+ *     }
+ *
+ *     print EncodedValue.of(Point(1, 2))
+ *
+ * # Related
+ *
+ * - [rendered] - the same, as the text a message shows.
+ */
+public type EncodedValue with Show {
+  /** An absent value: what `None` writes. */
+  case Nothing
+  /** A truth value. */
+  case Bool(value: Bool)
+  /** A whole number, widened to 64 bits. */
+  case Int(value: Int64)
+  /** A whole number that may not fit into an `Int64`. */
+  case Unsigned(value: UInt64)
+  /** A floating point number. */
+  case Float(value: Float64)
+  /** A text. An exact `Decimal` is held as its text too, which is exact and which every format can read back. */
+  case String(value: String)
+  /** Raw bytes. */
+  case Bytes(value: List<UInt8>)
+  /** The items of a sequence, in order. */
+  case Sequence(items: List<EncodedValue>)
+  /** The entries of a map, flat: a key, then its value, then the next key. */
+  case Mapping(entries: List<EncodedValue>)
+  /** A record, with the qualified name of its type and its fields in declaration order. */
+  case Record(typeName: String, fields: List<EncodedField>)
+  /** One case of a type with cases, with the fields of that case. */
+  case Variant(typeName: String, name: String, fields: List<EncodedField>)
+
+  /** `EncodedValue.of(user)`: the value, written by [Values]. */
+  static fn of<Value: Encode>(value: Value): EncodedValue {
+    var builder = Values()
+    value.encode builder
+    builder.result()
+  }
+
+  /** `Price(amount: 19.99, currency: "EUR")`: the shape the generated `Show` of the type has, too. */
+  fn show(): String {
+    match self {
+      .Nothing => "None"
+      .Bool(value) => "{value}"
+      .Int(value) => "{value}"
+      .Unsigned(value) => "{value}"
+      .Float(value) => "{value}"
+      .String(value) => value.showNested()
+      .Bytes(value) => "{value.length()} bytes"
+      .Sequence(items) => shownItems items
+      .Mapping(entries) => shownEntries entries
+      .Record(typeName, fields) => "{shortName(typeName)}({shownFields(fields)})"
+      .Variant(_, name, fields) => if fields.isEmpty() { name } else { "{name}({shownFields(fields)})" }
+    }
+  }
+
+  /** The unquoted text of a scalar, which is what a SQL default and a `--help` line want. */
+  fn plain(): String {
+    match self {
+      .String(value) => value
+      other => other.show()
+    }
+  }
+}
+
+/**
+ * An `EncodedValue` writes itself into any encoder, which is what makes it useful: a captured value can be bound as a
+ * SQL parameter, and a document nobody has a type for can be written out again.
+ */
+extend EncodedValue with Encode {
+  fn encode<Target: Encoder>(var target: Target) {
+    match self {
+      .Nothing => target.nothing()
+      .Bool(value) => target.bool value
+      .Int(value) => target.int value
+      .Unsigned(value) => target.unsigned value
+      .Float(value) => target.float value
+      .String(value) => target.string value
+      .Bytes(value) => target.bytes value
+      .Sequence(items) => {
+        target.sequence Some(items.length())
+        for item in items {
+          item.encode target
+        }
+        target.finish()
+      }
+      .Mapping(entries) => {
+        target.map Some(entries.length() / 2)
+        for entry in entries {
+          entry.encode target
+        }
+        target.finish()
+      }
+      .Record(typeName, fields) => {
+        target.record typeName
+        writeFields fields, target
+        target.finish()
+      }
+      .Variant(typeName, name, fields) => {
+        target.variant typeName, name
+        writeFields fields, target
+        target.finish()
+      }
+    }
+  }
+}
+
+/** Every field of a record or variant: its name announced through `field`, then its value's own `encode`. */
+fn writeFields<Target: Encoder>(fields: List<EncodedField>, var target: Target) {
+  for field in fields {
+    target.field field.name
+    field.value.encode target
+  }
+}
+
+/** One named field of an [EncodedValue.Record] or [EncodedValue.Variant]. */
+public type EncodedField {
+  /** The field's name, as the type declares it. */
+  name: String
+  /** What the field holds. */
+  value: EncodedValue
+
+  /** `name: value`, the way a record shows its fields. */
+  fn show(): String {
+    "{name}: {value.show()}"
+  }
+}
+
+fn shownFields(fields: List<EncodedField>): String {
+  const parts = fields.map { _.show() }
+  parts.joined separator: ", "
+}
+
+fn shownItems(items: List<EncodedValue>): String {
+  const parts = items.map { _.show() }
+  const inner = parts.joined separator: ", "
+  "[{inner}]"
+}
+
+/** `[key: value, ...]`, and `[:]` for an empty map - the way a map literal is written. */
+fn shownEntries(entries: List<EncodedValue>): String {
+  if entries.isEmpty() {
+    return "[:]"
+  }
+  var parts: List<String> = []
+  var index = 0
+  while index + 1 < entries.length() {
+    parts.append "{entries[index].show()}: {entries[index + 1].show()}"
+    index = index + 2
+  }
+  const inner = parts.joined separator: ", "
+  "[{inner}]"
+}
+
+/** `"app/orders/Price"` reads as `Price` in a message: the package is context a reader already has. */
+fn shortName(typeName: String): String {
+  match typeName.lastIndexOf("/") {
+    Some(position) => typeName[(position + 1)..]
+    None => typeName
+  }
+}
+
+/**
+ * Any `Encode` value as readable text, for messages and debugging:
+ * `User(name: "Ada", tags: ["math"])`. It is [EncodedValue.of] and then [EncodedValue.show].
+ *
+ * # Examples
+ *
+ *     print rendered([1, 2, 3])
+ */
+public fn rendered<Value: Encode>(value: Value): String {
+  EncodedValue.of(value).show()
+}
+
+/**
+ * An `Encoder` that builds an [EncodedValue]. It is a format like any other, and the only one without bytes.
+ *
+ * A record that announced no field and holds one value is a **wrapper**, and it becomes that value.
+ */
+public type Values with Encoder {
+  private var frames: List<ValueFrame> = []
+  private var finished: EncodedValue? = None
+
+  /** What was written. `Nothing` when nothing was. */
+  fn result(): EncodedValue {
+    finished ?? EncodedValue.Nothing
+  }
+
+  var fn nothing() {
+    complete EncodedValue.Nothing
+  }
+
+  var fn bool(value: Bool) {
+    complete EncodedValue.Bool(value)
+  }
+
+  var fn int(value: Int64) {
+    complete EncodedValue.Int(value)
+  }
+
+  var fn unsigned(value: UInt64) {
+    complete EncodedValue.Unsigned(value)
+  }
+
+  var fn float(value: Float64) {
+    complete EncodedValue.Float(value)
+  }
+
+  /** An exact number is held as its text, which loses nothing: `ValueDecoder.decimal` reads it back. */
+  var fn decimal(value: Decimal) {
+    complete EncodedValue.String("{value}")
+  }
+
+  var fn string(value: String) {
+    complete EncodedValue.String(value)
+  }
+
+  var fn bytes(value: List<UInt8>) {
+    complete EncodedValue.Bytes(value)
+  }
+
+  var fn sequence(length: Int?) {
+    const _length = length
+    frames.append ValueFrame(.Sequence)
+  }
+
+  var fn map(length: Int?) {
+    const _length = length
+    frames.append ValueFrame(.Mapping)
+  }
+
+  var fn record(typeName: String) {
+    frames.append ValueFrame(.Record(typeName))
+  }
+
+  var fn variant(typeName: String, name: String) {
+    frames.append ValueFrame(.Variant(typeName, name))
+  }
+
+  var fn field(name: String) {
+    if frames.isEmpty() {
+      return
+    }
+    const last = frames.length() - 1
+    frames[last].pending = Some name
+  }
+
+  var fn finish() {
+    if frames.isEmpty() {
+      return
+    }
+    const last = frames.length() - 1
+    const frame = frames[last]
+    frames = frames.removedAt last
+    const value = match frame.kind {
+      .Sequence => EncodedValue.Sequence frame.children
+      .Mapping => EncodedValue.Mapping frame.children
+      .Record(typeName) => recordOf typeName, frame
+      .Variant(typeName, name) => EncodedValue.Variant typeName, name, frame.fields
+    }
+    complete value
+  }
+
+  private var fn complete(value: EncodedValue) {
+    if frames.isEmpty() {
+      finished = Some value
+      return
+    }
+    const last = frames.length() - 1
+    match frames[last].pending {
+      Some(name) => {
+        frames[last].fields.append(EncodedField(name, value))
+        frames[last].pending = None
+      }
+      None => frames[last].children.append(value)
+    }
+  }
+}
+
+/** A record that announced no field is a wrapper, and a wrapper is its value. */
+fn recordOf(typeName: String, frame: ValueFrame): EncodedValue {
+  if frame.fields.isEmpty() && frame.children.length() == 1 {
+    return frame.children[0]
+  }
+  EncodedValue.Record typeName, frame.fields
+}
+
+/** One open `sequence`, `map`, `record` or `variant` of [Values], with what has been written into it so far. */
+type ValueFrame {
+  kind: ValueFrameKind
+  var children: List<EncodedValue> = []
+  var fields: List<EncodedField> = []
+  var pending: String? = None
+}
+
+/** What a `ValueFrame` is open as, which decides how `Values.finish` closes it. */
+type ValueFrameKind {
+  case Sequence
+  case Mapping
+  case Record(typeName: String)
+  case Variant(typeName: String, name: String)
+}
+
+// --- Reading out of an `EncodedValue`: the `Decoder` every buffering format shares ----------------------------------
+
+/**
+ * A `Decoder` over an [EncodedValue]. A format whose input has to be buffered anyway - a text format with unordered
+ * fields, a tabular row, a command line - parses into an `EncodedValue` and hands it to this decoder.
+ *
+ * `lenient` is what a format without numbers needs: XML, CSV and a command line have only text, so `int()` and `float()`
+ * parse what they are given. `naming` is how the format spelled the field names, and `strict` reports a field of the
+ * input that no type asked for. All three are options of the **format**, decided once, and never a question a type
+ * asks.
+ *
+ * A record's fields are also a map with text keys, and a text key is read as a number or a truth value where the key
+ * type asks for one: JSON writes every key of an object as a text.
+ *
+ * # Examples
+ *
+ *     var source = ValueDecoder.of(EncodedValue.Sequence([EncodedValue.Int(1), EncodedValue.Int(2)]))
+ *     print List<Int>.decode(source)
+ */
+public type ValueDecoder with Decoder {
+  private var root: EncodedValue? = None
+  private var frames: List<ValueCursor> = []
+  private lenient: Bool = false
+  private naming: Naming = Naming.Unchanged
+  private strict: Bool = false
+  /** Whether the value that was taken last was the text key of a map, which is read as whatever the key type is. */
+  private var tookKey: Bool = false
+
+  /** A decoder that reads `value`, with the options of the format that parsed it. */
+  static fn of(
+    value: EncodedValue,
+    lenient: Bool = false,
+    naming: Naming = Naming.Unchanged,
+    strict: Bool = false,
+  ): ValueDecoder {
+    Self root: Some(value), lenient: lenient, naming: naming, strict: strict
+  }
+
+  var fn nothing(): Bool {
+    if const Some(.Nothing) = peek() {
+      const _taken = take()
+      return true
+    }
+    false
+  }
+
+  var fn bool(): Result<Bool, DecodeError> {
+    match take()? {
+      .Bool(value) => Ok value
+      .String(text) => {
+        if !lenient && !tookKey {
+          return Fail DecodeError("a truth value is needed, not {text.showNested()}")
+        }
+        match text {
+          "true" => Ok true
+          "false" => Ok false
+          _ => Fail DecodeError("a truth value is needed, not {text.showNested()}")
+        }
+      }
+      other => Fail DecodeError("a truth value is needed, not {other.show()}")
+    }
+  }
+
+  var fn int(): Result<Int64, DecodeError> {
+    match take()? {
+      .Int(value) => Ok value
+      .Unsigned(value) => Int64.tryFrom(value).mapError { _ => DecodeError "{value} does not fit into an Int64" }
+      .Float(value) => wholeNumberOf value
+      .String(text) => parseInteger(text, lenient || tookKey)
+      other => Fail DecodeError("a whole number is needed, not {other.show()}")
+    }
+  }
+
+  var fn unsigned(): Result<UInt64, DecodeError> {
+    match take()? {
+      .Unsigned(value) => Ok value
+      .Int(value) => UInt64.tryFrom(value).mapError { _ => DecodeError "{value} is not a count" }
+      .String(text) => parseCount(text, lenient || tookKey)
+      other => Fail DecodeError("a count is needed, not {other.show()}")
+    }
+  }
+
+  var fn float(): Result<Float64, DecodeError> {
+    match take()? {
+      .Float(value) => Ok value
+      .Int(value) => Ok Float64.from(value)
+      .String(text) => parseFloating(text, lenient || tookKey)
+      other => Fail DecodeError("a number is needed, not {other.show()}")
+    }
+  }
+
+  var fn decimal(): Result<Decimal, DecodeError> {
+    match take()? {
+      .Int(value) => parseDecimal "{value}"
+      .Float(value) => parseDecimal "{value}"
+      .String(text) => parseDecimal text
+      other => Fail DecodeError("an exact number is needed, not {other.show()}")
+    }
+  }
+
+  var fn string(): Result<String, DecodeError> {
+    match take()? {
+      .String(value) => Ok value
+      other => {
+        if !lenient {
+          return Fail DecodeError("a text is needed, not {other.show()}")
+        }
+        Ok other.plain()
+      }
+    }
+  }
+
+  /** Bytes, or a sequence of numbers that each fit into a byte: the way a text format writes them. */
+  var fn bytes(): Result<List<UInt8>, DecodeError> {
+    match take()? {
+      .Bytes(value) => Ok value
+      .Sequence(items) => {
+        var found: List<UInt8> = []
+        for item in items {
+          const byte = match item {
+            .Int(value) => UInt8.tryFrom(value).mapError({ _ => DecodeError "{value} is not a byte" })?
+            other => {
+              return Fail DecodeError("a byte is needed, not {other.show()}")
+            }
+          }
+          found.append byte
+        }
+        Ok found
+      }
+      other => Fail DecodeError("bytes are needed, not {other.show()}")
+    }
+  }
+
+  var fn sequence(): Result<Int?, DecodeError> {
+    match take()? {
+      .Sequence(items) => {
+        frames.append ValueCursor(.Items, items: items)
+        Ok Some(items.length())
+      }
+      // A lenient format has no brackets: one value is a sequence of one, and an absent one is empty
+      other => {
+        if !lenient {
+          return Fail DecodeError("a sequence is needed, not {other.show()}")
+        }
+        const items = match other {
+          .Nothing => []
+          only => [only]
+        }
+        frames.append ValueCursor(.Items, items: items)
+        Ok Some(items.length())
+      }
+    }
+  }
+
+  /** A mapping, or a record read as a map from its field names: the only map a text format has is an object. */
+  var fn map(): Result<Int?, DecodeError> {
+    match take()? {
+      .Mapping(entries) => {
+        frames.append ValueCursor(.Items, items: entries)
+        Ok Some(entries.length() / 2)
+      }
+      .Record(_, fields) => {
+        var entries: List<EncodedValue> = []
+        for field in fields {
+          entries.append EncodedValue.String(field.name)
+          entries.append field.value
+        }
+        frames.append ValueCursor(.Keys, items: entries)
+        Ok Some(fields.length())
+      }
+      other => Fail DecodeError("a map is needed, not {other.show()}")
+    }
+  }
+
+  var fn hasNext(): Result<Bool, DecodeError> {
+    if frames.isEmpty() {
+      return Ok false
+    }
+    const frame = frames[frames.length() - 1]
+    Ok(frame.index < frame.items.length())
+  }
+
+  /**
+   * The name is not compared: a tabular row and a JSON object do not carry one, and the type asked for this one.
+   *
+   * A bare value where a record was asked for is a **wrapper**: it comes back as the one thing the record holds,
+   * which is exactly what the writing side put there.
+   */
+  var fn record(typeName: String): Result<Void, DecodeError> {
+    const _typeName = typeName
+    match take()? {
+      .Record(_, fields) => {
+        frames.append ValueCursor(.Fields, fields: fields)
+        Ok void
+      }
+      .Nothing => Fail DecodeError("a record is needed, not None")
+      only => {
+        frames.append ValueCursor(.Items, items: [only])
+        Ok void
+      }
+    }
+  }
+
+  var fn variant(typeName: String): Result<String, DecodeError> {
+    const _typeName = typeName
+    match take()? {
+      .Variant(_, name, fields) => {
+        frames.append ValueCursor(.Fields, fields: fields)
+        Ok name
+      }
+      // A case without fields is written as its bare name
+      .String(name) => {
+        frames.append ValueCursor(.Fields)
+        Ok name
+      }
+      // Externally tagged, which is what a text format writes: `{"Rejected": {"reason": "..."}}`
+      .Record(_, fields) => {
+        if fields.length() != 1 {
+          return Fail DecodeError("a case is one field named after it, and this record has {fields.length()}")
+        }
+        const only = fields[0]
+        match only.value {
+          .Record(_, inner) => frames.append ValueCursor(.Fields, fields: inner)
+          _ => frames.append ValueCursor(.Fields)
+        }
+        Ok only.name
+      }
+      other => Fail DecodeError("a case is needed, not {other.show()}")
+    }
+  }
+
+  var fn field(name: String): Result<Bool, DecodeError> {
+    if frames.isEmpty() {
+      return Fail DecodeError("no record is open")
+    }
+    const last = frames.length() - 1
+    // A record that holds a bare value is a wrapper, and a wrapper has no field to ask for
+    if const .Items = frames[last].kind {
+      const found = match frames[last].items.first() {
+        Some(value) => value.show()
+        None => "nothing"
+      }
+      return Fail DecodeError("a record is needed, not {found}")
+    }
+    const spelled = naming.applied name
+    for index in 0..frames[last].fields.length() {
+      if frames[last].fields[index].name == spelled {
+        frames[last].selected = Some frames[last].fields[index].value
+        frames[last].read.append spelled
+        return Ok true
+      }
+    }
+    Ok false
+  }
+
+  var fn finish(): Result<Void, DecodeError> {
+    if frames.isEmpty() {
+      return Fail DecodeError("nothing is open")
+    }
+    const last = frames.length() - 1
+    const frame = frames[last]
+    frames = frames.removedAt last
+    if strict {
+      for field in frame.fields {
+        if !frame.read.contains(field.name) {
+          return Fail DecodeError("the input has a field `{field.name}` and nothing read it")
+        }
+      }
+    }
+    Ok void
+  }
+
+  /** The value the next read takes, without taking it. */
+  private fn peek(): EncodedValue? {
+    if frames.isEmpty() {
+      return root
+    }
+    const frame = frames[frames.length() - 1]
+    if const Some(selected) = frame.selected {
+      return Some selected
+    }
+    if frame.index < frame.items.length() {
+      return Some frame.items[frame.index]
+    }
+    None
+  }
+
+  private var fn take(): Result<EncodedValue, DecodeError> {
+    tookKey = false
+    if frames.isEmpty() {
+      const found = match root {
+        Some(value) => value
+        None => {
+          return Fail DecodeError("there is nothing left to read")
+        }
+      }
+      root = None
+      return Ok found
+    }
+    const last = frames.length() - 1
+    if const Some(selected) = frames[last].selected {
+      frames[last].selected = None
+      return Ok selected
+    }
+    const index = frames[last].index
+    if index >= frames[last].items.length() {
+      return Fail DecodeError("there is nothing left to read")
+    }
+    frames[last].index = index + 1
+    if const .Keys = frames[last].kind {
+      tookKey = index % 2 == 0
+    }
+    Ok frames[last].items[index]
+  }
+}
+
+/** One open `sequence`, `map`, `record` or `variant` of [ValueDecoder], with the position the next read comes from. */
+type ValueCursor {
+  kind: ValueCursorKind
+  items: List<EncodedValue> = []
+  fields: List<EncodedField> = []
+  var index: Int = 0
+  var selected: EncodedValue? = None
+  /** The fields `field` found, which is what `strict` compares against. */
+  var read: List<String> = []
+}
+
+/**
+ * How a `ValueCursor` is read: by position (`Items`, a sequence or a map), by position with text keys (`Keys`, a record
+ * read as a map), or by name (`Fields`, a record or a variant).
+ */
+type ValueCursorKind {
+  case Items
+  case Keys
+  case Fields
+}
+
+/** A float that is a whole number within `Int64`, as one: `2.0` is `2`, and `1.5` is refused rather than cut. */
+fn wholeNumberOf(value: Float64): Result<Int64, DecodeError> {
+  match Int64.tryFrom(value) {
+    Ok(whole) => {
+      if Float64.from(whole) != value {
+        return Fail DecodeError("{value} is not a whole number")
+      }
+      Ok whole
+    }
+    Fail(_) => Fail DecodeError("{value} is not a whole number")
+  }
+}
+
+fn parseInteger(text: String, fromText: Bool): Result<Int64, DecodeError> {
+  if !fromText {
+    return Fail DecodeError("a whole number is needed, not {text.showNested()}")
+  }
+  Int64.tryFrom(text).mapError { _ => DecodeError "{text.showNested()} is not a whole number" }
+}
+
+fn parseCount(text: String, fromText: Bool): Result<UInt64, DecodeError> {
+  if !fromText {
+    return Fail DecodeError("a count is needed, not {text.showNested()}")
+  }
+  UInt64.tryFrom(text).mapError { _ => DecodeError "{text.showNested()} is not a count" }
+}
+
+fn parseFloating(text: String, fromText: Bool): Result<Float64, DecodeError> {
+  if !fromText {
+    return Fail DecodeError("a number is needed, not {text.showNested()}")
+  }
+  Float64.tryFrom(text).mapError { _ => DecodeError "{text.showNested()} is not a number" }
+}
+
+fn parseDecimal(text: String): Result<Decimal, DecodeError> {
+  Decimal.tryFrom(text).mapError { _ => DecodeError "{text.showNested()} is not an exact number" }
+}

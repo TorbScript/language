@@ -1,0 +1,208 @@
+/**
+ * The steps a generated `encode`, `decode` and `describe` are made of. The compiler writes a derived implementation as
+ * a straight line of calls to these functions, one per field, so what a derived form does is ordinary TorbScript that
+ * can be read here - and written by hand the same way.
+ *
+ *     // What the compiler generates for `type Price { amount: Decimal, currency: String = "EUR" }`, in words:
+ *     //   encode:   target.record "app/Price", encodeField(amount, "amount", target), ..., target.finish()
+ *     //   decode:   decodeRecord, decodeRequired<Decimal> "amount", decodeHasField "currency" (the default if not),
+ *     //             decodeFinish, and the constructor
+ *     //   describe: target.record "app/Price", describeField<Decimal> "amount", ..., target.finish()
+ *
+ * Every function reads or writes the field chain the design asks for: an error that comes out of a field names it
+ * ([DecodeError.inside]).
+ */
+
+use Show, From, TryFrom, LiteralParseError from "std/core"
+use Encode, Decode, Describe, Encoder, Decoder, Describer, DecodeError from "./lib"
+use FieldDescription, FieldDefault from "./structure"
+use EncodedValue from "./values"
+
+/** Opens the record a value of `typeName` is written as. */
+public fn encodeRecord<Target: Encoder>(typeName: String, var target: Target) {
+  target.record typeName
+}
+
+/** Opens the case `name` of a type with cases. */
+public fn encodeVariant<Target: Encoder>(typeName: String, name: String, var target: Target) {
+  target.variant typeName, name
+}
+
+/** Opens the sequence a tuple is written as. */
+public fn encodeSequence<Target: Encoder>(length: Int, var target: Target) {
+  target.sequence Some(length)
+}
+
+/** Closes what the last of the steps above opened. */
+public fn encodeFinish<Target: Encoder>(var target: Target) {
+  target.finish()
+}
+
+/** One field of a record or a case: its name, then its value's own `encode`. */
+public fn encodeField<Value: Encode, Target: Encoder>(value: Value, name: String, var target: Target) {
+  target.field name
+  value.encode target
+}
+
+/** One position of a tuple: its value's own `encode`. */
+public fn encodeItem<Value: Encode, Target: Encoder>(value: Value, var target: Target) {
+  value.encode target
+}
+
+/**
+ * A capsule is written as the source of its conversion pair: `Wire.from(value)`, then that value's own `encode`. There
+ * is no `record` around it, so a `Path` in a document is its text.
+ */
+public fn encodeThrough<Value, Wire: From<Value> & Encode, Target: Encoder>(value: Value, var target: Target) {
+  const wire = Wire.from value
+  wire.encode target
+}
+
+/** Opens the record the constructor is read from. */
+public fn decodeRecord<Source: Decoder>(typeName: String, var source: Source): Result<Void, DecodeError> {
+  source.record typeName
+}
+
+/** A field the input has to have, read with its own `decode`. The error names the field. */
+public fn decodeRequired<Value: Decode, Source: Decoder>(
+  name: String,
+  var source: Source,
+): Result<Value, DecodeError> {
+  if !source.field(name)? {
+    return Fail DecodeError("a value is needed").inside(name)
+  }
+  Value.decode(source).mapError { _.inside name }
+}
+
+/**
+ * Positions on a field that has a default, and answers whether the input has it. Where it does not, the generated
+ * code evaluates the default - and only then, so a value that is there never pays for one.
+ */
+public fn decodeHasField<Source: Decoder>(name: String, var source: Source): Result<Bool, DecodeError> {
+  source.field name
+}
+
+/** The value of the field [decodeHasField] positioned on, read with its own `decode`. The error names the field. */
+public fn decodeFieldValue<Value: Decode, Source: Decoder>(
+  name: String,
+  var source: Source,
+): Result<Value, DecodeError> {
+  Value.decode(source).mapError { _.inside name }
+}
+
+/** Closes the record, the variant or the tuple that was read. */
+public fn decodeFinish<Source: Decoder>(var source: Source): Result<Void, DecodeError> {
+  source.finish()
+}
+
+/** Opens a type with cases and answers the name of the case that is there. */
+public fn decodeVariant<Source: Decoder>(typeName: String, var source: Source): Result<String, DecodeError> {
+  source.variant typeName
+}
+
+/** What a case name the type does not have is: `` `Lost` is not a case of `Status` ``. */
+public fn unknownCase(name: String, typeName: String): DecodeError {
+  const short = match typeName.lastIndexOf("/") {
+    Some(position) => typeName[(position + 1)..]
+    None => typeName
+  }
+  DecodeError "`{name}` is not a case of `{short}`"
+}
+
+/** Opens the sequence a tuple is read from. */
+public fn decodeSequence<Source: Decoder>(var source: Source): Result<Void, DecodeError> {
+  const _length = source.sequence()?
+  Ok void
+}
+
+/** One position of a tuple. The error names the position. */
+public fn decodeItem<Value: Decode, Source: Decoder>(position: Int, var source: Source): Result<Value, DecodeError> {
+  if !source.hasNext()? {
+    return Fail DecodeError("a value is needed").inside("{position}")
+  }
+  Value.decode(source).mapError { _.inside "{position}" }
+}
+
+/** A capsule read through its conversion pair: the source's own `decode`, then the total way in. */
+public fn decodeThrough<Value: From<Wire>, Wire: Decode, Source: Decoder>(
+  var source: Source,
+): Result<Value, DecodeError> {
+  const wire = Wire.decode(source)?
+  Ok Value.from(wire)
+}
+
+/**
+ * A capsule read through a fallible way in: the check the factory exists to force runs for a value out of a document
+ * too, and its failure is the `DecodeError`.
+ */
+public fn decodeThroughChecked<Value: TryFrom<Wire, Failure>, Wire: Decode, Failure: Show, Source: Decoder>(
+  var source: Source,
+): Result<Value, DecodeError> {
+  const wire = Wire.decode(source)?
+  Value.tryFrom(wire).mapError { DecodeError _.show() }
+}
+
+/** A literal type is read as its base and then checked against the values it allows. */
+public fn decodeLiteral<Value: TryFrom<String, LiteralParseError>, Base: Decode & Show, Source: Decoder>(
+  var source: Source,
+): Result<Value, DecodeError> {
+  const base = Base.decode(source)?
+  Value.tryFrom(base.show()).mapError { DecodeError _.show() }
+}
+
+/** Opens the description of a record. `false` where the target knows the type already and wants no body. */
+public fn describeRecord<Target: Describer>(typeName: String, var target: Target): Bool {
+  target.record typeName
+}
+
+/** Opens the description of a type with cases, as [describeRecord] does. */
+public fn describeVariant<Target: Describer>(typeName: String, var target: Target): Bool {
+  target.variant typeName
+}
+
+/** One case of the open variant. Its fields follow. */
+public fn describeCase<Target: Describer>(name: String, var target: Target) {
+  target.variantCase name
+}
+
+/** Closes what the last of the steps above opened. */
+public fn describeFinish<Target: Describer>(var target: Target) {
+  target.finish()
+}
+
+/** A type that is described as another one: a capsule as its source, a literal type as its base. */
+public fn describeThrough<Wire: Describe, Target: Describer>(var target: Target) {
+  Wire.describe target
+}
+
+/** One field that has to be there: its name, its doc comment, and its value's own description. */
+public fn describeField<Value: Describe, Target: Describer>(
+  name: String,
+  documentation: String,
+  var target: Target,
+) {
+  target.field FieldDescription(name, documentation: documentation)
+  Value.describe target
+}
+
+/** One field whose default is not data a description can hold: a call, or a value that is not a constant. */
+public fn describeDefaultedField<Value: Describe, Target: Describer>(
+  name: String,
+  documentation: String,
+  var target: Target,
+) {
+  target.field FieldDescription(name, documentation: documentation, default: FieldDefault.Computed)
+  Value.describe target
+}
+
+/** One field whose default is a constant, written into the description as data. */
+public fn describeConstantField<Value: Describe & Encode, Target: Describer>(
+  name: String,
+  documentation: String,
+  default: Value,
+  var target: Target,
+) {
+  const constant = EncodedValue.of default
+  target.field FieldDescription(name, documentation: documentation, default: FieldDefault.Constant(constant))
+  Value.describe target
+}

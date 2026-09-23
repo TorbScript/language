@@ -5,16 +5,17 @@ public type QueryError {
   case Unsupported(what: String)
 }
 
-/** A piece of SQL with the values for its `?` placeholders. The driver binds them with its own `Encoder`. */
+/** A piece of SQL with the values for its `?` placeholders. The driver binds them with its own `Encoder`: an
+ * `EncodedValue` writes itself into any encoder. */
 public type Fragment {
   sql: String
-  parameters: List<Encode> = []
+  parameters: List<EncodedValue> = []
 
   static fn raw(sql: String): Fragment {
     Fragment sql
   }
 
-  static fn parameter(value: Encode): Fragment {
+  static fn parameter(value: EncodedValue): Fragment {
     Fragment "?", [value]
   }
 
@@ -28,7 +29,7 @@ public type Fragment {
   }
 }
 
-/** The parameters are `Encode` values and `Encode` does not require `Show`, so a fragment shows the count of them. */
+/** A fragment shows its SQL and how many parameters it binds; the values stay out of a log line. */
 extend Fragment with Show {
   fn show(): String {
     if parameters.isEmpty() {
@@ -46,7 +47,7 @@ extend Fragment with Show {
  * [QueryError.Unsupported] for a node kind this provider does not translate: a method call it does not recognize, or
  * any node outside the small subset handled here.
  */
-public fn translate(node: ExpressionNode, captures: List<Encode>): Result<Fragment, QueryError> {
+public fn translate(node: ExpressionNode, captures: List<EncodedValue>): Result<Fragment, QueryError> {
   match node {
     // `_.age`: a field of the row parameter is a column
     .Field(.Parameter(_, _, _), name, _) => Ok Fragment.raw(name)

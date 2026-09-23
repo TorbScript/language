@@ -73,7 +73,7 @@ only way in. Text is a source like any other, so there is no trait and no member
 - **A `private` field cannot be reached from `copy` or the constructor outside the type either.** Both take the same
   fields, so a `private` field with no default disables both from outside, not only the constructor call written out
   in an example.
-- **There is no `parse` on a type.** A function named `parse` belongs to a *format* (`Json.parse`), never to a value,
+- **There is no `parse` on a type.** A function named `parse` belongs to a *format* (`Json().parse`), never to a value,
   and a call of one on a type reports that the type has no such member.
 - **The conversion is still an ordinary static function.** Calling it is always `Email.tryFrom(text)`, never a
   coercion the compiler inserts on its own.

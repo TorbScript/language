@@ -1,0 +1,41 @@
+/**
+ * A `Set` in the three forms: a sequence, like a `List`, and read back into a set. The target type decides on the way
+ * back, so a `Set` comes back as a `Set`.
+ *
+ * # Pitfalls
+ *
+ * These implementations are in a module of their own and not next to `List`'s: `List` and `Set` are both traits over
+ * one item, and the native back end names a member of an `extend` of a trait after its module, its name and its type
+ * arguments only - so two such members of one module would share one C name.
+ */
+
+use Hash from "std/core"
+use Encode, Decode, Describe, Encoder, Decoder, Describer, DecodeError from "./lib"
+
+/** A set is a sequence of its items. */
+extend<Item: Encode> Set<Item> with Encode {
+  fn encode<Target: Encoder>(var target: Target) {
+    target.sequence Some(length())
+    for item in self {
+      item.encode target
+    }
+    target.finish()
+  }
+}
+
+/** A sequence read into a set: an item that is there twice is there once. */
+extend<Item: Decode & Hash> Set<Item> with Decode {
+  static fn decode<Source: Decoder>(var source: Source): Result<Set<Item>, DecodeError> {
+    const items = List<Item>.decode(source)?
+    Ok items.toSet()
+  }
+}
+
+/** A set describes as a sequence of its item. */
+extend<Item: Describe> Set<Item> with Describe {
+  static fn describe<Target: Describer>(var target: Target) {
+    target.sequence()
+    Item.describe target
+    target.finish()
+  }
+}

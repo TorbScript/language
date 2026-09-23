@@ -1,7 +1,9 @@
 # Encoding
 
-**Status: partly implemented** — `Encode`, `Decode` and `Describe` are declared in `std/encoding` and type check, and
-`examples/encoding-lab` proves the design; derived implementations and the `std/json` natives do not run natively yet.
+**Status: implemented, slices 1-6 of section 14.** The vocabulary is in `std/encoding`, the three forms are derived by
+the checker and generated per (type, format) by the native back end (`compiler/src/ir/lower/encoding.trb`), and
+`std/json` is written in TorbScript on top of it. `with Encode by value` (slice 7) and `std/xml` (slice 8) are open;
+what the implementation decided where the design left a choice is section 16.
 
 **A value is its constructor call.** The compiler knows every type's constructor and offers it in three forms — written
 (`Encode`), read (`Decode`) and described without a value (`Describe`). That is the whole mechanism. There is no list of
@@ -38,8 +40,9 @@ what is special about ONE type in ONE format  ──→  a mapping VALUE in that
 The lab that proves all of this is [`examples/encoding-lab`](../examples/encoding-lab): the vocabulary declared locally,
 four sample types with the code the compiler would derive written out by hand, and seven formats — JSON, CSV, XML with a
 mapping DSL, a Protobuf-like packed binary format, SQL DDL with row binding, command line arguments and logfmt. It type
-checks, and 34 tests assert the claims of this document one by one. They ran on stage 0, which has been deleted;
-natively the test package does not build yet (`docs/RUST-EXIT.md` 2.4 names the construct that stops it).
+checks, and 34 tests assert the claims of this document one by one; the test package builds natively. The lab keeps
+its own copy of the vocabulary and its derived code written by hand, which is what makes it a proof of the design and
+not of the implementation; `tests/conformance/encoding-*.trb` are the programs that pin what the compiler derives.
 
 ---
 
@@ -842,7 +845,7 @@ Ordered by how much the design depends on it. Each with the smallest change that
 
 | # | What is missing | Smallest change | The design needs it for |
 |---|-----------------|-----------------|-------------------------|
-| 1 | **A trait method with type parameters of its own, monomorphized.** `witness.trb` refuses a derived `encode` because `Encoder`'s members are all `var fn`s and `Decoder.record<Output>` is not object safe. **Partly closed:** a member with type parameters of its own is called through a trait-typed value as one slot of the table per list of arguments the program calls it with (`genericSlotOf` in `ir/witness.trb`; `std/stream`'s `Stage.onto<Final>`, `tests/conformance/generic-trait-members.trb`), so `record<Output>` has a slot now. The derived `encode` itself is still refused by `generatedForDerived` | emit `Encode.encode<Target>` as a monomorphized call per (type, encoder) pair instead of a witness entry. The trait is never a type, so no table is needed | everything. Without it no format runs in a compiled binary |
+| 1 | **A trait method with type parameters of its own, monomorphized.** `witness.trb` refuses a derived `encode` because `Encoder`'s members are all `var fn`s and `Decoder.record<Output>` is not object safe. **Partly closed:** a member with type parameters of its own is called through a trait-typed value as one slot of the table per list of arguments the program calls it with (`genericSlotOf` in `ir/witness.trb`; `std/stream`'s `Stage.onto<Final>`, `tests/conformance/generic-trait-members.trb`), so `record<Output>` has a slot now. **Closed for the derived forms:** `encode`, `decode` and `describe` are generated as one body per (type, format) pair and called directly, never through a table (`ir/lower/encoding.trb`; `tests/conformance/encoding-round-trip.trb`) | emit `Encode.encode<Target>` as a monomorphized call per (type, encoder) pair instead of a witness entry. The trait is never a type, so no table is needed | everything. Without it no format runs in a compiled binary |
 | 2 | **A static trait member reached through a bound at run time.** `Value.decode(source)`, `Item.describe target`. **Closed in the native back end:** a call through a bound is monomorphized (`docs/design/URI.md`, probe 5), and a generic one taken as a function value - `structureOf(Order.describe)` - is instantiated from the function type it is used as, through the implementation the checker named (`lowerNamedFunctionValue`; `examples/encoding-lab/tests`, `tests/conformance/methods-through-types.trb`) | both back ends: monomorphize the call. Stage 0: it has no types at run time, so a derived `decode` of a generic type cannot run there at all — which is a reason to finish the self-hosted back end, not to change stage 0 | the decode and describe side of every generic type (`List<Item>`, `Option<Value>`, `Page<Item>`) |
 | 3 | **`typeName<Type>()`**, a compile-time constant | a checker intrinsic that folds to the declaration's qualified name. CONCEPT already names it under Quoted Expressions | `map<Price> { … }` in every format's DSL. Without it a mapping is keyed by a string the user types |
 | 4 | **Quoted expressions at run time**, and `nameOf` over them | stage 0 support for `Expression<Value>` parameters other than `assert`'s (it special-cases `assert` and hands a plain closure to everything else) | `attribute { _.currency }`. Without it a mapping names a field with a string, and the check moves from compile time to format-build time |
@@ -850,12 +853,25 @@ Ordered by how much the design depends on it. Each with the smallest change that
 | 6 | **Bit access to a `Float64`** (`bits()`/`fromBits()`) | two natives on `Float64`/`Float32` | IEEE-754 in a binary format. The lab writes a float as its decimal text |
 | 7 | **Extension visibility, and overload resolution over a type parameter** | a trait's extensions are visible where the trait is (already decided, TODO "Extension-Sichtbarkeit"); and overload resolution must unify a type parameter instead of comparing type ids | writing the new vocabulary next to the old one at all. Two `Encode`s on `Float64` make an overload set the checker rejects |
 | 8 | **`by value` for a method with a `var` parameter** | delegation forwards the `var` path, not a copy. Stage 0 drops the change silently today | step 3 of the ladder |
-| 9 | **The doc comment of a field, at run time** | the checker already has it in the syntax tree; the derived `describe` embeds it as a string literal | `FieldDescription.documentation`, and therefore every `--help` text and every schema description |
+| 9 | **The doc comment of a field, at run time**. **Closed:** the derived `describe` embeds each field's doc comment as a text constant (`tests/conformance/encoding-describe.trb`) | the checker already has it in the syntax tree; the derived `describe` embeds it as a string literal | `FieldDescription.documentation`, and therefore every `--help` text and every schema description |
 | 10 | **A method and a case field must not share a name** | a diagnostic: `Structure.fields` as a case field and `fields()` as a method type check today, and stage 0 resolves the field | nothing in the design; found while writing the lab, and it is a hole in "a type has one namespace of members" |
 
 ## 14. Migration
 
 Eight slices. Each one lands with the repository checking green, `torb test` passing and `canon --check` clean.
+Slices 1 to 6 landed together: the flat vocabulary makes the old `std/json` natives unwritable, and a derived form needs
+the new vocabulary to exist, so none of them is green without the others.
+
+| Slice | Status |
+|-------|--------|
+| 1 the vocabulary | **done** - `std/encoding/src/lib.trb`; every hand-written implementation in `std/`, `examples/` and `docs/` moved |
+| 2 the derivation rule | **done** for the rule (`isPassable` in `semantics/checker/derive.trb`). **Open:** the call-site message does not name the field chain yet |
+| 3 `Describe` | **done** - derived, generated natively, doc comments embedded, a constant default written as data. A tuple has no `Describe` (it has no name and no field names) |
+| 4 `EncodedValue` and `Structure` | **done** - `std/encoding/src/values.trb`, `structure.trb`; `rendered` replaces the `describe` native |
+| 5 `Expression.captures()` | **done** in the declarations; the natives behind it are still the planned ones of `Expression` |
+| 6 `std/json` in TorbScript | **done** - no native left; the planned `Json.*` and `describe` rows are gone from the manifest |
+| 7 `with Encode by value` | **open** - `by` delegation is not built natively at all yet |
+| 8 `std/xml` | **open** |
 
 **Slice 1 — the vocabulary.** `std/encoding`: `Encoder` and `Decoder` become one flat trait each, `Encode`/`Decode` take
 a bound instead of a trait-typed parameter, the six sub-traits go, the prelude's export list follows. `std/json`'s
@@ -904,9 +920,8 @@ are never written.
 | `docs/design/STREAMS.md`, section 10 | `Format`'s two whole-value methods are renamed to `encode`/`decode`; the framing half is unchanged |
 
 **What `assert` and `describe` become.** `assert` keeps its signature and reads `List<EncodedValue>` instead of
-`List<Encode>`; its message does not change. `describe` keeps its name and becomes
-`fn describe<Value: Encode>(value: Value): String`, written in TorbScript over `EncodedValue.show()`. Both call sites are
-unchanged.
+`List<Encode>`; its message does not change. `describe` becomes `rendered` (section 15, decision 1):
+`fn rendered<Value: Encode>(value: Value): String`, written in TorbScript over `EncodedValue.show()`.
 
 ## 15. What the owner decided
 
@@ -923,4 +938,57 @@ the owner answered them.
    same for every format of the standard library: `strict: true` reports an input field no type asked for
    ("this document had a `discount` and nothing read it"); without it the field is ignored.
 4. **"A record as a flat map of paths" lives in `std/encoding`**, as a convenience next to `Structure`, because every
-   tabular, row-shaped or flag-shaped format wants it. It is not vocabulary.
+   tabular, row-shaped or flag-shaped format wants it. It is not vocabulary. Not written yet: no format of the standard
+   library needs it before `std/xml`, and the first tabular one writes it.
+
+## 16. What the implementation decided
+
+Technical choices the design left open, decided while building slices 1 to 6.
+
+1. **A derived form is a straight line of steps.** The compiler generates only the shape - which parameters, in which
+   order, which case, where a default is taken - and every step is a public generic function of
+   `std/encoding/src/derived.trb` (`encodeField`, `decodeRequired`, `decodeHasField`, `describeField`, ...),
+   instantiated for the field's type and the format. What a derived form does can therefore be read in TorbScript, and
+   a hand-written form can be made of the same pieces.
+2. **`typeName` is spelled** package name, module path inside the package without `src/` and `.trb` (an entry module,
+   `lib` or `main`, left out), then the type: `"torbscript/example-tour/11-data/User"`, `"std/time/Instant"`.
+3. **`EncodedValue` has no `Exact` case yet.** The native runtime has no `Decimal` (its natives are planned), and a
+   `Decimal` field in a case makes the whole type unbuildable - so every program that renders a value would be refused.
+   An exact number is held as its text, which is exact, and `ValueDecoder.decimal` reads it back. The case comes with
+   the runtime's `Decimal`.
+4. **`EncodedValue` writes itself and is not read back as itself.** The pull vocabulary has no question "what comes
+   next", which reading an arbitrary value needs; its derived `Decode` reads the case-tagged form a derived `encode`
+   would write. A document without a type is read with a format's own `parse`.
+5. **`Format` keeps `encodeAll`/`decodeAll`.** A text format's own `encode` answers its text (`Json().encode(order)` is a
+   `String`), and one member namespace cannot hold that and the trait's byte-level `encode` under one name. The members
+   stay static and use the format's default options; a `Json` value with options has its own `encode` and `decode`.
+6. **`Json` is a value** (`Json()`, `Json(naming: .SnakeCase, strict: true)`). `JsonValue` stays JSON's own tree
+   (step 6 of the ladder, `json.parse`), and `json.value(x)` is a value as that tree; `EncodedValue.of` is the
+   format-free one.
+7. **JSON's numbers.** A number without a fraction or an exponent is read as a whole number, one beyond `Int64` as an
+   unsigned one, and everything else as a `Float64`, so the whole range of `Int64` and `UInt64` round-trips exactly.
+   Infinity and "not a number" have no JSON and are written as `null`. A map's keys are texts: a number key is quoted,
+   and `ValueDecoder` reads a text key as whatever the key type asks for.
+8. **`Naming` is shared** and lives in `std/encoding`, with the two spellings the ladder names: `Unchanged` and
+   `SnakeCase`. It spells field names; case names are written as declared.
+9. **A capsule without a pair** keeps `Encode` field by field, over every field, and has neither `Decode` nor
+   `Describe`: a description of a closed constructor would describe something nobody can build.
+10. **A tuple has `Encode` and `Decode`, as a sequence of its positions, and no `Describe`**: `Structure` has no shape
+    without a name and without field names.
+
+### Open, found while building it
+
+- **The call-site message of slice 2** still names the one field and not the chain (`User.avatar → Image.palette`).
+- **A literal type decodes natively as its base, without the check.** A generic instance is keyed by the IR type, and a
+  literal type is its base there, so `decode<Level>` is `decode<String>`; the checker's `decodeLiteral` path is never
+  reached by a binary. Keying an instance by the checker type, or lowering a literal type's members through its own
+  `tryFrom`, closes it (the literal type's `tryFrom` itself is not built natively either).
+- **Two members of `extend`s of two traits over one item, in one module, share a C name.** `List<Item>.decode` and
+  `Set<Item>.decode` were one symbol: the name of a member of an `extend` of a trait carries its module, its name and
+  its type arguments, but not the trait it extends (`symbolPathOf` in `ir/instantiate.trb`). `std/encoding` keeps
+  `Set`'s implementations in `src/set.trb` until the name carries the extended trait.
+- **A checker false negative:** an implementation written with the old signature (`fn encode(var encoder: Encoder)`)
+  is accepted as `Encode`'s `fn encode<Target: Encoder>(var target: Target)`; the requirement check does not compare a
+  member's own type parameters.
+- **`Decimal` in a format**: `Values.decimal`, `ValueDecoder.decimal` and `JsonEncoder.decimal` call the planned
+  `Decimal` natives, so they are the three findings `ir --statistics .` counts for encoding until the runtime has one.

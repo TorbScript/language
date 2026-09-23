@@ -1,12 +1,13 @@
 ---
 title: Encode and Decode
-summary: Encode and Decode are generated the same way Equals and Show are, so a type describes itself to any format's Encoder and reads itself from its Decoder without a line of hand-written serialization code.
+summary: A value is its constructor call, offered in three forms - Encode writes it, Decode reads it back, Describe describes it without a value - so a type works with every format without hand-written serialization code.
 kind: reference
 status: stable
 order: 20
 keywords:
   - Encode
   - Decode
+  - Describe
   - serialization
   - generated
 source:
@@ -15,46 +16,48 @@ source:
   - examples/tour/src/11-data.trb
 ---
 
-> **Not built natively yet.** The generated `encode` and `Json` are not built by the native back end yet, so `torb run`
-> refuses the examples here that use them. `torb check` accepts them, and the rules are the language's.
-
-What reflection is normally needed for - serialization, config mapping, database rows, debug output - is covered by
-one more generated pair, the same way `Equals`, `Hash` and `Show` are generated for a `type` without being written.
+What reflection is normally needed for - serialization, config mapping, database rows, schemas, debug output - is
+covered by the type's constructor, which the compiler offers in three generated forms, the same way `Equals`, `Hash`
+and `Show` are generated for a `type` without being written.
 
 ## Example
 
 ```trb check
-use Json from "std/json"
-
 type User {
   name: String
   tags: List<String> = []
 }
 
-const user = User name: "Ada", tags: ["math"]
-const text = Json.encode user
+const json = Json()
+const text = json.encode User(name: "Ada", tags: ["math"])
 print text
+print json.decode<User>(text)
 ```
 
 ## Syntax
 
 ```text
-trait Encode { fn encode(var encoder: Encoder) }
-trait Decode { static fn decode(var decoder: Decoder): Result<Self, DecodeError> }
+trait Encode   { fn encode<Target: Encoder>(var target: Target) }
+trait Decode   { static fn decode<Source: Decoder>(var source: Source): Result<Self, DecodeError> }
+trait Describe { static fn describe<Target: Describer>(var target: Target) }
 ```
 
 ## Rules
 
-1. **`Encode` is generated for every `type` whose fields are all `Encode`.** A type describes itself to an `Encoder`
-   in `encode`, and never sees the format it is written into.
+1. **All three are generated when the constructor is usable from outside, over exactly its parameters.** Every
+   parameter's type has to have the trait itself. So what is written can always be read back: both forms are the one
+   constructor.
 
-2. **`Decode` is generated only if the constructor is usable from outside, and every field is `Decode`.** A type
-   with a `private` field that has no default has invariants, so it writes `decode` by hand, going through the same
-   factory the constructor would (see [Construction](../types/construction.md)).
+2. **A `private` field with a default is not a parameter from outside, so it is in none of the three forms.** A cache
+   or a memo stays out without an annotation; on the way in it takes its default. A `private(var)` field is publicly
+   constructible and therefore part of all three.
+
+3. **A capsule - a `private` field without a default - is written, read and described as the source of its one
+   conversion pair.** `Self` has `From<Source>` or `TryFrom<Source, Failure>` and `Source` has `From<Self>`; a failing
+   `tryFrom` becomes the `DecodeError`. Without a pair there is no `Decode` and no `Describe`, and `Encode` stays field
+   by field (see [Data or capsule](../types/data-or-capsule.md)).
 
    ```trb check
-   use Json from "std/json"
-
    type ParseError {
      message: String
    }
@@ -71,52 +74,58 @@ trait Decode { static fn decode(var decoder: Decoder): Result<Self, DecodeError>
    }
 
    extend Email with Encode, Decode {
-     fn encode(var encoder: Encoder) {
-       encoder.string value
+     fn encode<Target: Encoder>(var target: Target) {
+       target.string value
      }
 
-     static fn decode(var decoder: Decoder): Result<Email, DecodeError> {
-       const text = decoder.string()?
+     static fn decode<Source: Decoder>(var source: Source): Result<Email, DecodeError> {
+       const text = source.string()?
        Email.tryFrom(text).mapError { DecodeError _.message }
      }
    }
 
-   const encoded = Json.encode(Email.tryFrom("ada@example.test")?)
-   print Json.decode<Email>(encoded)
+   const json = Json()
+   const encoded = json.encode(Email.tryFrom("ada@example.test")?)
+   print json.decode<Email>(encoded)
    ```
 
-3. **A format implements `Encoder` and `Decoder` and never sees a type.** `Json`, a TOML reader or a database driver
-   is one implementation each; a type that describes itself once works with every format that exists, and a new
-   format works with every type that exists, which is N + M implementations instead of N × M.
+4. **A field with a default may be missing on the way in.** The derived `decode` evaluates the default only then, so
+   a value that is present never pays for one.
 
-4. **What the generated code does is exactly what could be written by hand, and nothing about it is special.** A
-   record calls `fields.field(name, value)` once per field in declaration order; a field with a default may be
-   missing on the way in through `fieldOr`.
+5. **A format implements `Encoder`, `Decoder` or `Describer` and never sees a type.** `Json`, a TOML reader or a
+   database driver is one implementation each; a type that describes itself once works with every format that exists,
+   and a new format works with every type that exists, which is N + M implementations instead of N × M.
 
-5. **A different field name, a skipped field, or a versioning scheme is written by hand.** There are no annotations:
-   what is a convention of the format and not of the type belongs to the format, not to the type. `Json.encode` has
-   no options yet, so a field name the format wants differently is an `encode` written by hand.
+6. **What the generated code does is exactly what could be written by hand.** A record announces itself with
+   `record(typeName)`, then every parameter as `field(name)` followed by its value's own `encode`, then `finish()`, in
+   declaration order; a type with cases writes `variant(typeName, name)` for the case it is. `typeName` is the
+   declaration's qualified name, such as `"app/orders/Price"`, which is what a format finds a mapping by.
 
-6. **There is no tree in between.** Values are written while the type describes itself: nothing is lost on the way
+7. **What is special about one type in one format belongs to the format.** A different spelling of every field name is
+   an option of the format (`Json(naming: .SnakeCase)`); a different representation in every format is `encode` and
+   `decode` written by hand. There are no annotations.
+
+8. **There is no tree in between.** Values are written while the type describes itself: nothing is lost on the way
    (a narrow number keeps its range, a `Set` comes back as a `Set` because the target type drives the decoding), and
    a sequence can be streamed one element at a time instead of being held in memory whole.
 
 ## What this is not
 
-**`Encode`/`Decode` are not a second, dynamically typed representation of a value.** There is no "any value" type
-in the language; looking at a document without knowing its shape uses an ordinary library type such as `JsonValue`,
-which is itself only `Encode`/`Decode`, not something the language treats specially.
+**`Encode`/`Decode` are not a second, dynamically typed representation of a value.** Looking at a value without its
+type uses `EncodedValue`, which is one ordinary format among many, and a document without a known shape uses a library
+type such as `JsonValue`. Neither is something the language treats specially.
 
 ```trb check
-use Json, JsonValue from "std/json"
+use JsonValue from "std/json"
 
 type User {
   name: String
 }
 
 const user = User "Ada"
-const value: JsonValue = Json.value user
+const value: JsonValue = Json().value(user)
 print value
+print EncodedValue.of(user)
 ```
 
 ```trb error
@@ -125,7 +134,7 @@ type Handler {
 }
 
 const handler = Handler(onClick: {})
-print Json.encode(handler)
+print Json().encode(handler)
 // error: `Handler` does not implement `Encode`
 ```
 
@@ -134,8 +143,8 @@ none of them, so the type gets none either.
 
 ## Related
 
-- [There is no reflection](no-reflection.md) - why a generated pair replaces a type-level lookup.
-- [Encoder and Decoder](encoders.md) - the four shapes and the six scalars every format implements.
+- [There is no reflection](no-reflection.md) - why generated forms replace a type-level lookup.
+- [Encoder and Decoder](encoders.md) - the scalars and the four shapes every format implements.
 - [Declaring a type](../types/declaring-a-type.md) - the other members generated the same way.
-- [Construction](../types/construction.md) - why `Decode` needs a usable constructor.
+- [Construction](../types/construction.md) - why the three forms need a usable constructor.
 

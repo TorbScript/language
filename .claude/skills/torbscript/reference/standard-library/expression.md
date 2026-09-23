@@ -50,7 +50,7 @@ public native type Expression<Value> {
   location: SourceLocation
 
   fn value(): Value
-  fn captures(): List<Encode>
+  fn captures(): List<EncodedValue>
 }
 ```
 
@@ -81,7 +81,7 @@ reflection - there is no way back from a `TypeReference` to the type it names.
 
 ```trb fragment
 public type ExpressionNode {
-  case Literal(value: Encode, of: TypeReference)
+  case Literal(value: EncodedValue, of: TypeReference)
   case Parameter(index: Int, name: String, of: TypeReference)
   case Captured(index: Int, name: String, of: TypeReference)
   case Field(target: ExpressionNode, name: String, of: TypeReference)

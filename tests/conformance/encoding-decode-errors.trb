@@ -1,0 +1,92 @@
+use Process from "std/process"
+
+/**
+ * Every way a document can fail to be read is a `Fail`, never a panic: malformed JSON with the line it was found on,
+ * and well-formed JSON of the wrong shape with the chain of fields it went wrong in (docs/design/ENCODING.md, section 2).
+ *
+ * What it pins: a missing required field names itself, a value of the wrong kind names its field and position, an
+ * unknown case names the case and the type, a document with something after its value is a syntax error, and a
+ * `strict` format reports a field no type asked for while the default one ignores it. The program reaches its end,
+ * which is the claim that nothing here panicked.
+ *
+ * The program leaves with the number of checks that failed.
+ */
+
+/** A price, with a currency that has a default. */
+type Price {
+  amount: Int
+  currency: String = "EUR"
+}
+
+/** Where an order stands. */
+type Status {
+  case Draft
+  case Shipped(tracking: String)
+}
+
+/** An order with a nested record, a list of them and a case. */
+type Order {
+  id: Int
+  price: Price
+  items: List<Price> = []
+  status: Status = Status.Draft
+}
+
+var failed = 0
+
+/** Compares one text with what it should be, and counts a difference. */
+fn expect(actual: String, wanted: String): Int {
+  if actual == wanted {
+    return 0
+  }
+  print "expected {wanted}"
+  print "     got {actual}"
+  1
+}
+
+const json = Json()
+
+failed = failed + expect("{json.decode<Order>(r"""{"price": {"amount": 1}}""")}", "Fail(id: a value is needed)")
+failed = failed + expect(
+  "{json.decode<Order>(r"""{"id": 1, "price": {"currency": "USD"}}""")}",
+  "Fail(price.amount: a value is needed)",
+)
+failed = failed + expect(
+  "{json.decode<Order>(r"""{"id": 1, "price": {"amount": 1}, "items": [{"amount": 2}, {"amount": "x"}]}""")}",
+  "Fail(items.1.amount: a whole number is needed, not \"x\")",
+)
+failed = failed + expect(
+  "{json.decode<Order>(r"""{"id": 1, "price": {"amount": 1}, "status": "Lost"}""")}",
+  "Fail(status: `Lost` is not a case of `Status`)",
+)
+failed = failed + expect(
+  "{json.decode<Order>(r"""{"id": 1, "price": {"amount": 1}, "status": {"Shipped": {}}}""")}",
+  "Fail(status.tracking: a value is needed)",
+)
+failed = failed + expect("{json.decode<Order>("[1, 2]")}", "Fail(a record is needed, not [1, 2])")
+failed = failed + expect("{json.decode<Int>("true")}", "Fail(a whole number is needed, not true)")
+failed = failed + expect("{json.decode<Int?>("null")}", "Ok(None)")
+
+// Malformed text is a syntax error with its line
+failed = failed + expect("{json.decode<List<Int>>("[1, 2,")}", "Fail(line 1: the text ends where a value was expected)")
+failed = failed + expect("{json.decode<List<Int>>("[1,\n2\n3]")}", "Fail(line 3: a `,` or a `]` belongs after an item, not `3`)")
+failed = failed + expect("{json.decode<Int>("1 2")}", "Fail(line 1: there is more than one value in this text)")
+failed = failed + expect("{json.decode<String>("\"open")}", "Fail(line 1: this text is not closed)")
+failed = failed + expect("{json.decode<Bool>("yes")}", "Fail(line 1: `yes` is not a JSON value)")
+failed = failed + expect("{json.decode<String>("\"a\\qb\"")}", "Fail(line 1: `\\q` is not an escape of JSON)")
+const lone = json.decode<String>("\"" + r"""\udc00""" + "\"")
+failed = failed + expect("{lone}", "Fail(line 1: a low surrogate needs a high one in front of it)")
+
+// A syntax error and a shape error are told apart
+failed = failed + expect("{json.decode<Int>("[").mapError({ _.isSyntaxError() })}", "Fail(true)")
+failed = failed + expect("{json.decode<Int>("\"a\"").mapError({ _.isSyntaxError() })}", "Fail(false)")
+
+// A field no type asked for is ignored by default, and an error where the format is strict
+const extra = r"""{"amount": 1, "discount": 5}"""
+failed = failed + expect("{json.decode<Price>(extra)}", "Ok(Price(amount: 1, currency: \"EUR\"))")
+failed = failed + expect(
+  "{Json(strict: true).decode<Price>(extra)}",
+  "Fail(the input has a field `discount` and nothing read it)",
+)
+
+Process.exit failed

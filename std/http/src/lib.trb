@@ -111,7 +111,7 @@ public shared type Body with Source<Bytes, HttpError> {
   /** The whole body, decoded as JSON: `response.body.json<User>().outcome()?` */
   var fn json<Value: Decode>(limit: Int = Body.defaultLimit): Task<Result<Value, HttpError>> {
     const document = text(limit: limit).outcome()?
-    Json.decode<Value>(document).mapError(HttpError.decodeFailed)
+    Json().decode<Value>(document).mapError(HttpError.decodeFailed)
   }
 
   /** Lines of text, as a stream: a log, an event stream, a CSV of any size. */
@@ -137,8 +137,8 @@ public shared type Body with Source<Bytes, HttpError> {
    * An `Encode` value as a JSON body. Not `Body.json(value)`: a type has one namespace for its members, and `json` is
    * taken by the reading side, where it matters more (`body.json<User>()`).
    */
-  static fn jsonOf(value: Encode): Body {
-    Body.from Json.encode(value)
+  static fn jsonOf<Value: Encode>(value: Value): Body {
+    Body.from Json().encode(value)
   }
 }
 

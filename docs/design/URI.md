@@ -1377,7 +1377,9 @@ Gaps 1 to 9 are the type; gaps 10 to 13 are the driver layer of section 11.
 4. **A derived `encode` is not compiled by the native back end.** `Json.encode(uri)` type checks and answers *"a
    derived `encode`, whose `Encoder` is all `var self` members is not supported by the native back end yet"*. So the
    capsule's `Encode`/`Decode` exist in the checker and not in a binary. *Smallest fix:* it is the encoding redesign
-   (`docs/design/ENCODING.md` section 14), and `std/uri` depends on it for `Decode` and on nothing else.
+   (`docs/design/ENCODING.md` section 14), and `std/uri` depends on it for `Decode` and on nothing else. **Closed:** the
+   derived forms are built per (type, format) natively (`ir/lower/encoding.trb`), and a capsule's go through its pair
+   (`tests/conformance/encoding-describe.trb`).
 5. **`std/number` has no narrowing conversion into `UInt8`.** `Int8.tryFrom(Int64)` and `Int32.tryFrom(Int64)` exist,
    `UInt8`, `UInt16`, `UInt32`, `UInt64`, `Int16` do not — so a package that produces `Bytes` (which is
    `List<UInt8>`) cannot make one from a number. The one way around it, `UInt8.tryFrom("{value}")`, type checks and

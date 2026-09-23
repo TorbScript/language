@@ -425,7 +425,7 @@ operating system.
 
 ## 10. Formats
 
-**`Encode`, `Decode`, `Encoder` and `Decoder` do not change, and that is the point.** They stay synchronous. A decoder
+**`Encode`, `Decode`, `Encoder` and `Decoder` stay synchronous, and that is the point.** A decoder
 that could wait would have to be written differently for every source, every derived implementation would change with
 it, and the whole standard library would be coloured by it — which is the one thing the design of `Encode`/`Decode` was
 supposed to avoid.
@@ -434,12 +434,16 @@ Streaming happens one level up, at the level at which it happens in practice: **
 
 ```trb
 public trait Format<Failure> {
-  static fn encodeAll(value: Encode): Bytes
+  static fn encodeAll<Value: Encode>(value: Value): Bytes
   static fn decodeAll<Value: Decode>(bytes: Bytes): Result<Value, Failure>
   static fn items<Item: Decode>(): Stage<Bytes, Result<Item, Failure>>
   static fn encoded<Item: Encode>(): Stage<Item, Bytes>
 }
 ```
+
+The members are static and use the format's default options (`Json()`), and the whole-value pair keeps the names
+`encodeAll`/`decodeAll`: a text format's own `encode` answers its text, so the byte-level pair of the trait cannot share
+the name (`docs/design/ENCODING.md` section 14).
 
 `items` is a resumable **framer**: it finds where one element ends in whatever bytes have arrived — across chunk borders
 — and hands that element to the ordinary synchronous `Decode`. **Memory is one element**, whatever the stream weighs,

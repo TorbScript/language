@@ -37,6 +37,6 @@ which are in [`language/`](../language/index.md); and an argument, which is in
 - **[Collect a pipeline into what you need](collect-a-pipeline.md)** - Reach for the named terminal operation when there is one - toList, sum, joined, groupBy - and fall back to collect with an Accumulator for anything else, including your own accumulator.
 - **[Sort by more than one key](sort-by-more-than-one-key.md)** - Sort by a tuple key instead of a single field - a tuple's Compare is generated lexicographically by position, which a type never gets because an order is a decision, not a structure.
 - **[Write a builder](write-a-builder.md)** - Write a function that creates a value, hands it to a receiver closure, and returns it - three lines that make every property command, nested block and method call in the closure statically typed.
-- **[Read and write JSON](read-and-write-json.md)** - Json.encode and Json.decode<T> work on any Encode/Decode type for free; write the pair by hand only for a type whose generated constructor cannot express what a document may contain.
+- **[Read and write JSON](read-and-write-json.md)** - Json().encode and Json().decode<T> work on any Encode/Decode type for free; an option of the format spells the field names, and the pair is written by hand only where a constructor cannot say what a document may.
 
 <!-- torb:index:end -->

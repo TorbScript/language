@@ -4,9 +4,10 @@
  */
 
 // Types and values are strictly separate: there is no runtime reflection.
-// What reflection is usually needed for is covered by the generated traits `Encode` and `Decode`.
+// What reflection is usually needed for is covered by the generated traits `Encode`, `Decode` and `Describe`.
 
 use Json, JsonValue, JsonError from "std/json"
+use structureOf from "std/encoding"
 
 /** Why [Email.tryFrom] refused a value. */
 type ParseError {
@@ -29,12 +30,12 @@ type Email with TryFrom<String, ParseError> {
 
 /** An Email is a plain string on the wire, not a record with one field. */
 extend Email with Encode, Decode {
-  fn encode(var encoder: Encoder) {
-    encoder.string value                // An Email is a string on the wire, not a record with one field
+  fn encode<Target: Encoder>(var target: Target) {
+    target.string value                 // An Email is a string on the wire, not a record with one field
   }
 
-  static fn decode(var decoder: Decoder): Result<Email, DecodeError> {
-    const text = decoder.string()?
+  static fn decode<Source: Decoder>(var source: Source): Result<Email, DecodeError> {
+    const text = source.string()?
     Email.tryFrom(text).mapError { DecodeError _.message }
   }
 }
@@ -45,7 +46,7 @@ type Role {
   case Member(since: Int)
 }
 
-// Public constructor, all fields are Encode/Decode: both traits are generated.
+// Public constructor, all fields are Encode/Decode: all three forms are generated.
 /** A user with a public constructor and only `Encode`/`Decode`-able fields, so both traits are generated. */
 type User {
   name: String
@@ -58,36 +59,40 @@ const user = User("Ada", Email.tryFrom("ada@example.test")?, tags: ["math"])
 
 // --- Formats are ordinary libraries: implementations of `Encoder` and `Decoder` ------------------------
 
-const text = Json.encode user
+const json = Json()
+const text = json.encode user
 print text    // {"name":"Ada","email":"ada@example.test","role":{"Member":{"since":2026}},"tags":["math"]}
 
 // Raw strings (`r"..."`) do not interpolate, so braces need no escaping
-match Json.decode<User>(r"""{"name": "Grace", "email": "not-an-email"}""") {
+match json.decode<User>(r"""{"name": "Grace", "email": "not-an-email"}""") {
   Ok(decoded) => print "Hello {decoded.name}"
   Fail(error) => print "Rejected: {error}"          // Rejected: email: 'not-an-email' is not an email address
 }
 
+// A convention of the format is an option of the format, never a word on the type
+/** A setting whose field names are two words, to show the naming option of the format. */
+type Setting {
+  logLabel: String
+  maximumSize: Int = 10
+}
+
+const snake = Json naming: .SnakeCase
+print snake.encode(Setting("audit"))                                  // {"log_label":"audit","maximum_size":10}
+print snake.decode<Setting>(r"""{"log_label": "trace"}""")          // Ok(Setting(logLabel: "trace", maximumSize: 10))
+
 // This is what the compiler generates for `User`. Nothing in it is special, it could be written by hand:
 //
-//   fn encode(var encoder: Encoder) {
-//     encoder.record("User") { fields =>
-//       fields.field("name", name)
-//       fields.field("email", email)
-//       fields.field("role", role)
-//       fields.field("tags", tags)
-//     }
+//   fn encode<Target: Encoder>(var target: Target) {
+//     target.record "torbscript/example-tour/11-data/User"
+//     target.field "name"
+//     name.encode target
+//     target.field "email"
+//     email.encode target
+//     ...
+//     target.finish()
 //   }
 //
-//   fn decode(var decoder: Decoder): Result<User, DecodeError> {
-//     decoder.record("User") { fields =>
-//       Ok(User(
-//         name: fields.field("name")?,
-//         email: fields.field("email")?,
-//         role: fields.fieldOr("role", .Member(since: 2026))?,
-//         tags: fields.fieldOr("tags", [])?,
-//       ))
-//     }
-//   }
+// and `decode` reads the same fields back, taking the default where one is missing.
 
 // --- A different wire format: write the functions by hand, there are no annotations -------------
 
@@ -99,11 +104,18 @@ type LegacyUser {
 
 /** Reads the `LegacyUser` shape by hand: there is no annotation to bridge `mail` and the nested `contact.e_mail`. */
 extend LegacyUser with Decode {
-  static fn decode(var decoder: Decoder): Result<LegacyUser, DecodeError> {
-    decoder.record "LegacyUser" { fields =>
-      const contact: LegacyContact = fields.field("contact")?
-      Ok LegacyUser(name: fields.field("user_name")?, mail: contact.mail)
+  static fn decode<Source: Decoder>(var source: Source): Result<LegacyUser, DecodeError> {
+    source.record("LegacyUser")?
+    if !source.field("user_name")? {
+      return Fail DecodeError("a value is needed").inside("user_name")
     }
+    const name = source.string()?
+    if !source.field("contact")? {
+      return Fail DecodeError("a value is needed").inside("contact")
+    }
+    const contact = LegacyContact.decode(source)?
+    source.finish()?
+    Ok LegacyUser(name: name, mail: contact.mail)
   }
 }
 
@@ -114,16 +126,23 @@ type LegacyContact {
 
 /** Reads the field name this older format actually uses: `e_mail`, not `mail`. */
 extend LegacyContact with Decode {
-  static fn decode(var decoder: Decoder): Result<LegacyContact, DecodeError> {
-    decoder.record "LegacyContact" { fields =>
-      Ok LegacyContact(mail: fields.field("e_mail")?)
+  static fn decode<Source: Decoder>(var source: Source): Result<LegacyContact, DecodeError> {
+    source.record("LegacyContact")?
+    if !source.field("e_mail")? {
+      return Fail DecodeError("a value is needed").inside("e_mail")
     }
+    const mail = source.string()?
+    source.finish()?
+    Ok LegacyContact(mail: mail)
   }
 }
 
+const legacy = json.decode<LegacyUser>(r"""{"user_name": "Linus", "contact": {"e_mail": "linus@example.test"}}""")
+print legacy                                          // Ok(LegacyUser(name: "Linus", mail: "linus@example.test"))
+
 // --- When you want to look at a document without knowing its type: that is a library type ------------------
 
-// `JsonValue` is an ordinary ADT of std/json (and `Encode`/`Decode` itself). Nothing in the language knows it.
+// `JsonValue` is an ordinary ADT of std/json. Nothing in the language knows it.
 /** The paths where two JSON documents differ, recursing into objects and stopping where values are already equal. */
 fn diff(before: JsonValue, after: JsonValue, path: String = ""): List<String> {
   match (before, after) {
@@ -139,9 +158,12 @@ fn diff(before: JsonValue, after: JsonValue, path: String = ""): List<String> {
 }
 
 const renamed = user.copy name: "Ada Lovelace", tags: ["math", "engines"]
-for change in diff(Json.value(user), Json.value(renamed)) {
+for change in diff(json.value(user), json.value(renamed)) {
   print change
 }
 
-// For messages and debugging every `Encode` value can be described
-print describe(user)                     // User(name: "Ada", email: "ada@example.test", role: Member(since: 2026), tags: ["math"])
+// For messages and debugging every `Encode` value can be rendered
+print rendered(user)                     // User(name: "Ada", email: "ada@example.test", role: Member(since: 2026), tags: ["math"])
+
+// And every type describes itself without a value: what a schema, a table or a `--help` text is built from
+print structureOf<Setting>()

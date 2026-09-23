@@ -572,6 +572,19 @@ group "A capsule's `Encode` and `Decode`" {
       + reader + inBody("  print read<Session>()")
     assert problems(source).isEmpty()
   }
+
+  /** The forms are over the constructor's parameters, and a `private` field with a default is none of them. */
+  test "a `private` field with a default is no parameter, so a type it has does not have to be `Decode`" {
+    const source = "type Session \{\n  token: String\n  private ratio: Float = 0.5\n\}\n\n"
+      + reader + inBody("  print read<Session>()")
+    assert problems(source).isEmpty()
+  }
+
+  test "the same field without `private` is a parameter, and then its type decides" {
+    const source = "type Session \{\n  token: String\n  ratio: Float = 0.5\n\}\n\n"
+      + reader + inBody("  print read<Session>()")
+    assert(problems(source) == ["`Session` does not implement `Decode`"])
+  }
 }
 
 /**

@@ -130,7 +130,7 @@ extend <Source> with From<<Name>>        // ...and the pair is what `Encode` and
    With more than one candidate the second note lists them: ``` `Slug` converts both ways with `String` and `Title`.
    Exactly one type may ```.
 
-   `Encode` is not refused with it. It is the way out, it cannot break an invariant, and it is what `describe(value)`
+   `Encode` is not refused with it. It is the way out, it cannot break an invariant, and it is what `rendered(value)`
    and a failing `assert` show - the same job the generated `Show` does, which prints private fields too - so without a
    pair it stays the field-wise one.
 

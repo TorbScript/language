@@ -1,0 +1,1059 @@
+/**
+ * The three forms of a type's constructor the language generates - `encode`, `decode` and `describe` - built as a
+ * straight line of calls to the steps `std/encoding` declares in `src/derived.trb` (docs/design/ENCODING.md).
+ *
+ * A generated body here decides only the **shape**: which fields are the constructor's parameters from outside, in which
+ * order, under which names, which case a value is, and where a default is taken. Everything a step does - announce a
+ * field, write it through its own `encode`, read it back and name the field in an error - is TorbScript in
+ * `std/encoding`, instantiated for the field's type and the format's encoder like any other generic function. So a
+ * derived `encode` of `Order` writing into a `JsonEncoder` is a chain of direct calls with no table in it, and what it
+ * does can be read in the standard library.
+ *
+ * Four shapes, in the order [encodingShapeOf] decides them:
+ *
+ * - a **literal type** is its base, and is read back through the `TryFrom<String, LiteralParseError>` it carries;
+ * - a **capsule** with a conversion pair is its source, through the pair;
+ * - a **tuple** is a sequence of its positions;
+ * - everything else is a record over the constructor's parameters, or a variant over its cases. A capsule without a
+ *   pair is only written, and field by field - the checker derives no `Decode` or `Describe` for it.
+ */
+
+use Span from "../../syntax/source"
+use Visibility, Expression from "../../syntax/ast"
+use joinPath from "../../project/path"
+use ModuleId from "../../semantics/module"
+use SymbolId from "../../semantics/symbols"
+use TypeId, ParameterId, LiteralValue from "../../semantics/checker/type"
+use signatureOf, typeSignatureOf from "../../semantics/checker/signature"
+use substitute, sameType from "../../semantics/checker/unify"
+use implementsBound, writtenTraitsOf from "../../semantics/checker/implementation"
+use isConstructible, conversionPairOf from "../../semantics/checker/derive"
+use IrTypeId, IrType, FunctionId, Slot, BlockId, LayoutId, WitnessSource, LocationId from "../ir"
+use Instruction, Terminator, Reference, PathStep, Argument, borrowed, referenced from "../ir"
+use Intrinsic, IntrinsicOperation, StaticContents from "../ir"
+use FunctionBuilder, addTemporary, addLocal, addBlock, emit, terminate, switchTo from "../build"
+use layoutOfType from "../verify"
+use describeIrType from "../print"
+use instanceFor from "../instances"
+use Lowering, Generated, GeneratedRequest, reportUnsupported, locationOf from "./context"
+use irTypeOfClosed, internStatic, booleanTypeOf, isVoidType from "./context"
+use variantNamed from "./match"
+use lowerForeignExpression from "./call"
+
+/** The body of a generated `encode`, `decode` or `describe`. */
+public fn encodingBody(var lowering: Lowering, var builder: FunctionBuilder, request: GeneratedRequest, at: Span) {
+  match request.kind {
+    .Encode => encodeBody lowering, builder, request, at
+    .Decode => decodeBody lowering, builder, request, at
+    .Describe => describeBody lowering, builder, request, at
+    _ => reportUnsupported lowering, "a generated member that is not one of the three encoding forms", at
+  }
+}
+
+/** Whether a generated member is one of the three forms: its name carries the format it was instantiated for. */
+public fn isEncodingKind(kind: Generated): Bool {
+  match kind {
+    .Encode => true
+    .Decode => true
+    .Describe => true
+    _ => false
+  }
+}
+
+// --- Which shape a type has -------------------------------------------------------------------------------------------
+
+/** How a type is written, read and described. */
+type EncodingShape {
+  /** A literal type: the base, and `TryFrom<String, LiteralParseError>` on the way back. */
+  case Literal(base: TypeId)
+  /** A capsule with a conversion pair: the source of the pair, and the failure of a fallible way in. */
+  case Paired(wire: TypeId, failure: TypeId?)
+  /** A tuple: a sequence of its positions. */
+  case Positions(fields: List<TypeId>)
+  /** A record or a type with cases, over its constructor's parameters (or over every field, for a closed one). */
+  case Fields(symbol: SymbolId, arguments: List<TypeId>, everyField: Bool)
+}
+
+fn encodingShapeOf(var lowering: Lowering, subject: TypeId, at: Span): EncodingShape? {
+  match lowering.checker.types.form(subject) {
+    .Literals(base, _) => Some EncodingShape.Literal(base)
+    .Tuple(fields) => {
+      var found: List<TypeId> = []
+      for field in fields {
+        found.append field.annotation
+      }
+      Some EncodingShape.Positions(found)
+    }
+    .Nominal(symbol, arguments) => {
+      const identifier = typeSignatureOf lowering.checker, symbol
+      const shape = lowering.checker.typeSignature identifier
+      if isConstructible(lowering.checker, shape.fields) {
+        return Some EncodingShape.Fields(symbol, arguments, everyField: false)
+      }
+      if const Some(pair) = conversionPairOf(lowering.checker, subject) {
+        const failure = if pair.fallible { failureOf lowering, subject, pair.source } else { None }
+        return Some EncodingShape.Paired(pair.source, failure)
+      }
+      Some EncodingShape.Fields(symbol, arguments, everyField: true)
+    }
+    _ => {
+      const shown = lowering.checker.describe subject
+      reportUnsupported lowering, "a generated encoding form of `{shown}`", at
+      None
+    }
+  }
+}
+
+/** The `Failure` of the `TryFrom<Wire, Failure>` a capsule is read through. */
+fn failureOf(var lowering: Lowering, subject: TypeId, wire: TypeId): TypeId? {
+  const tryFrom = lowering.checker.wellKnown.tryFrom?
+  for bound in writtenTraitsOf(lowering.checker, subject, tryFrom) {
+    if const .Nominal(_, given) = lowering.checker.types.form(bound) {
+      if given.length() == 2 && sameType(lowering.checker.types, given[0], wire) {
+        return Some given[1]
+      }
+    }
+  }
+  None
+}
+
+/** One field of a record or a case, as a generated form needs it. */
+type EncodedFieldOf {
+  name: String
+  /** The checker type, substituted: what the steps are instantiated for. */
+  subject: TypeId
+  /** The IR type of the slot it is read into. */
+  annotation: IrTypeId
+  step: PathStep
+  symbol: SymbolId
+  hasDefault: Bool
+  /** Whether it is a parameter of the constructor from outside. A field that is not takes its default on the way in. */
+  isPassable: Bool
+}
+
+/** One group of fields: the record's own, or one case's. `variant` is -1 for a record. */
+type FieldGroup {
+  name: String
+  variant: Int
+  fields: List<EncodedFieldOf>
+}
+
+/**
+ * The groups of a record or of a type with cases, lined up with its layout. The layout is built from the type signature
+ * in exactly this order, so position `i` of the signature is position `i` of the layout.
+ */
+fn fieldGroupsOf(
+  var lowering: Lowering,
+  symbol: SymbolId,
+  arguments: List<TypeId>,
+  layout: LayoutId,
+  at: Span,
+): List<FieldGroup>? {
+  const identifier = typeSignatureOf lowering.checker, symbol
+  const shape = lowering.checker.typeSignature identifier
+  var mapping: Map<ParameterId, TypeId> = [:]
+  for index in 0..shape.generics.length().min(arguments.length()) {
+    mapping.set shape.generics[index], arguments[index]
+  }
+  const layoutShape = lowering.program.layoutAt layout
+  if shape.cases.isEmpty() {
+    if layoutShape.fields.length() != shape.fields.length() {
+      reportUnsupported lowering, "a generated encoding form over fields the back end cannot line up", at
+      return None
+    }
+    var fields: List<EncodedFieldOf> = []
+    for index in 0..shape.fields.length() {
+      const field = shape.fields[index]
+      const annotation = layoutShape.fields[index].annotation
+      const step = PathStep.Field layout, index
+      const subject = substitute lowering.checker.types, field.annotation, mapping
+      const passable = field.visibility != Visibility.Private
+      fields.append EncodedFieldOf(field.name, subject, annotation, step, field.symbol, field.hasDefault, passable)
+    }
+    return Some([FieldGroup("", -1, fields)])
+  }
+  if !shape.fields.isEmpty() {
+    reportUnsupported lowering, "a generated encoding form of a type with cases and fields of its own", at
+    return None
+  }
+  var groups: List<FieldGroup> = []
+  for declared in shape.cases {
+    const variant = variantNamed lowering, layout, declared.name
+    if variant < 0 {
+      reportUnsupported lowering, "a generated encoding form over cases the back end cannot line up", at
+      return None
+    }
+    const laid = layoutShape.fieldsOfVariant variant
+    if laid.length() != declared.fields.length() {
+      reportUnsupported lowering, "a generated encoding form over fields the back end cannot line up", at
+      return None
+    }
+    var fields: List<EncodedFieldOf> = []
+    for index in 0..declared.fields.length() {
+      const field = declared.fields[index]
+      const step = PathStep.Variant layout, variant, index
+      const subject = substitute lowering.checker.types, field.annotation, mapping
+      const annotation = laid[index].annotation
+      fields.append EncodedFieldOf(field.name, subject, annotation, step, field.symbol, field.hasDefault, true)
+    }
+    groups.append FieldGroup(declared.name, variant, fields)
+  }
+  Some groups
+}
+
+/**
+ * The qualified name of a declaration, which is what `record(typeName)` announces and a format finds a mapping by: the
+ * package, the module path inside it without `src/` and without an entry module's name, and the type -
+ * `"torbscript/example-tour/11-data/User"`, `"std/time/Instant"`.
+ */
+fn qualifiedNameOf(var lowering: Lowering, symbol: SymbolId): String {
+  const name = lowering.checker.symbolAt(symbol).name
+  const site = match lowering.checker.siteOf(symbol) {
+    Some(found) => found
+    None => {
+      return name
+    }
+  }
+  const program = lowering.checker.program
+  const module = program.graph.modules[site.module.value]
+  const package = program.workspace.packages[module.package]
+  var relative = module.path
+  if !package.directory.isEmpty() && relative.startsWith("{package.directory}/") {
+    relative = relative[(package.directory.byteLength() + 1)..]
+  }
+  if relative.startsWith("src/") {
+    relative = relative[4..]
+  }
+  if relative.endsWith(".trb") {
+    relative = relative[..(relative.byteLength() - 4)]
+  }
+  var parts: List<String> = []
+  if !package.name.isEmpty() {
+    parts.append package.name
+  }
+  if relative != "lib" && relative != "main" && !relative.isEmpty() {
+    parts.append relative
+  }
+  parts.append name
+  parts.joined separator: "/"
+}
+
+// --- `encode` ---------------------------------------------------------------------------------------------------------
+
+/**
+ * `fn encode<Target: Encoder>(var target: Target)`: `self` is slot 0 and the target slot 1, a place the steps write
+ * through.
+ */
+fn encodeBody(var lowering: Lowering, var builder: FunctionBuilder, request: GeneratedRequest, at: Span) {
+  const target = match ownArgumentOf(lowering, request, at) {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  const shape = match encodingShapeOf(lowering, request.subject, at) {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  const place = referenced Reference(Slot(1), [])
+  match shape {
+    .Literal(base) => {
+      perform lowering, builder, "encodeItem", [base, target], [borrowed(Slot(0)), place], at
+    }
+    .Paired(wire, _) => {
+      perform lowering, builder, "encodeThrough", [request.subject, wire, target], [borrowed(Slot(0)), place], at
+    }
+    .Positions(fields) => encodePositions lowering, builder, fields, target, at
+    .Fields(symbol, arguments, everyField) => {
+      encodeFields lowering, builder, request.subject, symbol, arguments, everyField, target, at
+      return
+    }
+  }
+  terminate builder, Terminator.Return(None)
+}
+
+fn encodePositions(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  fields: List<TypeId>,
+  target: TypeId,
+  at: Span,
+) {
+  const annotation = builder.function.signature.parameters[0].annotation
+  const layout = match layoutOfType(lowering.program, annotation) {
+    Some(found) => found
+    None => {
+      reportUnsupported lowering, "a generated `encode` of a tuple without a layout", at
+      return
+    }
+  }
+  const place = referenced Reference(Slot(1), [])
+  const length = integerSlot lowering, builder, fields.length()
+  perform lowering, builder, "encodeSequence", [target], [borrowed(length), place], at
+  const shape = lowering.program.layoutAt layout
+  for index in 0..fields.length() {
+    const value = readInto builder, Slot(0), PathStep.TupleField(layout, index), shape.fields[index].annotation
+    perform lowering, builder, "encodeItem", [fields[index], target], [borrowed(value), place], at
+  }
+  perform lowering, builder, "encodeFinish", [target], [place], at
+}
+
+fn encodeFields(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  subject: TypeId,
+  symbol: SymbolId,
+  arguments: List<TypeId>,
+  everyField: Bool,
+  target: TypeId,
+  at: Span,
+) {
+  const annotation = builder.function.signature.parameters[0].annotation
+  const layout = match layoutOfType(lowering.program, annotation) {
+    Some(found) => found
+    None => {
+      const shown = describeIrType lowering.program, annotation
+      reportUnsupported lowering, "a generated `encode` of `{shown}`", at
+      return
+    }
+  }
+  const groups = match fieldGroupsOf(lowering, symbol, arguments, layout, at) {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  const typeName = qualifiedNameOf lowering, symbol
+  const place = referenced Reference(Slot(1), [])
+  const written = textSlot lowering, builder, typeName
+  if groups.length() == 1 && groups[0].variant < 0 {
+    perform lowering, builder, "encodeRecord", [target], [borrowed(written), place], at
+    encodeGroup lowering, builder, groups[0], everyField, target, at
+    perform lowering, builder, "encodeFinish", [target], [place], at
+    terminate builder, Terminator.Return(None)
+    return
+  }
+  // A type with cases: one block per case, chosen by the tag
+  const location = locationOf lowering, at
+  const integer = lowering.program.internType IrType.Integer(64, true)
+  const tag = addTemporary builder, integer
+  emit builder, Instruction.Tag(tag, Slot(0))
+  const impossible = addBlock builder, "no such case", Some(location)
+  var values: List<Int> = []
+  var targets: List<BlockId> = []
+  for group in groups {
+    values.append group.variant
+    targets.append addBlock(builder, "case {group.name}", Some(location))
+  }
+  terminate builder, Terminator.Switch(tag, values, targets, impossible)
+  for index in 0..groups.length() {
+    const group = groups[index]
+    switchTo builder, targets[index]
+    const name = textSlot lowering, builder, group.name
+    perform lowering, builder, "encodeVariant", [target], [borrowed(written), borrowed(name), place], at
+    encodeGroup lowering, builder, group, everyField, target, at
+    perform lowering, builder, "encodeFinish", [target], [place], at
+    terminate builder, Terminator.Return(None)
+  }
+  switchTo builder, impossible
+}
+
+fn encodeGroup(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  group: FieldGroup,
+  everyField: Bool,
+  target: TypeId,
+  at: Span,
+) {
+  const place = referenced Reference(Slot(1), [])
+  for field in group.fields {
+    if !everyField && !field.isPassable {
+      continue
+    }
+    const value = readInto builder, Slot(0), field.step, field.annotation
+    const name = textSlot lowering, builder, field.name
+    perform lowering, builder, "encodeField", [field.subject, target], [borrowed(value), borrowed(name), place], at
+  }
+}
+
+// --- `decode` ---------------------------------------------------------------------------------------------------------
+
+/**
+ * `static fn decode<Source: Decoder>(var source: Source): Result<Self, DecodeError>`: the source is slot 0. Every step
+ * answers a `Result`, and a failure is handed on as the failure of the whole `decode` - the `?` of the code that could be
+ * written by hand.
+ */
+fn decodeBody(var lowering: Lowering, var builder: FunctionBuilder, request: GeneratedRequest, at: Span) {
+  const source = match ownArgumentOf(lowering, request, at) {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  const shape = match encodingShapeOf(lowering, request.subject, at) {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  const place = referenced Reference(Slot(0), [])
+  const subject = request.subject
+  match shape {
+    .Literal(base) => returnStep lowering, builder, "decodeLiteral", [subject, base, source], [place], at
+    .Paired(wire, failure) => {
+      match failure {
+        Some(found) => returnStep lowering, builder, "decodeThroughChecked", [subject, wire, found, source], [place], at
+        None => returnStep lowering, builder, "decodeThrough", [subject, wire, source], [place], at
+      }
+    }
+    .Positions(fields) => decodePositions lowering, builder, fields, source, at
+    .Fields(symbol, arguments, everyField) => {
+      if everyField {
+        reportUnsupported lowering, "a derived `decode` of a type whose constructor is closed and has no pair", at
+        return
+      }
+      decodeFields lowering, builder, subject, symbol, arguments, source, at
+    }
+  }
+}
+
+/** A step whose `Result<Self, DecodeError>` is the answer of the whole `decode`. */
+fn returnStep(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  name: String,
+  typeArguments: List<TypeId>,
+  arguments: List<Argument>,
+  at: Span,
+) {
+  if const Some(answer) = step(lowering, builder, name, typeArguments, arguments, at) {
+    terminate builder, Terminator.Return(Some(borrowed(answer)))
+  }
+}
+
+fn decodePositions(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  fields: List<TypeId>,
+  source: TypeId,
+  at: Span,
+) {
+  const result = builder.function.signature.result
+  const tuple = match okTypeOf(lowering, result) {
+    Some(found) => found
+    None => {
+      reportUnsupported lowering, "a generated `decode` whose result is not a `Result`", at
+      return
+    }
+  }
+  const layout = match layoutOfType(lowering.program, tuple) {
+    Some(found) => found
+    None => {
+      reportUnsupported lowering, "a generated `decode` of a tuple without a layout", at
+      return
+    }
+  }
+  const place = referenced Reference(Slot(0), [])
+  if checkedStep(lowering, builder, "decodeSequence", [source], [place], at).isNone() {
+    return
+  }
+  var values: List<Slot> = []
+  for index in 0..fields.length() {
+    const position = integerSlot lowering, builder, index
+    const given = [borrowed(position), place]
+    const value = match checkedStep(lowering, builder, "decodeItem", [fields[index], source], given, at) {
+      Some(found) => found
+      None => {
+        return
+      }
+    }
+    values.append value
+  }
+  if checkedStep(lowering, builder, "decodeFinish", [source], [place], at).isNone() {
+    return
+  }
+  answerOk lowering, builder, layout, 0, values, at
+}
+
+fn decodeFields(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  subject: TypeId,
+  symbol: SymbolId,
+  arguments: List<TypeId>,
+  source: TypeId,
+  at: Span,
+) {
+  const result = builder.function.signature.result
+  const value = match okTypeOf(lowering, result) {
+    Some(found) => found
+    None => {
+      reportUnsupported lowering, "a generated `decode` whose result is not a `Result`", at
+      return
+    }
+  }
+  const layout = match layoutOfType(lowering.program, value) {
+    Some(found) => found
+    None => {
+      const shown = describeIrType lowering.program, value
+      reportUnsupported lowering, "a generated `decode` of `{shown}`", at
+      return
+    }
+  }
+  const groups = match fieldGroupsOf(lowering, symbol, arguments, layout, at) {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  const typeName = qualifiedNameOf lowering, symbol
+  const written = textSlot lowering, builder, typeName
+  const place = referenced Reference(Slot(0), [])
+  if groups.length() == 1 && groups[0].variant < 0 {
+    if checkedStep(lowering, builder, "decodeRecord", [source], [borrowed(written), place], at).isNone() {
+      return
+    }
+    const values = match decodeGroup(lowering, builder, subject, arguments, symbol, groups[0], source, at) {
+      Some(found) => found
+      None => {
+        return
+      }
+    }
+    if checkedStep(lowering, builder, "decodeFinish", [source], [place], at).isNone() {
+      return
+    }
+    answerOk lowering, builder, layout, 0, values, at
+    return
+  }
+  // A type with cases: the case's name, compared with every case the type has
+  const name = match checkedStep(lowering, builder, "decodeVariant", [source], [borrowed(written), place], at) {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  const location = locationOf lowering, at
+  const boolean = booleanTypeOf lowering
+  for group in groups {
+    const wanted = textSlot lowering, builder, group.name
+    const same = addTemporary builder, boolean
+    const intrinsic = Intrinsic IntrinsicOperation.TextEqual, None
+    emit builder, Instruction.Intrinsic(Some(same), intrinsic, [name, wanted], location)
+    const chosen = addBlock builder, "case {group.name}", Some(location)
+    const next = addBlock builder, "not {group.name}", Some(location)
+    terminate builder, Terminator.Branch(same, chosen, next)
+    switchTo builder, chosen
+    const values = match decodeGroup(lowering, builder, subject, arguments, symbol, group, source, at) {
+      Some(found) => found
+      None => {
+        return
+      }
+    }
+    if checkedStep(lowering, builder, "decodeFinish", [source], [place], at).isNone() {
+      return
+    }
+    answerOk lowering, builder, layout, group.variant, values, at
+    switchTo builder, next
+  }
+  const shownName = textSlot lowering, builder, typeName
+  const problem = match step(lowering, builder, "unknownCase", [], [borrowed(name), borrowed(shownName)], at) {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  answerFailure lowering, builder, problem, at
+}
+
+/**
+ * The fields of one group, in declaration order: a required one through `decodeRequired`, one with a default through
+ * `decodeHasField` and then either `decodeFieldValue` or the default - evaluated only where the input has no value. A
+ * field that is not a parameter from outside takes its default without asking the input.
+ */
+fn decodeGroup(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  subject: TypeId,
+  arguments: List<TypeId>,
+  symbol: SymbolId,
+  group: FieldGroup,
+  source: TypeId,
+  at: Span,
+): List<Slot>? {
+  const place = referenced Reference(Slot(0), [])
+  const location = locationOf lowering, at
+  var values: List<Slot> = []
+  for field in group.fields {
+    const name = textSlot lowering, builder, field.name
+    if !field.isPassable {
+      const taken = defaultOf(lowering, builder, symbol, arguments, field, at)?
+      values.append taken
+      continue
+    }
+    if !field.hasDefault {
+      const read = checkedStep(lowering, builder, "decodeRequired", [field.subject, source], [borrowed(name), place], at)?
+      values.append read
+      continue
+    }
+    const present = checkedStep(lowering, builder, "decodeHasField", [source], [borrowed(name), place], at)?
+    const value = addLocal builder, field.annotation, field.name
+    const given = addBlock builder, "{field.name} given", Some(location)
+    const missing = addBlock builder, "{field.name} missing", Some(location)
+    const joined = addBlock builder, "{field.name} read", Some(location)
+    terminate builder, Terminator.Branch(present, given, missing)
+    switchTo builder, given
+    const read = checkedStep(lowering, builder, "decodeFieldValue", [field.subject, source], [borrowed(name), place], at)?
+    emit builder, Instruction.Copy(value, read)
+    terminate builder, Terminator.Jump(joined)
+    switchTo builder, missing
+    const taken = defaultOf(lowering, builder, symbol, arguments, field, at)?
+    emit builder, Instruction.Copy(value, taken)
+    terminate builder, Terminator.Jump(joined)
+    switchTo builder, joined
+    values.append value
+  }
+  Some values
+}
+
+/** The default of a field, lowered where it is needed and in the module of the declaration that wrote it. */
+fn defaultOf(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  symbol: SymbolId,
+  arguments: List<TypeId>,
+  field: EncodedFieldOf,
+  at: Span,
+): Slot? {
+  const written = match fieldDefaultOf(lowering, field.symbol) {
+    Some(found) => found
+    None => {
+      reportUnsupported lowering, "a derived `decode` of a field without a default that the input may leave out", at
+      return None
+    }
+  }
+  const identifier = typeSignatureOf lowering.checker, symbol
+  const shape = lowering.checker.typeSignature identifier
+  var mapping: Map<ParameterId, TypeId> = [:]
+  for index in 0..shape.generics.length().min(arguments.length()) {
+    mapping.set shape.generics[index], arguments[index]
+  }
+  const slot = lowerForeignExpression lowering, builder, field.symbol, written, mapping
+  if !lowering.isSupported {
+    return None
+  }
+  Some slot
+}
+
+/** The default a field is declared with: in the member of a type, or in the field list of a case. */
+fn fieldDefaultOf(var lowering: Lowering, field: SymbolId): Expression? {
+  const site = lowering.checker.siteOf(field)?
+  if const .Owned(_, _, member) = site.kind {
+    if const .Field(declared) = member.kind {
+      return declared.default
+    }
+    if const .Case(declared) = member.kind {
+      const name = lowering.checker.symbolAt(field).name
+      for one in declared.fields {
+        if one.name.text == name {
+          return one.default
+        }
+      }
+    }
+  }
+  None
+}
+
+/** `Ok(Self(values))`, or `Ok(Case(values))`, returned. */
+fn answerOk(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  layout: LayoutId,
+  variant: Int,
+  values: List<Slot>,
+  at: Span,
+) {
+  const result = builder.function.signature.result
+  const resultLayout = match layoutOfType(lowering.program, result) {
+    Some(found) => found
+    None => {
+      reportUnsupported lowering, "a generated `decode` whose result is not a `Result`", at
+      return
+    }
+  }
+  const success = variantNamed lowering, resultLayout, "Ok"
+  const value = okTypeOf(lowering, result) ?? result
+  const built = addTemporary builder, value
+  var given: List<Argument> = []
+  for slot in values {
+    given.append borrowed(slot)
+  }
+  emit builder, Instruction.Construct(built, layout, variant, given)
+  const answer = addTemporary builder, result
+  emit builder, Instruction.Construct(answer, resultLayout, success, [borrowed(built)])
+  terminate builder, Terminator.Return(Some(borrowed(answer)))
+}
+
+/** `Fail(problem)`, returned. */
+fn answerFailure(var lowering: Lowering, var builder: FunctionBuilder, problem: Slot, at: Span) {
+  const result = builder.function.signature.result
+  const resultLayout = match layoutOfType(lowering.program, result) {
+    Some(found) => found
+    None => {
+      reportUnsupported lowering, "a generated `decode` whose result is not a `Result`", at
+      return
+    }
+  }
+  const failure = variantNamed lowering, resultLayout, "Fail"
+  const answer = addTemporary builder, result
+  emit builder, Instruction.Construct(answer, resultLayout, failure, [borrowed(problem)])
+  terminate builder, Terminator.Return(Some(borrowed(answer)))
+}
+
+/** The type in the `Ok` of a `Result`. */
+fn okTypeOf(var lowering: Lowering, result: IrTypeId): IrTypeId? {
+  const layout = layoutOfType(lowering.program, result)?
+  const success = variantNamed lowering, layout, "Ok"
+  if success < 0 {
+    return None
+  }
+  const shape = lowering.program.layoutAt layout
+  const fields = shape.fieldsOfVariant success
+  match fields.first() {
+    Some(found) => Some found.annotation
+    None => None
+  }
+}
+
+/**
+ * A step that answers a `Result`, with the `?` behind it: the value where there is one, and otherwise the failure handed
+ * on as the failure of the `decode`. `None` where the step could not be built; a `Result<Void, _>` answers its `Void`.
+ */
+fn checkedStep(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  name: String,
+  typeArguments: List<TypeId>,
+  arguments: List<Argument>,
+  at: Span,
+): Slot? {
+  const answer = step(lowering, builder, name, typeArguments, arguments, at)?
+  const annotation = builder.typeOfSlot answer
+  const layout = match layoutOfType(lowering.program, annotation) {
+    Some(found) => found
+    None => {
+      reportUnsupported lowering, "a step of a generated `decode` that does not answer a `Result`", at
+      return None
+    }
+  }
+  const success = variantNamed lowering, layout, "Ok"
+  const failure = variantNamed lowering, layout, "Fail"
+  if success < 0 || failure < 0 {
+    reportUnsupported lowering, "a step of a generated `decode` that does not answer a `Result`", at
+    return None
+  }
+  const location = locationOf lowering, at
+  const integer = lowering.program.internType IrType.Integer(64, true)
+  const tag = addTemporary builder, integer
+  emit builder, Instruction.Tag(tag, answer)
+  const succeeded = addBlock builder, "{name} succeeded", Some(location)
+  const failed = addBlock builder, "{name} failed", Some(location)
+  terminate builder, Terminator.Switch(tag, [success], [succeeded], failed)
+  switchTo builder, failed
+  const shape = lowering.program.layoutAt layout
+  const problemType = shape.fieldsOfVariant(failure)[0].annotation
+  const problem = readInto builder, answer, PathStep.Variant(layout, failure, 0), problemType
+  answerFailure lowering, builder, problem, at
+  switchTo builder, succeeded
+  const valueType = shape.fieldsOfVariant(success)[0].annotation
+  // `Result<Void, _>` answers nothing worth reading: the step's own slot stands in for it
+  if isVoidType(lowering, valueType) {
+    return Some answer
+  }
+  Some readInto(builder, answer, PathStep.Variant(layout, success, 0), valueType)
+}
+
+// --- `describe` -------------------------------------------------------------------------------------------------------
+
+/** `static fn describe<Target: Describer>(var target: Target)`: the target is slot 0. */
+fn describeBody(var lowering: Lowering, var builder: FunctionBuilder, request: GeneratedRequest, at: Span) {
+  const target = match ownArgumentOf(lowering, request, at) {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  const shape = match encodingShapeOf(lowering, request.subject, at) {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  const place = referenced Reference(Slot(0), [])
+  match shape {
+    .Literal(base) => {
+      perform lowering, builder, "describeThrough", [base, target], [place], at
+    }
+    .Paired(wire, _) => {
+      perform lowering, builder, "describeThrough", [wire, target], [place], at
+    }
+    .Positions(_) => {
+      reportUnsupported lowering, "a derived `describe` of a tuple", at
+      return
+    }
+    .Fields(symbol, arguments, everyField) => {
+      if everyField {
+        reportUnsupported lowering, "a derived `describe` of a type whose constructor is closed and has no pair", at
+        return
+      }
+      describeFields lowering, builder, request.subject, symbol, arguments, target, at
+    }
+  }
+  terminate builder, Terminator.Return(None)
+}
+
+/**
+ * `record` (or `variant`) first, and the body only where the target wants it: a target that has seen the type already
+ * refers to it by name, which is what makes a type that contains itself describe exactly once.
+ */
+fn describeFields(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  subject: TypeId,
+  symbol: SymbolId,
+  arguments: List<TypeId>,
+  target: TypeId,
+  at: Span,
+) {
+  const annotation = irTypeOfClosed lowering, subject
+  const layout = match layoutOfType(lowering.program, annotation) {
+    Some(found) => found
+    None => {
+      const shown = describeIrType lowering.program, annotation
+      reportUnsupported lowering, "a generated `describe` of `{shown}`", at
+      return
+    }
+  }
+  const groups = match fieldGroupsOf(lowering, symbol, arguments, layout, at) {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  const typeName = qualifiedNameOf lowering, symbol
+  const written = textSlot lowering, builder, typeName
+  const place = referenced Reference(Slot(0), [])
+  const location = locationOf lowering, at
+  const isRecord = groups.length() == 1 && groups[0].variant < 0
+  const opening = if isRecord { "describeRecord" } else { "describeVariant" }
+  const wanted = match step(lowering, builder, opening, [target], [borrowed(written), place], at) {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  const body = addBlock builder, "described", Some(location)
+  const done = addBlock builder, "known", Some(location)
+  terminate builder, Terminator.Branch(wanted, body, done)
+  switchTo builder, body
+  if isRecord {
+    describeGroup lowering, builder, symbol, arguments, groups[0], target, at
+  } else {
+    for group in groups {
+      const name = textSlot lowering, builder, group.name
+      perform lowering, builder, "describeCase", [target], [borrowed(name), place], at
+      describeGroup lowering, builder, symbol, arguments, group, target, at
+      perform lowering, builder, "describeFinish", [target], [place], at
+    }
+  }
+  perform lowering, builder, "describeFinish", [target], [place], at
+  terminate builder, Terminator.Jump(done)
+  switchTo builder, done
+}
+
+/**
+ * Every field that is a parameter from outside, with its doc comment. A default is written into the description as the
+ * value it is, where the field's type can be written at all; otherwise the description says only that there is one.
+ */
+fn describeGroup(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  symbol: SymbolId,
+  arguments: List<TypeId>,
+  group: FieldGroup,
+  target: TypeId,
+  at: Span,
+) {
+  const place = referenced Reference(Slot(0), [])
+  for field in group.fields {
+    if !field.isPassable {
+      continue
+    }
+    const name = textSlot lowering, builder, field.name
+    const documentation = textSlot lowering, builder, documentationOf(lowering, field.symbol)
+    if !field.hasDefault {
+      perform lowering, builder, "describeField", [field.subject, target], [borrowed(name), borrowed(documentation), place], at
+      continue
+    }
+    if !isEncodable(lowering, field.subject) {
+      const given = [borrowed(name), borrowed(documentation), place]
+      perform lowering, builder, "describeDefaultedField", [field.subject, target], given, at
+      continue
+    }
+    const value = match defaultOf(lowering, builder, symbol, arguments, field, at) {
+      Some(found) => found
+      None => {
+        return
+      }
+    }
+    const given = [borrowed(name), borrowed(documentation), borrowed(value), place]
+    perform lowering, builder, "describeConstantField", [field.subject, target], given, at
+  }
+}
+
+fn isEncodable(var lowering: Lowering, subject: TypeId): Bool {
+  const symbol = match lowering.checker.wellKnown.symbolNamed("Encode") {
+    Some(found) => found
+    None => {
+      return false
+    }
+  }
+  const bound = lowering.checker.nominal symbol, []
+  implementsBound lowering.checker, subject, bound
+}
+
+/** The doc comment of a field, as written: a type's field has it on its member, a case's field on itself. */
+fn documentationOf(var lowering: Lowering, field: SymbolId): String {
+  const site = match lowering.checker.siteOf(field) {
+    Some(found) => found
+    None => {
+      return ""
+    }
+  }
+  if const .Owned(_, _, member) = site.kind {
+    if const .Field(_) = member.kind {
+      return member.doc ?? ""
+    }
+    if const .Case(declared) = member.kind {
+      const name = lowering.checker.symbolAt(field).name
+      for one in declared.fields {
+        if one.name.text == name {
+          return one.doc ?? ""
+        }
+      }
+    }
+  }
+  ""
+}
+
+// --- The steps ---------------------------------------------------------------------------------------------------------
+
+/**
+ * The type argument the member was instantiated for: the `Target` of `encode` and `describe`, the `Source` of `decode`.
+ * It is the member's own type parameter, which the call site decided.
+ */
+fn ownArgumentOf(var lowering: Lowering, request: GeneratedRequest, at: Span): TypeId? {
+  const identifier = signatureOf lowering.checker, request.member
+  const generics = lowering.checker.signature(identifier).generics
+  if const Some(last) = generics.last() {
+    if const Some(found) = request.mapping.get(last) {
+      return Some found
+    }
+  }
+  reportUnsupported lowering, "a generated encoding form whose format the call site did not decide", at
+  None
+}
+
+/**
+ * One call of a step of `std/encoding`, instantiated for `typeArguments` in the order the step declares its type
+ * parameters. Answers the slot of its result, or `None` for a step that answers nothing (or could not be built).
+ */
+fn step(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  name: String,
+  typeArguments: List<TypeId>,
+  arguments: List<Argument>,
+  at: Span,
+): Slot? {
+  const symbol = match encodingExportOf(lowering, name) {
+    Some(found) => found
+    None => {
+      reportUnsupported lowering, "a generated encoding form without `{name}` in `std/encoding`", at
+      return None
+    }
+  }
+  const identifier = signatureOf lowering.checker, symbol
+  const generics = lowering.checker.signature(identifier).generics
+  if generics.length() != typeArguments.length() {
+    reportUnsupported lowering, "`{name}` of `std/encoding` with other type parameters than the compiler expects", at
+    return None
+  }
+  var mapping: Map<ParameterId, TypeId> = [:]
+  for index in 0..generics.length() {
+    mapping.set generics[index], typeArguments[index]
+  }
+  const function = match instanceFor(lowering, symbol, mapping) {
+    Some(found) => found
+    None => {
+      reportUnsupported lowering, "`{name}` of `std/encoding`", at, "no instance of it can be built"
+      return None
+    }
+  }
+  const location = locationOf lowering, at
+  const result = lowering.program.functionAt(function).signature.result
+  const empty: List<WitnessSource> = []
+  if isVoidType(lowering, result) {
+    emit builder, Instruction.Call(None, function, arguments, empty, Some(location))
+    return None
+  }
+  const target = addTemporary builder, result
+  emit builder, Instruction.Call(Some(target), function, arguments, empty, Some(location))
+  Some target
+}
+
+/** A step whose answer nothing reads. */
+fn perform(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  name: String,
+  typeArguments: List<TypeId>,
+  arguments: List<Argument>,
+  at: Span,
+) {
+  const _answer = step lowering, builder, name, typeArguments, arguments, at
+}
+
+/** A public function of `std/encoding`, by name: the steps are declared there and nowhere else. */
+fn encodingExportOf(var lowering: Lowering, name: String): SymbolId? {
+  const program = lowering.checker.program
+  const package = program.workspace.packageNamed("std/encoding")?
+  const module = program.graph.moduleAt(joinPath(package.directory, "src/lib.trb"))?
+  program.scopes[module.value].exported.get name
+}
+
+fn readInto(var builder: FunctionBuilder, base: Slot, step: PathStep, annotation: IrTypeId): Slot {
+  const target = addTemporary builder, annotation
+  emit builder, Instruction.Read(target, Reference(base, [step]))
+  target
+}
+
+fn textSlot(var lowering: Lowering, var builder: FunctionBuilder, value: String): Slot {
+  const text = lowering.program.internType IrType.Text
+  const target = addTemporary builder, text
+  const contents = StaticContents.Literal LiteralValue.Text(value)
+  const found = internStatic lowering, contents, text
+  emit builder, Instruction.Constant(target, found)
+  target
+}
+
+fn integerSlot(var lowering: Lowering, var builder: FunctionBuilder, value: Int): Slot {
+  const integer = lowering.program.internType IrType.Integer(64, true)
+  const target = addTemporary builder, integer
+  const contents = StaticContents.Literal LiteralValue.Integer(value)
+  const found = internStatic lowering, contents, integer
+  emit builder, Instruction.Constant(target, found)
+  target
+}

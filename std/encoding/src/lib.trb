@@ -1,93 +1,118 @@
 /**
- * Encoding and decoding: what other languages need reflection for (serialization, config mapping, database rows).
+ * Encoding and decoding: what other languages need reflection for (serialization, config mapping, database rows,
+ * schemas, `--help` texts).
  *
- *     const text = Json.encode(user)
- *     const user = Json.decode<User>(text)?
+ *     const json = Json()
+ *     const text = json.encode user
+ *     const back = json.decode<User>(text)?
  *
- * A type describes itself to an `Encoder` and reads itself from a `Decoder`. A format (`Json`, `Toml`, a database
- * driver) is an implementation of these two traits and never sees a type. There is no tree in between: values are
- * written while the type describes itself, and nothing is lost on the way.
+ * **A value is its constructor call.** The compiler knows every type's constructor and offers it in three forms:
+ * written ([Encode]), read ([Decode]) and described without a value ([Describe]). A format (`Json`, a database
+ * driver, a command line parser) implements [Encoder], [Decoder] or [Describer] and never sees a type. There is no tree
+ * in between: a value is written while the type describes itself, and nothing is lost on the way.
  *
- * `Encode` is generated for every type whose fields are all `Encode`. `Decode` is generated if, in addition, the
- * constructor is usable from outside. The generated code is exactly what one would write by hand:
+ * All three forms are generated for a type whose constructor is usable from outside, over exactly the constructor's
+ * parameters: a `private` field with a default is not one of them, so a cache stays out without an annotation. What
+ * the compiler generates is ordinary code over the vocabulary, and could be written by hand:
  *
- *     extend User with Encode, Decode {
- *       fn encode(var encoder: Encoder) {
- *         encoder.record("User") { fields =>
- *           fields.field("name", name)
- *           fields.field("tags", tags)
- *         }
- *       }
- *
- *       static fn decode(var decoder: Decoder): Result<User, DecodeError> {
- *         decoder.record("User") { fields =>
- *           Ok(User(
- *             name: fields.field("name")?,
- *             tags: fields.fieldOr("tags", [])?,        // Fields with a default value may be missing
- *           ))
- *         }
+ *     extend User with Encode {
+ *       fn encode<Target: Encoder>(var target: Target) {
+ *         target.record "app/User"
+ *         target.field "name"
+ *         name.encode target
+ *         target.field "tags"
+ *         tags.encode target
+ *         target.finish()
  *       }
  *     }
+ *
+ * The three traits take their target as a **bound**, not as a trait type: a format hands its own encoder over as a
+ * `var` path and reads the result out of it afterwards, and the derived code is a direct call chain with no table.
+ * [EncodedValue] is what a program holds where it has left the type behind, and [Structure] is a type's description as
+ * a value. `docs/design/ENCODING.md` is the design.
  */
 
-use Hash from "std/core"
-use Show from "std/core"
-use Error from "std/core"
+use Hash, Show, Error from "std/core"
 use Stage from "std/iteration"
 use Bytes from "std/stream"
 
+public use EncodedValue, EncodedField, Values, ValueDecoder, rendered from "./values"
+public use FieldDescription, FieldDefault, Structure, StructureField, StructureCase, Structures, structureOf from "./structure"
+public use Naming from "./naming"
+// The steps a derived `encode`, `decode` and `describe` are made of. The compiler finds them here by name
+public use encodeRecord, encodeVariant, encodeSequence, encodeFinish, encodeField, encodeItem from "./derived"
+public use encodeThrough from "./derived"
+public use decodeRecord, decodeRequired, decodeHasField, decodeFieldValue, decodeFinish, decodeVariant from "./derived"
+public use decodeSequence, decodeItem, unknownCase, decodeThrough, decodeThroughChecked, decodeLiteral from "./derived"
+public use describeRecord, describeVariant, describeCase, describeFinish, describeThrough from "./derived"
+public use describeField, describeDefaultedField, describeConstantField from "./derived"
+
+/**
+ * A value writes itself into any format.
+ *
+ * Generated for a type whose constructor is usable from outside and whose passable fields are all `Encode`, and for a
+ * capsule through its conversion pair. The target is a bound, so the call is monomorphized per format.
+ *
+ * # Examples
+ *
+ *     type Point {
+ *       x: Int
+ *       y: Int
+ *     }
+ *
+ *     print Json().encode(Point(1, 2))
+ *
+ * # Related
+ *
+ * - [Decode] - the way back, derived under the same condition.
+ * - [Encoder] - what a format implements.
+ */
 public trait Encode {
-  fn encode(var encoder: Encoder)
+  fn encode<Target: Encoder>(var target: Target)
 }
 
 /**
- * What a whole format is, once: bytes in both directions, and the two `Stage`s that make it work on a stream.
+ * A value reads itself back. Derived under the same condition as [Encode], so what is written can always be read.
  *
- * `Encode`/`Decode` and `Encoder`/`Decoder` stay exactly as they are - **synchronous**, and that is the point. A
- * decoder that could wait would have to be written differently for every source, every derived implementation would
- * have to change with it, and the whole standard library would be coloured by it. Streaming happens one level up, at
- * the level it happens in practice: the **element**.
+ * A field with a default may be missing from the input, and the default is only evaluated then.
  *
- *     body.through(Json.items<User>()).checked()          // bytes in, one `User` at a time out, memory = one user
- *     Source.from(users).through(Json.encoded<User>())    // and back
+ * # Related
  *
- * `items` is a resumable **framer**: it finds where one element ends in whatever bytes have arrived - across chunk
- * borders - and decodes that element synchronously, through the ordinary `Decode`. So the memory a stream of a million
- * records needs is one record, and no decoder had to learn anything new.
- *
- * A single huge *value* is deliberately not streamed into a type. It would colour every decoder (see above) and buy
- * almost nothing: the value itself is in memory either way, so all that is saved is the text it came from. What that
- * case needs is an **event level** (`Json.events`, SAX-like), and it is named in `docs/design/STREAMS.md` as later work.
- *
- * `Failure` is the second type parameter because the language has no associated types: `Json` is a
- * `Format<JsonError>`, and a function that works for any format says `fn load<Chosen: Format<Problem>, Problem>(...)`.
+ * - [DecodeError] - what a failure says, with the field chain it happened in.
  */
-public trait Format<Failure> {
-  /** The whole value, as the bytes that go into a file or onto a wire. */
-  static fn encodeAll(value: Encode): Bytes
-
-  /** One whole value out of all of its bytes. */
-  static fn decodeAll<Value: Decode>(bytes: Bytes): Result<Value, Failure>
-
-  /**
-   * Bytes to items. Fallible, so the items are `Result`s - a `Stage` is synchronous and knows nothing about the
-   * failure of the stream around it; `source.checked()` is where they become one.
-   */
-  static fn items<Item: Decode>(): Stage<Bytes, Result<Item, Failure>>
-
-  /** Items to bytes: the other direction, and the one that never fails. */
-  static fn encoded<Item: Encode>(): Stage<Item, Bytes>
-}
-
 public trait Decode {
-  static fn decode(var decoder: Decoder): Result<Self, DecodeError>
+  static fn decode<Source: Decoder>(var source: Source): Result<Self, DecodeError>
 }
 
+/**
+ * A type describes its structure **without a value**: what schema-driven formats need (a DDL statement, a `.proto`
+ * file, a JSON Schema, a `--help` text). It is the same constructor again, with every field's doc comment and whether
+ * the field has a default.
+ *
+ * # Related
+ *
+ * - [Describer] - what a schema format implements.
+ * - [structureOf] - the description as a [Structure] value, for a format that wants a tree.
+ */
+public trait Describe {
+  static fn describe<Target: Describer>(var target: Target)
+}
+
+/**
+ * What went wrong reading a value, with the field chain it went wrong in: `price.currency: a value is needed`.
+ *
+ * # Examples
+ *
+ *     const problem = DecodeError("a value is needed").inside("currency").inside("price")
+ *     print problem
+ */
 public type DecodeError with Show, Error {
+  /** What was wrong, without the place. */
   message: String
+  /** The fields and positions from the outermost value down to where it went wrong. */
   path: List<String> = []
 
-  /** `error.inside("email")`: errors collect the path on their way out. */
+  /** `error.inside("email")`: an error collects its path on the way out, outermost segment first. */
   fn inside(segment: String): DecodeError {
     copy path: path.inserted(0, segment)
   }
@@ -103,8 +128,21 @@ public type DecodeError with Show, Error {
 
 // --- What a format implements: writing --------------------------------------------------------------------------
 
-/** The methods are named after the types of the language. Narrow numbers are widened, so nothing is lost. */
+/**
+ * The writing half of a format. The scalar methods are named after the types of the language, so a format learns no
+ * second vocabulary; narrow numbers are widened on the way in and checked on the way back.
+ *
+ * `sequence`, `map`, `record` and `variant` open, and `finish` closes the innermost of them. A record's field is
+ * announced with `field` and its value is written right after. A record that announces no field at all is a **wrapper**
+ * around the one value it holds, and a text format writes that value without anything around it.
+ *
+ * # Related
+ *
+ * - [Decoder] - the reading half, with the same method names.
+ * - [Values] - the encoder that builds an [EncodedValue].
+ */
 public trait Encoder {
+  /** An absent value: `None`. A field written as nothing may be left out, and its default applies on the way back. */
   var fn nothing()
   var fn bool(value: Bool)
   var fn int(value: Int64)
@@ -114,33 +152,33 @@ public trait Encoder {
   var fn string(value: String)
   var fn bytes(value: List<UInt8>)
 
-  /** `length` is known for collections and unknown for pipelines. Items are written one by one: this streams. */
-  var fn sequence(length: Int?, write: (var items: SequenceEncoder) => Void)
-  var fn map(length: Int?, write: (var entries: MapEncoder) => Void)
-  var fn record(typeName: String, write: (var fields: RecordEncoder) => Void)
-  var fn variant(typeName: String, name: String, write: (var fields: RecordEncoder) => Void)
-}
-
-public trait SequenceEncoder {
-  var fn item(value: Encode)
-}
-
-public trait MapEncoder {
-  var fn entry(key: Encode, value: Encode)
-}
-
-public trait RecordEncoder {
-  var fn field(name: String, value: Encode)
+  /** `length` is known for a collection and unknown for a pipeline: a binary format writes it in front. */
+  var fn sequence(length: Int?)
+  /** A map of `length` entries, each written as its key and then its value. */
+  var fn map(length: Int?)
+  /** `typeName` is the qualified name of the declaration (`"app/orders/Price"`): the key a format finds a mapping by. */
+  var fn record(typeName: String)
+  /** One case of a type with cases. Its fields follow as a record's do. */
+  var fn variant(typeName: String, name: String)
+  /** The name of the field whose value comes next. */
+  var fn field(name: String)
+  /** Closes the innermost `sequence`, `map`, `record` or `variant`. */
+  var fn finish()
 }
 
 // --- What a format implements: reading ---------------------------------------------------------------------------
 
 /**
- * Reading is driven by the type: it asks for what it expects and gets an error if something else is there.
- * (A format with unordered fields, like JSON, buffers one record at a time. Sequences are streamed.)
+ * The reading half of a format. Reading is driven by the type: it asks for what it expects, and gets a [DecodeError]
+ * when something else is there. A format with unordered fields buffers one record at a time; a sequence streams.
+ *
+ * # Pitfalls
+ *
+ * `hasNext` both tests and positions: it answers `true` while one more item of the open sequence (or one more key or
+ * value of the open map) follows, and the next read takes it.
  */
 public trait Decoder {
-  /** Consumes a "nothing" if there is one. This is how `Option` decides between `None` and `Some`. */
+  /** Consumes a "nothing" if one is there. This is how `Option` decides between `None` and `Some`. */
   var fn nothing(): Bool
 
   var fn bool(): Result<Bool, DecodeError>
@@ -151,224 +189,428 @@ public trait Decoder {
   var fn string(): Result<String, DecodeError>
   var fn bytes(): Result<List<UInt8>, DecodeError>
 
-  var fn sequence<Output>(
-    read: (var items: SequenceDecoder) => Result<Output, DecodeError>,
-  ): Result<Output, DecodeError>
-
-  var fn map<Output>(
-    read: (var entries: MapDecoder) => Result<Output, DecodeError>,
-  ): Result<Output, DecodeError>
-
-  var fn record<Output>(
-    typeName: String,
-    read: (var fields: RecordDecoder) => Result<Output, DecodeError>,
-  ): Result<Output, DecodeError>
-
-  var fn variant<Output>(
-    typeName: String,
-    read: (name: String, var fields: RecordDecoder) => Result<Output, DecodeError>,
-  ): Result<Output, DecodeError>
+  /** Opens a sequence and answers its length where the format writes one in front. */
+  var fn sequence(): Result<Int?, DecodeError>
+  /** Opens a map. Its entries are read as a key, then a value, while `hasNext` answers `true`. */
+  var fn map(): Result<Int?, DecodeError>
+  /** `true` while one more item of the open sequence or one more key or value of the open map follows. */
+  var fn hasNext(): Result<Bool, DecodeError>
+  /** Opens a record. A wrapper's record holds one value and no field. */
+  var fn record(typeName: String): Result<Void, DecodeError>
+  /** Opens a variant and answers which case is there. */
+  var fn variant(typeName: String): Result<String, DecodeError>
+  /** Positions on the field `name`. `false` when the input has no such field: the field's default applies. */
+  var fn field(name: String): Result<Bool, DecodeError>
+  /** Closes the innermost `sequence`, `map`, `record` or `variant`. */
+  var fn finish(): Result<Void, DecodeError>
 }
 
-public trait SequenceDecoder {
-  /** `None` at the end of the sequence. */
-  var fn next<Item: Decode>(): Result<Item?, DecodeError>
+// --- What a format implements: describing ------------------------------------------------------------------------
+
+/**
+ * The describing half: the same method names as [Encoder], without values. `record` and `variant` answer a `Bool`:
+ * `false` means "this type is already known here", which is what makes a type that contains itself terminate - the
+ * name has been handed over before the answer, so the target can refer to the type it declined.
+ *
+ * # Related
+ *
+ * - [Structures] - the describer that builds a [Structure].
+ */
+public trait Describer {
+  var fn bool()
+  var fn int()
+  var fn unsigned()
+  var fn float()
+  var fn decimal()
+  var fn string()
+  var fn bytes()
+
+  /** The description that follows is the one that may be absent. `finish` closes it. */
+  var fn optional()
+  /** A sequence: the one description that follows is its item's. `finish` closes it. */
+  var fn sequence()
+  /** A map: the two descriptions that follow are its key's and its value's. `finish` closes it. */
+  var fn map()
+  /** Opens a record. `false`: this target knows the type already and does not want the body again. */
+  var fn record(typeName: String): Bool
+  /** Opens a type with cases, as `record` does. */
+  var fn variant(typeName: String): Bool
+  /** One case of the open variant. Its fields follow, `finish` closes it. */
+  var fn variantCase(name: String)
+  /** The next description belongs to this field. */
+  var fn field(description: FieldDescription)
+  /** Closes the innermost open description. */
+  var fn finish()
 }
 
-public trait MapDecoder {
-  var fn next<Key: Decode, Value: Decode>(): Result<(Key, Value)?, DecodeError>
-}
+/**
+ * What a whole format is, once: bytes in both directions, and the two `Stage`s that make it work on a stream.
+ *
+ * `Encode`/`Decode` and `Encoder`/`Decoder` stay **synchronous**, and that is the point. A decoder that could wait would
+ * have to be written differently for every source, every derived implementation would have to change with it, and the
+ * whole standard library would be coloured by it. Streaming happens one level up, at the level it happens in practice:
+ * the **element**.
+ *
+ *     body.through(Json.items<User>()).checked()          // bytes in, one `User` at a time out, memory = one user
+ *     Source.from(users).through(Json.encoded<User>())    // and back
+ *
+ * `items` is a resumable **framer**: it finds where one element ends in whatever bytes have arrived - across chunk
+ * borders - and decodes that element synchronously, through the ordinary `Decode`.
+ *
+ * `Failure` is the type parameter because the language has no associated types: `Json` is a `Format<JsonError>`, and
+ * a function that works for any format says `fn load<Chosen: Format<Problem>, Problem>(...)`. The members are static
+ * and use the format's default options; a format value with options has its own `encode` and `decode`.
+ */
+public trait Format<Failure> {
+  /** The whole value, as the bytes that go into a file or onto a wire. */
+  static fn encodeAll<Value: Encode>(value: Value): Bytes
 
-public trait RecordDecoder {
-  var fn field<Value: Decode>(name: String): Result<Value, DecodeError>
-  var fn fieldOr<Value: Decode>(name: String, default: lazy Value): Result<Value, DecodeError>
-}
+  /** One whole value out of all of its bytes. */
+  static fn decodeAll<Value: Decode>(bytes: Bytes): Result<Value, Failure>
 
-/** Any `Encode` value as readable text, for messages and debugging: `User(name: "Ada", tags: ["math"])` */
-public native fn describe(value: Encode): String
+  /**
+   * Bytes to items. Fallible, so the items are `Result`s - a `Stage` is synchronous and knows nothing about the
+   * failure of the stream around it; `source.checked()` is where they become one.
+   */
+  static fn items<Item: Decode>(): Stage<Bytes, Result<Item, Failure>>
+
+  /** Items to bytes: the other direction, and the one that never fails. */
+  static fn encoded<Item: Encode>(): Stage<Item, Bytes>
+}
 
 // --- The standard library describes itself, too --------------------------------------------------------------------
 
-extend Bool with Encode, Decode {
-  fn encode(var encoder: Encoder) {
-    encoder.bool self
+/** `Bool` is the vocabulary's own `bool`, in all three forms. */
+extend Bool with Encode, Decode, Describe {
+  fn encode<Target: Encoder>(var target: Target) {
+    target.bool self
   }
 
-  static fn decode(var decoder: Decoder): Result<Bool, DecodeError> {
-    decoder.bool()
-  }
-}
-
-extend Int64 with Encode, Decode {
-  fn encode(var encoder: Encoder) {
-    encoder.int self
+  static fn decode<Source: Decoder>(var source: Source): Result<Bool, DecodeError> {
+    source.bool()
   }
 
-  static fn decode(var decoder: Decoder): Result<Int64, DecodeError> {
-    decoder.int()
+  static fn describe<Target: Describer>(var target: Target) {
+    target.bool()
   }
 }
 
-/** Narrow numbers travel as `Int64` and are checked on the way back. */
-extend Int8 with Encode, Decode {
-  fn encode(var encoder: Encoder) {
-    encoder.int Int64.from(self)
+/** `Int64` is the vocabulary's own `int`, in all three forms. */
+extend Int64 with Encode, Decode, Describe {
+  fn encode<Target: Encoder>(var target: Target) {
+    target.int self
   }
 
-  static fn decode(var decoder: Decoder): Result<Int8, DecodeError> {
-    const wide = decoder.int()?
-    Int8.tryFrom(wide).mapError { DecodeError "{wide} does not fit into Int8" }
+  static fn decode<Source: Decoder>(var source: Source): Result<Int64, DecodeError> {
+    source.int()
+  }
+
+  static fn describe<Target: Describer>(var target: Target) {
+    target.int()
   }
 }
 
-/*
- * Every other number and the `Char`. They carry no `Decode` yet - `Decode` needs a `TryFrom` back, and only `Int8`,
- * `Int32` and `Int64` have one - but `Encode` is what a value has to have to be *looked at*: `describe(value)` renders
- * one, a quotation hands its captures on as `Encode` values (gap 36), and a SQL driver binds them as parameters. Without
- * these, a `Float64` field would make a whole syntax tree unshowable.
+/** A narrow integer travels as an `Int64` and is checked on the way back: a value that does not fit is an error. */
+extend Int8 with Encode, Decode, Describe {
+  fn encode<Target: Encoder>(var target: Target) {
+    target.int Int64.from(self)
+  }
+
+  static fn decode<Source: Decoder>(var source: Source): Result<Int8, DecodeError> {
+    const wide = source.int()?
+    Int8.tryFrom(wide).mapError { _ => DecodeError "{wide} does not fit into an Int8" }
+  }
+
+  static fn describe<Target: Describer>(var target: Target) {
+    target.int()
+  }
+}
+
+/** A narrow integer travels as an `Int64` and is checked on the way back: a value that does not fit is an error. */
+extend Int16 with Encode, Decode, Describe {
+  fn encode<Target: Encoder>(var target: Target) {
+    target.int Int64.from(self)
+  }
+
+  static fn decode<Source: Decoder>(var source: Source): Result<Int16, DecodeError> {
+    const wide = source.int()?
+    Int16.tryFrom(wide).mapError { _ => DecodeError "{wide} does not fit into an Int16" }
+  }
+
+  static fn describe<Target: Describer>(var target: Target) {
+    target.int()
+  }
+}
+
+/** A narrow integer travels as an `Int64` and is checked on the way back: a value that does not fit is an error. */
+extend Int32 with Encode, Decode, Describe {
+  fn encode<Target: Encoder>(var target: Target) {
+    target.int Int64.from(self)
+  }
+
+  static fn decode<Source: Decoder>(var source: Source): Result<Int32, DecodeError> {
+    const wide = source.int()?
+    Int32.tryFrom(wide).mapError { _ => DecodeError "{wide} does not fit into an Int32" }
+  }
+
+  static fn describe<Target: Describer>(var target: Target) {
+    target.int()
+  }
+}
+
+/**
+ * A narrow unsigned integer travels as an `Int64`, which holds every one of its values, and is checked on the way back.
  */
-extend Int16 with Encode {
-  fn encode(var encoder: Encoder) {
-    encoder.int Int64.from(self)
+extend UInt8 with Encode, Decode, Describe {
+  fn encode<Target: Encoder>(var target: Target) {
+    target.int Int64.from(self)
+  }
+
+  static fn decode<Source: Decoder>(var source: Source): Result<UInt8, DecodeError> {
+    const wide = source.int()?
+    UInt8.tryFrom(wide).mapError { _ => DecodeError "{wide} does not fit into a UInt8" }
+  }
+
+  static fn describe<Target: Describer>(var target: Target) {
+    target.int()
   }
 }
 
-extend Int32 with Encode {
-  fn encode(var encoder: Encoder) {
-    encoder.int Int64.from(self)
+/**
+ * A narrow unsigned integer travels as an `Int64`, which holds every one of its values, and is checked on the way back.
+ */
+extend UInt16 with Encode, Decode, Describe {
+  fn encode<Target: Encoder>(var target: Target) {
+    target.int Int64.from(self)
+  }
+
+  static fn decode<Source: Decoder>(var source: Source): Result<UInt16, DecodeError> {
+    const wide = source.int()?
+    UInt16.tryFrom(wide).mapError { _ => DecodeError "{wide} does not fit into a UInt16" }
+  }
+
+  static fn describe<Target: Describer>(var target: Target) {
+    target.int()
   }
 }
 
-extend UInt8 with Encode {
-  fn encode(var encoder: Encoder) {
-    encoder.int Int64.from(self)
+/**
+ * A narrow unsigned integer travels as an `Int64`, which holds every one of its values, and is checked on the way back.
+ */
+extend UInt32 with Encode, Decode, Describe {
+  fn encode<Target: Encoder>(var target: Target) {
+    target.int Int64.from(self)
+  }
+
+  static fn decode<Source: Decoder>(var source: Source): Result<UInt32, DecodeError> {
+    const wide = source.int()?
+    UInt32.tryFrom(wide).mapError { _ => DecodeError "{wide} does not fit into a UInt32" }
+  }
+
+  static fn describe<Target: Describer>(var target: Target) {
+    target.int()
   }
 }
 
-extend UInt16 with Encode {
-  fn encode(var encoder: Encoder) {
-    encoder.int Int64.from(self)
+/** `UInt64` is the vocabulary's own `unsigned`: its upper half does not fit into an `Int64`. */
+extend UInt64 with Encode, Decode, Describe {
+  fn encode<Target: Encoder>(var target: Target) {
+    target.unsigned self
+  }
+
+  static fn decode<Source: Decoder>(var source: Source): Result<UInt64, DecodeError> {
+    source.unsigned()
+  }
+
+  static fn describe<Target: Describer>(var target: Target) {
+    target.unsigned()
   }
 }
 
-extend UInt32 with Encode {
-  fn encode(var encoder: Encoder) {
-    encoder.int Int64.from(self)
+/**
+ * A `Float32` travels as a `Float64`. It has no `Decode`: nothing narrows a `Float64` back into a `Float32` yet.
+ */
+extend Float32 with Encode, Describe {
+  fn encode<Target: Encoder>(var target: Target) {
+    target.float Float64.from(self)
+  }
+
+  static fn describe<Target: Describer>(var target: Target) {
+    target.float()
   }
 }
 
-extend UInt64 with Encode {
-  fn encode(var encoder: Encoder) {
-    encoder.unsigned self
+/** `Float64` is the vocabulary's own `float`, in all three forms. */
+extend Float64 with Encode, Decode, Describe {
+  fn encode<Target: Encoder>(var target: Target) {
+    target.float self
+  }
+
+  static fn decode<Source: Decoder>(var source: Source): Result<Float64, DecodeError> {
+    source.float()
+  }
+
+  static fn describe<Target: Describer>(var target: Target) {
+    target.float()
   }
 }
 
-extend Float32 with Encode {
-  fn encode(var encoder: Encoder) {
-    encoder.float Float64.from(self)
+/** `Decimal` is the vocabulary's own `decimal`: an exact number stays exact in a format that can say so. */
+extend Decimal with Encode, Decode, Describe {
+  fn encode<Target: Encoder>(var target: Target) {
+    target.decimal self
   }
-}
 
-extend Float64 with Encode {
-  fn encode(var encoder: Encoder) {
-    encoder.float self
+  static fn decode<Source: Decoder>(var source: Source): Result<Decimal, DecodeError> {
+    source.decimal()
   }
-}
 
-extend Decimal with Encode {
-  fn encode(var encoder: Encoder) {
-    encoder.decimal self
+  static fn describe<Target: Describer>(var target: Target) {
+    target.decimal()
   }
 }
 
 /** A `Char` travels as a text of one character: the formats of the language have no character of their own. */
-extend Char with Encode {
-  fn encode(var encoder: Encoder) {
-    encoder.string show()
+extend Char with Encode, Decode, Describe {
+  fn encode<Target: Encoder>(var target: Target) {
+    target.string show()
+  }
+
+  static fn decode<Source: Decoder>(var source: Source): Result<Char, DecodeError> {
+    const text = source.string()?
+    var characters = text.chars().iterate()
+    const first = match characters.next() {
+      Some(found) => found
+      None => {
+        return Fail DecodeError("a character is needed, not an empty text")
+      }
+    }
+    if characters.next().isSome() {
+      return Fail DecodeError("a character is needed, not the text {text.showNested()}")
+    }
+    Ok first
+  }
+
+  static fn describe<Target: Describer>(var target: Target) {
+    target.string()
   }
 }
 
-extend String with Encode, Decode {
-  fn encode(var encoder: Encoder) {
-    encoder.string self
+/** `String` is the vocabulary's own `string`, in all three forms. */
+extend String with Encode, Decode, Describe {
+  fn encode<Target: Encoder>(var target: Target) {
+    target.string self
   }
 
-  static fn decode(var decoder: Decoder): Result<String, DecodeError> {
-    decoder.string()
+  static fn decode<Source: Decoder>(var source: Source): Result<String, DecodeError> {
+    source.string()
+  }
+
+  static fn describe<Target: Describer>(var target: Target) {
+    target.string()
   }
 }
 
+/** `Some` is its value, and `None` is `nothing()` - which a field may leave out, so its default applies. */
 extend<Value: Encode> Option<Value> with Encode {
-  fn encode(var encoder: Encoder) {
+  fn encode<Target: Encoder>(var target: Target) {
     match self {
-      Some(value) => value.encode encoder
-      None => encoder.nothing()
+      Some(value) => value.encode target
+      None => target.nothing()
     }
   }
 }
 
+/** A "nothing" is `None`, and anything else is the value's own `decode`. */
 extend<Value: Decode> Option<Value> with Decode {
-  static fn decode(var decoder: Decoder): Result<Value?, DecodeError> {
-    if decoder.nothing() {
+  static fn decode<Source: Decoder>(var source: Source): Result<Value?, DecodeError> {
+    if source.nothing() {
       return Ok None
     }
-    Ok Some(Value.decode(decoder)?)
+    Ok Some(Value.decode(source)?)
   }
 }
 
-/** Lists and sets are sequences. A `Set` stays a `Set`: the target type decides on the way back. */
+/** An optional value describes as `optional()` around the value's own structure. */
+extend<Value: Describe> Option<Value> with Describe {
+  static fn describe<Target: Describer>(var target: Target) {
+    target.optional()
+    Value.describe target
+    target.finish()
+  }
+}
+
+/** A list is a `sequence`: its length in front, then every item with its own `encode`. */
 extend<Item: Encode> List<Item> with Encode {
-  fn encode(var encoder: Encoder) {
-    encoder.sequence Some(length()) { items =>
-      for value in self {
-        items.item value
-      }
+  fn encode<Target: Encoder>(var target: Target) {
+    target.sequence Some(length())
+    for item in self {
+      item.encode target
     }
+    target.finish()
   }
 }
 
-extend<Item: Encode> Set<Item> with Encode {
-  fn encode(var encoder: Encoder) {
-    toList().encode(encoder)
-  }
-}
-
-extend<Key: Encode, Value: Encode> Map<Key, Value> with Encode {
-  fn encode(var encoder: Encoder) {
-    encoder.map Some(length()) { entries =>
-      for (key, value) in self {
-        entries.entry key, value
-      }
-    }
-  }
-}
-
+/** A sequence, item by item, each through the item's own `decode`. An error names the position it happened at. */
 extend<Item: Decode> List<Item> with Decode {
-  static fn decode(var decoder: Decoder): Result<List<Item>, DecodeError> {
-    decoder.sequence { items =>
-      var result: List<Item> = []
-      while const Some(value) = items.next()? {
-        result.append value
-      }
-      Ok result
+  static fn decode<Source: Decoder>(var source: Source): Result<List<Item>, DecodeError> {
+    const _length = source.sequence()?
+    var items: List<Item> = []
+    while source.hasNext()? {
+      const position = items.length()
+      const item = Item.decode(source).mapError({ _.inside "{position}" })?
+      items.append item
     }
+    source.finish()?
+    Ok items
   }
 }
 
-extend<Item: Decode & Hash> Set<Item> with Decode {
-  static fn decode(var decoder: Decoder): Result<Set<Item>, DecodeError> {
-    Ok((List<Item>.decode(decoder)?).toSet())
+/** A list describes as a `sequence` around its item's structure: the shape is one item, repeated. */
+extend<Item: Describe> List<Item> with Describe {
+  static fn describe<Target: Describer>(var target: Target) {
+    target.sequence()
+    Item.describe target
+    target.finish()
   }
 }
 
-extend<Key: Decode & Hash, Value: Decode> Map<Key, Value> with Decode {
-  static fn decode(var decoder: Decoder): Result<Map<Key, Value>, DecodeError> {
-    decoder.map { entries =>
-      var result: Map<Key, Value> = [:]
-      while const Some((key, value)) = entries.next()? {
-        result[key] = value
-      }
-      Ok result
+/** A map is a `map`: its length in front, then every entry as its key and its value. */
+extend<Key: Encode, Value: Encode> Map<Key, Value> with Encode {
+  fn encode<Target: Encoder>(var target: Target) {
+    target.map Some(length())
+    for (key, value) in self {
+      key.encode target
+      value.encode target
     }
+    target.finish()
+  }
+}
+
+/** A map, entry by entry: a key, then its value. An error in a value names the key it belongs to. */
+extend<Key: Decode & Hash & Show, Value: Decode> Map<Key, Value> with Decode {
+  static fn decode<Source: Decoder>(var source: Source): Result<Map<Key, Value>, DecodeError> {
+    const _length = source.map()?
+    var entries: Map<Key, Value> = [:]
+    while source.hasNext()? {
+      const key = Key.decode(source)?
+      if !source.hasNext()? {
+        return Fail DecodeError("the key {key} has no value")
+      }
+      const value = Value.decode(source).mapError({ _.inside "{key}" })?
+      entries[key] = value
+    }
+    source.finish()?
+    Ok entries
+  }
+}
+
+/** A map describes as a `map` around its key's and its value's structure. */
+extend<Key: Describe, Value: Describe> Map<Key, Value> with Describe {
+  static fn describe<Target: Describer>(var target: Target) {
+    target.map()
+    Key.describe target
+    Value.describe target
+    target.finish()
   }
 }

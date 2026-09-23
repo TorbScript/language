@@ -46,7 +46,7 @@ native type Expression<Value> {
   location: SourceLocation
 
   native fn value(): Value
-  native fn captures(): List<Encode>
+  native fn captures(): List<EncodedValue>
 }
 ```
 

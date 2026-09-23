@@ -540,7 +540,7 @@ print Int64.parse("42")
 
 `Type.tryFrom(text)` is the call, and `tryInto()` is the same conversion in a chain: under a `?` the annotation says
 the target alone (`const port: Int = text.tryInto()?`) and the failure follows from the one `TryFrom` the target has
-for a `String`. A function named `parse` belongs to a **format** - `Json.parse(text)` reads a document - never to a
+for a `String`. A function named `parse` belongs to a **format** - `Json().parse(text)` reads a document - never to a
 value. See [Conversions](../language/types/conversions.md) and
 [Parse text into a type](../how-to/parse-text-into-a-type.md).
 

@@ -1,0 +1,328 @@
+/**
+ * A type's structure as a value: [Structure], the [Structures] describer that builds one, and the [FieldDescription]
+ * every field of a description carries.
+ *
+ * Walking a visitor is harder than walking a tree, and every schema format wants a tree - a DDL statement, a `.proto`
+ * file, a JSON Schema, a `--help` text - so the conversion is written once here instead of once per format. A format that
+ * streams a schema implements `Describer` directly instead.
+ */
+
+use Describe, Describer from "./lib"
+use EncodedValue from "./values"
+
+/** What the compiler knows about one constructor parameter, and what a schema or a help text needs of it. */
+public type FieldDescription {
+  /** The field's name, as the type declares it. */
+  name: String
+  /** The field's doc comment, as written: what an `@description` annotation is for in other languages. */
+  documentation: String = ""
+  /** Whether the field may be missing, and what it is then. */
+  default: FieldDefault = FieldDefault.Required
+}
+
+/** Whether a field may be missing from the input, and what it is then. */
+public type FieldDefault {
+  /** No default: the field has to be there. */
+  case Required
+  /** A default the description cannot write as data: a call, or a value that is not a constant. */
+  case Computed
+  /** A default that is static data, and this is it. */
+  case Constant(value: EncodedValue)
+}
+
+/**
+ * What a [Describe] walk builds when a format wants a value instead of a visitor.
+ *
+ * Recursion is a `Reference`: the second time a type is opened the walk hands back its name and stops.
+ *
+ * # Examples
+ *
+ *     type Point {
+ *       x: Int
+ *       y: Int
+ *     }
+ *
+ *     print structureOf<Point>()
+ */
+public type Structure with Show {
+  /** `Bool`. */
+  case Boolean
+  /** A signed whole number. */
+  case Integer
+  /** A whole number that may not fit into an `Int64`. */
+  case Natural
+  /** A floating point number. */
+  case Floating
+  /** A `Decimal`. */
+  case Exact
+  /** A text. */
+  case Text
+  /** Raw bytes. */
+  case Binary
+  /** A value that may be absent. */
+  case Optional(of: Structure)
+  /** Many values of one structure, in order. */
+  case Sequence(of: Structure)
+  /** A map from one structure to another. */
+  case Mapping(key: Structure, value: Structure)
+  /** A record, with its fields in declaration order. */
+  case Record(typeName: String, fields: List<StructureField>)
+  /** A type that is its one value. It keeps its name, so a format can map it. */
+  case Wrapper(typeName: String, of: Structure)
+  /** A type with cases. */
+  case Variant(typeName: String, cases: List<StructureCase>)
+  /** A type that is already being described further up: the schema refers to it by name. */
+  case Reference(typeName: String)
+
+  /** The fields of a record, or nothing for everything else: what a tabular or a row-shaped format starts from. */
+  fn recordFields(): List<StructureField> {
+    match self {
+      .Record(_, found) => found
+      _ => []
+    }
+  }
+
+  /** The qualified name of the declaration, or an empty text for a structure that has none. */
+  fn declaredName(): String {
+    match self {
+      .Record(name, _) => name
+      .Wrapper(name, _) => name
+      .Variant(name, _) => name
+      .Reference(name) => name
+      _ => ""
+    }
+  }
+
+  /** `Record("app/Point", [x: Integer, y: Integer])`. */
+  fn show(): String {
+    match self {
+      .Boolean => "Boolean"
+      .Integer => "Integer"
+      .Natural => "Natural"
+      .Floating => "Floating"
+      .Exact => "Exact"
+      .Text => "Text"
+      .Binary => "Binary"
+      .Optional(inner) => "Optional({inner.show()})"
+      .Sequence(inner) => "Sequence({inner.show()})"
+      .Mapping(key, value) => "Mapping({key.show()}, {value.show()})"
+      .Record(name, fields) => "Record({name.showNested()}, [{shownFields(fields)}])"
+      .Wrapper(name, inner) => "Wrapper({name.showNested()}, {inner.show()})"
+      .Variant(name, cases) => "Variant({name.showNested()}, [{shownCases(cases)}])"
+      .Reference(name) => "Reference({name.showNested()})"
+    }
+  }
+}
+
+/** One field of a [Structure.Record]: its description and the structure of the value it holds. */
+public type StructureField {
+  /** The field's name, doc comment and default. */
+  description: FieldDescription
+  /** The structure of the value the field holds. */
+  of: Structure
+
+  /** The field's name. */
+  fn name(): String {
+    description.name
+  }
+
+  /** Whether the input has to have the field: it has no default and may not be absent. */
+  fn isRequired(): Bool {
+    match description.default {
+      .Required => {
+        if const .Optional(_) = of {
+          return false
+        }
+        true
+      }
+      _ => false
+    }
+  }
+}
+
+/** One case of a [Structure.Variant]: its name and the structure of its own fields. */
+public type StructureCase {
+  /** The case's name. */
+  name: String
+  /** The fields of the case, in declaration order. */
+  fields: List<StructureField>
+}
+
+fn shownFields(fields: List<StructureField>): String {
+  const parts = fields.map { "{_.description.name}: {_.of.show()}" }
+  parts.joined separator: ", "
+}
+
+fn shownCases(cases: List<StructureCase>): String {
+  const parts = cases.map { "{_.name}({shownFields(_.fields)})" }
+  parts.joined separator: ", "
+}
+
+/**
+ * The structure of a type, as a value.
+ *
+ * # Examples
+ *
+ *     print structureOf<List<Int>>()
+ */
+public fn structureOf<Value: Describe>(): Structure {
+  var builder = Structures()
+  Value.describe builder
+  builder.result()
+}
+
+/** A `Describer` that builds a [Structure]. The mirror image of `Values`, and the same state machine. */
+public type Structures with Describer {
+  private var frames: List<StructureFrame> = []
+  private var finished: Structure? = None
+  /** Every record and variant name that has been opened, so a type that contains itself stops at a `Reference`. */
+  private var known: List<String> = []
+
+  /** What was described. `Text` when nothing was. */
+  fn result(): Structure {
+    finished ?? Structure.Text
+  }
+
+  var fn bool() {
+    complete Structure.Boolean
+  }
+
+  var fn int() {
+    complete Structure.Integer
+  }
+
+  var fn unsigned() {
+    complete Structure.Natural
+  }
+
+  var fn float() {
+    complete Structure.Floating
+  }
+
+  var fn decimal() {
+    complete Structure.Exact
+  }
+
+  var fn string() {
+    complete Structure.Text
+  }
+
+  var fn bytes() {
+    complete Structure.Binary
+  }
+
+  var fn optional() {
+    frames.append StructureFrame(.Optional)
+  }
+
+  var fn sequence() {
+    frames.append StructureFrame(.Sequence)
+  }
+
+  var fn map() {
+    frames.append StructureFrame(.Mapping)
+  }
+
+  var fn record(typeName: String): Bool {
+    if known.contains(typeName) {
+      complete Structure.Reference(typeName)
+      return false
+    }
+    known.append typeName
+    frames.append StructureFrame(.Record(typeName))
+    true
+  }
+
+  var fn variant(typeName: String): Bool {
+    if known.contains(typeName) {
+      complete Structure.Reference(typeName)
+      return false
+    }
+    known.append typeName
+    frames.append StructureFrame(.Variant(typeName))
+    true
+  }
+
+  var fn variantCase(name: String) {
+    frames.append StructureFrame(.VariantCase(name))
+  }
+
+  var fn field(description: FieldDescription) {
+    if frames.isEmpty() {
+      return
+    }
+    const last = frames.length() - 1
+    frames[last].pending = Some description
+  }
+
+  var fn finish() {
+    if frames.isEmpty() {
+      return
+    }
+    const last = frames.length() - 1
+    const frame = frames[last]
+    frames = frames.removedAt last
+    match frame.kind {
+      .Optional => complete Structure.Optional(childOf(frame, 0))
+      .Sequence => complete Structure.Sequence(childOf(frame, 0))
+      .Mapping => complete Structure.Mapping(childOf(frame, 0), childOf(frame, 1))
+      .Record(typeName) => complete recordOf(typeName, frame)
+      .Variant(typeName) => complete Structure.Variant(typeName, frame.cases)
+      .VariantCase(name) => addCase StructureCase(name, frame.fields)
+    }
+  }
+
+  private var fn addCase(found: StructureCase) {
+    if frames.isEmpty() {
+      return
+    }
+    const last = frames.length() - 1
+    frames[last].cases.append(found)
+  }
+
+  private var fn complete(value: Structure) {
+    if frames.isEmpty() {
+      finished = Some value
+      return
+    }
+    const last = frames.length() - 1
+    match frames[last].pending {
+      Some(description) => {
+        frames[last].fields.append(StructureField(description, value))
+        frames[last].pending = None
+      }
+      None => frames[last].children.append(value)
+    }
+  }
+}
+
+fn childOf(frame: StructureFrame, index: Int): Structure {
+  frame.children.get(index) ?? Structure.Text
+}
+
+/** A record that announced no field, but does hold one description, is a wrapper around it. */
+fn recordOf(typeName: String, frame: StructureFrame): Structure {
+  if frame.fields.isEmpty() && frame.children.length() == 1 {
+    return Structure.Wrapper typeName, frame.children[0]
+  }
+  Structure.Record typeName, frame.fields
+}
+
+/** One open description of [Structures], with what has been described into it so far. */
+type StructureFrame {
+  kind: StructureFrameKind
+  var children: List<Structure> = []
+  var fields: List<StructureField> = []
+  var cases: List<StructureCase> = []
+  var pending: FieldDescription? = None
+}
+
+/** What a `StructureFrame` is open as, which decides how `Structures.finish` closes it. */
+type StructureFrameKind {
+  case Optional
+  case Sequence
+  case Mapping
+  case Record(typeName: String)
+  case Variant(typeName: String)
+  case VariantCase(name: String)
+}

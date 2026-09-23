@@ -180,6 +180,16 @@ jump left behind released nothing. The directory is the exemption, instead of a 
 |---------|--------------|
 | `paths.trb` | Every row of the parse table, every member including the two accessors of the capsule, `resolved(inside:)` in each of its outcomes, and the ten call-site rewrites of `docs/design/PATH.md` section 4 |
 
+**Encoding** - the three forms of a constructor (`Encode`, `Decode`, `Describe`), derived per type and format, and
+`std/json` on top of them (docs/design/ENCODING.md).
+
+| Program | What it pins |
+|---------|--------------|
+| `encoding-round-trip.trb` | Records, cases, lists, maps, options, sets and tuples through `Json` and back; a `private` field with a default is written nowhere; a missing field takes its default |
+| `encoding-numbers-and-text.trb` | `Int64` and `UInt64` at their limits round-trip exactly, a narrow integer that does not fit is a failure, infinity is `null`; every escape of JSON, and a `\u` surrogate pair |
+| `encoding-decode-errors.trb` | Every failure is a `Fail` with the field chain or the line, never a panic; `strict` reports a field no type asked for |
+| `encoding-describe.trb` | The derived `describe` with doc comments and defaults, a type that contains itself, a capsule through its pair in all three forms, and `Json(naming: .SnakeCase)` |
+
 **Tests** - `test` and `group` of `std/test`, whose report both implementations write from the same place.
 
 | Program | What it pins |

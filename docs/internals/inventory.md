@@ -273,7 +273,7 @@ markers so that milestone 8's `torb doc` can fill it.
 | `how-to/collect-a-pipeline.md` | Collect a pipeline into what you need | The terminal operations and the collectors | `std/iteration` |
 | `how-to/sort-by-more-than-one-key.md` | Sort by more than one key | A tuple key, and why a type has no generated order | `CONCEPT.md#values` |
 | `how-to/write-a-builder.md` | Write a builder | A receiver closure and property commands | `CONCEPT.md#configuration-dsl` |
-| `how-to/read-and-write-json.md` | Read and write JSON | `Json.encode`, `Json.decode<T>`, and hand-written pairs | `std/json` |
+| `how-to/read-and-write-json.md` | Read and write JSON | `Json().encode`, `Json().decode<T>`, the naming option, and hand-written pairs | `std/json` |
 | `how-to/set-up-a-workspace.md` | Set up a workspace | The root manifest and the members | `CONCEPT.md#workspaces` |
 
 ### Package 11: explanation

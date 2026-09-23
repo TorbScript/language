@@ -28,7 +28,7 @@ public native type Expression<Value> {
   native fn value(): Value
 
   /** The values of the captured variables, in the order of their `Captured.index`. */
-  native fn captures(): List<Encode>
+  native fn captures(): List<EncodedValue>
 }
 
 /** A place in a source file: what [Expression.location] and a diagnostic point at. */
@@ -110,7 +110,7 @@ public type BinaryOperator {
  */
 public type ExpressionNode {
   /** A literal value written in the source. */
-  case Literal(value: Encode, of: TypeReference)
+  case Literal(value: EncodedValue, of: TypeReference)
   /** An explicit parameter of the quoted closure, or its implicit `_`. */
   case Parameter(index: Int, name: String, of: TypeReference)
   /** A binding from outside the quoted expression, captured by value. */
@@ -211,7 +211,7 @@ public fn assert(condition: Expression<Bool>) {
   const values = condition.captures()
   const details = condition.tree.capturedNodes().map { node =>
     match node {
-      .Captured(index, name, _) => "{name} = {describe(values[index])}"
+      .Captured(index, name, _) => "{name} = {values[index]}"
       _ => ""
     }
   }

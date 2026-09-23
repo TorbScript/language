@@ -109,7 +109,7 @@ extend <Foreign> with From<Mine> { ... }   // Your type into somebody else's
 
 3. **A conversion from text is a `TryFrom<String, Failure>` like any other.** `Int.tryFrom "42"` and
    `Email.tryFrom "info@example.test"` both answer a `Result`, and there is no `parse` on a type: a function named
-   `parse` belongs to a **format** (`Json.parse`), never to a value. A type may implement `TryFrom` once per source,
+   `parse` belongs to a **format** (`Json().parse`), never to a value. A type may implement `TryFrom` once per source,
    and the call decides which one it means: the **argument**, and where the argument leaves several standing, the
    `Result` the call is expected to produce.
 

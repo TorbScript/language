@@ -796,11 +796,11 @@ native type Expression<Value> {
   source: String                  // "_.age >= minAge"
   location: SourceLocation
   native fn value(): Value               // The ordinary value/closure. Evaluated at most once for non-functions.
-  native fn captures(): List<Encode> // Values of the captured variables
+  native fn captures(): List<EncodedValue> // Values of the captured variables, without their types
 }
 
 type ExpressionNode {
-  case Literal(value: Encode, of: TypeReference)
+  case Literal(value: EncodedValue, of: TypeReference)
   case Parameter(index: Int, name: String, of: TypeReference)
   case Captured(index: Int, name: String, of: TypeReference)      // Index into `captures()`
   case Field(target: ExpressionNode, name: String, of: TypeReference)
@@ -1158,7 +1158,7 @@ const email = Email.tryFrom("info@example.test")?
 Conversions follow the `From`/`Into` principle. Implementing `From` provides `Into` for free, fallible conversions use
 `TryFrom`, which provides `TryInto` the same way. **Text is a source like any other**, so reading a value from it is a
 `TryFrom<String, Failure>` and there is no `parse` on a type; a function named `parse` belongs to a format
-(`Json.parse`). A type may implement `TryFrom` once per source - `Int.tryFrom("42")` reads text, `Int.tryFrom(3.0)`
+(`Json().parse`). A type may implement `TryFrom` once per source - `Int.tryFrom("42")` reads text, `Int.tryFrom(3.0)`
 narrows a number - and the argument decides which one a call means. One direction of each pair is the one to
 implement: `Into` and `TryInto` come from a blanket implementation over the other, so an `extend` that writes one by
 hand overlaps that blanket and is answered with the line to write instead.
@@ -1623,12 +1623,15 @@ Types and values are strictly separate worlds:
   boxed generics would become observable), it keeps every type's metadata alive in compiled binaries, and it is the
   meta-programming style this language does not want.
 
-What reflection is usually needed for (serialization, config mapping, database rows, debug output) is covered by one
-more _generated trait pair_, in the same way `Equals`, `Hash` and `Show` are generated:
+What reflection is usually needed for (serialization, config mapping, database rows, schemas, debug output) is covered
+by one principle: **a value is its constructor call.** The compiler knows every type's constructor and offers it in
+three generated forms, in the same way `Equals`, `Hash` and `Show` are generated - written (`Encode`), read (`Decode`)
+and described without a value (`Describe`):
 
 ```trb
-trait Encode { fn encode(var encoder: Encoder) }
-trait Decode { static fn decode(var decoder: Decoder): Result<Self, DecodeError> }
+trait Encode { fn encode<Target: Encoder>(var target: Target) }
+trait Decode { static fn decode<Source: Decoder>(var source: Source): Result<Self, DecodeError> }
+trait Describe { static fn describe<Target: Describer>(var target: Target) }
 ```
 
 ```trb
@@ -1638,65 +1641,68 @@ type User {
   tags: List<String> = []
 }
 
-const text = Json.encode(user)                 // fn encode(value: Encode): String
-const user = Json.decode<User>(text)?          // fn decode<Value: Decode>(text: String): Result<Value, JsonError>
+const json = Json()
+const text = json.encode(user)                 // fn encode<Value: Encode>(value: Value): String
+const user = json.decode<User>(text)?          // fn decode<Value: Decode>(text: String): Result<Value, JsonError>
 ```
 
-A type describes itself to an `Encoder` and reads itself from a `Decoder`. A format (`Json`, `Toml`, a database
-driver) implements these two traits and never sees a type. This is what the compiler generates for `User`, and
-nothing in it is special:
+A type writes itself into an `Encoder`, reads itself from a `Decoder` and describes itself to a `Describer`. A format
+(`Json`, `Toml`, a database driver) implements these traits and never sees a type; it is a **bound**, so every call is
+monomorphized per format and the chain is direct. This is what the compiler generates for `User`, and nothing in it is
+special:
 
 ```trb
-extend User with Encode, Decode {
-  fn encode(var encoder: Encoder) {
-    encoder.record("User") { fields =>
-      fields.field("name", name)
-      fields.field("email", email)
-      fields.field("tags", tags)
-    }
-  }
-
-  static fn decode(var decoder: Decoder): Result<User, DecodeError> {
-    decoder.record("User") { fields =>
-      Ok(User(
-        name: fields.field("name")?,
-        email: fields.field("email")?,
-        tags: fields.fieldOr("tags", [])?,       // Fields with a default value may be missing
-      ))
-    }
+extend User with Encode {
+  fn encode<Target: Encoder>(var target: Target) {
+    target.record "app/User"                   // the declaration's qualified name: what a format maps a type by
+    target.field "name"
+    name.encode target
+    target.field "email"
+    email.encode target
+    target.field "tags"
+    tags.encode target
+    target.finish()
   }
 }
 ```
 
+`decode` reads the same fields back in the same order, and a field with a default may be missing: the default is
+evaluated only then. `docs/design/ENCODING.md` is the design in full.
+
+- **Derivation is one condition.** All three forms are generated when the constructor is usable from outside, over
+  exactly its parameters, and every parameter has the trait. So what is written can always be read back. A `private`
+  field with a default is no parameter from outside and is in none of the forms - a cache stays out without an
+  annotation.
 - **No tree in between.** Values are written while the type describes itself: no second representation of the whole
   document, sequences are streamed, nothing is lost (numbers keep their range, a `Set` comes back as a `Set` because
   the target type drives the decoding, `Decimal` and bytes are first-class).
 - **No second vocabulary.** The methods of `Encoder` and `Decoder` are named after the types of the language (`bool`,
-  `int`, `float`, `decimal`, `string`, `bytes`) plus the four shapes `sequence`, `map`, `record` and `variant`.
-- **No dynamically typed island.** There is no "any value" type in the language. Who wants to look at a document
-  without knowing its type uses a library type (`JsonValue` of `std/json` is an ordinary ADT, and `Encode`/`Decode` itself).
-- `Encode` is generated for every `type` whose fields are all `Encode`.
-- **A type whose constructor is closed from outside is a capsule, and its `Encode`/`Decode` come from its one
+  `int`, `float`, `decimal`, `string`, `bytes`) plus the four shapes `sequence`, `map`, `record` and `variant`, which
+  open, `field` for the name of the value that follows, and `finish`, which closes.
+- **No dynamically typed island.** There is no "any value" type in the language. A value held without its type is an
+  `EncodedValue`, built by an ordinary encoder, and who wants to look at a document without knowing its type uses a
+  library type (`JsonValue` of `std/json` is an ordinary ADT).
+- **A type whose constructor is closed from outside is a capsule, and its three forms come from its one
   conversion pair** instead of from its fields (see [Construction](#construction)). The pair is the one type `Source`
   for which both directions exist: `Self` has `TryFrom<Source, Failure>` or `From<Source>`, and `Source` has
   `From<Self>`; the reflexive `From<Self>` never counts. A value is written as its `Source` and read by decoding a
   `Source` and handing it to the way in, so the check the factory exists to force runs for a decoded value too, and a
   `TryFrom` that refuses becomes a `DecodeError` that carries its `show()`. With no pair or with several candidates
-  there is no `Decode`, and the message names the rule and the candidates; the way out stays the field-wise one, which
-  cannot break an invariant and is what a message shows.
-- Different field names, skipped fields, versioning: write the two functions by hand, there are no annotations.
-  What is a convention of the format and not of the type is an option of the format (`Json.encode(user, naming: .SnakeCase)`).
+  there is no `Decode` and no `Describe`, and the message names the rule and the candidates; the way out stays the
+  field-wise one, which cannot break an invariant and is what a message shows.
+- **The adjustment ladder.** What is a convention of the format and not of the type is an option of the format
+  (`Json(naming: .SnakeCase).encode(user)`); a field that is not data says so with `private` and a default; a
+  different representation in every format is `encode` and `decode` written by hand. There are no annotations.
 - **`Encode`/`Decode` are data binding, for every format whose model is "values, sequences, maps, records"**: JSON,
   MessagePack, CBOR, TOML, YAML, query strings, database rows. A type says once what it consists of, a format says
-  once how that is written: N + M implementations instead of N × M, a format somebody else wrote works with every
-  type that exists, and `List<Encode>` stays possible. (`length` in `sequence` and `map` is there for the binary
-  formats, which write it in front.)
-- **A format with a document model of its own gets its own traits, in its own package, in addition.** XML and HTML
-  know attributes next to elements, namespaces, text between elements and an order that matters - none of that fits
-  into four shapes, and squeezing it in ends in naming tricks (`@id`, `$text`). So `std/xml` has the tree (`XmlNode`,
-  like `JsonValue`) and `XmlEncode`/`XmlDecode` for types that need the whole format. Data that merely travels as XML
-  needs neither: `Xml.encode(value: Encode)` writes records as elements by convention.
-- `describe(value)` renders every `Encode` value as text, for messages and debugging.
+  once how that is written: N + M implementations instead of N × M, and a format somebody else wrote works with every
+  type that exists. (`length` in `sequence` and `map` is there for the binary formats, which write it in front.)
+- **What is special about one type in one format is a value in that format's own DSL.** An XML attribute, a column
+  type, a field number: a format offers a mapping keyed by the qualified type name `record(typeName)` carries, and the
+  type knows about none of them. No format gets a trait of its own; XML is a mapping value and a tree (`XmlNode`,
+  like `JsonValue`) in `std/xml`.
+- `rendered(value)` renders every `Encode` value as text, for messages and debugging, and `structureOf<Value>()` is a
+  type's description as a tree, which is what a schema format walks.
 - Generated code only exists where it is used, like every generic instantiation. Nothing is kept alive "just in case".
 
 ## Error Handling
@@ -2484,6 +2490,15 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
 
 ## Decision Log
 
+- **A value is its constructor call, and format-specific facts live in the format** (2026-09-23;
+  docs/design/ENCODING.md). `Encode`, `Decode` and `Describe` are the constructor written, read and described without a
+  value; all three are derived when the constructor is usable from outside, over exactly its parameters, so a `private`
+  field with a default is in none of them and a capsule goes through its conversion pair. The format is a bound
+  (`encode<Target: Encoder>(var target: Target)`), so the vocabulary is one flat trait per direction and a derived form
+  is a direct call chain per (type, format). A convention of a format is an option of the format
+  (`Json(naming: .SnakeCase)`), what is special about one type in one format is a mapping value keyed by the qualified
+  type name, and no format gets a trait of its own. `EncodedValue` replaces `Encode` as a type where a program holds a
+  value without its type, and `describe(value)` is `rendered(value)`.
 - **`close()` is the destructor, and a release that runs one has a line** (2026-09-22; docs/design/DESTRUCTORS.md). Only a
   `shared type` implements `Close`, the last release runs it once, user code cannot call it and `self` cannot escape
   it. A slot whose type may contain a `Close` object is released at the end of its scope in reverse declaration order,
@@ -2804,7 +2819,7 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
   `Show`. `Show` is the language's `toString()` - display and debugging in one - and not the partner of a parser; the
   derived `Show` of a record reads nothing back either, so the pairing was the weaker argument, and keeping
   `TryFrom<String, _>` and `Parse` apart would have needed a lint to hold. A function named `parse` belongs to a
-  **format** (`Json.parse`) and stays. Under a `?` the annotation says the target alone and the failure follows from
+  **format** (`Json().parse`) and stays. Under a `?` the annotation says the target alone and the failure follows from
   the one `TryFrom` the target has for that source (`const port: Int = text.tryInto()?`)
 - One member namespace. A method is structurally a constant of the type that holds a receiver closure, `fn` is its
   declaration form. Not a per-instance field: methods cost no memory per instance, cannot be swapped at runtime, and
@@ -2957,7 +2972,7 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
   `std/path` kept a public constructor and a documented pitfall until this rule existed; with it, `Path` is a capsule
   whose component list cannot be handed in wholesale and whose text form is what a JSON document holds. No pair or several is no
   `Decode` and a message that names the rule and the candidates. The way out is not refused with it: `Encode`
-  cannot break an invariant, it is what `describe(value)` and a failing `assert` show, and the generated `Show` of
+  cannot break an invariant, it is what `rendered(value)` and a failing `assert` show, and the generated `Show` of
   the same type already prints private fields - so without a pair it stays the field-wise one. The price of the rule
   is that a capsule reaches a format without a type name, so a mapping keyed by one cannot pick it out.
 

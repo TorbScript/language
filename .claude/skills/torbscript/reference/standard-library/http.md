@@ -106,7 +106,7 @@ public shared type Body with Source<Bytes, HttpError> {
   var fn lines(): Source<String, HttpError>
   static fn of(var source: Source<Bytes, HttpError>): Body
   static fn empty(): Body
-  static fn jsonOf(value: Encode): Body
+  static fn jsonOf<Value: Encode>(value: Value): Body
 }
 ```
 
@@ -141,6 +141,6 @@ all.
 ## Related
 
 - [std/stream](stream.md) - `Source`, which `Body` is, and `Sink`.
-- [std/json](json.md) - `Json.decode`, which `Response.json` and `Body.json` call.
+- [std/json](json.md) - `Json().decode`, which `Response.json` and `Body.json` call.
 - [The standard library](index.md) - the other packages.
 

@@ -1,0 +1,90 @@
+use Process from "std/process"
+
+/**
+ * Numbers at their limits and text with everything JSON has to escape, through `Json` and back, compiled to a native
+ * binary.
+ *
+ * What it pins: the smallest and the largest `Int64` and the largest `UInt64` round-trip exactly, because a number
+ * without a fraction is read as a whole number and not through a `Float64`; a narrow integer is written widened and
+ * checked on the way back; a `Float64` is written so that it reads back as the same value, and one JSON cannot write
+ * (infinity) is `null`. A text escapes `"`, `\` and every control character, keeps everything else as UTF-8, and
+ * `\u` escapes - a surrogate pair among them - read back as the characters they name.
+ *
+ * The program leaves with the number of checks that failed.
+ */
+
+/** Every integer width at its edge, and two floats. */
+type Limits {
+  smallest: Int64
+  largest: Int64
+  count: UInt64
+  tiny: Int8
+  small: Int16
+  medium: Int32
+  byte: UInt8
+  word: UInt16
+  wide: UInt32
+  ratio: Float64
+  huge: Float64
+}
+
+var failed = 0
+
+/** Compares one text with what it should be, and counts a difference. */
+fn expect(actual: String, wanted: String): Int {
+  if actual == wanted {
+    return 0
+  }
+  print "expected {wanted}"
+  print "     got {actual}"
+  1
+}
+
+const json = Json()
+const count = UInt64.tryFrom("18446744073709551615").expect("the largest UInt64 is one")
+const limits = Limits(
+  -9223372036854775807 - 1,
+  9223372036854775807,
+  count,
+  -128,
+  -32768,
+  2147483647,
+  255,
+  65535,
+  4294967295,
+  0.1,
+  1.0e300,
+)
+const written = json.encode limits
+print written
+const back = json.decode<Limits>(written)
+print back
+failed = failed + expect("{back == Ok(limits)}", "true")
+
+// A narrow number that does not fit is a failure of the one field, never a truncation
+failed = failed + expect("{json.decode<Int8>("128")}", "Fail(128 does not fit into an Int8)")
+failed = failed + expect("{json.decode<UInt8>("-1")}", "Fail(-1 does not fit into a UInt8)")
+failed = failed + expect("{json.decode<Int>("1.5")}", "Fail(1.5 is not a whole number)")
+failed = failed + expect("{json.decode<Int>("2.0")}", "Ok(2)")
+failed = failed + expect("{json.decode<Float64>("3")}", "Ok(3.0)")
+
+// Infinity has no JSON, so it is written as `null`
+failed = failed + expect(json.encode(1.0e308 * 10.0), "null")
+
+// Everything that has to be escaped, and characters beyond ASCII that do not
+const text = "quote \" backslash \\ tab \t newline \n return \r bell \u{7} umlaut ü euro € party 🎉"
+const quoted = json.encode text
+print quoted
+const wanted = r"""quote \" backslash \\ tab \t newline \n return \r bell \u0007 umlaut ü euro € party 🎉"""
+failed = failed + expect(quoted, "\"" + wanted + "\"")
+failed = failed + expect("{json.decode<String>(quoted) == Ok(text)}", "true")
+
+// `\u` escapes, a surrogate pair, and the escaped solidus read back as the characters they name
+const escaped = json.decode<String>("\"" + r"""ü € 🎉 \/ \b\f""" + "\"")
+failed = failed + expect("{escaped == Ok("ü € 🎉 / \u{8}\u{c}")}", "true")
+
+// A `Char` is a text of one character
+failed = failed + expect(json.encode('ß'), "\"ß\"")
+failed = failed + expect("{json.decode<Char>("\"ß\"")}", "Ok('ß')")
+
+Process.exit failed
