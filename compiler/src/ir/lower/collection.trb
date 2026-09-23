@@ -29,7 +29,7 @@ use borrowed, referenced from "../ir"
 use FunctionBuilder, addTemporary, addLocal, addBlock, emit from "../build"
 use elementFor from "../element"
 use memberOfType, traitMemberNamed from "../witness"
-use traitArgumentsOf, witnessFor from "../../semantics/checker/implementation"
+use traitArgumentsOf, witnessFor, isSupertraitOfBound from "../../semantics/checker/implementation"
 use locationOf from "./context"
 use Lowering, reportUnsupported, irTypeOfClosed, substituted, voidTypeOf from "./context"
 use finishBlock, continueIn from "./context"
@@ -50,8 +50,12 @@ public fn lowerListLiteral(
   annotation: IrTypeId,
 ): Slot {
   const at = expression.span
+  // A trait the default list implements itself (`appendedAll([4, 5])` expects an `Iterate<Int>`) is boxed below; any
+  // other target, a `Set` for one, is built through its own `from`
   if const Some(.FromIterate(target, item, _)) = lowering.checker.collectionLiteralAt(lowering.module, at) {
-    return lowerBuiltList lowering, builder, destination, items, target, item, annotation, at
+    if !isImplementedByList(lowering, substituted(lowering, target), substituted(lowering, item)) {
+      return lowerBuiltList lowering, builder, destination, items, target, item, annotation, at
+    }
   }
   if !isDefaultLiteral(lowering, at) {
     return abandonedSlot lowering, builder, destination
@@ -74,6 +78,28 @@ public fn lowerListLiteral(
   // supertrait that is expected, which is what the `from` of a trait `List` implements would have made of it
   const appending = preludeType lowering, "List", [item]
   lowerItemList lowering, builder, destination, items, item, bounds, annotation, at, appending
+}
+
+/** Whether the default `List<Item>` a literal builds already is the trait-typed value `target` names. */
+fn isImplementedByList(var lowering: Lowering, target: TypeId, item: TypeId): Bool {
+  const bounds = match lowering.checker.types.form(target) {
+    .Traits(found) => found
+    _ => {
+      return false
+    }
+  }
+  const list = match preludeType(lowering, "List", [item]) {
+    Some(found) => found
+    None => {
+      return false
+    }
+  }
+  for bound in bounds {
+    if bound != list && !isSupertraitOfBound(lowering.checker, list, bound, list) {
+      return false
+    }
+  }
+  true
 }
 
 /**
