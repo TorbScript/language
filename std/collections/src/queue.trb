@@ -101,9 +101,12 @@ extend<Item: Hash> Queue<Item> with Hash {
 
 // --- Implementation, written in plain TorbScript ----------------------------------------------------------
 
-/** Ring buffer on top of a `List`. Nothing is moved and nothing is allocated until the buffer is full. */
+/**
+ * Ring buffer on top of a `List`. An empty queue holds no slots at all; the first `enqueue` makes 16 of them, and a
+ * full buffer doubles. Nothing is moved and nothing is allocated between two of those steps.
+ */
 public type ArrayQueue<Item> with Queue<Item>, From<Iterate<Item>> {
-  private var slots: List<Item?> = List.filled 16, None
+  private var slots: List<Item?> = []
   private var head: Int = 0
   private var storedLength: Int = 0
 
@@ -127,7 +130,10 @@ public type ArrayQueue<Item> with Queue<Item>, From<Iterate<Item>> {
 
   /** Takes the item at the front off and answers it, or `None` if empty. */
   var fn dequeue(): Item? {
-    const next = slots[head]?            // Empty queue: the slot is `None`
+    if storedLength == 0 {
+      return None
+    }
+    const next = slots[head]?
     slots[head] = None                   // Release the value
     head = slot 1
     storedLength = storedLength - 1
@@ -136,12 +142,15 @@ public type ArrayQueue<Item> with Queue<Item>, From<Iterate<Item>> {
 
   /** The item at the front, or `None` if empty: one slot, without walking the ring. */
   fn peek(): Item? {
+    if storedLength == 0 {
+      return None
+    }
     slots[head]
   }
 
-  /** Removes every item, in place. */
+  /** Removes every item, in place, and gives the slots back. */
   var fn clear() {
-    slots = List.filled 16, None
+    slots = []
     head = 0
     storedLength = 0
   }
@@ -156,10 +165,9 @@ public type ArrayQueue<Item> with Queue<Item>, From<Iterate<Item>> {
     (0..storedLength).filterMap { slots[slot(_)] }.iterate()
   }
 
-  /** Shrinks the ring to the items it holds; see [Queue.compact]. */
+  /** Shrinks the ring to the items it holds, to no slots at all when it is empty; see [Queue.compact]. */
   var fn compact() {
-    // At least one slot, because every index goes through `% slots.length()`
-    var tight: List<Item?> = List.filled storedLength.max(1), None
+    var tight: List<Item?> = List.filled storedLength, None
     for offset in 0..storedLength {
       tight[offset] = slots[slot(offset)]
     }
@@ -167,12 +175,15 @@ public type ArrayQueue<Item> with Queue<Item>, From<Iterate<Item>> {
     head = 0
   }
 
+  /** Where the item `offset` places behind the front is. Only asked while there are slots. */
   private fn slot(offset: Int): Int {
     (head + offset) % slots.length()
   }
 
+  /** Twice the slots, or the first 16. */
   private var fn grow() {
-    var larger: List<Item?> = List.filled(slots.length() * 2, None)
+    const size = if slots.isEmpty() { 16 } else { slots.length() * 2 }
+    var larger: List<Item?> = List.filled size, None
     for offset in 0..storedLength {
       larger[offset] = slots[slot(offset)]
     }

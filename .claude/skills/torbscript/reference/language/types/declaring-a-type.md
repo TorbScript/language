@@ -107,8 +107,10 @@ print "{point} {point.area()} {Point.origin}"
    print "{first} {second}"
    ```
 
-5. **A field default is evaluated at every construction, in a scope without `self` and without the other fields.** So the
-   order of the fields is not observable, and a default that depends on another field is what a factory is for.
+5. **A field default is a constant, read in a scope without `self` and without the other fields.** A literal, a
+   collection literal, a constructor or a case of constants, a named constant, or an operator on those - no call, so
+   the constructor runs no code. The order of the fields is not observable, and a default that is computed, or that
+   depends on another field, is what a factory is for ([Construction](construction.md), rule 4).
 
 6. **The constructor is usable from outside if and only if every `private` field has a default.** Everything else is a
    static factory function: a member declared `static`.

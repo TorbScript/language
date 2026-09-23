@@ -354,7 +354,7 @@ public type FieldDescription {
 public type FieldDefault {
   /** No default: the field has to be there. */
   case Required
-  /** A default that is evaluated at every construction, so it is not data anybody could print. */
+  /** A default the description cannot write as data - a closure, or a value of a type without `Encode`. */
   case Computed
   /** A default that is static data, and this is it. */
   case Constant(value: EncodedValue)

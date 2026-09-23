@@ -19,8 +19,8 @@ use Sink from "./sink"
  *     }
  *
  * A source has an identity and is consumed once, so it is a `shared type` - and `next` changes it, so it takes
- * `var self` exactly as `Iterator.next` does. **A source that is read from sits in a `var` binding**, and a `const`
- * handle is the read-only view every shared object has ("Identity" in CONCEPT.md). That a `var fn` method may answer a
+ * `var self` exactly as `Iterator.next` does. Like every change of a shared object it goes through any binding that
+ * holds the source, a `const` one included ("Identity" in CONCEPT.md). That a `var fn` method may answer a
  * `Task` is what the `shared` in `shared type` buys: for a value a `var` is an exclusive in-out access that ends with
  * the call, for an object it is a permission to change the one object, and a permission survives an `await`.
  *
@@ -357,6 +357,8 @@ public shared type Staged<Input, Item, Failure> with Source<Item, Failure> {
   private var queue: Shared<List<Item>>
   private var pushing: Accumulator<Input, Void>
   private var finished: Bool = false
+  /** How many items of the queue `next()` handed out: the front is at this index, and nothing is removed before it. */
+  private var taken: Int = 0
 
   /** Wraps `upstream` with `stage`, and sets up the queue `next()` reads from. */
   static fn of(var upstream: Source<Input, Failure>, stage: Stage<Input, Item>): Staged<Input, Item, Failure> {
@@ -367,11 +369,17 @@ public shared type Staged<Input, Item, Failure> with Source<Item, Failure> {
   /** Pulls from `upstream` and pushes into the stage until the queue holds an item or the stage is done. */
   var fn next(): Task<Result<Item?, Failure>> {
     loop {
-      var waiting = queue.value
-      if !waiting.isEmpty() {
-        const ready = waiting.removeAt 0
-        queue.value = waiting
-        return Ok ready
+      // The front is read at `taken` instead of removed, which would move every item behind it; once every item was
+      // handed out the queue is emptied in one step, before the next value is pushed in
+      const waiting = queue.value
+      if taken < waiting.length() {
+        const ready = waiting[taken]
+        taken = taken + 1
+        return Ok Some(ready)
+      }
+      if taken > 0 {
+        queue.value = []
+        taken = 0
       }
       if finished {
         return Ok None

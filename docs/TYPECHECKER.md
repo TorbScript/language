@@ -850,8 +850,10 @@ advances `current` (gap 3); the subject must then be a mutable place and the exc
   `+` on `String` is a call, interpolation is not. That is what removes module initialization order and makes cyclic
   imports harmless. In entry files and scripts a top-level `const` is ordinary code.
 - `public const` is allowed at top level, `public var` is not: a module exports constants, it has no mutable state.
-- A **field default** is evaluated at every construction, in a scope without `self` and without the other fields, so
-  field order is not observable.
+- A **field default** is a constant, read in a scope without `self` and without the other fields, so field order is
+  not observable: what a module's top-level `const` may be, plus a closure that captures nothing, and never the
+  construction of a `shared type` (`checkFieldDefaultConstant` in `semantics/checker/constant.trb`). A computed
+  value comes from a `static fn` factory; an empty `Set` is `[]`, which the lowering builds through `Set.from`.
 - A **const generic argument** must be a literal, a const parameter, or a path to a `const` whose initializer reduces
   to a literal. `Array<Item, Size + 1>` is "there is no arithmetic in types".
 - Top-level `?` and `await()` are allowed in entry files and scripts. `await()` elsewhere requires a return type of
@@ -2213,7 +2215,9 @@ _Proposal:_ a field default is evaluated at every construction in a scope withou
 fields. _Reason:_ field order must not be observable, and a default that depends on another field is what a factory
 is for.
 
-_Decision:_ accepted.
+_Decision:_ accepted, and narrowed by the owner on 2026-09-22: a field default is a **constant** - literals, `None`,
+collection literals, constructors and cases of constants, named constants, operators on those - and no call, a
+`static fn` included. The constructor has no logic, so it runs no code either.
 
 **27. What exactly is "compile-time evaluable"?**
 "Modules and Packages": "top-level `const` initializers of modules must be compile-time evaluable".

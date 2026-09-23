@@ -472,12 +472,16 @@ A type parameter can be a value instead of a type:
 
 ```trb
 type Matrix<const Rows: Int, const Columns: Int> {
-  private var cells: Array<Array<Float, Columns>, Rows> = Array.filled(Array.filled(0.0))
+  private var cells: Array<Array<Float, Columns>, Rows>
+
+  static fn zero(): Matrix<Rows, Columns> {
+    Self Array.filled(Array.filled(0.0))
+  }
 
   fn multiplied<const Other: Int>(other: Matrix<Columns, Other>): Matrix<Rows, Other> { ... }
 }
 
-const combined = Matrix<2, 3>().multiplied(Matrix<3, 4>())   // Matrix<2, 4>, checked by the compiler
+const combined = Matrix<2, 3>.zero().multiplied(Matrix<3, 4>.zero())   // Matrix<2, 4>, checked by the compiler
 ```
 
 - `Array<Item, const Size: Int>` is **the inline storage primitive**, as in Rust and Go: a small inline value without
@@ -608,7 +612,8 @@ A variadic parameter never accepts a collection implicitly (`List.of([1, 2])` is
 element). Spreading is always explicit.
 
 **A parameter default is evaluated at the call site, at every call, in the scope of the declaration** - without `self`
-and without the other parameters. That is the same rule as for a field default (see [Construction](#construction)), so
+and without the other parameters. That is the scope rule of a field default (see [Construction](#construction)), which
+is a constant on top of it, so
 `limits(memory: Int = 64.megabytes())` is a call that happens where `limits` is called, and a default can never depend
 on an argument order that is not visible at the call site.
 
@@ -1120,8 +1125,11 @@ Every type has exactly one constructor. It is generated from the fields, in decl
 written by hand. **Constructors never contain logic.**
 
 - Fields with a default value can be omitted.
-- **A field default is evaluated at every construction, in a scope without `self` and without the other fields.**
-  So the order of the fields is not observable, and a default that depends on another field is what a factory is for.
+- **A field default is a constant, read in a scope without `self` and without the other fields:** a literal, `None`,
+  a collection literal, a constructor or a case of constants, a named constant, an operator on those, or a closure
+  that captures nothing. No call - `List.filled 16, None` and `Set.of()` are code, and a constructor runs none; an
+  empty `Set` is `[]`. So the order of the fields is not observable, and a default that is computed or depends on
+  another field is what a factory is for.
 - Outside of the type, `private` fields cannot be passed. So the constructor is usable from outside if and only if
   every private field has a default value. Inside of the type (`Self(...)`) all fields can be passed.
 - **`copy` has the shape of the constructor, with every field optional:**
@@ -2002,14 +2010,13 @@ while const Some(line) = lines.next().await()? {
 
 - **A stream has an identity and is consumed once,** so both ends are `shared type`s, and the verbs that consume are
   `var fn`s exactly as `Iterator.next` and `Accumulator.add` are. A `var fn` method may answer a `Task` because for an
-  object `var` is a permission and not an exclusive access ([Identity](#identity-shared-type)). So **a source that is
-  read from sits in a `var` binding**, and a `const` handle is the read-only view every shared object has. A consequence
+  object `var` is a permission and not an exclusive access ([Identity](#identity-shared-type)). So **a source changes
+  through any binding that holds it**, a `const` one included, because there is no read-only view of an object. A consequence
   worth knowing: a source belongs to the task that made it, because shared objects do not cross task boundaries.
 - **Whoever reads needs the permission - now or later.** `next`, `collect`, `toList`, `count`, `find` and `into` read
   items, and `map`, `filter`, `through`, `then` and `checked` hand the source to a wrapper that reads it from then on:
-  all of them are `var fn`s. One rule, so a `const` source cannot be consumed by wrapping it either - which is what
-  the read-only view promised. A chain is still one expression, because a freshly produced object is a `var` path
-  ([Identity](#identity-shared-type)).
+  all of them are `var fn`s. One rule: a member that consumes the source is a `var fn`. A chain is one expression, because a
+  change of an object is not a question of the path it is reached through ([Identity](#identity-shared-type)).
 
   ```trb
   const all = body.through(Json.items<User>()).checked().toList().await()?

@@ -672,6 +672,137 @@ group "Defaults are evaluated without a receiver (gap 26)" {
   }
 }
 
+group "A field default is a constant" {
+  test "a call of a `static fn` is code, and the message offers the empty literal of the field's type" {
+    const source = r"""
+      type Buffer {
+        var slots: List<Int> = List.of(1, 2)
+      }
+      """
+    assert(
+      problems(source)
+        == ["A field default is a constant: `List.of` is a call - compute it in a `static fn`, or start from `[]`"]
+    )
+    assert(
+      notes(source)
+        == [
+          "A constructor has no body: a default is a literal, a collection literal, a constructor or a case of"
+            + " constants, a named constant, or an operator on those - so it can be built once and shared",
+        ]
+    )
+  }
+
+  test "a call of a function, a method and an operator that is a trait's are code too" {
+    const function = r"""
+      fn seed(): Int {
+        4
+      }
+
+      type Probe {
+        count: Int = seed()
+      }
+      """
+    assert(problems(function) == ["A field default is a constant: `seed` is a call - compute it in a `static fn`"])
+    const method = r"""
+      const limit = 3
+
+      type Probe {
+        count: Int = limit.max(1)
+      }
+      """
+    assert(problems(method) == ["A field default is a constant: `limit.max` is a call - compute it in a `static fn`"])
+    const text = r"""
+      type Probe {
+        name: String = "a" + "b"
+      }
+      """
+    const message = "A field default is a constant: `+` here is a call of its trait - compute it in a `static fn`,"
+      + " or start from `\"\"`"
+    assert(problems(text) == [message])
+  }
+
+  test "an empty `Set` is `[]` and an empty `Map` is `[:]`, and an array has no empty literal to offer" {
+    const set = r"""
+      type Probe {
+        seen: Set<Int> = TrieSet.from([1])
+      }
+      """
+    assert(
+      problems(set)
+        == ["A field default is a constant: `TrieSet.from` is a call - compute it in a `static fn`, or start from `[]`"]
+    )
+    const array = r"""
+      type Probe {
+        cells: Array<Int, 4> = Array.filled(0)
+      }
+      """
+    assert(problems(array) == ["A field default is a constant: `Array.filled` is a call - compute it in a `static fn`"])
+  }
+
+  test "literals, collection literals, constructors, cases, named constants and operators on them are constants" {
+    const source = r"""
+      const limit = 16
+
+      type Point {
+        x: Int = 0
+        y: Int = 0
+      }
+
+      type Shape {
+        case Circle(radius: Int)
+        case Square(side: Int = limit * 2)
+      }
+
+      type Probe {
+        count: Int = limit + 1
+        label: String = "n{limit}"
+        empty: List<Int> = []
+        numbers: List<Int> = [1, 2, limit]
+        seen: Set<Int> = []
+        byName: Map<String, Int> = [:]
+        pair: (Int, String) = (1, "a")
+        origin: Point = Point(1, 2)
+        shape: Shape = .Circle(3)
+        other: Shape = Shape.Square(side: 2)
+        absent: Int? = None
+        present: Int? = Some(3)
+        flag: Bool = !true && limit > 3
+        negative: Float = -1.5
+        onStart: () => Void = {}
+      }
+      """
+    assert problems(source).isEmpty()
+  }
+
+  test "a default never makes an object: every value needs one of its own" {
+    const source = r"""
+      shared type Connection {
+        url: String
+      }
+
+      type Pool {
+        first: Connection = Connection("tcp://example.test")
+      }
+      """
+    assert(
+      problems(source)
+        == [
+          "A field default is a constant, and this makes a `Connection`: every value needs an object of its own"
+            + " - make it in a `static fn`",
+        ]
+    )
+  }
+
+  test "a default that already has a message gets no second one" {
+    const source = r"""
+      type Probe {
+        count: Int = missing()
+      }
+      """
+    assert(problems(source) == ["Cannot find `missing` here"])
+  }
+}
+
 group "The parameters and the top level of a body are one scope" {
   test "a `const` of the body cannot shadow a parameter" {
     const source = r"""

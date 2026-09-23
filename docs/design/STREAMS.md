@@ -70,8 +70,9 @@ one object, and a permission survives an `await` (CONCEPT, "Identity"; TYPECHECK
 a message of its own: a `var fn` receiver or a `var` parameter of a **value** on a function that answers a `Task` would write its
 change back before the task has run.
 
-So **a source that is read from sits in a `var` binding** and a `const` handle is the read-only view every shared object
-has. The second consequence of identity: a source cannot be handed to another task, because shared objects are confined
+So **a source changes through any binding that holds it**, a `const` one included: `next()` is a `var fn` because it
+changes the source, and there is no read-only view of an object (CONCEPT, "Identity"). The second consequence of
+identity: a source cannot be handed to another task, because shared objects are confined
 to the task that made them. Nothing in `std/stream` spawns except `Source.produce`, which spawns a task that captures a
 `Channel` and nothing else shared.
 
@@ -103,21 +104,21 @@ var fn next(): Task<Result<Item?, Failure>>
 **Whoever reads needs the permission — now or later.** `next`, `collect`, `toList`, `count`, `fold`, `forEach`, `find`
 and `into` read items, so they are `var fn`s. So do `through`, `map`, `filter`, `take`, `then`, `mapFailure` and
 `checked`: they hand the source to a wrapper that reads it from then on, which is the same permission one step later.
-One rule, no exceptions — and a `const` source cannot be consumed by wrapping it either, which is exactly what the
-read-only view of a shared object promises.
+One rule, no exceptions: a member that consumes the source is a `var fn`, and it is called through whatever holds the
+source.
 
-A chain is still **one expression**, because a freshly produced object *is* a `var` path (gap 52): the rule against a
-temporary protects values, where the change would be lost with the copy it was made in, and an object has no copy —
-nobody else holds a view of something that was just made, so the full permission is the caller's to give.
+A chain is **one expression**, because a change of an object is not a question of the path it is reached through: the
+rule against a temporary protects values, where the change would be lost with the copy it was made in, and an object
+has no copy.
 
 ```trb
 const all = body.through(Json.items<User>()).checked().toList().await()?
 ```
 
-What needs a `var` binding is only what a `const` handle would have withheld anyway:
+A `const` binding is enough for all of it, because `Response` and its `body` are objects:
 
 ```trb
-var response = http.get(url).await()?     // `response.body` is a `var` path through it
+const response = http.get(url).await()?
 const text = response.body.text().await()?
 ```
 

@@ -84,6 +84,8 @@ type StagedIterator<Input, Item> with Iterator<Item> {
   var pushing: Accumulator<Input, Void>
   var queue: Shared<List<Item>>
   var finished: Bool = false
+  /** How many items of the queue were handed out: the front is at this index, and nothing is removed before it. */
+  var taken: Int = 0
 
   /** Deliver what is queued; when nothing is queued, push one more value in and look again. */
   var fn next(): Item? {
@@ -107,14 +109,22 @@ type StagedIterator<Input, Item> with Iterator<Item> {
     }
   }
 
+  /**
+   * The front of the queue, read at [StagedIterator.taken] instead of removed, which would move every item behind it.
+   * Once every item was handed out the queue is emptied in one step, before the next value is pushed in.
+   */
   var fn dequeue(): Item? {
-    var waiting = queue.value
-    if waiting.isEmpty() {
-      return None
+    const waiting = queue.value
+    if taken < waiting.length() {
+      const first = waiting[taken]
+      taken = taken + 1
+      return Some first
     }
-    const first = waiting.removeAt 0
-    queue.value = waiting
-    first
+    if taken > 0 {
+      queue.value = []
+      taken = 0
+    }
+    None
   }
 
   var fn stop() {

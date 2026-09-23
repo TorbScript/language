@@ -42,6 +42,7 @@ map.get(key)                             Indexed.get: an Option
 map[key] = value                         MutableIndexed.set
 
 const unique: Set<Int> = [1, 2, 2, 3]    a list literal, adapted because Set is From<Iterate<Item>>
+var seen: Set<Int> = []                  the empty Set, and the constant a field of one starts from
 Set.of(1, 2, 3)                          from arguments, needs Item: Hash
 ```
 
@@ -110,6 +111,22 @@ Set.of(1, 2, 3)                          from arguments, needs Item: Hash
      groups.update name[0..1], [] { names => names.append name }
    }
    print groups
+   ```
+
+8. **The empty literals are the constants a field starts from.** A field default is a constant
+   ([Construction](../types/construction.md), rule 4), and `Set.of()` is a call - so an empty `Set` is `[]`, which
+   the literal builds through `Set.from` like any other, and an empty `Map` is `[:]`.
+
+   ```trb check
+   type Index {
+     var seen: Set<String> = []
+     var positions: Map<String, Int> = [:]
+   }
+
+   var index = Index()
+   index.seen.insert "Ada"
+   index.positions.set "Ada", 1
+   print index
    ```
 
 ## What this is not

@@ -228,10 +228,6 @@ extend Status with Encode, Decode, Describe {
   }
 }
 
-/** A label a log line can carry, computed at every construction: a default that is not static data. */
-fn defaultLabel(): String {
-  "order"
-}
 
 /** What a customer bought, with everything the shop keeps about it. */
 public type Order {
@@ -247,8 +243,8 @@ public type Order {
   note: String? = None
   /** Free-form labels the shop puts on an order. */
   tags: List<String> = []
-  /** A short label for a log line. It is a call, so a schema knows there is a default but not which. */
-  logLabel: String = defaultLabel()
+  /** A short label for a log line. A default is a constant, so a schema knows which one it is. */
+  logLabel: String = "order"
   /** The rendered summary, kept so a list view does not build it twice. Private with a default, so it is not part. */
   private summary: String = ""
 }
@@ -285,7 +281,7 @@ extend Order with Encode, Decode, Describe {
     const status = optionalField(source, "status", Status.Draft, Status.decode)?
     const note = optionalField(source, "note", None, readOptionalText)?
     const tags = optionalField(source, "tags", [], readTextSequence)?
-    const logLabel = optionalField(source, "logLabel", defaultLabel(), { inner => inner.string() })?
+    const logLabel = optionalField(source, "logLabel", "order", { inner => inner.string() })?
     source.finish()?
     Ok Order(id: id, customer: customer, price: price, status: status, note: note, tags: tags, logLabel: logLabel)
   }
@@ -325,7 +321,7 @@ extend Order with Encode, Decode, Describe {
     target.field(FieldDescription(
       "logLabel",
       documentation: "A short label for a log line",
-      default: FieldDefault.Computed,
+      default: FieldDefault.Constant(EncodedValue.String("order")),
     ))
     target.string()
     target.finish()

@@ -16,6 +16,7 @@ use SymbolId from "../symbols"
 use Checker from "./context"
 use integerLiteral from "./lowering"
 use bindingOfSite, resultOf from "./signature"
+use isSharedType from "./declaration"
 
 /**
  * What a compile-time constant is worth. Only the scalars fold - an aggregate is evaluable exactly when its parts are,
@@ -61,6 +62,192 @@ public fn checkConstantInitializer(var checker: Checker, module: ModuleId, value
         )
     )
   }
+}
+
+/**
+ * The default of a field is a constant: a literal, `None`, a collection literal, a constructor or a case of constants,
+ * a named constant, and the compile-time operators on those - what the initializer of a top-level `const` may be -
+ * plus a closure that captures nothing, which the constructor only stores. A constructor has no body, so nothing it
+ * fills in may run code, and a value that is computed comes from a `static fn` factory. A constant is built once and
+ * shared, so it never makes a `shared type`: an object has an identity, and every value needs one of its own.
+ *
+ * The empty literal the message offers is what the field's type starts from, where there is one.
+ */
+public fn checkFieldDefaultConstant(var checker: Checker, module: ModuleId, value: Expression, emptyLiteral: String?) {
+  // A closure that captures nothing is a function value the constructor only stores: `var onStart: () => Void = {}`
+  if const .Closure(_) = value.kind {
+    if (checker.capturesAt(module, value.span) ?? []).isEmpty() {
+      return
+    }
+  }
+  const found = evaluateConstant checker, module, value, 0
+  const at = match found {
+    .NotConstant(span) => span
+    _ => {
+      if const Some(made) = objectMadeIn(checker, module, value) {
+        const shown = checker.describe(checker.expressionType(module, made.span) ?? checker.deferredType)
+        checker.report(
+          module,
+          Diagnostic.error(
+            "A field default is a constant, and this makes a `{shown}`: every value needs an object of its own - make"
+              + " it in a `static fn`",
+            made.span,
+          )
+            .withNote("A constant is built once and shared, and an object has an identity, so it is never shared")
+        )
+      }
+      return
+    }
+  }
+  const offending = expressionAt(value, at) ?? value
+  const instead = match emptyLiteral {
+    Some(literal) => "compute it in a `static fn`, or start from `{literal}`"
+    None => "compute it in a `static fn`"
+  }
+  const message = match offending.kind {
+    .Call(callee, _, _) => {
+      match calleeText(callee) {
+        Some(written) => "A field default is a constant: `{written}` is a call - {instead}"
+        None => "A field default is a constant, and this is a call - {instead}"
+      }
+    }
+    .Name(text) => "A field default is a constant: `{text}` is not one - {instead}"
+    .Binary(operator, _, _) => {
+      const spelled = operatorSpelling operator
+      "A field default is a constant: `{spelled}` here is a call of its trait - {instead}"
+    }
+    .Closure(_) => "A field default is a constant, and this closure captures a binding - {instead}"
+    _ => "A field default is a constant, and this is computed - {instead}"
+  }
+  checker.report(
+    module,
+    Diagnostic.error(message, at)
+      .withNote(
+        "A constructor has no body: a default is a literal, a collection literal, a constructor or a case of"
+          + " constants, a named constant, or an operator on those - so it can be built once and shared"
+      )
+  )
+}
+
+/** The first constructor or case call in a constant that builds a `shared type`, which has an identity. */
+fn objectMadeIn(var checker: Checker, module: ModuleId, expression: Expression): Expression? {
+  if const .Call(_, _, _) = expression.kind {
+    const resolution = checker.resolutionAt module, expression.span
+    const isBuilt = match resolution {
+      Some(.Construct(_)) | Some(.CaseOf(_, _)) => true
+      _ => false
+    }
+    if isBuilt {
+      if const Some(built) = checker.expressionType(module, expression.span) {
+        if isSharedType(checker, built) {
+          return Some expression
+        }
+      }
+    }
+  }
+  for child in childrenOf(expression) {
+    if const Some(found) = objectMadeIn(checker, module, child) {
+      return Some found
+    }
+  }
+  None
+}
+
+/** An infix operator as it is written. */
+fn operatorSpelling(operator: InfixOperator): String {
+  match operator {
+    .Add => "+"
+    .Subtract => "-"
+    .Multiply => "*"
+    .Divide => "/"
+    .Remainder => "%"
+    .Equal => "=="
+    .NotEqual => "!="
+    .Less => "<"
+    .LessOrEqual => "<="
+    .Greater => ">"
+    .GreaterOrEqual => ">="
+    .And => "&&"
+    .Or => "||"
+    .Coalesce => "??"
+  }
+}
+
+/** The callee of a call as it was written, without type arguments: `List.filled`, `Set.of`, `.max`. */
+fn calleeText(callee: Expression): String? {
+  match callee.kind {
+    .Name(text) => Some text
+    .ImplicitMember(name) => Some ".{name.text}"
+    .Generic(target, _) => calleeText target
+    .Member(target, name, _) => {
+      match calleeText(target) {
+        Some(base) => Some "{base}.{name.text}"
+        None => Some ".{name.text}"
+      }
+    }
+    _ => None
+  }
+}
+
+/** The part of `expression` that starts and ends at `at`, which is what [evaluateConstant] names when it gives up. */
+fn expressionAt(expression: Expression, at: Span): Expression? {
+  if expression.span == at {
+    return Some expression
+  }
+  for child in childrenOf(expression) {
+    if const Some(found) = expressionAt(child, at) {
+      return Some found
+    }
+  }
+  None
+}
+
+/** The parts [evaluateConstant] descends into. */
+fn childrenOf(expression: Expression): List<Expression> {
+  match expression.kind {
+    .TextLiteral(segments) => {
+      var found: List<Expression> = []
+      for segment in segments {
+        if const .Interpolated(inner) = segment {
+          found.append inner
+        }
+      }
+      found
+    }
+    .Unary(_, operand) => [operand]
+    .Binary(_, left, right) => [left, right]
+    .TupleLiteral(items) => valuesOf items
+    .ListLiteral(items) => valuesOf items
+    .MapLiteral(entries) => {
+      var found: List<Expression> = []
+      for (key, value) in entries {
+        found.append key
+        found.append value
+      }
+      found
+    }
+    .RangeLiteral(start, end, _) => {
+      var found: List<Expression> = []
+      if const Some(first) = start {
+        found.append first
+      }
+      if const Some(last) = end {
+        found.append last
+      }
+      found
+    }
+    .Call(_, arguments, _) => valuesOf arguments
+    .Generic(target, _) => [target]
+    _ => []
+  }
+}
+
+fn valuesOf(arguments: List<Argument>): List<Expression> {
+  var found: List<Expression> = []
+  for argument in arguments {
+    found.append argument.value
+  }
+  found
 }
 
 /** Whether an initializer is compile-time evaluable, without saying anything about it. */

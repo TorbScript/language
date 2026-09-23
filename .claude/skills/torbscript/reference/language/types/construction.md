@@ -118,11 +118,39 @@ Self(<field>, ...)                   // The constructor, from inside the type
    print Server("a", retries: 3)
    ```
 
-4. **A field default is evaluated at every construction, in a scope without `self` and without the other fields.** So
-   the order the fields are declared in is not observable from a default, and a default that depends on another field
-   has to be a factory function instead of a field default. A default stands in for an argument the caller left out,
-   and a construction cannot fail, so a `?` in one is refused - a value that has to be checked first comes from a
-   factory that answers a `Result`.
+4. **A field default is a constant.** It is a literal, `None`, a collection literal of constants, a constructor or a
+   case applied to constants, a named constant - a top-level `const`, a `static` value of a type - or an operator on
+   those: what the initializer of a module's top-level `const` may be. A closure that captures nothing is one too,
+   because the constructor only stores it. A call is not, a `static fn` included: `List.filled 16, None`, `Set.of()`
+   and `limit.max(1)` run code, and the constructor has no body to run it in. A value that is computed comes from a
+   `static fn` factory, and a collection starts from its empty literal - `[]` for a list, a `Set` or a queue, `[:]`
+   for a map.
+
+   ```trb error
+   type Buffer {
+     var slots: List<Int?> = List.filled 16, None
+   }
+   // error: A field default is a constant: `List.filled` is a call - compute it in a `static fn`, or start from `[]`
+   ```
+
+   ```trb
+   type Buffer {
+     var slots: List<Int?> = []
+     var seen: Set<String> = []
+     var counts: Map<String, Int> = [:]
+
+     static fn withSlots(count: Int): Buffer {
+       Buffer slots: List.filled(count, None)
+     }
+   }
+
+   print Buffer.withSlots(3)
+   ```
+
+   A default never makes an object: a `shared type` has an identity, and every value needs one of its own, so that is
+   a factory too. A default is read in a scope without `self` and without the other fields, so the order the fields are
+   declared in is not observable from one. And a construction cannot fail, so a `?` in a default is refused - a value
+   that has to be checked first comes from a factory that answers a `Result`.
 
    ```trb error
    fn parsed(text: String): Int? {
@@ -166,7 +194,9 @@ Self(<field>, ...)                   // The constructor, from inside the type
 7. **Inside the type, `Self(...)` is the constructor and every field can be passed**, `private` ones included - that is
    how `Email.tryFrom` builds the value nothing outside can.
 
-8. **Everything that is not the constructor is a static factory function**: a member of the type declared `static`. `Email.tryFrom` answers a `Result` because a constructor cannot fail; a factory can.
+8. **Everything that is not the constructor is a static factory function**: a member of the type declared `static`.
+   `Email.tryFrom` answers a `Result` because a constructor cannot fail; a factory can, and a factory is where a value
+   that is computed - a default the field cannot hold - comes from.
 
 ## What this is not
 
@@ -199,6 +229,8 @@ const wrong = Path(None, [])
 ## Related
 
 - [Fields](fields.md) - `var`, `private` and `private(var)`, the modifiers a constructor's fields carry.
+- [Maps and sets](../collections-and-iteration/maps-and-sets.md) - `[]` as the empty `Set`, the constant a field of one
+  starts from.
 - [Declaring a type](declaring-a-type.md) - fields, methods and what else is generated.
 - [Copy and equality](copy-and-equality.md) - `copy`, which has the same shape as the constructor with every field
   optional.

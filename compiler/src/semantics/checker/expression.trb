@@ -1320,6 +1320,37 @@ fn itemOfCollection(var checker: Checker, expected: TypeId?, capability: SymbolI
 }
 
 /**
+ * The empty literal a value of `annotation` starts from, for a message that offers one instead of a call: `""` for a
+ * text, `[:]` for a map, `[]` for everything else a list literal builds. `None` for a type no literal builds.
+ */
+public fn emptyLiteralOf(var checker: Checker, annotation: TypeId): String? {
+  const target = expectedTarget(checker, Some(annotation))?
+  // An array literal has exactly as many items as the type says, so an array has no empty literal to start from
+  if arrayTargetOf(checker, Some(target)).isSome() {
+    return None
+  }
+  if const .Nominal(symbol, _) = checker.types.form(target) {
+    if Some(symbol) == checker.wellKnown.string {
+      return Some "\"\""
+    }
+  }
+  if const Some(map) = checker.wellKnown.map {
+    if itemOfCollection(checker, Some(target), map, 0).isSome() {
+      return Some "[:]"
+    }
+  }
+  if const Some(list) = checker.wellKnown.list {
+    if itemOfCollection(checker, Some(target), list, 0).isSome() {
+      return Some "[]"
+    }
+  }
+  if builtTargetOf(checker, Some(target)).isSome() || itemOfIterated(checker, Some(target)).isSome() {
+    return Some "[]"
+  }
+  None
+}
+
+/**
  * The expected type as a target of its own. The one protocol is `From<Iterate<Item>>` - there is no `Collectable` and
  * no `FromIterator` (concept, Decision Log) - and `Item` is what the target itself iterates, so a literal accepts
  * exactly the targets `.to<Target>()` accepts.
@@ -2252,7 +2283,7 @@ fn tryType(var checker: Checker, inner: Expression, at: Span, expected: Expectat
     checker.reportHere(
       Diagnostic.error("`?` cannot stand in a field default: building a value never fails", at)
         .withNote(
-          "A default is evaluated at every construction that leaves the field out, and a constructor has no failure."
+          "A default stands in for an argument the caller left out, and a constructor has no failure."
             + " A value that has to be checked first is made by a factory: a `static fn` that answers a `Result`"
         )
     )

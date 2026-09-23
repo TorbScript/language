@@ -70,12 +70,13 @@ public type Request {
   method: String
   url: String
   headers: Map<String, String> = [:]
-  var body: Body = Body.empty()
+  var body: Body? = None
 }
 ```
 
-One HTTP request, for `request()`. `body` is `var` because reading a body changes it: whoever reads one needs a `var`
-path to it (see [Shared types](../language/types/shared-types.md)).
+One HTTP request, for `request()`. A request without a body, such as a `GET`, leaves `body` out. A field default is a
+constant and a `Body` is an object, which every request needs one of its own of, so the absence is `None` rather than
+`Body.empty()` (see [Construction](../language/types/construction.md)).
 
 ### Response
 

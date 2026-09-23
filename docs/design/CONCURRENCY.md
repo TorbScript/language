@@ -550,9 +550,10 @@ is two worlds, and the whole of this document is about not having two of anythin
 native var fn cancel()
 ```
 
-**It is a `var fn`**, so a task somebody intends to stop sits in a `var` binding — `var worker = spawn { … }` — and a
-`const` handle is the read-only view every shared object has (STREAMS section 2). That puts the right to cancel at the
-binding, where a reader sees it, and it is the same rule that makes `source.next()` a `var fn`.
+**It is a `var fn`**, because it changes the task - the same rule that makes `source.next()` a `var fn`. A `Task` is a
+shared object, and a shared object changes through any binding that holds it, a `const` one included: there is no
+read-only view of an object (CONCEPT, "Identity"), so `const worker = spawn { … }` can be cancelled, and the right to
+cancel is holding the task.
 
 ### Where the flag is read
 
@@ -1297,11 +1298,11 @@ carries it.
     `awaited` (one letter from `await`, and the language spends that distance on the value/mutating pair) and over
     `value` (which says nothing about the failure).
     **Decided (2026-09-22):** `outcome()` stays.
-11. **`cancel()` and `within` as `var fn`s**, so that the right to stop a task is visible at the binding
-    (`var worker = spawn { … }`) and a `const` handle is the read-only view. The cost is that a `Task` somebody may
-    cancel cannot be held in a `const`, including inside a collection somebody else reads.
-    **Decided (2026-09-22):** `var fn`s, both of them — the same rule `source.next()` has: the right to change is held as `var`,
-    and a `const` handle is the read-only view.
+11. **`cancel()` and `within` as `var fn`s**, because both change the task. The `var` says what the method does and
+    not who may call it: a shared object changes through any binding that holds it, a `const` one and an element of a
+    collection somebody else reads included, because there is no read-only view of an object (CONCEPT, "Identity").
+    **Decided (2026-09-22):** `var fn`s, both of them — the same rule `source.next()` has: a method that changes the object is a
+    `var fn`.
 
 ## 16. Runtime ABI, as built
 

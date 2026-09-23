@@ -805,8 +805,8 @@ function:
 /** One step of a schedule: what it does, and what it touches. */
 public type System<World> {
   name: String
-  reads: Set<ComponentKey> = Set.of()
-  writes: Set<ComponentKey> = Set.of()
+  reads: Set<ComponentKey> = []
+  writes: Set<ComponentKey> = []
   run: (var world: World, elapsed: Duration) => Void
 }
 

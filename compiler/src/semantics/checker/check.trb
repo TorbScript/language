@@ -21,7 +21,8 @@ use typeFromReference from "./lowering"
 use checkBodyOf, checkInitializer, checkStatement from "./statement"
 use checkPattern from "./pattern"
 use requireIrrefutable from "./exhaustive"
-use deferBlock from "./expression"
+use deferBlock, emptyLiteralOf from "./expression"
+use checkFieldDefaultConstant from "./constant"
 use settleChanges from "./mutation"
 use settleEscapes from "./escape"
 use buildImplementations, checkCoherence, checkImplementations, extensionAt from "./implementation"
@@ -381,13 +382,25 @@ fn checkDefaults(var checker: Checker, scope: TypeScope, function: FunctionDecla
 
 /**
  * The default of a **field**. It is evaluated without `self` and without the other fields, so a name that is a field
- * of the same type is a mistake with a message of its own - which is what `isFieldDefault` is for.
+ * of the same type is a mistake with a message of its own - which is what `isFieldDefault` is for. And it is a
+ * constant ([checkFieldDefaultConstant]), which is asked only of a default that checked without a message: one root
+ * cause, one message.
  */
 fn checkFieldDefault(var checker: Checker, scope: TypeScope, default: Expression?, annotation: TypeId?) {
   const outer = checker.isFieldDefault
   checker.isFieldDefault = true
+  const before = checker.diagnostics[scope.module.value].length()
   checkDefault checker, scope, default, annotation
   checker.isFieldDefault = outer
+  if const Some(expression) = default {
+    if checker.diagnostics[scope.module.value].length() == before {
+      const empty = match annotation {
+        Some(declared) => emptyLiteralOf checker, declared
+        None => None
+      }
+      checkFieldDefaultConstant checker, scope.module, expression, empty
+    }
+  }
 }
 
 fn checkDefault(var checker: Checker, scope: TypeScope, default: Expression?, annotation: TypeId?) {
