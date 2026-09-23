@@ -218,6 +218,10 @@ int64_t torb_process_run_inheriting(torb_text command, torb_list arguments, torb
 }
 
 void torb_process_exit(int64_t code) {
+  /* Inside a sandboxed script the script ends, never the host that runs it (docs/design/SCRIPTS.md section 4) */
+  if (torb_sandbox_active != 0) {
+    torb_sandbox_exit(code);
+  }
   torb_scheduler_exit(code);
   torb_process_finish();
   fflush(stdout);

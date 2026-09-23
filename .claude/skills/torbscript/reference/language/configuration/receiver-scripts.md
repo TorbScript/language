@@ -1,8 +1,8 @@
 ---
 title: Receiver scripts
-summary: A .trb file can be loaded as the body of a receiver closure and type checked against a receiver type before it runs, but nothing runs one yet - the sandboxed VM that would is still planned.
+summary: A .trb file can be loaded as the body of a receiver closure, type checked against a receiver type before it runs, and run by the sandboxed VM.
 kind: reference
-status: planned
+status: draft
 order: 30
 keywords:
   - receiver script
@@ -14,7 +14,9 @@ source:
   - docs/ARCHITECTURE.md
 ---
 
-> **Planned.** This feature is designed but not implemented. Nothing on this page runs today.
+> **Draft.** It runs in the VM: a program run with `torb run --vm` loads and applies a script, and so does the toolchain for
+> a `project.trb`; the native back end refuses `Script.apply` until a binary can embed the VM
+> (Receiver Scripts and the Sandbox).
 
 A [receiver closure](receiver-closures.md) is a value passed at a call site. A
 [receiver script](../../glossary.md#receiver-script) is the same idea with a whole file standing in for that value:
@@ -63,11 +65,11 @@ Script.apply(var value: Value): Result<Void, SandboxError>
    [top-level code](../modules-and-packages/top-level-code.md) allows, alongside an entry file, an unimported script
    and a `*.test.trb` file.
 
-5. **Nothing loads or runs a receiver script yet.** The bytecode VM a sandbox needs to interpret one is milestone 7
-   and does not exist; even `project.trb`, the one built-in use of this mechanism, is read today by parsing its
-   literal top-level command calls directly rather than through `Sandbox.load`. The example above type checks
-   against the real `Sandbox` and `Script` declarations; running it panics with an unimplemented native, on every
-   back end.
+5. **Only the VM runs a receiver script.** A program run with `torb run --vm` loads and applies one; the native back
+   end refuses `Script.apply` until a binary can embed the VM. The path has to be one the program was compiled with -
+   a literal of a `Sandbox.load` - because the program carries the scripts the checker checked. The toolchain runs one
+   too: `torb manifest` evaluates a `project.trb`, while the commands that build and test still read it by parsing its
+   literal top-level command calls.
 
 ## What this is not
 
@@ -88,7 +90,7 @@ fn describe(path: String) {
 describe "./config"
 ```
 
-```trb skip a receiver script cannot be produced inside one snippet of this documentation, and nothing runs Sandbox.load yet regardless; see rule 5 above
+```trb skip a receiver script cannot be produced inside one snippet of this documentation, and one snippet is no program the VM could run it in
 use Host from "./config"
 ```
 

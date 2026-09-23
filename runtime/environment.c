@@ -1,8 +1,9 @@
 /*
  * environment.c - `std/environment`: `Environment.get`.
  *
- * Capability filtering for a sandboxed script (`environment "APP_*"`) is a front-end concern of milestone 7.4; here
- * every variable `getenv` can see is visible, which is what a native, non-sandboxed program expects.
+ * A native program sees every variable the platform can. A sandboxed script sees the ones a pattern of its grant
+ * matches (`environment "APP_*"`, docs/design/SCRIPTS.md section 4), and every other one reads as unset: the loud lock
+ * is the module, which a host that grants no environment does not grant either.
  */
 
 #include "torb.h"
@@ -32,7 +33,12 @@ bool torb_environment_get(torb_text name, torb_text *out) {
   char *buffer = torb_environment_name_bytes(name, &capacity);
   char *value = NULL;
   size_t length = 0u;
-  const bool found = torb_platform_environment_variable(buffer, &value, &length);
+  bool found;
+  if (!torb_sandbox_allows_variable(buffer)) {
+    torb_raw_free(buffer, capacity);
+    return false;
+  }
+  found = torb_platform_environment_variable(buffer, &value, &length);
   torb_raw_free(buffer, capacity);
   if (!found) {
     return false;

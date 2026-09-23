@@ -248,6 +248,22 @@ torb_path_kind torb_platform_path_kind(const char *path) {
   return (attributes & (DWORD)FILE_ATTRIBUTE_DIRECTORY) != 0u ? TORB_PATH_DIRECTORY : TORB_PATH_FILE;
 }
 
+/* A junction and a mount point are reparse points as much as a symbolic link is, and each leads out of a directory */
+bool torb_platform_is_link(const char *path) {
+  size_t capacity = 0u;
+  wchar_t *wide = torb_platform_system_path(path, &capacity);
+  DWORD attributes;
+  if (wide == NULL) {
+    return false;
+  }
+  attributes = GetFileAttributesW(wide);
+  torb_raw_free(wide, capacity);
+  if (attributes == INVALID_FILE_ATTRIBUTES) {
+    return false;
+  }
+  return (attributes & (DWORD)FILE_ATTRIBUTE_REPARSE_POINT) != 0u;
+}
+
 char *torb_platform_working_directory(size_t *length) {
   /* With the NUL, which is what the second call wants and what the first one answers */
   const DWORD needed = GetCurrentDirectoryW(0u, NULL);
@@ -557,6 +573,14 @@ torb_path_kind torb_platform_path_kind(const char *path) {
     return TORB_PATH_DIRECTORY;
   }
   return TORB_PATH_FILE;
+}
+
+bool torb_platform_is_link(const char *path) {
+  struct stat information;
+  if (lstat(path, &information) != 0) {
+    return false;
+  }
+  return (information.st_mode & (unsigned)S_IFMT) == (unsigned)S_IFLNK;
 }
 
 char *torb_platform_working_directory(size_t *length) {

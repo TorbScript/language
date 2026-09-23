@@ -20,17 +20,14 @@
 #include <stdio.h>
 #include <string.h>
 
-/** A NUL-terminated copy of a path. Owned; free with `torb_raw_free(buffer, *capacity)`. */
-static char *torb_path_bytes(torb_text path, size_t *capacity) {
-  *capacity = (size_t)path.length + 1u;
-  {
-    char *buffer = (char *)torb_raw_allocate(*capacity);
-    if (path.length > 0u) {
-      memcpy(buffer, path.storage->data + path.offset, (size_t)path.length);
-    }
-    buffer[path.length] = '\0';
-    return buffer;
-  }
+/**
+ * A NUL-terminated copy of a path, for reading (`writes` false) or for writing. Owned; free with
+ * `torb_raw_free(buffer, *capacity)`. Inside a sandboxed script it is the path the sandbox resolved, or the script
+ * stops here (`torb_sandbox_path`, docs/design/SCRIPTS.md section 4): every function of this file reaches a path through
+ * this one, so none of them can forget the check.
+ */
+static char *torb_path_bytes(torb_text path, bool writes, size_t *capacity) {
+  return torb_sandbox_path(path, writes, capacity);
 }
 
 /** `<path>: <message>`, which is what `IoError.show()` prints. Result owned. */
@@ -40,7 +37,7 @@ static torb_text torb_io_message(const char *message) {
 
 bool torb_file_read_text(torb_text path, torb_text *out, torb_text *error) {
   size_t capacity = 0u;
-  char *name = torb_path_bytes(path, &capacity);
+  char *name = torb_path_bytes(path, false, &capacity);
   const char *message = NULL;
   uint8_t *bytes = NULL;
   size_t length = 0u;
@@ -64,7 +61,7 @@ bool torb_file_read_text(torb_text path, torb_text *out, torb_text *error) {
 
 bool torb_file_write_text(torb_text path, torb_text text, torb_text *error) {
   size_t capacity = 0u;
-  char *name = torb_path_bytes(path, &capacity);
+  char *name = torb_path_bytes(path, true, &capacity);
   const char *message = NULL;
   const uint8_t *bytes = text.length == 0u ? NULL : text.storage->data + text.offset;
   bool written = torb_platform_write_file(name, bytes, (size_t)text.length, &message);
@@ -84,7 +81,7 @@ bool torb_file_write_text(torb_text path, torb_text text, torb_text *error) {
  */
 bool torb_file_create_directory(torb_text path, torb_text *error) {
   size_t capacity = 0u;
-  char *name = torb_path_bytes(path, &capacity);
+  char *name = torb_path_bytes(path, true, &capacity);
   const char *message = NULL;
   bool created = torb_platform_create_directory(name, &message);
   torb_raw_free(name, capacity);
@@ -97,7 +94,7 @@ bool torb_file_create_directory(torb_text path, torb_text *error) {
 
 bool torb_file_exists(torb_text path) {
   size_t capacity = 0u;
-  char *name = torb_path_bytes(path, &capacity);
+  char *name = torb_path_bytes(path, false, &capacity);
   torb_path_kind kind = torb_platform_path_kind(name);
   torb_raw_free(name, capacity);
   return kind != TORB_PATH_MISSING;
@@ -105,7 +102,7 @@ bool torb_file_exists(torb_text path) {
 
 bool torb_file_is_directory(torb_text path) {
   size_t capacity = 0u;
-  char *name = torb_path_bytes(path, &capacity);
+  char *name = torb_path_bytes(path, false, &capacity);
   torb_path_kind kind = torb_platform_path_kind(name);
   torb_raw_free(name, capacity);
   return kind == TORB_PATH_DIRECTORY;
@@ -118,7 +115,7 @@ static int32_t torb_compare_text_elements(const void *first, const void *second,
 
 bool torb_file_list(torb_text path, torb_list *out, torb_text *error) {
   size_t capacity = 0u;
-  char *name = torb_path_bytes(path, &capacity);
+  char *name = torb_path_bytes(path, false, &capacity);
   const char *message = NULL;
   torb_list entries = torb_list_new(&torb_element_text);
   bool listed = torb_platform_list_directory(name, &entries, &message);
@@ -150,8 +147,28 @@ static bool torb_path_is_absolute(const char *bytes, size_t length) {
  * Text arithmetic, not a lookup: `.` and `..` are resolved against the working directory, the file does not have to
  * exist and links are not followed. Separators come out as forward slashes, on every platform, so no path of a
  * machine ever differs between them beyond the drive letter.
+ *
+ * Inside a sandboxed script it is a read like any other: the path is resolved against the sandbox's base directory and
+ * has to lie inside a root, because the working directory of the host is not the script's to learn.
  */
+static bool torb_file_absolute_path_of(torb_text path, torb_text *out, torb_text *error);
+
 bool torb_file_absolute_path(torb_text path, torb_text *out, torb_text *error) {
+  if (torb_sandbox_active != 0) {
+    size_t capacity = 0u;
+    char *resolved = torb_path_bytes(path, false, &capacity);
+    torb_text inside = torb_text_from_cstring(resolved);
+    bool answered;
+    torb_raw_free(resolved, capacity);
+    /* Absolute now, so the text arithmetic below never reads the working directory */
+    answered = torb_file_absolute_path_of(inside, out, error);
+    torb_text_release(inside);
+    return answered;
+  }
+  return torb_file_absolute_path_of(path, out, error);
+}
+
+static bool torb_file_absolute_path_of(torb_text path, torb_text *out, torb_text *error) {
   size_t joined_capacity;
   char *joined;
   size_t joined_length = 0u;
@@ -280,7 +297,7 @@ bool torb_file_absolute_path(torb_text path, torb_text *out, torb_text *error) {
 
 bool torb_file_open(torb_text path, torb_file **out, torb_text *error) {
   size_t capacity = 0u;
-  char *name = torb_path_bytes(path, &capacity);
+  char *name = torb_path_bytes(path, false, &capacity);
   const char *message = NULL;
   /* Through the platform layer, so the path is handed to the operating system in that platform's own form */
   FILE *handle = (FILE *)torb_platform_open_file(name, false, &message);

@@ -1,7 +1,8 @@
 # The Project File
 
-**Status: partly implemented** — the toolchain reads the static subset of `project.trb` from the syntax tree; profiles,
-targets, the lock file and manifests that compute anything (which need the VM) are not built.
+**Status: partly implemented** — the toolchain reads the static subset of `project.trb` from the syntax tree, and the
+VM evaluates a whole manifest in the sandbox of section 8 (`torb manifest`, docs/design/SCRIPTS.md section 7) without
+the toolchain reading the result yet; profiles, targets and the lock file are not built.
 
 **The names of the files say what a package produces, `project.trb` says what the names cannot, and a program is the
 one thing it says by hand.** A file called `lib.trb` is the library, a file called `main.trb` is the program, a file
@@ -595,8 +596,11 @@ is not a version — and `hash` is required for `archive:`, because there is no 
 else.** No network, no writing, no clock, no processes, no foreign functions.
 
 ```trb
+use File from "std/fs"
+use Environment from "std/environment"
+
 name "acme/shop"
-version Environment.get("CI_COMMIT_TAG") ?? File.readText("VERSION")?.trim() ?? "0.0.0"
+version Environment.get("CI_COMMIT_TAG") ?? File.readText("VERSION").ok()?.trim() ?? "0.0.0"
 ```
 
 The toolchain is the **caller** of this receiver script, and a caller grants capabilities at the call site — which is
@@ -830,11 +834,14 @@ file that is supposed to be stable would be the noisiest thing in the repository
   difference is lifetime and audience: `build/manifest-inputs.trb` is rewritten by every build and read by the next
   one, and `from { }` is written when the package is locked and read by whoever looks at the package.
 
-### Nothing runs a receiver script yet
+### The evaluation runs, and nothing reads it yet
 
 Probe 21 answered ``Unknown name `Sandbox` `` on stage 0, which has since been deleted, and the native back end refuses
-`Script`. So none of this section runs until the VM does (7.x), and until then the toolchain reads a `project.trb`
-with its static reader (`compiler/src/project/manifest.trb`), which takes the literal settings from the syntax tree.
+`Script`. Since milestone 7.5 the VM evaluates a `project.trb` under the grant above (docs/design/SCRIPTS.md section
+7): `torb manifest` prints what the evaluation configured, and `torb manifest --check`, a gate of tier A, asserts that
+the static reader reads the same from it as from the file on every manifest of the repository. The toolchain itself
+still reads a `project.trb` with its static reader (`compiler/src/project/manifest.trb`), which takes the literal
+settings from the syntax tree; reading the evaluation where a setting is computed is SCRIPTS.md's slice 5.
 
 **What works before the VM exists is the static subset, which is every setting in the repository's own thirty-five
 manifests.** `language`, `name`, `prelude`, `dependencies`, `source`, `registry`, `workspace` and `program` — section
@@ -945,7 +952,7 @@ plain string literals. Everything below them may be computed, because nothing is
 evaluated.
 
 **`version` moved.** The previous round listed it among the static settings. Section 8's whole point is that
-`version Environment.get("CI_COMMIT_TAG") ?? File.readText("VERSION")?.trim()` is the motivating example, so `version`
+`version Environment.get("CI_COMMIT_TAG") ?? File.readText("VERSION").ok()?.trim()` is the motivating example, so `version`
 is exactly the setting that must be allowed to compute. What a registry and a consumer need is the version of a
 *published* package, and that comes from the `settings` section of its `project.lock.trb`, where it is a literal
 again. A tool that wants the version of a project it is not building reads that lock; a tool that wants the version of
@@ -1029,8 +1036,11 @@ one table:
 So a project file may do this —
 
 ```trb
+use File from "std/fs"
+use Environment from "std/environment"
+
 name "acme/shop"
-version Environment.get("CI_COMMIT_TAG") ?? File.readText("VERSION")?.trim() ?? "0.0.0"
+version Environment.get("CI_COMMIT_TAG") ?? File.readText("VERSION").ok()?.trim() ?? "0.0.0"
 
 const threshold = if version.startsWith("0.") { 50 } else { 80 }
 

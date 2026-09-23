@@ -21,7 +21,11 @@ use finishProgram, isManagedType from "../layout"
 use verifyProgram, typeOfReference from "../verify"
 use printProgram from "../print"
 use Lowering, newLowering from "./context"
-use lowerEntryFunction, lowerInstance, seedModule from "./function"
+use lowerEntryFunction, lowerInstance, seedModule, lowerScriptFunction from "./function"
+use SymbolId from "../../semantics/symbols"
+use TypeId from "../../semantics/checker/type"
+use scriptReceiverOf from "../../semantics/checker/receiver"
+use instanceOfSymbol from "../instances"
 use lowerGenerated from "./derive"
 use requestCloseFunctions from "./scope"
 use dropUnreadCells from "./cell"
@@ -33,11 +37,21 @@ public fn lowerWorkspace(
   modules: List<ModuleId>,
   seedsEverything: Bool,
   target: BuildTarget,
+  forMachine: Bool = false,
 ): Lowering {
   var lowering = newLowering checker, paths, target
+  lowering.forMachine = forMachine
   lowering.programPackages = programPackagesOf checker, modules
   const own = programModules checker, modules
   for module in own {
+    // A script a `Sandbox.load` names is the body of its receiver, not top-level code (docs/design/SCRIPTS.md section 3)
+    if checker.program.graph.at(module).receiver.isSome() {
+      if const Some(receiver) = scriptReceiverOf(lowering.checker, module) {
+        const _ = lowerScriptFunction lowering, module, receiver
+        drainPending lowering
+        continue
+      }
+    }
     const _ = lowerEntryFunction lowering, module
     drainPending lowering
   }
@@ -47,6 +61,50 @@ public fn lowerWorkspace(
       drainPending lowering
     }
   }
+  finishLowering lowering
+  lowering
+}
+
+/**
+ * The program of a host that runs receiver scripts (docs/design/SCRIPTS.md section 3): the script function of every
+ * module in `scripts` against its receiver, the functions in `hosts` that call them, and everything they reach. A
+ * `project.trb` is a script here, and the one place it is ever lowered: `evaluated` of `std/project` is its host.
+ */
+public fn lowerScripts(
+  checker: Checker,
+  paths: List<String>,
+  scripts: List<(ModuleId, TypeId)>,
+  hosts: List<SymbolId>,
+  target: BuildTarget,
+): Lowering {
+  var lowering = newLowering checker, paths, target
+  lowering.forMachine = true
+  var roots: List<ModuleId> = []
+  for (module, _) in scripts {
+    roots.append module
+  }
+  for symbol in hosts {
+    if const Some(site) = checker.siteOf(symbol) {
+      roots.append site.module
+    }
+  }
+  lowering.programPackages = programPackagesOf checker, roots
+  for (module, receiver) in scripts {
+    const _ = lowerScriptFunction lowering, module, receiver
+    drainPending lowering
+  }
+  for symbol in hosts {
+    if const Some(function) = instanceOfSymbol(lowering, symbol) {
+      lowering.scriptHosts.append function
+    }
+    drainPending lowering
+  }
+  finishLowering lowering
+  lowering
+}
+
+/** What every lowering does once its roots are lowered, in the one order both back ends rely on. */
+fn finishLowering(var lowering: Lowering) {
   // Nothing calls a destructor, so the objects that have one ask for it once everything else is lowered
   while requestCloseFunctions(lowering) {
     drainPending lowering
@@ -66,7 +124,6 @@ public fn lowerWorkspace(
   // Last of the three, because a direct call is what makes a constant visible where a dispatch hid it: an overflow
   // check the ranges of a function prove cannot fire is the plain operation from here on
   dropProvableChecks lowering.program
-  lowering
 }
 
 /**
@@ -220,7 +277,8 @@ fn packageIndexNamed(workspace: Workspace, name: String): Int {
  * the back end any more because **the file is not part of the program**, not because anything was hidden.
  *
  * Every other receiver script stays: a file a `Sandbox.load` names is code the program runs, and it lowers like any
- * other body.
+ * other body. The one place a `project.trb` is lowered is [lowerScripts], as the script function the toolchain's
+ * evaluation runs in the VM (docs/design/SCRIPTS.md section 3).
  */
 fn programModules(checker: Checker, modules: List<ModuleId>): List<ModuleId> {
   var found: List<ModuleId> = []

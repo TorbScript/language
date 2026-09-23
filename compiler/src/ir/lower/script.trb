@@ -1,0 +1,160 @@
+/**
+ * The table of the receiver scripts a program was compiled with (docs/design/SCRIPTS.md section 3): the generated
+ * bodies of `scriptBody<Value>` and `scriptImports<Value>` of `std/sandbox`, one per receiver type.
+ *
+ * `Sandbox.load<ServerConfig>("./config.trb")` names a file the checker checked against `ServerConfig`, so the program
+ * knows every script it can load, and which receiver each one has. `scriptBody<Value>(path)` answers the script function
+ * of the one whose path relative to its package is `path` - a closure the sandbox runs - and `scriptImports<Value>(path)`
+ * the modules its `use` lines name, each with its line, which `Sandbox.load` holds against the grant.
+ *
+ * Both bodies are a chain of text comparisons over constants: ordinary IR, which either back end could run.
+ */
+
+use Span, LineIndex from "../../syntax/source"
+use SymbolId from "../../semantics/symbols"
+use ModuleId from "../../semantics/module"
+use TypeId, ParameterId from "../../semantics/checker/type"
+use signatureOf from "../../semantics/checker/signature"
+use scriptReceiverOf, packageOfImport from "../../semantics/checker/receiver"
+use ScriptTableKind from "../../backend/c/natives"
+use relativePath from "../../project/path"
+use IrType, IrTypeId, FunctionId, BlockId, Slot, Instruction, Terminator, Intrinsic, IntrinsicOperation from "../ir"
+use StaticContents, StaticId, borrowed from "../ir"
+use LiteralValue from "../../semantics/checker/type"
+use newFunction, addTemporary, addBlock, emit, terminate, switchTo, finishFunction, setBlockLocation from "../build"
+use nativeWrapperName from "../mangle"
+use symbolPathOf from "../instantiate"
+use instanceArgumentsOf, irSignatureUnder from "../instances"
+use Lowering, reportUnsupported, locationOf, internStatic from "./context"
+use variantLayoutOfType, variantNamed from "./match"
+use lowerScriptFunction from "./function"
+
+/** The generated body of one of the two tables for the receiver the instance names, built once per receiver. */
+public fn scriptTableOf(
+  var lowering: Lowering,
+  member: SymbolId,
+  mapping: Map<ParameterId, TypeId>,
+  kind: ScriptTableKind,
+  at: Span,
+): FunctionId? {
+  const receiver = match mapping.values().first() {
+    Some(found) => found
+    None => {
+      reportUnsupported lowering, "the table of scripts without a receiver type", at
+      return None
+    }
+  }
+  const arguments = match instanceArgumentsOf(lowering, member, mapping) {
+    Some(found) => found
+    None => {
+      reportUnsupported lowering, "the table of scripts of a receiver that is not monomorphic", at
+      return None
+    }
+  }
+  const name = nativeWrapperName lowering.program, symbolPathOf(lowering.checker, member), arguments
+  if const Some(found) = lowering.nativeWrappers.get(name) {
+    return Some found
+  }
+  const signature = lowering.checker.signature signatureOf(lowering.checker, member)
+  const declared = irSignatureUnder lowering, signature, mapping
+  var builder = newFunction name, Some(member), declared, "script table"
+  const location = locationOf lowering, at
+  setBlockLocation builder, BlockId(0), Some(location)
+  const text = lowering.program.internType IrType.Text
+  const boolean = lowering.program.internType IrType.Boolean
+  const layout = variantLayoutOfType lowering, declared.result
+  for (module, path) in scriptsOf(lowering, receiver) {
+    const written = addTemporary builder, text
+    emit builder, Instruction.Constant(written, textStatic(lowering, path, text))
+    const equal = addTemporary builder, boolean
+    const comparison = Intrinsic operation: IntrinsicOperation.TextEqual
+    emit builder, Instruction.Intrinsic(Some(equal), comparison, [Slot(0), written], location)
+    const found = addBlock builder, "found", Some(location)
+    const next = addBlock builder, "next", Some(location)
+    terminate builder, Terminator.Branch(equal, found, next)
+    switchTo builder, found
+    match kind {
+      .Body => {
+        const inner = match layout {
+          Some(found) => found
+          None => {
+            reportUnsupported lowering, "a table of scripts whose result is no `Option`", at
+            return None
+          }
+        }
+        const function = lowerScriptFunction(lowering, module, receiver)?
+        const some = variantNamed lowering, inner, "Some"
+        const closureType = lowering.program.layoutAt(inner).fieldsOfVariant(some)[0].annotation
+        const closure = addTemporary builder, closureType
+        emit builder, Instruction.Closure(closure, function, [], true)
+        const result = addTemporary builder, declared.result
+        emit builder, Instruction.Construct(result, inner, some, [borrowed(closure)])
+        terminate builder, Terminator.Return(Some(borrowed(result)))
+      }
+      .Imports => {
+        const imports = addTemporary builder, text
+        emit builder, Instruction.Constant(imports, textStatic(lowering, importsOf(lowering, module), text))
+        terminate builder, Terminator.Return(Some(borrowed(imports)))
+      }
+    }
+    switchTo builder, next
+  }
+  match kind {
+    .Body => {
+      const inner = match layout {
+        Some(found) => found
+        None => {
+          reportUnsupported lowering, "a table of scripts whose result is no `Option`", at
+          return None
+        }
+      }
+      const result = addTemporary builder, declared.result
+      emit builder, Instruction.Construct(result, inner, variantNamed(lowering, inner, "None"), [])
+      terminate builder, Terminator.Return(Some(borrowed(result)))
+    }
+    .Imports => {
+      const nothing = addTemporary builder, text
+      emit builder, Instruction.Constant(nothing, textStatic(lowering, "", text))
+      terminate builder, Terminator.Return(Some(borrowed(nothing)))
+    }
+  }
+  const built = finishFunction lowering.program, builder
+  lowering.nativeWrappers.set name, built
+  Some built
+}
+
+/** Every script the checker checked against `receiver`, with its path below its package, in the order of the graph. */
+fn scriptsOf(var lowering: Lowering, receiver: TypeId): List<(ModuleId, String)> {
+  var found: List<(ModuleId, String)> = []
+  for module in lowering.checker.program.graph.modules {
+    if const Some(.Loaded(_, _)) = module.receiver {
+      if scriptReceiverOf(lowering.checker, module.id) == Some(receiver) {
+        const package = lowering.checker.program.workspace.packages[module.package]
+        found.append((module.id, relativePath(package.directory, module.path)))
+      }
+    }
+  }
+  found
+}
+
+/** The modules the script imports, `"std/fs\t3"` per line: what `Sandbox.load` holds against the grant. */
+fn importsOf(var lowering: Lowering, module: ModuleId): String {
+  const inside = lowering.checker.program.graph.at module
+  const lines = LineIndex.of inside.source.text
+  var found: List<String> = []
+  for statement in inside.file.statements {
+    if const .Declare(declaration) = statement.kind {
+      if const .Use(usage) = declaration.kind {
+        if const .Module(path) = usage.source {
+          const (line, _) = lines.lineAndColumn declaration.span.start
+          found.append "{packageOfImport(path)}\t{line}"
+        }
+      }
+    }
+  }
+  found.joined separator: "\n"
+}
+
+fn textStatic(var lowering: Lowering, value: String, text: IrTypeId): StaticId {
+  internStatic lowering, StaticContents.Literal(LiteralValue.Text(value)), text
+}

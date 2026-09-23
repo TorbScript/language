@@ -48,12 +48,13 @@ fn projectType(var checker: Checker): TypeId? {
 /**
  * The file as the body of `(var self: Receiver) => Void`. The top level of a script is ordinary code - bindings,
  * loops, conditions and functions - and the one thing that makes it a script is the receiver: a bare name may mean a
- * member of it, and `self` names it. The file scope is the prelude and nothing else: there is no purity analysis
- * behind that, the prelude has no IO, and what a script may reach beyond it is granted where it is loaded, so a
- * `use` in the file itself is reported by [reportImport] instead of naming a capability the script could give itself.
+ * member of it, and `self` names it. The file scope is the prelude, the receiver, and what the script imports - and an
+ * import is a capability, so [reportImport] holds it against the grant wherever the grant is known here
+ * (docs/design/SCRIPTS.md section 2).
  */
 public fn checkReceiverScript(var checker: Checker, module: ModuleId, receiver: TypeId) {
   const statements = checker.program.graph.at(module).file.statements
+  const isProjectFile = if const Some(.ProjectFile) = checker.program.graph.at(module).receiver { true } else { false }
   const nothing = checker.voidType
   const saved = checker.enterBody module, nothing, true, None
   // A receiver script is a script, and `await()` is allowed at its top level (CONCEPT, "Concurrency")
@@ -68,7 +69,7 @@ public fn checkReceiverScript(var checker: Checker, module: ModuleId, receiver: 
   // Every statement is an ordinary one, not a top-level declaration of a module: a `const` of a script is a *local* of
   // the closure, so it may read the receiver (`const binary = name.substringAfter("/") ?? name`) and what came before it
   for statement in statements {
-    reportImport checker, statement
+    reportImport checker, statement, isProjectFile
     const _ = checkStatement checker, statement
   }
   // The file is a body like any other, so a change in it that nothing reads afterwards is reported the same way
@@ -77,17 +78,70 @@ public fn checkReceiverScript(var checker: Checker, module: ModuleId, receiver: 
   checker.leaveBody saved
 }
 
-/** Everything beyond the prelude is granted at the call site of `Sandbox.load`, never by the script itself. */
-fn reportImport(var checker: Checker, statement: Statement) {
-  if const .Declare(declaration) = statement.kind {
-    if const .Use(_) = declaration.kind {
-      checker.reportHere(
-        Diagnostic.error("A receiver script reaches the prelude and nothing else, so it cannot `use` a module", declaration.span)
-          .withNote(
-            "What a script may reach beyond the prelude is granted where it is loaded:"
-              + " `Sandbox.load<Value>(path) \{ modules \"std/text\" \}`"
-          )
-      )
+/**
+ * The modules a `project.trb` may import: the toolchain's grant, which never changes (docs/design/SCRIPTS.md section 7
+ * and PROJECT.md section 8) - the files of its directory, what to do with their text, and the environment.
+ */
+public const projectFileModules = ["std/fs", "std/text", "std/environment"]
+
+/** What no grant gives a script (docs/design/SCRIPTS.md section 2): the VM's own kernel, and loading scripts itself. */
+public const neverGrantedModules = ["std/machine", "std/sandbox"]
+
+/**
+ * An import is a capability. What no grant gives is an error in every script; for a `project.trb`, whose grant the
+ * toolchain fixes, every other module is held against that grant here. A script a program loads is granted modules at
+ * the call site, so its imports are held against them when `Sandbox.load` reads it, not here.
+ */
+fn reportImport(var checker: Checker, statement: Statement, isProjectFile: Bool) {
+  const declaration = match statement.kind {
+    .Declare(found) => found
+    _ => {
+      return
     }
   }
+  const path = match declaration.kind {
+    .Use(usage) => {
+      match usage.source {
+        .Module(found) => found
+        .Local => {
+          return
+        }
+      }
+    }
+    _ => {
+      return
+    }
+  }
+  const package = packageOfImport path
+  if neverGrantedModules.contains(package) {
+    checker.reportHere(
+      Diagnostic.error("A receiver script cannot import `{package}`", declaration.span)
+        .withNote(
+          "`std/machine` trusts its operands the way machine code does, and a script that loads scripts is a nesting the"
+            + " sandbox does not have: no grant gives either"
+        )
+    )
+    return
+  }
+  if isProjectFile && !projectFileModules.contains(package) {
+    checker.reportHere(
+      Diagnostic.error(
+        "A project file may import `std/fs`, `std/text` and `std/environment`, and not `{path}`",
+        declaration.span,
+      )
+        .withNote("A project file reads its own directory and the environment it was started in, nothing else")
+    )
+  }
+}
+
+/** `std/text` of `"std/text/lines"`: the package an import path names, or the path itself where it is relative. */
+public fn packageOfImport(path: String): String {
+  if path.startsWith(".") {
+    return path
+  }
+  const segments = path.split("/").toList()
+  if segments.length() < 2 {
+    return path
+  }
+  "{segments[0]}/{segments[1]}"
 }

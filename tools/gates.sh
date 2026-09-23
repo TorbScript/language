@@ -8,7 +8,7 @@
 #
 # Tier A: bootstrap if `build/release/torb` is missing or older than a file it is built from (the compiler's sources,
 # `std/`, the runtime), `check .`, `check --statistics .`, `check tests/conformance tests/language`,
-# `test compiler/tests`, `test` of the std/example packages (one that waits for a back-end gap is named in
+# `manifest --check` over every `project.trb`, `test compiler/tests`, `test` of the std/example packages (one that waits for a back-end gap is named in
 # docs/RUST-EXIT.md section 2.4 and skipped here), the programs of `tests/language/` against their
 # `.expected`, the three docs gates, and `canon --check` with the five rules. Every binary that is only built to be run
 # once is built with `--profile dev`, which `torb test` and `torb run` do by default.
@@ -125,6 +125,10 @@ if [ "$tier" = "a" ]; then
   gate "check ." "$torb" check .
   gate "check --statistics ." "$torb" check --statistics .
   gate "check tests/conformance tests/language" "$torb" check tests/conformance tests/language
+  # docs/design/SCRIPTS.md section 7: every project.trb of the repository, evaluated in the sandboxed VM, reads the same
+  # as the file itself does to the static reader the other commands use
+  gate "manifest --check (every project.trb, evaluated)" "$torb" manifest --check . tests/conformance tests/language \
+    tests/project.trb
   gate "test compiler/tests" "$torb" test compiler/tests
 
   # docs/RUST-EXIT.md section 2.4: every candidate package builds natively, and they are combined into one binary. A

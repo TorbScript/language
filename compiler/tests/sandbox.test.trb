@@ -1,0 +1,277 @@
+/**
+ * The sandbox of the VM (docs/design/SCRIPTS.md sections 4 and 6): receiver scripts run in the VM against a `Config`,
+ * each under a grant of its own, and every way a script can stop - a limit, a panic, a refused path, `Process.exit` -
+ * pinned with the exact `SandboxError` it becomes: the line of the script and the message.
+ *
+ * The package is written to a directory of its own below the system's temporary directory, because a script reads
+ * real files and the sandbox resolves real paths. It is checked once, with the toolchain's own standard library, and
+ * every script of it is lowered next to `configured` - the host that runs one against a fresh `Config` and answers
+ * what it configured - into one program the tests share.
+ */
+
+use test, group from "std/test"
+use File from "std/fs"
+use Environment from "std/environment"
+use normalizePath, joinPath from "../src/project/path"
+use readSourceTree from "../src/project/read"
+use hostTarget from "../src/project/target"
+use check from "../src/semantics/check"
+use ModuleId from "../src/semantics/module"
+use TypeId from "../src/semantics/checker/type"
+use scriptReceiverOf from "../src/semantics/checker/receiver"
+use lowerScripts, pathsOfModules from "../src/ir/lower/lower"
+use insertOwnership from "../src/ir/ownership"
+use verifyOwnedProgram from "../src/ir/ownership-verify"
+use emitBytecode from "../src/backend/bytecode/emit"
+use loadedProgram, unsupportedByInterpreter from "../src/vm/interpret"
+use BytecodeProgram from "../src/backend/bytecode/format"
+use Grant, ScriptStop, runScript, grantText from "../src/vm/sandbox"
+use projectGrant from "../src/vm/manifest"
+
+/** The program the scripts run in, and where each script's chunk and file are. */
+type Prepared {
+  program: BytecodeProgram
+  host: Int
+  /** By the file name of the script: its chunk, and the path its locations carry. */
+  scripts: Map<String, (Int, String)>
+  /** The package's directory: absolute, normalized, the base and the root of the grants below. */
+  directory: String
+  /** Everything that went wrong on the way, which the first test reports. */
+  problems: List<String>
+}
+
+const main = r"""
+  use Sandbox from "std/sandbox"
+
+  public type Config {
+    var port: Int = 8080
+    var host: String = "localhost"
+  }
+
+  /** The host of the scripts: one runs against a fresh `Config`, and what it configured comes back as text. */
+  public fn configured(script: (var self: Config) => Void): String {
+    var config = Config()
+    script config
+    "{config.host}:{config.port}"
+  }
+
+  const scripts = [
+    Sandbox.load<Config>("./configures.trb"),
+    Sandbox.load<Config>("./loops.trb"),
+    Sandbox.load<Config>("./panics.trb"),
+    Sandbox.load<Config>("./indexes.trb"),
+    Sandbox.load<Config>("./exits.trb"),
+    Sandbox.load<Config>("./reads.trb"),
+    Sandbox.load<Config>("./escapes.trb"),
+    Sandbox.load<Config>("./writes.trb"),
+    Sandbox.load<Config>("./allocates.trb"),
+    Sandbox.load<Config>("./environment.trb"),
+  ]
+  print scripts.length()
+  """
+
+/** Each script, by its file name. The line a test expects is written next to it. */
+const sources = [
+  "configures.trb": "port 9000\nhost \"example.test\"\n",
+  "loops.trb": "port 1\n// line 2\nloop \{\n  port 2\n\}\n",
+  "panics.trb": "port 1\npanic \"the configuration is broken\"\n",
+  "indexes.trb": "const ports = [1]\nport 2\nport ports[5]\n",
+  "exits.trb": "use Process from \"std/process\"\n\nport 1\nProcess.exit 3\n",
+  "reads.trb": "use File from \"std/fs\"\n\nhost File.readText(\"data/host.txt\").ok() ?? \"unread\"\n",
+  "escapes.trb": "use File from \"std/fs\"\n\nport 1\nhost File.readText(\"../secret.txt\").ok() ?? \"unread\"\n",
+  "writes.trb": "use File from \"std/fs\"\n\nconst written = File.writeText(\"out.txt\", \"x\")\nport if written.isOk() \{ 1 \} else \{ 2 \}\n",
+  "allocates.trb": "var text = \"x\"\nfor _ in 0..100000 \{\n  text = \"\{text\}\{text.byteLength()\}\"\n\}\nhost text\n",
+  "environment.trb": "use Environment from \"std/environment\"\n\nhost Environment.get(\"PATH\") ?? \"unset\"\n",
+]
+
+/** A directory of the system's temporary one that nothing else writes. */
+fn temporaryDirectory(): String {
+  const base = Environment.get("TEMP") ?? Environment.get("TMPDIR") ?? "/tmp"
+  normalizePath joinPath(File.absolutePath(base).expect("the temporary directory"), "torb-sandbox-tests")
+}
+
+fn prepare(): Prepared {
+  const root = temporaryDirectory()
+  const directory = joinPath root, "app"
+  var problems: List<String> = []
+  File.createDirectory(joinPath(directory, "src")).expect("the test directory")
+  File.createDirectory(joinPath(directory, "data")).expect("the data directory")
+  File.writeText(joinPath(directory, "project.trb"), "name \"acme/app\"\n").expect("project.trb")
+  File.writeText(joinPath(directory, "src/main.trb"), main).expect("main.trb")
+  File.writeText(joinPath(directory, "data/host.txt"), "from.file").expect("host.txt")
+  File.writeText(joinPath(root, "secret.txt"), "secret").expect("secret.txt")
+  for (name, text) in sources {
+    File.writeText(joinPath(directory, name), text).expect(name)
+  }
+  const tree = readSourceTree([directory]).expect("the source tree")
+  const checked = check tree, [directory], false, true
+  for file in checked.files {
+    for diagnostic in file.diagnostics {
+      problems.append "{file.path}: {diagnostic.message}"
+    }
+  }
+  problems.appendAll checked.problems
+  var checker = checked.checker
+  var scripts: List<(ModuleId, TypeId)> = []
+  var names: Map<Int, String> = [:]
+  for (name, _) in sources {
+    const module = checked.program.graph.moduleAt(joinPath(directory, name)).expect("the module of {name}")
+    const receiver = scriptReceiverOf(checker, module).expect("the receiver of {name}")
+    scripts.append((module, receiver))
+    names.set module.value, name
+  }
+  const mainModule = checked.program.graph.moduleAt(joinPath(directory, "src/main.trb")).expect("main.trb")
+  const host = checked.program.scopes[mainModule.value].exported.get("configured").expect("`configured`")
+  const paths = pathsOfModules checked
+  var lowering = lowerScripts checker, paths, scripts, [host], hostTarget()
+  insertOwnership lowering.program
+  for blocked in lowering.unsupported {
+    problems.append "{blocked.what} (at {blocked.at})"
+  }
+  problems.appendAll lowering.program.problems
+  problems.appendAll verifyOwnedProgram(lowering.program)
+  const emission = emitBytecode lowering.program, []
+  problems.appendAll emission.unsupported
+  problems.appendAll unsupportedByInterpreter(emission.program)
+  var chunks: Map<String, Int> = [:]
+  for index in 0..emission.program.chunks.length() {
+    chunks.set emission.program.chunks[index].name, index
+  }
+  const hostFunction = lowering.scriptHosts.first().expect("the host function")
+  const hostChunk = chunks.get(lowering.program.functionAt(hostFunction).name) ?? (0 - 1)
+  var found: Map<String, (Int, String)> = [:]
+  for (module, function) in lowering.scriptFunctions {
+    const name = names.get(module) ?? ""
+    const chunk = chunks.get(lowering.program.functionAt(function).name) ?? (0 - 1)
+    found.set name, (chunk, paths[module])
+  }
+  Prepared emission.program, hostChunk, found, directory, problems
+}
+
+const prepared = prepare()
+
+/** A grant of this package's directory to read, and nothing else. */
+fn readingGrant(): Grant {
+  Grant base: prepared.directory, readOnly: [prepared.directory]
+}
+
+/** One script of the package, run in a sandbox of `grant`. */
+fn run(name: String, grant: Grant): Result<String, ScriptStop> {
+  const (chunk, path) = prepared.scripts.get(name).expect("the script {name}")
+  var loaded = loadedProgram prepared.program
+  runScript loaded, grant, prepared.host, chunk, path
+}
+
+/** What a stop reads as: the line, then the message. */
+fn stopOf(answer: Result<String, ScriptStop>): String {
+  match answer {
+    Ok(text) => "ran to its end: {text}"
+    Fail(stop) => "{stop.line}: {stop.message}"
+  }
+}
+
+group "The program of the scripts" {
+  test "checks, lowers and is encoded without a finding" {
+    assert(prepared.problems == [])
+    assert(prepared.host >= 0)
+    assert(prepared.scripts.length() == sources.length())
+  }
+
+  test "a script that runs to its end configures the receiver, and the host reads it back" {
+    assert(run("configures.trb", readingGrant()) == Ok("example.test:9000"))
+  }
+
+  test "the grant is text the runtime reads, one setting per line" {
+    const grant = Grant base: "/srv/app", readOnly: ["/srv/app"], environment: ["APP_*"], memory: 5
+    assert(grantText(grant) == "base\t/srv/app\nmemory\t5\nread\t/srv/app\nvariable\tAPP_*")
+  }
+}
+
+group "Limits" {
+  test "a loop that never ends is stopped by the step limit, at its line" {
+    const answer = run "loops.trb", readingGrant().copy(steps: 10000)
+    assert(stopOf(answer) == "3: The script ran more than 10000 steps")
+  }
+
+  test "the time limit stops a script the step limit would not" {
+    const answer = run "loops.trb", readingGrant().copy(steps: 1_000_000_000_000, milliseconds: 50)
+    assert(stopOf(answer) == "3: The script ran longer than 50 milliseconds")
+  }
+
+  test "what a script allocates is held against the memory limit" {
+    const answer = run "allocates.trb", readingGrant().copy(memory: 100_000)
+    assert(stopOf(answer) == "3: The script allocated more than 100000 bytes")
+  }
+
+  test "after a stop the same program runs the next script as if nothing had happened" {
+    const _ = run "loops.trb", readingGrant().copy(steps: 1000)
+    assert(run("configures.trb", readingGrant()) == Ok("example.test:9000"))
+  }
+}
+
+group "Panics are the script's, never the host's" {
+  test "a panic in the script is its message, at its line" {
+    assert(stopOf(run("panics.trb", readingGrant())) == "2: the configuration is broken")
+  }
+
+  test "a panic inside the standard library names its own site and blames the line of the script" {
+    const answer = stopOf run("indexes.trb", readingGrant())
+    assert answer.startsWith("3: Key does not exist (at std/")
+  }
+
+  test "`Process.exit` ends the script and not the process" {
+    assert(stopOf(run("exits.trb", readingGrant())) == "4: The script called Process.exit(3)")
+  }
+}
+
+group "Files" {
+  test "a relative path is read against the base, inside the root" {
+    assert(run("reads.trb", readingGrant()) == Ok("from.file:8080"))
+  }
+
+  test "a path that leaves the root is refused, with the path and the root" {
+    const answer = stopOf run("escapes.trb", readingGrant())
+    assert(answer == "4: The script may not read `../secret.txt`: it is not inside `{prepared.directory}`")
+  }
+
+  test "a script granted nothing reads nothing, not even inside its own directory" {
+    const answer = stopOf run("reads.trb", Grant(base: prepared.directory))
+    assert(answer == "3: The script may not read `data/host.txt`: no directory is granted for reading")
+  }
+
+  test "a root to read is no root to write" {
+    const answer = stopOf run("writes.trb", readingGrant())
+    assert(answer == "3: The script may not write `out.txt`: no directory is granted for writing")
+  }
+
+  test "a root to write is one to read as well" {
+    const grant = Grant base: prepared.directory, readWrite: [prepared.directory]
+    assert(run("writes.trb", grant) == Ok("localhost:1"))
+    assert(run("reads.trb", grant) == Ok("from.file:8080"))
+  }
+}
+
+group "The environment" {
+  test "a variable no pattern matches reads as unset" {
+    assert(run("environment.trb", readingGrant()) == Ok("unset:8080"))
+  }
+
+  test "a pattern with a star matches every name it is the prefix of" {
+    const answer = run "environment.trb", readingGrant().copy(environment: ["PA*"])
+    assert(answer != Ok("unset:8080"))
+    assert answer.isOk()
+  }
+}
+
+group "The grant of a project file" {
+  test "is its own directory to read, every variable, and the toolchain's limits" {
+    const grant = projectGrant "/work/shop"
+    assert(grant.base == "/work/shop")
+    assert(grant.readOnly == ["/work/shop"])
+    assert(grant.readWrite == [])
+    assert(grant.environment == ["*"])
+    assert(grant.steps == 1_000_000)
+    assert(grant.memory == 16_000_000)
+    assert(grant.milliseconds == 2000)
+  }
+}

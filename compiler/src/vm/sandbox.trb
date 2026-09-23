@@ -1,0 +1,61 @@
+/**
+ * The host's side of a sandboxed receiver script (docs/design/SCRIPTS.md): what a script is granted, how the grant
+ * reaches the kernel, and how a stop of the script becomes the line and the message of a `SandboxError`.
+ *
+ * The script itself is a chunk of a loaded program - the function `lowerScripts` made of its module - and a **host
+ * chunk** calls it: a function of the program whose one parameter is the script as a closure and whose result is what
+ * the host wants back, as text. `evaluated` of `std/project` is the host of every `project.trb`. A program the VM runs
+ * loads its own scripts instead, through `runScript` of `std/sandbox` (`runScriptInstruction` in `./interpret`).
+ */
+
+use LoadedProgram, limitedBudget, callSandboxed, textOfWords, scriptStopOf from "./interpret"
+public use ScriptStop from "./interpret"
+
+/** What a script may do (docs/design/SCRIPTS.md section 4). The modules are held against its imports before it runs. */
+public type Grant {
+  /** The directory a relative path of the script is read against: absolute and normalized, like every root. */
+  base: String
+  readOnly: List<String> = []
+  readWrite: List<String> = []
+  /** Names, or prefixes followed by one `*`; `"*"` is every variable. */
+  environment: List<String> = []
+  steps: Int = 1_000_000
+  /** Bytes the script may allocate while it runs. */
+  memory: Int = 64_000_000
+  milliseconds: Int = 2000
+}
+
+/** The grant as `runtime/sandbox.c` reads it: one setting per line, a tab between the word and the value. */
+public fn grantText(grant: Grant): String {
+  var lines: List<String> = ["base\t{grant.base}", "memory\t{grant.memory}"]
+  for root in grant.readOnly {
+    lines.append "read\t{root}"
+  }
+  for root in grant.readWrite {
+    lines.append "write\t{root}"
+  }
+  for pattern in grant.environment {
+    lines.append "variable\t{pattern}"
+  }
+  lines.joined separator: "\n"
+}
+
+/**
+ * Runs the script chunk `script` through the host chunk `host` in a sandbox of `grant`, and answers the host's text.
+ * `scriptPath` is how the program's locations spell the script's file: a stop is blamed on the innermost line of it.
+ */
+public fn runScript(
+  var loaded: LoadedProgram,
+  grant: Grant,
+  host: Int,
+  script: Int,
+  scriptPath: String,
+): Result<String, ScriptStop> {
+  var budget = limitedBudget grant.steps, grant.milliseconds
+  // A named function as a closure value: its chunk plus one, and no environment (docs/design/VM.md section 5)
+  const answered = callSandboxed loaded, grantText(grant), budget, host, [script + 1, 0]
+  match answered {
+    Ok(words) => Ok textOfWords(loaded, words)
+    Fail(stop) => Fail scriptStopOf(loaded.program, stop, scriptPath)
+  }
+}

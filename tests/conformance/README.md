@@ -97,6 +97,9 @@ jump left behind released nothing. The directory is the exemption, instead of a 
 error and its exit code with the **same** expectation files, folded the same way. There are no expectation files of
 the VM's own: an answer that differs between the two back ends is a bug of one of them, never a second expectation.
 
+`vm-only/` holds the programs that load a receiver script, which only the VM runs (docs/design/SCRIPTS.md section 1):
+they are named in `vm.list` and have no native run, and the scripts beside them are no programs of their own.
+
 The list is the programs the VM runs today, one per line, and it grows until it is the whole suite. The leak gate and
 the two checks of the C do not apply to a VM run. What is not listed yet, and why, is section 8 of the design record:
 tasks, `test` and `group`, keys that their own `equals` compares, and the executable's own path.

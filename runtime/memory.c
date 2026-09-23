@@ -51,6 +51,9 @@ void *torb_allocate(size_t size, torb_block_kind kind) {
   if (size < sizeof(torb_header)) {
     size = sizeof(torb_header);
   }
+  if (torb_sandbox_active != 0) {
+    torb_sandbox_account(size);
+  }
   header = (torb_header *)malloc(size);
   if (header == NULL) {
     torb_panic_out_of_memory(size);
@@ -80,6 +83,9 @@ void *torb_raw_allocate(size_t size) {
   void *buffer;
   if (size == 0) {
     size = 1;
+  }
+  if (torb_sandbox_active != 0) {
+    torb_sandbox_account(size);
   }
   buffer = malloc(size);
   if (buffer == NULL) {

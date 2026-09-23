@@ -25,6 +25,10 @@
  * Nothing here decides a question of the language. Every panic is the runtime's own panic function with the location
  * the IR gave, every count is `torb_retain`/`torb_release`, and every allocation is `torb_allocate` - so a program run by
  * the VM prints, panics, counts and leaks exactly as its native binary does.
+ *
+ * **While a sandbox is open** (sandbox.c, docs/design/SCRIPTS.md) every operation runs under a recovery point of its
+ * own, so a panic of a receiver script - or a stop of the sandbox, which is a panic with a kind - ends the operation
+ * with `TORB_MACHINE_STOPPED` instead of the process, and the interpreter unwinds the script from there.
  */
 
 #include "torb.h"
@@ -32,6 +36,7 @@
 #include "torb_machine.h"
 
 #include <math.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -1857,10 +1862,111 @@ enum {
   TORB_OPERATION_STACK_OVERFLOW = 28,
   TORB_OPERATION_SET_ARGUMENTS = 29,
   TORB_OPERATION_BEGIN_IMMORTAL = 30,
-  TORB_OPERATION_END_IMMORTAL = 31
+  TORB_OPERATION_END_IMMORTAL = 31,
+  TORB_OPERATION_SANDBOX_OPEN = 32,
+  TORB_OPERATION_SANDBOX_CLOSE = 33,
+  TORB_OPERATION_TAKE_STOP = 34,
+  TORB_OPERATION_TEXT_OUT = 35
 };
 
+/* ------------------------------------------------------------------------------------------------- sandboxes --- */
+
+/*
+ * What `operate` answers instead of its result when the operation stopped the script: a panic, a refusal of the
+ * sandbox, the memory limit or `Process.exit` (docs/design/SCRIPTS.md section 6). No operation answers it otherwise -
+ * an address, a register reference, a count and a closer's chunk are never this small.
+ */
+#define TORB_MACHINE_STOPPED INT64_MIN
+
+/* The stop the last recovered operation left: its kind, the panic's message and its site. */
+static int64_t torb_machine_stop_kind = 0;
+static char torb_machine_stop_message[1024];
+static torb_location torb_machine_stop_at = { NULL, 0, 0 };
+
+/* The index of a location of the table, -1 for one that is not in it (a panic of the runtime with no site). */
+static int64_t torb_machine_location_index(torb_location at) {
+  if (at.path == NULL) {
+    return -1;
+  }
+  for (size_t index = 0; index < torb_machine_location_count; index++) {
+    torb_location candidate = torb_machine_location_table[index];
+    if (candidate.path == at.path && candidate.line == at.line && candidate.column == at.column) {
+      return (int64_t)index;
+    }
+  }
+  return -1;
+}
+
+/* The code points of UTF-8 bytes into words, one per word. Answers how many. */
+static int64_t torb_machine_code_points(int64_t *target, const uint8_t *bytes, size_t length) {
+  int64_t count = 0;
+  size_t at = 0u;
+  while (at < length) {
+    uint32_t first = bytes[at];
+    uint32_t point;
+    size_t size;
+    if (first < 0x80u) {
+      point = first;
+      size = 1u;
+    } else if ((first & 0xE0u) == 0xC0u && at + 1u < length) {
+      point = ((first & 0x1Fu) << 6) | (bytes[at + 1u] & 0x3Fu);
+      size = 2u;
+    } else if ((first & 0xF0u) == 0xE0u && at + 2u < length) {
+      point = ((first & 0x0Fu) << 12) | ((bytes[at + 1u] & 0x3Fu) << 6) | (bytes[at + 2u] & 0x3Fu);
+      size = 3u;
+    } else if (at + 3u < length) {
+      point = ((first & 0x07u) << 18) | ((bytes[at + 1u] & 0x3Fu) << 12) | ((bytes[at + 2u] & 0x3Fu) << 6) |
+              (bytes[at + 3u] & 0x3Fu);
+      size = 4u;
+    } else {
+      point = 0xFFFDu;
+      size = 1u;
+    }
+    target[count] = (int64_t)point;
+    count += 1;
+    at += size;
+  }
+  return count;
+}
+
+static int64_t torb_machine_dispatch(torb_list *list, int64_t base, torb_list code, int64_t at);
+
+/*
+ * While a sandbox is open every operation runs under a recovery point of its own: a panic inside it - the program's,
+ * or a stop of the sandbox - lands here instead of leaving the process, and the interpreter unwinds the script from the
+ * answer. It is the one C frame that is sure to be active when a script panics, because everything the interpreter
+ * cannot do on words itself is an operation.
+ */
+static int64_t torb_machine_guarded(torb_list *list, int64_t base, torb_list code, int64_t at) {
+  torb_recovery point;
+  torb_recovery *previous = torb_begin_recovery(&point);
+  int64_t result;
+  if (setjmp(point.destination) != 0) {
+    torb_end_recovery(previous);
+    torb_sandbox_leave_guard();
+    torb_machine_stop_kind = torb_sandbox_take_stop_kind();
+    snprintf(torb_machine_stop_message, sizeof torb_machine_stop_message, "%s", point.message);
+    torb_machine_stop_at = point.at;
+    return TORB_MACHINE_STOPPED;
+  }
+  torb_sandbox_enter_guard();
+  torb_sandbox_check_budget();
+  result = torb_machine_dispatch(list, base, code, at);
+  torb_sandbox_leave_guard();
+  torb_end_recovery(previous);
+  return result;
+}
+
 int64_t torb_machine_operate(torb_list *list, int64_t base, torb_list code, int64_t at) {
+  /* Closing is the host's, never the script's: it must not be stopped by the budget the script used up */
+  if (torb_sandbox_active != 0 &&
+      ((const int64_t *)torb_list_storage_data(code.storage))[code.offset + at] != TORB_OPERATION_SANDBOX_CLOSE) {
+    return torb_machine_guarded(list, base, code, at);
+  }
+  return torb_machine_dispatch(list, base, code, at);
+}
+
+static int64_t torb_machine_dispatch(torb_list *list, int64_t base, torb_list code, int64_t at) {
   int64_t *words = torb_machine_words(list);
   const int64_t *operands = (const int64_t *)torb_list_storage_data(code.storage) + code.offset + at;
   int64_t operation = operands[0];
@@ -2040,6 +2146,42 @@ int64_t torb_machine_operate(torb_list *list, int64_t base, torb_list code, int6
     case TORB_OPERATION_END_IMMORTAL:
       torb_end_immortal();
       return 0;
+    case TORB_OPERATION_SANDBOX_OPEN: {
+      /* the register of the grant's text */
+      torb_text grant;
+      memcpy(&grant, words + base + o[0], sizeof grant);
+      torb_sandbox_open(grant.length == 0u ? "" : (const char *)grant.storage->data + grant.offset,
+                        (size_t)grant.length);
+      return 0;
+    }
+    case TORB_OPERATION_SANDBOX_CLOSE:
+      /*
+       * A script that stopped leaves the destructors it queued behind; they belong to values nothing will release, so
+       * they are dropped here without running - a stop runs nothing on the way out (docs/design/SCRIPTS.md section 6).
+       */
+      torb_sandbox_close();
+      torb_machine_closer_first = 0;
+      torb_machine_closer_count = 0;
+      return 0;
+    case TORB_OPERATION_TAKE_STOP: {
+      /* target: the location index, the length of the message, its code points; answers the kind */
+      int64_t kind = torb_machine_stop_kind;
+      words[base + o[0]] = torb_machine_location_index(torb_machine_stop_at);
+      words[base + o[0] + 1] = torb_machine_code_points(words + base + o[0] + 2,
+                                                         (const uint8_t *)torb_machine_stop_message,
+                                                         strlen(torb_machine_stop_message));
+      torb_machine_stop_kind = 0;
+      return kind;
+    }
+    case TORB_OPERATION_TEXT_OUT: {
+      /* target, source: the code points of the text, one per word; answers how many */
+      torb_text text;
+      memcpy(&text, words + base + o[1], sizeof text);
+      if (text.length == 0u) {
+        return 0;
+      }
+      return torb_machine_code_points(words + base + o[0], text.storage->data + text.offset, (size_t)text.length);
+    }
     default:
       torb_panic_text("internal error: the VM asked for an operation the kernel does not have", torb_location_unknown);
   }

@@ -36,6 +36,7 @@ use memberInValue, genericMemberInValue, derivedKindOf, generatedKindOf from "..
 use generatedFunctionOf, literalConversionOf, isKeyedContainer from "./derive"
 use instanceFor, needsReference, isMonomorphic, isClosedType from "../instances"
 use nativeFunctionOf from "./native"
+use scriptTableOf from "./script"
 use elementFor from "../element"
 use Lowering, Generated, reportUnsupported, locationOf, nativeNamed, producesValue, substituted from "./context"
 use irTypeOfClosed, typeAtSpan, voidTypeOf from "./context"
@@ -704,6 +705,30 @@ fn lowerNativeCall(
         return lowerStop lowering, builder, destination, at
       }
       unsupportedSlot lowering, builder, destination, "`{entry.name}` as a value", at
+    }
+    // The scripts the program was compiled with, one table per receiver type (docs/design/SCRIPTS.md section 3)
+    .ScriptTable(kind) => {
+      const table = match scriptTableOf(lowering, member, mapping, kind, at) {
+        Some(found) => found
+        None => {
+          return abandonedSlot lowering, builder, destination
+        }
+      }
+      emitCall lowering, builder, destination, table, operands, annotation, at
+    }
+    // Running a script is the VM's alone: a native binary does not embed one (docs/design/SCRIPTS.md section 1)
+    .Machine(function) => {
+      if !lowering.forMachine {
+        const what = "a receiver script run by `Script.apply` (only the VM runs one)"
+        return unsupportedSlot lowering, builder, destination, what, at
+      }
+      const identifier = match nativeFunctionOf(lowering, member, mapping, entry, function, at) {
+        Some(found) => found
+        None => {
+          return abandonedSlot lowering, builder, destination
+        }
+      }
+      emitCall lowering, builder, destination, identifier, operands, annotation, at, places
     }
   }
 }
@@ -1960,5 +1985,7 @@ fn lowerNativeOperator(
     .Lowered => unsupportedSlot lowering, builder, destination, "`{entry.name}` as an operator", at
     .ArrayStorage(_) => unsupportedSlot lowering, builder, destination, "`{entry.name}` as an operator", at
     .Target(_) => unsupportedSlot lowering, builder, destination, "`{entry.name}` as an operator", at
+    .ScriptTable(_) => unsupportedSlot lowering, builder, destination, "`{entry.name}` as an operator", at
+    .Machine(_) => unsupportedSlot lowering, builder, destination, "`{entry.name}` as an operator", at
   }
 }

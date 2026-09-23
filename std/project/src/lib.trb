@@ -106,4 +106,99 @@ public type Project {
   var fn registry(owner: String, url: String) {
     registries.append Registry(owner, url)
   }
+
+  /**
+   * The settings as the literal command calls that would produce them, one per line, in the order of this type: the
+   * `settings` block of the locked manifest (docs/design/PROJECT.md section 8), and the text the toolchain reads back
+   * from an evaluated `project.trb` (docs/design/SCRIPTS.md section 7). A setting at its default is left out, because
+   * the reader has defaults of its own: a workspace without a `test` section has no test directory.
+   */
+  fn settings(): String {
+    var lines: List<String> = []
+    if !name.isEmpty() {
+      lines.append "name {quoted(name)}"
+    }
+    if !version.isEmpty() {
+      lines.append "version {quoted(version)}"
+    }
+    if prelude != "std/prelude" {
+      lines.append "prelude {quoted(prelude)}"
+    }
+    var needs: List<String> = []
+    if !dependencies.runtimeRequirements.isEmpty() {
+      needs.append "  runtime {quotedList(dependencies.runtimeRequirements)}"
+    }
+    if !dependencies.developmentRequirements.isEmpty() {
+      needs.append "  development {quotedList(dependencies.developmentRequirements)}"
+    }
+    appendSection lines, "dependencies", needs
+    var builds: List<String> = []
+    if build.target != "dev" {
+      builds.append "  target {quoted(build.target)}"
+    }
+    if build.input != "src/main.trb" {
+      builds.append "  input {quoted(build.input)}"
+    }
+    if !build.output.isEmpty() {
+      builds.append "  output {quoted(build.output)}"
+    }
+    appendSection lines, "build", builds
+    var tests: List<String> = []
+    if test.input != "tests" {
+      tests.append "  input {quoted(test.input)}"
+    }
+    if test.coverageThreshold != 0 {
+      tests.append "  coverageThreshold {test.coverageThreshold}"
+    }
+    appendSection lines, "test", tests
+    if !workspace.memberPatterns.isEmpty() {
+      appendSection lines, "workspace", ["  members {quotedList(workspace.memberPatterns)}"]
+    }
+    if !authorNames.isEmpty() {
+      lines.append "authors {quotedList(authorNames)}"
+    }
+    for bound in registries {
+      lines.append "registry {quoted(bound.owner)}, url: {quoted(bound.url)}"
+    }
+    lines.map({ "{_}\n" }).toList().joined(separator: "")
+  }
+}
+
+/**
+ * What the toolchain runs to evaluate a `project.trb` (docs/design/SCRIPTS.md section 7): a fresh [Project], configured
+ * by the script, printed back as its settings. It is the host of the script inside the VM's sandbox, and nothing a
+ * program needs.
+ */
+public fn evaluated(script: (var self: Project) => Void): String {
+  var project = Project()
+  script project
+  project.settings()
+}
+
+/** `word {`, the lines, `}` - and nothing at all where there are no lines. */
+fn appendSection(var lines: List<String>, word: String, inside: List<String>) {
+  if inside.isEmpty() {
+    return
+  }
+  lines.append "{word} \{"
+  lines.appendAll inside
+  lines.append "\}"
+}
+
+/** A string literal that reads back as `text`: the escapes of the lexer, and `\{` so nothing is interpolated. */
+fn quoted(text: String): String {
+  const escaped = text
+    .replace("\\", "\\\\")
+    .replace("\"", "\\\"")
+    .replace("\{", "\\\{")
+    .replace("\}", "\\\}")
+    .replace("\n", "\\n")
+    .replace("\r", "\\r")
+    .replace("\t", "\\t")
+  "\"{escaped}\""
+}
+
+/** `"a", "b"`: the arguments of a variadic setting. */
+fn quotedList(texts: List<String>): String {
+  texts.map(quoted).toList().joined(separator: ", ")
 }

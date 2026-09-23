@@ -2,7 +2,7 @@
 title: The sandbox
 summary: A script has no IO, no network, no clock, no environment and no foreign functions by default, and only the caller of Sandbox.load can grant more, in a block that names exactly what is granted.
 kind: reference
-status: planned
+status: draft
 order: 40
 keywords:
   - sandbox
@@ -15,7 +15,9 @@ source:
   - docs/ARCHITECTURE.md
 ---
 
-> **Planned.** This feature is designed but not implemented. Nothing on this page runs today.
+> **Draft.** It runs in the VM: a program run with `torb run --vm` loads and applies a script, and so does the toolchain for
+> a `project.trb`; the native back end refuses `Script.apply` until a binary can embed the VM
+> (Receiver Scripts and the Sandbox).
 
 A [receiver script](receiver-scripts.md) is untrusted code from outside the program. What it can touch is not a
 setting inside the script or its own `project.trb`; it is a
@@ -60,8 +62,8 @@ SandboxCapabilities.limits(steps: Int = 1_000_000, memory: Int = 64.megabytes(),
 ## Rules
 
 1. **Left at the defaults, a script has no IO, no network, no clock, no environment and no foreign functions.** The
-   file scope is the prelude and the receiver, and nothing else - a receiver script's `use` lines are what the
-   `modules` capability decides, not the script's own choice.
+   file scope is the prelude, the receiver and what the script imports - and a receiver script's `use` lines are what
+   the `modules` capability decides, not the script's own choice: an import the grant does not name fails the load.
 
 2. **Every capability is granted at the call site of `Sandbox.load`, never in the script or its `project.trb`.** A
    script that could grant itself a capability would not be a sandbox; the trailing block on `load` is a receiver
@@ -83,9 +85,10 @@ SandboxCapabilities.limits(steps: Int = 1_000_000, memory: Int = 64.megabytes(),
 7. **Foreign functions can never be granted to a script.** There is no capability for them in
    `SandboxCapabilities`, because a `foreign` declaration reaches outside the process the sandbox itself runs in.
 
-8. **Nothing runs a script yet, so no capability is enforced yet either.** The bytecode VM this needs is milestone 7
-   (see [Receiver scripts](receiver-scripts.md)); the example above type checks against the real
-   `SandboxCapabilities` and nothing on it runs.
+8. **The VM enforces all of it, and only the VM runs a script.** A program run with `torb run --vm` loads scripts
+   under these capabilities and limits, and so does the toolchain for a `project.trb` (`torb manifest`, see
+   [project.trb](../../tooling/project-trb.md)); the native back end refuses `Script.apply` until a binary can embed
+   the VM. A relative root is read against the directory the program runs in.
 
 ## What this is not
 

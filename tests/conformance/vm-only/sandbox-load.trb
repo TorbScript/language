@@ -1,0 +1,51 @@
+/**
+ * `Sandbox.load` and `Script.apply` in a program the VM runs (docs/design/SCRIPTS.md slice 4): a script configures a
+ * value of the program in place, and every way one fails - an import the grant does not name, a path the program was
+ * not compiled with, the step limit, a panic - is a `SandboxError` of `load` or of `apply`, and the program goes on.
+ *
+ * Only the VM runs a receiver script, so this program is named in `vm.list` and has no native run.
+ */
+
+use Sandbox, Script, SandboxError from "std/sandbox"
+
+type Settings {
+  var port: Int = 8080
+  private(var) names: List<String> = []
+
+  var fn name(value: String) {
+    names.append value
+  }
+}
+
+/** What the script configured, or where and why it failed. */
+fn configured(loading: Result<Script<Settings>, SandboxError>): String {
+  const script = match loading {
+    Ok(found) => found
+    Fail(error) => {
+      return "not loaded: {error}"
+    }
+  }
+  var settings = Settings()
+  match script.apply(settings) {
+    Ok(_) => "port {settings.port}, names {settings.names.joined(separator: " ")}"
+    Fail(error) => "stopped: {error}"
+  }
+}
+
+print configured(Sandbox.load<Settings>("./vm-only/configures.trb"))
+
+const looping = Sandbox.load<Settings>("./vm-only/loops.trb") {
+  limits steps: 10_000
+}
+print configured(looping)
+
+print configured(Sandbox.load<Settings>("./vm-only/panics.trb"))
+print configured(Sandbox.load<Settings>("./vm-only/imports.trb"))
+
+const granted = Sandbox.load<Settings>("./vm-only/imports.trb") {
+  modules "std/environment"
+}
+print configured(granted)
+
+print configured(Sandbox.load<Settings>("./vm-only/nowhere.trb"))
+print "the program goes on"

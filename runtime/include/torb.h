@@ -271,6 +271,48 @@ torb_recovery *torb_begin_recovery(torb_recovery *point);
 /** Restores the recovery point `torb_begin_recovery` answered. Pass `NULL` to leave a panic leaving the process. */
 void torb_end_recovery(torb_recovery *previous);
 
+/* --------------------------------------------------------------------------------------------------- sandbox --- */
+
+/*
+ * The second lock of a sandboxed receiver script (sandbox.c, docs/design/SCRIPTS.md section 4). Only the VM's kernel
+ * opens one; a native program never has one open, and then every function below lets everything through.
+ */
+
+/** Why a script stopped: what `torb_sandbox_take_stop_kind` answers after the kernel recovered a panic. */
+enum {
+  TORB_SANDBOX_PANIC = 1,
+  TORB_SANDBOX_REFUSED = 2,
+  TORB_SANDBOX_MEMORY = 3,
+  TORB_SANDBOX_EXIT = 4
+};
+
+/** Non-zero while a sandbox is open: what the allocation functions test before they count. */
+extern int torb_sandbox_active;
+
+/** Opens a sandbox from the text of a grant (`grant` borrowed, `length` bytes). A sandbox that is open is closed first. */
+void torb_sandbox_open(const char *grant, size_t length);
+void torb_sandbox_close(void);
+bool torb_sandbox_is_open(void);
+/** A recovery point of the kernel is active from here on, so a stop may jump. The two nest. */
+void torb_sandbox_enter_guard(void);
+void torb_sandbox_leave_guard(void);
+/** Stops the script if it allocated more than its limit while no recovery point was active. */
+void torb_sandbox_check_budget(void);
+/** The kind of the stop the kernel just recovered, `TORB_SANDBOX_PANIC` for a panic of the program itself. */
+int64_t torb_sandbox_take_stop_kind(void);
+/** Counts an allocation against the memory limit, and stops the script past it. */
+void torb_sandbox_account(size_t size);
+/** `Process.exit` inside a script: the script stops, the process goes on. */
+TORB_NORETURN void torb_sandbox_exit(int64_t code);
+/** Whether `Environment.get` may answer for the variable. True where no sandbox is open. */
+bool torb_sandbox_allows_variable(const char *name);
+/**
+ * The NUL-terminated path a file function hands the operating system: the text itself where no sandbox is open, and
+ * otherwise the path read against the base directory, normalized, checked against the roots of the side `writes`
+ * names and against links - or a stop of the script. Owned; free with `torb_raw_free(result, *capacity)`.
+ */
+char *torb_sandbox_path(struct torb_text path, bool writes, size_t *capacity);
+
 /* ------------------------------------------------------------------------------------------------ allocation --- */
 
 /** Release the counted children of a block. Receives the block itself. `NULL` when the contents are trivial. */
@@ -1072,6 +1114,12 @@ typedef enum torb_path_kind {
 
 /** `path` borrowed, NUL terminated. */
 torb_path_kind torb_platform_path_kind(const char *path);
+/**
+ * Whether the path names a symbolic link itself, not what it points at: a reparse point of any kind on Windows (a
+ * symbolic link, a junction, a mount point), `S_ISLNK` of `lstat` elsewhere. False for a path that does not exist.
+ * `path` borrowed, NUL terminated. The sandbox refuses a component that is one (docs/design/SCRIPTS.md section 4).
+ */
+bool torb_platform_is_link(const char *path);
 /** Result owned, freed with `torb_raw_free`; `*length` is the byte length without the NUL. `NULL` on failure. */
 char *torb_platform_working_directory(size_t *length);
 /**

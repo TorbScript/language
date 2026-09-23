@@ -37,6 +37,7 @@ use BytecodeProgram, Chunk, ParameterEntry, FrameSlot, Place, PlaceStep, Witness
 use Shape, CountedWord, CountedKind, ConstantPart, TableEntry, ElementEntry, ElementKind, widthOfPart from "./format"
 use WordTables, LayoutWords, wordTablesOf, whyNoWords, isBlockPointer, isBoxed, layoutOfType from "./words"
 use nativeIndices from "./natives"
+use runScriptFunction from "../c/natives"
 
 /** What [emitBytecode] answers: the program, and every construct it could not encode, in the order found. */
 public type BytecodeEmission {
@@ -90,6 +91,8 @@ type Body {
   var patches: List<(Int, Int)> = []
   /** Stores through a `var` parameter that the current instruction owes after it ran: (slot, scratch register). */
   var pendingStores: List<(Int, Int)> = []
+  /** `(code offset, location index)` of every block and instruction that carries a location, in code order. */
+  var sites: List<(Int, Int)> = []
 }
 
 /** The bytecode of a whole program: the chunks, the tables, and the entry chunks named by `entries`. */
@@ -645,8 +648,14 @@ fn emitChunk(var emitter: Emitter, program: IrProgram, function: IrFunction): Ch
   for index in 0..function.blocks.length() {
     body.blockStarts.append body.code.length()
     const block = function.blocks[index]
+    if const Some(at) = block.at {
+      noteSite emitter, body, program, at
+    }
     for instruction in block.instructions {
       body.scratch = body.firstScratch
+      if const Some(at) = siteOf(instruction) {
+        noteSite emitter, body, program, at
+      }
       emitInstruction emitter, body, program, instruction
       flushStores emitter, body, program
     }
@@ -678,7 +687,30 @@ fn emitChunk(var emitter: Emitter, program: IrProgram, function: IrFunction): Ch
     body.places,
     body.witnesses,
     body.blockStarts,
+    body.sites,
   )
+}
+
+/** The location an instruction carries, where it carries one: what a stop of a script names (SCRIPTS.md section 6). */
+fn siteOf(instruction: Instruction): LocationId? {
+  match instruction {
+    .Call(_, _, _, _, at) => at
+    .Intrinsic(_, _, _, at) => Some at
+    .Panic(_, at) => Some at
+    _ => None
+  }
+}
+
+/** The code offset of the next instruction is at `at`; one site per offset, the last one noted wins. */
+fn noteSite(var emitter: Emitter, var body: Body, program: IrProgram, at: LocationId) {
+  const location = locationIndex emitter, program, at
+  const offset = body.code.length()
+  if const Some((last, _)) = body.sites.last() {
+    if last == offset {
+      body.sites.removeAt(body.sites.length() - 1)
+    }
+  }
+  body.sites.append((offset, location))
 }
 
 /**
@@ -1194,6 +1226,23 @@ fn emitRuntimeCall(
   arguments: List<Argument>,
   at: LocationId?,
 ) {
+  // `runScript` of `std/sandbox` is no function of the runtime but an instruction of the VM (docs/design/SCRIPTS.md)
+  if symbol == runScriptFunction {
+    if arguments.length() != 3 || target.isNone() {
+      report emitter, "`runScript` with other operands than a closure, a receiver and a grant"
+      return
+    }
+    const script = argumentRegister emitter, body, program, arguments[0]
+    const receiver = argumentRegister emitter, body, program, arguments[1]
+    const grant = argumentRegister emitter, body, program, arguments[2]
+    const answer = match target {
+      Some(slot) => targetOf emitter, body, slot
+      None => 0
+    }
+    emitHead emitter, body, Opcode.RunScript, answer, script, receiver
+    emitTail body, grant
+    return
+  }
   const index = match emitter.natives.get(symbol) {
     Some(found) => found
     None => {

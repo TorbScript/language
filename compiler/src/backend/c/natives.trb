@@ -176,7 +176,28 @@ public type NativeTarget {
    * machine it runs on, because it compiles a program where it runs it.
    */
   case Target(dimension: TargetDimension)
+  /**
+   * The table of the receiver scripts the program was compiled with, one per receiver type: a body the lowering
+   * generates out of the scripts the checker checked against the type argument (`ir/lower/script.trb`,
+   * docs/design/SCRIPTS.md section 3). Ordinary IR, which either back end could run.
+   */
+  case ScriptTable(kind: ScriptTableKind)
+  /**
+   * An operation only the VM performs, because it runs a receiver script inside a sandbox: the C back end refuses a
+   * program that reaches one, and the bytecode emitter writes an instruction of its own for it (docs/design/SCRIPTS.md
+   * section 1). `function` is the name the IR carries it under.
+   */
+  case Machine(function: String)
 }
+
+/** What the table of scripts answers for a path: the body of the script, or the modules its `use` lines name. */
+public type ScriptTableKind {
+  case Body
+  case Imports
+}
+
+/** The name a call of `runScript` of `std/sandbox` carries in the IR, which the bytecode emitter turns into its instruction. */
+public const runScriptFunction = "torb_machine_run_script"
 
 /**
  * The three things only the storage of an `Array<Item, Size>` can do. Each one is an instruction of the IR, so the VM
@@ -1090,7 +1111,7 @@ fn taskEntries(var entries: List<NativeEntry>) {
   entries.append runtimeOf("closeReading", "torb_channel_close", "void torb_channel_close(torb_channel *channel);")
 }
 
-/** `std/environment`: capability filtering for the sandbox (`environment "APP_*"`) is a front-end concern of 7.4. */
+/** `std/environment`: the patterns of a sandbox (`environment "APP_*"`) are `runtime/sandbox.c`'s, inside `torb_environment_get`. */
 fn environmentEntries(var entries: List<NativeEntry>) {
   entries.append(optionalRuntimeOf(
     "Environment.get",
@@ -1167,12 +1188,11 @@ fn plannedPackageEntries(var entries: List<NativeEntry>) {
   // `isSame` compares the identity of a `shared` object, which the checker allows nowhere else.
   entries.append plannedIntrinsicOf("isSame", IntrinsicOperation.Equal, "5.9")
 
-  entries.append plannedRuntimeOf("SandboxCapabilities.modules", "torb_sandbox_modules", "7.4")
-  entries.append plannedRuntimeOf("SandboxCapabilities.files", "torb_sandbox_files", "7.4")
-  entries.append plannedRuntimeOf("SandboxCapabilities.environment", "torb_sandbox_environment", "7.4")
-  entries.append plannedRuntimeOf("SandboxCapabilities.limits", "torb_sandbox_limits", "7.4")
-  entries.append plannedRuntimeOf("Script.apply", "torb_script_apply", "7.4")
-  entries.append plannedRuntimeOf("Sandbox.load", "torb_sandbox_load", "7.4")
+  // `std/sandbox` (docs/design/SCRIPTS.md): `Sandbox.load`, `Script.apply` and `SandboxCapabilities` are TorbScript over
+  // the table of the program's scripts and the one operation that runs a script inside the sandbox of the VM
+  entries.append NativeEntry(name: "scriptBody", target: NativeTarget.ScriptTable(ScriptTableKind.Body))
+  entries.append NativeEntry(name: "scriptImports", target: NativeTarget.ScriptTable(ScriptTableKind.Imports))
+  entries.append NativeEntry(name: "runScript", target: NativeTarget.Machine(runScriptFunction))
 
   entries.append plannedRuntimeOf("get", "torb_http_get", "8")
   entries.append plannedRuntimeOf("post", "torb_http_post", "8")

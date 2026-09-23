@@ -159,6 +159,11 @@ own: `madeEntryCell` read a signature in the same expression that computed it, a
 (`examples/config-dsl/config.trb`) is computed right there, so `torb ir --statistics .` panicked with `Key does not
 exist`.
 
+**Re-measured after SCRIPTS.md slice 4: 38 414 of 38 428 functions, 14 constructs.** `Script` is TorbScript now and a
+receiver script lowers as the `script` function of its module, so the two findings of 7.4 are one: a call of
+`Script.apply`, which only the VM runs and the C back end refuses by design (docs/design/SCRIPTS.md section 1). The other
+13 are the 12 natives the runtime does not provide yet and the quoted expression.
+
 **None of this blocks the exit.** A construct the back end does not lower is a gap of the back end and is tracked as
 one; that stage 0 happens to interpret it is not a reason to keep 14 435 lines of Rust. The proof is the first row of
 the table: **the compiler lowers completely**, so it, its tests and every gate are already independent of stage 0. The

@@ -12,15 +12,22 @@
  * [execute] runs its `close()` to its return before the next instruction, as one more `execute` on top of the words in
  * use.
  *
+ * **A sandboxed call can stop** (docs/design/SCRIPTS.md sections 4 and 6): the [Budget] runs out, or an operation of the
+ * kernel answers `stoppedWord` because the script panicked, was refused or allocated too much. [execute] then answers
+ * false, and every `execute` that ran it answers false in turn, each adding its frames to the budget's record of where
+ * the script was. Nothing is released on the way out, as nothing is on a panic.
+ *
  * # Related
  *
  * - [loadProgram] - the constant pool and the tables of the kernel, before the first instruction.
  * - [runProgram] - the whole run of one program.
+ * - [callSandboxed] - one call of a chunk inside a sandbox, for a host that runs scripts.
  */
 
 use Machine from "std/machine"
 use Environment from "std/environment"
-use Opcode, KernelOperation, allOpcodes, kernelNumberOf from "../backend/bytecode/format"
+use Clock from "std/time"
+use Opcode, KernelOperation, allOpcodes, kernelNumberOf, stoppedWord from "../backend/bytecode/format"
 use opcodeNumberOf, operandA, operandB, operandC from "../backend/bytecode/format"
 use BytecodeProgram, Chunk, Place, PlaceStep, WitnessEntry, WitnessRootEntry from "../backend/bytecode/format"
 use ConstantPart, Shape, CountedWord from "../backend/bytecode/format"
@@ -34,6 +41,42 @@ type Frame {
   /** The absolute register of the result, `-1` where the call takes none. */
   target: Int
 }
+
+/**
+ * What a run may still do: the steps and the time of a sandboxed script (docs/design/SCRIPTS.md section 4), and where
+ * it was when it stopped. A program that is no script runs with [unlimitedBudget], which counts as well and never
+ * runs out.
+ */
+public type Budget {
+  /** Steps left before the next look at the step limit and the clock. */
+  var countdown: Int = 0
+  /** Steps left after the countdown. */
+  var remaining: Int
+  /** The step limit as it was granted, for the message. */
+  steps: Int
+  /** The monotonic milliseconds after which the script has run too long; `0` for no limit. */
+  deadline: Int = 0
+  /** The time limit as it was granted, for the message. */
+  milliseconds: Int = 0
+  /** Why the interpreter stopped the script itself: a limit. Empty where the kernel stopped it. */
+  var reason: String = ""
+  /** `(chunk, code offset)` of every frame when it stopped, the innermost first. */
+  var frames: List<(Int, Int)> = []
+}
+
+/** The budget of a program that is no script: counted like any other, and never exhausted. */
+public fn unlimitedBudget(): Budget {
+  Budget(remaining: largest / 2, steps: largest / 2)
+}
+
+/** A budget of `steps` steps and `milliseconds` of time from now on; `0` milliseconds is no time limit. */
+public fn limitedBudget(steps: Int, milliseconds: Int): Budget {
+  const deadline = if milliseconds > 0 { Clock.milliseconds() + milliseconds } else { 0 }
+  Budget remaining: steps, steps: steps, deadline: deadline, milliseconds: milliseconds
+}
+
+/** How many steps run between two looks at the limits: the clock is read once per this many. */
+const checkInterval = 4096
 
 /**
  * The words above a frame the interpreter uses itself for the operands it hands the kernel: a reference it resolved, a
@@ -74,9 +117,256 @@ public fn runProgram(program: BytecodeProgram, arguments: List<String>) {
     registers.append(2 * index)
   }
   const _ = kernelCall words, kernel, scratch, KernelOperation.SetArguments, registers
+  var budget = unlimitedBudget()
   for entry in program.entries {
-    execute(words, kernel, program, entry, firstFrameOf(program), 0 - 1)
+    const _ = execute(words, kernel, budget, program, entry, firstFrameOf(program), 0 - 1)
   }
+}
+
+// --- A host that calls into the program ------------------------------------------------------------------------------
+
+/** A program loaded into the kernel once, whose chunks a host calls one at a time: a script per call. */
+public type LoadedProgram {
+  program: BytecodeProgram
+  var words: ArrayList<Int>
+  var kernel: ArrayList<Int>
+}
+
+/** The program's constant pool and tables in place, ready for [callSandboxed]. */
+public fn loadedProgram(program: BytecodeProgram): LoadedProgram {
+  var words: ArrayList<Int> = ArrayList.withCapacity 65536
+  var kernel: ArrayList<Int> = ArrayList.withCapacity 64
+  for _ in 0..64 {
+    kernel.append 0
+  }
+  loadProgram words, kernel, program
+  LoadedProgram program, words, kernel
+}
+
+/** Why a sandboxed call stopped, as the kernel and the interpreter saw it. */
+public type Stop {
+  /** `0` for a limit of the interpreter, otherwise the kernel's kind (`TORB_SANDBOX_*` of `runtime/torb.h`). */
+  kind: Int
+  message: String
+  /** The location index of the panic's site, `-1` for none. */
+  site: Int
+  /** `(chunk, code offset)` of every frame when it stopped, the innermost first. */
+  frames: List<(Int, Int)>
+}
+
+/**
+ * One call of `chunk` inside a sandbox: the grant's text opened in the kernel, `arguments` as the words of the
+ * parameters in order, the budget counted, and the sandbox closed again whatever happened. Answers the words of the
+ * result, or where and why the call stopped.
+ */
+public fn callSandboxed(
+  var loaded: LoadedProgram,
+  grant: String,
+  var budget: Budget,
+  chunk: Int,
+  arguments: List<Int>,
+): Result<List<Int>, Stop> {
+  const program = loaded.program
+  const callee = program.chunks[chunk]
+  const base = firstFrameOf(program) + scratchWords
+  // The grant's text in the scratch words below the frame, where the kernel reads it
+  const scratch = firstFrameOf program
+  ensureWords(loaded.words, base + callee.frameWords + callee.resultWidth + scratchWords * 2)
+  Machine.placeText loaded.words, scratch, grant
+  const _ = kernelCall loaded.words, loaded.kernel, scratch, KernelOperation.SandboxOpen, [0]
+  var cursor = 0
+  for parameter in callee.parameters {
+    for offset in 0..parameter.width {
+      loaded.words.set(base + parameter.offset + offset, arguments.get(cursor + offset) ?? 0)
+    }
+    cursor = cursor + parameter.width
+  }
+  const target = base + callee.frameWords + scratchWords
+  const finished = execute loaded.words, loaded.kernel, budget, program, chunk, base, target
+  // Closed first, so that nothing after this is held against the script's budget - reading the stop included
+  const _ = kernelCall loaded.words, loaded.kernel, scratch, KernelOperation.SandboxClose, []
+  if !finished {
+    return Fail stopAt(loaded.words, loaded.kernel, budget, firstFrameOf(program))
+  }
+  var result: List<Int> = []
+  for offset in 0..callee.resultWidth {
+    result.append loaded.words[target + offset]
+  }
+  Ok result
+}
+
+/**
+ * The stop the kernel recorded, or the limit the interpreter hit, with the frames the budget collected. `scratch` is
+ * the first of the words above everything in use, which the kernel writes the stop into.
+ */
+fn stopAt(var words: ArrayList<Int>, var kernel: ArrayList<Int>, budget: Budget, scratch: Int): Stop {
+  if !budget.reason.isEmpty() {
+    return Stop(0, budget.reason, 0 - 1, budget.frames)
+  }
+  // The site, the length and up to 1023 code points of the message
+  ensureWords(words, scratch + 1100)
+  const kind = kernelCall words, kernel, scratch, KernelOperation.TakeStop, [0]
+  const site = words[scratch]
+  const count = words[scratch + 1]
+  var points: List<Int> = []
+  for index in 0..count {
+    points.append words[scratch + 2 + index]
+  }
+  Stop kind, textOfCodePoints(points), site, budget.frames
+}
+
+/** The text of the two words of a `String` in the VM, as a `String` of the host: `TextOut`, then the code points. */
+public fn textOfWords(var loaded: LoadedProgram, text: List<Int>): String {
+  const scratch = firstFrameOf loaded.program
+  ensureWords(loaded.words, scratch + 4)
+  loaded.words.set(scratch, text.get(0) ?? 0)
+  loaded.words.set(scratch + 1, text.get(1) ?? 0)
+  textAt(loaded.words, loaded.kernel, scratch, scratch + 2)
+}
+
+/** The text in the two words at the register `at`, as a `String` of the host, with the words from `scratch` on to spare. */
+fn textAt(var words: ArrayList<Int>, var kernel: ArrayList<Int>, at: Int, scratch: Int): String {
+  ensureWords(words, scratch + 2)
+  // A text has no more code points than bytes, so its byte length is room enough
+  const _ = kernelCall words, kernel, scratch, KernelOperation.TextByteLength, [0, at - scratch]
+  const bytes = words[scratch]
+  ensureWords(words, scratch + 2 + bytes)
+  const count = kernelCall words, kernel, scratch, KernelOperation.TextOut, [1, at - scratch]
+  var points: List<Int> = []
+  for index in 0..count {
+    points.append words[scratch + 1 + index]
+  }
+  textOfCodePoints points
+}
+
+// --- Stops, as the author of a script reads them --------------------------------------------------------------------
+
+/** Where and why a script stopped: the two fields of its `SandboxError`. `line` is 0 where no line of it is to blame. */
+public type ScriptStop {
+  line: Int
+  message: String
+}
+
+/** The kinds of a stop the kernel reports, as `runtime/torb.h` numbers them. */
+const panicked = 1
+
+/** The stop as the script's author reads it: the line of the script, and the message with a foreign site appended. */
+public fn scriptStopOf(program: BytecodeProgram, stop: Stop, scriptPath: String): ScriptStop {
+  const blamed = innermostLineOf program, stop.frames, scriptPath
+  if stop.kind != panicked {
+    return ScriptStop blamed, stop.message
+  }
+  const site = match program.locations.get(stop.site) {
+    Some(found) => found
+    None => {
+      return ScriptStop blamed, stop.message
+    }
+  }
+  if site.path == scriptPath {
+    return ScriptStop site.line, stop.message
+  }
+  ScriptStop blamed, "{stop.message} (at {site.path}:{site.line}:{site.column})"
+}
+
+/**
+ * The line of the innermost frame that is in the script's file: the site of the last instruction before its program
+ * counter that carries one. A caller's program counter is the one after its call, so its call is before it.
+ */
+fn innermostLineOf(program: BytecodeProgram, frames: List<(Int, Int)>, scriptPath: String): Int {
+  var isInnermost = true
+  for (chunkIndex, pc) in frames {
+    const chunk = match program.chunks.get(chunkIndex) {
+      Some(found) => found
+      None => {
+        continue
+      }
+    }
+    const last = if isInnermost { pc } else { pc - 1 }
+    isInnermost = false
+    var location = chunk.location
+    for (offset, index) in chunk.sites {
+      if offset > last {
+        break
+      }
+      location = index
+    }
+    if const Some(found) = program.locations.get(location) {
+      if found.path == scriptPath {
+        return found.line
+      }
+    }
+  }
+  0
+}
+
+/**
+ * `runScript` of `std/sandbox`, the one instruction only the VM has (docs/design/SCRIPTS.md sections 4 to 6): the grant
+ * opened in the kernel, the script's closure called with the receiver's reference under a budget of its own, the
+ * sandbox closed whatever happened, and the answer placed as text - `""`, or the line of the script and the message of
+ * the stop with a tab between them. A stop ends the script and never the program that ran it.
+ */
+fn runScriptInstruction(
+  var words: ArrayList<Int>,
+  var kernel: ArrayList<Int>,
+  program: BytecodeProgram,
+  base: Int,
+  top: Int,
+  target: Int,
+  closure: Int,
+  receiver: Int,
+  grant: Int,
+) {
+  const scratch = top + scratchWords
+  const granted = textAt(words, kernel, base + grant, scratch)
+  var steps = 1_000_000
+  var milliseconds = 2000
+  for line in granted.split("\n") {
+    if const Some(number) = line.substringAfter("steps\t") {
+      steps = Int.tryFrom(number).ok() ?? steps
+    }
+    if const Some(number) = line.substringAfter("milliseconds\t") {
+      milliseconds = Int.tryFrom(number).ok() ?? milliseconds
+    }
+  }
+  const _ = kernelCall words, kernel, base, KernelOperation.SandboxOpen, [grant]
+  var budget = limitedBudget steps, milliseconds
+  const callee = words[base + closure] - 1
+  const chunk = program.chunks[callee]
+  var finished = ensureFrame words, kernel, scratch, chunk
+  if finished {
+    var first = 0
+    if chunk.takesEnvironment {
+      words.set(scratch + chunk.parameters[0].offset, words[base + closure + 1])
+      first = 1
+    }
+    words.set(scratch + chunk.parameters[first].offset, words[base + receiver])
+    finished = execute(words, kernel, budget, program, callee, scratch, 0 - 1)
+  } else {
+    noteFrames budget, callee, 0, []
+  }
+  const _ = kernelCall words, kernel, base, KernelOperation.SandboxClose, []
+  var answer = ""
+  if !finished {
+    const stop = stopAt words, kernel, budget, scratch
+    const path = match program.locations.get(chunk.location) {
+      Some(found) => found.path
+      None => ""
+    }
+    const blamed = scriptStopOf program, stop, path
+    answer = "{blamed.line}\t{blamed.message}"
+  }
+  Machine.placeText(words, base + target, answer)
+}
+
+/** The characters of the code points, which the kernel decoded from UTF-8 and are therefore valid. */
+fn textOfCodePoints(points: List<Int>): String {
+  var characters: List<Char> = []
+  for point in points {
+    if const Ok(character) = Char.tryFrom(point) {
+      characters.append character
+    }
+  }
+  String.from characters
 }
 
 // --- Loading --------------------------------------------------------------------------------------------------------
@@ -199,7 +489,10 @@ public fn unsupportedByInterpreter(program: BytecodeProgram): List<String> {
 
 // --- The kernel -----------------------------------------------------------------------------------------------------
 
-/** One operation of the kernel with operands the interpreter makes itself; the registers are relative to `base`. */
+/**
+ * One operation of the kernel with operands the interpreter makes itself; the registers are relative to `base`. Inside
+ * a sandbox it answers `stoppedWord` where the operation stopped the script.
+ */
 fn kernelCall(
   var words: ArrayList<Int>,
   var kernel: ArrayList<Int>,
@@ -261,6 +554,7 @@ fn registerReference(index: Int): Int {
 /**
  * Where a place of the chunk is, as a reference word: the base register (or the reference a `var` parameter holds),
  * then one step at a time - an offset, a dereference of a counted block, an element of a list through the kernel.
+ * `stoppedWord` where the kernel stopped a sandboxed script on the way, an index out of range say.
  */
 fn resolvePlace(
   var words: ArrayList<Int>,
@@ -285,6 +579,9 @@ fn resolvePlace(
         words.set(top + 2, words[missing + 1])
         const operands = [0, base + index - top, 1, location]
         reference = kernelCall words, kernel, top, KernelOperation.ElementAddress, operands
+        if reference == stoppedWord {
+          return stoppedWord
+        }
       }
     }
   }
@@ -296,15 +593,18 @@ fn resolvePlace(
 /**
  * Runs one chunk to its return, with its frame from `entryBase` on. Every call it makes is a frame of this loop; a
  * destructor that has to run in the middle of an instruction is one more `execute`, above every word in use.
+ *
+ * Answers false where a sandboxed script stopped, after adding the frames of this loop to `budget.frames`.
  */
 fn execute(
   var words: ArrayList<Int>,
   var kernel: ArrayList<Int>,
+  var budget: Budget,
   program: BytecodeProgram,
   entry: Int,
   entryBase: Int,
   resultTarget: Int,
-) {
+): Bool {
   const opcodes = allOpcodes
   const tracing = Environment.get("TORB_VM_TRACE").isSome()
   var frames: List<Frame> = []
@@ -316,6 +616,13 @@ fn execute(
   var pc = 0
   ensureWords(words, top + scratchWords)
   loop {
+    budget.countdown = budget.countdown - 1
+    if budget.countdown < 0 {
+      if !refill(budget) {
+        noteFrames budget, chunkIndex, pc, frames
+        return false
+      }
+    }
     const head = code[pc]
     const a = operandA head
     const b = operandB head
@@ -351,6 +658,10 @@ fn execute(
       .Load => {
         const place = chunk.places[b]
         const reference = resolvePlace words, kernel, place, base, top
+        if reference == stoppedWord {
+          noteFrames budget, chunkIndex, pc, frames
+          return false
+        }
         for offset in 0..place.width {
           words.set(base + a + offset, readWord(words, stepped(reference, offset)))
         }
@@ -359,6 +670,10 @@ fn execute(
       .Store => {
         const place = chunk.places[a]
         const reference = resolvePlace words, kernel, place, base, top
+        if reference == stoppedWord {
+          noteFrames budget, chunkIndex, pc, frames
+          return false
+        }
         for offset in 0..place.width {
           writeWord words, stepped(reference, offset), words[base + b + offset]
         }
@@ -367,13 +682,24 @@ fn execute(
       .Reference => {
         const place = chunk.places[b]
         const reference = resolvePlace words, kernel, place, base, top
+        if reference == stoppedWord {
+          noteFrames budget, chunkIndex, pc, frames
+          return false
+        }
         words.set(base + a, reference)
         pc = pc + 1
       }
       .Kernel => {
         const queued = Machine.operate(words, base, code, pc + 1)
+        if queued == stoppedWord {
+          noteFrames budget, chunkIndex, pc, frames
+          return false
+        }
         if queued > 0 {
-          runClosers words, kernel, program, top
+          if !runClosers(words, kernel, budget, program, top) {
+            noteFrames budget, chunkIndex, pc, frames
+            return false
+          }
         }
         pc = pc + 1 + a
       }
@@ -381,7 +707,10 @@ fn execute(
         const callee = code[pc + 1]
         const next = program.chunks[callee]
         const calleeBase = top + scratchWords
-        ensureFrame words, kernel, calleeBase, next
+        if !ensureFrame(words, kernel, calleeBase, next) {
+          noteFrames budget, chunkIndex, pc, frames
+          return false
+        }
         for index in 0..b {
           const parameter = next.parameters[index]
           const source = base + code[pc + 2 + index]
@@ -402,7 +731,10 @@ fn execute(
         const callee = words[closure] - 1
         const next = program.chunks[callee]
         const calleeBase = top + scratchWords
-        ensureFrame words, kernel, calleeBase, next
+        if !ensureFrame(words, kernel, calleeBase, next) {
+          noteFrames budget, chunkIndex, pc, frames
+          return false
+        }
         var first = 0
         if next.takesEnvironment {
           words.set(calleeBase + next.parameters[0].offset, words[closure + 1])
@@ -428,10 +760,17 @@ fn execute(
         const witness = chunk.witnesses[code[pc + 1]]
         const member = code[pc + 2]
         const (table, payload) = resolveWitness words, kernel, program, witness, chunk, base, top
+        if table == stoppedWord {
+          noteFrames budget, chunkIndex, pc, frames
+          return false
+        }
         const callee = program.tables[table].members[member]
         const next = program.chunks[callee]
         const calleeBase = top + scratchWords
-        ensureFrame words, kernel, calleeBase, next
+        if !ensureFrame(words, kernel, calleeBase, next) {
+          noteFrames budget, chunkIndex, pc, frames
+          return false
+        }
         const receiver = next.parameters[0]
         if receiver.isReference {
           words.set(calleeBase + receiver.offset, payload + contentsOffset)
@@ -453,7 +792,10 @@ fn execute(
           if parameter.retainedThroughWitness >= 0 {
             const register = calleeBase + parameter.offset - top
             const retained = [register, parameter.retainedThroughWitness]
-            const _ = kernelCall words, kernel, top, KernelOperation.Retain, retained
+            if kernelCall(words, kernel, top, KernelOperation.Retain, retained) == stoppedWord {
+              noteFrames budget, chunkIndex, pc, frames
+              return false
+            }
           }
         }
         frames.append Frame(chunkIndex, pc + 3 + b, base, if c == 1 { base + a } else { 0 - 1 })
@@ -466,6 +808,10 @@ fn execute(
       }
       .WitnessTable => {
         const (table, _) = resolveWitness words, kernel, program, chunk.witnesses[b], chunk, base, top
+        if table == stoppedWord {
+          noteFrames budget, chunkIndex, pc, frames
+          return false
+        }
         words.set(base + a, table + 1)
         pc = pc + 1
       }
@@ -481,7 +827,7 @@ fn execute(
                 words.set(resultTarget + offset, words[source + offset])
               }
             }
-            return
+            return true
           }
         }
         if frame.target >= 0 {
@@ -500,7 +846,10 @@ fn execute(
         const first = words[base + b]
         const second = words[base + c]
         if (second > 0 && first > largest - second) || (second < 0 && first < smallest - second) {
-          checkedByKernel words, kernel, base, top, a, b, c, code[pc + 1], 0
+          if !checkedByKernel(words, kernel, base, top, a, b, c, code[pc + 1], 0) {
+            noteFrames budget, chunkIndex, pc, frames
+            return false
+          }
         }
         words.set(base + a, first + second)
         pc = pc + 2
@@ -509,7 +858,10 @@ fn execute(
         const first = words[base + b]
         const second = words[base + c]
         if (second < 0 && first > largest + second) || (second > 0 && first < smallest + second) {
-          checkedByKernel words, kernel, base, top, a, b, c, code[pc + 1], 1
+          if !checkedByKernel(words, kernel, base, top, a, b, c, code[pc + 1], 1) {
+            noteFrames budget, chunkIndex, pc, frames
+            return false
+          }
         }
         words.set(base + a, first - second)
         pc = pc + 2
@@ -519,8 +871,9 @@ fn execute(
         const second = words[base + c]
         if isSmall(first) && isSmall(second) {
           words.set(base + a, first * second)
-        } else {
-          checkedByKernel words, kernel, base, top, a, b, c, code[pc + 1], 2
+        } else if !checkedByKernel(words, kernel, base, top, a, b, c, code[pc + 1], 2) {
+          noteFrames budget, chunkIndex, pc, frames
+          return false
         }
         pc = pc + 2
       }
@@ -528,7 +881,10 @@ fn execute(
         const first = words[base + b]
         const second = words[base + c]
         if second == 0 || (second == 0 - 1 && first == smallest) {
-          checkedByKernel words, kernel, base, top, a, b, c, code[pc + 1], 3
+          if !checkedByKernel(words, kernel, base, top, a, b, c, code[pc + 1], 3) {
+            noteFrames budget, chunkIndex, pc, frames
+            return false
+          }
         } else {
           words.set(base + a, first / second)
         }
@@ -538,7 +894,10 @@ fn execute(
         const first = words[base + b]
         const second = words[base + c]
         if second == 0 || (second == 0 - 1 && first == smallest) {
-          checkedByKernel words, kernel, base, top, a, b, c, code[pc + 1], 4
+          if !checkedByKernel(words, kernel, base, top, a, b, c, code[pc + 1], 4) {
+            noteFrames budget, chunkIndex, pc, frames
+            return false
+          }
         } else {
           words.set(base + a, first % second)
         }
@@ -547,7 +906,10 @@ fn execute(
       .NegateInteger => {
         const first = words[base + b]
         if first == smallest {
-          checkedByKernel words, kernel, base, top, a, b, b, code[pc + 1], 5
+          if !checkedByKernel(words, kernel, base, top, a, b, b, code[pc + 1], 5) {
+            noteFrames budget, chunkIndex, pc, frames
+            return false
+          }
         }
         words.set(base + a, 0 - first)
         pc = pc + 2
@@ -624,12 +986,25 @@ fn execute(
       .Stop => {
         panicInternal "the VM does not run tasks yet"
       }
+      .RunScript => {
+        runScriptInstruction words, kernel, program, base, top, a, b, c, code[pc + 1]
+        pc = pc + 2
+      }
       .Cell => {
         const cell = program.constantWords + code[pc + 1]
         if words[cell] == 0 {
-          const _ = kernelCall words, kernel, top, KernelOperation.BeginImmortal, []
-          execute(words, kernel, program, code[pc + 2], top + scratchWords, cell + 1)
-          const _ = kernelCall words, kernel, top, KernelOperation.EndImmortal, []
+          if kernelCall(words, kernel, top, KernelOperation.BeginImmortal, []) == stoppedWord {
+            noteFrames budget, chunkIndex, pc, frames
+            return false
+          }
+          const built = execute(words, kernel, budget, program, code[pc + 2], top + scratchWords, cell + 1)
+          // The region is closed whether or not the initializer ran to its end: a stop must not leave the host
+          // allocating immortal blocks
+          const closed = kernelCall words, kernel, top, KernelOperation.EndImmortal, []
+          if !built || closed == stoppedWord {
+            noteFrames budget, chunkIndex, pc, frames
+            return false
+          }
           words.set cell, 1
         }
         for offset in 0..b {
@@ -638,6 +1013,37 @@ fn execute(
         pc = pc + 3
       }
     }
+  }
+}
+
+/**
+ * The countdown ran out: the step limit and the clock are looked at, and the next `checkInterval` steps are handed
+ * out. Answers false, with the reason, where a limit is reached.
+ */
+fn refill(var budget: Budget): Bool {
+  if budget.remaining <= 0 {
+    budget.reason = "The script ran more than {budget.steps} steps"
+    return false
+  }
+  if budget.deadline > 0 && Clock.milliseconds() > budget.deadline {
+    budget.reason = "The script ran longer than {budget.milliseconds} milliseconds"
+    return false
+  }
+  const next = if budget.remaining < checkInterval { budget.remaining } else { checkInterval }
+  // This step is the first of them
+  budget.countdown = next - 1
+  budget.remaining = budget.remaining - next
+  true
+}
+
+/** The frames of one loop, the innermost first, after the ones of the loops above it that stopped already. */
+fn noteFrames(var budget: Budget, chunk: Int, pc: Int, frames: List<Frame>) {
+  budget.frames.append((chunk, pc))
+  var index = frames.length() - 1
+  while index >= 0 {
+    const frame = frames[index]
+    budget.frames.append((frame.chunk, frame.pc))
+    index = index - 1
   }
 }
 
@@ -660,6 +1066,7 @@ fn flag(condition: Bool): Int {
 /**
  * An `Int64` operation whose check the interpreter could not settle itself: the kernel runs it through the helper of
  * `torb_number.h` the C back end calls, which panics with the runtime's own message at the operation's location.
+ * Answers false where that panic stopped a sandboxed script.
  */
 fn checkedByKernel(
   var words: ArrayList<Int>,
@@ -671,9 +1078,9 @@ fn checkedByKernel(
   second: Int,
   location: Int,
   operation: Int,
-) {
+): Bool {
   const operands = [target + base - top, first + base - top, second + base - top, location, operation + 256, 4]
-  const _ = kernelCall words, kernel, top, KernelOperation.Arithmetic, operands
+  kernelCall(words, kernel, top, KernelOperation.Arithmetic, operands) != stoppedWord
 }
 
 /** An error of the VM itself, never of the program: the runtime's panic, as every internal error of torb is. */
@@ -681,18 +1088,24 @@ fn panicInternal(message: String): Never {
   panic "internal error: {message}"
 }
 
-/** The words of a callee's frame, and the recursion limit the runtime reports as a stack overflow. */
-fn ensureFrame(var words: ArrayList<Int>, var kernel: ArrayList<Int>, calleeBase: Int, next: Chunk) {
+/**
+ * The words of a callee's frame, and the recursion limit the runtime reports as a stack overflow. Answers false where
+ * that overflow stopped a sandboxed script.
+ */
+fn ensureFrame(var words: ArrayList<Int>, var kernel: ArrayList<Int>, calleeBase: Int, next: Chunk): Bool {
   const needed = calleeBase + next.frameWords + scratchWords
   if needed > largestStack {
     const _ = kernelCall words, kernel, 0, KernelOperation.StackOverflow, [next.location]
+    return false
   }
   ensureWords words, needed
+  true
 }
 
 /**
  * The table a witness source names and the payload block of the value it came from: the table word of the
- * trait-typed value (its index plus one) or a static table, then one nested step per supertrait.
+ * trait-typed value (its index plus one) or a static table, then one nested step per supertrait. The table is
+ * `stoppedWord` where resolving the value's place stopped a sandboxed script.
  */
 fn resolveWitness(
   var words: ArrayList<Int>,
@@ -711,6 +1124,9 @@ fn resolveWitness(
     }
     .Value(place, bound) => {
       const reference = resolvePlace words, kernel, chunk.places[place], base, top
+      if reference == stoppedWord {
+        return (stoppedWord, 0)
+      }
       payload = readWord words, reference
       table = readWord(words, stepped(reference, 1 + bound)) - 1
     }
@@ -724,12 +1140,22 @@ fn resolveWitness(
 /**
  * The destructors the kernel queued, run in the order the C back end runs them: every block of the batch has its
  * `close()` called with the count lent to it, then its fields released - and what that release queues runs before the
- * next block of the batch, as the nested drop functions of C would.
+ * next block of the batch, as the nested drop functions of C would. Answers false where a destructor stopped a
+ * sandboxed script.
  */
-fn runClosers(var words: ArrayList<Int>, var kernel: ArrayList<Int>, program: BytecodeProgram, top: Int) {
+fn runClosers(
+  var words: ArrayList<Int>,
+  var kernel: ArrayList<Int>,
+  var budget: Budget,
+  program: BytecodeProgram,
+  top: Int,
+): Bool {
   var batch: List<(Int, Int)> = []
   loop {
     const closer = kernelCall words, kernel, top, KernelOperation.TakeCloser, [0]
+    if closer == stoppedWord {
+      return false
+    }
     if closer < 0 {
       break
     }
@@ -737,10 +1163,14 @@ fn runClosers(var words: ArrayList<Int>, var kernel: ArrayList<Int>, program: By
   }
   for (block, closer) in batch {
     words.set top, block
-    const _ = kernelCall words, kernel, top, KernelOperation.ClosingBegin, [0]
+    if kernelCall(words, kernel, top, KernelOperation.ClosingBegin, [0]) == stoppedWord {
+      return false
+    }
     const destructor = program.chunks[closer]
     const calleeBase = top + scratchWords
-    ensureFrame words, kernel, calleeBase, destructor
+    if !ensureFrame(words, kernel, calleeBase, destructor) {
+      return false
+    }
     const receiver = destructor.parameters[0]
     if receiver.isReference {
       // `var fn close()` takes the object as a place: the register above the frame that holds it
@@ -749,12 +1179,22 @@ fn runClosers(var words: ArrayList<Int>, var kernel: ArrayList<Int>, program: By
     } else {
       words.set(calleeBase + receiver.offset, block)
     }
-    execute(words, kernel, program, closer, calleeBase, 0 - 1)
+    if !execute(words, kernel, budget, program, closer, calleeBase, 0 - 1) {
+      return false
+    }
     words.set top, block
-    const _ = kernelCall words, kernel, top, KernelOperation.ClosingEnd, [0]
+    if kernelCall(words, kernel, top, KernelOperation.ClosingEnd, [0]) == stoppedWord {
+      return false
+    }
     const queued = kernelCall words, kernel, top, KernelOperation.FinishRelease, [0]
+    if queued == stoppedWord {
+      return false
+    }
     if queued > 0 {
-      runClosers words, kernel, program, top
+      if !runClosers(words, kernel, budget, program, top) {
+        return false
+      }
     }
   }
+  true
 }

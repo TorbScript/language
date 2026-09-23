@@ -87,7 +87,17 @@ fn addReceiverScripts(tree: SourceTree, workspace: Workspace, var modules: List<
     const from = modules[index].id
     for load in loads {
       const path = joinPath directory, load.path
-      if !tree.exists(path) || known.contains(path) {
+      if !tree.exists(path) {
+        continue
+      }
+      // A file a program loads is a script wherever it lies, also where a test directory swept it in as a module
+      // (docs/design/SCRIPTS.md section 3) - but a `project.trb` stays the manifest, and the first load decides
+      if known.contains(path) {
+        for position in 0..ordinary {
+          if modules[position].path == path && modules[position].receiver.isNone() {
+            modules[position] = modules[position].copy(receiver: Some(ScriptReceiver.Loaded(from, load.annotation)))
+          }
+        }
         continue
       }
       known.insert path

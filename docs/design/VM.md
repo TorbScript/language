@@ -49,7 +49,9 @@ after `lowerWorkspace` (`finishProgram`, `devirtualizeProgram`, `rewriteElementP
   already, so the bytecode is a near 1:1 encoding and not a second lowering.
 - **What the C back end refuses, the VM refuses.** A construct the C back end reports as unsupported (a call that
   passes a witness table, a `var` path through a map, a `Contents` step) is reported by the bytecode emitter too, with
-  the same kind of finding, and the program does not run. The VM never becomes the more permissive back end.
+  the same kind of finding, and the program does not run. The VM never becomes the more permissive back end. The one
+  exception is a receiver script, which is not a program but the one construct defined to be interpreted: its limits
+  and its recoverable panic are properties of an interpreter (docs/design/SCRIPTS.md section 1).
 
 The bytecode lives in memory; a file format (`.torbc`, a version and a hash of its inputs) is milestone 8, together
 with the IR cache.
@@ -214,7 +216,9 @@ What it needs beyond TorbScript is a way to put the words of a register in front
   the manifest's. `runtime/machine.c` adds the operations only a VM needs: allocation of a counted block with its
   shape word, the shapes and the counts of section 7, float arithmetic and conversions, checked arithmetic of every
   width with the runtime's own panic functions, the tables of locations and element descriptors, the program's
-  arguments (`Process.arguments()` answers them, not `torb`'s), and the immortal region a module constant is built in.
+  arguments (`Process.arguments()` answers them, not `torb`'s), the immortal region a module constant is built in, and
+  the sandbox of a receiver script: opening and closing it, the stop it recorded, and a text copied out as code points
+  (docs/design/SCRIPTS.md sections 4 to 6).
 - **One native, many operations, is deliberate.** A new native is two commits and a refreshed seed (CONTRIBUTING, "Two
   commits for a breaking change"). A new *operation* is a new row of a C table and a new constant of the emitter, in
   one commit, because the manifest does not change. The kernel natives are the only natives the VM will ever need.
@@ -303,8 +307,9 @@ compares standard output, standard error (folded as for the native run) and the 
   resume function of `runtime/machine.c` that hands control back to the interpreter, or the VM carries the same
   algorithm in TorbScript (BACKEND 5.3 names both). The first keeps one scheduler in the process and is preferred.
 - **Calling compiled code from bytecode.** BACKEND 5.2 promised that a compiled function can be called from bytecode
-  and back. With the VM's own inline layouts that is a marshalling step at the boundary for any record of the program;
-  nothing needs it before the sandbox embeds a VM into a compiled program (7.4), and it is decided there.
+  and back. With the VM's own inline layouts that is a marshalling step at the boundary for any record of the program.
+  docs/design/SCRIPTS.md section 5 decided it for the sandbox: only text crosses between `torb` and the VM (the kernel
+  operation `TextOut`), and a native binary that loads scripts will cross with `std/encoding`.
 - **Speed.** A register read is `Indexed.at` (a runtime call and an `Option`); a direct read of the list's storage, an
   intrinsic for a word of a block, and return records kept in the word stack instead of a list of records are the first
   three steps, each measured against `fibonacci(30)` above. The first two are new natives, so two commits each.

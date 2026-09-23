@@ -6,8 +6,8 @@
  * outer one, so it makes nothing implicit inside the closure at all.
  *
  * A receiver *script* is a file that is such a body: `project.trb` against `Project`, and a configuration file against
- * whatever `Sandbox.load<Value>` was written with. It is checked with the file scope "the prelude, and nothing else",
- * which is why a `use` in one is an error.
+ * whatever `Sandbox.load<Value>` was written with. It is checked with the file scope "the prelude, the receiver, and
+ * what it imports", and an import is a capability: held against the grant where the grant is known when it is checked.
  */
 
 use test, group from "std/test"
@@ -216,6 +216,9 @@ fn probeScript(files: Map<String, String>, path: String): Probed {
   Probed files[path], checked.checker, module
 }
 
+/** A `std/fs` of one type, which is all an import of it needs. */
+const fileSource = "public type File \{\}\n"
+
 const loader = "type Sandbox \{\n  static fn load<Value>(path: String): Int \{\n    0\n  \}\n\}\n\n"
   + "public type Config \{\n  var port: Int = 8080\n  var host: String = \"\"\n\}\n\n"
   + "const script = Sandbox.load<Config>(\"./config.trb\")\n"
@@ -247,11 +250,16 @@ group "project.trb is a receiver script against `Project`" {
     assert(scriptProblems(["app/project.trb": "nmae \"acme/app\"\n"]) == ["Cannot find `nmae` here"])
   }
 
-  test "a script reaches the prelude and nothing else" {
+  test "a project file may import what the toolchain grants it: its files, their text, and the environment" {
+    const manifest = "use File from \"std/fs\"\nname \"acme/app\"\n"
+    assert scriptProblems(["app/project.trb": manifest, "std/fs/project.trb": "name \"std/fs\"", "std/fs/src/lib.trb": fileSource]).isEmpty()
+  }
+
+  test "and nothing else, whatever it is" {
     const manifest = "use Thing from \"./src/thing\"\nname \"acme/app\"\n"
     assert(
       scriptProblems(["app/project.trb": manifest, "app/src/thing.trb": "public type Thing \{\}\n"])
-        == ["A receiver script reaches the prelude and nothing else, so it cannot `use` a module"]
+        == ["A project file may import `std/fs`, `std/text` and `std/environment`, and not `./src/thing`"]
     )
   }
 }
@@ -277,6 +285,33 @@ group "Sandbox.load makes a file part of the project" {
       "app/config.trb": "port 9000\n",
     ]
     assert scriptProblems(files).contains("There is no module `../config`")
+  }
+
+  test "a loaded script may import a module: its grant is held against the import when it is loaded" {
+    const files = [
+      "app/src/main.trb": loader,
+      "app/config.trb": "use Thing from \"./src/thing\"\nport 9000\n",
+      "app/src/thing.trb": "public type Thing \{\}\n",
+    ]
+    assert scriptProblems(files).isEmpty()
+  }
+
+  test "a file the test directory sweeps in is a script all the same where a program loads it" {
+    const main = loader.replace "./config.trb", "./tests/config.trb"
+    const files = ["app/src/main.trb": main, "app/tests/config.trb": "port 9000\n"]
+    assert scriptProblems(files).isEmpty()
+    const probed = probeScript files, "app/tests/config.trb"
+    assert(probed.receiverOf("") == "implicit var self: Config")
+  }
+
+  test "no grant gives a script the kernel of the VM, or scripts of its own" {
+    const files = [
+      "app/src/main.trb": loader,
+      "app/config.trb": "use Machine from \"std/machine\"\nport 9000\n",
+      "std/machine/project.trb": "name \"std/machine\"",
+      "std/machine/src/lib.trb": "public type Machine \{\}\n",
+    ]
+    assert(scriptProblems(files) == ["A receiver script cannot import `std/machine`"])
   }
 
   test "a path that is not a literal is not checked here: only the sandbox can know it" {

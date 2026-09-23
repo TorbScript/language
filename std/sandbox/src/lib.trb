@@ -1,6 +1,10 @@
 /**
  * Loads `.trb` files as sandboxed receiver closures - the mechanism behind `project.trb` and configuration scripts
- * (see "Receiver Scripts and the Sandbox" in CONCEPT.md).
+ * (see "Receiver Scripts and the Sandbox" in CONCEPT.md, and docs/design/SCRIPTS.md).
+ *
+ * A script runs in the VM, always: the step and time limits and the panic that does not end the caller are properties
+ * of an interpreter (docs/design/SCRIPTS.md section 1). A program run with `torb run --vm` loads one; a native binary
+ * does not embed the VM yet, and the C back end refuses a program that calls [Script.apply].
  */
 
 use Duration from "std/time"
@@ -37,18 +41,61 @@ extend Int64 {
  * (a script that could grant itself capabilities would not be a sandbox). Left at the defaults, a script has no
  * IO, no network, no clock, no environment and no foreign functions.
  */
-public native type SandboxCapabilities {
+public type SandboxCapabilities {
+  /** The modules [SandboxCapabilities.modules] granted, which the script's imports are held against. */
+  private(var) moduleNames: List<String> = []
+  private(var) readOnlyRoots: List<String> = []
+  private(var) readWriteRoots: List<String> = []
+  private(var) variablePatterns: List<String> = []
+  private(var) stepLimit: Int = 1_000_000
+  private(var) memoryLimit: Int = 64_000_000
+  /** Milliseconds: a `Duration` is no constant a default could be. */
+  private(var) timeLimit: Int = 2000
+
   /** Additional parts of the standard library the script may `use`, e.g. `"std/text"`. */
-  native var fn modules(...names: String)
+  var fn modules(...names: String) {
+    moduleNames.appendAll names
+  }
 
   /** File system roots the script may reach. A side that is left out stays closed. */
-  native var fn files(readOnly: String = "", readWrite: String = "")
+  var fn files(readOnly: String = "", readWrite: String = "") {
+    if !readOnly.isEmpty() {
+      readOnlyRoots.append readOnly
+    }
+    if !readWrite.isEmpty() {
+      readWriteRoots.append readWrite
+    }
+  }
 
   /** Environment variable name patterns the script may read, e.g. `"APP_*"`. */
-  native var fn environment(...patterns: String)
+  var fn environment(...patterns: String) {
+    variablePatterns.appendAll patterns
+  }
 
   /** Guards against runaway scripts (`loop {}`). */
-  native var fn limits(steps: Int = 1_000_000, memory: Int = 64.megabytes(), time: Duration = 2.seconds())
+  var fn limits(steps: Int = 1_000_000, memory: Int = 64.megabytes(), time: Duration = 2.seconds()) {
+    stepLimit = steps
+    memoryLimit = memory
+    timeLimit = time.nanoseconds() / 1_000_000
+  }
+
+  /**
+   * The grant as the VM's runtime reads it (docs/design/SCRIPTS.md section 4): one setting per line, a tab between the
+   * word and the value. A relative root is read against the working directory, which is where the program runs.
+   */
+  private fn grantText(): String {
+    var lines = ["base\t.", "memory\t{memoryLimit}", "steps\t{stepLimit}", "milliseconds\t{timeLimit}"]
+    for root in readOnlyRoots {
+      lines.append "read\t{root}"
+    }
+    for root in readWriteRoots {
+      lines.append "write\t{root}"
+    }
+    for pattern in variablePatterns {
+      lines.append "variable\t{pattern}"
+    }
+    lines.joined separator: "\n"
+  }
 }
 
 /**
@@ -56,9 +103,18 @@ public native type SandboxCapabilities {
  * script runs inside the sandbox and can still fail there: a step, memory or time limit, or a panic - the only panic
  * in the language that is recoverable, because the VM is interpreting it and the script has a heap of its own.
  */
-public native type Script<Value> {
+public type Script<Value> {
+  private body: (var self: Value) => Void
+  private granted: SandboxCapabilities
+
   /** Runs the body of the script against `value`, configuring it in place. */
-  native fn apply(var value: Value): Result<Void, SandboxError>
+  fn apply(var value: Value): Result<Void, SandboxError> {
+    const stopped = runScript body, value, granted.grantText()
+    if stopped.isEmpty() {
+      return Ok(void)
+    }
+    Fail errorOf(stopped)
+  }
 }
 
 /** Sandboxes and type checks `.trb` files against a receiver type. */
@@ -68,6 +124,9 @@ public native type Sandbox {
    * own. What is wrong with the file (syntax, types, a module the script may not import) is reported here; what goes
    * wrong while it runs is reported by [Script.apply] instead. The trailing block grants capabilities beyond the
    * defaults.
+   *
+   * The path has to be one the program was compiled with - a literal of a `Sandbox.load` - because the program carries
+   * the scripts it checked; a path only known while it runs is docs/design/SCRIPTS.md's slice 7.
    *
    * # Examples
    *
@@ -81,8 +140,68 @@ public native type Sandbox {
    *     }
    *     print loaded.isOk()
    */
-  native static fn load<Value>(
+  static fn load<Value>(
     path: String,
     capabilities: (var self: SandboxCapabilities) => Void = {},
-  ): Result<Script<Value>, SandboxError>
+  ): Result<Script<Value>, SandboxError> {
+    var granted = SandboxCapabilities()
+    capabilities granted
+    const written = relativeScriptPath path
+    const body = match scriptBody<Value>(written) {
+      Some(found) => found
+      None => {
+        return Fail SandboxError(0, "There is no script `{path}` in this program: a script is loaded by a path it was compiled with")
+      }
+    }
+    for line in scriptImports<Value>(written).split("\n") {
+      const (module, at) = match line.split("\t").toList() {
+        [name, number] => (name, Int.tryFrom(number).ok() ?? 0)
+        _ => {
+          continue
+        }
+      }
+      if !granted.moduleNames.contains(module) {
+        return Fail SandboxError(at, "The script may not import `{module}`: the caller grants it with `modules \"{module}\"`")
+      }
+    }
+    Ok Script(body, granted)
+  }
 }
+
+/** `./config/../config.trb` is `config.trb`: the path as the table of the program's scripts spells it. */
+fn relativeScriptPath(path: String): String {
+  var segments: List<String> = []
+  for segment in path.replace("\\", "/").split("/") {
+    if segment.isEmpty() || segment == "." {
+      continue
+    }
+    if segment == ".." && !segments.isEmpty() {
+      segments.removeAt(segments.length() - 1)
+      continue
+    }
+    segments.append segment
+  }
+  segments.joined separator: "/"
+}
+
+/** `"3\tthe message"`, which is how the VM reports a stop, as the error it is. */
+fn errorOf(stopped: String): SandboxError {
+  const line = Int.tryFrom(stopped.substringBefore("\t") ?? "0").ok() ?? 0
+  SandboxError(line, stopped.substringAfter("\t") ?? stopped)
+}
+
+/**
+ * The body of the script at `path` that was checked against `Value`, from the table of scripts the program was compiled
+ * with; `None` for a path it was not. Generated by the lowering, one table per receiver type.
+ */
+native fn scriptBody<Value>(path: String): ((var self: Value) => Void)?
+
+/** The modules the script at `path` imports, each with the line of its `use`: `"std/fs\t3"`, one per line. */
+native fn scriptImports<Value>(path: String): String
+
+/**
+ * Runs `body` against `value` inside a sandbox of `grant` (docs/design/SCRIPTS.md section 4). Answers `""` where the
+ * body ran to its end, and otherwise the line of the script and what stopped it, a tab between the two. Only the VM
+ * runs it.
+ */
+native fn runScript<Value>(body: (var self: Value) => Void, var value: Value, grant: String): String

@@ -10,20 +10,21 @@
 use Statement, Block, Binding, FunctionDeclaration, Declaration, ExtendDeclaration from "../../syntax/ast"
 use ModuleId from "../../semantics/module"
 use SymbolId, boundNamesOf from "../../semantics/symbols"
-use TypeId, ParameterId from "../../semantics/checker/type"
+use TypeId, ParameterId, FunctionForm, ParameterForm, ParameterMode from "../../semantics/checker/type"
 use signatureOf, typeSignatureOf from "../../semantics/checker/signature"
 use extensionAt from "../../semantics/checker/implementation"
+use Span from "../../syntax/source"
 use IrSignature, IrTypeId, Slot, BlockId, FunctionId, Instance, Terminator, FunctionKind, LocationId, borrowed from "../ir"
-use FunctionBuilder, newFunction, setBlockLocation, finishFunction, setFunctionKind from "../build"
+use FunctionBuilder, newFunction, setBlockLocation, finishFunction, setFunctionKind, addBlock from "../build"
 use resumeFunctionName from "../mangle"
 use taskValueOf, resumeSignatureOf, buildTaskConstructor, numberSuspensions, hasSuspension from "./task"
-use moduleComponentOf from "../instantiate"
+use moduleComponentOf, instantiateSignature from "../instantiate"
 use mangledName from "../mangle"
 use instanceOfSymbol, instanceKeyOf, functionDeclarationOf, isMonomorphic from "../instances"
 use Lowering, reportUnsupported, locationOf, isVoidType, isNeverType, isTaskType from "./context"
-use finishBlock, voidTypeOf from "./context"
+use finishBlock, continueIn, voidTypeOf from "./context"
 use lowerBlockInto, lowerBlockValue, lowerStatement from "./statement"
-use capturedVariablesOf, capturedVariablesIn from "./closure"
+use capturedVariablesOf, capturedVariablesIn, savedFrame, restoreFrame, enterBody from "./closure"
 use staticOfConstant from "../constant"
 use taskValueOf as declaredTaskValueOf from "../../semantics/checker/statement"
 use openScope, closeScope from "./scope"
@@ -359,6 +360,105 @@ fn rememberEntryLocal(var lowering: Lowering, var builder: FunctionBuilder, bind
       }
     }
   }
+}
+
+// --- The function of a receiver script ------------------------------------------------------------------------------
+
+/**
+ * The function of a receiver script (docs/design/SCRIPTS.md section 3): the file as the body of
+ * `(var self: Receiver) => Void`, lowered once per module however often it is asked for.
+ *
+ * The receiver is parameter zero, a reference, and the checker declared its binding at `Span(0, 0)` - so that span is
+ * the parameter's slot, exactly as `bindClosureParameters` maps the implicit receiver of a closure. Every statement is
+ * code of the body, the bindings are locals, and a `use` is no code at all.
+ */
+public fn lowerScriptFunction(var lowering: Lowering, module: ModuleId, receiver: TypeId): FunctionId? {
+  if const Some(found) = lowering.scriptFunctions.get(module.value) {
+    return Some found
+  }
+  const statements = lowering.checker.program.graph.at(module).file.statements
+  const name = scriptNameOf lowering, module
+  const voidType = lowering.checker.voidType
+  const form = FunctionForm([ParameterForm(Some("self"), ParameterMode.Receiver(true), receiver)], voidType)
+  const identifier = instantiateSignature lowering.program, lowering.checker, lowering.instantiation, form
+  const signature = lowering.program.signatureAt identifier
+  // A script is asked for where its value is made, which may be in the middle of another body
+  const saved = savedFrame lowering
+  const savedSupport = lowering.isSupported
+  const savedDivergence = lowering.isDiverged
+  enterBody lowering, name
+  lowering.module = module
+  lowering.substitution = [:]
+  lowering.isSupported = true
+  lowering.capturedVariables = capturedVariablesIn lowering, statements
+  var builder = newFunction name, None, signature, "script"
+  for statement in statements {
+    if isEntryStatement(statement) {
+      const location = locationOf lowering, statement.span
+      setBlockLocation builder, BlockId(0), Some(location)
+      break
+    }
+  }
+  lowering.slots.set Span(0, 0), Slot(0)
+  openScope lowering
+  var isFirst = true
+  for statement in statements {
+    if lowering.isDiverged || !lowering.isSupported {
+      break
+    }
+    if isImport(statement) {
+      continue
+    }
+    // One block per statement of the file, each at its own location: a script that stops is blamed on the statement
+    // that was running, even where nothing in it carries a location of its own (docs/design/SCRIPTS.md section 6)
+    if !isFirst {
+      const next = addBlock builder, "statement", Some(locationOf(lowering, statement.span))
+      finishBlock lowering, builder, Terminator.Jump(next)
+      continueIn lowering, builder, next
+    }
+    isFirst = false
+    lowerStatement lowering, builder, statement
+  }
+  closeScope lowering, builder
+  if !lowering.isDiverged {
+    finishBlock lowering, builder, Terminator.Return(None)
+  }
+  const isSupported = lowering.isSupported
+  restoreFrame lowering, saved
+  lowering.isSupported = savedSupport
+  lowering.isDiverged = savedDivergence
+  if !isSupported {
+    lowering.stubbed = lowering.stubbed + 1
+    var stub = newFunction name, None, signature, "not supported yet"
+    const stubbed = finishFunction lowering.program, stub
+    lowering.scriptFunctions.set module.value, stubbed
+    return Some stubbed
+  }
+  lowering.lowered = lowering.lowered + 1
+  const function = finishFunction lowering.program, builder
+  lowering.scriptFunctions.set module.value, function
+  Some function
+}
+
+/** `use X from "..."`: a declaration of the file scope, never code. */
+fn isImport(statement: Statement): Bool {
+  if const .Declare(declaration) = statement.kind {
+    if const .Use(_) = declaration.kind {
+      return true
+    }
+  }
+  false
+}
+
+/**
+ * The name of a script function: the module's name with the member component `script`, which no declaration can
+ * produce and which never collides with the entry function of the same module.
+ */
+public fn scriptNameOf(var lowering: Lowering, module: ModuleId): String {
+  const inside = lowering.checker.program.graph.at module
+  const package = lowering.checker.program.workspace.packages[inside.package]
+  const component = moduleComponentOf package.directory, inside.path
+  mangledName "t", [package.name, component], "script"
 }
 
 /** `t_main`, `t_acme_x2f_app_main`: the entry function is named after the file and has no member component. */

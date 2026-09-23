@@ -49,9 +49,10 @@ test {
 ### What the toolchain reads today
 
 `torb check`, `build` and `test` are what read `project.trb`, and today they read it **statically**, from its syntax
-tree, rather than by evaluating it against `Project` the way a receiver script normally runs - the sandbox that would
-run it does not exist yet (see [The sandbox](../language/configuration/the-sandbox.md)). Only the following settings
-are consulted, each as a literal string argument:
+tree, rather than by evaluating it against `Project` the way a receiver script normally runs. The evaluation exists -
+`torb manifest` runs the file in the sandboxed VM and prints the settings it configured - but no command reads its
+result yet (see [The sandbox](../language/configuration/the-sandbox.md)). Only the following settings are consulted,
+each as a literal string argument:
 
 | Setting | What it decides |
 |---------|------------------|
@@ -69,6 +70,21 @@ and type check, because the whole file is also checked as an ordinary program ag
 reads them yet. A computed setting, such as `build { output "build/{target}/{binary}" }`
 (see [`CONCEPT.md`](../../CONCEPT.md#projecttrb)), type checks the same way and is silently not read either: only a
 literal string argument with no `{...}` in it is.
+
+### What a project file may do
+
+A project file may import `std/fs`, `std/text` and `std/environment`, and nothing else - `torb check` reports any other
+`use` at its line. When it is evaluated, it may read files below its own directory (a relative path is read against
+that directory) and every variable of the environment, and it runs at most 1 000 000 steps, 16 MB of allocations and
+two seconds. Anything outside that stops the evaluation with an error at the line that asked for it:
+
+```console
+$ torb manifest shop
+error: The script may not read `../VERSION`: it is not inside `C:/work/shop`
+ --> shop/project.trb:4
+  |
+4 | version File.readText("../VERSION").ok() ?? "0.0.0"
+```
 
 ### Workspaces
 

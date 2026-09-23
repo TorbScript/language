@@ -34,6 +34,7 @@ torb tokens <file>     Print the tokens of a file
 torb ast <file>        Print the syntax tree of a file
 torb highlight <file>  Print the semantic tokens of a file as JSON, for an editor
 torb natives --header  Write torb_natives.h and machine_natives.c from the manifest of natives
+torb manifest [path]...  Evaluate every project.trb the paths reach in the sandboxed VM
 torb docs <command>    Check, index, and derive the documentation
 torb canon [path]...   Write the formatter canon over the syntax tree
 torb test [path]...    Run the *.test.trb files below the paths
@@ -142,6 +143,15 @@ rejected.
 from one place - one line per test, `  ok      ` or `  FAILED  ` with the group names in front of it, and the counts
 of the summary. So a test file that is **built** on its own (`torb build one.test.trb`) runs its tests the same way,
 which is what the language's own conformance suite compares.
+
+### `manifest`
+
+Evaluates every `project.trb` the paths reach - a manifest named directly, or every package of a workspace below a
+directory - as the receiver script it is: in the VM, inside the sandbox a project file gets, against the `Project` of
+`std/project` (see [project.trb](project-trb.md)). It prints the settings each one configured, as literal command
+calls. With `--check` it prints nothing but a summary, and fails where the static reader the other commands use reads
+anything else out of those settings than out of the file itself; `tools/gates.sh a` runs it over every manifest of the
+repository.
 
 ### `docs`
 

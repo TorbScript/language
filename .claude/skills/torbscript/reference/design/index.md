@@ -19,6 +19,7 @@ documents:
   - DESTRUCTORS.md
   - OS.md
   - VM.md
+  - SCRIPTS.md
 ---
 
 A design record is written before a feature is finished, sometimes before a line of it is implemented. It works out the
@@ -30,8 +31,8 @@ implemented, or done - so a reader knows how much of what follows exists yet.
 
 The specification of a feature that spans several packages or several `language/` pages: collections, streams,
 concurrency, encoding, paths, URIs, linear algebra, entities and components, resources, the project file,
-destructors, and the operating system. Each is plain Markdown without front matter, linked here rather than copied,
-and stays where the feature it describes keeps changing.
+destructors, the operating system, the VM and the sandbox of receiver scripts. Each is plain Markdown without front
+matter, linked here rather than copied, and stays where the feature it describes keeps changing.
 
 What does not belong here: the compiler's own implementation, which is in `internals/`; the
 settled rules of the language, which are in [`language/`](../language/index.md) once a feature has a page there; and
@@ -56,6 +57,7 @@ the reasons behind a decision that no longer needs a whole record, which belong 
 - **Destructors, `close()` and `using`**
 - **The Operating System**
 - **The Bytecode VM**
+- **Receiver Scripts and the Sandbox**
 
 <!-- torb:index:end -->
 

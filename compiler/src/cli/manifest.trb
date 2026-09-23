@@ -1,0 +1,85 @@
+/**
+ * `torb manifest [--check] [path]...`: every `project.trb` the paths reach, evaluated in the sandboxed VM
+ * (docs/design/SCRIPTS.md section 7).
+ *
+ * Without `--check` it prints the settings each evaluation answered - the literal command calls the configured
+ * `Project` prints back. With it, it reads those settings with the static reader and compares them with what the same
+ * reader reads from the file itself, and fails where the two differ: the gate that has to stay green before the
+ * toolchain reads an evaluated manifest anywhere (BACKEND row 7.5).
+ */
+
+use IoError from "std/fs"
+use LineIndex from "../syntax/source"
+use renderDiagnostic, renderProblem, counted from "./render"
+use evaluateManifests, manifestOfSettings, EvaluatedManifest from "../vm/manifest"
+use ScriptStop from "../vm/sandbox"
+
+/** Runs the command; answers the exit code. */
+public fn runManifest(paths: List<String>, checks: Bool): Result<Int, IoError> {
+  const evaluation = evaluateManifests(paths)?
+  const manifests = match evaluation {
+    Ok(found) => found
+    Fail(failure) => {
+      for problem in failure.problems {
+        printError renderProblem(problem)
+      }
+      for (path, text, diagnostic) in failure.diagnostics {
+        printError renderDiagnostic(path, LineIndex.of(text), diagnostic)
+        printError ""
+      }
+      return Ok 1
+    }
+  }
+  var failed = 0
+  for manifest in manifests {
+    match manifest.evaluated {
+      Fail(stop) => {
+        printError renderStop(manifest, stop)
+        printError ""
+        failed = failed + 1
+      }
+      Ok(settings) => {
+        if !checks {
+          print "// {manifest.path}"
+          print settings.trim()
+          continue
+        }
+        const read = manifestOfSettings settings
+        if read != manifest.statically {
+          printError "error: the evaluation of {manifest.path} and the static reader disagree"
+          printError "  static:    {manifest.statically}"
+          printError "  evaluated: {read}"
+          printError ""
+          failed = failed + 1
+        }
+      }
+    }
+  }
+  if failed > 0 {
+    printError "{counted(failed, "manifest")} of {manifests.length()} failed"
+    return Ok 1
+  }
+  if checks {
+    print "{counted(manifests.length(), "manifest")}, the evaluation agrees with the static reader"
+  }
+  Ok 0
+}
+
+/**
+ * A stop of a project file, as a diagnostic against it: the message, the file and the line, and the line itself where
+ * the stop names one (docs/design/SCRIPTS.md section 6).
+ */
+public fn renderStop(manifest: EvaluatedManifest, stop: ScriptStop): String {
+  if stop.line <= 0 {
+    return "error: {stop.message}\n --> {manifest.path}"
+  }
+  const lines = LineIndex.of manifest.text
+  const gutter = " ".repeat("{stop.line}".byteLength())
+  const rendered = [
+    "error: {stop.message}",
+    "{gutter}--> {manifest.path}:{stop.line}",
+    "{gutter} |",
+    "{stop.line} | {lines.lineText(stop.line)}",
+  ]
+  rendered.joined separator: "\n"
+}

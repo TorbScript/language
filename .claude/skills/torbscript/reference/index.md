@@ -126,8 +126,8 @@ that answers the question. A page marked (planned) describes a feature that does
 - `language/configuration/builders.md` - **Builders and DSLs** (reference): A builder is a function that creates a value, hands it to a receiver closure to configure, and returns it, which is what makes a configuration block a statically typed value instead of a string to parse.
 - `language/configuration/index.md` - **Configuration** (index): Receiver closures, the builder function around one, and the receiver script and sandbox that let a whole file play the same role - statically typed configuration without a second language.
 - `language/configuration/receiver-closures.md` - **Receiver closures** (reference): A receiver closure is a closure whose first parameter is called self, so names inside it resolve against that receiver first, exactly as inside a method.
-- `language/configuration/receiver-scripts.md` - **Receiver scripts** (reference, planned): A .trb file can be loaded as the body of a receiver closure and type checked against a receiver type before it runs, but nothing runs one yet - the sandboxed VM that would is still planned.
-- `language/configuration/the-sandbox.md` - **The sandbox** (reference, planned): A script has no IO, no network, no clock, no environment and no foreign functions by default, and only the caller of Sandbox.load can grant more, in a block that names exactly what is granted.
+- `language/configuration/receiver-scripts.md` - **Receiver scripts** (reference, draft): A .trb file can be loaded as the body of a receiver closure, type checked against a receiver type before it runs, and run by the sandboxed VM.
+- `language/configuration/the-sandbox.md` - **The sandbox** (reference, draft): A script has no IO, no network, no clock, no environment and no foreign functions by default, and only the caller of Sandbox.load can grant more, in a block that names exactly what is granted.
 
 ## language/errors
 

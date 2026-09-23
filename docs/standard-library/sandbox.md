@@ -14,8 +14,9 @@ source:
   - std/sandbox/src/lib.trb
 ---
 
-> **Not built natively yet.** `Script` and `Sandbox` are not built by the native back end yet, so `torb run` refuses the
-> examples here that use them. `torb check` accepts them, and the rules are the language's.
+> **Only the VM runs a script.** A script is always interpreted
+> ([Receiver Scripts and the Sandbox](../design/SCRIPTS.md)): `torb run --vm` runs a program that loads one, and the
+> native back end refuses `Script.apply` until a binary can embed the VM.
 
 `std/sandbox` loads `.trb` files as sandboxed receiver closures - the mechanism behind `project.trb` and every
 configuration script. What a script may do is granted at the call site of `Sandbox.load`, never in the script or its
@@ -58,10 +59,15 @@ Type checks `path` against `Value` and answers a `Script`, ready to run against 
 wrong with the file (syntax, types, a module the script may not import) is reported here; what goes wrong while it runs
 is reported by `Script.apply` instead. The trailing block grants capabilities beyond the defaults.
 
+The path is relative to the directory the program runs in, and it has to be one the program was compiled with: the
+checker checks every file a `Sandbox.load` names with a literal path against its type argument, and the program carries
+those scripts. A path it was not compiled with is the `SandboxError` of `load`, and so is an import of the script that the
+grant does not name, with the line of the `use`.
+
 ### Script
 
 ```trb fragment
-public native type Script<Value> {
+public type Script<Value> {
   fn apply(var value: Value): Result<Void, SandboxError>
 }
 ```
@@ -73,7 +79,7 @@ that is recoverable, because the sandbox interprets the script and the script ha
 ### SandboxCapabilities
 
 ```trb fragment
-public native type SandboxCapabilities {
+public type SandboxCapabilities {
   var fn modules(...names: String)
   var fn files(readOnly: String = "", readWrite: String = "")
   var fn environment(...patterns: String)

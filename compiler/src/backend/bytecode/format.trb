@@ -101,6 +101,11 @@ public type Opcode {
    * immortal region, and every read after the first copies it.
    */
   case Cell
+  /**
+   * `A` = the answer (a `String`), `B` = the closure of a receiver script, `C` = the reference of its receiver; `T0` =
+   * the grant: `runScript` of `std/sandbox`, which only the VM has (docs/design/SCRIPTS.md sections 4 to 6).
+   */
+  case RunScript
 
   /** The number the head word carries. */
   fn number(): Int {
@@ -142,6 +147,7 @@ public type Opcode {
       .Return => 34
       .Stop => 35
       .Cell => 36
+      .RunScript => 37
     }
   }
 
@@ -185,6 +191,7 @@ public type Opcode {
       .Return => "return"
       .Stop => "stop"
       .Cell => "cell"
+      .RunScript => "run.script"
     }
   }
 }
@@ -228,6 +235,7 @@ public const allOpcodes: List<Opcode> = [
   Opcode.Return,
   Opcode.Stop,
   Opcode.Cell,
+  Opcode.RunScript,
 ]
 
 // --- The head word --------------------------------------------------------------------------------------------------
@@ -283,6 +291,7 @@ public fn tailLengthOf(opcode: Opcode, head: Int): Int {
     .Branch => 2
     .Switch => 2 * operandB(head) + 1
     .Cell => 2
+    .RunScript => 1
     _ => 0
   }
 }
@@ -365,6 +374,17 @@ public type KernelOperation {
   case BeginImmortal
   /** Closes it (`torb_end_immortal`). */
   case EndImmortal
+  /**
+   * `grant`: the register of a text, one setting per line (`runtime/sandbox.c`). From here on every operation runs under
+   * a recovery point, and one that stops the script answers `stoppedWord` (docs/design/SCRIPTS.md section 4).
+   */
+  case SandboxOpen
+  /** Closes the sandbox, and drops the destructors a stopped script left queued without running them. */
+  case SandboxClose
+  /** `target`: the stop's location index, the length of its message, then its code points. Answers the stop's kind. */
+  case TakeStop
+  /** `target, source`: the code points of the text in `source`, one per word from `target` on. Answers how many. */
+  case TextOut
 
   /** The name the disassembly writes. */
   fn spelling(): String {
@@ -401,6 +421,10 @@ public type KernelOperation {
       .SetArguments => "set.arguments"
       .BeginImmortal => "begin.immortal"
       .EndImmortal => "end.immortal"
+      .SandboxOpen => "sandbox.open"
+      .SandboxClose => "sandbox.close"
+      .TakeStop => "take.stop"
+      .TextOut => "text.out"
     }
   }
 }
@@ -439,7 +463,17 @@ public const allKernelOperations: List<KernelOperation> = [
   KernelOperation.SetArguments,
   KernelOperation.BeginImmortal,
   KernelOperation.EndImmortal,
+  KernelOperation.SandboxOpen,
+  KernelOperation.SandboxClose,
+  KernelOperation.TakeStop,
+  KernelOperation.TextOut,
 ]
+
+/**
+ * What `Machine.operate` answers instead of its result when the operation stopped a sandboxed script
+ * (`TORB_MACHINE_STOPPED` of `runtime/machine.c`). No operation answers it otherwise.
+ */
+public const stoppedWord = 0 - 9223372036854775807 - 1
 
 /**
  * The number of the first call of a runtime function. The operations of the kernel stay below it, so a kernel that
@@ -658,6 +692,11 @@ public type Chunk {
   var witnesses: List<WitnessEntry> = []
   /** The code offset every block of the IR starts at, by block: what the disassembly labels. */
   var blockStarts: List<Int> = []
+  /**
+   * `(code offset, location index)` of every block and every instruction that carries a location, in code order: where
+   * a sandboxed script was when it stopped (docs/design/SCRIPTS.md section 6).
+   */
+  var sites: List<(Int, Int)> = []
 }
 
 /** The whole program, as the interpreter loads it. */

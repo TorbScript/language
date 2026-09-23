@@ -1,0 +1,188 @@
+/**
+ * `project.trb` through the VM (docs/design/SCRIPTS.md section 7): every manifest below some paths is checked once,
+ * lowered as the script it is next to `evaluated` of `std/project`, and run in a sandbox of its own with the grant a
+ * project file has. What comes back is the configured `Project` printed as its settings, which the static reader reads.
+ *
+ * Nothing in the toolchain reads an evaluated manifest yet: `torb manifest --check` asserts that the evaluation and the
+ * static reader agree on every manifest of the repository first (BACKEND row 7.5).
+ */
+
+use IoError from "std/fs"
+use SourceText from "../syntax/source"
+use Diagnostic from "../syntax/diagnostic"
+use parse from "../syntax/parser/parser"
+use readSourceTree, absolutePaths from "../project/read"
+use SourceTree from "../project/source-tree"
+use Manifest, readManifest from "../project/manifest"
+use normalizePath, parentPath, pathName, joinPath, isInside from "../project/path"
+use hostTarget from "../project/target"
+use ModuleId from "../semantics/module"
+use SymbolId from "../semantics/symbols"
+use check, Checked from "../semantics/check"
+use scriptReceiverOf from "../semantics/checker/receiver"
+use TypeId from "../semantics/checker/type"
+use lowerScripts, pathsOfModules from "../ir/lower/lower"
+use insertOwnership from "../ir/ownership"
+use verifyOwnedProgram from "../ir/ownership-verify"
+use emitBytecode from "../backend/bytecode/emit"
+use loadedProgram, unsupportedByInterpreter from "./interpret"
+use Grant, ScriptStop, runScript from "./sandbox"
+
+/** One `project.trb`: where it is, and what its evaluation answered. */
+public type EvaluatedManifest {
+  /** The path as the user typed it, relative to where the toolchain was started. */
+  path: String
+  /** The text of the file, which a stop is shown against. */
+  text: String
+  /** What the file says, read statically: the reader the toolchain uses today. */
+  statically: Manifest
+  /** The settings the evaluation printed, or why the script stopped. */
+  evaluated: Result<String, ScriptStop>
+}
+
+/** Why no manifest could be evaluated at all: the files do not check, or the program the VM would run does not build. */
+public type EvaluationFailure {
+  /** Each one rendered already, a diagnostic with its source line or a sentence. */
+  problems: List<String>
+  /** The diagnostics of the files, which a caller renders against their text. */
+  diagnostics: List<(String, String, Diagnostic)>
+}
+
+/**
+ * The grant of a project file (docs/design/PROJECT.md section 8): its own directory to read, the base a relative path
+ * is read against, every variable of the environment, and the toolchain's limits.
+ */
+public fn projectGrant(directory: String): Grant {
+  Grant(
+    base: directory,
+    readOnly: [directory],
+    environment: ["*"],
+    steps: 1_000_000,
+    memory: 16_000_000,
+    milliseconds: 2000,
+  )
+}
+
+/**
+ * Evaluates every `project.trb` the paths reach: a manifest named directly, or the manifest of every package of the
+ * workspace a directory belongs to that lies below it.
+ */
+public fn evaluateManifests(paths: List<String>): Result<Result<List<EvaluatedManifest>, EvaluationFailure>, IoError> {
+  const tree = readSourceTree(paths)?
+  const requested = absolutePaths(paths)?
+  const checked = check tree, requested, false, true
+  var checker = checked.checker
+  var scripts: List<(ModuleId, TypeId)> = []
+  var problems = checked.problems
+  var diagnostics: List<(String, String, Diagnostic)> = []
+  for module in checked.program.graph.modules {
+    if pathName(module.path) != "project.trb" || !isRequested(requested, module.path) {
+      continue
+    }
+    const receiver = match scriptReceiverOf(checker, module.id) {
+      Some(found) => found
+      None => {
+        problems.append "{tree.display(module.path)}: there is no `Project` of `std/project` to evaluate it against"
+        continue
+      }
+    }
+    for file in checked.files {
+      if file.path == tree.display(module.path) {
+        for diagnostic in file.diagnostics {
+          diagnostics.append((file.path, file.text, diagnostic))
+        }
+      }
+    }
+    scripts.append((module.id, receiver))
+  }
+  if !problems.isEmpty() || !diagnostics.isEmpty() {
+    return Ok Fail(EvaluationFailure(problems, diagnostics))
+  }
+  const host = match hostSymbolOf(checked) {
+    Some(found) => found
+    None => {
+      return Ok Fail(EvaluationFailure(["there is no `evaluated` in `std/project` to run a project file with"], []))
+    }
+  }
+  const locations = pathsOfModules checked
+  var lowering = lowerScripts checker, locations, scripts, [host], hostTarget()
+  insertOwnership lowering.program
+  var refused: List<String> = []
+  for problem in lowering.problems {
+    refused.append problem.diagnostic.message
+  }
+  for blocked in lowering.unsupported {
+    refused.append "{blocked.what} (at {blocked.at})"
+  }
+  for what in lowering.program.planned {
+    refused.append what
+  }
+  for problem in lowering.program.problems {
+    refused.append "internal error: {problem}"
+  }
+  for problem in verifyOwnedProgram(lowering.program) {
+    refused.append "internal error: {problem}"
+  }
+  const emission = emitBytecode lowering.program, []
+  for what in emission.unsupported {
+    refused.append "{what} is not supported by the VM yet"
+  }
+  for what in unsupportedByInterpreter(emission.program) {
+    refused.append "{what} is not supported by the VM yet"
+  }
+  if !refused.isEmpty() {
+    return Ok Fail(EvaluationFailure(refused, []))
+  }
+  var chunks: Map<String, Int> = [:]
+  for index in 0..emission.program.chunks.length() {
+    chunks.set emission.program.chunks[index].name, index
+  }
+  var hostChunk = 0 - 1
+  if const Some(function) = lowering.scriptHosts.first() {
+    hostChunk = chunks.get(lowering.program.functionAt(function).name) ?? (0 - 1)
+  }
+  var loaded = loadedProgram emission.program
+  var evaluated: List<EvaluatedManifest> = []
+  for (module, _) in scripts {
+    const inside = checked.program.graph.at module
+    const function = lowering.scriptFunctions.get module.value
+    const scriptChunk = match function {
+      Some(found) => chunks.get(lowering.program.functionAt(found).name) ?? (0 - 1)
+      None => 0 - 1
+    }
+    const statically = readManifest parse(SourceText.of(inside.source.text)).file
+    const display = tree.display inside.path
+    if hostChunk < 0 || scriptChunk < 0 {
+      const missing = ScriptStop 0, "internal error: the script or its host was not emitted"
+      evaluated.append EvaluatedManifest(display, inside.source.text, statically, Fail(missing))
+      continue
+    }
+    const grant = projectGrant parentPath(inside.path)
+    const answered = runScript loaded, grant, hostChunk, scriptChunk, locations[module.value]
+    evaluated.append EvaluatedManifest(display, inside.source.text, statically, answered)
+  }
+  Ok Ok(evaluated)
+}
+
+/** The manifest the evaluated settings say, read by the same static reader as the file itself. */
+public fn manifestOfSettings(settings: String): Manifest {
+  readManifest parse(SourceText.of(settings)).file
+}
+
+/** A manifest named directly, or one below a directory that was named. */
+fn isRequested(requested: List<String>, path: String): Bool {
+  for given in requested {
+    const normalized = normalizePath given
+    if normalized == path || isInside(path, normalized) {
+      return true
+    }
+  }
+  false
+}
+
+/** `evaluated` of `std/project`: the host of every project file. */
+fn hostSymbolOf(checked: Checked): SymbolId? {
+  const package = checked.program.workspace.packageNamed("std/project")?
+  const module = checked.program.graph.moduleAt(joinPath(package.directory, "src/lib.trb"))?
+  checked.program.scopes[module.value].exported.get "evaluated"
+}
