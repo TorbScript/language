@@ -1,7 +1,8 @@
 # TorbScript repository
 
-Self-hosted: `compiler/` is TorbScript, emits C and links `runtime/` (C11). No Rust, no cargo, no interpreter yet
-(the VM is milestone 7) - `torb run` builds natively. Load the `torbscript` skill before writing any `.trb`.
+Self-hosted: `compiler/` is TorbScript, emits C and links `runtime/` (C11). No Rust, no cargo. `torb run` builds
+natively; `torb run --vm` interprets bytecode of the same IR (milestone 7, `docs/design/VM.md`; tier B runs
+`tests/conformance/vm.list` in it). Load the `torbscript` skill before writing any `.trb`.
 Code rules, gates and repository operations: `compiler/CONTRIBUTING.md`.
 
 ## Build and gates (repository root, Git Bash on Windows)

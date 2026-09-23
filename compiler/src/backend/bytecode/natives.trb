@@ -5,6 +5,9 @@
  * The order is the manifest's: every `.Ready` `.Runtime` row, one entry per C symbol, sorted by the symbol - exactly
  * the list `torb_natives.h` declares. A `kernel` instruction that calls one carries `kernelNativeBase` plus its index
  * here, so the emitter and the table agree as long as both are generated from the same manifest.
+ *
+ * A row bound to some operating systems (`availableOn`) has no thunk: the table is one file for every machine, and
+ * its C function exists only where its `runtime/os` file is compiled. The emitter refuses a call of one.
  */
 
 use nativeEntries from "../c/natives"
@@ -15,6 +18,9 @@ public fn nativeSymbols(): List<String> {
   var symbols: List<String> = []
   for entry in nativeEntries() {
     if const .Planned(_) = entry.state {
+      continue
+    }
+    if !entry.availableOn.isEmpty() {
       continue
     }
     if const .Runtime(function) = entry.target {
