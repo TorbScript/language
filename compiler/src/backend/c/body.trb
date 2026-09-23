@@ -32,6 +32,7 @@ use cTypeOf, memberNameOf, variantMemberNameOf, witnessMemberNameOf from "./type
 use CExpression, CDesignatedField, CStatement, CSwitchCase, declarationOf from "./writer"
 use readPrototype, matchPrototype from "./prototype"
 use TaskMachine, taskMachineOf from "../../ir/suspension"
+use Closing from "../../ir/closing"
 
 /** One function, with which slots are read and which labels are jumped to precomputed once for the whole body. */
 public type Body {
@@ -48,6 +49,10 @@ public type Body {
   framedClosures: List<Bool>
   /** The state machine of a resume function (`ir/suspension.trb`), and `None` for every other function. */
   machine: TaskMachine? = None
+  /** Which types of the program may hold an object with a destructor: a slice of a list of them copies ([sliceSymbolOf]). */
+  closing: Closing = Closing([])
+  /** Per slot: whether a `Clear` writes it, so its value may be the zero value of its type ([guardedRelease]). */
+  clearedSlots: List<Bool> = []
 }
 
 /** The name the caller's result pointer has inside the callee. No mangled name can collide with it. */
@@ -62,6 +67,7 @@ public fn bodyOf(
   function: IrFunction,
   prototypes: Map<String, String>,
   keeping: Keeping,
+  closing: Closing,
 ): Body {
   var reads: List<Bool> = []
   for _ in 0..function.slots.length() {
@@ -71,9 +77,13 @@ public fn bodyOf(
   for _ in 0..function.blocks.length() {
     labels.append false
   }
+  var cleared: List<Bool> = []
   for block in function.blocks {
     for instruction in block.instructions {
       markReadSlots program, function, reads, instruction
+      if const .Clear(target) = instruction {
+        markCleared cleared, function.slots.length(), target
+      }
     }
     markTerminator reads, labels, block.terminator
   }
@@ -81,9 +91,21 @@ public fn bodyOf(
   if const .TaskResume = function.kind {
     // The value goes into the task block and never through a result pointer, whatever its size
     const machine = taskMachineOf program, function
-    return Body function, prototypes, reads, labels, false, framed, Some(machine)
+    return Body function, prototypes, reads, labels, false, framed, Some(machine), closing, cleared
   }
-  Body function, prototypes, reads, labels, isByPointerResult(function), framed
+  Body function, prototypes, reads, labels, isByPointerResult(function), framed, closing: closing, clearedSlots: cleared
+}
+
+/** Marks a slot a `Clear` writes; the list is made on the first one, so a body without any keeps none. */
+fn markCleared(var cleared: List<Bool>, count: Int, slot: Slot) {
+  if cleared.isEmpty() {
+    for _ in 0..count {
+      cleared.append false
+    }
+  }
+  if slot.value >= 0 && slot.value < cleared.length() {
+    cleared.set slot.value, true
+  }
 }
 
 /**
@@ -202,6 +224,7 @@ fn markReadSlots(program: IrProgram, function: IrFunction, var reads: List<Bool>
     .Retain(slot) => markRead reads, slot
     .Release(slot) => markRead reads, slot
     .EndOfScope(slot) => markRead reads, slot
+    .Clear(_) => {}
     .MakeUnique(reference) => markReference reads, reference
     .Call(_, _, arguments, _, _) => markArguments reads, arguments
     .CallClosure(_, callee, arguments) => {
@@ -644,7 +667,7 @@ fn stopPathOf(
   for slot in releases {
     const place = slotExpression body, slot
     const released = releaseStatements emission, program, typeOfSlot(body, slot), place
-    statements.appendAll released
+    statements.appendAll guardedRelease(program, body, slot, place, released)
   }
   statements.append CStatement.Return(Some(CExpression.Name("TORB_POLL_STOPPED")))
   statements
@@ -860,10 +883,17 @@ fn instructionStatements(
     }
     .Release(slot) => {
       const place = slotExpression body, slot
-      releaseStatements emission, program, typeOfSlot(body, slot), place
+      const released = releaseStatements emission, program, typeOfSlot(body, slot), place
+      guardedRelease program, body, slot, place, released
     }
     // The ownership pass removes every one of them, so an emitted body never holds one
     .EndOfScope(_) => []
+    .Clear(target) => {
+      const place = slotExpression body, target
+      const spelling = valueTypeOf program, typeOfSlot(body, target)
+      const zero = CExpression.Initializer([CExpression.Literal("0")])
+      [CStatement.Assignment(place, CExpression.CompoundLiteral(spelling, zero))]
+    }
     .MakeUnique(reference) => makeUniqueStatements emission, program, body, reference
     .Call(target, callee, arguments, witnesses, at) => {
       callStatements emission, program, body, target, callee, arguments, witnesses, at
@@ -1098,6 +1128,33 @@ public fn releaseStatement(program: IrProgram, id: IrTypeId, place: CExpression)
     }
     _ => None
   }
+}
+
+/**
+ * The release of a trait-typed slot that a `Clear` may have emptied: the zero value has no table, so the drop function
+ * the release reads out of the first one is only there when the value is. Every other type releases its zero value
+ * through a null pointer, which the runtime passes over, so nothing else needs the test.
+ */
+fn guardedRelease(
+  program: IrProgram,
+  body: Body,
+  slot: Slot,
+  place: CExpression,
+  released: List<CStatement>,
+): List<CStatement> {
+  if released.isEmpty() || !isClearedSlot(body, slot) {
+    return released
+  }
+  if const .Object(_) = program.typeAt(countedFormOf(program, typeOfSlot(body, slot))) {
+    const table = CExpression.Member place, witnessMemberNameOf(0)
+    return [CStatement.If(CExpression.Binary(table, "!=", CExpression.Literal("NULL")), released)]
+  }
+  released
+}
+
+/** Whether some `Clear` of the body writes the slot: the ones whose value may be the zero value of its type. */
+fn isClearedSlot(body: Body, slot: Slot): Bool {
+  slot.value >= 0 && slot.value < body.clearedSlots.length() && body.clearedSlots[slot.value]
 }
 
 fn releasedBy(place: CExpression, symbol: String): CStatement {
@@ -1549,6 +1606,27 @@ fn referenceExpression(
  * a native whose result is an `Option` or a `Result`, one that takes a pointer, and one that wants the source location
  * of the call all need something the lowering does not write yet, and each is a finding that names the native.
  */
+/**
+ * `torb_list_slice` shares the storage of the list it slices, and a slice of a list whose elements may hold an object
+ * with a destructor copies instead: shared storage would keep every element of the original alive for as long as the
+ * slice lives, so when an element closes would depend on a slice that never mentioned it (docs/design/DESTRUCTORS.md
+ * 2a). The copy has the same prototype, and the decision is the program's own `Closing` fact, so a program without
+ * such an object emits exactly the C it did.
+ */
+fn sliceSymbolOf(program: IrProgram, body: Body, function: IrFunction, symbol: String): String {
+  if symbol != "torb_list_slice" || body.closing.isEmpty() {
+    return symbol
+  }
+  if const .Runtime(_, arguments) = program.typeAt(function.signature.result) {
+    if const Some(item) = arguments.first() {
+      if body.closing.holds(item) {
+        return "torb_list_slice_copied"
+      }
+    }
+  }
+  symbol
+}
+
 fn runtimeCallStatements(
   var emission: Emission,
   program: IrProgram,
@@ -1584,7 +1662,8 @@ fn runtimeCallStatements(
       }
       var written = argumentsOf emission, program, body, function.signature, arguments
       written.append locationExpression(program, site)
-      callStatementOf emission, body, target, function, symbol, written, ""
+      const called = sliceSymbolOf program, body, function, symbol
+      callStatementOf emission, body, target, function, called, written, ""
     }
     .Converted(annotation, withLocation) => {
       var written = argumentsOf emission, program, body, function.signature, arguments

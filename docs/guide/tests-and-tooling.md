@@ -67,7 +67,7 @@ and gets parentheses everywhere else - and `--check` reports the files that are 
 
 ```console
 $ torb canon --check examples/tour
-0 of 14 files would change: 0 calls became commands, 0 got parentheses, 0 strings were indented, 0 case patterns
+0 of 14 files would change: 0 calls to commands, 0 calls to parentheses, 0 strings indented, 0 case patterns
 ```
 
 A change is done when both commands are green. See [Verify your work](../tooling/verifying-your-work.md) for the full

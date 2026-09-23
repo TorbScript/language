@@ -58,7 +58,7 @@ back-end intrinsic and builds regardless):
 ```console
 $ torb build my-project
 error: a variadic argument list is not supported by the native back end yet (at my-project/src/main.trb:5:7)
-1 problems the native back end cannot compile yet, nothing was built
+1 problem the native back end cannot compile yet, nothing was built
 ```
 
 A program that only uses what the back end already lowers - functions, types, control flow, arithmetic, `print`,

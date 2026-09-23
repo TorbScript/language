@@ -1,0 +1,39 @@
+use Process from "std/process"
+use sleep from "std/time"
+
+/**
+ * `Process.exit` inside a task ends the program there, with that code, and takes every task down on the way out: the
+ * one that exits never returns to its caller, a task still asleep is cancelled and closes what its frame held, and the
+ * entry file that waits for the task is released like every other frame - so nothing is left behind.
+ */
+
+shared type Probe with Close {
+  name: String
+
+  var fn close() {
+    print "close {name}"
+  }
+}
+
+/** Sleeps far longer than the program lives, holding a probe. */
+fn sleeper(): Task<Int> {
+  using held = Probe "the sleeper's"
+  sleep(60.0).await() ?? void
+  print "the sleeper woke up"
+  held.name.byteLength()
+}
+
+/** Leaves the program from two tasks deep. */
+fn leaving(depth: Int): Task<Int> {
+  if depth > 0 {
+    return leaving(depth - 1).await() ?? 0
+  }
+  print "leaving from inside a task"
+  Process.exit 4
+}
+
+const asleep = sleeper()
+print "started the sleeper"
+const answer = leaving(2).await() ?? 0
+print "never printed {answer}"
+print asleep.await().isOk()

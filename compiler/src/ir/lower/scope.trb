@@ -14,8 +14,10 @@
  * # Pitfalls
  *
  * A temporary that only some paths of its statement define (the arms of an `if` expression, the fallback of a `??`)
- * keeps no end: the ownership pass releases it at its last use, because an end would release what another path never
- * made. A closure captures by retaining, so a binding a closure captured is still held by its slot until its scope ends.
+ * ends with its statement too: the ownership pass clears its slot where the function begins and after an end inside a
+ * loop, so a path that never made it releases the zero value, which is nothing. Only a type whose zero value cannot be released -
+ * a trait-typed value held inline in a record - is left to its last use. A closure captures by retaining, so a binding a
+ * closure captured is still held by its slot until its scope ends.
  */
 
 use IrTypeId, Slot, Instruction, LayoutId, TraitId from "../ir"
@@ -82,16 +84,21 @@ public fn declareScopedBetween(var lowering: Lowering, var builder: FunctionBuil
 
 /**
  * The end of a statement: every temporary it made from slot `from` on that may hold a `Close` object, the last made
- * first. A statement inside it ended its own already, and a temporary is ended once, by the innermost statement.
- * One that is defined on only some paths through the statement - an arm of an `if` - is left to its last use by the
- * ownership pass, which is what it gets without an end.
+ * first. A statement inside it ended its own already, and a temporary is ended once, by the innermost statement. The
+ * last expression of a block is a statement as well, whose own value - `except` - is the block's and is not ended.
+ * One that is defined on only some paths through the statement - an arm of an `if` - ends here as well: its slot is
+ * its drop flag, which the ownership pass clears on the paths that never made it (`withClearedTemporaries`).
  */
-public fn endTemporaries(var lowering: Lowering, var builder: FunctionBuilder, from: Int) {
+public fn endTemporaries(var lowering: Lowering, var builder: FunctionBuilder, from: Int, except: Slot? = None) {
   if lowering.isDiverged || !lowering.isSupported {
     return
   }
   var index = builder.slotCount() - 1
   while index >= from {
+    if except == Some(Slot(index)) {
+      index = index - 1
+      continue
+    }
     if const .Temporary = builder.function.slots[index].role {
       if !lowering.endedTemporaries.contains(index) && mayHoldClose(lowering, builder.typeOfSlot(Slot(index))) {
         lowering.endedTemporaries.insert index

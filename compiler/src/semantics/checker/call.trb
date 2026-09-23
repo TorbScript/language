@@ -916,12 +916,13 @@ fn isClosureArgument(argument: Argument): Bool {
  * Where `await()` may stand (CONCEPT, "Concurrency"): in a function that returns a `Task<...>`, in a closure handed to
  * `spawn`, at the top level of an entry file or a script, and inside a closure written in one of those - a closure runs
  * where it stands. Everywhere else it is a mistake, because "a function that waits says so in its return type"; a
- * blocking `await()` anywhere would need a stack per task in every back end.
+ * blocking `await()` anywhere would need a stack per task in every back end. `outcome()` waits exactly the same way
+ * and answers the `Result` instead of passing the failure on, so it stands under the same rule.
  *
  * The member is found by its name plus a receiver that is a `Task`, which is the one thing that makes it this call.
  */
 fn requireAwaitAllowed(var checker: Checker, callee: Expression, name: String, at: Span) {
-  if name != "await" || checker.awaitsTasks {
+  if (name != "await" && name != "outcome") || checker.awaitsTasks {
     return
   }
   const base = match callee.kind {
@@ -942,7 +943,7 @@ fn requireAwaitAllowed(var checker: Checker, callee: Expression, name: String, a
   // A closure is not a function that declares a result: where it stands is what says whether it becomes a task
   if !checker.closureFrames.isEmpty() {
     checker.reportHere(
-      Diagnostic.error("`await()` is only allowed in a closure that becomes a task", at)
+      Diagnostic.error("`{name}()` is only allowed in a closure that becomes a task", at)
         .withNote(
           "The closure handed to `spawn \{ ... \}` is one, and so is one whose result is declared a `Task`. To wait"
             + " for many at once use `Task.all(tasks).await()`, and to go on when one finishes use"
@@ -953,7 +954,7 @@ fn requireAwaitAllowed(var checker: Checker, callee: Expression, name: String, a
   }
   const shown = checker.describe checker.resultType
   checker.reportHere(
-    Diagnostic.error("`await()` is only allowed in a function that returns a `Task`", at)
+    Diagnostic.error("`{name}()` is only allowed in a function that returns a `Task`", at)
       .withNote(
         "A function that waits says so in its result type, and this one produces `{shown}`. `spawn \{ ... \}` starts"
           + " a task, and the top level of an entry file or a script may wait for one"

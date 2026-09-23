@@ -446,6 +446,13 @@ void torb_scheduler_run(torb_task *until);
  */
 void torb_scheduler_finish(void);
 
+/**
+ * `Process.exit` while tasks are alive, maybe from inside one: every task is cancelled and run to its stop, the running
+ * one is completed as cancelled without returning to it, and the main task the program's `main` waits for is
+ * released - so the leak report of the exit sees what the end of `main` would have seen. A no-op without tasks.
+ */
+void torb_scheduler_exit(void);
+
 /** How many tasks have not completed yet. For the tests and the leak report. */
 size_t torb_task_live_count(void);
 

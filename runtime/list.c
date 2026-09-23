@@ -344,6 +344,12 @@ void torb_list_compact(torb_list *list) {
   list->offset = 0u;
 }
 
+torb_list torb_list_slice_copied(torb_list list, int64_t from, int64_t to, torb_location at) {
+  torb_list result = torb_list_slice(list, from, to, at);
+  torb_list_compact(&result);
+  return result;
+}
+
 torb_list torb_list_slice(torb_list list, int64_t from, int64_t to, torb_location at) {
   torb_list result;
   if (from < 0 || to > (int64_t)list.length) {

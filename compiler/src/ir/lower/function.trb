@@ -9,7 +9,7 @@
 
 use Statement, Block, Binding, FunctionDeclaration, Declaration, ExtendDeclaration from "../../syntax/ast"
 use ModuleId from "../../semantics/module"
-use SymbolId from "../../semantics/symbols"
+use SymbolId, boundNamesOf from "../../semantics/symbols"
 use TypeId, ParameterId from "../../semantics/checker/type"
 use signatureOf, typeSignatureOf from "../../semantics/checker/signature"
 use extensionAt from "../../semantics/checker/implementation"
@@ -343,16 +343,18 @@ fn lowerTopLevel(var lowering: Lowering, var builder: FunctionBuilder, statement
   }
 }
 
+/**
+ * Every name a top-level binding declares, a destructuring one included: `const (quotient, remainder) = ...` is two
+ * locals of the entry function, each found under the span of its own name, exactly like `const quotient = ...`.
+ */
 fn rememberEntryLocal(var lowering: Lowering, binding: Binding) {
   const module = lowering.module
-  const symbol = match lowering.checker.resolvedName(module, binding.pattern.span) {
-    Some(found) => found
-    None => {
-      return
+  for name in boundNamesOf(binding.pattern) {
+    if const Some(symbol) = lowering.checker.resolvedName(module, name.span) {
+      if const Some(slot) = lowering.slots.get(name.span) {
+        lowering.entryLocals.set symbol.value, slot
+      }
     }
-  }
-  if const Some(slot) = lowering.slots.get(binding.pattern.span) {
-    lowering.entryLocals.set symbol.value, slot
   }
 }
 

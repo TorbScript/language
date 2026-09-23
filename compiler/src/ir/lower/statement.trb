@@ -81,15 +81,27 @@ fn lowerStatementsOfScope(
     const statement = block.statements[index]
     if index == last {
       if const .Evaluate(expression) = statement.kind {
+        // The last expression of a block that stands as a statement - a loop body, a body, a branch whose value nobody
+        // takes - is a statement too, and the temporaries it made end with it, all but the value the block hands on. A
+        // block that produces into a slot is part of the statement around it, which ends them
+        const firstSlot = builder.slotCount()
+        const isStatement = destination.isNone()
         // The value of a block that is used as a statement is `Void`, and its last expression may still *have* one:
         // `{ errorHere "..."  bump() }` as a `match` arm discards the `Token` that `bump` answers (docs/TYPECHECKER.md,
         // Which discarded values are errors?). Producing it into the arm's own slot would put a `Token` in a `Void`
         // slot, which is what the verifier catches
         if discardsLastValue(lowering, builder, expression, destination) {
           const _ = lowerExpression lowering, builder, expression, None
+          if isStatement {
+            endTemporaries lowering, builder, firstSlot
+          }
           return None
         }
-        return Some lowerExpression(lowering, builder, expression, destination)
+        const value = lowerExpression lowering, builder, expression, destination
+        if isStatement {
+          endTemporaries lowering, builder, firstSlot, except: Some(value)
+        }
+        return Some value
       }
     }
     lowerStatement lowering, builder, statement

@@ -249,10 +249,20 @@ fn expectationFor(checker: Checker, subject: TypeId): Expectation {
 
 fn tuplePattern(var checker: Checker, items: List<Pattern>, subject: TypeId, at: Span, isVar: Bool) {
   var fields: List<TypeId> = []
-  if const .Tuple(found) = checker.types.form(subject) {
-    for field in found {
-      fields.append field.annotation
+  match checker.types.form(subject) {
+    .Tuple(found) => {
+      for field in found {
+        fields.append field.annotation
+      }
     }
+    // A named type is never a tuple: without this the positions would be bound to nothing and read as unknown types
+    .Nominal(_, _) => {
+      if !checker.absorbs(subject) {
+        const shown = checker.describe subject
+        checker.reportHere Diagnostic.error("This pattern takes a tuple apart, and `{shown}` is not one", at)
+      }
+    }
+    _ => {}
   }
   if !fields.isEmpty() && fields.length() != items.length() {
     const shown = checker.describe subject

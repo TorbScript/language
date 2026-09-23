@@ -1,0 +1,28 @@
+/**
+ * A slice of a list whose elements have a destructor holds its own elements and nothing else: the elements it left
+ * out close as soon as the list they came from is gone, not when the slice goes. Shared storage would keep every
+ * element of the original alive for as long as any slice of it lives, and when an element closes would then depend on
+ * a slice that never mentioned it (docs/design/DESTRUCTORS.md 2a).
+ */
+
+shared type Probe with Close {
+  name: String
+
+  var fn close() {
+    print "close {name}"
+  }
+}
+
+/** The middle of a list, which outlives the list it was taken from. */
+fn middleOf(probes: List<Probe>): List<Probe> {
+  probes[1..2]
+}
+
+/** The list is a temporary, so it is gone at the end of the statement that slices it. */
+fn slicing() {
+  const middle = middleOf([Probe("first"), Probe("second"), Probe("third")])
+  print "the list is gone, the slice holds {middle.length()}: {middle[0].name}"
+}
+
+slicing()
+print "after the block"

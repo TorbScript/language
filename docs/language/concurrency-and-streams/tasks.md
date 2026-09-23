@@ -61,7 +61,9 @@ Task.all(tasks: Iterate<Task<Value>>): Task<List<Value>>
    whose declared result is a `Task`, and at the top level of an entry file or a script**, because a function that
    waits should say so in its own return type - the same reasoning `?` follows for `Result`. The checker rejects it
    everywhere else: `` `await()` is only allowed in a function that returns a `Task` `` for a function, and
-   `` `await()` is only allowed in a closure that becomes a task `` for a closure.
+   `` `await()` is only allowed in a closure that becomes a task `` for a closure. `outcome()` waits exactly the
+   same way - it is `await()` plus the conversion of a cancellation into the task's own failure - so it stands under
+   the same rule, and the two messages name it.
 
    An ordinary closure is not a task, and `tasks.map { _.await() }` is the mistake the rule is for: the closure runs
    where the pipeline is pulled, so the wait would block the worker underneath it. `Task.all(tasks).await()` waits for

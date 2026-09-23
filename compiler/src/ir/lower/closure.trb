@@ -463,9 +463,7 @@ public fn lowerNamedFunctionValue(
   const written = lowering.checker.signature identifier
   // `Point.area` read through its type is the unbound function, whose first parameter is the receiver: nothing to bind
   if written.takesSelf && !isReadThroughType(lowering, expression) {
-    const name = lowering.checker.symbolAt(symbol).name
-    const what = "`{name}` used as a function value, which would have to bind its receiver"
-    return unsupportedSlot lowering, builder, destination, what, expression.span
+    return lowerBoundMethodValue lowering, builder, destination, expression, symbol, annotation, dispatch
   }
   // `Order.describe` names the requirement of `Describe`, and the implementation the checker found says which body runs.
   // `Failure.from` on a generic parameter names it through the parameter's bound, and the type this instance put in for
@@ -501,6 +499,110 @@ public fn lowerNamedFunctionValue(
   }
   const target = valueSlot lowering, builder, destination, annotation
   emit builder, Instruction.Closure(target, function, [], false)
+  target
+}
+
+/**
+ * `rectangle.area`: a method bound to its receiver, as a function value. It is a closure whose environment holds the
+ * receiver - copied like every captured value, so `area()` later answers for the receiver as it was when the value was
+ * made - and whose code calls the method with it, followed by the arguments the closure is called with.
+ *
+ * A `var fn` cannot be bound, because it would change a copy nobody sees, and neither can a member of a trait-typed
+ * value, whose body is found through a table at the call.
+ */
+fn lowerBoundMethodValue(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  expression: Expression,
+  symbol: SymbolId,
+  annotation: IrTypeId,
+  dispatch: Dispatch,
+): Slot {
+  const name = lowering.checker.symbolAt(symbol).name
+  const written = lowering.checker.signature signatureOf(lowering.checker, symbol)
+  const base = match expression.kind {
+    .Member(found, _, _) => found
+    _ => {
+      const what = "`{name}` used as a function value, which would have to bind its receiver"
+      return unsupportedSlot lowering, builder, destination, what, expression.span
+    }
+  }
+  if written.isVarSelf {
+    const what = "`{name}` used as a function value, which would change a copy of its receiver"
+    return unsupportedSlot lowering, builder, destination, what, expression.span
+  }
+  const receiverType = match lowering.checker.expressionType(lowering.module, base.span) {
+    Some(found) => substituted lowering, found
+    None => {
+      const what = "`{name}` used as a function value on a receiver the checker did not type"
+      return unsupportedSlot lowering, builder, destination, what, expression.span
+    }
+  }
+  var member = symbol
+  var mapping = lowering.substitution
+  if !written.hasBody {
+    if const .Implementation(_, _) = dispatch {
+      if const Some(dispatched) = dispatchedMember(lowering, symbol, [], dispatch, Some(receiverType), expression.span) {
+        member = dispatched.member
+        mapping = dispatched.mapping
+      }
+    }
+  }
+  const signature = lowering.checker.signature signatureOf(lowering.checker, member)
+  if const Some(owner) = signature.owner {
+    const _ = matchTypePattern lowering.checker, owner, receiverType, signature.generics, mapping
+  }
+  const method = match instanceFor(lowering, member, mapping) {
+    Some(found) => found
+    None => {
+      const what = "`{name}` used as a function value, which the back end cannot build an instance of"
+      return unsupportedSlot lowering, builder, destination, what, expression.span
+    }
+  }
+  const shape = match closureSignatureOf(lowering, annotation) {
+    Some(found) => lowering.program.signatureAt found
+    None => {
+      const what = "a function value whose type is {describeClosureType(lowering, annotation)}"
+      return unsupportedSlot lowering, builder, destination, what, expression.span
+    }
+  }
+  const receiver = lowerValue lowering, builder, base
+  if !lowering.isSupported {
+    return abandonedSlot lowering, builder, destination
+  }
+  const held = builder.typeOfSlot receiver
+  if const .Object(_) = lowering.program.typeAt(held) {
+    const what = "`{name}` of a trait-typed value used as a function value"
+    return unsupportedSlot lowering, builder, destination, what, expression.span
+  }
+  const index = lowering.closureCount
+  lowering.closureCount = index + 1
+  const closureName = closureFunctionName lowering.owner, index
+  const environment = environmentLayoutOf lowering.program, closureName, [FieldLayout("receiver", held, None)]
+  const environmentType = lowering.program.internType IrType.Record(environment)
+  var parameters = [IrParameter("environment", environmentType, false, Ownership.Borrowed)]
+  parameters.appendAll shape.parameters
+  var inner = newFunction closureName, None, IrSignature(parameters, shape.result), "closure"
+  const location = locationOf lowering, expression.span
+  setBlockLocation inner, BlockId(0), Some(location)
+  const bound = addTemporary inner, held
+  emit inner, Instruction.Read(bound, Reference(Slot(0), [PathStep.Field(environment, 0)]))
+  var arguments = [borrowed(bound)]
+  for position in 1..parameters.length() {
+    arguments.append borrowed(Slot(position))
+  }
+  if isVoidType(lowering, shape.result) {
+    emit inner, Instruction.Call(None, method, arguments, [], Some(location))
+    terminate inner, Terminator.Return(None)
+  } else {
+    const answer = addTemporary inner, shape.result
+    emit inner, Instruction.Call(Some(answer), method, arguments, [], Some(location))
+    terminate inner, Terminator.Return(Some(borrowed(answer)))
+  }
+  const function = finishFunction lowering.program, inner
+  const target = valueSlot lowering, builder, destination, annotation
+  emit builder, Instruction.Closure(target, function, [Capture.Value(receiver)], escapesAt(lowering, expression.span))
   target
 }
 

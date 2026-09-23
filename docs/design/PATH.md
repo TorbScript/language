@@ -568,10 +568,11 @@ back as `path.joined(name)`, sorted by the byte order of their names, which is w
 **A directory entry whose name is not valid UTF-8 is an `IoError`**, and this is a `# Pitfalls` entry on `list`:
 a `String` is always valid UTF-8 and a `Path` is made of `String`s, so there is no value for such a name and no
 replacement character is invented. Stage 0 silently mangled it (`entry.file_name().to_string_lossy()` in its
-`natives.rs`, deleted with stage 0). The C runtime does not check either: the POSIX `torb_platform_list_directory`
-in `runtime/platform.c` hands the bytes on through `torb_text_from_cstring` without validating them, so a `String`
-that is not UTF-8 can reach a program today, and closing that is part of the same slice. What a program does about
-such an entry is its own decision: the error names the directory and the bytes.
+`natives.rs`, deleted with stage 0). The C runtime checks both halves: the Windows `torb_platform_list_directory` of
+`runtime/platform.c` fails where a UTF-16 name has no UTF-8 form, and the POSIX one validates every name before it
+becomes a `String` and fails with `a name in this directory is not valid UTF-8: caf\xE9.txt` - printable ASCII as it
+is, every other byte as `\xNN` (`runtime/tests/platform_test.c` pins it where the file system allows such a name).
+What a program does about such an entry is its own decision: the error names the directory and the bytes.
 
 `Process` gains the parameter the outline names, which does not exist today:
 

@@ -218,6 +218,7 @@ int64_t torb_process_run_inheriting(torb_text command, torb_list arguments, torb
 }
 
 void torb_process_exit(int64_t code) {
+  torb_scheduler_exit();
   torb_process_finish();
   fflush(stdout);
   fflush(stderr);

@@ -15,10 +15,6 @@ source:
   - examples/tour/src/03-types.trb
 ---
 
-> **Not built natively yet.** A method taken as a function value (`rectangle.area` without a call) is not built by the
-> native back end yet, so `torb run` refuses the examples here that use it. `torb check` accepts them, and the rules are
-> the language's.
-
 A member of a `type` is either a field, or a constant that holds a function - there is nothing else. Two words say
 which: `static` means the member belongs to the type rather than to a value, and `var` means it may change.
 

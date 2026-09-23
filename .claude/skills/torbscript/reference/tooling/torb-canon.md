@@ -105,16 +105,16 @@ dropped and reported instead of applied. A file that does not parse to begin wit
 $ torb canon --check examples/tour/src/scratch.trb
 ../examples/tour/src/scratch.trb
 
-1 of 1 files would change: 2 calls became commands, 0 got parentheses, 0 strings were indented, 0 case patterns, 0 unread bindings, 0 endless loops
+1 of 1 file would change: 2 calls to commands, 0 calls to parentheses, 0 strings indented, 0 case patterns, 0 unread bindings, 0 endless loops
 ```
 
 ```console
 $ torb canon examples/tour/src/scratch.trb
 ../examples/tour/src/scratch.trb
 
-1 of 1 files changed: 2 calls became commands, 0 got parentheses, 0 strings were indented, 0 case patterns, 0 unread bindings, 0 endless loops
+1 of 1 file changed: 2 calls to commands, 0 calls to parentheses, 0 strings indented, 0 case patterns, 0 unread bindings, 0 endless loops
 $ torb canon --check examples/tour/src/scratch.trb
-0 of 1 files would change: 0 calls became commands, 0 got parentheses, 0 strings were indented, 0 case patterns, 0 unread bindings, 0 endless loops
+0 of 1 file would change: 0 calls to commands, 0 calls to parentheses, 0 strings indented, 0 case patterns, 0 unread bindings, 0 endless loops
 ```
 
 A second run over an already-canonical file changes nothing, which is what makes `--check` a gate: a repository where
@@ -131,7 +131,7 @@ file explicitly imports the same way.
 $ torb canon --check --rule imported-case-patterns examples/tour/src/scratch.trb
 ../examples/tour/src/scratch.trb
 
-1 of 1 files would change: 0 calls became commands, 0 got parentheses, 0 strings were indented, 1 case patterns, 0 unread bindings, 0 endless loops
+1 of 1 file would change: 0 calls to commands, 0 calls to parentheses, 0 strings indented, 1 case pattern, 0 unread bindings, 0 endless loops
 ```
 
 ### `unused-bindings`
@@ -146,7 +146,7 @@ dropping it is more than one token. Whatever is left after a run, the checker na
 
 ```console
 $ torb canon --check --rule unused-bindings .
-0 of 293 files would change: 0 calls became commands, 0 got parentheses, 0 strings were indented, 0 case patterns, 0 unread bindings, 0 endless loops
+0 of 293 files would change: 0 calls to commands, 0 calls to parentheses, 0 strings indented, 0 case patterns, 0 unread bindings, 0 endless loops
 ```
 
 ### `loops`
@@ -160,7 +160,7 @@ endless loop and is left alone.
 $ torb canon --check --rule loops examples/tour/src/scratch.trb
 ../examples/tour/src/scratch.trb
 
-1 of 1 files would change: 0 calls became commands, 0 got parentheses, 0 strings were indented, 0 case patterns, 0 unread bindings, 1 endless loops
+1 of 1 file would change: 0 calls to commands, 0 calls to parentheses, 0 strings indented, 0 case patterns, 0 unread bindings, 1 endless loop
 ```
 
 ### Exit codes
@@ -175,7 +175,7 @@ The gate runs before every commit, with all five rules, over the whole repositor
 
 ```console
 $ torb canon --check --rule calls --rule strings --rule imported-case-patterns --rule unused-bindings --rule loops .
-0 of 488 files would change: 0 calls became commands, 0 got parentheses, 0 strings were indented, 0 case patterns, 0 unread bindings, 0 endless loops
+0 of 488 files would change: 0 calls to commands, 0 calls to parentheses, 0 strings indented, 0 case patterns, 0 unread bindings, 0 endless loops
 ```
 
 That is the tier A gate of compiler/CONTRIBUTING.md, and `sh tools/gates.sh a` runs

@@ -574,6 +574,42 @@ char *torb_platform_working_directory(size_t *length) {
   }
 }
 
+/*
+ * The message for a name that is not valid UTF-8, which the caller copies into its error right away: the bytes, the
+ * printable ASCII ones as they are and every other one as `\xNN`, so a program can tell which entry it was. One buffer
+ * is enough, because the runtime has one worker and the message is read before anything lists a directory again.
+ */
+static char torb_unreadable_name[320];
+
+static const char *torb_describe_unreadable_name(const char *name) {
+  static const char prefix[] = "a name in this directory is not valid UTF-8: ";
+  size_t used = sizeof prefix - 1u;
+  size_t index;
+  memcpy(torb_unreadable_name, prefix, used);
+  for (index = 0u; name[index] != '\0'; index += 1u) {
+    unsigned char byte = (unsigned char)name[index];
+    /* Room for one escaped byte, the ellipsis that says the name went on, and the terminator. */
+    if (used + 4u + 3u + 1u > sizeof torb_unreadable_name) {
+      memcpy(torb_unreadable_name + used, "...", 3u);
+      used += 3u;
+      break;
+    }
+    if (byte >= 0x20u && byte < 0x7Fu && byte != (unsigned char)'\\') {
+      torb_unreadable_name[used] = (char)byte;
+      used += 1u;
+    } else {
+      snprintf(torb_unreadable_name + used, 5u, "\\x%02X", (unsigned int)byte);
+      used += 4u;
+    }
+  }
+  torb_unreadable_name[used] = '\0';
+  return torb_unreadable_name;
+}
+
+/*
+ * A name that is not valid UTF-8 ends the listing with an error instead of becoming a value (docs/design/PATH.md, the
+ * directory entry that is not UTF-8): a `String` is always UTF-8, and no replacement character is invented for it.
+ */
 bool torb_platform_list_directory(const char *path, torb_list *out, const char **message) {
   DIR *directory = opendir(path);
   struct dirent *entry;
@@ -582,8 +618,14 @@ bool torb_platform_list_directory(const char *path, torb_list *out, const char *
     return false;
   }
   while ((entry = readdir(directory)) != NULL) {
+    size_t bad = 0u;
     if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
       continue;
+    }
+    if (!torb_utf8_validate((const uint8_t *)entry->d_name, strlen(entry->d_name), &bad)) {
+      *message = torb_describe_unreadable_name(entry->d_name);
+      closedir(directory);
+      return false;
     }
     {
       torb_text name = torb_text_from_cstring(entry->d_name);

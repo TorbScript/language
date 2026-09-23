@@ -727,6 +727,12 @@ void torb_list_compact(torb_list *list);
 
 /** `list` borrowed, result owned and sharing the storage; the slice starts at index 0 again. */
 torb_list torb_list_slice(torb_list list, int64_t from, int64_t to, torb_location at);
+/**
+ * The same slice in a storage of its own that retains exactly its elements: what the C back end calls instead of
+ * `torb_list_slice` where an element may hold an object with a destructor, so no element outlives its last holder
+ * because a slice keeps the storage around it alive (docs/design/DESTRUCTORS.md 2a).
+ */
+torb_list torb_list_slice_copied(torb_list list, int64_t from, int64_t to, torb_location at);
 
 /** Two elements in written order; -1, 0 or 1. `context` is whatever the caller threaded through. */
 typedef int32_t (*torb_compare_function)(const void *first, const void *second, void *context);

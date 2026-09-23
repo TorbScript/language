@@ -665,7 +665,7 @@ group "Real code" {
     assert verifyOwnedProgram(owned.program).isEmpty()
     assert owned.program.problems.isEmpty()
     // The same declarations as before the pass: ownership changes bodies, never what is lowered
-    assert(owned.lowered + owned.stubbed == 112)
+    assert(owned.lowered + owned.stubbed == 173)
     var again = lowerChecked checked
     insertOwnership again.program
     assert(printProgram(owned.program) == printProgram(again.program))
@@ -721,6 +721,10 @@ const probeSource = r"""
   fn plain(): Int {
     const text = "{1}"
     text.byteLength()
+  }
+
+  fn conditional(isMaking: Bool) {
+    print(if isMaking { Probe("arm").name } else { "none" })
   }
   """
 
@@ -834,6 +838,48 @@ group "The ends of scope: a binding with a destructor is released where its bloc
           %5 = construct T_std_x2f_prelude_types_Option__T_acme_x2f_app_main_Probe.None ()
           release %1
           return %5 owned last
+        }"""
+    )
+  }
+
+  /**
+   * Only the `then` arm makes the probe, and the end of the statement still releases it: the slot is cleared where the
+   * function begins, so the `else` path reaches the release with nothing in it (docs/design/DESTRUCTORS.md 2a).
+   */
+  test "a temporary made on one path only is released at the end of its statement through a cleared slot" {
+    assert(
+      ownedIrOf(probeSource, "t_acme_x2f_app_main_conditional") == r"""
+        fn t_acme_x2f_app_main_conditional(isMaking: Bool borrowed) -> Void {
+          slot %0 parameter isMaking: Bool
+          slot %1 temporary: String
+          slot %2 temporary: String
+          slot %3 temporary: Shared(T_acme_x2f_app_main_Probe)
+          slot %4 temporary: String
+          slot %5 temporary: String
+          slot %6 temporary: String
+          slot %7 temporary: Void
+        b0: # acme/app/src/main.trb:47 body
+          %3 = clear
+          branch %0 then b4 else b2
+        b1: # acme/app/src/main.trb:48 then
+          %2 = constant s_literal__String_arm
+          %3 = construct T_acme_x2f_app_main_Probe (%2 owned)
+          %4 = read %3.name
+          %1 = move %4
+          jump b3
+        b2: # acme/app/src/main.trb:48 else
+          %5 = constant s_literal__String_none
+          %1 = copy %5
+          jump b3
+        b3: # acme/app/src/main.trb:48 join
+          %6 = call t_std_x2f_prelude_types_Show_show__String(%1 owned last)
+          intrinsic printParts %6 at acme/app/src/main.trb:48:3
+          release %6
+          release %3
+          return
+        b4: # acme/app/src/main.trb:47 drop
+          release %3
+          jump b1
         }"""
     )
   }

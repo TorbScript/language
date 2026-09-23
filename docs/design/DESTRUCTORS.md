@@ -6,8 +6,9 @@ implements `Close` (section 5), no program calls `close()` (section 3), `self` d
 and `using name = expression` is a binding whose name does not escape its block, with `fn using` deleted from
 `std/core` (section 4). The release half is in too (2026-09-23): the drop function of an object runs its `close()`,
 bindings and temporaries are released at the ends of their scopes, fields and elements in reverse order, and a
-cancelled task's frame the same way (section 10, slices R1 and R3). What is still open is listed there: the copying
-slice of section 2a, and the type names in the leak report of section 9.
+cancelled task's frame the same way (section 10, slices R1 and R3), a temporary that only one path of its statement
+made included, and a slice of a list of such objects copies. What is still open is listed there: the type names in the
+leak report of section 9.
 
 `close()` stops being a method somebody remembers to call and becomes the language's one destructor: the runtime's
 own reference count triggers it, exactly once, the moment the last holder of a value goes away. This reopens a
@@ -249,12 +250,22 @@ error: `close` may not keep `self`: the object is being released
 
 *(Proposed.)*
 
-**No slice shares storage that holds `Close` objects.** A slice of a list shares the list's storage today
+**A temporary that only one path of its statement made ends there too.** The arm of an `if` expression, the fallback
+of a `??`: the other path never made the temporary, and the end of the statement still releases it where it was made.
+The slot is its own drop flag - the ownership pass clears it where the function begins and after an end inside a
+loop, so a path that made nothing releases the zero value, which is nothing, and the next turn of a loop never sees what
+the last one released (`Instruction.Clear`, `withClearedTemporaries` in `ir/ownership.trb`). The last expression of a block is a
+statement as well: its temporaries end with it, and only the value it hands on to the block outlives it.
+
+**No slice shares storage that holds `Close` objects.** A slice of a list shares the list's storage
 (`docs/design/COLLECTIONS.md` 3.7); for an element type that may contain a `Close` object, slicing **copies** — the new list
 retains exactly the elements it holds and nothing else. Shared storage would keep every element of the original alive,
 and its `close()` deferred, for as long as any slice of it lives, so the moment an element closes would depend on the
 lifetime of a slice that never mentioned it. The copy costs a retain per element and happens only for such element
-types.
+types: a trait-typed `List` slices through the copying default of `std/collections`, and the native slice of a
+concrete `ArrayList` - which the back end does not build yet, because its `Bounds` argument is not the runtime's
+`from, to` - calls `torb_list_slice_copied` instead of `torb_list_slice` where the program's closing fact says the
+element may hold one (`sliceSymbolOf` in `backend/c/body.trb`).
 
 **A back end with a garbage collector still counts these types.** JavaScript and PHP (after the VM) could leave every
 other value to the host's collector, but a type that may contain a `Close` object needs its reference count in every
@@ -525,9 +536,10 @@ releases its fields last to first, and a list and a map release their elements l
 of `benchmarks/` is byte for byte what it was. Every `close()` call `std` had was removed with the checker's rule
 (`Pushing`, `Remapped`, `Buffered` of `sink.trb`; `Pulling`, `Stepping`, `Remapped`, `Staged`, `Produced`,
 `Checked` of `source.trb`; `Body` of `std/http`; `File.write` of `std/fs`), and the release of the field makes each of
-those closes now. Open: a slice of a list whose elements may hold `Close` still shares the storage instead of copying,
-and a `native shared type` (`File`, `Child`) closes through the drop function of the runtime (`torb_file_drop`) once
-the back end lowers it - it does not yet. Tests: `tests/conformance/destructor-*.trb`, the group "The ends of scope" of
+those closes now. A slice of a list whose elements may hold `Close` copies, and a temporary that only one path of its
+statement made is released at the end of that statement through a cleared slot (section 2a). Open: a `native shared
+type` (`File`, `Child`) closes through the drop function of the runtime (`torb_file_drop`) once the back end lowers
+it - it does not yet. Tests: `tests/conformance/destructor-*.trb`, the group "The ends of scope" of
 `compiler/tests/ownership.test.trb`, and `runtime/tests/memory_test.c` and `list_test.c`.* `Close` becomes real: `semantics/checker` adds the restriction that only a
 `shared type` may implement it (section 5), rejects a direct call (section 3), and rejects keeping `self` inside
 `close()` (section 2a); `ir` computes "may contain `Close`" per layout to a fixpoint and marks a `Close`-implementing

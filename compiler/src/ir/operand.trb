@@ -114,6 +114,7 @@ public fn operandsOf(program: IrProgram, facts: SlotFacts, instruction: Instruct
     .Release(_) => []
     // The end of a scope reads the value and nothing else: its last use is where the release goes
     .EndOfScope(slot) => [borrowedOperand(slot)]
+    .Clear(_) => []
     .MakeUnique(reference) => borrowedOperands placeSlotsOf(reference)
     .Call(_, callee, arguments, witnesses, _) => {
       var found = callOperands program, callee, arguments
@@ -318,6 +319,7 @@ public fn withOperands(instruction: Instruction, decided: List<Argument>): Instr
     .Retain(_) => instruction
     .Release(_) => instruction
     .EndOfScope(_) => instruction
+    .Clear(_) => instruction
     .MakeUnique(reference) => Instruction.MakeUnique withPlace(reference, decided, 0)
     .Call(target, callee, arguments, witnesses, at) => {
       Instruction.Call target, callee, takenArguments(arguments, decided, 0), witnesses, at

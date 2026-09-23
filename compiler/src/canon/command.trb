@@ -33,6 +33,7 @@ use stringEdits from "./strings"
 use patternEdits from "./patterns"
 use bindingEdits from "./bindings"
 use loopEdits from "./loops"
+use counted from "../cli/render"
 
 /** `torb canon --help` */
 public fn canonUsage(): String {
@@ -193,12 +194,13 @@ fn printCanonReport(report: Report, check: Bool) {
   const counts = report.counts
   print ""
   print(
-    "{report.changed.length()} of {report.files} files {verb}: {counts.toCommand} calls became commands, "
-      + "{counts.toParentheses} got parentheses, {counts.strings} strings were indented, {counts.patterns} case patterns, "
-      + "{counts.bindings} unread bindings, {counts.endless} endless loops"
+    "{report.changed.length()} of {counted(report.files, "file")} {verb}: "
+      + "{counted(counts.toCommand, "call")} to commands, {counted(counts.toParentheses, "call")} to parentheses, "
+      + "{counted(counts.strings, "string")} indented, {counted(counts.patterns, "case pattern")}, "
+      + "{counted(counts.bindings, "unread binding")}, {counted(counts.endless, "endless loop")}"
   )
   if !report.dropped.isEmpty() {
-    print "{report.dropped.length()} edits were dropped by the safety net"
+    print "{counted(report.dropped.length(), "edit")} dropped by the safety net"
   }
 }
 

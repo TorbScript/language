@@ -1,0 +1,60 @@
+/**
+ * A temporary that only one path of its statement makes still lives to the end of that statement: the arm of an `if`
+ * that builds one, the fallback of a `??`, a trait-typed one. The path that made none releases nothing, and a loop that
+ * makes one on some turns and not on others closes each exactly once, at the end of the statement of its own turn.
+ */
+
+/** Something that can describe itself, which a `Probe` is: a trait-typed temporary may hold one too. */
+shared trait Named {
+  fn label(): String
+}
+
+shared type Probe with Close, Named {
+  name: String
+
+  fn label(): String {
+    name
+  }
+
+  var fn close() {
+    print "close {name}"
+  }
+}
+
+fn report(first: String, second: String) {
+  print "report {first} {second}"
+}
+
+fn named(value: String): Named {
+  Probe value
+}
+
+fn fromAnArm(flag: Bool) {
+  report(if flag { Probe("arm").name } else { "no arm" }, "then")
+  print "the statement of the arm ended"
+}
+
+fn fromAFallback(given: String?) {
+  report(given ?? Probe("fallback").name, "then")
+  print "the statement of the fallback ended"
+}
+
+fn fromATraitValue(flag: Bool) {
+  report(if flag { named("trait").label() } else { "no trait" }, "then")
+  print "the statement of the trait value ended"
+}
+
+fn inALoop() {
+  for turn in 0..4 {
+    report(if turn % 2 == 0 { Probe("turn {turn}").name } else { "skipped {turn}" }, "then")
+  }
+  print "the loop ended"
+}
+
+fromAnArm true
+fromAnArm false
+fromAFallback None
+fromAFallback Some("given")
+fromATraitValue true
+fromATraitValue false
+inALoop()

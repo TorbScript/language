@@ -52,6 +52,8 @@ typedef struct torb_scheduler {
   uint32_t timer_capacity;
   uint64_t timer_sequence;
   bool running;
+  /** The task `torb_scheduler_run` waits for, whose last reference the `main` of the program holds while it does. */
+  torb_task *awaited;
 } torb_scheduler;
 
 static torb_scheduler torb_process_scheduler;
@@ -1048,6 +1050,7 @@ void torb_scheduler_run(torb_task *until) {
     torb_internal_error("the scheduler was run from inside a task");
   }
   scheduler->running = true;
+  scheduler->awaited = until;
   for (;;) {
     torb_task *task;
     if (until != NULL && until->status != (uint8_t)TORB_TASK_PENDING) {
@@ -1067,10 +1070,12 @@ void torb_scheduler_run(torb_task *until) {
       break;
     }
     scheduler->running = false;
+    scheduler->awaited = NULL;
     torb_panic_text("deadlock: every task is waiting for another one, and nothing is left that could wake one",
                     torb_location_unknown);
   }
   scheduler->running = false;
+  scheduler->awaited = NULL;
 }
 
 void torb_scheduler_finish(void) {
@@ -1088,6 +1093,34 @@ void torb_scheduler_finish(void) {
   scheduler->timers = NULL;
   scheduler->timer_capacity = 0u;
   scheduler->timer_sequence = 0u;
+}
+
+void torb_scheduler_exit(void) {
+  torb_scheduler *scheduler = torb_scheduler_current();
+  torb_task *current = scheduler->current;
+  torb_task *awaited = scheduler->awaited;
+  torb_task *task;
+  if (scheduler->live_count == 0u && awaited == NULL) {
+    return;
+  }
+  for (task = scheduler->live_first; task != NULL; task = task->live_next) {
+    torb_task_cancel(task);
+  }
+  /*
+   * The running task leaves through the exit and never returns to its machine, so it cannot take its own stop path.
+   * The lowering released what its frame held in front of the call, as it does in front of every call that answers
+   * `Never`, so completing it as cancelled is all that is left: its waiters were cancelled above and stop on their own.
+   */
+  if (current != NULL) {
+    scheduler->current = NULL;
+    torb_complete(scheduler, current, false);
+  }
+  scheduler->running = false;
+  scheduler->awaited = NULL;
+  torb_scheduler_finish();
+  if (awaited != NULL) {
+    torb_task_release(awaited);
+  }
 }
 
 size_t torb_task_live_count(void) {

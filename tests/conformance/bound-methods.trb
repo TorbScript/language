@@ -1,0 +1,71 @@
+/**
+ * A method read without a call is a function bound to its receiver: `rectangle.area` is a closure that calls `area` on
+ * the rectangle it was read from. The receiver is a value, so the closure holds a copy of it: a change to the binding
+ * afterwards is not seen, while a `shared` object is the one object and every change to it is.
+ */
+
+type Rectangle {
+  width: Int
+  height: Int
+
+  fn area(): Int {
+    width * height
+  }
+
+  fn scaled(factor: Int): Rectangle {
+    Rectangle(width * factor, height * factor)
+  }
+
+  fn describe(unit: String): String {
+    "{width} x {height} {unit}"
+  }
+}
+
+shared type Counter {
+  var count: Int = 0
+
+  var fn bump() {
+    count = count + 1
+  }
+
+  fn current(): Int {
+    count
+  }
+}
+
+/** A generic record, whose bound method is an instance for its type argument. */
+type Labeled<Value: Show> {
+  label: String
+  value: Value
+
+  fn shown(): String {
+    "{label} = {value}"
+  }
+}
+
+/** Calls a function it was handed, the way every higher-order function does. */
+fn twice(action: () => Int): Int {
+  action() + action()
+}
+
+var rectangle = Rectangle 3, 4
+const area = rectangle.area
+const scale = rectangle.scaled
+const describe = rectangle.describe
+rectangle = Rectangle 10, 10
+print area()
+print scale(2).area()
+print describe("cm")
+print twice(rectangle.area)
+
+var counter = Counter()
+const current = counter.current
+counter.bump()
+counter.bump()
+print current()
+
+const labeled = Labeled "answer", 42
+const shown = labeled.shown
+print shown()
+const units = ["cm", "m"]
+print units.map(rectangle.describe).toList()

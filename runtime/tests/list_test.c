@@ -129,6 +129,23 @@ TORB_TEST(a_slice_shares_the_storage_and_keeps_it_alive) {
   torb_list_release(window);
 }
 
+TORB_TEST(a_copied_slice_holds_exactly_its_own_elements) {
+  torb_list list = torb_list_new(&torb_element_text);
+  torb_list window;
+  add_text(&list, "first");
+  add_text(&list, "second");
+  add_text(&list, "third");
+  window = torb_list_slice_copied(list, 1, 3, somewhere);
+  TORB_CHECK(window.storage != list.storage);
+  TORB_CHECK_INTEGER(window.offset, 0);
+  TORB_CHECK_INTEGER(torb_list_length(window), 2);
+  TORB_CHECK_TEXT(text_at(window, 0), "second");
+  /* The parent is released on its own: the copy retained its two elements and nothing else. */
+  torb_list_release(list);
+  TORB_CHECK_TEXT(text_at(window, 1), "third");
+  torb_list_release(window);
+}
+
 TORB_TEST(adding_to_a_slice_does_not_reach_the_parent) {
   torb_list list = torb_list_new(&torb_element_int64);
   torb_list window;
@@ -350,6 +367,7 @@ void torb_register_list_tests(void) {
   TORB_ADD(a_write_goes_through_in_place_when_the_list_is_unique);
   TORB_ADD(a_write_copies_exactly_once_when_the_storage_is_shared);
   TORB_ADD(a_slice_shares_the_storage_and_keeps_it_alive);
+  TORB_ADD(a_copied_slice_holds_exactly_its_own_elements);
   TORB_ADD(adding_to_a_slice_does_not_reach_the_parent);
   TORB_ADD(an_element_reference_makes_the_storage_unique_first);
   TORB_ADD(an_element_reference_out_of_range_panics_with_the_message_it_was_given);

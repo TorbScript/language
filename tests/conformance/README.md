@@ -167,7 +167,9 @@ jump left behind released nothing. The directory is the exemption, instead of a 
 | `capsule.trb` | The capsule standard: private fields with no default, a `static fn` factory, accessors, and the one conversion pair in both directions |
 | `case-defaults.trb` | A case constructor whose field takes its default |
 | `constructor-values.trb` | The generated constructor as a function value: the labels and the defaults survive |
+| `bound-methods.trb` | A method read without a call is a closure bound to a copy of its receiver: a value is copied, a `shared` object is the one object, a generic record gets its own instance |
 | `module-destructuring.trb` | A top-level binding that destructures is one constant per name, each one its own part of the value |
+| `top-level-destructuring-task.trb` | A top-level binding of an entry file that destructures what a task answered is code of the file: it waits where it stands, and a `var` pattern binds names that can be assigned |
 | `literal-union-show.trb` | A literal type is its base at run time: its `Show`, `Equals` and `Hash` are the base's |
 | `constants.trb` | Top-level `const`s of every shape, from a function and from the top level, and the mutated copy of one |
 | `generic-constants.trb` | A `const` of a generic type is one value per type argument, named after the arguments the read decided |
@@ -237,6 +239,7 @@ jump left behind released nothing. The directory is the exemption, instead of a 
 | `channel-ping-pong.trb` | A rendezvous channel alternates in lock-step, a buffered one carries every item once and in order, and `end()` is `None` for the reader |
 | `channel-closed.trb` | Letting go of the reading end closes it: every later `add` fails with `ChannelClosed`, and what was buffered is released |
 | `destructor-cancelled-task.trb` | A cancelled task closes what its frame held, the last declared first, before its waiter hears that it was cancelled |
+| `task-exit.trb` | `Process.exit` inside a task ends the program with that code and takes every task down on the way out: a sleeping one closes what it held, and nothing is left behind |
 
 **Destructors** - `close()` runs at the last release, and a binding that holds an object with one is released where its block ends.
 
@@ -248,6 +251,9 @@ jump left behind released nothing. The directory is the exemption, instead of a 
 | `destructor-using.trb` | `using` closes at the end of its block, and an unused binding lives to the end of its block too |
 | `destructor-patterns-and-temporaries.trb` | The names of `if const`, a `match` arm and a `for` end with their block; a temporary lives to the end of its statement |
 | `destructor-stream.trb` | A pipeline of `std/stream` stages closes its source through the release of the last stage, read to the end or cut short by `take` |
+| `destructor-conditional-temporaries.trb` | A temporary that only one path of its statement makes - an arm of an `if`, the fallback of a `??`, a trait-typed one, a turn of a loop - still closes at the end of that statement, and the path that made none closes nothing |
+| `destructor-slice.trb` | A slice of a list whose elements have a destructor holds its own elements: the ones it left out close when the list is gone, not when the slice goes |
+| `stream-take.trb` | `take` over an endless source reads exactly as many items as it takes, and a pipeline over a list stops pulling as soon as its taking stage is done |
 
 **The outside world**
 

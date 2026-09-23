@@ -729,9 +729,45 @@ public fn checkDestructuredBinding(var checker: Checker, module: ModuleId, bindi
   checkPattern checker, binding.pattern, subject, binding.isVar
   requireIrrefutable checker, binding.pattern, subject, "The pattern of a binding", "value"
   closeInference checker
+  resolvePatternTypes checker, module, binding.pattern
   settleChanges checker
   checker.closeScope()
   checker.leaveBody saved
+}
+
+/**
+ * Writes the solved type back to every part of a destructuring pattern. The binding is checked when a name of it is
+ * first asked for, which may be in the middle of another statement's inference - and there `closeInference` leaves the
+ * pruning to the outermost statement, which does not know these spans: `const (low, high) = task.await()` would keep
+ * the variable `await()` answered with, and each name would read a type nobody solved.
+ */
+fn resolvePatternTypes(var checker: Checker, module: ModuleId, pattern: Pattern) {
+  if const Some(found) = checker.patternType(module, pattern.span) {
+    checker.recordPattern module, pattern.span, resolveType(checker, found)
+  }
+  match pattern.kind {
+    .TuplePattern(items) => {
+      for item in items {
+        resolvePatternTypes checker, module, item
+      }
+    }
+    .ListPattern(items, _) => {
+      for item in items {
+        resolvePatternTypes checker, module, item
+      }
+    }
+    .Variant(_, fields, _) | .ImplicitVariant(_, fields, _) => {
+      for field in fields {
+        resolvePatternTypes checker, module, field.pattern
+      }
+    }
+    .Alternatives(patterns) => {
+      for alternative in patterns {
+        resolvePatternTypes checker, module, alternative
+      }
+    }
+    _ => {}
+  }
 }
 
 /** The expectation a body's last expression is checked against: none where the result is inferred, `Void` where it is. */

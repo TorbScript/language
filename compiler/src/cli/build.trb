@@ -30,7 +30,7 @@ use lowerWorkspace, pathsOfModules from "../ir/lower/lower"
 use entryNameOf from "../ir/lower/function"
 use emitProgram, ProgramEntry from "../backend/c/emit"
 use emittedText from "../backend/c/emission"
-use renderDiagnostic, renderProblem from "./render"
+use renderDiagnostic, renderProblem, counted from "./render"
 
 /**
  * How a program is built: how hard the C compiler optimizes the one C file. The C itself is the same under every
@@ -107,7 +107,7 @@ public fn build(options: BuildOptions): Result<Int, IoError> {
   const checked = check(tree, absolutePaths(options.paths)?, false, true)
   const reported = reportChecked checked
   if reported > 0 {
-    printError "{reported} problems, nothing was built"
+    printError "{counted(reported, "problem")}, nothing was built"
     return Ok buildFailedCode
   }
   const modules = match entryModulesOf(checked, tree, options) {
@@ -125,9 +125,9 @@ public fn build(options: BuildOptions): Result<Int, IoError> {
   // makes the emitted C free what it allocates, so the pipeline is lower, own, verify, emit
   insertOwnership lowering.program
   const entries = programEntriesOf lowering, checked, tree, modules, options
-  const found = reportLowering checked, tree, lowering, entries
+  const found = reportLowering checked, tree, lowering
   if found > 0 {
-    printError "{found} problems the native back end cannot compile yet, nothing was built"
+    printError "{counted(found, "problem")} the native back end cannot compile yet, nothing was built"
     return Ok buildFailedCode
   }
   const emission = emitProgram lowering.program, entries
@@ -179,7 +179,7 @@ fn reportChecked(checked: Checked): Int {
  * the runtime does not represent yet, and anything the verifier says - which is an internal error, because a malformed
  * body is a bug of the compiler.
  */
-fn reportLowering(checked: Checked, tree: SourceTree, lowering: Lowering, entries: List<ProgramEntry>): Int {
+fn reportLowering(checked: Checked, tree: SourceTree, lowering: Lowering): Int {
   var found = 0
   for problem in lowering.problems {
     const module = checked.program.graph.at problem.module
@@ -202,18 +202,6 @@ fn reportLowering(checked: Checked, tree: SourceTree, lowering: Lowering, entrie
   }
   for problem in verifyOwnedProgram(lowering.program) {
     printError "internal error: {problem}"
-    found = found + 1
-  }
-  // A test run has one entry per file and a file without tests simply runs nothing; a build has exactly one, and a
-  // program whose entry file has no top-level code has nothing to run at all
-  var runnable = 0
-  for entry in entries {
-    if !entry.name.isEmpty() {
-      runnable = runnable + 1
-    }
-  }
-  if runnable == 0 {
-    printError "error: the entry file has no top-level code, so the program has nothing to run"
     found = found + 1
   }
   found

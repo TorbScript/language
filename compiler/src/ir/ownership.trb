@@ -28,7 +28,7 @@
  */
 
 use IrProgram, IrFunction, FunctionKind, Ownership, Slot, SlotRole, SlotDeclaration from "./ir"
-use BlockId, Block, Instruction, Terminator, Argument, Reference from "./ir"
+use BlockId, Block, Instruction, Terminator, Argument, Reference, IrTypeId from "./ir"
 use isManagedType, containsCountedType from "./layout"
 use isSharedStorage from "./capture"
 use usedSlots, definedSlot, successorsOf, reachableBlocks, typeOfReference, usedByTerminator from "./verify"
@@ -1005,13 +1005,9 @@ fn withNeededScopeEnds(program: IrProgram, closing: Closing, function: IrFunctio
 }
 
 /** What becomes of the ends of scope, decided over the prepared body: kept where the value is owned, gone where moved. */
-fn resolvedScopeEnds(program: IrProgram, function: IrFunction): IrFunction {
-  const stripped = withoutScopeEnds function
-  const facts = slotFactsOf program, stripped
-  const counted = countedSlotsOf program, stripped
-  const live = livenessOf program, stripped, counted
-  const moves = movesOf program, facts, counted, live, stripped
-  const states = scopeStatesOf function, moves
+fn resolvedScopeEnds(program: IrProgram, original: IrFunction): IrFunction {
+  const function = withClearedTemporaries program, original
+  const states = scopeStatesOfBody program, function
   // A binding that is moved on one path and not on another keeps all of its ends
   var isPinned = filledFlags function.slots.length(), false
   for block in 0..function.blocks.length() {
@@ -1046,6 +1042,124 @@ fn resolvedScopeEnds(program: IrProgram, function: IrFunction): IrFunction {
     }
   }
   built
+}
+
+/** The state of every scoped binding at every `EndOfScope` of the body, over the moves the rewrite would make. */
+fn scopeStatesOfBody(program: IrProgram, function: IrFunction): List<List<Int>> {
+  const stripped = withoutScopeEnds function
+  const facts = slotFactsOf program, stripped
+  const counted = countedSlotsOf program, stripped
+  const live = livenessOf program, stripped, counted
+  const moves = movesOf program, facts, counted, live, stripped
+  scopeStatesOf function, moves
+}
+
+/**
+ * A temporary that only some paths of its statement make - the arm of an `if` expression, the fallback of a `??` - is
+ * still released at the end of that statement (docs/design/DESTRUCTORS.md 2a). The slot is its own drop flag: it is
+ * cleared where the function begins, so a path that never made the temporary reaches the end with the zero value and
+ * releases nothing, and cleared again after an end inside a loop, so the next turn finds it empty and not holding what
+ * that end already released. The end is then owned on every path, and the ordinary rule turns it into the release.
+ *
+ * A type whose zero value cannot be released - one that holds a trait-typed value inline, which has no table to take
+ * the drop function from - keeps the old answer: no end, and a release at the last use.
+ */
+fn withClearedTemporaries(program: IrProgram, function: IrFunction): IrFunction {
+  const states = scopeStatesOfBody program, function
+  var isPartial = filledFlags function.slots.length(), false
+  var slots: List<Slot> = []
+  for block in 0..function.blocks.length() {
+    const instructions = function.blocks[block].instructions
+    for at in 0..instructions.length() {
+      if const .EndOfScope(slot) = instructions[at] {
+        if states[block][at] == statePartial && !isPartial[slot.value] {
+          if isClearable(program, function.typeOfSlot(slot)) {
+            isPartial.set slot.value, true
+            slots.append slot
+          }
+        }
+      }
+    }
+  }
+  if slots.isEmpty() {
+    return function
+  }
+  var built = function
+  for block in 0..function.blocks.length() {
+    var written: List<Instruction> = []
+    if block == 0 {
+      for slot in slots {
+        written.append Instruction.Clear(slot)
+      }
+    }
+    // Only an end that control can come back to needs the slot emptied behind it
+    const isRepeated = isOnCycle function, block
+    for instruction in function.blocks[block].instructions {
+      written.append instruction
+      if const .EndOfScope(slot) = instruction {
+        if isPartial[slot.value] && isRepeated {
+          written.append Instruction.Clear(slot)
+        }
+      }
+    }
+    built.blocks[block].instructions = written
+  }
+  built
+}
+
+/** Whether a block can be reached again from itself: whether it is inside a loop. */
+fn isOnCycle(function: IrFunction, start: Int): Bool {
+  var isSeen = filledFlags function.blocks.length(), false
+  var pending: List<Int> = []
+  for target in successorsOf(function.blocks[start]) {
+    pending.append target
+  }
+  var cursor = 0
+  while cursor < pending.length() {
+    const block = pending[cursor]
+    cursor = cursor + 1
+    if block == start {
+      return true
+    }
+    if isSeen[block] {
+      continue
+    }
+    isSeen.set block, true
+    for target in successorsOf(function.blocks[block]) {
+      pending.append target
+    }
+  }
+  false
+}
+
+/**
+ * Whether the zero value of a type can be released: a null pointer, which every release of the runtime passes over, or
+ * a trait-typed value whose release the C back end guards. A trait-typed value held inline in a record or a case has
+ * no such guard, because the release of the aggregate is one helper for every value of its layout.
+ */
+fn isClearable(program: IrProgram, id: IrTypeId): Bool {
+  if const .Object(_) = program.typeAt(id) {
+    return true
+  }
+  isZeroReleasable program, id, 0
+}
+
+fn isZeroReleasable(program: IrProgram, id: IrTypeId, depth: Int): Bool {
+  if depth > 16 || !program.hasType(id) {
+    return false
+  }
+  match program.typeAt(id) {
+    .Object(_) => false
+    .Record(layout) | .Tuple(layout) | .Variant(layout) => {
+      const shape = program.layouts[layout.value]
+      if const .Boxed = shape.representation {
+        return true
+      }
+      shape.fields.all({ isZeroReleasable(program, _.annotation, depth + 1) })
+    }
+    .FixedArray(item, _) => isZeroReleasable(program, item, depth + 1)
+    _ => true
+  }
 }
 
 fn withoutScopeEnds(function: IrFunction): IrFunction {

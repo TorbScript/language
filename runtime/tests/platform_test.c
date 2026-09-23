@@ -136,6 +136,36 @@ TORB_TEST(a_path_over_the_windows_limit_is_created_written_and_read) {
   (void)torb_platform_remove(directory);
 }
 
+#if !defined(_WIN32)
+
+/**
+ * A name of bytes that are not UTF-8 is an error of the listing, and the message shows the bytes. POSIX names are bytes,
+ * so such a file can exist; a file system that refuses the name (APFS normalizes to UTF-8) has nothing to list, and the
+ * test then checks nothing.
+ */
+TORB_TEST(a_name_that_is_not_utf8_is_an_error_of_the_listing) {
+  char directory[256];
+  char path[512];
+  const char *message = NULL;
+  torb_list entries = torb_list_new(&torb_element_text);
+  FILE *file;
+
+  scratch_directory(directory, sizeof directory);
+  snprintf(path, sizeof path, "%s/caf\xE9.txt", directory);
+  TORB_CHECK(torb_platform_create_directory(directory, &message));
+  file = fopen(path, "wb");
+  if (file != NULL) {
+    fclose(file);
+    TORB_CHECK(!torb_platform_list_directory(directory, &entries, &message));
+    TORB_CHECK(strcmp(message, "a name in this directory is not valid UTF-8: caf\\xE9.txt") == 0);
+    (void)remove(path);
+  }
+  torb_list_release(entries);
+  (void)torb_platform_remove(directory);
+}
+
+#endif
+
 #if defined(_WIN32)
 
 /** The two conversions, there and back, over every UTF-8 width including one that needs a surrogate pair. */
@@ -263,6 +293,9 @@ TORB_TEST(a_path_that_is_already_extended_is_handed_on_as_it_is) {
 void torb_register_platform_tests(void) {
   TORB_ADD(a_name_that_is_not_ascii_is_written_listed_read_and_removed);
   TORB_ADD(a_path_over_the_windows_limit_is_created_written_and_read);
+#if !defined(_WIN32)
+  TORB_ADD(a_name_that_is_not_utf8_is_an_error_of_the_listing);
+#endif
 #if defined(_WIN32)
   TORB_ADD(utf8_and_utf16_convert_in_both_directions);
   TORB_ADD(the_empty_text_converts_in_both_directions);
