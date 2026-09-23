@@ -21,6 +21,7 @@ use normalizePath, parentPath, joinPath, pathName from "../project/path"
 use SourceTree from "../project/source-tree"
 use readSourceTree, absolutePaths from "../project/read"
 use findRuntime, threadArguments from "../project/toolchain"
+use BuildTarget, hostTarget from "../project/target"
 use ModuleId from "../semantics/module"
 use check, Checked from "../semantics/check"
 use insertOwnership from "../ir/ownership"
@@ -92,6 +93,12 @@ public type BuildOptions {
   saysWhatItWrote: Bool = true
   /** `--profile dev|release`, `--release`. It decides the C compiler's flags and the `build/<profile>/` directory. */
   profile: Profile = Profile.Release
+  /**
+   * `--target linux-x64`: what `OperatingSystem.current` and its two siblings answer in the program, and so which arm
+   * of a `match` on one of them is compiled. `None` is the machine `torb` runs on. A target that is not the host needs
+   * `--emit-c`, because the C compiler `torb` finds builds for the host.
+   */
+  target: BuildTarget? = None
 }
 
 /** Exit codes of `torb build`. */
@@ -123,10 +130,17 @@ public fn build(options: BuildOptions): Result<Int, IoError> {
       return Ok buildFailedCode
     }
   }
+  const host = hostTarget()
+  const target = options.target ?? host
+  if target != host && !options.onlyC {
+    printError "error: this machine is {host.name()}, and a binary for {target.name()} needs a C compiler for that target"
+    printError "  `torb build --target {target.name()} --emit-c` writes the C, which builds on that system"
+    return Ok buildFailedCode
+  }
   const paths = pathsOfModules checked
   const checker = checked.checker
   // Only what the entry files reach: nothing unreachable is emitted
-  var lowering = lowerWorkspace checker, paths, modules, false
+  var lowering = lowerWorkspace checker, paths, modules, false, target
   // The IR both back ends read is phase one plus ownership: the `Retain`s, `Release`s and `Move`s of BACKEND 2 are what
   // makes the emitted C free what it allocates, so the pipeline is lower, own, verify, emit
   insertOwnership lowering.program
@@ -376,12 +390,24 @@ fn canRun(command: String, arguments: List<String>): Bool {
   }
 }
 
-/** Every `.c` file of the runtime, sorted: its tests are not part of a program. */
-fn runtimeSourcesOf(directory: String): Result<List<String>, IoError> {
+/**
+ * Every `.c` file of the runtime and of its `os/` directory, sorted: its tests are not part of a program. Every file of
+ * `os/` is compiled on every machine and is empty where it does not belong, because each one is guarded as a whole
+ * (`runtime/README.md`), so the list does not depend on the target.
+ */
+public fn runtimeSourcesOf(directory: String): Result<List<String>, IoError> {
   var sources: List<String> = []
   for entry in File.list(directory)? {
     if entry.endsWith(".c") {
       sources.append joinPath(directory, entry)
+    }
+  }
+  const systems = joinPath directory, "os"
+  if File.exists(systems) {
+    for entry in File.list(systems)? {
+      if entry.endsWith(".c") {
+        sources.append joinPath(systems, entry)
+      }
     }
   }
   Ok sources

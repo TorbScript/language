@@ -25,6 +25,7 @@ source:
 torb check [path]...     Check projects, workspaces or single files (default: the current directory)
     --statistics          How many expressions of every file have a type, and how many are deferred
     --timings             The wall time of every pass, in the order they ran
+    --every-target        Lower every program and test once per target, without a C compiler
 ```
 
 ## What it does
@@ -105,6 +106,24 @@ names in type positions: 453 ms
 bodies: 14796 ms
 all passes: 41069 ms
 255 files, no problems
+```
+
+### `--every-target`
+
+After the check, lowers every program and test of the paths - every entry file, script and test file - once per
+target of the toolchain's list (`windows`, `linux`, `macos` and `freebsd`, each on `x64` and `arm64`) and stops before C,
+so no C compiler is needed. The checker already checked every arm of every `match OperatingSystem.current` on this
+machine; what only a target's lowering sees is which arm that target keeps, and what the arm reaches. A native that
+exists on some systems only, reached on another, is the error it finds, printed under the target that has it
+([Compile-time branches](../language/execution/compile-time-branches.md)).
+
+```console
+$ torb check --every-target tools/probe.trb
+1 file, no problems
+linux-x64:
+error: `Windows.tickCount` exists only on Windows, and this program is built for Linux
+...
+6 problems on 6 targets of 8: linux-x64, linux-arm64, macos-x64, macos-arm64, freebsd-x64, freebsd-arm64
 ```
 
 ### A false positive is a bug in the checker

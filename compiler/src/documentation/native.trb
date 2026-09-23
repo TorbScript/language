@@ -25,6 +25,8 @@ use Environment from "std/environment"
 use Process from "std/process"
 use joinPath from "../project/path"
 use threadArguments from "../project/toolchain"
+use hostTarget from "../project/target"
+use runtimeSourcesOf from "../cli/build"
 use Checked from "../semantics/check"
 use ModuleId from "../semantics/module"
 use Lowering from "../ir/lower/context"
@@ -147,7 +149,7 @@ fn moduleOf(checked: Checked, snippet: Snippet): ModuleId? {
  * needs to be asked anything at all.
  */
 public fn refusalsOf(checked: Checked, paths: List<String>, module: ModuleId, seedsEverything: Bool): List<String> {
-  var lowering = lowerWorkspace checked.checker, paths, [module], seedsEverything
+  var lowering = lowerWorkspace checked.checker, paths, [module], seedsEverything, hostTarget()
   insertOwnership lowering.program
   var found: List<String> = []
   for problem in lowering.problems {
@@ -192,7 +194,7 @@ fn runSnippets(
   modules: List<ModuleId>,
   options: NativeOptions,
 ): Result<List<DocumentationProblem>, IoError> {
-  var lowering = lowerWorkspace checked.checker, paths, modules, false
+  var lowering = lowerWorkspace checked.checker, paths, modules, false, hostTarget()
   insertOwnership lowering.program
   var entries: List<ProgramEntry> = []
   var index = 0
@@ -237,11 +239,7 @@ fn compileProgram(source: String, binary: String, runtime: String): Result<Strin
     return Ok "There is no C runtime at `{runtime}`. Set $TORB_RUNTIME, or pass --no-native to leave the `trb run` blocks out"
   }
   var arguments = ["-std=c11", "-O0", "-g0", "-I{joinPath(runtime, "include")}", "-o", binary, source]
-  for entry in File.list(runtime)? {
-    if entry.endsWith(".c") {
-      arguments.append joinPath(runtime, entry)
-    }
-  }
+  arguments.appendAll(runtimeSourcesOf(runtime)?)
   arguments.appendAll threadArguments()
   arguments.append "-lm"
   const output = Process.run(compiler, arguments)?

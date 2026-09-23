@@ -1,0 +1,450 @@
+/**
+ * The decision of a `match`, an `if` and an `if const` whose subject is a compile-time constant: which arm the value
+ * selects, so that the lowering lowers that arm and nothing else (docs/language/execution/compile-time-branches.md).
+ *
+ * It is what keeps the code of one operating system out of the binary of another. A `match OperatingSystem.current`
+ * lowers the arm of the target, and a function only another arm calls is never reached by the worklist, so it is never
+ * lowered - and a native of another system (`availableOn` in the manifest) is never called. This has to happen in the
+ * lowering and not in the C compiler, because an arm that is lowered references its natives.
+ *
+ * The checker is not part of it: every arm is type checked on every machine, and exhaustiveness and reachability are
+ * judged by the type of the subject, never by its value. What is decided here is only which of the checked arms is
+ * compiled.
+ *
+ * **What is a compile-time constant for this rule** ([knownValueOf]): a literal (`true`, `3`, `'a'`, a text without
+ * interpolation), a case without fields, a tuple of constants, `!`, `&&`, `||`, the comparisons and `+`, `-`, `*` of
+ * integers, `==` and `!=` of those and of two cases of a type whose `Equals` is derived, a module-level `const` or a
+ * `static` of a type whose initializer is one, and the three target constants of `std/core`. A local `const` never is,
+ * and neither is a top-level `const` of an entry file or a script, which is a local of the program's entry: whether an
+ * arm is compiled depends on the line the `match` is written on and not on data flow a reader has to follow.
+ *
+ * This evaluator is not `ir/constant.trb`'s, which produces static data: a case is a value of a variant layout, which
+ * static data does not hold, and nothing here is ever emitted - the answer is only which arm.
+ *
+ * # Pitfalls
+ *
+ * - An arm with a guard is code: where the value reaches such an arm first, the `match` is lowered as an ordinary one.
+ * - An expression that could overflow (`largest + 1`) is not a constant here: it is lowered, and fails where it runs.
+ */
+
+use Expression, TextSegment, PrefixOperator, InfixOperator from "../syntax/ast"
+use SymbolId from "../semantics/symbols"
+use TypeId, LiteralValue from "../semantics/checker/type"
+use MatchPlan, PatternBranch, PatternCheck, PatternStep, PatternLiteral from "../semantics/checker/exhaustive"
+use signatureOf from "../semantics/checker/signature"
+use integerLiteral from "../semantics/checker/lowering"
+use caseNamed from "../semantics/checker/member"
+use allowsTopLevelCode from "../semantics/checker/declaration"
+use resolveTrait, isGenerated, memberOfImplementation from "../semantics/checker/implementation"
+use targetCaseName from "../backend/c/natives"
+use Lowering, nativeNamed from "./lower/context"
+use addedChecked, subtractedChecked, multipliedChecked from "./constant"
+
+/** A value the compiler knows while it lowers: enough of one to decide a pattern, and never emitted. */
+public type KnownValue {
+  /** A `Bool`, an integer, a `Char` or a `String`. */
+  case Scalar(value: LiteralValue)
+  /** A case without fields, of the type `owner`. */
+  case Variant(owner: TypeId, variant: SymbolId)
+  case Tuple(items: List<KnownValue>)
+}
+
+/** Which arm a known value selects. */
+public type Selection {
+  /** The value takes this arm, through this alternative of its pattern. */
+  case Arm(arm: Int, branch: Int)
+  /** No arm takes the value: the `else` of an `if const`, which a `match` never has. */
+  case NoArm
+}
+
+/** What one test of a pattern says about a known value. */
+type Decision {
+  case Holds
+  case Fails
+  /** The value does not say, or the test asks something this evaluator does not know: the arm is not decided. */
+  case Open
+}
+
+/** A constant that names a constant that names a constant: past this, nothing is decided. */
+const foldDepthLimit = 32
+
+// --- The value ------------------------------------------------------------------------------------------------------
+
+/** The value of a subject that is a compile-time constant by the rule above, or `None` where it is not one. */
+public fn knownValueOf(var lowering: Lowering, expression: Expression): KnownValue? {
+  knownValueAt lowering, expression, 0
+}
+
+/** The value of a condition that is a compile-time constant `Bool`. */
+public fn knownConditionOf(var lowering: Lowering, expression: Expression): Bool? {
+  booleanOfKnown(knownValueOf(lowering, expression)?)
+}
+
+fn booleanOfKnown(value: KnownValue): Bool? {
+  if const .Scalar(.Boolean(found)) = value {
+    return Some found
+  }
+  None
+}
+
+fn integerOfKnown(value: KnownValue): Int? {
+  if const .Scalar(.Integer(found)) = value {
+    return Some found
+  }
+  None
+}
+
+fn knownValueAt(var lowering: Lowering, expression: Expression, depth: Int): KnownValue? {
+  if depth > foldDepthLimit {
+    return None
+  }
+  match expression.kind {
+    .BoolLiteral(value) => Some KnownValue.Scalar(.Boolean(value))
+    .CharLiteral(value) => Some KnownValue.Scalar(.Character(value))
+    .IntegerLiteral(text) => Some KnownValue.Scalar(integerLiteral(text, false)?)
+    .TextLiteral(segments) => knownText segments
+    .Unary(operator, operand) => knownUnary lowering, operator, operand, depth
+    .Binary(operator, left, right) => knownBinary lowering, operator, left, right, depth
+    .TupleLiteral(items) => {
+      var values: List<KnownValue> = []
+      for item in items {
+        values.append(knownValueAt(lowering, item.value, depth + 1)?)
+      }
+      Some KnownValue.Tuple(values)
+    }
+    .Name(_) | .ImplicitMember(_) => knownName lowering, expression, depth
+    .Member(_, _, isOptional) => {
+      if isOptional {
+        return None
+      }
+      knownName lowering, expression, depth
+    }
+    .Call(_, arguments, _) => {
+      if !arguments.isEmpty() {
+        return None
+      }
+      knownTargetCall lowering, expression
+    }
+    _ => None
+  }
+}
+
+/** A text without interpolation: interpolation is `Show`, which is code. */
+fn knownText(segments: List<TextSegment>): KnownValue? {
+  var text = ""
+  for segment in segments {
+    match segment {
+      .Literal(part) => {
+        text = text + part
+      }
+      .Interpolated(_) => {
+        return None
+      }
+    }
+  }
+  Some KnownValue.Scalar(.Text(text))
+}
+
+fn knownUnary(var lowering: Lowering, operator: PrefixOperator, operand: Expression, depth: Int): KnownValue? {
+  match operator {
+    .Negate => {
+      // `-3` is one literal, exactly as the checker reads it; a negation of anything else may overflow
+      if const .IntegerLiteral(text) = operand.kind {
+        return Some KnownValue.Scalar(integerLiteral(text, true)?)
+      }
+      None
+    }
+    .Not => {
+      const inner = booleanOfKnown(knownValueAt(lowering, operand, depth + 1)?)?
+      Some KnownValue.Scalar(.Boolean(!inner))
+    }
+  }
+}
+
+fn knownBinary(
+  var lowering: Lowering,
+  operator: InfixOperator,
+  left: Expression,
+  right: Expression,
+  depth: Int,
+): KnownValue? {
+  const first = knownValueAt(lowering, left, depth + 1)?
+  const second = knownValueAt(lowering, right, depth + 1)?
+  match operator {
+    .And => Some KnownValue.Scalar(.Boolean(booleanOfKnown(first)? && booleanOfKnown(second)?))
+    .Or => Some KnownValue.Scalar(.Boolean(booleanOfKnown(first)? || booleanOfKnown(second)?))
+    .Equal => Some KnownValue.Scalar(.Boolean(knownEquality(lowering, first, second)?))
+    .NotEqual => Some KnownValue.Scalar(.Boolean(!knownEquality(lowering, first, second)?))
+    .Less => Some KnownValue.Scalar(.Boolean(integerOfKnown(first)? < integerOfKnown(second)?))
+    .LessOrEqual => Some KnownValue.Scalar(.Boolean(integerOfKnown(first)? <= integerOfKnown(second)?))
+    .Greater => Some KnownValue.Scalar(.Boolean(integerOfKnown(first)? > integerOfKnown(second)?))
+    .GreaterOrEqual => Some KnownValue.Scalar(.Boolean(integerOfKnown(first)? >= integerOfKnown(second)?))
+    .Add => Some KnownValue.Scalar(.Integer(addedChecked(integerOfKnown(first)?, integerOfKnown(second)?)?))
+    .Subtract => Some KnownValue.Scalar(.Integer(subtractedChecked(integerOfKnown(first)?, integerOfKnown(second)?)?))
+    .Multiply => Some KnownValue.Scalar(.Integer(multipliedChecked(integerOfKnown(first)?, integerOfKnown(second)?)?))
+    _ => None
+  }
+}
+
+/**
+ * `==` of two known values. Two scalars compare as the language compares them; two cases compare by which case they
+ * are, but only where the type's `Equals` is derived - a hand-written `equals` is code, and may say anything.
+ */
+fn knownEquality(var lowering: Lowering, first: KnownValue, second: KnownValue): Bool? {
+  match (first, second) {
+    (.Scalar(left), .Scalar(right)) => Some(left == right)
+    (.Variant(owner, left), .Variant(_, right)) => {
+      if !hasDerivedEquality(lowering, owner) {
+        return None
+      }
+      Some(left == right)
+    }
+    (_, _) => None
+  }
+}
+
+fn hasDerivedEquality(var lowering: Lowering, owner: TypeId): Bool {
+  const equals = match lowering.checker.wellKnown.equals {
+    Some(found) => found
+    None => {
+      return false
+    }
+  }
+  const implementation = match resolveTrait(lowering.checker, owner, equals) {
+    .Found(found, _) => found
+    _ => {
+      return false
+    }
+  }
+  if isGenerated(lowering.checker.implementations.at(implementation)) {
+    return true
+  }
+  // `with Equals` written on the type and no `equals` beside it: the member is generated all the same
+  memberOfImplementation(lowering.checker, implementation, "equals").isNone()
+}
+
+/** A name: a case without fields, or a module-level `const` or a `static` whose initializer is a constant. */
+fn knownName(var lowering: Lowering, expression: Expression, depth: Int): KnownValue? {
+  const module = lowering.module
+  const resolution = lowering.checker.resolutionAt(module, expression.span)?
+  match resolution {
+    .CaseOf(owner, variant) => {
+      const name = lowering.checker.symbolAt(variant).name
+      const shape = caseNamed(lowering.checker, owner, name)?
+      if !shape.fields.isEmpty() {
+        return None
+      }
+      Some KnownValue.Variant(owner, variant)
+    }
+    .Constant(symbol, _) => knownConstant lowering, symbol, depth
+    _ => None
+  }
+}
+
+/**
+ * The initializer of a constant, read in the module that declares it. A top-level `const` of a module that runs code
+ * - an entry file, a script, a test file - is a local of that code and not a constant, and a `const` of a generic type
+ * is one value per type argument, which this evaluator does not follow.
+ */
+fn knownConstant(var lowering: Lowering, symbol: SymbolId, depth: Int): KnownValue? {
+  const site = lowering.checker.siteOf(symbol)?
+  const binding = match site.kind {
+    .Constant(found) => {
+      if allowsTopLevelCode(lowering.checker, site.module) {
+        return None
+      }
+      found
+    }
+    .Declared(declaration) => {
+      if allowsTopLevelCode(lowering.checker, site.module) {
+        return None
+      }
+      match declaration.kind {
+        .Constant(found) => found
+        _ => {
+          return None
+        }
+      }
+    }
+    .Owned(_, generics, member) => {
+      if !generics.isEmpty() {
+        return None
+      }
+      match member.kind {
+        .Constant(found) => found
+        _ => {
+          return None
+        }
+      }
+    }
+    _ => {
+      return None
+    }
+  }
+  if const .Binding(_) = binding.pattern.kind {
+    const outer = lowering.module
+    lowering.module = site.module
+    const found = knownValueAt(lowering, binding.value, depth + 1)
+    lowering.module = outer
+    return found
+  }
+  None
+}
+
+/**
+ * `targetOperatingSystem()` and its two siblings: the case of the build's target. Every other call is code.
+ */
+fn knownTargetCall(var lowering: Lowering, expression: Expression): KnownValue? {
+  const module = lowering.module
+  const resolution = lowering.checker.resolutionAt(module, expression.span)?
+  const symbol = match resolution {
+    .Callable(found, _, _) => found
+    _ => {
+      return None
+    }
+  }
+  const signature = lowering.checker.signature signatureOf(lowering.checker, symbol)
+  if signature.hasBody || signature.takesSelf || signature.owner.isSome() {
+    return None
+  }
+  const name = lowering.checker.symbolAt(symbol).name
+  const entry = nativeNamed(lowering, "", name, signature)?
+  if const .Target(dimension) = entry.target {
+    const owner = signature.form.result
+    const shape = caseNamed(lowering.checker, owner, targetCaseName(lowering.target, dimension))?
+    return Some KnownValue.Variant(owner, shape.symbol)
+  }
+  None
+}
+
+// --- The arm --------------------------------------------------------------------------------------------------------
+
+/**
+ * The arm a known value selects, in source order: the first arm one of whose alternatives holds. `None` where an arm
+ * the value reaches first cannot be decided - a test this evaluator does not know, or a guard - and the construct is
+ * then lowered as it always is.
+ */
+public fn selectionOf(var lowering: Lowering, plan: MatchPlan, value: KnownValue): Selection? {
+  for index in 0..plan.arms.length() {
+    const arm = plan.arms[index]
+    var taken: Int? = None
+    for position in 0..arm.branches.length() {
+      match branchDecision(arm.branches[position], value) {
+        .Holds => {
+          taken = Some position
+          break
+        }
+        .Fails => {
+          continue
+        }
+        .Open => {
+          return None
+        }
+      }
+    }
+    if const Some(branch) = taken {
+      if arm.hasGuard {
+        return None
+      }
+      return Some Selection.Arm(index, branch)
+    }
+  }
+  Some Selection.NoArm
+}
+
+fn branchDecision(branch: PatternBranch, value: KnownValue): Decision {
+  for test in branch.tests {
+    const found = match valueAtPath(value, test.path) {
+      Some(inner) => inner
+      None => {
+        return Decision.Open
+      }
+    }
+    match checkDecision(test.check, found) {
+      .Holds => {
+        continue
+      }
+      .Fails => {
+        return Decision.Fails
+      }
+      .Open => {
+        return Decision.Open
+      }
+    }
+  }
+  Decision.Holds
+}
+
+/** The part of a known value a pattern test is about. Only a tuple has parts here: a case of a known value has none. */
+fn valueAtPath(value: KnownValue, path: List<PatternStep>): KnownValue? {
+  var found = value
+  for step in path {
+    match step {
+      .TupleField(_, index) => {
+        if const .Tuple(items) = found {
+          found = items.get(index)?
+        } else {
+          return None
+        }
+      }
+      _ => {
+        return None
+      }
+    }
+  }
+  Some found
+}
+
+fn checkDecision(check: PatternCheck, value: KnownValue): Decision {
+  match check {
+    .IsCase(_, variant) => {
+      if const .Variant(_, known) = value {
+        return decided(known == variant)
+      }
+      Decision.Open
+    }
+    .IsLiteral(literal) => {
+      const expected = match literal.value {
+        Some(found) => found
+        None => {
+          return Decision.Open
+        }
+      }
+      if const .Scalar(known) = value {
+        return decided(known == expected)
+      }
+      Decision.Open
+    }
+    .IsInRange(low, high, isInclusive) => rangeDecision value, low, high, isInclusive
+    _ => Decision.Open
+  }
+}
+
+fn rangeDecision(value: KnownValue, low: PatternLiteral, high: PatternLiteral, isInclusive: Bool): Decision {
+  const known = match value {
+    .Scalar(.Integer(found)) => found
+    _ => {
+      return Decision.Open
+    }
+  }
+  const first = match low.value {
+    Some(.Integer(found)) => found
+    _ => {
+      return Decision.Open
+    }
+  }
+  const last = match high.value {
+    Some(.Integer(found)) => found
+    _ => {
+      return Decision.Open
+    }
+  }
+  if isInclusive {
+    return decided(known >= first && known <= last)
+  }
+  decided(known >= first && known < last)
+}
+
+fn decided(holds: Bool): Decision {
+  if holds { Decision.Holds } else { Decision.Fails }
+}

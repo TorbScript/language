@@ -50,6 +50,7 @@ use isAssertion, lowerAssertion from "./quote"
 use lowerItemList, listBoundFor from "./collection"
 use loweredNativeOf, lowerSpawn, lowerStop, isSuspendingCall, emitSuspension from "./task"
 use channelItemOf, lowerChannelNew from "./task"
+use checkAvailable, lowerTargetCase from "./target"
 
 /**
  * `f(x)`, `Point(1, 2)`, `p.copy(y: 3)`, `a.Circle`: every call syntax lowers to one of a handful of shapes, chosen by
@@ -635,9 +636,14 @@ fn lowerNativeCall(
     const what = "`{entry.name}`"
     return unsupportedSlot lowering, builder, destination, what, at, "the runtime does not provide it"
   }
+  // An error of the program for this target, and the call is lowered all the same: nothing is emitted from a program
+  // with an error, and a body that stays whole lets `--every-target` report every such call and not only the first
+  checkAvailable lowering, entry, at
   const member = dispatched.member
   const mapping = dispatched.mapping
   match entry.target {
+    // A constant of the build: the case of `std/core` the target answers, and no call at all
+    .Target(dimension) => lowerTargetCase lowering, builder, destination, annotation, dimension, at
     .Intrinsic(intrinsic) => {
       if !producesValue(lowering, annotation) {
         const what = "`{entry.name}`, an intrinsic that produces no value"
@@ -1953,5 +1959,6 @@ fn lowerNativeOperator(
     .Container(_) => unsupportedSlot lowering, builder, destination, "`{entry.name}` as an operator", at
     .Lowered => unsupportedSlot lowering, builder, destination, "`{entry.name}` as an operator", at
     .ArrayStorage(_) => unsupportedSlot lowering, builder, destination, "`{entry.name}` as an operator", at
+    .Target(_) => unsupportedSlot lowering, builder, destination, "`{entry.name}` as an operator", at
   }
 }

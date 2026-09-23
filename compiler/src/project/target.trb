@@ -1,0 +1,156 @@
+/**
+ * [BuildTarget]: the operating system and the architecture a program is compiled for, which is what the three target
+ * constants of `std/core` (`OperatingSystem.current`, `Architecture.current`, `ByteOrder.current`) answer in the
+ * program, and what decides which arm of a `match` on one of them is lowered.
+ *
+ * `torb build --target linux-x64` names one, [hostTarget] is the default, and [everyTarget] is the toolchain's list
+ * that `torb check --every-target` lowers once per entry. The target is a parameter of the lowering and of nothing
+ * before it: the checker checks every arm for every target, and knows none of them.
+ */
+
+use Environment from "std/environment"
+use Process from "std/process"
+
+/** An operating system the toolchain builds for, in the order of the cases of `OperatingSystem` in `std/core`. */
+public type TargetSystem {
+  case Windows
+  case Linux
+  case MacOs
+  case FreeBsd
+
+  /** The name of the case of `std/core`'s `OperatingSystem` this is, which the lowering builds. */
+  fn caseName(): String {
+    match self {
+      .Windows => "Windows"
+      .Linux => "Linux"
+      .MacOs => "MacOs"
+      .FreeBsd => "FreeBsd"
+    }
+  }
+
+  /** The first half of a target's name on the command line: `windows`, `linux`, `macos`, `freebsd`. */
+  fn word(): String {
+    match self {
+      .Windows => "windows"
+      .Linux => "linux"
+      .MacOs => "macos"
+      .FreeBsd => "freebsd"
+    }
+  }
+
+  /** The name as its vendor writes it, for a message: `Windows`, `Linux`, `macOS`, `FreeBSD`. */
+  fn displayName(): String {
+    match self {
+      .Windows => "Windows"
+      .Linux => "Linux"
+      .MacOs => "macOS"
+      .FreeBsd => "FreeBSD"
+    }
+  }
+}
+
+/** A processor architecture the toolchain builds for, in the order of the cases of `std/core`'s `Architecture`. */
+public type TargetArchitecture {
+  case X64
+  case Arm64
+
+  /** The name of the case of `std/core`'s `Architecture` this is. */
+  fn caseName(): String {
+    match self {
+      .X64 => "X64"
+      .Arm64 => "Arm64"
+    }
+  }
+
+  /** The second half of a target's name on the command line: `x64`, `arm64`. */
+  fn word(): String {
+    match self {
+      .X64 => "x64"
+      .Arm64 => "arm64"
+    }
+  }
+}
+
+/** What one build is for: the values of the three target constants of `std/core`. */
+public type BuildTarget {
+  system: TargetSystem
+  architecture: TargetArchitecture
+
+  /** `linux-x64`, the spelling of `--target`. */
+  fn name(): String {
+    "{system.word()}-{architecture.word()}"
+  }
+
+  /** The name of the case of `std/core`'s `ByteOrder`: every target of the list is little endian. */
+  fn byteOrderCaseName(): String {
+    "LittleEndian"
+  }
+}
+
+/** Every operating system the toolchain knows, in the order of the cases of `OperatingSystem`. */
+public fn everySystem(): List<TargetSystem> {
+  [.Windows, .Linux, .MacOs, .FreeBsd]
+}
+
+/**
+ * The toolchain's list of targets: every operating system on every architecture. `torb check --every-target` lowers a
+ * program once per entry, so a mistake only another target's build would meet is reported on any machine.
+ */
+public fn everyTarget(): List<BuildTarget> {
+  var found: List<BuildTarget> = []
+  for system in everySystem() {
+    for architecture in [TargetArchitecture.X64, TargetArchitecture.Arm64] {
+      found.append BuildTarget(system, architecture)
+    }
+  }
+  found
+}
+
+/** The target a `--target` names (`linux-x64`), or `None` for a name that is not in [everyTarget]. */
+public fn targetNamed(name: String): BuildTarget? {
+  for target in everyTarget() {
+    if target.name() == name {
+      return Some target
+    }
+  }
+  None
+}
+
+/**
+ * The machine `torb` runs on, which is what a build is for unless `--target` says otherwise.
+ *
+ * Windows is told by its environment (`OS`, `PROCESSOR_ARCHITECTURE`); every other system by one call of `uname`.
+ *
+ * # Pitfalls
+ *
+ * - A `uname` that cannot be started, or answers a name this list does not have, is taken to be Linux on x64.
+ *
+ * # Open
+ *
+ * - `torb` is built for the machine it runs on, so `OperatingSystem.current` and `Architecture.current` of its own build
+ *   are this answer without asking anything. Reading them needs a seed that knows the target natives, because the
+ *   seed compiles the compiler (CLAUDE.md, "Seed and breaking changes").
+ */
+public fn hostTarget(): BuildTarget {
+  if Environment.get("OS") == Some("Windows_NT") {
+    const reported = Environment.get("PROCESSOR_ARCHITEW6432") ?? Environment.get("PROCESSOR_ARCHITECTURE") ?? ""
+    const architecture = if reported == "ARM64" { TargetArchitecture.Arm64 } else { TargetArchitecture.X64 }
+    return BuildTarget TargetSystem.Windows, architecture
+  }
+  const words = match Process.run("uname", ["-s", "-m"]) {
+    Ok(output) => output.standardOutput.trim().split(" ")
+    Fail(_) => []
+  }
+  const system = match words.get(0) ?? "" {
+    "Darwin" => TargetSystem.MacOs
+    "FreeBSD" => TargetSystem.FreeBsd
+    _ => TargetSystem.Linux
+  }
+  const machine = words.get(1) ?? ""
+  const architecture = if machine == "arm64" || machine == "aarch64" {
+    TargetArchitecture.Arm64
+  } else {
+    TargetArchitecture.X64
+  }
+  BuildTarget system, architecture
+}

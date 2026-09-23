@@ -15,7 +15,8 @@ use ModuleId from "../module"
 use SymbolId from "../symbols"
 use Checker from "./context"
 use integerLiteral from "./lowering"
-use bindingOfSite, resultOf, isTraitConstant from "./signature"
+use bindingOfSite, resultOf, signatureOf, isTraitConstant from "./signature"
+use targetDimensionNamed from "../../backend/c/natives"
 use isSharedType from "./declaration"
 
 /**
@@ -410,6 +411,9 @@ fn rangeConstant(
 /**
  * A call is compile-time evaluable exactly when it builds a value out of its arguments: the generated constructor of a
  * type, or a case constructor. Every other call is code, `native` calls included - and `+` on `String` is one of them.
+ *
+ * The one exception is a parameter of the build: `targetOperatingSystem()` and its two siblings in `std/core`, which
+ * the compiler answers without running anything, so `const system = OperatingSystem.current` is a constant.
  */
 fn callConstant(
   var checker: Checker,
@@ -426,10 +430,25 @@ fn callConstant(
   }
   match resolution {
     .Construct(_) | .CaseOf(_, _) => argumentsConstant checker, module, arguments, depth
+    .Callable(symbol, _, _) => {
+      if arguments.isEmpty() && isTargetConstant(checker, symbol) {
+        return ConstantResult.Value ConstantValue.Composite
+      }
+      ConstantResult.NotConstant expression.span
+    }
     // A construct that could not be resolved because of an earlier problem: nothing is said about it a second time
     .Deferred => ConstantResult.Value ConstantValue.Composite
     _ => ConstantResult.NotConstant expression.span
   }
+}
+
+/** A free `native fn` without a body that the manifest answers with the build's target (`backend/c/natives.trb`). */
+fn isTargetConstant(var checker: Checker, symbol: SymbolId): Bool {
+  const signature = checker.signature signatureOf(checker, symbol)
+  if signature.hasBody || signature.takesSelf || signature.owner.isSome() {
+    return false
+  }
+  targetDimensionNamed(checker.symbolAt(symbol).name).isSome()
 }
 
 /** A name that stands for a value: another compile-time constant, a case without fields, or `Void`. */

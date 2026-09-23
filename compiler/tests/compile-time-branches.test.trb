@@ -1,0 +1,454 @@
+/**
+ * A `match`, an `if` and an `if const` on a compile-time constant keep the one arm the value selects
+ * (docs/language/execution/compile-time-branches.md): every arm is type checked on every machine, only the selected
+ * one is lowered, a function only another arm calls is not part of the program, and a native of another operating
+ * system is an error exactly where a target's lowering reaches it - which `--every-target` asks of every target.
+ *
+ * The programs import an in-memory `std/core` with the three target types and an in-memory `std/os` with one native
+ * per family; the rows of those natives are the real manifest's.
+ */
+
+use test, group from "std/test"
+use check, Checked from "../src/semantics/check"
+use Lowering from "../src/ir/lower/context"
+use lowerWorkspace, pathsOfModules from "../src/ir/lower/lower"
+use BuildTarget, TargetSystem, TargetArchitecture, everyTarget from "../src/project/target"
+use problemsOfEveryTarget, entriesOf from "../src/cli/targets"
+use workspaceWith, problemsOf from "./harness"
+
+const targetModule = r"""
+  public type OperatingSystem with Equals {
+    case Windows
+    case Linux
+    case MacOs
+    case FreeBsd
+
+    static current: OperatingSystem = targetOperatingSystem()
+  }
+
+  public type Architecture with Equals {
+    case X64
+    case Arm64
+
+    static current: Architecture = targetArchitecture()
+  }
+
+  native fn targetOperatingSystem(): OperatingSystem
+
+  native fn targetArchitecture(): Architecture
+  """
+
+const nativeModules = [
+  "std/core/project.trb": r"""
+    name "std/core"
+    """,
+  "std/core/src/lib.trb": r"""
+    public use OperatingSystem, Architecture from "./target"
+    """,
+  "std/core/src/target.trb": targetModule,
+  "std/os/project.trb": r"""
+    name "std/os"
+    """,
+  "std/os/src/lib.trb": r"""
+    public use OperatingSystem from "std/core"
+    """,
+  "std/os/src/windows/native.trb": r"""
+    public native type Windows {
+      native static fn tickCount(): Int64
+    }
+    """,
+  "std/os/src/posix/native.trb": r"""
+    public native type Posix {
+      native static fn effectiveUserIdentifier(): Int64
+    }
+    """,
+]
+
+const linux = BuildTarget TargetSystem.Linux, TargetArchitecture.X64
+const windows = BuildTarget TargetSystem.Windows, TargetArchitecture.X64
+const macosArm = BuildTarget TargetSystem.MacOs, TargetArchitecture.Arm64
+
+/** The program checked, which has to be clean: the lowering reads the checker's tables. */
+fn checkedProgram(source: String, extra: Map<String, String> = [:]): Checked {
+  var files = nativeModules
+  for (path, text) in extra {
+    files.set path, text
+  }
+  files.set "app/src/main.trb", source
+  const checked = check workspaceWith(files), ["app"], false, true
+  for file in checked.files {
+    for diagnostic in file.diagnostics {
+      assert(diagnostic.message == file.path)
+    }
+  }
+  checked
+}
+
+/** What a build of the program lowers: its entry and what that reaches, and nothing seeded besides. */
+fn loweredFor(source: String, target: BuildTarget, extra: Map<String, String> = [:]): Lowering {
+  const checked = checkedProgram source, extra
+  lowerWorkspace checked.checker, pathsOfModules(checked), entriesOf(checked), false, target
+}
+
+/** Whether the program has a function of this name, which is the declaration's name at the end of the mangled one. */
+fn hasFunction(lowering: Lowering, name: String): Bool {
+  lowering.program.functions.any({ _.name.endsWith "_{name}" })
+}
+
+fn problemMessages(lowering: Lowering): List<String> {
+  var found: List<String> = []
+  for problem in lowering.problems {
+    found.append problem.diagnostic.message
+  }
+  found
+}
+
+const systemMatch = r"""
+  use OperatingSystem from "std/core"
+
+  fn windowsName(): String {
+    "windows"
+  }
+
+  fn posixName(): String {
+    "posix"
+  }
+
+  fn systemName(): String {
+    match OperatingSystem.current {
+      .Windows => windowsName()
+      .Linux | .MacOs | .FreeBsd => posixName()
+    }
+  }
+
+  print systemName()
+  """
+
+group "A match on the target keeps one arm" {
+  test "the arm the target selects is lowered, and a function only the other arm calls is not" {
+    const onLinux = loweredFor systemMatch, linux
+    assert hasFunction(onLinux, "posixName")
+    assert(!hasFunction(onLinux, "windowsName"))
+    const onWindows = loweredFor systemMatch, windows
+    assert hasFunction(onWindows, "windowsName")
+    assert(!hasFunction(onWindows, "posixName"))
+  }
+
+  test "a tuple of two target constants selects by both" {
+    const source = r"""
+      use OperatingSystem, Architecture from "std/core"
+
+      fn appleSilicon(): Int {
+        16384
+      }
+
+      fn smallPages(): Int {
+        4096
+      }
+
+      fn pageSize(): Int {
+        match (OperatingSystem.current, Architecture.current) {
+          (.MacOs, .Arm64) => appleSilicon()
+          (_, _) => smallPages()
+        }
+      }
+
+      print pageSize()
+      """
+    const onMac = loweredFor source, macosArm
+    assert hasFunction(onMac, "appleSilicon")
+    assert(!hasFunction(onMac, "smallPages"))
+    const onLinux = loweredFor source, linux
+    assert hasFunction(onLinux, "smallPages")
+    assert(!hasFunction(onLinux, "appleSilicon"))
+  }
+
+  test "a name the selected arm binds is the constant's value" {
+    const source = r"""
+      use OperatingSystem from "std/core"
+
+      fn describe(system: OperatingSystem): Int {
+        match system {
+          .Windows => 1
+          _ => 2
+        }
+      }
+
+      fn other(): Int {
+        0
+      }
+
+      fn chosen(): Int {
+        match OperatingSystem.current {
+          .Windows => other()
+          system => describe(system)
+        }
+      }
+
+      print chosen()
+      """
+    const onLinux = loweredFor source, linux
+    assert hasFunction(onLinux, "describe")
+    assert(!hasFunction(onLinux, "other"))
+  }
+
+  test "an arm with a guard is code, so the match is lowered whole" {
+    const source = r"""
+      use OperatingSystem from "std/core"
+
+      fn guarded(): Int {
+        1
+      }
+
+      fn fallback(): Int {
+        2
+      }
+
+      fn chosen(flag: Bool): Int {
+        match OperatingSystem.current {
+          .Linux if flag => guarded()
+          _ => fallback()
+        }
+      }
+
+      print chosen(true)
+      """
+    const onLinux = loweredFor source, linux
+    assert hasFunction(onLinux, "guarded")
+    assert hasFunction(onLinux, "fallback")
+  }
+
+  test "a local const is not a compile-time constant, so every arm is lowered" {
+    const source = r"""
+      use OperatingSystem from "std/core"
+
+      fn windowsName(): String {
+        "windows"
+      }
+
+      fn posixName(): String {
+        "posix"
+      }
+
+      fn systemName(): String {
+        const system = OperatingSystem.current
+        match system {
+          .Windows => windowsName()
+          _ => posixName()
+        }
+      }
+
+      print systemName()
+      """
+    const onLinux = loweredFor source, linux
+    assert hasFunction(onLinux, "windowsName")
+    assert hasFunction(onLinux, "posixName")
+  }
+}
+
+group "Every arm is type checked on every machine" {
+  test "a mistake in the arm another target takes is reported, whatever the target" {
+    var files = nativeModules
+    files.set("app/src/main.trb", r"""
+      use OperatingSystem from "std/core"
+
+      fn systemName(): String {
+        match OperatingSystem.current {
+          .Windows => missing()
+          .Linux | .MacOs | .FreeBsd => "posix"
+        }
+      }
+
+      print systemName()
+      """)
+    assert(problemsOf(files) == ["Cannot find `missing` here"])
+  }
+
+  test "exhaustiveness is judged by the type, never by the value" {
+    var files = nativeModules
+    files.set("app/src/main.trb", r"""
+      use OperatingSystem from "std/core"
+
+      fn systemName(): String {
+        match OperatingSystem.current {
+          .Windows => "windows"
+          .Linux => "linux"
+        }
+      }
+
+      print systemName()
+      """)
+    const found = problemsOf files
+    assert(found.length() == 1)
+    assert found[0].contains("MacOs")
+  }
+
+  test "a module constant may read the target, because the target is a constant of the build" {
+    var files = nativeModules
+    files.set("app/src/settings.trb", r"""
+      use OperatingSystem from "std/core"
+
+      public const system = OperatingSystem.current
+      """)
+    files.set("app/src/main.trb", r"""
+      use system from "./settings"
+
+      print(system == .Linux)
+      """)
+    assert problemsOf(files).isEmpty()
+  }
+}
+
+group "An if and an if const on a constant keep one branch" {
+  test "a module-level Bool decides an if, and the branch it does not take is not lowered" {
+    const settings = r"""
+      public const verbose = false
+      """
+    const source = r"""
+      use verbose from "./settings"
+
+      fn loud() {
+        print "loud"
+      }
+
+      fn quiet() {
+        print "quiet"
+      }
+
+      fn report() {
+        if verbose {
+          loud()
+        } else {
+          quiet()
+        }
+      }
+
+      report()
+      """
+    const found = loweredFor source, linux, ["app/src/settings.trb": settings]
+    assert hasFunction(found, "quiet")
+    assert(!hasFunction(found, "loud"))
+  }
+
+  test "== between the target and a case decides an if" {
+    const source = r"""
+      use OperatingSystem from "std/core"
+
+      fn windowsOnly() {
+        print "windows"
+      }
+
+      fn check() {
+        if OperatingSystem.current == .Windows {
+          windowsOnly()
+        }
+      }
+
+      check()
+      """
+    assert(!hasFunction(loweredFor(source, linux), "windowsOnly"))
+    assert hasFunction(loweredFor(source, windows), "windowsOnly")
+  }
+
+  test "an if const on the target takes the block or the else" {
+    const source = r"""
+      use OperatingSystem from "std/core"
+
+      fn onWindows() {
+        print "windows"
+      }
+
+      fn elsewhere() {
+        print "elsewhere"
+      }
+
+      fn check() {
+        if const .Windows = OperatingSystem.current {
+          onWindows()
+        } else {
+          elsewhere()
+        }
+      }
+
+      check()
+      """
+    const onLinux = loweredFor source, linux
+    assert hasFunction(onLinux, "elsewhere")
+    assert(!hasFunction(onLinux, "onWindows"))
+  }
+
+  test "a top-level const of the entry file is a local of it, so its if is lowered whole" {
+    const source = r"""
+      fn loud() {
+        print "loud"
+      }
+
+      const verbose = false
+      if verbose {
+        loud()
+      }
+      """
+    assert hasFunction(loweredFor(source, linux), "loud")
+  }
+}
+
+group "A native of one operating system" {
+  const windowsCall = r"""
+    use Windows from "std/os/windows/native"
+
+    print Windows.tickCount()
+    """
+
+  test "reached on another target, it is an error that names the native and both systems" {
+    const found = loweredFor windowsCall, linux
+    assert(problemMessages(found) == ["`Windows.tickCount` exists only on Windows, and this program is built for Linux"])
+    const notes = found.problems[0].diagnostic.notes
+    assert(notes[1] == "Reach it only from a `.Windows` arm, or check every target with `torb check --every-target`")
+  }
+
+  test "reached on its own target, it is an ordinary call" {
+    assert problemMessages(loweredFor(windowsCall, windows)).isEmpty()
+  }
+
+  test "a native of several systems names all of them" {
+    const source = r"""
+      use Posix from "std/os/posix/native"
+
+      print Posix.effectiveUserIdentifier()
+      """
+    const expected = "`Posix.effectiveUserIdentifier` exists only on Linux, macOS and FreeBSD, and this program is built"
+      + " for Windows"
+    assert(problemMessages(loweredFor(source, windows)) == [expected])
+  }
+
+  test "in the arm of its own system, it is reached on no other target" {
+    const source = r"""
+      use OperatingSystem from "std/core"
+      use Windows from "std/os/windows/native"
+      use Posix from "std/os/posix/native"
+
+      fn identity(): Int64 {
+        match OperatingSystem.current {
+          .Windows => Windows.tickCount()
+          .Linux | .MacOs | .FreeBsd => Posix.effectiveUserIdentifier()
+        }
+      }
+
+      print identity()
+      """
+    for target in everyTarget() {
+      assert problemMessages(loweredFor(source, target)).isEmpty()
+    }
+  }
+
+  test "every target is lowered once, and the targets that reach it are the ones that report it" {
+    const checked = checkedProgram windowsCall
+    var failing: List<String> = []
+    for found in problemsOfEveryTarget(checked, everyTarget()) {
+      if !found.problems.isEmpty() {
+        failing.append found.target.name()
+      }
+    }
+    assert(failing == ["linux-x64", "linux-arm64", "macos-x64", "macos-arm64", "freebsd-x64", "freebsd-arm64"])
+  }
+}

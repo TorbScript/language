@@ -18,6 +18,7 @@ use SymbolId from "../../semantics/symbols"
 use TypeId, ParameterId, Signature, ImplementationId from "../../semantics/checker/type"
 use Checker from "../../semantics/checker/context"
 use NativeEntry, nativeEntries, ArrayOperation from "../../backend/c/natives"
+use BuildTarget from "../../project/target"
 use IrProgram, IrTypeId, IrType, Slot, BlockId, StaticId, StaticValue, StaticContents from "../ir"
 use Location, LocationId, Terminator, Argument, Reference, borrowed, referenced from "../ir"
 use FunctionId, Intrinsic, RuntimeKind from "../ir"
@@ -153,6 +154,11 @@ public type Lowering {
   nativeIndex: Map<String, Int>
   /** How every module's path is written in a location, in the order of `program.graph.modules`. */
   paths: List<String>
+  /**
+   * What the program is built for: the case `OperatingSystem.current` and its two siblings answer, which decides the
+   * arm a `match` on one of them keeps (`ir/fold.trb`) and which natives of `runtime/os/` may be reached.
+   */
+  target: BuildTarget
   /** The line index of a module, built the first time a location of it is needed and kept afterwards. */
   var lines: Map<Int, LineIndex> = [:]
   /** Whose tables are being read. A default argument is lowered at the call site but in the callee's module. */
@@ -369,7 +375,7 @@ public type EntryCellAccesses {
 }
 
 /** A lowering for one checked program. `paths` holds one path per module, in the order of `program.graph.modules`. */
-public fn newLowering(checker: Checker, paths: List<String>): Lowering {
+public fn newLowering(checker: Checker, paths: List<String>, target: BuildTarget): Lowering {
   const instantiation = newInstantiation checker
   const entries = nativeEntries()
   var index: Map<String, Int> = [:]
@@ -379,7 +385,7 @@ public fn newLowering(checker: Checker, paths: List<String>): Lowering {
       index.set name, position
     }
   }
-  Lowering IrProgram(), checker, instantiation, entries, index, paths
+  Lowering IrProgram(), checker, instantiation, entries, index, paths, target
 }
 
 // --- What the back end does not do yet ------------------------------------------------------------------------------

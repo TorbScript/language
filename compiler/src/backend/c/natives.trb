@@ -29,6 +29,7 @@
  */
 
 use Intrinsic, IntrinsicOperation, NumericKind, RuntimeKind from "../../ir/ir"
+use BuildTarget, TargetSystem from "../../project/target"
 
 /** One `native` declaration and what it becomes. */
 public type NativeEntry {
@@ -59,6 +60,50 @@ public type NativeEntry {
    * target. It lives here so that the generated header is a pure function of this table.
    */
   prototype: String = ""
+  /**
+   * The operating systems the native exists on, empty for every target. A call of one that the lowering reaches while
+   * building for another system is an error of the program at that call (`ir/lower/call.trb`), which
+   * `torb check --every-target` reports on any machine: its C function is compiled on its own system only
+   * (`runtime/os/`), so it is never a link error.
+   */
+  availableOn: List<TargetSystem> = []
+}
+
+/**
+ * Which constant of the build a `.Target` native answers: the three `native fn`s of `std/core/src/target.trb` behind
+ * `OperatingSystem.current`, `Architecture.current` and `ByteOrder.current`.
+ */
+public type TargetDimension {
+  case OperatingSystem
+  case Architecture
+  case ByteOrder
+}
+
+/** Whether a native exists on a system: one without `availableOn` exists on every one. */
+public fn isAvailableOn(entry: NativeEntry, system: TargetSystem): Bool {
+  entry.availableOn.isEmpty() || entry.availableOn.contains(system)
+}
+
+/**
+ * The constant a `native fn` of `std/core/src/target.trb` answers, by its name: what the checker asks where a
+ * top-level `const` reads `OperatingSystem.current`, without building the manifest for one question.
+ */
+public fn targetDimensionNamed(name: String): TargetDimension? {
+  match name {
+    "targetOperatingSystem" => Some TargetDimension.OperatingSystem
+    "targetArchitecture" => Some TargetDimension.Architecture
+    "targetByteOrder" => Some TargetDimension.ByteOrder
+    _ => None
+  }
+}
+
+/** The one question a `.Target` native asks of the build, as the name of the case of `std/core` it answers. */
+public fn targetCaseName(target: BuildTarget, dimension: TargetDimension): String {
+  match dimension {
+    .OperatingSystem => target.system.caseName()
+    .Architecture => target.architecture.caseName()
+    .ByteOrder => target.byteOrderCaseName()
+  }
 }
 
 /**
@@ -124,6 +169,13 @@ public type NativeTarget {
    * the rest of `std/core`'s `Array` is written in TorbScript on top of (`ir/lower/derive.trb`, docs/BACKEND.md 5.9b).
    */
   case ArrayStorage(operation: ArrayOperation)
+  /**
+   * A constant of the build, which is no code at all: the case of `std/core`'s `OperatingSystem`, `Architecture` or
+   * `ByteOrder` the build is for. The constant evaluator and the fold of a `match` read it (`ir/fold.trb`), and a call
+   * that is lowered anyway - `print(OperatingSystem.current)` - is one `Construct` of that case. The VM answers the
+   * machine it runs on, because it compiles a program where it runs it.
+   */
+  case Target(dimension: TargetDimension)
 }
 
 /**
@@ -1073,6 +1125,38 @@ fn machineEntries(var entries: List<NativeEntry>) {
   ))
 }
 
+/** `std/core/src/target.trb`: the three constants of the build, answered by the compiler and never by C. */
+fn targetEntries(var entries: List<NativeEntry>) {
+  entries.append NativeEntry(name: "targetOperatingSystem", target: NativeTarget.Target(.OperatingSystem))
+  entries.append NativeEntry(name: "targetArchitecture", target: NativeTarget.Target(.Architecture))
+  entries.append NativeEntry(name: "targetByteOrder", target: NativeTarget.Target(.ByteOrder))
+}
+
+/** A function of `runtime/os/<family>.c`, which exists on the operating systems that file is compiled for. */
+fn systemRuntimeOf(name: String, function: String, prototype: String, systems: List<TargetSystem>): NativeEntry {
+  NativeEntry name: name, target: NativeTarget.Runtime(function), prototype: prototype, availableOn: systems
+}
+
+/**
+ * The raw layer of `std/os` (docs/design/OS.md section 7): one `native type` per family, each row bound to the systems
+ * its C file is compiled on. The prototypes are in `torb_os.h` on every machine, so a signature cannot drift even where
+ * the body is not compiled.
+ */
+fn systemEntries(var entries: List<NativeEntry>) {
+  entries.append(systemRuntimeOf(
+    "Windows.tickCount",
+    "torb_os_windows_tick_count",
+    "int64_t torb_os_windows_tick_count(void);",
+    [.Windows],
+  ))
+  entries.append(systemRuntimeOf(
+    "Posix.effectiveUserIdentifier",
+    "torb_os_posix_effective_user_identifier",
+    "int64_t torb_os_posix_effective_user_identifier(void);",
+    [.Linux, .MacOs, .FreeBsd],
+  ))
+}
+
 fn plannedPackageEntries(var entries: List<NativeEntry>) {
   entries.append plannedRuntimeOf("Expression.value", "torb_expression_value", "5.11")
   entries.append plannedRuntimeOf("Expression.captures", "torb_expression_captures", "5.11")
@@ -1108,6 +1192,8 @@ public fn nativeEntries(): List<NativeEntry> {
   mathEntries entries
   timeEntries entries
   environmentEntries entries
+  targetEntries entries
+  systemEntries entries
   taskEntries entries
   machineEntries entries
   plannedPackageEntries entries

@@ -12,6 +12,7 @@ use Checker from "../../semantics/checker/context"
 use Checked from "../../semantics/check"
 use Package, Workspace from "../../project/workspace"
 use relativePath, pathName from "../../project/path"
+use BuildTarget, hostTarget from "../../project/target"
 use IrProgram, Instruction from "../ir"
 use devirtualizeProgram from "../devirtualize"
 use rewriteElementPlaces from "../elements"
@@ -31,8 +32,9 @@ public fn lowerWorkspace(
   paths: List<String>,
   modules: List<ModuleId>,
   seedsEverything: Bool,
+  target: BuildTarget,
 ): Lowering {
-  var lowering = newLowering checker, paths
+  var lowering = newLowering checker, paths, target
   lowering.programPackages = programPackagesOf checker, modules
   const own = programModules checker, modules
   for module in own {
@@ -232,12 +234,12 @@ fn programModules(checker: Checker, modules: List<ModuleId>): List<ModuleId> {
   found
 }
 
-/** What `torb ir` lowers: everything the requested modules declare. */
-public fn lowerChecked(checked: Checked): Lowering {
+/** What `torb ir` lowers: everything the requested modules declare, for the machine it runs on unless told otherwise. */
+public fn lowerChecked(checked: Checked, target: BuildTarget = hostTarget()): Lowering {
   const paths = pathsOfModules checked
   const modules = checked.requested
   const checker = checked.checker
-  lowerWorkspace checker, paths, modules, true
+  lowerWorkspace checker, paths, modules, true, target
 }
 
 /**

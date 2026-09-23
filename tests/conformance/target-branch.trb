@@ -1,0 +1,45 @@
+use OperatingSystem, Architecture, ByteOrder from "std/core"
+use Windows from "std/os/windows/native"
+use Posix from "std/os/posix/native"
+
+/**
+ * A `match OperatingSystem.current` keeps the arm of the machine it is built on, and only that one is compiled.
+ *
+ * The arms of `machineAnswers` call a native of `runtime/os/windows.c` and one of `runtime/os/posix.c`, and each of the
+ * two exists on its own systems only: a build that compiled both arms would not link on any machine. The output is the
+ * same on every machine, and the program says in a different way on each one that it knows which one it is on.
+ */
+fn separator(): String {
+  match OperatingSystem.current {
+    .Windows => ";"
+    .Linux | .MacOs | .FreeBsd => ":"
+  }
+}
+
+fn machineAnswers(): Bool {
+  match OperatingSystem.current {
+    .Windows => Windows.tickCount() > 0
+    .Linux | .MacOs | .FreeBsd => Posix.effectiveUserIdentifier() >= 0
+  }
+}
+
+/** A binding of the selected arm is the value itself, read at run time. */
+fn named(): String {
+  match OperatingSystem.current {
+    .FreeBsd => "the one without /proc"
+    system => "{system}"
+  }
+}
+
+print separator().byteLength()
+print machineAnswers()
+print(OperatingSystem.current.isPosix() == (separator() == ":"))
+print ByteOrder.current
+print(Architecture.current == .X64 || Architecture.current == .Arm64)
+const shown = named()
+print(shown == "Windows" || shown == "Linux" || shown == "macOS" || shown == "the one without /proc")
+if OperatingSystem.current == .Windows {
+  print(Windows.tickCount() > 0)
+} else {
+  print(Posix.effectiveUserIdentifier() >= 0)
+}

@@ -35,6 +35,8 @@ use Lowering, reportUnsupported, locationOf, irTypeOf, booleanTypeOf, isVoidType
 use irTypeOfClosed, substituted from "./context"
 use finishBlock, continueIn, enterLoop, leaveLoop from "./context"
 use lowerExpression, lowerValue, valueSlot, unsupportedSlot, abandonedSlot, voidSlot from "./expression"
+use decidedIfTarget, lowerDecidedElse from "./expression"
+use knownValueOf, selectionOf from "../fold"
 use lowerOptionalMemberValue from "./expression"
 use constantSlot, emitIntrinsic, intrinsicSlot, integerSlot from "./expression"
 use lowerBlockInto from "./statement"
@@ -88,6 +90,13 @@ public fn lowerMatch(
     const what = "a `match` whose plan does not have one entry per arm"
     return unsupportedSlot lowering, builder, destination, what, expression.span
   }
+  // A subject the compiler knows keeps one arm, and the others produce no code at all (`ir/fold.trb`)
+  if const Some(value) = knownValueOf(lowering, subject) {
+    if const Some(.Arm(arm, branch)) = selectionOf(lowering, plan, value) {
+      const body = arms[arm].body
+      return lowerSelectedArm lowering, builder, destination, subject, plan, arm, branch, annotation, body
+    }
+  }
   const scrutinee = lowerValue lowering, builder, subject
   if !lowering.isSupported {
     return abandonedSlot lowering, builder, destination
@@ -136,6 +145,63 @@ public fn lowerMatch(
   target
 }
 
+/**
+ * The one arm of a `match` whose subject is a compile-time constant, lowered where the `match` stands: no test, no block
+ * of its own, and no code for the other arms, so a function only they call is never reached (`ir/fold.trb`).
+ */
+fn lowerSelectedArm(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  subject: Expression,
+  plan: MatchPlan,
+  arm: Int,
+  branch: Int,
+  annotation: IrTypeId,
+  body: Expression,
+): Slot {
+  const target = valueSlot lowering, builder, destination, annotation
+  const (firstSlot, lastSlot) = match bindSelected(lowering, builder, subject, plan, arm, branch) {
+    Some(found) => found
+    None => {
+      return abandonedSlot lowering, builder, destination
+    }
+  }
+  openScope lowering
+  declareScopedBetween lowering, builder, firstSlot, lastSlot
+  const _ = lowerExpression lowering, builder, body, Some(target)
+  closeScope lowering, builder
+  target
+}
+
+/**
+ * The names the selected alternative binds, as slots from the first to the last. The subject is computed only when
+ * there is a name to bind: a constant has no effect, so leaving it out changes nothing but the size of the body.
+ */
+fn bindSelected(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  subject: Expression,
+  plan: MatchPlan,
+  arm: Int,
+  branch: Int,
+): (Int, Int)? {
+  const firstSlot = builder.slotCount()
+  declareBindings lowering, builder, plan, arm
+  const lastSlot = builder.slotCount()
+  if lastSlot > firstSlot {
+    const scrutinee = lowerValue lowering, builder, subject
+    if !lowering.isSupported {
+      return None
+    }
+    emitBindings lowering, builder, plan, arm, branch, scrutinee, subject.span
+    if !lowering.isSupported {
+      return None
+    }
+  }
+  Some((firstSlot, lastSlot))
+}
+
 // --- `if const` and `while const` -----------------------------------------------------------------------------------
 
 /**
@@ -162,6 +228,30 @@ public fn lowerIfBinding(
     None => {
       const what = "an `if const` the checker recorded no plan for"
       return unsupportedSlot lowering, builder, destination, what, pattern.span
+    }
+  }
+  // A subject the compiler knows takes the block or the `else`, and the other one produces no code (`ir/fold.trb`)
+  if const Some(known) = knownValueOf(lowering, value) {
+    match selectionOf(lowering, plan, known) {
+      Some(.Arm(_, branch)) => {
+        const target = decidedIfTarget lowering, builder, destination, otherwise, annotation
+        const (firstSlot, lastSlot) = match bindSelected(lowering, builder, value, plan, 0, branch) {
+          Some(found) => found
+          None => {
+            return abandonedSlot lowering, builder, destination
+          }
+        }
+        const wanted = if otherwise.isSome() { Some target } else { None }
+        openScope lowering
+        declareScopedBetween lowering, builder, firstSlot, lastSlot
+        lowerBlockInto lowering, builder, then, wanted
+        closeScope lowering, builder
+        return target
+      }
+      Some(.NoArm) => {
+        return lowerDecidedElse lowering, builder, destination, otherwise, annotation
+      }
+      None => {}
     }
   }
   const scrutinee = lowerValue lowering, builder, value

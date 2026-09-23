@@ -1,8 +1,15 @@
 # The Operating System
 
-**Status: decided, not implemented** — there is no `std/os` yet. `std/environment` exists with one native (`Environment.get`), and
-`Process.executablePath()` in `std/process` answers on Windows and Linux only. The one probe of section 2 type checks
-and builds natively today with a literal standing in for the compile-time constant; nothing else here was run.
+**Status: decided; slice 0 (the construct) is implemented, slices 1 to 7 are not.** `OperatingSystem`,
+`Architecture` and `ByteOrder` are in `std/core/src/target.trb`; the lowering keeps the one arm of a `match`, an `if` or
+an `if const` on a compile-time constant (`compiler/src/ir/fold.trb`); a manifest row names the systems its native
+exists on (`availableOn`), and reaching one on another target is an error of that target at the call; `torb build
+--target <os>-<arch>` sets the constants and `torb check --every-target` lowers every program and test once per target
+without C; `runtime/os/` holds one guarded file per family and `runtime/include/torb_os.h` every prototype. `std/os` is
+a skeleton: its `lib.trb` re-exports the three types, and `windows/native.trb` and `posix/native.trb` hold one native each
+(`Windows.tickCount`, `Posix.effectiveUserIdentifier`), which the conformance program `tests/conformance/target-branch.trb`
+calls from the arms of its own system. `std/environment` still exists, and `Process.executablePath()` in `std/process`
+still answers on Windows and Linux only.
 
 **An operating-system branch is a `match`, and the compiler decides it.** That is the whole design of `std/os`.
 Operating systems differ and always will, so the language does not hide the branch in C or in a build file: it is
@@ -255,7 +262,10 @@ shapes.
    to other constants, arithmetic and comparison of numbers and `Bool` — and no call. It gains the three target
    intrinsics, which are not code but parameters of the build, and `==` and `!=` between two cases without fields.
    `OperatingSystem.current` is then a compile-time constant by the existing rule: a `static` whose initializer is
-   evaluable.
+   evaluable. *As built:* the checker's evaluator (`semantics/checker/constant.trb`) accepts the three calls, so a
+   module `const` may read the target; the decision itself has an evaluator of its own, `compiler/src/ir/fold.trb`,
+   because `ir/constant.trb` produces static data and a case of a variant layout is none - the fold needs only to know
+   which arm, and emits nothing.
 3. **The lowering decides a `match` whose subject is a compile-time constant.** It lowers the arm the value selects,
    binds its pattern, and lowers nothing else: no block, no test, no call. An `if` whose condition is a constant `Bool`
    and an `if const` whose subject is a constant are decided the same way. This is not an optimization the C compiler
@@ -264,7 +274,11 @@ shapes.
 4. **The VM does the same at load.** The VM compiles a program on the machine it runs it on, so its target is that
    machine, the constants have that machine's values, and the arms for other systems are never turned into bytecode.
    A compiled binary and the VM therefore run the same arm on the same machine, which is CONCEPT's principle 5 held by
-   construction rather than by testing.
+   construction rather than by testing. *For the VM:* the fold is part of the lowering, so a VM that reads the typed IR
+   gets it by building its `Lowering` with the machine it runs on as `target` (`hostTarget()` in
+   `compiler/src/project/target.trb`); a VM that compiles from the checked tree itself calls `knownValueOf` and
+   `selectionOf` of `ir/fold.trb` where it compiles a `match`, an `if` or an `if const`, and answers a `.Target` native
+   (`NativeTarget.Target` in the manifest) with the case of its machine.
 
 **The cost at run time is zero**, in both implementations: no comparison is executed, no table is consulted, no code
 for another system is in the binary, and nothing is loaded lazily.
@@ -1592,7 +1606,7 @@ first: the construct, then the environment, identity and directories that the to
 
 | # | Slice | Files | Depends on | Risk |
 |---|---|---|---|---|
-| 0 | **The construct.** `std/core/src/target.trb` with the three types and intrinsics; the constant evaluator; the lowering of a constant `match`/`if`; `availableOn` and its diagnostic; `torb check --every-target`; `runtime/os/` with `torb_os.h` and empty guarded files; the language page of section 2 | `std/core`, `compiler/src/ir/{constant.trb,lower/match.trb,lower/statement.trb}`, `compiler/src/backend/c/natives.trb`, `compiler/src/main.trb` (the `check` subcommand), `runtime/{build.sh,os/,include/torb_os.h}`, `docs/language/execution/` | — | **Medium.** It touches the lowering and the manifest, so it needs `gates.sh b` and the two-commit seed refresh. The fold itself is small; the test is a program whose untaken arm calls a native that does not exist on the host, built on the host |
+| 0 | **Done (2026-09-23).** **The construct.** `std/core/src/target.trb` with the three types and intrinsics; the constant evaluator; the lowering of a constant `match`/`if`; `availableOn` and its diagnostic; `torb check --every-target`; `runtime/os/` with `torb_os.h` and empty guarded files; the language page of section 2 | `std/core`, `compiler/src/ir/{constant.trb,lower/match.trb,lower/statement.trb}`, `compiler/src/backend/c/natives.trb`, `compiler/src/main.trb` (the `check` subcommand), `runtime/{build.sh,os/,include/torb_os.h}`, `docs/language/execution/` | — | **Medium.** It touches the lowering and the manifest, so it needs `gates.sh b` and the two-commit seed refresh. The fold itself is small; the test is a program whose untaken arm calls a native that does not exist on the host, built on the host |
 | 1 | **Environment, identity, directories.** `std/os` created; `Environment` moved with `variables()` and `searchPath()`; `EnvironmentVariables`; `OsError` and `outcome`; `System.version`, `hostName`, `uptime`, `pageSize`, `machineArchitecture`; `Directories` (the base six); the Windows, Linux, macOS, POSIX and XDG natives these need; `std/environment` removed and every importer migrated (section 6) | `std/os/**`, `std/environment/` (deleted), `compiler/src/{cli,documentation,project}/*`, `examples/config-dsl`, `tests/conformance/*`, `runtime/os/{windows,linux,posix,macos}.c`, `runtime/platform.c`, `docs/standard-library/os.md` and the pages of section 6 | 0 | **Medium.** The compiler imports the package, so it is part of the fixpoint; the natives are small. FreeBSD's arms are written and answer `Unsupported` until slice 7 |
 | 2 | **`ByteSize`, memory and the current process.** `ByteSize` in `std/number` and the prelude, the sandbox's `megabytes` replaced; `Memory`, `Swap`; `CurrentProcess` whole, with `Process.executablePath` moved | `std/number`, `std/prelude`, `std/sandbox`, `std/process`, `std/os/src/{memory,process}.trb` and the per-system halves, `compiler/src/project/toolchain.trb`, `runtime/os/*.c`, `runtime/process.c` | 1 | **Low.** `megabytes` changes type, and every `64.megabytes()` in docs and tests follows |
 | 3 | **Processors.** Counts, `describe` with `x86/`, `times`, `timesOfEach`, `usage` (a `Task` over `sleep`), `frequencies`, `Frequency` | `std/os/src/processor.trb`, `x86/`, per-system halves, `runtime/os/{x86,windows,linux,macos,bsd}.c` | 2 | **Low.** The decoders are pure and tested on every machine with captured inputs |
@@ -1600,6 +1614,13 @@ first: the construct, then the environment, identity and directories that the to
 | 5 | **`std/network` and interfaces.** The five address values with parsing and RFC 5952 display; `NetworkInterface.all`, `traffic`, `throughput` | `std/network/**`, `std/os/src/network.trb`, per-system halves, `runtime/os/{windows,posix,bsd}.c` | 2 | **Medium**, for the parsers: IPv6 text has many spellings and each needs a test |
 | 6 | **The user, the user folders, a child's environment.** `User.current`, `documents()` and the other five, `user-dirs.dirs`; `Process.run`/`start` gain `environment:` | `std/os/src/{user,directories}.trb`, `xdg/`, `std/process`, `runtime/platform.c`, `runtime/os/*.c` | 1 | **Low.** `environment:` is new behaviour in `torb_platform_run_process` on both halves |
 | 7 | **FreeBSD.** `runtime/os/freebsd.c`, the `freebsd/` directory, every `Unsupported` arm of slices 1 to 6 replaced | `std/os/src/freebsd/`, `bsd/`, `runtime/os/{freebsd,bsd}.c` | 1–6 | **Medium**, because nobody here runs FreeBSD: the TorbScript is checked and lowered for it everywhere, the C is compiled only on FreeBSD |
+
+**How slice 0 landed.** The compiler does not read the target constants of its own build and uses no native of
+`runtime/os/`, so no seed refresh was needed: the seed compiles `std/core/src/target.trb` without ever lowering it.
+`hostTarget()` asks the environment on Windows and `uname` elsewhere; reading `OperatingSystem.current` there instead is
+the first use that takes the two commits. The raw layer has one native per family so far, enough for the conformance
+program and for the error of a native reached on the wrong target. A target that is not the host builds with `--emit-c`
+only, because the C compiler `torb` finds builds for the host.
 
 `System.bootTime` lands with `std/time`'s `Timestamp`, whenever that is; the sandbox grants of section 8 are checked
 from 7.4; the waiting calls move onto the blocking pool with 7.7; signals are `std/process`'s and CONCURRENCY's.

@@ -1,0 +1,99 @@
+/**
+ * The two things the lowering does with the target of the build (`Lowering.target`) at a call of a native: a `.Target`
+ * native is the case of `std/core` the target answers, built on the spot ([lowerTargetCase]), and a native bound to
+ * some operating systems is an error of the program where the lowering reaches it on another ([checkAvailable]).
+ *
+ * Which arm of a `match OperatingSystem.current` is lowered at all is decided before either of them, by the fold of
+ * `ir/fold.trb`: a call in an arm another target takes is never reached, so it is never reported.
+ */
+
+use Span from "../../syntax/source"
+use Diagnostic from "../../syntax/diagnostic"
+use NativeEntry, TargetDimension, isAvailableOn, targetCaseName from "../../backend/c/natives"
+use TargetSystem from "../../project/target"
+use IrTypeId, Slot from "../ir"
+use FunctionBuilder from "../build"
+use Lowering, LoweredProblem from "./context"
+use valueSlot, unsupportedSlot from "./expression"
+use variantLayoutOfType, variantNamed from "./match"
+use lowerConstruct from "./call"
+
+/**
+ * `OperatingSystem.current` read at run time - `print(OperatingSystem.current)` - is one `Construct` of the case the
+ * build is for. Nothing is asked of the machine: the value is the build's, and the VM builds where it runs.
+ */
+public fn lowerTargetCase(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  annotation: IrTypeId,
+  dimension: TargetDimension,
+  at: Span,
+): Slot {
+  const name = targetCaseName lowering.target, dimension
+  const layout = match variantLayoutOfType(lowering, annotation) {
+    Some(found) => found
+    None => {
+      return unsupportedSlot lowering, builder, destination, "a target constant whose type has no cases", at
+    }
+  }
+  const index = variantNamed lowering, layout, name
+  if index < 0 {
+    const what = "a target constant whose type has no case `{name}`"
+    return unsupportedSlot lowering, builder, destination, what, at
+  }
+  const target = valueSlot lowering, builder, destination, annotation
+  lowerConstruct lowering, builder, target, layout, index, []
+  target
+}
+
+/**
+ * A native whose manifest row names the systems it exists on, reached while building for another one: an error at the
+ * call, which names the native, both systems and the construct that keeps a call out of a build.
+ *
+ *     error: `Windows.tickCount` exists only on Windows, and this program is built for Linux
+ *
+ * One message per call site, however many instances of the function around it are lowered.
+ */
+public fn checkAvailable(var lowering: Lowering, entry: NativeEntry, at: Span) {
+  const system = lowering.target.system
+  if isAvailableOn(entry, system) {
+    return
+  }
+  for problem in lowering.problems {
+    if problem.module == lowering.module && problem.diagnostic.span == at {
+      return
+    }
+  }
+  const systems = listed entry.availableOn
+  const message = "`{entry.name}` exists only on {systems}, and this program is built for {system.displayName()}"
+  const diagnostic = Diagnostic.error(message, at)
+    .withNote("Only the arm of `match OperatingSystem.current` that the target selects is compiled")
+    .withNote("Reach it only from {armsOf(entry.availableOn)}, or check every target with `torb check --every-target`")
+  lowering.problems.append LoweredProblem(lowering.module, diagnostic)
+}
+
+/** `Windows`, `Linux and macOS`, `Linux, macOS and FreeBSD`. */
+fn listed(systems: List<TargetSystem>): String {
+  var names: List<String> = []
+  for system in systems {
+    names.append system.displayName()
+  }
+  if names.length() <= 1 {
+    return names.joined separator: ""
+  }
+  const last = names.length() - 1
+  "{names.take(last).toList().joined(separator: ", ")} and {names[last]}"
+}
+
+/** Where a call of such a native belongs: the arm of the one case, or an arm of the alternatives of all of them. */
+fn armsOf(systems: List<TargetSystem>): String {
+  var cases: List<String> = []
+  for system in systems {
+    cases.append ".{system.caseName()}"
+  }
+  if cases.length() == 1 {
+    return "a `{cases[0]}` arm"
+  }
+  "an arm of `{cases.joined(separator: " | ")}`"
+}

@@ -28,6 +28,7 @@ use numericKindOf, layoutOfType from "../verify"
 use describeIrType from "../print"
 use bindingOfSite, signatureOf from "../../semantics/checker/signature"
 use evaluateConstant, staticOfConstant, constantInstanceOf, ConstantInstance, reachedConstantOf from "../constant"
+use knownConditionOf from "../fold"
 use functionName, mangledName from "../mangle"
 use symbolPathOf from "../instantiate"
 use Lowering, reportUnsupported, locationOf, typeAtSpan, voidTypeOf from "./context"
@@ -1508,6 +1509,16 @@ public fn lowerIf(
       return found
     }
   }
+  // A condition the compiler knows takes one branch, and the other one produces no code (`ir/fold.trb`)
+  if const Some(taken) = knownConditionOf(lowering, test) {
+    if !taken {
+      return lowerDecidedElse lowering, builder, destination, otherwise, annotation
+    }
+    const target = decidedIfTarget lowering, builder, destination, otherwise, annotation
+    const wanted = if otherwise.isSome() { Some target } else { None }
+    lowerBlockInto lowering, builder, then, wanted
+    return target
+  }
   const scrutinee = lowerValue lowering, builder, test
   const location = locationOf lowering, expression.span
   const thenBlock = addBlock builder, "then", Some(location)
@@ -1536,6 +1547,41 @@ public fn lowerIf(
   continueIn lowering, builder, join
   // Nothing reaches the join block when both arms left the function, and an empty `unreachable` marker is what it is
   lowering.isDiverged = thenDiverged && elseDiverged
+  target
+}
+
+/**
+ * Where a decided `if` or `if const` puts its value: a slot of its type with an `else`, and without one the `Void` the
+ * whole is worth, defined before the block for whoever takes it.
+ */
+public fn decidedIfTarget(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  otherwise: Expression?,
+  annotation: IrTypeId,
+): Slot {
+  if otherwise.isSome() {
+    return valueSlot lowering, builder, destination, annotation
+  }
+  match destination {
+    Some(_) => voidSlot lowering, builder, destination
+    None => abandonedSlot lowering, builder, destination
+  }
+}
+
+/** A decided `if` or `if const` whose block is not taken: the `else`, or nothing at all. */
+public fn lowerDecidedElse(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  otherwise: Expression?,
+  annotation: IrTypeId,
+): Slot {
+  const target = decidedIfTarget lowering, builder, destination, otherwise, annotation
+  if const Some(alternative) = otherwise {
+    const _ = lowerExpression lowering, builder, alternative, Some(target)
+  }
   target
 }
 

@@ -142,10 +142,11 @@ that answers the question. A page marked (planned) describes a feature that does
 
 ## language/execution
 
+- `language/execution/compile-time-branches.md` - **Compile-time branches** (reference): A match, an if or an if const whose subject is a compile-time constant keeps the one arm its value selects - OperatingSystem.current is one - while every arm is still type checked on every machine and exhaustiveness is judged by the type.
 - `language/execution/copies.md` - **What a copy costs** (reference): A copy always behaves the same way, but what it costs depends on the shape of the type - inline for a small fixed-size value, copy-on-write for heap-backed storage, and never for a shared type.
 - `language/execution/destructors.md` - **Destructors - close() runs at the last release** (reference): A shared type's close() is its destructor - it runs exactly once at the last release, user code never calls it, and a binding that holds one is released at the end of its block, the last declared first.
 - `language/execution/evaluation-order.md` - **Evaluation order** (reference): Evaluation order is source order - the receiver first, then the arguments as they are written, then the parameter defaults - so a side effect in an argument is exactly as predictable as reading the line.
-- `language/execution/index.md` - **Execution** (index): The parts of running a program that are a rule of the language rather than an implementation detail - evaluation order, what a copy costs, the tail-call guarantee, and when a destructor runs.
+- `language/execution/index.md` - **Execution** (index): The parts of running a program that are a rule of the language rather than an implementation detail - evaluation order, copies, tail calls, destructors, and which arm of a branch on a compile-time constant is compiled.
 - `language/execution/loops.md` - **Loops** (reference): for walks an Iterate, while repeats while a condition holds, and loop is the endless one - with the type Never until a break gives it a Void. while true is an error, because never ending is a property of the syntax here.
 - `language/execution/tail-calls.md` - **Tail calls and stack overflow** (reference): Direct self-recursion in tail position is guaranteed to run without growing the stack, and every other call uses a frame of its task's stack; a recursion that runs out of stack panics with stack overflow instead of crashing.
 

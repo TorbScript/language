@@ -1,0 +1,149 @@
+/**
+ * What a program is compiled for: [OperatingSystem], [Architecture] and [ByteOrder], each with one `static current`.
+ *
+ * The three constants are parameters of the build and not questions to the machine: `torb build --target` sets them,
+ * the host is the default, and the VM compiles a program on the machine it runs it on. A `match` on one of them keeps
+ * the one arm its value selects, while every arm is still type checked on every machine (the language page
+ * `docs/language/execution/compile-time-branches.md`). That is how code for one operating system is written in
+ * TorbScript, next to the code for the others, without a declaration that exists on one target and not on another.
+ *
+ * They are not in the prelude: a branch on the target is rare in application code, and the import is the statement
+ * "this file branches on where it runs".
+ */
+
+use Equals, Hash from "./compare"
+use Show from "./convert"
+
+/**
+ * The operating systems the toolchain builds for. A case is added when a target is, and every
+ * `match OperatingSystem.current` of a workspace is then a compile error that names the missing case.
+ *
+ * # Examples
+ *
+ *     fn searchPathSeparator(): String {
+ *       match OperatingSystem.current {
+ *         .Windows => ";"
+ *         .Linux | .MacOs | .FreeBsd => ":"
+ *       }
+ *     }
+ *
+ * # Pitfalls
+ *
+ * - Adding a case is a breaking change of `std/core`. A branch that must survive it writes `_` for "the others", or
+ *   asks [OperatingSystem.isPosix].
+ * - `const system = OperatingSystem.current` inside a function is an ordinary binding, and a `match system` compiles
+ *   every arm. Branch on `OperatingSystem.current` itself where only one arm should be part of the program.
+ */
+public type OperatingSystem with Show, Equals, Hash {
+  /** Microsoft Windows. */
+  case Windows
+  /** Linux, with any C library. */
+  case Linux
+  /** Apple's macOS. */
+  case MacOs
+  /** FreeBSD. */
+  case FreeBsd
+
+  /**
+   * The operating system this program is compiled for: the `--target` of the build, the host by default, and in the VM
+   * the machine the VM runs on. A compile-time constant, so a `match` on it keeps one arm.
+   *
+   * # Examples
+   *
+   *     print OperatingSystem.current.isPosix() || true
+   */
+  static current: OperatingSystem = targetOperatingSystem()
+
+  /**
+   * Whether the system follows POSIX, which is every case but `Windows`. The question for a branch that should include
+   * a system that is added later.
+   *
+   * # Examples
+   *
+   *     print OperatingSystem.Linux.isPosix()
+   */
+  fn isPosix(): Bool {
+    match self {
+      .Windows => false
+      .Linux | .MacOs | .FreeBsd => true
+    }
+  }
+
+  /**
+   * The name as its vendor writes it: `Windows`, `Linux`, `macOS`, `FreeBSD`.
+   *
+   * # Examples
+   *
+   *     print OperatingSystem.MacOs
+   */
+  fn show(): String {
+    match self {
+      .Windows => "Windows"
+      .Linux => "Linux"
+      .MacOs => "macOS"
+      .FreeBsd => "FreeBSD"
+    }
+  }
+}
+
+/**
+ * The processor architectures the toolchain builds for.
+ *
+ * # Examples
+ *
+ *     fn wordName(): String {
+ *       match Architecture.current {
+ *         .X64 => "x86-64"
+ *         .Arm64 => "arm64"
+ *       }
+ *     }
+ */
+public type Architecture with Show, Equals, Hash {
+  /** x86-64, also called AMD64. */
+  case X64
+  /** 64-bit Arm, also called AArch64. */
+  case Arm64
+
+  /** The architecture this program is compiled for. A compile-time constant, like [OperatingSystem.current]. */
+  static current: Architecture = targetArchitecture()
+
+  /**
+   * `x86-64`, `arm64`.
+   *
+   * # Examples
+   *
+   *     print Architecture.Arm64
+   */
+  fn show(): String {
+    match self {
+      .X64 => "x86-64"
+      .Arm64 => "arm64"
+    }
+  }
+}
+
+/**
+ * The order of the bytes of a number in memory, for a binary format that says "native order". Every target today is
+ * little endian; a decoder that reads a structure the operating system wrote says which order it assumes by asking.
+ */
+public type ByteOrder with Show, Equals, Hash {
+  /** The least significant byte first. */
+  case LittleEndian
+  /** The most significant byte first. */
+  case BigEndian
+
+  /** The byte order of the target. A compile-time constant, like [OperatingSystem.current]. */
+  static current: ByteOrder = targetByteOrder()
+}
+
+/**
+ * The build's operating system. A parameter of the build that the compiler answers itself: it runs no code, so the
+ * constant that reads it is a compile-time constant. It is a `native` because the answer is not TorbScript's to give.
+ */
+native fn targetOperatingSystem(): OperatingSystem
+
+/** The build's architecture, answered the same way as [targetOperatingSystem]. */
+native fn targetArchitecture(): Architecture
+
+/** The build's byte order, answered the same way as [targetOperatingSystem]. */
+native fn targetByteOrder(): ByteOrder

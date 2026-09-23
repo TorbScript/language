@@ -26,6 +26,7 @@ torb build [path]         Compile an entry file to a native binary through C
     --release               The same as --profile release
     --emit-c                Write the C and stop, which needs no C compiler at all
     --output <file>          Where the binary goes (the C is written next to it)
+    --target <os>-<arch>     What the program is built for (default: this machine), with --emit-c for another one
 ```
 
 ## What it does
@@ -73,6 +74,14 @@ wrote ../build/dev/my-project.exe
 
 Writes the generated C next to where the binary would have gone and stops, needing no C compiler on the machine at
 all. This is what lets a change to the back end be reviewed as a diff of the C it emits.
+
+### `--target`
+
+What `OperatingSystem.current`, `Architecture.current` and `ByteOrder.current` answer in the program, and so which
+arm of a `match` on them is compiled ([Compile-time branches](../language/execution/compile-time-branches.md)): one
+of `windows-x64`, `windows-arm64`, `linux-x64`, `linux-arm64`, `macos-x64`, `macos-arm64`, `freebsd-x64`,
+`freebsd-arm64`. Without it, a build is for the machine `torb` runs on. A target that is not this machine needs
+`--emit-c`, because the C compiler `build` finds compiles for this machine; the C it writes builds on the target.
 
 ### `--profile`
 

@@ -21,7 +21,7 @@ else
   fi
 fi
 out="$here/../build/runtime"
-mkdir -p "$out"
+mkdir -p "$out" "$out/os"
 warnings="-Wall -Wextra -Wpedantic -Werror"
 # The worker pool is pthreads everywhere but Windows, where it is the Win32 API that every C compiler links anyway
 threads=""
@@ -29,7 +29,7 @@ case "$(uname -s 2>/dev/null)" in
   MINGW* | MSYS* | CYGWIN* | Windows*) ;;
   *) threads="-pthread" ;;
 esac
-sources="memory.c panic.c test.c text.c list.c map.c number.c console.c process.c platform.c file.c clock.c environment.c task.c"
+sources="memory.c panic.c test.c text.c list.c map.c number.c console.c process.c platform.c file.c clock.c environment.c task.c os/windows.c os/linux.c os/macos.c os/freebsd.c os/posix.c"
 tests="tests/harness.c tests/memory_test.c tests/number_test.c tests/text_test.c tests/list_test.c tests/map_test.c tests/file_test.c tests/clock_test.c tests/environment_test.c tests/process_test.c tests/platform_test.c tests/console_test.c tests/task_test.c tests/pool_test.c"
 echo "compiling the runtime with $cc"
 objects=""

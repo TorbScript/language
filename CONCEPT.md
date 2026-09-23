@@ -2490,6 +2490,19 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
 
 ## Decision Log
 
+- **A branch on a compile-time constant keeps one arm, and every arm is still checked** (2026-09-23;
+  docs/design/OS.md section 2, docs/language/execution/compile-time-branches.md). A `match`, an `if` or an `if const`
+  whose subject is a compile-time constant - a literal, a case without fields, a tuple of constants, the operators on
+  `Bool` and the integers, a module `const` or a `static` of such, and the build's `OperatingSystem.current`,
+  `Architecture.current` and `ByteOrder.current` of `std/core` - is decided by the lowering: only the selected arm is
+  compiled, so a function only another arm calls and a native of another operating system are not in the binary. The
+  checker checks every arm on every machine and judges exhaustiveness by the type, so adding an operating system is a
+  list of compile errors. A local `const` is not a constant for this rule, and neither is a top-level `const` of an
+  entry file: whether an arm is compiled depends on the line the `match` is written on. A native bound to some systems
+  (`availableOn` in the manifest) reached on another target is an error of that target, and `torb check --every-target`
+  lowers every program once per target without a C compiler. `cfg`, build tags, a per-target source directory,
+  `expect`/`actual` and a trait registry were weighed and refused: each removes code before it is checked or puts
+  every system's natives into every binary.
 - **A value is its constructor call, and format-specific facts live in the format** (2026-09-23;
   docs/design/ENCODING.md). `Encode`, `Decode` and `Describe` are the constructor written, read and described without a
   value; all three are derived when the constructor is usable from outside, over exactly its parameters, so a `private`

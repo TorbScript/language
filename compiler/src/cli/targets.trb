@@ -1,0 +1,62 @@
+/**
+ * `torb check --every-target`: the programs and tests of what was checked, lowered once per target of the toolchain's
+ * list and stopped before C, so an error that only another system's build would meet is reported on any machine.
+ *
+ * The type checker already checked every arm of every `match OperatingSystem.current` for every system, and it knows
+ * no target. What only the lowering sees is which arm a target keeps (`ir/fold.trb`) and what that arm reaches: a
+ * native of `runtime/os/` that does not exist on the target is the error this finds. No C compiler is needed, because
+ * nothing is emitted.
+ *
+ * The entries are what a build or a test run starts from - an entry file, a script, a test file - and never every
+ * declaration: a function of `windows/` that no Linux arm reaches is not part of a Linux program, and lowering it for
+ * Linux would report what no build ever meets.
+ */
+
+use ModuleId from "../semantics/module"
+use Checked from "../semantics/check"
+use allowsTopLevelCode from "../semantics/checker/declaration"
+use LoweredProblem from "../ir/lower/context"
+use lowerWorkspace, pathsOfModules from "../ir/lower/lower"
+use BuildTarget from "../project/target"
+
+/** What one target's lowering found: the errors of the program for that target, in the order they were found. */
+public type TargetProblems {
+  target: BuildTarget
+  problems: List<LoweredProblem>
+}
+
+/**
+ * Every entry of what was checked, lowered once per target. A target whose list is empty builds; the entries are
+ * found once, and each lowering starts from the same checked program.
+ */
+public fn problemsOfEveryTarget(checked: Checked, targets: List<BuildTarget>): List<TargetProblems> {
+  const modules = entriesOf checked
+  const paths = pathsOfModules checked
+  var found: List<TargetProblems> = []
+  if modules.isEmpty() {
+    return found
+  }
+  for target in targets {
+    const lowering = lowerWorkspace checked.checker, paths, modules, false, target
+    found.append TargetProblems(target, lowering.problems)
+  }
+  found
+}
+
+/**
+ * The modules of what was checked that run code: an entry file, a script, a test file. A library module is reached
+ * from them or not at all, and a manifest is never part of a program (`programModules` in `ir/lower/lower.trb`).
+ */
+public fn entriesOf(checked: Checked): List<ModuleId> {
+  var checker = checked.checker
+  var found: List<ModuleId> = []
+  for module in checked.requested {
+    if const Some(.ProjectFile) = checker.program.graph.at(module).receiver {
+      continue
+    }
+    if allowsTopLevelCode(checker, module) {
+      found.append module
+    }
+  }
+  found
+}

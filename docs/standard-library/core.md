@@ -12,14 +12,19 @@ keywords:
   - Array
   - operators
   - using
+  - OperatingSystem
+  - Architecture
+  - ByteOrder
 source:
   - std/core/src/lib.trb
+  - std/core/src/target.trb
 ---
 
 `std/core` is what every other package builds on: the types the language itself refers to - `Option` behind `Value?`,
 `Result` behind `?`, the three ranges behind `a..b`, `Array` as the inline storage a list literal adapts to - the traits the
 operators and the conversions go through, and the control flow that is an ordinary function. Everything in it is
-re-exported by the prelude, so a file rarely imports it by name.
+re-exported by the prelude, so a file rarely imports it by name - except the three target types, which a file that
+branches on where it runs imports on purpose.
 
 A data structure is not in here: `List`, `Map` and `Set` are written on top of a storage primitive and live in
 [std/collections](collections.md). Nothing in `std/core` knows about text or numbers - with the one exception that
@@ -201,8 +206,60 @@ the object runs it. `using name = value` is the binding that pins that release t
 the grammar, not a function of `std/core` (see [Destructors](../language/execution/destructors.md), which also says
 what is built of it today).
 
+### OperatingSystem, Architecture and ByteOrder
+
+What the program is compiled for, each with one `static current`: a compile-time constant that `torb build --target`
+sets, the machine `torb` runs on by default. A `match` on one of them keeps only the arm the value selects, while every
+arm is type checked on every machine ([Compile-time branches](../language/execution/compile-time-branches.md)). They
+are not in the prelude: the import is the statement that a file branches on its target.
+
+```trb fragment
+public type OperatingSystem with Show, Equals, Hash {
+  case Windows
+  case Linux
+  case MacOs
+  case FreeBsd
+
+  static current: OperatingSystem
+  fn isPosix(): Bool
+}
+
+public type Architecture with Show, Equals, Hash {
+  case X64
+  case Arm64
+
+  static current: Architecture
+}
+
+public type ByteOrder with Show, Equals, Hash {
+  case LittleEndian
+  case BigEndian
+
+  static current: ByteOrder
+}
+```
+
+```trb run
+use OperatingSystem from "std/core"
+
+fn separator(): String {
+  match OperatingSystem.current {
+    .Windows => ";"
+    .Linux | .MacOs | .FreeBsd => ":"
+  }
+}
+
+print(OperatingSystem.Linux.isPosix() && separator().byteLength() == 1)
+// prints true
+```
+
+`show()` answers the name as the vendor writes it (`macOS`, `FreeBSD`), and `isPosix()` is the question for a branch
+that should include an operating system added later.
+
 ## Related
 
+- [Compile-time branches](../language/execution/compile-time-branches.md) - which arm of a `match` on the target is
+  compiled.
 - [Result](../language/errors/result.md) - the rules of `Result` and `?`.
 - [Bindings](../language/values-and-types/bindings.md) - what `const` and `var` decide.
 - [Traits](../language/traits/traits.md) - how the operator traits are implemented.

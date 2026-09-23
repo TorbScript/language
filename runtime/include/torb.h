@@ -1249,5 +1249,6 @@ uint64_t torb_hash_combine(uint64_t first, uint64_t second);
 
 #include "torb_number.h"
 #include "torb_task.h"
+#include "torb_os.h"
 
 #endif /* TORB_H */

@@ -165,6 +165,10 @@ double torb_math_sine(double value);
 double torb_math_tangent(double value);
 /* UInt64.multipliedWrapping */
 uint64_t torb_multiplied_wrapping_u64(uint64_t first, uint64_t second);
+/* Posix.effectiveUserIdentifier */
+int64_t torb_os_posix_effective_user_identifier(void);
+/* Windows.tickCount */
+int64_t torb_os_windows_tick_count(void);
 /* panic */
 void torb_panic(torb_text message, torb_location at);
 /* Float64.tryFrom(String) */
