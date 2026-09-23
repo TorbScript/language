@@ -52,9 +52,9 @@ public type Root with Show, Equals, Hash {
 /** A file path: where it starts, and the components between the separators. */
 public type Path with Show, Equals, Hash, Compare {
   /** Where the path starts, and `None` for a relative path. [Path.root] reads it. */
-  private storedRoot: Root?
+  private rootValue: Root?
   /** The components between the separators, outermost first. [Path.components] reads them. */
-  private storedComponents: List<String>
+  private componentValues: List<String>
 
   fn root(): Root?
   fn components(): List<String>
@@ -153,8 +153,8 @@ asks for and never something a construction does.
 
 ```trb
 public type Path with Show, Equals, Hash, Compare {
-  private storedRoot: Root?
-  private storedComponents: List<String>
+  private rootValue: Root?
+  private componentValues: List<String>
 
   /** Where the path starts, and `None` for a relative path. */
   fn root(): Root?
@@ -217,8 +217,9 @@ public type PathError with Show, Error {
 }
 ```
 
-**`components()` is a method and the field behind it is `storedComponents`**, which is the naming a capsule takes: a
-field and a method never share a name, so the field says what it stores and the method what it answers. `path.root()`
+**`components()` is a method and the field behind it is `componentValues`**, which is the naming a capsule with more
+than one stored field takes: a field and a method never share a name, so the field takes the method's name plus
+`Value` (`Values` for a plural, as here) and the method keeps the word every caller writes. `path.root()`
 and `path.components()` are the two reads, and both are total.
 
 **No member panics**, as the std rule requires: what can be absent answers an `Option`, what can be refused answers a

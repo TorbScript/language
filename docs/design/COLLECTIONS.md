@@ -923,7 +923,7 @@ reporting zero files.
 **C1 — the words of `Stack` and `Queue`. Done, and revised by 6b.** Both traits became `Collection<Item>` plus
 `remove(): Item?` and `removed(): (Item, Self)?`; `add` and `added` came from `Collection`, and looking without taking
 was `Iterable.first()`. `ArrayStack` and `ArrayQueue` write `add` and `remove` directly, `ArrayQueue`'s own count field
-is `storedLength` so that it does not stand in the way of `Collection.count()`, and the tour keeps its stack and its
+is `lengthValue` so that it does not stand in the way of `Collection.count()`, and the tour keeps its stack and its
 queue in those words. **The rename round turns this back** into `push`/`pop`/`peek` and `enqueue`/`dequeue`/`peek`
 (section 6b); what stays of C1 is the one-verb-one-participle shape and the participle rule.
 

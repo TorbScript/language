@@ -224,7 +224,7 @@ From another file the constructor of such a type is not reachable at all, and th
 use Path from "std/path"
 
 const wrong = Path(None, [])
-// error: `Path` cannot be constructed here: `storedRoot` is private and has no default
+// error: `Path` cannot be constructed here: `rootValue` is private and has no default
 ```
 
 ## Related

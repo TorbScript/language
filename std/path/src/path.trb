@@ -45,33 +45,33 @@ use PathError from "./error"
  */
 public type Path with Show, Equals, Hash, Compare {
   /** Where the path starts, and `None` for a relative path. [Path.root] reads it. */
-  private storedRoot: Root?
+  private rootValue: Root?
   /** The components between the separators, outermost first. [Path.components] reads them. */
-  private storedComponents: List<String>
+  private componentValues: List<String>
 
   /** Where the path starts, and `None` for a relative path. */
   fn root(): Root? {
-    storedRoot
+    rootValue
   }
 
   /** The components between the separators, outermost first. A parsed path has neither an empty one nor a `.`. */
   fn components(): List<String> {
-    storedComponents
+    componentValues
   }
 
   /** Whether the path starts at a root. Its opposite is [Path.isRelative]. */
   fn isAbsolute(): Bool {
-    storedRoot.isSome()
+    rootValue.isSome()
   }
 
   /** Whether the path has no root, so that it means something only against a base. */
   fn isRelative(): Bool {
-    storedRoot.isNone()
+    rootValue.isNone()
   }
 
   /** The last component: the name of the file or of the directory. `None` for a root and for the empty path. */
   fn name(): String? {
-    storedComponents.last()
+    componentValues.last()
   }
 
   /**
@@ -102,15 +102,15 @@ public type Path with Show, Equals, Hash, Compare {
 
   /** The path one component up. `None` at a root and for the empty path: there is nothing above them. */
   fn parent(): Path? {
-    if storedComponents.isEmpty() {
+    if componentValues.isEmpty() {
       return None
     }
-    Some Path(storedRoot, storedComponents.take(storedComponents.length() - 1).toList())
+    Some Path(rootValue, componentValues.take(componentValues.length() - 1).toList())
   }
 
   /** `relative` below this path. The root of `relative` is dropped, so the result never leaves `self`. */
   fn joined(relative: Path): Path {
-    Path storedRoot, storedComponents.appendedAll(relative.storedComponents)
+    Path rootValue, componentValues.appendedAll(relative.componentValues)
   }
 
   /** The same path with its last component replaced. `None` where there is no name to replace. */
@@ -130,11 +130,11 @@ public type Path with Show, Equals, Hash, Compare {
 
   /** Whether this path starts at the same root and with the same components as `prefix`. */
   fn startsWith(prefix: Path): Bool {
-    if storedRoot != prefix.storedRoot || prefix.storedComponents.length() > storedComponents.length() {
+    if rootValue != prefix.rootValue || prefix.componentValues.length() > componentValues.length() {
       return false
     }
-    for index in 0..prefix.storedComponents.length() {
-      if storedComponents[index] != prefix.storedComponents[index] {
+    for index in 0..prefix.componentValues.length() {
+      if componentValues[index] != prefix.componentValues[index] {
         return false
       }
     }
@@ -147,20 +147,20 @@ public type Path with Show, Equals, Hash, Compare {
    * guessing for it.
    */
   fn relativeTo(base: Path): Path? {
-    if storedRoot != base.storedRoot {
+    if rootValue != base.rootValue {
       return None
     }
     var common = 0
-    while common < base.storedComponents.length() && common < storedComponents.length()
-      && base.storedComponents[common] == storedComponents[common] {
+    while common < base.componentValues.length() && common < componentValues.length()
+      && base.componentValues[common] == componentValues[common] {
       common = common + 1
     }
     var walked: List<String> = []
-    for _ in common..base.storedComponents.length() {
+    for _ in common..base.componentValues.length() {
       walked.append ".."
     }
-    for index in common..storedComponents.length() {
-      walked.append storedComponents[index]
+    for index in common..componentValues.length() {
+      walked.append componentValues[index]
     }
     Some Path(None, walked)
   }
@@ -172,7 +172,7 @@ public type Path with Show, Equals, Hash, Compare {
    */
   fn normalized(): Path {
     var kept: List<String> = []
-    for component in storedComponents {
+    for component in componentValues {
       if component.isEmpty() || component == "." {
         continue
       }
@@ -185,11 +185,11 @@ public type Path with Show, Equals, Hash, Compare {
         kept.removeAt(kept.length() - 1)
         continue
       }
-      if storedRoot.isNone() {
+      if rootValue.isNone() {
         kept.append ".."
       }
     }
-    Path storedRoot, kept
+    Path rootValue, kept
   }
 
   /**
@@ -223,8 +223,8 @@ public type Path with Show, Equals, Hash, Compare {
 
   /** The path with `/` as the separator, on every platform. `.` for the empty path. */
   fn show(): String {
-    const body = storedComponents.joined separator: "/"
-    match storedRoot {
+    const body = componentValues.joined separator: "/"
+    match rootValue {
       Some(found) => if body.isEmpty() { found.show() } else { "{found}{body}" }
       None => if body.isEmpty() { "." } else { body }
     }
@@ -232,26 +232,26 @@ public type Path with Show, Equals, Hash, Compare {
 
   /** Root first, then component by component, then by the number of components. Case sensitive everywhere. */
   fn compare(other: Path): Ordering {
-    const here = rankOf storedRoot
-    const there = rankOf other.storedRoot
+    const here = rankOf rootValue
+    const there = rankOf other.rootValue
     if here != there {
       return here.compare there
     }
-    if const Some(found) = storedRoot {
-      const answer = found.show().compare(other.storedRoot?.show() ?? "")
+    if const Some(found) = rootValue {
+      const answer = found.show().compare(other.rootValue?.show() ?? "")
       if answer != .Equal {
         return answer
       }
     }
     var index = 0
-    while index < storedComponents.length() && index < other.storedComponents.length() {
-      const answer = storedComponents[index].compare(other.storedComponents[index])
+    while index < componentValues.length() && index < other.componentValues.length() {
+      const answer = componentValues[index].compare(other.componentValues[index])
       if answer != .Equal {
         return answer
       }
       index = index + 1
     }
-    storedComponents.length().compare(other.storedComponents.length())
+    componentValues.length().compare(other.componentValues.length())
   }
 }
 

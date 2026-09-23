@@ -67,13 +67,13 @@ public trait Storage with Schemes {
  * A storage that picks a driver by the scheme of every reference it is handed.
  *
  * The drivers are a `var List` and the table maps a scheme to an **index** into it, so that a writing member
- * reaches the driver through the path (`storedDrivers[index].write(...)`) instead of binding a copy of it. A
+ * reaches the driver through the path (`driverValues[index].write(...)`) instead of binding a copy of it. A
  * `Map<String, Storage>` whose value is bound to a local is the copy trap, and this probe measured it: the write
  * answered `Ok` and the read after it answered `NotFound`.
  */
 public type Registry with Storage {
-  private var storedDrivers: List<Storage>
-  private storedSchemes: Map<String, Int>
+  private var driverValues: List<Storage>
+  private schemeValues: Map<String, Int>
 
   /** The registry a program builds: `Storage.registry([FileStorage(), MemoryStorage()])`. */
   static fn of(drivers: List<Storage>): Registry {
@@ -88,38 +88,38 @@ public type Registry with Storage {
 
   /** Every scheme the registry answers to, sorted, which is what an unknown one is reported against. */
   fn schemes(): List<String> {
-    storedSchemes.keys().sorted({ _ }).toList()
+    schemeValues.keys().sorted({ _ }).toList()
   }
 
   fn read(uri: Uri): Result<String, StorageFailure> {
     const index = indexOf(uri)?
-    storedDrivers[index].read(uri)
+    driverValues[index].read(uri)
   }
 
   fn exists(uri: Uri): Result<Bool, StorageFailure> {
     const index = indexOf(uri)?
-    storedDrivers[index].exists(uri)
+    driverValues[index].exists(uri)
   }
 
   fn list(uri: Uri): Result<List<Uri>, StorageFailure> {
     const index = indexOf(uri)?
-    storedDrivers[index].list(uri)
+    driverValues[index].list(uri)
   }
 
   var fn write(uri: Uri, text: String): Result<Void, StorageFailure> {
     const index = indexOf(uri)?
-    storedDrivers[index].write(uri, text)
+    driverValues[index].write(uri, text)
   }
 
   var fn delete(uri: Uri): Result<Void, StorageFailure> {
     const index = indexOf(uri)?
-    storedDrivers[index].delete(uri)
+    driverValues[index].delete(uri)
   }
 
   /** Where the driver for the scheme of `uri` is, or the failure that lists what the registry knows. */
   fn indexOf(uri: Uri): Result<Int, StorageFailure> {
     const scheme = uri.scheme() ?? ""
-    match storedSchemes.get(scheme) {
+    match schemeValues.get(scheme) {
       Some(index) => Ok index
       None => Fail StorageFailure.UnknownScheme(uri.show(), schemes())
     }
@@ -130,10 +130,10 @@ public type Registry with Storage {
  * A driver that keeps everything in this process: the `memory:` scheme, and what a test writes against.
  *
  * It is the one driver whose state is inside the value, and therefore the one that measures the copy rule: the
- * registry reaches it through `storedDrivers[index]` and never binds it to a local.
+ * registry reaches it through `driverValues[index]` and never binds it to a local.
  */
 public type MemoryStorage with Storage {
-  private var storedEntries: Map<String, String> = [:]
+  private var value: Map<String, String> = [:]
 
   fn schemes(): List<String> {
     ["memory"]
@@ -141,20 +141,20 @@ public type MemoryStorage with Storage {
 
   fn read(uri: Uri): Result<String, StorageFailure> {
     const key = keyOf(uri)?
-    match storedEntries.get(key) {
+    match value.get(key) {
       Some(text) => Ok text
       None => Fail StorageFailure.NotFound(uri.show())
     }
   }
 
   fn exists(uri: Uri): Result<Bool, StorageFailure> {
-    Ok storedEntries.containsKey(keyOf(uri)?)
+    Ok value.containsKey(keyOf(uri)?)
   }
 
   fn list(uri: Uri): Result<List<Uri>, StorageFailure> {
     const prefix = keyOf(uri)?
     var found: List<Uri> = []
-    for key in storedEntries.keys().sorted({ _ }) {
+    for key in value.keys().sorted({ _ }) {
       if key.startsWith(prefix) {
         found.append(Uri.tryFrom("memory:{key}").mapError({ _ => StorageFailure.NotAddressable key, "not a reference" })?)
       }
@@ -164,13 +164,13 @@ public type MemoryStorage with Storage {
 
   var fn write(uri: Uri, text: String): Result<Void, StorageFailure> {
     const key = keyOf(uri)?
-    storedEntries.set key, text
+    value.set key, text
     Ok void
   }
 
   var fn delete(uri: Uri): Result<Void, StorageFailure> {
     const key = keyOf(uri)?
-    storedEntries.remove key
+    value.remove key
     Ok void
   }
 
@@ -194,8 +194,8 @@ public type MemoryStorage with Storage {
 public type ObjectStorage with Storage {
   /** The region, which is configuration and not part of the reference. */
   region: String
-  private storedKeyIdentifier: String
-  private storedSecret: String
+  private keyIdentifierValue: String
+  private secretValue: String
 
   /** The credentials come from the environment at the one place the program builds its registry. */
   static fn of(region: String, keyIdentifier: String, secret: String): ObjectStorage {
@@ -229,7 +229,7 @@ public type ObjectStorage with Storage {
   /** What a driver with credentials would do, written out so that the probe can print it. */
   fn reach(uri: Uri): String {
     const bucket = uri.host() ?? ""
-    "bucket {bucket.showNested()} in {region.showNested()} as {storedKeyIdentifier.showNested()}, and this probe has no network"
+    "bucket {bucket.showNested()} in {region.showNested()} as {keyIdentifierValue.showNested()}, and this probe has no network"
   }
 }
 

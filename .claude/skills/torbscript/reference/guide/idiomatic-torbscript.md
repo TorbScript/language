@@ -284,7 +284,7 @@ checks the rule.** The private field closes the constructor, so the factory is t
 
 ```trb run
 type Percent {
-  private storedValue: Int
+  private value: Int
 
   static fn tryFrom(value: Int): Result<Percent, String> {
     if value < 0 || value > 100 {
@@ -293,17 +293,38 @@ type Percent {
     Ok Self(value)
   }
 
-  fn value(): Int {
-    storedValue
+  fn percent(): Int {
+    value
   }
 }
 
-print Percent.tryFrom(120)                       // prints Fail("120 is not between 0 and 100")
-print Percent.tryFrom(40).map({ _.value() })     // prints Ok(40)
+print Percent.tryFrom(120)                        // prints Fail("120 is not between 0 and 100")
+print Percent.tryFrom(40).map({ _.percent() })    // prints Ok(40)
 ```
 
 Why: a constructor never contains logic, so a check that runs on every value needs one door that cannot be walked
 around. See [Data or capsule](../language/types/data-or-capsule.md).
+
+## A capsule's field is named `value` {#capsule-field-naming}
+
+**A capsule's one stored field is named `value`; several are named for the method each answers, plus `Value`, or
+`Values` for a plural.** A field and a method never share a name, so the field never borrows the accessor's word.
+
+```trb run
+type Distance {
+  private value: Int
+
+  fn meters(): Int {
+    value
+  }
+}
+
+print Distance(5).meters()    // prints 5
+```
+
+Why: `value` cannot collide with any accessor, and `rootValue` next to `fn root()` or `componentValues` next to
+`fn components()` reads at a glance which of the two is the storage. See
+[Naming](../language/syntax/naming.md) and [Data or capsule](../language/types/data-or-capsule.md).
 
 ## A field default is a constant {#field-defaults}
 

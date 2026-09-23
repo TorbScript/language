@@ -189,14 +189,14 @@ type Title {
 }
 
 type Slug with From<Title> {
-  private storedText: String
+  private value: String
 
   static fn from(value: Title): Slug {
     Self value.text.toLowerCase().replace(" ", "-")
   }
 
   fn text(): String {
-    storedText
+    value
   }
 }
 

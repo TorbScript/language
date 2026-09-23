@@ -41,7 +41,7 @@ and needs nothing either way.
 
 ```trb fragment
 public type Instant with Compare, Subtract<Instant, Duration>, Add<Duration, Instant> {
-  private storedNanoseconds: Int64
+  private value: Int64
 }
 ```
 
@@ -53,7 +53,7 @@ private: an `Instant` comes from `Clock.now()` and from nowhere else.
 
 ```trb fragment
 public type Duration with Compare, Show, Add, Subtract {
-  private storedNanoseconds: Int64
+  private value: Int64
 
   fn seconds(): Float64
   fn nanoseconds(): Int64

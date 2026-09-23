@@ -113,8 +113,8 @@ print "{server.host}:{server.port} has {server.connections} connections"
    use Path from "std/path"
 
    const path = Path.from "a/b"
-   print path.storedComponents
-   // error: `storedComponents` is private to `Path`
+   print path.componentValues
+   // error: `componentValues` is private to `Path`
    ```
 
    Inside the file that declares it, nothing is hidden:

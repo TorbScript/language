@@ -161,6 +161,33 @@ lowerCamelCase           a function, a method, a field, a parameter, a binding, 
     // error: `enabled` is already declared in `Dimmer`
     ```
 
+12. **A capsule's stored field is named `value`, or `<method>Value`/`<...>Values` for several.** A `private` field
+    without a default closes a capsule's constructor, so it is read back through an accessor of its own name
+    ([Data or capsule](../types/data-or-capsule.md)) - and the one namespace of rule 11 means that field cannot
+    borrow the accessor's word. With one such field, it is named `value`, its unit or meaning said in the field's doc
+    comment. With several, each is named for the method it answers, plus `Value`, or `Values` for a plural:
+    `rootValue` behind `fn root()`, `componentValues` behind `fn components()`. Like rule 8, this is a convention
+    rather than a diagnostic.
+
+    ```trb check
+    type Percent {
+      private value: Int
+
+      static fn tryFrom(value: Int): Result<Percent, String> {
+        if value < 0 || value > 100 {
+          return Fail "{value} is not between 0 and 100"
+        }
+        Ok Self(value)
+      }
+
+      fn percent(): Int {
+        value
+      }
+    }
+
+    print Percent.tryFrom(120)
+    ```
+
 ## What this is not
 
 **A name in the wrong case is not a style warning.** It is an error of the checker, reported at the declaration, and

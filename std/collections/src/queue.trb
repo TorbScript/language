@@ -108,7 +108,7 @@ extend<Item: Hash> Queue<Item> with Hash {
 public type ArrayQueue<Item> with Queue<Item>, From<Iterate<Item>> {
   private var slots: List<Item?> = []
   private var head: Int = 0
-  private var storedLength: Int = 0
+  private var lengthValue: Int = 0
 
   /** Builds the queue from `items`, with the first one at the front. */
   static fn from(items: Iterate<Item>): ArrayQueue<Item> {
@@ -121,28 +121,28 @@ public type ArrayQueue<Item> with Queue<Item>, From<Iterate<Item>> {
 
   /** Puts `value` at the back, in place; grows the buffer first if it is full. */
   var fn enqueue(value: Item) {
-    if storedLength == slots.length() {
+    if lengthValue == slots.length() {
       grow()
     }
-    slots[slot(storedLength)] = Some value
-    storedLength = storedLength + 1
+    slots[slot(lengthValue)] = Some value
+    lengthValue = lengthValue + 1
   }
 
   /** Takes the item at the front off and answers it, or `None` if empty. */
   var fn dequeue(): Item? {
-    if storedLength == 0 {
+    if lengthValue == 0 {
       return None
     }
     const next = slots[head]?
     slots[head] = None                   // Release the value
     head = slot 1
-    storedLength = storedLength - 1
+    lengthValue = lengthValue - 1
     Some next
   }
 
   /** The item at the front, or `None` if empty: one slot, without walking the ring. */
   fn peek(): Item? {
-    if storedLength == 0 {
+    if lengthValue == 0 {
       return None
     }
     slots[head]
@@ -152,23 +152,23 @@ public type ArrayQueue<Item> with Queue<Item>, From<Iterate<Item>> {
   var fn clear() {
     slots = []
     head = 0
-    storedLength = 0
+    lengthValue = 0
   }
 
   /** How many items there are. */
   fn length(): Int {
-    storedLength
+    lengthValue
   }
 
   /** A cursor from front to back: the order the queue hands items out in. */
   fn iterate(): Iterator<Item> {
-    (0..storedLength).filterMap { slots[slot(_)] }.iterate()
+    (0..lengthValue).filterMap { slots[slot(_)] }.iterate()
   }
 
   /** Shrinks the ring to the items it holds, to no slots at all when it is empty; see [Queue.compact]. */
   var fn compact() {
-    var tight: List<Item?> = List.filled storedLength, None
-    for offset in 0..storedLength {
+    var tight: List<Item?> = List.filled lengthValue, None
+    for offset in 0..lengthValue {
       tight[offset] = slots[slot(offset)]
     }
     slots = tight
@@ -184,7 +184,7 @@ public type ArrayQueue<Item> with Queue<Item>, From<Iterate<Item>> {
   private var fn grow() {
     const size = if slots.isEmpty() { 16 } else { slots.length() * 2 }
     var larger: List<Item?> = List.filled size, None
-    for offset in 0..storedLength {
+    for offset in 0..lengthValue {
       larger[offset] = slots[slot(offset)]
     }
     slots = larger

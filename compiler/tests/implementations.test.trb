@@ -518,9 +518,9 @@ group "A capsule's `Encode` and `Decode`" {
   const writer = "fn write(value: Encode): Int \{\n  1\n\}\n\n"
 
   test "the pair may be written with `TryFrom`, and then `Decode` is derived" {
-    const source = "type Email with TryFrom<String, String> \{\n  private storedAddress: String\n\n"
+    const source = "type Email with TryFrom<String, String> \{\n  private value: String\n\n"
       + "  static fn tryFrom(value: String): Result<Email, String> \{\n    Ok Self(value)\n  \}\n\n"
-      + "  fn address(): String \{\n    storedAddress\n  \}\n\}\n\n"
+      + "  fn address(): String \{\n    value\n  \}\n\}\n\n"
       + "extend String with From<Email> \{\n"
       + "  static fn from(value: Email): String \{\n    value.address()\n  \}\n\}\n\n"
       + reader + inBody("  print read<Email>()\n  const _ = Email.decode(\"ada@example.test\")")
@@ -528,8 +528,8 @@ group "A capsule's `Encode` and `Decode`" {
   }
 
   test "the pair may be written with `From`, and then `Decode` is derived too" {
-    const source = "type Title \{\n  text: String\n\}\n\ntype Slug \{\n  private storedText: String\n\n"
-      + "  fn text(): String \{\n    storedText\n  \}\n\}\n\n"
+    const source = "type Title \{\n  text: String\n\}\n\ntype Slug \{\n  private value: String\n\n"
+      + "  fn text(): String \{\n    value\n  \}\n\}\n\n"
       + "extend Slug with From<Title> \{\n"
       + "  static fn from(value: Title): Slug \{\n    Self value.text\n  \}\n\}\n\n"
       + "extend Title with From<Slug> \{\n"
@@ -540,14 +540,14 @@ group "A capsule's `Encode` and `Decode`" {
 
   /** One direction is not a pair: the way out has to exist as well, or nothing can be written. */
   test "a way in without a way back is no pair, and the reflexive `From<Self>` never counts as one" {
-    const source = "type Email with TryFrom<String, String> \{\n  private storedAddress: String\n\n"
+    const source = "type Email with TryFrom<String, String> \{\n  private value: String\n\n"
       + "  static fn tryFrom(value: String): Result<Email, String> \{\n    Ok Self(value)\n  \}\n\}\n\n"
       + reader + inBody("  print read<Email>()")
     assert(problems(source) == ["`Email` does not implement `Decode`"])
     assert(
       notes(source) == [
         "`read` asks for it",
-        "`Email` is a capsule: `storedAddress` is private and has no default, so nothing outside can call the"
+        "`Email` is a capsule: `value` is private and has no default, so nothing outside can call the"
           + " constructor and `Decode` comes from `Email`'s one conversion pair instead of from its fields",
         "`Email` has no pair. Write `From<Source>` or `TryFrom<Source, Failure>` for `Email`, and `From<Email>` for"
           + " that `Source`",
@@ -575,8 +575,8 @@ group "A capsule's `Encode` and `Decode`" {
   }
 
   test "two types that convert both ways are two pairs, and the message lists them" {
-    const source = "type Title \{\n  text: String\n\}\n\ntype Slug \{\n  private storedText: String\n\n"
-      + "  fn text(): String \{\n    storedText\n  \}\n\}\n\n"
+    const source = "type Title \{\n  text: String\n\}\n\ntype Slug \{\n  private value: String\n\n"
+      + "  fn text(): String \{\n    value\n  \}\n\}\n\n"
       + "extend Slug with From<Title> \{\n"
       + "  static fn from(value: Title): Slug \{\n    Self value.text\n  \}\n\}\n\n"
       + "extend Title with From<Slug> \{\n"
@@ -594,7 +594,7 @@ group "A capsule's `Encode` and `Decode`" {
 
   /** The generated body reads the `Source` and nothing else, so a `Source` without the trait is no pair either. */
   test "a pair whose source is not `Decode` itself derives nothing, and the message names it" {
-    const source = "type Weight \{\n  private storedGrams: Float\n\}\n\n"
+    const source = "type Weight \{\n  private value: Float\n\}\n\n"
       + "extend Weight with From<Float> \{\n"
       + "  static fn from(value: Float): Weight \{\n    Self value\n  \}\n\}\n\n"
       + "extend Float with From<Weight> \{\n"
@@ -608,7 +608,7 @@ group "A capsule's `Encode` and `Decode`" {
 
   /** The way out cannot break an invariant, so a capsule without a pair is still a value a message can show. */
   test "without a pair the way out stays the fields, because that is what `Show` does as well" {
-    const source = "type Email with TryFrom<String, String> \{\n  private storedAddress: String\n\n"
+    const source = "type Email with TryFrom<String, String> \{\n  private value: String\n\n"
       + "  static fn tryFrom(value: String): Result<Email, String> \{\n    Ok Self(value)\n  \}\n\}\n\n"
       + writer + "fn probe(address: Email): Int \{\n  write address\n\}"
     assert problems(source).isEmpty()

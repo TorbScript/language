@@ -23,21 +23,22 @@
  * - [Duration] - what the difference of two of them is.
  */
 public type Instant with Compare, Subtract<Instant, Duration>, Add<Duration, Instant> {
-  private storedNanoseconds: Int64
+  /** In nanoseconds, from the origin the process chooses. */
+  private value: Int64
 
   /** Which of the two readings came first. */
   fn compare(other: Instant): Ordering {
-    storedNanoseconds.compare other.storedNanoseconds
+    value.compare other.value
   }
 
   /** The span from `other` to this reading: negative where `other` is the later one. */
   fn subtract(other: Instant): Duration {
-    Duration(storedNanoseconds - other.storedNanoseconds)
+    Duration(value - other.value)
   }
 
   /** The point in time `other` after this one: a deadline, `Clock.now() + 2.seconds()`. */
   fn add(other: Duration): Instant {
-    Instant(storedNanoseconds + other.nanoseconds())
+    Instant(value + other.nanoseconds())
   }
 }
 
@@ -57,31 +58,32 @@ public type Instant with Compare, Subtract<Instant, Duration>, Add<Duration, Ins
  * - [Instant] - whose difference it is.
  */
 public type Duration with Compare, Show, Add, Subtract {
-  private storedNanoseconds: Int64
+  /** In nanoseconds. */
+  private value: Int64
 
   /** As a fractional number of seconds: `(Clock.now() - start).seconds()`. */
   fn seconds(): Float64 {
-    Float64.from(storedNanoseconds) / 1_000_000_000.0
+    Float64.from(value) / 1_000_000_000.0
   }
 
   /** As a whole number of nanoseconds, which is exactly what it holds. */
   fn nanoseconds(): Int64 {
-    storedNanoseconds
+    value
   }
 
   /** Which of the two spans is the shorter one. */
   fn compare(other: Duration): Ordering {
-    storedNanoseconds.compare other.storedNanoseconds
+    value.compare other.value
   }
 
   /** The two spans one after the other. Panics where the sum does not fit, as every `Int64` addition does. */
   fn add(other: Duration): Duration {
-    Duration(storedNanoseconds + other.storedNanoseconds)
+    Duration(value + other.value)
   }
 
   /** How much longer this span is than `other`: negative where it is shorter. */
   fn subtract(other: Duration): Duration {
-    Duration(storedNanoseconds - other.storedNanoseconds)
+    Duration(value - other.value)
   }
 
   /** The seconds with an `s` behind them: `2.5s`. */

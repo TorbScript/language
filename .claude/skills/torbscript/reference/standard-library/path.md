@@ -42,8 +42,8 @@ print module.joined(Path.from("deeper"))
 
 ```trb fragment
 public type Path with Show, Equals, Hash, Compare {
-  private storedRoot: Root?
-  private storedComponents: List<String>
+  private rootValue: Root?
+  private componentValues: List<String>
 
   fn root(): Root?
   fn components(): List<String>

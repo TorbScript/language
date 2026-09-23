@@ -110,7 +110,7 @@ error: `Slug` does not implement `Decode`
 68 | print needsDecode<Slug>()
    |       ^^^^^^^^^^^^^^^^^^^
    = `needsDecode` asks for it
-   = `Slug` is a capsule: `storedText` is private and has no default, so nothing outside can call the constructor
+   = `Slug` is a capsule: `value` is private and has no default, so nothing outside can call the constructor
      and `Decode` comes from `Slug`'s one conversion pair instead of from its fields
    = `Slug` converts both ways with `String` and `Title`. Exactly one type may
 ```
@@ -164,7 +164,7 @@ fn byBound<Value: TryFrom<String, Failure>, Failure>(text: String): Result<Value
 
 ```text
 $ build/release/torb run examples/uri-scratch
-Ok(Locator(storedText: "https://example.test/a"))
+Ok(Locator(value: "https://example.test/a"))
 ```
 
 **A static trait member reached through a bound type checks and builds natively.** So the generic reader that
@@ -222,7 +222,7 @@ Three things the probe settled, each of which changed the design.
 2. **`Map<String, Storage>` is the copy trap.** The first version bound the driver out of the map and wrote into the
    copy: the write answered `Ok(void)` and the read after it answered ``Fail(nothing is stored at `memory:/notes/first`)``,
    with no diagnostic anywhere. What builds reaches through the path instead — `Map<String, Int>` into a
-   `var List<Storage>`, and `storedDrivers[index].write(…)`.
+   `var List<Storage>`, and `driverValues[index].write(…)`.
 3. **A relative reference has no scheme, so a registry cannot dispatch on it**, and the failure says so rather than
    guessing a base.
 
@@ -308,11 +308,11 @@ public type Authority with Show, Equals, Hash {
 
 /** A URI reference per RFC 3986: what it names, and where. */
 public type Uri with Show, Equals, Hash, Compare {
-  private storedScheme: String?
-  private storedAuthority: Authority?
-  private storedPath: String
-  private storedQuery: String?
-  private storedFragment: String?
+  private schemeValue: String?
+  private authorityValue: Authority?
+  private pathValue: String
+  private queryValue: String?
+  private fragmentValue: String?
 
   fn scheme(): String?
   fn authority(): Authority?
@@ -631,9 +631,9 @@ URN, which is the .NET mistake at a smaller scale.
 ```trb
 /** `urn:<namespace>:<specific>` per RFC 8141, with the namespace identifier lower case. */
 public type Urn with Show, Equals, Hash, Compare {
-  private storedUri: Uri
-  private storedNamespace: String
-  private storedSpecific: String
+  private uriValue: Uri
+  private namespaceValue: String
+  private specificValue: String
 
   /** The URI this name is. */
   fn uri(): Uri
@@ -1062,7 +1062,7 @@ dead-change check has nothing to say. That is mistake 6 of `mistakes-models-make
 cannot avoid it. There are two answers and the document takes both, one per era:
 
 - **What builds today**: the drivers are a `var List<Storage>` and the table is a `Map<String, Int>` into it, so every
-  member reaches through the path — `storedDrivers[index].write(uri, content)` — and nothing is ever bound to a local.
+  member reaches through the path — `driverValues[index].write(uri, content)` — and nothing is ever bound to a local.
   The probe does this and the run above is its output.
 - **What the design is**: `Storage` is a **`shared trait`** and a driver is a `shared type`, the way a `File` is. Then
   the drivers have identity, `Map<String, Storage>` aliases instead of copying, and the index table is unnecessary.
@@ -1269,7 +1269,7 @@ public trait Identifier with Show, Equals, Hash, Compare, TryFrom<String, Identi
 
 /** A UUID per RFC 9562: sixteen bytes, shown as the canonical thirty-six lower-case characters. */
 public type Uuid with Identifier {
-  private storedBytes: Array<UInt8, 16>
+  private value: Array<UInt8, 16>
 
   /** The version nibble: `4` for a random one, `7` for a time-ordered one. */
   fn version(): Int
@@ -1283,7 +1283,7 @@ public type Uuid with Identifier {
 
 /** A ULID: 128 bits, shown as twenty-six characters of Crockford base 32, ordered by time as text. */
 public type Ulid with Identifier {
-  private storedBytes: Array<UInt8, 16>
+  private value: Array<UInt8, 16>
 
   /** The millisecond the identifier carries. */
   fn at(): Instant

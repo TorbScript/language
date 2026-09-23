@@ -62,70 +62,70 @@ fn redacted(userInfo: String): String {
  */
 public type Uri with Show, Equals, Hash, Compare {
   /** The scheme, lower case. `None` for a relative reference. [Uri.scheme] reads it. */
-  private storedScheme: String?
+  private schemeValue: String?
   /** The authority. `None` where the reference has no `//`. [Uri.authority] reads it. */
-  private storedAuthority: Authority?
+  private authorityValue: Authority?
   /** The path, normalized. Always there, and `""` for `mailto:` with no path. [Uri.path] reads it. */
-  private storedPath: String
+  private pathValue: String
   /** Everything after the first `?` and before the `#`. [Uri.query] reads it. */
-  private storedQuery: String?
+  private queryValue: String?
   /** Everything after the first `#`. [Uri.fragment] reads it. */
-  private storedFragment: String?
+  private fragmentValue: String?
 
   /** The scheme, lower case. `None` for a relative reference. */
   fn scheme(): String? {
-    storedScheme
+    schemeValue
   }
 
   /** The authority, where the reference has one. */
   fn authority(): Authority? {
-    storedAuthority
+    authorityValue
   }
 
   /** The host of the authority, where there is one. */
   fn host(): String? {
-    storedAuthority?.host
+    authorityValue?.host
   }
 
   /** The port that is written out, which is not the port a scheme defaults to. */
   fn port(): Int? {
-    storedAuthority?.port
+    authorityValue?.port
   }
 
   /** The path. Always there, and `""` where the reference has none. */
   fn path(): String {
-    storedPath
+    pathValue
   }
 
   /** Everything between the first `?` and the `#`, as RFC 3986 leaves it: one opaque string. */
   fn query(): String? {
-    storedQuery
+    queryValue
   }
 
   /** Everything after the first `#`. */
   fn fragment(): String? {
-    storedFragment
+    fragmentValue
   }
 
   /** Whether the reference has a scheme, which is what RFC 3986 calls a URI rather than a relative reference. */
   fn isAbsolute(): Bool {
-    storedScheme.isSome()
+    schemeValue.isSome()
   }
 
   /** Whether the reference has a host and a hierarchical path: the question `Url` would have been a type for. */
   fn isUrl(): Bool {
-    storedScheme.isSome() && storedAuthority.isSome()
+    schemeValue.isSome() && authorityValue.isSome()
   }
 
   /** Whether the scheme is `urn`, which is the question `Urn` is a type for. */
   fn isUrn(): Bool {
-    storedScheme == Some("urn")
+    schemeValue == Some("urn")
   }
 
   /** The path split at its `/`, with the empty leading segment of an absolute path dropped. */
   fn segments(): List<String> {
     var kept: List<String> = []
-    for segment in storedPath.split("/") {
+    for segment in pathValue.split("/") {
       if !segment.isEmpty() {
         kept.append segment
       }
@@ -139,7 +139,7 @@ public type Uri with Show, Equals, Hash, Compare {
    */
   fn queryParameters(): Map<String, List<String>> {
     var table: Map<String, List<String>> = [:]
-    const text = storedQuery ?? ""
+    const text = queryValue ?? ""
     if text.isEmpty() {
       return table
     }
@@ -165,9 +165,9 @@ public type Uri with Show, Equals, Hash, Compare {
    * scheme is a fact about five schemes and not a fact about URIs.
    */
   fn normalized(): Uri {
-    const authority = withoutDefaultPort(storedAuthority, storedScheme ?? "")
-    const path = if storedPath.isEmpty() && authority.isSome() { "/" } else { storedPath }
-    Uri storedScheme, authority, path, storedQuery, storedFragment
+    const authority = withoutDefaultPort(authorityValue, schemeValue ?? "")
+    const path = if pathValue.isEmpty() && authority.isSome() { "/" } else { pathValue }
+    Uri schemeValue, authority, path, queryValue, fragmentValue
   }
 
   /**
@@ -178,38 +178,38 @@ public type Uri with Show, Equals, Hash, Compare {
    * - [UriError.NoBase] where `base` has no scheme, which section 5.2.1 requires of a base.
    */
   fn resolved(against: Uri): Result<Uri, UriError> {
-    if against.storedScheme.isNone() {
+    if against.schemeValue.isNone() {
       return Fail UriError.NoBase(against.show())
     }
-    if storedScheme.isSome() {
-      return Ok Uri(storedScheme, storedAuthority, withoutDotSegments(storedPath), storedQuery, storedFragment)
+    if schemeValue.isSome() {
+      return Ok Uri(schemeValue, authorityValue, withoutDotSegments(pathValue), queryValue, fragmentValue)
     }
-    if storedAuthority.isSome() {
+    if authorityValue.isSome() {
       return Ok(Uri(
-        against.storedScheme,
-        storedAuthority,
-        withoutDotSegments(storedPath),
-        storedQuery,
-        storedFragment,
+        against.schemeValue,
+        authorityValue,
+        withoutDotSegments(pathValue),
+        queryValue,
+        fragmentValue,
       ))
     }
-    if storedPath.isEmpty() {
-      const query = if storedQuery.isSome() { storedQuery } else { against.storedQuery }
+    if pathValue.isEmpty() {
+      const query = if queryValue.isSome() { queryValue } else { against.queryValue }
       return Ok(Uri(
-        against.storedScheme,
-        against.storedAuthority,
-        against.storedPath,
+        against.schemeValue,
+        against.authorityValue,
+        against.pathValue,
         query,
-        storedFragment,
+        fragmentValue,
       ))
     }
-    const merged = if storedPath.startsWith("/") { storedPath } else { mergedPath against, storedPath }
+    const merged = if pathValue.startsWith("/") { pathValue } else { mergedPath against, pathValue }
     Ok(Uri(
-      against.storedScheme,
-      against.storedAuthority,
+      against.schemeValue,
+      against.authorityValue,
       withoutDotSegments(merged),
-      storedQuery,
-      storedFragment,
+      queryValue,
+      fragmentValue,
     ))
   }
 
@@ -218,7 +218,7 @@ public type Uri with Show, Equals, Hash, Compare {
    * the two have different schemes or different authorities, which nothing relative can bridge.
    */
   fn relativeTo(base: Uri): Uri? {
-    if storedScheme != base.storedScheme || storedAuthority != base.storedAuthority {
+    if schemeValue != base.schemeValue || authorityValue != base.authorityValue {
       return None
     }
     const here = segments()
@@ -234,7 +234,7 @@ public type Uri with Show, Equals, Hash, Compare {
     for index in common..here.length() {
       walked.append here[index]
     }
-    Some Uri(None, None, walked.joined(separator: "/"), storedQuery, storedFragment)
+    Some Uri(None, None, walked.joined(separator: "/"), queryValue, fragmentValue)
   }
 
   /**
@@ -252,18 +252,18 @@ public type Uri with Show, Equals, Hash, Compare {
 
   /** The recomposition of RFC 3986 section 5.3, with `authorityText` deciding how much of the authority is written. */
   fn recomposed(authorityText: (authority: Authority) => String): String {
-    var text = match storedScheme {
+    var text = match schemeValue {
       Some(found) => "{found}:"
       None => ""
     }
-    if const Some(found) = storedAuthority {
+    if const Some(found) = authorityValue {
       text = "{text}//{authorityText(found)}"
     }
-    text = "{text}{storedPath}"
-    if const Some(found) = storedQuery {
+    text = "{text}{pathValue}"
+    if const Some(found) = queryValue {
       text = "{text}?{found}"
     }
-    if const Some(found) = storedFragment {
+    if const Some(found) = fragmentValue {
       text = "{text}#{found}"
     }
     text
@@ -271,23 +271,23 @@ public type Uri with Show, Equals, Hash, Compare {
 
   /** Scheme, then authority, then path, then query, then fragment, each on the normalized form the value holds. */
   fn compare(other: Uri): Ordering {
-    var answer = optionCompare storedScheme, other.storedScheme
+    var answer = optionCompare schemeValue, other.schemeValue
     if answer != .Equal {
       return answer
     }
-    answer = optionCompare storedAuthority?.text(), other.storedAuthority?.text()
+    answer = optionCompare authorityValue?.text(), other.authorityValue?.text()
     if answer != .Equal {
       return answer
     }
-    answer = storedPath.compare other.storedPath
+    answer = pathValue.compare other.pathValue
     if answer != .Equal {
       return answer
     }
-    answer = optionCompare storedQuery, other.storedQuery
+    answer = optionCompare queryValue, other.queryValue
     if answer != .Equal {
       return answer
     }
-    optionCompare storedFragment, other.storedFragment
+    optionCompare fragmentValue, other.fragmentValue
   }
 }
 

@@ -2793,7 +2793,7 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
   (`guarded` was tried: one more word to learn for something the existing two words already say). It removed
   every "private field plus accessor method of nearly the same name" pair from the examples.
 - **`private` reaches one file, not one package.** An `extend Path` in another file of `std/path` could otherwise
-  write `Self(storedRoot: ..., storedComponents: ...)` and walk around the parser that is the only way into the
+  write `Self(rootValue: ..., componentValues: ...)` and walk around the parser that is the only way into the
   capsule. The package stays the unit of coherence; it is not the unit of privacy. It is also *one* rule instead of
   two: a `private` member and a `private` top-level declaration now reach exactly as far as each other, so a free
   function of the declaring file sees the private member as well - the border "only the type body and an `extend`"

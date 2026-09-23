@@ -187,13 +187,15 @@ reaches no file at all is an error, never "0 files, no problems".
   type parameter (`flags.set key, true`, `Some(true)`, `list.append(None)`). Labeled arguments follow the positional ones,
   so options are declared last. The same goes for a number literal whose meaning the call does not show
   (`connect("localhost", timeout: 10)`); that half is judgement, the `Bool`/`None` half will be a lint with a fix.
-- **A capsule names its field for the storage and its method for the answer.** A type whose constructor is closed from
-  outside - a `private` field without a default - reads through accessors, and a field and a method never share a name,
-  so the field takes `stored` in front of the accessor's name: `private storedComponents: List<String>` next to
-  `fn components(): List<String>`, `private storedRoot` next to `fn root()`. The prefix is on the field and never on
-  the method, because the method is what every caller writes. Where the two say different things the accessor keeps
-  its own word instead (`private storedDegrees` answered by `degrees()`, but `private kind` answered by
-  `isSyntaxError()`). The four parts of a capsule and the conversion pair its `Encode`/`Decode` come from are
+- **A capsule's field is named for its storage, never for the accessor's word, because a field and a method never
+  share a name.** A type whose constructor is closed from outside - a `private` field without a default - reads
+  through accessors. One stored field is named `value`, its unit or meaning said in the field's doc comment
+  (`/** In nanoseconds. */ private value: Int64` behind `fn nanoseconds(): Int64`). Several stored fields are named
+  for the method each answers, plus `Value`, or `Values` for a plural: `private rootValue` next to `fn root()`,
+  `private componentValues: List<String>` next to `fn components(): List<String>`, `private lengthValue` next to
+  `fn length()`. Where a field's meaning is not what the accessor answers, the accessor keeps its own word instead
+  (a token's `private kind` answered by `isSyntaxError()`). The four parts of a capsule and the conversion pair its
+  `Encode`/`Decode` come from are
   [docs/language/types/data-or-capsule](../docs/language/types/data-or-capsule.md).
 - A case name must not shadow a prelude type (`TupleType`, `Floating`, `VoidType`, not `Tuple`, `Float`, `Void`).
 - `type`, `trait`, `where`, `shared` are keywords and cannot be names (`annotation`, `capability`, ...).

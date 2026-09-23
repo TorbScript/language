@@ -98,8 +98,8 @@ A field that is `private` is readable in the file that declares it and nowhere e
 use Path from "std/path"
 
 const path = Path.from "a/b"
-print path.storedComponents
-// error: `storedComponents` is private to `Path`
+print path.componentValues
+// error: `componentValues` is private to `Path`
 ```
 
 ## Related

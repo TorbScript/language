@@ -589,7 +589,7 @@ shape: one private `Int64`, members that read it in a unit, and members on `Int6
  * negative.
  */
 public type ByteSize with Show, Compare, Add, Subtract, Multiply<Int64, ByteSize> {
-  private storedBytes: Int64
+  private value: Int64
 
   /** Exactly what it holds. */
   fn bytes(): Int64
@@ -642,7 +642,7 @@ binary ones, and a `megabytes()` that meant 2²⁰ would contradict the existing
 ```trb
 /** A processor clock: a count of hertz. */
 public type Frequency with Show, Compare {
-  private storedHertz: Int64
+  private value: Int64
 
   static fn ofHertz(hertz: Int64): Frequency
   static fn ofMegahertz(megahertz: Int64): Frequency
@@ -668,7 +668,7 @@ needs `std/time` to gain one, and it is `std/time`'s design, not this one's:
 ```trb
 /** A point on the wall clock: nanoseconds since 1970-01-01 00:00:00 UTC. It can jump, where an [Instant] cannot. */
 public type Timestamp with Show, Compare, Subtract<Timestamp, Duration>, Add<Duration, Timestamp> {
-  private storedNanoseconds: Int64
+  private value: Int64
 }
 ```
 
@@ -1106,7 +1106,7 @@ public type InterfaceTraffic with Show, Equals, Subtract {
 ```trb
 /** An IPv4 address: four octets, and a value like any other. */
 public type Ipv4Address with Show, Equals, Hash, Compare, TryFrom<String, AddressError> {
-  private storedValue: UInt32
+  private value: UInt32
 
   static fn of(first: UInt8, second: UInt8, third: UInt8, fourth: UInt8): Ipv4Address
   /** `127.0.0.1`. A constant built with the constructor, because a constant may not call `of`. */
@@ -1126,8 +1126,8 @@ public type Ipv4Address with Show, Equals, Hash, Compare, TryFrom<String, Addres
  * zeros collapsed.
  */
 public type Ipv6Address with Show, Equals, Hash, Compare, TryFrom<String, AddressError> {
-  private storedHigh: UInt64
-  private storedLow: UInt64
+  private highValue: UInt64
+  private lowValue: UInt64
 
   fn segments(): Array<UInt16, 8>
   fn isLoopback(): Bool
@@ -1146,7 +1146,7 @@ public type IpAddress with Show, Equals, Hash, Compare, TryFrom<String, AddressE
 
 /** A link-layer address. `show()` is lower case with colons: `3c:22:fb:0a:1b:9e`. */
 public type MacAddress with Show, Equals, Hash, TryFrom<String, AddressError> {
-  private storedValue: UInt64
+  private value: UInt64
 
   fn octets(): Array<UInt8, 6>
 }
@@ -1185,7 +1185,7 @@ public native type Environment {
  * on Windows, exactly everywhere else — so `set("PATH", …)` on Windows replaces an inherited `Path`.
  */
 public type EnvironmentVariables with Show, Equals {
-  private storedEntries: Map<String, (name: String, value: String)>
+  private value: Map<String, (name: String, value: String)>
 
   static fn empty(): EnvironmentVariables
 
