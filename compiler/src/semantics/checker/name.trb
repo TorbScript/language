@@ -398,6 +398,11 @@ fn parameterNamespaceTarget(var checker: Checker, symbol: SymbolId, text: String
     }
   }
   const own = checker.types.intern TypeForm.Parameter(identifier)
+  // `Size` of `<const Size: Int>` read as a value is an `Int`: the resolution keeps the parameter, which is what the
+  // lowering substitutes, and the expression has the type of the value
+  if const Some(value) = checker.constantValueType(identifier) {
+    return Target Resolution.TypeOf(own), value, name: text
+  }
   Target Resolution.TypeOf(own), own, name: text, constructs: Some(own)
 }
 

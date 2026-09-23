@@ -438,8 +438,11 @@ public type PathStep {
    * back end: `a[key]` is `Indexed.at`, whose body is `get(key).expect("Key does not exist")`, so `missing` is the
    * very static that `expect` would have been handed and `at` the site of the `panic` inside it. A step that could not
    * name both is never formed, and the read-copy-write stays (`ir/elements.trb`).
+   *
+   * `checked` is false where the range analysis proved the index inside an `Array<Item, Size>` (`ir/ranges.trb`):
+   * the back end then indexes the slots without comparing, and `missing` is never reached.
    */
-  case Element(item: IrTypeId, index: Slot, missing: StaticId, at: LocationId)
+  case Element(item: IrTypeId, index: Slot, missing: StaticId, at: LocationId, checked: Bool = true)
   /** Dereference a boxed layout, a `Box`, a `Lazy` cell or a `shared` object. */
   case Contents(annotation: IrTypeId)
 }

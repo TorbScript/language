@@ -159,6 +159,96 @@ fn lowerGeneratedBody(
     .Container(kind) => containerBody lowering, builder, request, kind, at
     .ArrayStorage(operation) => arrayStorageBody lowering, builder, operation, at
     .Encode | .Decode | .Describe => encodingBody lowering, builder, request, at
+    .Delegate => delegateBody lowering, builder, request, at
+  }
+}
+
+/**
+ * A required member of a `by` implementation: `Meters(5.0) + Meters(2.5)` is `Meters(5.0 + 2.5)`. Every parameter
+ * of the delegating type - the receiver and every `Self` - is unwrapped to its one field, the field type's own member
+ * of the same trait is called, and a result of the delegating type is wrapped again
+ * (docs/language/traits/delegation.md). A default member of the trait is not forwarded and never reaches this: it is the
+ * trait's own body, which calls the forwarded members.
+ *
+ * The trait the field type is asked for is the one the delegating type implements with the delegating type replaced by
+ * the field's wherever it is an argument: `Add<Meters, Meters>` becomes `Add<Float, Float>`.
+ */
+fn delegateBody(var lowering: Lowering, var builder: FunctionBuilder, request: GeneratedRequest, at: Span) {
+  const subject = request.subject
+  const target = irTypeOfClosed lowering, subject
+  const layout = match layoutOfType(lowering.program, target) {
+    Some(found) => found
+    None => {
+      reportUnsupported lowering, "`by` delegation from a type without a layout", at
+      return
+    }
+  }
+  const shape = lowering.program.layoutAt layout
+  const inner = match fieldTypesOf(lowering, subject) {
+    Some(found) => found
+    None => {
+      reportUnsupported lowering, "`by` delegation from a type without fields", at
+      return
+    }
+  }
+  if shape.fields.length() != 1 || inner.length() != 1 || !shape.variants.isEmpty() {
+    reportUnsupported lowering, "`by` delegation from a type that is not one field", at
+    return
+  }
+  const field = shape.fields[0]
+  const forwarded = replacedArguments lowering, request.bound, subject, inner[0]
+  const name = lowering.checker.symbolAt(request.member).name
+  const called = match memberOfType(lowering, inner[0], forwarded, name, at) {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  const signature = builder.function.signature
+  var arguments: List<Argument> = []
+  for index in 0..signature.parameters.length() {
+    const parameter = signature.parameters[index]
+    if parameter.isReference {
+      reportUnsupported lowering, "a `var` member forwarded by `by`", at
+      return
+    }
+    if parameter.annotation == target {
+      const unwrapped = readField lowering, builder, Slot(index), PathStep.Field(layout, 0), field.annotation
+      arguments.append borrowed(unwrapped)
+    } else {
+      arguments.append borrowed(Slot(index))
+    }
+  }
+  const answered = lowering.program.functionAt(called).signature.result
+  const produced = addTemporary builder, answered
+  const location = locationOf lowering, at
+  const empty: List<WitnessSource> = []
+  emit builder, Instruction.Call(Some(produced), called, arguments, empty, Some(location))
+  if signature.result == target && answered != target {
+    const wrapped = addTemporary builder, target
+    emit builder, Instruction.Construct(wrapped, layout, 0, [borrowed(produced)])
+    terminate builder, Terminator.Return(Some(borrowed(wrapped)))
+    return
+  }
+  terminate builder, Terminator.Return(Some(borrowed(produced)))
+}
+
+/** A trait applied to arguments, with every argument that is `from` replaced by `to`: `Add<Meters, Meters>` for a field. */
+fn replacedArguments(var lowering: Lowering, bound: TypeId, from: TypeId, to: TypeId): TypeId {
+  const applied = substituted lowering, bound
+  match lowering.checker.types.form(applied) {
+    .Nominal(symbol, arguments) => {
+      var replaced: List<TypeId> = []
+      for argument in arguments {
+        if argument == from {
+          replaced.append to
+        } else {
+          replaced.append argument
+        }
+      }
+      lowering.checker.nominal symbol, replaced
+    }
+    _ => applied
   }
 }
 

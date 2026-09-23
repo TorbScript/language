@@ -1,5 +1,6 @@
 /**
- * The range analysis: an integer operation whose operands cannot leave the width of their type is the plain operation.
+ * The range analysis: an integer operation whose operands cannot leave the width of their type is the plain operation,
+ * and an index into an `Array<Item, Size>` that cannot leave `0..Size` is the plain index.
  *
  * Every integer operation of TorbScript is checked, because an overflow panics and that is semantics and not a
  * diagnostic (BACKEND 3.3). The check is `__builtin_add_overflow` plus a cold branch, and what it costs depends
@@ -9,7 +10,9 @@
  * those two recovers about half of it.
  *
  * So this is a forward interval analysis over one function, and nothing more: what a slot can hold at one point, and an
- * `Add`, `Subtract`, `Multiply` or `Negate` whose result provably fits its own type loses the check. The facts come
+ * `Add`, `Subtract`, `Multiply` or `Negate` whose result provably fits its own type loses the check. The same facts
+ * decide the `Element` step of a `Read` or a `Write` into an array: its size is in its type, so an index the facts keep
+ * inside `0..Size` - `values[index]` under `for index in 0..16` - is indexed without comparing. The facts come
  * from three places and no others - an integer constant, the operation that computed a slot, and the **comparison a
  * `Branch` stands on**, which narrows its two operands in the two successors.
  *
@@ -31,9 +34,9 @@
  * - [narrowedByGuard] - what a comparison says about its operands in the two successors of a `Branch`.
  */
 
-use IrProgram, IrFunction, Slot, Instruction, Argument, StaticId from "./ir"
+use IrProgram, IrFunction, Slot, Instruction, Argument, StaticId, Reference, PathStep from "./ir"
 use Intrinsic, IntrinsicOperation, NumericKind from "./ir"
-use numericKindOf, successorsOf, definedSlot from "./verify"
+use numericKindOf, successorsOf, definedSlot, typeOfReference from "./verify"
 use postorderOf, filledFlags from "./liveness"
 
 /** How often a block may be re-entered before the analysis gives up on it. Widening settles a loop in three. */
@@ -746,9 +749,11 @@ fn afterInstruction(
         found = copiedFact universes, found, reference.base, value.slot
       }
     }
+    // The operands are read before the target is written, so their facts are the ones in front of the instruction:
+    // `%5 = add %5, %9`, the step of every counted loop, would otherwise add one to a counter it has just forgotten
     .Intrinsic(target, intrinsic, arguments, _) => {
       if const Some(slot) = target {
-        if const Some(known) = resultInterval(universes, found, intrinsic, arguments) {
+        if const Some(known) = resultInterval(universes, facts, intrinsic, arguments) {
           found = withFact universes, found, slot, known
         }
       }
@@ -892,6 +897,10 @@ fn rewriteFunction(
           isChanged = true
         }
       }
+      if const Some(proven) = withProvenElements(program, original, universes, facts, instruction) {
+        kept = proven
+        isChanged = true
+      }
       facts = afterInstruction program, original, universes, facts, instruction
       written.append kept
     }
@@ -899,6 +908,84 @@ fn rewriteFunction(
       program.functions[index].blocks[block].instructions = written
     }
   }
+}
+
+/**
+ * The same `Read` or `Write` with every `Element` step into an array whose index the facts keep inside the array
+ * unchecked, or `None` where no step changed. Only the two instructions an array element is read and written through
+ * are asked; a place anywhere else keeps its checks.
+ */
+fn withProvenElements(
+  program: IrProgram,
+  function: IrFunction,
+  universes: Universes,
+  facts: List<Interval>,
+  instruction: Instruction,
+): Instruction? {
+  match instruction {
+    .Read(target, place) => {
+      const proven = provenPlace(program, function, universes, facts, place)?
+      Some Instruction.Read(target, proven)
+    }
+    .Write(place, value) => {
+      const proven = provenPlace(program, function, universes, facts, place)?
+      Some Instruction.Write(proven, value)
+    }
+    _ => None
+  }
+}
+
+fn provenPlace(
+  program: IrProgram,
+  function: IrFunction,
+  universes: Universes,
+  facts: List<Interval>,
+  place: Reference,
+): Reference? {
+  var steps: List<PathStep> = []
+  var isChanged = false
+  for position in 0..place.steps.length() {
+    const step = place.steps[position]
+    if const .Element(item, index, missing, at, checked) = step {
+      const container = Reference place.base, place.steps[0..position]
+      if checked && isInsideArray(program, function, universes, facts, container, index) {
+        steps.append PathStep.Element(item, index, missing, at, false)
+        isChanged = true
+        continue
+      }
+    }
+    steps.append step
+  }
+  if !isChanged {
+    return None
+  }
+  Some Reference(place.base, steps)
+}
+
+/** Whether the container is an `Array<Item, Size>` and the index provably one of its slots. */
+fn isInsideArray(
+  program: IrProgram,
+  function: IrFunction,
+  universes: Universes,
+  facts: List<Interval>,
+  container: Reference,
+  index: Slot,
+): Bool {
+  var ignored: List<String> = []
+  const annotation = match typeOfReference(program, function, ignored, "", container) {
+    Some(found) => found
+    None => {
+      return false
+    }
+  }
+  if const .FixedArray(_, size) = program.typeAt(annotation) {
+    if !isSlotTracked(universes, index.value) {
+      return false
+    }
+    const known = facts[index.value]
+    return known.low >= 0 && known.high < size
+  }
+  false
 }
 
 /**

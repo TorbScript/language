@@ -59,6 +59,7 @@ Each one is small, deterministic and prints a checksum, so a program that is wro
 | `wrapper` | A one-field `Meters` against the `double` inside it: the zero-cost claim in its smallest form |
 | `closure` | A closure that captures one value, against a function pointer plus a context |
 | `list-index` | `numbers[index]` in a counted loop against `data[index]` |
+| `array-index` | `values[index]` of an `Array<Int, 64>` in a counted loop: whether the range analysis leaves a bounds check |
 | `list-iterate` | `for value in numbers` against walking a pointer |
 | `pipeline` | `map`, `filter`, `sum` against the fused loop they stand for |
 | `record-write` | `points[index].y = ...` against the same store through a pointer |

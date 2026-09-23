@@ -14,10 +14,11 @@
  *
  * An **index** on the path (`a[key]`) is the one step that is not a `PathStep`: it takes the element out of its
  * container into a slot of the frame, runs the access against that slot and puts it back afterwards (`TakenElement`).
+ * A **slice** on the path (`a[from..to]`) is the same round trip over the window: `Slice.slice` takes it out and
+ * `MutableSlice.replace` puts it back, so `samples[1..4].sort { _ }` sorts three items and writes them back.
  *
- * What is not here: a slice as a window and a `shared type` object. Each of them is a clean finding instead of a wrong
- * answer. An `Array<Item, Size>` on the path is an ordinary index: its round trip is formed here like every other one,
- * and `ir/elements.trb` turns it into one `Element` step into the array's inline slots.
+ * An `Array<Item, Size>` on the path is an ordinary index: its round trip is formed here like every other one, and
+ * `ir/elements.trb` turns it into one `Element` step into the array's inline slots.
  */
 
 use Span from "../../syntax/source"
@@ -54,7 +55,7 @@ public type PlacePath {
 
 /**
  * One element a `var` path goes through `a[key]` for: taken out of its container before the access begins, put back
- * after it has run.
+ * after it has run. A window of `a[from..to]` is one as well, with the range as its key.
  *
  * That is the concept's own model of an index path - "take it out, change it, put it back" (`var` Paths) - and the two
  * halves are two members the language already has: **`Indexed.at`** takes the element out, which is why a missing key
@@ -79,7 +80,7 @@ public type TakenElement {
   key: Slot
   /** The frame's own slot the element lives in while the access runs. */
   element: Slot
-  /** `MutableIndexed.set` of the container's own type, which is what puts it back. */
+  /** `MutableIndexed.set` of the container's own type, or `MutableSlice.replace` for a window: what puts it back. */
   setter: Dispatched
   at: Span
 }
@@ -281,7 +282,12 @@ fn steppedFrom(
   var taken: List<TakenElement> = []
   var position = 0
   for step in written {
-    if const .Index(container, _, _) = step {
+    const taking = match step {
+      .Index(container, _, _) => Some TakenKind(container, false)
+      .Range(container, _) => Some TakenKind(container, true)
+      _ => None
+    }
+    if const Some(kind) = taking {
       const key = match keys.get(position) {
         Some(found) => found
         None => {
@@ -290,7 +296,8 @@ fn steppedFrom(
         }
       }
       position = position + 1
-      const element = match takenElement(lowering, builder, Reference(base, steps), annotation, container, key, what, at) {
+      const container = Reference base, steps
+      const element = match takenElement(lowering, builder, container, annotation, kind, key, what, at) {
         Some(found) => found
         None => {
           return None
@@ -312,6 +319,13 @@ fn steppedFrom(
     annotation = next.annotation
   }
   Some PlacePath(Reference(base, steps), annotation, taken)
+}
+
+/** What a step that takes a value out of its container takes: an element of `a[key]`, or a window of `a[from..to]`. */
+type TakenKind {
+  /** The container's type as the checker wrote it. */
+  container: TypeId
+  isWindow: Bool
 }
 
 /** One step of a path, and the type it leads to. */
@@ -431,13 +445,9 @@ fn steppedPath(
       }
       Some SteppedPath(PathStep.TupleField(layout, index), fieldTypeOf(lowering, layout, index))
     }
-    // An index takes its element out one level up, so the walk never asks this one about it
-    .Index(_, _, _) => {
+    // An index and a slice take their value out one level up, so the walk never asks this one about them
+    .Index(_, _, _) | .Range(_, _) => {
       reportUnsupported lowering, "{what} through `a[key]` the walk did not take out", at
-      None
-    }
-    .Range(_, _) => {
-      reportUnsupported lowering, "{what} through a slice, which is a window", at
       None
     }
   }
@@ -473,8 +483,8 @@ fn typeOfPlace(var lowering: Lowering, var builder: FunctionBuilder, place: Refe
 // --- An index on the path --------------------------------------------------------------------------------------------
 
 /**
- * The key expression of every `a[key]` on the path, from the root outwards - which is the order the steps of a place are
- * in.
+ * The key expression of every `a[key]` and `a[from..to]` on the path, from the root outwards - which is the order the
+ * steps of a place are in.
  *
  * The checker's `PlaceStep.Index` carries the **span** of the key and nothing else, and the lowering does not lower from
  * spans: so the target expression is walked in step with the steps of its place. That is no second opinion about what a
@@ -527,13 +537,11 @@ fn loweredKeys(
 ): List<Slot>? {
   var count = 0
   for step in steps {
-    // A slice is a window into the base and needs the interior places of 5.9b, so nothing of the path is evaluated
-    if const .Range(_, _) = step {
-      reportUnsupported lowering, "{what} through a slice, which is a window", at
-      return None
-    }
-    if const .Index(_, _, _) = step {
-      count = count + 1
+    match step {
+      .Index(_, _, _) | .Range(_, _) => {
+        count = count + 1
+      }
+      _ => {}
     }
   }
   const empty: List<Slot> = []
@@ -557,29 +565,35 @@ fn loweredKeys(
 
 /**
  * One element on the path: the container as a value, `Indexed.at` to take the element out of it into a slot of the frame,
- * and the `MutableIndexed.set` that will put it back once the access has run.
+ * and the `MutableIndexed.set` that will put it back once the access has run. A window is the same with `Slice.slice`
+ * and `MutableSlice.replace`, and the range as the key.
  *
  * The container is **read out of its place** first, because `at` takes `self` by value: a `Read` of a counted value hands
  * the frame a count of its own, which dies at the call again and leaves the container's count untouched.
+ *
+ * A window of a list shares the list's storage, so the first write through it copies the part it covers - that copy is
+ * what `replace` writes back, and it is the price of a window over storage that is not its own.
  */
 fn takenElement(
   var lowering: Lowering,
   var builder: FunctionBuilder,
   container: Reference,
   annotation: IrTypeId,
-  written: TypeId,
+  kind: TakenKind,
   key: Slot,
   what: String,
   at: Span,
 ): TakenElement? {
-  const subject = substituted lowering, written
-  const reader = match indexedMemberOf(lowering, subject, false, "at", what, at) {
+  const subject = substituted lowering, kind.container
+  const readerName = if kind.isWindow { "slice" } else { "at" }
+  const setterName = if kind.isWindow { "replace" } else { "set" }
+  const reader = match takingMemberOf(lowering, subject, false, kind.isWindow, readerName, what, at) {
     Some(found) => found
     None => {
       return None
     }
   }
-  const setter = match indexedMemberOf(lowering, subject, true, "set", what, at) {
+  const setter = match takingMemberOf(lowering, subject, true, kind.isWindow, setterName, what, at) {
     Some(found) => found
     None => {
       return None
@@ -599,6 +613,9 @@ fn takenElement(
   if !lowering.isSupported {
     return None
   }
+  if kind.isWindow {
+    return Some TakenElement(container, key, element, setter, at)
+  }
   // Which member this was, so that `ir/elements.trb` can recognize the round trip once the container is concrete and
   // replace it with one `Element` step - by the symbol, because a specialized copy of it is the same member
   lowering.program.elementReaders.insert reader.member.value
@@ -607,6 +624,36 @@ fn takenElement(
     lowering.program.elementWriters.insert setter.member.value
   }
   Some TakenElement(container, key, element, setter, at)
+}
+
+/** The two halves of an index path, or of a window: `Slice.slice` and `MutableSlice.replace` of the container. */
+fn takingMemberOf(
+  var lowering: Lowering,
+  container: TypeId,
+  isMutable: Bool,
+  isWindow: Bool,
+  name: String,
+  what: String,
+  at: Span,
+): Dispatched? {
+  if !isWindow {
+    return indexedMemberOf lowering, container, isMutable, name, what, at
+  }
+  const capability = if isMutable {
+    lowering.checker.wellKnown.mutableSlice
+  } else {
+    lowering.checker.wellKnown.slice
+  }
+  const symbol = match capability {
+    Some(found) => found
+    None => {
+      reportUnsupported lowering, "{what} through `a[from..to]` without `Slice` in the prelude", at
+      return None
+    }
+  }
+  const empty: List<TypeId> = []
+  const bound = lowering.checker.nominal symbol, empty
+  dispatchedOn lowering, container, bound, name, at
 }
 
 /** `Indexed.at` and `MutableIndexed.set` of the container's own type: the two halves of an index path. */

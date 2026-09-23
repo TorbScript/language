@@ -40,7 +40,7 @@ use knownValueOf, selectionOf from "../fold"
 use lowerOptionalMemberValue from "./expression"
 use constantSlot, emitIntrinsic, intrinsicSlot, integerSlot from "./expression"
 use lowerBlockInto from "./statement"
-use referenceAt from "./place"
+use referenceAt, PlacePath from "./place"
 use showSlot from "./text"
 use endEveryScope, openScope, closeScope, declareScopedBetween from "./scope"
 
@@ -354,23 +354,11 @@ fn lowerIfVarBinding(
     return unsupportedSlot lowering, builder, destination, what, value.span
   }
   // Every name as a path from the subject, before anything is emitted that could not be undone
-  var named: List<(Span, Reference)> = []
-  for binding in branch.bindings {
-    var steps = subject.reference.steps
-    var current = subject.annotation
-    for step in binding.path {
-      const resolved = match resolvedStepOn(lowering, current, step, pattern.span) {
-        Some(found) => found
-        None => {
-          return abandonedSlot lowering, builder, destination
-        }
-      }
-      steps.append resolved.step
-      current = resolved.annotation
+  const named = match namedPaths(lowering, subject, branch, pattern.span) {
+    Some(found) => found
+    None => {
+      return abandonedSlot lowering, builder, destination
     }
-    const declared = lowering.checker.binding(binding.binding).at
-    const place = Reference subject.reference.base, steps
-    named.append((declared, place))
   }
   // The test itself binds nothing: the names are the paths above, not copies of what they lead to
   const bare = plan.copy arms: [arm.copy(branches: [branch.copy(bindings: [])])]
@@ -419,6 +407,33 @@ fn lowerIfVarBinding(
   target
 }
 
+/**
+ * Every name of one alternative of a pattern as a path from the subject: the steps of the subject's own place, then the
+ * fields of the case and the positions of the tuple the name sits in. `None` where a step cannot be formed, which has
+ * been reported.
+ */
+fn namedPaths(
+  var lowering: Lowering,
+  subject: PlacePath,
+  branch: PatternBranch,
+  at: Span,
+): List<(Span, Reference)>? {
+  var named: List<(Span, Reference)> = []
+  for binding in branch.bindings {
+    var steps = subject.reference.steps
+    var current = subject.annotation
+    for step in binding.path {
+      const resolved = resolvedStepOn(lowering, current, step, at)?
+      steps.append resolved.step
+      current = resolved.annotation
+    }
+    const declared = lowering.checker.binding(binding.binding).at
+    const place = Reference subject.reference.base, steps
+    named.append((declared, place))
+  }
+  Some named
+}
+
 /** `while const Some(line) = lines.next() { ... }`: the pattern is matched again at the head of every round. */
 public fn lowerWhileBinding(
   var lowering: Lowering,
@@ -430,7 +445,7 @@ public fn lowerWhileBinding(
   at: Span,
 ) {
   if isVar {
-    reportUnsupported lowering, "`while var`, which binds a path into its subject", at
+    lowerWhileVarBinding lowering, builder, pattern, value, body, at
     return
   }
   const plan = match planOfPattern(lowering, pattern) {
@@ -463,6 +478,86 @@ public fn lowerWhileBinding(
   declareScopedBetween lowering, builder, firstSlot, lastSlot
   lowerBlockInto lowering, builder, body, None
   closeScope lowering, builder
+  const _ = leaveLoop lowering
+  if !lowering.isDiverged {
+    finishBlock lowering, builder, Terminator.Jump(check)
+  }
+  continueIn lowering, builder, done
+}
+
+/**
+ * `while var Some(node) = cursor { node.visit() }`: the test of `while const`, with every name a **path into the subject**
+ * as in `if var` - the body changes what the subject holds, and the next round tests the changed value.
+ *
+ * The path of the subject is formed again at the head of every round, and so are the paths of the names: the body may
+ * have written the subject, and nothing formed before that write may be used after it.
+ */
+fn lowerWhileVarBinding(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  pattern: Pattern,
+  value: Expression,
+  body: Block,
+  at: Span,
+) {
+  const plan = match planOfPattern(lowering, pattern) {
+    Some(found) => found
+    None => {
+      reportUnsupported lowering, "a `while var` the checker recorded no plan for", pattern.span
+      return
+    }
+  }
+  const arm = match plan.arms.first() {
+    Some(found) => found
+    None => {
+      reportUnsupported lowering, "a `while var` the checker recorded no plan for", pattern.span
+      return
+    }
+  }
+  if arm.branches.length() != 1 {
+    reportUnsupported lowering, "`while var` over alternatives, whose names are paths into different cases", pattern.span
+    return
+  }
+  const branch = arm.branches[0]
+  const location = locationOf lowering, at
+  const check = addBlock builder, "while", Some(location)
+  const inner = addBlock builder, "body", Some(location)
+  const done = addBlock builder, "done", Some(location)
+  finishBlock lowering, builder, Terminator.Jump(check)
+  continueIn lowering, builder, check
+  const subject = match referenceAt(lowering, builder, value, "`while var`") {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  if !subject.taken.isEmpty() {
+    reportUnsupported lowering, "`while var` on an element of a container, which would have to be put back", value.span
+    return
+  }
+  const named = match namedPaths(lowering, subject, branch, pattern.span) {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  const bare = plan.copy arms: [arm.copy(branches: [branch.copy(bindings: [])])]
+  const scrutinee = addTemporary builder, subject.annotation
+  emit builder, Instruction.Read(scrutinee, subject.reference)
+  const graph = decisionTreeOf bare
+  const walk = Walk bare, graph, [None], scrutinee, [inner], Some(done), [], pattern.span, location
+  emitWalk lowering, builder, walk
+  continueIn lowering, builder, inner
+  enterLoop lowering, done, check
+  for (declared, place) in named {
+    lowering.references.set declared, place
+  }
+  openScope lowering
+  lowerBlockInto lowering, builder, body, None
+  closeScope lowering, builder
+  for (declared, _) in named {
+    const _ = lowering.references.remove declared
+  }
   const _ = leaveLoop lowering
   if !lowering.isDiverged {
     finishBlock lowering, builder, Terminator.Jump(check)

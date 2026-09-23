@@ -120,10 +120,6 @@ copy instead of requiring one.
 rule that makes a `var` parameter second-class: it cannot be stored in a field, returned, or captured by a closure
 that escapes the block.
 
-**This page describes what the checker accepts. Running a program that uses `if var` is still ahead of the toolchain**:
-the native back end does not lower `if var` or `while var` yet, so `torb build` cannot turn the example above into a
-binary today. `torb check` accepts it, which is what every block on this page is verified against.
-
 ## Related
 
 - [Mutation and var paths](../types/var-paths.md) - what counts as a `var` path anywhere in the language.

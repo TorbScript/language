@@ -474,16 +474,16 @@ group "Places the source writes another way" {
 
 group "What a place cannot be yet" {
   /**
-   * An index is a path of its own now (`lower-collections.test.trb`): it takes the element out and puts it back. A
-   * **slice** is not, and cannot be one - it is a *window* into the base, so every element of it stays where it is and a
-   * write goes through an interior pointer, which is what 5.9b brings together with `Array<Item, Size>`.
+   * An index is a path of its own (`lower-collections.test.trb`): it takes the element out and puts it back. A
+   * **slice** is the same round trip over a window: `Slice.slice` takes the part out and `MutableSlice.replace` puts it
+   * back, so an assignment to one and a `var fn` on one both lower.
    */
-  test "a slice is a window, and a path through one is a clean finding" {
+  test "a slice is a window, and a path through one takes the part out and puts it back" {
     assert(
       unsupportedIn(
         "fn part(var items: ArrayList<Int>, var other: ArrayList<Int>) \{\n  items[0..1] = other\n\}"
       )
-        == ["an assignment through a slice, which is a window is not supported by the native back end yet"]
+        == []
     )
   }
 

@@ -13,9 +13,6 @@ source:
   - CONCEPT.md#distinct-types-opaque-aliases
 ---
 
-> **Not built natively yet.** `by` delegation is not built by the native back end yet, so `torb run` refuses the
-> examples here that use it. `torb check` accepts them, and the rules are the language's.
-
 There is no separate concept for "a type that wraps another type but is not interchangeable with it" - that is a
 `type` with one field. `by` forwards specific traits to that field, one decision per trait, so the wrapper costs
 nothing to use.

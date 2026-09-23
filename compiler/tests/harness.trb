@@ -357,10 +357,24 @@ public const preludeSource = r"""
   public native type ArrayList<Item> with List<Item>, From<Iterate<Item>> {
     native static fn from(items: Iterate<Item>): ArrayList<Item>
     native fn get(index: Int): Item?
+    native fn length(): Int
 
     fn at(key: Int): Item {
       get(key).expect("Key does not exist")
     }
+
+    /** `list[from..to]`, over the native that takes two numbers, as in `std/collections`. */
+    fn slice(range: Bounds<Int>): ArrayList<Item> {
+      sliceBetween(range.lowest() ?? 0, range.highest() ?? length())
+    }
+
+    /** `list[from..to] = values`, and what puts a window back. */
+    var fn replace(range: Bounds<Int>, values: ArrayList<Item>) {
+      replaceBetween(range.lowest() ?? 0, range.highest() ?? length(), values)
+    }
+
+    private native fn sliceBetween(start: Int, end: Int): ArrayList<Item>
+    private native var fn replaceBetween(start: Int, end: Int, values: ArrayList<Item>)
   }
 
   /** The trie, whose `from` waits for milestone 8: what a **planned** native looks like to the back end. */
@@ -405,7 +419,11 @@ public const preludeSource = r"""
     native fn contains(value: Item): Bool
   }
 
-  /** `[1, 2]` against an `Array<Int, 2>` writes the items into the inline slots, and the checker counts them. */
+  /**
+   * `[1, 2]` against an `Array<Int, 2>` writes the items into the inline slots, and the checker counts them. `get`,
+   * `at` and `set` are TorbScript over the two storage natives, as in `std/core`, so `values[index]` becomes one
+   * `Element` step.
+   */
   public native type Array<Item, const Size: Int>
     with Iterate<Item>, Length, MutableIndexed<Int, Item>
   {
@@ -415,6 +433,24 @@ public const preludeSource = r"""
 
     native fn length(): Int
     native fn iterate(): Iterator<Item>
+
+    fn get(index: Int): Item? {
+      if index < 0 || index >= Size {
+        return None
+      }
+      Some load(index)
+    }
+
+    fn at(key: Int): Item {
+      get(key).expect("Key does not exist")
+    }
+
+    var fn set(index: Int, value: Item) {
+      store index, value
+    }
+
+    private native fn load(index: Int): Item
+    private native var fn store(index: Int, value: Item)
   }
 
   public native fn print(...values: Show): Void

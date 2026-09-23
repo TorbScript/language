@@ -141,11 +141,9 @@ if [ "$tier" = "a" ]; then
   # shellcheck disable=SC2086
   gate "test (std/example packages, native)" "$torb" test $buildable
 
-  # `language.trb` is blocked by one back-end gap; the runner is here so that it is compared the moment it builds.
-  language_broken="tests/language/language.trb"
+  # A program that waits for a back-end gap is named here and skipped; none does.
+  language_broken=""
   gate "tests/language against .expected (native)" language_programs "$torb"
-  say "  skipped, does not build natively yet: tests/language/language.trb (a var receiver through a slice of a"
-  say "  trait-typed list)"
 
   gate "docs check" "$torb" docs check docs
   gate "docs index --check" "$torb" docs index --check docs

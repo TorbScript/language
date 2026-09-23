@@ -1082,6 +1082,8 @@ public type Checker {
   var reachingTraits: Map<Int, Bool> = [:]
   /** The traits a generic parameter is bounded by, by `ParameterId.value`: what a member lookup on it may see. */
   var parameterBounds: Map<Int, List<TypeId>> = [:]
+  /** The type of the value of a const parameter, by `ParameterId.value`: `Int` for `<const Size: Int>`. */
+  var constantValueTypes: Map<Int, TypeId> = [:]
   /**
    * Whether a value of a type holds an object anywhere inside it, by interned type id: the question a task boundary
    * asks. `sharedRunning` is the guard for a type that contains itself, and `sharedCycles` counts the times one was
@@ -1148,6 +1150,16 @@ public type Checker {
 
   var fn nominal(symbol: SymbolId, arguments: List<TypeId>): TypeId {
     types.intern TypeForm.Nominal(symbol, arguments)
+  }
+
+  /**
+   * The type of the value a const parameter stands for: `Int` for `<const Size: Int>`, the single item of its bounds.
+   * `None` for an ordinary type parameter, and for a const parameter whose declaration has not been read yet.
+   *
+   * It is what `Size` read as a value has, so `"{Size}"` finds the `Show` of an `Int` and `Size + 1` its `Add`.
+   */
+  fn constantValueType(parameter: ParameterId): TypeId? {
+    constantValueTypes.get parameter.value
   }
 
   fn signature(id: SignatureId): Signature {

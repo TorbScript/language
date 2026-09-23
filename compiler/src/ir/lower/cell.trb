@@ -58,7 +58,10 @@ fn madeEntryCell(var lowering: Lowering, symbol: SymbolId): EntryCellAccesses? {
   if !isEntryModule(lowering, site.module, statements) {
     return None
   }
-  const declared = lowering.checker.signature(signatureOf(lowering.checker, symbol)).form.result
+  // The identifier first, on a line of its own: asking for it may compute the signature, which writes the checker that
+  // an outer call would already have read - the constant of a receiver script is computed right here
+  const identifier = signatureOf lowering.checker, symbol
+  const declared = lowering.checker.signature(identifier).form.result
   if lowering.checker.isBroken(declared) {
     return None
   }

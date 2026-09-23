@@ -111,13 +111,13 @@ void torb_list_insert(torb_list *list, int64_t index, const void *value, torb_lo
 int64_t torb_list_length(torb_list list);
 /* ArrayList.removeAt, TrieList.removeAt */
 bool torb_list_remove_at(torb_list *list, int64_t index, void *out);
-/* ArrayList.replace, TrieList.replace */
+/* ArrayList.replaceBetween, TrieList.replaceBetween */
 void torb_list_replace(torb_list *list, int64_t from, int64_t to, torb_list values, torb_location at);
 /* ArrayList.reverse, TrieList.reverse */
 void torb_list_reverse(torb_list *list);
 /* ArrayList.set, TrieList.set */
 void torb_list_set(torb_list *list, int64_t index, const void *value, torb_location at);
-/* ArrayList.slice, TrieList.slice */
+/* ArrayList.sliceBetween, TrieList.sliceBetween */
 torb_list torb_list_slice(torb_list list, int64_t from, int64_t to, torb_location at);
 /* Machine.load */
 int64_t torb_machine_load(int64_t address);

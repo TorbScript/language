@@ -14,10 +14,6 @@ source:
   - std/core/src/operators.trb
 ---
 
-> **Not built natively yet.** Changing a slice in place, through a `var` receiver or a `var` argument, is not built by
-> the native back end yet, so `torb run` refuses the examples here that use it. `torb check` accepts them, and the rules
-> are the language's.
-
 `list[from..to]` reads as a value: a new `List` that shares the original's storage and starts counting at 0, unaffected
 by anything the original does afterward. The same expression used as a `var` path is the other half of `Slice`'s
 contract, `MutableSlice`: it changes that part of the original in place, which is what other languages need a mutable
@@ -50,9 +46,11 @@ value[from..to].compact()                List.compact: gives the slice storage o
    moment it is taken - the storage is shared - but it is still a value: `middle` above does not see `samples[0] = 0`,
    because that assignment never goes through `middle`'s path.
 
-2. **The same expression as a `var` path is a window: no copy, and the change lands in the original.**
+2. **The same expression as a `var` path is a window: the change lands in the original.**
    `samples[1..4].sort { value => value }` sorts exactly that part of `samples`, the same way a field step of a `var`
-   path would. See [Mutation and var paths](../types/var-paths.md) for the general rule a slice follows here.
+   path would. The part is taken out, changed and put back through `MutableSlice.replace`, exactly as an element of
+   `a[key]` is, so the change costs a copy of that part and nothing of the rest. See
+   [Mutation and var paths](../types/var-paths.md) for the general rule a slice follows here.
 
 3. **A slice keeps the whole original storage alive**, so a small slice of a big value is a small view backed by a big
    buffer. `header.compact()` gives it storage of its own, exactly as big as the slice needs, for the case where a

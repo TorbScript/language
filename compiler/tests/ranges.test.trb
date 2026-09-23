@@ -1,9 +1,10 @@
 /**
- * The range analysis: which overflow check is dropped, and which one may not be.
+ * The range analysis: which overflow check and which bounds check of an array is dropped, and which one may not be.
  *
  * A check that is dropped although it could fire is a **missing panic**, which is an observable difference between two
  * back ends - so both halves are asked here. What is written down is the IR text, where a dropped check reads
- * `add.i64.unchecked`, and the conformance suite's `overflow.trb` is what says the kept ones still fire.
+ * `add.i64.unchecked` or `[%5 unchecked]`, and the conformance suite's `overflow.trb` and `array-index-bounds.trb`
+ * are what say the kept ones still fire.
  */
 
 use test, group from "std/test"
@@ -61,6 +62,51 @@ group "a check the ranges prove cannot fire" {
     assert(text.split("add.i64.unchecked").length() == 3)
     // `sum + row` is not one of them: nothing bounds `sum`
     assert text.contains("%2 = intrinsic add.i64 %2, %3")
+  }
+}
+
+group "an index the ranges keep inside an array" {
+  /** `values[index]` under the guard of `for index in 0..4` over an `Array<Int, 4>` reads the slot without comparing. */
+  test "the counter of a loop over the size indexes without a check" {
+    const source = r"""
+      fn total(values: Array<Int, 4>): Int {
+        var sum = 0
+        for index in 0..4 {
+          sum = sum + values[index]
+        }
+        sum
+      }
+      """
+    const text = irOf source, "t_acme_x2f_app_main_total"
+    assert text.contains("read %0[%2 unchecked]")
+  }
+
+  /** One slot past the end is reachable, so the step keeps its comparison and the panic of `a[key]` with it. */
+  test "a loop that runs one past the size keeps the check" {
+    const source = r"""
+      fn total(values: Array<Int, 4>): Int {
+        var sum = 0
+        var index = 0
+        while index <= 4 {
+          sum = sum + values[index]
+          index = index + 1
+        }
+        sum
+      }
+      """
+    const text = irOf source, "t_acme_x2f_app_main_total"
+    assert text.contains("read %0[%")
+    assert(!text.contains(" unchecked]"))
+  }
+
+  /** An index the function is handed may be anything an `Int` holds. */
+  test "an index from a parameter keeps the check" {
+    const source = r"""
+      fn at(values: Array<Int, 4>, index: Int): Int {
+        values[index]
+      }
+      """
+    assert irOf(source, "t_acme_x2f_app_main_at").contains("read %0[%1]")
   }
 }
 

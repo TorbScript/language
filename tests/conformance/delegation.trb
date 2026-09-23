@@ -1,0 +1,32 @@
+/**
+ * **`by` forwards the required members of a trait to the one field.** `Add` and `Subtract` unwrap both operands and
+ * wrap the result again, `Compare` unwraps both and answers the field type's `Ordering`, and a default of the trait -
+ * `max`, `lessThan` - is the trait's own body calling the forwarded member. A `Show` delegated to a text field
+ * shows the text itself.
+ */
+
+type Meters with Show, Add & Subtract by value, Compare by value {
+  value: Float
+}
+
+type Count with Add by amount, Compare by amount {
+  amount: Int
+}
+
+type Label with Show by text {
+  text: String
+}
+
+const distance = Meters(5.0) + Meters(2.5)
+print distance
+print(distance - Meters(1.5))
+print distance.max(Meters(10.0))
+print(distance < Meters(8.0), distance.compare(Meters(7.5)))
+
+const total = Count(2) + Count(3) + Count(4)
+print(total.amount, total > Count(8))
+const counts = [Count(3), Count(1), Count(2)]
+print counts.sorted({ _ }).map({ _.amount }).toList()
+
+print Label("plain text")
+print "{Label("inside")}!"

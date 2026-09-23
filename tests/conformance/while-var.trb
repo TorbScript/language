@@ -1,0 +1,55 @@
+/**
+ * **`while var` binds paths into its subject, not copies, and tests the subject again every round.** The body changes
+ * what the subject holds through the names, and the next round sees the change: a countdown that lives in an `Option`
+ * runs until the body empties it, and a case with two fields is changed through both of its names.
+ */
+
+type Countdown {
+  var remaining: Int
+
+  var fn tick() {
+    remaining = remaining - 1
+  }
+}
+
+type Stage {
+  case Running(countdown: Countdown, log: String)
+  case Stopped
+}
+
+type Machine {
+  var current: Countdown? = None
+  var stage: Stage = .Stopped
+}
+
+var machine = Machine()
+machine.current = Some Countdown(3)
+var rounds = 0
+while var Some(countdown) = machine.current {
+  countdown.tick()
+  rounds = rounds + 1
+  if countdown.remaining == 0 {
+    machine.current = None
+  }
+}
+print "{rounds} rounds, then {machine.current}"
+
+machine.stage = .Running(Countdown(2), "")
+while var .Running(countdown, log) = machine.stage {
+  countdown.tick()
+  log = "{log}tick "
+  if countdown.remaining == 0 {
+    print log
+    machine.stage = .Stopped
+  }
+}
+print machine.stage
+
+var plain: Int? = Some 1
+while var Some(value) = plain {
+  value = value * 2
+  if value > 10 {
+    plain = None
+  }
+}
+print plain

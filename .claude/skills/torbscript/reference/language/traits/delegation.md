@@ -14,9 +14,6 @@ source:
   - CONCEPT.md#traits
 ---
 
-> **Not built natively yet.** `by` delegation is not built by the native back end yet, so `torb run` refuses the
-> examples here that use it. `torb check` accepts them, and the rules are the language's.
-
 `by` forwards a trait to the one field of a type, so a wrapper around a single value does not have to write out
 members that only ever call through to it.
 

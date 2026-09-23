@@ -908,7 +908,7 @@ deleted).
 | **5.7** | **The lists run.** The ABI of the containers, `var fn` members of a **trait-typed value**, the witness of a value as a *place*, element descriptors, `ContainerNew`, the list literal, `a[key]` reads, `for` over a collection, a range as a value; then **the bound on the instance set** (a default nothing overrides is no slot of a table), **nested tables**, `ArrayList.from` and `Range.iterate`/`length`/`show` as TorbScript. **Done since:** the map/set cursor with the map and set literals (`tests/conformance/maps-and-sets.trb`), index paths (`collection-places.trb`, and PERFORMANCE round P7's in-place write), variadics and the spread (`variadics.trb`). **Done in the long tail of 6.1:** list patterns, `String.chars`/`bytes`/`from` and `String.slice` (see the note at the end). **Gate: `tests/conformance/{collections,ranges,collection-index}.trb}` - `language.trb` is a stage-0 script and not a checked program (see the note)** | `ir/element.trb`, `ir/lower/{native,collection}.trb`, `ir/witness.trb`, `backend/c/{natives,emit}.trb`, `std/collections/src/list.trb`, `std/core/src/range.trb` | `tests/conformance/{natives,reassignment,trait-values,collections,ranges,collection-index}.trb`, `compiler/tests/{lower-natives,ir-elements,lower-generics}.test.trb`; `07-collections.trb` is two index-path findings away | 5.3, 5.6, 5.8 |
 | **5.8** | **Done.** Closures: closure conversion, environments, escaping or not, boxes for captured `var` bindings, `lazy` cells, function values, receiver closures, property commands. **Gate: `tests/conformance/{closures,counted-closures,dsl}.trb`** - `examples/config-dsl` loads a receiver *script* (7.4) and needs 5.7 and 5.10 besides (see the note below) | `ir/lower/closure.trb`, `ir/capture.trb` | `compiler/tests/lower-closures.test.trb` (19: the IR text, the pinned C, the findings); three native gate programs with zero live blocks | 5.6 |
 | **5.9a** | **Done.** `var` parameters and `var fn` receivers: a place as an argument, interior projections through fields, assignment and property commands through a path, `MakeUnique` per counted owner of the path | `ir/lower/place.trb` | `compiler/tests/lower-places.test.trb` (23: the IR text, the pinned C, the verifier's invariants); `tests/conformance/{places,place-counted}.trb` run natively with zero live blocks | 5.4 |
-| **5.9b** | The rest of the `var` paths: index paths (`TakeOut`/`PutBack`), slices as windows, `if var`/`while var`, `shared type` objects with their headers and trace functions, `FixedArray`, `Close`/`using`. **`Close`/`using` are done:** the drop function of an object that implements `Close` runs its `close()` and then its fields in reverse order, a binding that may hold one is released at the end of its block in reverse declaration order, a temporary at the end of its statement, and a cancelled task's frame the last declared first (`ir/lower/scope.trb`, `ir/closing.trb`, `resolvedScopeEnds` in `ir/ownership.trb`, `emitDropHelper` in `backend/c/emit.trb`, `torb_closing_begin` in `runtime/memory.c`; `tests/conformance/destructor-*.trb`). **`if var` is done:** its names are paths into the subject through `Lowering.references`, not copies (`lowerIfVarBinding` in `ir/lower/match.trb`, `tests/conformance/if-var.trb`); `while var` is not. **`File` is done as a value:** the `native shared type` of `std/fs` is `RuntimeKind.FileHandle`, the `torb_file *` of the runtime, retained generically and released through `torb_file_drop` (`tests/conformance/file-values.trb`). **A `var fn` on a freshly produced shared object** lowers the value into a hidden local and starts the path there (`temporaryPrelude`, `tests/conformance/temporary-receiver.trb`). **`FixedArray` is done:** `Array<Item, Size>` is a struct per item type and size with the items inline, retained and released item by item, built by `ArrayNew`, read and written through `Element` steps with the bounds checked, and every public member of `std/core`'s `Array` is TorbScript over three private storage natives ("What 5.9b decided about `Array<Item, Size>`", `tests/conformance/array-*.trb`) | `ir/lower/place.trb`, `ir/lower/match.trb`, `runtime/memory.c` | `01-bindings-and-values.trb`, `03-types.trb`, `08-control-flow.trb`, `tests/conformance/if-var.trb` | 5.9a, 5.7 |
+| **5.9b** | The rest of the `var` paths: index paths (`TakeOut`/`PutBack`), slices as windows, `if var`/`while var`, `shared type` objects with their headers and trace functions, `FixedArray`, `Close`/`using`. **`Close`/`using` are done:** the drop function of an object that implements `Close` runs its `close()` and then its fields in reverse order, a binding that may hold one is released at the end of its block in reverse declaration order, a temporary at the end of its statement, and a cancelled task's frame the last declared first (`ir/lower/scope.trb`, `ir/closing.trb`, `resolvedScopeEnds` in `ir/ownership.trb`, `emitDropHelper` in `backend/c/emit.trb`, `torb_closing_begin` in `runtime/memory.c`; `tests/conformance/destructor-*.trb`). **`if var` and `while var` are done:** their names are paths into the subject through `Lowering.references`, not copies, and `while var` forms them again at the head of every round (`lowerIfVarBinding` and `lowerWhileVarBinding` in `ir/lower/match.trb`, `tests/conformance/if-var.trb`, `while-var.trb`). **Slices as windows are done:** a `var` path through `a[from..to]` takes the part out with `Slice.slice` and puts it back with `MutableSlice.replace`, the round trip of an index (`takenElement` in `ir/lower/place.trb`, `tests/conformance/slice-window.trb`), and `ArrayList.slice`/`replace` are TorbScript over two private natives that take two numbers ("What 5.9b decided about windows"). **`by` delegation is done** (`Generated.Delegate`, `delegation.trb`), **a const parameter is a value of its type** (`"{Size}"`, `const-parameter-show.trb`), and **the range analysis drops an array's bounds check** where the index provably stays inside the size (`ir/ranges.trb`, `benchmarks/array-index`). **`File` is done as a value:** the `native shared type` of `std/fs` is `RuntimeKind.FileHandle`, the `torb_file *` of the runtime, retained generically and released through `torb_file_drop` (`tests/conformance/file-values.trb`). **A `var fn` on a freshly produced shared object** lowers the value into a hidden local and starts the path there (`temporaryPrelude`, `tests/conformance/temporary-receiver.trb`). **`FixedArray` is done:** `Array<Item, Size>` is a struct per item type and size with the items inline, retained and released item by item, built by `ArrayNew`, read and written through `Element` steps with the bounds checked, and every public member of `std/core`'s `Array` is TorbScript over three private storage natives ("What 5.9b decided about `Array<Item, Size>`", `tests/conformance/array-*.trb`) | `ir/lower/place.trb`, `ir/lower/match.trb`, `ir/lower/derive.trb`, `ir/ranges.trb`, `runtime/memory.c` | `01-bindings-and-values.trb`, `03-types.trb`, `07-collections.trb`, `08-control-flow.trb`, `tests/language/language.trb`, `tests/conformance/{if-var,while-var,slice-window,delegation,const-parameter-show}.trb` | 5.9a, 5.7 |
 | **5.10** | **Done, except what needs a collection.** Text: interpolation, `print`/`printError`, `Show` for every shape in the format of gap 23, float formatting in both back ends, `?.`. **The encoding half is done too:** the derived `encode`, `decode` and `describe` are one body per (type, format) out of the steps of `std/encoding`, and `std/json` and `rendered` are TorbScript without a native (`ir/lower/encoding.trb`, docs/design/ENCODING.md section 14; `tests/conformance/encoding-*.trb`) | `ir/lower/text.trb`, `ir/lower/match.trb`, `runtime/text.c` | `compiler/tests/lower-text.test.trb` (19); `tests/conformance/{interpolation,floats,optional-chain}.trb` run natively, compared with stage 0, zero live blocks | 5.6, 5.7 |
 | **5.11** | **The gate holds.** `assert` is lowered, `test`/`group` are functions of the runtime with a recovery point, `torb test <directory>` builds **one** binary for every test file and runs it, and `\n` is `\n` on both implementations. **Gate: `compiler/tests/*.test.trb` run from the native binary - 1482 passed, 0 failed (55 files), the same report as stage 0 line for line.** **Still open:** an `Expression<Value>` as a value - the static tree, `value()`, `captures()` - which nothing of `compiler/` needs | `ir/lower/quote.trb`, `ir/lower/match.trb`, `runtime/test.c`, `runtime/panic.c`, `runtime/console.c`, `cli/test.trb`, `backend/c/emit.trb` | `tests/conformance/{tests,test-failure,assert-values,nested-list-patterns}.trb`, `binary-only/assert-compound-capture.trb`, and the suite gate that compared the two reports | 5.10 |
 | **5.12** | **Done for what the compiler needs** (`File.createDirectory`, `Process.run`, `Clock.milliseconds` and the `.Fallible` shape of `std/fs`, see the note of 6.1's long tail). **Runtime half done.** **`Duration` and `Instant` are done:** records of `std/time` over one private `Int64` of nanoseconds, with comparison, arithmetic, `show` and `Int64.seconds`/`milliseconds` in TorbScript and `monotonicNanoseconds` (`torb_clock_now`) the one native; `Task.within` hands the runtime the limit's nanoseconds (`tests/conformance/{time,task-within}.trb`). The remaining std natives: `std/fs`, `std/io`, `std/process`, `std/time`, `std/math`, `std/environment`. **Gate: the tour runs** (01-09, 11, 12; `10-async` waits for 7.3) | `runtime/file.c`, `clock.c`, `environment.c`, `number.c` | `.expected` files for every tour module, run on stage 0 and natively | 5.3 (parallel with 5.8-5.11) |
@@ -1316,7 +1316,7 @@ accepts, the code won and this is the list. Everything else is as written.
   last use anyway. A nested pattern therefore costs one `Read` per step per block, and the C compiler flattens it.
 - **`if var` and `while var` wait for 5.9b.** The row of the table names `if var`, but the name it binds is a *path into
   its subject* (the checker's own note, gap 3), and a path is a `Reference` - which is milestone 5.9's. Binding it by
-  value would compile and silently drop a write, so it is a clean finding instead.
+  value would compile and silently drop a write, so it is a clean finding instead. **Later:** both are done (5.9b).
 - **`??` inlines the thunk the checker asked for.** The checker records `a ?? b` as `orElse` with a `lazy` argument
   (gap 13); a thunk is a closure and closures are 5.8's. So the lowering emits the control flow the `lazy` stands for -
   the fallback in the arm that needs it - which short circuits as decided gap 1 asks and allocates nothing.
@@ -1658,7 +1658,8 @@ parameters and `var fn` receivers, which need nothing of 5.6 and 5.7 at all.
 - **`if var` and `while var` are still a finding, and 5.9b's.** They do *not* fall out of this mechanism: a place here is
   formed at a call site and dies with the call, while a pattern binds a name that lives for a whole block - which needs
   the lowering to key a *binding* to a `Reference` instead of to a slot, and every read, every write and every argument
-  of such a name to go through it. That is a second mechanism, not this one.
+  of such a name to go through it. That is a second mechanism, not this one. **Later:** it is `Lowering.references`,
+  and both are done (5.9b).
 - **A body whose result the checker inferred as `Never` and that does `return` is a finding.** `Parser.recoverToLineEnd`
   was `loop { ... return ... }`: the checker infers `Never` from a body that never *ends*, although the bare
   `return`s inside the loop do leave the function. The IR would then carry a `Return` out of a `_Noreturn` function,
@@ -2178,7 +2179,8 @@ that were all one missing cursor.
   `result.clear()` and one `add` per item of the part - the only way a default can build a `Self` whose type it does not
   know, and the price of not knowing it is one copy of the part. Nothing observable differs between the two, which is what
   the gate asserts. **A `var` path *through* a slice is untouched** and still 5.9b's: a window is what an interior place
-  needs, and that is a different mechanism from a slice as a value.
+  needs, and that is a different mechanism from a slice as a value. **Later:** it needed no interior place - a window is
+  the round trip of an index, taken out with `slice` and put back with `replace` ("What 5.9b decided about windows").
 - **And the lookup a default needs was missing in `dynamicDispatch`.** The bound a call resolved is the trait that
   *requires* a member, and another trait of the closure may be the one that writes it - `Slice.slice` is required and
   `List` gives it a body, exactly as `Collection.add` is required and `Map` gives it one. `providerOfMember` asks that
@@ -3825,14 +3827,14 @@ The pieces around them:
 - **`a[index] = value` out of bounds panics in `Array.set`** with `index -1 is out of bounds for a length of 3`, the
   message a `List` gives the same mistake, at `std/core/src/array.trb` (`array-set-bounds.trb`). A constant index out of
   bounds is a compile error of the checker (`requireIndexInBounds`), so neither panic can be reached by a literal index.
-- **A bounds check the C compiler can prove is gone, and only that one.** `get` and `set` compare the index before the
-  step does, and the step's check is inline, so a C compiler folds the second comparison into the first.
-  `ir/ranges.trb` drops arithmetic checks only, so an `Element` step inside `for index in 0..Size` still carries its
-  comparison into the C.
+- **A bounds check the ranges prove is gone.** `get` and `set` compare the index before the step does, and the step's
+  check is inline, so a C compiler folds the second comparison into the first. An `Element` step of a `Read` or a
+  `Write` whose index `ir/ranges.trb` keeps inside `0..Size` - `values[index]` inside `for index in 0..Size` - is
+  marked `checked: false` and emitted as a plain `items[index]` ("What 5.9b decided about windows").
 - **`HashMap()` builds**: the constructor of a container the runtime owns is the empty container over its element
   descriptors, the `ContainerNew` its `withCapacity` is (`lowerEmptyContainer` in `ir/lower/call.trb`). The array
-  literal of tour 07 had hidden it; behind both stands a `var` receiver through a slice window
-  (`samples[1..4].sort { _ }`), the other open half of this row, which still keeps tour 07 from building.
+  literal of tour 07 had hidden it; behind both stood a `var` receiver through a slice window
+  (`samples[1..4].sort { _ }`), which builds as well (the next section).
 
 - **A field that is an array is not read whole for one element.** `cells[row][column]` inside a method reads `cells`
   into a slot before the bracket, which for counted items would be a retain and a release per item on every access;
@@ -3840,9 +3842,65 @@ The pieces around them:
   method reads `self->f_cells.items[row].items[column]` and nothing else. Only constants and intrinsics may stand
   between the two - the key of `cells[row + 1]` - because neither touches memory.
 
-**Open.** The `Element` step of an array still carries its check where the range analysis could prove it unnecessary.
-`"{Size}"` is a false positive of the checker - a const parameter is not `Show` there although its
-value is an `Int` - so `Array.set` interpolates `length()` instead.
+**Open.** `Array.set` interpolates `length()` and not `"{Size}"`: the checker that accepts the second is not the seed's
+yet, and `std/` is built by the seed. It changes once the seed is refreshed.
+
+### What 5.9b decided about windows, `while var` and `by`
+
+**A window is the round trip of an index.** The row once said a slice as a `var` path needs an interior pointer into
+the base. It does not: `samples[1..4].sort { _ }` is exactly `a[key]` with a range for the key - the part is taken out
+with `Slice.slice` into a slot of the frame, the access runs against that slot, and `MutableSlice.replace` puts it back
+(`takenElement` in `ir/lower/place.trb`, with `TakenKind.isWindow`). The key is the range as the `Bounds<Int>` the
+checker coerced it to, lowered once and used by both halves. Everything a path does falls out: a `var fn` on the window,
+a `var` argument (`zero readings[1..3]`), an assignment (`samples[0..2] = [8]`, a `Write` to the window and then the
+`replace`), a window behind a field (`shelf.books[0..3]`) and behind an index (`grid[1][0..2]`).
+
+- **What it costs.** A window of a concrete `ArrayList` shares the storage, so the first write through it copies the part
+  it covers and `replace` writes that part back; a trait-typed `List` reaches the default `slice`, which copies the part
+  anyway. Nothing of the rest of the list is touched, and the language page says so
+  (docs/language/collections-and-iteration/slices.md, rule 2).
+- **`replace` of a trait-typed list is a default of `List`.** `replace(range, values: Self)` takes a second `Self` and is
+  in no witness table, for the reason `slice` is not (the note of 5.7 above). So `List` writes it in TorbScript - the
+  overlapping items through `self[index] = ...`, the rest inserted or removed - and `ArrayList` overrides it.
+- **The calling convention of the two natives.** `slice` and `replace` take a `Bounds<Int>`, a trait value the runtime
+  cannot read, while `torb_list_slice` and `torb_list_replace` take two numbers. The manifest mapped the declarations
+  straight onto the runtime, which no call could reach. They are TorbScript now, over two private natives that take the
+  numbers - `sliceBetween(start, end)` and `replaceBetween(start, end, values)`, the two rows of the manifest - and
+  `windowOf` in `std/collections/src/list.trb` turns a range into the two numbers and panics with the runtime's two
+  messages, so every slice and every replacement of the file agrees about them. The pattern is `String.slice` over
+  `sliceBytes`.
+- **A slice of items with a destructor copies**, now that the native slice is reachable: `sliceSymbolOf` in
+  `backend/c/body.trb` calls `torb_list_slice_copied` where the item may hold a `Close` object
+  (`tests/conformance/destructor-slice-concrete.trb`, the concrete twin of `destructor-slice.trb`).
+
+**`while var` is `if var` at the head of a loop.** The subject's path is formed again at the head of every round and
+the names are keyed to paths from it (`namedPaths`, shared with `if var`), because the body may have written the subject
+and nothing formed before that write may be used after it (`lowerWhileVarBinding` in `ir/lower/match.trb`). A subject
+that is an element of a container stays a finding for both, as does a pattern with alternatives.
+
+**`by` is a generated member.** A required member of a delegated implementation has no body anywhere, which is what a
+derived member is as well, so it is one more kind of `Generated`: `Generated.Delegate` (`delegateBody` in
+`ir/lower/derive.trb`). Every parameter of the delegating type - the receiver and every `Self` - is unwrapped to the one
+field, the field type's own member of the same trait is called (the bound with the delegating type replaced by the
+field's: `Add<Meters, Meters>` becomes `Add<Float, Float>`), and a result of the delegating type is wrapped again. A
+default of the trait (`max`, `lessThan`) is its own body and calls the forwarded member, so it needs nothing. A member
+with a `var` parameter - `encode` of `with Encode by value` - is a finding (docs/design/ENCODING.md, slice 7).
+
+**A const parameter read as a value has the type of its value.** `Size` of `<const Size: Int>` was typed as the
+parameter itself, which every operator accepted only because a const parameter counted as "undecided" - and
+`"{Size}"` looked for a `Show` of the parameter and found none. The checker now records the value type of every const
+parameter when it reads the declaration (`Checker.constantValueTypes`, `constantValueType`), and the name resolves to
+an `Int` with the parameter kept as its resolution, which is what the lowering substitutes
+(`tests/conformance/const-parameter-show.trb`).
+
+**The range analysis drops an array's bounds check.** `PathStep.Element` carries `checked`, true unless
+`ir/ranges.trb` proved the index inside `0..Size` for the `Read` or `Write` it stands in; the C back end then indexes
+the slots without `torb_array_index`. Proving it needed one fix of the analysis itself: an instruction reset what it
+defines *before* it read its operands, so `%5 = add %5, %9` - the step of every counted loop - added one to a counter
+it had just forgotten, and the counter's lower bound was lost at the loop head. The operands are read from the facts in
+front of the instruction now. Measured with `benchmarks/array-index` (an `Array<Int, 64>` summed 2 000 000 times, gcc 13
+`-O2`, a machine with other builds running): 58.7 ms before and 49.9 ms after, against 27.6-30.0 ms for the C twin; the
+rest of the ratio is the overflow check of the sum, which no range can drop.
 
 ---
 

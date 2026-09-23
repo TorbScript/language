@@ -66,7 +66,7 @@ under a `build/` directory), then `check .` ("no problems"), `check --statistics
 over `tests/lexer-cases/` and `tests/parser-cases/` as well), `test` of every std/example test package (all of them
 build natively; one that waits for a back-end gap is named in [docs/RUST-EXIT.md](../docs/RUST-EXIT.md) section 2.4 and
 in the `broken` list of `gates.sh`, which skips it), every program of `tests/language/` run with
-`torb run` against its `.expected` (`language.trb` is skipped today, with the back-end gaps printed), the three docs gates
+`torb run` against its `.expected` (all of them build natively), the three docs gates
 (`docs check`, `docs index --check`, `docs skill --check`), and `canon --check` with the five rules. Everything it
 builds only to run it once is built with the `dev` profile.
 

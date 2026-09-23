@@ -1,0 +1,28 @@
+/**
+ * A slice of a concrete `ArrayList` whose items have a destructor copies the items it covers instead of sharing the
+ * storage: `ArrayList.slice` is the native one, and the items it left out close as soon as the list they came from is
+ * gone, not when the slice goes (docs/design/DESTRUCTORS.md 2a). `destructor-slice.trb` is the same through a
+ * trait-typed `List`, whose shared default copies anyway.
+ */
+
+shared type Probe with Close {
+  name: String
+
+  var fn close() {
+    print "close {name}"
+  }
+}
+
+/** The middle of a list, which outlives the list it was taken from. */
+fn middleOf(probes: ArrayList<Probe>): ArrayList<Probe> {
+  probes[1..2]
+}
+
+/** The list is a temporary, so it is gone at the end of the statement that slices it. */
+fn slicing() {
+  const middle = middleOf ArrayList.from([Probe("first"), Probe("second"), Probe("third")])
+  print "the list is gone, the slice holds {middle.length()}: {middle[0].name}"
+}
+
+slicing()
+print "after the block"

@@ -233,27 +233,57 @@ public trait List<Item>
    * word: a back end may not disagree with the other about them.
    */
   fn slice(range: Bounds<Int>): Self {
-    const count = length()
-    // What an open end means is the receiver's decision, and for a list it is the first and the last index
-    const from = range.lowest() ?? 0
-    const written = range.highest() ?? count
-    const last = if range.includesHighest() { written + 1 } else { written }
-    if from < 0 || last > count {
-      const shown = if from < 0 { from } else { last }
-      panic "index {shown} is out of bounds for a length of {count}"
-    }
-    if from > last {
-      panic "the range {from}..{last} starts after it ends"
-    }
+    const (start, end) = windowOf range, length()
     // A copy of the receiver, emptied: the only way a default can build a `Self` it does not know the type of
     var result = self
     result.clear()
-    var index = from
-    while index < last {
+    var index = start
+    while index < end {
       result.append self[index]
       index = index + 1
     }
     result
+  }
+
+  /**
+   * `numbers[1..3] = values`: the items of that part replaced by `values`, in place. The two need not be the same
+   * length, so the list grows or shrinks by the difference.
+   *
+   * It is also what puts a window back: `numbers[1..4].sort()` sorts the slice and then writes it back through this
+   * member, which is how a `var` path goes through `a[from..to]` ([MutableSlice]).
+   *
+   * `ArrayList` answers it natively. This default is what a **trait-typed** `List<Item>` reaches, for the reason
+   * [List.slice] gives: `values` is a `Self`, so the member is in no witness table. It writes the overlapping items in
+   * place and inserts or removes the rest.
+   *
+   * # Examples
+   *
+   *     var numbers = [5, 3, 9, 1, 7]
+   *     numbers[1..3] = [0]
+   *     print numbers
+   *
+   * # Panics
+   *
+   * When the range reaches outside the list, or starts after it ends, with the messages of [List.slice].
+   */
+  var fn replace(range: Bounds<Int>, values: Self) {
+    const (start, end) = windowOf range, length()
+    const added = values.length()
+    const kept = (end - start).min(added)
+    var index = 0
+    while index < kept {
+      self[start + index] = values[index]
+      index = index + 1
+    }
+    while index < added {
+      insert(start + index, values[index])
+      index = index + 1
+    }
+    var surplus = end - start - kept
+    while surplus > 0 {
+      removeAt(start + kept)
+      surplus = surplus - 1
+    }
   }
 
   /** Swaps the items at `first` and `second`, in place. */
@@ -380,6 +410,31 @@ extend<Item: Hash> List<Item> with Hash {
   }
 }
 
+/**
+ * Where the part of a list of `count` items that `range` covers starts, and where it ends (exclusive). An open end is
+ * the start or the end of the list, which is the receiver's decision and not the range's ([Slice]).
+ *
+ * Every slice and every replacement of this file goes through it, so all of them panic with the same two messages.
+ *
+ * # Panics
+ *
+ * When the range reaches outside the list, with `index <index> is out of bounds for a length of <count>`, or starts
+ * after it ends, with `the range <from>..<to> starts after it ends`.
+ */
+fn windowOf(range: Bounds<Int>, count: Int): (start: Int, end: Int) {
+  const from = range.lowest() ?? 0
+  const written = range.highest() ?? count
+  const to = if range.includesHighest() { written + 1 } else { written }
+  if from < 0 || to > count {
+    const shown = if from < 0 { from } else { to }
+    panic "index {shown} is out of bounds for a length of {count}"
+  }
+  if from > to {
+    panic "the range {from}..{to} starts after it ends"
+  }
+  (from, to)
+}
+
 // --- Implementations -----------------------------------------------------------------------------------
 
 /**
@@ -451,10 +506,26 @@ public native type ArrayList<Item>
   native fn get(index: Int): Item?
 
   /**
-   * The native, O(1) slice: shares storage with the receiver. See [List.slice] for the shared default a
-   * trait-typed `List` reaches instead.
+   * The O(1) slice: it shares storage with the receiver until one of the two is written. See [List.slice] for the
+   * shared default a trait-typed `List` reaches instead.
+   *
+   * A list whose items may hold an object with a destructor gets a copy instead, so that an item the slice left out
+   * closes when the list it came from is gone (docs/design/DESTRUCTORS.md 2a).
+   *
+   * # Panics
+   *
+   * When the range reaches outside the list, or starts after it ends, with the messages of [List.slice].
    */
-  native fn slice(range: Bounds<Int>): ArrayList<Item>
+  fn slice(range: Bounds<Int>): ArrayList<Item> {
+    const (start, end) = windowOf range, length()
+    sliceBetween start, end
+  }
+
+  /**
+   * The items from `from` up to `to` (exclusive), sharing the storage: what [ArrayList.slice] is built on, once the
+   * range is two numbers. The runtime checks both ends again.
+   */
+  private native fn sliceBetween(from: Int, to: Int): ArrayList<Item>
 
   /** Ordinary TorbScript over `get`: see [ListIterator]. */
   fn iterate(): Iterator<Item> {
@@ -475,9 +546,20 @@ public native type ArrayList<Item>
 
   /**
    * Replaces the items of `range` with `values`, in place; the two need not be the same length. What
-   * `list[from..to] = values` goes through; see [MutableSlice.replace].
+   * `list[from..to] = values` goes through, and what puts a window back after `list[1..4].sort()`; see
+   * [MutableSlice.replace].
+   *
+   * # Panics
+   *
+   * When the range reaches outside the list, or starts after it ends, with the messages of [List.slice].
    */
-  native var fn replace(range: Bounds<Int>, values: ArrayList<Item>)
+  var fn replace(range: Bounds<Int>, values: ArrayList<Item>) {
+    const (start, end) = windowOf range, length()
+    replaceBetween start, end, values
+  }
+
+  /** The items from `from` up to `to` (exclusive) replaced by `values`: what [ArrayList.replace] is built on. */
+  private native var fn replaceBetween(from: Int, to: Int, values: ArrayList<Item>)
 
   /** Reverses the order, in place. */
   native var fn reverse()
@@ -521,7 +603,13 @@ public native type TrieList<Item>
   }
 
   /** Same as [ArrayList.slice]. */
-  native fn slice(range: Bounds<Int>): TrieList<Item>
+  fn slice(range: Bounds<Int>): TrieList<Item> {
+    const (start, end) = windowOf range, length()
+    sliceBetween start, end
+  }
+
+  /** Same as [ArrayList.sliceBetween]. */
+  private native fn sliceBetween(from: Int, to: Int): TrieList<Item>
 
   /** Same as [ArrayList.append]. */
   native var fn append(value: Item)
@@ -536,7 +624,13 @@ public native type TrieList<Item>
   native var fn removeAt(index: Int): Item?
 
   /** Same as [ArrayList.replace]. */
-  native var fn replace(range: Bounds<Int>, values: TrieList<Item>)
+  var fn replace(range: Bounds<Int>, values: TrieList<Item>) {
+    const (start, end) = windowOf range, length()
+    replaceBetween start, end, values
+  }
+
+  /** Same as [ArrayList.replaceBetween]. */
+  private native var fn replaceBetween(from: Int, to: Int, values: TrieList<Item>)
 
   /** Same as [ArrayList.reverse]. */
   native var fn reverse()

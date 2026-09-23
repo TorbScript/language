@@ -194,7 +194,7 @@ fn markWitness(var reads: List<Bool>, witness: WitnessSource) {
 fn markReference(var reads: List<Bool>, reference: Reference) {
   markRead reads, reference.base
   for step in reference.steps {
-    if const .Element(_, index, _, _) = step {
+    if const .Element(_, index, _, _, _) = step {
       markRead reads, index
     }
   }
@@ -2903,8 +2903,8 @@ public fn placeExpression(
         found = CExpression.Dereference found
         current = annotation
       }
-      .Element(item, index, missing, location) => {
-        found = elementReferenceOf emission, program, body, found, current, item, index, missing, location
+      .Element(item, index, missing, location, checked) => {
+        found = elementReferenceOf emission, program, body, found, current, item, index, missing, location, checked
         current = item
       }
     }
@@ -2937,10 +2937,14 @@ fn elementReferenceOf(
   index: Slot,
   missing: StaticId,
   location: LocationId,
+  checked: Bool,
 ): CExpression {
   // An array holds its items inline, so the element is a slot of its struct: no call, no uniqueness to arrange - only
-  // the bounds, which `torb_array_index` checks against the size the type says
+  // the bounds, which `torb_array_index` checks against the size the type says, unless `ir/ranges.trb` proved them
   if const .FixedArray(_, size) = program.typeAt(annotation) {
+    if !checked {
+      return CExpression.Index CExpression.Member(container, arrayItemsMember), slotExpression(body, index)
+    }
     const checked = CExpression.Call(CExpression.Name("torb_array_index"), [
       slotExpression(body, index),
       CExpression.Literal("{size}"),
@@ -2999,7 +3003,7 @@ public fn placeTypeOf(program: IrProgram, body: Body, reference: Reference): IrT
       .Contents(annotation) => {
         current = annotation
       }
-      .Element(item, _, _, _) => {
+      .Element(item, _, _, _, _) => {
         current = item
       }
     }

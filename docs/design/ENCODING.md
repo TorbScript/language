@@ -876,7 +876,7 @@ the new vocabulary to exist, so none of them is green without the others.
 | 4 `EncodedValue` and `Structure` | **done** - `std/encoding/src/values.trb`, `structure.trb`; `rendered` replaces the `describe` native |
 | 5 `Expression.captures()` | **done** in the declarations; the natives behind it are still the planned ones of `Expression` |
 | 6 `std/json` in TorbScript | **done** - no native left; the planned `Json.*` and `describe` rows are gone from the manifest |
-| 7 `with Encode by value` | **open** - `by` delegation is not built natively at all yet |
+| 7 `with Encode by value` | **open** - `by` delegation is built natively, but not for a member with a `var` parameter, which `encode` is (point 4 of "What the checker and the back end must support") |
 | 8 `std/xml` | **open** |
 
 **Slice 1 — the vocabulary.** `std/encoding`: `Encoder` and `Decoder` become one flat trait each, `Encode`/`Decode` take

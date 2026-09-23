@@ -146,6 +146,19 @@ behind it. Of the 17 left, 12 are natives the runtime does not provide yet by de
 `standardInput`), two belong to 7.4 (`Script`, a receiver script), and the other three are a quoted expression, `by`
 delegation and the slice window.
 
+**Re-measured after the round that finished 5.9b** (docs/BACKEND.md, "What 5.9b decided about windows, `while var` and
+`by`"): from **35 037 of 35 054** functions with **17** constructs not supported (main at `289a655`) to **36 219 of
+36 234 with 15** (merged with main at `b4f8055`, the worker pool and `std/parallel` among it). Gone are the two that
+were the back end's own: `by` delegation (tour 03) and the `var` receiver through a slice window (tour 07), each with a
+conformance program (`delegation`, `slice-window`), and `tests/language/language.trb` builds and is compared by tier A.
+`while var` and `"{Size}"` were no finding of this list - the first was never reached by a program of the repository,
+the second was a false positive of the checker - and have conformance programs of their own too (`while-var`,
+`const-parameter-show`). Of the 15 left, 12 are natives the runtime does not provide yet by design, two belong to 7.4
+(`Script`, a receiver script) and one is a quoted expression. The run over the whole repository needed a fix of its
+own: `madeEntryCell` read a signature in the same expression that computed it, and the constant of a receiver script
+(`examples/config-dsl/config.trb`) is computed right there, so `torb ir --statistics .` panicked with `Key does not
+exist`.
+
 **None of this blocks the exit.** A construct the back end does not lower is a gap of the back end and is tracked as
 one; that stage 0 happens to interpret it is not a reason to keep 14 435 lines of Rust. The proof is the first row of
 the table: **the compiler lowers completely**, so it, its tests and every gate are already independent of stage 0. The
