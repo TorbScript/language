@@ -1,6 +1,6 @@
 # The Operating System
 
-**Status: proposed** — there is no `std/os` yet. `std/environment` exists with one native (`Environment.get`), and
+**Status: decided, not implemented** — there is no `std/os` yet. `std/environment` exists with one native (`Environment.get`), and
 `Process.executablePath()` in `std/process` answers on Windows and Linux only. The one probe of section 2 type checks
 and builds natively today with a literal standing in for the compile-time constant; nothing else here was run.
 
@@ -1624,6 +1624,11 @@ from 7.4; the waiting calls move onto the blocking pool with 7.7; signals are `s
 ## 12. Open
 
 Everything technical above is decided. These are questions of taste or direction, and only the owner answers them.
+
+**Answered by the owner (2026-09-23):** 1 - the rule is accepted as written. 2 - `OperatingSystem.current` (one
+`static current` per type). 3 - FreeBSD is in from the start, a fourth case every branch handles (slice 7 moves up
+with the others). 4 - `~/Library/Application Support` on macOS. Question 5 is still open; until the owner says otherwise
+`ByteSize` shows binary units.
 
 1. **The construct's rule itself (section 2, "The rule").** It is the one language addition of this design: a `match`
    on a compile-time constant keeps one arm, every arm is still checked, exhaustiveness is by type. It is general — it
