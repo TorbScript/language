@@ -1,0 +1,690 @@
+/**
+ * The bytecode of the VM: what one program is once the final IR has been encoded for the interpreter
+ * (docs/design/VM.md section 3).
+ *
+ * A [BytecodeProgram] holds one [Chunk] per function, the program-wide tables a chunk names by index - the constant
+ * pool, the shapes that say how a value is retained and released, the witness tables, the element descriptors, the
+ * locations and the runtime functions - and nothing that has to be built while the program runs. A chunk is one
+ * `List<Int64>` of code: a head word per instruction ([Opcode] in bits 0-7, three operands of sixteen bits) followed by
+ * its tail words.
+ *
+ * Every register operand is a **word offset** into the frame, never a slot number: the emitter laid the frame out once
+ * (`./words`), and the interpreter only adds the frame's base.
+ *
+ * # Related
+ *
+ * - [Opcode] - every instruction, with the meaning of its operands.
+ * - [KernelOperation] - what an instruction hands to the C runtime through the one native of the kernel.
+ * - [Shape] - how a value of one type is retained and released, which is what `copy`, `retain` and `release` name.
+ */
+
+use Location from "../../ir/ir"
+
+// --- Opcodes --------------------------------------------------------------------------------------------------------
+
+/**
+ * One instruction of the VM. `A`, `B` and `C` are the three sixteen-bit operands of the head word, `T0`, `T1`, ... its
+ * tail words; a register is a word offset into the frame, and a width counts words.
+ *
+ * The opcode is its position in [allOpcodes], so a zero word is `Unreachable`: code that was never written stops.
+ */
+public type Opcode {
+  /** A block the IR says nothing reaches. Reaching it is an internal error of the compiler. */
+  case Unreachable
+  /** `A` = target, `B` = source, `C` = width: the words, no count changes. `Move`, and the words of a `Copy`. */
+  case Move
+  /** `A` = target, `B` = width, `T0` = the offset of the constant in the pool's words. */
+  case Constant
+  /** `A` = target, `T0` = the value of the word. */
+  case Word
+  /** `A` = target, `B` = width: zero words, the empty variant of a niche. */
+  case Zero
+  /** `A` = target, `B` = place: the words at the place, no count changes. The IR's `Read`, before its retain. */
+  case Load
+  /** `A` = place, `B` = value: the words to the place. The IR's `Write`, after the release of what was there. */
+  case Store
+  /** `A` = target, `B` = place: the one reference word of the place, which is what a `var` parameter receives. */
+  case Reference
+  /** `A` = target, `B` = argument count, `C` = 1 when there is a result; `T0` = chunk, then one register per argument. */
+  case Call
+  /** `A` = target, `B` = closure, `C` = argument count; `T0` = 1 when there is a result, then the argument registers. */
+  case CallClosure
+  /**
+   * `A` = target, `B` = argument count, `C` = 1 when there is a result; `T0` = witness source, `T1` = member, then the
+   * argument registers. The receiver is the payload of the value the source reads its table out of.
+   */
+  case CallWitness
+  /** `A` = target, `B` = witness source: the table (its index plus one) into one word. */
+  case WitnessTable
+  /** `A` = the number of tail words; the tail is a [KernelOperation] and its operands. */
+  case Kernel
+  /** `A` = target, `B`, `C` = operands, `T0` = location: `Int64` addition that panics on overflow. */
+  case AddInteger
+  case SubtractInteger
+  case MultiplyInteger
+  /** Panics on a zero divisor and on the one quotient that overflows. */
+  case DivideInteger
+  case RemainderInteger
+  /** `A` = target, `B` = operand, `T0` = location. */
+  case NegateInteger
+  /** `A` = target, `B`, `C` = operands: an `Int64` operation the range analysis proved cannot overflow. */
+  case AddUnchecked
+  case SubtractUnchecked
+  case MultiplyUnchecked
+  /** `A` = target, `B`, `C` = operands: one word compared with one word (every integer but `UInt64`, `Bool`, `Char`). */
+  case Equal
+  case NotEqual
+  /** Signed: every signed integer, an unsigned one narrower than 64 bits, `Char` and `Bool` are all sign-correct words. */
+  case Less
+  case LessOrEqual
+  case Greater
+  case GreaterOrEqual
+  /** `A` = target, `B` = operand. */
+  case Not
+  /** `A` = target, `B` = source, `C` = word offset of the tag inside an inline variant. */
+  case Tag
+  /** `A` = target, `B` = source, `C` = the payload variant of a niche: the tag is read off the first word. */
+  case TagNiche
+  /** `T0` = code offset. */
+  case Jump
+  /** `A` = condition; `T0` = code offset when true, `T1` when false. */
+  case Branch
+  /** `A` = scrutinee, `B` = count; then `count` pairs of value and code offset, then the offset of `otherwise`. */
+  case Switch
+  /** `A` = register, `B` = width (0: no value). */
+  case Return
+  /** Ends a task as cancelled (the IR's `Stop`). */
+  case Stop
+  /**
+   * `A` = target, `B` = width; `T0` = the cell's first word (after the constant pool: its flag, then its value), `T1` = the chunk of
+   * the initializer. The accessor of a module constant that is no static data: the value is built once, inside an
+   * immortal region, and every read after the first copies it.
+   */
+  case Cell
+
+  /** The number the head word carries. */
+  fn number(): Int {
+    match self {
+      .Unreachable => 0
+      .Move => 1
+      .Constant => 2
+      .Word => 3
+      .Zero => 4
+      .Load => 5
+      .Store => 6
+      .Reference => 7
+      .Call => 8
+      .CallClosure => 9
+      .CallWitness => 10
+      .WitnessTable => 11
+      .Kernel => 12
+      .AddInteger => 13
+      .SubtractInteger => 14
+      .MultiplyInteger => 15
+      .DivideInteger => 16
+      .RemainderInteger => 17
+      .NegateInteger => 18
+      .AddUnchecked => 19
+      .SubtractUnchecked => 20
+      .MultiplyUnchecked => 21
+      .Equal => 22
+      .NotEqual => 23
+      .Less => 24
+      .LessOrEqual => 25
+      .Greater => 26
+      .GreaterOrEqual => 27
+      .Not => 28
+      .Tag => 29
+      .TagNiche => 30
+      .Jump => 31
+      .Branch => 32
+      .Switch => 33
+      .Return => 34
+      .Stop => 35
+      .Cell => 36
+    }
+  }
+
+  /** The name the disassembly writes. */
+  fn spelling(): String {
+    match self {
+      .Unreachable => "unreachable"
+      .Move => "move"
+      .Constant => "constant"
+      .Word => "word"
+      .Zero => "zero"
+      .Load => "load"
+      .Store => "store"
+      .Reference => "reference"
+      .Call => "call"
+      .CallClosure => "call.closure"
+      .CallWitness => "call.witness"
+      .WitnessTable => "table"
+      .Kernel => "kernel"
+      .AddInteger => "add.i64"
+      .SubtractInteger => "subtract.i64"
+      .MultiplyInteger => "multiply.i64"
+      .DivideInteger => "divide.i64"
+      .RemainderInteger => "remainder.i64"
+      .NegateInteger => "negate.i64"
+      .AddUnchecked => "add.i64.unchecked"
+      .SubtractUnchecked => "subtract.i64.unchecked"
+      .MultiplyUnchecked => "multiply.i64.unchecked"
+      .Equal => "equal"
+      .NotEqual => "not.equal"
+      .Less => "less"
+      .LessOrEqual => "less.or.equal"
+      .Greater => "greater"
+      .GreaterOrEqual => "greater.or.equal"
+      .Not => "not"
+      .Tag => "tag"
+      .TagNiche => "tag.niche"
+      .Jump => "jump"
+      .Branch => "branch"
+      .Switch => "switch"
+      .Return => "return"
+      .Stop => "stop"
+      .Cell => "cell"
+    }
+  }
+}
+
+/** Every opcode, in the order of [Opcode.number]: the table the interpreter decodes a head word with. */
+public const allOpcodes: List<Opcode> = [
+  Opcode.Unreachable,
+  Opcode.Move,
+  Opcode.Constant,
+  Opcode.Word,
+  Opcode.Zero,
+  Opcode.Load,
+  Opcode.Store,
+  Opcode.Reference,
+  Opcode.Call,
+  Opcode.CallClosure,
+  Opcode.CallWitness,
+  Opcode.WitnessTable,
+  Opcode.Kernel,
+  Opcode.AddInteger,
+  Opcode.SubtractInteger,
+  Opcode.MultiplyInteger,
+  Opcode.DivideInteger,
+  Opcode.RemainderInteger,
+  Opcode.NegateInteger,
+  Opcode.AddUnchecked,
+  Opcode.SubtractUnchecked,
+  Opcode.MultiplyUnchecked,
+  Opcode.Equal,
+  Opcode.NotEqual,
+  Opcode.Less,
+  Opcode.LessOrEqual,
+  Opcode.Greater,
+  Opcode.GreaterOrEqual,
+  Opcode.Not,
+  Opcode.Tag,
+  Opcode.TagNiche,
+  Opcode.Jump,
+  Opcode.Branch,
+  Opcode.Switch,
+  Opcode.Return,
+  Opcode.Stop,
+  Opcode.Cell,
+]
+
+// --- The head word --------------------------------------------------------------------------------------------------
+
+/** The largest value a head operand holds. Anything larger is a tail word, or a finding of the emitter. */
+public const largestOperand = 65535
+
+/** One head word: the opcode in bits 0-7, then `A`, `B` and `C` in sixteen bits each. */
+public fn headWord(opcode: Opcode, a: Int, b: Int, c: Int): Int {
+  const low = opcode.number().bitwiseOr(a.shiftedLeft(8))
+  low.bitwiseOr(b.shiftedLeft(24)).bitwiseOr(c.shiftedLeft(40))
+}
+
+/** The opcode number of a head word. */
+public fn opcodeNumberOf(head: Int): Int {
+  head.bitwiseAnd 255
+}
+
+/** Operand `A` of a head word. */
+public fn operandA(head: Int): Int {
+  head.shiftedRight(8).bitwiseAnd(largestOperand)
+}
+
+/** Operand `B` of a head word. */
+public fn operandB(head: Int): Int {
+  head.shiftedRight(24).bitwiseAnd(largestOperand)
+}
+
+/** Operand `C` of a head word. */
+public fn operandC(head: Int): Int {
+  head.shiftedRight(40).bitwiseAnd(largestOperand)
+}
+
+/**
+ * How many tail words follow the head of an instruction: what the interpreter and the disassembler both step over.
+ * `code[at]` is the head.
+ */
+public fn tailLengthOf(opcode: Opcode, head: Int): Int {
+  match opcode {
+    .Constant => 1
+    .Word => 1
+    .Call => 1 + operandB(head)
+    .CallClosure => 1 + operandC(head)
+    .CallWitness => 2 + operandB(head)
+    .Kernel => operandA head
+    .AddInteger => 1
+    .SubtractInteger => 1
+    .MultiplyInteger => 1
+    .DivideInteger => 1
+    .RemainderInteger => 1
+    .NegateInteger => 1
+    .Jump => 1
+    .Branch => 2
+    .Switch => 2 * operandB(head) + 1
+    .Cell => 2
+    _ => 0
+  }
+}
+
+// --- Kernel operations ----------------------------------------------------------------------------------------------
+
+/**
+ * What a `kernel` instruction asks of the C runtime, and the order of its operands. The number of an operation is its
+ * position in [allKernelOperations]; a call of a function of the runtime is operation [kernelNativeBase] plus the
+ * function's index among the symbols of the manifest (`nativeSymbols` of `./natives`), so the table of thunks the
+ * kernel dispatches through is in the manifest's own order (docs/design/VM.md section 6).
+ *
+ * A register operand is a word offset from the frame's base, like every other operand of the bytecode.
+ */
+public type KernelOperation {
+  /** `message, location`: `torb_panic`, which does not return. */
+  case Panic
+  /** `target, first, second, location, operation, kind`: every integer operation but the `Int64` fast ones, every float. */
+  case Arithmetic
+  /** `target, first, second, operation, kind`: a comparison the interpreter cannot make on one word (floats, `UInt64`). */
+  case Compare
+  /** `target, source, from, to`: a numeric conversion, the C cast of the C back end. */
+  case Convert
+  /** `target, count`, then per part `register, part kind`: one concatenation of every part (`torb_text_concat_parts`). */
+  case TextConcat
+  /** `target, first, second`: `torb_text_equal`. */
+  case TextEqual
+  /** `target, first, second`: `torb_text_compare`, as a sign. */
+  case TextCompare
+  /** `target, source`. */
+  case TextByteLength
+  /** `count`, then the registers of the parts: `torb_print_parts`. */
+  case Print
+  /** `count`, then the registers of the parts: `torb_print_error_parts`. */
+  case PrintError
+  /** `code`: `torb_process_exit`, which does not return. */
+  case Exit
+  /** `target, shape, block kind, words, count`, then per field `offset, register, width`: a new counted block. */
+  case BlockNew
+  /** `target, kind, count`, then the element descriptors: an empty list (kind 0), map (1) or set (2). */
+  case ContainerNew
+  /** `target, capacity, element, location`: `torb_channel_new`. */
+  case ChannelNew
+  /** `register, shape`: one count more of every counted word of the value, as its shape says. */
+  case Retain
+  /**
+   * `register, shape`: one count less of every counted word, in the order of the C back end's drop functions. Answers
+   * how many destructors it queued for the interpreter to run (docs/design/VM.md section 7).
+   */
+  case Release
+  /** `target`: the first queued block into the register; answers the chunk of its `close()`, or -1 for none. */
+  case TakeCloser
+  /** `register`: the fields of a block whose `close()` ran, then the block. Answers how many destructors it queued. */
+  case FinishRelease
+  /** `register`: lends the block a count while its `close()` runs (`torb_closing_begin`). */
+  case ClosingBegin
+  /** `register`: takes the lent count back (`torb_closing_end`). */
+  case ClosingEnd
+  /** `kind, register`: the list (0), map (1) or set (2) the reference in the register points at, made unique. */
+  case ContainerUnique
+  /** `register`: the block the reference in the register points at, made unique - copied where it is shared. */
+  case BlockUnique
+  /** `register, index, missing, location`: the address of an element of the list the reference points at. */
+  case ElementAddress
+  /** `index, path, line, column`: one location of the program, the path a text in a register. */
+  case DefineLocation
+  /** `index, words, kind, shape`: one element descriptor, trivial (0), a text (1) or counted by a shape (2). */
+  case DefineElement
+  /** `index, width, tag, closer, reversed`, then the common group and one group per variant: one shape. */
+  case DefineShape
+  /** Answers how many counted blocks are live, for the leak gate of the VM. */
+  case LiveBlocks
+  /** `register`: the block becomes static data, never counted and never freed. */
+  case MakeImmortal
+  /** `location`: the runtime's `stack overflow` panic. */
+  case StackOverflow
+  /** `count`, then the registers of the texts: what `Process.arguments()` answers the program the VM runs. */
+  case SetArguments
+  /** Opens an immortal region (`torb_begin_immortal`): what a module constant is built in. */
+  case BeginImmortal
+  /** Closes it (`torb_end_immortal`). */
+  case EndImmortal
+
+  /** The name the disassembly writes. */
+  fn spelling(): String {
+    match self {
+      .Panic => "panic"
+      .Arithmetic => "arithmetic"
+      .Compare => "compare"
+      .Convert => "convert"
+      .TextConcat => "text.concat"
+      .TextEqual => "text.equal"
+      .TextCompare => "text.compare"
+      .TextByteLength => "text.byte.length"
+      .Print => "print"
+      .PrintError => "print.error"
+      .Exit => "exit"
+      .BlockNew => "block.new"
+      .ContainerNew => "container.new"
+      .ChannelNew => "channel.new"
+      .Retain => "retain"
+      .Release => "release"
+      .TakeCloser => "take.closer"
+      .FinishRelease => "finish.release"
+      .ClosingBegin => "closing.begin"
+      .ClosingEnd => "closing.end"
+      .ContainerUnique => "container.unique"
+      .BlockUnique => "block.unique"
+      .ElementAddress => "element.address"
+      .DefineLocation => "define.location"
+      .DefineElement => "define.element"
+      .DefineShape => "define.shape"
+      .LiveBlocks => "live.blocks"
+      .MakeImmortal => "make.immortal"
+      .StackOverflow => "stack.overflow"
+      .SetArguments => "set.arguments"
+      .BeginImmortal => "begin.immortal"
+      .EndImmortal => "end.immortal"
+    }
+  }
+}
+
+/** Every kernel operation, in the order of their numbers. */
+public const allKernelOperations: List<KernelOperation> = [
+  KernelOperation.Panic,
+  KernelOperation.Arithmetic,
+  KernelOperation.Compare,
+  KernelOperation.Convert,
+  KernelOperation.TextConcat,
+  KernelOperation.TextEqual,
+  KernelOperation.TextCompare,
+  KernelOperation.TextByteLength,
+  KernelOperation.Print,
+  KernelOperation.PrintError,
+  KernelOperation.Exit,
+  KernelOperation.BlockNew,
+  KernelOperation.ContainerNew,
+  KernelOperation.ChannelNew,
+  KernelOperation.Retain,
+  KernelOperation.Release,
+  KernelOperation.TakeCloser,
+  KernelOperation.FinishRelease,
+  KernelOperation.ClosingBegin,
+  KernelOperation.ClosingEnd,
+  KernelOperation.ContainerUnique,
+  KernelOperation.BlockUnique,
+  KernelOperation.ElementAddress,
+  KernelOperation.DefineLocation,
+  KernelOperation.DefineElement,
+  KernelOperation.DefineShape,
+  KernelOperation.LiveBlocks,
+  KernelOperation.MakeImmortal,
+  KernelOperation.StackOverflow,
+  KernelOperation.SetArguments,
+  KernelOperation.BeginImmortal,
+  KernelOperation.EndImmortal,
+]
+
+/**
+ * The number of the first call of a runtime function. The operations of the kernel stay below it, so a kernel that
+ * grows by an operation moves no native's number, and a native added to the manifest moves no operation's.
+ */
+public const kernelNativeBase = 1024
+
+/** The number a `kernel` instruction carries for an operation. */
+public fn kernelNumberOf(operation: KernelOperation): Int {
+  var index = 0
+  for candidate in allKernelOperations {
+    if candidate == operation {
+      return index
+    }
+    index = index + 1
+  }
+  index
+}
+
+// --- What the tables hold -------------------------------------------------------------------------------------------
+
+/** How one kind of counted word is retained and released. */
+public type CountedKind {
+  /** A `torb_text` over two words: its storage block. */
+  case TextStorage
+  /** A `torb_list` over two words. */
+  case ListStorage
+  /** A `torb_map`. */
+  case MapStorage
+  /** A `torb_set`. */
+  case SetStorage
+  case TaskObject
+  case ChannelObject
+  /** `torb_file *`, released through the runtime's own drop of a file. */
+  case FileHandle
+  /** A counted block of the VM whose contents have the shape with this index. */
+  case Block(contents: Int)
+  /** A closure's environment: a block (or none) whose own shape word says what it holds. */
+  case Environment
+  /** The payload block of a trait-typed value, which says what it holds in its own shape word as well. */
+  case Payload
+  /** An inline variant nested at this offset, released by its own shape because it has a tag of its own. */
+  case Nested(shape: Int)
+
+  /** The name the disassembly writes. */
+  fn spelling(): String {
+    match self {
+      .TextStorage => "text"
+      .ListStorage => "list"
+      .MapStorage => "map"
+      .SetStorage => "set"
+      .TaskObject => "task"
+      .ChannelObject => "channel"
+      .FileHandle => "file"
+      .Block(contents) => "block {contents}"
+      .Environment => "environment"
+      .Payload => "payload"
+      .Nested(shape) => "nested {shape}"
+    }
+  }
+}
+
+/** One counted word of a value: where it is, and what it is. */
+public type CountedWord {
+  offset: Int
+  kind: CountedKind
+}
+
+/**
+ * How a value of one type is retained and released: its counted words, in the order the C back end's helpers visit
+ * them, and for a variant the tag word and the counted words of each group.
+ *
+ * The shape of a counted block's *contents* is a shape too, with the `close()` of the object where its type implements
+ * `Close` - the destructor its release runs before the fields (docs/design/DESTRUCTORS.md 2 and 8).
+ */
+public type Shape {
+  /** What it is the shape of, for the disassembly: the mangled name of the layout, or the type's own word. */
+  name: String
+  width: Int
+  counted: List<CountedWord> = []
+  /** The word the tag is in, or `-1` for a value that is no inline variant. */
+  tag: Int = -1
+  /** The counted words of every variant's group, by variant. */
+  groups: List<List<CountedWord>> = []
+  /** Fields released in reverse declaration order, the variant's group first: a layout that may hold a `Close` object. */
+  isReversed: Bool = false
+  /** The chunk of the `close()` a release of this block runs first, or `-1`. */
+  closer: Int = -1
+}
+
+/** One part of the constant pool: what the interpreter places into its words when it loads the program. */
+public type ConstantPart {
+  /** One word, placed as it is: an integer, a `Bool`, a `Char`, the tag of an inline variant, a zero of padding. */
+  case Word(value: Int)
+  /** One word: the bits of the float. */
+  case Floating(value: Float)
+  /** Two words: an immortal copy of the text. */
+  case Text(value: String)
+  /** One word: an immortal counted block of the VM, holding these parts, with this shape of its contents. */
+  case Block(shape: Int, parts: List<ConstantPart>)
+}
+
+/** One step of a compiled place. */
+public type PlaceStep {
+  /** Move this many words further into the value. */
+  case Offset(words: Int)
+  /** The word here is the pointer to a counted block: go on at the first word of its contents. */
+  case Dereference
+  /**
+   * An element of the contiguous list here: `torb_list_element_reference`, which makes the storage unique and panics
+   * with the language's own message (`missing`, an offset of the constant pool) at `location` for an index out of range.
+   */
+  case Element(index: Int, missing: Int, location: Int)
+}
+
+/**
+ * A place of the IR, compiled: its base register, whether that register holds a reference (a `var` parameter) that
+ * the path starts from instead, the steps, and the width of what the place ends in.
+ */
+public type Place {
+  base: Int
+  isThroughReference: Bool
+  steps: List<PlaceStep>
+  width: Int
+}
+
+/** Where a witness table comes from at one call site. */
+public type WitnessRootEntry {
+  /** A static table of the program, by index. */
+  case Table(table: Int)
+  /** The table word of the trait-typed value at a place of the chunk, for one of its bounds. */
+  case Value(place: Int, bound: Int)
+}
+
+/** A witness source of the IR, compiled: its root and the nested steps below it. */
+public type WitnessEntry {
+  root: WitnessRootEntry
+  steps: List<Int> = []
+}
+
+/** One witness table: the chunk of every member (`-1` where the member is not emitted), and the nested tables. */
+public type TableEntry {
+  name: String
+  members: List<Int>
+  /** The index of the table of every direct supertrait, `-1` where there is none. */
+  nested: List<Int>
+  /** The shape of the contents of the payload block a value of the table's target is boxed in, or `-1`. */
+  payload: Int = -1
+  /** The word width of the target, which is what a member reads out of the payload block. */
+  payloadWidth: Int = 0
+}
+
+/** What an element of a runtime container is, for the descriptor the interpreter makes of it when it loads. */
+public type ElementKind {
+  /** Nothing counted: no callbacks at all. */
+  case Trivial
+  /** A `String`: the runtime's own `torb_element_text`. */
+  case TextElement
+  /** Anything else counted: the element's shape, and the chunks of the equality and the hash where it has them. */
+  case Counted(shape: Int)
+}
+
+/** One element descriptor, as the interpreter makes it. */
+public type ElementEntry {
+  name: String
+  words: Int
+  kind: ElementKind
+  /** The chunk of the element's `equals`, or `-1`. */
+  equals: Int = -1
+  /** The chunk of the element's `hash`, or `-1`. */
+  hash: Int = -1
+  /**
+   * Whether two elements are equal exactly when their words are: nothing counted, no float (whose `==` is IEEE's, so
+   * `nan` differs from itself and `-0.0` equals `0.0`). A key of such a type needs no call of its `equals` at all.
+   */
+  comparesByWords: Bool = false
+}
+
+/** One parameter of a chunk: where its words are, and whether it takes a reference word instead of a value. */
+public type ParameterEntry {
+  offset: Int
+  width: Int
+  isReference: Bool
+  /**
+   * The shape the interpreter retains the argument by when the chunk is called through a witness table, where the
+   * member takes it owned and the erased convention borrows every operand (the C back end's witness thunk does the
+   * same); `-1` where there is nothing to retain.
+   */
+  retainedThroughWitness: Int = -1
+}
+
+/** One slot of a frame, for the disassembly: the IR slot, its register and width, and its type. */
+public type FrameSlot {
+  slot: Int
+  offset: Int
+  width: Int
+  description: String
+}
+
+/** One function, encoded. */
+public type Chunk {
+  /** The mangled name of the function. */
+  name: String
+  parameters: List<ParameterEntry>
+  /** How many words the result has (0: none). */
+  resultWidth: Int
+  /** Whether the first parameter is an environment, which a closure call fills from the closure value. */
+  takesEnvironment: Bool = false
+  /** How many words the frame needs, the scratch registers included. */
+  frameWords: Int
+  /** Where the function begins, as a location index: the site of a `stack overflow` panic on entering it. */
+  location: Int
+  slots: List<FrameSlot> = []
+  var code: ArrayList<Int>
+  var places: List<Place> = []
+  var witnesses: List<WitnessEntry> = []
+  /** The code offset every block of the IR starts at, by block: what the disassembly labels. */
+  var blockStarts: List<Int> = []
+}
+
+/** The whole program, as the interpreter loads it. */
+public type BytecodeProgram {
+  var chunks: List<Chunk> = []
+  /** The chunks the program runs, in order: the top-level code of the entry file, or of every test file. */
+  var entries: List<Int> = []
+  var constants: List<ConstantPart> = []
+  /** How many words the constant pool places. */
+  var constantWords: Int = 0
+  /**
+   * How many words the cells of the module constants take, after the constant pool: per cell a flag that says it is
+   * built, then its value. The first frame begins after them.
+   */
+  var cellWords: Int = 0
+  var shapes: List<Shape> = []
+  var tables: List<TableEntry> = []
+  var elements: List<ElementEntry> = []
+  var locations: List<Location> = []
+}
+
+/** The width of the words of a constant part. */
+public fn widthOfPart(part: ConstantPart): Int {
+  match part {
+    .Word(_) => 1
+    .Floating(_) => 1
+    .Text(_) => 2
+    .Block(_, _) => 1
+  }
+}

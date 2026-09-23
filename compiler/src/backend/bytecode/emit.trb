@@ -1,0 +1,1896 @@
+/**
+ * From the final IR to bytecode: one [Chunk] per function the C back end would emit, and the tables they name
+ * (docs/design/VM.md sections 1 and 3).
+ *
+ * The emitter reads the IR after the devirtualization and the ownership pass and decides nothing the IR decided: every
+ * `Retain`, `Release`, `Move` and `MakeUnique` becomes exactly one instruction, so the VM counts what the C back end
+ * counts. What it does decide is the VM's own business - the word offset of every slot, the scratch registers an
+ * instruction needs, and which opcode a typed operation becomes.
+ *
+ * A construct the C back end reports as unsupported is reported here too ([BytecodeEmission.unsupported]), so the VM
+ * never runs a program the native back end refuses.
+ *
+ * # Examples
+ *
+ *     // fragment
+ *     const emission = emitBytecode program, ["t_acme_x2f_app_main"]
+ *
+ * # Related
+ *
+ * - [disassemble] - the text of what this writes.
+ * - [wordTablesOf] - where the word widths come from.
+ */
+
+use IrProgram, IrFunction, IrTypeId, IrType, LayoutId, FunctionId, Slot, BlockId, StaticId, LocationId from "../../ir/ir"
+use Instruction, Terminator, Argument, Reference, PathStep, Capture, WitnessSource, WitnessRoot from "../../ir/ir"
+use Intrinsic, IntrinsicOperation, NumericKind, RuntimeKind, SlotRole, StaticContents, FunctionKind from "../../ir/ir"
+use Ownership from "../../ir/ir"
+use LiteralValue from "../../semantics/checker/type"
+use Layout, Representation, containsCountedType, isManagedType, textPartKindOf, TextPartKind from "../../ir/layout"
+use closingOf, Closing from "../../ir/closing"
+use payloadLayoutName from "../../ir/mangle"
+use emittedFunctionsOf, runtimePrototypes from "../c/emit"
+use environmentLayoutOfFunction from "../c/body"
+use readPrototype, matchPrototype, PrototypeMatch from "../c/prototype"
+use Opcode, KernelOperation, kernelNumberOf, kernelNativeBase, headWord, largestOperand from "./format"
+use BytecodeProgram, Chunk, ParameterEntry, FrameSlot, Place, PlaceStep, WitnessEntry, WitnessRootEntry from "./format"
+use Shape, CountedWord, CountedKind, ConstantPart, TableEntry, ElementEntry, ElementKind, widthOfPart from "./format"
+use WordTables, LayoutWords, wordTablesOf, whyNoWords, isBlockPointer, isBoxed, layoutOfType from "./words"
+use nativeIndices from "./natives"
+
+/** What [emitBytecode] answers: the program, and every construct it could not encode, in the order found. */
+public type BytecodeEmission {
+  program: BytecodeProgram
+  unsupported: List<String>
+}
+
+/** The block kinds of `runtime/torb.h` a block of the VM is allocated with. Only the leak report reads them. */
+const recordBlockKind = 4
+const objectBlockKind = 8
+const environmentBlockKind = 9
+
+/** The program-wide state of one emission. */
+type Emitter {
+  var bytecode: BytecodeProgram
+  var unsupported: List<String>
+  tables: WordTables
+  closing: Closing
+  /** By `FunctionId.value`: the chunk the function became, `-1` where it is not emitted. */
+  chunks: List<Int>
+  natives: Map<String, Int>
+  prototypes: Map<String, String>
+  /** `type <id>` and `block <layout>` to the index of their shape. */
+  var shapeKeys: Map<String, Int>
+  /** By `StaticId.value`: the offset of the constant in the pool's words. */
+  var constantOffsets: Map<Int, Int>
+  /** The key of a constant's parts to its offset: one value, one constant. */
+  var constantKeys: Map<String, Int>
+  /** By `LocationId.value`: the index in the program's location table. */
+  var locationIndices: Map<Int, Int>
+}
+
+/** The state of one function while its chunk is written. */
+type Body {
+  function: IrFunction
+  /** By slot: its register. */
+  offsets: List<Int>
+  /** By slot: its words (one for a `var` parameter, which holds a reference). */
+  widths: List<Int>
+  /** By slot: whether it is a `var` parameter, whose word is a reference to the caller's storage. */
+  references: List<Bool>
+  /** The first register after the slots: where the scratch registers of one instruction start. */
+  firstScratch: Int
+  var scratch: Int
+  var highest: Int
+  var code: ArrayList<Int>
+  var places: List<Place> = []
+  var witnesses: List<WitnessEntry> = []
+  var blockStarts: List<Int> = []
+  /** Code positions that hold the index of a block, patched to its code offset once every block is written. */
+  var patches: List<(Int, Int)> = []
+  /** Stores through a `var` parameter that the current instruction owes after it ran: (slot, scratch register). */
+  var pendingStores: List<(Int, Int)> = []
+}
+
+/** The bytecode of a whole program: the chunks, the tables, and the entry chunks named by `entries`. */
+public fn emitBytecode(program: IrProgram, entries: List<String>): BytecodeEmission {
+  const functions = emittedFunctionsOf program
+  var byName: Map<String, Int> = [:]
+  for index in 0..functions.length() {
+    byName.set functions[index].name, index
+  }
+  var chunks: List<Int> = []
+  for function in program.functions {
+    chunks.append(byName.get(function.name) ?? (0 - 1))
+  }
+  var emitter = Emitter(
+    BytecodeProgram(),
+    [],
+    wordTablesOf(program),
+    closingOf(program),
+    chunks,
+    nativeIndices(),
+    runtimePrototypes(),
+    [:],
+    [:],
+    [:],
+    [:],
+  )
+  for function in functions {
+    const chunk = emitChunk emitter, program, function
+    emitter.bytecode.chunks.append chunk
+  }
+  emitTables emitter, program
+  for entry in entries {
+    if const Some(index) = byName.get(entry) {
+      emitter.bytecode.entries.append index
+    }
+  }
+  BytecodeEmission emitter.bytecode, emitter.unsupported
+}
+
+fn report(var emitter: Emitter, what: String) {
+  if !emitter.unsupported.contains(what) {
+    emitter.unsupported.append what
+  }
+}
+
+// --- The tables -----------------------------------------------------------------------------------------------------
+
+/** The witness tables and the element descriptors, by the ids the IR gives them. */
+fn emitTables(var emitter: Emitter, program: IrProgram) {
+  for table in program.witnessTables {
+    var members: List<Int> = []
+    for member in table.members {
+      members.append(emitter.chunks.get(member.value) ?? (0 - 1))
+    }
+    var nested: List<Int> = []
+    for inner in table.nested {
+      nested.append(
+        match inner {
+          Some(found) => found.value
+          None => 0 - 1
+        },
+      )
+    }
+    var payload = 0 - 1
+    if const Some(layout) = program.layoutNamed(payloadLayoutName(program, table.target)) {
+      payload = blockShapeIndex emitter, program, layout
+    }
+    const width = emitter.tables.widthOf table.target
+    emitter.bytecode.tables.append TableEntry(table.name, members, nested, payload, width)
+  }
+  for descriptor in program.elements {
+    const words = emitter.tables.widthOf descriptor.item
+    const kind = elementKindOf emitter, program, descriptor.item
+    const equals = chunkOfOptional emitter, descriptor.equals
+    const hash = chunkOfOptional emitter, descriptor.hash
+    const byWords = comparesByWords program, descriptor.item
+    emitter.bytecode.elements.append ElementEntry(descriptor.name, words, kind, equals, hash, byWords)
+  }
+}
+
+/** Whether a value of the type is equal to another exactly when their words are: integers, `Bool`s and `Char`s only. */
+fn comparesByWords(program: IrProgram, id: IrTypeId): Bool {
+  match program.typeAt(id) {
+    .Integer(_, _) => true
+    .Boolean => true
+    .Character => true
+    .VoidType => true
+    .Record(layout) => layoutComparesByWords program, layout
+    .Tuple(layout) => layoutComparesByWords program, layout
+    _ => false
+  }
+}
+
+fn layoutComparesByWords(program: IrProgram, layout: LayoutId): Bool {
+  const shape = program.layoutAt layout
+  if !shape.variants.isEmpty() {
+    return false
+  }
+  if const .Inline = shape.representation {
+    for field in shape.fields {
+      if !comparesByWords(program, field.annotation) {
+        return false
+      }
+    }
+    return true
+  }
+  false
+}
+
+fn chunkOfOptional(emitter: Emitter, function: FunctionId?): Int {
+  match function {
+    Some(found) => emitter.chunks.get(found.value) ?? (0 - 1)
+    None => 0 - 1
+  }
+}
+
+fn elementKindOf(var emitter: Emitter, program: IrProgram, item: IrTypeId): ElementKind {
+  if !containsCountedType(program, item) {
+    return ElementKind.Trivial
+  }
+  if const .Text = program.typeAt(item) {
+    return ElementKind.TextElement
+  }
+  ElementKind.Counted valueShapeIndex(emitter, program, item)
+}
+
+// --- Shapes ---------------------------------------------------------------------------------------------------------
+
+/** The operand that names the shape of a value of this type: its index plus one, and 0 where nothing is counted. */
+fn shapeOperand(var emitter: Emitter, program: IrProgram, id: IrTypeId): Int {
+  if !containsCountedType(program, id) {
+    return 0
+  }
+  valueShapeIndex(emitter, program, id) + 1
+}
+
+/** The shape of a value of this type where it is stored: a register, a field, an element. */
+fn valueShapeIndex(var emitter: Emitter, program: IrProgram, id: IrTypeId): Int {
+  const key = "type {id.value}"
+  if const Some(found) = emitter.shapeKeys.get(key) {
+    return found
+  }
+  const index = reserveShape emitter, key
+  const name = describeType program, id
+  if const Some(layout) = inlineVariantLayoutOf(program, id) {
+    const shape = variantShape emitter, program, layout, name
+    emitter.bytecode.shapes.set index, shape
+    return index
+  }
+  var counted: List<CountedWord> = []
+  countedWordsOf emitter, program, id, 0, counted
+  emitter.bytecode.shapes.set index, Shape(name, emitter.tables.widthOf(id), counted)
+  index
+}
+
+/**
+ * The shape of the contents of a counted block of this layout: a boxed record or variant, a shared object, an
+ * environment, the payload of a trait-typed value. It carries the destructor where the object has one, and the order
+ * the C back end's drop function releases the fields in.
+ */
+fn blockShapeIndex(var emitter: Emitter, program: IrProgram, layout: LayoutId): Int {
+  const key = "block {layout.value}"
+  if const Some(found) = emitter.shapeKeys.get(key) {
+    return found
+  }
+  const index = reserveShape emitter, key
+  const shape = program.layoutAt layout
+  var built = if shape.variants.isEmpty() {
+    recordShape emitter, program, layout, shape.name
+  } else {
+    variantShape emitter, program, layout, shape.name
+  }
+  const closer = match program.closeFunctions.get(layout.value) {
+    Some(function) => emitter.chunks.get(function.value) ?? (0 - 1)
+    None => 0 - 1
+  }
+  built = Shape built.name, built.width, built.counted, built.tag, built.groups, built.isReversed, closer
+  emitter.bytecode.shapes.set index, built
+  index
+}
+
+/** A place in the shape table for a key, before the shape is built: a recursive layout finds its own index. */
+fn reserveShape(var emitter: Emitter, key: String): Int {
+  const index = emitter.bytecode.shapes.length()
+  emitter.bytecode.shapes.append Shape(key, 0)
+  emitter.shapeKeys.set key, index
+  index
+}
+
+/** The fields of a record layout, flattened, in the order its drop function releases them. */
+fn recordShape(var emitter: Emitter, program: IrProgram, layout: LayoutId, name: String): Shape {
+  const shape = program.layoutAt layout
+  const words = emitter.tables.wordsOf layout
+  const isReversed = emitter.closing.holdsLayout layout
+  var counted: List<CountedWord> = []
+  for position in fieldOrder(shape.fields.length(), isReversed) {
+    countedWordsOf emitter, program, shape.fields[position].annotation, words.offsets[position], counted
+  }
+  Shape(name, words.width, counted, 0 - 1, [], isReversed)
+}
+
+/** The common fields, the tag word and the group of every variant of a variant layout. */
+fn variantShape(var emitter: Emitter, program: IrProgram, layout: LayoutId, name: String): Shape {
+  const shape = program.layoutAt layout
+  const words = emitter.tables.wordsOf layout
+  const isReversed = emitter.closing.holdsLayout layout
+  var counted: List<CountedWord> = []
+  for position in fieldOrder(shape.commonFieldCount, isReversed) {
+    countedWordsOf emitter, program, shape.fields[position].annotation, words.offsets[position], counted
+  }
+  var groups: List<List<CountedWord>> = []
+  for variant in shape.variants {
+    var group: List<CountedWord> = []
+    for inside in fieldOrder(variant.count, isReversed) {
+      const position = variant.first + inside
+      countedWordsOf emitter, program, shape.fields[position].annotation, words.offsets[position], group
+    }
+    groups.append group
+  }
+  Shape name, words.width, counted, words.tag, groups, isReversed
+}
+
+/** `0 ..< count`, or the same backwards. */
+fn fieldOrder(count: Int, isReversed: Bool): List<Int> {
+  var order: List<Int> = []
+  for index in 0..count {
+    order.append index
+  }
+  if isReversed {
+    order.reverse()
+  }
+  order
+}
+
+/**
+ * The counted words of a value of this type at `offset`, appended in release order. An inline record is flattened into
+ * its fields; an inline variant has a tag of its own, so it stays one `Nested` entry.
+ */
+fn countedWordsOf(
+  var emitter: Emitter,
+  program: IrProgram,
+  id: IrTypeId,
+  offset: Int,
+  var into: List<CountedWord>,
+) {
+  if !containsCountedType(program, id) {
+    return
+  }
+  match program.typeAt(id) {
+    .Text => into.append CountedWord(offset, CountedKind.TextStorage)
+    .Runtime(kind, _) => {
+      match kind {
+        .ListStorage => into.append CountedWord(offset, CountedKind.ListStorage)
+        .MapStorage => into.append CountedWord(offset, CountedKind.MapStorage)
+        .SetStorage => into.append CountedWord(offset, CountedKind.SetStorage)
+        .TaskObject => into.append CountedWord(offset, CountedKind.TaskObject)
+        .ChannelObject => into.append CountedWord(offset, CountedKind.ChannelObject)
+        .FileHandle => into.append CountedWord(offset, CountedKind.FileHandle)
+        _ => report emitter, "a counted value of a runtime type the VM does not represent"
+      }
+    }
+    .Closure(_) => into.append CountedWord(offset + 1, CountedKind.Environment)
+    .Object(_) => into.append CountedWord(offset, CountedKind.Payload)
+    .SharedObject(layout) => into.append CountedWord(offset, CountedKind.Block(blockShapeIndex(emitter, program, layout)))
+    .Record(layout) => countedLayoutWords emitter, program, id, layout, offset, into
+    .Tuple(layout) => countedLayoutWords emitter, program, id, layout, offset, into
+    .Variant(layout) => countedLayoutWords emitter, program, id, layout, offset, into
+    _ => report emitter, "a counted value of a type the VM does not represent"
+  }
+}
+
+fn countedLayoutWords(
+  var emitter: Emitter,
+  program: IrProgram,
+  id: IrTypeId,
+  layout: LayoutId,
+  offset: Int,
+  var into: List<CountedWord>,
+) {
+  const shape = program.layoutAt layout
+  match shape.representation {
+    .Boxed => into.append CountedWord(offset, CountedKind.Block(blockShapeIndex(emitter, program, layout)))
+    // A niche is its payload, so it is counted as the payload is
+    .Niche(_, field) => {
+      if const Some(found) = shape.fields.get(field) {
+        countedWordsOf emitter, program, found.annotation, offset, into
+      }
+    }
+    .Inline => {
+      if !shape.variants.isEmpty() {
+        into.append CountedWord(offset, CountedKind.Nested(valueShapeIndex(emitter, program, id)))
+        return
+      }
+      const words = emitter.tables.wordsOf layout
+      const isReversed = emitter.closing.holdsLayout layout
+      for position in fieldOrder(shape.fields.length(), isReversed) {
+        const field = shape.fields[position]
+        countedWordsOf(emitter, program, field.annotation, offset + words.offsets[position], into)
+      }
+    }
+  }
+}
+
+/** The layout of an inline variant type, which is the one kind of value whose shape needs its tag. */
+fn inlineVariantLayoutOf(program: IrProgram, id: IrTypeId): LayoutId? {
+  const layout = match program.typeAt(id) {
+    .Variant(found) => found
+    _ => {
+      return None
+    }
+  }
+  match program.layoutAt(layout).representation {
+    .Inline => Some layout
+    _ => None
+  }
+}
+
+/** A type as the disassembly names a shape after it. */
+fn describeType(program: IrProgram, id: IrTypeId): String {
+  match program.typeAt(id) {
+    .Integer(width, isSigned) => if isSigned { "Int{width}" } else { "UInt{width}" }
+    .Floating(width) => "Float{width}"
+    .Boolean => "Bool"
+    .Character => "Char"
+    .VoidType => "Void"
+    .NeverType => "Never"
+    .Text => "String"
+    .Record(layout) => program.layoutAt(layout).name
+    .Variant(layout) => program.layoutAt(layout).name
+    .Tuple(layout) => program.layoutAt(layout).name
+    .SharedObject(layout) => program.layoutAt(layout).name
+    .FixedArray(_, size) => "Array[{size}]"
+    .Closure(_) => "closure"
+    .Object(bounds) => "object[{bounds.length()}]"
+    .Box(_) => "box"
+    .Lazy(_) => "lazy"
+    .Runtime(kind, _) => {
+      match kind {
+        .ListStorage => "list"
+        .MapStorage => "map"
+        .SetStorage => "set"
+        .TaskObject => "task"
+        .ChannelObject => "channel"
+        .FileHandle => "file"
+        .ExpressionTree => "expression"
+        .DecimalNumber => "decimal"
+      }
+    }
+    .ConstantValue(_, _) => "const"
+  }
+}
+
+// --- Constants and locations ----------------------------------------------------------------------------------------
+
+/** The offset of a static in the pool's words, adding it on first use. */
+fn constantOffset(var emitter: Emitter, program: IrProgram, id: StaticId): Int {
+  if const Some(found) = emitter.constantOffsets.get(id.value) {
+    return found
+  }
+  var parts: List<ConstantPart> = []
+  constantPartsOf emitter, program, id, parts
+  // Two statics of one value are one constant: `"a"` written twice is placed once
+  const key = keyOfParts parts
+  if const Some(found) = emitter.constantKeys.get(key) {
+    emitter.constantOffsets.set id.value, found
+    return found
+  }
+  const offset = emitter.bytecode.constantWords
+  for part in parts {
+    emitter.bytecode.constants.append part
+    emitter.bytecode.constantWords = emitter.bytecode.constantWords + widthOfPart(part)
+  }
+  emitter.constantOffsets.set id.value, offset
+  emitter.constantKeys.set key, offset
+  offset
+}
+
+/** A key that tells two lists of parts apart exactly: a text carries its byte length, so no separator can be forged. */
+fn keyOfParts(parts: List<ConstantPart>): String {
+  var key = ""
+  for part in parts {
+    key = key + match part {
+      .Word(value) => "w{value};"
+      .Floating(value) => "f{value};"
+      .Text(value) => "t{value.byteLength()}:{value};"
+      .Block(shape, inner) => "b{shape}({keyOfParts(inner)});"
+    }
+  }
+  key
+}
+
+/** The words of one static value, as parts, in the layout a register holds it in. */
+fn constantPartsOf(var emitter: Emitter, program: IrProgram, id: StaticId, var into: List<ConstantPart>) {
+  if !program.hasStatic(id) {
+    report emitter, "a static value that is not in the program"
+    into.append ConstantPart.Word(0)
+    return
+  }
+  const value = program.staticAt id
+  match value.contents {
+    .Literal(literal) => {
+      match literal {
+        .Integer(number) => into.append ConstantPart.Word(number)
+        .Text(text) => into.append ConstantPart.Text(text)
+        .Character(character) => into.append ConstantPart.Word(Int.from(character))
+        .Boolean(flag) => into.append ConstantPart.Word(if flag { 1 } else { 0 })
+      }
+    }
+    .Floating(number) => into.append ConstantPart.Floating(number)
+    .VoidValue => into.append ConstantPart.Word(0)
+    .Aggregate(layout, variant, fields) => aggregateParts emitter, program, layout, variant, fields, into
+    .Items(_, _) => {
+      report emitter, "an `Array<Item, Size>` value"
+      into.append ConstantPart.Word(0)
+    }
+  }
+}
+
+fn aggregateParts(
+  var emitter: Emitter,
+  program: IrProgram,
+  layout: LayoutId,
+  variant: Int,
+  fields: List<StaticId>,
+  var into: List<ConstantPart>,
+) {
+  const shape = program.layoutAt layout
+  match shape.representation {
+    .Niche(payload, field) => {
+      if variant == payload {
+        if const Some(first) = fields.first() {
+          constantPartsOf emitter, program, first, into
+        }
+        return
+      }
+      const width = match shape.fields.get(field) {
+        Some(found) => emitter.tables.widthOf found.annotation
+        None => 1
+      }
+      for _ in 0..width {
+        into.append ConstantPart.Word(0)
+      }
+    }
+    .Boxed => {
+      var contents: List<ConstantPart> = []
+      contentParts emitter, program, layout, variant, fields, contents
+      into.append ConstantPart.Block(blockShapeIndex(emitter, program, layout), contents)
+    }
+    .Inline => contentParts emitter, program, layout, variant, fields, into
+  }
+}
+
+/** The contents of a layout, field after field, with the tag of a variant and zero words up to the width. */
+fn contentParts(
+  var emitter: Emitter,
+  program: IrProgram,
+  layout: LayoutId,
+  variant: Int,
+  fields: List<StaticId>,
+  var into: List<ConstantPart>,
+) {
+  const shape = program.layoutAt layout
+  const words = emitter.tables.wordsOf layout
+  var written = 0
+  var index = 0
+  for field in fields {
+    if !shape.variants.isEmpty() && index == shape.commonFieldCount {
+      into.append ConstantPart.Word(variant)
+      written = written + 1
+    }
+    var parts: List<ConstantPart> = []
+    constantPartsOf emitter, program, field, parts
+    for part in parts {
+      into.append part
+      written = written + widthOfPart(part)
+    }
+    index = index + 1
+  }
+  if !shape.variants.isEmpty() && index <= shape.commonFieldCount {
+    into.append ConstantPart.Word(variant)
+    written = written + 1
+  }
+  while written < words.width {
+    into.append ConstantPart.Word(0)
+    written = written + 1
+  }
+}
+
+/** The index of a location in the program's table, adding it on first use. */
+fn locationIndex(var emitter: Emitter, program: IrProgram, id: LocationId): Int {
+  if const Some(found) = emitter.locationIndices.get(id.value) {
+    return found
+  }
+  const index = emitter.bytecode.locations.length()
+  emitter.bytecode.locations.append program.locationAt(id)
+  emitter.locationIndices.set id.value, index
+  index
+}
+
+// --- One chunk ------------------------------------------------------------------------------------------------------
+
+/** The frame of a function, then its blocks in order, then the jump targets patched in. */
+fn emitChunk(var emitter: Emitter, program: IrProgram, function: IrFunction): Chunk {
+  var offsets: List<Int> = []
+  var widths: List<Int> = []
+  var references: List<Bool> = []
+  var slots: List<FrameSlot> = []
+  var cursor = 0
+  for index in 0..function.slots.length() {
+    const declared = function.slots[index]
+    const isReference = isReferenceRole function, declared.role
+    if const Some(why) = whyNoWords(program, declared.annotation) {
+      report emitter, why
+    }
+    var width = if isReference { 1 } else { emitter.tables.widthOf declared.annotation }
+    if width < 1 {
+      width = 1
+    }
+    offsets.append cursor
+    widths.append width
+    references.append isReference
+    const described = describeType program, declared.annotation
+    const shown = if isReference { "&{described}" } else { described }
+    slots.append FrameSlot(index, cursor, width, shown)
+    cursor = cursor + width
+  }
+  var parameters: List<ParameterEntry> = []
+  for position in 0..function.signature.parameters.length() {
+    const found = parameterSlotOf function, position
+    if found < 0 {
+      report emitter, "a parameter without a slot"
+      continue
+    }
+    const declared = function.signature.parameters[position]
+    var retained = 0 - 1
+    if !declared.isReference && declared.ownership == Ownership.Owned {
+      if containsCountedType(program, declared.annotation) {
+        retained = valueShapeIndex emitter, program, declared.annotation
+      }
+    }
+    parameters.append ParameterEntry(offsets[found], widths[found], references[found], retained)
+  }
+  if !function.signature.witnesses.isEmpty() {
+    report emitter, "a function that takes a witness table"
+  }
+  if const .TaskResume = function.kind {
+    report emitter, "the body of a task"
+  }
+  if const .ConstantCell(initializer) = function.kind {
+    return cellChunk emitter, program, function, initializer
+  }
+  var body = Body function, offsets, widths, references, cursor, cursor, cursor, ArrayList.withCapacity(64)
+  for index in 0..function.blocks.length() {
+    body.blockStarts.append body.code.length()
+    const block = function.blocks[index]
+    for instruction in block.instructions {
+      body.scratch = body.firstScratch
+      emitInstruction emitter, body, program, instruction
+      flushStores emitter, body, program
+    }
+    body.scratch = body.firstScratch
+    emitTerminator emitter, body, program, block.terminator
+  }
+  for (position, block) in body.patches {
+    body.code.set(position, body.blockStarts.get(block) ?? 0)
+  }
+  if body.highest > largestOperand {
+    report emitter, "a frame of more than {largestOperand} words"
+  }
+  const takesEnvironment = environmentLayoutOfFunction(program, function).isSome()
+  var location = 0 - 1
+  if const Some(entry) = function.blocks.first() {
+    if const Some(at) = entry.at {
+      location = locationIndex emitter, program, at
+    }
+  }
+  Chunk(
+    function.name,
+    parameters,
+    resultWidthOf(emitter, program, function.signature.result),
+    takesEnvironment,
+    body.highest,
+    location,
+    slots,
+    body.code,
+    body.places,
+    body.witnesses,
+    body.blockStarts,
+  )
+}
+
+/**
+ * The accessor of a module constant whose value is no static data: `cell` builds it on the first read and copies it on
+ * every read, then `return`. The cell's words - a flag and the value - follow the constant pool, which is where the
+ * VM keeps what the C back end keeps in two file-scope statics beside the function.
+ */
+fn cellChunk(var emitter: Emitter, program: IrProgram, function: IrFunction, initializer: FunctionId): Chunk {
+  const width = resultWidthOf emitter, program, function.signature.result
+  const built = emitter.chunks.get(initializer.value) ?? (0 - 1)
+  if built < 0 {
+    report emitter, "a constant whose initializer is not emitted"
+  }
+  const cell = emitter.bytecode.cellWords
+  emitter.bytecode.cellWords = cell + 1 + width
+  var code: ArrayList<Int> = ArrayList.withCapacity 8
+  code.append headWord(Opcode.Cell, 0, width, 0)
+  code.append cell
+  code.append built
+  code.append headWord(Opcode.Return, 0, width, 0)
+  Chunk(function.name, [], width, false, width, 0 - 1, [], code, [], [], [0])
+}
+
+fn isReferenceRole(function: IrFunction, role: SlotRole): Bool {
+  if const .Parameter(index) = role {
+    if const Some(parameter) = function.signature.parameters.get(index) {
+      return parameter.isReference
+    }
+  }
+  false
+}
+
+fn parameterSlotOf(function: IrFunction, position: Int): Int {
+  for index in 0..function.slots.length() {
+    if const .Parameter(found) = function.slots[index].role {
+      if found == position {
+        return index
+      }
+    }
+  }
+  0 - 1
+}
+
+/** How many words a result has: none for `Void` and `Never`, whose value nobody reads. */
+fn resultWidthOf(emitter: Emitter, program: IrProgram, id: IrTypeId): Int {
+  match program.typeAt(id) {
+    .VoidType => 0
+    .NeverType => 0
+    _ => emitter.tables.widthOf id
+  }
+}
+
+// --- Writing code ---------------------------------------------------------------------------------------------------
+
+fn emitHead(var emitter: Emitter, var body: Body, opcode: Opcode, a: Int, b: Int, c: Int) {
+  for value in [a, b, c] {
+    if value < 0 || value > largestOperand {
+      report emitter, "an operand that does not fit sixteen bits"
+    }
+  }
+  const head = headWord opcode, a.bitwiseAnd(largestOperand), b.bitwiseAnd(largestOperand), c.bitwiseAnd(largestOperand)
+  body.code.append head
+}
+
+fn emitTail(var body: Body, word: Int) {
+  body.code.append word
+}
+
+/** A tail word that names a block: written as the block's index now, patched to its code offset at the end. */
+fn emitBlockTarget(var body: Body, block: BlockId) {
+  body.patches.append((body.code.length(), block.value))
+  body.code.append block.value
+}
+
+/** A `kernel` instruction: the head with the tail's length, then the operation and its operands. */
+fn emitKernel(var emitter: Emitter, var body: Body, operation: Int, operands: List<Int>) {
+  emitHead(emitter, body, Opcode.Kernel, operands.length() + 1, 0, 0)
+  emitTail body, operation
+  for operand in operands {
+    emitTail body, operand
+  }
+}
+
+/** Scratch registers of the current instruction: they live until its end. */
+fn allocateScratch(var body: Body, width: Int): Int {
+  const register = body.scratch
+  body.scratch = body.scratch + (if width < 1 { 1 } else { width })
+  if body.scratch > body.highest {
+    body.highest = body.scratch
+  }
+  register
+}
+
+fn typeOf(body: Body, slot: Slot): IrTypeId {
+  body.function.slots[slot.value].annotation
+}
+
+/**
+ * The register an instruction reads a slot from. A `var` parameter's word is a reference, so its value is loaded into a
+ * scratch register first - which is what C's `*p` is at every mention of such a slot.
+ */
+fn operand(var emitter: Emitter, var body: Body, program: IrProgram, slot: Slot): Int {
+  if !body.function.hasSlot(slot) {
+    report emitter, "an operand that is no slot of its function"
+    return 0
+  }
+  if !body.references[slot.value] {
+    return body.offsets[slot.value]
+  }
+  const width = emitter.tables.widthOf typeOf(body, slot)
+  const register = allocateScratch body, width
+  const place = placeOfSlot body, slot, width
+  emitHead emitter, body, Opcode.Load, register, place, 0
+  register
+}
+
+/** The register an instruction writes a slot to; for a `var` parameter a scratch register, stored after it ran. */
+fn targetOf(var emitter: Emitter, var body: Body, slot: Slot): Int {
+  if !body.function.hasSlot(slot) {
+    report emitter, "a target that is no slot of its function"
+    return 0
+  }
+  if !body.references[slot.value] {
+    return body.offsets[slot.value]
+  }
+  const width = emitter.tables.widthOf typeOf(body, slot)
+  const register = allocateScratch body, width
+  body.pendingStores.append((slot.value, register))
+  register
+}
+
+fn flushStores(var emitter: Emitter, var body: Body, program: IrProgram) {
+  const pending = body.pendingStores
+  body.pendingStores = []
+  for (slot, register) in pending {
+    const width = emitter.tables.widthOf typeOf(body, Slot(slot))
+    const place = placeOfSlot body, Slot(slot), width
+    emitHead emitter, body, Opcode.Store, place, register, 0
+  }
+}
+
+/** The place that is a `var` parameter itself: its reference, and no steps. */
+fn placeOfSlot(var body: Body, slot: Slot, width: Int): Int {
+  body.places.append Place(body.offsets[slot.value], body.references[slot.value], [], width)
+  body.places.length() - 1
+}
+
+/** A place of the IR, compiled into the chunk's place table. */
+fn placeOf(var emitter: Emitter, var body: Body, program: IrProgram, reference: Reference): Int {
+  var steps: List<PlaceStep> = []
+  var current = typeOf body, reference.base
+  var pending = 0
+  for step in reference.steps {
+    match step {
+      .Field(layout, index) => {
+        if isBlockPointer(program, current) {
+          pending = flushOffset steps, pending
+          steps.append PlaceStep.Dereference
+        }
+        pending = pending + fieldOffset(emitter, layout, index)
+        current = program.layoutAt(layout).fields[index].annotation
+      }
+      .TupleField(layout, index) => {
+        if isBlockPointer(program, current) {
+          pending = flushOffset steps, pending
+          steps.append PlaceStep.Dereference
+        }
+        pending = pending + fieldOffset(emitter, layout, index)
+        current = program.layoutAt(layout).fields[index].annotation
+      }
+      .Variant(layout, variant, index) => {
+        const shape = program.layoutAt layout
+        const position = shape.variants[variant].first + index
+        current = shape.fields[position].annotation
+        // A niche is its payload: the step into the one field of the payload variant goes nowhere
+        if const .Niche(_, _) = shape.representation {
+          continue
+        }
+        if isBoxed(program, layout) {
+          pending = flushOffset steps, pending
+          steps.append PlaceStep.Dereference
+        }
+        pending = pending + fieldOffset(emitter, layout, position)
+      }
+      .Element(item, index, missing, at) => {
+        pending = flushOffset steps, pending
+        const register = operand emitter, body, program, index
+        const constant = constantOffset emitter, program, missing
+        steps.append PlaceStep.Element(register, constant, locationIndex(emitter, program, at))
+        current = item
+      }
+      .Contents(_) => report emitter, "a `contents` step, which the lowering never writes"
+    }
+  }
+  const _ = flushOffset steps, pending
+  const width = emitter.tables.widthOf current
+  body.places.append Place(body.offsets[reference.base.value], body.references[reference.base.value], steps, width)
+  body.places.length() - 1
+}
+
+fn flushOffset(var steps: List<PlaceStep>, pending: Int): Int {
+  if pending != 0 {
+    steps.append PlaceStep.Offset(pending)
+  }
+  0
+}
+
+fn fieldOffset(emitter: Emitter, layout: LayoutId, index: Int): Int {
+  emitter.tables.wordsOf(layout).offsets.get(index) ?? 0
+}
+
+/** The type a place ends in: the base's, stepped through the path as `placeTypeOf` of the C back end steps it. */
+fn placeType(program: IrProgram, body: Body, reference: Reference): IrTypeId {
+  var current = typeOf body, reference.base
+  for step in reference.steps {
+    current = match step {
+      .Field(layout, index) => program.layoutAt(layout).fields[index].annotation
+      .TupleField(layout, index) => program.layoutAt(layout).fields[index].annotation
+      .Variant(layout, variant, index) => {
+        const shape = program.layoutAt layout
+        shape.fields[shape.variants[variant].first + index].annotation
+      }
+      .Element(item, _, _, _) => item
+      .Contents(annotation) => annotation
+    }
+  }
+  current
+}
+
+/** The register one argument is in: the reference word of its place for a `var` parameter, the value otherwise. */
+fn argumentRegister(var emitter: Emitter, var body: Body, program: IrProgram, argument: Argument): Int {
+  if const Some(place) = argument.place {
+    const index = placeOf emitter, body, program, place
+    const register = allocateScratch body, 1
+    emitHead emitter, body, Opcode.Reference, register, index, 0
+    return register
+  }
+  operand emitter, body, program, argument.slot
+}
+
+// --- Instructions ---------------------------------------------------------------------------------------------------
+
+fn emitInstruction(var emitter: Emitter, var body: Body, program: IrProgram, instruction: Instruction) {
+  match instruction {
+    .Constant(target, value) => {
+      const offset = constantOffset emitter, program, value
+      const register = targetOf emitter, body, target
+      emitHead emitter, body, Opcode.Constant, register, emitter.tables.widthOf(typeOf(body, target)), 0
+      emitTail body, offset
+    }
+    .Move(target, source) => {
+      if target == source {
+        return
+      }
+      const from = operand emitter, body, program, source
+      const to = targetOf emitter, body, target
+      emitHead emitter, body, Opcode.Move, to, from, emitter.tables.widthOf(typeOf(body, source))
+    }
+    .Copy(target, source) => emitCopy emitter, body, program, target, source
+    .Retain(slot) => {
+      const shape = shapeOperand emitter, program, typeOf(body, slot)
+      if shape != 0 {
+        const register = operand emitter, body, program, slot
+        emitKernel emitter, body, kernelNumberOf(KernelOperation.Retain), [register, shape - 1]
+      }
+    }
+    .Release(slot) => {
+      const shape = shapeOperand emitter, program, typeOf(body, slot)
+      if shape != 0 {
+        const register = operand emitter, body, program, slot
+        emitKernel emitter, body, kernelNumberOf(KernelOperation.Release), [register, shape - 1]
+      }
+    }
+    .EndOfScope(_) => {}
+    // The zero value owns no count, so a release of the slot afterwards does nothing: the slot is its own drop flag
+    .Clear(target) => {
+      const register = targetOf emitter, body, target
+      emitHead emitter, body, Opcode.Zero, register, emitter.tables.widthOf(typeOf(body, target)), 0
+    }
+    .MakeUnique(reference) => emitMakeUnique emitter, body, program, reference
+    .Call(target, callee, arguments, witnesses, at) => {
+      emitCall emitter, body, program, target, callee, arguments, witnesses, at
+    }
+    .CallClosure(target, callee, arguments) => {
+      const closure = operand emitter, body, program, callee
+      var registers: List<Int> = []
+      for argument in arguments {
+        registers.append argumentRegister(emitter, body, program, argument)
+      }
+      const result = resultRegister emitter, body, target
+      emitHead emitter, body, Opcode.CallClosure, result, closure, registers.length()
+      emitTail body, flagOf(target.isSome())
+      for register in registers {
+        emitTail body, register
+      }
+    }
+    .CallWitness(target, witness, member, arguments) => {
+      if const .Value(_, _) = witness.root {
+        const source = witnessEntryOf emitter, body, program, witness
+        var registers: List<Int> = []
+        for argument in arguments {
+          registers.append argumentRegister(emitter, body, program, argument)
+        }
+        const result = resultRegister emitter, body, target
+        emitHead emitter, body, Opcode.CallWitness, result, registers.length(), flagOf(target.isSome())
+        emitTail body, source
+        emitTail body, member
+        for register in registers {
+          emitTail body, register
+        }
+      } else {
+        report emitter, "a call through a witness table that does not belong to a value"
+      }
+    }
+    .Intrinsic(target, intrinsic, arguments, at) => emitIntrinsic emitter, body, program, target, intrinsic, arguments, at
+    .Construct(target, layout, variant, fields) => emitConstruct emitter, body, program, target, layout, variant, fields
+    .Read(target, reference) => {
+      if reference.steps.isEmpty() && !body.references[reference.base.value] {
+        emitCopy emitter, body, program, target, reference.base
+        return
+      }
+      const place = placeOf emitter, body, program, reference
+      const register = targetOf emitter, body, target
+      emitHead emitter, body, Opcode.Load, register, place, 0
+      // A read of a counted field hands the frame a count of it, as the C back end's `Read` does
+      const shape = shapeOperand emitter, program, typeOf(body, target)
+      if shape != 0 {
+        emitKernel emitter, body, kernelNumberOf(KernelOperation.Retain), [register, shape - 1]
+      }
+    }
+    .Write(reference, value) => {
+      const from = operand emitter, body, program, value.slot
+      if reference.steps.isEmpty() && !body.references[reference.base.value] {
+        const to = body.offsets[reference.base.value]
+        if to != from {
+          emitHead emitter, body, Opcode.Move, to, from, emitter.tables.widthOf(typeOf(body, value.slot))
+        }
+        return
+      }
+      const annotation = placeType program, body, reference
+      const released = shapeOperand emitter, program, annotation
+      const place = placeOf emitter, body, program, reference
+      // A write through a place releases what was there first, which is read out of the place for the release
+      if released != 0 {
+        const old = allocateScratch body, emitter.tables.widthOf(annotation)
+        emitHead emitter, body, Opcode.Load, old, place, 0
+        emitKernel emitter, body, kernelNumberOf(KernelOperation.Release), [old, released - 1]
+      }
+      emitHead emitter, body, Opcode.Store, place, from, 0
+    }
+    .Tag(target, source) => emitTag emitter, body, program, target, source
+    .ArrayNew(_, _) => report emitter, "an `Array<Item, Size>` value"
+    .Closure(target, function, captures, _) => emitClosure emitter, body, program, target, function, captures
+    .BoxNew(_, _) => report emitter, "a box built by an instruction instead of by a `construct`"
+    .TraitValue(target, value, tables) => emitTraitValue emitter, body, program, target, value, tables
+    .ContainerNew(target, kind, elements) => {
+      const register = targetOf emitter, body, target
+      var operands = [register, runtimeKindCode(kind), elements.length()]
+      for element in elements {
+        operands.append element.value
+      }
+      emitKernel emitter, body, kernelNumberOf(KernelOperation.ContainerNew), operands
+    }
+    .TakeOut(_, _, _, _) => report emitter, "a `var` path through a map"
+    .PutBack(_, _, _, _) => report emitter, "a `var` path through a map"
+    .Panic(message, at) => {
+      const register = operand emitter, body, program, message.slot
+      const location = locationIndex emitter, program, at
+      emitKernel emitter, body, kernelNumberOf(KernelOperation.Panic), [register, location]
+    }
+    .Suspend(_, _) => report emitter, "a suspension of a task"
+    .TaskNew(_, _, _, _) => report emitter, "a task"
+    .ChannelNew(target, capacity, item, at) => {
+      const size = operand emitter, body, program, capacity
+      const register = targetOf emitter, body, target
+      const location = locationIndex emitter, program, at
+      emitKernel emitter, body, kernelNumberOf(KernelOperation.ChannelNew), [register, size, item.value, location]
+    }
+  }
+}
+
+/** `Copy`: the words and one count more, or only the count where source and target are one slot. */
+fn emitCopy(var emitter: Emitter, var body: Body, program: IrProgram, target: Slot, source: Slot) {
+  const annotation = typeOf body, source
+  const shape = shapeOperand emitter, program, annotation
+  const from = operand emitter, body, program, source
+  if target != source {
+    const to = targetOf emitter, body, target
+    emitHead emitter, body, Opcode.Move, to, from, emitter.tables.widthOf(annotation)
+    if shape != 0 {
+      emitKernel emitter, body, kernelNumberOf(KernelOperation.Retain), [to, shape - 1]
+    }
+    return
+  }
+  if shape != 0 {
+    emitKernel emitter, body, kernelNumberOf(KernelOperation.Retain), [from, shape - 1]
+  }
+}
+
+/**
+ * `MakeUnique` of a place: a boxed block, a container of the runtime, or the payload of a trait-typed value. A value with
+ * an identity - a task, a channel, a file, a shared object - is never made unique, and a value without a count has
+ * nothing to make unique; both are no instruction at all, as they are no statement in C.
+ */
+fn emitMakeUnique(var emitter: Emitter, var body: Body, program: IrProgram, reference: Reference) {
+  const annotation = placeType program, body, reference
+  if !isManagedType(program, annotation) && !isBlockPointer(program, annotation) {
+    return
+  }
+  match program.typeAt(annotation) {
+    .SharedObject(_) => {
+      return
+    }
+    .Runtime(kind, _) => {
+      match kind {
+        .ListStorage => {}
+        .MapStorage => {}
+        .SetStorage => {}
+        _ => {
+          return
+        }
+      }
+    }
+    .Record(_) => {}
+    .Variant(_) => {}
+    .Tuple(_) => {}
+    .Object(_) => {}
+    _ => {
+      report emitter, "making a value of this type unique"
+      return
+    }
+  }
+  const place = placeOf emitter, body, program, reference
+  const register = allocateScratch body, 1
+  emitHead emitter, body, Opcode.Reference, register, place, 0
+  if const .Runtime(kind, _) = program.typeAt(annotation) {
+    emitKernel emitter, body, kernelNumberOf(KernelOperation.ContainerUnique), [runtimeKindCode(kind), register]
+    return
+  }
+  // A boxed record and the payload of a trait-typed value are both a block whose shape word says what it holds
+  emitKernel emitter, body, kernelNumberOf(KernelOperation.BlockUnique), [register]
+}
+
+/** A flag as the word an operand carries. */
+fn flagOf(flag: Bool): Int {
+  if flag {
+    return 1
+  }
+  0
+}
+
+fn resultRegister(var emitter: Emitter, var body: Body, target: Slot?): Int {
+  match target {
+    Some(slot) => targetOf emitter, body, slot
+    None => 0
+  }
+}
+
+/** A call of a function of the program, or of the runtime through the kernel's table of thunks. */
+fn emitCall(
+  var emitter: Emitter,
+  var body: Body,
+  program: IrProgram,
+  target: Slot?,
+  callee: FunctionId,
+  arguments: List<Argument>,
+  witnesses: List<WitnessSource>,
+  at: LocationId?,
+) {
+  if !witnesses.isEmpty() {
+    report emitter, "a call that passes a witness table"
+    return
+  }
+  if !program.hasFunction(callee) {
+    report emitter, "a call of a function that is not in the program"
+    return
+  }
+  const function = program.functionAt callee
+  if const .Runtime(symbol) = function.kind {
+    emitRuntimeCall emitter, body, program, target, function, symbol, arguments, at
+    return
+  }
+  const chunk = emitter.chunks.get(callee.value) ?? (0 - 1)
+  if chunk < 0 {
+    report emitter, "a call of a function that is not emitted"
+    return
+  }
+  var registers: List<Int> = []
+  for argument in arguments {
+    registers.append argumentRegister(emitter, body, program, argument)
+  }
+  const result = resultRegister emitter, body, target
+  emitHead emitter, body, Opcode.Call, result, registers.length(), flagOf(target.isSome())
+  emitTail body, chunk
+  for register in registers {
+    emitTail body, register
+  }
+}
+
+/**
+ * A function of the runtime: a `kernel` instruction whose operation is the function's thunk, with the result register
+ * (`-1` for none), the argument registers, and the location (`-1` where the prototype takes none). The thunk reads a
+ * pointer parameter from a reference word, and a `const void *` one - an element handed over by address - as the
+ * address of the register itself, exactly as the C back end passes `&slot`.
+ */
+fn emitRuntimeCall(
+  var emitter: Emitter,
+  var body: Body,
+  program: IrProgram,
+  target: Slot?,
+  function: IrFunction,
+  symbol: String,
+  arguments: List<Argument>,
+  at: LocationId?,
+) {
+  const index = match emitter.natives.get(symbol) {
+    Some(found) => found
+    None => {
+      report emitter, "`{symbol}`, which is no ready function of the runtime"
+      return
+    }
+  }
+  const text = emitter.prototypes.get(symbol) ?? ""
+  const prototype = match readPrototype(text) {
+    Some(found) => found
+    None => {
+      report emitter, "`{symbol}`, whose prototype the emitter could not read"
+      return
+    }
+  }
+  var withLocation = false
+  var conversion = ""
+  match matchPrototype(program, function.signature, prototype, symbol) {
+    .Direct => {}
+    .WithLocation => {
+      withLocation = true
+    }
+    .Converted(annotation, located) => {
+      withLocation = located
+      conversion = annotation
+    }
+    .Mismatch(what) => {
+      report emitter, what
+      return
+    }
+  }
+  var location = 0 - 1
+  if withLocation {
+    match at {
+      Some(found) => {
+        location = locationIndex emitter, program, found
+      }
+      None => {
+        report emitter, "`{symbol}` takes the source location of the call, and the call carries none"
+        return
+      }
+    }
+  }
+  var operands: List<Int> = []
+  const result = match target {
+    Some(slot) => targetOf emitter, body, slot
+    None => 0 - 1
+  }
+  operands.append result
+  for argument in arguments {
+    operands.append argumentRegister(emitter, body, program, argument)
+  }
+  operands.append location
+  emitKernel(emitter, body, kernelNativeBase + index, operands)
+  // The runtime answers a number of the other sign in the same width: the C cast the C back end writes around the call
+  if !conversion.isEmpty() {
+    if const Some(slot) = target {
+      const to = numericKindOfType program, typeOf(body, slot)
+      const from = numericKindOfSpelling prototype.result
+      if const (Some(to), Some(from)) = (to, from) {
+        emitKernel(emitter, body, kernelNumberOf(KernelOperation.Convert), [
+          result,
+          result,
+          numericKindCode(from),
+          numericKindCode(to),
+        ])
+      }
+    }
+  }
+}
+
+// --- Intrinsics -----------------------------------------------------------------------------------------------------
+
+fn emitIntrinsic(
+  var emitter: Emitter,
+  var body: Body,
+  program: IrProgram,
+  target: Slot?,
+  intrinsic: Intrinsic,
+  arguments: List<Slot>,
+  at: LocationId,
+) {
+  var registers: List<Int> = []
+  for argument in arguments {
+    registers.append operand(emitter, body, program, argument)
+  }
+  const first = registers.get(0) ?? 0
+  const second = registers.get(1) ?? 0
+  const location = locationIndex emitter, program, at
+  match intrinsic.operation {
+    .PrintParts => {
+      var operands = [registers.length()]
+      operands.appendAll registers
+      emitKernel emitter, body, kernelNumberOf(KernelOperation.Print), operands
+      return
+    }
+    .PrintErrorParts => {
+      var operands = [registers.length()]
+      operands.appendAll registers
+      emitKernel emitter, body, kernelNumberOf(KernelOperation.PrintError), operands
+      return
+    }
+    .ExitWithCode => {
+      emitKernel emitter, body, kernelNumberOf(KernelOperation.Exit), [first]
+      return
+    }
+    _ => {}
+  }
+  const slot = match target {
+    Some(found) => found
+    // Every other intrinsic answers a value; one nobody takes changes nothing, so it is not computed
+    None => {
+      return
+    }
+  }
+  const result = targetOf emitter, body, slot
+  match intrinsic.operation {
+    .TextConcat => {
+      var operands = [result, registers.length()]
+      for index in 0..arguments.length() {
+        operands.append registers[index]
+        match textPartKindOf(program, typeOf(body, arguments[index])) {
+          Some(kind) => operands.append textPartCode(kind)
+          None => {
+            report emitter, "a part of a text that is neither a string nor a value the runtime shows"
+            operands.append 0
+          }
+        }
+      }
+      emitKernel emitter, body, kernelNumberOf(KernelOperation.TextConcat), operands
+    }
+    .TextEqual => emitKernel emitter, body, kernelNumberOf(KernelOperation.TextEqual), [result, first, second]
+    .TextCompare => emitKernel emitter, body, kernelNumberOf(KernelOperation.TextCompare), [result, first, second]
+    .TextByteLength => emitKernel emitter, body, kernelNumberOf(KernelOperation.TextByteLength), [result, first]
+    .BooleanNot => emitHead emitter, body, Opcode.Not, result, first, 0
+    .LazyForce => report emitter, "forcing a `lazy` value"
+    .Convert(to) => {
+      const from = intrinsic.kind ?? to
+      emitKernel(emitter, body, kernelNumberOf(KernelOperation.Convert), [
+        result,
+        first,
+        numericKindCode(from),
+        numericKindCode(to),
+      ])
+    }
+    .Equal => emitComparison emitter, body, program, intrinsic, arguments, result, first, second
+    .NotEqual => emitComparison emitter, body, program, intrinsic, arguments, result, first, second
+    .Less => emitComparison emitter, body, program, intrinsic, arguments, result, first, second
+    .LessOrEqual => emitComparison emitter, body, program, intrinsic, arguments, result, first, second
+    .Greater => emitComparison emitter, body, program, intrinsic, arguments, result, first, second
+    .GreaterOrEqual => emitComparison emitter, body, program, intrinsic, arguments, result, first, second
+    _ => emitArithmetic emitter, body, intrinsic, result, first, second, location
+  }
+}
+
+/**
+ * Arithmetic: the `Int64` operations as opcodes of their own, checked unless the range analysis proved otherwise, and
+ * every other width, every float and every bit operation through the kernel, which calls the very helpers of
+ * `torb_number.h` the C back end calls.
+ */
+fn emitArithmetic(
+  var emitter: Emitter,
+  var body: Body,
+  intrinsic: Intrinsic,
+  result: Int,
+  first: Int,
+  second: Int,
+  location: Int,
+) {
+  const kind = match intrinsic.kind {
+    Some(found) => found
+    None => {
+      report emitter, "an arithmetic intrinsic without a numeric type"
+      return
+    }
+  }
+  if kind == NumericKind.Signed(64) {
+    if !intrinsic.isChecked {
+      const unchecked = match intrinsic.operation {
+        .Add => Some Opcode.AddUnchecked
+        .Subtract => Some Opcode.SubtractUnchecked
+        .Multiply => Some Opcode.MultiplyUnchecked
+        _ => None
+      }
+      if const Some(opcode) = unchecked {
+        emitHead emitter, body, opcode, result, first, second
+        return
+      }
+    }
+    const checked = match intrinsic.operation {
+      .Add => Some Opcode.AddInteger
+      .Subtract => Some Opcode.SubtractInteger
+      .Multiply => Some Opcode.MultiplyInteger
+      .Divide => Some Opcode.DivideInteger
+      .Remainder => Some Opcode.RemainderInteger
+      .Negate => Some Opcode.NegateInteger
+      _ => None
+    }
+    if const Some(opcode) = checked {
+      emitHead emitter, body, opcode, result, first, second
+      emitTail body, location
+      return
+    }
+  }
+  if const .Unsigned(_) = kind {
+    if const .Negate = intrinsic.operation {
+      report emitter, "the negation of an unsigned number"
+      return
+    }
+  }
+  const code = arithmeticCode intrinsic.operation
+  if code < 0 {
+    report emitter, "an intrinsic the VM does not execute"
+    return
+  }
+  const checkedFlag = if intrinsic.isChecked { 1 } else { 0 }
+  emitKernel(emitter, body, kernelNumberOf(KernelOperation.Arithmetic), [
+    result,
+    first,
+    second,
+    location,
+    code + checkedFlag * 256,
+    numericKindCode(kind),
+  ])
+}
+
+/**
+ * A comparison: one word against one word wherever the words compare as the values do (every integer but `UInt64`,
+ * `Bool`, `Char`, `Void`, and the pointer of an object with an identity), the runtime's byte order for a `String`, and
+ * the kernel for a float and a `UInt64`.
+ */
+fn emitComparison(
+  var emitter: Emitter,
+  var body: Body,
+  program: IrProgram,
+  intrinsic: Intrinsic,
+  arguments: List<Slot>,
+  result: Int,
+  first: Int,
+  second: Int,
+) {
+  const annotation = match arguments.first() {
+    Some(slot) => typeOf body, slot
+    None => {
+      report emitter, "a comparison without operands"
+      return
+    }
+  }
+  const operation = intrinsic.operation
+  if const .Text = program.typeAt(annotation) {
+    emitKernel(emitter, body, kernelNumberOf(KernelOperation.Compare), [
+      result,
+      first,
+      second,
+      comparisonCode(operation),
+      textKindCode,
+    ])
+    return
+  }
+  const isWord = match program.typeAt(annotation) {
+    .Integer(width, isSigned) => isSigned || width < 64
+    .Boolean => true
+    .Character => true
+    .VoidType => true
+    .SharedObject(_) => true
+    .Record(layout) => isBoxed program, layout
+    .Variant(layout) => isBoxed program, layout
+    .Tuple(layout) => isBoxed program, layout
+    _ => false
+  }
+  if isWord {
+    const opcode = match operation {
+      .Equal => Opcode.Equal
+      .NotEqual => Opcode.NotEqual
+      .Less => Opcode.Less
+      .LessOrEqual => Opcode.LessOrEqual
+      .Greater => Opcode.Greater
+      _ => Opcode.GreaterOrEqual
+    }
+    emitHead emitter, body, opcode, result, first, second
+    return
+  }
+  const kind = match numericKindOfType(program, annotation) {
+    Some(found) => found
+    None => {
+      report emitter, "a comparison of a value the C back end cannot compare directly"
+      return
+    }
+  }
+  emitKernel(emitter, body, kernelNumberOf(KernelOperation.Compare), [
+    result,
+    first,
+    second,
+    comparisonCode(operation),
+    numericKindCode(kind),
+  ])
+}
+
+/** The number a numeric type is written as in a kernel operand: 1-4 signed 8-64, 5-8 unsigned, 9 and 10 the floats. */
+public fn numericKindCode(kind: NumericKind): Int {
+  match kind {
+    .Signed(width) => widthStep width
+    .Unsigned(width) => 4 + widthStep(width)
+    .Floating(width) => if width == 32 { 9 } else { 10 }
+  }
+}
+
+/** The kind code of a `String` operand of `compare`. */
+public const textKindCode = 11
+
+fn widthStep(width: Int): Int {
+  if width <= 8 {
+    return 1
+  }
+  if width <= 16 {
+    return 2
+  }
+  if width <= 32 {
+    return 3
+  }
+  4
+}
+
+/** `int32_t`, `uint64_t`: the numeric kind of a C integer type a prototype answers. */
+fn numericKindOfSpelling(spelling: String): NumericKind? {
+  for width in [8, 16, 32, 64] {
+    if spelling == "int{width}_t" {
+      return Some NumericKind.Signed(width)
+    }
+    if spelling == "uint{width}_t" {
+      return Some NumericKind.Unsigned(width)
+    }
+  }
+  None
+}
+
+fn numericKindOfType(program: IrProgram, id: IrTypeId): NumericKind? {
+  match program.typeAt(id) {
+    .Integer(width, isSigned) => {
+      if isSigned {
+        Some NumericKind.Signed(width)
+      } else {
+        Some NumericKind.Unsigned(width)
+      }
+    }
+    .Floating(width) => Some NumericKind.Floating(width)
+    _ => None
+  }
+}
+
+/** The operation of an `arithmetic` kernel call; 256 is added to it where the operation is checked. */
+public fn arithmeticCode(operation: IntrinsicOperation): Int {
+  match operation {
+    .Add => 0
+    .Subtract => 1
+    .Multiply => 2
+    .Divide => 3
+    .Remainder => 4
+    .Negate => 5
+    .BitwiseAnd => 6
+    .BitwiseOr => 7
+    .BitwiseExclusiveOr => 8
+    .BitwiseNot => 9
+    .ShiftedLeft => 10
+    .ShiftedRight => 11
+    _ => 0 - 1
+  }
+}
+
+/** The operation of a `compare` kernel call. */
+public fn comparisonCode(operation: IntrinsicOperation): Int {
+  match operation {
+    .Equal => 0
+    .NotEqual => 1
+    .Less => 2
+    .LessOrEqual => 3
+    .Greater => 4
+    _ => 5
+  }
+}
+
+/** The `torb_text_part_kind` of `runtime/torb.h` a part of a concatenation is. */
+public fn textPartCode(kind: TextPartKind): Int {
+  match kind {
+    .TextValue => 0
+    .SignedValue => 1
+    .UnsignedValue => 2
+    .FloatingValue => 3
+    .BooleanValue => 4
+    .CharacterValue => 5
+    .VoidPart => 6
+  }
+}
+
+/** The kind of container a `container.new` makes: 0 a list, 1 a map, 2 a set. */
+public fn runtimeKindCode(kind: RuntimeKind): Int {
+  match kind {
+    .ListStorage => 0
+    .MapStorage => 1
+    .SetStorage => 2
+    _ => 3
+  }
+}
+
+// --- Construction ---------------------------------------------------------------------------------------------------
+
+/**
+ * `Construct`: a counted block for a boxed layout, the payload itself or zero words for a niche, and the fields moved
+ * into their words - with the tag word of a variant - for an inline layout.
+ */
+fn emitConstruct(
+  var emitter: Emitter,
+  var body: Body,
+  program: IrProgram,
+  target: Slot,
+  layout: LayoutId,
+  variant: Int,
+  fields: List<Argument>,
+) {
+  if !program.hasLayout(layout) {
+    report emitter, "a construction of a layout that is not in the program"
+    return
+  }
+  const shape = program.layoutAt layout
+  var registers: List<Int> = []
+  for field in fields {
+    registers.append operand(emitter, body, program, field.slot)
+  }
+  const register = targetOf emitter, body, target
+  const words = emitter.tables.wordsOf layout
+  match shape.representation {
+    .Niche(payload, field) => {
+      if variant == payload {
+        if const Some(found) = registers.first() {
+          const width = emitter.tables.widthOf shape.fields[field].annotation
+          emitHead emitter, body, Opcode.Move, register, found, width
+        }
+        return
+      }
+      emitHead emitter, body, Opcode.Zero, register, emitter.tables.widthOf(typeOf(body, target)), 0
+    }
+    .Inline => {
+      const positions = constructedPositions shape, variant
+      for index in 0..registers.length() {
+        const position = positions.get(index) ?? 0
+        const width = emitter.tables.widthOf shape.fields[position].annotation
+        emitHead(emitter, body, Opcode.Move, register + words.offsets[position], registers[index], width)
+      }
+      if !shape.variants.isEmpty() {
+        emitHead(emitter, body, Opcode.Word, register + words.tag, 0, 0)
+        emitTail body, variant
+      }
+    }
+    .Boxed => {
+      var placed: List<Int> = []
+      const positions = constructedPositions shape, variant
+      for index in 0..registers.length() {
+        const position = positions.get(index) ?? 0
+        placed.append words.offsets[position]
+        placed.append registers[index]
+        placed.append emitter.tables.widthOf(shape.fields[position].annotation)
+      }
+      if !shape.variants.isEmpty() {
+        const tag = allocateScratch body, 1
+        emitHead emitter, body, Opcode.Word, tag, 0, 0
+        emitTail body, variant
+        placed.append words.tag
+        placed.append tag
+        placed.append 1
+      }
+      emitBlockNew emitter, body, register, blockShapeIndex(emitter, program, layout), recordBlockKind, words.width, placed
+    }
+  }
+}
+
+/** The positions in `Layout.fields` the fields of one `Construct` go to: all of them, or the common ones and a group. */
+fn constructedPositions(shape: Layout, variant: Int): List<Int> {
+  var positions: List<Int> = []
+  if shape.variants.isEmpty() {
+    for index in 0..shape.fields.length() {
+      positions.append index
+    }
+    return positions
+  }
+  for index in 0..shape.commonFieldCount {
+    positions.append index
+  }
+  if shape.hasVariant(variant) {
+    const group = shape.variants[variant]
+    for index in group.first..group.first + group.count {
+      positions.append index
+    }
+  }
+  positions
+}
+
+/** `block.new`: the target, the shape of the contents, the block kind, the words, then `(offset, register, width)` triples. */
+fn emitBlockNew(
+  var emitter: Emitter,
+  var body: Body,
+  target: Int,
+  shape: Int,
+  kind: Int,
+  words: Int,
+  placed: List<Int>,
+) {
+  var operands = [target, shape, kind, words, placed.length() / 3]
+  operands.appendAll placed
+  emitKernel emitter, body, kernelNumberOf(KernelOperation.BlockNew), operands
+}
+
+/** `Tag`: the tag word of an inline variant, the null test of a niche, the tag word inside a boxed block. */
+fn emitTag(var emitter: Emitter, var body: Body, program: IrProgram, target: Slot, source: Slot) {
+  const annotation = typeOf body, source
+  const layout = match program.typeAt(annotation) {
+    .Variant(found) => found
+    _ => {
+      report emitter, "the tag of a value that is not a variant"
+      return
+    }
+  }
+  const words = emitter.tables.wordsOf layout
+  const from = operand emitter, body, program, source
+  const register = targetOf emitter, body, target
+  match program.layoutAt(layout).representation {
+    .Niche(payload, _) => emitHead emitter, body, Opcode.TagNiche, register, from, payload
+    .Inline => emitHead emitter, body, Opcode.Tag, register, from, words.tag
+    .Boxed => {
+      var steps: List<PlaceStep> = [PlaceStep.Dereference]
+      if words.tag != 0 {
+        steps.append PlaceStep.Offset(words.tag)
+      }
+      body.places.append Place(from, false, steps, 1)
+      emitHead(emitter, body, Opcode.Load, register, body.places.length() - 1, 0)
+    }
+  }
+}
+
+/**
+ * `Closure`: the function (its chunk plus one) and the environment, a counted block of the captures. A closure without
+ * captures has no environment - the null pointer, which a retain and a release treat as nothing.
+ */
+fn emitClosure(
+  var emitter: Emitter,
+  var body: Body,
+  program: IrProgram,
+  target: Slot,
+  function: FunctionId,
+  captures: List<Capture>,
+) {
+  if !program.hasFunction(function) {
+    report emitter, "a closure of a function that is not in the program"
+    return
+  }
+  const chunk = emitter.chunks.get(function.value) ?? (0 - 1)
+  if chunk < 0 {
+    report emitter, "a closure of a function that is not emitted"
+    return
+  }
+  var registers: List<Int> = []
+  for capture in captures {
+    match capture {
+      .Value(slot) => registers.append operand(emitter, body, program, slot)
+      .Boxed(slot) => registers.append operand(emitter, body, program, slot)
+      .Place(_) => {
+        report emitter, "a closure that captures a `var` parameter"
+        return
+      }
+    }
+  }
+  const register = targetOf emitter, body, target
+  match environmentLayoutOfFunction(program, program.functionAt(function)) {
+    Some(layout) => {
+      const shape = program.layoutAt layout
+      if shape.fields.length() != captures.length() {
+        report emitter, "a closure whose environment does not hold exactly its captures"
+        return
+      }
+      const words = emitter.tables.wordsOf layout
+      var placed: List<Int> = []
+      for index in 0..registers.length() {
+        placed.append words.offsets[index]
+        placed.append registers[index]
+        placed.append emitter.tables.widthOf(shape.fields[index].annotation)
+      }
+      const contents = blockShapeIndex emitter, program, layout
+      emitBlockNew(emitter, body, register + 1, contents, environmentBlockKind, words.width, placed)
+    }
+    None => {
+      if !captures.isEmpty() {
+        report emitter, "a closure with captures whose function takes no environment"
+        return
+      }
+      emitHead(emitter, body, Opcode.Word, register + 1, 0, 0)
+      emitTail body, 0
+    }
+  }
+  emitHead emitter, body, Opcode.Word, register, 0, 0
+  emitTail(body, chunk + 1)
+}
+
+/**
+ * `TraitValue`: the payload boxed into a block of the payload layout, then one table word per bound. A value that is
+ * trait-typed already is narrowed: its payload block is shared and only the tables change.
+ */
+fn emitTraitValue(
+  var emitter: Emitter,
+  var body: Body,
+  program: IrProgram,
+  target: Slot,
+  value: Argument,
+  tables: List<WitnessSource>,
+) {
+  const item = typeOf body, value.slot
+  const from = operand emitter, body, program, value.slot
+  const register = targetOf emitter, body, target
+  if const .Object(_) = program.typeAt(item) {
+    emitHead emitter, body, Opcode.Move, register, from, 1
+  } else {
+    const layout = match program.layoutNamed(payloadLayoutName(program, item)) {
+      Some(found) => found
+      None => {
+        report emitter, "a trait-typed value whose payload has no layout"
+        return
+      }
+    }
+    const words = emitter.tables.wordsOf layout
+    const width = emitter.tables.widthOf item
+    const contents = blockShapeIndex emitter, program, layout
+    emitBlockNew emitter, body, register, contents, objectBlockKind, words.width, [0, from, width]
+  }
+  for index in 0..tables.length() {
+    const table = tables[index]
+    if const .Table(found) = table.root {
+      if table.steps.isEmpty() {
+        emitHead(emitter, body, Opcode.Word, register + 1 + index, 0, 0)
+        emitTail(body, found.value + 1)
+        continue
+      }
+    }
+    const source = witnessEntryOf emitter, body, program, table
+    emitHead(emitter, body, Opcode.WitnessTable, register + 1 + index, source, 0)
+  }
+}
+
+/** A witness source, compiled into the chunk's witness table. */
+fn witnessEntryOf(var emitter: Emitter, var body: Body, program: IrProgram, witness: WitnessSource): Int {
+  const root = match witness.root {
+    .Table(table) => WitnessRootEntry.Table table.value
+    .Value(place, bound) => WitnessRootEntry.Value placeOf(emitter, body, program, place), bound
+    .Parameter(_) => {
+      report emitter, "a witness table the caller passed, which the lowering never builds"
+      WitnessRootEntry.Table 0
+    }
+  }
+  body.witnesses.append WitnessEntry(root, witness.steps)
+  body.witnesses.length() - 1
+}
+
+// --- Terminators ----------------------------------------------------------------------------------------------------
+
+fn emitTerminator(var emitter: Emitter, var body: Body, program: IrProgram, terminator: Terminator) {
+  match terminator {
+    .Jump(target) => {
+      emitHead emitter, body, Opcode.Jump, 0, 0, 0
+      emitBlockTarget body, target
+    }
+    .Branch(condition, then, otherwise) => {
+      const register = operand emitter, body, program, condition
+      emitHead emitter, body, Opcode.Branch, register, 0, 0
+      emitBlockTarget body, then
+      emitBlockTarget body, otherwise
+    }
+    .Switch(scrutinee, values, targets, otherwise) => {
+      const register = operand emitter, body, program, scrutinee
+      emitHead emitter, body, Opcode.Switch, register, values.length(), 0
+      for index in 0..values.length() {
+        emitTail body, values[index]
+        emitBlockTarget body, targets[index]
+      }
+      emitBlockTarget body, otherwise
+    }
+    .Return(value) => {
+      match value {
+        Some(argument) => {
+          const width = resultWidthOf emitter, program, body.function.signature.result
+          if width == 0 {
+            emitHead emitter, body, Opcode.Return, 0, 0, 0
+            return
+          }
+          const register = operand emitter, body, program, argument.slot
+          emitHead emitter, body, Opcode.Return, register, width, 0
+        }
+        None => emitHead emitter, body, Opcode.Return, 0, 0, 0
+      }
+    }
+    .Unreachable => emitHead emitter, body, Opcode.Unreachable, 0, 0, 0
+    .Stop => emitHead emitter, body, Opcode.Stop, 0, 0, 0
+  }
+}

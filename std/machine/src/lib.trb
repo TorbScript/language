@@ -1,0 +1,60 @@
+/**
+ * The kernel the bytecode VM of `torb run --vm` runs on: raw 64-bit words, and the C runtime behind them
+ * (docs/design/VM.md section 6).
+ *
+ * The VM keeps its registers in one `ArrayList<Int64>`, and a value there is the runtime's own bytes - a `String` is
+ * the two words of a `torb_text`, a list the two of a `torb_list`, a counted block its pointer. [Machine] is what does
+ * the part TorbScript cannot do on such words: call a function of the runtime with them, read and write a word of a
+ * counted block, and place a text or a float constant into them.
+ *
+ * **This package is not for programs.** Its operations trust their operands the way machine code does - a wrong
+ * register or address is a wrong write, not a panic - and a sandboxed script never gets it, because a sandbox's
+ * capabilities are its imports.
+ */
+
+/** The five natives of the VM's kernel. Every one of them is `runtime/machine.c`. */
+public native type Machine {
+  /**
+   * Runs one operation of the kernel on the registers, and answers one word. `code[at]` is the operation's number - an
+   * operation of the kernel's own table below 1024, a function of the runtime from 1024 on - and the words after it
+   * are its operands: register offsets from `base`, location indices, sizes.
+   *
+   * It is native because it is the runtime: every function of `runtime/` is reached through it, with the words of the
+   * registers as its arguments, so the VM and a native binary share one implementation of every native.
+   *
+   * # Pitfalls
+   *
+   * Nothing is checked. A register outside of `words` is memory that belongs to somebody else.
+   */
+  native static fn operate(var words: ArrayList<Int64>, base: Int64, code: ArrayList<Int64>, at: Int64): Int64
+
+  /**
+   * The word at `address`: a field of a counted block of the VM. It is native because an address is raw storage.
+   *
+   * # Pitfalls
+   *
+   * An address that is no field of a live block is undefined behaviour, exactly as it is in C.
+   */
+  native static fn load(address: Int64): Int64
+
+  /**
+   * Writes the word at `address`. Native for the reason [Machine.load] is.
+   *
+   * # Pitfalls
+   *
+   * The block has to be unique before a write goes through it; the VM makes it so first, as the IR says.
+   */
+  native static fn store(address: Int64, value: Int64)
+
+  /**
+   * An immortal copy of `text` as the two words of a `torb_text`, at the register `at` of `words` (an absolute index).
+   * It is how the constant pool gets its strings, and it is native because the storage of a text is the runtime's.
+   */
+  native static fn placeText(var words: ArrayList<Int64>, at: Int64, text: String)
+
+  /**
+   * The bits of `value` as one word at the register `at`. It is how the constant pool gets its floats, and it is native
+   * because the language has no way to see the bits of a float.
+   */
+  native static fn placeFloat(var words: ArrayList<Int64>, at: Int64, value: Float64)
+}

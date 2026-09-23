@@ -1,0 +1,218 @@
+/**
+ * The table of thunks through which the VM calls the functions of the runtime: `runtime/machine_natives.c`, written by
+ * `torb natives --header` next to `torb_natives.h` (docs/design/VM.md section 6).
+ *
+ * One thunk per symbol of [nativeSymbols], in that order, generated from the symbol's prototype in the manifest. A
+ * thunk reads every argument out of the register its operand names - an integer by a cast, a `double` from its bits, a
+ * struct (`torb_text`, `torb_list`) by `memcpy`, a task or a channel as the pointer it is - calls the function, and
+ * writes the result back the same way. A pointer parameter is where the VM's reference word points (a `var` parameter,
+ * an out parameter), and a `const void *` - an element handed over by address - is the address of the register itself,
+ * which is exactly what the C back end passes as `&slot`.
+ *
+ * A prototype a thunk cannot be written for - a `torb_closure` parameter, which would call back into the program -
+ * gets a thunk that panics with an internal error naming the symbol, so the table stays complete and the numbering
+ * stays the manifest's.
+ *
+ * # Related
+ *
+ * - [nativeSymbols] - the order both the bytecode and this table use.
+ */
+
+use NativeEntry from "../c/natives"
+use readPrototype, Prototype from "../c/prototype"
+use nativeSymbols from "./natives"
+
+/** The whole of `runtime/machine_natives.c`: a pure function of the manifest. */
+public fn renderMachineNatives(entries: List<NativeEntry>): String {
+  var prototypes: Map<String, String> = [:]
+  for entry in entries {
+    if const .Planned(_) = entry.state {
+      continue
+    }
+    if const .Runtime(function) = entry.target {
+      if !prototypes.containsKey(function) {
+        prototypes.set function, entry.prototype
+      }
+    }
+  }
+  var lines = [
+    "/*",
+    " * machine_natives.c - generated from the natives manifest by `torb natives --header`. Do not edit.",
+    " *",
+    " * One thunk per ready function of the runtime, in the manifest's sorted order: how the bytecode VM calls the",
+    " * runtime with the words of its registers (docs/design/VM.md section 6, runtime/machine.c).",
+    " */",
+    "",
+    "#include \"torb.h\"",
+    "#include \"torb_natives.h\"",
+    "#include \"torb_machine.h\"",
+    "",
+    "#include <string.h>",
+    "",
+  ]
+  const symbols = nativeSymbols()
+  for index in 0..symbols.length() {
+    const symbol = symbols[index]
+    lines.appendAll thunkLines(index, symbol, prototypes.get(symbol) ?? "")
+    lines.append ""
+  }
+  lines.append "const torb_machine_native torb_machine_natives[] = \{"
+  for index in 0..symbols.length() {
+    lines.append "  {thunkName(index)},"
+  }
+  lines.append "\};"
+  lines.append ""
+  lines.append "const size_t torb_machine_native_count = {symbols.length()};"
+  lines.joined(separator: "\n") + "\n"
+}
+
+fn thunkName(index: Int): String {
+  "torb_machine_native_{index}"
+}
+
+/**
+ * The functions of the runtime whose answer inside the VM is the program's and not `torb`'s: `Process.arguments()` is
+ * what was written behind the path of `torb run --vm`, and `runtime/machine.c` holds it.
+ */
+const substitutes: Map<String, String> = ["torb_process_arguments": "torb_machine_process_arguments"]
+
+/** The integer types a register holds widened to one word, and a thunk casts back. */
+const integerSpellings = [
+  "int8_t",
+  "int16_t",
+  "int32_t",
+  "int64_t",
+  "uint8_t",
+  "uint16_t",
+  "uint32_t",
+  "uint64_t",
+  "bool",
+  "torb_char",
+  "torb_void",
+  "size_t",
+]
+
+/** The structs the runtime passes by value, which a register holds in their own bytes. */
+const structSpellings = ["torb_text", "torb_list", "torb_map", "torb_set"]
+
+/** The runtime objects whose value *is* the pointer to their counted block. */
+const objectSpellings = ["torb_task *", "torb_channel *", "torb_file *"]
+
+/** The integer types narrower than a word, which an out parameter writes into a temporary first. */
+const narrowSpellings = ["int8_t", "int16_t", "int32_t", "uint8_t", "uint16_t", "uint32_t", "bool", "torb_char"]
+
+fn thunkLines(index: Int, symbol: String, text: String): List<String> {
+  var lines = ["/* {symbol} */"]
+  lines.append "static void {thunkName(index)}(int64_t *words, int64_t base, const int64_t *operands) \{"
+  lines.append "  (void)words;"
+  lines.append "  (void)base;"
+  lines.append "  (void)operands;"
+  const prototype = match readPrototype(text) {
+    Some(found) => found
+    None => {
+      lines.appendAll refusedLines(symbol)
+      return lines
+    }
+  }
+  var parameters = prototype.parameters
+  var hasLocation = false
+  if const Some(last) = parameters.last() {
+    if last == "torb_location" {
+      hasLocation = true
+      parameters = parameters.take(parameters.length() - 1).toList()
+    }
+  }
+  var body: List<String> = []
+  var arguments: List<String> = []
+  var after: List<String> = []
+  for position in 0..parameters.length() {
+    const spelling = parameters[position]
+    const operand = "operands[{position + 1}]"
+    const name = "a{position}"
+    if integerSpellings.contains(spelling) {
+      body.append "  {spelling} {name} = ({spelling})words[base + {operand}];"
+    } else if spelling == "double" {
+      body.append "  double {name} = torb_machine_double_of(words[base + {operand}]);"
+    } else if spelling == "float" {
+      body.append "  float {name} = (float)torb_machine_double_of(words[base + {operand}]);"
+    } else if structSpellings.contains(spelling) {
+      body.append "  {spelling} {name};"
+      body.append "  memcpy(&{name}, words + base + {operand}, sizeof {name});"
+    } else if objectSpellings.contains(spelling) {
+      body.append "  {spelling}{name} = ({spelling})(intptr_t)words[base + {operand}];"
+    } else if spelling == "const void *" || spelling == "const torb_text *" {
+      body.append "  {spelling}{name} = (const void *)(words + base + {operand});"
+    } else if spelling.endsWith("*") {
+      const pointee = spelling[0..spelling.byteLength() - 1].trim()
+      if pointee.startsWith("const ") {
+        lines.appendAll refusedLines(symbol)
+        return lines
+      }
+      if narrowSpellings.contains(pointee) {
+        body.append "  int64_t *p{position} = (int64_t *)torb_machine_address(words, words[base + {operand}]);"
+        body.append "  {pointee} t{position} = ({pointee})*p{position};"
+        arguments.append "&t{position}"
+        after.append "  *p{position} = (int64_t)t{position};"
+        continue
+      }
+      body.append "  {spelling}{name} = ({spelling})torb_machine_address(words, words[base + {operand}]);"
+    } else {
+      lines.appendAll refusedLines(symbol)
+      return lines
+    }
+    arguments.append name
+  }
+  if hasLocation {
+    arguments.append "torb_machine_location(operands[{parameters.length() + 1}])"
+  }
+  const callee = substitutes.get(symbol) ?? symbol
+  const call = "{callee}({arguments.joined(separator: ", ")})"
+  const result = prototype.result
+  lines.appendAll body
+  if result == "void" {
+    lines.append "  {call};"
+    lines.appendAll after
+    lines.append "\}"
+    return lines
+  }
+  if integerSpellings.contains(result) {
+    lines.append "  {result} r = {call};"
+    lines.appendAll after
+    lines.append "  if (operands[0] >= 0) words[base + operands[0]] = (int64_t)r;"
+  } else if result == "double" || result == "float" {
+    lines.append "  double r = (double){call};"
+    lines.appendAll after
+    lines.append "  if (operands[0] >= 0) words[base + operands[0]] = torb_machine_word_of_double(r);"
+  } else if structSpellings.contains(result) {
+    lines.append "  {result} r = {call};"
+    lines.appendAll after
+    lines.append "  if (operands[0] >= 0) memcpy(words + base + operands[0], &r, sizeof r);"
+  } else if objectSpellings.contains(result) {
+    lines.append "  {result}r = {call};"
+    lines.appendAll after
+    lines.append "  if (operands[0] >= 0) words[base + operands[0]] = (int64_t)(intptr_t)r;"
+  } else {
+    return thunkRefused index, symbol
+  }
+  lines.append "\}"
+  lines
+}
+
+/** A thunk for a function whose result a register cannot hold: the header again, and the panic. */
+fn thunkRefused(index: Int, symbol: String): List<String> {
+  var lines = ["/* {symbol} */"]
+  lines.append "static void {thunkName(index)}(int64_t *words, int64_t base, const int64_t *operands) \{"
+  lines.append "  (void)words;"
+  lines.append "  (void)base;"
+  lines.append "  (void)operands;"
+  lines.appendAll refusedLines(symbol)
+  lines
+}
+
+/** The body of a thunk the VM cannot call yet: an internal error that names the function, and the closing brace. */
+fn refusedLines(symbol: String): List<String> {
+  [
+    "  torb_panic_text(\"internal error: the VM cannot call `{symbol}` yet\", torb_location_unknown);",
+    "\}",
+  ]
+}

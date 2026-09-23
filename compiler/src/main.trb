@@ -26,6 +26,10 @@ use RunOptions, runProgram from "./cli/run"
 use TestOptions, runTests from "./cli/test"
 use NewOptions, runNew from "./cli/new"
 use insertOwnership from "./ir/ownership"
+use entryNameOf from "./ir/lower/function"
+use emitBytecode from "./backend/bytecode/emit"
+use disassemble from "./backend/bytecode/disassemble"
+use renderMachineNatives from "./backend/bytecode/thunks"
 use verifyOwnedProgram from "./ir/ownership-verify"
 use nativeEntries, renderNativesHeader from "./backend/c/natives"
 use runHighlight from "./highlight/command"
@@ -58,7 +62,8 @@ fn printUsage() {
   printError "  torb ir <path>...      Print the typed IR of what the back end lowers, and what it does not yet"
   printError "                         --statistics: only the counts, without the IR itself"
   printError "                         --no-ownership: the IR the lowering writes, before the ownership pass"
-  printError "  torb natives --header   Write runtime/include/torb_natives.h from the manifest of natives"
+  printError "                         --bytecode: the bytecode of the VM instead, disassembled"
+  printError "  torb natives --header   Write torb_natives.h and machine_natives.c from the manifest of natives"
   printError "                         [path]: the runtime directory (default: ../runtime beside the compiler)"
   printError "  torb parse <path>...   Check the syntax of files or directories (recursively, *.trb)"
   printError "  torb tokens <file>     Print the tokens of a file"
@@ -202,7 +207,7 @@ fn printTimings(checked: Checked) {
  * The typed IR of what the back end lowers today, in the deterministic text format of docs/BACKEND.md 1.7, plus the
  * list of the constructs the back end does not support yet. Returns the number of problems.
  */
-fn printIr(paths: List<String>, onlyStatistics: Bool, withOwnership: Bool): Result<Int, IoError> {
+fn printIr(paths: List<String>, onlyStatistics: Bool, withOwnership: Bool, asBytecode: Bool): Result<Int, IoError> {
   const tree = readSourceTree(paths)?
   const checked = check(tree, absolutePaths(paths)?, false, true)
   var problems = checked.problems.length()
@@ -223,8 +228,11 @@ fn printIr(paths: List<String>, onlyStatistics: Bool, withOwnership: Bool): Resu
   }
   var lowering = lowerChecked checked
   // Phase one plus ownership is the IR both back ends read; `--no-ownership` shows what the lowering alone writes
-  if withOwnership {
+  if withOwnership || asBytecode {
     insertOwnership lowering.program
+  }
+  if asBytecode {
+    return Ok printBytecode(checked, lowering)
   }
   if !onlyStatistics {
     const text = loweredText lowering
@@ -242,6 +250,29 @@ fn printIr(paths: List<String>, onlyStatistics: Bool, withOwnership: Bool): Resu
     printError "internal error: {line}"
   }
   Ok(found + broken.length())
+}
+
+/**
+ * `torb ir --bytecode`: the final IR encoded for the VM (docs/design/VM.md), disassembled, and every construct the
+ * bytecode cannot encode yet on standard error. Returns the number of those.
+ */
+fn printBytecode(checked: Checked, lowering: Lowering): Int {
+  var owned = lowering
+  var entries: List<String> = []
+  for module in checked.requested {
+    entries.append entryNameOf(owned, module)
+  }
+  const emission = emitBytecode owned.program, entries
+  print disassemble(emission.program)
+  var found = emission.unsupported.length()
+  for blocked in owned.unsupported {
+    printError "error: {blocked.what} (at {blocked.at})"
+    found = found + blocked.count
+  }
+  for what in emission.unsupported {
+    printError "error: {what}"
+  }
+  found
 }
 
 /** The verifier that fits what was built: the ownership invariants are only checkable once the pass has run. */
@@ -400,16 +431,22 @@ fn newOptionsOf(arguments: List<String>): NewOptions? {
  * sides from drifting without a C compiler error.
  */
 fn writeNativesHeader(directory: String): Result<Int, IoError> {
-  const path = "{directory}/include/torb_natives.h"
-  const rendered = renderNativesHeader nativeEntries()
+  writeGenerated("{directory}/include/torb_natives.h", renderNativesHeader(nativeEntries()))?
+  // The table of thunks the VM calls the runtime through is the same manifest's (docs/design/VM.md section 6)
+  writeGenerated("{directory}/machine_natives.c", renderMachineNatives(nativeEntries()))?
+  Ok 0
+}
+
+/** A generated file, written only where it is not what it has to be. */
+fn writeGenerated(path: String, rendered: String): Result<Void, IoError> {
   const before = File.readText(path).ok() ?? ""
   if before == rendered {
     print "{path} is current"
-    return Ok 0
+    return Ok(void)
   }
   File.writeText(path, rendered)?
   print "wrote {path}"
-  Ok 0
+  Ok(void)
 }
 
 /** The errors of the program the lowering found: an overflow or a division by zero in a compile-time constant. */
@@ -484,9 +521,10 @@ match Process.arguments() {
   ["ir", ...more] => {
     const onlyStatistics = more.contains "--statistics"
     const withOwnership = !more.contains("--no-ownership")
-    const given = more.filter({ _ != "--statistics" && _ != "--no-ownership" }).toList()
+    const asBytecode = more.contains "--bytecode"
+    const given = more.filter({ !_.startsWith("--") }).toList()
     const paths = if given.isEmpty() { ["."] } else { given }
-    if printIr(paths, onlyStatistics, withOwnership)? > 0 {
+    if printIr(paths, onlyStatistics, withOwnership, asBytecode)? > 0 {
       Process.exit 1
     }
   }

@@ -1044,6 +1044,35 @@ fn environmentEntries(var entries: List<NativeEntry>) {
   ))
 }
 
+/**
+ * The kernel of the bytecode VM (`std/machine`, `runtime/machine.c`, docs/design/VM.md section 6): the functions of the
+ * runtime reached with the words of the VM's registers, one word of a counted block, and the constants placed into the
+ * registers. Nothing but the VM inside `torb` calls them.
+ */
+fn machineEntries(var entries: List<NativeEntry>) {
+  entries.append(runtimeOf(
+    "Machine.operate",
+    "torb_machine_operate",
+    "int64_t torb_machine_operate(torb_list *words, int64_t base, torb_list code, int64_t at);",
+  ))
+  entries.append runtimeOf("Machine.load", "torb_machine_load", "int64_t torb_machine_load(int64_t address);")
+  entries.append(runtimeOf(
+    "Machine.store",
+    "torb_machine_store",
+    "void torb_machine_store(int64_t address, int64_t value);",
+  ))
+  entries.append(runtimeOf(
+    "Machine.placeText",
+    "torb_machine_place_text",
+    "void torb_machine_place_text(torb_list *words, int64_t at, torb_text text);",
+  ))
+  entries.append(runtimeOf(
+    "Machine.placeFloat",
+    "torb_machine_place_float",
+    "void torb_machine_place_float(torb_list *words, int64_t at, double value);",
+  ))
+}
+
 fn plannedPackageEntries(var entries: List<NativeEntry>) {
   entries.append plannedRuntimeOf("Expression.value", "torb_expression_value", "5.11")
   entries.append plannedRuntimeOf("Expression.captures", "torb_expression_captures", "5.11")
@@ -1080,6 +1109,7 @@ public fn nativeEntries(): List<NativeEntry> {
   timeEntries entries
   environmentEntries entries
   taskEntries entries
+  machineEntries entries
   plannedPackageEntries entries
   entries
 }

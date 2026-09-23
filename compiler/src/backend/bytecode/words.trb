@@ -1,0 +1,245 @@
+/**
+ * How many words a value of every IR type takes in the VM, and where every field of a layout is among them
+ * (docs/design/VM.md section 2).
+ *
+ * A register is one 64-bit word and a value is the C runtime's own bytes spread over as many words as it needs: one for
+ * a number, two for a `torb_text` or a `torb_list`, one pointer for everything counted, and an inline record flattened
+ * into its fields. The representation class - inline, boxed, niche - is the IR's and is read, never decided; the word
+ * layout of an inline value is the VM's own, because no program can observe it.
+ *
+ * [WordTables] computes every width once for the whole program, so the emitter never walks a type twice.
+ */
+
+use IrProgram, IrTypeId, IrType, LayoutId, RuntimeKind from "../../ir/ir"
+use Layout, Representation from "../../ir/layout"
+
+/** Where the fields of one layout are, as words of the value (or of the contents of its block, for a boxed one). */
+public type LayoutWords {
+  /** The offset of every field, in the order of `Layout.fields`. A variant's groups all start after the tag. */
+  offsets: List<Int>
+  /** The word the tag is in, or `-1` for a layout without variants. */
+  tag: Int
+  /** The words of the contents: every field, the tag, and the largest group. */
+  width: Int
+}
+
+/** The width of every type and the words of every layout of one program. */
+public type WordTables {
+  /** By `IrTypeId.value`: how many words a value of the type takes, `-1` while it is not computed. */
+  var widths: List<Int>
+  /** By `LayoutId.value`; `None` while it is not computed. */
+  var layouts: List<LayoutWords?>
+
+  fn widthOf(id: IrTypeId): Int {
+    if id.value < 0 || id.value >= widths.length() {
+      return 1
+    }
+    widths[id.value]
+  }
+
+  fn wordsOf(id: LayoutId): LayoutWords {
+    match layouts.get(id.value) {
+      Some(Some(found)) => found
+      _ => LayoutWords([], -1, 0)
+    }
+  }
+}
+
+/** Every width of the program, computed once. */
+public fn wordTablesOf(program: IrProgram): WordTables {
+  var widths: List<Int> = []
+  for _ in 0..program.typeCount() {
+    widths.append(0 - 1)
+  }
+  var layouts: List<LayoutWords?> = []
+  for _ in 0..program.layouts.length() {
+    layouts.append None
+  }
+  var tables = WordTables widths, layouts
+  for index in 0..program.typeCount() {
+    const _ = widthOfType tables, program, IrTypeId(index)
+  }
+  for index in 0..program.layouts.length() {
+    const _ = layoutWordsOf tables, program, LayoutId(index)
+  }
+  tables
+}
+
+/**
+ * The words of one type. A boxed layout is one pointer whatever it holds, so the recursion only ever descends into an
+ * inline layout - and an inline layout is never on a cycle of the field graph (a cycle makes every layout on it boxed),
+ * which is what makes the memo enough to terminate.
+ */
+fn widthOfType(var tables: WordTables, program: IrProgram, id: IrTypeId): Int {
+  if !program.hasType(id) {
+    return 1
+  }
+  const known = tables.widths[id.value]
+  if known >= 0 {
+    return known
+  }
+  const width = match program.typeAt(id) {
+    .Integer(_, _) => 1
+    .Floating(_) => 1
+    .Boolean => 1
+    .Character => 1
+    .VoidType => 1
+    .NeverType => 0
+    .Text => 2
+    .Record(layout) => widthOfLayoutValue tables, program, layout
+    .Variant(layout) => widthOfLayoutValue tables, program, layout
+    .Tuple(layout) => widthOfLayoutValue tables, program, layout
+    .FixedArray(item, size) => widthOfType(tables, program, item) * size
+    .Closure(_) => 2
+    .Object(bounds) => 1 + bounds.length()
+    .SharedObject(_) => 1
+    .Box(_) => 1
+    .Lazy(_) => 1
+    .Runtime(kind, _) => widthOfRuntime kind
+    .ConstantValue(_, _) => 0
+  }
+  tables.widths.set id.value, width
+  width
+}
+
+/** A list is `torb_list` (storage, offset, length: two words); a map and a set are one storage pointer. */
+fn widthOfRuntime(kind: RuntimeKind): Int {
+  match kind {
+    .ListStorage => 2
+    _ => 1
+  }
+}
+
+/** What a value of a layout takes where it is stored: one pointer for a boxed layout, the payload for a niche. */
+fn widthOfLayoutValue(var tables: WordTables, program: IrProgram, id: LayoutId): Int {
+  if !program.hasLayout(id) {
+    return 1
+  }
+  const layout = program.layoutAt id
+  match layout.representation {
+    .Boxed => 1
+    .Niche(_, field) => {
+      match layout.fields.get(field) {
+        Some(found) => widthOfType tables, program, found.annotation
+        None => 1
+      }
+    }
+    .Inline => layoutWordsOf(tables, program, id).width
+  }
+}
+
+/**
+ * The words of a layout's contents: the fields of a record in declaration order, and for a variant layout the common
+ * fields, the tag word, and every group starting right after the tag, so that the width is the largest group's.
+ */
+fn layoutWordsOf(var tables: WordTables, program: IrProgram, id: LayoutId): LayoutWords {
+  if const Some(Some(found)) = tables.layouts.get(id.value) {
+    return found
+  }
+  if !program.hasLayout(id) {
+    return LayoutWords([], -1, 0)
+  }
+  const layout = program.layoutAt id
+  var offsets: List<Int> = []
+  var cursor = 0
+  if layout.variants.isEmpty() {
+    for field in layout.fields {
+      offsets.append cursor
+      cursor = cursor + widthOfType(tables, program, field.annotation)
+    }
+    const words = LayoutWords(offsets, 0 - 1, cursor)
+    tables.layouts.set id.value, Some(words)
+    return words
+  }
+  for index in 0..layout.commonFieldCount {
+    offsets.append cursor
+    cursor = cursor + widthOfType(tables, program, layout.fields[index].annotation)
+  }
+  const tag = cursor
+  const groupStart = tag + 1
+  var widest = 0
+  for variant in layout.variants {
+    var inside = 0
+    for index in variant.first..variant.first + variant.count {
+      while offsets.length() <= index {
+        offsets.append 0
+      }
+      offsets.set(index, groupStart + inside)
+      inside = inside + widthOfType(tables, program, layout.fields[index].annotation)
+    }
+    if inside > widest {
+      widest = inside
+    }
+  }
+  while offsets.length() < layout.fields.length() {
+    offsets.append groupStart
+  }
+  const words = LayoutWords(offsets, tag, groupStart + widest)
+  tables.layouts.set id.value, Some(words)
+  words
+}
+
+/**
+ * Why a value of this type has no representation in the VM yet, or `None` where it has one. It is the VM's half of
+ * the C back end's `whyNoCType`, and it answers the same types: what one back end cannot represent, neither does the
+ * other.
+ */
+public fn whyNoWords(program: IrProgram, id: IrTypeId): String? {
+  if !program.hasType(id) {
+    return Some "a type that is not in the program"
+  }
+  match program.typeAt(id) {
+    .FixedArray(_, _) => Some "an `Array<Item, Size>` value"
+    .Object(bounds) => if bounds.isEmpty() { Some "a trait-typed value without bounds" } else { None }
+    .Box(_) => Some "a captured `var` binding as a type of its own"
+    .Lazy(_) => Some "a `lazy` cell as a type of its own"
+    .Runtime(kind, _) => {
+      match kind {
+        .ExpressionTree => Some "an `Expression` value"
+        .DecimalNumber => Some "a `Decimal` value"
+        _ => None
+      }
+    }
+    .ConstantValue(_, _) => Some "a const generic argument as the type of a value"
+    _ => None
+  }
+}
+
+/** Whether a value of the type is the pointer to a counted block of the VM - what a field step dereferences first. */
+public fn isBlockPointer(program: IrProgram, id: IrTypeId): Bool {
+  if !program.hasType(id) {
+    return false
+  }
+  match program.typeAt(id) {
+    .SharedObject(_) => true
+    .Record(layout) => isBoxed program, layout
+    .Variant(layout) => isBoxed program, layout
+    .Tuple(layout) => isBoxed program, layout
+    _ => false
+  }
+}
+
+/** Whether a layout's values are counted blocks. */
+public fn isBoxed(program: IrProgram, id: LayoutId): Bool {
+  if !program.hasLayout(id) {
+    return false
+  }
+  match program.layoutAt(id).representation {
+    .Boxed => true
+    _ => false
+  }
+}
+
+/** The layout of a record, variant or tuple type, or of a shared object. */
+public fn layoutOfType(program: IrProgram, id: IrTypeId): LayoutId? {
+  if !program.hasType(id) {
+    return None
+  }
+  match program.typeAt(id) {
+    .Record(layout) => Some layout
+    .Variant(layout) => Some layout
+    .Tuple(layout) => Some layout
+    .SharedObject(layout) => Some layout
+    _ => None
+  }
+}

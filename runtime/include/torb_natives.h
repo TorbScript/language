@@ -119,6 +119,16 @@ void torb_list_reverse(torb_list *list);
 void torb_list_set(torb_list *list, int64_t index, const void *value, torb_location at);
 /* ArrayList.slice, TrieList.slice */
 torb_list torb_list_slice(torb_list list, int64_t from, int64_t to, torb_location at);
+/* Machine.load */
+int64_t torb_machine_load(int64_t address);
+/* Machine.operate */
+int64_t torb_machine_operate(torb_list *words, int64_t base, torb_list code, int64_t at);
+/* Machine.placeFloat */
+void torb_machine_place_float(torb_list *words, int64_t at, double value);
+/* Machine.placeText */
+void torb_machine_place_text(torb_list *words, int64_t at, torb_text text);
+/* Machine.store */
+void torb_machine_store(int64_t address, int64_t value);
 /* HashMap.clear, TrieMap.clear */
 void torb_map_clear(torb_map *map);
 /* HashMap.entryAfter, TrieMap.entryAfter */

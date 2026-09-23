@@ -18,6 +18,7 @@ documents:
   - URI.md
   - DESTRUCTORS.md
   - OS.md
+  - VM.md
 ---
 
 A design record is written before a feature is finished, sometimes before a line of it is implemented. It works out the
@@ -54,5 +55,6 @@ the reasons behind a decision that no longer needs a whole record, which belong 
 - **[Uniform Resource Identifiers](URI.md)**
 - **[Destructors, `close()` and `using`](DESTRUCTORS.md)**
 - **[The Operating System](OS.md)**
+- **[The Bytecode VM](VM.md)**
 
 <!-- torb:index:end -->

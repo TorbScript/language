@@ -22,6 +22,11 @@
 #   sh tools/conformance.sh --jobs 8
 #   sh tools/conformance.sh --filter closures
 #   sh tools/conformance.sh --update             # rewrite .expected/.stderr/.exit from a native run
+#   sh tools/conformance.sh --vm                 # the programs of tests/conformance/vm.list, run by the VM
+#
+# `--vm` is the second leg of docs/design/VM.md section 8: every program named in `tests/conformance/vm.list` is run
+# with `torb run --vm` and compared against the same `.expected`/`.stderr`/`.exit` as its native run, byte for byte.
+# The list grows until it is the whole suite. The leak gate and the two checks of the C do not apply to it.
 
 set -eu
 
@@ -245,8 +250,72 @@ fold_library_positions() {
   }'
 }
 
+# ----------------------------------------------------------------------------- one program in the VM ----------------
+#
+# The same comparison for `--vm`: the program is run by `torb run --vm` in a work directory of its own, and its three
+# outputs are compared with the expectation files of its native run. Nothing is built, so there is no C to check.
+run_one_vm() {
+  program=$1
+  name=$(printf '%s' "$program" | sed 's#[/\\]#_#g; s/\.trb$//')
+  work="$CONFORMANCE_SCRATCH/work/$name"
+  rm -rf "$work"
+  mkdir -p "$work/run"
+  result="$CONFORMANCE_SCRATCH/results/$name"
+  absolute="$CONFORMANCE_ROOT/$program"
+
+  set +e
+  (cd "$work/run" && "$CONFORMANCE_TORB" run --vm "$absolute" >"$work/stdout" 2>"$work/stderr")
+  code=$?
+  set -e
+  fold_library_positions <"$work/stderr" >"$work/stderr.folded"
+
+  expected_file="${program%.trb}.expected"
+  exit_file="${program%.trb}.exit"
+  stderr_file="${program%.trb}.stderr"
+  problems=""
+
+  if [ -f "$expected_file" ]; then
+    fold_crlf <"$expected_file" >"$work/expected.norm"
+    if ! cmp -s "$work/expected.norm" "$work/stdout"; then
+      problems="$problems
+unexpected standard output in the VM:
+$(diff -u "$work/expected.norm" "$work/stdout" 2>&1 || true)"
+    fi
+  fi
+  if [ -f "$exit_file" ]; then
+    want=$(tr -d ' \t\r\n' <"$exit_file")
+    if [ "$code" != "$want" ]; then
+      problems="$problems
+left the VM with exit code $code, expected $want"
+    fi
+  fi
+  if [ -f "$stderr_file" ]; then
+    fold_crlf <"$stderr_file" >"$work/stderr.expected.norm"
+    if ! cmp -s "$work/stderr.expected.norm" "$work/stderr.folded"; then
+      problems="$problems
+unexpected standard error in the VM:
+$(diff -u "$work/stderr.expected.norm" "$work/stderr.folded" 2>&1 || true)"
+    fi
+  elif [ -s "$work/stderr.folded" ]; then
+    problems="$problems
+wrote to stderr in the VM and has no .stderr file:
+$(cat "$work/stderr.folded")"
+  fi
+
+  if [ -z "$problems" ]; then
+    echo "PASS" >"$result"
+  else
+    { echo "FAIL"; printf '%s\n' "$problems"; } >"$result"
+  fi
+}
+
 if [ "${1-}" = "--run-one" ]; then
   run_one "$2"
+  exit 0
+fi
+
+if [ "${1-}" = "--run-one-vm" ]; then
+  run_one_vm "$2"
   exit 0
 fi
 
@@ -255,6 +324,7 @@ fi
 jobs=2
 filter=""
 update=0
+machine=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -278,8 +348,12 @@ while [ $# -gt 0 ]; do
       update=1
       shift
       ;;
+    --vm)
+      machine=1
+      shift
+      ;;
     -h | --help)
-      say "usage: sh tools/conformance.sh [--jobs N] [--filter substring] [--update]"
+      say "usage: sh tools/conformance.sh [--jobs N] [--filter substring] [--update] [--vm]"
       exit 0
       ;;
     *)
@@ -298,8 +372,16 @@ directory="tests/conformance"
 list=$(mktemp)
 trap 'rm -f "$list"' EXIT
 
-for file in "$directory"/*.trb "$directory"/binary-only/*.trb; do
-  [ -f "$file" ] || continue
+if [ "$machine" = "1" ]; then
+  [ "$update" = "0" ] || fail "--update rewrites the expectations from a native run, never from the VM"
+  [ -f "$directory/vm.list" ] || fail "no $directory/vm.list"
+  candidates=$(sed 's/\r$//; s/#.*//; /^[[:space:]]*$/d; s#^#'"$directory"'/#' "$directory/vm.list")
+else
+  candidates=$(ls "$directory"/*.trb "$directory"/binary-only/*.trb 2>/dev/null)
+fi
+
+for file in $candidates; do
+  [ -f "$file" ] || fail "$file is named but does not exist"
   case "$file" in
     */project.trb) continue ;;
   esac
@@ -323,13 +405,23 @@ mkdir -p "$scratch/work" "$scratch/results"
 export CONFORMANCE_SCRATCH="$scratch"
 export CONFORMANCE_TORB="$torb"
 export CONFORMANCE_UPDATE="$update"
+export CONFORMANCE_ROOT="$root"
 
-say "building and running $total programs with $torb, $jobs at a time"
+runner="--run-one"
+if [ "$machine" = "1" ]; then
+  runner="--run-one-vm"
+fi
+
+if [ "$machine" = "1" ]; then
+  say "running $total programs in the VM of $torb, $jobs at a time"
+else
+  say "building and running $total programs with $torb, $jobs at a time"
+fi
 started=$(date +%s)
 # `-a` is not portable to BSD `xargs` (macOS), so the list is read from standard input instead. A child that crashed
 # outright is caught below, from the result file it never wrote - not from `xargs`'s own exit code.
 set +e
-cat "$list" | xargs -P "$jobs" -I{} sh "$0" --run-one {}
+cat "$list" | xargs -P "$jobs" -I{} sh "$0" "$runner" {}
 set -e
 elapsed=$(($(date +%s) - started))
 

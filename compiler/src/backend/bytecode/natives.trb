@@ -1,0 +1,40 @@
+/**
+ * The functions of the runtime the VM can call, in the one order both the bytecode and the kernel's table of thunks
+ * use (docs/design/VM.md section 6).
+ *
+ * The order is the manifest's: every `.Ready` `.Runtime` row, one entry per C symbol, sorted by the symbol - exactly
+ * the list `torb_natives.h` declares. A `kernel` instruction that calls one carries `kernelNativeBase` plus its index
+ * here, so the emitter and the table agree as long as both are generated from the same manifest.
+ */
+
+use nativeEntries from "../c/natives"
+
+/** Every C symbol of a ready runtime function of the manifest, once, sorted. */
+public fn nativeSymbols(): List<String> {
+  var seen: Set<String> = Set.of()
+  var symbols: List<String> = []
+  for entry in nativeEntries() {
+    if const .Planned(_) = entry.state {
+      continue
+    }
+    if const .Runtime(function) = entry.target {
+      if !seen.contains(function) {
+        seen.insert function
+        symbols.append function
+      }
+    }
+  }
+  symbols.sort({ _ })
+  symbols
+}
+
+/** The index of every symbol in [nativeSymbols], for the emitter. */
+public fn nativeIndices(): Map<String, Int> {
+  var indices: Map<String, Int> = [:]
+  var index = 0
+  for symbol in nativeSymbols() {
+    indices.set symbol, index
+    index = index + 1
+  }
+  indices
+}

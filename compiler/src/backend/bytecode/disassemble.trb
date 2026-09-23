@@ -1,0 +1,336 @@
+/**
+ * The text of a [BytecodeProgram]: what `torb ir --bytecode` prints and what the snapshot tests compare.
+ *
+ * It is deterministic because the program is: the chunks come in the order of the mangled names of their functions,
+ * every table in the order of its index, and every instruction on one line with its code offset. A register is written
+ * `r<offset>`, a shape `shape <index>`, a block `b<index>` in front of the instruction it starts at.
+ *
+ * # Related
+ *
+ * - [emitBytecode] - what writes the program.
+ */
+
+use Location from "../../ir/ir"
+use Opcode, KernelOperation, allOpcodes, allKernelOperations, kernelNativeBase, tailLengthOf from "./format"
+use opcodeNumberOf, operandA, operandB, operandC from "./format"
+use BytecodeProgram, Chunk, Place, PlaceStep, WitnessEntry, WitnessRootEntry, Shape, CountedWord from "./format"
+use ConstantPart, TableEntry, ElementEntry, ElementKind, widthOfPart from "./format"
+use nativeSymbols from "./natives"
+
+/** The whole program: the constant pool, the shapes, the tables, then every chunk. */
+public fn disassemble(program: BytecodeProgram): String {
+  var lines: List<String> = []
+  lines.appendAll tableLines(program)
+  const natives = nativeSymbols()
+  for index in 0..program.chunks.length() {
+    lines.append ""
+    lines.appendAll chunkLines(program, index, natives)
+  }
+  lines.joined separator: "\n"
+}
+
+/** One chunk alone, by the name of its function: what a snapshot of one function compares. */
+public fn disassembleChunk(program: BytecodeProgram, name: String): String {
+  const natives = nativeSymbols()
+  for index in 0..program.chunks.length() {
+    if program.chunks[index].name == name {
+      return chunkLines(program, index, natives).joined(separator: "\n")
+    }
+  }
+  "there is no chunk `{name}`"
+}
+
+/** The program-wide tables, one line per entry. */
+public fn tableLines(program: BytecodeProgram): List<String> {
+  var lines: List<String> = []
+  var offset = 0
+  for part in program.constants {
+    lines.append "constant {offset}: {describePart(part)}"
+    offset = offset + widthOfPart(part)
+  }
+  for index in 0..program.shapes.length() {
+    lines.append "shape {index}: {describeShape(program.shapes[index])}"
+  }
+  for index in 0..program.tables.length() {
+    lines.append "table {index}: {describeTable(program.tables[index])}"
+  }
+  for index in 0..program.elements.length() {
+    lines.append "element {index}: {describeElement(program.elements[index])}"
+  }
+  if !program.entries.isEmpty() {
+    var shown: List<String> = []
+    for entry in program.entries {
+      shown.append "{entry}"
+    }
+    lines.append "entries: {shown.joined(separator: ", ")}"
+  }
+  lines
+}
+
+fn describePart(part: ConstantPart): String {
+  match part {
+    .Word(value) => "word {value}"
+    .Floating(value) => "float {value}"
+    .Text(value) => "text \"{value}\""
+    .Block(shape, parts) => {
+      var inner: List<String> = []
+      for inside in parts {
+        inner.append describePart(inside)
+      }
+      "block shape {shape} [{inner.joined(separator: ", ")}]"
+    }
+  }
+}
+
+fn describeShape(shape: Shape): String {
+  var text = "{shape.name}, {counted(shape.width, "word")}"
+  if !shape.counted.isEmpty() {
+    text = text + ", counted {describeWords(shape.counted)}"
+  }
+  if shape.tag >= 0 {
+    text = text + ", tag {shape.tag}"
+    for index in 0..shape.groups.length() {
+      if !shape.groups[index].isEmpty() {
+        text = text + ", variant {index} {describeWords(shape.groups[index])}"
+      }
+    }
+  }
+  if shape.isReversed {
+    text = text + ", reversed"
+  }
+  if shape.closer >= 0 {
+    text = text + ", closed by chunk {shape.closer}"
+  }
+  text
+}
+
+fn describeWords(words: List<CountedWord>): String {
+  var shown: List<String> = []
+  for word in words {
+    shown.append "{word.offset} {word.kind.spelling()}"
+  }
+  "[{shown.joined(separator: ", ")}]"
+}
+
+fn describeTable(table: TableEntry): String {
+  var members: List<String> = []
+  for member in table.members {
+    members.append "{member}"
+  }
+  var nested: List<String> = []
+  for inner in table.nested {
+    nested.append "{inner}"
+  }
+  "{table.name}, members [{members.joined(separator: ", ")}], nested [{nested.joined(separator: ", ")}]"
+    + ", payload shape {table.payload} of {counted(table.payloadWidth, "word")}"
+}
+
+fn describeElement(element: ElementEntry): String {
+  const kind = match element.kind {
+    .Trivial => "trivial"
+    .TextElement => "text"
+    .Counted(shape) => "shape {shape}"
+  }
+  "{element.name}, {counted(element.words, "word")}, {kind}, equals {element.equals}, hash {element.hash}"
+}
+
+fn counted(count: Int, noun: String): String {
+  if count == 1 {
+    return "1 {noun}"
+  }
+  "{count} {noun}s"
+}
+
+// --- A chunk --------------------------------------------------------------------------------------------------------
+
+fn chunkLines(program: BytecodeProgram, index: Int, natives: List<String>): List<String> {
+  const chunk = program.chunks[index]
+  var lines: List<String> = []
+  var parameters: List<String> = []
+  for parameter in chunk.parameters {
+    const mark = if parameter.isReference { "&" } else { "" }
+    parameters.append "{mark}r{parameter.offset}"
+  }
+  const environment = if chunk.takesEnvironment { ", environment" } else { "" }
+  lines.append(
+    "chunk {index} {chunk.name}({parameters.joined(separator: ", ")}) -> {counted(chunk.resultWidth, "word")}"
+      + ", frame of {counted(chunk.frameWords, "word")}{environment}"
+      + ", at {describeLocation(program.locations, chunk.location)}",
+  )
+  for slot in chunk.slots {
+    lines.append "  r{slot.offset} %{slot.slot} {slot.description}"
+  }
+  for place in 0..chunk.places.length() {
+    lines.append "  place {place}: {describePlace(chunk.places[place], program.locations)}"
+  }
+  for witness in 0..chunk.witnesses.length() {
+    lines.append "  witness {witness}: {describeWitness(chunk.witnesses[witness])}"
+  }
+  var starts: Map<Int, Int> = [:]
+  for block in 0..chunk.blockStarts.length() {
+    starts.set chunk.blockStarts[block], block
+  }
+  var pc = 0
+  while pc < chunk.code.length() {
+    if const Some(block) = starts.get(pc) {
+      lines.append "b{block}:"
+    }
+    const head = chunk.code[pc]
+    const number = opcodeNumberOf head
+    const opcode = match allOpcodes.get(number) {
+      Some(found) => found
+      None => {
+        lines.append "  {pc}: opcode {number}?"
+        pc = pc + 1
+        continue
+      }
+    }
+    const tail = tailLengthOf opcode, head
+    var words: List<Int> = []
+    for position in pc + 1..pc + 1 + tail {
+      words.append(chunk.code.get(position) ?? 0)
+    }
+    lines.append "  {pc}: {describeInstruction(program, opcode, head, words, natives)}"
+    pc = pc + 1 + tail
+  }
+  lines
+}
+
+fn describePlace(place: Place, locations: List<Location>): String {
+  const base = if place.isThroughReference { "*r{place.base}" } else { "r{place.base}" }
+  var parts = [base]
+  for step in place.steps {
+    parts.append(
+      match step {
+        .Offset(words) => "+{words}"
+        .Dereference => "->"
+        .Element(index, missing, location) => {
+          "[r{index}] missing {missing} at {describeLocation(locations, location)}"
+        }
+      },
+    )
+  }
+  "{parts.joined(separator: " ")}, {counted(place.width, "word")}"
+}
+
+fn describeWitness(witness: WitnessEntry): String {
+  const root = match witness.root {
+    .Table(table) => "table {table}"
+    .Value(place, bound) => "place {place} bound {bound}"
+  }
+  if witness.steps.isEmpty() {
+    return root
+  }
+  var steps: List<String> = []
+  for step in witness.steps {
+    steps.append "{step}"
+  }
+  "{root} nested {steps.joined(separator: ".")}"
+}
+
+fn describeLocation(locations: List<Location>, index: Int): String {
+  match locations.get(index) {
+    Some(found) => "{found.path}:{found.line}:{found.column}"
+    None => "-"
+  }
+}
+
+fn registersOf(words: List<Int>): String {
+  var shown: List<String> = []
+  for word in words {
+    shown.append "r{word}"
+  }
+  shown.joined separator: ", "
+}
+
+fn chunkName(program: BytecodeProgram, index: Int): String {
+  match program.chunks.get(index) {
+    Some(found) => found.name
+    None => "?"
+  }
+}
+
+fn describeInstruction(
+  program: BytecodeProgram,
+  opcode: Opcode,
+  head: Int,
+  tail: List<Int>,
+  natives: List<String>,
+): String {
+  const a = operandA head
+  const b = operandB head
+  const c = operandC head
+  const name = opcode.spelling()
+  const first = tail.get(0) ?? 0
+  const second = tail.get(1) ?? 0
+  match opcode {
+    .Move => "{name} r{a}, r{b}, {counted(c, "word")}"
+    .Constant => "{name} r{a}, {counted(b, "word")} at {first}"
+    .Word => "{name} r{a}, {first}"
+    .Zero => "{name} r{a}, {counted(b, "word")}"
+    .Load => "{name} r{a}, place {b}"
+    .Store => "{name} place {a}, r{b}"
+    .Reference => "{name} r{a}, place {b}"
+    .Call => {
+      const result = if c == 1 { "r{a} = " } else { "" }
+      "{name} {result}{chunkName(program, first)}({registersOf(tail.skip(1).toList())})"
+    }
+    .CallClosure => {
+      const result = if first == 1 { "r{a} = " } else { "" }
+      "{name} {result}r{b}({registersOf(tail.skip(1).toList())})"
+    }
+    .CallWitness => {
+      const result = if c == 1 { "r{a} = " } else { "" }
+      "{name} {result}witness {first} member {second}({registersOf(tail.skip(2).toList())})"
+    }
+    .WitnessTable => "{name} r{a}, witness {b}"
+    .Kernel => describeKernel program, tail, natives
+    .AddInteger => arithmeticLine program, name, a, b, c, first
+    .SubtractInteger => arithmeticLine program, name, a, b, c, first
+    .MultiplyInteger => arithmeticLine program, name, a, b, c, first
+    .DivideInteger => arithmeticLine program, name, a, b, c, first
+    .RemainderInteger => arithmeticLine program, name, a, b, c, first
+    .NegateInteger => "{name} r{a}, r{b} at {describeLocation(program.locations, first)}"
+    .Not => "{name} r{a}, r{b}"
+    .Tag => "{name} r{a}, r{b}, +{c}"
+    .TagNiche => "{name} r{a}, r{b}, payload {c}"
+    .Jump => "{name} {first}"
+    .Branch => "{name} r{a}, {first}, {second}"
+    .Switch => {
+      var cases: List<String> = []
+      for index in 0..b {
+        cases.append "{tail.get(2 * index) ?? 0} -> {tail.get(2 * index + 1) ?? 0}"
+      }
+      cases.append "otherwise {tail.get(2 * b) ?? 0}"
+      "{name} r{a}, {cases.joined(separator: ", ")}"
+    }
+    .Return => if b == 0 { name } else { "{name} r{a}, {counted(b, "word")}" }
+    .Unreachable => name
+    .Stop => name
+    .Cell => "{name} r{a}, {counted(b, "word")}, cell at {first}, built by {chunkName(program, second)}"
+    _ => "{name} r{a}, r{b}, r{c}"
+  }
+}
+
+fn arithmeticLine(program: BytecodeProgram, name: String, a: Int, b: Int, c: Int, location: Int): String {
+  "{name} r{a}, r{b}, r{c} at {describeLocation(program.locations, location)}"
+}
+
+/** A `kernel` instruction: the operation's name, or the runtime function's symbol, then its operands as numbers. */
+fn describeKernel(program: BytecodeProgram, tail: List<Int>, natives: List<String>): String {
+  const number = tail.get(0) ?? 0
+  var operands: List<String> = []
+  for operand in tail.skip(1) {
+    operands.append "{operand}"
+  }
+  const shown = operands.joined separator: ", "
+  if number >= kernelNativeBase {
+    const symbol = natives.get(number - kernelNativeBase) ?? "native {number - kernelNativeBase}"
+    return "kernel {symbol} {shown}"
+  }
+  const operation = match allKernelOperations.get(number) {
+    Some(found) => found.spelling()
+    None => "operation {number}"
+  }
+  "kernel {operation} {shown}"
+}

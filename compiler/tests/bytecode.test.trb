@@ -1,0 +1,430 @@
+/**
+ * The bytecode of the VM (docs/design/VM.md): the format of a head word, and the disassembly of chunks emitted from the
+ * final IR of small in-memory programs - after the ownership pass, exactly what `torb ir --bytecode` prints.
+ *
+ * A snapshot pins the frame layout (every slot's register and width), the places, and one line per instruction, so a
+ * change of the emitter that moves a count, a register or a jump shows up here before a program runs differently.
+ */
+
+use test, group from "std/test"
+use lowered from "./lower-harness"
+use insertOwnership from "../src/ir/ownership"
+use emitBytecode from "../src/backend/bytecode/emit"
+use disassembleChunk, tableLines from "../src/backend/bytecode/disassemble"
+use Opcode, allOpcodes, allKernelOperations, kernelNumberOf, KernelOperation, headWord from "../src/backend/bytecode/format"
+use opcodeNumberOf, operandA, operandB, operandC, tailLengthOf from "../src/backend/bytecode/format"
+use nativeSymbols from "../src/backend/bytecode/natives"
+use renderMachineNatives from "../src/backend/bytecode/thunks"
+use nativeEntries from "../src/backend/c/natives"
+use File from "std/fs"
+use normalizePath, parentPath, pathDepth, joinPath from "../src/project/path"
+
+/** The entry function of `app/src/main.trb`. */
+const entryName = "t_acme_x2f_app_main"
+
+/** One chunk of the final IR's bytecode, by the mangled name of its function. */
+fn chunkOf(source: String, name: String): String {
+  var found = lowered source
+  insertOwnership found.program
+  const emission = emitBytecode found.program, [entryName]
+  // A snapshot's raw string ends in the newline in front of its closing quotes
+  disassembleChunk(emission.program, name) + "\n"
+}
+
+/** What the bytecode could not encode, in the order it was found. */
+fn findingsOf(source: String): List<String> {
+  var found = lowered source
+  insertOwnership found.program
+  emitBytecode(found.program, [entryName]).unsupported
+}
+
+group "The format" {
+  test "an opcode is its position in the table, so a zero word is `unreachable`" {
+    for index in 0..allOpcodes.length() {
+      assert(allOpcodes[index].number() == index)
+    }
+    assert(allOpcodes[0] == Opcode.Unreachable)
+  }
+
+  test "a head word carries the opcode and three operands of sixteen bits" {
+    const head = headWord Opcode.Switch, 65535, 7, 40000
+    assert(opcodeNumberOf(head) == Opcode.Switch.number())
+    assert(operandA(head) == 65535)
+    assert(operandB(head) == 7)
+    assert(operandC(head) == 40000)
+    assert(tailLengthOf(Opcode.Switch, head) == 15)
+  }
+
+  test "a kernel operation is its position in its table" {
+    for index in 0..allKernelOperations.length() {
+      assert(kernelNumberOf(allKernelOperations[index]) == index)
+    }
+    assert(kernelNumberOf(KernelOperation.Panic) == 0)
+  }
+
+  /**
+   * `torb natives --header` writes the table the kernel calls the runtime through, and this is the other half of that
+   * contract: a row added to the manifest without running the command fails here, not in a VM that calls the wrong
+   * function.
+   */
+  test "the table of thunks on disk is what the manifest renders" {
+    fn repositoryRoot(): String? {
+      var current = normalizePath File.absolutePath(".").expect("the working directory")
+      while pathDepth(current) >= 1 {
+        if File.exists(joinPath(current, "compiler/project.trb")) {
+          return Some current
+        }
+        const parent = parentPath current
+        if parent == current {
+          return None
+        }
+        current = parent
+      }
+      None
+    }
+
+    const root = repositoryRoot().expect("the root of the repository above the working directory")
+    const written = File.readText(joinPath(root, "runtime/machine_natives.c")).expect("the generated table")
+    assert(written == renderMachineNatives(nativeEntries()))
+  }
+
+  test "a thunk reads a struct by its bytes, a pointer from a reference word, and refuses a closure" {
+    const text = renderMachineNatives nativeEntries()
+    assert text.contains("  torb_text a0;\n  memcpy(&a0, words + base + operands[1], sizeof a0);")
+    assert text.contains("  torb_list *a0 = (torb_list *)torb_machine_address(words, words[base + operands[1]]);")
+    assert text.contains("internal error: the VM cannot call `torb_test_case` yet")
+  }
+
+  test "the natives are the manifest's runtime symbols, sorted and once each" {
+    const symbols = nativeSymbols()
+    assert symbols.contains("torb_list_add")
+    assert symbols.contains("torb_text_trim")
+    for index in 1..symbols.length() {
+      assert(symbols[index - 1] < symbols[index])
+    }
+  }
+}
+
+group "Chunks" {
+  test "arithmetic, a branch and two calls are registers of one frame" {
+    const source = r"""
+      fn fibonacci(value: Int): Int {
+        if value < 2 {
+          return value
+        }
+        fibonacci(value - 1) + fibonacci(value - 2)
+      }
+
+      const _ = fibonacci(10)
+      """
+    assert(
+      chunkOf(source, "t_acme_x2f_app_main_fibonacci") == r"""
+        chunk 1 t_acme_x2f_app_main_fibonacci(r0) -> 1 word, frame of 11 words, at acme/app/src/main.trb:1:31
+          r0 %0 Int64
+          r1 %1 Int64
+          r2 %2 Bool
+          r3 %3 Void
+          r4 %4 Int64
+          r5 %5 Int64
+          r6 %6 Int64
+          r7 %7 Int64
+          r8 %8 Int64
+          r9 %9 Int64
+          r10 %10 Int64
+        b0:
+          0: constant r1, 1 word at 1
+          2: less r2, r0, r1
+          3: branch r2, 6, 7
+        b1:
+          6: return r0, 1 word
+        b2:
+          7: constant r4, 1 word at 2
+          9: subtract.i64.unchecked r5, r0, r4
+          10: call r6 = t_acme_x2f_app_main_fibonacci(r5)
+          13: constant r7, 1 word at 1
+          15: subtract.i64.unchecked r8, r0, r7
+          16: call r9 = t_acme_x2f_app_main_fibonacci(r8)
+          19: add.i64 r10, r6, r9 at acme/app/src/main.trb:5:3
+          21: return r10, 1 word
+        """,
+    )
+  }
+
+  test "an inline record is its fields, flattened, and a boxed one is a block with a shape" {
+    const source = r"""
+      type Point {
+        x: Int
+        y: Int
+      }
+
+      type Person {
+        name: String
+        nickname: String
+        age: Int
+        height: Int
+        weight: Int
+      }
+
+      fn sum(point: Point): Int {
+        point.x + point.y
+      }
+
+      fn born(name: String): Person {
+        Person(name, "baby", 0, 50, 3)
+      }
+
+      fn ageOf(person: Person): Int {
+        person.age
+      }
+
+      const _ = sum(Point(1, 2)) + ageOf(born("Ada"))
+      """
+    assert(
+      chunkOf(source, "t_acme_x2f_app_main_sum") == r"""
+        chunk 3 t_acme_x2f_app_main_sum(r0) -> 1 word, frame of 5 words, at acme/app/src/main.trb:14:27
+          r0 %0 T_acme_x2f_app_main_Point
+          r2 %1 Int64
+          r3 %2 Int64
+          r4 %3 Int64
+          place 0: r0, 1 word
+          place 1: r0 +1, 1 word
+        b0:
+          0: load r2, place 0
+          1: load r3, place 1
+          2: add.i64 r4, r2, r3 at acme/app/src/main.trb:15:3
+          4: return r4, 1 word
+        """,
+    )
+    assert(
+      chunkOf(source, "t_acme_x2f_app_main_born") == r"""
+        chunk 2 t_acme_x2f_app_main_born(r0) -> 1 word, frame of 8 words, at acme/app/src/main.trb:18:31
+          r0 %0 String
+          r2 %1 String
+          r4 %2 Int64
+          r5 %3 Int64
+          r6 %4 Int64
+          r7 %5 T_acme_x2f_app_main_Person
+        b0:
+          0: constant r2, 2 words at 4
+          2: constant r4, 1 word at 6
+          4: constant r5, 1 word at 7
+          6: constant r6, 1 word at 8
+          8: kernel block.new 7, 1, 4, 7, 5, 0, 0, 2, 2, 2, 2, 4, 4, 1, 5, 5, 1, 6, 6, 1
+          30: return r7, 1 word
+        """,
+    )
+    assert(
+      chunkOf(source, "t_acme_x2f_app_main_ageOf") == r"""
+        chunk 1 t_acme_x2f_app_main_ageOf(r0) -> 1 word, frame of 2 words, at acme/app/src/main.trb:22:31
+          r0 %0 T_acme_x2f_app_main_Person
+          r1 %1 Int64
+          place 0: r0 -> +4, 1 word
+        b0:
+          0: load r1, place 0
+          1: return r1, 1 word
+        """,
+    )
+  }
+
+  test "a variant is its tag word and the group of its case, and `match` switches on the tag" {
+    const source = r"""
+      type Shape {
+        case Circle(radius: Int)
+        case Named(name: String, size: Int)
+      }
+
+      fn describe(shape: Shape): String {
+        match shape {
+          .Circle(_) => "circle"
+          .Named(name, _) => name
+        }
+      }
+
+      const _ = describe(Shape.Named("n", 2))
+      """
+    assert(
+      chunkOf(source, "t_acme_x2f_app_main_describe") == r"""
+        chunk 1 t_acme_x2f_app_main_describe(r0) -> 2 words, frame of 9 words, at acme/app/src/main.trb:6:35
+          r0 %0 T_acme_x2f_app_main_Shape
+          r4 %1 String
+          r6 %2 String
+          r8 %3 Int64
+          place 0: r0 +1, 2 words
+        b0:
+          0: jump 20
+        b1:
+          2: constant r4, 2 words at 3
+          4: jump 9
+        b2:
+          6: move r4, r6, 2 words
+          7: jump 9
+        b3:
+          9: return r4, 2 words
+        b4:
+          10: jump 2
+        b5:
+          12: load r6, place 0
+          13: kernel retain 6, 1
+          17: jump 6
+        b6:
+          19: unreachable
+        b7:
+          20: tag r8, r0, +0
+          21: switch r8, 0 -> 10, 1 -> 12, otherwise 19
+        """,
+    )
+  }
+
+  test "a `var` parameter is one reference word, read and written through its place" {
+    const source = r"""
+      fn bump(var counter: Int) {
+        counter = counter + 1
+      }
+
+      var count = 1
+      bump count
+      const _ = count
+      """
+    assert(
+      chunkOf(source, "t_acme_x2f_app_main_bump") == r"""
+        chunk 1 t_acme_x2f_app_main_bump(&r0) -> 0 words, frame of 4 words, at acme/app/src/main.trb:1:27
+          r0 %0 &Int64
+          r1 %1 Int64
+          r2 %2 Int64
+          place 0: *r0, 1 word
+          place 1: *r0, 1 word
+        b0:
+          0: constant r1, 1 word at 0
+          2: load r3, place 0
+          3: add.i64 r2, r3, r1 at acme/app/src/main.trb:2:13
+          5: store place 1, r2
+          6: return
+        """,
+    )
+    assert(
+      chunkOf(source, entryName) == r"""
+        chunk 0 t_acme_x2f_app_main() -> 0 words, frame of 3 words, at acme/app/src/main.trb:5:1
+          r0 %0 Int64
+          r1 %1 Void
+          place 0: r0, 1 word
+        b0:
+          0: constant r0, 1 word at 0
+          2: reference r2, place 0
+          3: call t_acme_x2f_app_main_bump(r2)
+          6: return
+        """,
+    )
+  }
+
+  test "text is two words, a concatenation and `print` are the kernel's" {
+    const source = r"""
+      fn greet(name: String): String {
+        "hello {name}!"
+      }
+
+      print greet("you")
+      """
+    assert(
+      chunkOf(source, "t_acme_x2f_app_main_greet") == r"""
+        chunk 1 t_acme_x2f_app_main_greet(r0) -> 2 words, frame of 8 words, at acme/app/src/main.trb:1:32
+          r0 %0 String
+          r2 %1 String
+          r4 %2 String
+          r6 %3 String
+        b0:
+          0: constant r2, 2 words at 2
+          2: constant r4, 2 words at 4
+          4: kernel text.concat 6, 3, 2, 0, 0, 0, 4, 0
+          14: return r6, 2 words
+        """,
+    )
+    assert chunkOf(source, entryName).contains("kernel print 1, ")
+  }
+
+  test "a closure is its function and an environment block, called through the closure word" {
+    const source = r"""
+      fn apply(value: Int, operation: (Int) => Int): Int {
+        operation(value)
+      }
+
+      fn offsetBy(amount: Int): (Int) => Int {
+        { _ + amount }
+      }
+
+      const _ = apply(1, offsetBy(2))
+      """
+    assert(
+      chunkOf(source, "t_acme_x2f_app_main_offsetBy") == r"""
+        chunk 2 t_acme_x2f_app_main_offsetBy(r0) -> 2 words, frame of 3 words, at acme/app/src/main.trb:5:40
+          r0 %0 Int64
+          r1 %1 closure
+        b0:
+          0: kernel block.new 2, 1, 9, 1, 1, 0, 0, 1
+          10: word r1, 4
+          12: return r1, 2 words
+        """,
+    )
+    assert(
+      chunkOf(source, "t_acme_x2f_app_main_apply") == r"""
+        chunk 1 t_acme_x2f_app_main_apply(r0, r1) -> 1 word, frame of 4 words, at acme/app/src/main.trb:1:52
+          r0 %0 Int64
+          r1 %1 closure
+          r3 %2 Int64
+        b0:
+          0: call.closure r3 = r1(r0)
+          3: return r3, 1 word
+        """,
+    )
+  }
+
+  test "the shapes say which words are counted, and how" {
+    const source = r"""
+      type Person {
+        name: String
+        nickname: String
+        age: Int
+        height: Int
+        weight: Int
+      }
+
+      fn born(name: String): Person {
+        Person(name, "baby", 0, 50, 3)
+      }
+
+      const _ = born("Ada")
+      """
+    var found = lowered source
+    insertOwnership found.program
+    const lines = tableLines emitBytecode(found.program, [entryName]).program
+    assert lines.contains("constant 2: text \"baby\"")
+    assert lines.contains("shape 0: T_acme_x2f_app_main_Person, 1 word, counted [0 block 1]")
+    assert lines.contains("shape 1: T_acme_x2f_app_main_Person, 7 words, counted [0 text, 2 text]")
+  }
+}
+
+group "Module constants" {
+  test "a constant that is no static data is a cell: built once by its initializer, copied on every read" {
+    const source = r"""
+      fn doubled(value: Int): Int {
+        value * 2
+      }
+
+      const answer = doubled(21)
+
+      fn read(): Int {
+        answer
+      }
+
+      const _ = read()
+      """
+    assert findingsOf(source).isEmpty()
+    assert(
+      chunkOf(source, "t_acme_x2f_app_main_answer") == r"""
+        chunk 1 t_acme_x2f_app_main_answer() -> 1 word, frame of 1 word, at -
+        b0:
+          0: cell r0, 1 word, cell at 0, built by t_constant__t_acme_x2f_app_main_answer
+          3: return r0, 1 word
+        """,
+    )
+  }
+}
