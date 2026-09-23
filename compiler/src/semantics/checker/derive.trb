@@ -99,6 +99,10 @@ fn membersOf(name: String): List<String> {
   if name == "Into" {
     return ["into"]
   }
+  // Only for a literal type, see `canDerive`
+  if name == "TryFrom" {
+    return ["tryFrom"]
+  }
   // Only for a tuple, see `canDerive`
   if name == "Compare" {
     return ["compare"]
@@ -119,6 +123,14 @@ fn canDerive(
   }
   if name == "Into" {
     return isIntoBase checker, target, wanted
+  }
+  // The conversion from text a literal type is given is the one `TryFrom` the language generates, and it is asked for
+  // through a bound as well as by name: `decodeLiteral<Value: TryFrom<String, LiteralParseError>>` reads one back
+  if name == "TryFrom" {
+    if const .Literals(_, _) = checker.types.form(target) {
+      return isLiteralTrait checker, name, wanted
+    }
+    return false
   }
   /*
    * `Compare` is generated for a **tuple** and for nothing else. An order is a decision and not a structure, so no
@@ -535,6 +547,115 @@ public fn capsuleNotesOf(var checker: Checker, target: TypeId, bound: TypeId): L
   const source = checker.describe pair.source
   notes.append "`{shown}` pairs with `{source}` through `{how}`, and that type is not `{name}` itself"
   notes
+}
+
+/**
+ * Why a type with an open constructor carries none of the three encoding forms, as the notes of the message that asked
+ * for one: the chain of fields down to the type that is the root cause, then what is wrong about that type.
+ *
+ *     its field `avatar: Avatar` is not `Decode`: `User.avatar -> Avatar.image -> Image`
+ *
+ * The first field that fails is followed, and inside of it again the first, so the chain names one path and not a
+ * tree. Where the type at its end is a capsule, the capsule's own notes follow. Empty where the type is no record, or
+ * where every field implements the trait - then the ordinary message is all there is to say.
+ */
+public fn fieldChainNotesOf(var checker: Checker, target: TypeId, bound: TypeId): List<String> {
+  const name = match capabilityNameOf(checker, bound) {
+    Some(found) => found
+    None => {
+      return []
+    }
+  }
+  if !isEncoding(name) {
+    return []
+  }
+  var chain: List<String> = []
+  var current = target
+  var first: String? = None
+  var seen: List<TypeId> = []
+  // A bound on the depth, for a chain of generic records that never comes back to a type it saw
+  for _ in 0..16 {
+    if seen.contains(current) {
+      break
+    }
+    seen.append current
+    const failing = match failingFieldOf(checker, current, bound) {
+      Some(found) => found
+      None => {
+        break
+      }
+    }
+    chain.append "{describeHead(checker, current)}.{failing.name}"
+    if first.isNone() {
+      first = Some "`{failing.name}: {checker.describe(failing.annotation)}`"
+    }
+    current = failing.annotation
+  }
+  const field = match first {
+    Some(found) => found
+    None => {
+      return []
+    }
+  }
+  chain.append checker.describe(current)
+  var notes = ["its field {field} is not `{name}`: `{chain.joined(separator: " -> ")}`"]
+  notes.appendAll capsuleNotesOf(checker, current, bound)
+  notes
+}
+
+/** The name and the type of one field, substituted for the arguments of the type it belongs to. */
+type FailingField {
+  name: String
+  annotation: TypeId
+}
+
+/**
+ * The first field of a record with an open constructor whose type does not implement the bound, in the order the three
+ * forms visit them: the passable fields, then the fields of every case.
+ */
+fn failingFieldOf(var checker: Checker, target: TypeId, bound: TypeId): FailingField? {
+  const (symbol, arguments) = match checker.types.form(target) {
+    .Nominal(found, given) => (found, given)
+    _ => {
+      return None
+    }
+  }
+  if isTrait(checker, symbol) {
+    return None
+  }
+  const identifier = typeSignatureOf checker, symbol
+  const shape = checker.typeSignature identifier
+  if shape.isNative || shape.isShared || !isConstructible(checker, shape.fields) {
+    return None
+  }
+  var mapping: Map<ParameterId, TypeId> = [:]
+  for position in 0..shape.generics.length().min(arguments.length()) {
+    mapping.set shape.generics[position], arguments[position]
+  }
+  var fields: List<FieldSignature> = []
+  for field in shape.fields {
+    if isPassable(field) {
+      fields.append field
+    }
+  }
+  for variant in shape.cases {
+    fields.appendAll variant.fields
+  }
+  for field in fields {
+    const annotation = substitute checker.types, field.annotation, mapping
+    if !fieldImplements(checker, annotation, target, bound) {
+      return Some FailingField(field.name, annotation)
+    }
+  }
+  None
+}
+
+/** `User` for `User`, `Page` for `Page<Item>`: the declaration a field belongs to, as the chain writes it. */
+fn describeHead(var checker: Checker, target: TypeId): String {
+  if const .Nominal(symbol, _) = checker.types.form(target) {
+    return checker.symbolAt(symbol).name
+  }
+  checker.describe target
 }
 
 /** `a`, `b` and `c`: a list a sentence can hold, with the last one joined by a word instead of a comma. */

@@ -3017,8 +3017,8 @@ somehow, and there is no order the language could name. What makes the laziness 
 rule for a module constant (docs/TYPECHECKER.md, What exactly is "compile-time evaluable"?) - literals, the operators of
 the number types, interpolation, collection literals, constructor calls and other constants, and never a function call -
 so there is no side effect whose timing anything could see. In an entry file or a test file, where the rule does not
-apply, a top-level `const` is a **local of the entry function** and never reaches this at all, which is what closes the
-one hole the previous round recorded.
+apply, a top-level `const` is a **local of the entry function**, and a function of the file that reads one holding a
+shared object reads it from its entry cell (below).
 
 **Immortal by construction, so the leak gate stays exact.** `torb_begin_immortal()`/`torb_end_immortal()` open a region
 around the call of the initializer, and every block `torb_allocate` hands out while one is open is born with
@@ -3114,6 +3114,26 @@ has to say which entries are not written yet; a planned native reads `` `X`, whi
   checker" that a gate program can hit.
 - **A capture of a quotation that is not a scalar is shown by its name and type natively** (see the 5.11 note below),
   which is a divergence in the text of a failing `assert` and in nothing else.
+
+### The entry cell
+
+**A top-level `const` of an entry file that holds a shared object is one object for the entry function and for every
+function of its file.** The binding is a local of the entry function, and a function of the same file cannot see that
+frame - so without more it read the constant the way it reads a module constant, as an immortal value built from the
+initializer a second time. For a value nobody can tell; for a `shared type` object, a task, a channel or a file it is a
+second object, and `const evaluations = Tally()` counted in a function and printed at the top level printed `0`.
+
+`FunctionKind.EntryCell(cell, access)` is the same shape as the constant cell: a function with a signature and no
+blocks, and the storage is the back end's (one file-scope `static` per cell in C). `Write` takes the entry's binding
+right after it is made, with a count of its own; `Read` answers the object with one more count, which is what a read
+from a function (`lowerConstantReference`) and the root of a path into the object (`rootReferenceOf` in
+`ir/lower/place.trb`) get. `main` releases every cell once the program is done - after the tasks the entry left
+running, which may still read it - so the leak gate stays exact (`entry_cells_release` in `backend/c/emit.trb`).
+A cell no function reads is not written at all (`dropUnreadCells`, once every function is lowered): then the binding is
+an ordinary local again, and a task handle or a file is released where it would be without a cell.
+Which constants get one is `entryCellOf` in `ir/lower/cell.trb`: a `const` of a single name, in a module that runs
+code, whose type is a shared object. A top-level `var` still has no cell: a function that assigns one is a finding.
+Test: `tests/conformance/shared-top-level-const.trb`.
 
 ### What 5.11 needs, measured before it is written
 

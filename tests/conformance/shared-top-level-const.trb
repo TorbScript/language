@@ -1,0 +1,43 @@
+/**
+ * A top-level `const` of an entry file that holds a shared object is **one** object: the top-level code and every
+ * function of the file see the same one, so a field a function writes through the name is what the top-level code
+ * reads next. A function changes no top-level `var`, and an object is not one - what the name holds is a reference,
+ * and the reference never changes (docs/language/types/shared-types.md).
+ *
+ * What it pins: a function that writes a field through the constant, a function that reads it, a lazy argument that
+ * counts how often it was evaluated through the constant, and a task the top-level code starts and does not wait for,
+ * which reads the object after the top-level code is done - the object is still there.
+ */
+
+/** A counter every holder shares. */
+shared type Tally {
+  var count: Int = 0
+}
+
+const evaluations = Tally()
+
+fn expensive(): Int {
+  evaluations.count = evaluations.count + 1
+  42
+}
+
+fn counted(): Int {
+  evaluations.count
+}
+
+fn pick(isUsed: Bool, value: lazy Int): Int {
+  if isUsed {
+    value + value
+  } else {
+    0
+  }
+}
+
+print pick(false, expensive()), evaluations.count
+print pick(true, expensive()), evaluations.count, counted()
+evaluations.count = 10
+print counted()
+const _ = spawn {
+  print "a task reads {counted()}"
+}
+print "the top level ends"

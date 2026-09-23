@@ -347,6 +347,25 @@ public type Lowering {
    * `ir/lower/expression.trb`).
    */
   var constantCells: Map<String, FunctionId> = [:]
+  /**
+   * The accesses of every entry cell made so far, by `SymbolId.value` of the `const` it belongs to, and `None` for a
+   * `const` that has none (`ir/lower/cell.trb`). Program-wide, because the entry function writes a cell and the
+   * functions of its file read it, in whichever order the worklist reaches them.
+   */
+  var entryCells: Map<Int, EntryCellAccesses?> = [:]
+  /** The read of every entry cell a function read so far, by `SymbolId.value` of its `const`. */
+  var entryCellReads: Map<Int, FunctionId> = [:]
+}
+
+/** One entry cell (`FunctionKind.EntryCell`): its write, and what its read is made from when a function reads it. */
+public type EntryCellAccesses {
+  write: FunctionId
+  /** The type the cell holds, which the entry's binding has to have. */
+  held: IrTypeId
+  /** The name of the cell in the back end. */
+  cell: String
+  /** The mangled name of the constant, which the names of the accesses are built from. */
+  accessor: String
 }
 
 /** A lowering for one checked program. `paths` holds one path per module, in the order of `program.graph.modules`. */

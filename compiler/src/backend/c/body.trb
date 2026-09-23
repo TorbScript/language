@@ -393,7 +393,9 @@ public fn keptFunctions(program: IrProgram, withheld: Set<Int>): List<Bool> {
     const isReader = isElementReader program, program.functions[index]
     // A destructor nothing calls: it is kept where something reaches it, or where the drop function that calls it is
     // emitted (`emittedFunctionsOf`)
-    const leftOut = program.specializedFunctions.contains(index) || isReader || withheld.contains(index)
+    // An access to an entry cell nothing calls is no root either: its cell may have no other access at all
+    const isCell = isEntryCellAccess program.functions[index]
+    const leftOut = program.specializedFunctions.contains(index) || isReader || withheld.contains(index) || isCell
     isLeftOut.append leftOut
     isAnyLeftOut = isAnyLeftOut || leftOut
   }
@@ -450,6 +452,13 @@ fn keepReached(var kept: List<Bool>, var pending: List<Int>, callee: FunctionId)
     kept.set callee.value, true
     pending.append callee.value
   }
+}
+
+fn isEntryCellAccess(function: IrFunction): Bool {
+  if const .EntryCell(_, _) = function.kind {
+    return true
+  }
+  false
 }
 
 fn isElementReader(program: IrProgram, function: IrFunction): Bool {

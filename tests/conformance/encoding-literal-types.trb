@@ -1,0 +1,70 @@
+use Process from "std/process"
+
+/**
+ * A literal type is read back through its own check: the value is read as its base and then compared with the members
+ * the type allows, so a document can never smuggle a value into a literal type that its `tryFrom` would refuse
+ * (docs/design/ENCODING.md, section 3). A literal type is its base at run time, which is exactly why the check has to be
+ * the literal type's own and not the base's: two literal types over `String` read the same text differently.
+ *
+ * What it pins: a literal field, a literal item of a list and a literal type read on its own each fail with the
+ * `LiteralParseError` of that type, naming the field chain it went wrong in (a position in brackets); a member the type
+ * allows is read; `String` itself still reads any text; and two literal types over one base keep their own members.
+ *
+ * The program leaves with the number of checks that failed.
+ */
+
+type Status = "draft" | "sent"
+
+type Color = "red" | "green"
+
+type Level = 1 | 2 | 3
+
+/** A letter, whose fields are three literal types and a list of one. */
+type Letter {
+  status: Status
+  color: Color
+  level: Level
+  tags: List<Status> = []
+}
+
+var failed = 0
+
+/** Compares one text with what it should be, and counts a difference. */
+fn expect(actual: String, wanted: String): Int {
+  if actual == wanted {
+    return 0
+  }
+  print "expected {wanted}"
+  print "     got {actual}"
+  1
+}
+
+const json = Json()
+const good = json.decode<Letter>(r"""{"status": "sent", "color": "red", "level": 2}""")
+failed = failed + expect("{good}", "Ok(Letter(status: \"sent\", color: \"red\", level: 2, tags: []))")
+failed = failed + expect(
+  "{json.decode<Letter>(r"""{"status": "lost", "color": "red", "level": 2}""")}",
+  "Fail(status: 'lost' is not one of \"draft\", \"sent\")",
+)
+failed = failed + expect(
+  "{json.decode<Letter>(r"""{"status": "sent", "color": "blue", "level": 2}""")}",
+  "Fail(color: 'blue' is not one of \"green\", \"red\")",
+)
+failed = failed + expect(
+  "{json.decode<Letter>(r"""{"status": "sent", "color": "red", "level": 7}""")}",
+  "Fail(level: '7' is not one of \"1\", \"2\", \"3\")",
+)
+failed = failed + expect(
+  "{json.decode<Letter>(r"""{"status": "sent", "color": "red", "level": 1, "tags": ["draft", "gone"]}""")}",
+  "Fail(tags[1]: 'gone' is not one of \"draft\", \"sent\")",
+)
+failed = failed + expect("{json.decode<Status>("\"gone\"")}", "Fail('gone' is not one of \"draft\", \"sent\")")
+failed = failed + expect("{json.decode<String>("\"gone\"")}", "Ok(\"gone\")")
+failed = failed + expect(
+  "{json.decode<List<Color>>(r"""["red", "pink"]""")}",
+  "Fail([1]: 'pink' is not one of \"green\", \"red\")",
+)
+failed = failed + expect("{json.decode<List<String>>(r"""["red", "pink"]""")}", "Ok([\"red\", \"pink\"])")
+failed = failed + expect("{json.decode<Color>("\"green\"")}", "Ok(\"green\")")
+
+Process.exit failed

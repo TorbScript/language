@@ -101,6 +101,12 @@ public const noCompilerCode = 3
 /** A bug of the compiler itself: the generated C did not compile, or the verifier found a malformed program. */
 public const internalErrorCode = 70
 
+/**
+ * The file beside every `program.c` that holds the hash of its text: the identity of the binary built from it, so that
+ * `torb run` can tell one `torb` from another by reading a line and not the compiler's whole C.
+ */
+public const identityFileName = "program.hash"
+
 /** The exit code of the whole command: zero when a binary (or, with `--emit-c`, a C file) came out. */
 public fn build(options: BuildOptions): Result<Int, IoError> {
   const tree = readSourceTree(options.paths)?
@@ -143,6 +149,8 @@ public fn build(options: BuildOptions): Result<Int, IoError> {
   const source = joinPath directory, "program.c"
   const text = emittedText emission
   File.writeText(source, text)?
+  // What says which program this is without reading it again: `torb run` keys its cache on the one beside `torb`
+  File.writeText(joinPath(directory, identityFileName), "{text.hash()}")?
   if options.onlyC {
     if options.saysWhatItWrote {
       print "wrote {source}"

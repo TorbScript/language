@@ -241,8 +241,9 @@ public fn runCanon(options: CanonOptions): Result<Int, IoError> {
 }
 
 /**
- * Every `.trb` file below the paths, without the hidden directories and the two directories of files that are broken
- * on purpose - unlike a file that fails to parse, they are not even read.
+ * Every `.trb` file below the paths, without the hidden directories, the `build` directories (what a build or a docs
+ * check writes, never a source) and the two directories of files that are broken on purpose - unlike a file that fails
+ * to parse, they are not even read.
  */
 fn collectCanonFiles(var files: List<String>, path: String): Result<Void, IoError> {
   if !File.isDirectory(path) {
@@ -255,7 +256,7 @@ fn collectCanonFiles(var files: List<String>, path: String): Result<Void, IoErro
   for entry in File.list(path)? {
     const child = "{path}/{entry}"
     if File.isDirectory(child) {
-      const isSkipped = entry.startsWith(".") || entry == "parser-cases" || entry == "lexer-cases"
+      const isSkipped = entry.startsWith(".") || entry == "build" || entry == "parser-cases" || entry == "lexer-cases"
       if !isSkipped {
         collectCanonFiles(files, child)?
       }

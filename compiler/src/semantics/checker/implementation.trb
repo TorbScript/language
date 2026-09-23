@@ -26,7 +26,7 @@ use SymbolId from "../symbols"
 use resolveImport from "../graph"
 use memberImportOf from "../scope"
 use joinPath from "../../project/path"
-use TypeId, ParameterId, FunctionForm from "./type"
+use TypeId, TypeForm, ParameterId, FunctionForm, Signature from "./type"
 use Implementation, ImplementationId, ImplementationOrigin, TargetShape, DerivedImplementation from "./type"
 use Resolved, Witness, describeType from "./type"
 use Checker, TypeScope from "./context"
@@ -377,12 +377,13 @@ fn resolveUncached(var checker: Checker, annotation: TypeId, capability: SymbolI
     return Resolved.Missing
   }
   // A literal type **is** its base at run time: `"tcp" | "udp"` is a `String`, so its `Show`, `Equals`, `Hash` and
-  // `Compare` are the ones of `String` and not bodies generated for it. The one trait that belongs to the literal type
-  // itself is the conversion from text, which `directTraitsOf` puts in place of the base's own
+  // `Compare` are the ones of `String` and not bodies generated for it. The two traits that belong to the literal type
+  // itself are the conversion from text, which `directTraitsOf` puts in place of the base's own, and `Decode`, whose
+  // body checks what it read against the values the type allows - the base's would let any text in
   if const .Literals(base, _) = checker.types.form(annotation) {
-    var isConversion = false
+    var isConversion = checker.symbolAt(capability).name == "Decode"
     if const Some(found) = wanted {
-      isConversion = isTextConversionBound checker, found
+      isConversion = isConversion || isTextConversionBound(checker, found)
     }
     if !isConversion {
       return resolveUncached checker, base, capability, wanted
@@ -2604,9 +2605,20 @@ fn memberOfSameTarget(var checker: Checker, index: Int, target: TypeId, name: St
 }
 
 /**
- * The signature the trait asks for against the one the type provides. Only compared where both are written down
- * without a generic parameter of their own and neither carries anything that is broken or not checked yet: a
- * difference that comes out of a missing piece of the checker is not a mistake in the source.
+ * The signature the trait asks for against the one the type provides. Neither may carry anything that is broken or not
+ * checked yet: a difference that comes out of a missing piece of the checker is not a mistake in the source.
+ *
+ * A requirement with type parameters of its own - `fn encode<Target: Encoder>(var target: Target)` - is met only by a
+ * member with as many of its own, in the same places and under the same bounds: the requirement's parameters are
+ * renamed to the member's, position by position, and then the two forms have to be the same. A member with a different
+ * number of them is always a mismatch, `fn encode(var target: Encoder)` for the requirement above too.
+ *
+ * # Open
+ *
+ * A member inside of a generic `extend` (`Item` of `extend<Item: Encode> List<Item>`), and a member for a generic trait
+ * (`TryFrom<Source, Failure>`), is held to the count of its own parameters and no further: its `Self` is the implementing
+ * type while the requirement says the target, a type body may hold one member per instantiation of the trait, and
+ * comparing the two forms needs the substitution that tells those apart.
  */
 fn compareSignatures(
   var checker: Checker,
@@ -2624,26 +2636,129 @@ fn compareSignatures(
   const required = checker.signature wantedSignature
   const givenSignature = signatureOf checker, provider
   const given = checker.signature givenSignature
-  if !required.generics.isEmpty() || !given.generics.isEmpty() {
-    return
+  const requiredOwn = ownGenericsOf checker, required
+  const givenOwn = ownGenericsOf checker, given
+  var renamed = mapping
+  var isSameShape = requiredOwn.length() == givenOwn.length()
+  if isSameShape {
+    for position in 0..requiredOwn.length() {
+      renamed.set requiredOwn[position], checker.types.intern(TypeForm.Parameter(givenOwn[position]))
+    }
   }
-  const wanted = substituteFunction checker.types, required.form, mapping
+  const wanted = substituteFunction checker.types, required.form, renamed
   if !isComparableForm(checker, wanted) || !isComparableForm(checker, given.form) {
     return
   }
-  if required.takesSelf == given.takesSelf && sameFunction(checker.types, wanted, given.form) {
+  if isSameShape {
+    isSameShape = sameOwnBounds checker, required, requiredOwn, given, givenOwn, renamed
+  }
+  // A member of a generic `extend` or of a generic trait is held to its own parameters and to nothing more, see # Open
+  const hasOuterGenerics = given.generics.length() > givenOwn.length()
+  const isInsideGeneric = hasOuterGenerics || required.generics.length() > requiredOwn.length()
+  if isSameShape && isInsideGeneric {
+    return
+  }
+  if isSameShape && required.takesSelf == given.takesSelf && sameFunction(checker.types, wanted, given.form) {
     return
   }
   const implementation = checker.implementations.all[index]
   const target = checker.describe implementation.target
   const capability = checker.describe bound
-  const shown = describeRequirement checker, name, required.takesSelf, required.isVarSelf, wanted
+  const generics = describeOwnGenerics checker, required, requiredOwn, mapping
+  const asked = substituteFunction checker.types, required.form, mapping
+  const shown = describeRequirement checker, "{name}{generics}", required.takesSelf, required.isVarSelf, asked
   const at = checker.symbolAt(provider).span
   checker.report(
     implementation.module,
     Diagnostic.error("`{target}.{name}` does not match `{capability}`", at)
       .withNote("`{capability}` requires `{shown}`")
   )
+}
+
+/** The type parameters a function declares itself, in order - not the ones of the `trait`, `type` or `extend` around it. */
+fn ownGenericsOf(checker: Checker, signature: Signature): List<ParameterId> {
+  var found: List<ParameterId> = []
+  for parameter in signature.generics {
+    if checker.types.parameter(parameter).owner == Some(signature.symbol) {
+      found.append parameter
+    }
+  }
+  found
+}
+
+/** The traits one parameter is bounded by in a signature: its inline bounds and its `where` clauses. */
+fn boundsOfParameter(var checker: Checker, signature: Signature, parameter: ParameterId): List<TypeId> {
+  const subject = checker.types.intern TypeForm.Parameter(parameter)
+  var found: List<TypeId> = []
+  for bound in signature.bounds {
+    if bound.subject == subject {
+      found.appendAll bound.traits
+    }
+  }
+  found
+}
+
+/**
+ * Whether every bound the member puts on a parameter of its own is one the requirement promises for the same position:
+ * the same trait, or a supertrait of one of them. A member may ask for less than the requirement promises, never for
+ * more, because a caller through the trait only knows what the requirement says.
+ */
+fn sameOwnBounds(
+  var checker: Checker,
+  required: Signature,
+  requiredOwn: List<ParameterId>,
+  given: Signature,
+  givenOwn: List<ParameterId>,
+  renamed: Map<ParameterId, TypeId>,
+): Bool {
+  for position in 0..requiredOwn.length() {
+    const own = checker.types.intern TypeForm.Parameter(givenOwn[position])
+    var promised: List<TypeId> = []
+    for bound in boundsOfParameter(checker, required, requiredOwn[position]) {
+      promised.append substitute(checker.types, bound, renamed)
+    }
+    for asked in boundsOfParameter(checker, given, givenOwn[position]) {
+      if !isWritten(checker, asked) {
+        continue
+      }
+      var isPromised = false
+      for offered in promised {
+        if sameType(checker.types, offered, asked) || isSupertraitOfBound(checker, offered, asked, own) {
+          isPromised = true
+        }
+      }
+      if !isPromised {
+        return false
+      }
+    }
+  }
+  true
+}
+
+/** `<Target: Encoder>`: the type parameters a requirement declares itself, as its declaration writes them. */
+fn describeOwnGenerics(
+  var checker: Checker,
+  signature: Signature,
+  own: List<ParameterId>,
+  mapping: Map<ParameterId, TypeId>,
+): String {
+  if own.isEmpty() {
+    return ""
+  }
+  var parts: List<String> = []
+  for parameter in own {
+    const name = checker.types.parameter(parameter).name
+    var bounds: List<String> = []
+    for bound in boundsOfParameter(checker, signature, parameter) {
+      bounds.append describeType(checker.types, checker.symbols, substitute(checker.types, bound, mapping))
+    }
+    if bounds.isEmpty() {
+      parts.append name
+    } else {
+      parts.append "{name}: {bounds.joined(separator: " & ")}"
+    }
+  }
+  "<{parts.joined(separator: ", ")}>"
 }
 
 fn isComparableForm(checker: Checker, form: FunctionForm): Bool {

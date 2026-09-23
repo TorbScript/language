@@ -14,7 +14,7 @@
 
 use FunctionDeclaration from "../syntax/ast"
 use SymbolId from "../semantics/symbols"
-use TypeId, TypeForm, ParameterId, ParameterForm, ParameterMode, Signature from "../semantics/checker/type"
+use TypeId, TypeForm, ParameterId, ParameterForm, ParameterMode, Signature, LiteralValue from "../semantics/checker/type"
 use signatureOf, functionOfSite from "../semantics/checker/signature"
 use substitute from "../semantics/checker/unify"
 use IrFunction, IrSignature, IrParameter, IrType, IrTypeId, Ownership from "./ir"
@@ -40,12 +40,13 @@ public fn instanceFor(
   symbol: SymbolId,
   mapping: Map<ParameterId, TypeId>,
 ): FunctionId? {
-  const arguments = match instanceArgumentsOf(lowering, symbol, mapping) {
+  const plain = match instanceArgumentsOf(lowering, symbol, mapping) {
     Some(found) => found
     None => {
       return None
     }
   }
+  const arguments = plain.appendedAll literalArgumentsOf(lowering, symbol, mapping)
   const instance = Instance symbol, arguments, []
   const key = instanceKeyOf instance
   if const Some(found) = lowering.program.instances.get(key) {
@@ -321,6 +322,85 @@ public fn instanceArgumentsOf(
     }
   }
   Some arguments
+}
+
+/**
+ * What tells an instance over a literal type from the one over its base: one more argument per type argument that has
+ * a literal type in it, which spells the position and the whole type (`0: "draft" | "sent"`).
+ *
+ * A literal type **is** its base at run time, so `"draft" | "sent"` and `String` are one IR type and would be one
+ * instance - and the body of the first one asked for would serve both. That is right for everything a body does with
+ * the value, and wrong for what it asks of the type: `Value.decode` of a literal type checks the text against the values
+ * it allows, `Value.tryFrom` compares with them, and the base does neither. So an instance whose arguments mention a
+ * literal type anywhere, `List<"draft" | "sent">` too, is an instance of its own, with a name of its own.
+ */
+fn literalArgumentsOf(
+  var lowering: Lowering,
+  symbol: SymbolId,
+  mapping: Map<ParameterId, TypeId>,
+): List<IrTypeId> {
+  const identifier = signatureOf lowering.checker, symbol
+  const signature = lowering.checker.signature identifier
+  var parameters: List<ParameterId> = []
+  if const Some(own) = selfParameterOf(lowering, signature) {
+    parameters.append own
+  }
+  parameters.appendAll signature.generics
+  var found: List<IrTypeId> = []
+  for position in 0..parameters.length() {
+    const given = match mapping.get(parameters[position]) {
+      Some(found) => found
+      None => {
+        continue
+      }
+    }
+    if !mentionsLiteralType(lowering, given, 0) {
+      continue
+    }
+    const text = lowering.checker.describe given
+    const voidType = lowering.program.internType IrType.VoidType
+    const spelled = LiteralValue.Text "{position}: {text}"
+    found.append lowering.program.internType(IrType.ConstantValue(spelled, voidType))
+  }
+  found
+}
+
+/** Whether a literal type stands anywhere inside of a type. */
+fn mentionsLiteralType(var lowering: Lowering, id: TypeId, depth: Int): Bool {
+  if depth > 12 {
+    return false
+  }
+  match lowering.checker.types.form(id) {
+    .Literals(_, _) => true
+    .Nominal(_, arguments) => anyMentionsLiteralType lowering, arguments, depth
+    .Traits(bounds) => anyMentionsLiteralType lowering, bounds, depth
+    .Tuple(fields) => {
+      for field in fields {
+        if mentionsLiteralType(lowering, field.annotation, depth + 1) {
+          return true
+        }
+      }
+      false
+    }
+    .Function(form) => {
+      for parameter in form.parameters {
+        if mentionsLiteralType(lowering, parameter.annotation, depth + 1) {
+          return true
+        }
+      }
+      mentionsLiteralType(lowering, form.result, depth + 1)
+    }
+    _ => false
+  }
+}
+
+fn anyMentionsLiteralType(var lowering: Lowering, types: List<TypeId>, depth: Int): Bool {
+  for id in types {
+    if mentionsLiteralType(lowering, id, depth + 1) {
+      return true
+    }
+  }
+  false
 }
 
 /** The `Self` of a trait, which is a generic parameter that is not in `Signature.generics`. */

@@ -1,0 +1,59 @@
+/**
+ * Several `extend`s of one module may declare a member of the same name, and each of them is a function of its own: the
+ * extended type in full and the trait it implements are what tell them apart, never only the module and the name.
+ *
+ * What it pins: two traits over one item type (`List<Item>` and `Set<Item>`) extended with one trait, the same trait
+ * implemented twice for one generic type at two concrete arguments (`Holder<Int>`, `Holder<String>`), and a list at two
+ * item types - each call reaches the body written for it. A mixup is not a wrong answer at run time but a program that
+ * does not build, so the output is the whole claim.
+ */
+
+/** Something that can say what it is. */
+trait Named {
+  fn name(): String
+}
+
+extend<Item> List<Item> with Named {
+  fn name(): String {
+    "a list of {length()}"
+  }
+}
+
+extend<Item: Hash> Set<Item> with Named {
+  fn name(): String {
+    "a set of {length()}"
+  }
+}
+
+/** One value of any type. */
+type Holder<Item> {
+  item: Item
+}
+
+extend Holder<Int> with Named {
+  fn name(): String {
+    "a holder of the number {item}"
+  }
+}
+
+extend Holder<String> with Named {
+  fn name(): String {
+    "a holder of the text {item}"
+  }
+}
+
+/** The same question through a bound: which body runs is decided by the type the call is instantiated for. */
+fn describe<Value: Named>(value: Value): String {
+  value.name()
+}
+
+const numbers = [1, 2, 3]
+const unique: Set<Int> = [1, 2]
+print numbers.name()
+print unique.name()
+print describe(numbers)
+print describe(unique)
+print Holder(1).name()
+print Holder("one").name()
+print describe(Holder(2))
+print describe(Holder("two"))

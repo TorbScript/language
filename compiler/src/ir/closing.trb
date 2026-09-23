@@ -12,7 +12,7 @@
  * exactly as it would without any of this.
  */
 
-use IrProgram, IrTypeId, LayoutId from "./ir"
+use IrProgram, IrTypeId, LayoutId, RuntimeKind from "./ir"
 use LayoutKind from "./layout"
 use filledFlags from "./liveness"
 
@@ -42,7 +42,7 @@ public type Closing {
  * trait-typed value, a closure - come from what the program boxes and what its environments hold.
  */
 public fn closingOf(program: IrProgram): Closing {
-  if program.closingLayouts.isEmpty() {
+  if program.closingLayouts.isEmpty() && !hasFileHandles(program) {
     return Closing([])
   }
   const typeCount = program.typeCount()
@@ -94,6 +94,21 @@ public fn closingOf(program: IrProgram): Closing {
   Closing holding, layoutHolds
 }
 
+/**
+ * Whether the program has a `File` anywhere: an object of the runtime that closes when it is released, and that no layout
+ * of the program stands for, so [IrProgram.closingLayouts] cannot say it.
+ */
+fn hasFileHandles(program: IrProgram): Bool {
+  for index in 0..program.typeCount() {
+    if const .Runtime(kind, _) = program.typeAt(IrTypeId(index)) {
+      if kind == RuntimeKind.FileHandle {
+        return true
+      }
+    }
+  }
+  false
+}
+
 fn holdsNow(holding: List<Bool>, id: IrTypeId): Bool {
   id.value >= 0 && id.value < holding.length() && holding[id.value]
 }
@@ -114,7 +129,7 @@ fn typeHolds(
     .FixedArray(item, _) => holdsNow holding, item
     .Box(item) => holdsNow holding, item
     .Lazy(item) => holdsNow holding, item
-    .Runtime(_, arguments) => arguments.any({ holdsNow holding, _ })
+    .Runtime(kind, arguments) => kind == RuntimeKind.FileHandle || arguments.any({ holdsNow holding, _ })
     .Object(_) => isObjectHolding
     .Closure(_) => isClosureHolding
     _ => false

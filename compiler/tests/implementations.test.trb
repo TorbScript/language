@@ -77,6 +77,32 @@ group "What an implementation has to provide" {
     assert(notes(source) == ["`Shape` requires `fn name(): String`"])
   }
 
+  /** The requirement takes the format as a bound, and a member that takes a trait-typed value is another member. */
+  test "a generic requirement is met only by a member with as many type parameters of its own" {
+    const source = "trait Writer \{\n  var fn put(value: Int)\n\}\n\n"
+      + "trait Saved \{\n  fn save<Target: Writer>(var target: Target)\n\}\n\n"
+      + "type Money with Saved \{\n  cents: Int\n\n  fn save(var target: Writer) \{\n    target.put cents\n  \}\n\}"
+    assert(problems(source) == ["`Money.save` does not match `Saved`"])
+    assert(notes(source) == ["`Saved` requires `fn save<Target: Writer>(var target: Target)`"])
+  }
+
+  test "the type parameters of a member may have other names than the requirement's" {
+    const source = "trait Writer \{\n  var fn put(value: Int)\n\}\n\n"
+      + "trait Saved \{\n  fn save<Target: Writer>(var target: Target)\n\}\n\n"
+      + "type Money with Saved \{\n  cents: Int\n\n"
+      + "  fn save<Output: Writer>(var output: Output) \{\n    output.put cents\n  \}\n\}"
+    assert problems(source).isEmpty()
+  }
+
+  /** A caller through the trait knows only that the format is a `Writer`, so a member may not ask for more. */
+  test "a member whose type parameter asks for more than the requirement promises does not match" {
+    const source = "trait Writer \{\n  var fn put(value: Int)\n\}\n\n"
+      + "trait Saved \{\n  fn save<Target: Writer>(var target: Target)\n\}\n\n"
+      + "type Money with Saved \{\n  cents: Int\n\n"
+      + "  fn save<Output: Writer & Show>(var output: Output) \{\n    output.put cents\n  \}\n\}"
+    assert(problems(source) == ["`Money.save` does not match `Saved`"])
+  }
+
   test "a supertrait is a requirement on the implementing type, and the message says who asked" {
     const source = "trait Named \{\n  fn name(): String\n\}\n\ntrait Shape with Named \{\n  fn area(): Int\n\}\n\n"
       + "type Square with Shape \{\n  fn area(): Int \{\n    1\n  \}\n\}"
@@ -202,7 +228,7 @@ group "Coherence" {
   test "an argument that only *contains* a type of this package is not enough" {
     const source = "type Celsius \{\n  degrees: Float\n\}\n\n"
       + "extend Float64 with From<List<Celsius>> \{\n"
-      + "  fn from(value: List<Celsius>): Float64 \{\n    1.0\n  \}\n\}"
+      + "  static fn from(value: List<Celsius>): Float64 \{\n    1.0\n  \}\n\}"
     assert(
       problems(source)
         == ["`extend Float64 with From<List<Celsius>>`: neither `Float64` nor `From<List<Celsius>>` belongs to this"
@@ -516,6 +542,25 @@ group "A capsule's `Encode` and `Decode`" {
         "`Email` is a capsule: `storedAddress` is private and has no default, so nothing outside can call the"
           + " constructor and `Decode` comes from `Email`'s one conversion pair instead of from its fields",
         "`Email` has no pair. Write `From<Source>` or `TryFrom<Source, Failure>` for `Email`, and `From<Email>` for"
+          + " that `Source`",
+      ]
+    )
+  }
+
+  /** The chain goes down the first field that fails, to the type that is the root cause, and that type says why. */
+  test "a record without `Decode` names the chain of fields down to the type that has none" {
+    const source = "type Image \{\n  private pixels: List<Int>\n\}\n\n"
+      + "type Avatar \{\n  image: Image\n\}\n\n"
+      + "type User \{\n  name: String\n  avatar: Avatar\n\}\n\n"
+      + reader + inBody("  print read<User>()")
+    assert(problems(source) == ["`User` does not implement `Decode`"])
+    assert(
+      notes(source) == [
+        "`read` asks for it",
+        "its field `avatar: Avatar` is not `Decode`: `User.avatar -> Avatar.image -> Image`",
+        "`Image` is a capsule: `pixels` is private and has no default, so nothing outside can call the"
+          + " constructor and `Decode` comes from `Image`'s one conversion pair instead of from its fields",
+        "`Image` has no pair. Write `From<Source>` or `TryFrom<Source, Failure>` for `Image`, and `From<Image>` for"
           + " that `Source`",
       ]
     )

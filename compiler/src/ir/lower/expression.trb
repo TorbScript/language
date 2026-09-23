@@ -42,6 +42,7 @@ use lowerClosureValue, lowerNamedFunctionValue, lowerForcedRead, bindingReferenc
 use savedFrame, restoreFrame, enterBody from "./closure"
 use lowerConstructorValue from "./closure"
 use lowerTextLiteral, showsHere from "./text"
+use entryCellType, readEntryCell from "./cell"
 
 /** One expression, lowered into `destination` where the caller has a slot for it, or into a fresh one otherwise. */
 public fn lowerExpression(
@@ -659,6 +660,12 @@ fn lowerConstantReference(
   // A top-level binding of the entry file is a local of the entry function, not a static value
   if const Some(slot) = lowering.entryLocals.get(symbol.value) {
     return copiedInto builder, destination, slot
+  }
+  // A shared object of the entry file, read from a function of it: the one object the entry made, from its cell
+  if const Some(held) = entryCellType(lowering, symbol) {
+    const target = valueSlot lowering, builder, destination, held
+    const _ = readEntryCell lowering, builder, symbol, target
+    return target
   }
   if isVarBinding(lowering, symbol) {
     const what = "a top-level `var` read from a function"

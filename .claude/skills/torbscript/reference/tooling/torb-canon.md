@@ -37,6 +37,10 @@ Rules (calls and strings run by default):
 
 ## What it does
 
+A path is a file or a directory. Below a directory every `.trb` file is rewritten except those in a hidden directory,
+in a `build` directory - what a build, a test run or a docs check wrote, never a source - and in the two directories of
+files that are broken on purpose (`parser-cases`, `lexer-cases`).
+
 ### A call is a command wherever the grammar allows it
 
 Both a command call and a parenthesized one parse, so which one is written is a question of style, and the language

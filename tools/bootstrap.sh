@@ -168,6 +168,12 @@ install() {
   fi
   mv "$second" "build/release/$name"
   mv "$staging/release/program.c" build/release/program.c
+  # The hash of that C is the identity `torb run` keys its cache on; an old one must never stay beside a new program.c
+  if [ -f "$staging/release/program.hash" ]; then
+    mv "$staging/release/program.hash" build/release/program.hash
+  else
+    rm -f build/release/program.hash
+  fi
   rm -f "build/release/$name.old-$$" 2>/dev/null || true
   succeeded=1
 }

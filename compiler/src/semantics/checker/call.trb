@@ -33,7 +33,7 @@ use taskValueOf from "./statement"
 use isQuotation, openThunk, closeThunk from "./quote"
 use checkConstruction, checkSharedIdentity from "./declaration"
 use taskProblemOf, taskNoteOf from "./declaration"
-use capsuleNotesOf from "./derive"
+use capsuleNotesOf, fieldChainNotesOf from "./derive"
 use checkCloseCall from "./close"
 
 /** Which parameter every written argument fills, and what the call adds to what was written. */
@@ -1143,8 +1143,12 @@ fn reportUnmetBound(var checker: Checker, subject: TypeId, wanted: TypeId, owner
   if !owner.isEmpty() {
     problem = problem.withNote "`{owner}` asks for it"
   }
-  // A capsule says why it has no `Decode`: the rule that closed it, and the one thing its conversions are missing
+  // A capsule says why it has no `Decode`: the rule that closed it, and the one thing its conversions are missing. A
+  // record says which of its fields is the reason, down to the type that is the root cause
   for note in capsuleNotesOf(checker, subject, wanted) {
+    problem = problem.withNote note
+  }
+  for note in fieldChainNotesOf(checker, subject, wanted) {
     problem = problem.withNote note
   }
   checker.reportHere problem

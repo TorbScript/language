@@ -1,0 +1,217 @@
+/**
+ * The entry cells: how a top-level `const` of an entry file that holds a shared object is **one** object for the entry
+ * function and for every function of its file.
+ *
+ * A top-level binding of an entry file is a local of the entry function, and a function of the same file cannot see the
+ * entry's frame - so without a cell it reads the constant the way it reads a module constant, as an immortal value built
+ * from the initializer a second time. For a value nobody can tell, because values have no identity. For a shared object
+ * it is a second object: `const evaluations = Tally()` counted in a function and printed by the entry would print `0`.
+ *
+ * So such a binding gets a cell (`FunctionKind.EntryCell`): the entry function writes its binding into it right after
+ * the binding is made, and every function of the file reads it from there. The cell holds a count of its own, so the
+ * object lives while anything may still read it - a task the entry started and did not wait for runs after the entry
+ * function returned - and the back end gives that count back once the program is done.
+ *
+ * # Pitfalls
+ *
+ * A function that runs before the entry reached the binding reads an empty cell. The checker orders a file's statements,
+ * not the calls into its functions, so `bump()` above `const tally = Tally()` is a program that reads nothing yet.
+ */
+
+use Binding from "../../syntax/ast"
+use SymbolId from "../../semantics/symbols"
+use signatureOf from "../../semantics/checker/signature"
+use IrTypeId, IrSignature, IrParameter, Slot, FunctionId, FunctionKind, CellAccess, Instruction from "../ir"
+use Ownership, WitnessSource, borrowed from "../ir"
+use FunctionBuilder, emit, newFunction, finishFunction, setFunctionKind from "../build"
+use functionName, mangledName from "../mangle"
+use symbolPathOf from "../instantiate"
+use Lowering, EntryCellAccesses, irTypeOfClosed, voidTypeOf from "./context"
+use isEntryModule from "./function"
+
+/**
+ * The entry cell of a top-level `const`, made the first time anything asks, or `None` for a declaration that has none:
+ * a `var`, a binding that takes a value apart, a constant of a module that runs nothing, and a value that is no shared
+ * object.
+ */
+public fn entryCellOf(var lowering: Lowering, symbol: SymbolId): EntryCellAccesses? {
+  if const Some(known) = lowering.entryCells.get(symbol.value) {
+    return known
+  }
+  const made = madeEntryCell lowering, symbol
+  lowering.entryCells.set symbol.value, made
+  made
+}
+
+fn madeEntryCell(var lowering: Lowering, symbol: SymbolId): EntryCellAccesses? {
+  const site = lowering.checker.siteOf(symbol)?
+  const binding = match site.kind {
+    .Constant(found) => found
+    _ => {
+      return None
+    }
+  }
+  if binding.isVar || !isNameBinding(binding) {
+    return None
+  }
+  const statements = lowering.checker.program.graph.at(site.module).file.statements
+  if !isEntryModule(lowering, site.module, statements) {
+    return None
+  }
+  const declared = lowering.checker.signature(signatureOf(lowering.checker, symbol)).form.result
+  if lowering.checker.isBroken(declared) {
+    return None
+  }
+  const held = irTypeOfClosed lowering, declared
+  if !isSharedObject(lowering, held) {
+    return None
+  }
+  const path = symbolPathOf lowering.checker, symbol
+  const accessor = functionName lowering.program, path, []
+  const cell = "{accessor}_entry"
+  const voidType = voidTypeOf lowering
+  const parameters = [IrParameter("value", held, false, Ownership.Owned)]
+  const write = cellAccess(
+    lowering,
+    mangledName("t", ["cellWrite"], accessor),
+    symbol,
+    IrSignature(parameters, voidType),
+    cell,
+    .Write,
+  )
+  Some EntryCellAccesses(write, held, cell, accessor)
+}
+
+/** `const tally = Tally()`, and not `const (reader, writer) = ...`, whose names share one initializer. */
+fn isNameBinding(binding: Binding): Bool {
+  if const .Binding(_) = binding.pattern.kind {
+    return true
+  }
+  false
+}
+
+fn cellAccess(
+  var lowering: Lowering,
+  name: String,
+  symbol: SymbolId,
+  signature: IrSignature,
+  cell: String,
+  access: CellAccess,
+): FunctionId {
+  var builder = newFunction name, Some(symbol), signature, "cell"
+  setFunctionKind builder, FunctionKind.EntryCell(cell, access)
+  const empty = builder.function
+  builder.function = empty.copy blocks: []
+  finishFunction lowering.program, builder
+}
+
+/** An object of a `shared type`, a task, a channel or a file: one pointer to a counted block that has an identity. */
+fn isSharedObject(var lowering: Lowering, id: IrTypeId): Bool {
+  match lowering.program.typeAt(id) {
+    .SharedObject(_) => true
+    .Runtime(kind, _) => {
+      match kind {
+        .TaskObject => true
+        .ChannelObject => true
+        .FileHandle => true
+        _ => false
+      }
+    }
+    _ => false
+  }
+}
+
+/** A top-level binding of the entry function was just made: where it has a cell, the binding goes into it. */
+public fn writeEntryCell(var lowering: Lowering, var builder: FunctionBuilder, symbol: SymbolId, slot: Slot) {
+  if lowering.isDiverged || !lowering.isSupported {
+    return
+  }
+  const accesses = match entryCellOf(lowering, symbol) {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  if builder.typeOfSlot(slot) != accesses.held {
+    return
+  }
+  const none: List<WitnessSource> = []
+  emit builder, Instruction.Call(None, accesses.write, [borrowed(slot)], none)
+}
+
+/**
+ * A read of a top-level `const` from a function of its file, where the constant has a cell: the object the entry put
+ * there, with a count of its own. `false` where it has none, and the caller reads the constant as a module constant.
+ */
+public fn readEntryCell(var lowering: Lowering, var builder: FunctionBuilder, symbol: SymbolId, target: Slot): Bool {
+  const accesses = match entryCellOf(lowering, symbol) {
+    Some(found) => found
+    None => {
+      return false
+    }
+  }
+  const read = readAccessOf lowering, symbol, accesses
+  const none: List<WitnessSource> = []
+  emit builder, Instruction.Call(Some(target), read, [], none)
+  true
+}
+
+/**
+ * The read of a cell, made the first time a function reads it: a cell the entry fills and no function reads has no
+ * read, because a `static` function nothing calls is an error of the C compiler.
+ */
+fn readAccessOf(var lowering: Lowering, symbol: SymbolId, accesses: EntryCellAccesses): FunctionId {
+  if const Some(known) = lowering.entryCellReads.get(symbol.value) {
+    return known
+  }
+  const name = mangledName "t", ["cellRead"], accesses.accessor
+  const read = cellAccess lowering, name, symbol, IrSignature([], accesses.held), accesses.cell, CellAccess.Read
+  lowering.entryCellReads.set symbol.value, read
+  read
+}
+
+/** The type a `const` with a cell holds, or `None` where it has none. */
+public fn entryCellType(var lowering: Lowering, symbol: SymbolId): IrTypeId? {
+  const accesses = entryCellOf(lowering, symbol)?
+  Some accesses.held
+}
+
+/**
+ * The writes of every cell no function reads, gone again: the entry's binding is then an ordinary local, released where
+ * it would be without a cell - a task handle is not held until the program ends, a file closes where its block ends.
+ * Which cells are read is known only once every function is lowered, which is why the write is taken back and not left
+ * out.
+ */
+public fn dropUnreadCells(var lowering: Lowering) {
+  var unread: Set<Int> = []
+  for (key, found) in lowering.entryCells {
+    if const Some(accesses) = found {
+      if !lowering.entryCellReads.containsKey(key) {
+        unread.insert accesses.write.value
+      }
+    }
+  }
+  if unread.isEmpty() {
+    return
+  }
+  for index in 0..lowering.program.functions.length() {
+    var function = lowering.program.functions[index]
+    var isChanged = false
+    for block in 0..function.blocks.length() {
+      var kept: List<Instruction> = []
+      for instruction in function.blocks[block].instructions {
+        if const .Call(None, callee, _, _, _) = instruction {
+          if unread.contains(callee.value) {
+            isChanged = true
+            continue
+          }
+        }
+        kept.append instruction
+      }
+      function.blocks[block].instructions = kept
+    }
+    if isChanged {
+      lowering.program.functions.set index, function
+    }
+  }
+}

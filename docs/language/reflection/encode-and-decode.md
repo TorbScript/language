@@ -109,6 +109,17 @@ trait Describe { static fn describe<Target: Describer>(var target: Target) }
    (a narrow number keeps its range, a `Set` comes back as a `Set` because the target type drives the decoding), and
    a sequence can be streamed one element at a time instead of being held in memory whole.
 
+9. **A literal type is read as its base and then checked against its members.** `"draft" | "sent"` is a `String` at run
+   time, but its `decode` is its own: a text that is none of the members fails with the type's `LiteralParseError`, so
+   a document cannot put a value into a literal type that `tryFrom` would refuse.
+
+10. **A `DecodeError` names the whole chain it went wrong in.** A field follows a `.`, a position of a sequence or a
+    tuple stands in brackets, an entry of a map follows a `.` with its key: `items[2].price: a value is needed`.
+
+11. **A hand-written `encode`, `decode` or `describe` takes the format as a type parameter**, exactly as the trait
+    declares it. `fn encode(var target: Encoder)` takes a trait-typed value instead and is another member: the checker
+    says it does not match `Encode`.
+
 ## What this is not
 
 **`Encode`/`Decode` are not a second, dynamically typed representation of a value.** Looking at a value without its

@@ -355,6 +355,25 @@ public type FunctionKind {
    * release of it are no-ops, a write to it copies, and the leak gate counts it apart from the live blocks.
    */
   case ConstantCell(initializer: FunctionId)
+  /**
+   * One access to the **entry cell** of a top-level `const` of an entry file whose value is a shared object: the one
+   * place the entry function's binding and every function of the file that names it meet, so that all of them see one
+   * object and not an object each (docs/BACKEND.md, the entry cell).
+   *
+   * The cell holds a count of its own: `Write` takes one right after the binding is made, `Read` answers the object with
+   * one more, and the back end releases every cell once the program is done - after the tasks the entry left running,
+   * which may still read it. It has no blocks: where the cell lives is the back end's, a file-scope `static` in C, as for
+   * [FunctionKind.ConstantCell].
+   */
+  case EntryCell(cell: String, access: CellAccess)
+}
+
+/** What one function of an entry cell does with it. */
+public type CellAccess {
+  /** `() -> Value`: the object in the cell, with a count the caller owns. */
+  case Read
+  /** `(value: Value) -> Void`: the entry's binding goes into the cell, which takes the count it is handed. */
+  case Write
 }
 
 /** One basic block: the instructions that run in it, in order, and how it ends. */

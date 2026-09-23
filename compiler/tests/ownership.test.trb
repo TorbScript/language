@@ -728,6 +728,34 @@ const probeSource = r"""
   }
   """
 
+/** A `File` as `std/fs` declares it, as far as the test below needs it: a `native shared type` that implements `Close`. */
+const fileLibrary = [
+  "std/fs/project.trb": r"""
+    name "std/fs"
+    """,
+  "std/fs/src/lib.trb": r"""
+    public native shared type File with Close {
+      native var fn close()
+    }
+    """,
+]
+
+/** Two files held by two bindings of one block. */
+const fileSource = r"""
+  use File from "std/fs"
+
+  fn touch(file: File) {
+    print "touched"
+  }
+
+  fn twoFiles(one: File, other: File) {
+    const first = one
+    const second = other
+    touch first
+    touch second
+  }
+  """
+
 group "The ends of scope: a binding with a destructor is released where its block ends" {
   test "the lowering ends the scope of every such binding, the last declared first" {
     assert(
@@ -880,6 +908,31 @@ group "The ends of scope: a binding with a destructor is released where its bloc
         b4: # acme/app/src/main.trb:47 drop
           release %3
           jump b1
+        }"""
+    )
+  }
+
+  /**
+   * A `File` is an object of the runtime and no layout of the program, and it closes when it is released: `first` is
+   * read for the last time before `second`, and still released after it.
+   */
+  test "a file is released where its block ends, in reverse declaration order" {
+    assert(
+      ownedIrOf(fileSource, "t_acme_x2f_app_main_twoFiles", fileLibrary) == r"""
+        fn t_acme_x2f_app_main_twoFiles(one: File owned, other: File owned) -> Void {
+          slot %0 parameter one: File
+          slot %1 parameter other: File
+          slot %2 local first: File
+          slot %3 local second: File
+          slot %4 temporary: Void
+        b0: # acme/app/src/main.trb:7 body
+          %2 = move %0
+          %3 = move %1
+          call t_acme_x2f_app_main_touch(%2 borrowed) at acme/app/src/main.trb:10:3
+          call t_acme_x2f_app_main_touch(%3 borrowed) at acme/app/src/main.trb:11:3
+          release %3
+          release %2
+          return
         }"""
     )
   }

@@ -1,0 +1,57 @@
+use File, IoError from "std/fs"
+use Process from "std/process"
+
+/**
+ * A `File` is a `Close` object like any `shared type` that implements `Close`: a binding of one is released where its
+ * block ends, in reverse declaration order, and not after its last use - so the handle stays open for the whole block
+ * that named it, the moment it closes is a line of the source, and nothing is left open when the program ends
+ * (docs/design/DESTRUCTORS.md 2a). A file inside a value is released with the value, at the end of the value's block.
+ *
+ * What it pins: files opened in nested blocks, in a loop and inside a record are all read, and the leak gate finds no
+ * block and no handle left at the end. The order of the releases is pinned by the IR of the group "The ends of scope"
+ * of `compiler/tests/ownership.test.trb`; a program cannot observe the close of a handle it no longer reads.
+ *
+ * It works in a scratch directory under the working directory (`build/` is ignored by git).
+ */
+
+/** A file with a name beside it. */
+type Labelled {
+  var file: File
+  label: String
+}
+
+fn run(): Result<Int, IoError> {
+  const directory = "build/native-tests-scratch/file-scope-end"
+  File.createDirectory(directory)?
+  const path = "{directory}/text.txt"
+  File.writeText(path, "one\ntwo\n")?
+
+  var outer = File.open(path)?
+  var inner = File.open(path)?
+  const outerText = outer.readAll()?
+  const innerText = inner.readAll()?
+  print "outer read {outerText.byteLength()}"
+  print "inner read {innerText.byteLength()}"
+  print "both are still held here, and released after this line, inner first"
+
+  for round in 0..3 {
+    var opened = File.open(path)?
+    const text = opened.readAll()?
+    print "round {round}: {text.byteLength()}"
+  }
+
+  if true {
+    var kept = Labelled(File.open(path)?, "kept")
+    const text = kept.file.readAll()?
+    print "{kept.label}: {text.byteLength()}"
+  }
+  Ok 0
+}
+
+match run() {
+  Ok(code) => Process.exit code
+  Fail(problem) => {
+    printError "error: {problem}"
+    Process.exit 1
+  }
+}

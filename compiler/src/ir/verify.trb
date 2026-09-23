@@ -59,6 +59,20 @@ public fn verifyFunction(program: IrProgram, function: IrFunction): List<String>
     }
     return found
   }
+  // An access to an entry cell is a signature and the cell it names: the storage is the back end's
+  if const .EntryCell(_, access) = function.kind {
+    if !function.blocks.isEmpty() {
+      found.append "{function.name}: an access to an entry cell has no body"
+    }
+    const arity = match access {
+      .Read => 0
+      .Write => 1
+    }
+    if function.signature.parameters.length() != arity {
+      found.append "{function.name}: an access to an entry cell takes {arity} arguments"
+    }
+    return found
+  }
   verifyGraph program, function, found
   // A dataflow over a graph with a dangling edge says nothing useful, so the shape has to be right first
   if !found.isEmpty() {

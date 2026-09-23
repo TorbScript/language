@@ -81,7 +81,7 @@ if [ -f "$seed/$name" ] || [ -f "$seed/program.c" ]; then
   commit=$(cat "$seed/commit" 2>/dev/null || echo unknown)
   archive="$archives/$commit-$(date +%Y-%m-%d-%H%M%S)"
   mkdir -p "$archive"
-  for file in "$seed/$name" "$seed/program.c" "$seed/commit"; do
+  for file in "$seed/$name" "$seed/program.c" "$seed/program.hash" "$seed/commit"; do
     if [ -f "$file" ]; then
       cp -p "$file" "$archive/"
     fi
@@ -104,6 +104,12 @@ if [ -f "$seed/$name" ]; then
 fi
 cp -p "$binary" "$seed/$name"
 cp -p build/release/program.c "$seed/program.c"
+# The identity `torb run` keys its cache on goes with the C it is the hash of, and an old one never stays behind
+if [ -f build/release/program.hash ]; then
+  cp -p build/release/program.hash "$seed/program.hash"
+else
+  rm -f "$seed/program.hash"
+fi
 current=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)
 printf '%s\n' "$current" >"$seed/commit"
 rm -f "$seed/$name.old-$$" 2>/dev/null || true

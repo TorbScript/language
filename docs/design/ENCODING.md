@@ -110,7 +110,9 @@ error: `User` is not `Decode`
 ```
 
 One root cause, one message, and the field chain in the note — three levels deep if it has to be
-(`User.avatar → Image.palette → Color`).
+(`User.avatar -> Avatar.image -> Image`), followed by what is wrong about the type at its end. The checker's own
+wording is ``its field `avatar: Avatar` is not `Decode`: `User.avatar -> Avatar.image -> Image` ``, then the capsule
+notes of `Image`.
 
 `DecodeError` collects the field chain on its way out, so a message names where the input was wrong and not only what
 was wrong:
@@ -126,7 +128,11 @@ public type DecodeError with Show, Error {
 
 ```text
 price.currency: a value is needed
+items[2].price.currency: a value is needed
 ```
+
+A field follows a `.`, a position of a sequence or a tuple stands in brackets (`DecodeError.at`), and an entry of a map
+follows a `.` with its key.
 
 ## 3. Derivation
 
@@ -865,7 +871,7 @@ the new vocabulary to exist, so none of them is green without the others.
 | Slice | Status |
 |-------|--------|
 | 1 the vocabulary | **done** - `std/encoding/src/lib.trb`; every hand-written implementation in `std/`, `examples/` and `docs/` moved |
-| 2 the derivation rule | **done** for the rule (`isPassable` in `semantics/checker/derive.trb`). **Open:** the call-site message does not name the field chain yet |
+| 2 the derivation rule | **done** - the rule (`isPassable` in `semantics/checker/derive.trb`) and the call-site message with the field chain (`fieldChainNotesOf`) |
 | 3 `Describe` | **done** - derived, generated natively, doc comments embedded, a constant default written as data. A tuple has no `Describe` (it has no name and no field names) |
 | 4 `EncodedValue` and `Structure` | **done** - `std/encoding/src/values.trb`, `structure.trb`; `rendered` replaces the `describe` native |
 | 5 `Expression.captures()` | **done** in the declarations; the natives behind it are still the planned ones of `Expression` |
@@ -975,20 +981,20 @@ Technical choices the design left open, decided while building slices 1 to 6.
    `Describe`: a description of a closed constructor would describe something nobody can build.
 10. **A tuple has `Encode` and `Decode`, as a sequence of its positions, and no `Describe`**: `Structure` has no shape
     without a name and without field names.
+11. **A literal type decodes through its own check.** Its `Decode` is derived and not its base's: the base is read and
+    then passed through the literal type's `tryFrom` (`decodeLiteral`), and an instance whose type arguments mention a
+    literal type is an instance of its own (`literalArgumentsOf` in `ir/instances.trb`), because at run time the literal
+    type is its base.
+12. **A member of an `extend` is named after the whole target and the trait**, so `extend<Item> List<Item> with Decode`
+    and `extend<Item> Set<Item> with Decode` in one module are two functions (`extensionOf` in `ir/instantiate.trb`).
+    `Set`'s implementations stand beside `List`'s in `src/lib.trb`.
+13. **A generic requirement is met only by a member with as many type parameters of its own**:
+    `fn encode(var encoder: Encoder)` does not match `Encode` (`compareSignatures` in
+    `semantics/checker/implementation.trb`).
+14. **The call-site message names the chain** down to the type that is the root cause (`fieldChainNotesOf`), and a
+    `DecodeError` at run time names its fields and positions (`items[2].price`).
 
 ### Open, found while building it
 
-- **The call-site message of slice 2** still names the one field and not the chain (`User.avatar → Image.palette`).
-- **A literal type decodes natively as its base, without the check.** A generic instance is keyed by the IR type, and a
-  literal type is its base there, so `decode<Level>` is `decode<String>`; the checker's `decodeLiteral` path is never
-  reached by a binary. Keying an instance by the checker type, or lowering a literal type's members through its own
-  `tryFrom`, closes it (the literal type's `tryFrom` itself is not built natively either).
-- **Two members of `extend`s of two traits over one item, in one module, share a C name.** `List<Item>.decode` and
-  `Set<Item>.decode` were one symbol: the name of a member of an `extend` of a trait carries its module, its name and
-  its type arguments, but not the trait it extends (`symbolPathOf` in `ir/instantiate.trb`). `std/encoding` keeps
-  `Set`'s implementations in `src/set.trb` until the name carries the extended trait.
-- **A checker false negative:** an implementation written with the old signature (`fn encode(var encoder: Encoder)`)
-  is accepted as `Encode`'s `fn encode<Target: Encoder>(var target: Target)`; the requirement check does not compare a
-  member's own type parameters.
 - **`Decimal` in a format**: `Values.decimal`, `ValueDecoder.decimal` and `JsonEncoder.decimal` call the planned
   `Decimal` natives, so they are the three findings `ir --statistics .` counts for encoding until the runtime has one.

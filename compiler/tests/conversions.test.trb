@@ -286,7 +286,7 @@ group "`into()`, `tryInto()` and their traits" {
   test "the target comes from the expectation, and the conversion is the `From` of that target" {
     const source = "type Celsius \{\n  degrees: Float\n\}\n\ntype Fahrenheit \{\n  degrees: Float\n\}\n\n"
       + "extend Celsius with From<Fahrenheit> \{\n"
-      + "  fn from(value: Fahrenheit): Celsius \{\n    Celsius(value.degrees)\n  \}\n\}\n\n"
+      + "  static fn from(value: Fahrenheit): Celsius \{\n    Celsius(value.degrees)\n  \}\n\}\n\n"
       + "fn probe() \{\n  const warm: Celsius = Fahrenheit(100.0).into()\n\}"
     assert problems(source).isEmpty()
     const found = probe source
@@ -308,7 +308,7 @@ group "`into()`, `tryInto()` and their traits" {
   test "`Target.from(value)` is the ordinary static member of the implementation" {
     const source = "type Celsius \{\n  degrees: Float\n\}\n\ntype Fahrenheit \{\n  degrees: Float\n\}\n\n"
       + "extend Celsius with From<Fahrenheit> \{\n"
-      + "  fn from(value: Fahrenheit): Celsius \{\n    Celsius(value.degrees)\n  \}\n\}\n\n"
+      + "  static fn from(value: Fahrenheit): Celsius \{\n    Celsius(value.degrees)\n  \}\n\}\n\n"
       + "fn probe() \{\n  const warm = Celsius.from(Fahrenheit(100.0))\n\}"
     assert problems(source).isEmpty()
     const found = probe source
@@ -318,7 +318,7 @@ group "`into()`, `tryInto()` and their traits" {
   test "`TryFrom` gives back a `Result`, and it is an ordinary implementation as well" {
     const source = "type Port \{\n  value: Int\n\}\n\n"
       + "extend Port with TryFrom<Int, String> \{\n"
-      + "  fn tryFrom(value: Int): Result<Port, String> \{\n    Ok(Port(value))\n  \}\n\}\n\n"
+      + "  static fn tryFrom(value: Int): Result<Port, String> \{\n    Ok(Port(value))\n  \}\n\}\n\n"
       + "fn probe() \{\n  const port = Port.tryFrom(8080)\n\}"
     assert problems(source).isEmpty()
     const found = probe source
@@ -328,7 +328,7 @@ group "`into()`, `tryInto()` and their traits" {
   test "`tryInto()` reads its target and its failure out of the `Result` that is expected of it" {
     const source = "type Port \{\n  value: Int\n\}\n\n"
       + "extend Port with TryFrom<Int, String> \{\n"
-      + "  fn tryFrom(value: Int): Result<Port, String> \{\n    Ok(Port(value))\n  \}\n\}\n\n"
+      + "  static fn tryFrom(value: Int): Result<Port, String> \{\n    Ok(Port(value))\n  \}\n\}\n\n"
       + "fn probe() \{\n  const port: Result<Port, String> = 8080.tryInto()\n\}"
     assert problems(source).isEmpty()
     const found = probe source
@@ -352,7 +352,7 @@ group "`into()`, `tryInto()` and their traits" {
   test "nothing that says the target is a message of its own" {
     const source = "type Port \{\n  value: Int\n\}\n\n"
       + "extend Port with TryFrom<Int, String> \{\n"
-      + "  fn tryFrom(value: Int): Result<Port, String> \{\n    Ok(Port(value))\n  \}\n\}\n\n"
+      + "  static fn tryFrom(value: Int): Result<Port, String> \{\n    Ok(Port(value))\n  \}\n\}\n\n"
       + "fn probe() \{\n  const port = 8080.tryInto()\n\}"
     assert(problems(source) == ["The target of `tryInto()` is not known here"])
     assert(
@@ -397,7 +397,7 @@ group "`into()`, `tryInto()` and their traits" {
   test "a concrete receiver still goes through the `From` of the target, once" {
     const source = "type Celsius \{\n  degrees: Float\n\}\n\ntype Fahrenheit \{\n  degrees: Float\n\}\n\n"
       + "extend Celsius with From<Fahrenheit> \{\n"
-      + "  fn from(value: Fahrenheit): Celsius \{\n    Celsius(value.degrees)\n  \}\n\}\n\n"
+      + "  static fn from(value: Fahrenheit): Celsius \{\n    Celsius(value.degrees)\n  \}\n\}\n\n"
       + "fn cool(): Fahrenheit \{\n  Fahrenheit(32.0)\n\}\n\n"
       + "fn probe() \{\n  const warm: Celsius = cool().into()\n\}"
     assert problems(source).isEmpty()
@@ -427,15 +427,15 @@ group "`tryInto()` under a `?`" {
   /** `Port` from text, and from a number with a failure of its own, for the "more than one way" message. */
   const fromText = "type Port \{\n  number: Int\n\}\n\n"
     + "extend Port with TryFrom<String, String> \{\n"
-    + "  fn tryFrom(value: String): Result<Port, String> \{\n    Ok(Port(1))\n  \}\n\}\n\n"
+    + "  static fn tryFrom(value: String): Result<Port, String> \{\n    Ok(Port(1))\n  \}\n\}\n\n"
 
   const alsoFromNumber = fromText
     + "extend Port with TryFrom<Int64, Int64> \{\n"
-    + "  fn tryFrom(value: Int64): Result<Port, Int64> \{\n    Ok(Port(value))\n  \}\n\}\n\n"
+    + "  static fn tryFrom(value: Int64): Result<Port, Int64> \{\n    Ok(Port(value))\n  \}\n\}\n\n"
 
   const twiceFromText = fromText
     + "extend Port with TryFrom<String, Int64> \{\n"
-    + "  fn tryFrom(value: String): Result<Port, Int64> \{\n    Ok(Port(2))\n  \}\n\}\n\n"
+    + "  static fn tryFrom(value: String): Result<Port, Int64> \{\n    Ok(Port(2))\n  \}\n\}\n\n"
 
   test "an annotated binding says the target, and the failure is the one implementation" {
     const source = fromText

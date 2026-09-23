@@ -27,6 +27,7 @@ use capturedVariablesOf, capturedVariablesIn from "./closure"
 use staticOfConstant from "../constant"
 use taskValueOf as declaredTaskValueOf from "../../semantics/checker/statement"
 use openScope, closeScope from "./scope"
+use writeEntryCell from "./cell"
 
 /** The body of one instance. The stub is replaced only where everything in it could be lowered. */
 public fn lowerInstance(var lowering: Lowering, instance: Instance) {
@@ -339,20 +340,22 @@ fn lowerTopLevel(var lowering: Lowering, var builder: FunctionBuilder, statement
   }
   lowerStatement lowering, builder, statement
   if const .Bind(binding) = statement.kind {
-    rememberEntryLocal lowering, binding
+    rememberEntryLocal lowering, builder, binding
   }
 }
 
 /**
  * Every name a top-level binding declares, a destructuring one included: `const (quotient, remainder) = ...` is two
- * locals of the entry function, each found under the span of its own name, exactly like `const quotient = ...`.
+ * locals of the entry function, each found under the span of its own name, exactly like `const quotient = ...`. A name
+ * whose value is a shared object goes into its entry cell as well (`ir/lower/cell.trb`).
  */
-fn rememberEntryLocal(var lowering: Lowering, binding: Binding) {
+fn rememberEntryLocal(var lowering: Lowering, var builder: FunctionBuilder, binding: Binding) {
   const module = lowering.module
   for name in boundNamesOf(binding.pattern) {
     if const Some(symbol) = lowering.checker.resolvedName(module, name.span) {
       if const Some(slot) = lowering.slots.get(name.span) {
         lowering.entryLocals.set symbol.value, slot
+        writeEntryCell lowering, builder, symbol, slot
       }
     }
   }

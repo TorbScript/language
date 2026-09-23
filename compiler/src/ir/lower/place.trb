@@ -39,6 +39,7 @@ use lowerExpression, lowerValue, voidSlot, abandonedSlot, fieldIndexOf from "./e
 use bindingReferenceOf, emitClosureCall from "./closure"
 use Dispatched, dispatchedOn, resultTypeOf from "./generic"
 use lowerDispatched from "./call"
+use entryCellType, readEntryCell from "./cell"
 
 /**
  * A place of the IR: the path, the type it ends in - which is what a write through it has to produce - and the elements
@@ -353,6 +354,12 @@ fn rootReferenceOf(
       match lowering.entryLocals.get(symbol.value) {
         Some(found) => Some PlacePath(Reference(found, []), builder.typeOfSlot(found))
         None => {
+          // A shared object of the entry file: a path into it goes through the one object, whoever holds a count of it
+          if const Some(held) = entryCellType(lowering, symbol) {
+            const object = addTemporary builder, held
+            const _ = readEntryCell lowering, builder, symbol, object
+            return Some PlacePath(Reference(object, []), held)
+          }
           reportUnsupported lowering, "{what} through a top-level `var` read from a function", at
           None
         }

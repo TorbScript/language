@@ -517,9 +517,15 @@ public fn symbolPathOf(checker: Checker, symbol: SymbolId): SymbolPath {
     }
     break
   }
-  const implemented = implementedTraitOf checker, symbol
-  if !implemented.isEmpty() {
-    owners.append implemented
+  if const Some(index) = extensionOf(checker, symbol) {
+    const implementation = checker.implementations.all[index]
+    // `extend Holder<Int>` and `extend Holder<String>` declare members of one owner: the target itself tells them apart
+    if !owners.isEmpty() && !isPlainTarget(checker, implementation.target) {
+      owners.set(owners.length() - 1, describeType(checker.types, checker.symbols, implementation.target))
+    }
+    if const Some(capability) = implementation.capability {
+      owners.append describeType(checker.types, checker.symbols, capability)
+    }
   }
   match declared.module {
     Some(module) => {
@@ -533,25 +539,23 @@ public fn symbolPathOf(checker: Checker, symbol: SymbolId): SymbolPath {
 }
 
 /**
- * `Multiply<Scale>` for a member of `extend Board with Multiply<Scale>`: the applied trait, as one more owner of the
- * member's name, where the trait has arguments and the member is written in an `extend`. Empty for everything else.
+ * The `extend` a member is written in, as an index of the implementation table, or `None` for a member of the body of
+ * a `type` or a `trait` and for everything that is no member at all.
  *
- * `extend Board with Multiply<Scale>` and `extend Board with Multiply<Board>` both declare `multiply` on `Board`, and
- * two `From`s on one type both declare `from`: the owner and the name are the same, and only the arguments of the trait
- * tell the two bodies apart. A member of the body of a `type` needs nothing, because one body cannot declare a name
- * twice. `extend Board with A<X>, B<Y>` is one set of members for both, named after the first.
+ * A member of an `extend` is named after the whole of what it extends and the trait it implements, because several
+ * `extend`s of one module can declare the same name on one owner: `extend Board with Multiply<Scale>` and
+ * `extend Board with Multiply<Board>` both declare `multiply`, two `From`s on one type both declare `from`,
+ * `extend<Item> List<Item> with Decode` and `extend<Item> Set<Item> with Decode` both declare `decode` over one item
+ * type, and `extend Holder<Int>` and `extend Holder<String>` both declare members of `Holder`. A member of the body of a
+ * `type` needs nothing, because one body cannot declare a name twice. `extend Board with A<X>, B<Y>` is one set of
+ * members for both, named after the first.
  */
-fn implementedTraitOf(checker: Checker, symbol: SymbolId): String {
-  const site = match checker.siteOf(symbol) {
-    Some(found) => found
-    None => {
-      return ""
-    }
-  }
+fn extensionOf(checker: Checker, symbol: SymbolId): Int? {
+  const site = checker.siteOf(symbol)?
   const owner = match site.kind {
     .Owned(Some(found), _, _) => found
     _ => {
-      return ""
+      return None
     }
   }
   const name = checker.symbolAt(symbol).name
@@ -560,19 +564,6 @@ fn implementedTraitOf(checker: Checker, symbol: SymbolId): String {
   candidates.appendAll table.open
   for index in candidates {
     const implementation = table.all[index]
-    const capability = match implementation.capability {
-      Some(found) => found
-      None => {
-        continue
-      }
-    }
-    if const .Nominal(_, arguments) = checker.types.form(capability) {
-      if arguments.isEmpty() {
-        continue
-      }
-    } else {
-      continue
-    }
     if implementation.members.get(name) != Some(symbol) {
       continue
     }
@@ -580,9 +571,48 @@ fn implementedTraitOf(checker: Checker, symbol: SymbolId): String {
     if !table.bySpan.containsKey("{implementation.module.value}:{implementation.at.start}") {
       continue
     }
-    return describeType checker.types, checker.symbols, capability
+    return Some index
   }
-  ""
+  None
+}
+
+/**
+ * Whether the target of an `extend` is its head over nothing but distinct parameters of its own - `List<Item>`,
+ * `Pair<First, Second>`, `Point` - so that the type arguments of an instance say everything about it. A target with a
+ * concrete argument (`Holder<Int>`) is named in full instead.
+ */
+fn isPlainTarget(checker: Checker, target: TypeId): Bool {
+  const arguments = match checker.types.form(target) {
+    .Nominal(_, found) => found
+    .Traits(bounds) => {
+      if bounds.length() != 1 {
+        return false
+      }
+      match checker.types.form(bounds[0]) {
+        .Nominal(_, found) => found
+        _ => {
+          return false
+        }
+      }
+    }
+    _ => {
+      return true
+    }
+  }
+  var seen: List<Int> = []
+  for argument in arguments {
+    const parameter = match checker.types.form(argument) {
+      .Parameter(found) => found
+      _ => {
+        return false
+      }
+    }
+    if seen.contains(parameter.value) {
+      return false
+    }
+    seen.append parameter.value
+  }
+  true
 }
 
 /** `list` for `std/collections/src/list.trb`; `main` for a script that belongs to no project. */
@@ -622,11 +652,23 @@ fn ownerSymbolOf(checker: Checker, symbol: SymbolId): SymbolId? {
   }
 }
 
-/** `Point` from `Point`, `Holder<Item>` from the nominal, and the trait from the `Self` of a trait. */
+/**
+ * `Point` from `Point`, `Holder<Item>` from the nominal, the trait from the `Self` of a trait, and `List` from the
+ * trait-typed target of `extend<Item> List<Item>`.
+ */
 fn symbolOfOwnerType(checker: Checker, owner: TypeId): SymbolId? {
   match checker.types.form(owner) {
     .Nominal(symbol, _) => Some symbol
     .Parameter(parameter) => checker.types.parameter(parameter).owner
+    .Traits(bounds) => {
+      if bounds.length() != 1 {
+        return None
+      }
+      if const .Nominal(symbol, _) = checker.types.form(bounds[0]) {
+        return Some symbol
+      }
+      None
+    }
     _ => None
   }
 }

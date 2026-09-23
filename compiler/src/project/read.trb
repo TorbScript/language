@@ -84,7 +84,10 @@ fn isSkippedDirectory(name: String): Bool {
   name.startsWith "."
 }
 
-/** Every `.trb` file below the path. Hidden directories are skipped, as in `torb parse`. */
+/**
+ * Every `.trb` file below the path. Hidden directories are skipped, as in `torb parse`, and so is every `build`
+ * directory: it holds what a build, a test run or a docs check wrote, and never a source.
+ */
 fn readBelow(var files: Map<String, String>, path: String): Result<Void, IoError> {
   if !File.isDirectory(path) {
     if path.endsWith(".trb") && !files.containsKey(path) {
@@ -95,7 +98,7 @@ fn readBelow(var files: Map<String, String>, path: String): Result<Void, IoError
   for entry in File.list(path)? {
     const child = joinPath path, entry
     if File.isDirectory(child) {
-      if !isSkippedDirectory(entry) {
+      if !isSkippedDirectory(entry) && entry != "build" {
         readBelow(files, child)?
       }
     } else if entry.endsWith(".trb") && !files.containsKey(child) {

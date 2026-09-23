@@ -39,16 +39,19 @@ when the manifest says `input "src/main.trb"`. A file that nothing imports may h
 ### The cache
 
 The binary goes into `build/run/<profile>/<key>/` under the workspace root, and `<key>` is a hash of **every file the
-front end read**, with its path and its text, plus the entry that was named. The profile is `dev` unless the command
+front end read**, with its path and its text, plus the entry that was named and **the toolchain that builds it**: the
+hash of the compiler's own C that `torb build` wrote beside the running `torb` (`program.hash`, or `program.c` where
+only that is there) and the text of every C file and header of the runtime it links. The profile is `dev` unless the command
 line says `--profile release` or `--release` in front of the path. An unchanged program is therefore not rebuilt: the
 first run costs a build, every run after it costs a process start.
 
 Keying on every file that was read rather than on the ones the program imports is the same trade
 [`check`](torb-check.md) makes when it reads the whole workspace: an edit to a file the program does not import costs
 one rebuild, and in exchange "is this binary current" is a question about bytes that were read anyway instead of about
-a dependency graph that is only known after the check. The cache is a directory and nothing else - `rm -r build/run`
-is how it is cleared, and a toolchain that was upgraded while the program stayed the same is the one case that asks
-for it.
+a dependency graph that is only known after the check. A `torb` that was built again, or a runtime that was edited,
+is another key, so a binary an older compiler built is never the one that starts. The cache is a directory and nothing
+else - `rm -r build/run` is how it is cleared. A `torb` copied somewhere without the `program.c` it was built from is
+known by its path alone, which is the one case that asks for it.
 
 ### Arguments
 

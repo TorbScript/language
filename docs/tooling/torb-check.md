@@ -33,7 +33,8 @@ torb check [path]...     Check projects, workspaces or single files (default: th
 
 A path on the command line can be a single file or a directory. `check` walks up from it looking for a `project.trb`;
 the outermost one it finds is the workspace root, and every `.trb` file below that root is read, because that is
-where the standard library the path depends on lives. A file with no `project.trb` above it at all is checked alone,
+where the standard library the path depends on lives - except in a hidden directory and in a `build` directory, which
+holds what a build, a test run or a docs check wrote and never a source. A file with no `project.trb` above it at all is checked alone,
 against the default prelude.
 
 A file that is named directly is checked even where no project would sweep it in - at the root of a workspace, beside

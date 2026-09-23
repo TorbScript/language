@@ -23,6 +23,7 @@ use Lowering, newLowering from "./context"
 use lowerEntryFunction, lowerInstance, seedModule from "./function"
 use lowerGenerated from "./derive"
 use requestCloseFunctions from "./scope"
+use dropUnreadCells from "./cell"
 
 /** The whole lowering of a checked workspace: the entry functions first, then everything the worklist reaches. */
 public fn lowerWorkspace(
@@ -48,6 +49,8 @@ public fn lowerWorkspace(
   while requestCloseFunctions(lowering) {
     drainPending lowering
   }
+  // Only once every function is lowered is it known which entry cells a function reads
+  dropUnreadCells lowering
   finishProgram lowering.program
   // Both back ends read the IR after this, so a value whose concrete type the program decides is that type from here
   // on: the boxes and the indirect calls of docs/PERFORMANCE.md finding 2 are gone before anything else looks

@@ -65,12 +65,11 @@ public fn generatedFunctionOf(
   if const .Conversion = kind {
     arguments.append built.parameters[0].annotation
   }
-  // Every literal type of one base is that base at run time, so its members are what tells two `tryFrom`s apart
-  if const .LiteralParse = kind {
-    if const .Literals(_, values) = lowering.checker.types.form(subject) {
-      for value in values {
-        arguments.append lowering.program.internType(IrType.ConstantValue(value, target))
-      }
+  // Every literal type of one base is that base at run time, so its members are what tells two `tryFrom`s - and two
+  // `decode`s, which check against the values - apart
+  if const .Literals(_, values) = lowering.checker.types.form(subject) {
+    for value in values {
+      arguments.append lowering.program.internType(IrType.ConstantValue(value, target))
     }
   }
   // An encoding form is one body per format as well: the format is the member's own type parameter

@@ -58,7 +58,8 @@ fn f(mode: "tcp" | "udp" = "tcp") { ... } inline, in a signature
 
 4. **`parse`, `Show`, `Equals`, `Hash`, `Encode` and `Decode` are generated for every literal type**, the same list a
    declared `type` gets. `parse` returns `Result<Self, LiteralParseError>`; going back to the base type is
-   interpolation or `.into()`.
+   interpolation or `.into()`. `Decode` reads the base and then checks it against the members, with the same
+   `LiteralParseError` - the base's own `decode` would let any text in.
 
 5. **Two literal types with the same members are the same type.** The identity is structural, so a literal type has
    no owner of its own the way a declared `type` does.

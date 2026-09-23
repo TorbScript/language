@@ -19,7 +19,7 @@
 
 use LiteralValue from "../../semantics/checker/type"
 use IrProgram, IrFunction, IrTypeId, LayoutId, StaticId, StaticValue, FunctionId from "../../ir/ir"
-use Slot, Instruction, WitnessTable, WitnessTableId, Ownership, FunctionKind from "../../ir/ir"
+use Slot, Instruction, WitnessTable, WitnessTableId, Ownership, FunctionKind, CellAccess from "../../ir/ir"
 use taskMachineOf from "../../ir/suspension"
 use ElementId, ElementDescriptor from "../../ir/ir"
 use Layout, FieldLayout, containsCountedType from "../../ir/layout"
@@ -80,6 +80,9 @@ public fn emitProgram(program: IrProgram, entries: List<ProgramEntry>): Emission
   emitWitnessTables emission, program
   emitClosureThunks emission, program, functions
   emitDefinitions emission, program, functions, prototypes
+  if !entries.isEmpty() {
+    emitEntryCellRelease emission, program, functions
+  }
   emitMain emission, entries, functions
   emission
 }
@@ -1973,6 +1976,10 @@ fn emitDefinitions(
       emitConstantCell emission, program, function, initializer
       continue
     }
+    if const .EntryCell(cell, access) = function.kind {
+      emitEntryCell emission, program, function, cell, access
+      continue
+    }
     const body = bodyOf program, function, prototypes, keeping, closing
     var statements = bodyStatements emission, program, body
     if callsProgramCode(program, function) {
@@ -2095,6 +2102,73 @@ fn emitConstantCell(
   write emission, CDeclaration.Definition(comment, signatureHeadOf(program, function), statements)
 }
 
+/**
+ * One access to an entry cell (`FunctionKind.EntryCell`): the cell is a file-scope `static` with a count of its own. A
+ * read hands out one more count, a write keeps the one it is handed, and [emitEntryCellRelease] gives the cell's back
+ * once the program is done.
+ */
+fn emitEntryCell(var emission: Emission, program: IrProgram, function: IrFunction, cell: String, access: CellAccess) {
+  var statements: List<CStatement> = []
+  match access {
+    .Read => {
+      if const Some(retain) = retainStatement(program, function.signature.result, CExpression.Name(cell)) {
+        statements.append retain
+      }
+      statements.append CStatement.Return(Some(CExpression.Name(cell)))
+    }
+    .Write => {
+      const value = CExpression.Name slotNameOf(function, Slot(0))
+      statements.append CStatement.Assignment(CExpression.Name(cell), value)
+    }
+  }
+  const comment = "{function.name}: the entry cell {cell}"
+  write emission, CDeclaration.Definition(comment, signatureHeadOf(program, function), statements)
+}
+
+/** What gives the count of every entry cell back, from `main`. A name no mangled name can be: those start with a prefix. */
+const entryCellReleaseName = "entry_cells_release"
+
+/** Every entry cell of the program once, with the type it holds, in the order the functions are emitted. */
+fn entryCellsOf(functions: List<IrFunction>): List<(String, IrTypeId)> {
+  var found: List<(String, IrTypeId)> = []
+  var seen: Set<String> = []
+  for function in functions {
+    if const .EntryCell(cell, access) = function.kind {
+      if seen.contains(cell) {
+        continue
+      }
+      seen.insert cell
+      const held = match access {
+        .Read => function.signature.result
+        .Write => function.signature.parameters[0].annotation
+      }
+      found.append((cell, held))
+    }
+  }
+  found
+}
+
+/**
+ * The one function that releases every entry cell, called by `main` once the program is done: the cell's count is the
+ * last one, so this is where the object of a top-level `const` of the entry file goes - and runs its `close()`, if it
+ * has one.
+ */
+fn emitEntryCellRelease(var emission: Emission, program: IrProgram, functions: List<IrFunction>) {
+  const cells = entryCellsOf functions
+  if cells.isEmpty() {
+    return
+  }
+  var statements: List<CStatement> = []
+  for (cell, held) in cells {
+    if const Some(release) = releaseStatement(program, held, CExpression.Name(cell)) {
+      statements.append release
+    }
+    statements.append CStatement.Assignment(CExpression.Name(cell), CExpression.Literal("NULL"))
+  }
+  const comment = "The count every entry cell holds, given back once the program is done"
+  write emission, CDeclaration.Definition(comment, "static void {entryCellReleaseName}(void)", statements)
+}
+
 fn cellNameOf(function: IrFunction): String {
   "{function.name}_cell"
 }
@@ -2121,6 +2195,16 @@ fn emitConstantCellStorage(var emission: Emission, program: IrProgram, functions
       write emission, CDeclaration.Variable("static {spelling}", cellNameOf(function))
       write emission, CDeclaration.Variable("static bool", readyNameOf(function))
     }
+  }
+  // The entry cells, one per cell however many accesses of it are in the program
+  const cells = entryCellsOf functions
+  if !cells.isEmpty() {
+    write(emission, CDeclaration.Comment(
+      "The one object of every top-level const of an entry file that holds a shared object, with a count of its own."
+    ))
+  }
+  for (cell, held) in cells {
+    write emission, CDeclaration.Variable("static {valueTypeOf(program, held)}", cell)
   }
 }
 
@@ -2192,6 +2276,10 @@ fn emitMain(var emission: Emission, entries: List<ProgramEntry>, functions: List
   // What is still running when the program ends is cancelled and runs to its stop, so every frame is released
   if isTasked {
     lines.append "torb_scheduler_finish();"
+  }
+  // The entry cells hold a count until nothing can read them any more: after the last task
+  if !entryCellsOf(functions).isEmpty() {
+    lines.append "{entryCellReleaseName}();"
   }
   // The summary of the run is written before the leak report, so the two reports read in the order they happened
   if isTestRun {

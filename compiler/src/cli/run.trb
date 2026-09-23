@@ -17,7 +17,8 @@ use Process from "std/process"
 use SourceTree from "../project/source-tree"
 use readSourceTree from "../project/read"
 use normalizePath, parentPath, joinPath, pathName, pathDepth from "../project/path"
-use BuildOptions, Profile, build, buildFailedCode, binaryNameOf from "./build"
+use BuildOptions, Profile, build, buildFailedCode, binaryNameOf, identityFileName from "./build"
+use findRuntime from "../project/toolchain"
 
 /** What `torb run` needs from the command line. */
 public type RunOptions {
@@ -43,7 +44,8 @@ public fn runProgram(options: RunOptions): Result<Int, IoError> {
   }
   const entry = normalizePath(File.absolutePath(options.path)?)
   const tree = readSourceTree([options.path])?
-  const directory = joinPath cacheDirectoryOf(entry), "{options.profile.name()}/{cacheKeyOf(tree, entry)}"
+  const key = cacheKeyOf tree, entry, toolchainKeyOf([options.path])
+  const directory = joinPath cacheDirectoryOf(entry), "{options.profile.name()}/{key}"
   const output = joinPath directory, binaryNameOf(entry)
   if const None = builtBinary(output) {
     const built = build(
@@ -70,22 +72,18 @@ public fn runProgram(options: RunOptions): Result<Int, IoError> {
 }
 
 /**
- * What the cache is keyed by: every file the front end would read, with its path and its text, and the entry that was
- * named. A file that changed anywhere in the workspace is a different key and therefore a different directory, so a
- * stale binary is never the one that is started.
+ * What the cache is keyed by: every file the front end would read, with its path and its text, the entry that was
+ * named, and the toolchain that builds it ([toolchainKeyOf]). A file that changed anywhere in the workspace is a
+ * different key and therefore a different directory, and so is another `torb` or another runtime, so a stale binary is
+ * never the one that is started.
  *
  * Reading more than the program reaches is deliberate and the same trade [readSourceTree] makes: an edit to a file the
  * program does not import costs one rebuild, and in exchange "is this binary current" is a question about bytes that
  * were read anyway rather than about a dependency graph that is only known after the check.
- *
- * # Pitfalls
- *
- * The key says nothing about the `torb` that builds. Inside this repository that is covered, because the compiler's
- * own sources are files of the workspace; for a program somewhere else, a new toolchain over an unchanged program
- * reuses the binary the old one built. The cache is `build/run/` and is thrown away by deleting it.
+ * The cache is `build/run/` and is thrown away by deleting it.
  */
-fn cacheKeyOf(tree: SourceTree, entry: String): Int {
-  var seed = entry.hash()
+fn cacheKeyOf(tree: SourceTree, entry: String, toolchain: Int): Int {
+  var seed = combineHashes entry.hash(), toolchain
   for path in tree.paths() {
     seed = combineHashes seed, path.hash()
     const text = tree.text(path) ?? ""
@@ -93,6 +91,64 @@ fn cacheKeyOf(tree: SourceTree, entry: String): Int {
   }
   // A directory is named after the key, and a name that starts with `-` reads as a flag wherever the path is typed
   seed.bitwiseAnd 0x7FFFFFFFFFFFFFFF
+}
+
+/**
+ * Which toolchain builds: the compiler that runs, by the hash of its own C that `torb build` wrote beside it
+ * (`program.hash`, or `program.c` itself where only that is there), and every C file of the runtime it links. A
+ * `torb` that was bootstrapped again over an unchanged program is a different key, and so is an edit of the runtime.
+ *
+ * # Pitfalls
+ *
+ * A `torb` copied somewhere without the `program.c` it was built from is known by its path alone, and a new one copied
+ * over it at the same path reuses what the old one built. `tools/bootstrap.sh` and `tools/refresh-seed.sh` keep the two
+ * files together.
+ */
+fn toolchainKeyOf(paths: List<String>): Int {
+  var seed = 0
+  if const Some(executable) = Process.executablePath() {
+    const beside = parentPath normalizePath(executable)
+    seed = combineHashes seed, compilerIdentityOf(executable, beside)
+  }
+  if const Some(runtime) = findRuntime(paths) {
+    seed = combineHashes seed, runtimeIdentityOf(runtime)
+  }
+  seed
+}
+
+fn compilerIdentityOf(executable: String, directory: String): Int {
+  for name in [identityFileName, "program.c"] {
+    const path = joinPath directory, name
+    if File.exists(path) {
+      if const Ok(text) = File.readText(path) {
+        return text.hash()
+      }
+    }
+  }
+  executable.hash()
+}
+
+/** The texts of the runtime's C files and headers, with their names: what every binary is linked against. */
+fn runtimeIdentityOf(runtime: String): Int {
+  var seed = 0
+  for directory in [runtime, joinPath(runtime, "include")] {
+    const names = match File.list(directory) {
+      Ok(found) => found
+      Fail(_) => []
+    }
+    for name in names {
+      if !name.endsWith(".c") && !name.endsWith(".h") {
+        continue
+      }
+      const text = match File.readText(joinPath(directory, name)) {
+        Ok(found) => found
+        Fail(_) => ""
+      }
+      seed = combineHashes seed, name.hash()
+      seed = combineHashes seed, text.hash()
+    }
+  }
+  seed
 }
 
 /**

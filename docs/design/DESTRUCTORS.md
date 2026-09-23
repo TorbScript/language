@@ -537,9 +537,11 @@ of `benchmarks/` is byte for byte what it was. Every `close()` call `std` had wa
 (`Pushing`, `Remapped`, `Buffered` of `sink.trb`; `Pulling`, `Stepping`, `Remapped`, `Staged`, `Produced`,
 `Checked` of `source.trb`; `Body` of `std/http`; `File.write` of `std/fs`), and the release of the field makes each of
 those closes now. A slice of a list whose elements may hold `Close` copies, and a temporary that only one path of its
-statement made is released at the end of that statement through a cleared slot (section 2a). Open: a `native shared
-type` (`File`, `Child`) closes through the drop function of the runtime (`torb_file_drop`) once the back end lowers
-it - it does not yet. Tests: `tests/conformance/destructor-*.trb`, the group "The ends of scope" of
+statement made is released at the end of that statement through a cleared slot (section 2a). A `File` of `std/fs` is
+an object the runtime owns (`RuntimeKind.FileHandle`, no layout of the program) and closes through its drop function
+(`torb_file_drop`): a binding of one, and a value that holds one, is released at the end of its scope like any other
+`Close` object (`ir/closing.trb`, `mayHoldClose` in `ir/lower/scope.trb`). Open: `Child` of `std/process`, which the
+back end does not lower yet. Tests: `tests/conformance/destructor-*.trb`, the group "The ends of scope" of
 `compiler/tests/ownership.test.trb`, and `runtime/tests/memory_test.c` and `list_test.c`.* `Close` becomes real: `semantics/checker` adds the restriction that only a
 `shared type` may implement it (section 5), rejects a direct call (section 3), and rejects keeping `self` inside
 `close()` (section 2a); `ir` computes "may contain `Close`" per layout to a fixpoint and marks a `Close`-implementing

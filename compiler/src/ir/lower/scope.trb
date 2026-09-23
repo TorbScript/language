@@ -20,7 +20,7 @@
  * closure captured is still held by its slot until its scope ends.
  */
 
-use IrTypeId, Slot, Instruction, LayoutId, TraitId from "../ir"
+use IrTypeId, Slot, Instruction, LayoutId, TraitId, RuntimeKind from "../ir"
 use FunctionBuilder, emit from "../build"
 use Lowering from "./context"
 use closeImplementers, traitsOfCloseImplementers from "../../semantics/checker/close"
@@ -199,7 +199,8 @@ fn holdsClose(var lowering: Lowering, id: IrTypeId, var search: Search): Bool {
     .FixedArray(item, _) => holdsClose lowering, item, search
     .Box(inner) => holdsClose lowering, inner, search
     .Lazy(inner) => holdsClose lowering, inner, search
-    .Runtime(_, arguments) => anyHoldsClose lowering, arguments, search
+    // A `File` is a `Close` object the runtime owns: its block is no layout of the program, and its drop closes it
+    .Runtime(kind, arguments) => kind == RuntimeKind.FileHandle || anyHoldsClose(lowering, arguments, search)
     .Object(bounds) => anyCloseTrait(lowering, bounds) || anyTraitArgumentHolds(lowering, bounds, search)
     _ => false
   }
