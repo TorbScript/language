@@ -9,7 +9,7 @@ use Span from "../../syntax/source"
 use Diagnostic from "../../syntax/diagnostic"
 use TypeId, TypeForm, TypeTable, TupleField, FunctionForm, ParameterForm, ParameterMode, ParameterId, Bound from "./type"
 use VariableId, Witness from "./type"
-use Checker, Adaptation, Resolution, Dispatch, CollectionLiteral from "./context"
+use Checker, Adaptation, Resolution, Dispatch, CollectionLiteral, VariableState from "./context"
 use Quotation, QuotationCapture, QuotationParameter from "./context"
 
 /**
@@ -266,13 +266,16 @@ fn settleVariables(var checker: Checker, start: Int) {
     }
     if state.solution.isNone() && !state.isReported {
       checker.markReported VariableId(index)
-      reportUnsolved checker, state.name, state.owner, state.at, state.isConst
+      reportUnsolved checker, state
     }
     index = index + 1
   }
 }
 
-fn reportUnsolved(var checker: Checker, name: String, owner: String, at: Span, isConst: Bool) {
+fn reportUnsolved(var checker: Checker, state: VariableState) {
+  const name = state.name
+  const owner = state.owner
+  const at = state.at
   // Only a collection literal makes a variable that belongs to no declaration
   if owner.isEmpty() {
     checker.reportHere(
@@ -283,7 +286,7 @@ fn reportUnsolved(var checker: Checker, name: String, owner: String, at: Span, i
   }
   // A `const` parameter is a *value*, so none of the three ways a type is pinned down applies to it: no argument of
   // the call mentions it, and the note that names them would send the reader looking in the wrong place
-  if isConst {
+  if state.isConst {
     checker.reportHere(
       Diagnostic.error("Cannot infer `{name}` of `{owner}`", at)
         .withNote(
@@ -293,10 +296,41 @@ fn reportUnsolved(var checker: Checker, name: String, owner: String, at: Span, i
     )
     return
   }
+  const written = typeArgumentsNote checker, state
   checker.reportHere(
     Diagnostic.error("Cannot infer `{name}` of `{owner}`", at)
-      .withNote("Annotate the closure parameter or the result, or write the type argument: `{owner}<{name}>(...)`")
+      .withNote("Annotate the closure parameter or the result, or write the type argument: `{owner}<{written}>(...)`")
   )
+}
+
+/**
+ * The type argument list a "Cannot infer" note spells out for one unsolved variable: every parameter of the call in
+ * its declared order, the ones already known written out and this one - and any other still-unsolved sibling - named
+ * after its parameter. Explicit type arguments fill parameters from the left, so naming only the one that stayed
+ * open would silently ask for the wrong one to be filled in wherever it is not the first.
+ */
+fn typeArgumentsNote(var checker: Checker, state: VariableState): String {
+  if state.siblings.isEmpty() {
+    return state.name
+  }
+  var parts: List<String> = []
+  for index in 0..state.siblings.length() {
+    if index == state.position {
+      parts.append state.name
+    } else {
+      parts.append describeArgument(checker, state.siblings[index])
+    }
+  }
+  parts.joined separator: ", "
+}
+
+/** A sibling type argument as it stands right now: its type where one was found, its own parameter name otherwise. */
+fn describeArgument(var checker: Checker, id: TypeId): String {
+  const resolved = resolveType checker, id
+  match checker.types.form(resolved) {
+    .Variable(variable) => checker.variableState(variable).name
+    _ => checker.describe resolved
+  }
 }
 
 /**

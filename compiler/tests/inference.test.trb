@@ -60,6 +60,18 @@ group "Unification variables" {
     assert problems(convert + shout + inBody("  const found = convert(\"loud\", shout)")).isEmpty()
   }
 
+  test "a note about a later parameter spells every parameter in order, the earlier ones already filled" {
+    // Explicit type arguments fill parameters from the left, so a note that only named `Output` would send the
+    // reader to write `convert<Output>(...)` - which fills `Input`, not `Output`
+    const source = "fn convert<Input, Output>(value: Input): Output \{\n  panic \"no\"\n\}\n\n"
+      + inBody("  const found = convert(3)")
+    assert(problems(source) == ["Cannot infer `Output` of `convert`"])
+    assert(
+      notes(source)
+        == ["Annotate the closure parameter or the result, or write the type argument: `convert<Int64, Output>(...)`"]
+    )
+  }
+
   test "the expected type of the binding decides what a call produces" {
     const source = "fn make<Value>(): Value \{\n  panic \"no\"\n\}\n\n"
       + inBody("  const found: Int = make()")

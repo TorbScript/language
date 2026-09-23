@@ -175,6 +175,28 @@ group "The calls that become commands" {
     unchanged "const x = f(a,)"
   }
 
+  test "an example in a doc comment is left exactly as it is written, even where it looks like a command call" {
+    // A doc comment is not part of the tree `walk` reads, so nothing inside of `/** ... */` is ever a call site - the
+    // parentheses of the example stay exactly as written, whatever the real code around it does
+    const source = "/**\n"
+      + " * Where the two segments cross.\n"
+      + " *\n"
+      + " *     print Segment2(Vector2(-1.0, 0.0), Vector2(1.0, 0.0)).intersection(across)\n"
+      + " */\n"
+      + "fn f() \{\n"
+      + "  print(Vector2(1.0, 0.0))\n"
+      + "\}"
+    const after = "/**\n"
+      + " * Where the two segments cross.\n"
+      + " *\n"
+      + " *     print Segment2(Vector2(-1.0, 0.0), Vector2(1.0, 0.0)).intersection(across)\n"
+      + " */\n"
+      + "fn f() \{\n"
+      + "  print Vector2(1.0, 0.0)\n"
+      + "\}"
+    assert(defaultCanon(source) == after)
+  }
+
 }
 
 group "The commands that get parentheses" {

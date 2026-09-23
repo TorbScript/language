@@ -280,6 +280,15 @@ public type VariableState {
    * stands for, for the bare `Vector2` of `Vector2.zero` (`noteDeclaredDefaults`).
    */
   var fallback: TypeId? = None
+  /**
+   * Every type argument of the call or construction this variable is one parameter of, in their declared order -
+   * itself included. Empty for the item type of an empty collection literal, which belongs to no declaration and
+   * has no order to spell. What "Cannot infer" suggests reads this: explicit type arguments fill parameters from
+   * the left, so a parameter before the unsolved one has to be named as well, not skipped.
+   */
+  var siblings: List<TypeId> = []
+  /** Where in `siblings` this variable's own slot is. */
+  var position: Int = 0
 }
 
 /** One binding a closure reads from the scope around it. The back ends need to know which ones, and which are `var`. */
@@ -1544,6 +1553,18 @@ public type Checker {
 
   fn variableState(variable: VariableId): VariableState {
     variables[variable.value]
+  }
+
+  /**
+   * Records the full, ordered type arguments of one call or construction on the fresh variable at `position` of
+   * them - a no-op where `id` was not a fresh variable to begin with (an explicit or an already-known argument).
+   * `reportUnsolved` reads this to spell every parameter in order instead of only the one that stayed open.
+   */
+  var fn attachSiblings(id: TypeId, siblings: List<TypeId>, position: Int) {
+    if const .Variable(variable) = types.form(id) {
+      const updated = variables[variable.value].copy(siblings: siblings, position: position)
+      variables.set variable.value, updated
+    }
   }
 
   fn solutionOf(variable: VariableId): TypeId? {

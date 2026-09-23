@@ -64,9 +64,7 @@ public fn check(
     const found = findWorkspace tree, path
     problems.appendAll found.problems
     for package in found.packages {
-      if !packages.any({ _.directory == package.directory }) {
-        packages.append package
-      }
+      addPackage packages, package
     }
   }
   const workspace = Workspace packages
@@ -133,6 +131,35 @@ public fn check(
   }
   files.sort({ _.path })
   Checked resolvedProgram.copy(symbols: checked.symbols), files, problems, resolutions, requested, checked
+}
+
+/**
+ * Adds one package `findWorkspace` found to the ones already collected, merging it into an existing package of the
+ * same directory rather than dropping it outright.
+ *
+ * A real project always answers the same [Package] for every path inside it, so merging changes nothing there. A
+ * standalone script is different: `findWorkspace` gives every one of them its own single-file package, named "" and
+ * rooted at the script's own directory, so two scratch files that sit next to each other - `torb check a.trb b.trb`
+ * outside of any project - produce two packages with the very same `directory`. Dropping the second of them, which is
+ * what comparing only `directory` used to do, silently stopped checking every named file after the first one that
+ * shared a directory with another.
+ */
+fn addPackage(var packages: List<Package>, package: Package) {
+  var index = 0
+  while index < packages.length() {
+    if packages[index].directory == package.directory {
+      var files = packages[index].files
+      for file in package.files {
+        if !files.contains(file) {
+          files.append file
+        }
+      }
+      packages.set index, packages[index].copy(files: files)
+      return
+    }
+    index = index + 1
+  }
+  packages.append package
 }
 
 /**

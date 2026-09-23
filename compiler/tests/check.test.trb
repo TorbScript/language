@@ -772,6 +772,36 @@ group "Preludes" {
   }
 }
 
+group "Several paths on the command line" {
+  // A script below no `project.trb` at all gets its own single-file package, named "" and rooted at its own
+  // directory (`findWorkspace`). Two such scripts named on the same command line can share that directory, and a
+  // package that only compares directories to the ones already found used to drop the second of them outright.
+
+  test "every named script is checked, even where several of them share a directory" {
+    const tree = SourceTree.of([
+      "scratch/a.trb": "fn broken(",
+      "scratch/b.trb": "fn also broken(",
+      "scratch/c.trb": "fn still broken(",
+    ])
+    const checked = check tree, ["scratch/a.trb", "scratch/b.trb", "scratch/c.trb"]
+    assert(checked.files.map({ _.path }).toList() == ["scratch/a.trb", "scratch/b.trb", "scratch/c.trb"])
+    for file in checked.files {
+      assert(!file.diagnostics.isEmpty())
+    }
+  }
+
+  test "a directory named alongside one of its own files still checks every file below it" {
+    const tree = SourceTree.of([
+      "scratch/wanted.trb": "fn broken(",
+      "scratch/other.trb": "fn also broken(",
+    ])
+    // `scratch/other.trb` is read as its own one-file package first; `scratch` is the same directory, and merging
+    // has to add `wanted.trb` to it rather than dropping the whole package because the directory is already known
+    const checked = check tree, ["scratch/other.trb", "scratch"]
+    assert(checked.files.map({ _.path }).toList() == ["scratch/other.trb", "scratch/wanted.trb"])
+  }
+}
+
 group "The summary line" {
   test "a count of one takes the singular, every other count the plural" {
     assert(counted(1, "problem") == "1 problem")
