@@ -16,6 +16,7 @@
  */
 
 #include "torb.h"
+#include "torb_pool.h"
 
 #include <string.h>
 
@@ -387,6 +388,39 @@ void torb_map_clear(torb_map *map) {
 
 void torb_map_make_unique(torb_map *map) {
   torb_map_prepare(map);
+}
+
+/*
+ * The copy at a crossing (torb_task.h): a table somebody else holds is copied first, which retains every key and value;
+ * then each live entry of the table that is now this map's alone is made private in its place. A private copy of a key
+ * is equal to it, so its hash and its bucket stay what they are.
+ */
+bool torb_map_privatize(torb_map *map, torb_privatize_function key, torb_privatize_function value) {
+  torb_map_storage *storage = map->storage;
+  uint32_t index;
+  if (storage == NULL || storage->header.count == TORB_IMMORTAL_COUNT) {
+    return true;
+  }
+  if (!torb_is_unique(storage)) {
+    torb_map_prepare(map);
+    torb_pool_count_copy();
+    storage = map->storage;
+  }
+  if (key == NULL && value == NULL) {
+    return true;
+  }
+  for (index = 0u; index < storage->entry_count; index += 1u) {
+    if (!torb_entry_alive(storage, index)) {
+      continue;
+    }
+    if (key != NULL && !key(torb_entry_key(storage, index))) {
+      return false;
+    }
+    if (value != NULL && !value(torb_entry_value(storage, index))) {
+      return false;
+    }
+  }
+  return true;
 }
 
 bool torb_map_take_out(torb_map *map, const void *key, void *out) {

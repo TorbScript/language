@@ -941,7 +941,8 @@ void torb_write_line_error(const char *bytes, size_t length);
  * One line per test to stdout, `  ok      <group> > <name>` or `  FAILED  <name>` plus the message and the site: the
  * format lives in the runtime so that the interpreter and the binary print one report. A body that panics is caught by
  * a recovery point around it and the next test runs - and because a recovered panic releases nothing, a run with a
- * failed test leaks what the aborted frames held.
+ * failed test leaks what the aborted frames held. The test ends once the tasks its body started have completed, and a
+ * panic in one of them, on whichever worker, is the test's failure in the same words (`torb_test_tasks_end`).
  */
 void torb_test_case(torb_text name, torb_closure body);
 void torb_test_group(torb_text name, torb_closure body);

@@ -1,0 +1,32 @@
+/**
+ * The same as `task-test-panic.trb`, in an entry file that waits: its top-level code is the main task, so every test
+ * body runs inside that task, which counts as running while the test waits for the tasks it started. A panic in one of
+ * them still fails just that test, the next test runs, and the top-level code goes on waiting after the tests. Four
+ * workers and one (`task-test-panic-waiting.workers`), the same bytes.
+ */
+use Process from "std/process"
+use test from "std/test"
+
+/** Doubles a number, and panics on the one number a test does not expect. */
+fn doubled(value: Int): Int {
+  if value == 37 {
+    panic "37 is the one number this does not double"
+  }
+  value * 2
+}
+
+const before = (1..=10).toList().parallel().map({ doubled _ }).sum().await() ?? 0
+print "awaited before the tests: {before}"
+
+test "a chunk of a parallel map that panics fails the test that started it" {
+  const _ = (0..100).toList().parallel().map({ doubled _ }).toList()
+}
+
+test "the next test's tasks run on a whole pool" {
+  const _ = (0..100).toList().parallel().map({ doubled(_ + 100) }).toList()
+}
+
+const after = (11..=20).toList().parallel().map({ doubled _ }).sum().await() ?? 0
+print "awaited after the tests: {after}"
+
+Process.exit 0

@@ -13,6 +13,7 @@
  */
 
 #include "torb.h"
+#include "torb_pool.h"
 
 #include <float.h>
 #include <math.h>
@@ -343,6 +344,24 @@ torb_text torb_text_compact(torb_text text) {
     memcpy(data, torb_text_data(text), (size_t)text.length);
   }
   return result;
+}
+
+/* The copy at a crossing (torb_task.h): storage nobody else holds is private already, whatever part of it this is. */
+bool torb_text_privatize(torb_text *text) {
+  torb_text copy;
+  if (text->storage == NULL || text->storage->header.count == TORB_IMMORTAL_COUNT
+      || text->storage->header.count == 1u) {
+    return true;
+  }
+  copy = torb_text_compact(*text);
+  torb_text_release(*text);
+  *text = copy;
+  torb_pool_count_copy();
+  return true;
+}
+
+bool torb_text_privatize_place(void *place) {
+  return torb_text_privatize((torb_text *)place);
 }
 
 bool torb_text_equal(torb_text first, torb_text second) {

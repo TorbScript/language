@@ -10,6 +10,7 @@
  */
 
 #include "harness.h"
+#include "torb_pool.h"
 
 #define POOL_WORKERS 4u
 
@@ -651,6 +652,406 @@ TORB_TEST(a_counted_result_comes_back_from_the_worker_that_made_it) {
   TORB_CHECK(right);
 }
 
+/* ------------------------------------------------------------------ a panic in a task that belongs to a test --- */
+
+/* A few milliseconds of work, then a panic - where the task runs on another worker than the main thread, or always. */
+typedef struct panicky_frame {
+  int64_t rounds;
+  bool always;
+} panicky_frame;
+
+static torb_poll panicky_resume(torb_task *task) {
+  panicky_frame *frame = (panicky_frame *)torb_task_frame(task);
+  if (torb_task_cancelled(task)) {
+    return TORB_POLL_STOPPED;
+  }
+  if (frame->always || torb_worker_index() != 0u) {
+    torb_panic_text("a task of the test panicked", torb_location_unknown);
+  }
+  *(int64_t *)torb_task_result_slot(task) = work_value(0, frame->rounds);
+  return TORB_POLL_FINISHED;
+}
+
+static void panicky(int64_t rounds, bool always, bool portable) {
+  torb_task *task = torb_task_new(panicky_resume, sizeof(panicky_frame), &torb_element_int64);
+  panicky_frame *frame = (panicky_frame *)torb_task_frame(task);
+  frame->rounds = rounds;
+  frame->always = always;
+  if (portable) {
+    torb_task_start_portable(task);
+  } else {
+    torb_task_start(task);
+  }
+  torb_task_release(task);
+}
+
+/**
+ * Sixty-four tasks started inside a test, each of which panics on any worker but the main thread: the panic lands in
+ * the recovery point of the worker that runs it instead of ending the process, it is the test's failure with its
+ * message, and the test's other tasks are cancelled and stop. The pool is whole afterwards: the next test's tasks run.
+ */
+TORB_TEST(a_panic_in_a_task_on_another_worker_fails_its_test) {
+  torb_recovery failure;
+  bool failed;
+  bool second_failed;
+  int64_t index;
+  pool_begin();
+  TORB_CHECK(torb_test_tasks_begin());
+  for (index = 0; index < 64; index += 1) {
+    panicky(2000000, false, true);
+  }
+  failed = torb_test_tasks_end(false, &failure);
+  TORB_CHECK(torb_task_live_count() == 0u);
+  TORB_CHECK(torb_test_tasks_begin());
+  for (index = 0; index < 8; index += 1) {
+    torb_task_release(work(index, 1000));
+  }
+  second_failed = torb_test_tasks_end(false, NULL);
+  pool_end();
+  TORB_CHECK(failed);
+  TORB_CHECK(strcmp(failure.message, "a task of the test panicked") == 0);
+  TORB_CHECK(!second_failed);
+}
+
+/** The same on the main thread, with one worker: the task that panics is resumed under its own recovery point too. */
+TORB_TEST(a_panic_in_a_task_on_the_main_thread_fails_its_test) {
+  torb_recovery failure;
+  bool failed;
+  torb_pool_set_workers(1u);
+  TORB_CHECK(torb_test_tasks_begin());
+  panicky(10, false, false);
+  panicky(10, true, false);
+  panicky(10, false, false);
+  failed = torb_test_tasks_end(false, &failure);
+  TORB_CHECK(torb_task_live_count() == 0u);
+  pool_end();
+  TORB_CHECK(failed);
+  TORB_CHECK(strcmp(failure.message, "a task of the test panicked") == 0);
+}
+
+/**
+ * A test ends only once the tasks it started have completed, whichever worker ran them; a task the test's task makes
+ * belongs to the test as well. A test that nothing panicked in is not failed, and a second scope inside the first opens
+ * nothing.
+ */
+TORB_TEST(a_test_waits_for_the_tasks_it_started) {
+  torb_task *tasks[16];
+  torb_task *collector;
+  int64_t index;
+  bool complete = true;
+  bool failed;
+  pool_begin();
+  TORB_CHECK(torb_test_tasks_begin());
+  TORB_CHECK(!torb_test_tasks_begin());
+  for (index = 0; index < 16; index += 1) {
+    tasks[index] = work(index, 200000);
+  }
+  {
+    torb_task **handed = (torb_task **)torb_raw_allocate(16u * sizeof(torb_task *));
+    for (index = 0; index < 16; index += 1) {
+      torb_retain(tasks[index]);
+      handed[index] = tasks[index];
+    }
+    collector = collect(handed, 16);
+  }
+  failed = torb_test_tasks_end(false, NULL);
+  for (index = 0; index < 16; index += 1) {
+    complete = complete && torb_task_is_complete(tasks[index]);
+    torb_task_release(tasks[index]);
+  }
+  complete = complete && torb_task_is_complete(collector);
+  TORB_CHECK_INTEGER(result_of(collector), expected_sum(16, 200000));
+  torb_task_release(collector);
+  pool_end();
+  TORB_CHECK(!failed);
+  TORB_CHECK(complete);
+}
+
+/* ---------------------------------------------------------------------------------- the copy at the crossing --- */
+
+static uint32_t count_of(const void *block) {
+  return ((const torb_header *)block)->count;
+}
+
+/** A text nobody else holds is private already; one somebody else holds too is copied, and the original keeps its count. */
+TORB_TEST(a_text_is_copied_only_where_somebody_else_holds_it) {
+  torb_text text = torb_text_from_cstring("a text of some length");
+  torb_text other;
+  torb_bytes *before = text.storage;
+  uint64_t copied = torb_pool_statistics_now().copied;
+  TORB_CHECK(torb_text_privatize(&text));
+  TORB_CHECK(text.storage == before);
+  TORB_CHECK(torb_pool_statistics_now().copied == copied);
+  other = torb_text_retained(text);
+  TORB_CHECK(torb_text_privatize(&other));
+  TORB_CHECK(other.storage != before);
+  TORB_CHECK_INTEGER(count_of(before), 1);
+  TORB_CHECK_INTEGER(count_of(other.storage), 1);
+  TORB_CHECK(torb_text_equal(text, other));
+  TORB_CHECK(torb_pool_statistics_now().copied == copied + 1u);
+  torb_text_release(text);
+  torb_text_release(other);
+}
+
+/**
+ * A list of texts that is held twice: the copy gets a storage of its own and a copy of every text, and the first list
+ * is left exactly as it was - every one of its texts back at a count of 1.
+ */
+TORB_TEST(a_list_of_texts_held_twice_is_copied_down_to_every_text) {
+  torb_list first = torb_list_new(&torb_element_text);
+  torb_list second;
+  int64_t index;
+  bool apart = true;
+  for (index = 0; index < 3; index += 1) {
+    torb_text text = torb_show_i64(1000 + index);
+    torb_list_add(&first, &text);
+  }
+  second = torb_list_retained(first);
+  TORB_CHECK(torb_list_privatize(&second, torb_text_privatize_place));
+  TORB_CHECK(second.storage != first.storage);
+  TORB_CHECK_INTEGER(count_of(first.storage), 1);
+  for (index = 0; index < 3; index += 1) {
+    const torb_text *mine = (const torb_text *)torb_list_at(first, index, torb_location_unknown);
+    const torb_text *theirs = (const torb_text *)torb_list_at(second, index, torb_location_unknown);
+    apart = apart && mine->storage != theirs->storage && count_of(mine->storage) == 1u
+            && count_of(theirs->storage) == 1u && torb_text_equal(*mine, *theirs);
+  }
+  TORB_CHECK(apart);
+  torb_list_release(first);
+  torb_list_release(second);
+}
+
+/** A map of texts held twice: the copy's keys and values are its own, and its plain side is left alone. */
+TORB_TEST(a_map_held_twice_is_copied_down_to_every_key) {
+  torb_map first = torb_map_new(&torb_element_text, &torb_element_int64);
+  torb_map second;
+  torb_text key = torb_text_from_cstring("seven");
+  int64_t value = 7;
+  const void *found_key;
+  const void *found_value;
+  uint32_t cursor = 0u;
+  torb_map_set(&first, &key, &value);
+  second = torb_map_retained(first);
+  TORB_CHECK(torb_map_privatize(&second, torb_text_privatize_place, NULL));
+  TORB_CHECK(second.storage != first.storage);
+  TORB_CHECK(torb_map_next(second, &cursor, &found_key, &found_value));
+  TORB_CHECK(count_of(((const torb_text *)found_key)->storage) == 1u);
+  TORB_CHECK_INTEGER(*(const int64_t *)found_value, 7);
+  TORB_CHECK(torb_map_contains(second, &key));
+  torb_map_release(first);
+  torb_map_release(second);
+}
+
+/* A task that adds up the lengths of the texts of its list. */
+typedef struct lengths_frame {
+  torb_list texts;
+} lengths_frame;
+
+static torb_poll lengths_resume(torb_task *task) {
+  lengths_frame *frame = (lengths_frame *)torb_task_frame(task);
+  int64_t total = 0;
+  int64_t index;
+  if (torb_task_cancelled(task)) {
+    torb_list_release(frame->texts);
+    return TORB_POLL_STOPPED;
+  }
+  for (index = 0; index < torb_list_length(frame->texts); index += 1) {
+    /* A text the task keeps a while: its count changes on this thread */
+    torb_text text = torb_text_retained(*(const torb_text *)torb_list_at(frame->texts, index, torb_location_unknown));
+    total += (int64_t)text.length;
+    torb_text_release(text);
+  }
+  torb_list_release(frame->texts);
+  *(int64_t *)torb_task_result_slot(task) = total;
+  return TORB_POLL_FINISHED;
+}
+
+/**
+ * Thirty-two tasks over lists of texts the main thread still holds: the test of the runtime refuses each frame, the
+ * copy makes it private, and the tasks run on several workers - reading texts nobody else can touch - while the lists
+ * of the main thread stay what they were. Every block is freed, whichever heap made it.
+ */
+TORB_TEST(frames_of_texts_somebody_else_holds_cross_after_the_copy) {
+  torb_list lists[32];
+  torb_task *tasks[32];
+  int64_t index;
+  int64_t expected = 0;
+  int64_t sum = 0;
+  uint64_t copied = torb_pool_statistics_now().copied;
+  pool_begin();
+  for (index = 0; index < 32; index += 1) {
+    int64_t item;
+    lists[index] = torb_list_new(&torb_element_text);
+    for (item = 0; item <= index; item += 1) {
+      torb_text text = torb_show_i64(100000 + item);
+      expected += (int64_t)text.length;
+      torb_list_add(&lists[index], &text);
+    }
+  }
+  for (index = 0; index < 32; index += 1) {
+    torb_task *task = torb_task_new(lengths_resume, sizeof(lengths_frame), &torb_element_int64);
+    lengths_frame *frame = (lengths_frame *)torb_task_frame(task);
+    frame->texts = torb_list_retained(lists[index]);
+    TORB_CHECK(!torb_list_may_move(frame->texts, true));
+    TORB_CHECK(torb_task_copies() && torb_list_privatize(&frame->texts, torb_text_privatize_place));
+    torb_task_start_portable(task);
+    tasks[index] = task;
+  }
+  for (index = 0; index < 32; index += 1) {
+    torb_scheduler_run(tasks[index]);
+    sum += result_of(tasks[index]);
+    torb_task_release(tasks[index]);
+    TORB_CHECK_INTEGER(count_of(lists[index].storage), 1);
+    torb_list_release(lists[index]);
+  }
+  pool_end();
+  TORB_CHECK_INTEGER(sum, expected);
+  TORB_CHECK(torb_pool_statistics_now().copied >= copied + 32u * 2u);
+}
+
+/* ------------------------------------------------------------------------------------------ the blocking pool --- */
+
+/* The body asks, the task on the worker answers: one flag each way, written by one thread and read by the other. */
+static uint32_t blocking_asked = 0u;
+static uint32_t blocking_answered = 0u;
+
+typedef struct offloaded_frame {
+  torb_task *turn;
+  /** Whether the body blocks until the task on the worker answers. */
+  bool waits;
+} offloaded_frame;
+
+/*
+ * `offload` as the lowering writes it: the turn, its await, and then the body. The body blocks - it sleeps until the
+ * other task answers, for at most five seconds - and the task answers 1 where it ran on the blocking pool and was
+ * answered, 2 where it ran on its worker, 0 where it was never answered.
+ */
+static torb_poll offloaded_resume(torb_task *task) {
+  offloaded_frame *frame = (offloaded_frame *)torb_task_frame(task);
+  int64_t waited = 0;
+  bool on_pool;
+  switch (task->state) {
+    case 0u:
+      goto state_0;
+    case 1u:
+      goto state_1;
+    default:
+      TORB_UNREACHABLE();
+  }
+state_0:
+  if (torb_task_cancelled(task)) {
+    return TORB_POLL_STOPPED;
+  }
+  frame->turn = torb_blocking_turn();
+  task->state = 1u;
+  if (torb_task_await(task, frame->turn) == TORB_WAIT_SUSPENDED) {
+    return TORB_POLL_SUSPENDED;
+  }
+state_1:
+  if (torb_task_cancelled(task)) {
+    torb_task_release(frame->turn);
+    return TORB_POLL_STOPPED;
+  }
+  (void)torb_task_outcome(task);
+  torb_task_release(frame->turn);
+  frame->turn = NULL;
+  on_pool = torb_worker_is_blocking();
+  if (!frame->waits) {
+    *(int64_t *)torb_task_result_slot(task) = on_pool ? 1 : 2;
+    return TORB_POLL_FINISHED;
+  }
+  torb_atomic_store_u32(&blocking_asked, 1u);
+  while (torb_atomic_load_u32(&blocking_answered) == 0u && waited < 5000) {
+    torb_platform_sleep(1000000LL);
+    waited += 1;
+  }
+  *(int64_t *)torb_task_result_slot(task) = torb_atomic_load_u32(&blocking_answered) == 0u ? 0 : (on_pool ? 1 : 2);
+  return TORB_POLL_FINISHED;
+}
+
+static torb_task *offloaded(bool waits, bool portable) {
+  torb_task *task = torb_task_new(offloaded_resume, sizeof(offloaded_frame), &torb_element_int64);
+  ((offloaded_frame *)torb_task_frame(task))->waits = waits;
+  if (portable) {
+    torb_task_start_portable(task);
+  } else {
+    torb_task_start(task);
+  }
+  return task;
+}
+
+/* The task on the worker: it lets the others run until the body asked, then answers. */
+static torb_poll answerer_resume(torb_task *task) {
+  if (torb_task_cancelled(task)) {
+    return TORB_POLL_STOPPED;
+  }
+  if (task->state == 1u) {
+    (void)torb_task_outcome(task);
+  }
+  if (torb_atomic_load_u32(&blocking_asked) == 0u) {
+    task->state = 1u;
+    if (torb_task_pause(task) == TORB_WAIT_SUSPENDED) {
+      return TORB_POLL_SUSPENDED;
+    }
+  }
+  torb_atomic_store_u32(&blocking_answered, 1u);
+  *(torb_void *)torb_task_result_slot(task) = 0u;
+  return TORB_POLL_FINISHED;
+}
+
+/**
+ * With one worker, a body that blocks until a task of that very worker answers: it can only ever be answered because
+ * it runs on a thread of the blocking pool and the worker goes on with its other tasks.
+ */
+TORB_TEST(a_body_on_the_blocking_pool_does_not_stall_its_worker) {
+  torb_task *body;
+  torb_task *answerer;
+  torb_atomic_store_u32(&blocking_asked, 0u);
+  torb_atomic_store_u32(&blocking_answered, 0u);
+  torb_pool_set_workers(1u);
+  torb_pool_set_blocking(2u);
+  body = offloaded(true, true);
+  answerer = torb_task_new(answerer_resume, 0u, &torb_element_void);
+  torb_task_start(answerer);
+  torb_scheduler_run(body);
+  TORB_CHECK_INTEGER(result_of(body), 1);
+  torb_task_release(body);
+  torb_task_release(answerer);
+  torb_scheduler_finish();
+  torb_pool_set_workers(0u);
+  torb_pool_set_blocking(0u);
+  TORB_CHECK_INTEGER(torb_task_live_count(), 0);
+}
+
+/**
+ * A task started pinned may not move - its frame was never proven movable - so its turn is only a turn and its body runs
+ * on its own worker; a hundred portable ones over four workers all reach the pool and come back.
+ */
+TORB_TEST(only_a_task_whose_frame_may_move_turns_to_the_blocking_pool) {
+  torb_task *pinned;
+  torb_task *tasks[100];
+  int64_t index;
+  bool all = true;
+  pool_begin();
+  torb_pool_set_blocking(3u);
+  pinned = offloaded(false, false);
+  for (index = 0; index < 100; index += 1) {
+    tasks[index] = offloaded(false, true);
+  }
+  torb_scheduler_run(pinned);
+  TORB_CHECK_INTEGER(result_of(pinned), 2);
+  torb_task_release(pinned);
+  for (index = 0; index < 100; index += 1) {
+    torb_scheduler_run(tasks[index]);
+    all = all && result_of(tasks[index]) == 1;
+    torb_task_release(tasks[index]);
+  }
+  pool_end();
+  torb_pool_set_blocking(0u);
+  TORB_CHECK(all);
+  TORB_CHECK_INTEGER(torb_task_live_count(), 0);
+}
+
 void torb_register_pool_tests(void) {
   TORB_ADD(portable_tasks_run_on_several_workers);
   TORB_ADD(ten_thousand_tasks_over_the_workers);
@@ -660,4 +1061,13 @@ void torb_register_pool_tests(void) {
   TORB_ADD(a_cancellation_reaches_a_waiter_on_another_worker);
   TORB_ADD(cancelling_a_parent_stops_its_children_on_every_worker);
   TORB_ADD(a_counted_result_comes_back_from_the_worker_that_made_it);
+  TORB_ADD(a_panic_in_a_task_on_another_worker_fails_its_test);
+  TORB_ADD(a_panic_in_a_task_on_the_main_thread_fails_its_test);
+  TORB_ADD(a_test_waits_for_the_tasks_it_started);
+  TORB_ADD(a_text_is_copied_only_where_somebody_else_holds_it);
+  TORB_ADD(a_list_of_texts_held_twice_is_copied_down_to_every_text);
+  TORB_ADD(a_map_held_twice_is_copied_down_to_every_key);
+  TORB_ADD(frames_of_texts_somebody_else_holds_cross_after_the_copy);
+  TORB_ADD(a_body_on_the_blocking_pool_does_not_stall_its_worker);
+  TORB_ADD(only_a_task_whose_frame_may_move_turns_to_the_blocking_pool);
 }

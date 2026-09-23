@@ -80,9 +80,11 @@ sequential `sum()`, which adds in another order. `find` answers the first match 
 for every item; the order in which items of two chunks run is the machine's. Cancelling the task a terminal answers
 stops every chunk at its next suspension point or loop turn.
 
-A chunk moves to another worker only where its items and the closures of the pipeline may cross one: plain items (`Int`,
-`Float`, a record of those) and closures that capture nothing counted. A pipeline over `String`s, or with a closure that
-captures a list, runs its chunks on the caller's worker, one after the other - the same answer without the speed-up
+A chunk moves to another worker only where its items and the closures of the pipeline may cross one. Plain items (`Int`,
+`Float`, a record of those) cross as they are; `String`s, lists, maps and records of those cross as a copy, made when the
+chunk's task starts, where the input still holds them. A closure that captures nothing counted crosses; a pipeline with
+a closure that captures a `String` or a list, or over items with an identity (a `shared type` object) or an enum with a
+counted case, runs its chunks on the caller's worker, one after the other - the same answer without the speed-up
 ([Concurrency](../design/CONCURRENCY.md), section 16). Every stage is a fork-join of its own, so `map` then `filter`
 runs the chunks twice.
 

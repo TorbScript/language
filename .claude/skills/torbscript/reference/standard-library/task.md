@@ -22,13 +22,13 @@ source:
 may call `await()`, and its body produces the `Value` - the same way a function that returns `Result` may use `?`.
 `Task` and `Channel` are the two shared types that connect concurrent work; everything else is copied when it crosses
 into one. Every task can be cancelled, so `await()` answers `Result<Value, Cancelled>`. `Task`, `Channel`,
-`ChannelClosed`, `Cancelled`, `TimedOut`, `spawn` and `both` are in scope through the prelude; `pause` is imported from
-here.
+`ChannelClosed`, `Cancelled`, `TimedOut`, `spawn` and `both` are in scope through the prelude; `pause`, `offload` and
+`Workers` are imported from here.
 
 ## Import
 
 ```trb fragment
-use Task, Channel, ChannelClosed, Cancelled, TimedOut, Workers, spawn, both, pause from "std/task"
+use Task, Channel, ChannelClosed, Cancelled, TimedOut, Workers, spawn, both, pause, offload from "std/task"
 ```
 
 ```trb check
@@ -92,6 +92,7 @@ at the back of the queue, which is what makes a long loop fair.
 ```trb fragment
 public native type Workers {
   native static fn count(): Int
+  native static fn blocking(): Int
 }
 ```
 
@@ -101,7 +102,23 @@ task that is started goes to the worker that started it; an idle worker takes it
 it holds may cross to another thread - numbers, a `Channel` of numbers, a text or a list nobody else holds - and a task
 never moves once it has run. With `TORB_WORKERS=1` the tasks run one at a time in the order they became ready, which is
 the order a program that prints from several tasks at once can rely on. `Workers` is imported from here; it is what
-[`parallel(workers:)`](parallel.md) defaults to.
+[`parallel(workers:)`](parallel.md) defaults to. `blocking()` is the size of the blocking pool below: `TORB_BLOCKING`
+where it is set, and 4 otherwise, at most 1024.
+
+### `offload`
+
+```trb fragment
+public fn offload<Value>(body: () => Value): Task<Value>
+```
+
+Runs `body` on a thread of the blocking pool instead of on a worker, so a call that blocks - reading a file, running a
+child process, a C library that waits - does not stall the other tasks of the worker that asked:
+`offload({ File.readText("notes.txt") }).await()`. The pool has `Workers.blocking()` threads, started the first time a
+body moves there, so it is for one blocking call and not for a long computation, which belongs on the workers. The body
+moves only where its closure may cross to another thread - where it captures nothing counted, or only literals and
+values nothing else holds a count of; a closure that captures a `String` built at run time, a list or a `shared type`
+object runs on the worker that asked, with the same answer and that worker blocked. The body cannot `await`, and a
+cancellation does not interrupt a body that already runs: it runs to its end and its answer is thrown away.
 
 ### Channel
 

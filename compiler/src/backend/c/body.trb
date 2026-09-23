@@ -32,7 +32,7 @@ use cTypeOf, whyNoCType, memberNameOf, variantMemberNameOf, witnessMemberNameOf,
 use CExpression, CDesignatedField, CStatement, CSwitchCase, declarationOf from "./writer"
 use readPrototype, matchPrototype from "./prototype"
 use TaskMachine, taskMachineOf from "../../ir/suspension"
-use Crossing, frameCrossingOf, environmentCrossingOf from "./crossing"
+use Crossing, frameCrossingOf, framePrivateOf, environmentCrossingOf from "./crossing"
 use Closing from "../../ir/closing"
 
 /** One function, with which slots are read and which labels are jumped to precomputed once for the whole body. */
@@ -757,14 +757,33 @@ fn taskNewStatements(
  * The start of a task: pinned to the worker that makes it, or free to be taken by an idle worker before its first run
  * where every value of its frame may cross one ([frameCrossingOf]) - decided here where the types answer it, and by
  * the runtime beside the call where they do not (docs/design/CONCURRENCY.md section 16).
+ *
+ * Where the test may fail on a value that can be copied soundly, the frame is made private instead while the pool has
+ * more than one worker ([framePrivateOf]): `(torb_task_copies() ? <copy> : <test>) ? portable : pinned`. With one worker
+ * nothing is copied, because no other worker could take the task.
  */
 fn startStatementOf(program: IrProgram, place: CExpression, members: List<CExpression>, types: List<IrTypeId>): CStatement {
   const pinned = CExpression.Name "torb_task_start"
   const portable = CExpression.Name "torb_task_start_portable"
-  const start = match frameCrossingOf(program, members, types) {
-    .Always => portable
-    .Never => pinned
-    .When(test) => CExpression.Conditional test, portable, pinned
+  const crossing = frameCrossingOf program, members, types
+  if const .Always = crossing {
+    return CStatement.Evaluate CExpression.Call(portable, [place])
+  }
+  const test = match crossing {
+    .When(found) => found
+    _ => CExpression.Literal "false"
+  }
+  // A frame whose copy copies nothing - its closures are tested either way - needs no second branch
+  if const .When(copy) = framePrivateOf(program, members, types) {
+    if copy != test {
+      const copies = CExpression.Call CExpression.Name("torb_task_copies"), []
+      const decided = CExpression.Conditional copies, copy, test
+      return CStatement.Evaluate CExpression.Call(CExpression.Conditional(decided, portable, pinned), [place])
+    }
+  }
+  const start = match crossing {
+    .When(found) => CExpression.Conditional found, portable, pinned
+    _ => pinned
   }
   CStatement.Evaluate CExpression.Call(start, [place])
 }

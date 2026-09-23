@@ -209,8 +209,13 @@ struct torb_task {
   uint8_t portable;
   /** In the list of its worker's queue that an idle worker takes from (unstarted and portable). */
   uint8_t stealable;
-  /** Has run at least once: it never moves again. */
+  /**
+   * Has run at least once: it never moves again - except once, to the blocking pool, where it asked for that with a
+   * turn and its frame may move (`hopping`, task.c "The blocking pool").
+   */
   uint8_t started;
+  /** Awaits a turn to the blocking pool: its worker hands it to the pool instead of running it. Its own thread's. */
+  uint8_t hopping;
   /** Its worker is completing it: a cancellation passes it by (set and read under the tree lock). */
   uint8_t completing;
   int32_t outcome;         /**< `torb_outcome` of the last wait. */
@@ -219,6 +224,11 @@ struct torb_task {
   uint32_t worker;
   /** The lock of `status` and `waiters`: a spin lock, held for a few instructions. */
   uint32_t lock;
+  /**
+   * The test this task belongs to, 0 for none: the one in progress on the main thread where the task was made outside
+   * any of that test's tasks, or its parent's (task.c, "A panic in a task of a test"). Written once, at creation.
+   */
+  uint32_t test;
   torb_task *queue_previous;
   torb_task *queue_next;
   torb_task *steal_previous;
@@ -515,6 +525,26 @@ size_t torb_task_live_count(void);
 /** The task whose machine is running now on the calling thread, or `NULL` outside every task. Borrowed. */
 torb_task *torb_task_current(void);
 
+/* ------------------------------------------------------------------------------------------- the tasks of a test --- */
+
+/*
+ * A test owns the tasks it starts (task.c, "A panic in a task of a test"): `test.c` opens a scope around one test body,
+ * every task made in it - and every task one of those makes - belongs to it, and closing the scope waits until they
+ * have completed. A task of the test that panics, on whichever worker, is completed as cancelled, the other tasks of the
+ * test are cancelled, and the first such panic is the test's failure. Only the main thread opens a scope.
+ */
+
+/** Opens the scope of a test on the main thread. False where one is open already or this is another thread. */
+bool torb_test_tasks_begin(void);
+
+/**
+ * Closes the scope `torb_test_tasks_begin` opened. With `abandon` (the body itself panicked) every task of the test is
+ * cancelled first. Then the calling thread runs tasks until every task of the test has completed or nothing that could
+ * still happen is left. Answers true where a task of the test panicked, with its message and site in `failure`
+ * (`failure` may be `NULL` where the caller does not want them).
+ */
+bool torb_test_tasks_end(bool abandon, torb_recovery *failure);
+
 /* -------------------------------------------------------------------------------------------- the worker pool --- */
 
 /**
@@ -527,6 +557,27 @@ int64_t torb_workers_count(void);
 
 /** The index of the worker running the calling thread: 0 on the main thread. For the tests. */
 uint32_t torb_worker_index(void);
+
+/**
+ * `Workers.blocking()`: how many threads the blocking pool has - `TORB_BLOCKING` where it is set, and otherwise 4. Fixed
+ * for the life of the process; a `TORB_BLOCKING` that is not a whole number from 1 to 1024 makes the program refuse to
+ * go on, with one line that names the variable and exit code 2, as `TORB_WORKERS` does.
+ */
+int64_t torb_workers_blocking(void);
+
+/**
+ * The turn that moves the running task to the blocking pool (`offload` in `std/task`): a task that finishes at once,
+ * and whose completion hands the task that awaits it to a thread of the blocking pool instead of back to its worker -
+ * where that task was started portable, so its frame may move. Anywhere else it is only a turn, and the awaiting task
+ * goes on where it is. The pool's threads are started the first time a task moves. Result owned.
+ */
+torb_task *torb_blocking_turn(void);
+
+/** Whether the calling thread is a thread of the blocking pool. For the tests. */
+bool torb_worker_is_blocking(void);
+
+/** For the runtime's tests: the size of the blocking pool the next time it starts; 0 goes back to `torb_workers_blocking`. */
+void torb_pool_set_blocking(uint32_t count);
 
 /**
  * For the runtime's tests: the number of workers the pool starts with the next time it starts, in place of
@@ -542,6 +593,8 @@ typedef struct torb_pool_statistics {
   uint64_t stolen;
   /** How many times the pool's threads were started. */
   uint64_t starts;
+  /** Blocks copied at a crossing (`torb_text_privatize` and its siblings): what a program pays for moving a value. */
+  uint64_t copied;
 } torb_pool_statistics;
 
 torb_pool_statistics torb_pool_statistics_now(void);
@@ -564,5 +617,32 @@ bool torb_text_may_move(torb_text text, bool transfer);
 bool torb_list_may_move(torb_list list, bool transfer);
 /** A map or a set: the same, with a plain key and a plain value. */
 bool torb_map_may_move(torb_map map, bool transfer);
+
+/*
+ * The copy at the crossing (docs/design/CONCURRENCY.md section 16, "The copy at the crossing"). Where a frame's values
+ * fail the tests above but may be copied soundly, the compiler writes beside the start of a task, while the pool has
+ * more than one worker (`torb_task_copies`), one of these per value of the frame, and starts the task portable where all
+ * of them answer true. They run on the thread that starts the task, before anybody else can see the frame.
+ *
+ * A **privatize function** takes a place that holds an owned value and leaves in it a value equal to it that shares no
+ * counted block with anything outside it - every block it reaches is its own with a count of 1, immortal, or shared -
+ * releasing the count the place held on the original. Nothing is copied that is private already. False where the value
+ * reaches something that cannot be copied soundly (a closure whose environment is not shared); the place then still
+ * holds a valid owned value, maybe copied in part, and the task stays on its worker.
+ */
+typedef bool (*torb_privatize_function)(void *place);
+
+/** Whether the pool has more than one worker, so a copy at a crossing can pay off. */
+bool torb_task_copies(void);
+/** A `String`: its own storage where somebody else holds it too. Always true. `text` in and out. */
+bool torb_text_privatize(torb_text *text);
+/** The same through a `void *`: the element function of a list, a map or a set of `String`s. */
+bool torb_text_privatize_place(void *place);
+/**
+ * A list: storage of its own, with `element` run on every element of it; `NULL` for plain elements. `list` in and out.
+ */
+bool torb_list_privatize(torb_list *list, torb_privatize_function element);
+/** A map or a set: a table of its own, with `key` and `value` run on every entry; `NULL` for a plain side. */
+bool torb_map_privatize(torb_map *map, torb_privatize_function key, torb_privatize_function value);
 
 #endif /* TORB_TASK_H */

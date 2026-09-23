@@ -159,6 +159,7 @@ public fn both<First, Second>(first: Task<First>, second: Task<Second>): Task<(F
  * # Related
  *
  * - [spawn] - a task an idle worker may take before it first runs.
+ * - [offload] - a body that blocks, run on the blocking pool.
  */
 public native type Workers {
   /**
@@ -166,6 +167,12 @@ public native type Workers {
    * most 1024. What `parallel(workers:)` defaults to.
    */
   native static fn count(): Int
+
+  /**
+   * How many threads the blocking pool has, which runs the bodies of [offload]: `TORB_BLOCKING` where it is set, and
+   * otherwise 4, at most 1024. The threads start the first time a body moves there.
+   */
+  native static fn blocking(): Int
 }
 
 /**
@@ -173,6 +180,36 @@ public native type Workers {
  * fair; a loop of a task is cancellable at every turn without it.
  */
 public native fn pause(): Task<Void>
+
+/**
+ * Runs `body` on a thread of the blocking pool instead of on a worker, so a call that blocks - reading a file, running a
+ * child process, a C library that waits - does not stall the other tasks of the worker that asked.
+ *
+ *     const text = offload({ File.readText("notes.txt") }).await()
+ *
+ * Reach for it around one blocking call, not around a computation: a computation that is merely long belongs on the
+ * workers, with [spawn] or `parallel()`, because the pool has only [Workers.blocking] threads.
+ *
+ * # Pitfalls
+ *
+ * - The body moves to the pool only where the closure may cross to another thread: where it captures nothing counted,
+ *   or only literals and other values nothing else holds a count of. A closure that captures a `String` built at run
+ *   time, a list or a `shared type` object runs on the worker that asked - the same answer, but it blocks that worker
+ *   as a direct call would (docs/design/CONCURRENCY.md section 16, "The blocking pool, as built").
+ * - The body cannot `await`. Cancelling the task does not interrupt a body that already runs: it runs to its end on its
+ *   thread, and what it answers is thrown away.
+ */
+public fn offload<Value>(body: () => Value): Task<Value> {
+  // Cancelled only together with this task, which then stops at this very wait: the fallback is never read
+  blockingTurn().await() ?? void
+  body()
+}
+
+/**
+ * The turn that moves the task awaiting it to a thread of the blocking pool, where that task's frame may move: the one
+ * part of [offload] TorbScript cannot write.
+ */
+native fn blockingTurn(): Task<Void>
 
 /** `task.cancel()` without the `var` binding the method asks for: the body of [Task.cancel], and what `both` uses. */
 native fn cancelTask<Value>(task: Task<Value>)

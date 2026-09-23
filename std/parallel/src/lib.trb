@@ -15,9 +15,10 @@
  * # Pitfalls
  *
  * - A chunk moves to another worker only where its items and the closures of the pipeline may cross one: plain items
- *   (`Int`, `Float`, a record of those) and closures that capture nothing counted. A pipeline over `String`s, or with a
- *   closure that captures a list, runs its chunks on the caller's worker, one after the other - the same answer,
- *   without the speed-up (docs/design/CONCURRENCY.md section 16, "What crosses a worker").
+ *   (`Int`, `Float`, a record of those) as they are, `String`s, lists and records of those as a copy made when the
+ *   chunk's task starts, and closures that capture nothing counted. A pipeline with a closure that captures a `String`
+ *   or a list, or over `shared type` objects, runs its chunks on the caller's worker, one after the other - the same
+ *   answer, without the speed-up (docs/design/CONCURRENCY.md section 16, "The copy at the crossing").
  * - Cancelling the task a terminal answers stops every chunk at its next suspension point or loop turn.
  *
  * # Open

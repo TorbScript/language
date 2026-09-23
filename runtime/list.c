@@ -14,6 +14,7 @@
  */
 
 #include "torb.h"
+#include "torb_pool.h"
 
 #include <stddef.h>
 #include <string.h>
@@ -185,6 +186,38 @@ bool torb_list_get(torb_list list, int64_t index, void *out) {
 
 void torb_list_make_unique(torb_list *list) {
   torb_list_prepare(list, 0u);
+}
+
+/*
+ * The copy at a crossing (torb_task.h). A storage somebody else holds, or a slice of one whose elements are counted -
+ * the elements outside the slice would be released wherever the storage is - is copied first, which retains the
+ * elements; then every element of the storage that is now this list's alone is made private in its place.
+ */
+bool torb_list_privatize(torb_list *list, torb_privatize_function element) {
+  torb_list_storage *storage = list->storage;
+  uint8_t *data;
+  uint32_t index;
+  if (storage == NULL || storage->header.count == TORB_IMMORTAL_COUNT) {
+    return true;
+  }
+  if (element == NULL && storage->header.count == 1u) {
+    return true;
+  }
+  if (!(torb_is_unique(storage) && list->offset == 0u && list->length == storage->length)) {
+    torb_list_prepare(list, 0u);
+    torb_pool_count_copy();
+  }
+  if (element == NULL) {
+    return true;
+  }
+  storage = list->storage;
+  data = (uint8_t *)torb_list_storage_data(storage);
+  for (index = 0u; index < storage->length; index += 1u) {
+    if (!element(data + (size_t)index * (size_t)storage->element->size)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 void *torb_list_element_reference(torb_list *list, int64_t index, torb_text missing, torb_location at) {

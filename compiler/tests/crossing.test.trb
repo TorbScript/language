@@ -59,10 +59,30 @@ const tasks = r"""
     { value => value * factor }
   }
 
+  type Person {
+    name: String
+    age: Int
+  }
+
+  fn named(people: ArrayList<String>): Task<Int> {
+    people.length()
+  }
+
+  fn aged(person: Person): Task<Int> {
+    person.age
+  }
+
+  fn grouped(people: ArrayList<Person>): Task<Int> {
+    people.length()
+  }
+
   const first = squared 3
   const second = measured "word"
   const third = counted Tally()
   print scaled(2)(4)
+  const fourth = named ArrayList.from(["Ada"])
+  const fifth = aged Person(name: "Ada", age: 36)
+  const sixth = grouped ArrayList.from([Person(name: "Ada", age: 36)])
   """
 
 group "The start of a task" {
@@ -81,6 +101,40 @@ group "The start of a task" {
     const found = functionOf tasks, "t_acme_x2f_app_main_counted"
     assert found.contains("  torb_task_start(s1);")
     assert(!found.contains("portable"))
+    assert(!found.contains("privatize"))
+  }
+}
+
+group "The copy at the crossing" {
+  test "a text somebody else holds is copied where the pool has more than one worker" {
+    const found = functionOf tasks, "t_acme_x2f_app_main_measured"
+    assert found.contains("(torb_task_copies()) ? torb_text_privatize(&")
+  }
+
+  test "a list of texts is copied with the runtime's own function for one text" {
+    const found = functionOf tasks, "t_acme_x2f_app_main_named"
+    assert found.contains("torb_list_privatize(&")
+    assert found.contains(", torb_text_privatize_place)")
+  }
+
+  test "a record is copied field by field, and a plain field needs nothing" {
+    const found = functionOf tasks, "t_acme_x2f_app_main_aged"
+    assert found.contains("torb_text_privatize(&")
+    assert found.contains("->s0_person.f_name) : ")
+  }
+
+  test "a list of records is copied with a function the emitter writes for one record" {
+    const found = functionOf tasks, "t_acme_x2f_app_main_grouped"
+    assert found.contains("torb_list_privatize(&")
+    assert found.contains(", P_T_acme_x2f_app_main_Person)")
+  }
+
+  test "the function for one record is defined once, and copies the counted fields of the record" {
+    var found = lowered tasks
+    insertOwnership found.program
+    const text = emittedProgramText found.program, entryName
+    assert text.contains("static bool P_T_acme_x2f_app_main_Person(void *block) \{")
+    assert text.contains("  return torb_text_privatize(&value->f_name);")
   }
 }
 

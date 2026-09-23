@@ -13,6 +13,8 @@
 
 /* UInt64.addedWrapping */
 uint64_t torb_added_wrapping_u64(uint64_t first, uint64_t second);
+/* blockingTurn */
+torb_task *torb_blocking_turn(void);
 /* Float64.ceiling */
 double torb_ceiling_f64(double value);
 /* closeReading */
@@ -273,6 +275,8 @@ torb_text torb_text_to_lower_case(torb_text text);
 torb_text torb_text_to_upper_case(torb_text text);
 /* String.trim */
 torb_text torb_text_trim(torb_text text);
+/* Workers.blocking */
+int64_t torb_workers_blocking(void);
 /* Workers.count */
 int64_t torb_workers_count(void);
 

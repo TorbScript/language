@@ -1,0 +1,35 @@
+/**
+ * A panic in a task a test started fails that test, whichever worker ran the task, and the next test still runs.
+ *
+ * A test owns the tasks it starts: it ends only once they have completed, and a panic in one of them - on the main thread
+ * or on any other worker of the pool - is caught by a recovery point of the thread that runs it and reported as the
+ * test's failure, with its message and site, exactly as a panic of the body would be. The test's other tasks are
+ * cancelled. The program runs with four workers and again with one (`task-test-panic.workers`), and prints the same
+ * bytes both times: which worker ran the chunk that panicked is the machine's, the report is not.
+ *
+ * The run leaves with **0**: what counts the failures and decides an exit code is `torb test`.
+ */
+use Process from "std/process"
+use test from "std/test"
+
+/** Doubles a number, and panics on the one number a test does not expect. */
+fn doubled(value: Int): Int {
+  if value == 37 {
+    panic "37 is the one number this does not double"
+  }
+  value * 2
+}
+
+test "a chunk of a parallel map that panics fails the test that started it" {
+  const _ = (0..100).toList().parallel().map({ doubled _ }).toList()
+}
+
+test "a spawned task that panics fails its test too" {
+  const _ = spawn { doubled 37 }
+}
+
+test "the tasks of the next test run on a whole pool" {
+  const _ = (0..100).toList().parallel().map({ doubled(_ + 100) }).toList()
+}
+
+Process.exit 0

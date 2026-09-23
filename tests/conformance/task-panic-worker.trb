@@ -1,0 +1,18 @@
+/**
+ * A panic in a task ends the program the way a panic of the main thread does, on whichever worker the task runs: what
+ * was printed before it comes first, then `panic:` with the message and the site on standard error, and exit code 101.
+ * Nothing after it runs. The program runs with four workers and again with one (`task-panic-worker.workers`), and
+ * prints the same bytes both times.
+ */
+
+/** Doubles a number, and panics on the one number the program does not expect. */
+fn doubled(value: Int): Int {
+  if value == 37 {
+    panic "37 is the one number this does not double"
+  }
+  value * 2
+}
+
+print "before the pipeline"
+const all = (0..100).toList().parallel().map({ doubled _ }).toList().await() ?? []
+print "never reached: {all.length()}"

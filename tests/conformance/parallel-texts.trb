@@ -1,0 +1,29 @@
+/**
+ * `parallel()` over values that are not plain: `String`s and records that hold one. The chunks hold texts the input list
+ * still holds too, so a chunk may cross to another worker only as a copy - made on the thread that starts its task,
+ * before anybody else can see it - and the answers are the sequential ones, in input order, while the input stays what
+ * it was. The program runs with four workers and again with one (`parallel-texts.workers`), prints the same bytes both
+ * times, and frees every block, whichever worker made or copied it.
+ */
+
+type Person {
+  name: String
+  age: Int
+}
+
+const words = (1..=3000).toList().map({ "word{_}" }).toList()
+
+const lengths = words.parallel().map({ _.byteLength() }).toList().await() ?? []
+print "lengths: {lengths.length()}, the same as the sequential map: {lengths == words.map({ _.byteLength() }).toList()}"
+
+const shouted = words.parallel().map({ _.toUpperCase() }).toList().await() ?? []
+print "shouted: {shouted.take(3).toList()}, in order: {shouted == words.map({ _.toUpperCase() }).toList()}"
+
+const people = words.map({ word => Person name: word, age: word.byteLength() }).toList()
+const long = people.parallel().filter({ _.age > 7 }).toList().await() ?? []
+print "people with long names: {long.length()}, the first: {long.first()?.name ?? "nobody"}"
+
+const found = words.parallel().find({ _.endsWith "99" }).await() ?? None
+print "the first word that ends in 99: {found ?? "none"}"
+
+print "the input is untouched: {words.first() ?? ""} {words.last() ?? ""}"

@@ -32,7 +32,7 @@ deliberately panics says `TORB_IGNORE_LEAKS()`, because a panic runs nothing on 
 | `include/torb_task.h` | The task ABI of 7.3: the task block, the resume function a `Task` function is lowered to, the suspension primitives, `sleep`/`pause`/`cancel`/`within`, channels, the scheduler and the worker pool, the tests of what may cross a worker (`docs/design/CONCURRENCY.md` section 16) |
 | `include/torb_pool.h` | What the runtime's own files share about a worker: its heap counters, its scheduler, the threads, locks and conditions of `platform.c`, the atomics, the one-load `torb_worker_current`. Never included by generated C |
 | `memory.c`            | Block header, non-atomic counts (atomic only for a `TORB_SHARED_COUNT` block while there are threads), retain/release/is-unique/make-unique, immortal values and the lock around building a constant, the live-block counters of every worker summed |
-| `task.c`              | The worker pool: a FIFO run queue per worker that is also its inbox, the stealing of unstarted tasks, the timer heaps, waking and cancelling across workers, the tasks the runtime writes itself (`sleep`, `pause`, `within`), channels, the end-of-program drain, `Workers.count` |
+| `task.c`              | The worker pool: a FIFO run queue per worker that is also its inbox, the stealing of unstarted tasks, the timer heaps, waking and cancelling across workers, the tasks the runtime writes itself (`sleep`, `pause`, `within`), channels, the end-of-program drain, the tasks of a test (waited for, a panic in one on any worker the test's failure), the blocking pool and its turn (`offload`), `Workers.count`, `Workers.blocking` |
 | `panic.c`             | `torb_panic` and friends, the per-thread stack check, exit code 101, the test hook, one panic at a time |
 | `text.c`              | UTF-8, slices, concatenation, comparison, hashing, `Show`, float formatting, parsing       |
 | `list.c`              | The one contiguous list: growth, shared slices, copy on write, a stable merge sort         |
@@ -48,7 +48,7 @@ deliberately panics says `TORB_IGNORE_LEAKS()`, because a panic runs nothing on 
 | `os/<family>.c`       | The natives of `std/os` one family of systems has: `windows.c`, `linux.c`, `macos.c`, `freebsd.c`, and `posix.c` for what Linux, macOS and FreeBSD share. **Each file is one `#if` from its first line after the includes to its last**, so every file is compiled on every machine and is empty where it does not belong, and no function has an `#ifdef` inside it. A row of the manifest names the systems its native exists on (`availableOn`), which is what keeps a call of one out of another system's build (docs/design/OS.md section 7) |
 | `tests/`              | `harness.h`/`harness.c` plus one `*_test.c` per area, one executable                       |
 
-Not here yet, by design: `io.c` (the poller and the blocking pool, 7.7 slice G) and with it every stream over real IO
+Not here yet, by design: `io.c` (the poller, 7.7 slice G; the blocking pool `offload` runs on is in `task.c`) and with it every stream over real IO
 (`standardInput`, `Process.start`, `File.chunks`). There is no `collect.c` and there will be none: the language has no
 cycle collector (`docs/design/DESTRUCTORS.md` section 9). `File.lines` is also still
 `.Planned`, for 5.7 rather than 5.12: it answers `Result<Iterable<String>, IoError>`, and `Iterable` is a trait-typed
@@ -236,7 +236,8 @@ file - which an OS that locks open files (Windows) would refuse if the handle we
   identifiers and keywords are ASCII.
 - **The heap is libc's `malloc`.** The bump allocator with size-class free lists of BACKEND 2.5 is a replacement
   behind `torb_allocate` and changes nothing above it. A worker's heap is its counters: a block moves to another worker
-  by being re-homed, never copied (`task.c`, "What crosses a worker").
+  by being re-homed; a value somebody else holds too is first copied by the thread that starts the task
+  (`torb_text_privatize` and its siblings, `task.c`, "What crosses a worker").
 - **No small-string optimization**, on purpose: it doubles the code path of every string operation for a win the
   compiler does not need, whose strings are slices of source files.
 - **A child process goes through a shell on POSIX and through none on Windows.** `Process.run` is `CreateProcess` plus one

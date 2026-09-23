@@ -63,12 +63,14 @@
  *   task becomes the only thread that ever touches the block again. Nothing is copied and nothing is recorded: libc
  *   frees a block from any thread, and the block counters of the two heaps balance in their sum (memory.c).
  *
- * Everything else - a shared object, a `Box`, a trait-typed value, a list of strings, a text somebody else holds too -
- * does not cross at all: the task that holds it is started pinned (`torb_task_start`) and runs where it was made, the
- * way every task ran before there was a pool. The compiler writes the test beside every start (backend/c/body.trb,
- * `taskNewStatements`) out of the types of the frame and the four `..._may_move` functions below, and marks a closure's
- * environment shared where its captures pass the same test (`torb_share`). The deep copy of a value that is none of
- * these - what section 6 calls copying a chunk into a worker's heap - is not built: such work runs on one worker.
+ * A text somebody else holds too, a list of strings, a record of those - a value that may be copied soundly - crosses
+ * as a **copy** while the pool has more than one worker: the thread that starts the task replaces it in the frame by an
+ * equal value that shares nothing (`torb_text_privatize`, `torb_list_privatize`, `torb_map_privatize`), before anybody
+ * else can see the frame. Everything else - a shared object, a `Box`, a trait-typed value, a closure whose environment
+ * is not shared - does not cross at all: the task that holds it is started pinned (`torb_task_start`) and runs where
+ * it was made, the way every task ran before there was a pool. The compiler writes the test and the copy beside every
+ * start (backend/c/body.trb, `startStatementOf`) out of the types of the frame and the functions below, and marks a
+ * closure's environment shared where its captures pass the same test (`torb_share`).
  *
  * The result of a task follows from the same rule: a worker that runs a stolen task gives up the scheduler's reference
  * **before** it publishes the completion, so the last release of the task block - and with it the release of a counted
@@ -124,12 +126,62 @@ typedef struct torb_pool_state {
   torb_task *live_last;
   /** What stopped workers did, folded in when they were joined. */
   torb_pool_statistics totals;
+  /**
+   * The value of `busy` at which the main thread wants to be woken because nothing can happen any more: 0, or 1 while a
+   * test body inside the running main task waits for its tasks - the main task itself counts as running.
+   */
+  int64_t floor;
+  /* ---- the test in progress on the main thread ("A panic in a task of a test"); under the tree lock ---- */
+  /** Its number, 0 while no test is in progress; and the last number given out. */
+  uint32_t test_current;
+  uint32_t test_sequence;
+  /** The task its body runs inside (the main task of an entry that waits, or `NULL`): what that makes is the test's. */
+  torb_task *test_host;
+  /** Its tasks that have not completed. Read without the lock by the main thread's loop. */
+  int64_t test_live;
+  /** The main thread waits for them (`torb_test_tasks_end`): the host is suspended below that wait. Main thread only. */
+  uint32_t test_draining;
+  /** Whether a task of it panicked, and the first such panic's message and site. */
+  uint32_t test_failed;
+  torb_location test_at;
+  char test_message[1024];
 } torb_pool_state;
 
-static torb_pool_state torb_pool = { NULL, 1u, 0u, 0u, 0u, 0u, 0, 0, 0u, 0u, NULL, 0u, 0u, 0, NULL, NULL, { 0u, 0u, 0u } };
+/** Blocks copied at a crossing, over the life of the process: any thread that starts a task may count one. */
+static int64_t torb_pool_copies = 0;
+
+static torb_pool_state torb_pool = { NULL, 1u, 0u, 0u, 0u, 0u, 0, 0, 0u, 0u, NULL, 0u, 0u, 0, NULL, NULL,
+                                     { 0u, 0u, 0u, 0u }, 0, 0u, 0u, NULL, 0, 0u, 0u, { NULL, 0u, 0u }, { 0 } };
 
 /** The parent, child and live links of every task. The first lock of the order at the top of the file. */
 static torb_mutex torb_tree = TORB_MUTEX_INITIALIZER;
+
+/*
+ * The blocking pool ("The blocking pool" below). Its threads are workers whose indices start above every worker of the
+ * ring: `TORB_BLOCKING_INBOX` is the queue they share - a worker without a thread - and thread `k` is
+ * `TORB_BLOCKING_INBOX + 1 + k`.
+ */
+#define TORB_BLOCKING_INBOX 2048u
+#define TORB_BLOCKING_DEFAULT 4u
+
+typedef struct torb_blocking_state {
+  /** The threads' workers, `count` of them; `NULL` until the pool first starts. */
+  torb_worker **workers;
+  /** How many threads run now: 0 until a task first moves to the pool. Published with a release. */
+  uint32_t count;
+  /** `torb_workers_blocking()`, read once; 0 until then. */
+  uint32_t configured;
+  /** The runtime tests' choice for the next start, or 0. */
+  uint32_t chosen;
+  /** Tasks in the inbox: what a thread of the pool that has nothing to do looks at before it sleeps. */
+  uint32_t waiting;
+} torb_blocking_state;
+
+static torb_blocking_state torb_blocking;
+/** The queue every thread of the blocking pool takes from. */
+static torb_worker torb_blocking_inbox;
+/** Starting the pool's threads, which the first two tasks to move may ask for at once. */
+static torb_mutex torb_blocking_start_lock = TORB_MUTEX_INITIALIZER;
 
 struct torb_channel {
   torb_header header;
@@ -159,7 +211,18 @@ static TORB_NORETURN void torb_internal_error(const char *message) {
 }
 
 static torb_worker *torb_worker_at(uint32_t index) {
-  return index == 0u ? &torb_main_worker : torb_pool.workers[index];
+  if (index == 0u) {
+    return &torb_main_worker;
+  }
+  if (index >= TORB_BLOCKING_INBOX) {
+    return index == TORB_BLOCKING_INBOX ? &torb_blocking_inbox : torb_blocking.workers[index - TORB_BLOCKING_INBOX - 1u];
+  }
+  return torb_pool.workers[index];
+}
+
+/* A thread of the blocking pool, which takes from the inbox and is never a victim or a thief of the ring. */
+static bool torb_is_blocking_worker(const torb_worker *worker) {
+  return worker->index > TORB_BLOCKING_INBOX;
 }
 
 /* The lock and the condition of a worker, made once. Worker 0's the first time any task is touched. */
@@ -191,9 +254,12 @@ static void torb_wake_worker(torb_worker *worker) {
   torb_mutex_unlock(&worker->lock);
 }
 
-/* One thing less that could still happen. At zero the main thread may be waiting for exactly that. */
+/*
+ * One thing less that could still happen. At zero - or at the floor a test that waits inside the main task set - the
+ * main thread may be waiting for exactly that.
+ */
 static void torb_busy_less(void) {
-  if (torb_atomic_add_i64(&torb_pool.busy, -1) == 1) {
+  if (torb_atomic_add_i64(&torb_pool.busy, -1) - 1 <= torb_atomic_load_i64(&torb_pool.floor)) {
     torb_wake_worker(&torb_main_worker);
   }
 }
@@ -271,7 +337,8 @@ static void torb_enqueue_locked(torb_worker *worker, torb_task *task) {
     worker->queue_first = task;
   }
   worker->queue_last = task;
-  if (task->portable != 0u && task->started == 0u) {
+  /* Only the ring steals, and only from the ring: the queue of a blocking thread and the inbox are nobody's victims */
+  if (task->portable != 0u && task->started == 0u && worker->index < TORB_BLOCKING_INBOX) {
     task->stealable = 1u;
     task->steal_next = NULL;
     task->steal_previous = worker->steal_last;
@@ -324,10 +391,13 @@ static void torb_unqueue_locked(torb_worker *worker, torb_task *task) {
  * happens where the task is queued already. The worker is read again under its lock, because a task that has not run
  * yet may have been taken by another worker in between.
  */
+static void torb_notify_blocking(void);
+
 static void torb_post(torb_task *task) {
   for (;;) {
     uint32_t index = torb_atomic_load_u32(&task->worker);
     torb_worker *owner = torb_worker_at(index);
+    bool inboxed = false;
     torb_mutex_lock(&owner->lock);
     if (torb_atomic_peek_u32(&task->worker) != index) {
       torb_mutex_unlock(&owner->lock);
@@ -335,13 +405,58 @@ static void torb_post(torb_task *task) {
     }
     if (task->queued == 0u) {
       torb_enqueue_locked(owner, task);
+      /* The inbox has no thread of its own: whichever thread of the blocking pool is idle takes it */
+      if (index == TORB_BLOCKING_INBOX) {
+        (void)torb_atomic_add_u32(&torb_blocking.waiting, 1u);
+        inboxed = true;
+      }
     }
     if (owner->sleeping != 0u) {
       owner->wanted = 1u;
       torb_condition_signal(&owner->wake);
     }
     torb_mutex_unlock(&owner->lock);
+    if (inboxed) {
+      torb_notify_blocking();
+    }
     return;
+  }
+}
+
+/* The oldest task of the blocking pool's inbox, made the calling thread's; `NULL` where there is none. */
+static torb_task *torb_take_blocking(torb_worker *self) {
+  torb_task *task;
+  if (torb_atomic_read_u32(&torb_blocking.waiting) == 0u) {
+    return NULL;
+  }
+  torb_mutex_lock(&torb_blocking_inbox.lock);
+  task = torb_blocking_inbox.queue_first;
+  if (task != NULL) {
+    torb_unqueue_locked(&torb_blocking_inbox, task);
+    (void)torb_atomic_sub_u32(&torb_blocking.waiting, 1u);
+    torb_atomic_store_u32(&task->worker, self->index);
+  }
+  torb_mutex_unlock(&torb_blocking_inbox.lock);
+  return task;
+}
+
+/* A task was put into the inbox: one thread of the blocking pool that sleeps is woken to take it. */
+static void torb_notify_blocking(void) {
+  uint32_t count = torb_atomic_load_u32(&torb_blocking.count);
+  uint32_t index;
+  for (index = 0u; index < count; index += 1u) {
+    torb_worker *worker = torb_blocking.workers[index];
+    if (torb_atomic_peek_u32(&worker->sleeping) == 0u) {
+      continue;
+    }
+    torb_mutex_lock(&worker->lock);
+    if (worker->sleeping != 0u && worker->wanted == 0u) {
+      worker->wanted = 1u;
+      torb_condition_signal(&worker->wake);
+      torb_mutex_unlock(&worker->lock);
+      return;
+    }
+    torb_mutex_unlock(&worker->lock);
   }
 }
 
@@ -395,9 +510,10 @@ static void torb_notify_idle(torb_worker *self) {
   if (torb_atomic_read_u32(&torb_pool.sleeping) == 0u) {
     return;
   }
-  for (offset = 1u; offset < count; offset += 1u) {
+  /* From a thread of the blocking pool, every worker of the ring is somebody else */
+  for (offset = 0u; offset < count; offset += 1u) {
     torb_worker *worker = torb_worker_at((self->index + offset) % count);
-    if (torb_atomic_peek_u32(&worker->sleeping) == 0u) {
+    if (worker == self || torb_atomic_peek_u32(&worker->sleeping) == 0u) {
       continue;
     }
     torb_mutex_lock(&worker->lock);
@@ -700,6 +816,7 @@ static void torb_complete(torb_worker *self, torb_task *task, bool finished) {
   torb_task *child;
   bool last;
   bool unqueued = false;
+  bool last_of_test = false;
   if (task->waiting != (uint8_t)TORB_WAITING_NOTHING) {
     torb_internal_error("a task completed while it was still waiting");
   }
@@ -732,7 +849,15 @@ static void torb_complete(torb_worker *self, torb_task *task, bool finished) {
   task->live_previous = NULL;
   task->live_next = NULL;
   (void)torb_atomic_add_i64(&torb_pool.live, -1);
+  /* The last task of the test in progress: the main thread may be waiting for exactly that */
+  if (task->test != 0u && task->test == torb_pool.test_current
+      && torb_atomic_add_i64(&torb_pool.test_live, -1) == 1 && self != &torb_main_worker) {
+    last_of_test = true;
+  }
   torb_mutex_unlock(&torb_tree);
+  if (last_of_test) {
+    torb_wake_worker(&torb_main_worker);
+  }
   /* A cancellation from another worker may have queued it while it ran for the last time */
   torb_mutex_lock(&self->lock);
   if (task->queued != 0u) {
@@ -768,13 +893,84 @@ static void torb_complete(torb_worker *self, torb_task *task, bool finished) {
   }
 }
 
+/*
+ * # A panic in a task of a test
+ *
+ * A test owns the tasks it starts: every task made on the main thread while a test is in progress there - outside the
+ * tasks of that test, which pass it on to theirs - carries the test's number, and the test does not end before they
+ * have completed (`torb_test_tasks_end`). Such a task is resumed under a recovery point of the thread that runs it, so
+ * a panic in it lands here on every worker alike, the main thread included: the first panic of the test's tasks is
+ * recorded as the test's failure, every task of the test is cancelled, and the one that panicked is completed as
+ * cancelled without returning to its machine - so whoever awaits it reads `Fail(Cancelled)` and the pool's counts stay
+ * exact. What its frame held stays allocated, exactly as after a recovered panic of a test body.
+ *
+ * A panic in a task that belongs to no test in progress - the top-level code's, or a test's that already ended - is not
+ * a test's to report, and ends the process as it does on the main thread. Nothing of this runs outside a test run: a
+ * task of no test is resumed without a recovery point.
+ */
+
+/* The tree lock held: the flag of every task of test `test`, which then stops at its next check. */
+static void torb_cancel_test_locked(torb_worker *self, uint32_t test) {
+  torb_task *task;
+  for (task = torb_pool.live_first; task != NULL; task = task->live_next) {
+    if (task->test == test) {
+      torb_cancel_one(self, task);
+    }
+  }
+}
+
+/* The machine of a test's task, under a recovery point of this thread. False where it panicked; `point` says how. */
+static bool torb_resume_recovered(torb_worker *self, torb_task *task, torb_poll *poll, torb_recovery *point) {
+  torb_recovery *previous = torb_begin_recovery(point);
+  if (setjmp(point->destination) != 0) {
+    self->recovery = previous;
+    return false;
+  }
+  *poll = task->resume(task);
+  torb_end_recovery(previous);
+  return true;
+}
+
+/* A task of a test panicked in its machine, whose frames are gone: the test's failure, or the end of the process. */
+static void torb_task_panicked(torb_worker *self, torb_task *task, const torb_recovery *point) {
+  bool attributed;
+  torb_mutex_lock(&torb_tree);
+  attributed = task->test == torb_pool.test_current;
+  if (attributed) {
+    if (torb_pool.test_failed == 0u) {
+      torb_pool.test_failed = 1u;
+      snprintf(torb_pool.test_message, sizeof torb_pool.test_message, "%s", point->message);
+      torb_pool.test_at = point->at;
+    }
+    /* The panicking task too: one that panicked while registered somewhere is taken out of there */
+    torb_cancel_test_locked(self, task->test);
+  }
+  torb_mutex_unlock(&torb_tree);
+  if (!attributed) {
+    self->recovery = NULL;
+    torb_panic_text(point->message, point->at);
+  }
+  torb_complete(self, task, false);
+}
+
 static void torb_run_one(torb_worker *self, torb_task *task) {
   torb_scheduler *scheduler = &self->scheduler;
-  torb_poll poll;
+  torb_poll poll = TORB_POLL_SUSPENDED;
   torb_settle(self, task);
   task->started = 1u;
   scheduler->current = task;
-  poll = task->resume(task);
+  if (task->test == 0u) {
+    poll = task->resume(task);
+  } else {
+    torb_recovery point;
+    if (!torb_resume_recovered(self, task, &poll, &point)) {
+      scheduler->current = NULL;
+      self->ran += 1u;
+      torb_task_panicked(self, task, &point);
+      torb_busy_less();
+      return;
+    }
+  }
   scheduler->current = NULL;
   self->ran += 1u;
   switch (poll) {
@@ -832,6 +1028,15 @@ torb_task *torb_task_new(torb_resume_function resume, size_t frame_size, const t
     if (torb_atomic_load_u8(&parent->cancelled) != 0u) {
       task->cancelled = 1u;
     }
+  }
+  /* A test's task makes tasks of the test, and so does its body on the main thread ("A panic in a task of a test") */
+  if (parent != NULL && parent->test != 0u) {
+    task->test = parent->test;
+  } else if (torb_pool.test_current != 0u && self == &torb_main_worker && parent == torb_pool.test_host) {
+    task->test = torb_pool.test_current;
+  }
+  if (task->test != 0u && task->test == torb_pool.test_current) {
+    (void)torb_atomic_add_i64(&torb_pool.test_live, 1);
   }
   task->live_next = NULL;
   task->live_previous = torb_pool.live_last;
@@ -1037,6 +1242,121 @@ torb_task *torb_pause(void) {
   torb_task *task = torb_task_new(torb_pause_resume, 0u, &torb_element_void);
   torb_task_start(task);
   return task;
+}
+
+/*
+ * # The blocking pool
+ *
+ * `offload` runs a body that blocks - a file, a child process, a C library - on a thread of its own instead of on a
+ * worker, so the worker's other tasks go on (docs/design/CONCURRENCY.md section 16, "The blocking pool, as built"). The
+ * pool is `Workers.blocking()` threads (`TORB_BLOCKING`, default 4), started the first time a task moves to it and
+ * joined with the workers at the end of the program.
+ *
+ * **A thread of the blocking pool is a worker without a place in the ring**: it has a heap (its block counters), a
+ * scheduler and a run queue of its own, and runs the loop every worker runs - but nobody steals from it and it steals
+ * from nobody. What it takes instead is the **inbox**, one queue behind one lock that every thread of the pool shares
+ * (a worker struct without a thread, `TORB_BLOCKING_INBOX`). A task gets there by a **turn** (`torb_blocking_turn`): it
+ * awaits a task of the runtime that finishes at once, and when its worker takes it from its queue after that, the worker
+ * hands it to the inbox instead of running it (`torb_hand_to_blocking`). The first thread of the pool that is idle takes
+ * it, makes it its own, and runs the rest of its machine - the body - to its end.
+ *
+ * **Only a task whose frame may move turns**: one that was started portable, so every value its frame held at its start
+ * was proven movable where it was handed over (or copied, "What crosses a worker"), and the one thing it made since is
+ * the turn's handle, a task of nothing. A task started pinned takes the turn in place: it goes on on its own worker, and
+ * its body blocks that worker exactly as before there was a pool - correct, and sequential. A task that already runs on
+ * a thread of the pool stays there.
+ *
+ * **Cancelling a task of the blocking pool** is the flag, as everywhere. One that waits in the inbox is taken by a thread
+ * and stops at its first check without running its body; one whose body runs is not interrupted - the thread runs the
+ * body to its end, and the machine stops at its next check and releases its frame there, on that thread (section 7, the
+ * row of the blocking pool: the worker is free at once, the frame at the next honest moment).
+ */
+
+static void torb_worker_main(void *argument);
+
+/* Starts the threads of the blocking pool, once; the first two tasks to turn may ask at the same time. */
+static void torb_blocking_start(void) {
+  uint32_t count;
+  uint32_t index;
+  torb_worker **workers;
+  if (torb_atomic_load_u32(&torb_blocking.count) != 0u) {
+    return;
+  }
+  torb_mutex_lock(&torb_blocking_start_lock);
+  if (torb_blocking.count != 0u) {
+    torb_mutex_unlock(&torb_blocking_start_lock);
+    return;
+  }
+  count = torb_blocking.chosen != 0u ? torb_blocking.chosen : (uint32_t)torb_workers_blocking();
+  /* No thread but this one yet (a pool of one worker): what `torb_pool_start` readies before a second thread exists */
+  if (torb_pool_threaded == 0u) {
+    torb_console_prepare();
+    torb_clock_prepare();
+    (void)torb_worker_self();
+    torb_platform_set_worker(&torb_main_worker);
+    torb_pool_threaded = 1u;
+  }
+  torb_worker_prepare(&torb_blocking_inbox, TORB_BLOCKING_INBOX);
+  workers = (torb_worker **)calloc(count, sizeof(torb_worker *));
+  if (workers == NULL) {
+    torb_panic_out_of_memory((size_t)count * sizeof(torb_worker *));
+  }
+  for (index = 0u; index < count; index += 1u) {
+    torb_worker *worker = (torb_worker *)calloc(1u, sizeof(torb_worker));
+    if (worker == NULL) {
+      torb_panic_out_of_memory(sizeof(torb_worker));
+    }
+    torb_worker_prepare(worker, TORB_BLOCKING_INBOX + 1u + index);
+    workers[index] = worker;
+  }
+  torb_blocking.workers = workers;
+  torb_atomic_store_u32(&torb_blocking.count, count);
+  for (index = 0u; index < count; index += 1u) {
+    if (!torb_thread_start(&workers[index]->thread, torb_worker_main, workers[index], TORB_WORKER_STACK_SIZE)) {
+      torb_panic_text("the operating system refused to start a thread of the blocking pool", torb_location_unknown);
+    }
+  }
+  torb_mutex_unlock(&torb_blocking_start_lock);
+}
+
+static torb_poll torb_turn_resume(torb_task *task) {
+  if (torb_task_cancelled(task)) {
+    return TORB_POLL_STOPPED;
+  }
+  *(torb_void *)torb_task_result_slot(task) = 0u;
+  return TORB_POLL_FINISHED;
+}
+
+torb_task *torb_blocking_turn(void) {
+  torb_worker *self = torb_worker_self();
+  torb_task *current = self->scheduler.current;
+  torb_task *turn = torb_task_new(torb_turn_resume, 0u, &torb_element_void);
+  if (current != NULL && current->portable != 0u && !torb_is_blocking_worker(self)) {
+    torb_blocking_start();
+    current->hopping = 1u;
+  }
+  torb_task_start(turn);
+  return turn;
+}
+
+/*
+ * A task whose turn completed was taken from this worker's queue: it goes to the inbox of the blocking pool instead of
+ * running here. Not where it still waits for something or was cancelled - that one runs here and stops at its check. Its
+ * new worker is set under this worker's lock, so a waker that read the old one retries with the inbox; it was taken, so
+ * it counted as running, which the queue of the inbox counts instead.
+ */
+static bool torb_hand_to_blocking(torb_worker *self, torb_task *task) {
+  task->hopping = 0u;
+  if (torb_atomic_load_u8(&task->waiting) != (uint8_t)TORB_WAITING_NOTHING || task->timer >= 0
+      || torb_task_cancelled(task)) {
+    return false;
+  }
+  torb_mutex_lock(&self->lock);
+  torb_atomic_store_u32(&task->worker, TORB_BLOCKING_INBOX);
+  torb_mutex_unlock(&self->lock);
+  torb_post(task);
+  torb_busy_less();
+  return true;
 }
 
 typedef struct torb_within_frame {
@@ -1486,20 +1806,28 @@ static int64_t torb_sleep_span(torb_worker *self) {
 
 /*
  * Waits on the worker's condition until somebody queues a task here, a task that may move is queued anywhere, the first
- * timer is due - or, for the main thread, until nothing can happen any more or what it waits for completed, and for
- * every other worker, until the pool stops. Each of those is checked again under the worker's lock after `sleeping` is
- * set, which is what makes the signal of whoever changes one of them impossible to miss.
+ * timer is due - or, for the main thread, until nothing can happen any more or what it waits for completed (`until`,
+ * or with `for_test` the last task of the test in progress), and for every other worker, until the pool stops. Each of
+ * those is checked again under the worker's lock after `sleeping` is set, which is what makes the signal of whoever
+ * changes one of them impossible to miss.
  */
-static void torb_idle(torb_worker *self, torb_task *until, bool is_main) {
+static void torb_idle(torb_worker *self, torb_task *until, bool is_main, bool for_test) {
   int64_t span = torb_sleep_span(self);
   bool may_sleep;
   torb_mutex_lock(&self->lock);
   self->sleeping = 1u;
   (void)torb_atomic_add_u32(&torb_pool.sleeping, 1u);
-  may_sleep = self->queue_first == NULL && self->wanted == 0u && torb_atomic_read_u32(&torb_pool.stealable) == 0u;
+  may_sleep = self->queue_first == NULL && self->wanted == 0u;
+  /* What the thread would take if it were awake: the ring's steal lists, or the blocking pool's inbox */
+  if (torb_is_blocking_worker(self)) {
+    may_sleep = may_sleep && torb_atomic_read_u32(&torb_blocking.waiting) == 0u;
+  } else {
+    may_sleep = may_sleep && torb_atomic_read_u32(&torb_pool.stealable) == 0u;
+  }
   if (is_main) {
-    may_sleep = may_sleep && torb_atomic_load_i64(&torb_pool.busy) != 0
+    may_sleep = may_sleep && torb_atomic_load_i64(&torb_pool.busy) > torb_atomic_load_i64(&torb_pool.floor)
                 && (until == NULL || torb_atomic_load_u8(&until->status) == (uint8_t)TORB_TASK_PENDING)
+                && (!for_test || torb_atomic_load_i64(&torb_pool.test_live) != 0)
                 && torb_atomic_load_u32(&torb_pool.exiting) == 0u;
   } else {
     may_sleep = may_sleep && torb_atomic_load_u32(&torb_pool.stopping) == 0u;
@@ -1515,12 +1843,16 @@ static void torb_idle(torb_worker *self, torb_task *until, bool is_main) {
 
 /*
  * The loop of a worker. The main thread's runs until `until` completed, or - with `NULL` - until nothing is queued,
- * running or waiting on a timer anywhere; every other worker's until the pool stops.
+ * running or waiting on a timer anywhere; with `for_test`, until the last task of the test in progress completed or
+ * nothing is left that could still happen. Every other worker's runs until the pool stops.
  */
-static void torb_worker_loop(torb_worker *self, torb_task *until, bool is_main) {
+static void torb_worker_loop(torb_worker *self, torb_task *until, bool is_main, bool for_test) {
   for (;;) {
     torb_task *task;
     if (until != NULL && torb_atomic_load_u8(&until->status) != (uint8_t)TORB_TASK_PENDING) {
+      return;
+    }
+    if (for_test && torb_atomic_load_i64(&torb_pool.test_live) == 0) {
       return;
     }
     if (!is_main && torb_atomic_load_u32(&torb_pool.stopping) != 0u) {
@@ -1534,15 +1866,20 @@ static void torb_worker_loop(torb_worker *self, torb_task *until, bool is_main) 
     }
     torb_fire_timers(self);
     task = torb_take_local(self);
+    /* The turn of a task to the blocking pool completed: it goes there instead of running here */
+    if (task != NULL && task->hopping != 0u && torb_hand_to_blocking(self, task)) {
+      continue;
+    }
     if (task == NULL && torb_pool_threaded != 0u) {
-      task = torb_steal(self);
+      task = torb_is_blocking_worker(self) ? torb_take_blocking(self) : torb_steal(self);
     }
     if (task != NULL) {
       torb_run_one(self, task);
       continue;
     }
-    if (is_main && torb_atomic_load_i64(&torb_pool.busy) == 0) {
-      if (until == NULL || torb_atomic_load_u8(&until->status) != (uint8_t)TORB_TASK_PENDING) {
+    if (is_main && torb_atomic_load_i64(&torb_pool.busy) <= torb_atomic_load_i64(&torb_pool.floor)) {
+      /* A test's tasks that wait for what never comes are cancelled at the end of the program, as before tests waited */
+      if (for_test || until == NULL || torb_atomic_load_u8(&until->status) != (uint8_t)TORB_TASK_PENDING) {
         return;
       }
       self->scheduler.running = false;
@@ -1550,7 +1887,7 @@ static void torb_worker_loop(torb_worker *self, torb_task *until, bool is_main) 
       torb_panic_text("deadlock: every task is waiting for another one, and nothing is left that could wake one",
                       torb_location_unknown);
     }
-    torb_idle(self, until, is_main);
+    torb_idle(self, until, is_main, for_test);
   }
 }
 
@@ -1564,7 +1901,7 @@ void torb_scheduler_run(torb_task *until) {
   }
   self->scheduler.running = true;
   torb_pool.until = until;
-  torb_worker_loop(self, until, true);
+  torb_worker_loop(self, until, true, false);
   torb_pool.until = NULL;
   self->scheduler.running = false;
 }
@@ -1606,7 +1943,7 @@ static TORB_NORETURN void torb_exit_from_worker(torb_worker *self, torb_task *cu
     torb_busy_less();
   }
   torb_wake_worker(&torb_main_worker);
-  torb_worker_loop(self, NULL, false);
+  torb_worker_loop(self, NULL, false, false);
   torb_raw_free(self->scheduler.timers, (size_t)self->scheduler.timer_capacity * sizeof(torb_timer));
   self->scheduler.timers = NULL;
   self->scheduler.timer_capacity = 0u;
@@ -1617,10 +1954,14 @@ void torb_scheduler_exit(int64_t code) {
   torb_worker *self = torb_worker_self();
   torb_task *current = self->scheduler.current;
   torb_task *awaited = self == &torb_main_worker ? torb_pool.until : NULL;
+  /* A test body inside a task of the main thread that waits for the test's tasks: that task never returns either */
+  torb_task *host = self == &torb_main_worker && torb_pool.test_draining != 0u ? torb_pool.test_host : NULL;
   torb_task *task;
   if (torb_atomic_load_i64(&torb_pool.live) == 0 && awaited == NULL) {
     return;
   }
+  /* The program ends from here on: a panic on the way is the process's, never a jump back into a test that is left */
+  self->recovery = NULL;
   /* Told first, while this task still counts as running, so the main thread cannot see the pool go quiet before it */
   if (self != &torb_main_worker) {
     torb_mutex_lock(&torb_main_worker.lock);
@@ -1650,6 +1991,12 @@ void torb_scheduler_exit(int64_t code) {
     torb_complete(self, current, false);
     torb_busy_less();
   }
+  if (host != NULL && host != current) {
+    torb_complete(self, host, false);
+    torb_busy_less();
+  }
+  torb_pool.test_draining = 0u;
+  (void)torb_atomic_add_i64(&torb_pool.floor, -torb_atomic_load_i64(&torb_pool.floor));
   self->scheduler.running = false;
   torb_pool.until = NULL;
   torb_scheduler_finish();
@@ -1664,6 +2011,71 @@ size_t torb_task_live_count(void) {
 
 torb_task *torb_task_current(void) {
   return torb_worker_current()->scheduler.current;
+}
+
+/* ------------------------------------------------------------------------------------------- the tasks of a test --- */
+
+bool torb_test_tasks_begin(void) {
+  torb_worker *self = torb_worker_current();
+  if (self != &torb_main_worker) {
+    return false;
+  }
+  (void)torb_worker_self();
+  torb_mutex_lock(&torb_tree);
+  if (torb_pool.test_current != 0u) {
+    torb_mutex_unlock(&torb_tree);
+    return false;
+  }
+  torb_pool.test_sequence += 1u;
+  if (torb_pool.test_sequence == 0u) {
+    torb_pool.test_sequence = 1u;
+  }
+  torb_pool.test_current = torb_pool.test_sequence;
+  torb_pool.test_host = self->scheduler.current;
+  torb_pool.test_failed = 0u;
+  torb_mutex_unlock(&torb_tree);
+  return true;
+}
+
+/*
+ * The test's tasks run here, on the main thread and every other worker, until the last of them completed or nothing is
+ * left that could still happen - a task that waits for what never comes then waits on, and is cancelled at the end of
+ * the program as it always was. Where the body runs inside a task of the main thread (an entry file that waits), that
+ * task counts as running for as long as this waits, so "nothing is left" is one thing that could still happen, not zero.
+ */
+bool torb_test_tasks_end(bool abandon, torb_recovery *failure) {
+  torb_worker *self = torb_worker_current();
+  bool failed;
+  if (abandon) {
+    torb_mutex_lock(&torb_tree);
+    torb_cancel_test_locked(self, torb_pool.test_current);
+    torb_mutex_unlock(&torb_tree);
+  }
+  if (torb_atomic_load_i64(&torb_pool.test_live) != 0) {
+    torb_task *host = self->scheduler.current;
+    bool running = self->scheduler.running;
+    int64_t floor = host != NULL ? 1 : 0;
+    (void)torb_atomic_add_i64(&torb_pool.floor, floor);
+    torb_pool.test_draining = 1u;
+    self->scheduler.running = true;
+    torb_worker_loop(self, NULL, true, true);
+    self->scheduler.running = running;
+    self->scheduler.current = host;
+    torb_pool.test_draining = 0u;
+    (void)torb_atomic_add_i64(&torb_pool.floor, -floor);
+  }
+  torb_mutex_lock(&torb_tree);
+  failed = torb_pool.test_failed != 0u;
+  if (failed && failure != NULL) {
+    snprintf(failure->message, sizeof failure->message, "%s", torb_pool.test_message);
+    failure->at = torb_pool.test_at;
+  }
+  torb_pool.test_current = 0u;
+  torb_pool.test_host = NULL;
+  torb_pool.test_failed = 0u;
+  (void)torb_atomic_add_i64(&torb_pool.test_live, -torb_atomic_load_i64(&torb_pool.test_live));
+  torb_mutex_unlock(&torb_tree);
+  return failed;
 }
 
 /* ------------------------------------------------------------------------------------------ the worker pool --- */
@@ -1699,8 +2111,39 @@ int64_t torb_workers_count(void) {
   return (int64_t)torb_pool.configured;
 }
 
+int64_t torb_workers_blocking(void) {
+  if (torb_blocking.configured == 0u) {
+    const char *given = getenv("TORB_BLOCKING");
+    uint32_t count = TORB_BLOCKING_DEFAULT;
+    if (given != NULL) {
+      const char *digit = given;
+      bool valid = *digit != '\0';
+      count = 0u;
+      for (; *digit != '\0'; digit += 1) {
+        if (*digit < '0' || *digit > '9' || count > TORB_MAXIMUM_WORKERS) {
+          valid = false;
+          break;
+        }
+        count = count * 10u + (uint32_t)(*digit - '0');
+      }
+      if (!valid || count < 1u || count > TORB_MAXIMUM_WORKERS) {
+        fflush(stdout);
+        fprintf(stderr, "error: TORB_BLOCKING must be a whole number from 1 to 1024, and it is \"%s\"\n", given);
+        fflush(stderr);
+        exit(2);
+      }
+    }
+    torb_blocking.configured = count;
+  }
+  return (int64_t)torb_blocking.configured;
+}
+
 uint32_t torb_worker_index(void) {
   return torb_worker_current()->index;
+}
+
+bool torb_worker_is_blocking(void) {
+  return torb_is_blocking_worker(torb_worker_current());
 }
 
 void torb_pool_set_workers(uint32_t count) {
@@ -1708,6 +2151,13 @@ void torb_pool_set_workers(uint32_t count) {
     torb_internal_error("the number of workers was changed while the pool runs");
   }
   torb_pool.chosen = count > TORB_MAXIMUM_WORKERS ? TORB_MAXIMUM_WORKERS : count;
+}
+
+void torb_pool_set_blocking(uint32_t count) {
+  if (torb_blocking.count != 0u) {
+    torb_internal_error("the size of the blocking pool was changed while it runs");
+  }
+  torb_blocking.chosen = count > TORB_MAXIMUM_WORKERS ? TORB_MAXIMUM_WORKERS : count;
 }
 
 torb_pool_statistics torb_pool_statistics_now(void) {
@@ -1718,8 +2168,21 @@ torb_pool_statistics torb_pool_statistics_now(void) {
     now.resumed += torb_pool.workers[index]->ran;
     now.stolen += torb_pool.workers[index]->stole;
   }
+  for (index = 0u; index < torb_blocking.count; index += 1u) {
+    now.resumed += torb_blocking.workers[index]->ran;
+  }
   now.stolen += torb_main_worker.stole;
+  now.copied = (uint64_t)torb_atomic_load_i64(&torb_pool_copies);
   return now;
+}
+
+void torb_pool_count_copy(void) {
+  (void)torb_atomic_add_i64(&torb_pool_copies, 1);
+}
+
+bool torb_task_copies(void) {
+  uint32_t count = torb_pool.chosen != 0u ? torb_pool.chosen : (uint32_t)torb_workers_count();
+  return count > 1u;
 }
 
 size_t torb_pool_sum_live_blocks(void) {
@@ -1727,6 +2190,9 @@ size_t torb_pool_sum_live_blocks(void) {
   uint32_t index;
   for (index = 1u; index < torb_pool.count; index += 1u) {
     sum += torb_pool.workers[index]->heap.live_blocks;
+  }
+  for (index = 0u; index < torb_blocking.count; index += 1u) {
+    sum += torb_blocking.workers[index]->heap.live_blocks;
   }
   return sum;
 }
@@ -1736,6 +2202,9 @@ size_t torb_pool_sum_immortal_blocks(void) {
   uint32_t index;
   for (index = 1u; index < torb_pool.count; index += 1u) {
     sum += torb_pool.workers[index]->heap.immortal_blocks;
+  }
+  for (index = 0u; index < torb_blocking.count; index += 1u) {
+    sum += torb_blocking.workers[index]->heap.immortal_blocks;
   }
   return sum;
 }
@@ -1748,7 +2217,7 @@ static void torb_worker_main(void *argument) {
   /* What a POSIX thread knows of its stack is the size it was made with; a quarter of a megabyte is left for what is
      above this frame. Windows reads the bottom out of the thread's TEB instead. */
   torb_set_thread_stack_floor((uintptr_t)&top - (TORB_WORKER_STACK_SIZE - (size_t)256u * 1024u));
-  torb_worker_loop(self, NULL, false);
+  torb_worker_loop(self, NULL, false, false);
   torb_raw_free(self->scheduler.timers, (size_t)self->scheduler.timer_capacity * sizeof(torb_timer));
   self->scheduler.timers = NULL;
   self->scheduler.timer_capacity = 0u;
@@ -1800,33 +2269,54 @@ static void torb_pool_start(void) {
  * what each counted - its blocks, its resumes, its thefts - is folded into worker 0, so the report of memory.c still
  * sums to the exact number. After it the process has one thread again, and a later task starts the pool anew.
  */
+/* A stopped thread's worker: what it counted folded into worker 0, and its struct freed. */
+static void torb_fold_worker(torb_worker *worker) {
+  torb_main_worker.heap.live_blocks += worker->heap.live_blocks;
+  torb_main_worker.heap.immortal_blocks += worker->heap.immortal_blocks;
+  torb_pool.totals.resumed += worker->ran;
+  torb_pool.totals.stolen += worker->stole;
+  torb_condition_destroy(&worker->wake);
+  torb_mutex_destroy(&worker->lock);
+  free(worker);
+}
+
 static void torb_pool_stop(void) {
   uint32_t index;
   uint32_t count = torb_pool.count;
-  if (torb_pool.started == 0u) {
+  uint32_t blocking = torb_blocking.count;
+  if (torb_pool.started == 0u && blocking == 0u) {
     return;
   }
-  if (count > 1u) {
+  if (count > 1u || blocking > 0u) {
     torb_atomic_store_u32(&torb_pool.stopping, 1u);
     for (index = 1u; index < count; index += 1u) {
       torb_wake_worker(torb_pool.workers[index]);
     }
+    for (index = 0u; index < blocking; index += 1u) {
+      torb_wake_worker(torb_blocking.workers[index]);
+    }
     for (index = 1u; index < count; index += 1u) {
       torb_thread_join(&torb_pool.workers[index]->thread);
     }
-    for (index = 1u; index < count; index += 1u) {
-      torb_worker *worker = torb_pool.workers[index];
-      torb_main_worker.heap.live_blocks += worker->heap.live_blocks;
-      torb_main_worker.heap.immortal_blocks += worker->heap.immortal_blocks;
-      torb_pool.totals.resumed += worker->ran;
-      torb_pool.totals.stolen += worker->stole;
-      torb_condition_destroy(&worker->wake);
-      torb_mutex_destroy(&worker->lock);
-      free(worker);
+    for (index = 0u; index < blocking; index += 1u) {
+      torb_thread_join(&torb_blocking.workers[index]->thread);
     }
-    free(torb_pool.workers);
-    torb_pool.workers = NULL;
-    torb_pool.count = 1u;
+    for (index = 1u; index < count; index += 1u) {
+      torb_fold_worker(torb_pool.workers[index]);
+    }
+    for (index = 0u; index < blocking; index += 1u) {
+      torb_fold_worker(torb_blocking.workers[index]);
+    }
+    if (count > 1u) {
+      free(torb_pool.workers);
+      torb_pool.workers = NULL;
+      torb_pool.count = 1u;
+    }
+    if (blocking > 0u) {
+      free(torb_blocking.workers);
+      torb_blocking.workers = NULL;
+      torb_atomic_store_u32(&torb_blocking.count, 0u);
+    }
     torb_pool_threaded = 0u;
     torb_pool.stopping = 0u;
   }

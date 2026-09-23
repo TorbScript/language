@@ -16,6 +16,12 @@
  * **A recovered panic runs nothing on the way out**, exactly as an ordinary panic runs nothing, so a run with a failed
  * test leaks what the aborted frames held and the leak gate does not apply to one.
  *
+ * **A test owns the tasks it starts.** The body runs inside a scope of the pool (`torb_test_tasks_begin`), and the test
+ * ends only once every task made in it has completed (`torb_test_tasks_end`), wherever the pool ran them. A panic in one
+ * of them - on the main thread or on any other worker - is caught by a recovery point of the thread that runs it and
+ * becomes this test's failure, with its message and site, exactly as a panic of the body itself; the test's other tasks
+ * are cancelled, and the next test runs. A body that panics cancels the tasks it started and waits for them to stop.
+ *
  * `torb test` over a directory is **one binary for every test file**, so the counts of the run and the summary line
  * live here as well: `torb_test_file` writes the name of the file whose tests come next and `torb_test_finish` writes
  * the blank line, `N passed, M failed (K files)`, and the exit code. A test file that fails does not stop the file
@@ -109,16 +115,25 @@ void torb_test_case(torb_text name, torb_closure body) {
   char full[TORB_TEST_NAME_SIZE];
   torb_recovery point;
   torb_recovery *previous;
+  bool scoped;
   torb_test_full_name(full, sizeof full, name);
+  scoped = torb_test_tasks_begin();
   previous = torb_begin_recovery(&point);
   if (setjmp(point.destination) == 0) {
     ((void (*)(torb_environment *))body.code)(body.environment);
     torb_end_recovery(previous);
-    torb_test_passed += 1;
-    torb_test_line_of("  ok      ", full, strlen(full));
-    return;
+    /* A task the body started that panicked, on whichever worker, fails the test as the body would have */
+    if (!scoped || !torb_test_tasks_end(false, &point)) {
+      torb_test_passed += 1;
+      torb_test_line_of("  ok      ", full, strlen(full));
+      return;
+    }
+  } else {
+    torb_end_recovery(previous);
+    if (scoped) {
+      (void)torb_test_tasks_end(true, NULL);
+    }
   }
-  torb_end_recovery(previous);
   torb_test_failed += 1;
   torb_test_line_of("  FAILED  ", full, strlen(full));
   torb_test_print_indented(point.message);

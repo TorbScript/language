@@ -9,13 +9,22 @@
  * of the runtime (`torb_text_may_move`, `torb_list_may_move`, `torb_map_may_move`, `torb_closure_may_move`) on the
  * value itself. A type none of that covers never crosses, and the task that holds one stays on its worker.
  *
+ * Where the test fails on a value that may be **copied** soundly - a `String` somebody else holds too, a list of
+ * `String`s, a record of those - the frame of a task is made private instead while the pool has more than one worker:
+ * each such value is replaced by an equal one that shares no counted block with anything else, on the thread that
+ * starts the task, before anybody else can see the frame ([privateOf], docs/design/CONCURRENCY.md section 16, "The
+ * copy at the crossing"). What has an identity - a shared object, a task or a channel of counted items, a captured
+ * `var`, a trait-typed value whose payload nothing here can walk - is never copied, and neither is a value whose type
+ * implements `Close`, which a copy would close twice.
+ *
  * # Related
  *
  * - [crossingOf] - the test of one value.
  * - [frameCrossingOf] - the test of every argument of a `TaskNew`, which picks the start that lets a task move.
+ * - [framePrivateOf] - the copy that makes a frame movable where the test cannot.
  */
 
-use IrProgram, IrTypeId, RuntimeKind from "../../ir/ir"
+use IrProgram, IrTypeId, LayoutId, RuntimeKind from "../../ir/ir"
 use containsCountedType from "../../ir/layout"
 use memberNameOf from "./type"
 use CExpression from "./writer"
@@ -129,6 +138,244 @@ fn combinedCrossingOf(program: IrProgram, members: List<CExpression>, types: Lis
   var combined = Crossing.Always
   for index in 0..members.length() {
     combined = bothOf combined, crossingOf(program, types[index], members[index], isTransfer)
+  }
+  combined
+}
+
+/**
+ * The copy that makes the value of type `id` in `place` private, for the frame of a task that has not run: `Always`
+ * where nothing needs copying (nothing counted inside), `Never` where it cannot be copied soundly, and otherwise the
+ * calls of the runtime that copy what somebody else holds too, in place, joined with `&&` - each answers whether its
+ * value could be made private, and a `false` pins the task.
+ */
+public fn privateOf(program: IrProgram, id: IrTypeId, place: CExpression): Crossing {
+  if !containsCountedType(program, id) {
+    return Crossing.Always
+  }
+  const inner = countedFormOf program, id
+  if inner != id {
+    return privateOf program, inner, place
+  }
+  if const Some(layout) = inlineCountedLayoutOf(program, inner) {
+    const shape = program.layoutAt layout
+    // A variant would need a switch on its case, and a type with `close()` is a resource a copy would close twice
+    if !shape.variants.isEmpty() || program.closeFunctions.containsKey(layout.value) {
+      return Crossing.Never
+    }
+    var combined = Crossing.Always
+    for field in shape.fields {
+      const member = CExpression.Member place, memberNameOf(field)
+      combined = bothOf combined, privateOf(program, field.annotation, member)
+    }
+    return combined
+  }
+  match program.typeAt(inner) {
+    .Text => Crossing.When CExpression.Call(CExpression.Name("torb_text_privatize"), [CExpression.AddressOf(place)])
+    // An environment is not copied: the closure crosses where it is shared, exactly as without the copy
+    .Closure(_) => {
+      const environment = CExpression.Member place, environmentMemberName
+      Crossing.When CExpression.Call(CExpression.Name("torb_closure_may_move"), [environment])
+    }
+    .Runtime(kind, arguments) => runtimePrivateOf program, kind, arguments, place
+    _ => Crossing.Never
+  }
+}
+
+/** A container is copied by the runtime, with what makes one element private; a task and a channel never are. */
+fn runtimePrivateOf(program: IrProgram, kind: RuntimeKind, arguments: List<IrTypeId>, place: CExpression): Crossing {
+  const address = CExpression.AddressOf place
+  match kind {
+    .ListStorage => {
+      match elementPrivateOf(program, arguments, 0) {
+        Some(element) => Crossing.When CExpression.Call(CExpression.Name("torb_list_privatize"), [address, element])
+        None => Crossing.Never
+      }
+    }
+    .MapStorage => {
+      const key = match elementPrivateOf(program, arguments, 0) {
+        Some(found) => found
+        None => {
+          return Crossing.Never
+        }
+      }
+      const value = match elementPrivateOf(program, arguments, 1) {
+        Some(found) => found
+        None => {
+          return Crossing.Never
+        }
+      }
+      Crossing.When CExpression.Call(CExpression.Name("torb_map_privatize"), [address, key, value])
+    }
+    .SetStorage => {
+      match elementPrivateOf(program, arguments, 0) {
+        Some(item) => Crossing.When CExpression.Call(CExpression.Name("torb_map_privatize"), [address, item, noFunction])
+        None => Crossing.Never
+      }
+    }
+    .TaskObject => plainArgumentsCrossing program, arguments
+    .ChannelObject => plainArgumentsCrossing program, arguments
+    _ => Crossing.Never
+  }
+}
+
+/** The function of a plain side of a container: there is nothing in it to copy. */
+const noFunction = CExpression.Literal "NULL"
+
+/**
+ * What makes one element of a container private, through a `void *`: `NULL` for a plain element, the runtime's own
+ * function for a `String`, the `P_<layout>` the emitter writes for a record or a tuple that may be copied
+ * ([privateHelperOf]), and `None` for anything else, which leaves the container - and its task - where it is.
+ */
+fn elementPrivateOf(program: IrProgram, arguments: List<IrTypeId>, index: Int): CExpression? {
+  if index >= arguments.length() {
+    return None
+  }
+  const element = arguments[index]
+  if !containsCountedType(program, element) {
+    return Some noFunction
+  }
+  const inner = countedFormOf program, element
+  if const .Text = program.typeAt(inner) {
+    return Some CExpression.Name("torb_text_privatize_place")
+  }
+  if const Some(layout) = inlineCountedLayoutOf(program, inner) {
+    var visiting: List<Int> = []
+    if !isCopyableLayout(program, layout, visiting) {
+      return None
+    }
+    return Some CExpression.Name(privateHelperNameOf(program, layout))
+  }
+  None
+}
+
+/**
+ * Whether [privateHelperOf] of a layout is anything but `Never`, answered without building it: a layout that holds a
+ * list of itself asks about itself, and `visiting` is what ends that - a layout already being asked about is taken to
+ * be copyable, because whatever else it holds is asked about on the way.
+ */
+fn isCopyableLayout(program: IrProgram, layout: LayoutId, var visiting: List<Int>): Bool {
+  if visiting.contains(layout.value) {
+    return true
+  }
+  const shape = program.layoutAt layout
+  if !shape.variants.isEmpty() || program.closeFunctions.containsKey(layout.value) {
+    return false
+  }
+  visiting.append layout.value
+  for field in shape.fields {
+    if !isCopyable(program, field.annotation, visiting) {
+      return false
+    }
+  }
+  true
+}
+
+/** The same question of one type, in the words of [privateOf]. */
+fn isCopyable(program: IrProgram, id: IrTypeId, var visiting: List<Int>): Bool {
+  if !containsCountedType(program, id) {
+    return true
+  }
+  const inner = countedFormOf program, id
+  if const Some(layout) = inlineCountedLayoutOf(program, inner) {
+    return isCopyableLayout program, layout, visiting
+  }
+  match program.typeAt(inner) {
+    .Text => true
+    .Closure(_) => true
+    .Runtime(kind, arguments) => {
+      match kind {
+        .ListStorage => isCopyableElement program, arguments, 0, visiting
+        .SetStorage => isCopyableElement program, arguments, 0, visiting
+        .MapStorage => isCopyableElement(program, arguments, 0, visiting) && isCopyableElement(program, arguments, 1, visiting)
+        .TaskObject => !arguments.any({ containsCountedType program, _ })
+        .ChannelObject => !arguments.any({ containsCountedType program, _ })
+        _ => false
+      }
+    }
+    _ => false
+  }
+}
+
+/** An element [elementPrivateOf] has a function for. */
+fn isCopyableElement(program: IrProgram, arguments: List<IrTypeId>, index: Int, var visiting: List<Int>): Bool {
+  if index >= arguments.length() {
+    return false
+  }
+  const element = arguments[index]
+  if !containsCountedType(program, element) {
+    return true
+  }
+  const inner = countedFormOf program, element
+  if const .Text = program.typeAt(inner) {
+    return true
+  }
+  if const Some(layout) = inlineCountedLayoutOf(program, inner) {
+    return isCopyableLayout program, layout, visiting
+  }
+  false
+}
+
+/** The name of the function that makes one value of an inline layout private through a `void *`. */
+public fn privateHelperNameOf(program: IrProgram, layout: LayoutId): String {
+  "P_{program.layoutAt(layout).name}"
+}
+
+/**
+ * What the body of `P_<layout>` answers: the copy of every field of `*value`, where `value` is the `void *` the
+ * function was handed, cast to the layout.
+ */
+public fn privateHelperOf(program: IrProgram, layout: LayoutId): Crossing {
+  const shape = program.layoutAt layout
+  if !shape.variants.isEmpty() || program.closeFunctions.containsKey(layout.value) {
+    return Crossing.Never
+  }
+  const value = CExpression.Name "value"
+  var combined = Crossing.Always
+  for field in shape.fields {
+    const member = CExpression.PointerMember value, memberNameOf(field)
+    combined = bothOf combined, privateOf(program, field.annotation, member)
+  }
+  combined
+}
+
+/**
+ * The `P_<layout>` functions an expression the emitter wrote names, by their names: what the emitter has to define
+ * before the functions that start tasks.
+ */
+public fn privateHelpersNamedIn(expression: CExpression, var names: List<String>) {
+  match expression {
+    .Name(name) => {
+      if name.startsWith("P_") && !names.contains(name) {
+        names.append name
+      }
+    }
+    .Call(callee, arguments) => {
+      privateHelpersNamedIn callee, names
+      for argument in arguments {
+        privateHelpersNamedIn argument, names
+      }
+    }
+    .Binary(left, _, right) => {
+      privateHelpersNamedIn left, names
+      privateHelpersNamedIn right, names
+    }
+    .Conditional(condition, then, otherwise) => {
+      privateHelpersNamedIn condition, names
+      privateHelpersNamedIn then, names
+      privateHelpersNamedIn otherwise, names
+    }
+    _ => {}
+  }
+}
+
+/**
+ * The copy of a whole frame: every argument a `TaskNew` moves into it, each made private in its member. `Never` where
+ * one of them cannot be copied soundly.
+ */
+public fn framePrivateOf(program: IrProgram, members: List<CExpression>, types: List<IrTypeId>): Crossing {
+  var combined = Crossing.Always
+  for index in 0..members.length() {
+    combined = bothOf combined, privateOf(program, types[index], members[index])
   }
   combined
 }

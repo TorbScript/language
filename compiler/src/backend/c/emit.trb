@@ -39,6 +39,7 @@ use dropFunctionOf, pointerTo, closureThunkNameOf, environmentLayoutOfFunction f
 use retainChildrenFunctionOf from "./body"
 use variantInitializerParts, boxedLayoutOf, countedFormOf, inlineCountedLayoutOf from "./body"
 use retainStatement, releaseStatement, describeCounted from "./body"
+use frameCrossingOf, framePrivateOf, privateHelperOf, privateHelperNameOf, privateHelpersNamedIn from "./crossing"
 
 /**
  * One entry function the generated `main` calls, and what it is called for.
@@ -71,6 +72,7 @@ public fn emitProgram(program: IrProgram, entries: List<ProgramEntry>): Emission
   // The frames of the tasks come after the layouts, because a frame slot is a value of any of them
   emitTaskFrames emission, program, functions
   emitCountedHelpers emission, program, functions, layouts
+  emitPrivateHelpers emission, program, functions
   emitStaticData emission, program, functions
   emitConstantCellStorage emission, program, functions
   emitPrototypes emission, program, functions
@@ -1274,6 +1276,75 @@ fn emitCountedHelpers(var emission: Emission, program: IrProgram, functions: Lis
 
 fn helperHeadOf(prefix: String, name: String): String {
   "static void {prefix}{name}(void *block)"
+}
+
+/**
+ * The `P_<layout>` functions the starts of tasks name: each makes one element of a container private, the element being
+ * a record or a tuple (docs/design/CONCURRENCY.md section 16, "The copy at the crossing"). Which ones are named is read
+ * off the very expressions the starts are written with ([framePrivateOf]), and then off the bodies of those functions,
+ * so exactly the ones called are defined - an unused `static` function is an error under `-Werror`.
+ */
+fn emitPrivateHelpers(var emission: Emission, program: IrProgram, functions: List<IrFunction>) {
+  var names: List<String> = []
+  for function in functions {
+    for block in function.blocks {
+      for instruction in block.instructions {
+        if const .TaskNew(_, _, _, arguments) = instruction {
+          var places: List<CExpression> = []
+          var types: List<IrTypeId> = []
+          for argument in arguments {
+            places.append CExpression.Name("value")
+            types.append typeOfSlotOf(function, argument.slot)
+          }
+          if const .Always = frameCrossingOf(program, places, types) {
+            continue
+          }
+          if const .When(copy) = framePrivateOf(program, places, types) {
+            privateHelpersNamedIn copy, names
+          }
+        }
+      }
+    }
+  }
+  var layouts: List<LayoutId> = []
+  var index = 0
+  while index < names.length() {
+    const name = names[index]
+    index = index + 1
+    const found = match program.layoutNamed(name[2..]) {
+      Some(layout) => layout
+      None => {
+        continue
+      }
+    }
+    layouts.append found
+    if const .When(copy) = privateHelperOf(program, found) {
+      privateHelpersNamedIn copy, names
+    }
+  }
+  if layouts.isEmpty() {
+    return
+  }
+  write emission, CDeclaration.Comment("Making one element private at the crossing of a worker (CONCURRENCY.md 16).")
+  for layout in layouts {
+    write emission, CDeclaration.Prototype(privateHeadOf(program, layout))
+  }
+  for layout in layouts {
+    const name = program.layoutAt(layout).name
+    const cast = CExpression.Cast "{name} *", CExpression.Name("block")
+    var body = [CStatement.Declaration("{name} *", "value", Some(cast))]
+    const answer = match privateHelperOf(program, layout) {
+      .When(copy) => copy
+      .Always => CExpression.Literal "true"
+      .Never => CExpression.Literal "false"
+    }
+    body.append CStatement.Return(Some(answer))
+    write emission, CDeclaration.Definition("", privateHeadOf(program, layout), body)
+  }
+}
+
+fn privateHeadOf(program: IrProgram, layout: LayoutId): String {
+  "static bool {privateHelperNameOf(program, layout)}(void *block)"
 }
 
 /** One helper: the block as a pointer to its layout, then one statement per counted field. */

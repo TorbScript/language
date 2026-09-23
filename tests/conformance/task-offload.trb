@@ -1,0 +1,38 @@
+/**
+ * `offload` runs a body on a thread of the blocking pool and answers what the body answers: eight of them at once, read
+ * in the order they were started, a body whose closure captures a `String` built at run time - which may not cross to
+ * another thread and runs on the worker that asked instead, with the same answer - and the size of the pool. The
+ * program runs with four workers and again with one (`task-offload.workers`), and prints the same bytes both times;
+ * every block is freed, whichever thread made it.
+ */
+use offload, Workers from "std/task"
+
+/** Steps of the Collatz sequence from `start` down to 1. */
+fn collatz(start: Int): Int {
+  var steps = 0
+  var value = start
+  while value != 1 {
+    value = if value.remainder(2) == 0 { value / 2 } else { 3 * value + 1 }
+    steps = steps + 1
+  }
+  steps
+}
+
+var tasks: List<Task<Int>> = []
+for index in 0..8 {
+  tasks.append offload({ collatz(27 + index) })
+}
+var steps: List<Int> = []
+for task in tasks {
+  steps.append(task.await() ?? 0)
+}
+print "eight bodies on the blocking pool: {steps}"
+
+const word = "word" + 3.show()
+const length = offload({ word.byteLength() }).await() ?? 0
+print "a body over a text built at run time: {length}"
+
+const shouted = offload({ "loud".toUpperCase() }).await() ?? ""
+print "a text made on the blocking pool: {shouted}"
+
+print "the blocking pool has {Workers.blocking()} threads"

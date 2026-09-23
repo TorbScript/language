@@ -215,7 +215,10 @@ typedef struct torb_worker {
   /* ---- the thread's own ---- */
   torb_heap heap;
   torb_scheduler scheduler;
-  /** Where a panic of this thread jumps instead of ending the process: `runtime/test.c` around one test body. */
+  /**
+   * Where a panic of this thread jumps instead of ending the process: `test.c` around a test body, `task.c` around the
+   * resume of a task that belongs to a test.
+   */
   torb_recovery *recovery;
   uint32_t index;
   /* ---- behind `lock` ---- */
@@ -303,5 +306,8 @@ void torb_set_thread_stack_floor(uintptr_t floor);
 /** Readies stdout, stderr and the clock before a second thread exists, so no first use races (console.c, clock.c). */
 void torb_console_prepare(void);
 void torb_clock_prepare(void);
+
+/** One block copied at a crossing, for `torb_pool_statistics.copied` (text.c, list.c, map.c). From any thread. */
+void torb_pool_count_copy(void);
 
 #endif /* TORB_POOL_H */

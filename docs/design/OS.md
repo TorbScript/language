@@ -1591,7 +1591,8 @@ this design adds only the rule that a module path inside `std/os` is a valid gra
    every machine, each file guarded as a whole.
 7. **`Timestamp` in `std/time`**, owned by that package's own design; `System.bootTime` waits for it.
 8. **The blocking pool and `offload`** (CONCURRENCY section 7, milestone 7.7) for the waiting calls of section 4.
-   Until then their bodies call the native directly.
+   *Built* (CONCURRENCY section 16, "The blocking pool, as built"); the waiting calls of section 4 still call their
+   native directly, and move under `offload` when they are written.
 9. **Not required, noted:** package-private visibility would let the `native.trb` modules be unreachable from outside
    `std/os`. Section 3 explains why the design does not need it.
 
