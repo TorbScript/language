@@ -727,7 +727,17 @@ group "The members of a type" {
     assert(noteMessages(text) == ["A field is `x: Type`, a constant of the type is `static x = ...`"])
   }
 
-  test "a trait cannot require a constant without a value yet" {
-    assert messages("trait Zero \{\n  static pi: Self\n\}").contains("A constant of the type needs a value")
+  test "a constant with a type and without a value parses as a requirement, and the checker says where it may stand" {
+    assert messages("trait Zero \{\n  static zero: Self\n\}").isEmpty()
+    const members = membersOf "  static zero: Int"
+    match members[0].kind {
+      .Constant(binding) => assert binding.required
+      other => panic "Expected a constant, found {other}"
+    }
+  }
+
+  test "a constant without a type and without a value is still a binding without a value" {
+    const found = messages "type Probe \{\n  static zero\n\}"
+    assert found.contains("A binding needs a value: there are no uninitialized bindings and no default values")
   }
 }

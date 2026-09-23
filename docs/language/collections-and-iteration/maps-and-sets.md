@@ -86,7 +86,9 @@ Set.of(1, 2, 3)                          from arguments, needs Item: Hash
    `removed` follows the usual pattern, and putting one map into another is a `for` over its entries with `set`. A
    `Set`'s in-place verbs are `insert`/`remove`/`insertAll`/`removeAll`/`retainAll`, with the participles
    `inserted`, `insertedAll` and `removed`; its set operations - `union`, `intersection`, `difference` - are nouns
-   and never change either operand.
+   and never change either operand. They are functions of the type that take both sets, `Set.union(first, second)`,
+   because neither operand is the one the operation belongs to; `insertedAll` is the member that fills one set from
+   anything that iterates.
 
    ```trb check
    const ages: Map<String, Int> = ["Ada": 36]
@@ -94,7 +96,7 @@ Set.of(1, 2, 3)                          from arguments, needs Item: Hash
    print older
 
    const primes = Set.of 2, 3, 5, 7
-   const evenPrimes = primes.intersection Set.of(2, 4, 6)
+   const evenPrimes = Set.intersection primes, Set.of(2, 4, 6)
    print evenPrimes
    ```
 

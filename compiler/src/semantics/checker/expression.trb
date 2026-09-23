@@ -239,6 +239,7 @@ fn memberTarget(
   if const Some(own) = owner.constructs {
     match lookupStaticMember(checker, own, text, Some(at)) {
       Some(candidate) => {
+        noteDeclaredDefaults checker, own
         const found = targetOfCandidate checker, candidate, text
         return found.copy arguments: explicit
       }
@@ -492,6 +493,38 @@ fn withDeclaredDefaults(var checker: Checker, own: TypeId): TypeId? {
     return None
   }
   Some checker.types.intern(TypeForm.Nominal(symbol, filled))
+}
+
+/**
+ * `Vector2.zero` where `zero` is a constant of `extend<Scalar: Numeric> Vector2<Scalar>`: the member is found with
+ * `Scalar` still open, and a constant takes no argument that could decide it. Where the statement decides nothing
+ * either - `print Vector2.zero` - the declared default is what the bare name means, exactly as it is for a member of
+ * `extend Vector2<Float>`; where it does - `const tile: Vector2<Int> = Vector2.zero` - that is what it is.
+ */
+fn noteDeclaredDefaults(var checker: Checker, own: TypeId) {
+  const arguments = match checker.types.form(own) {
+    .Nominal(_, given) => given
+    _ => {
+      return
+    }
+  }
+  const defaulted = match withDeclaredDefaults(checker, own) {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  const filled = match checker.types.form(defaulted) {
+    .Nominal(_, given) => given
+    _ => {
+      return
+    }
+  }
+  for index in 0..arguments.length().min(filled.length()) {
+    if const Some(variable) = openVariableOf(checker, arguments[index]) {
+      checker.fallBackTo variable, filled[index]
+    }
+  }
 }
 
 fn reportCaseWithoutType(var checker: Checker, text: String, at: Span) {

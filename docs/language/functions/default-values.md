@@ -63,6 +63,11 @@ fn <name>(..., <parameter>: <Type> = <default expression>, ...): <ReturnType> { 
    Running this prints `computing the default` twice, once for each call that leaves `timeout` out, and not for the
    third call, which supplies it.
 
+   **A parameter default may be any expression** - a call, as here, a `static fn`, a pipeline - and no constant rule
+   applies to it, because a call has a caller to run it in. That is the contrast to a field default, which is a
+   constant ([Construction](../types/construction.md), rule 4): a constructor has no body to run a call in, so a
+   field's computed value comes from a `static fn` factory instead.
+
 3. **A default runs in the scope of the declaration, without `self` and without the other parameters.** A default
    cannot read another parameter of the same call, so `fn limits(low: Int, high: Int = low)` does not compile; a
    value that depends on another argument is computed in the body instead.

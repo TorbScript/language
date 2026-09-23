@@ -15,7 +15,7 @@ use ModuleId from "../module"
 use SymbolId from "../symbols"
 use Checker from "./context"
 use integerLiteral from "./lowering"
-use bindingOfSite, resultOf from "./signature"
+use bindingOfSite, resultOf, isTraitConstant from "./signature"
 use isSharedType from "./declaration"
 
 /**
@@ -466,6 +466,11 @@ fn constantOfSymbol(var checker: Checker, symbol: SymbolId, at: Span, depth: Int
     None => {
       return ConstantResult.NotConstant at
     }
+  }
+  // `Scalar.zero` of `trait Numeric`: the value is the implementation's, and that one is held to the rule where it is
+  // written - the trait's own default included, which is a constant of every implementation that writes none
+  if isTraitConstant(checker, symbol) {
+    return ConstantResult.Value ConstantValue.Composite
   }
   const found = evaluateConstant(checker, site.module, binding.value, depth + 1)
   if const .NotConstant(_) = found {

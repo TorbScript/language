@@ -684,9 +684,9 @@ are deleted.** Their bodies are `addAll other` and `addedAll other`, so the word
 meaning, and the caller writes `ages.addAll(more)` and `ages.addedAll(more)`.
 
 **`Set`'s algebra stays a triple.** `union`, `intersection` and `difference` are nouns that never change either
-operand, and `union` happens to be `addedAll`. Dropping it alone would leave two thirds of a vocabulary everybody
-knows, and a reader who writes `a.union(b)` is saying something about sets rather than about filling. The doc comment
-says which `Collection` member it is, as it does today.
+operand. Dropping `union` alone would leave two thirds of a vocabulary everybody knows. The three are functions of the
+type - `Set.union(first, second)` - because a symmetric operation belongs to neither operand (section 6, question 3),
+and `insertedAll` is the member that fills one set from anything that iterates.
 
 ### 3.8a `Collector` merged into `Accumulator`: the probe, and what it costs
 
@@ -1159,7 +1159,7 @@ not "has no member"); those few were read off the source and were all lists.
 
 ## 6. Open, for the owner
 
-Everything technical above is decided and argued. These six were taste and direction; the first two are answered.
+Everything technical above is decided and argued. These six were taste and direction, and all six are answered.
 
 **1. `remove()` on a stack and a queue.** Section 3.3 spends one word for "the item the structure gives next", so
 `stack.remove()` and `queue.remove()` read alike and `Set.remove(value)` is a different member of a different trait.
@@ -1177,17 +1177,27 @@ writable?
 
 **3. `Set.union`.** Its body is `insertedAll` (was `addedAll`). It stays because `union`, `intersection` and `difference` are a vocabulary
 and two thirds of one is worse than three thirds with an overlap. The other reading is that one word per meaning
-admits no exception. *(Still open. After 6b the overlap is with `insertedAll`, which the rename round kept.)*
+admits no exception.
+**Answered by the owner (2026-09-23):** the triple stays, as functions of the type: `Set.union(first, second)`,
+`Set.intersection(first, second)` and `Set.difference(first, second)`, because a symmetric operation belongs to
+neither operand. `insertedAll` stays the instance form - filling one set from anything that iterates - so the overlap
+is gone: the member and the function of the type say different things.
 
 **4. The name of the ordered structure.** `Ordered.by { _.priority }`, or `Heap`, or `Priority`. `Ordered` says what
 the contract is and not how it is built, which is the rule every other implementation name breaks on purpose
 (`ArrayList`, `TrieMap`).
+**Answered by the owner (2026-09-23):** `Heap` - the name of the structure, like every other implementation name of
+the family.
 
 **5. The name of the deque implementation.** `RingList` says the structure, which matches `ArrayList` and `TrieList`.
 `ArrayDeque` says the word everybody knows and would be the only implementation name in the family that names a
 contract rather than a structure.
+**Answered by the owner (2026-09-23):** `RingList`.
 
 **6. Whether the tour keeps `Stack` and `Queue`.** They are the only two places in the repository that construct one
 (section 1.2), and the compiler writes `list.removeAt(list.length() - 1)` instead. Scala deprecated `mutable.Stack`
 for exactly this reason and then brought it back. The traits stay either way — that is the fixed point — but the tour
 could show `ConsStack` doing something a `List` cannot, which is the honest case for them.
+**Answered by the owner (2026-09-23):** the tour keeps them, and shows what a `List` cannot do: `examples/tour/src/07-collections.trb` runs a
+breadth-first search over a `Queue` (constant-time `dequeue` from the ring, where a list moves every item behind
+the front) and declares a `ConsStack` of its own whose copies share their tails.

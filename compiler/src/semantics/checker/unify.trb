@@ -256,6 +256,14 @@ fn settleVariables(var checker: Checker, start: Int) {
   var index = start
   while index < checker.variables.length() {
     const state = checker.variables[index]
+    // A bare type name that nothing decided means what its declaration says by default
+    if state.solution.isNone() {
+      if const Some(fallback) = state.fallback {
+        checker.solveVariable VariableId(index), fallback
+        index = index + 1
+        continue
+      }
+    }
     if state.solution.isNone() && !state.isReported {
       checker.markReported VariableId(index)
       reportUnsolved checker, state.name, state.owner, state.at, state.isConst

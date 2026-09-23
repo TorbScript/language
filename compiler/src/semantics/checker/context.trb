@@ -275,6 +275,11 @@ public type VariableState {
   var solution: TypeId? = None
   /** One message per variable, however often it is mentioned. */
   var isReported: Bool = false
+  /**
+   * What solves it where nothing else did by the end of its statement: the declared default of the parameter it
+   * stands for, for the bare `Vector2` of `Vector2.zero` (`noteDeclaredDefaults`).
+   */
+  var fallback: TypeId? = None
 }
 
 /** One binding a closure reads from the scope around it. The back ends need to know which ones, and which are `var`. */
@@ -1536,6 +1541,12 @@ public type Checker {
   var fn solveVariable(variable: VariableId, id: TypeId) {
     const solved = variables[variable.value].copy(solution: Some(id))
     variables.set variable.value, solved
+  }
+
+  /** The type a variable takes where the statement that made it leaves it open. */
+  var fn fallBackTo(variable: VariableId, id: TypeId) {
+    const given = variables[variable.value].copy(fallback: Some(id))
+    variables.set variable.value, given
   }
 
   var fn markReported(variable: VariableId) {

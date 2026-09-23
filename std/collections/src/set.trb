@@ -17,7 +17,8 @@ use Iterate, Length from "std/iteration"
  * Collection without duplicates. `insert` of a value that is already present does nothing.
  *
  * Verbs change the set in place (`insert`, `remove`, `insertAll`, `removeAll`, `retainAll`). The set operations are
- * nouns and never change either operand (`union`, `intersection`, `difference`).
+ * nouns of the type and never change either operand: `Set.union(first, second)`, `Set.intersection(first, second)`
+ * and `Set.difference(first, second)` take both sets as arguments, because neither is the one the operation belongs to.
  *
  * **Every implementation iterates in insertion order,** and removing a value does not reorder the rest. The order
  * reaches the output through `Show`, so it is a rule of the language and not of the implementation.
@@ -31,7 +32,7 @@ use Iterate, Length from "std/iteration"
  * The set operations never change either operand:
  *
  *     const primes = Set.of 2, 3, 5, 7
- *     const evenPrimes = primes.intersection Set.of(2, 4, 6)
+ *     const evenPrimes = Set.intersection primes, Set.of(2, 4, 6)
  *     print evenPrimes
  *
  * # Related
@@ -109,22 +110,49 @@ public trait Set<Item>
     result
   }
 
-  /** The values of either set, as a changed copy: [Set.insertedAll], read as a set operation. */
-  fn union(other: Iterate<Item>): Self {
-    insertedAll other
+  // --- Set operations ------------------------------------------------------------------------------
+
+  /**
+   * The values of either set: those of `first` in their order, then the new ones of `second`.
+   *
+   * A function of the type and not a member of one operand, because the operation is symmetric: `Set.union(a, b)`
+   * says that neither set is the one that changes. [Set.insertedAll] is the same step read as filling one set from
+   * anything that iterates, and that one is a member.
+   *
+   * # Examples
+   *
+   *     const both = Set.union Set.of(1, 2), Set.of(2, 3)
+   *     print both
+   */
+  static fn union(first: Self, second: Self): Self {
+    first.insertedAll second
   }
 
-  /** The values common to both sets, as a changed copy. */
-  fn intersection(other: Set<Item>): Self {
-    var result = self
-    result.retainAll other
+  /**
+   * The values common to both sets, in the order of `first`.
+   *
+   * # Examples
+   *
+   *     const common = Set.intersection Set.of(1, 2, 3), Set.of(2, 3, 4)
+   *     print common
+   */
+  static fn intersection(first: Self, second: Self): Self {
+    var result = first
+    result.retainAll second
     result
   }
 
-  /** The values of this set that are not in `other`, as a changed copy. */
-  fn difference(other: Iterate<Item>): Self {
-    var result = self
-    result.removeAll other
+  /**
+   * The values of `first` that are not in `second`, in the order of `first`.
+   *
+   * # Examples
+   *
+   *     const left = Set.difference Set.of(1, 2, 3), Set.of(2)
+   *     print left
+   */
+  static fn difference(first: Self, second: Self): Self {
+    var result = first
+    result.removeAll second
     result
   }
 }

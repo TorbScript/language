@@ -47,7 +47,7 @@ pause(): Task<Void>                        lets every other ready task run first
 sleep(seconds: Float): Task<Void>          finishes once the time is up (std/time)
 task.map(transform): Task<Output>
 task.flatMap(transform): Task<Output>
-all(first: Task<A>, second: Task<B>): Task<(A, B)>
+both(first: Task<A>, second: Task<B>): Task<(A, B)>
 Task.all(tasks: Iterate<Task<Value>>): Task<List<Value>>
 ```
 
@@ -163,7 +163,7 @@ Task.all(tasks: Iterate<Task<Value>>): Task<List<Value>>
    take, and a function value whose captures are not visible (a closure bound to a name, a field) is refused. A declared
    function captures nothing and always may.
 
-6. **`all` waits for two tasks of different types at once; `Task.all` waits for a list of tasks of the same type.**
+6. **`both` waits for two tasks of different types at once; `Task.all` waits for a list of tasks of the same type.**
    Both answer their values in the order of the tasks, which is the order they were given in, not the order they
    finish in.
 
@@ -172,12 +172,12 @@ Task.all(tasks: Iterate<Task<Value>>): Task<List<Value>>
      value
    }
 
-   fn both(): Task<Result<String, Cancelled>> {
-     const (first, second) = all(asNumber(1), asNumber(2)).await()?
+   fn pair(): Task<Result<String, Cancelled>> {
+     const (first, second) = both(asNumber(1), asNumber(2)).await()?
      Ok "{first} {second}"
    }
 
-   print(both().outcome()?)
+   print(pair().outcome()?)
    ```
 
 7. **A `var fn` method may answer a `Task` only when its type is a `shared type`.** A value's `var fn` receiver is a copy

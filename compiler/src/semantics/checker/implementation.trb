@@ -1898,11 +1898,61 @@ public fn checkCoherence(var checker: Checker) {
   buildImplementations checker
   const total = checker.implementations.all.length()
   for index in 0..total {
+    if isHandWrittenInto(checker, checker.implementations.all[index]) {
+      reportHandWrittenInto checker, index
+      continue
+    }
     checkOrphan checker, index
     checkTraitPromise checker, index
     checkCloseImplementer checker, index
   }
   checkOverlaps checker
+}
+
+/**
+ * An implementation of `Into` anywhere but in the blanket of the module that declares it. `Into` has exactly one
+ * implementation - `extend<Source, Target> Source with Into<Target> where Target: From<Source>` - and a conversion is
+ * written as the `From` of its target, which is Rust's `from_over_into` made a rule: the `From` gives the `Into` for
+ * free, the other direction gives nothing, and coherence allows the `From` wherever it would allow the `Into`, because
+ * the package that owns the source may name it as the argument of `From` ([ownsTraitArgument]).
+ */
+fn isHandWrittenInto(var checker: Checker, implementation: Implementation): Bool {
+  if isGenerated(implementation) {
+    return false
+  }
+  const into = match checker.wellKnown.into {
+    Some(found) => found
+    None => {
+      return false
+    }
+  }
+  if capabilitySymbolOf(checker, implementation.capability) != Some(into) {
+    return false
+  }
+  checker.symbolAt(into).module != Some(implementation.module)
+}
+
+/** "Implement `From<Celsius>` for `Float64` instead", with the line to write. One message, and no overlap beside it. */
+fn reportHandWrittenInto(var checker: Checker, index: Int) {
+  const implementation = checker.implementations.all[index]
+  const source = checker.describe implementation.target
+  const target = match checker.types.form(implementation.capability ?? checker.invalidType) {
+    .Nominal(_, arguments) => {
+      match arguments.first() {
+        Some(found) => checker.describe found
+        None => "Target"
+      }
+    }
+    _ => "Target"
+  }
+  checker.report(
+    implementation.module,
+    Diagnostic.error("Implement `From<{source}>` for `{target}` instead; `Into` comes from it", implementation.at)
+      .withNote(
+        "Write `extend {target} with From<{source}>`: every `From` gives the `Into` of the other direction through"
+          + " the one implementation `Into` has, and coherence allows it wherever it allows this one"
+      )
+  )
 }
 
 /**
@@ -2086,6 +2136,10 @@ fn checkOverlaps(var checker: Checker) {
 fn reportOverlap(var checker: Checker, first: Int, second: Int) {
   const left = checker.implementations.all[first]
   const right = checker.implementations.all[second]
+  // A hand-written `Into` has its own message already, and the overlap with the blanket is only the same fact again
+  if isHandWrittenInto(checker, left) || isHandWrittenInto(checker, right) {
+    return
+  }
   if reportTraitTargetOverlap(checker, left, right) || reportTraitTargetOverlap(checker, right, left) {
     return
   }
@@ -2425,8 +2479,9 @@ fn checkRequirements(
         if hasDefaultInClosure(checker, closure, name) || isProvidedOtherwise(checker, index, bound) {
           continue
         }
-        // `native type Int64 with Signed {}`: `Int64.add` is a row of the manifest and nothing in the source
-        if isNative {
+        // `native type Int64 with Signed {}`: `Int64.add` is a row of the manifest and nothing in the source. A constant
+        // is never a row: `static zero: Int64 = 0` is written in the source like any other constant of the type
+        if isNative && !isConstantSymbol(checker, member) {
           if !hasManifestRow(checker, rows, target, name) {
             reportMissingRow checker, index, bound, name
           }
@@ -2435,6 +2490,14 @@ fn checkRequirements(
         reportMissingMember checker, index, declared, bound, name, member, mapping
       }
     }
+  }
+}
+
+/** Whether the declaration is a constant: a `static zero = ...` of a type, or the `static zero: Self` a trait requires. */
+public fn isConstantSymbol(checker: Checker, symbol: SymbolId): Bool {
+  match checker.symbolAt(symbol).kind {
+    .Constant => true
+    _ => false
   }
 }
 
@@ -2651,6 +2714,13 @@ fn compareSignatures(
   const required = checker.signature wantedSignature
   const givenSignature = signatureOf checker, provider
   const given = checker.signature givenSignature
+  // `static zero: Self` is read as `Value.zero` and `static fn zero(): Self` is called as `Value.zero()`, so the two
+  // never stand in for each other, however alike their forms are
+  const isConstant = isConstantSymbol checker, member
+  if isConstant != isConstantSymbol(checker, provider) {
+    reportMismatch checker, index, bound, name, member, provider, mapping
+    return
+  }
   const requiredOwn = ownGenericsOf checker, required
   const givenOwn = ownGenericsOf checker, given
   var renamed = mapping
@@ -2676,12 +2746,35 @@ fn compareSignatures(
   if isSameShape && required.takesSelf == given.takesSelf && sameFunction(checker.types, wanted, given.form) {
     return
   }
+  reportMismatch checker, index, bound, name, member, provider, mapping
+}
+
+/** "`Point.zero` does not match `Zero`", with the requirement written the way the trait writes it. */
+fn reportMismatch(
+  var checker: Checker,
+  index: Int,
+  bound: TypeId,
+  name: String,
+  member: SymbolId,
+  provider: SymbolId,
+  mapping: Map<ParameterId, TypeId>,
+) {
+  const required = checker.signature signatureOf(checker, member)
+  const requiredOwn = ownGenericsOf checker, required
   const implementation = checker.implementations.all[index]
   const target = checker.describe implementation.target
   const capability = checker.describe bound
   const generics = describeOwnGenerics checker, required, requiredOwn, mapping
   const asked = substituteFunction checker.types, required.form, mapping
-  const shown = describeRequirement checker, "{name}{generics}", required.takesSelf, required.isVarSelf, asked
+  const isConstant = isConstantSymbol checker, member
+  const shown = describeRequirement(
+    checker,
+    "{name}{generics}",
+    required.takesSelf,
+    required.isVarSelf,
+    asked,
+    isConstant: isConstant,
+  )
   const at = checker.symbolAt(provider).span
   checker.report(
     implementation.module,
@@ -2834,7 +2927,8 @@ fn reportMissingMember(
   const wanted = substituteFunction checker.types, required.form, mapping
   const target = checker.describe implementation.target
   const capability = checker.describe bound
-  const shown = describeRequirement checker, name, required.takesSelf, required.isVarSelf, wanted
+  const isConstant = isConstantSymbol checker, member
+  const shown = describeRequirement checker, name, required.takesSelf, required.isVarSelf, wanted, isConstant: isConstant
   // A supertrait is a requirement like any other, and the message says which trait asked for it
   if !sameType(checker.types, bound, declared) {
     const written = checker.describe declared
@@ -2852,14 +2946,21 @@ fn reportMissingMember(
   )
 }
 
-/** `fn name(): String`, `var fn name(...)`, `static fn name(...)`: the way the trait writes the requirement down. */
+/**
+ * `fn name(): String`, `var fn name(...)`, `static fn name(...)`, `static zero: Self`: the way the trait writes the
+ * requirement down.
+ */
 fn describeRequirement(
   checker: Checker,
   name: String,
   takesSelf: Bool,
   isVarSelf: Bool,
   form: FunctionForm,
+  isConstant: Bool = false,
 ): String {
+  if isConstant {
+    return "{staticKeyword} {name}: {describeType(checker.types, checker.symbols, form.result)}"
+  }
   const keyword = if !takesSelf {
     "{staticKeyword} fn"
   } else if isVarSelf {

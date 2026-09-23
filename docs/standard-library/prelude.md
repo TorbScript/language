@@ -59,7 +59,7 @@ public use counting, summing, averaging, minBy, maxBy, joining, partitioningBy, 
 public use Encode, Decode, Describe, DecodeError, Format, rendered from "std/encoding"
 public use Encoder, Decoder, Describer, FieldDescription, FieldDefault, EncodedValue from "std/encoding"
 public use Expression, ExpressionNode, TypeReference, SourceLocation, UnaryOperator, BinaryOperator, assert, nameOf from "std/expression"
-public use Task, Channel, ChannelClosed, spawn, all from "std/task"
+public use Task, Channel, ChannelClosed, Cancelled, TimedOut, spawn, both from "std/task"
 public use Parallel from "std/parallel"
 public use List.parallel from "std/parallel"
 public use Source, Sink, Bytes from "std/stream"
@@ -68,7 +68,13 @@ public use * as math from "std/math"
 public use Json, JsonValue, JsonError from "std/json"
 public use Duration, Instant from "std/time"
 public use Int64.seconds, Int64.milliseconds from "std/time"
+public use Path, PathError from "std/path"
 ```
+
+`Path` is in because it is a value like `Duration`: it names a file and reads nothing, so a signature can say it
+without an import, while `File` and `Directory` - which touch what a path names - stay behind `use ... from "std/fs"`.
+`Uri` and `UriError` join it once `std/uri` exists. `std/linear` stays out: a program that computes with vectors
+imports it.
 
 Every re-export keeps its original name, so `use Option from "std/prelude"` and `use Option from "std/core"` name the
 same type. `math` keeps its namespace even in the prelude - `math.power(a, 2.0)` reads as a function of a value, and

@@ -887,7 +887,7 @@ BEAM's, and it is decided by the stackless choice of section 1 rather than being
 
 ## 10. What the standard library looks like
 
-**`std/task`** keeps what it has — `Task`, `spawn`, `all`, `Channel`, `ChannelClosed` — and gains this:
+**`std/task`** keeps what it has — `Task`, `spawn`, `both`, `Channel`, `ChannelClosed` — and gains this:
 
 ```trb fragment
 /** How many workers this process runs, and how many threads its blocking pool has. Both fixed at start. */
@@ -920,7 +920,7 @@ public native shared type Task<Value> {
   /** Cancels the task once the limit has passed. A task that finished first is unaffected. */
   native var fn within(limit: Duration): Task<Result<Value, TimedOut>>
 
-  // `map`, `flatMap` and `all` unchanged
+  // `map`, `flatMap` and `Task.all` unchanged
 }
 
 extend<Value, Failure: From<Cancelled>> Task<Result<Value, Failure>> {
@@ -1444,7 +1444,7 @@ lowered yet, which is what stops `examples/tour/src/10-async.trb` (and `std/http
 | `cancelTask`, `completedWithin` | missing | `torb_task_cancel(torb_task *)`, `torb_task_completed_within(torb_task *, torb_duration)`, under the TorbScript `Task.cancel` and `Task.within` |
 | `Channel(capacity:)` | - | `Instruction.ChannelNew` over `torb_channel_new` and the element descriptor of `Item` |
 | `Channel.source`, `Channel.sink` | `.Planned` | TorbScript: `ChannelSource`/`ChannelSink` over `received` (`torb_channel_received`), `offered` (`torb_channel_offered`), `endWriting` (`torb_channel_end`) and `closeReading` (`torb_channel_close`) |
-| `Task.map`, `Task.flatMap`, `Task.all`, `all` | `.Planned` natives | TorbScript over `await()` and `stopAsCancelled()` |
+| `Task.map`, `Task.flatMap`, `Task.all`, `both` | `.Planned` natives | TorbScript over `await()` and `stopAsCancelled()` |
 | `standardInput`/`Output`/`Error`, `Process.start`, `Child.*`, `File.create`/`chunks`/`add`/`finish` | `.Planned` 7.3 | stay planned, for slice G: they are `Source`/`Sink` objects over real IO, which needs `runtime/io.c` and its poller |
 
 ### The pool, as built (7.7)

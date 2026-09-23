@@ -690,18 +690,25 @@ nothing links to.
 
 Everything technical above is decided. These are taste or direction, and only the owner answers them.
 
+**Answered by the owner (2026-09-23):** 2 - the prelude exports `Path` (and `PathError`). 3 - the wide-character Windows runtime is a round of its
+own, later. 4 - `Root.Share` is in. Question 1 keeps the answer the document gives, `nameWithoutExtension`.
+
 1. **`nameWithoutExtension`, or `stem`?** The rule says full words and no abbreviations, and `stem` is a full English
    word that happens to be jargon (`file_stem` in Rust, `stem` in `pathlib`). `nameWithoutExtension` needs no
    documentation to be understood and reads as the truth next to `name` and `extension`; it is also nineteen
    characters. The document uses `nameWithoutExtension`.
 2. **Does the prelude export `Path`?** `std/fs` deliberately is not in the prelude, so that `use File from "std/fs"`
    is the statement "this file touches files". A `Path` is not a capability — it reads nothing — and it appears in
-   signatures all over the compiler and in every `project.trb`-shaped configuration. The document assumes
+   signatures all over the compiler and in every `project.trb`-shaped configuration. The document assumed
    `use Path from "std/path"`, which is the conservative half.
+   **Answered by the owner (2026-09-23):** yes. `std/prelude` exports `Path` and `PathError`; `File` and `Directory`, which touch
+   what a path names, stay behind `use ... from "std/fs"`.
 3. **Is slice 2's wide-character Windows runtime this design's work, or a round of its own?** It fixes two bugs that exist
    today and are not about paths as such (a non-ASCII path fails in a compiled binary, a long path cannot be opened),
    and it is the largest single piece of C in the plan. Doing it here is what makes `Path` honest on Windows; deferring
    it means `std/path` ships with a documented hole on one platform.
+   **Answered by the owner (2026-09-23):** a round of its own, later; until then the hole is documented.
 4. **`Root.Share` now or later?** A UNC share is one case and about thirty lines of parsing, and nothing in the
    repository has ever needed one. Leaving it out would make `//server/share/x` parse as a `Unix` root with `server`
    as its first component, which is wrong rather than unsupported — so the document includes it.
+   **Answered by the owner (2026-09-23):** included.

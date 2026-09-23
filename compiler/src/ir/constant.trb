@@ -19,8 +19,8 @@ use Expression, Argument, TextSegment, PrefixOperator, InfixOperator from "../sy
 use Pattern, FieldPattern from "../syntax/ast"
 use SymbolId from "../semantics/symbols"
 use LiteralValue, TypeId, ParameterId from "../semantics/checker/type"
-use bindingOfSite, resultOf, signatureOf from "../semantics/checker/signature"
-use matchTypePattern from "../semantics/checker/implementation"
+use bindingOfSite, resultOf, signatureOf, isTraitConstant from "../semantics/checker/signature"
+use matchTypePattern, witnessFor, traitArgumentsOf from "../semantics/checker/implementation"
 use substitute from "../semantics/checker/unify"
 use integerLiteral from "../semantics/checker/lowering"
 use IrTypeId, LayoutId, StaticId, StaticContents, Instance from "./ir"
@@ -32,6 +32,7 @@ use isStaticLayout from "./layout"
 use describeIrType from "./print"
 use staticName from "./mangle"
 use symbolPathOf from "./instantiate"
+use providerOfMember, memberMappingOf from "./witness"
 
 /** One compile-time value: what it is, and what type it has. */
 public type ConstantValue {
@@ -524,6 +525,9 @@ fn callConstant(
  * instance from everywhere.
  */
 public fn constantInstanceOf(var lowering: Lowering, symbol: SymbolId, owner: TypeId?): ConstantInstance? {
+  if isTraitConstant(lowering.checker, symbol) {
+    return traitConstantInstanceOf lowering, symbol, owner
+  }
   const identifier = signatureOf lowering.checker, symbol
   const signature = lowering.checker.signature identifier
   var mapping: Map<ParameterId, TypeId> = [:]
@@ -536,6 +540,92 @@ public fn constantInstanceOf(var lowering: Lowering, symbol: SymbolId, owner: Ty
   const _ = matchTypePattern lowering.checker, declared, reached, signature.generics, mapping
   var arguments: List<IrTypeId> = []
   for parameter in signature.generics {
+    const given = mapping.get(parameter)?
+    if !isClosedType(lowering, given) {
+      return None
+    }
+    arguments.append irTypeOfClosed(lowering, given)
+  }
+  Some ConstantInstance(instanceKeyOf(Instance(symbol, arguments, [])), arguments, mapping)
+}
+
+/**
+ * The declaration a read of a constant reaches, and the type it is reached on. A constant of a **trait** is the one read
+ * that is decided here and not by the checker: `Scalar.zero` inside `fn sum<Scalar: Numeric>` names the requirement of
+ * `Numeric`, and only the instance that is being lowered says that `Scalar` is `Int64` and therefore that the constant is
+ * `Int64.zero`. Which declaration provides it is the question a witness table asks for a member (`providerOfMember`):
+ * the implementation's own constant, a constant of the type's body or of another `extend` of it, or the trait's default
+ * value, which is then instantiated with `Self` bound to that type (`traitConstantInstanceOf`).
+ *
+ * Every other constant - and a trait's constant read on a type that is not closed yet - is its own answer.
+ */
+public fn reachedConstantOf(var lowering: Lowering, symbol: SymbolId, owner: TypeId?): ReachedConstant {
+  if !isTraitConstant(lowering.checker, symbol) {
+    return ReachedConstant symbol, owner
+  }
+  const written = match owner {
+    Some(found) => found
+    None => {
+      return ReachedConstant symbol, owner
+    }
+  }
+  const subject = substituted lowering, written
+  if !isClosedType(lowering, subject) {
+    return ReachedConstant symbol, owner
+  }
+  const bound = match traitConstantBound(lowering, symbol, subject) {
+    Some(found) => found
+    None => {
+      return ReachedConstant symbol, Some(subject)
+    }
+  }
+  if const .Implementation(implementation, _, _) = witnessFor(lowering.checker, subject, bound) {
+    const name = lowering.checker.symbolAt(symbol).name
+    const provider = providerOfMember lowering, subject, implementation, symbol, name
+    return ReachedConstant provider, Some(subject)
+  }
+  ReachedConstant symbol, Some(subject)
+}
+
+/** What [reachedConstantOf] answers: the declaration that provides the value, and the type it is read on. */
+public type ReachedConstant {
+  symbol: SymbolId
+  owner: TypeId?
+}
+
+/**
+ * The trait a constant of a trait belongs to, applied to the arguments it has for `subject`: `Numeric` for `Int64`,
+ * `Zero<Int>` for a type that implements `Zero<Int>`. `None` for a declaration that is no member of a trait.
+ */
+fn traitConstantBound(var lowering: Lowering, symbol: SymbolId, subject: TypeId): TypeId? {
+  const identifier = signatureOf lowering.checker, symbol
+  const owner = lowering.checker.signature(identifier).owner?
+  const parameter = match lowering.checker.types.form(owner) {
+    .Parameter(found) => found
+    _ => {
+      return None
+    }
+  }
+  const capability = lowering.checker.types.parameter(parameter).owner?
+  const arguments = traitArgumentsOf(lowering.checker, subject, capability) ?? []
+  Some lowering.checker.nominal(capability, arguments)
+}
+
+/**
+ * The instance of a trait's **default** constant for one type: `static unit: Self = Self.make()` read on `Point` is
+ * built once for `Point`, with `Self` bound to it and the trait's own parameters to the arguments `Point` implements it
+ * with. `None` where the read left the type open, which is the same finding as for a constant of a generic type.
+ */
+fn traitConstantInstanceOf(var lowering: Lowering, symbol: SymbolId, owner: TypeId?): ConstantInstance? {
+  const reached = substituted(lowering, owner?)
+  if !isClosedType(lowering, reached) {
+    return None
+  }
+  const bound = traitConstantBound(lowering, symbol, reached)?
+  const mapping = memberMappingOf lowering, symbol, reached, bound
+  var arguments = [irTypeOfClosed(lowering, reached)]
+  const identifier = signatureOf lowering.checker, symbol
+  for parameter in lowering.checker.signature(identifier).generics {
     const given = mapping.get(parameter)?
     if !isClosedType(lowering, given) {
       return None
@@ -559,8 +649,10 @@ public type ConstantInstance {
  * The static value of one instance of a `const`, evaluated once. There is no module initialization, ever: a constant is
  * static data with a name, and `Instruction.Constant` names it.
  */
-public fn staticOfConstant(var lowering: Lowering, symbol: SymbolId, owner: TypeId? = None): StaticId? {
-  const instance = constantInstanceOf(lowering, symbol, owner)?
+public fn staticOfConstant(var lowering: Lowering, written: SymbolId, writtenOwner: TypeId? = None): StaticId? {
+  const reached = reachedConstantOf lowering, written, writtenOwner
+  const symbol = reached.symbol
+  const instance = constantInstanceOf(lowering, symbol, reached.owner)?
   if const Some(known) = lowering.constants.get(instance.key) {
     return Some known
   }

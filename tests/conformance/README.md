@@ -267,7 +267,7 @@ tasks, `test` and `group`, keys that their own `equals` compares, and the execut
 | `task-sleep.trb` | Tasks that `sleep` wake in the order of their deadlines, and `Task.all` answers in the order of the tasks |
 | `task-cancel-loop.trb` | A loop that never waits stops at its next turn once cancelled, and one that pauses stops at the pause |
 | `task-cancel-await.trb` | A task cancelled while it waits never sees an answer, its waiter reads `Fail(Cancelled)`, and a cancelled parent takes its children with it |
-| `task-combinators.trb` | `map`, `flatMap`, `Task.all`, `all` and `outcome()` |
+| `task-combinators.trb` | `map`, `flatMap`, `Task.all`, `both` and `outcome()` |
 | `task-thousand.trb` | A thousand tasks alive at once, and every block of them released |
 | `channel-ping-pong.trb` | A rendezvous channel alternates in lock-step, a buffered one carries every item once and in order, and `end()` is `None` for the reader |
 | `channel-closed.trb` | Letting go of the reading end closes it: every later `add` fails with `ChannelClosed`, and what was buffered is released |

@@ -2770,6 +2770,13 @@ of that". The advice is only given where the `where` clause is **one bound on on
 standard library is; anything else keeps the plain overlap message, because a clause of several bounds is a sentence and
 not a line to write. The member in the note is the blanket's own, where it provides exactly one.
 
+_Decision of the owner (2026-09-23):_ `Into` is implemented **only** by its blanket, as a rule of its own and not as a
+case of the overlap (`isHandWrittenInto` in `semantics/checker/implementation.trb`): every other implementation of it
+is "Implement `From<Celsius>` for `Float64` instead; `Into` comes from it", generic and orphaned ones included, and no
+orphan or overlap message is added beside it. Rust's clippy `from_over_into`, made a rule - and coherence allows the
+`From` wherever it allows the `Into`, because the package of the source may name it as the argument of `From`.
+`TryInto` keeps the derived overlap advice above.
+
 **62. How does `tryInto()` find its target?**
 `into()` is a well-known call whose target is the expected type (`conversionType`). `TryInto<Target, Failure>` joins it,
 and it needs two types rather than one: `TryFrom` carries the failure as well.

@@ -595,7 +595,7 @@ public fn query<Space, ...Components>(space: Space): Iterate<(Entity, ...Compone
 ```
 
 No indexing into the pack, no arithmetic on its length, no mapping a type function over it — the same restriction
-const parameters already live under, and enough for every query anybody writes. It would also serve `all(taskA, taskB)`
+const parameters already live under, and enough for every query anybody writes. It would also serve `both(taskA, taskB)`
 and `zip`, which are the other two places the standard library writes one function four times.
 
 Until it exists there are four names: `query`, `pairs`, `triples`, `quadruples` — readable at the call site
@@ -1335,7 +1335,7 @@ program's world carries every bound its columns carry and a system takes one wor
 **2. No variadic type parameters.** `fn tuples<...Components>()` is five parse errors, the first *"Expected a name,
 found `...`"*. **Smallest change:** a type-parameter pack that expands in exactly two positions — as the element list
 of a tuple type, and as the subject of a bound — with no indexing, no length arithmetic and no mapping. It costs
-`pairs`/`triples`/`quadruples` in this package, `all` in `std/task` and `zip` in `std/iteration`. **It is an
+`pairs`/`triples`/`quadruples` in this package, `both` in `std/task` and `zip` in `std/iteration`. **It is an
 ergonomic gap and not a structural one:** [section 2](#2-the-decision-an-open-component-set-without-any) needs none
 of it.
 

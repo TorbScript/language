@@ -575,10 +575,13 @@ inferred.* It is sound (the member's body cannot depend on it) and it would also
 _Decision:_ free functions now, because the rule is a change to inference in a pass other agents are working in, and the
 gerund names are consistent with the collectors that are already there. **The owner's call:** whether to have that rule
 and rename the ten factories afterwards.
+**Answered by the owner (2026-09-23):** free functions until an inference rule exists; the rule and
+the renaming wait for it.
 
 **3. `for` over a source.** Section 2.
 _Decision:_ no `for` in v1; `while const Some(item) = source.next().await()? { … }`. **The owner's call** if a spelling
 turns up that keeps the `?` visible.
+**Answered by the owner (2026-09-23):** no asynchronous `for` in v1.
 
 **4. Interrupting an `await` that is already waiting.** Releasing an end takes effect for everything after it, but a
 `next()` in flight runs to its end. Cancelling a task is decided in `docs/design/CONCURRENCY.md` section 8: its frame is
@@ -598,10 +601,12 @@ implementation for `Never` as the *source*, and `Never` has no values), and `Pro
 types that are public because a driver outside `std/iteration` needs them), `textOf`, `Body.jsonOf` (which is not
 `Body.json` because a type has one namespace for its members and the reading side needs that name more), `source.then`
 for the asynchronous step, and `chunked`/`chunking` for the grouping stage.
+**Answered by the owner (2026-09-23):** the names are kept.
 
 **7. Prelude membership.** `Source`, `Sink`, `Bytes`, `Stage`, the ten stage factories and `Format` are in.
 The argument is in section 11. **The owner's call** if ten free function names in every file is too many — the
 alternative is to leave the factories in `std/iteration` and import them where they are used.
+**Answered by the owner (2026-09-23):** the factories stay in the prelude.
 
 **8. `Buffered` on the reading side.** There is none: `Source.produce(capacity:)` is where read-ahead would live, and a
 `source.buffered(capacity:)` would have to read upstream from another task, which shared-object confinement forbids.

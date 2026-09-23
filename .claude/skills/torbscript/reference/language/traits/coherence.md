@@ -166,8 +166,11 @@ extend<Source, Target> Source with <Trait><Target> where <bounds> { ... }   a bl
    implementation of a trait it owns, however its `where` clause is written.
 
 7. **A trait that has a blanket implementation is not implemented by hand, and the message says which one to write
-   instead.** `Into` comes from `From` for every type, and `TryInto` from `TryFrom`, so writing one of them directly
-   overlaps the blanket. The note is built from the blanket's own `where` clause with your types put in.
+   instead.** `TryInto` comes from `TryFrom` for every type, so writing it directly overlaps the blanket, and the note
+   is built from the blanket's own `where` clause with your types put in. `Into` is a rule of its own: an
+   implementation of it anywhere but in its one blanket is refused whatever it overlaps, with the `From` to write -
+   `From<Source>` for the target, which coherence allows wherever it would allow the `Into`, because the package of
+   the source may name it as the argument of `From` (rule 4).
 
    ```trb error
    type Celsius {
@@ -179,7 +182,7 @@ extend<Source, Target> Source with <Trait><Target> where <bounds> { ... }   a bl
        degrees
      }
    }
-   // error: `Into` comes from `From` for every type
+   // error: Implement `From<Celsius>` for `Float64` instead; `Into` comes from it
    ```
 
 8. **One trait may stand twice in a `with` list, and then each instantiation needs a body of its own.** Two

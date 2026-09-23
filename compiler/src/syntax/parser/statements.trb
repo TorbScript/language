@@ -130,10 +130,17 @@ fn parseUsingBinding(var parser: Parser): Binding {
 /**
  * The part of a binding behind its keyword: `name: Type = value`. A constant of a type is written
  * `static name = value`, so its binding starts here and not at a `const`.
+ *
+ * `valueOptional` is for that constant of a type: `static zero: Self` with a type and without a value is a binding the
+ * checker holds to be the requirement of a trait ([Binding.required]).
  */
-public fn parseBindingBody(var parser: Parser, doc: String?, isVar: Bool): Binding {
+public fn parseBindingBody(var parser: Parser, doc: String?, isVar: Bool, valueOptional: Bool = false): Binding {
   const pattern = parsePattern parser
   const annotation = if parser.eat(TokenKind.Colon) { Some parseType(parser) } else { None }
+  if valueOptional && annotation.isSome() && !parser.isAt(TokenKind.Equal) {
+    const missing = Expression ExpressionKind.Invalid, parser.previousSpan()
+    return Binding doc, isVar, pattern, annotation, missing, required: true
+  }
   if !parser.isAt(TokenKind.Equal) {
     parser.errorHere "A binding needs a value: there are no uninitialized bindings and no default values"
     return Binding doc, isVar, pattern, annotation, Expression(ExpressionKind.Invalid, parser.span())

@@ -1627,8 +1627,7 @@ Everything technical above is decided. These are questions of taste or direction
 
 **Answered by the owner (2026-09-23):** 1 - the rule is accepted as written. 2 - `OperatingSystem.current` (one
 `static current` per type). 3 - FreeBSD is in from the start, a fourth case every branch handles (slice 7 moves up
-with the others). 4 - `~/Library/Application Support` on macOS. Question 5 is still open; until the owner says otherwise
-`ByteSize` shows binary units.
+with the others). 4 - `~/Library/Application Support` on macOS. 5 - `ByteSize` shows binary units (`15.9 GiB`).
 
 1. **The construct's rule itself (section 2, "The rule").** It is the one language addition of this design: a `match`
    on a compile-time constant keeps one arm, every arm is still checked, exhaustiveness is by type. It is general — it

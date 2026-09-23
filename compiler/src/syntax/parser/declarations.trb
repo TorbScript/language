@@ -484,16 +484,9 @@ fn parseStaticMember(var parser: Parser): MemberKind {
   if parser.isAt(TokenKind.Reserved(Keyword.Fn)) {
     return MemberKind.Function parseFunction(parser)
   }
-  const binding = parseBindingBody parser, None, false
-  // `static pi: Self` without a value: a trait that requires a constant is not in the language yet. A pattern and not
-  // `==`: comparing an `ExpressionKind` would ask the whole syntax tree for `Equals`, which nothing else needs.
-  if const .Invalid = binding.value.kind {
-    if binding.annotation.isSome() {
-      const note = "A trait cannot require one without a value yet: declare it in every implementation"
-      parser.errorWithNote "A constant of the type needs a value", note, binding.pattern.span
-    }
-  }
-  MemberKind.Constant binding
+  // `static zero: Self` without a value is what a trait requires of its implementations. Whether the member stands in a
+  // trait is the checker's question: the parser only knows it has a name and a type and no `=`
+  MemberKind.Constant parseBindingBody(parser, None, false, valueOptional: true)
 }
 
 /**

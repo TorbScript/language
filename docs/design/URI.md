@@ -1512,15 +1512,21 @@ Everything technical above is decided. These are taste or direction, and only th
    `Authority`, `Urn` and `repaired` behind `use … from "std/uri"`. That pairs with `docs/design/PATH.md` open question 2,
    which left `Path` out of the prelude — and the two belong together, because `File.readText("./config.trb")` and
    `http.get("https://…")` are the same ergonomics. The recommendation is both, which is four names.
+   **Answered by the owner (2026-09-23):** yes, `Uri` and `UriError`. `std/uri` is not built yet, so the prelude exports `Path` and
+   `PathError` today and the two `std/uri` names join them with the package.
 3. **`Identifier`, or `Uid`?** The rule says full words and no abbreviations, and `Uid` also means a POSIX user id.
    The document uses `Identifier`.
+   **Answered by the owner (2026-09-23):** `Identifier`.
 4. **UUIDv7 as the default, with `Ulid` kept?** Section 12's table is the argument. The other reading is that 26
    characters that sort as text are worth more than a standard, which is the case every ULID user makes.
+   **Answered by the owner (2026-09-23):** UUIDv7 is the default, and `Ulid` is kept beside it.
 5. **`reference.resolved(against: base)`, or `base.resolve(reference)`?** The document uses the first, because it is
    `path.resolved(inside: base)` with one word changed. The second is what every other library writes.
+   **Answered by the owner (2026-09-23):** `reference.resolved(against: base)`.
 6. **Is refusing a non-ASCII host acceptable until `std/idna` exists?** The alternative is percent-encoding it, which
    produces a host no resolver accepts — a wrong value rather than an unsupported one. The document refuses, and
    slice 7 is the answer.
+   **Answered by the owner (2026-09-23):** refuse a non-ASCII host until `std/idna` exists.
 7. **Is a redacting `show()` the right default?** Section 11 makes `print uri` lossy for the one URI in a thousand
    that carries a password, so a value that is printed no longer round trips through its own display form — which is
    a property every other capsule in the standard library has. The other reading is that `text()` should be the
@@ -1528,8 +1534,10 @@ Everything technical above is decided. These are taste or direction, and only th
    the burden on whoever logs. The document takes the redacting default, because the failure mode of the other one
    is a password in a crash report and the failure mode of this one is a `***` in a message that wanted the whole
    thing.
+   **Answered by the owner (2026-09-23):** the redacting `show()` stays the default.
 8. **Does `std` carry `Cache` and `Connection` before it carries a driver for either?** The document says no, by the
    rule "a capability trait belongs in `std` when `std` ships two drivers for it, one of which reaches the outside
    world" — so `std/storage` exists and `std/cache` does not. The other reading is that a trait in `std` is how an
    ecosystem converges on one spelling, and that waiting for a driver means two packages will invent two `Cache`
    traits first. Section 11 writes both traits out so that the shape is at least written down either way.
+   **Answered by the owner (2026-09-23):** wait for two drivers: `std/cache` and `Connection` come with the second driver of each.

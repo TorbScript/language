@@ -124,7 +124,8 @@ Self(<field>, ...)                   // The constructor, from inside the type
    because the constructor only stores it. A call is not, a `static fn` included: `List.filled 16, None`, `Set.of()`
    and `limit.max(1)` run code, and the constructor has no body to run it in. A value that is computed comes from a
    `static fn` factory, and a collection starts from its empty literal - `[]` for a list, a `Set` or a queue, `[:]`
-   for a map.
+   for a map. A **parameter** default has no such rule and may be any expression, a call included
+   ([Default values](../functions/default-values.md)): it runs at the call, which has a caller to run it in.
 
    ```trb error
    type Buffer {

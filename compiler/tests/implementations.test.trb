@@ -261,17 +261,25 @@ group "Coherence" {
     )
   }
 
-  test "a trait that has a blanket implementation says which trait to implement instead" {
+  test "`Into` is never implemented by hand: the message names the `From` to write instead" {
     const source = "type Celsius \{\n  degrees: Float\n\}\n\n"
       + "extend Celsius with Into<Float64> \{\n  fn into(): Float64 \{\n    degrees\n  \}\n\}"
-    assert(problems(source) == ["`Into` comes from `From` for every type"])
+    assert(problems(source) == ["Implement `From<Celsius>` for `Float64` instead; `Into` comes from it"])
     assert(
       notes(source)
         == [
-          "Write `extend Float64 with From<Celsius>`: the blanket implementation in `std/prelude` makes"
-            + " `Celsius.into()` out of that",
+          "Write `extend Float64 with From<Celsius>`: every `From` gives the `Into` of the other direction through"
+            + " the one implementation `Into` has, and coherence allows it wherever it allows this one",
         ]
     )
+  }
+
+  test "a generic `Into` is refused the same way, and an orphaned one gets that message and no second one" {
+    const generic = "type Wrapper<Item> \{\n  item: Item\n\}\n\n"
+      + "extend<Item> Wrapper<Item> with Into<List<Item>> \{\n  fn into(): List<Item> \{\n    [item]\n  \}\n\}"
+    assert(problems(generic) == ["Implement `From<Wrapper<Item>>` for `List<Item>` instead; `Into` comes from it"])
+    const orphaned = "extend Int with Into<String> \{\n  fn into(): String \{\n    \"\"\n  \}\n\}"
+    assert(problems(orphaned) == ["Implement `From<Int64>` for `String` instead; `Into` comes from it"])
   }
 
   test "the line it names is coherent, because the argument of the trait is a type of this package" {

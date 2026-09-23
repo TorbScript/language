@@ -850,7 +850,7 @@ slots, the switch over the state, and one stop path per state and per loop back-
 The **scheduler is a FIFO run queue**, single threaded in 7.3, in `runtime/task.c` and in the VM with the same
 algorithm and the same order - so a program whose tasks do no real IO produces identical output in both back ends,
 and `10-async.trb` has a stable `.expected`. `Channel` is a ring buffer plus two waiter queues; `send` on a full
-channel and `receive` on an empty one suspend. `all(a, b)` and `Task.all` are ordinary functions over that.
+channel and `receive` on an empty one suspend. `both(a, b)` and `Task.all` are ordinary functions over that.
 
 7.7 adds threads: one worker per core, one heap per worker, and a task that has **started** is pinned to its worker,
 because moving it would move a heap. `spawn` puts the task in a worker's inbox as a transferable message, and the

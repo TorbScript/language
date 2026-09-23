@@ -27,7 +27,7 @@ use FunctionBuilder, addTemporary, addBlock, emit, newFunction, finishFunction, 
 use numericKindOf, layoutOfType from "../verify"
 use describeIrType from "../print"
 use bindingOfSite, signatureOf from "../../semantics/checker/signature"
-use evaluateConstant, staticOfConstant, constantInstanceOf, ConstantInstance from "../constant"
+use evaluateConstant, staticOfConstant, constantInstanceOf, ConstantInstance, reachedConstantOf from "../constant"
 use functionName, mangledName from "../mangle"
 use symbolPathOf from "../instantiate"
 use Lowering, reportUnsupported, locationOf, typeAtSpan, voidTypeOf from "./context"
@@ -739,8 +739,11 @@ fn lowerImmortalConstant(
  * translate yet has to abandon the body that reads the constant - which is what the reader's `isSupported` carries, and
  * what a worklist entry drained later could not reach any more.
  */
-fn constantAccessorOf(var lowering: Lowering, symbol: SymbolId, at: Span, owner: TypeId?): FunctionId? {
-  const instance = match constantInstanceOf(lowering, symbol, owner) {
+fn constantAccessorOf(var lowering: Lowering, written: SymbolId, at: Span, writtenOwner: TypeId?): FunctionId? {
+  // `Scalar.zero` of a trait is the constant of the type `Scalar` stands for in this instance
+  const reached = reachedConstantOf lowering, written, writtenOwner
+  const symbol = reached.symbol
+  const instance = match constantInstanceOf(lowering, symbol, reached.owner) {
     Some(found) => found
     None => {
       reportUnsupported lowering, "a constant of a generic type the read did not decide the arguments of", at

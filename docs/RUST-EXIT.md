@@ -168,7 +168,7 @@ declarations** (39 and 66 since `describe` and the four members of `Json` became
 11, both milestone 8; `Array` with 9, milestone 5.9b). The other 41 are `Float32.tryFrom(String)` and
 `Decimal.tryFrom(String)` (8), the stream side of `File` (`create`, `chunks`,
 `add`, and `finish` — which `std/fs` now declares as `end`, so the entry is stale), the three standard streams,
-`Process.start` and the five members of `Child`, `sleep`, `Task.await`/`map`/`flatMap`/`all`, `spawn`, `all`,
+`Process.start` and the five members of `Child`, `sleep`, `Task.await`/`map`/`flatMap`/`all`, `spawn`, `both`,
 `Channel.source`/`sink` (milestone 7.3); `Expression.value`/`captures` (5.11); `isSame` (5.9); the six members of the sandbox (7.4); and `get`/`post`/`request` of `std/http` (8).
 
 **The `Array` loop is gone (5.9b):** its nine members are TorbScript over three private storage natives

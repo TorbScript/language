@@ -23,9 +23,9 @@ ages["Linus"] = 28
 ages.remove "Ada"
 const younger = ages.updated "Grace", 44              // The participle of `set` is `set`, so: `updated`
 
-// Set operations are nouns. They never change anything.
+// Set operations are nouns of the type: both sets are arguments, and neither one changes.
 const primes = Set.of 2, 3, 5, 7
-const evenPrimes = primes.intersection Set.of(2, 4, 6)
+const evenPrimes = Set.intersection primes, Set.of(2, 4, 6)
 
 var cache: Map<Int, String> = [:]
 const label = cache.getOrInsert 42, "stored once"    // The fallback is `lazy`: only built on a miss
@@ -245,3 +245,94 @@ var rest = stack
 if const Some(top) = rest.pop() {
   print "top: {top}, remaining: {rest.length()}, before: {stack.length()}, next: {rest.peek()}"
 }
+
+// A queue takes from the front in constant time, which a `List` cannot: `list.removeAt(0)` moves every item behind
+// it. `ArrayQueue`, the default, is a ring over its storage, so a breadth-first search pays one step per visit
+/** The fewest moves from `start` to `goal`, where one move doubles the number or adds one to it. */
+fn fewestMoves(start: Int, goal: Int): Int? {
+  var frontier: Queue<(Int, Int)> = Queue.of((start, 0))
+  var seen = Set.of start
+  while const Some((number, moves)) = frontier.dequeue() {
+    if number == goal {
+      return Some moves
+    }
+    for next in [number * 2, number + 1] {
+      if next <= goal && !seen.contains(next) {
+        seen.insert next
+        frontier.enqueue((next, moves + 1))
+      }
+    }
+  }
+  None
+}
+
+print fewestMoves(1, 10)                 // Some(4): 1, 2, 4, 5, 10
+
+// `Stack` is a trait, so a stack of your own is one `with` away. A cons list shares its tail: `push` puts one cell in
+// front and every copy keeps pointing at the cells below it, so two histories that branch from one cost a cell each -
+// where two `List`s that grew from one copy it the moment the second one is written to
+/** One cell of a [ConsStack]: an item and everything below it, or the bottom. */
+type Cell<Item> {
+  case Bottom
+  case Cons(top: Item, below: Cell<Item>)
+}
+
+/** The cursor of a [ConsStack], from the top down. */
+type CellIterator<Item> with Iterator<Item> {
+  var cells: Cell<Item>
+
+  var fn next(): Item? {
+    match cells {
+      .Bottom => None
+      .Cons(top, below) => {
+        cells = below
+        Some top
+      }
+    }
+  }
+}
+
+/** A stack whose `push` puts one cell in front and shares every cell below it with every other copy. */
+type ConsStack<Item> with Stack<Item> {
+  private var cells: Cell<Item> = .Bottom
+  private var size: Int = 0
+
+  var fn push(value: Item) {
+    cells = .Cons(value, cells)
+    size = size + 1
+  }
+
+  var fn pop(): Item? {
+    match cells {
+      .Bottom => None
+      .Cons(top, below) => {
+        cells = below
+        size = size - 1
+        Some top
+      }
+    }
+  }
+
+  var fn clear() {
+    cells = .Bottom
+    size = 0
+  }
+
+  fn length(): Int {
+    size
+  }
+
+  fn iterate(): Iterator<Item> {
+    CellIterator cells
+  }
+}
+
+var history = ConsStack<String>()
+history.push "draft"
+history.push "review"
+var accepted = history                   // Shares both cells
+accepted.push "accepted"
+var rejected = history                   // Shares them too: three stacks, four cells
+rejected.push "rejected"
+print accepted.toList()                  // ["accepted", "review", "draft"]
+print rejected.toList()                  // ["rejected", "review", "draft"]

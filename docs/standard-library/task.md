@@ -22,13 +22,13 @@ source:
 may call `await()`, and its body produces the `Value` - the same way a function that returns `Result` may use `?`.
 `Task` and `Channel` are the two shared types that connect concurrent work; everything else is copied when it crosses
 into one. Every task can be cancelled, so `await()` answers `Result<Value, Cancelled>`. `Task`, `Channel`,
-`ChannelClosed`, `Cancelled`, `TimedOut`, `spawn` and `all` are in scope through the prelude; `pause` is imported from
+`ChannelClosed`, `Cancelled`, `TimedOut`, `spawn` and `both` are in scope through the prelude; `pause` is imported from
 here.
 
 ## Import
 
 ```trb fragment
-use Task, Channel, ChannelClosed, Cancelled, TimedOut, Workers, spawn, all, pause from "std/task"
+use Task, Channel, ChannelClosed, Cancelled, TimedOut, Workers, spawn, both, pause from "std/task"
 ```
 
 ```trb check
@@ -73,17 +73,17 @@ it. `within(limit)` cancels the task once the limit has passed and answers `Fail
 so a task somebody may stop sits in a `var` binding. Dropping the last handle stops nothing. `Task` belongs to the
 vocabulary of `Option` and `Result` (`map`, `flatMap`, `all`), and all three are TorbScript over `await()`.
 
-### `spawn`, `all`, `pause`
+### `spawn`, `both`, `pause`
 
 ```trb fragment
 public native fn spawn<Value>(body: () => Value): Task<Value>
-public fn all<First, Second>(first: Task<First>, second: Task<Second>): Task<(First, Second)>
+public fn both<First, Second>(first: Task<First>, second: Task<Second>): Task<(First, Second)>
 public native fn pause(): Task<Void>
 ```
 
 `spawn` runs the closure as a new task; it gets copies of what it captures and cannot capture a `var` binding, so
-there is nothing to race for. The free function `all` waits for two tasks of different types at once
-(`const (user, posts) = all(fetchUser(1), fetchPosts(1)).await()?`); `Task.all` is the same idea for any number of
+there is nothing to race for. The free function `both` waits for two tasks of different types at once
+(`const (user, posts) = both(fetchUser(1), fetchPosts(1)).await()?`); `Task.all` is the same idea for any number of
 tasks of the same type. Where one of them is cancelled, the others are cancelled too. `pause()` puts the running task
 at the back of the queue, which is what makes a long loop fair.
 

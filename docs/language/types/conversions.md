@@ -196,9 +196,24 @@ extend <Foreign> with From<Mine> { ... }   // Your type into somebody else's
 ## What this is not
 
 **`Into` and `TryInto` are not something you implement.** Each of them comes from a blanket implementation over the
-other direction, so writing one by hand overlaps that blanket, and the compiler answers with the line to write
-instead: `extend Celsius with Into<Float64>` is `` `Into` comes from `From` for every type ``, with the note
-"Write `extend Float64 with From<Celsius>`".
+other direction. A hand-written `Into` is refused by a rule of its own - `extend Celsius with Into<Float64>` is
+"Implement `From<Celsius>` for `Float64` instead; `Into` comes from it", with the note "Write `extend Float64 with
+From<Celsius>`" - because the `From` gives the `Into` for free while the `Into` gives nothing back, and coherence
+allows the `From` wherever it would allow the `Into`. It is Rust's `from_over_into` lint, made a rule. A hand-written
+`TryInto` overlaps its blanket, and that message names the `TryFrom` to write.
+
+```trb error
+type Celsius {
+  degrees: Float
+}
+
+extend Celsius with Into<Float64> {
+  fn into(): Float64 {
+    degrees
+  }
+}
+// error: Implement `From<Celsius>` for `Float64` instead; `Into` comes from it
+```
 
 ```trb
 extend Celsius with From<Fahrenheit> {

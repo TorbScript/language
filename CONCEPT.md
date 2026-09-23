@@ -2320,7 +2320,7 @@ fn fetchUser(id: Int): Task<Result<User, HttpError>> {
   response.json<User>().await()                  // the body is a stream, so reading it is a Task too
 }
 
-const (user, posts) = all(fetchUser(1), fetchPosts(1)).await()
+const (user, posts) = both(fetchUser(1), fetchPosts(1)).await()
 
 const task = spawn { expensiveComputation() }    // Task<Int>, runs in parallel
 const result = task.await()
@@ -2812,8 +2812,9 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
 - Orphan rule for `extend ... with`, counting a type named as an argument of the trait as owning it (Rust RFC 2451 is
   the model; the stricter reading, so a nested `List<Mine>` does not count)
 - A trait that has a blanket implementation is never implemented by hand, and the message is built from the blanket's
-  own `where` clause with the concrete types put in: `extend Celsius with Into<Float64>` answers "`Into` comes from
-  `From` for every type" and names `extend Float64 with From<Celsius>`
+  own `where` clause with the concrete types put in. `Into` is a rule of its own (Rust's `from_over_into`, decided
+  2026-09-23): `extend Celsius with Into<Float64>` answers "Implement `From<Celsius>` for `Float64` instead; `Into`
+  comes from it", whatever else holds, because coherence allows the `From` wherever it allows the `Into`
 - **No trait for text.** A value is read from text through `TryFrom<String, Failure>` like any other fallible
   conversion, so there is exactly one way and no rule anybody has to watch. Rejected: a `Parse<Failure>` trait beside
   `Show`. `Show` is the language's `toString()` - display and debugging in one - and not the partner of a parser; the

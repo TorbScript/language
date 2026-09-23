@@ -132,10 +132,13 @@ extend<Value, Failure: From<Cancelled>> Task<Result<Value, Failure>> {
 public native fn spawn<Value>(body: () => Value): Task<Value>
 
 /**
- * Waits for two tasks of different types at once: `const (user, posts) = all(fetchUser(1), fetchPosts(1)).await()?`.
+ * Waits for two tasks of different types at once: `const (user, posts) = both(fetchUser(1), fetchPosts(1)).await()?`.
  * Where one of them is cancelled, the other is cancelled too and this task ends as cancelled.
+ *
+ * It is `both` and not `all`: it takes exactly two tasks, each of its own type, while [Task.all] waits for a list of
+ * tasks of one type and `Iterate.all` asks a predicate of every item.
  */
-public fn all<First, Second>(first: Task<First>, second: Task<Second>): Task<(First, Second)> {
+public fn both<First, Second>(first: Task<First>, second: Task<Second>): Task<(First, Second)> {
   const one = match first.await() {
     Ok(value) => value
     Fail(_) => {
@@ -171,7 +174,7 @@ public native type Workers {
  */
 public native fn pause(): Task<Void>
 
-/** `task.cancel()` without the `var` binding the method asks for: the body of [Task.cancel], and what `all` uses. */
+/** `task.cancel()` without the `var` binding the method asks for: the body of [Task.cancel], and what `both` uses. */
 native fn cancelTask<Value>(task: Task<Value>)
 
 /**

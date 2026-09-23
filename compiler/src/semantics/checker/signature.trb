@@ -435,6 +435,19 @@ fn isTraitOwner(checker: Checker, owner: TypeId?): Bool {
   false
 }
 
+/**
+ * Whether the declaration is a constant of a trait - `static zero: Self`, or one with a default value. Its `Self` is the
+ * trait's own parameter, so what a read of it produces is decided by the type the read reaches it on, and the back end
+ * reads the implementation's constant or instantiates the default for that type.
+ */
+public fn isTraitConstant(var checker: Checker, symbol: SymbolId): Bool {
+  if const .Constant = checker.symbolAt(symbol).kind {
+    const identifier = signatureOf checker, symbol
+    return isTraitOwner checker, checker.signature(identifier).owner
+  }
+  false
+}
+
 fn brokenSignatureOf(checker: Checker, symbol: SymbolId): Signature {
   Signature symbol, [], FunctionForm([], checker.invalidType), [], None, false, false, false
 }
@@ -448,6 +461,24 @@ fn constantSignature(
   owner: TypeId?,
 ): Signature {
   const scope = TypeScope module, selfType: owner
+  // `static zero: Self`: the requirement of a trait, whose value every implementation provides. It has a type and no
+  // body, like a `fn` a trait requires, and anywhere but in a trait it is a constant that forgot its value
+  if binding.required {
+    const annotation = match binding.annotation {
+      Some(reference) => typeFromReference checker, reference, scope.forType()
+      None => checker.invalidType
+    }
+    checker.checkedBodies.set symbol, true
+    if !isTraitOwner(checker, owner) {
+      checker.report(
+        module,
+        Diagnostic.error("A constant of the type needs a value", binding.pattern.span)
+          .withNote("Only a trait requires a constant without one, and every implementation of the trait provides it")
+      )
+    }
+    return Signature symbol, genericsOf(checker, symbol), FunctionForm([], annotation), [], owner, false, false, false
+  }
+  const generics = genericsOf checker, symbol
   // A top-level `const` of an entry file or a script is ordinary code, so `await()` is allowed in its initializer
   const awaits = owner.isNone() && allowsTopLevelCode(checker, module)
   // An annotated initializer is checked here too, and not where the declaration is walked: the annotation *is* the
@@ -457,15 +488,23 @@ fn constantSignature(
     Some(reference) => {
       const built = typeFromReference checker, reference, scope.forType()
       checker.checkedBodies.set symbol, true
-      const _ = checkInitializer checker, module, binding.value, owner, Some(built), awaitsTasks: awaits
+      const _ = checkInitializer(
+        checker,
+        module,
+        binding.value,
+        owner,
+        Some(built),
+        awaitsTasks: awaits,
+        generics: generics,
+      )
       built
     }
     None => {
       checker.checkedBodies.set symbol, true
-      checkInitializer checker, module, binding.value, owner, None, awaitsTasks: awaits
+      checkInitializer checker, module, binding.value, owner, None, awaitsTasks: awaits, generics: generics
     }
   }
-  Signature symbol, genericsOf(checker, symbol), FunctionForm([], annotation), [], owner, false, false, true
+  Signature symbol, generics, FunctionForm([], annotation), [], owner, false, false, true
 }
 
 fn functionSignature(

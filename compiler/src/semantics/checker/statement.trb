@@ -666,6 +666,7 @@ public fn checkInitializer(
   owner: TypeId?,
   annotation: TypeId?,
   awaitsTasks: Bool = false,
+  generics: List<ParameterId> = [],
 ): TypeId {
   const voidType = checker.voidType
   const saved = checker.enterBody module, voidType, true, owner
@@ -674,6 +675,9 @@ public fn checkInitializer(
   checker.awaitsTasks = awaitsTasks
   checker.writesDeclarations = awaitsTasks
   checker.openScope()
+  // `static zero = Pair(Scalar.zero, Scalar.zero)` inside `extend<Scalar: Numeric> Pair<Scalar>`: the parameters of the
+  // declaration around a constant are names of its initializer, exactly as they are of a body
+  declareGenerics checker, generics
   openInference checker
   var found = match annotation {
     Some(wanted) => {

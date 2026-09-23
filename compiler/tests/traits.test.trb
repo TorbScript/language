@@ -685,3 +685,53 @@ group "A bound a trait-typed value witnesses" {
     assert(notes(source) == ["`render` asks for it"])
   }
 }
+
+/** A trait that requires a constant, one implementation that provides it, and a generic body that reads it. */
+const zeroSource = "trait Zero \{\n  static zero: Self\n\n  static origin: Self = Self.zero\n\}\n\n"
+  + "type Point with Zero \{\n  x: Int\n\n  static zero = Point(0)\n\}\n\n"
+  + "fn zeroOf<Value: Zero>(): Value \{\n  Value.zero\n\}\n\n"
+  + "fn originOf<Value: Zero>(): Value \{\n  Value.origin\n\}\n\n"
+  + "const first: Point = zeroOf()\n"
+  + "const second: Point = originOf()\n"
+  + "const third = Point.origin"
+
+group "A constant a trait requires" {
+  test "a generic body reads it through its parameter, and a concrete one through the type" {
+    const found = probe zeroSource
+    assert problems(zeroSource).isEmpty()
+    assert(found.typeOf("Value.zero") == "Value")
+    assert(found.resolutionOf("Value.zero") == "constant zero")
+    // The default is a constant of every implementation that writes none, read on the type like its own
+    assert(found.typeOf("Point.origin") == "Point")
+  }
+
+  test "an implementation without it is told what the trait asks for" {
+    const source = "trait Zero \{\n  static zero: Self\n\}\n\ntype Point with Zero \{\n  x: Int\n\}"
+    assert(problems(source) == ["`Point` implements `Zero` but has no `zero`"])
+    assert(notes(source) == ["`Zero` requires `static zero: Point`"])
+  }
+
+  test "a `static fn` does not stand in for a constant, and a constant of another type does not either" {
+    const function = "trait Zero \{\n  static zero: Self\n\}\n\n"
+      + "type Point with Zero \{\n  x: Int\n\n  static fn zero(): Point \{\n    Point 0\n  \}\n\}"
+    assert(problems(function) == ["`Point.zero` does not match `Zero`"])
+    assert(notes(function) == ["`Zero` requires `static zero: Point`"])
+    const mistyped = "trait Zero \{\n  static zero: Self\n\}\n\ntype Point with Zero \{\n  x: Int\n\n  static zero = 0\n\}"
+    assert(problems(mistyped) == ["`Point.zero` does not match `Zero`"])
+  }
+
+  test "a native type provides it as a constant of its own and never through the manifest" {
+    const source = "trait Zero \{\n  static zero: Self\n\}\n\nextend Int64 with Zero \{\n  static zero: Int64 = 0\n\}\n\n"
+      + "fn zeroOf<Value: Zero>(): Value \{\n  Value.zero\n\}\n\n"
+      + "const nothing: Int = zeroOf()"
+    assert problems(source).isEmpty()
+  }
+
+  test "only a trait may leave a constant without a value" {
+    const source = "type Point \{\n  x: Int\n\n  static zero: Point\n\}"
+    assert(problems(source) == ["A constant of the type needs a value"])
+    assert(
+      notes(source) == ["Only a trait requires a constant without one, and every implementation of the trait provides it"]
+    )
+  }
+}
