@@ -1762,7 +1762,7 @@ public fn inherentExtensionsOf(var checker: Checker, annotation: TypeId): List<I
     if !boundsHold(checker, implementation, mapping) {
       continue
     }
-    if !isExtensionNamedHere(checker, implementation.package, owner, here, head) {
+    if !isExtensionNamedHere(checker, implementation, owner, here, head) {
       continue
     }
     found.append index
@@ -1772,20 +1772,34 @@ public fn inherentExtensionsOf(var checker: Checker, annotation: TypeId): List<I
 }
 
 /**
- * Whether an `extend` of `package` reaches this file: the package of the type attached it, this package attached it, or
- * this file named a member of the type that comes from there.
+ * Whether an `extend` reaches this file: the package of the type attached it, this package attached it, or this file
+ * named a member that comes from there - of the type itself, or of the trait the `extend` is written on, which is how
+ * `use Iterate.parallel from "std/parallel"` reaches a `List`.
  */
-fn isExtensionNamedHere(var checker: Checker, package: Int, owner: Int, here: Int, head: SymbolId?): Bool {
-  if package == owner || package == here {
+fn isExtensionNamedHere(var checker: Checker, implementation: Implementation, owner: Int, here: Int, head: SymbolId?): Bool {
+  if implementation.package == owner || implementation.package == here {
     return true
   }
-  const symbol = match head {
-    Some(found) => found
-    None => {
-      return false
+  for symbol in namingHeadsOf(checker, implementation, head) {
+    if checker.program.importsMemberFrom(checker.module, symbol, implementation.package) {
+      return true
     }
   }
-  checker.program.importsMemberFrom checker.module, symbol, package
+  false
+}
+
+/** The symbols a `use Type.member` line may name to reach an extension: the type the member is read on, then its target. */
+fn namingHeadsOf(checker: Checker, implementation: Implementation, head: SymbolId?): List<SymbolId> {
+  var heads: List<SymbolId> = []
+  if const Some(found) = head {
+    heads.append found
+  }
+  if const Some(target) = headSymbolOf(checker, implementation.target) {
+    if !heads.contains(target) {
+      heads.append target
+    }
+  }
+  heads
 }
 
 /**
@@ -1802,13 +1816,14 @@ public fn extensionMemberOf(var checker: Checker, index: Int, annotation: TypeId
       return Some found
     }
   }
-  const symbol = headSymbolOf(checker, annotation)?
-  for entry in checker.program.memberImportsOf(checker.module, symbol, name) {
-    if entry.package != implementation.package {
-      continue
-    }
-    if const Some(found) = implementation.members.get(entry.name) {
-      return Some found
+  for symbol in namingHeadsOf(checker, implementation, headSymbolOf(checker, annotation)) {
+    for entry in checker.program.memberImportsOf(checker.module, symbol, name) {
+      if entry.package != implementation.package {
+        continue
+      }
+      if const Some(found) = implementation.members.get(entry.name) {
+        return Some found
+      }
     }
   }
   None
@@ -1826,7 +1841,7 @@ public fn hiddenExtensionOf(var checker: Checker, annotation: TypeId, name: Stri
     if !implementation.members.containsKey(name) {
       continue
     }
-    if isExtensionNamedHere(checker, implementation.package, owner, here, head) {
+    if isExtensionNamedHere(checker, implementation, owner, here, head) {
       continue
     }
     var mapping: Map<ParameterId, TypeId> = [:]

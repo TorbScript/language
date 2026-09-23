@@ -16,8 +16,12 @@ source:
 
 Asynchrony lives in the type system, not in a keyword. A function that returns `Task<Value>` may call `await()`
 inside its body, the same way a function that returns a `Result` may use `?`. Every task can be cancelled, so
-`await()` answers `Result<Value, Cancelled>`: `?` hands a cancellation on, `??` replaces it. One worker runs the tasks
-of a program, one at a time, in the order they became ready.
+`await()` answers `Result<Value, Cancelled>`: `?` hands a cancellation on, `??` replaces it. A pool of workers - one
+operating-system thread per processor, `TORB_WORKERS` to say otherwise - runs the tasks of a program: each worker runs
+one task at a time in the order they became ready, and an idle worker takes a task that has not started yet where
+everything it holds may cross to another thread (numbers, a channel of numbers, a text nobody else holds). What a program
+reads of its tasks - their values, the items of a channel - does not depend on which worker ran them; what several
+tasks print at once interleaves as the machine runs them, and with `TORB_WORKERS=1` in the one order of the queue.
 
 ## Example
 

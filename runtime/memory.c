@@ -6,49 +6,37 @@
  * it is born inside an immortal region (`torb_begin_immortal`), which is what the value of a module constant and the
  * tree of a quoted expression are built in, and it is reported on its own line so the leak gate stays exact.
  *
- * Counts are plain integers: every task owns its heap, so nothing has to be atomic (BACKEND 2.5). The heap is libc's
- * for now; the bump allocator with size-class free lists that section 2.5 describes is a replacement behind these six
- * functions and changes nothing above them.
+ * Counts are plain integers: nothing a worker can reach is reachable from another one, so nothing has to be atomic
+ * (BACKEND 2.5). The one exception is a block with `TORB_SHARED_COUNT` - a task, a channel, the environment of a
+ * closure that may cross to another worker - whose count changes atomically once the pool runs threads (torb.h, the
+ * block header). The heap is libc's for now; the bump allocator with size-class free lists that section 2.5 describes
+ * is a replacement behind these six functions and changes nothing above them.
+ *
+ * **One heap per worker, as counters.** Each worker counts what it allocates and frees in its own `torb_heap`
+ * (runtime/include/torb_pool.h), written by its thread alone. A block that moved to another worker and is freed there
+ * lowers that worker's counter instead of its maker's, so one counter may run below zero - they are unsigned and wrap -
+ * and the **sum** over all workers is what is exact, which is what the report and the tests read. That is also why a
+ * block needs no id of its heap in its header: libc frees it from any thread, and the counters balance in the sum.
  *
  * Every allocation failure panics: the language has no out-of-memory error.
  */
 
 #include "torb.h"
+#include "torb_pool.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 /*
- * The state of one heap. Everything the allocator knows lives here and nowhere else, so that the worker pool of 7.7
- * (docs/design/CONCURRENCY.md slices E-H) gives every worker one of these without touching a function below.
- *
- * In 7.3 there is one worker, so there is one heap and `torb_heap_current` answers it; the call folds away. What the
- * pool slice changes, and all it changes here:
- *
- * - `torb_heap_current` answers a `TORB_THREAD_LOCAL torb_heap *` that each worker thread points at its own heap when
- *   it starts (MSVC `__declspec(thread)`, `_Thread_local` elsewhere - thread-local on MinGW is emulated and costs a
- *   call, which is why it is not paid now, while nothing needs it).
- * - `torb_live_block_count` and `torb_report_leaks` sum over every heap, read after the workers joined.
- * - A block records its heap (BACKEND 2.5: the header carries the owning heap's id) and a release by another worker
- *   goes to the owner's foreign-free list - which a transferred channel item is the only way to cause.
+ * The heap of the calling thread's worker. A block allocated inside an immortal region (the value of a module constant,
+ * the tree of a quoted expression, and every temporary the initializer made on the way) is born immortal: retaining and
+ * releasing it are no-ops, it is never freed, and a write to it copies. It is counted apart from the live blocks, so
+ * `live blocks at exit: 0` keeps meaning "everything that was counted was freed". Regions are per thread, because the
+ * worker that builds a constant is the one whose allocations are immortal while it does.
  */
-typedef struct torb_heap {
-  size_t live_blocks;
-  size_t immortal_blocks;
-  /*
-   * How many immortal regions are open. Everything `torb_allocate` hands out while one is (the value of a module
-   * constant, the tree of a quoted expression, and every temporary the initializer made on the way) is born immortal:
-   * retaining and releasing it are no-ops, it is never freed, and a write to it copies. It is counted apart from the
-   * live blocks, so `live blocks at exit: 0` keeps meaning "everything that was counted was freed".
-   */
-  unsigned immortal_depth;
-} torb_heap;
-
-static torb_heap torb_process_heap = { 0u, 0u, 0u };
-
 static torb_heap *torb_heap_current(void) {
-  return &torb_process_heap;
+  return &torb_worker_current()->heap;
 }
 
 static void *torb_payload(void *block) {
@@ -59,6 +47,7 @@ static void *torb_payload(void *block) {
 
 void *torb_allocate(size_t size, torb_block_kind kind) {
   torb_header *header;
+  torb_heap *heap;
   if (size < sizeof(torb_header)) {
     size = sizeof(torb_header);
   }
@@ -68,13 +57,14 @@ void *torb_allocate(size_t size, torb_block_kind kind) {
   }
   header->kind = (uint16_t)kind;
   header->color = (uint16_t)TORB_COLOR_NONE;
-  if (torb_heap_current()->immortal_depth > 0) {
+  heap = torb_heap_current();
+  if (heap->immortal_depth > 0) {
     header->count = TORB_IMMORTAL_COUNT;
-    torb_heap_current()->immortal_blocks += 1;
+    heap->immortal_blocks += 1;
     return header;
   }
   header->count = 1;
-  torb_heap_current()->live_blocks += 1;
+  heap->live_blocks += 1;
   return header;
 }
 
@@ -116,24 +106,80 @@ void torb_raw_free(void *buffer, size_t size) {
 
 void torb_retain(void *block) {
   torb_header *header = (torb_header *)block;
-  if (header == NULL || header->count == TORB_IMMORTAL_COUNT) {
+  uint32_t count;
+  if (header == NULL) {
     return;
   }
-  header->count += 1;
+  count = header->count;
+  if (count >= TORB_SHARED_COUNT) {
+    if (count == TORB_IMMORTAL_COUNT) {
+      return;
+    }
+    if (torb_pool_threaded != 0u) {
+      (void)torb_atomic_add_u32(&header->count, 1u);
+      return;
+    }
+  }
+  header->count = count + 1u;
 }
 
 void torb_release(void *block, torb_drop_function drop) {
   torb_header *header = (torb_header *)block;
-  if (header == NULL || header->count == TORB_IMMORTAL_COUNT) {
+  uint32_t count;
+  if (header == NULL) {
     return;
   }
-  if (header->count == 0) {
+  count = header->count;
+  if (count == TORB_IMMORTAL_COUNT) {
+    return;
+  }
+  if ((count & TORB_SHARED_COUNT) != 0u && torb_pool_threaded != 0u) {
+    /* Whoever takes the count from one to zero frees the block, on whichever worker that is */
+    uint32_t before = torb_atomic_sub_u32(&header->count, 1u);
+    if (before == TORB_SHARED_COUNT) {
+      torb_panic_text("internal error: released a block whose count is already zero", torb_location_unknown);
+    }
+    if (before != TORB_SHARED_COUNT + 1u) {
+      return;
+    }
+  } else {
+    if ((count & ~TORB_SHARED_COUNT) == 0u) {
+      torb_panic_text("internal error: released a block whose count is already zero", torb_location_unknown);
+    }
+    count -= 1u;
+    header->count = count;
+    if ((count & ~TORB_SHARED_COUNT) != 0u) {
+      return;
+    }
+  }
+  if (drop != NULL) {
+    drop(block);
+  }
+  free(block);
+  torb_heap_current()->live_blocks -= 1;
+}
+
+bool torb_count_down(void *block) {
+  torb_header *header = (torb_header *)block;
+  uint32_t count = header->count;
+  if (count == TORB_IMMORTAL_COUNT) {
+    return false;
+  }
+  if ((count & TORB_SHARED_COUNT) != 0u && torb_pool_threaded != 0u) {
+    uint32_t before = torb_atomic_sub_u32(&header->count, 1u);
+    if (before == TORB_SHARED_COUNT) {
+      torb_panic_text("internal error: released a block whose count is already zero", torb_location_unknown);
+    }
+    return before == TORB_SHARED_COUNT + 1u;
+  }
+  if ((count & ~TORB_SHARED_COUNT) == 0u) {
     torb_panic_text("internal error: released a block whose count is already zero", torb_location_unknown);
   }
-  header->count -= 1;
-  if (header->count != 0) {
-    return;
-  }
+  header->count = count - 1u;
+  return ((count - 1u) & ~TORB_SHARED_COUNT) == 0u;
+}
+
+void torb_free_counted(void *block, torb_drop_function drop) {
   if (drop != NULL) {
     drop(block);
   }
@@ -184,7 +230,16 @@ bool torb_is_unique(const void *block) {
   if (header == NULL) {
     return true;
   }
-  return header->count == 1;
+  /* An immortal count masks to 0x7FFFFFFF, so static data is never unique and a write to it always copies */
+  return (header->count & ~TORB_SHARED_COUNT) == 1u;
+}
+
+void torb_share(void *block) {
+  torb_header *header = (torb_header *)block;
+  if (header == NULL || header->count == TORB_IMMORTAL_COUNT) {
+    return;
+  }
+  header->count |= TORB_SHARED_COUNT;
 }
 
 void *torb_make_unique(void *block,
@@ -193,7 +248,7 @@ void *torb_make_unique(void *block,
                        torb_drop_function drop) {
   torb_header *header = (torb_header *)block;
   void *copy;
-  if (header == NULL || header->count == 1) {
+  if (header == NULL || torb_is_unique(block)) {
     return block;
   }
   if (size < sizeof(torb_header)) {
@@ -212,13 +267,15 @@ void *torb_make_unique(void *block,
 
 void torb_make_immortal(void *block) {
   torb_header *header = (torb_header *)block;
+  torb_heap *heap;
   if (header == NULL || header->count == TORB_IMMORTAL_COUNT) {
     return;
   }
   header->count = TORB_IMMORTAL_COUNT;
   /* The block is never freed again, so it leaves the live count and joins the immortal one. */
-  torb_heap_current()->live_blocks -= 1;
-  torb_heap_current()->immortal_blocks += 1;
+  heap = torb_heap_current();
+  heap->live_blocks -= 1;
+  heap->immortal_blocks += 1;
 }
 
 void torb_begin_immortal(void) {
@@ -226,21 +283,61 @@ void torb_begin_immortal(void) {
 }
 
 void torb_end_immortal(void) {
-  if (torb_heap_current()->immortal_depth == 0) {
+  torb_heap *heap = torb_heap_current();
+  if (heap->immortal_depth == 0) {
     torb_panic_text("internal error: ended an immortal region that was never begun", torb_location_unknown);
   }
-  torb_heap_current()->immortal_depth -= 1;
+  heap->immortal_depth -= 1;
 }
 
 size_t torb_live_block_count(void) {
-  return torb_heap_current()->live_blocks;
+  return torb_pool_sum_live_blocks();
 }
 
 size_t torb_immortal_block_count(void) {
-  return torb_heap_current()->immortal_blocks;
+  return torb_pool_sum_immortal_blocks();
 }
 
 void torb_report_leaks(void) {
-  fprintf(stderr, "live blocks at exit: %lu\n", (unsigned long)torb_heap_current()->live_blocks);
-  fprintf(stderr, "immortal blocks at exit: %lu\n", (unsigned long)torb_heap_current()->immortal_blocks);
+  fprintf(stderr, "live blocks at exit: %lu\n", (unsigned long)torb_pool_sum_live_blocks());
+  fprintf(stderr, "immortal blocks at exit: %lu\n", (unsigned long)torb_pool_sum_immortal_blocks());
+}
+
+/* ------------------------------------------------------------------------------- building a constant once --- */
+
+/*
+ * The lock around the first build of an immortal counted static (torb.h, `torb_constant_ready`). Recursive by hand -
+ * one mutex, the worker holding it and how deep - because the initializer of one constant may read another, which
+ * locks again on the same thread. `owner` is the worker's index plus one, and a thread only ever compares it with its
+ * own, which no other thread writes.
+ */
+static torb_mutex torb_constant_mutex = TORB_MUTEX_INITIALIZER;
+static uint32_t torb_constant_owner = 0u;
+static unsigned torb_constant_depth = 0u;
+
+void torb_constant_lock(void) {
+  uint32_t self = torb_worker_current()->index + 1u;
+  if (torb_atomic_peek_u32(&torb_constant_owner) == self) {
+    torb_constant_depth += 1u;
+    return;
+  }
+  torb_mutex_lock(&torb_constant_mutex);
+  torb_atomic_store_u32(&torb_constant_owner, self);
+  torb_constant_depth = 1u;
+}
+
+void torb_constant_unlock(void) {
+  torb_constant_depth -= 1u;
+  if (torb_constant_depth == 0u) {
+    torb_atomic_store_u32(&torb_constant_owner, 0u);
+    torb_mutex_unlock(&torb_constant_mutex);
+  }
+}
+
+void torb_constant_publish(bool *ready) {
+#if defined(__GNUC__) || defined(__clang__)
+  __atomic_store_n(ready, true, __ATOMIC_RELEASE);
+#else
+  *(volatile bool *)ready = true;
+#endif
 }

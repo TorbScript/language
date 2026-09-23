@@ -88,11 +88,20 @@
  *
  * # The scheduler
  *
- * One worker, one FIFO run queue, one heap (the pool of docs/design/CONCURRENCY.md is slices E to H of 7.7). A task that is
- * started or woken goes to the back of the queue; a timer that is due is woken before the next task is taken, in
- * deadline order. When the queue is empty and a timer is pending, the worker sleeps until the first deadline. When the
- * queue is empty, no timer is pending and the task being waited for has not completed, every task is waiting for
- * another one: that is a deadlock, and it panics rather than hangs.
+ * A fixed pool of workers, each an operating-system thread with its own FIFO run queue, timers and heap
+ * (docs/design/CONCURRENCY.md sections 1 and 16). A task that is started or woken goes to the back of the queue of the
+ * worker it belongs to; a timer that is due is woken before the next task is taken, in deadline order. When a worker
+ * has nothing to run it takes an **unstarted** task that may move from another worker's queue (stealing), and
+ * otherwise sleeps until it is woken or its first deadline comes. A task that has started never leaves its worker.
+ *
+ * **Which tasks may move** is decided where they are started: `torb_task_start` pins the task to the worker that
+ * starts it, `torb_task_start_portable` lets an idle worker take it until it first runs. The compiler calls the second
+ * one only where every value the frame holds may cross (task.c, "What crosses a worker"), so a program that starts no
+ * such task never starts a second thread at all, and one worker behaves exactly as the single-threaded scheduler did:
+ * `TORB_WORKERS=1` is the order the conformance suite pins.
+ *
+ * When nothing is queued anywhere, no timer is pending and the task being waited for has not completed, every task is
+ * waiting for another one: that is a deadlock, and it panics rather than hangs.
  *
  * The generated `main` of a program that uses tasks runs its entry file as the **main task**:
  *
@@ -175,6 +184,12 @@ typedef struct torb_task_list {
 /**
  * The runtime's part of a task block. **The machine reads `cancelled` (through `torb_task_cancelled`) and writes
  * `state`; every other field is the runtime's**, and is here only because the accessors below are `static inline`.
+ *
+ * Who may touch what, with a pool of workers: `state`, `outcome`, `timer` and the frame belong to the worker that runs
+ * the task (`worker`); `waiters` and the step of `status` to complete belong to the task's own `lock`; the links of a
+ * task that waits on something (`waiting`, `wait_*`) belong to the lock of what it waits on; the queue links and
+ * `queued` belong to the lock of the worker whose queue it is in; the parent, child and live links belong to the tree
+ * lock of task.c. `cancelled` and `status` are read without a lock, with an acquire.
  */
 struct torb_task {
   torb_header header;
@@ -189,18 +204,34 @@ struct torb_task {
   uint8_t cancelled;
   uint8_t status;          /**< `torb_task_status`. */
   uint8_t waiting;         /**< `torb_task_waiting`. */
-  uint8_t queued;          /**< In the run queue. */
+  uint8_t queued;          /**< In the run queue of its worker. */
+  /** Started with `torb_task_start_portable`: an idle worker may take it until it first runs. */
+  uint8_t portable;
+  /** In the list of its worker's queue that an idle worker takes from (unstarted and portable). */
+  uint8_t stealable;
+  /** Has run at least once: it never moves again. */
+  uint8_t started;
+  /** Its worker is completing it: a cancellation passes it by (set and read under the tree lock). */
+  uint8_t completing;
   int32_t outcome;         /**< `torb_outcome` of the last wait. */
-  int32_t timer;           /**< The index in the timer heap, or -1. */
-  /** The worker whose heap the block is in. Always 0 until 7.7: a started task never leaves its worker. */
+  int32_t timer;           /**< The index in its worker's timer heap, or -1. */
+  /** The worker that runs it: the one that started it, or the one that took it before its first run. */
   uint32_t worker;
+  /** The lock of `status` and `waiters`: a spin lock, held for a few instructions. */
+  uint32_t lock;
+  torb_task *queue_previous;
   torb_task *queue_next;
+  torb_task *steal_previous;
+  torb_task *steal_next;
   /** What it waits on (a `torb_task` or a `torb_channel`) and the slot of the frame a send offers or a receive fills. */
   void *wait_target;
   void *wait_slot;
   torb_task *wait_previous;
   torb_task *wait_next;
-  /** A received item that the frame has not taken yet (`torb_task_outcome` takes it), and what it is. */
+  /**
+   * A received item that the frame has not taken yet (`torb_task_outcome` takes it), or the item of a send that was
+   * cancelled while it waited, and what it is: released by the runtime when the task completes without taking it.
+   */
   void *delivered;
   const torb_element *delivered_element;
   /** The tasks waiting for this one. */
@@ -229,10 +260,19 @@ static inline void *torb_task_result_slot(torb_task *task) {
   return (void *)((uint8_t *)task + task->result_offset);
 }
 
-/** The cancellation check: one load and one branch, at every resume, after every ready wait, at every back-edge. */
+/**
+ * The cancellation check: one load and one branch, at every resume, after every ready wait, at every back-edge. The flag
+ * may be set by another worker while the machine runs, so the load is an atomic one - a plain load on every target.
+ */
+#if defined(__GNUC__) || defined(__clang__)
 static inline bool torb_task_cancelled(const torb_task *task) {
-  return task->cancelled != 0u;
+  return __atomic_load_n(&task->cancelled, __ATOMIC_RELAXED) != 0u;
 }
+#else
+static inline bool torb_task_cancelled(const torb_task *task) {
+  return *(const volatile uint8_t *)&task->cancelled != 0u;
+}
+#endif
 
 /* ------------------------------------------------------------------------------------- making and holding one --- */
 
@@ -247,8 +287,21 @@ static inline bool torb_task_cancelled(const torb_task *task) {
  */
 torb_task *torb_task_new(torb_resume_function resume, size_t frame_size, const torb_element *result);
 
-/** `task` borrowed. Queues it; the scheduler takes its own reference until the task completes. */
+/**
+ * `task` borrowed. Queues it on the worker that runs the caller, **pinned** there; the scheduler takes its own reference
+ * until the task completes.
+ */
 void torb_task_start(torb_task *task);
+
+/**
+ * The same, and until it first runs an idle worker may take the task and run it instead - which is how `spawn` and a
+ * call of a task function spread over the workers. The caller vouches that **every value in the frame may cross**:
+ * plain data, a `Task` or `Channel` of plain data, a closure whose environment is shared (`torb_share`), or a block that
+ * nothing but the frame holds (`torb_text_may_move`, `torb_list_may_move`, `torb_map_may_move`). The compiler writes
+ * the test beside the call (task.c, "What crosses a worker"). Starts the pool's threads the first time it is called,
+ * where there is more than one worker.
+ */
+void torb_task_start_portable(torb_task *task);
 
 /**
  * The drop of a task block, for `torb_release(task, torb_task_drop)`: releases the result if the task finished. The
@@ -449,14 +502,67 @@ void torb_scheduler_finish(void);
 /**
  * `Process.exit` while tasks are alive, maybe from inside one: every task is cancelled and run to its stop, the running
  * one is completed as cancelled without returning to it, and the main task the program's `main` waits for is
- * released - so the leak report of the exit sees what the end of `main` would have seen. A no-op without tasks.
+ * released - so the leak report of the exit sees what the end of `main` would have seen. A no-op without tasks. Called
+ * on a worker other than the main thread it hands the exit and its `code` to the main thread, which is the one inside
+ * the program's `main`, and never returns: that worker keeps running its own tasks to their stop until the pool stops,
+ * and then its thread ends.
  */
-void torb_scheduler_exit(void);
+void torb_scheduler_exit(int64_t code);
 
-/** How many tasks have not completed yet. For the tests and the leak report. */
+/** How many tasks have not completed yet, on every worker. For the tests and the leak report. */
 size_t torb_task_live_count(void);
 
-/** The task whose machine is running now, or `NULL` outside every task. Borrowed. */
+/** The task whose machine is running now on the calling thread, or `NULL` outside every task. Borrowed. */
 torb_task *torb_task_current(void);
+
+/* -------------------------------------------------------------------------------------------- the worker pool --- */
+
+/**
+ * `Workers.count()`: how many workers this process runs - `TORB_WORKERS` where it is set, and otherwise the number of
+ * logical processors, capped at 1024. Fixed for the life of the process. A `TORB_WORKERS` that is not a whole number
+ * from 1 to 1024 makes the program refuse to go on, with one line that names the variable and exit code 2, rather than
+ * fall back to a default in silence (docs/design/CONCURRENCY.md section 3). `torb_process_start` asks it first.
+ */
+int64_t torb_workers_count(void);
+
+/** The index of the worker running the calling thread: 0 on the main thread. For the tests. */
+uint32_t torb_worker_index(void);
+
+/**
+ * For the runtime's tests: the number of workers the pool starts with the next time it starts, in place of
+ * `torb_workers_count()`. Only while the pool is not running; 0 goes back to the count the process was given.
+ */
+void torb_pool_set_workers(uint32_t count);
+
+/** What the pool did so far, summed over every worker and every run of the pool. For the tests and the benchmark. */
+typedef struct torb_pool_statistics {
+  /** Resumes of a task, on every worker. */
+  uint64_t resumed;
+  /** Tasks a worker took from another one's queue before their first run. */
+  uint64_t stolen;
+  /** How many times the pool's threads were started. */
+  uint64_t starts;
+} torb_pool_statistics;
+
+torb_pool_statistics torb_pool_statistics_now(void);
+
+/* ------------------------------------------------------------------------------- what may cross a worker --- */
+
+/*
+ * The tests the compiler writes beside `torb_task_start_portable` and `torb_share`, one per value of a frame or a
+ * closure whose type alone does not answer it. Each is true where handing the value to another thread can never touch a
+ * count that this thread may still touch: nothing counted inside, an immortal block, a shared (atomic) block, or - for
+ * the frame of a task, which runs once and on one thread - a block that only this value holds and whose elements are
+ * plain. All values borrowed.
+ */
+
+/** A closure: no environment, or a shared one. */
+bool torb_closure_may_move(torb_environment *environment);
+/** A `String`: immortal storage; with `transfer`, also storage that only this text holds. */
+bool torb_text_may_move(torb_text text, bool transfer);
+/** A list: no storage or immortal storage; with `transfer`, also storage only this list holds, with plain elements. */
+bool torb_list_may_move(torb_list list, bool transfer);
+/** A map or a set: the same, with a plain key and a plain value. */
+bool torb_map_may_move(torb_map map, bool transfer);
 
 #endif /* TORB_TASK_H */

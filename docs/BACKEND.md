@@ -497,7 +497,10 @@ block it reaches has count 1 - the blocks are **transferred** (the receiving hea
 block back to its owning heap's foreign-free list, which the owner drains). A value with `containsShared` never
 crosses a channel; the checker rejects that (Concurrency section: "`shared type` objects ... are confined to the task
 that created them"). With the single-threaded scheduler of 7.3 none of this is load bearing yet: the transfer is a
-move and the heap is one. 7.7 turns it on.
+move and the heap is one. 7.7 turns it on - **as built**, without the copy: a value crosses a worker only where it provably
+needs none (plain data, an immortal block, a shared `Task`/`Channel`/closure environment with an atomic count, or a block
+only the moving frame holds, which is re-homed), the heap is a set of per-worker counters that balance in their sum, and
+work over anything else stays on its worker (`docs/design/CONCURRENCY.md` section 16, "What crosses a worker").
 
 ---
 
@@ -920,7 +923,7 @@ deleted).
 | **7.4** | The sandbox: `Script<Value>` (gap 12 below), capability checks at import, limits as counters, panics recovered, embedding the front end | `std/sandbox`, `vm/sandbox.trb` | A script that loops forever, one that imports what it may not, one that panics | 7.2 |
 | **7.5** | `project.trb` as a receiver script: `Project` and friends as real types, the static reader deleted after a test asserts both agree | `project/model.trb`, `project/manifest.trb` | Every `project.trb` of the repository, both readers | 7.4 |
 | **7.6** | The REPL: the scope chain, the persistent frame, shadowing, generations of redeclared types | `cli/repl.trb`, `vm/session.trb` | A transcript test | 7.4 |
-| **7.7** | Threads: workers, per-worker heaps, channel transfer, the inbox and the stealing of unstarted tasks (`docs/design/CONCURRENCY.md` slice H). **No cycle collector** (section 2.4, `docs/design/DESTRUCTORS.md` section 9): the leak report names the type of every block still alive instead | `runtime/task.c` | Parallelism tests, and a leak report test for a program that builds a cycle | 7.3 |
+| **7.7** | **Done for the C back end** (`docs/design/CONCURRENCY.md` section 16, "The pool, as built"): a fixed pool of OS threads, a heap and a scheduler per worker, the stealing of unstarted tasks that may move, wake-ups, channels and cancellation across workers, the per-thread stack check, `Workers.count`, and `parallel()` in the prelude on the pool; what may cross a worker is proven where it is handed over, and nothing is copied. **Open:** the IO poller, the blocking pool, the manifest setting, the deep copy of a value that cannot move, and the VM half. Threads: workers, per-worker heaps, channel transfer, the inbox and the stealing of unstarted tasks (`docs/design/CONCURRENCY.md` slice H). **No cycle collector** (section 2.4, `docs/design/DESTRUCTORS.md` section 9): the leak report names the type of every block still alive instead | `runtime/task.c`, `runtime/platform.c`, `backend/c/crossing.trb`, `std/parallel` | `runtime/tests/pool_test.c`, `tests/conformance/{parallel-ordered,task-workers}.trb` with four workers and one, `benchmarks/parallel.sh`; the leak report test for a cycle is not written | 7.3 |
 
 ```text
 5.1 ─► 5.2 ─► 5.3 ─┬─► 5.4 ─► 5.5 ─► 5.6 ─┬─► 5.7 ─┬─► 5.9b ┐

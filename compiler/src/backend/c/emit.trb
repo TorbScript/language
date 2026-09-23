@@ -2090,9 +2090,16 @@ fn emitConstantCell(
     building.append CStatement.Assignment(CExpression.Name(cell), call)
   }
   building.append CStatement.Evaluate(CExpression.Call(CExpression.Name("torb_end_immortal"), []))
-  building.append CStatement.Assignment(CExpression.Name(ready), CExpression.Literal("true"))
+  const flag = CExpression.AddressOf CExpression.Name(ready)
+  building.append CStatement.Evaluate(CExpression.Call(CExpression.Name("torb_constant_publish"), [flag]))
+  // Two workers may ask for the constant at once: the first build is under the process's lock, checked again inside it
+  var locked: List<CStatement> = []
+  locked.append CStatement.Evaluate(CExpression.Call(CExpression.Name("torb_constant_lock"), []))
+  locked.append CStatement.If(CExpression.Unary("!", CExpression.Name(ready)), building)
+  locked.append CStatement.Evaluate(CExpression.Call(CExpression.Name("torb_constant_unlock"), []))
+  const isReady = CExpression.Call CExpression.Name("torb_constant_ready"), [flag]
   var statements: List<CStatement> = []
-  statements.append CStatement.If(CExpression.Unary("!", CExpression.Name(ready)), building)
+  statements.append CStatement.If(CExpression.Unary("!", isReady), locked)
   if isByPointer {
     statements.append CStatement.Assignment(CExpression.Dereference(CExpression.Name(resultPointerName)), CExpression.Name(cell))
   } else {

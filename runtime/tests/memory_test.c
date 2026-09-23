@@ -240,20 +240,24 @@ TORB_TEST(a_panic_hook_catches_a_panic_and_the_suite_goes_on) {
 }
 
 /**
- * The stack check fires once the stack is below the limit, and not before. A limit above every address stands for a
- * stack that is used up; the real one, from the bounds of this thread's stack, lies below where a test runs.
+ * The stack check fires once the stack is below the limit, and not before. A reserve that reaches past this very frame
+ * stands for a stack that is used up; the real one, above the bottom of this thread's stack, lies below where a test
+ * runs.
  */
 TORB_TEST(the_stack_check_panics_below_the_limit) {
-  const uintptr_t saved = torb_stack_limit;
-  torb_stack_limit = 0u;
+  const uintptr_t saved = torb_stack_reserve;
+  char here = 0;
+  torb_stack_reserve = 0u;
   TORB_CHECK_STACK(in_deep);
   torb_set_stack_limit();
-  TORB_CHECK(torb_stack_limit > 0u);
+  TORB_CHECK(torb_stack_reserve > 0u);
+  TORB_CHECK(torb_stack_floor() > 0u);
+  TORB_CHECK((uintptr_t)&here > torb_stack_floor());
   TORB_CHECK_STACK(in_deep);
-  torb_stack_limit = UINTPTR_MAX;
+  torb_stack_reserve = (uintptr_t)&here - torb_stack_floor() + 65536u;
   TORB_EXPECT_PANIC(TORB_CHECK_STACK(in_deep));
   TORB_CHECK_PANIC_CONTAINS("stack overflow");
-  torb_stack_limit = saved;
+  torb_stack_reserve = saved;
 }
 
 /** An object with a destructor, in the shape the C emitter writes its drop function (docs/design/DESTRUCTORS.md 8). */

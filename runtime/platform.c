@@ -29,6 +29,7 @@
 #endif
 
 #include "torb.h"
+#include "torb_pool.h"
 
 #include <errno.h>
 #include <stdio.h>
@@ -1397,6 +1398,246 @@ bool torb_platform_run_inheriting(
     *code = (int64_t)(128 + (WIFSIGNALED(status) ? WTERMSIG(status) : 0));
   }
   return true;
+}
+
+#endif
+
+/* ====================================================================== threads, locks and waiting (7.7) ====== */
+
+/*
+ * What the worker pool of task.c stands on (runtime/include/torb_pool.h): a thread with a stack of a given size, a
+ * mutex, a condition with a timeout on the monotonic clock, the number of processors, and the one pointer per thread
+ * that says which worker it is. Slim reader/writer locks and condition variables on Windows (Vista and later), pthreads
+ * everywhere else.
+ */
+
+#if defined(_WIN32)
+
+unsigned long torb_worker_slot = TORB_NO_SLOT;
+
+void torb_mutex_initialize(torb_mutex *mutex) {
+  InitializeSRWLock((PSRWLOCK)&mutex->opaque);
+}
+
+void torb_mutex_lock(torb_mutex *mutex) {
+  AcquireSRWLockExclusive((PSRWLOCK)&mutex->opaque);
+}
+
+void torb_mutex_unlock(torb_mutex *mutex) {
+  ReleaseSRWLockExclusive((PSRWLOCK)&mutex->opaque);
+}
+
+void torb_mutex_destroy(torb_mutex *mutex) {
+  (void)mutex;
+}
+
+void torb_condition_initialize(torb_condition *condition) {
+  InitializeConditionVariable((PCONDITION_VARIABLE)&condition->opaque);
+}
+
+bool torb_condition_wait(torb_condition *condition, torb_mutex *mutex, int64_t nanoseconds) {
+  DWORD milliseconds = INFINITE;
+  if (nanoseconds >= 0) {
+    int64_t rounded = nanoseconds / 1000000LL + (nanoseconds % 1000000LL != 0 ? 1 : 0);
+    milliseconds = rounded >= (int64_t)0x7FFFFFFF ? (DWORD)0x7FFFFFFF : (DWORD)rounded;
+  }
+  if (SleepConditionVariableSRW((PCONDITION_VARIABLE)&condition->opaque, (PSRWLOCK)&mutex->opaque, milliseconds, 0)) {
+    return true;
+  }
+  return GetLastError() != ERROR_TIMEOUT;
+}
+
+void torb_condition_signal(torb_condition *condition) {
+  WakeConditionVariable((PCONDITION_VARIABLE)&condition->opaque);
+}
+
+void torb_condition_destroy(torb_condition *condition) {
+  (void)condition;
+}
+
+typedef struct torb_thread_start_record {
+  void (*body)(void *argument);
+  void *argument;
+} torb_thread_start_record;
+
+static DWORD WINAPI torb_thread_entry(LPVOID parameter) {
+  torb_thread_start_record record = *(torb_thread_start_record *)parameter;
+  free(parameter);
+  record.body(record.argument);
+  return 0u;
+}
+
+bool torb_thread_start(torb_thread *thread, void (*body)(void *argument), void *argument, size_t stack_size) {
+  /* A plain `malloc`: the record is the platform's and not a block of any worker's heap. */
+  torb_thread_start_record *record = (torb_thread_start_record *)malloc(sizeof *record);
+  HANDLE handle;
+  if (record == NULL) {
+    return false;
+  }
+  record->body = body;
+  record->argument = argument;
+  handle = CreateThread(NULL, stack_size, torb_thread_entry, record, STACK_SIZE_PARAM_IS_A_RESERVATION, NULL);
+  if (handle == NULL) {
+    free(record);
+    return false;
+  }
+  thread->handle = handle;
+  return true;
+}
+
+void torb_thread_join(torb_thread *thread) {
+  WaitForSingleObject((HANDLE)thread->handle, INFINITE);
+  CloseHandle((HANDLE)thread->handle);
+  thread->handle = NULL;
+}
+
+void torb_thread_yield(void) {
+  SwitchToThread();
+}
+
+void torb_thread_exit(void) {
+  ExitThread(0u);
+}
+
+uint32_t torb_platform_processor_count(void) {
+  DWORD count = GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);
+  return count == 0u ? 1u : (uint32_t)count;
+}
+
+void *torb_platform_slot_value(void) {
+  return TlsGetValue((DWORD)torb_worker_slot);
+}
+
+void torb_platform_set_slot_value(void *value) {
+  TlsSetValue((DWORD)torb_worker_slot, value);
+}
+
+/* The slot is taken on the first call, which the pool makes on the main thread before a second thread exists. */
+void torb_platform_set_worker(torb_worker *worker) {
+  if (torb_worker_slot == TORB_NO_SLOT) {
+    DWORD slot = TlsAlloc();
+    if (slot == TLS_OUT_OF_INDEXES) {
+      torb_panic_text("the operating system has no thread-local slot left for a worker", torb_location_unknown);
+    }
+    torb_worker_slot = (unsigned long)slot;
+  }
+  torb_platform_set_slot_value(worker);
+}
+
+#else
+
+#  include <sched.h>
+
+_Thread_local torb_worker *torb_thread_worker = NULL;
+
+void torb_mutex_initialize(torb_mutex *mutex) {
+  pthread_mutex_init(&mutex->mutex, NULL);
+}
+
+void torb_mutex_lock(torb_mutex *mutex) {
+  pthread_mutex_lock(&mutex->mutex);
+}
+
+void torb_mutex_unlock(torb_mutex *mutex) {
+  pthread_mutex_unlock(&mutex->mutex);
+}
+
+void torb_mutex_destroy(torb_mutex *mutex) {
+  pthread_mutex_destroy(&mutex->mutex);
+}
+
+void torb_condition_initialize(torb_condition *condition) {
+#  if defined(__APPLE__)
+  pthread_cond_init(&condition->condition, NULL);
+#  else
+  pthread_condattr_t attributes;
+  pthread_condattr_init(&attributes);
+  pthread_condattr_setclock(&attributes, CLOCK_MONOTONIC);
+  pthread_cond_init(&condition->condition, &attributes);
+  pthread_condattr_destroy(&attributes);
+#  endif
+}
+
+bool torb_condition_wait(torb_condition *condition, torb_mutex *mutex, int64_t nanoseconds) {
+  struct timespec until;
+  if (nanoseconds < 0) {
+    pthread_cond_wait(&condition->condition, &mutex->mutex);
+    return true;
+  }
+#  if defined(__APPLE__)
+  until.tv_sec = (time_t)(nanoseconds / 1000000000LL);
+  until.tv_nsec = (long)(nanoseconds % 1000000000LL);
+  return pthread_cond_timedwait_relative_np(&condition->condition, &mutex->mutex, &until) != ETIMEDOUT;
+#  else
+  {
+    int64_t deadline = torb_platform_monotonic_nanoseconds();
+    deadline = nanoseconds > INT64_MAX - deadline ? INT64_MAX : deadline + nanoseconds;
+    until.tv_sec = (time_t)(deadline / 1000000000LL);
+    until.tv_nsec = (long)(deadline % 1000000000LL);
+    return pthread_cond_timedwait(&condition->condition, &mutex->mutex, &until) != ETIMEDOUT;
+  }
+#  endif
+}
+
+void torb_condition_signal(torb_condition *condition) {
+  pthread_cond_signal(&condition->condition);
+}
+
+void torb_condition_destroy(torb_condition *condition) {
+  pthread_cond_destroy(&condition->condition);
+}
+
+typedef struct torb_thread_start_record {
+  void (*body)(void *argument);
+  void *argument;
+} torb_thread_start_record;
+
+static void *torb_thread_entry(void *parameter) {
+  torb_thread_start_record record = *(torb_thread_start_record *)parameter;
+  free(parameter);
+  record.body(record.argument);
+  return NULL;
+}
+
+bool torb_thread_start(torb_thread *thread, void (*body)(void *argument), void *argument, size_t stack_size) {
+  torb_thread_start_record *record = (torb_thread_start_record *)malloc(sizeof *record);
+  pthread_attr_t attributes;
+  int failed;
+  if (record == NULL) {
+    return false;
+  }
+  record->body = body;
+  record->argument = argument;
+  pthread_attr_init(&attributes);
+  pthread_attr_setstacksize(&attributes, stack_size);
+  failed = pthread_create(&thread->thread, &attributes, torb_thread_entry, record);
+  pthread_attr_destroy(&attributes);
+  if (failed != 0) {
+    free(record);
+    return false;
+  }
+  return true;
+}
+
+void torb_thread_join(torb_thread *thread) {
+  pthread_join(thread->thread, NULL);
+}
+
+void torb_thread_yield(void) {
+  sched_yield();
+}
+
+void torb_thread_exit(void) {
+  pthread_exit(NULL);
+}
+
+uint32_t torb_platform_processor_count(void) {
+  long count = sysconf(_SC_NPROCESSORS_ONLN);
+  return count < 1 ? 1u : (uint32_t)count;
+}
+
+void torb_platform_set_worker(torb_worker *worker) {
+  torb_thread_worker = worker;
 }
 
 #endif

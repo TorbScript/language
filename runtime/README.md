@@ -29,10 +29,11 @@ deliberately panics says `TORB_IGNORE_LEAKS()`, because a panic runs nothing on 
 | `include/torb.h`      | The public ABI: the header, `torb_text`, `torb_list`, `torb_map`, the closure and object shapes, panics, allocation, element descriptors, console, process, files, `torb_file`, `Instant`/`Duration`, `std/math` |
 | `include/torb_number.h` | The checked arithmetic of all eight integer widths as `static inline`, plus the conversions |
 | `include/torb_natives.h` | Generated from the manifest by `torb natives --header`. Do not edit                      |
-| `include/torb_task.h` | The task ABI of 7.3: the task block, the resume function a `Task` function is lowered to, the suspension primitives, `sleep`/`pause`/`cancel`/`within`, channels, the scheduler (`docs/design/CONCURRENCY.md` section 16) |
-| `memory.c`            | Block header, non-atomic counts, retain/release/is-unique/make-unique, immortal values, the live-block counter - all of a heap's state in one `torb_heap`, so the worker pool of 7.7 gives each worker one |
-| `task.c`              | One worker: the FIFO run queue, the timer heap, waking and cancelling, the tasks the runtime writes itself (`sleep`, `pause`, `within`), channels, the end-of-program drain |
-| `panic.c`             | `torb_panic` and friends, the frame counter, exit code 101, the test hook                  |
+| `include/torb_task.h` | The task ABI of 7.3: the task block, the resume function a `Task` function is lowered to, the suspension primitives, `sleep`/`pause`/`cancel`/`within`, channels, the scheduler and the worker pool, the tests of what may cross a worker (`docs/design/CONCURRENCY.md` section 16) |
+| `include/torb_pool.h` | What the runtime's own files share about a worker: its heap counters, its scheduler, the threads, locks and conditions of `platform.c`, the atomics, the one-load `torb_worker_current`. Never included by generated C |
+| `memory.c`            | Block header, non-atomic counts (atomic only for a `TORB_SHARED_COUNT` block while there are threads), retain/release/is-unique/make-unique, immortal values and the lock around building a constant, the live-block counters of every worker summed |
+| `task.c`              | The worker pool: a FIFO run queue per worker that is also its inbox, the stealing of unstarted tasks, the timer heaps, waking and cancelling across workers, the tasks the runtime writes itself (`sleep`, `pause`, `within`), channels, the end-of-program drain, `Workers.count` |
+| `panic.c`             | `torb_panic` and friends, the per-thread stack check, exit code 101, the test hook, one panic at a time |
 | `text.c`              | UTF-8, slices, concatenation, comparison, hashing, `Show`, float formatting, parsing       |
 | `list.c`              | The one contiguous list: growth, shared slices, copy on write, a stable merge sort         |
 | `map.c`               | The one insertion-ordered hash table, and the set on top of it                             |
@@ -70,7 +71,9 @@ parameter and of the result, in the words of BACKEND section 2:
 typedef struct torb_header { uint32_t count; uint16_t kind; uint16_t color; } torb_header;
 ```
 
-Counts are plain integers: every task owns its heap, so nothing has to be atomic. `count == TORB_IMMORTAL_COUNT`
+Counts are plain integers: nothing a worker can reach is reachable from another one, so nothing has to be atomic - except
+the blocks with `TORB_SHARED_COUNT` (a task, a channel, a closure environment that may cross), whose counts change
+atomically while the pool runs threads. `count == TORB_IMMORTAL_COUNT`
 marks static data, which is never retained, released or freed - so a write through a static value always copies.
 `color` is `TORB_COLOR_NONE` for every block: it was reserved for a cycle collector, and there will be none.
 
@@ -230,7 +233,8 @@ file - which an OS that locks open files (Windows) would refuse if the handle we
   pins all five from the language side**, so a change to the table here is a change to that program. The compiler's own
   identifiers and keywords are ASCII.
 - **The heap is libc's `malloc`.** The bump allocator with size-class free lists of BACKEND 2.5 is a replacement
-  behind `torb_allocate` and changes nothing above it. Per-task heaps and channel transfer arrive with 7.7.
+  behind `torb_allocate` and changes nothing above it. A worker's heap is its counters: a block moves to another worker
+  by being re-homed, never copied (`task.c`, "What crosses a worker").
 - **No small-string optimization**, on purpose: it doubles the code path of every string operation for a win the
   compiler does not need, whose strings are slices of source files.
 - **A child process goes through a shell on POSIX and through none on Windows.** `Process.run` is `CreateProcess` plus one

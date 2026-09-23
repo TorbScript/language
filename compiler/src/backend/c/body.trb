@@ -32,6 +32,7 @@ use cTypeOf, whyNoCType, memberNameOf, variantMemberNameOf, witnessMemberNameOf,
 use CExpression, CDesignatedField, CStatement, CSwitchCase, declarationOf from "./writer"
 use readPrototype, matchPrototype from "./prototype"
 use TaskMachine, taskMachineOf from "../../ir/suspension"
+use Crossing, frameCrossingOf, environmentCrossingOf from "./crossing"
 use Closing from "../../ir/closing"
 
 /** One function, with which slots are read and which labels are jumped to precomputed once for the whole body. */
@@ -740,12 +741,32 @@ fn taskNewStatements(
   ])
   var statements = [CStatement.Assignment(place, made)]
   const frame = CExpression.Cast pointerTo(frameType), CExpression.Call(CExpression.Name("torb_task_frame"), [place])
+  var members: List<CExpression> = []
+  var types: List<IrTypeId> = []
   for index in 0..arguments.length() {
     const member = CExpression.PointerMember frame, slotNameOf(started, Slot(index))
     statements.append CStatement.Assignment(member, slotExpression(body, arguments[index].slot))
+    members.append member
+    types.append typeOfSlot(body, arguments[index].slot)
   }
-  statements.append CStatement.Evaluate(CExpression.Call(CExpression.Name("torb_task_start"), [place]))
+  statements.append startStatementOf(program, place, members, types)
   statements
+}
+
+/**
+ * The start of a task: pinned to the worker that makes it, or free to be taken by an idle worker before its first run
+ * where every value of its frame may cross one ([frameCrossingOf]) - decided here where the types answer it, and by
+ * the runtime beside the call where they do not (docs/design/CONCURRENCY.md section 16).
+ */
+fn startStatementOf(program: IrProgram, place: CExpression, members: List<CExpression>, types: List<IrTypeId>): CStatement {
+  const pinned = CExpression.Name "torb_task_start"
+  const portable = CExpression.Name "torb_task_start_portable"
+  const start = match frameCrossingOf(program, members, types) {
+    .Always => portable
+    .Never => pinned
+    .When(test) => CExpression.Conditional test, portable, pinned
+  }
+  CStatement.Evaluate CExpression.Call(start, [place])
 }
 
 /** A resume function finishes by moving its value into the result slot of the task block. */
@@ -1780,10 +1801,21 @@ fn closureStatements(
   inner.append CStatement.Declaration(spelling, "environment", Some(CExpression.Cast(spelling, allocated)))
   const drop = CExpression.PointerMember CExpression.Name("environment"), "drop"
   inner.append CStatement.Assignment(drop, dropFunctionOf(program, found))
+  var members: List<CExpression> = []
+  var types: List<IrTypeId> = []
   for index in 0..captures.length() {
     const member = CExpression.PointerMember CExpression.Name("environment"), memberNameOf(shape.fields[index])
     const value = captureExpression emission, program, body, captures[index]
     inner.append CStatement.Assignment(member, value)
+    members.append member
+    types.append shape.fields[index].annotation
+  }
+  // Captures that may all cross to another worker make the environment shared, so the closure may run on several
+  const sharing = CStatement.Evaluate CExpression.Call(CExpression.Name("torb_share"), [CExpression.Name("environment")])
+  match environmentCrossingOf(program, members, types) {
+    .Always => inner.append sharing
+    .Never => {}
+    .When(test) => inner.append CStatement.If(test, [sharing])
   }
   inner.append CStatement.Assignment(CExpression.Member(place, codeMemberName), code)
   const erased = CExpression.Cast "torb_environment *", CExpression.Name("environment")

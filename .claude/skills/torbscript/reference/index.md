@@ -283,6 +283,7 @@ that answers the question. A page marked (planned) describes a feature that does
 - `standard-library/linear.md` - **std/linear** (package): Vectors, matrices, quaternions and angles over one generic scalar, plus Fixed, the fixed-point scalar whose answers are the same bits everywhere.
 - `standard-library/math.md` - **std/math** (package): The functions on Float that read as an operation rather than a method, under the math namespace import.
 - `standard-library/number.md` - **std/number** (package): Every numeric type of the language, the traits their arithmetic and bit operations go through, and Real.
+- `standard-library/parallel.md` - **std/parallel** (package): parallel() and Parallel, a pipeline whose stages run on the workers of the pool with the results in input order, in scope through the prelude.
 - `standard-library/path.md` - **std/path** (package): Path, a root and a list of components, never a string, plus Root and PathError - the type behind Path.resolved.
 - `standard-library/prelude.md` - **std/prelude** (package): The package of re-exports that is in scope in every file of a project, unless project.trb names another one.
 - `standard-library/process.md` - **std/process** (package): Process for arguments and exiting, Child for a running program's pipes, and ProcessOutput for what it left behind.

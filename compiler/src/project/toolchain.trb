@@ -29,6 +29,17 @@ public fn findRuntime(paths: List<String>): String? {
   findToolchainPart "TORB_RUNTIME", "runtime", "include/torb.h", paths
 }
 
+/**
+ * What a gcc or clang command line needs for the worker pool of the runtime: `-pthread` everywhere but Windows, where
+ * the threads are the Win32 API that every C compiler links anyway. Windows is told by `OS`, which every Windows NT sets.
+ */
+public fn threadArguments(): List<String> {
+  if Environment.get("OS") == Some("Windows_NT") {
+    return []
+  }
+  ["-pthread"]
+}
+
 fn findToolchainPart(variable: String, name: String, marker: String, paths: List<String>): String? {
   if const Some(given) = Environment.get(variable) {
     if !given.isEmpty() {

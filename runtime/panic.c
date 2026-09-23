@@ -11,6 +11,7 @@
  */
 
 #include "torb.h"
+#include "torb_pool.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -40,22 +41,32 @@ const torb_location torb_location_unknown = { NULL, 0, 0 };
  */
 #define TORB_STACK_RESERVE ((uintptr_t)128u * 1024u)
 
-uintptr_t torb_stack_limit = 0u;
+uintptr_t torb_stack_reserve = 0u;
+#if !(defined(_WIN64) && (defined(__x86_64__) || defined(__amd64__) || defined(_M_X64)))
+#  if defined(_MSC_VER)
+__declspec(thread) uintptr_t torb_thread_stack_floor = 0u;
+#  else
+_Thread_local uintptr_t torb_thread_stack_floor = 0u;
+#  endif
+#endif
 static torb_panic_hook torb_hook = NULL;
-static torb_recovery *torb_recovery_point = NULL;
+/** Set by the first thread that panics: a second panic on another worker waits for the first to end the process. */
+static uint32_t torb_panicking = 0u;
 
 void torb_set_panic_hook(torb_panic_hook hook) {
   torb_hook = hook;
 }
 
+/* The recovery point is the running thread's: a panic on a worker must never jump into a frame of the main thread. */
 torb_recovery *torb_begin_recovery(torb_recovery *point) {
-  torb_recovery *previous = torb_recovery_point;
-  torb_recovery_point = point;
+  torb_worker *worker = torb_worker_current();
+  torb_recovery *previous = worker->recovery;
+  worker->recovery = point;
   return previous;
 }
 
 void torb_end_recovery(torb_recovery *previous) {
-  torb_recovery_point = previous;
+  torb_worker_current()->recovery = previous;
 }
 
 /**
@@ -64,14 +75,15 @@ void torb_end_recovery(torb_recovery *previous) {
  */
 static TORB_NORETURN void torb_finish_panic(const char *message, torb_location at) {
   char buffer[TORB_PANIC_BUFFER_SIZE];
+  torb_worker *worker = torb_worker_current();
   /*
    * A test runner that set up a recovery point catches the panic instead: the message and the site go into the point
    * and the jump lands in the frame that owns it. The point is taken away first, so a panic *while* a failure is being
    * reported is an ordinary panic and never a jump into a frame that has already been left.
    */
-  if (torb_recovery_point != NULL) {
-    torb_recovery *point = torb_recovery_point;
-    torb_recovery_point = NULL;
+  if (worker->recovery != NULL) {
+    torb_recovery *point = worker->recovery;
+    worker->recovery = NULL;
     snprintf(point->message, sizeof point->message, "%s", message);
     point->at = at;
     longjmp(point->destination, 1);
@@ -83,6 +95,15 @@ static TORB_NORETURN void torb_finish_panic(const char *message, torb_location a
   }
   if (torb_hook != NULL) {
     torb_hook(buffer);
+  }
+  /*
+   * One panic ends the process, and only one is printed: a second worker that panics at the same time waits here for the
+   * first to leave, instead of interleaving its message with the first one's.
+   */
+  if (torb_atomic_exchange_u32(&torb_panicking, 1u) != 0u) {
+    for (;;) {
+      torb_platform_sleep(1000000000LL);
+    }
   }
   /*
    * Everything the program printed comes first. Standard output is buffered when it is a pipe or a file, standard
@@ -175,9 +196,23 @@ void torb_panic_stack_overflow(torb_location at) {
   torb_finish_panic("stack overflow: the recursion is deeper than the stack of the thread", at);
 }
 
+/*
+ * The check is on from here: the reserve is the process's, and the bottom of the stack is the thread's - read out of
+ * the TEB on 64-bit Windows for every thread alike, and set here for the main thread everywhere else (a worker sets
+ * its own when it starts, `torb_set_thread_stack_floor`).
+ */
 void torb_set_stack_limit(void) {
   uintptr_t low = 0u;
   if (torb_platform_stack_low(&low)) {
-    torb_stack_limit = low + TORB_STACK_RESERVE;
+    torb_set_thread_stack_floor(low);
+    torb_stack_reserve = TORB_STACK_RESERVE;
   }
+}
+
+void torb_set_thread_stack_floor(uintptr_t floor) {
+#if !(defined(_WIN64) && (defined(__x86_64__) || defined(__amd64__) || defined(_M_X64)))
+  torb_thread_stack_floor = floor;
+#else
+  (void)floor;
+#endif
 }

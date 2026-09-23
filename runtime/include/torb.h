@@ -64,6 +64,11 @@
  * (BACKEND 2.5). `TORB_IMMORTAL_COUNT` marks static data, which is never retained, never released and never freed -
  * so a write through a static value always copies.
  *
+ * `TORB_SHARED_COUNT` is the one exception, a bit in the count of the few blocks that may be held on two workers at
+ * once: a `Task`, a `Channel`, and the environment of a closure whose captures may all cross (docs/design/CONCURRENCY.md
+ * section 16, "What crosses a worker"). While the worker pool runs more than one thread, retaining and releasing such a
+ * block is an atomic operation; every other count stays a plain integer, and none of them ever has the bit.
+ *
  * `color` is `TORB_COLOR_NONE` for every block. It was reserved for a cycle collector, and there will be none
  * (docs/design/DESTRUCTORS.md section 9); the field stays until the header is next reorganised, because removing it changes
  * the layout. `kind` is for the leak report and for assertions.
@@ -75,6 +80,8 @@ typedef struct torb_header {
 } torb_header;
 
 #define TORB_IMMORTAL_COUNT 0xFFFFFFFFu
+/** The bit of a count that says "retained and released atomically once there are threads". Never set on an immortal. */
+#define TORB_SHARED_COUNT 0x80000000u
 
 typedef enum torb_block_kind {
   TORB_BLOCK_RAW = 0,            /**< A side buffer of a container: no header, only counted by the leak counter. */
@@ -176,19 +183,46 @@ TORB_NORETURN void torb_panic_stack_overflow(torb_location at);
  * room the panic itself and a leaf below the check need. So a recursion that is too deep is a panic with exit code 101
  * and a site, and never the crash the operating system answers when a frame lands on its guard page.
  *
- * `torb_stack_limit` is that address, worked out once by `torb_process_start` from the real bounds of the stack of the
- * main thread (`torb_platform_stack_low`). Zero - a runtime test, or a platform that says nothing about its stack -
- * never fires.
+ * The limit is **per thread**, because every worker of the pool runs on a stack of its own: the bottom of the running
+ * thread's stack (`torb_stack_floor()`) plus `torb_stack_reserve`. On 64-bit Windows the bottom is read out of the
+ * thread's TEB (the start of the stack's reservation, which is what `GetCurrentThreadStackLimits` answers too), one
+ * `gs`-relative load; elsewhere it is a thread-local the thread sets when it starts - the main thread in
+ * `torb_process_start` from the real bounds of its stack (`torb_platform_stack_low`), a worker from the size it was
+ * created with. The reserve is zero until `torb_process_start` ran, so a runtime test never fires the check, and so does
+ * a thread of a platform that says nothing about its stack (its bottom stays zero).
  *
- * One comparison of an address with a global and no write, which is cheaper than a frame counter: a counter needs a
- * decrement on every way out of a function and a reset on every recovered panic, and it still crashes where frames are
- * bigger than it assumed, because a count says nothing about bytes (docs/PERFORMANCE.md, F9).
+ * Two loads and a comparison and no write, which is cheaper than a frame counter: a counter needs a decrement on every
+ * way out of a function and a reset on every recovered panic, and it still crashes where frames are bigger than it
+ * assumed, because a count says nothing about bytes (docs/PERFORMANCE.md, F9).
  */
-extern uintptr_t torb_stack_limit;
-#if defined(__GNUC__) || defined(__clang__)
-#  define TORB_STACK_EXHAUSTED(address) __builtin_expect((address) < torb_stack_limit, 0)
+extern uintptr_t torb_stack_reserve;
+#if defined(_WIN64) && (defined(__x86_64__) || defined(__amd64__)) && (defined(__GNUC__) || defined(__clang__))
+/* `DeallocationStack` of the TEB: the lowest address of the running thread's stack reservation. */
+static inline uintptr_t torb_stack_floor(void) {
+  uintptr_t floor;
+  __asm__("movq %%gs:0x1478, %0" : "=r"(floor));
+  return floor;
+}
+#elif defined(_WIN64) && defined(_M_X64) && defined(_MSC_VER)
+unsigned __int64 __readgsqword(unsigned long offset);
+#  pragma intrinsic(__readgsqword)
+static __inline uintptr_t torb_stack_floor(void) {
+  return (uintptr_t)__readgsqword(0x1478ul);
+}
 #else
-#  define TORB_STACK_EXHAUSTED(address) ((address) < torb_stack_limit)
+#  if defined(_MSC_VER)
+extern __declspec(thread) uintptr_t torb_thread_stack_floor;
+#  else
+extern _Thread_local uintptr_t torb_thread_stack_floor;
+#  endif
+static inline uintptr_t torb_stack_floor(void) {
+  return torb_thread_stack_floor;
+}
+#endif
+#if defined(__GNUC__) || defined(__clang__)
+#  define TORB_STACK_EXHAUSTED(address) __builtin_expect((address) < torb_stack_floor() + torb_stack_reserve, 0)
+#else
+#  define TORB_STACK_EXHAUSTED(address) ((address) < torb_stack_floor() + torb_stack_reserve)
 #endif
 #define TORB_CHECK_STACK(at)                                     \
   do {                                                           \
@@ -197,7 +231,7 @@ extern uintptr_t torb_stack_limit;
       torb_panic_stack_overflow(at);                             \
     }                                                            \
   } while (0)
-/** What `torb_process_start` calls: `torb_stack_limit` for the stack of the thread that calls it. */
+/** What `torb_process_start` calls: turns the check on, with the bottom of the calling thread's stack. */
 void torb_set_stack_limit(void);
 
 /**
@@ -313,6 +347,48 @@ void torb_make_immortal(void *block);
  */
 void torb_begin_immortal(void);
 void torb_end_immortal(void);
+
+/**
+ * The accessor of an immortal counted static (a module constant that is no static data) builds the value the first
+ * time it is asked, and two workers may ask at the same time. So the first build happens under one recursive lock of the
+ * process - recursive, because the initializer of one constant may read another - and the flag that says it happened is
+ * published with a release and read with an acquire:
+ *
+ *     if (!torb_constant_ready(&k_ready)) {
+ *       torb_constant_lock();
+ *       if (!k_ready) {
+ *         torb_begin_immortal();
+ *         k_cell = k_build();
+ *         torb_end_immortal();
+ *         torb_constant_publish(&k_ready);
+ *       }
+ *       torb_constant_unlock();
+ *     }
+ *
+ * Every later call is the one load of the first line: an acquire is a plain load on x86, and the value itself is
+ * immortal, so handing it to any worker touches no count.
+ */
+#if defined(__GNUC__) || defined(__clang__)
+static inline bool torb_constant_ready(const bool *ready) {
+  return __atomic_load_n(ready, __ATOMIC_ACQUIRE);
+}
+#else
+static inline bool torb_constant_ready(const bool *ready) {
+  return *(const volatile bool *)ready;
+}
+#endif
+void torb_constant_lock(void);
+void torb_constant_unlock(void);
+/** `*ready = true` with a release, so a worker that reads it also sees the cell it guards. */
+void torb_constant_publish(bool *ready);
+
+/**
+ * Gives a block `TORB_SHARED_COUNT`: from here on it may be held on several workers, and its count is changed
+ * atomically while the pool runs threads. `block` borrowed, and held by nobody but the caller - which is why it is
+ * called right after the block was made. The emitter calls it on the environment of a closure whose captures may all
+ * cross to another worker; a `Task` and a `Channel` are made with it.
+ */
+void torb_share(void *block);
 
 /** How many counted blocks (including raw side buffers) are live. The leak test asserts this is zero at the end. */
 size_t torb_live_block_count(void);

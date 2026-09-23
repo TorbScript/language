@@ -85,6 +85,20 @@ run_one() {
     return
   fi
 
+  # One worker, the order the suite pins, unless a `.workers` file names how many (`all`: one per processor) - and then
+  # the program runs a second time with one worker below and has to print the same bytes (tests/conformance/README.md)
+  workers_file="${program%.trb}.workers"
+  workers=1
+  if [ -f "$workers_file" ]; then
+    workers=$(tr -d ' \t\r\n' <"$workers_file")
+  fi
+  if [ "$workers" = "all" ]; then
+    unset TORB_WORKERS
+  else
+    TORB_WORKERS=$workers
+    export TORB_WORKERS
+  fi
+
   # The program runs in its own work directory, so a program that writes files (`build/native-*`) writes them there and
   # never into the checkout, and two programs never share one
   mkdir -p "$work/run"
@@ -126,6 +140,17 @@ the generated C of $program contains an absolute path of this machine"
       problems="$problems
 unexpected standard output:
 $(diff -u "$work/expected.norm" "$work/stdout" 2>&1 || true)"
+    fi
+  fi
+
+  if [ -f "$workers_file" ] && [ "$workers" != "1" ] && [ -f "$expected_file" ]; then
+    set +e
+    (cd "$work/run" && TORB_WORKERS=1 "$binary" >"$work/stdout.one" 2>"$work/stderr.one")
+    set -e
+    if ! cmp -s "$work/expected.norm" "$work/stdout.one"; then
+      problems="$problems
+with one worker the standard output is not the same:
+$(diff -u "$work/expected.norm" "$work/stdout.one" 2>&1 || true)"
     fi
   fi
 

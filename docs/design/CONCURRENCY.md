@@ -3,8 +3,11 @@
 **Status: partly implemented** — the checker rules of section 13 (gaps 1, 2, 3 and 17) are in, and so is all of 7.3 for
 the C back end: the task ABI, the single-worker scheduler, timers, channels and cancellation in C, and the lowering of
 task functions, `spawn`, `await()`, the cancellation checks and the main task on top of it (section 16), with slices A
-and A2 and the `std/task` surface of section 10. Workers, `parallel()` and borrowing are designed and not built
-(section 14).
+and A2 and the `std/task` surface of section 10. **The worker pool of 7.7 is built** (section 16, "The pool, as built"):
+real threads, a heap and a scheduler per worker, the stealing of unstarted tasks, wake-ups, channels and cancellation
+across workers, `Workers.count`, and `parallel()` in the prelude running its chunks on the pool - slices E and H, and
+the environment half of D. The manifest setting, `Merge`, borrowing (`Plain`, `Window`, `windows`), IO with its
+poller, the blocking pool and the deep copy of a value that cannot move are not built (section 14).
 
 Many things waiting is one problem; one thing going faster is another. This is the specification of both: what a task
 is and what runs it, how many cores a program uses and who decides, how a pipeline is spread over them without copying
@@ -40,7 +43,7 @@ value like any other, and there are no async keywords.
 - **[13. What the language, the IR and the runtime must provide](#13-what-the-language-the-ir-and-the-runtime-must-provide)**
 - **[14. Slices](#14-slices)** — what fits 7.3, what waits for 7.7
 - **[15. What the owner decided](#15-what-the-owner-decided)**
-- **[16. Runtime ABI, as built](#16-runtime-abi-as-built)** — what the compiler lowers a task to, and what 7.7 changes
+- **[16. Runtime ABI, as built](#16-runtime-abi-as-built)** — what the compiler lowers a task to, and the pool of 7.7
 
 Every snippet below was run against the checker, in `tests/language/` so that `std` resolves, with the
 proposed declarations written out in the probe file. A snippet marked **type checks today** was accepted as written;
@@ -1209,27 +1212,43 @@ real timer rather than only its type - driven by hand-written state machines in 
   has to be rewritten after it.
 - **Slice B — `Merge` and the collectors.** Pure `std/iteration`, no runtime and no back end. Gate: a test per
   collector asserting `merge(a, b)` equals the sequential run over the concatenation, including the empty-chunk rule.
+  *Not built: `std/iteration` has no `Merge`, so `Parallel` has no `collect` and no `minBy` yet.*
 - **Slice C — `Parallel` and `parallel()`, running sequentially.** With one worker a region is a loop over the chunks
   in order, so the whole vocabulary, the chunk arithmetic and the terminal `Task` land here and are *testable* here.
   Gate: `parallel()` and the sequential pipeline agree on every collector, and a `Float` sum is byte-identical across
   the back ends. This is the slice that de-risks 7.7, because the semantics are pinned before the threads exist.
+  *Built together with slice E, on the threads directly (`std/parallel`, section 16): `map`, `filter`, `filterMap`,
+  `toList`, `count`, `sum`, `find`, `forEach`, the chunk arithmetic of section 4 and the terminal `Task`, with
+  `parallel` an extension of `List` in the prelude.*
 - **Slice D — gaps 10 and 12.** The manifest setting, the environment variables, the sandbox limit, `Workers.count()`
   answering 1. Gate: every `project.trb` of the repository still reads, and `TORB_WORKERS=1` is a no-op.
+  *Half built: `TORB_WORKERS` (refused with exit code 2 where it is not a whole number from 1 to 1024) and
+  `Workers.count()`, answering the real count. The manifest setting, `TORB_BLOCKING`, the sandbox limit and the copy
+  counter of gap 12 are not.*
 
 **With 7.7 (threads, per-worker heaps).**
 
 - **Slice E — the fork-join barrier** (gap 7) and slice C's region turned on. Gate: `parallel()` gives the same answer
   at `workers: 1`, `workers: 2` and `workers: Workers.count()`, for every collector, on a machine with at least four
   cores; and the live-block counter is zero after each.
+  *Built: every stage of a pipeline is a fork-join of chunk tasks an idle worker may take, at most `workers` of them
+  running at once, read back in input order (`tests/conformance/parallel-ordered.trb`, run with four workers and with
+  one, and `benchmarks/parallel.sh`). The stages of one pipeline are not fused into one pass yet (section 16).*
 - **Slice F — `Plain`, `Window`, `windows`** (gaps 4, 5, 6). Gate: a data-parallel scale over a million `Float`s with
   zero copies (the counter of gap 12 at zero), zero live blocks, and the same output as the sequential loop.
+  *Not built.*
 - **Slice G — IO** (gap 8) **and the cancellation of a task that waits for the world** (gap 15). Gate: the conformance
   suite unchanged, plus a program that reads eight files at once and prints them in a fixed order, on all three
   platforms; and a cancelled read on each of the three mechanisms, with the live-block counter at zero afterwards —
   which is what proves the "not before" rows of section 7 rather than assuming them.
+  *Not built: no `runtime/io.c`, no poller, no blocking pool.*
 - **Slice H — the inbox and stealing** (gap 9), with the measurements of section 9. Gate: the skewed-cost benchmark
   within its stated factor, and the fraction of stolen tasks reported. The parent link of gap 14 travels in the same
   message, so this slice re-runs slice A2's parent tests with the inbox in place.
+  *Built, with the run queue of each worker as its inbox (section 16): an unstarted task that may move is taken by an
+  idle worker, the parent link stays where it is, and `runtime/tests/pool_test.c` cancels parents and children across
+  workers. The skewed-cost benchmark and the three measurements of section 9 are not written yet; the pool counts the
+  resumes and the thefts (`torb_pool_statistics_now`).*
 
 **`offload` and `Task.within`** ride with slice G: both need the blocking pool or a timer, and neither has anything to
 say before real IO exists. `Task.within`'s *type* lands with slice A2, because `Cancelled` and `TimedOut` are what the
@@ -1307,8 +1326,9 @@ carries it.
 ## 16. Runtime ABI, as built
 
 The runtime half of 7.3 is `runtime/include/torb_task.h` (the contract, with a lowered example in its header
-comment), `runtime/task.c` (one worker) and `runtime/tests/task_test.c` (twenty-one tests over state machines written
-by hand, the way the lowering will write them). This section is the summary; the header is the reference.
+comment), `runtime/task.c` (the scheduler - since 7.7 a pool of workers, "The pool, as built" below) and
+`runtime/tests/task_test.c` (twenty-one tests over state machines written by hand, the way the lowering writes them).
+This section is the summary; the header is the reference.
 
 **A task is one counted block**: the runtime's part (resume function, state index, cancellation flag, waiter list,
 parent link), then the frame, then the result slot placed by the `torb_element` of `Value`. Its count is the handles
@@ -1427,12 +1447,119 @@ lowered yet, which is what stops `examples/tour/src/10-async.trb` (and `std/http
 | `Task.map`, `Task.flatMap`, `Task.all`, `all` | `.Planned` natives | TorbScript over `await()` and `stopAsCancelled()` |
 | `standardInput`/`Output`/`Error`, `Process.start`, `Child.*`, `File.create`/`chunks`/`add`/`finish` | `.Planned` 7.3 | stay planned, for slice G: they are `Source`/`Sink` objects over real IO, which needs `runtime/io.c` and its poller |
 
-### What waits for the thread pool (7.7)
+### The pool, as built (7.7)
 
-`task.c`'s `torb_scheduler` and memory.c's `torb_heap` are everything a worker owns, each reached through one
-function (`torb_scheduler_current`, `torb_heap_current`) that answers the process's single instance today and a
-thread-local pointer then - a change of two functions, and the reason it is not made now is that thread-local storage
-is an emulated call on MinGW. The live-block count then sums the heaps; the frame counter of `panic.c` becomes per
-thread. Not built at all, and each named in `task.c`: waking a waiter on another worker (an atomic flag and the owner's
-inbox), the inbox and the stealing of unstarted tasks, a channel whose ends are on two workers (a lock, and transfer or
-copy of the item, BACKEND 2.5), the blocking pool, and the poller. The `worker` field of a task is 0 until then.
+The runtime half is `runtime/task.c` (the pool, over the same task ABI as before), `runtime/include/torb_pool.h` (what
+the runtime's own files share about a worker, never included by generated C), the thread, lock and condition functions
+at the end of `runtime/platform.c`, and `runtime/tests/pool_test.c`. Nothing of the task ABI above changed for the
+lowering except the start of a task and the environment of a closure.
+
+**A worker is a thread and what that thread alone touches.** The main thread is worker 0 from the first instruction on;
+workers 1 to N-1 are started the first time a task that may move is started (`torb_task_start_portable`) where
+`Workers.count()` is more than one, and joined in `torb_scheduler_finish`, their block counters folded into worker 0's.
+A program that never starts such a task never has a second thread. Each worker owns a `torb_heap` (the block counters of
+memory.c, written by its thread alone and summed for the report - a block freed by another worker than its maker lowers
+that worker's counter, so the counters are unsigned and wrap and only the sum is exact), a `torb_scheduler` (the running
+task, the timer heap), the recovery point of a panic, and the bottom of its stack. A thread finds its worker in one load:
+a thread-local pointer on POSIX, and on 64-bit Windows its TLS slot read straight out of the TEB through `gs`, because
+MinGW's `_Thread_local` is an emulated call on the path of every allocation. The stack check reads the bottom of the
+running thread's stack the same way (`DeallocationStack` of the TEB; a thread-local elsewhere), so recursion that is too
+deep is a panic on every worker and not only on the main thread. A panic ends the process from whichever thread it is
+on, and a second one at the same time waits for the first instead of interleaving with it.
+
+**The run queue of a worker is its inbox.** One FIFO per worker behind the worker's mutex, and inside it the list of the
+unstarted tasks that may move. Whoever wakes a task - the completion of the task it awaited, a channel, a cancellation -
+takes it out of what it waited on under that object's lock, puts it at the back of its worker's queue under the worker's
+lock, and signals the worker's condition where it sleeps. A worker with nothing to run takes the oldest unstarted task
+that may move from another worker's queue (the victims tried round the ring from its right neighbour) and makes it its
+own; a task that has run once never moves, because its frame is its worker's. Otherwise the worker sleeps until it is
+signalled or its first timer is due. One counter of the process says how much can still happen - tasks queued, tasks
+running, timers armed - and the main thread reads a deadlock (or, with nothing to wait for, the end of the program) off it
+reaching zero. The locks are taken in one order and nothing else: the tree lock of the parent, child and live links (a
+mutex of the process), then the spin lock of a task (its `status` and `waiters`) or of a channel (its ring and queues),
+then a worker's queue lock. No user code runs while one is held.
+
+**Cancellation across workers** is the flag, set atomically, and the task queued on its own worker: the task that runs
+the machine is the only one that may touch its timer and read what it waits on, so a cancellation from another worker
+queues it and its own worker takes it out of the waiter list or the channel queue when it takes it from the queue. A
+cancellation on the task's own worker takes it out at once, exactly as the single worker did. A parent and its children
+may be on different workers; the tree they form is behind the tree lock, and cancelling a parent reaches every child
+wherever it runs (`runtime/tests/pool_test.c`).
+
+**What crosses a worker, and why nothing is copied.** Counts are plain integers, so a value may be handed to another
+thread only where no count it reaches can ever be touched by two threads. The runtime cannot walk a value - it has no
+layout of the program in it - so the proof is made where the value is handed over, out of its type and, where the type
+does not answer, a test of the runtime on the value itself:
+
+| A value that holds | crosses because |
+|---|---|
+| nothing counted (`Int`, `Float`, a record of those) | its bytes are all of it |
+| an immortal block (a literal, a module constant) | nobody ever retains or releases it |
+| a `Task` or a `Channel` whose value or item holds nothing counted, or a closure whose environment is **shared** | these are the only blocks with `TORB_SHARED_COUNT`: their counts change atomically while the pool runs threads, and what they hand out holds nothing counted |
+| a list, a map or a text whose storage only it holds, with plain elements - **in the frame of a task that has not run** | the block is **re-homed**: the frame is its only owner, so the worker that takes the task is the only thread that ever touches it again; libc frees it from any thread and the heap counters balance in their sum |
+
+Everything else - a shared object, a `Box`, a trait-typed value, a list of strings, a text somebody else holds too -
+does not cross at all: the task that holds one is started pinned (`torb_task_start`) and runs on the worker that made
+it, the way every task ran before there was a pool, and a channel or a task handle of a counted value never leaves its
+worker either, because its type fails the test wherever it is written. The compiler writes the test
+(`compiler/src/backend/c/crossing.trb`): beside a task's start, `torb_task_start_portable` where the frame's types
+answer yes, `torb_task_start` where they answer no, and a choice between the two on `torb_text_may_move`,
+`torb_list_may_move`, `torb_map_may_move` and `torb_closure_may_move` where they cannot tell; beside a closure's
+environment, `torb_share` where every capture may cross without a transfer - so a closure that captures only plain values
+or other shared closures may run on several workers at once. The result of a task follows from the same rule: the
+worker that ran a stolen task gives up the scheduler's reference **before** it publishes the completion, so the last
+release of the task block, and with it the release of a counted result, happens on a thread that held a handle - and the
+handles of a counted result are all on one worker. The deep copy of section 6 ("copied into the worker's heap"), which
+would let a list of strings or a closure over a list cross as well, needs a copy function per type the emitter does not
+write; such work runs on its worker instead, correct and sequential.
+
+**The counts that are atomic** are exactly the blocks with `TORB_SHARED_COUNT`, and only while the pool runs more than
+one thread (`torb_pool_threaded`, which changes only while one thread is left): a program with one worker pays one
+extra test of a bit it already loaded. The first build of a module constant (the immortal counted static) happens under
+one recursive lock of the process and is published with a release (`torb_constant_ready`, `torb_constant_publish`),
+because two workers may ask for the same constant at once; a line of `print` is written under a lock, so two workers
+never interleave inside one; the console cache and the clock are made ready before a second thread exists.
+`Process.exit` from a task on another worker is handed to the main thread, which is the one inside the program's `main`:
+the exiting worker completes its task as cancelled and keeps running its own queue until the pool stops, then its thread
+ends where it is, and the main thread drains the pool and leaves with the code - so the leak report of such an exit is
+as exact as one on the main thread.
+
+**`parallel()`** is `std/parallel`, TorbScript over task functions, and in the prelude as `Parallel` and `List.parallel`.
+`parallel` extends `List` rather than every `Iterate` - an extension of a trait reached on a type that implements a
+*different* trait needs the receiver converted between the two trait-typed values, which the lowering does not do yet -
+so a range is written `(0..rows).toList().parallel()`. The input is cut by section 4's arithmetic, every chunk becomes a
+task of a chunk function (a task *function*, because the checker's `spawn` rule refuses a capture of a generic type), and
+the chunks are `ArrayList`s: a `List<Item>` value is a trait-typed object, whose payload no test can prove may move, while
+an `ArrayList` of plain items with a storage of its own passes `torb_list_may_move`. At most `workers:` chunks run at
+once, the outputs are read back in input order, and every stage is a fork-join of its own: the stages of one pipeline
+are not fused into one pass, which needs a generic member through the pipeline value. Measured with
+`benchmarks/parallel.sh` on 16 logical processors (`parallel-map.trb`: the Collatz steps of two million numbers,
+summed; whole process, fastest of five): 632 ms with one worker, 377 ms with two, 275 with four, 205 with eight, 167 with
+sixteen - 3.8x, with the building of the list, the cutting into chunks and the start of the process in every number.
+Inside the program the map itself takes 476 ms sequentially and 95 ms with sixteen workers (5.0x), 39 ms of which the
+same pipeline spends on a trivial map: the cutting, the copies into and out of the chunks and the final sum.
+
+**Determinism.** With one worker the pool is the single scheduler of 7.3, order for order, and the conformance suite
+runs every program with `TORB_WORKERS=1` unless a `<program>.workers` file names more; such a program runs a second time
+with one worker and has to print the same bytes (`tests/conformance/README.md`). What stays deterministic with more
+workers is what a program reads - the values of tasks, the items of a channel in the order they were sent, the chunks of
+`parallel()` in input order - and not the interleaving of what several tasks print at once.
+
+**Not built, and why each waits:**
+
+- **The IO poller and the blocking pool** (slice G, `offload`, `Workers.blocking`, `TORB_BLOCKING`): there is no
+  `runtime/io.c`; every file and process call still blocks the worker that makes it.
+- **The manifest setting `tasks { workers }`** and the sandbox limit (slice D): the project model has no `tasks`, and
+  there is no sandbox yet.
+- **`Merge`, `collect` and `minBy`** on `Parallel` (slice B), and **`Plain`, `Window`, `windows`** (slice F).
+- **The deep copy** of a value that is none of the four rows above, and the fusing of the stages of a pipeline.
+- **The measurements of section 9** and the skewed-cost benchmark; the pool counts resumes and thefts
+  (`torb_pool_statistics_now`), nothing prints a histogram.
+- **A panic in a task on another worker than the test runner's** ends the process instead of failing one test: a
+  recovery point is per thread.
+- **A race detector**: there is no `-fsanitize=thread` for Windows targets, so the pool was verified by its tests run
+  thirty times in a row with four workers, by the conformance programs with four workers and one, and by review of the
+  lock order. The POSIX half (pthreads, `_Thread_local`, `-pthread` on the command line) is written against POSIX and
+  was neither compiled nor run on this machine, which has no POSIX toolchain; the MSVC branch of the atomics was not
+  compiled either.
+- **The VM half** (`vm/task.trb`) waits for the VM.

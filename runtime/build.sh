@@ -23,19 +23,25 @@ fi
 out="$here/../build/runtime"
 mkdir -p "$out"
 warnings="-Wall -Wextra -Wpedantic -Werror"
+# The worker pool is pthreads everywhere but Windows, where it is the Win32 API that every C compiler links anyway
+threads=""
+case "$(uname -s 2>/dev/null)" in
+  MINGW* | MSYS* | CYGWIN* | Windows*) ;;
+  *) threads="-pthread" ;;
+esac
 sources="memory.c panic.c test.c text.c list.c map.c number.c console.c process.c platform.c file.c clock.c environment.c task.c"
-tests="tests/harness.c tests/memory_test.c tests/number_test.c tests/text_test.c tests/list_test.c tests/map_test.c tests/file_test.c tests/clock_test.c tests/environment_test.c tests/process_test.c tests/platform_test.c tests/console_test.c tests/task_test.c"
+tests="tests/harness.c tests/memory_test.c tests/number_test.c tests/text_test.c tests/list_test.c tests/map_test.c tests/file_test.c tests/clock_test.c tests/environment_test.c tests/process_test.c tests/platform_test.c tests/console_test.c tests/task_test.c tests/pool_test.c"
 echo "compiling the runtime with $cc"
 objects=""
 for source in $sources; do
   object="$out/${source%.c}.o"
   # shellcheck disable=SC2086
-  "$cc" -std=c11 $warnings ${CFLAGS-} -Iinclude -c "$source" -o "$object"
+  "$cc" -std=c11 $warnings $threads ${CFLAGS-} -Iinclude -c "$source" -o "$object"
   objects="$objects $object"
 done
 echo "compiling and linking the tests"
 # shellcheck disable=SC2086
-"$cc" -std=c11 $warnings ${CFLAGS-} -Iinclude -Itests -o "$out"/runtime-tests $tests $objects -lm
+"$cc" -std=c11 $warnings $threads ${CFLAGS-} -Iinclude -Itests -o "$out"/runtime-tests $tests $objects -lm
 echo "running the tests"
 "$out"/runtime-tests
 # The natives manifest and the header it generates must agree, which `torb natives --header` writes and

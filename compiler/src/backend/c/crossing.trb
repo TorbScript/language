@@ -1,0 +1,134 @@
+/**
+ * Whether a value may cross to another worker of the pool: the test the C back end writes beside the start of a task
+ * and beside the environment of a closure (docs/design/CONCURRENCY.md section 16, "What crosses a worker").
+ *
+ * Counts are plain integers, so a value may be handed to another thread only where no count it reaches can ever be
+ * touched by two threads: nothing counted inside it, an immortal block, a shared block (a `Task` or `Channel` of plain
+ * data, a closure whose environment is shared) - or, for the frame of a task, which runs once and on one thread, a block
+ * that only this value holds and whose elements are plain. The type answers most of it; what it cannot answer is a test
+ * of the runtime (`torb_text_may_move`, `torb_list_may_move`, `torb_map_may_move`, `torb_closure_may_move`) on the
+ * value itself. A type none of that covers never crosses, and the task that holds one stays on its worker.
+ *
+ * # Related
+ *
+ * - [crossingOf] - the test of one value.
+ * - [frameCrossingOf] - the test of every argument of a `TaskNew`, which picks the start that lets a task move.
+ */
+
+use IrProgram, IrTypeId, RuntimeKind from "../../ir/ir"
+use containsCountedType from "../../ir/layout"
+use memberNameOf from "./type"
+use CExpression from "./writer"
+use countedFormOf, inlineCountedLayoutOf, environmentMemberName from "./body"
+
+/** What the test of one value comes to: it always crosses, it never does, or the runtime decides with an expression. */
+public type Crossing {
+  case Always
+  case Never
+  case When(test: CExpression)
+}
+
+/**
+ * Whether the value of type `id` in `place` may cross to another worker. With `isTransfer` the value is given up by the
+ * thread that hands it over - the frame of a task that has not run - so a block only it holds moves along; without it
+ * (the captures of a closure, which may run on several workers at once) only what nobody counts may cross.
+ */
+public fn crossingOf(program: IrProgram, id: IrTypeId, place: CExpression, isTransfer: Bool): Crossing {
+  if !containsCountedType(program, id) {
+    return Crossing.Always
+  }
+  const inner = countedFormOf program, id
+  if inner != id {
+    return crossingOf program, inner, place, isTransfer
+  }
+  if const Some(layout) = inlineCountedLayoutOf(program, inner) {
+    const shape = program.layoutAt layout
+    // A variant crosses where its case says so, which a test would have to switch on: it stays where it is instead
+    if !shape.variants.isEmpty() {
+      return Crossing.Never
+    }
+    var combined = Crossing.Always
+    for field in shape.fields {
+      const member = CExpression.Member place, memberNameOf(field)
+      combined = bothOf combined, crossingOf(program, field.annotation, member, isTransfer)
+    }
+    return combined
+  }
+  const transfer = CExpression.Literal(if isTransfer { "true" } else { "false" })
+  match program.typeAt(inner) {
+    .Text => Crossing.When CExpression.Call(CExpression.Name("torb_text_may_move"), [place, transfer])
+    .Closure(_) => {
+      const environment = CExpression.Member place, environmentMemberName
+      Crossing.When CExpression.Call(CExpression.Name("torb_closure_may_move"), [environment])
+    }
+    .Runtime(kind, arguments) => runtimeCrossingOf program, kind, arguments, place, transfer
+    _ => Crossing.Never
+  }
+}
+
+/** A container is tested by the runtime; a task and a channel are shared blocks that carry only plain data across. */
+fn runtimeCrossingOf(
+  program: IrProgram,
+  kind: RuntimeKind,
+  arguments: List<IrTypeId>,
+  place: CExpression,
+  transfer: CExpression,
+): Crossing {
+  match kind {
+    .ListStorage => Crossing.When CExpression.Call(CExpression.Name("torb_list_may_move"), [place, transfer])
+    .MapStorage => Crossing.When CExpression.Call(CExpression.Name("torb_map_may_move"), [place, transfer])
+    .SetStorage => Crossing.When CExpression.Call(CExpression.Name("torb_map_may_move"), [place, transfer])
+    .TaskObject => plainArgumentsCrossing program, arguments
+    .ChannelObject => plainArgumentsCrossing program, arguments
+    _ => Crossing.Never
+  }
+}
+
+/** A handle of a shared block crosses where what it hands out is plain, so no two workers hold one counted value. */
+fn plainArgumentsCrossing(program: IrProgram, arguments: List<IrTypeId>): Crossing {
+  for argument in arguments {
+    if containsCountedType(program, argument) {
+      return Crossing.Never
+    }
+  }
+  Crossing.Always
+}
+
+/** Both tests: `Never` wins, `Always` changes nothing, two expressions are joined with `&&`. */
+fn bothOf(first: Crossing, second: Crossing): Crossing {
+  match first {
+    .Never => Crossing.Never
+    .Always => second
+    .When(left) => {
+      match second {
+        .Never => Crossing.Never
+        .Always => first
+        .When(right) => Crossing.When CExpression.Binary(left, "&&", right)
+      }
+    }
+  }
+}
+
+/**
+ * The test of a whole frame: every argument a `TaskNew` moves into it, each read back out of its member. `Always` and
+ * `Never` are decided here; `When` is written beside the start.
+ */
+public fn frameCrossingOf(program: IrProgram, members: List<CExpression>, types: List<IrTypeId>): Crossing {
+  combinedCrossingOf program, members, types, isTransfer: true
+}
+
+/**
+ * The test of the captures of a closure's environment: where all of them may cross without a transfer, the environment
+ * is shared (`torb_share`), so the closure may run on several workers at once.
+ */
+public fn environmentCrossingOf(program: IrProgram, members: List<CExpression>, types: List<IrTypeId>): Crossing {
+  combinedCrossingOf program, members, types, isTransfer: false
+}
+
+fn combinedCrossingOf(program: IrProgram, members: List<CExpression>, types: List<IrTypeId>, isTransfer: Bool): Crossing {
+  var combined = Crossing.Always
+  for index in 0..members.length() {
+    combined = bothOf combined, crossingOf(program, types[index], members[index], isTransfer)
+  }
+  combined
+}

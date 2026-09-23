@@ -21,6 +21,7 @@
  */
 
 #include "torb.h"
+#include "torb_pool.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -29,6 +30,35 @@
 #  define WIN32_LEAN_AND_MEAN
 #  include <windows.h>
 #endif
+
+/*
+ * One line at a time. A line is several writes (the parts, the spaces, the `\n`), and two workers that print at once
+ * must not interleave inside one, so every line is written under this lock. Recursive by hand, like the lock of
+ * memory.c, because a panic while this thread holds it (an allocation of the console path that fails) writes its report
+ * through the same path.
+ */
+static torb_mutex torb_console_mutex = TORB_MUTEX_INITIALIZER;
+static uint32_t torb_console_owner = 0u;
+static unsigned torb_console_depth = 0u;
+
+static void torb_console_lock(void) {
+  uint32_t self = torb_worker_current()->index + 1u;
+  if (torb_atomic_peek_u32(&torb_console_owner) == self) {
+    torb_console_depth += 1u;
+    return;
+  }
+  torb_mutex_lock(&torb_console_mutex);
+  torb_atomic_store_u32(&torb_console_owner, self);
+  torb_console_depth = 1u;
+}
+
+static void torb_console_unlock(void) {
+  torb_console_depth -= 1u;
+  if (torb_console_depth == 0u) {
+    torb_atomic_store_u32(&torb_console_owner, 0u);
+    torb_mutex_unlock(&torb_console_mutex);
+  }
+}
 
 /* ============================================================================================ Windows ========== */
 
@@ -286,18 +316,21 @@ void torb_write_parts(FILE *stream, const torb_text *parts, size_t count) {
  *  flushing the stream first so anything already buffered for it keeps appearing before this call; the raw bytes of
  *  `torb_write_parts` otherwise, and again where the console path answers that the text was not convertible. */
 static void torb_print_to(FILE *stream, const torb_text *parts, size_t count) {
+  torb_console_lock();
 #if defined(_WIN32)
   if (stream == stdout || stream == stderr) {
     HANDLE handle;
     if (torb_std_is_console(stream == stdout ? STD_OUTPUT_HANDLE : STD_ERROR_HANDLE, &handle)) {
       fflush(stream);
       if (torb_write_parts_console(handle, parts, count)) {
+        torb_console_unlock();
         return;
       }
     }
   }
 #endif
   torb_write_parts(stream, parts, count);
+  torb_console_unlock();
 }
 
 /**
@@ -308,12 +341,14 @@ static void torb_print_to(FILE *stream, const torb_text *parts, size_t count) {
  * the whole line goes out in one call, and the one `\n` this appends is the end of it.
  */
 void torb_write_line(FILE *stream, const char *bytes, size_t length) {
+  torb_console_lock();
 #if defined(_WIN32)
   if (stream == stdout || stream == stderr) {
     HANDLE handle;
     if (torb_std_is_console(stream == stdout ? STD_OUTPUT_HANDLE : STD_ERROR_HANDLE, &handle)) {
       fflush(stream);
       if (torb_write_line_console(handle, bytes, length)) {
+        torb_console_unlock();
         return;
       }
     }
@@ -323,6 +358,17 @@ void torb_write_line(FILE *stream, const char *bytes, size_t length) {
     fwrite(bytes, 1u, length, stream);
   }
   fputc('\n', stream);
+  torb_console_unlock();
+}
+
+/* The cache of `torb_std_is_console` is filled before a second thread exists, so every later look-up only reads it. */
+void torb_console_prepare(void) {
+#if defined(_WIN32)
+  HANDLE handle;
+  (void)torb_std_is_console(STD_OUTPUT_HANDLE, &handle);
+  (void)torb_std_is_console(STD_ERROR_HANDLE, &handle);
+  (void)torb_std_is_console(STD_INPUT_HANDLE, &handle);
+#endif
 }
 
 /** The two standard streams of `torb_write_line`, which is how `torb.h` names it without naming `FILE *`. */

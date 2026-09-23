@@ -552,7 +552,20 @@ fn mappingOfCall(
     return found
   }
   const generics = signature.generics
-  const _ = matchTypePattern lowering.checker, owner, target, generics, mapping
+  if !matchTypePattern(lowering.checker, owner, target, generics, mapping) {
+    // An `extend` of a trait reached on a type that implements it (`Iterate.parallel` on a `List<Int>`): the owner is
+    // matched against the trait with the arguments that type has for it
+    const written = match lowering.checker.types.form(owner) {
+      .Traits(bounds) => bounds.first() ?? owner
+      _ => owner
+    }
+    if const .Nominal(capability, _) = lowering.checker.types.form(written) {
+      if const Some(arguments) = traitArgumentsOf(lowering.checker, target, capability) {
+        const applied = lowering.checker.nominal capability, arguments
+        const _ = matchTypePattern lowering.checker, written, applied, generics, mapping
+      }
+    }
+  }
   addOwnArguments lowering, mapping, symbol, typeArguments
   mapping
 }

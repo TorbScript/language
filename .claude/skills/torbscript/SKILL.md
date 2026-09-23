@@ -325,4 +325,4 @@ Every page is self-contained: it defines or links every term it uses, so one pag
 question. A page marked `status: draft` may still be wrong, so verify it against the compiler. A page marked
 `status: planned` describes a designed feature that does not compile yet, and its first line says so.
 
-There are 215 pages.
+There are 216 pages.

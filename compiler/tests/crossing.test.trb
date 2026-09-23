@@ -1,0 +1,92 @@
+/**
+ * What may cross to another worker: the start the C back end writes for a task, chosen by the types of its frame, and
+ * the environment of a closure made shared where its captures may cross (docs/design/CONCURRENCY.md section 16, "What
+ * crosses a worker"). A task whose frame holds only plain values starts with `torb_task_start_portable`; one that holds a
+ * value the types cannot answer for starts with the choice the runtime makes on that value; one that holds a shared
+ * object is pinned. That the pool really runs them is `runtime/tests/pool_test.c` and
+ * `tests/conformance/task-workers.trb`.
+ */
+
+use test, group from "std/test"
+use lowered from "./lower-harness"
+use insertOwnership from "../src/ir/ownership"
+use emittedProgramText from "../src/backend/c/emit"
+
+/** The entry function of `app/src/main.trb`, which is what the `main` of the program calls. */
+const entryName = "t_acme_x2f_app_main"
+
+/** The emitted C of one function, from its comment to its closing brace, after the ownership pass. */
+fn functionOf(source: String, name: String): String {
+  var found = lowered source
+  insertOwnership found.program
+  const text = emittedProgramText found.program, entryName
+  var lines: List<String> = []
+  var isInside = false
+  for line in text.lines() {
+    if line == "/* {name} */" {
+      isInside = true
+      continue
+    }
+    if !isInside {
+      continue
+    }
+    lines.append line
+    if line == "\}" {
+      break
+    }
+  }
+  lines.joined separator: "\n"
+}
+
+const tasks = r"""
+  shared type Tally {
+    var count: Int = 0
+  }
+
+  fn squared(value: Int): Task<Int> {
+    value * value
+  }
+
+  fn measured(text: String): Task<Int> {
+    text.byteLength()
+  }
+
+  fn counted(tally: Tally): Task<Int> {
+    tally.count
+  }
+
+  fn scaled(factor: Int): (Int) => Int {
+    { value => value * factor }
+  }
+
+  const first = squared 3
+  const second = measured "word"
+  const third = counted Tally()
+  print scaled(2)(4)
+  """
+
+group "The start of a task" {
+  test "a frame of plain values may move, so the task starts portable" {
+    const found = functionOf tasks, "t_acme_x2f_app_main_squared"
+    assert found.contains("  torb_task_start_portable(s1);")
+  }
+
+  test "a text may move where nothing else holds its storage, which the runtime decides on the value" {
+    const found = functionOf tasks, "t_acme_x2f_app_main_measured"
+    assert found.contains("torb_text_may_move(")
+    assert found.contains(", true)) ? torb_task_start_portable : torb_task_start)(s1);")
+  }
+
+  test "a shared object never crosses, so the task is pinned to the worker that made it" {
+    const found = functionOf tasks, "t_acme_x2f_app_main_counted"
+    assert found.contains("  torb_task_start(s1);")
+    assert(!found.contains("portable"))
+  }
+}
+
+group "The environment of a closure" {
+  test "captures that are plain values make it shared, so the closure may run on several workers" {
+    const found = functionOf tasks, "t_acme_x2f_app_main_scaled"
+    assert found.contains("    torb_share(environment);")
+  }
+}

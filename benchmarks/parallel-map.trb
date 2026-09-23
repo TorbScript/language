@@ -1,0 +1,20 @@
+/**
+ * A CPU-bound `parallel()` map: the Collatz steps of two million numbers, summed. The chunks are plain `Int` lists and the
+ * closure captures nothing, so every chunk may be taken by an idle worker; `parallel.sh` runs this one binary with
+ * `TORB_WORKERS` from 1 up and prints the speed-up. It has no C twin: what it measures is the pool against itself.
+ */
+const size = 2000000
+
+fn collatz(start: Int): Int {
+  var steps = 0
+  var value = start
+  while value != 1 {
+    value = if value % 2 == 0 { value / 2 } else { 3 * value + 1 }
+    steps = steps + 1
+  }
+  steps
+}
+
+const numbers = (1..=size).toList()
+const total = numbers.parallel().map({ collatz _ }).sum().await() ?? 0
+print "parallel-map {total}"

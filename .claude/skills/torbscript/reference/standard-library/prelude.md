@@ -60,6 +60,8 @@ public use Encode, Decode, Describe, DecodeError, Format, rendered from "std/enc
 public use Encoder, Decoder, Describer, FieldDescription, FieldDefault, EncodedValue from "std/encoding"
 public use Expression, ExpressionNode, TypeReference, SourceLocation, UnaryOperator, BinaryOperator, assert, nameOf from "std/expression"
 public use Task, Channel, ChannelClosed, spawn, all from "std/task"
+public use Parallel from "std/parallel"
+public use List.parallel from "std/parallel"
 public use Source, Sink, Bytes from "std/stream"
 public use print, printError from "std/console"
 public use * as math from "std/math"

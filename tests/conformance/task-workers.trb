@@ -1,0 +1,106 @@
+/**
+ * Tasks whose frames hold only what may cross a worker - numbers, a channel of numbers, a text nothing else holds - are
+ * taken by idle workers, and what the program reads of them does not depend on which worker ran which: the values of
+ * forty tasks read in the order they were started, a channel that carries a thousand numbers from a producer to a
+ * consumer in the order they were sent, a text built on one worker and read on another, and a loop on another worker
+ * stopped at its next turn by a cancellation. The program runs with four workers and again with one
+ * (`task-workers.workers`), and prints the same bytes both times; every block is freed, whichever heap made it.
+ */
+
+use pause from "std/task"
+use sleep from "std/time"
+
+/** Work whose cost differs from task to task. */
+fn grind(seed: Int, rounds: Int): Task<Int> {
+  var value = seed
+  for _ in 0..rounds {
+    value = (value * 1103515245 + 12345).remainder(2147483648)
+  }
+  value
+}
+
+/** Sends the numbers from 0 below `count` and ends the stream. */
+fn produce(channel: Channel<Int>, count: Int): Task<Result<Void, ChannelClosed>> {
+  var sink = channel.sink()
+  for value in 0..count {
+    sink.add(value).outcome()?
+  }
+  sink.end().outcome()
+}
+
+/** Reads until the stream ends, and says whether every number came in the order it was sent. */
+fn consume(channel: Channel<Int>): Task<Result<(Int, Bool), Cancelled>> {
+  var source = channel.source()
+  var expected = 0
+  var isInOrder = true
+  while const Some(value) = source.next().outcome()? {
+    if value != expected {
+      isInOrder = false
+    }
+    expected = expected + 1
+  }
+  Ok((expected, isInOrder))
+}
+
+/** A text of its own, built wherever the task runs. */
+fn shout(word: String, times: Int): Task<String> {
+  var loud = ""
+  for _ in 0..times {
+    loud = loud + word.toUpperCase()
+  }
+  loud
+}
+
+/**
+ * Counts until somebody stops it. It lets the other tasks of its worker run now and then, which with one worker is what
+ * lets the sleep below end at all; with four it runs on another worker and is stopped at a turn of its loop.
+ */
+fn forever(start: Int): Task<Int> {
+  var count = start
+  while count >= 0 {
+    count = count + 1
+    if count.remainder(100000) == 0 {
+      pause().await() ?? void
+    }
+  }
+  count
+}
+
+var tasks: List<Task<Int>> = []
+for index in 0..40 {
+  tasks.append grind(index, 20000 + index * 1000)
+}
+var values: List<Int> = []
+for task in tasks {
+  values.append(task.await() ?? 0)
+}
+var expected: List<Int> = []
+for index in 0..40 {
+  var value = index
+  for _ in 0..(20000 + index * 1000) {
+    value = (value * 1103515245 + 12345).remainder(2147483648)
+  }
+  expected.append value
+}
+print "forty tasks, read in the order they were started: {values == expected}"
+
+const numbers = Channel<Int>(capacity: 8)
+const producer = produce numbers, 1000
+const consumer = consume numbers
+match consumer.outcome() {
+  Ok((count, isInOrder)) => print "the channel carried {count} numbers, in order: {isInOrder}"
+  Fail(problem) => print "the consumer: {problem}"
+}
+print "the producer finished: {producer.outcome().isOk()}"
+
+const loud = shout("hey", 3).await() ?? ""
+print "built on a worker: {loud}"
+
+var looping = forever 0
+// Long enough for the loop to be running when the request comes
+sleep(0.05).await() ?? void
+looping.cancel()
+match looping.await() {
+  Ok(count) => print "the loop finished after {count}"
+  Fail(problem) => print "the loop: {problem}"
+}

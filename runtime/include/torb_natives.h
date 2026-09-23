@@ -259,5 +259,7 @@ torb_text torb_text_to_lower_case(torb_text text);
 torb_text torb_text_to_upper_case(torb_text text);
 /* String.trim */
 torb_text torb_text_trim(torb_text text);
+/* Workers.count */
+int64_t torb_workers_count(void);
 
 #endif /* TORB_NATIVES_H */

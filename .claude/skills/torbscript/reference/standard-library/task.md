@@ -28,7 +28,7 @@ here.
 ## Import
 
 ```trb fragment
-use Task, Channel, ChannelClosed, Cancelled, TimedOut, spawn, all, pause from "std/task"
+use Task, Channel, ChannelClosed, Cancelled, TimedOut, Workers, spawn, all, pause from "std/task"
 ```
 
 ```trb check
@@ -86,6 +86,22 @@ there is nothing to race for. The free function `all` waits for two tasks of dif
 (`const (user, posts) = all(fetchUser(1), fetchPosts(1)).await()?`); `Task.all` is the same idea for any number of
 tasks of the same type. Where one of them is cancelled, the others are cancelled too. `pause()` puts the running task
 at the back of the queue, which is what makes a long loop fair.
+
+### Workers
+
+```trb fragment
+public native type Workers {
+  native static fn count(): Int
+}
+```
+
+How many workers - operating-system threads - run the tasks of this process: `TORB_WORKERS` where it is set, and one per
+logical processor otherwise, at most 1024. It is fixed before the first line runs, because every worker owns a heap. A
+task that is started goes to the worker that started it; an idle worker takes it before its first run where every value
+it holds may cross to another thread - numbers, a `Channel` of numbers, a text or a list nobody else holds - and a task
+never moves once it has run. With `TORB_WORKERS=1` the tasks run one at a time in the order they became ready, which is
+the order a program that prints from several tasks at once can rely on. `Workers` is imported from here; it is what
+[`parallel(workers:)`](parallel.md) defaults to.
 
 ### Channel
 

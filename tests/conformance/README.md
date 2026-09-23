@@ -9,6 +9,13 @@ compiler (`torb build <program>`), run, and compared against what is written dow
 | standard error   | `<program>.stderr`, and no file means "nothing at all" |
 | the exit code    | `<program>.exit`         |
 | whether the leak gate applies | `<program>.leaks`, which holds the reason it does not |
+| how many workers it runs with | `<program>.workers`: a number, or `all` for one per processor; no file means one |
+
+**One worker unless a program says otherwise.** Every program runs with `TORB_WORKERS=1`, the order the task programs
+pin: one worker runs one task at a time in the order they became ready. A program with a `.workers` file runs with that
+many, and then a second time with one, and both runs have to print the same `.expected` bytes - so such a program pins
+what the language promises for any number of workers (the values of tasks, the items of a channel, the chunks of
+`parallel()` in input order) and never the interleaving of what several tasks print at once.
 
 **`\n` is `\n`.** Nothing about what a program wrote is normalised - the runtime puts standard output and standard
 error into binary mode on Windows (`torb_process_start`), so the bytes a binary writes into a pipe are exactly what
