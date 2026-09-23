@@ -17,6 +17,7 @@ documents:
   - RESOURCES.md
   - URI.md
   - DESTRUCTORS.md
+  - OS.md
 ---
 
 A design record is written before a feature is finished, sometimes before a line of it is implemented. It works out the
@@ -27,9 +28,9 @@ implemented, or done - so a reader knows how much of what follows exists yet.
 ## What belongs here
 
 The specification of a feature that spans several packages or several `language/` pages: collections, streams,
-concurrency, encoding, paths, URIs, linear algebra, entities and components, resources, the project file, and
-destructors. Each is plain Markdown without front matter, linked here rather than copied, and stays where the
-feature it describes keeps changing.
+concurrency, encoding, paths, URIs, linear algebra, entities and components, resources, the project file,
+destructors, and the operating system. Each is plain Markdown without front matter, linked here rather than copied,
+and stays where the feature it describes keeps changing.
 
 What does not belong here: the compiler's own implementation, which is in [`internals/`](../internals/index.md); the
 settled rules of the language, which are in [`language/`](../language/index.md) once a feature has a page there; and
@@ -52,5 +53,6 @@ the reasons behind a decision that no longer needs a whole record, which belong 
 - **[Resources](RESOURCES.md)**
 - **[Uniform Resource Identifiers](URI.md)**
 - **[Destructors, `close()` and `using`](DESTRUCTORS.md)**
+- **[The Operating System](OS.md)**
 
 <!-- torb:index:end -->
