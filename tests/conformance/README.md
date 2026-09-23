@@ -155,6 +155,19 @@ jump left behind released nothing. The directory is the exemption, instead of a 
 | `sort-stability.trb` | `sort` and `sorted` are stable, and sorting twice by the same key changes nothing |
 | `variadics.trb` | `...items: Item` is one parameter that every positional argument lands in |
 
+**Arrays** - `Array<Item, Size>`: inline storage whose size is part of the type, a value at every size.
+
+| Program | What it pins |
+|---------|--------------|
+| `array-literal.trb` | A literal against an `Array` fills the slots in written order, a `...` spreads another array, and no items is `[]` |
+| `array-filled.trb` | `filled`, `generated` (once per slot, in order), `from` (a wrong count, an endless source), `mapped`, `fill`, and a result past the register limit |
+| `array-read-write.trb` | `a[index] = value` changes this array and no copy of it, through a `var` parameter as well; `get` outside is `None` |
+| `array-nested.trb` | Arrays of arrays, an array in a field of an inline and of a counted record, an array in a `List`, written through paths |
+| `array-text.trb` | Counted items: a copy retains every one, a write releases what it replaces, and nothing leaks |
+| `array-equality.trb` | `Equals`, `Hash` and `Show` follow the items in order, nested too |
+| `array-iteration.trb` | `for` walks a copy held by the cursor, and the pipelines of `Iterate` work on an array |
+| `array-matrix.trb` | The tour's matrix: const parameters read as values (`0..Rows`) and a product checked dimension for dimension |
+
 **Types and traits**
 
 | Program | What it pins |
@@ -219,6 +232,8 @@ jump left behind released nothing. The directory is the exemption, instead of a 
 | `division-by-zero.trb` | ``division by zero in `/` `` |
 | `remainder-by-zero.trb` | ``division by zero in `%` ``: two instructions, two messages |
 | `collection-index.trb` | `a[key]` past the end is `Indexed.at`, so it is `Key does not exist` at `std/core/src/option.trb` |
+| `array-index-bounds.trb` | The same for an `Array`, whose `a[key]` is a direct read of an inline slot and still says what `at` says |
+| `array-set-bounds.trb` | `a[index] = value` outside an `Array` is `index -1 is out of bounds for a length of 3`, as for a `List` |
 | `slice-out-of-range.trb` | `index 9 is out of bounds for a length of 3`, with the **exclusive** end in the message |
 | `slice-reversed.trb` | `the range 2..1 starts after it ends` |
 | `text-slice-past-end.trb` | A text is sliced in **bytes**: `the offset 9 is past the end of a text of 6 bytes` |

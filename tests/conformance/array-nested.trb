@@ -1,0 +1,45 @@
+use Process from "std/process"
+
+/**
+ * **An `Array` nests inline**: an array of arrays, an array in a field, an array as the item of a `List`. A write through
+ * `grid[row][column]` and through `board.cells[row][column]` changes that one slot, and a copy taken before - of the
+ * grid, of the board - keeps what it had, whether the record that holds the array is inline or a counted block.
+ *
+ * `Board` is wide on purpose: past the inline limit a record is a counted block, so the write has to make it unique
+ * first, which is the half of the question a narrow record would not ask.
+ */
+type Board with Show {
+  var cells: Array<Array<String, 2>, 2>
+  title: String
+  owner: String = "nobody"
+}
+
+type Point with Show {
+  var x: Int
+  var y: Int
+}
+
+var grid: Array<Array<String, 2>, 2> = Array.filled Array.filled("-")
+const empty = grid
+grid[0][1] = "x"
+grid[1][0] = "o"
+print grid
+print empty
+
+var board = Board grid, "game"
+const saved = board
+board.cells[1][1] = "x"
+print board
+print saved
+
+var points: Array<Point, 2> = [Point(1, 2), Point(3, 4)]
+points[1].y = 40
+print points
+
+var rows: List<Array<Int, 2>> = []
+rows.append([1, 2])
+rows.append([3, 4])
+rows[1][0] = 30
+print rows
+
+Process.exit(rows[1][0] + points[1].y - 70)

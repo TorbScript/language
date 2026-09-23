@@ -136,6 +136,7 @@ public fn operandsOf(program: IrProgram, facts: SlotFacts, instruction: Instruct
     // An intrinsic reads its operands and builds its answer out of them: `textConcat` allocates, it does not store
     .Intrinsic(_, _, arguments, _) => borrowedOperands arguments
     .Construct(_, _, _, fields) => ownedOperands fields
+    .ArrayNew(_, items) => ownedOperands items
     .Read(_, reference) => borrowedOperands placeSlotsOf(reference)
     // A write with no steps **defines** its base (`definedSlot`), so the base is no operand at all: what the slot held
     // died at its own last use, and the store keeps the value it is given (docs/PERFORMANCE.md, finding 1)
@@ -282,6 +283,7 @@ public fn consumedSlotsOf(instruction: Instruction): List<Slot> {
     .CallClosure(_, _, arguments) => movedSlotsOf arguments
     .CallWitness(_, _, _, arguments) => movedSlotsOf arguments
     .Construct(_, _, _, fields) => movedSlotsOf fields
+    .ArrayNew(_, items) => movedSlotsOf items
     .Write(_, value) => movedSlotsOf([value])
     .BoxNew(_, value) => movedSlotsOf([value])
     .TraitValue(_, value, _) => movedSlotsOf([value])
@@ -342,6 +344,7 @@ public fn withOperands(instruction: Instruction, decided: List<Argument>): Instr
     .Construct(target, layout, variant, fields) => {
       Instruction.Construct target, layout, variant, takenArguments(fields, decided, 0)
     }
+    .ArrayNew(target, items) => Instruction.ArrayNew target, takenArguments(items, decided, 0)
     .Read(target, reference) => Instruction.Read target, withPlace(reference, decided, 0)
     .Write(reference, _) => {
       if reference.steps.isEmpty() {

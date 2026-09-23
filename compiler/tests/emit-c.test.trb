@@ -337,6 +337,25 @@ group "Types" {
     assert text.contains(r"""  s4 = (T_acme_x2f_app_main_Shape){ .tag = 1 };""")
   }
 
+  test "an `Array<Item, Size>` is a struct of its own with the items inline, and a literal is one compound literal" {
+    const source = r"""
+      fn corners(): Array<Int, 4> {
+        [1, 2, 3, 4]
+      }
+
+      const _ = corners()
+      """
+    const text = cOf source
+    assert text.contains("typedef struct T_array__Int64_4 T_array__Int64_4;")
+    assert(
+      text.contains(r"""
+        struct T_array__Int64_4 {
+          int64_t items[4];
+        };""")
+    )
+    assert text.contains(r"  s4 = (T_array__Int64_4){ { s0, s1, s2, s3 } };")
+  }
+
   test "a variant layout is a tag and a union of the groups, and an empty case has no member" {
     const source = r"""
       fn keep(value: Int?): Int? {
@@ -578,6 +597,22 @@ group "Counted values" {
     )
     assert text.contains("  s1_kept = s0_label;\n  R_T_acme_x2f_app_main_Label(&s1_kept);")
     assert text.contains("  D_T_acme_x2f_app_main_Label(&s1_kept);")
+  }
+
+  /** An array carries no count of its own and one on every item, so a copy of one is a loop over its slots. */
+  test "a copy of an array of counted items retains every item in one loop over its slots" {
+    const source = r"""
+      fn twice(names: Array<String, 2>): (Array<String, 2>, Array<String, 2>) {
+        const kept = names
+        (names, kept)
+      }
+
+      const _ = twice(["a", "b"])
+      """
+    const text = ownedCOf source
+    const header = "  for (int64_t torb_item0 = 0; torb_item0 < 2; torb_item0++) \{\n"
+    const retain = "    s1_kept.items[torb_item0] = torb_text_retained(s1_kept.items[torb_item0]);\n"
+    assert text.contains("  s1_kept = s0_names;\n{header}{retain}  \}\n")
   }
 
   /** A read of a counted field hands the frame a count of it, which is what makes the target of the read owned. */
@@ -831,11 +866,11 @@ group "Trait-typed values" {
 group "What the C back end does not emit yet" {
   test "a type the back end has no C spelling for is a finding that names the type" {
     const source = r"""
-      fn sized(values: Array<Int, 4>): Int {
+      fn quoted(tree: Expression<Int>): Int {
         0
       }
       """
-    assert(findingsOf(source) == ["an `Array<Item, Size>` value is not supported by the native back end yet"])
+    assert(findingsOf(source) == ["an `Expression` value is not supported by the native back end yet"])
   }
 
   /**

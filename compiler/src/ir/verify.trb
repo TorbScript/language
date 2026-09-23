@@ -473,6 +473,7 @@ public fn usedSlots(instruction: Instruction): List<Slot> {
     }
     .Intrinsic(_, _, arguments, _) => arguments
     .Construct(_, _, _, fields) => slotsOfArguments fields
+    .ArrayNew(_, items) => slotsOfArguments items
     .Read(_, reference) => slotsOfReference reference
     // A write with no steps replaces the whole slot, so it does not *read* its base: what the slot held died at its
     // own last use, which is what lets `x = f(x)` hand the old value to the call (docs/PERFORMANCE.md, finding 1)
@@ -537,6 +538,7 @@ public fn definedSlot(instruction: Instruction): Slot? {
     .CallWitness(target, _, _, _) => target
     .Intrinsic(target, _, _, _) => target
     .Construct(target, _, _, _) => Some target
+    .ArrayNew(target, _) => Some target
     .Read(target, _) => Some target
     .Tag(target, _) => Some target
     .Closure(target, _, _, _) => Some target
@@ -712,6 +714,7 @@ fn verifyInstruction(
     .Construct(target, layout, variant, fields) => {
       verifyConstruct program, function, found, at, target, layout, variant, fields
     }
+    .ArrayNew(target, items) => verifyArrayNew program, function, found, at, target, items
     .Read(target, reference) => {
       const annotation = typeOfReference program, function, found, at, reference
       if const Some(inner) = annotation {
@@ -1184,6 +1187,36 @@ fn verifyConstruct(
   const annotation = function.typeOfSlot target
   if layoutOfType(program, annotation) != Some(layout) {
     found.append "{at}: `{shape.name}` was built into %{target.value}, which is `{describeIrType(program, annotation)}`"
+  }
+}
+
+/** An `arrayNew` fills every slot of the `FixedArray` its target is, with one item of the item type each - or none. */
+fn verifyArrayNew(
+  program: IrProgram,
+  function: IrFunction,
+  var found: List<String>,
+  at: String,
+  target: Slot,
+  items: List<Argument>,
+) {
+  if !function.hasSlot(target) {
+    found.append "{at}: there is no slot %{target.value}"
+    return
+  }
+  const annotation = function.typeOfSlot target
+  const (item, size) = match program.typeAt(annotation) {
+    .FixedArray(inner, count) => (inner, count)
+    _ => {
+      found.append "{at}: an array was built into %{target.value}, which is `{describeIrType(program, annotation)}`"
+      return
+    }
+  }
+  if !items.isEmpty() && items.length() != size {
+    found.append "{at}: `{describeIrType(program, annotation)}` is built from {size} items or none, and {items.length()} were given"
+    return
+  }
+  for index in 0..items.length() {
+    expectType program, function, found, at, items[index].slot, item, "the item {index}"
   }
 }
 

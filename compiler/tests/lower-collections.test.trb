@@ -278,10 +278,19 @@ group "which of the three shapes a literal is" {
    * `ArrayList` over as an `Iterate`, whose table this test prelude cannot build, so the conformance program
    * `literal-through-from.trb` is what pins it.
    */
-  test "a literal that fills an `Array` names 5.9b" {
+  test "a literal that fills an `Array` is one `arrayNew` of its items in written order" {
     assert(
-      unsupportedIn("fn fixed(): Array<Int, 2> \{\n  [1, 2]\n\}")
-        == ["a literal that fills an `Array` of 2 items is not supported by the native back end yet"]
+      irOf("fn fixed(): Array<Int, 2> \{\n  [1, 2]\n\}", "t_acme_x2f_app_main_fixed") == r"""
+        fn t_acme_x2f_app_main_fixed() -> Array(Int64, 2) {
+          slot %0 temporary: Int64
+          slot %1 temporary: Int64
+          slot %2 temporary: Array(Int64, 2)
+        b0: # acme/app/src/main.trb:1 body
+          %0 = constant s_literal__Int64_1
+          %1 = constant s_literal__Int64_2
+          %2 = arrayNew (%0 borrowed, %1 borrowed)
+          return %2 borrowed
+        }"""
     )
   }
 }

@@ -17,7 +17,7 @@ use ModuleId from "../../semantics/module"
 use SymbolId from "../../semantics/symbols"
 use TypeId, ParameterId, Signature, ImplementationId from "../../semantics/checker/type"
 use Checker from "../../semantics/checker/context"
-use NativeEntry, nativeEntries from "../../backend/c/natives"
+use NativeEntry, nativeEntries, ArrayOperation from "../../backend/c/natives"
 use IrProgram, IrTypeId, IrType, Slot, BlockId, StaticId, StaticValue, StaticContents from "../ir"
 use Location, LocationId, Terminator, Argument, Reference, borrowed, referenced from "../ir"
 use FunctionId, Intrinsic, RuntimeKind from "../ir"
@@ -92,6 +92,11 @@ public type Generated {
    * declaration of `std/` can name one.
    */
   case Container(kind: RuntimeKind)
+  /**
+   * One of the three private members of `Array` that are its storage: `unfilled`, `load` and `store`, one instruction
+   * each over the inline slots of the `FixedArray` (`ir/lower/derive.trb`).
+   */
+  case ArrayStorage(operation: ArrayOperation)
   /**
    * The three forms of a type's constructor, over `std/encoding`'s vocabulary: one body per type and format, because the
    * format is the member's own type parameter (`ir/lower/encoding.trb`).
@@ -437,10 +442,18 @@ fn lineIndexOf(var lowering: Lowering, index: Int): LineIndex {
 /**
  * The IR type a checker type stands for, with the type arguments of the instance that is being lowered filled in.
  * Everything that comes out of it is monomorphic, which is what the whole back end rests on.
+ *
+ * It is asked for the type of a **value**, so a const parameter read as one (`0..Rows`) is the type of its argument
+ * (`Int64`) and not the type-level constant: the constant only means something as an argument of a type, where
+ * `Grid<4>` and `Grid<5>` have to stay two instances.
  */
 public fn irTypeOf(var lowering: Lowering, id: TypeId): IrTypeId {
   const mapping = lowering.substitution
-  instantiateType lowering.program, lowering.checker, lowering.instantiation, mapping, id
+  const built = instantiateType lowering.program, lowering.checker, lowering.instantiation, mapping, id
+  if const .ConstantValue(_, of) = lowering.program.typeAt(built) {
+    return of
+  }
+  built
 }
 
 /**

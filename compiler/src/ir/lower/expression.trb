@@ -31,7 +31,7 @@ use evaluateConstant, staticOfConstant, constantInstanceOf, ConstantInstance fro
 use functionName, mangledName from "../mangle"
 use symbolPathOf from "../instantiate"
 use Lowering, reportUnsupported, locationOf, typeAtSpan, voidTypeOf from "./context"
-use internStatic, isNeverType, isVoidType, finishBlock, continueIn, irTypeOfClosed from "./context"
+use internStatic, isNeverType, isVoidType, finishBlock, continueIn, irTypeOfClosed, substituted from "./context"
 use lowerCall, lowerOperator, lowerConstruct, lowerCaseValue, lowerConversionCall from "./call"
 use objectTypeOf, lowerTraitValue, closedBounds from "./generic"
 use lowerBlockInto from "./statement"
@@ -544,7 +544,27 @@ fn lowerReference(
     .CaseOf(owner, variant) => lowerCaseValue lowering, builder, destination, expression, owner, variant, annotation
     // `byPath.get(path).map(ModuleId)`: the constructor itself, as a function value
     .Construct(_) => lowerConstructorValue lowering, builder, destination, expression, 0, annotation
+    .TypeOf(owner) => lowerConstantParameter lowering, builder, destination, owner, annotation, expression.span
     _ => unsupportedSlot lowering, builder, destination, "a name the back end does not lower yet", expression.span
+  }
+}
+
+/**
+ * A const parameter read as a value - `0..Rows` inside `Matrix<const Rows: Int, ...>`: the argument of the instance
+ * that is being lowered, as a constant. Every instance is monomorphic, so the parameter is always a literal by now.
+ */
+fn lowerConstantParameter(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  owner: TypeId,
+  annotation: IrTypeId,
+  at: Span,
+): Slot {
+  const applied = substituted lowering, owner
+  match lowering.checker.types.form(applied) {
+    .Constant(value, _) => constantSlot lowering, builder, destination, StaticContents.Literal(value), annotation
+    _ => unsupportedSlot lowering, builder, destination, "a name the back end does not lower yet", at
   }
 }
 

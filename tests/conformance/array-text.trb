@@ -1,0 +1,34 @@
+use Process from "std/process"
+
+/**
+ * **An `Array` of counted items owns one count on every item**: copying the array retains each of them, writing a slot
+ * releases what was there, and dropping the array releases them all. There is no count on the array itself, because
+ * it has no storage of its own - it is its items, inline.
+ *
+ * The leak gate is what this program is for: every text below is built at run time, so a missing release is a live
+ * block at exit and a missing retain is a text freed while a copy still reads it.
+ */
+
+fn named(prefix: String, index: Int): String {
+  "{prefix}-{index}"
+}
+
+var names: Array<String, 3> = Array.generated { named "item", _ }
+const copied = names
+names[1] = named "changed", 1
+names[2] = names[0]
+print names
+print copied
+
+var nested: Array<Array<String, 2>, 2> = Array.filled(Array.generated { named "cell", _ })
+const kept = nested
+nested[0][0] = named "new", 0
+print nested
+print kept
+
+var maybe: Array<String?, 2> = [Some(named("some", 0)), None]
+maybe[1] = maybe[0]
+maybe[0] = None
+print maybe
+
+Process.exit(names.length() + nested.length())

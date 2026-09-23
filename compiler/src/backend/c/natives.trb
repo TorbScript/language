@@ -119,6 +119,24 @@ public type NativeTarget {
    * closure literal becomes the resume function of a task, and `stopAsCancelled`, which ends the machine it runs in.
    */
   case Lowered
+  /**
+   * The raw storage of an `Array<Item, Size>`: a generated body of one instruction over the inline slots, which is what
+   * the rest of `std/core`'s `Array` is written in TorbScript on top of (`ir/lower/derive.trb`, docs/BACKEND.md 5.9b).
+   */
+  case ArrayStorage(operation: ArrayOperation)
+}
+
+/**
+ * The three things only the storage of an `Array<Item, Size>` can do. Each one is an instruction of the IR, so the VM
+ * needs nothing of the runtime for them either.
+ */
+public type ArrayOperation {
+  /** Every slot empty: `ArrayNew` without items, the storage `filled` and `generated` write every slot of. */
+  case Unfilled
+  /** The item at an index, read through an `Element` step. */
+  case Load
+  /** The item at an index replaced through an `Element` step, releasing what was there. */
+  case Store
 }
 
 /** Whether a `native` declaration can be called today, or is still a named, clean compile error where it is used. */
@@ -794,12 +812,11 @@ fn collectionEntries(var entries: List<NativeEntry>) {
   setEntries entries, "HashSet"
   setEntries entries, "TrieSet"
 
-  // `Array<Item, Size>` is inline storage the emitter writes itself; the members arrive with the interior paths of 5.9b.
-  // `filled` and `generated` take their `Size` from the expected type, so the emitter knows how many slots to write.
-  const arrayMembers = ["filled", "generated", "from", "length", "get", "iterate", "set", "fill", "mapped"]
-  for member in arrayMembers {
-    entries.append plannedRuntimeOf("Array.{member}", "torb_array_{member}", "5.9b")
-  }
+  // `Array<Item, Size>` is inline storage, a struct of the program the emitter writes itself. Three private members are
+  // the storage and nothing else, and every public member of `std/core`'s `Array` is TorbScript on top of them
+  entries.append NativeEntry(name: "Array.unfilled", target: NativeTarget.ArrayStorage(ArrayOperation.Unfilled))
+  entries.append NativeEntry(name: "Array.load", target: NativeTarget.ArrayStorage(ArrayOperation.Load))
+  entries.append NativeEntry(name: "Array.store", target: NativeTarget.ArrayStorage(ArrayOperation.Store))
 
   // A `Range` is an ordinary record; only its iteration is native, and it panics without both ends.
   entries.append derivedOf("Range.equals", DerivedKind.Equals)

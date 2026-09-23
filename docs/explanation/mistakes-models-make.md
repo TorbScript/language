@@ -15,9 +15,6 @@ source:
   - CONCEPT.md#formatter-canon
 ---
 
-> **Not built natively yet.** An `Array` filled from a literal (mistake 19) is not built by the native back end yet, so
-> `torb run` refuses the examples here that use it. `torb check` accepts them, and the rules are the language's.
-
 A model writing TorbScript does not fail from ignorance. It fails because TorbScript looks like four languages it knows
 well and differs from all of them in the same few places. These are those places, in the order they go wrong, with the
 right line first and the wrong one after it.

@@ -212,6 +212,12 @@ public type CStatement {
   /** Braces of their own, for a temporary that must not outlive the statement that needs it. */
   case Block(body: List<CStatement>)
   /**
+   * `for (int64_t counter = 0; counter < count; counter++) { ... }`: the one loop the emitter writes itself, over the
+   * slots of an `Array<Item, Size>` whose items are counted - a retain, a release, a fill. Everything else loops through
+   * the blocks of the IR.
+   */
+  case Loop(counter: String, count: Int, body: List<CStatement>)
+  /**
    * Several statements on one line. It is what the `(void)` casts of every slot nothing reads are: one per slot would
    * be a screen of them in front of every body, and together they are one line a reader skips.
    */
@@ -267,6 +273,7 @@ fn textOf(statement: CStatement): String {
     .Joined(statements) => joinedTextOf statements
     .Switch(_, _, _) => ""
     .Block(_) => ""
+    .Loop(_, _, _) => ""
   }
 }
 
@@ -465,6 +472,11 @@ fn writeStatement(var writer: CWriter, statement: CStatement) {
     .If(condition, then) => {
       writeLine writer, "if ({renderExpression(condition)}) \{"
       writeStatements writer, then
+      writeLine writer, "\}"
+    }
+    .Loop(counter, count, body) => {
+      writeLine writer, "for (int64_t {counter} = 0; {counter} < {count}; {counter}++) \{"
+      writeStatements writer, body
       writeLine writer, "\}"
     }
     _ => {}

@@ -15,9 +15,6 @@ source:
   - std/collections/src/list.trb
 ---
 
-> **Not built natively yet.** A `HashMap()` built through its constructor is not built by the native back end yet, so
-> `torb run` refuses the examples here that use it. `torb check` accepts them, and the rules are the language's.
-
 A collection type is a trait, one per kind, and never a concrete data structure. A function that takes a `Map` accepts
 a `TrieMap`, a `HashMap`, or a type somebody else wrote; only the expression that builds the value names which one it
 is.

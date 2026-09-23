@@ -1,0 +1,71 @@
+use Process from "std/process"
+
+/**
+ * **A const parameter is a value inside its declaration**: `0..Rows` counts through the rows of this very instance,
+ * and `Matrix<2, 3>` and `Matrix<3, 4>` are two types whose `multiplied` the checker matched dimension for dimension.
+ * The cells are an `Array` of `Array`s, so the whole matrix is inline storage and `result.set` writes one slot of it.
+ *
+ * It is the matrix of the tour (`examples/tour/src/12-type-system.trb`), with numbers in it so that the product can be
+ * checked by hand: row `r` of `left` is `r + 1` everywhere, and `right` is the identity padded with a column of `2`s.
+ */
+type Matrix<const Rows: Int, const Columns: Int> {
+  private var cells: Array<Array<Float, Columns>, Rows>
+
+  static fn zero(): Matrix<Rows, Columns> {
+    Self Array.filled(Array.filled(0.0))
+  }
+
+  fn get(row: Int, column: Int): Float {
+    cells[row][column]
+  }
+
+  var fn set(row: Int, column: Int, value: Float) {
+    cells[row][column] = value
+  }
+
+  fn rows(): Int {
+    Rows
+  }
+
+  fn multiplied<const Other: Int>(other: Matrix<Columns, Other>): Matrix<Rows, Other> {
+    var result = Matrix<Rows, Other>.zero()
+    for row in 0..Rows {
+      for column in 0..Other {
+        const sum = (0..Columns).map({ get(row, _) * other.get(_, column) }).sum()
+        result.set row, column, sum
+      }
+    }
+    result
+  }
+
+  fn rendered(): String {
+    var lines: List<String> = []
+    for row in 0..Rows {
+      var parts: List<String> = []
+      for column in 0..Columns {
+        parts.append "{cells[row][column]}"
+      }
+      lines.append parts.joined(separator: " ")
+    }
+    lines.joined separator: " / "
+  }
+}
+
+var left = Matrix<2, 3>.zero()
+for row in 0..2 {
+  for column in 0..3 {
+    left.set row, column, Float.from(row + 1)
+  }
+}
+var right = Matrix<3, 4>.zero()
+for index in 0..3 {
+  right.set index, index, 1.0
+  right.set index, 3, 2.0
+}
+const product = left.multiplied right
+print left.rendered()
+print right.rendered()
+print product.rendered()
+print "{product.rows()} rows"
+
+Process.exit product.rows()

@@ -32,7 +32,7 @@ use nativeEntries from "./natives"
 use CExpression, CStatement, CSwitchCase, CDeclaration, CMember, declarationOf, cStringOf from "./writer"
 use Emission, write, reportUnsupported, emittedText, locationExpression, slotNameOf from "./emission"
 use cTypeOf, whyNoCType, hasStructDefinition, memberNameOf, variantMemberNameOf from "./type"
-use structDeclarationOf, layoutDefinitionOrder, objectDeclarationOf from "./type"
+use structDeclarationOf, layoutDefinitionOrder, objectDeclarationOf, arrayDeclarationOf from "./type"
 use bodyOf, bodyStatements, signatureHeadOf, valueTypeOf, emptyNicheExpression, resultTypeOf from "./body"
 use resultPointerName, keptFunctions, frameTypeName from "./body"
 use dropFunctionOf, pointerTo, closureThunkNameOf, environmentLayoutOfFunction from "./body"
@@ -67,7 +67,7 @@ public fn emitProgram(program: IrProgram, entries: List<ProgramEntry>): Emission
   // The trait-typed values come first: they are made of the erased pointers of the ABI and of nothing of the program,
   // while a layout may hold one in a field - the environment of a closure over a trait-typed value is one
   emitObjectTypes emission, program, functions, layouts
-  emitTypeDefinitions emission, program, layouts
+  emitTypeDefinitions emission, program, functions, layouts
   // The frames of the tasks come after the layouts, because a frame slot is a value of any of them
   emitTaskFrames emission, program, functions
   emitCountedHelpers emission, program, functions, layouts
@@ -1052,8 +1052,9 @@ fn markLayout(program: IrProgram, var used: List<Bool>, var pending: List<Int>, 
  * Every layout, forward declared first and then defined in an order in which nothing needs what is not complete yet.
  * A forward declaration for all of them is what makes a pointer to a counted block work whatever the order is.
  */
-fn emitTypeDefinitions(var emission: Emission, program: IrProgram, layouts: List<Bool>) {
+fn emitTypeDefinitions(var emission: Emission, program: IrProgram, functions: List<IrFunction>, layouts: List<Bool>) {
   const order = layoutDefinitionOrder program
+  const arrays = usedArraysOf program, functions, layouts
   var names: List<String> = []
   for id in order {
     if !layouts[id.value] {
@@ -1065,6 +1066,9 @@ fn emitTypeDefinitions(var emission: Emission, program: IrProgram, layouts: List
     }
     names.append layout.name
   }
+  for id in arrays {
+    names.append cTypeOf(program, id)
+  }
   if names.isEmpty() {
     return
   }
@@ -1074,6 +1078,8 @@ fn emitTypeDefinitions(var emission: Emission, program: IrProgram, layouts: List
   for name in sorted {
     write emission, CDeclaration.Typedef("struct {name}", name)
   }
+  // An array a layout stores inline is defined right in front of it: its items were complete before the layout was
+  var written: Set<Int> = Set.of()
   for id in order {
     if !layouts[id.value] {
       continue
@@ -1082,7 +1088,109 @@ fn emitTypeDefinitions(var emission: Emission, program: IrProgram, layouts: List
     if !hasStructDefinition(layout) {
       continue
     }
+    for field in layout.fields {
+      emitArrayDefinition emission, program, arrays, written, field.annotation
+    }
     write emission, structDeclarationOf(program, layout)
+  }
+  for id in arrays {
+    emitArrayDefinition emission, program, arrays, written, id
+  }
+}
+
+/**
+ * The struct of an array the program uses, after the struct of every array among its items, and only once. A type that
+ * is no array, or one that is not used, writes nothing.
+ */
+fn emitArrayDefinition(
+  var emission: Emission,
+  program: IrProgram,
+  arrays: List<IrTypeId>,
+  var written: Set<Int>,
+  id: IrTypeId,
+) {
+  if !program.hasType(id) || written.contains(id.value) || !arrays.contains(id) {
+    return
+  }
+  const item = match program.typeAt(id) {
+    .FixedArray(found, _) => found
+    _ => {
+      return
+    }
+  }
+  written.insert id.value
+  emitArrayDefinition emission, program, arrays, written, item
+  if const Some(declaration) = arrayDeclarationOf(program, id) {
+    write emission, declaration
+  }
+}
+
+/**
+ * Every `Array<Item, Size>` type the emitted C spells, sorted by its C name: the type of a slot, a parameter or a
+ * result, a field of a used layout, an element of a container, and every array among the items of one of those.
+ */
+fn usedArraysOf(program: IrProgram, functions: List<IrFunction>, layouts: List<Bool>): List<IrTypeId> {
+  var found: List<IrTypeId> = []
+  for function in functions {
+    collectArrays program, found, function.signature.result
+    for parameter in function.signature.parameters {
+      collectArrays program, found, parameter.annotation
+    }
+    for slot in function.slots {
+      collectArrays program, found, slot.annotation
+    }
+  }
+  for index in 0..layouts.length() {
+    if !layouts[index] {
+      continue
+    }
+    for field in program.layouts[index].fields {
+      collectArrays program, found, field.annotation
+    }
+  }
+  for descriptor in program.elements {
+    collectArrays program, found, descriptor.item
+  }
+  var byName: Map<String, IrTypeId> = [:]
+  var names: List<String> = []
+  for id in found {
+    const name = cTypeOf program, id
+    if name.isEmpty() || byName.containsKey(name) {
+      continue
+    }
+    byName.set name, id
+    names.append name
+  }
+  var sorted = names
+  sorted.sort({ _ })
+  var ordered: List<IrTypeId> = []
+  for name in sorted {
+    if const Some(id) = byName.get(name) {
+      ordered.append id
+    }
+  }
+  ordered
+}
+
+/** The arrays inside one type: the type itself where it is one, and what its items and type arguments hold. */
+fn collectArrays(program: IrProgram, var found: List<IrTypeId>, id: IrTypeId) {
+  if !program.hasType(id) {
+    return
+  }
+  match program.typeAt(id) {
+    .FixedArray(item, _) => {
+      if found.contains(id) {
+        return
+      }
+      found.append id
+      collectArrays program, found, item
+    }
+    .Runtime(_, arguments) => {
+      for argument in arguments {
+        collectArrays program, found, argument
+      }
+    }
+    _ => {}
   }
 }
 
@@ -1380,6 +1488,11 @@ fn demandFlagsOf(program: IrProgram, functions: List<IrFunction>): DemandFlags {
     markLayoutOfHelper program, retains, descriptor.item
     markLayoutOfHelper program, drops, descriptor.item
     markDestructor program, drops, descriptor.item
+    // An element that is an array retains and releases item by item, whatever the helper of the item is
+    if innermostItemOf(program, descriptor.item) != descriptor.item {
+      markRetained program, retains, descriptor.item
+      markDropped program, drops, descriptor.item
+    }
   }
   // A witness table names **both** helpers of the box its target is kept in: the drop function so that a release of an
   // erased value works, and the retain-children function so that making the payload of one unique works (5.7's note)
@@ -1455,13 +1568,27 @@ fn typeOfSlotOf(function: IrFunction, slot: Slot): IrTypeId {
 
 /** A retain of an inline aggregate is its `R_`; a retain of a pointer, a text or a container calls no helper. */
 fn markRetained(program: IrProgram, var retains: List<Bool>, id: IrTypeId) {
-  if const Some(layout) = inlineCountedLayoutOf(program, countedFormOf(program, id)) {
+  if const Some(layout) = inlineCountedLayoutOf(program, countedFormOf(program, innermostItemOf(program, id))) {
     markLayoutFlag program, retains, layout
   }
 }
 
+/**
+ * The item of an `Array<Item, Size>`, of an array of arrays the item inside all of them, and the type itself otherwise:
+ * the retain or the release of an array is a loop over its items (`itemsLoopOf`), so the helper it calls is the item's.
+ */
+fn innermostItemOf(program: IrProgram, id: IrTypeId): IrTypeId {
+  if !program.hasType(id) {
+    return id
+  }
+  if const .FixedArray(item, _) = program.typeAt(id) {
+    return innermostItemOf program, item
+  }
+  id
+}
+
 fn markDropped(program: IrProgram, var drops: List<Bool>, id: IrTypeId) {
-  const inner = countedFormOf program, id
+  const inner = countedFormOf program, innermostItemOf(program, id)
   if const .SharedObject(layout) = program.typeAt(inner) {
     // An object with a destructor has a drop function whether or not a field of it is counted
     if program.closeFunctions.containsKey(layout.value) && program.hasLayout(layout) {

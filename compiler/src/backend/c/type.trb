@@ -18,7 +18,7 @@
 use IrProgram, IrTypeId, IrType, LayoutId, RuntimeKind from "../../ir/ir"
 use Layout, LayoutKind, Representation, FieldLayout from "../../ir/layout"
 use isEnvironmentLayout from "../../ir/capture"
-use escapedComponent, objectTypeName from "../../ir/mangle"
+use escapedComponent, objectTypeName, arrayTypeName from "../../ir/mangle"
 use CMember, CDeclaration from "./writer"
 
 /** The C type of a value of this type. Empty where the back end has none yet - [whyNoCType] says why. */
@@ -60,9 +60,39 @@ public fn cTypeOf(program: IrProgram, id: IrTypeId): String {
      * a call through a witness table already does.
      */
     .Closure(_) => "torb_closure"
+    // The items inline in one member of a struct of its own, so an array assigns, passes and returns by value
+    .FixedArray(item, size) => {
+      if cTypeOf(program, item).isEmpty() {
+        return ""
+      }
+      arrayTypeName program, item, size
+    }
     _ => ""
   }
 }
+
+/**
+ * The struct of one `Array<Item, Size>`: the items inline in the one member `items` (docs/BACKEND.md 3.1). An array of
+ * no items still has one slot, because an array of length zero is not C - no index ever reaches it, since every index
+ * into an array of length zero is out of bounds.
+ */
+public fn arrayDeclarationOf(program: IrProgram, id: IrTypeId): CDeclaration? {
+  const (item, size) = match program.typeAt(id) {
+    .FixedArray(inner, count) => (inner, count)
+    _ => {
+      return None
+    }
+  }
+  const spelling = cTypeOf program, item
+  if spelling.isEmpty() {
+    return None
+  }
+  const slots = if size > 0 { size } else { 1 }
+  Some CDeclaration.Struct(arrayTypeName(program, item, size), [CMember.Field(spelling, "{arrayItemsMember}[{slots}]")])
+}
+
+/** The one member of an array's struct, which holds the items: `value.items[index]`. */
+public const arrayItemsMember = "items"
 
 /**
  * The struct of one trait-typed value: the boxed payload and one witness table pointer per bound, in bound order
@@ -95,7 +125,8 @@ public fn whyNoCType(program: IrProgram, id: IrTypeId): String {
     return "a type that is not in the program"
   }
   match program.typeAt(id) {
-    .FixedArray(_, _) => "an `Array<Item, Size>` value"
+    // An array has a C type exactly when its item has one
+    .FixedArray(item, _) => whyNoCType program, item
     .Object(_) => "a trait-typed value without bounds"
     // Neither of them is ever built: a box and a cell are layouts of the program, so they are ordinary counted records
     .Box(_) => "a captured `var` binding as a type of its own"

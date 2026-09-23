@@ -21,10 +21,10 @@
 use Span from "../../syntax/source"
 use Expression, Argument from "../../syntax/ast"
 use SymbolId from "../../semantics/symbols"
-use TypeId, TypeForm from "../../semantics/checker/type"
+use TypeId, TypeForm, LiteralValue from "../../semantics/checker/type"
 use Adaptation from "../../semantics/checker/context"
 use IrTypeId, IrType, Slot, ElementId, RuntimeKind, Instruction, Reference, FunctionId from "../ir"
-use LayoutId, PathStep, Terminator from "../ir"
+use LayoutId, PathStep, Terminator, StaticContents from "../ir"
 use borrowed, referenced from "../ir"
 use FunctionBuilder, addTemporary, addLocal, addBlock, emit from "../build"
 use elementFor from "../element"
@@ -32,10 +32,10 @@ use memberOfType, traitMemberNamed from "../witness"
 use traitArgumentsOf, witnessFor, isSupertraitOfBound from "../../semantics/checker/implementation"
 use locationOf from "./context"
 use Lowering, reportUnsupported, irTypeOfClosed, substituted, voidTypeOf from "./context"
-use finishBlock, continueIn from "./context"
+use finishBlock, continueIn, internStatic, borrowedArguments from "./context"
 use isClosedType from "../instances"
 use variantLayoutOfType, variantNamed from "./match"
-use valueSlot, unsupportedSlot, abandonedSlot from "./expression"
+use valueSlot, unsupportedSlot, abandonedSlot, integerSlot from "./expression"
 use lowerValue from "./expression"
 use lowerTraitValue, dispatchedMember, dispatchedOn, resultTypeOf, preludeType from "./generic"
 use lowerDispatched, emitCall from "./call"
@@ -56,6 +56,9 @@ public fn lowerListLiteral(
     if !isImplementedByList(lowering, substituted(lowering, target), substituted(lowering, item)) {
       return lowerBuiltList lowering, builder, destination, items, target, item, annotation, at
     }
+  }
+  if const Some(.InlineArray(_, _)) = lowering.checker.collectionLiteralAt(lowering.module, at) {
+    return lowerInlineArray lowering, builder, destination, items, annotation, at
   }
   if !isDefaultLiteral(lowering, at) {
     return abandonedSlot lowering, builder, destination
@@ -78,6 +81,66 @@ public fn lowerListLiteral(
   // supertrait that is expected, which is what the `from` of a trait `List` implements would have made of it
   const appending = preludeType lowering, "List", [item]
   lowerItemList lowering, builder, destination, items, item, bounds, annotation, at, appending
+}
+
+/**
+ * `const corners: Array<Int, 4> = [1, 2, 3, 4]`: the literal the checker recorded as `CollectionLiteral.InlineArray`,
+ * written straight into the inline slots of the `FixedArray` with one `ArrayNew` - no list and no iterator in between
+ * (docs/BACKEND.md 5.9b).
+ *
+ * A `...` inside it spreads another array, whose size its type says: each of its slots is read through an `Element`
+ * step with a constant index, in order. The checker counted the items against `Size` already, so a count that does
+ * not come out right here is a clean finding and never a wrong array.
+ */
+fn lowerInlineArray(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  items: List<Argument>,
+  annotation: IrTypeId,
+  at: Span,
+): Slot {
+  const (item, size) = match lowering.program.typeAt(annotation) {
+    .FixedArray(found, count) => (found, count)
+    _ => {
+      return unsupportedSlot lowering, builder, destination, "a literal that fills an `Array` of no array type", at
+    }
+  }
+  const integer = lowering.program.internType IrType.Integer(64, true)
+  const textType = lowering.program.internType IrType.Text
+  const missing = internStatic lowering, StaticContents.Literal(LiteralValue.Text("Key does not exist")), textType
+  const location = locationOf lowering, at
+  var slots: List<Slot> = []
+  for written in items {
+    const value = lowerValue lowering, builder, written.value
+    if !lowering.isSupported {
+      return abandonedSlot lowering, builder, destination
+    }
+    if !written.isSpread {
+      slots.append value
+      continue
+    }
+    const count = match lowering.program.typeAt(builder.typeOfSlot(value)) {
+      .FixedArray(_, found) => found
+      _ => {
+        const what = "a `...` inside an `Array` literal of something that is no `Array`"
+        return unsupportedSlot lowering, builder, destination, what, written.value.span
+      }
+    }
+    for index in 0..count {
+      const key = integerSlot lowering, builder, index, integer
+      const element = addTemporary builder, item
+      emit builder, Instruction.Read(element, Reference(value, [PathStep.Element(item, key, missing, location)]))
+      slots.append element
+    }
+  }
+  if slots.length() != size {
+    const what = "an `Array` literal of {slots.length()} items for {size} slots"
+    return unsupportedSlot lowering, builder, destination, what, at
+  }
+  const target = valueSlot lowering, builder, destination, annotation
+  emit builder, Instruction.ArrayNew(target, borrowedArguments(slots))
+  target
 }
 
 /** Whether the default `List<Item>` a literal builds already is the trait-typed value `target` names. */
@@ -403,8 +466,8 @@ public fn listBoundFor(var lowering: Lowering, item: TypeId, at: Span): TypeId? 
  * the literal's span, so the back end reads that decision instead of asking the expected type a second time and
  * answering it differently.
  *
- * - **`InlineArray`** writes the items straight into the inline slots of an `Array<Item, Size>`. That is a
- *   `FixedArray`, and filling one this way is not lowered yet, together with its interior paths.
+ * - **`InlineArray`** writes the items straight into the inline slots of an `Array<Item, Size>`, which
+ *   `lowerListLiteral` hands to `lowerInlineArray` before it asks this; a literal that reaches this anyway is a finding.
  * - **`FromIterate`** builds the default list and hands it to the `from` of the target (`Set<String>`, `Queue<Int>`).
  *   A list literal takes that way before it gets here (`lowerBuiltList`); a map literal whose target is not a `Map`
  *   does not yet.
@@ -631,6 +694,11 @@ public fn lowerIndexRead(
   const key = lowerValue lowering, builder, index
   if !lowering.isSupported {
     return abandonedSlot lowering, builder, destination
+  }
+  // An array keeps its items inline, and `ir/elements.trb` reads the slot directly instead of calling `at` - by the
+  // symbol of the member, which it has to know is the reader
+  if const .FixedArray(_, _) = lowering.program.typeAt(builder.typeOfSlot(base)) {
+    lowering.program.elementReaders.insert dispatched.member.value
   }
   const places: List<Reference?> = []
   lowerDispatched lowering, builder, destination, at, dispatched, [base, key], places, annotation

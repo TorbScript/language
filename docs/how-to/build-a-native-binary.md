@@ -67,7 +67,7 @@ the part of the language the native back end already covers.
   flow, functions and these no longer needs `--emit-c` just to read the generated code.
 - **A handful of other constructs are still a gap** - a variadic parameter of a function you declare (`print`'s own
   variadic call is a back-end intrinsic and is not affected), reading or writing through `a[key]` on a `List`, a
-  `Map` or `Set` literal, a list pattern, `Array<Item, Size>`, a slice used as a window, a `shared type` object, a
+  `Map` or `Set` literal, a list pattern, a slice used as a window, a `shared type` object, a
   task or a stream, and a quoted expression (`assert` included). `torb build` reports each one as "not supported by
   the back end yet" with the construct named, and refuses to build rather than emit something that does not do what
   the program says.

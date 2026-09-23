@@ -16,7 +16,7 @@
 use Equals, Hash, combineHashes from "./compare"
 use Show from "./convert"
 use MutableIndexed from "./operators"
-use Iterate, Length from "std/iteration"
+use Iterator, Iterate, Length from "std/iteration"
 
 /**
  * A fixed number of items, and the number is part of the type: `Array<Float, 16>`.
@@ -69,44 +69,161 @@ use Iterate, Length from "std/iteration"
 public native type Array<Item, const Size: Int>
   with Iterate<Item>, Length, MutableIndexed<Int, Item>
 {
-  /** Every item set to `value`, with the length taken from the expected type: `const zeros: Array<Int, 8> = Array.filled(0)` */
-  native static fn filled(value: Item): Array<Item, Size>
+  /**
+   * Every item set to `value`, with the length taken from the expected type.
+   *
+   * The value is written straight into the inline slots, one copy per slot, so no list is built and no closure runs.
+   *
+   * # Examples
+   *
+   *     const zeros: Array<Int, 8> = Array.filled 0
+   *     print zeros
+   */
+  static fn filled(value: Item): Array<Item, Size> {
+    var result: Array<Item, Size> = Array.unfilled()
+    for index in 0..Size {
+      result.store index, value
+    }
+    result
+  }
 
   /**
    * Every item from its index, with the length taken from the expected type: `produce` is called once per slot, from
    * `0` to `Size - 1`, in that order.
    *
    * Reach for it where the items follow from their position - a ramp, a lookup table, a row of a matrix - and for
-   * [Array.filled] where they are all the same. It is `native` for the same reason `filled` is: the values are written
-   * straight into the inline slots, so no list is built and no iterator runs.
+   * [Array.filled] where they are all the same. The values are written straight into the inline slots, so no list is
+   * built and no iterator runs.
    *
    * # Examples
    *
    *     const squares: Array<Int, 5> = Array.generated { index => index * index }
    *     print squares
    */
-  native static fn generated(produce: (index: Int) => Item): Array<Item, Size>
+  static fn generated(produce: (index: Int) => Item): Array<Item, Size> {
+    var result: Array<Item, Size> = Array.unfilled()
+    for index in 0..Size {
+      result.store index, produce(index)
+    }
+    result
+  }
 
-  /** The Array built from `items`, or `None` if their count is not `Size`. The runtime-checked sibling of a literal. */
-  native static fn from(items: Iterate<Item>): Array<Item, Size>?
+  /**
+   * The Array built from `items`, or `None` if their count is not `Size`. The runtime-checked sibling of a literal.
+   *
+   * It stops reading as soon as there is one item too many, so an endless `items` answers `None` instead of running
+   * forever.
+   *
+   * # Examples
+   *
+   *     const parsed: Array<Int, 3>? = Array.from([1, 2, 3])
+   *     print parsed
+   */
+  static fn from(items: Iterate<Item>): Array<Item, Size>? {
+    var collected: List<Item> = []
+    for item in items {
+      if collected.length() == Size {
+        return None
+      }
+      collected.append item
+    }
+    if collected.length() != Size {
+      return None
+    }
+    const result: Array<Item, Size> = Array.generated { index => collected[index] }
+    Some result
+  }
 
-  /** How many items there are: always `Size`. */
-  native fn length(): Int
+  /** How many items there are: always `Size`, which the type already says. */
+  fn length(): Int {
+    Size
+  }
 
   /** The item at `index`, or `None` if it is out of bounds. `array[index]` panics instead; see [Indexed.at]. */
-  native fn get(index: Int): Item?
+  fn get(index: Int): Item? {
+    if index < 0 || index >= Size {
+      return None
+    }
+    Some load(index)
+  }
 
-  /** A cursor over the items, front to back. */
-  native fn iterate(): Iterator<Item>
+  /** A cursor over the items, front to back: see [ArrayIterator]. */
+  fn iterate(): Iterator<Item> {
+    ArrayIterator self
+  }
 
-  /** Changes the item at `index` in place. Needs a `var` path; see [MutableIndexed.set]. */
-  native var fn set(index: Int, value: Item)
+  /**
+   * Changes the item at `index` in place. `array[index] = value` goes through this; see [MutableIndexed.set].
+   *
+   * # Panics
+   *
+   * When `index` is out of bounds, with `index <index> is out of bounds for a length of <Size>` - the message a `List`
+   * answers the same mistake with.
+   */
+  var fn set(index: Int, value: Item) {
+    if index < 0 || index >= Size {
+      panic "index {index} is out of bounds for a length of {length()}"
+    }
+    store index, value
+  }
 
   /** Sets every item to `value`, in place. */
-  native var fn fill(value: Item)
+  var fn fill(value: Item) {
+    for index in 0..Size {
+      store index, value
+    }
+  }
 
-  /** Transforms every item into a new Array of the same length, so the result is an Array again. */
-  native fn mapped<Output>(transform: (value: Item) => Output): Array<Output, Size>
+  /**
+   * Transforms every item into a new Array of the same length, so the result is an Array again.
+   *
+   * # Examples
+   *
+   *     const numbers: Array<Int, 3> = [1, 2, 3]
+   *     const doubled = numbers.mapped { _ * 2 }
+   *     print doubled
+   */
+  fn mapped<Output>(transform: (value: Item) => Output): Array<Output, Size> {
+    var result: Array<Output, Size> = Array.unfilled()
+    for index in 0..Size {
+      result.store index, transform(load(index))
+    }
+    result
+  }
+
+  /**
+   * Every slot empty: the storage [Array.filled], [Array.generated] and [Array.mapped] write every slot of before
+   * anything reads one. It is `native` because an empty slot is no value of `Item` at all - which is also why it is
+   * `private`: read before it is written, a slot would answer something no program could have built.
+   */
+  private native static fn unfilled(): Array<Item, Size>
+
+  /** The item at `index`, read out of its inline slot. `native` because the slots are storage no TorbScript can name. */
+  private native fn load(index: Int): Item
+
+  /** Replaces the item at `index` in its inline slot and releases the one that was there. `native`, as `load` is. */
+  private native var fn store(index: Int, value: Item)
+}
+
+/**
+ * The cursor [Array.iterate] answers: the array, held by value, and the index of the next item.
+ *
+ * It is TorbScript over [Array.get], exactly as `ListIterator` is over the `get` of a list, so the storage of an Array
+ * needs nothing of its own for iteration. Holding the array by value means changing the original while iterating it
+ * does not change what the cursor walks.
+ */
+public type ArrayIterator<Item, const Size: Int> with Iterator<Item> {
+  /** The array this cursor walks. Held by value, so a later change to the original is never seen here. */
+  items: Array<Item, Size>
+  /** The index of the next item to answer. */
+  var index: Int = 0
+
+  /** The item at `index`, or `None` once it reaches the end. */
+  var fn next(): Item? {
+    const found = items.get index
+    index = index + 1
+    found
+  }
 }
 
 /**

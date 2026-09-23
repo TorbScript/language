@@ -28,7 +28,7 @@ use isEnvironmentLayout from "../../ir/capture"
 use suffixOfNumeric from "../../ir/print"
 use payloadLayoutName from "../../ir/mangle"
 use Emission, reportUnsupported, slotNameOf, locationExpression, lineDirectiveOf from "./emission"
-use cTypeOf, memberNameOf, variantMemberNameOf, witnessMemberNameOf from "./type"
+use cTypeOf, whyNoCType, memberNameOf, variantMemberNameOf, witnessMemberNameOf, arrayItemsMember from "./type"
 use CExpression, CDesignatedField, CStatement, CSwitchCase, declarationOf from "./writer"
 use readPrototype, matchPrototype from "./prototype"
 use TaskMachine, taskMachineOf from "../../ir/suspension"
@@ -241,6 +241,7 @@ fn markReadSlots(program: IrProgram, function: IrFunction, var reads: List<Bool>
       }
     }
     .Construct(_, _, _, fields) => markArguments reads, fields
+    .ArrayNew(_, items) => markArguments reads, items
     .Read(_, reference) => markReference reads, reference
     .Write(reference, value) => {
       markReference reads, reference
@@ -372,7 +373,9 @@ public fn signatureHeadOf(program: IrProgram, function: IrFunction): String {
  *
  * The same holds for the `Indexed.at` instance an index path took an element out with: once the round trip is one
  * `Element` step, a list the program only ever changes through `a[key]` leaves its reader with no call at all - and
- * with it everything only the reader called (the `Option.expect` of its missing key).
+ * with it everything only the reader called (the `Option.expect` of its missing key). An array's `a[key]` read is one
+ * step as well, and so is the put-back of a path through one - which leaves `Array.set` without a call just as often,
+ * so the setters an array path named ([IrProgram.elementWriters]) are left out on the same terms.
  *
  * The answer is a **reachability**: the roots are what nothing calls and is neither a copy nor a reader (the entry, a
  * test, a task body), and every member of a table and of an element descriptor. A `withheld` function is left out
@@ -451,7 +454,7 @@ fn keepReached(var kept: List<Bool>, var pending: List<Int>, callee: FunctionId)
 
 fn isElementReader(program: IrProgram, function: IrFunction): Bool {
   if const Some(origin) = function.origin {
-    return program.elementReaders.contains origin.value
+    return program.elementReaders.contains(origin.value) || program.elementWriters.contains(origin.value)
   }
   false
 }
@@ -904,6 +907,7 @@ fn instructionStatements(
     .Construct(target, layout, variant, fields) => {
       constructStatements emission, program, body, target, layout, variant, fields
     }
+    .ArrayNew(target, items) => arrayNewStatements emission, program, body, target, items
     // A `Read` of a counted field hands the frame a count of it, which is what makes the target of the read owned
     .Read(target, reference) => {
       var statements: List<CStatement> = []
@@ -1031,6 +1035,9 @@ fn copyStatements(
  */
 public fn retainStatement(program: IrProgram, id: IrTypeId, place: CExpression): CStatement? {
   const inner = countedFormOf program, id
+  if const .FixedArray(item, size) = program.typeAt(inner) {
+    return itemsLoopOf program, item, size, place, isRetain: true
+  }
   if const Some(layout) = inlineCountedLayoutOf(program, inner) {
     const helper = retainChildrenFunctionOf program, layout
     return Some CStatement.Evaluate(CExpression.Call(helper, [CExpression.AddressOf(place)]))
@@ -1080,6 +1087,9 @@ fn retainedInto(place: CExpression, symbol: String): CStatement {
 /** One count less, and the block freed where it was the last one. `None` where the type carries no count. */
 public fn releaseStatement(program: IrProgram, id: IrTypeId, place: CExpression): CStatement? {
   const inner = countedFormOf program, id
+  if const .FixedArray(item, size) = program.typeAt(inner) {
+    return itemsLoopOf program, item, size, place, isRetain: false
+  }
   if const Some(layout) = boxedLayoutOf(program, inner) {
     const drop = dropFunctionOf program, layout
     return Some CStatement.Evaluate(CExpression.Call(CExpression.Name("torb_release"), [place, drop]))
@@ -1159,6 +1169,29 @@ fn isClearedSlot(body: Body, slot: Slot): Bool {
 
 fn releasedBy(place: CExpression, symbol: String): CStatement {
   CStatement.Evaluate CExpression.Call(CExpression.Name(symbol), [place])
+}
+
+/**
+ * The retain or the release of every item of an `Array<Item, Size>`, as one loop over its slots: an array carries no
+ * count of its own and owns one on each item, exactly as an inline record owns one on each field.
+ *
+ * The counter is named after how deep the item nests arrays, so the loop over an array of arrays does not shadow the
+ * counter of the loop around it.
+ */
+fn itemsLoopOf(program: IrProgram, item: IrTypeId, size: Int, place: CExpression, isRetain: Bool): CStatement? {
+  const counter = "torb_item{arrayDepthOf(program, item)}"
+  const slot = CExpression.Index CExpression.Member(place, arrayItemsMember), CExpression.Name(counter)
+  const inner = if isRetain { retainStatement program, item, slot } else { releaseStatement program, item, slot }
+  const found = inner?
+  Some CStatement.Loop(counter, size, [found])
+}
+
+/** How many arrays a type nests inside of it: 0 for an item that is no array. */
+fn arrayDepthOf(program: IrProgram, id: IrTypeId): Int {
+  if const .FixedArray(item, _) = program.typeAt(id) {
+    return 1 + arrayDepthOf(program, item)
+  }
+  0
 }
 
 /**
@@ -2564,6 +2597,34 @@ fn constructStatements(
 }
 
 /**
+ * An `Array<Item, Size>` as a compound literal of its struct: the items in order inside the braces of the one `items`
+ * member, or `{ 0 }` for an array whose slots are all empty - zero bits, which hold no count.
+ */
+fn arrayNewStatements(
+  var emission: Emission,
+  program: IrProgram,
+  body: Body,
+  target: Slot,
+  items: List<Argument>,
+): List<CStatement> {
+  const annotation = typeOfSlot body, target
+  const spelling = cTypeOf program, annotation
+  if spelling.isEmpty() {
+    return reported emission, whyNoCType(program, annotation)
+  }
+  const place = slotExpression body, target
+  if items.isEmpty() {
+    return [CStatement.Assignment(place, CExpression.CompoundLiteral(spelling, zeroInitializer))]
+  }
+  var written: List<CExpression> = []
+  for item in items {
+    written.append slotExpression(body, item.slot)
+  }
+  const initializer = CExpression.Initializer([CExpression.Initializer(written)])
+  [CStatement.Assignment(place, CExpression.CompoundLiteral(spelling, initializer))]
+}
+
+/**
  * The initializer of an inline value: the fields in order for a record and a tuple, and for a variant layout the
  * common fields, the tag and the group of the variant as a designated member of the union.
  */
@@ -2836,6 +2897,17 @@ fn elementReferenceOf(
   missing: StaticId,
   location: LocationId,
 ): CExpression {
+  // An array holds its items inline, so the element is a slot of its struct: no call, no uniqueness to arrange - only
+  // the bounds, which `torb_array_index` checks against the size the type says
+  if const .FixedArray(_, size) = program.typeAt(annotation) {
+    const checked = CExpression.Call(CExpression.Name("torb_array_index"), [
+      slotExpression(body, index),
+      CExpression.Literal("{size}"),
+      CExpression.Name(program.staticAt(missing).name),
+      locationExpression(program, location),
+    ])
+    return CExpression.Index CExpression.Member(container, arrayItemsMember), checked
+  }
   if !isListStorage(program, annotation) {
     reportUnsupported emission, "an element of a value that is no list as a place"
     return container

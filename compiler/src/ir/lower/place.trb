@@ -15,8 +15,9 @@
  * An **index** on the path (`a[key]`) is the one step that is not a `PathStep`: it takes the element out of its
  * container into a slot of the frame, runs the access against that slot and puts it back afterwards (`TakenElement`).
  *
- * What is not here: a slice as a window, a `shared type` object and a `FixedArray`. Each of them is a clean finding
- * instead of a wrong answer.
+ * What is not here: a slice as a window and a `shared type` object. Each of them is a clean finding instead of a wrong
+ * answer. An `Array<Item, Size>` on the path is an ordinary index: its round trip is formed here like every other one,
+ * and `ir/elements.trb` turns it into one `Element` step into the array's inline slots.
  */
 
 use Span from "../../syntax/source"
@@ -594,6 +595,10 @@ fn takenElement(
   // Which member this was, so that `ir/elements.trb` can recognize the round trip once the container is concrete and
   // replace it with one `Element` step - by the symbol, because a specialized copy of it is the same member
   lowering.program.elementReaders.insert reader.member.value
+  // An array's `set` is TorbScript and has no native symbol to be recognized by, so the lowering names it
+  if const .FixedArray(_, _) = lowering.program.typeAt(annotation) {
+    lowering.program.elementWriters.insert setter.member.value
+  }
   Some TakenElement(container, key, element, setter, at)
 }
 

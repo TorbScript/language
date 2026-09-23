@@ -37,6 +37,7 @@ use elementFor from "../element"
 use Lowering, Generated, GeneratedRequest, reportUnsupported, locationOf from "./context"
 use irTypeOfClosed, internStatic, booleanTypeOf, substituted from "./context"
 use encodingBody, isEncodingKind from "./encoding"
+use ArrayOperation from "../../backend/c/natives"
 
 /** A generated member, added to the worklist the first time it is needed. One body per member per target type. */
 public fn generatedFunctionOf(
@@ -53,7 +54,9 @@ public fn generatedFunctionOf(
   const identifier = signatureOf lowering.checker, member
   const signature = lowering.checker.signature identifier
   const built = irSignatureUnder lowering, signature, mapping
-  if built.parameters.isEmpty() {
+  // `Array.unfilled` is static and takes nothing: its result is what says which array it is
+  const isStatic = if const .ArrayStorage(_) = kind { true } else { false }
+  if built.parameters.isEmpty() && !isStatic {
     reportUnsupported lowering, "a generated member without a receiver", at
     return None
   }
@@ -155,7 +158,58 @@ fn lowerGeneratedBody(
     .Conversion => conversionBody lowering, builder, at
     .LiteralParse => literalParseBody lowering, builder, request.subject, at
     .Container(kind) => containerBody lowering, builder, request, kind, at
+    .ArrayStorage(operation) => arrayStorageBody lowering, builder, operation, at
     .Encode | .Decode | .Describe => encodingBody lowering, builder, request, at
+  }
+}
+
+/**
+ * The body of one storage member of `Array<Item, Size>`, one instruction over the inline slots (docs/BACKEND.md 5.9b):
+ *
+ * - `unfilled()` is an `ArrayNew` without items, every slot empty;
+ * - `load(index)` reads the slot through an `Element` step of the receiver;
+ * - `store(index, value)` writes it through the same step of the receiver's place, releasing what was there.
+ *
+ * Both steps still check the index against `Size` - the TorbScript around them already did, and a C compiler folds the
+ * second comparison into the first. The message of that check is the one `a[key]` panics with, at this declaration.
+ */
+fn arrayStorageBody(var lowering: Lowering, var builder: FunctionBuilder, operation: ArrayOperation, at: Span) {
+  const signature = builder.function.signature
+  if const .Unfilled = operation {
+    const target = addTemporary builder, signature.result
+    emit builder, Instruction.ArrayNew(target, [])
+    terminate builder, Terminator.Return(Some(borrowed(target)))
+    return
+  }
+  const receiver = match signature.parameters.first() {
+    Some(found) => found.annotation
+    None => {
+      reportUnsupported lowering, "a storage member of `Array` without a receiver", at
+      return
+    }
+  }
+  const item = match lowering.program.typeAt(receiver) {
+    .FixedArray(found, _) => found
+    _ => {
+      reportUnsupported lowering, "a storage member of `Array` whose receiver is no `Array`", at
+      return
+    }
+  }
+  const textType = lowering.program.internType IrType.Text
+  const missing = internStatic lowering, StaticContents.Literal(LiteralValue.Text("Key does not exist")), textType
+  const location = locationOf lowering, at
+  const step = PathStep.Element item, Slot(1), missing, location
+  match operation {
+    .Load => {
+      const target = addTemporary builder, item
+      emit builder, Instruction.Read(target, Reference(Slot(0), [step]))
+      terminate builder, Terminator.Return(Some(borrowed(target)))
+    }
+    .Store => {
+      emit builder, Instruction.Write(Reference(Slot(0), [step]), borrowed(Slot(2)))
+      terminate builder, Terminator.Return(None)
+    }
+    .Unfilled => {}
   }
 }
 
@@ -374,7 +428,7 @@ fn containerBody(
 }
 
 /** Whether the first type argument of a container is a key of the hash table: the map's key, and the set's item. */
-fn isKeyedContainer(kind: RuntimeKind): Bool {
+public fn isKeyedContainer(kind: RuntimeKind): Bool {
   match kind {
     .MapStorage => true
     .SetStorage => true

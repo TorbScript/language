@@ -22,10 +22,10 @@ use substitute from "../../semantics/checker/unify"
 use Resolution, Dispatch, DefaultSource from "../../semantics/checker/context"
 use signatureOf, typeSignatureOf from "../../semantics/checker/signature"
 use fieldsOf from "../../semantics/checker/member"
-use NativeEntry, DerivedKind from "../../backend/c/natives"
+use NativeEntry, DerivedKind, ArrayOperation from "../../backend/c/natives"
 use IrTypeId, Slot, Instruction, Terminator, FunctionId, LayoutId, Reference, PathStep, borrowed from "../ir"
 use Intrinsic, NumericKind from "../ir"
-use RuntimeKind from "../ir"
+use RuntimeKind, ElementId from "../ir"
 use CallOperands, PlacePath, TakenElement from "./place"
 use referenceParametersOf, parameterTypeAt, receiverReference, argumentReference from "./place"
 use collidesWithPlace, writtenResult, lowerPropertyWrite, makeOwnersUnique, putBackElements from "./place"
@@ -33,9 +33,10 @@ use FunctionBuilder, emit, addTemporary from "../build"
 use layoutOfType, conversionKindOf from "../verify"
 use describeIrType from "../print"
 use memberInValue, genericMemberInValue, derivedKindOf, generatedKindOf from "../witness"
-use generatedFunctionOf, literalConversionOf from "./derive"
+use generatedFunctionOf, literalConversionOf, isKeyedContainer from "./derive"
 use instanceFor, needsReference, isMonomorphic, isClosedType from "../instances"
 use nativeFunctionOf from "./native"
+use elementFor from "../element"
 use Lowering, Generated, reportUnsupported, locationOf, nativeNamed, producesValue, substituted from "./context"
 use irTypeOfClosed, typeAtSpan, voidTypeOf from "./context"
 use isNeverType, finishBlock, borrowedArguments from "./context"
@@ -681,6 +682,16 @@ fn lowerNativeCall(
       }
       emitCall lowering, builder, destination, built, operands, annotation, at
     }
+    // The storage of an `Array`: one instruction in a generated body, over the slots of the receiver's own `FixedArray`
+    .ArrayStorage(operation) => {
+      const built = match arrayStorageMemberOf(lowering, dispatched, operation, at) {
+        Some(found) => found
+        None => {
+          return abandonedSlot lowering, builder, destination
+        }
+      }
+      emitCall lowering, builder, destination, built, operands, annotation, at, places
+    }
     // `spawn` never reaches this (`lowerCallable` takes it first), so what is left is the end of a task
     .Lowered => {
       if entry.name == "stopAsCancelled" {
@@ -689,6 +700,20 @@ fn lowerNativeCall(
       unsupportedSlot lowering, builder, destination, "`{entry.name}` as a value", at
     }
   }
+}
+
+/** The generated body of one of the storage members of `Array`: one per operation per `FixedArray` type. */
+fn arrayStorageMemberOf(
+  var lowering: Lowering,
+  dispatched: Dispatched,
+  operation: ArrayOperation,
+  at: Span,
+): FunctionId? {
+  const subject = dispatched.subject?
+  const member = dispatched.member
+  const bound = dispatched.capability
+  const mapping = dispatched.mapping
+  generatedFunctionOf lowering, Generated.ArrayStorage(operation), member, subject, bound, mapping, at
 }
 
 /** The generated body of `ArrayList.withCapacity` and friends: one per implementation per element type. */
@@ -1276,6 +1301,12 @@ fn lowerConstructorCall(
     }
     return lowerChannelNew lowering, builder, destination, capacity, annotation, item, expression.span
   }
+  // `HashMap()`: a container of the runtime has no fields, so its constructor is the empty container itself
+  if const .Runtime(kind, _) = lowering.program.typeAt(annotation) {
+    if arguments.isEmpty() {
+      return lowerEmptyContainer lowering, builder, destination, annotation, kind, owner, expression.span
+    }
+  }
   const layout = match layoutOfType(lowering.program, annotation) {
     Some(found) => found
     None => {
@@ -1293,6 +1324,46 @@ fn lowerConstructorCall(
   }
   const target = valueSlot lowering, builder, destination, annotation
   lowerConstruct lowering, builder, target, layout, 0, slots
+  target
+}
+
+/**
+ * `var index: Map<String, Int> = HashMap()`: the constructor of a container the runtime owns, which is the empty
+ * container over the element descriptors of its type arguments - the same `ContainerNew` its `withCapacity` is.
+ */
+fn lowerEmptyContainer(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  annotation: IrTypeId,
+  kind: RuntimeKind,
+  owner: TypeId,
+  at: Span,
+): Slot {
+  const isContainer = match kind {
+    .ListStorage | .MapStorage | .SetStorage => true
+    _ => false
+  }
+  const given = match lowering.checker.types.form(substituted(lowering, owner)) {
+    .Nominal(_, found) => found
+    _ => []
+  }
+  if !isContainer || given.isEmpty() {
+    const shown = describeIrType lowering.program, annotation
+    return unsupportedSlot lowering, builder, destination, "a constructor of `{shown}`", at
+  }
+  var elements: List<ElementId> = []
+  for index in 0..given.length() {
+    const found = match elementFor(lowering, given[index], index == 0 && isKeyedContainer(kind), at) {
+      Some(one) => one
+      None => {
+        return abandonedSlot lowering, builder, destination
+      }
+    }
+    elements.append found
+  }
+  const target = valueSlot lowering, builder, destination, annotation
+  emit builder, Instruction.ContainerNew(target, kind, elements)
   target
 }
 
@@ -1881,5 +1952,6 @@ fn lowerNativeOperator(
     // No operator of the language builds a container, starts a task or stops one, so nothing reaches these
     .Container(_) => unsupportedSlot lowering, builder, destination, "`{entry.name}` as an operator", at
     .Lowered => unsupportedSlot lowering, builder, destination, "`{entry.name}` as an operator", at
+    .ArrayStorage(_) => unsupportedSlot lowering, builder, destination, "`{entry.name}` as an operator", at
   }
 }

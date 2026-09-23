@@ -565,9 +565,8 @@ has to give three things before the columns move onto it:
 3. **`swapRemove` without a shift**, so the dense half of a column stays O(1) to remove from without three `removeAt`
    calls that each shift a tail.
 
-`Array<Item, const Size: Int>` is not the answer here — a column grows — and it does not run either: a literal that
-fills an `Array<Int, 4>` answers *"a literal that fills an `Array` of 4 items is not supported by the native back end
-yet"*.
+`Array<Item, const Size: Int>` is not the answer here: a column grows, and an `Array` is inline storage of a size the
+type fixes.
 
 ## 4. Queries
 
@@ -1389,8 +1388,7 @@ that document's gaps 2 and 3 so a task boundary refuses a captured `var` and a `
 
 **9. `Buffer<Item>`**, with the three promises of [section 3](#3-the-data-layer): an in-place write when there is one
 owner, two disjoint `var` windows, and a `swapRemove` without a shift. `Array<Item, const Size: Int>` is not a
-substitute and does not run: *"a literal that fills an `Array` of 4 items is not supported by the native back end
-yet"*.
+substitute: its size is part of its type, and a column grows.
 
 **10. The sandbox in the back ends.** `Sandbox`, `Script<Value>` and `SandboxCapabilities` are declared as native types
 in `std/sandbox` and the back end answers *"a value of type `Sandbox` is not supported by the native back end yet"*, so

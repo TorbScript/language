@@ -13,10 +13,6 @@ source:
   - std/core/src/array.trb
 ---
 
-> **Not built natively yet.** An `Array` value, from `Array.filled` or from a literal, is not built by the native back
-> end yet, so `torb run` refuses the examples here that use it. `torb check` accepts them, and the rules are the
-> language's.
-
 `Array<Item, const Size: Int>` puts a number in a type: the length is part of what the type is, checked the same way
 every other type argument is. A type parameter is ordinarily a type; a `const` parameter is a value instead - a
 literal, a named `const`, or another `const` parameter.
@@ -49,6 +45,11 @@ type Name<const Size: Int> { ... }       declaring a const parameter of your own
 
 1. **`Array` is a small value with a fixed layout: no heap storage, no reference count.** It lives inline, in a
    binding, a field, or another `Array`, and copying it copies its items. Everything that grows is a `List`.
+
+   That holds at every size, so the size is also what a copy costs: an `Array<Float, 16>` is 128 bytes wherever it
+   is passed, returned or assigned, and an item that is counted - a `String`, a `List` - gains one count per copy. An
+   `Array` is for the vectors, matrices, colors and hashes whose size is small and known; a buffer of thousands of
+   items is a `List`, whose copies share one storage until one of them is written.
 
 2. **`Size` comes from the expected type, not from a value passed to `filled`.** `Array.filled 0.0` above produces
    an `Array<Float, 4>` because the annotation says so; the same call would produce a different length against a

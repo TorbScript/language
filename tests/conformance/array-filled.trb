@@ -1,0 +1,43 @@
+use Process from "std/process"
+
+/**
+ * **`Array.filled`, `Array.generated` and `Array.from` take `Size` from the expected type**, and each one says what it
+ * does with it: `filled` writes one copy of its value into every slot, `generated` calls its closure once per slot from
+ * `0` to `Size - 1` in that order - which the printed order below pins - and `from` counts at run time and answers
+ * `None` for a count that is not `Size`, reading at most one item past it, so an endless source ends too.
+ *
+ * `mapped` answers an `Array` of the same size, and `fill` changes every slot in place.
+ */
+
+const zeros: Array<Int, 3> = Array.filled 0
+print zeros
+
+const squares: Array<Int, 4> = Array.generated { index =>
+  print "slot {index}"
+  index * index
+}
+print squares
+
+const parsed: Array<Int, 3>? = Array.from([7, 8, 9])
+const short: Array<Int, 3>? = Array.from([7, 8])
+const long: Array<Int, 3>? = Array.from([7, 8, 9, 10])
+const endless: Array<Int, 3>? = Array.from(0..)
+print parsed
+print short
+print long
+print endless
+
+const doubled = squares.mapped { _ * 2 }
+print doubled
+
+var labels: Array<String, 3> = Array.filled "a"
+labels.fill "b"
+print labels
+
+// 128 bytes: past the limit up to which a result is returned in registers, so `generated` writes it through the
+// pointer its caller passes
+const wide: Array<Int, 16> = Array.generated { _ * 10 }
+const wideSum = wide.fold 0 { sum, value => sum + value }
+print wideSum
+
+Process.exit doubled[3]

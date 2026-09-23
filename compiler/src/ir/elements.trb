@@ -12,6 +12,9 @@
  * runtime's own contiguous list, the round trip is a `PathStep.Element` into that list and the change goes through an
  * interior pointer. Nothing is taken out, nothing is put back, and the element never has a second owner.
  *
+ * An `Array<Item, Size>` is contiguous as well, and inline: its round trip becomes the same step into its slots, and so
+ * does a plain `a[key]` read of one ([arrayReadAt]), which would otherwise hand the whole array to `at` by value.
+ *
  * **It is not a change of the lowering.** `takenElement` runs while the container is still `Object(List<Int>)`;
  * `devirtualizeProgram` is what makes it a `Runtime(ListStorage, Item)`, and that is two passes later. So this is a
  * peephole over the IR after it, and a container that stayed boxed - two implementations meet in it, it sits in a
@@ -62,11 +65,188 @@ public fn rewriteElementPlaces(var program: IrProgram) {
           more = true
         }
       }
+      for at in 0..instructions.length() {
+        if const Some(read) = arrayReadAt(program, function, instructions[at]) {
+          instructions.set at, read
+          isChanged = true
+        }
+      }
+      const folded = foldedArrayReads function, block, instructions
+      if folded.length() != instructions.length() {
+        instructions = folded
+        isChanged = true
+      }
       if isChanged {
         program.functions[index].blocks[block].instructions = instructions
       }
     }
   }
+}
+
+/**
+ * `a[key]` on an `Array<Item, Size>` as one `Read` through an `Element` step, where the instruction is the call of
+ * `Indexed.at` that read it: the item is a slot of the array's own struct, so there is nothing to call, no `Option` to
+ * build and no copy of the whole array to hand to `at` by value.
+ *
+ * The step carries the panic `at` would have produced - read out of its body, exactly as a list's round trip does - so
+ * an index out of bounds still says `Key does not exist` at `std/core/src/option.trb`. A call whose reader does not
+ * say it stays a call.
+ */
+fn arrayReadAt(program: IrProgram, function: IrFunction, instruction: Instruction): Instruction? {
+  const (target, callee, arguments) = match instruction {
+    .Call(Some(found), reader, given, witnesses, _) => {
+      if !witnesses.isEmpty() || given.length() != 2 {
+        return None
+      }
+      (found, reader, given)
+    }
+    _ => {
+      return None
+    }
+  }
+  if hasPlace(arguments[0]) || hasPlace(arguments[1]) || !isElementReader(program, callee) {
+    return None
+  }
+  const array = arguments[0].slot
+  if !function.hasSlot(array) || !function.hasSlot(target) {
+    return None
+  }
+  const item = match program.typeAt(function.typeOfSlot(array)) {
+    .FixedArray(found, _) => found
+    _ => {
+      return None
+    }
+  }
+  if item != function.typeOfSlot(target) {
+    return None
+  }
+  const panic = missingKeyOf(program, instruction)?
+  const step = PathStep.Element item, arguments[1].slot, panic.missing, panic.at
+  Some Instruction.Read(target, Reference(array, [step]))
+}
+
+/**
+ * The block with every array that is read whole only to read one element of it read through the one path instead:
+ * `%3 = read %0.cells` followed by `%4 = read %3[%1]` becomes `%4 = read %0.cells[%1]`, where `%3` is used by that
+ * second read and by nothing else.
+ *
+ * It is what `cells[row][column]` inside a method needs. The field is a value like any other, so the lowering reads it
+ * into a slot before the bracket - and for an array of counted items that read retains every item, once per access,
+ * only to release them all again. The two reads stand next to each other, so nothing can write the path between them.
+ */
+fn foldedArrayReads(function: IrFunction, block: Int, instructions: List<Instruction>): List<Instruction> {
+  var kept: List<Instruction> = []
+  for instruction in instructions {
+    // The key may be computed between the two reads (`cells[row + 1]`): a constant and an intrinsic touch no memory,
+    // so the first read may move down past them as long as none of them defines what that read reads
+    var at = kept.length() - 1
+    while at >= 0 && isPureBetween(kept[at], instruction) {
+      at = at - 1
+    }
+    if at >= 0 {
+      if const Some(read) = foldedRead(function, block, instructions, kept[at], instruction) {
+        if !definesAnyOf(kept[at + 1..kept.length()], kept[at]) {
+          kept.removeAt at
+          kept.append read
+          continue
+        }
+      }
+    }
+    kept.append instruction
+  }
+  kept
+}
+
+/** Whether an instruction reads and writes no memory - a constant or an intrinsic - and is not the definition asked for. */
+fn isPureBetween(instruction: Instruction, reader: Instruction): Bool {
+  const wanted = match reader {
+    .Read(_, reference) => reference.base
+    _ => {
+      return false
+    }
+  }
+  if definedSlot(instruction) == Some(wanted) {
+    return false
+  }
+  match instruction {
+    .Constant(_, _) => true
+    .Intrinsic(_, _, _, _) => true
+    _ => false
+  }
+}
+
+/** Whether one of these instructions defines a slot the read reads: its base, or the index of one of its steps. */
+fn definesAnyOf(between: List<Instruction>, read: Instruction): Bool {
+  const reference = match read {
+    .Read(_, found) => found
+    _ => {
+      return true
+    }
+  }
+  var slots: List<Slot> = [reference.base]
+  for step in reference.steps {
+    if const .Element(_, index, _, _) = step {
+      slots.append index
+    }
+  }
+  for instruction in between {
+    if const Some(defined) = definedSlot(instruction) {
+      if slots.contains(defined) {
+        return true
+      }
+    }
+  }
+  false
+}
+
+/** The one read two adjacent reads make, where the first one's target is the second one's array and nothing else's. */
+fn foldedRead(
+  function: IrFunction,
+  block: Int,
+  instructions: List<Instruction>,
+  first: Instruction,
+  second: Instruction,
+): Instruction? {
+  const (whole, source) = match first {
+    .Read(target, reference) => (target, reference)
+    _ => {
+      return None
+    }
+  }
+  const (target, reference) = match second {
+    .Read(found, inner) => (found, inner)
+    _ => {
+      return None
+    }
+  }
+  if reference.base != whole || source.base == whole || reference.steps.length() != 1 {
+    return None
+  }
+  const step = reference.steps[0]
+  if const .Element(_, index, _, _) = step {
+    if index == whole {
+      return None
+    }
+  } else {
+    return None
+  }
+  if touchesOutsideBlock(function, block, whole) {
+    return None
+  }
+  var uses = 0
+  var definitions = 0
+  for instruction in instructions {
+    uses = uses + occurrences(usedSlots(instruction), whole)
+    if definedSlot(instruction) == Some(whole) {
+      definitions = definitions + 1
+    }
+  }
+  if uses != 1 || definitions != 1 {
+    return None
+  }
+  var steps = source.steps
+  steps.append step
+  Some Instruction.Read(target, Reference(source.base, steps))
 }
 
 /** One take-out and the put-back that closes it, with everything the rewrite needs decided. */
@@ -146,7 +326,13 @@ fn elementWriteAt(
   if !readsContainerInto(instructions[take - 1], receiver, container) {
     return None
   }
-  const item = match elementTypeOf(program, function, container) {
+  const setter = match instructions[at] {
+    .Call(_, callee, _, _, _) => callee
+    _ => {
+      return None
+    }
+  }
+  const item = match elementTypeOf(program, function, container, setter) {
     Some(found) => found
     None => {
       return None
@@ -186,7 +372,7 @@ fn putBackArguments(program: IrProgram, instruction: Instruction): List<Argument
       if !witnesses.isEmpty() || arguments.length() != 3 {
         return None
       }
-      if !isListSetter(program, callee) {
+      if !isListSetter(program, callee) && !isArraySetter(program, callee) {
         return None
       }
       Some arguments
@@ -212,6 +398,21 @@ fn isListSetter(program: IrProgram, callee: FunctionId): Bool {
   }
   match forwardedCallee(program.functionAt(callee)) {
     Some(inner) => isRuntimeSymbol program, inner, "torb_list_set"
+    None => false
+  }
+}
+
+/**
+ * Whether a callee is the `set` an index path through an `Array<Item, Size>` puts its element back with, by the symbol
+ * the lowering recorded: that `set` is TorbScript, so there is no native symbol to recognize it by. The container of
+ * the put-back is checked to be an array as well ([elementTypeOf]).
+ */
+fn isArraySetter(program: IrProgram, callee: FunctionId): Bool {
+  if !program.hasFunction(callee) {
+    return false
+  }
+  match program.functionAt(callee).origin {
+    Some(symbol) => program.elementWriters.contains symbol.value
     None => false
   }
 }
@@ -314,16 +515,23 @@ fn readsContainerInto(instruction: Instruction, receiver: Slot, container: Refer
   false
 }
 
-/** The item type of a container that is the runtime's contiguous list, and `None` for everything else. */
-fn elementTypeOf(program: IrProgram, function: IrFunction, container: Reference): IrTypeId? {
+/**
+ * The item type of a container whose storage is contiguous - the runtime's list, or an `Array<Item, Size>` - and `None`
+ * for everything else. The setter has to match it: an array's `set` on an array, the list's on a list.
+ */
+fn elementTypeOf(program: IrProgram, function: IrFunction, container: Reference, callee: FunctionId): IrTypeId? {
   var ignored: List<String> = []
   const annotation = typeOfReference(program, function, ignored, "", container)?
-  if const .Runtime(kind, arguments) = program.typeAt(annotation) {
-    if kind == RuntimeKind.ListStorage && arguments.length() == 1 {
-      return Some arguments[0]
+  match program.typeAt(annotation) {
+    .Runtime(kind, arguments) => {
+      if kind == RuntimeKind.ListStorage && arguments.length() == 1 && isListSetter(program, callee) {
+        return Some arguments[0]
+      }
+      None
     }
+    .FixedArray(item, _) => if isArraySetter(program, callee) { Some item } else { None }
+    _ => None
   }
-  None
 }
 
 /** The message and the site an index out of range panics with. */
@@ -613,6 +821,7 @@ fn substituted(instruction: Instruction, element: Slot, prefix: Reference): Inst
     .Construct(target, layout, variant, fields) => {
       Instruction.Construct target, layout, variant, substitutedArguments(fields, element, prefix)
     }
+    .ArrayNew(target, items) => Instruction.ArrayNew target, substitutedArguments(items, element, prefix)
     .TraitValue(target, value, tables) => {
       Instruction.TraitValue target, value, substitutedWitnesses(tables, element, prefix)
     }
@@ -746,6 +955,7 @@ public fn referencesOf(instruction: Instruction): List<Reference> {
       found
     }
     .Construct(_, _, _, fields) => placesOfArguments fields
+    .ArrayNew(_, items) => placesOfArguments items
     .TraitValue(_, _, tables) => {
       var found: List<Reference> = []
       for table in tables {

@@ -740,6 +740,22 @@ typedef int32_t (*torb_compare_function)(const void *first, const void *second, 
 /** A stable merge sort, so the order is deterministic whatever the comparison does with equal keys. */
 void torb_list_sort(torb_list *list, torb_compare_function compare, void *context);
 
+/* ----------------------------------------------------------------------------------------------------- array --- */
+
+/**
+ * The index of an `Element` step into an `Array<Item, Size>`, checked against the size its type says: `index` itself,
+ * or a panic with `missing` at `at` - the message the step carries, which is the language's and not the runtime's.
+ *
+ * An array is a struct of the program with its items inline (`value.items[index]`), so the check is all the runtime
+ * adds, and it is inline so that a C compiler folds it away where a comparison in front of it already decided it.
+ */
+static inline int64_t torb_array_index(int64_t index, int64_t length, torb_text missing, torb_location at) {
+  if (index < 0 || index >= length) {
+    torb_panic(missing, at);
+  }
+  return index;
+}
+
 /* ------------------------------------------------------------------------------------------------ map and set --- */
 
 /** An empty map. Both descriptors must be static data; `key->equals` and `key->hash` must not be `NULL`. */

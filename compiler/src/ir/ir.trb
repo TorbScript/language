@@ -632,6 +632,15 @@ public type Instruction {
   case Intrinsic(target: Slot?, intrinsic: Intrinsic, arguments: List<Slot>, at: LocationId)
 
   case Construct(target: Slot, layout: LayoutId, variant: Int, fields: List<Argument>)
+  /**
+   * An `Array<Item, Size>` value: the type of `target` is the `FixedArray`, and `items` fill its slots in order, each
+   * one owned - a list literal against an expected `Array` (docs/BACKEND.md 5.9b).
+   *
+   * With **no** items every slot is empty: all bits zero in C, which holds no count, so a later write through an
+   * `Element` step may release what it replaces. That is what the private `Array.unfilled` of `std/core` answers, and
+   * `filled` and `generated` write every slot of it before anything reads one.
+   */
+  case ArrayNew(target: Slot, items: List<Argument>)
   case Read(target: Slot, reference: Reference)
   case Write(reference: Reference, value: Argument)
   /** The variant index of a value of a variant layout. */
@@ -736,6 +745,12 @@ public type IrProgram {
    * with an `Element` step and keep the answer.
    */
   var elementReaders: Set<Int> = []
+  /**
+   * The members an index on a `var` path through an `Array<Item, Size>` puts its element back with - `Array.set` - by the
+   * symbol, like [IrProgram.elementReaders]. The runtime's list is recognized by its native symbol instead, and an array
+   * has none: its `set` is TorbScript, so the lowering says which member closes the round trip.
+   */
+  var elementWriters: Set<Int> = []
   /**
    * The functions `specializeFrozenCallees` copied, by index: a body no witness table, no closure and no descriptor
    * names, which only a direct call the devirtualization wrote ever reaches.
