@@ -13,8 +13,8 @@
 # `.expected`, the three docs gates, and `canon --check` with the five rules. Every binary that is only built to be run
 # once is built with `--profile dev`, which `torb test` and `torb run` do by default.
 #
-# Tier B: `tools/conformance.sh` (the conformance suite), `tools/bootstrap.sh` (the fixpoint: seed -> torb -> torb,
-# byte-identical C), and the C runtime's own tests.
+# Tier B: `tools/conformance.sh` (the conformance suite, and with `--vm` the programs of its `vm.list` in the bytecode
+# VM), `tools/bootstrap.sh` (the fixpoint: seed -> torb -> torb, byte-identical C), and the C runtime's own tests.
 #
 # POSIX sh. Runs in Git Bash on Windows and on Linux/macOS.
 
@@ -164,6 +164,7 @@ torb=$(binary_of "$torb_path")
 [ -n "$torb" ] || fail "no native compiler at $torb_path - run: sh tools/gates.sh a"
 
 gate "conformance suite" sh tools/conformance.sh
+gate "conformance suite in the VM" sh tools/conformance.sh --vm
 gate "fixpoint (seed -> torb -> torb)" sh tools/bootstrap.sh
 gate "runtime tests" sh runtime/build.sh
 

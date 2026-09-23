@@ -54,6 +54,7 @@ fn printUsage() {
   printError "  torb run <path> [...]  Build a file or a project into build/run/ and execute it"
   printError "                         everything behind the path is the program's own Process.arguments()"
   printError "                         --profile dev|release, --release: in front of the path (default: dev)"
+  printError "                         --vm: run it in the bytecode VM instead of building it"
   printError "  torb test [path]...    Build every *.test.trb below the paths into one binary and run it"
   printError "                         --profile dev|release, --release (default: dev)"
   printError "                         --jobs N: accepted and ignored - one binary is one process"
@@ -392,9 +393,15 @@ fn testOptionsOf(arguments: List<String>): TestOptions? {
  */
 fn runOptionsOf(arguments: List<String>): RunOptions? {
   var profile = Profile.Dev
+  var usesMachine = false
   var index = 0
   while index < arguments.length() {
     const argument = arguments[index]
+    if argument == "--vm" {
+      usesMachine = true
+      index = index + 1
+      continue
+    }
     if argument == "--release" {
       profile = Profile.Release
       index = index + 1
@@ -409,7 +416,7 @@ fn runOptionsOf(arguments: List<String>): RunOptions? {
     index = index + 2
   }
   const path = arguments.get(index)?
-  Some RunOptions(path, arguments.skip(index + 1).toList(), profile)
+  Some RunOptions(path, arguments.skip(index + 1).toList(), profile, usesMachine)
 }
 
 /**

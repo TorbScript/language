@@ -90,6 +90,17 @@ jump left behind released nothing. The directory is the exemption, instead of a 
 | `assert-compound-capture.trb` | A failing `assert` shows a capture that is not a scalar by its **name and its type** (`found: Point`) rather than by its value. Showing the value needs `Encode` for its type and for every type under it - one implementation in the binary per captured type, and one unshowable type anywhere refuses the whole build, which is what the compiler's own 2801 assertions over its own types would mean. It closes when a capture is an `EncodedValue` |
 | `blanket-into.trb` | `into()` through the blanket implementation of `Into`: the instance of `Target.from self` is chosen by the type the value arrives at, which is the one place a member's target type stands nowhere near the call |
 
+## The second back end: `vm.list`
+
+`sh tools/conformance.sh --vm` runs every program named in `vm.list` with `torb run --vm` - the bytecode VM inside
+`torb`, over the same typed IR and the same runtime (docs/design/VM.md) - and compares its standard output, its standard
+error and its exit code with the **same** expectation files, folded the same way. There are no expectation files of
+the VM's own: an answer that differs between the two back ends is a bug of one of them, never a second expectation.
+
+The list is the programs the VM runs today, one per line, and it grows until it is the whole suite. The leak gate and
+the two checks of the C do not apply to a VM run. What is not listed yet, and why, is section 8 of the design record:
+tasks, `test` and `group`, keys that their own `equals` compares, and the executable's own path.
+
 ## The programs
 
 **Values and copies** - a value has no identity, so a second name is a second value.

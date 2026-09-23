@@ -19,6 +19,7 @@ use readSourceTree from "../project/read"
 use normalizePath, parentPath, joinPath, pathName, pathDepth from "../project/path"
 use BuildOptions, Profile, build, buildFailedCode, binaryNameOf, identityFileName from "./build"
 use findRuntime from "../project/toolchain"
+use runInMachine from "../vm/run"
 
 /** What `torb run` needs from the command line. */
 public type RunOptions {
@@ -34,6 +35,11 @@ public type RunOptions {
    * often than it runs long. A benchmark says `torb run --release`.
    */
   profile: Profile = Profile.Dev
+  /**
+   * `--vm`: the program is not built at all but run by the bytecode VM inside this process (docs/design/VM.md), which
+   * is the second back end of the conformance suite.
+   */
+  usesMachine: Bool = false
 }
 
 /** The exit code of the whole command: the program's own, or what went wrong before it started. */
@@ -41,6 +47,9 @@ public fn runProgram(options: RunOptions): Result<Int, IoError> {
   if !File.exists(options.path) {
     printError "error: `{options.path}` does not exist"
     return Ok buildFailedCode
+  }
+  if options.usesMachine {
+    return runInMachine options.path, options.arguments
   }
   const entry = normalizePath(File.absolutePath(options.path)?)
   const tree = readSourceTree([options.path])?

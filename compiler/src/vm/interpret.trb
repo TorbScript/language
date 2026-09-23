@@ -1,0 +1,760 @@
+/**
+ * The interpreter loop of the VM: bytecode over a word stack, in the runtime's own representation
+ * (docs/design/VM.md sections 2 to 4 and 7).
+ *
+ * The registers are one `ArrayList<Int64>` of words for the whole run. A frame is a window of it that starts at its
+ * `base`, a call pushes the callee's frame on top of the caller's, and the constant pool lies below the first frame. A
+ * word holds exactly the bytes the C back end would hold in the same place - an `Int64`, the two words of a
+ * `torb_text`, the pointer to a counted block - so everything that is more than moving and comparing words is a call of
+ * the kernel (`std/machine`), which is C and the one runtime of the process.
+ *
+ * A destructor runs inside the instruction whose release dropped the last count: the kernel queues the block, and
+ * [execute] runs its `close()` to its return before the next instruction, as one more `execute` on top of the words in
+ * use.
+ *
+ * # Related
+ *
+ * - [loadProgram] - the constant pool and the tables of the kernel, before the first instruction.
+ * - [runProgram] - the whole run of one program.
+ */
+
+use Machine from "std/machine"
+use Environment from "std/environment"
+use Opcode, KernelOperation, allOpcodes, kernelNumberOf from "../backend/bytecode/format"
+use opcodeNumberOf, operandA, operandB, operandC from "../backend/bytecode/format"
+use BytecodeProgram, Chunk, Place, PlaceStep, WitnessEntry, WitnessRootEntry from "../backend/bytecode/format"
+use ConstantPart, Shape, CountedWord from "../backend/bytecode/format"
+use CountedKind, ElementKind, widthOfPart from "../backend/bytecode/format"
+
+/** Where a call goes on once its callee returned, and where the callee's result goes. */
+type Frame {
+  chunk: Int
+  pc: Int
+  base: Int
+  /** The absolute register of the result, `-1` where the call takes none. */
+  target: Int
+}
+
+/**
+ * The words above a frame the interpreter uses itself for the operands it hands the kernel: a reference it resolved, a
+ * text it copied out of the constant pool. Nothing of them outlives one instruction.
+ */
+const scratchWords = 8
+
+/**
+ * How many words the stack may hold: a recursion deeper than this is the `stack overflow` panic of the runtime, with
+ * the site of the function it could not enter - which is where the C back end's stack check reports it, too.
+ */
+const largestStack = 4194304
+
+/** The block kind of a static aggregate that is a block. */
+const recordBlockKind = 4
+
+/** The size of a block's header plus its shape word: where the contents of a counted block of the VM begin. */
+const contentsOffset = 16
+
+/**
+ * The run of one program: the constant pool and the tables placed, then the entry chunks in order, each to its return.
+ * A program that ends by `Process.exit` or a panic never comes back here, exactly as its native binary never returns
+ * from `main`.
+ */
+public fn runProgram(program: BytecodeProgram, arguments: List<String>) {
+  var words: ArrayList<Int> = ArrayList.withCapacity 65536
+  var kernel: ArrayList<Int> = ArrayList.withCapacity 64
+  for _ in 0..64 {
+    kernel.append 0
+  }
+  loadProgram words, kernel, program
+  // `Process.arguments()` answers what was written behind the path, as it answers a native binary its `argv`
+  const scratch = firstFrameOf program
+  ensureWords(words, scratch + 2 * arguments.length() + scratchWords)
+  var registers: List<Int> = [arguments.length()]
+  for index in 0..arguments.length() {
+    Machine.placeText(words, scratch + 2 * index, arguments[index])
+    registers.append(2 * index)
+  }
+  const _ = kernelCall words, kernel, scratch, KernelOperation.SetArguments, registers
+  for entry in program.entries {
+    execute(words, kernel, program, entry, firstFrameOf(program), 0 - 1)
+  }
+}
+
+// --- Loading --------------------------------------------------------------------------------------------------------
+
+/**
+ * Everything a program needs before its first instruction: the constant pool at the bottom of the words, and the
+ * locations, element descriptors and shapes of the kernel's tables.
+ */
+public fn loadProgram(var words: ArrayList<Int>, var kernel: ArrayList<Int>, program: BytecodeProgram) {
+  ensureWords(words, firstFrameOf(program) + scratchWords * 4)
+  var offset = 0
+  for part in program.constants {
+    placePart words, kernel, part, offset, firstFrameOf(program)
+    offset = offset + widthOfPart(part)
+  }
+  const scratch = firstFrameOf program
+  for index in 0..program.locations.length() {
+    const location = program.locations[index]
+    Machine.placeText words, scratch, location.path
+    kernelCall words, kernel, scratch, KernelOperation.DefineLocation, [index, 0, location.line, location.column]
+  }
+  for index in 0..program.elements.length() {
+    const element = program.elements[index]
+    const (kind, shape) = match element.kind {
+      .Trivial => (0, 0 - 1)
+      .TextElement => (1, 0 - 1)
+      .Counted(found) => (2, found)
+    }
+    kernelCall words, kernel, scratch, KernelOperation.DefineElement, [index, element.words, kind, shape]
+  }
+  for index in 0..program.shapes.length() {
+    kernelCall words, kernel, scratch, KernelOperation.DefineShape, shapeOperands(index, program.shapes[index])
+  }
+}
+
+/** Where the first frame begins: after the constant pool and the cells of the module constants. */
+fn firstFrameOf(program: BytecodeProgram): Int {
+  program.constantWords + program.cellWords
+}
+
+/** One part of the constant pool into its words; a block part becomes an immortal block, as a static of C is. */
+fn placePart(var words: ArrayList<Int>, var kernel: ArrayList<Int>, part: ConstantPart, offset: Int, scratch: Int) {
+  match part {
+    .Word(value) => words.set offset, value
+    .Floating(value) => Machine.placeFloat words, offset, value
+    .Text(value) => Machine.placeText words, offset, value
+    .Block(shape, parts) => {
+      // The contents are placed above everything in use, then copied into the block in one piece
+      var width = 0
+      for inside in parts {
+        width = width + widthOfPart(inside)
+      }
+      const contents = scratch + scratchWords
+      ensureWords(words, contents + width + scratchWords)
+      var cursor = contents
+      for inside in parts {
+        placePart(words, kernel, inside, cursor, cursor + width + scratchWords)
+        cursor = cursor + widthOfPart(inside)
+      }
+      const operands = [scratchWords - 1, shape, recordBlockKind, width, 1, 0, scratchWords, width]
+      kernelCall words, kernel, scratch, KernelOperation.BlockNew, operands
+      kernelCall words, kernel, scratch, KernelOperation.MakeImmortal, [scratchWords - 1]
+      words.set offset, words[scratch + scratchWords - 1]
+    }
+  }
+}
+
+/** A shape as the kernel's `DefineShape` reads it. */
+fn shapeOperands(index: Int, shape: Shape): List<Int> {
+  var operands = [index, shape.width, shape.tag, shape.closer, if shape.isReversed { 1 } else { 0 }]
+  appendGroup operands, shape.counted
+  operands.append shape.groups.length()
+  for group in shape.groups {
+    appendGroup operands, group
+  }
+  operands
+}
+
+fn appendGroup(var operands: List<Int>, words: List<CountedWord>) {
+  operands.append words.length()
+  for word in words {
+    operands.append word.offset
+    const (kind, shape) = match word.kind {
+      .TextStorage => (0, 0 - 1)
+      .ListStorage => (1, 0 - 1)
+      .MapStorage => (2, 0 - 1)
+      .SetStorage => (3, 0 - 1)
+      .TaskObject => (4, 0 - 1)
+      .ChannelObject => (5, 0 - 1)
+      .FileHandle => (6, 0 - 1)
+      .Block(contents) => (7, contents)
+      .Environment => (8, 0 - 1)
+      .Payload => (9, 0 - 1)
+      .Nested(inner) => (10, inner)
+    }
+    operands.append kind
+    operands.append shape
+  }
+}
+
+/** What the program uses that this interpreter does not run yet, in the words of a finding. */
+public fn unsupportedByInterpreter(program: BytecodeProgram): List<String> {
+  var found: List<String> = []
+  // The runtime compares and hashes a key through its descriptor, and a descriptor cannot call into the interpreter
+  for element in program.elements {
+    if element.equals >= 0 && !element.comparesByWords {
+      if const .TextElement = element.kind {
+        continue
+      }
+      if element.words > 0 {
+        const what = "a map key or a set item compared by its own `equals`"
+        if !found.contains(what) {
+          found.append what
+        }
+      }
+    }
+  }
+  found
+}
+
+// --- The kernel -----------------------------------------------------------------------------------------------------
+
+/** One operation of the kernel with operands the interpreter makes itself; the registers are relative to `base`. */
+fn kernelCall(
+  var words: ArrayList<Int>,
+  var kernel: ArrayList<Int>,
+  base: Int,
+  operation: KernelOperation,
+  operands: List<Int>,
+): Int {
+  while kernel.length() < operands.length() + 1 {
+    kernel.append 0
+  }
+  kernel.set 0, kernelNumberOf(operation)
+  for index in 0..operands.length() {
+    kernel.set(index + 1, operands[index])
+  }
+  Machine.operate words, base, kernel, 0
+}
+
+/** The words grow to hold at least `count`; they never shrink, so an index stays valid for the whole run. */
+fn ensureWords(var words: ArrayList<Int>, count: Int) {
+  if count > largestStack {
+    return
+  }
+  while words.length() < count {
+    words.append 0
+  }
+}
+
+// --- Words and references -------------------------------------------------------------------------------------------
+
+/** The word a reference points at: a register for an odd reference, memory of a block for an even one. */
+fn readWord(words: ArrayList<Int>, reference: Int): Int {
+  if reference.bitwiseAnd(1) == 1 {
+    return words[reference.shiftedRight(1)]
+  }
+  Machine.load reference
+}
+
+fn writeWord(var words: ArrayList<Int>, reference: Int, value: Int) {
+  if reference.bitwiseAnd(1) == 1 {
+    words.set reference.shiftedRight(1), value
+    return
+  }
+  Machine.store reference, value
+}
+
+/** The reference `words` further on than `reference`. */
+fn stepped(reference: Int, words: Int): Int {
+  if reference.bitwiseAnd(1) == 1 {
+    return reference + 2 * words
+  }
+  reference + 8 * words
+}
+
+/** The reference of the register with this absolute index. */
+fn registerReference(index: Int): Int {
+  index * 2 + 1
+}
+
+/**
+ * Where a place of the chunk is, as a reference word: the base register (or the reference a `var` parameter holds),
+ * then one step at a time - an offset, a dereference of a counted block, an element of a list through the kernel.
+ */
+fn resolvePlace(
+  var words: ArrayList<Int>,
+  var kernel: ArrayList<Int>,
+  place: Place,
+  base: Int,
+  top: Int,
+): Int {
+  var reference = if place.isThroughReference { words[base + place.base] } else { registerReference(base + place.base) }
+  for step in place.steps {
+    match step {
+      .Offset(count) => {
+        reference = stepped reference, count
+      }
+      .Dereference => {
+        reference = readWord(words, reference) + contentsOffset
+      }
+      .Element(index, missing, location) => {
+        // The container's reference and the missing text go into the scratch words above the frame
+        words.set top, reference
+        words.set(top + 1, words[missing])
+        words.set(top + 2, words[missing + 1])
+        const operands = [0, base + index - top, 1, location]
+        reference = kernelCall words, kernel, top, KernelOperation.ElementAddress, operands
+      }
+    }
+  }
+  reference
+}
+
+// --- The loop -------------------------------------------------------------------------------------------------------
+
+/**
+ * Runs one chunk to its return, with its frame from `entryBase` on. Every call it makes is a frame of this loop; a
+ * destructor that has to run in the middle of an instruction is one more `execute`, above every word in use.
+ */
+fn execute(
+  var words: ArrayList<Int>,
+  var kernel: ArrayList<Int>,
+  program: BytecodeProgram,
+  entry: Int,
+  entryBase: Int,
+  resultTarget: Int,
+) {
+  const opcodes = allOpcodes
+  const tracing = Environment.get("TORB_VM_TRACE").isSome()
+  var frames: List<Frame> = []
+  var chunkIndex = entry
+  var chunk = program.chunks[entry]
+  var code = chunk.code
+  var base = entryBase
+  var top = base + chunk.frameWords
+  var pc = 0
+  ensureWords(words, top + scratchWords)
+  loop {
+    const head = code[pc]
+    const a = operandA head
+    const b = operandB head
+    const c = operandC head
+    const opcode = opcodes[opcodeNumberOf(head)]
+    if tracing {
+      printError "{chunk.name} {pc} {opcode.spelling()} base {base}"
+    }
+    match opcode {
+      .Move => {
+        for offset in 0..c {
+          words.set(base + a + offset, words[base + b + offset])
+        }
+        pc = pc + 1
+      }
+      .Constant => {
+        const offset = code[pc + 1]
+        for index in 0..b {
+          words.set(base + a + index, words[offset + index])
+        }
+        pc = pc + 2
+      }
+      .Word => {
+        words.set(base + a, code[pc + 1])
+        pc = pc + 2
+      }
+      .Zero => {
+        for offset in 0..b {
+          words.set(base + a + offset, 0)
+        }
+        pc = pc + 1
+      }
+      .Load => {
+        const place = chunk.places[b]
+        const reference = resolvePlace words, kernel, place, base, top
+        for offset in 0..place.width {
+          words.set(base + a + offset, readWord(words, stepped(reference, offset)))
+        }
+        pc = pc + 1
+      }
+      .Store => {
+        const place = chunk.places[a]
+        const reference = resolvePlace words, kernel, place, base, top
+        for offset in 0..place.width {
+          writeWord words, stepped(reference, offset), words[base + b + offset]
+        }
+        pc = pc + 1
+      }
+      .Reference => {
+        const place = chunk.places[b]
+        const reference = resolvePlace words, kernel, place, base, top
+        words.set(base + a, reference)
+        pc = pc + 1
+      }
+      .Kernel => {
+        const queued = Machine.operate(words, base, code, pc + 1)
+        if queued > 0 {
+          runClosers words, kernel, program, top
+        }
+        pc = pc + 1 + a
+      }
+      .Call => {
+        const callee = code[pc + 1]
+        const next = program.chunks[callee]
+        const calleeBase = top + scratchWords
+        ensureFrame words, kernel, calleeBase, next
+        for index in 0..b {
+          const parameter = next.parameters[index]
+          const source = base + code[pc + 2 + index]
+          for offset in 0..parameter.width {
+            words.set(calleeBase + parameter.offset + offset, words[source + offset])
+          }
+        }
+        frames.append Frame(chunkIndex, pc + 2 + b, base, if c == 1 { base + a } else { 0 - 1 })
+        chunkIndex = callee
+        chunk = next
+        code = chunk.code
+        base = calleeBase
+        top = base + chunk.frameWords
+        pc = 0
+      }
+      .CallClosure => {
+        const closure = base + b
+        const callee = words[closure] - 1
+        const next = program.chunks[callee]
+        const calleeBase = top + scratchWords
+        ensureFrame words, kernel, calleeBase, next
+        var first = 0
+        if next.takesEnvironment {
+          words.set(calleeBase + next.parameters[0].offset, words[closure + 1])
+          first = 1
+        }
+        for index in 0..c {
+          const parameter = next.parameters[first + index]
+          const source = base + code[pc + 2 + index]
+          for offset in 0..parameter.width {
+            words.set(calleeBase + parameter.offset + offset, words[source + offset])
+          }
+        }
+        const hasResult = code[pc + 1] == 1
+        frames.append Frame(chunkIndex, pc + 2 + c, base, if hasResult { base + a } else { 0 - 1 })
+        chunkIndex = callee
+        chunk = next
+        code = chunk.code
+        base = calleeBase
+        top = base + chunk.frameWords
+        pc = 0
+      }
+      .CallWitness => {
+        const witness = chunk.witnesses[code[pc + 1]]
+        const member = code[pc + 2]
+        const (table, payload) = resolveWitness words, kernel, program, witness, chunk, base, top
+        const callee = program.tables[table].members[member]
+        const next = program.chunks[callee]
+        const calleeBase = top + scratchWords
+        ensureFrame words, kernel, calleeBase, next
+        const receiver = next.parameters[0]
+        if receiver.isReference {
+          words.set(calleeBase + receiver.offset, payload + contentsOffset)
+        } else {
+          for offset in 0..receiver.width {
+            words.set(calleeBase + receiver.offset + offset, Machine.load(payload + contentsOffset + 8 * offset))
+          }
+        }
+        for index in 0..b {
+          const parameter = next.parameters[1 + index]
+          const source = base + code[pc + 3 + index]
+          for offset in 0..parameter.width {
+            words.set(calleeBase + parameter.offset + offset, words[source + offset])
+          }
+        }
+        // The erased convention borrows every operand, so what the member takes owned is retained here, as the C
+        // back end's witness thunk retains it
+        for parameter in next.parameters {
+          if parameter.retainedThroughWitness >= 0 {
+            const register = calleeBase + parameter.offset - top
+            const retained = [register, parameter.retainedThroughWitness]
+            const _ = kernelCall words, kernel, top, KernelOperation.Retain, retained
+          }
+        }
+        frames.append Frame(chunkIndex, pc + 3 + b, base, if c == 1 { base + a } else { 0 - 1 })
+        chunkIndex = callee
+        chunk = next
+        code = chunk.code
+        base = calleeBase
+        top = base + chunk.frameWords
+        pc = 0
+      }
+      .WitnessTable => {
+        const (table, _) = resolveWitness words, kernel, program, chunk.witnesses[b], chunk, base, top
+        words.set(base + a, table + 1)
+        pc = pc + 1
+      }
+      .Return => {
+        const width = b
+        const source = base + a
+        const frame = match frames.removeAt(frames.length() - 1) {
+          Some(found) => found
+          None => {
+            // The bottom frame hands its result to whoever ran this loop: a module constant's cell
+            if resultTarget >= 0 {
+              for offset in 0..width {
+                words.set(resultTarget + offset, words[source + offset])
+              }
+            }
+            return
+          }
+        }
+        if frame.target >= 0 {
+          for offset in 0..width {
+            words.set(frame.target + offset, words[source + offset])
+          }
+        }
+        chunkIndex = frame.chunk
+        chunk = program.chunks[chunkIndex]
+        code = chunk.code
+        base = frame.base
+        top = base + chunk.frameWords
+        pc = frame.pc
+      }
+      .AddInteger => {
+        const first = words[base + b]
+        const second = words[base + c]
+        if (second > 0 && first > largest - second) || (second < 0 && first < smallest - second) {
+          checkedByKernel words, kernel, base, top, a, b, c, code[pc + 1], 0
+        }
+        words.set(base + a, first + second)
+        pc = pc + 2
+      }
+      .SubtractInteger => {
+        const first = words[base + b]
+        const second = words[base + c]
+        if (second < 0 && first > largest + second) || (second > 0 && first < smallest + second) {
+          checkedByKernel words, kernel, base, top, a, b, c, code[pc + 1], 1
+        }
+        words.set(base + a, first - second)
+        pc = pc + 2
+      }
+      .MultiplyInteger => {
+        const first = words[base + b]
+        const second = words[base + c]
+        if isSmall(first) && isSmall(second) {
+          words.set(base + a, first * second)
+        } else {
+          checkedByKernel words, kernel, base, top, a, b, c, code[pc + 1], 2
+        }
+        pc = pc + 2
+      }
+      .DivideInteger => {
+        const first = words[base + b]
+        const second = words[base + c]
+        if second == 0 || (second == 0 - 1 && first == smallest) {
+          checkedByKernel words, kernel, base, top, a, b, c, code[pc + 1], 3
+        } else {
+          words.set(base + a, first / second)
+        }
+        pc = pc + 2
+      }
+      .RemainderInteger => {
+        const first = words[base + b]
+        const second = words[base + c]
+        if second == 0 || (second == 0 - 1 && first == smallest) {
+          checkedByKernel words, kernel, base, top, a, b, c, code[pc + 1], 4
+        } else {
+          words.set(base + a, first % second)
+        }
+        pc = pc + 2
+      }
+      .NegateInteger => {
+        const first = words[base + b]
+        if first == smallest {
+          checkedByKernel words, kernel, base, top, a, b, b, code[pc + 1], 5
+        }
+        words.set(base + a, 0 - first)
+        pc = pc + 2
+      }
+      .AddUnchecked => {
+        words.set(base + a, words[base + b] + words[base + c])
+        pc = pc + 1
+      }
+      .SubtractUnchecked => {
+        words.set(base + a, words[base + b] - words[base + c])
+        pc = pc + 1
+      }
+      .MultiplyUnchecked => {
+        words.set(base + a, words[base + b] * words[base + c])
+        pc = pc + 1
+      }
+      .Equal => {
+        words.set(base + a, flag(words[base + b] == words[base + c]))
+        pc = pc + 1
+      }
+      .NotEqual => {
+        words.set(base + a, flag(words[base + b] != words[base + c]))
+        pc = pc + 1
+      }
+      .Less => {
+        words.set(base + a, flag(words[base + b] < words[base + c]))
+        pc = pc + 1
+      }
+      .LessOrEqual => {
+        words.set(base + a, flag(words[base + b] <= words[base + c]))
+        pc = pc + 1
+      }
+      .Greater => {
+        words.set(base + a, flag(words[base + b] > words[base + c]))
+        pc = pc + 1
+      }
+      .GreaterOrEqual => {
+        words.set(base + a, flag(words[base + b] >= words[base + c]))
+        pc = pc + 1
+      }
+      .Not => {
+        words.set(base + a, flag(words[base + b] == 0))
+        pc = pc + 1
+      }
+      .Tag => {
+        words.set(base + a, words[base + b + c])
+        pc = pc + 1
+      }
+      .TagNiche => {
+        const empty = if c == 0 { 1 } else { 0 }
+        words.set(base + a, if words[base + b] != 0 { c } else { empty })
+        pc = pc + 1
+      }
+      .Jump => {
+        pc = code[pc + 1]
+      }
+      .Branch => {
+        pc = if words[base + a] != 0 { code[pc + 1] } else { code[pc + 2] }
+      }
+      .Switch => {
+        const scrutinee = words[base + a]
+        var next = code[pc + 1 + 2 * b]
+        for index in 0..b {
+          if code[pc + 1 + 2 * index] == scrutinee {
+            next = code[pc + 2 + 2 * index]
+            break
+          }
+        }
+        pc = next
+      }
+      .Unreachable => {
+        panicInternal "the VM reached code the IR says nothing reaches, in `{chunk.name}`"
+      }
+      .Stop => {
+        panicInternal "the VM does not run tasks yet"
+      }
+      .Cell => {
+        const cell = program.constantWords + code[pc + 1]
+        if words[cell] == 0 {
+          const _ = kernelCall words, kernel, top, KernelOperation.BeginImmortal, []
+          execute(words, kernel, program, code[pc + 2], top + scratchWords, cell + 1)
+          const _ = kernelCall words, kernel, top, KernelOperation.EndImmortal, []
+          words.set cell, 1
+        }
+        for offset in 0..b {
+          words.set(base + a + offset, words[cell + 1 + offset])
+        }
+        pc = pc + 3
+      }
+    }
+  }
+}
+
+const largest = 9223372036854775807
+
+const smallest = 0 - 9223372036854775807 - 1
+
+/** Whether two factors of this size multiply without leaving 64 bits. */
+fn isSmall(value: Int): Bool {
+  value > 0 - 2147483648 && value < 2147483648
+}
+
+fn flag(condition: Bool): Int {
+  if condition {
+    return 1
+  }
+  0
+}
+
+/**
+ * An `Int64` operation whose check the interpreter could not settle itself: the kernel runs it through the helper of
+ * `torb_number.h` the C back end calls, which panics with the runtime's own message at the operation's location.
+ */
+fn checkedByKernel(
+  var words: ArrayList<Int>,
+  var kernel: ArrayList<Int>,
+  base: Int,
+  top: Int,
+  target: Int,
+  first: Int,
+  second: Int,
+  location: Int,
+  operation: Int,
+) {
+  const operands = [target + base - top, first + base - top, second + base - top, location, operation + 256, 4]
+  const _ = kernelCall words, kernel, top, KernelOperation.Arithmetic, operands
+}
+
+/** An error of the VM itself, never of the program: the runtime's panic, as every internal error of torb is. */
+fn panicInternal(message: String): Never {
+  panic "internal error: {message}"
+}
+
+/** The words of a callee's frame, and the recursion limit the runtime reports as a stack overflow. */
+fn ensureFrame(var words: ArrayList<Int>, var kernel: ArrayList<Int>, calleeBase: Int, next: Chunk) {
+  const needed = calleeBase + next.frameWords + scratchWords
+  if needed > largestStack {
+    const _ = kernelCall words, kernel, 0, KernelOperation.StackOverflow, [next.location]
+  }
+  ensureWords words, needed
+}
+
+/**
+ * The table a witness source names and the payload block of the value it came from: the table word of the
+ * trait-typed value (its index plus one) or a static table, then one nested step per supertrait.
+ */
+fn resolveWitness(
+  var words: ArrayList<Int>,
+  var kernel: ArrayList<Int>,
+  program: BytecodeProgram,
+  witness: WitnessEntry,
+  chunk: Chunk,
+  base: Int,
+  top: Int,
+): (Int, Int) {
+  var table = 0
+  var payload = 0
+  match witness.root {
+    .Table(found) => {
+      table = found
+    }
+    .Value(place, bound) => {
+      const reference = resolvePlace words, kernel, chunk.places[place], base, top
+      payload = readWord words, reference
+      table = readWord(words, stepped(reference, 1 + bound)) - 1
+    }
+  }
+  for step in witness.steps {
+    table = program.tables[table].nested[step]
+  }
+  (table, payload)
+}
+
+/**
+ * The destructors the kernel queued, run in the order the C back end runs them: every block of the batch has its
+ * `close()` called with the count lent to it, then its fields released - and what that release queues runs before the
+ * next block of the batch, as the nested drop functions of C would.
+ */
+fn runClosers(var words: ArrayList<Int>, var kernel: ArrayList<Int>, program: BytecodeProgram, top: Int) {
+  var batch: List<(Int, Int)> = []
+  loop {
+    const closer = kernelCall words, kernel, top, KernelOperation.TakeCloser, [0]
+    if closer < 0 {
+      break
+    }
+    batch.append((words[top], closer))
+  }
+  for (block, closer) in batch {
+    words.set top, block
+    const _ = kernelCall words, kernel, top, KernelOperation.ClosingBegin, [0]
+    const destructor = program.chunks[closer]
+    const calleeBase = top + scratchWords
+    ensureFrame words, kernel, calleeBase, destructor
+    const receiver = destructor.parameters[0]
+    if receiver.isReference {
+      // `var fn close()` takes the object as a place: the register above the frame that holds it
+      words.set(calleeBase - 1, block)
+      words.set(calleeBase + receiver.offset, registerReference(calleeBase - 1))
+    } else {
+      words.set(calleeBase + receiver.offset, block)
+    }
+    execute(words, kernel, program, closer, calleeBase, 0 - 1)
+    words.set top, block
+    const _ = kernelCall words, kernel, top, KernelOperation.ClosingEnd, [0]
+    const queued = kernelCall words, kernel, top, KernelOperation.FinishRelease, [0]
+    if queued > 0 {
+      runClosers words, kernel, program, top
+    }
+  }
+}

@@ -33,7 +33,7 @@ torb parse <path>...   Check the syntax of files or directories
 torb tokens <file>     Print the tokens of a file
 torb ast <file>        Print the syntax tree of a file
 torb highlight <file>  Print the semantic tokens of a file as JSON, for an editor
-torb natives --header  Write runtime/include/torb_natives.h from the manifest of natives
+torb natives --header  Write torb_natives.h and machine_natives.c from the manifest of natives
 torb docs <command>    Check, index, and derive the documentation
 torb canon [path]...   Write the formatter canon over the syntax tree
 torb test [path]...    Run the *.test.trb files below the paths
@@ -56,9 +56,9 @@ Builds a file, or the `build { input }` of a project directory, into `build/run/
 of the command line to the program as `Process.arguments()`. The key is a hash of every source file that was read, so
 an unchanged program is not rebuilt. A script may hold top-level code because nothing imports it.
 
-There is no second implementation of the language behind `run`: what it starts is the binary
-[`build`](torb-build.md) would have written, with the program's three streams and its exit code passed through.
-Milestone 7's bytecode VM is what will start a small script without building it, over the same typed IR.
+What it starts is the binary [`build`](torb-build.md) would have written, with the program's three streams and its
+exit code passed through. `torb run --vm` runs the same program in the bytecode VM instead, over the same typed IR and
+the same runtime, without building anything ([torb run](torb-run.md)).
 
 ### `check`
 
@@ -84,7 +84,8 @@ the C is written next to it. Nothing observable differs between a binary and the
 The four windows into the front end. `parse` checks syntax only, recursively over directories. `tokens` and `ast` print the
 lexer and parser output of one file in a deterministic format - the one `compiler/src/syntax/dump.trb` and the
 generated `Show` of the syntax tree define. `ir` prints the typed intermediate representation the back end lowers,
-with `--statistics` for the counts alone.
+with `--statistics` for the counts alone, and `--bytecode` prints what the VM runs instead: the chunks of the final IR,
+disassembled.
 
 ### `highlight`
 

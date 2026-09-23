@@ -1,0 +1,105 @@
+/**
+ * `torb run --vm`: a program checked, lowered to the final IR, encoded as bytecode and run by the interpreter inside
+ * this process (docs/design/VM.md).
+ *
+ * The pipeline is `torb build`'s up to the IR both back ends read - check, lower the entry file and what it reaches,
+ * insert the ownership, verify - and then the bytecode instead of the C. A program the native back end cannot compile
+ * is refused here with the same findings, and a program the interpreter cannot run yet is refused with what it lacks,
+ * before a single instruction runs.
+ *
+ * What the program writes is all that is written: nothing of this command is on standard output, and a program that
+ * ends by `Process.exit` or a panic ends this process with its own exit code, as its native binary would.
+ */
+
+use IoError from "std/fs"
+use LineIndex from "../syntax/source"
+use readSourceTree, absolutePaths from "../project/read"
+use check, Checked from "../semantics/check"
+use insertOwnership from "../ir/ownership"
+use verifyOwnedProgram from "../ir/ownership-verify"
+use lowerWorkspace, pathsOfModules from "../ir/lower/lower"
+use entryNameOf from "../ir/lower/function"
+use renderDiagnostic, renderProblem from "../cli/render"
+use emitBytecode from "../backend/bytecode/emit"
+use runProgram, unsupportedByInterpreter from "./interpret"
+
+/** The exit code of a program that could not be run at all: the one `torb build` answers for a refused program. */
+const refusedCode = 1
+
+/**
+ * Runs the program at `path` in the VM. Answers the exit code when the program ends by running off the end of its
+ * top-level code; `Process.exit` and a panic end the process directly.
+ */
+public fn runInMachine(path: String, arguments: List<String>): Result<Int, IoError> {
+  const tree = readSourceTree([path])?
+  const checked = check(tree, absolutePaths([path])?, false, true)
+  if reportChecked(checked) > 0 {
+    return Ok refusedCode
+  }
+  const module = match checked.requested.first() {
+    Some(found) => found
+    None => {
+      printError "error: `torb run --vm` needs one entry file"
+      return Ok refusedCode
+    }
+  }
+  var lowering = lowerWorkspace checked.checker, pathsOfModules(checked), [module], false
+  insertOwnership lowering.program
+  var refused = 0
+  for problem in lowering.problems {
+    const inside = checked.program.graph.at problem.module
+    printError renderDiagnostic(tree.display(inside.path), LineIndex.of(inside.source.text), problem.diagnostic)
+    refused = refused + 1
+  }
+  for blocked in lowering.unsupported {
+    printError "error: {blocked.what} (at {blocked.at})"
+    refused = refused + 1
+  }
+  for what in lowering.program.planned {
+    printError "error: {what}"
+    refused = refused + 1
+  }
+  for problem in lowering.program.problems {
+    printError "internal error: {problem}"
+    refused = refused + 1
+  }
+  for problem in verifyOwnedProgram(lowering.program) {
+    printError "internal error: {problem}"
+    refused = refused + 1
+  }
+  if refused > 0 {
+    return Ok refusedCode
+  }
+  const entry = entryNameOf lowering, module
+  const emission = emitBytecode lowering.program, [entry]
+  var missing = emission.unsupported
+  missing.appendAll unsupportedByInterpreter(emission.program)
+  if !missing.isEmpty() {
+    for what in missing {
+      printError "error: {what} is not supported by the VM yet"
+    }
+    return Ok refusedCode
+  }
+  runProgram emission.program, arguments
+  Ok 0
+}
+
+/** Everything the front end found, rendered the way `torb check` renders it. */
+fn reportChecked(checked: Checked): Int {
+  var problems = checked.problems.length()
+  for problem in checked.problems {
+    printError renderProblem(problem)
+  }
+  for file in checked.files {
+    if file.diagnostics.isEmpty() {
+      continue
+    }
+    problems = problems + file.diagnostics.length()
+    const lines = LineIndex.of file.text
+    for diagnostic in file.diagnostics {
+      printError renderDiagnostic(file.path, lines, diagnostic)
+      printError ""
+    }
+  }
+  problems
+}

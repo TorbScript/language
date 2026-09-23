@@ -11,6 +11,7 @@ keywords:
   - entry point
 source:
   - compiler/src/cli/run.trb
+  - compiler/src/vm/run.trb
   - compiler/src/cli/build.trb
   - tools/bootstrap.sh
 ---
@@ -25,6 +26,7 @@ way when it is shipped.
 torb run [--profile dev|release] <path> [arguments]   Build a file, or a project's build { input }, and run it
     --profile dev|release   In front of the path: how hard the C compiler optimizes (default: dev)
     --release               The same as --profile release
+    --vm                    In front of the path: run it in the bytecode VM instead of building it
 ```
 
 ## What it does
@@ -68,6 +70,16 @@ user is typing into, and a gate that compares what a program wrote compares the 
 
 A build that **fails** says so, on standard error, in the form [`check`](torb-check.md) uses, and `run` leaves with
 `1` without starting anything.
+
+### `--vm`: the bytecode VM
+
+`torb run --vm <path>` builds nothing: the program is checked and lowered to the same typed IR `build` compiles, encoded
+as bytecode, and run by the VM inside `torb` itself, on the same runtime a native binary links. Its output, its exit
+code and its panics are the native binary's, which the conformance suite checks for every program it lists
+(`tools/conformance.sh --vm`). A program that uses what the VM does not run yet - a task, `test` and `group`, a map key
+that its own `equals` compares - is refused before anything runs, with a message that names what is missing. Two things
+answer differently because the program runs inside `torb`: `Process.executablePath()` is the path of `torb`, and a
+recursion reaches the `stack overflow` panic at a depth of its own.
 
 ### Exit codes
 

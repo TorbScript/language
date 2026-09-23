@@ -1,10 +1,11 @@
 # The Bytecode VM
 
 **Status: partly implemented** — decided on 2026-09-23 as the start of milestone 7 (`docs/BACKEND.md` section 5 and
-rows 7.1-7.2). Slice 1 is in: the bytecode format, the emitter from the IR, the disassembler and `torb ir --bytecode`
-(`compiler/src/backend/bytecode/`, snapshots in `compiler/tests/bytecode.test.trb`). Slices 2 and 3 - the kernel of
-natives the interpreter runs on, and the interpreter loop itself with `torb run --vm` - are described in section 9 with
-what each of them waits for.
+rows 7.1-7.2). Slices 1 to 3 are in (section 9): the bytecode and `torb ir --bytecode`
+(`compiler/src/backend/bytecode/`), the kernel of `std/machine` with `runtime/machine.c` and the generated table of
+thunks, and the interpreter with `torb run --vm` (`compiler/src/vm/`). `tools/conformance.sh --vm` runs the programs of
+`tests/conformance/vm.list` - 120 of the 142 of the suite - and compares them byte for byte with their native run.
+Tasks, `test`/`group`, keys compared by a program's own `equals` and the leak gate of the VM are still open.
 
 TorbScript has two back ends that read one IR. The C back end turns it into a native binary; the VM turns it into
 bytecode and runs that inside `torb`, for `torb run --vm`, the sandbox (7.4), `project.trb` as a script (7.5) and the
@@ -57,7 +58,7 @@ with the IR cache.
 
 **Decision: a register is a 64-bit word, and a value is the C runtime's own bytes spread over as many words as it
 needs.** There are no tags: the IR gives every slot a type, so the emitter chooses a typed opcode (`add.i64`,
-`copy.text`, `release` with the shape of the value) and the interpreter never inspects a value to learn what it is.
+`move` and a `kernel retain` with the shape of the value) and the interpreter never inspects a value to learn what it is.
 
 | IR type | Words | What the words hold |
 |---|---|---|
@@ -190,12 +191,14 @@ words into the callee's parameter words, and pushes a return record `(chunk, cod
 The VM is TorbScript compiled into `torb` by the C back end, so it is ordinary machine code linked against `runtime/`.
 What it needs beyond TorbScript is a way to put the words of a register in front of a C function.
 
-**Decision: a kernel of three natives, in `std/machine`, and one table of thunks generated from the manifest.**
+**Decision: a kernel of five natives, `Machine` of `std/machine`, and one table of thunks generated from the manifest.**
 
 ```text
   operate(var words: ArrayList<Int64>, base: Int64, code: ArrayList<Int64>, at: Int64): Int64
       code[at] names an operation of the kernel's table, code[at + 1 ...] are its operands (register offsets from
       base, location indices, sizes). The operation reads and writes the words directly and answers one word.
+  load(address: Int64): Int64, store(address: Int64, value: Int64)
+      one word of a counted block: a field the interpreter reads or writes through a place
   placeText(var words: ArrayList<Int64>, at: Int64, text: String)
       an immortal copy of the text, as two words at the register at: how the constant pool gets its strings
   placeFloat(var words: ArrayList<Int64>, at: Int64, value: Float64)
@@ -206,9 +209,12 @@ What it needs beyond TorbScript is a way to put the words of a register in front
   thunk per `.Ready` `.Runtime` row of the manifest, in the manifest's sorted order, generated from the row's C
   prototype: each argument is read from the register the operand names (a struct by `memcpy`, an integer by a cast, a
   pointer parameter from a reference word or as the address of the register), the runtime function is called, and
-  the result is written back. `runtime/machine.c` adds the operations only a VM needs: loads and stores through a
-  reference, allocation of a counted block with its shape word, the release protocol of section 7, float arithmetic and
-  conversions, checked arithmetic of every width with the runtime's own panic functions, the location table.
+  the result is written back. A function the thunk cannot be written for - `test` and `group`, which take a
+  `torb_closure` the runtime would call back - gets a thunk that panics with an internal error, so the numbering stays
+  the manifest's. `runtime/machine.c` adds the operations only a VM needs: allocation of a counted block with its
+  shape word, the shapes and the counts of section 7, float arithmetic and conversions, checked arithmetic of every
+  width with the runtime's own panic functions, the tables of locations and element descriptors, the program's
+  arguments (`Process.arguments()` answers them, not `torb`'s), and the immortal region a module constant is built in.
 - **One native, many operations, is deliberate.** A new native is two commits and a refreshed seed (CONTRIBUTING, "Two
   commits for a breaking change"). A new *operation* is a new row of a C table and a new constant of the emitter, in
   one commit, because the manifest does not change. The kernel natives are the only natives the VM will ever need.
@@ -227,26 +233,29 @@ offset is a wrong write - and a sandboxed script cannot import it, because a san
 
 ## 7. Releases and destructors
 
-**Decision: the VM releases its own blocks in TorbScript, in exactly the order the C back end's drop functions do.**
+**Decision: the kernel retains and releases, in C, over a mirror of the shapes; the interpreter runs the destructors.**
+Revised from the first plan (a walk in TorbScript), because the runtime itself has to release the VM's values too - an
+element of a list, a map value it replaces - and two walkers would be two orders.
 
-- A release of a counted pointer asks the kernel to decrement the count; where it was the last one, the VM walks the
-  block's shape - the common fields, then the group of the variant the tag names, in declaration order, or in reverse
-  declaration order where the C back end's `emitDropHelper` reverses them - releasing each counted field, and then
-  frees the block. `torb_release` of a runtime type (a text, a list, a task) is the runtime's own release, called
-  through the kernel.
-- **`close()` runs where C runs it**: the block's count is lent back (`torb_closing_begin`), the destructor runs as an
-  ordinary VM call, `torb_closing_end` checks and takes the count back, and only then are the fields released
-  (docs/design/DESTRUCTORS.md sections 2 and 8). Because the VM's own interpreter is re-entrant (a release inside an
-  instruction may push the destructor's frame and run it to its return), the order of output between a `close()` and
-  the code around it is the C back end's.
-- **A block the runtime releases** - an element of a list whose storage is freed, the payload of a trait-typed value in
-  a container - reaches a generic C drop of `runtime/machine.c` that reads the block's shape word. Where that shape runs
-  a `close()`, the drop cannot call into the interpreter directly, so it queues the block and the interpreter runs the
-  queued destructors, in the order they were queued, before the instruction after the kernel call. Nothing but a
-  destructor can observe the difference, and a destructor runs in the same order relative to every other destructor and
-  to all output, because the runtime writes no output of its own.
-- A panic runs nothing on the way out, in the VM as in C (gap 9): the interpreter calls the runtime's panic function,
-  which prints and leaves with 101.
+- **The shapes are defined once, when a program is loaded** (`DefineShape`), and `retain`/`release` are one kernel call
+  each: the counted words of the value in the order the C back end's helpers visit them - the common fields, then the
+  group of the variant the tag names, or all of it reversed where `emitDropHelper` reverses it. A counted block of the
+  VM carries its shape word, so a block is released the same way whoever releases it.
+- **A counted element of the program's own types** gets a descriptor whose callbacks walk its shape. The runtime hands a
+  callback the element and nothing else, so the callbacks come from a pool of 64 slots in `runtime/machine.c`, one per
+  counted element type; a trivial key of several words is compared and hashed by its words in the same way, which is
+  exact for integers, `Bool`s and `Char`s (the bytecode says which keys qualify, `comparesByWords`). A key the program
+  compares with an `equals` of its own - a `String` field, a float - needs a callback into the interpreter and is
+  refused until then.
+- **`close()` runs where C runs it.** A release that drops the last count of a block whose shape has a destructor
+  queues the block instead of freeing it. After every kernel call that answered a queued count, the interpreter takes
+  the batch out, and for each block lends it a count (`torb_closing_begin`), runs its `close()` as one more `execute`
+  on top of the words in use, takes the count back (`torb_closing_end`), and releases its fields - and what that
+  release queues runs before the next block of the batch. That is the depth-first order of nested C drop functions,
+  and nothing but a destructor can tell that it ran after the kernel call instead of inside it, because the runtime
+  writes no output of its own.
+- A panic runs nothing on the way out, in the VM as in C (gap 9): the kernel calls the runtime's panic function, which
+  prints and leaves with 101.
 
 ## 8. The gate: C and the VM agree
 
@@ -256,34 +265,47 @@ compares standard output, standard error (folded as for the native run) and the 
 
 - The list grows with every slice until it is every program of the suite; then the list goes away and 7.2's gate - C
   and the VM agree on every script - is the whole suite run twice.
-- **The leak gate for the VM** compares the live-block count of the runtime after the program with the count before it
-  (the VM runs inside `torb`, whose own blocks are alive throughout), under the same `TORB_REPORT_LEAKS=1`, so "the
-  program freed what it allocated" means the same in both back ends.
-- The native leg stays as it is: a program is added to `vm.list` only when its VM run is green, and a VM regression is
-  a red gate like any other.
+- **Not in the list, and why.** The sixteen programs with tasks (slice 7), the three that run `test`/`group` (a
+  closure the runtime calls back), the two whose map keys a program's own `equals` compares (`capsule`, `paths`), and
+  `process-executable-path`, whose executable is `torb` in the VM - a difference that belongs to running inside the
+  toolchain and that the sandbox of 7.4 will answer for itself. `stack-overflow` is in: its recursion never ends, so
+  the VM's limit (section 4) is reached as surely as the native stack's, at the same site.
+- **The leak gate for the VM** is still open: the VM runs inside `torb`, so "live blocks at exit" counts the compiler's
+  own blocks as well. The kernel already answers the live count (`LiveBlocks`); the gate is the count after the program
+  against the count before it, which needs a `Process.exit` inside the VM to report the difference instead of the
+  process's.
+- **What it costs, measured.** `fibonacci(30)` (about 2.7 million calls): 2.0 s of interpretation in a `torb` built
+  with the `dev` profile, against 0.035 s natively. The front end before it is the same for both commands and takes
+  most of a small program's run. Register reads through `Indexed.at`, a kernel call per count and a list of return
+  records are where the time goes; section 10 has the next steps.
 
 ## 9. Slices
 
 | # | Scope | State |
 |---|---|---|
 | 1 | The bytecode format, the frame layout, the emitter from the final IR, the disassembler, `torb ir --bytecode`, snapshots | **Done**: `compiler/src/backend/bytecode/`, `compiler/tests/bytecode.test.trb` |
-| 2 | The kernel: `std/machine` (three natives), the manifest rows, `runtime/machine.c`, the thunk table generated by `torb natives --header` | Not started. **Two commits**: the natives land and the seed is refreshed before anything in `compiler/` calls them |
-| 3 | The interpreter loop for straight-line code, `Int64` and `Float64` arithmetic, calls, inline and boxed records, variants and `match`, text, `print`, lists of trivial elements and of text; `torb run --vm`; `tools/conformance.sh --vm` with `vm.list` | After slice 2's seed |
-| 4 | Closures, trait-typed values and witness calls, maps and sets | After 3 |
-| 5 | Destructors and the release queue, counted elements of the program's own types, the leak gate for the VM | After 4 |
-| 6 | Everything else the C back end runs: the remaining natives' shapes (`torb_closure` arguments of `test`/`group`), `Process.arguments()` answering the program's arguments, module constants (`ConstantCell`), statics of boxed aggregates | After 5 |
-| 7 | Tasks: `TaskNew`, `Suspend`, `Stop`, channels, the FIFO order of `runtime/task.c` (docs/BACKEND.md 7.3's VM half) | After 6 |
+| 2 | The kernel: `std/machine` (five natives), the manifest rows, `runtime/machine.c`, the thunk table generated by `torb natives --header` | **Done**, as the first of two commits: the seed is refreshed from it before the interpreter can call the natives |
+| 3 | The interpreter loop: calls, closures, witness calls, records, variants, text, lists, maps and sets, module constants, destructors; `torb run --vm`; `tools/conformance.sh --vm` with `vm.list` | **Done**: `compiler/src/vm/`, 120 programs of the suite |
+| 4 | Keys compared by a program's own `equals`: a callback from the runtime into the interpreter | Open |
+| 5 | The leak gate of the VM: the live count after the program against the count before it | Open |
+| 6 | `test` and `group`: the runtime's recovery point around a closure of the interpreter | Open, needs the callback of 4 |
+| 7 | Tasks: `TaskNew`, `Suspend`, `Stop`, channels, the FIFO order of `runtime/task.c` (docs/BACKEND.md 7.3's VM half) | Open |
 | 8 | The gate of 7.2: every conformance program in both back ends; `vm.list` deleted | After 7 |
 
 ## 10. Open
 
+- **A call from the runtime into the interpreter.** Slices 4, 6 and 7 need the same thing: a C function the runtime calls
+  (an element's `equals`, a test body, a task's resume) that runs a chunk. The interpreter is TorbScript compiled into
+  `torb`, so the entry has to be a function of the program the runtime can hold - a closure handed to the kernel once,
+  or a queue the interpreter drains as it drains the destructors. The queue works for tasks, whose scheduler decides
+  when a task runs anyway; an `equals` needs its answer at once and so needs the closure.
 - **Where the tasks' scheduler runs.** Either the runtime's own FIFO scheduler drives a VM task through one generic
   resume function of `runtime/machine.c` that hands control back to the interpreter, or the VM carries the same
-  algorithm in TorbScript (BACKEND 5.3 names both). The first keeps one scheduler in the process and is preferred; it
-  needs the interpreter to be callable from C, which is the same mechanism as a destructor queued by the runtime.
+  algorithm in TorbScript (BACKEND 5.3 names both). The first keeps one scheduler in the process and is preferred.
 - **Calling compiled code from bytecode.** BACKEND 5.2 promised that a compiled function can be called from bytecode
   and back. With the VM's own inline layouts that is a marshalling step at the boundary for any record of the program;
   nothing needs it before the sandbox embeds a VM into a compiled program (7.4), and it is decided there.
-- **An inline load of a word.** The loop reads registers through list reads; reading a counted block's field goes
-  through the kernel. An intrinsic that the C back end emits as a load would make the second as cheap as the first -
-  a new native, so two commits, after slice 3 has numbers.
+- **Speed.** A register read is `Indexed.at` (a runtime call and an `Option`); a direct read of the list's storage, an
+  intrinsic for a word of a block, and return records kept in the word stack instead of a list of records are the first
+  three steps, each measured against `fibonacci(30)` above. The first two are new natives, so two commits each.
+
