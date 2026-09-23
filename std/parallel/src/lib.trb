@@ -59,21 +59,21 @@ public type Parallel<Item> {
   private run: () => Task<ArrayList<ArrayList<Item>>>
 
   /** Every item through `transform`, the chunks on the workers. */
-  fn map<Output>(transform: (value: Item) => Output): Parallel<Output> {
+  fn map<Output>(transform: Transform<Item, Output>): Parallel<Output> {
     const previous = run
     const bound = limit
     Parallel(bound, { spreadAfter(previous(), bound, { mapped _, transform }).await() ?? empty() })
   }
 
   /** The items for which `predicate` answers `true`, in their order. */
-  fn filter(predicate: (value: Item) => Bool): Parallel<Item> {
+  fn filter(predicate: Predicate<Item>): Parallel<Item> {
     const previous = run
     const bound = limit
     Parallel(bound, { spreadAfter(previous(), bound, { filtered _, predicate }).await() ?? empty() })
   }
 
   /** Every item through `transform`, keeping the values that are there. */
-  fn filterMap<Output>(transform: (value: Item) => Output?): Parallel<Output> {
+  fn filterMap<Output>(transform: Transform<Item, Output?>): Parallel<Output> {
     const previous = run
     const bound = limit
     Parallel(bound, { spreadAfter(previous(), bound, { filterMapped _, transform }).await() ?? empty() })
@@ -117,7 +117,7 @@ public type Parallel<Item> {
   }
 
   /** The first item in input order for which `predicate` answers `true`, or `None`. */
-  fn find(predicate: (value: Item) => Bool): Task<Item?> {
+  fn find(predicate: Predicate<Item>): Task<Item?> {
     const previous = run
     const chunks = spreadAfter(previous(), limit, { found _, predicate }).await() ?? empty()
     for chunk in chunks {
@@ -129,7 +129,7 @@ public type Parallel<Item> {
   }
 
   /** Runs `body` for every item, the chunks on the workers. The order in which items of two chunks run is the machine's. */
-  fn forEach(body: (value: Item) => Void): Task<Void> {
+  fn forEach(body: Action<Item>): Task<Void> {
     const previous = run
     const _ = spreadAfter(previous(), limit, { visited _, body }).await() ?? empty()
   }
@@ -221,7 +221,7 @@ fn copied<Item>(items: ArrayList<Item>): ArrayList<Item> {
   copy
 }
 
-fn mapped<Item, Output>(chunk: ArrayList<Item>, transform: (value: Item) => Output): ArrayList<Output> {
+fn mapped<Item, Output>(chunk: ArrayList<Item>, transform: Transform<Item, Output>): ArrayList<Output> {
   var outputs: ArrayList<Output> = empty()
   for item in chunk {
     outputs.append transform(item)
@@ -229,7 +229,7 @@ fn mapped<Item, Output>(chunk: ArrayList<Item>, transform: (value: Item) => Outp
   outputs
 }
 
-fn filtered<Item>(chunk: ArrayList<Item>, predicate: (value: Item) => Bool): ArrayList<Item> {
+fn filtered<Item>(chunk: ArrayList<Item>, predicate: Predicate<Item>): ArrayList<Item> {
   var kept: ArrayList<Item> = empty()
   for item in chunk {
     if predicate(item) {
@@ -239,7 +239,7 @@ fn filtered<Item>(chunk: ArrayList<Item>, predicate: (value: Item) => Bool): Arr
   kept
 }
 
-fn filterMapped<Item, Output>(chunk: ArrayList<Item>, transform: (value: Item) => Output?): ArrayList<Output> {
+fn filterMapped<Item, Output>(chunk: ArrayList<Item>, transform: Transform<Item, Output?>): ArrayList<Output> {
   var outputs: ArrayList<Output> = empty()
   for item in chunk {
     if const Some(output) = transform(item) {
@@ -259,7 +259,7 @@ fn summed<Item>(chunk: ArrayList<Item>): ArrayList<Item> where Item: Add & From<
 }
 
 /** The first match of one chunk, as a list of none or one. */
-fn found<Item>(chunk: ArrayList<Item>, predicate: (value: Item) => Bool): ArrayList<Item> {
+fn found<Item>(chunk: ArrayList<Item>, predicate: Predicate<Item>): ArrayList<Item> {
   for item in chunk {
     if predicate(item) {
       return single item
@@ -268,7 +268,7 @@ fn found<Item>(chunk: ArrayList<Item>, predicate: (value: Item) => Bool): ArrayL
   empty()
 }
 
-fn visited<Item>(chunk: ArrayList<Item>, body: (value: Item) => Void): ArrayList<Bool> {
+fn visited<Item>(chunk: ArrayList<Item>, body: Action<Item>): ArrayList<Bool> {
   for item in chunk {
     body item
   }

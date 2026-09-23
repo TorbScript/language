@@ -79,7 +79,7 @@ public type Option<Value> with OrElse<Value> {
    *     const name: String? = Some "ada"
    *     print name.map({ _.toUpperCase() })
    */
-  fn map<Output>(transform: (value: Value) => Output): Output? {
+  fn map<Output>(transform: Transform<Value, Output>): Output? {
     match self {
       Some(value) => .Some(transform(value))
       None => .None
@@ -95,7 +95,7 @@ public type Option<Value> with OrElse<Value> {
    *     const initial = names.get("ada").flatMap({ _.chars().first() })
    *     print initial
    */
-  fn flatMap<Output>(transform: (value: Value) => Output?): Output? {
+  fn flatMap<Output>(transform: Transform<Value, Output?>): Output? {
     match self {
       Some(value) => transform value
       None => .None
@@ -103,7 +103,7 @@ public type Option<Value> with OrElse<Value> {
   }
 
   /** Keeps the value only if it answers the question, and turns it into `None` if it does not. */
-  fn filter(predicate: (value: Value) => Bool): Value? {
+  fn filter(predicate: Predicate<Value>): Value? {
     match self {
       Some(value) if predicate(value) => self
       _ => .None
@@ -111,7 +111,7 @@ public type Option<Value> with OrElse<Value> {
   }
 
   /** Runs the action if there is a value: the statement form of [Option.map], for a step that answers with nothing. */
-  fn forEach(action: (value: Value) => Void) {
+  fn forEach(action: Action<Value>) {
     if const Some(value) = self {
       action value
     }

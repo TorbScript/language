@@ -67,27 +67,27 @@ type Composition<Input, Middle, Output> with Stage<Input, Output> {
  * are the gerunds the collectors already use (`counting`, `joining`, `groupingBy`), which also keeps them apart from
  * the methods of the same meaning on `Iterate` and `Source` (`items.map(f)` is `items.through(mapping(f))`).
  */
-public fn mapping<Input, Output>(transform: (value: Input) => Output): Stage<Input, Output> {
+public fn mapping<Input, Output>(transform: Transform<Input, Output>): Stage<Input, Output> {
   Mapping transform
 }
 
 /** Keeps every value that answers the predicate, and drops the rest. */
-public fn filtering<Item>(predicate: (value: Item) => Bool): Stage<Item, Item> {
+public fn filtering<Item>(predicate: Predicate<Item>): Stage<Item, Item> {
   Filtering predicate
 }
 
 /** `map` and `filter` in one: keeps the value of every `Some`. The bridge for functions that answer an Option. */
-public fn filterMapping<Input, Output>(transform: (value: Input) => Output?): Stage<Input, Output> {
+public fn filterMapping<Input, Output>(transform: Transform<Input, Output?>): Stage<Input, Output> {
   FilterMapping transform
 }
 
 /** Like `filterMapping`, but the first `None` ends the pipeline. */
-public fn mappingWhile<Input, Output>(transform: (value: Input) => Output?): Stage<Input, Output> {
+public fn mappingWhile<Input, Output>(transform: Transform<Input, Output?>): Stage<Input, Output> {
   MappingWhile transform
 }
 
 /** Transforms every value into its own Iterate, and flattens all of them into one sequence. */
-public fn flatMapping<Input, Output>(transform: (value: Input) => Iterate<Output>): Stage<Input, Output> {
+public fn flatMapping<Input, Output>(transform: Transform<Input, Iterate<Output>>): Stage<Input, Output> {
   FlatMapping transform
 }
 
@@ -97,7 +97,7 @@ public fn taking<Item>(amount: Int): Stage<Item, Item> {
 }
 
 /** Values up to, but not including, the first one that fails the predicate. */
-public fn takingWhile<Item>(predicate: (value: Item) => Bool): Stage<Item, Item> {
+public fn takingWhile<Item>(predicate: Predicate<Item>): Stage<Item, Item> {
   TakingWhile predicate
 }
 
@@ -122,7 +122,7 @@ public fn chunking<Item>(size: Int): Stage<Item, List<Item>> {
 // --- mapping --------------------------------------------------------------------------------------------------------
 
 type Mapping<Input, Output> with Stage<Input, Output> {
-  transform: (value: Input) => Output
+  transform: Transform<Input, Output>
 
   fn onto<Final>(downstream: Accumulator<Output, Final>): Accumulator<Input, Final> {
     MappingAccumulator transform, downstream
@@ -130,7 +130,7 @@ type Mapping<Input, Output> with Stage<Input, Output> {
 }
 
 type MappingAccumulator<Input, Output, Final> with Accumulator<Input, Final> {
-  transform: (value: Input) => Output
+  transform: Transform<Input, Output>
   var downstream: Accumulator<Output, Final>
 
   var fn add(value: Input) {
@@ -149,7 +149,7 @@ type MappingAccumulator<Input, Output, Final> with Accumulator<Input, Final> {
 // --- filtering ------------------------------------------------------------------------------------------------------
 
 type Filtering<Item> with Stage<Item, Item> {
-  predicate: (value: Item) => Bool
+  predicate: Predicate<Item>
 
   fn onto<Final>(downstream: Accumulator<Item, Final>): Accumulator<Item, Final> {
     FilteringAccumulator predicate, downstream
@@ -157,7 +157,7 @@ type Filtering<Item> with Stage<Item, Item> {
 }
 
 type FilteringAccumulator<Item, Final> with Accumulator<Item, Final> {
-  predicate: (value: Item) => Bool
+  predicate: Predicate<Item>
   var downstream: Accumulator<Item, Final>
 
   var fn add(value: Item) {
@@ -178,7 +178,7 @@ type FilteringAccumulator<Item, Final> with Accumulator<Item, Final> {
 // --- filterMapping, mappingWhile ------------------------------------------------------------------------------------
 
 type FilterMapping<Input, Output> with Stage<Input, Output> {
-  transform: (value: Input) => Output?
+  transform: Transform<Input, Output?>
 
   fn onto<Final>(downstream: Accumulator<Output, Final>): Accumulator<Input, Final> {
     FilterMappingAccumulator transform, downstream
@@ -186,7 +186,7 @@ type FilterMapping<Input, Output> with Stage<Input, Output> {
 }
 
 type FilterMappingAccumulator<Input, Output, Final> with Accumulator<Input, Final> {
-  transform: (value: Input) => Output?
+  transform: Transform<Input, Output?>
   var downstream: Accumulator<Output, Final>
 
   var fn add(value: Input) {
@@ -205,7 +205,7 @@ type FilterMappingAccumulator<Input, Output, Final> with Accumulator<Input, Fina
 }
 
 type MappingWhile<Input, Output> with Stage<Input, Output> {
-  transform: (value: Input) => Output?
+  transform: Transform<Input, Output?>
 
   fn onto<Final>(downstream: Accumulator<Output, Final>): Accumulator<Input, Final> {
     MappingWhileAccumulator transform, downstream
@@ -213,7 +213,7 @@ type MappingWhile<Input, Output> with Stage<Input, Output> {
 }
 
 type MappingWhileAccumulator<Input, Output, Final> with Accumulator<Input, Final> {
-  transform: (value: Input) => Output?
+  transform: Transform<Input, Output?>
   var downstream: Accumulator<Output, Final>
   var stopped: Bool = false
 
@@ -238,7 +238,7 @@ type MappingWhileAccumulator<Input, Output, Final> with Accumulator<Input, Final
 // --- flatMapping ----------------------------------------------------------------------------------------------------
 
 type FlatMapping<Input, Output> with Stage<Input, Output> {
-  transform: (value: Input) => Iterate<Output>
+  transform: Transform<Input, Iterate<Output>>
 
   fn onto<Final>(downstream: Accumulator<Output, Final>): Accumulator<Input, Final> {
     FlatMappingAccumulator transform, downstream
@@ -246,7 +246,7 @@ type FlatMapping<Input, Output> with Stage<Input, Output> {
 }
 
 type FlatMappingAccumulator<Input, Output, Final> with Accumulator<Input, Final> {
-  transform: (value: Input) => Iterate<Output>
+  transform: Transform<Input, Iterate<Output>>
   var downstream: Accumulator<Output, Final>
 
   /** The one stage that answers many values for one, so it is also the one that has to watch `isDone` itself. */
@@ -301,7 +301,7 @@ type TakingAccumulator<Item, Final> with Accumulator<Item, Final> {
 }
 
 type TakingWhile<Item> with Stage<Item, Item> {
-  predicate: (value: Item) => Bool
+  predicate: Predicate<Item>
 
   fn onto<Final>(downstream: Accumulator<Item, Final>): Accumulator<Item, Final> {
     TakingWhileAccumulator predicate, downstream
@@ -309,7 +309,7 @@ type TakingWhile<Item> with Stage<Item, Item> {
 }
 
 type TakingWhileAccumulator<Item, Final> with Accumulator<Item, Final> {
-  predicate: (value: Item) => Bool
+  predicate: Predicate<Item>
   var downstream: Accumulator<Item, Final>
   var stopped: Bool = false
 

@@ -15,6 +15,8 @@ keywords:
   - OperatingSystem
   - Architecture
   - ByteOrder
+  - Predicate
+  - Transform
 source:
   - std/core/src/lib.trb
   - std/core/src/target.trb
@@ -168,7 +170,7 @@ public native type Array<Item, const Size: Int>
   static fn from(items: Iterate<Item>): Array<Item, Size>?
   var fn set(index: Int, value: Item)
   var fn fill(value: Item)
-  fn mapped<Output>(transform: (value: Item) => Output): Array<Output, Size>
+  fn mapped<Output>(transform: Transform<Item, Output>): Array<Output, Size>
 }
 ```
 
@@ -256,6 +258,18 @@ print(OperatingSystem.Linux.isPosix() && separator().byteLength() == 1)
 `show()` answers the name as the vendor writes it (`macOS`, `FreeBSD`), and `isPosix()` is the question for a branch
 that should include an operating system added later.
 
+### Predicate, Action and Transform
+
+The three closure shapes a signature takes most, as aliases: a question about one value, an effect on one value, and
+the conversion of one value into another. An alias is transparent, so any closure of the shape fits (see
+[Predicate, Action and Transform](function-types.md)).
+
+```trb fragment
+public type Predicate<Value> = (value: Value) => Bool
+public type Action<Value> = (value: Value) => Void
+public type Transform<Input, Output> = (value: Input) => Output
+```
+
 ## Related
 
 - [Compile-time branches](../language/execution/compile-time-branches.md) - which arm of a `match` on the target is
@@ -263,4 +277,5 @@ that should include an operating system added later.
 - [Result](../language/errors/result.md) - the rules of `Result` and `?`.
 - [Bindings](../language/values-and-types/bindings.md) - what `const` and `var` decide.
 - [Traits](../language/traits/traits.md) - how the operator traits are implemented.
+- [Predicate, Action and Transform](function-types.md) - the rules of the three closure aliases.
 - [The standard library](index.md) - the other packages.

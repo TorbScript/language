@@ -49,6 +49,7 @@ the calls, the types and the error handling all in the one form the language pic
 - [A type with cases is taken apart with `match`](#match)
 - [A closure is short, and trails its call](#closures)
 - [A closure over a `var` does not escape](#closures-over-var)
+- [A closure parameter names its shape](#closure-types)
 - [A resource is bound with `using`](#resources)
 - [A task answers a `Result` when it is awaited](#tasks)
 - [`Into` comes from `From`](#conversions)
@@ -429,6 +430,33 @@ fn counter(): () => Int {
 
 Why: a `var` is the one variable the language shares, and a closure that outlived it would share it with nobody's
 knowledge. See [Closures](../language/functions/closures.md), rule 8.
+
+## A closure parameter names its shape {#closure-types}
+
+**A parameter that takes a question about one value is a `Predicate<Item>`, one called for its effect is an
+`Action<Item>`, and one that turns a value into another is a `Transform<Item, Output>`.** The three are aliases in
+the prelude, so any closure of the shape fits, and the signature says what the closure is for before it says what it
+looks like.
+
+```trb run
+fn countWhere(numbers: List<Int>, predicate: Predicate<Int>): Int {
+  numbers.filter(predicate).count()
+}
+
+fn labels(numbers: List<Int>, transform: Transform<Int, String>): List<String> {
+  numbers.map(transform).toList()
+}
+
+const numbers = [3, 8, 5]
+const large = countWhere numbers { _ > 4 }
+const shown = labels numbers { "#{_}" }
+print large    // prints 2
+print shown    // prints ["#3", "#8", "#5"]
+```
+
+Why: `filter`, `forEach` and `map` of the standard library are written this way, and a signature that reads like
+theirs needs no second look. A closure without parameters stays `() => Value`, which is already as short as a name.
+See [Predicate, Action and Transform](../standard-library/function-types.md).
 
 ## A resource is bound with `using` {#resources}
 

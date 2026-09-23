@@ -48,12 +48,12 @@ fn totalLength(channel: Channel<String>): Task<Result<Int, Cancelled>> {
 public shared trait Source<Item, Failure: From<Cancelled>> with Close {
   var fn next(): Task<Result<Item?, Failure>>
   var fn through<Output>(stage: Stage<Item, Output>): Source<Output, Failure>
-  var fn map<Output>(transform: (value: Item) => Output): Source<Output, Failure>
-  var fn filter(predicate: (value: Item) => Bool): Source<Item, Failure>
-  var fn filterMap<Output>(transform: (value: Item) => Output?): Source<Output, Failure>
-  var fn mapWhile<Output>(transform: (value: Item) => Output?): Source<Output, Failure>
+  var fn map<Output>(transform: Transform<Item, Output>): Source<Output, Failure>
+  var fn filter(predicate: Predicate<Item>): Source<Item, Failure>
+  var fn filterMap<Output>(transform: Transform<Item, Output?>): Source<Output, Failure>
+  var fn mapWhile<Output>(transform: Transform<Item, Output?>): Source<Output, Failure>
   var fn take(amount: Int): Source<Item, Failure>
-  var fn takeWhile(predicate: (value: Item) => Bool): Source<Item, Failure>
+  var fn takeWhile(predicate: Predicate<Item>): Source<Item, Failure>
   var fn skip(amount: Int): Source<Item, Failure>
   var fn indexed(): Source<(index: Int, item: Item), Failure>
   var fn chunked(size: Int): Source<List<Item>, Failure>
@@ -63,8 +63,8 @@ public shared trait Source<Item, Failure: From<Cancelled>> with Close {
   var fn toList(): Task<Result<List<Item>, Failure>>
   var fn count(): Task<Result<Int, Failure>>
   var fn fold<State>(initial: State, combine: (State, Item) => State): Task<Result<State, Failure>>
-  var fn forEach(action: (value: Item) => Void): Task<Result<Void, Failure>>
-  var fn find(predicate: (value: Item) => Bool): Task<Result<Item?, Failure>>
+  var fn forEach(action: Action<Item>): Task<Result<Void, Failure>>
+  var fn find(predicate: Predicate<Item>): Task<Result<Item?, Failure>>
   var fn into(var sink: Sink<Item, Failure>): Task<Result<Void, Failure>>
 
   static fn from(items: Iterate<Item>): Source<Item, Failure>

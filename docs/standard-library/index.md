@@ -19,7 +19,7 @@ mathematics, JSON and the time values. What a program can *touch* is deliberatel
 
 One page per package: what it is for, how it is imported, and every public declaration with its doc comment. The
 `## Declarations` section of each page stands between generator markers, so that milestone 8's `torb doc` can fill it from
-the sources.
+the sources. One reference page stands beside them, for the three closure aliases every package's signatures use.
 
 What does not belong here: the language rules that a type participates in, which are in
 [the language reference](../language/index.md), and the argument for a design decision, which is in
@@ -30,6 +30,7 @@ What does not belong here: the language rules that a type participates in, which
 ## Pages
 
 - **[std/core](core.md)** - The bottom of the standard library: Option, Result, Error, the operator and conversion traits, and the control structures that are functions.
+- **[Predicate, Action and Transform](function-types.md)** - Three aliases in the prelude for the closure shapes signatures take most - a question about one value, an effect on one value, and a conversion of one value into another.
 - **[std/text](text.md)** - Char, a Unicode scalar value, and String, always-valid UTF-8 text with no length() and no indexing by character.
 - **[std/number](number.md)** - Every numeric type of the language, the traits their arithmetic and bit operations go through, and Real.
 - **[std/collections](collections.md)** - The collection traits every signature talks about, and the implementations that only show up where one is built.

@@ -63,8 +63,8 @@ public trait List<Item>
   var fn reverse()
   var fn clear()
   var fn compact()
-  var fn sort<Key: Compare>(by: (value: Item) => Key)
-  fn sorted<Key: Compare>(by: (value: Item) => Key): Self
+  var fn sort<Key: Compare>(by: Transform<Item, Key>)
+  fn sorted<Key: Compare>(by: Transform<Item, Key>): Self
   var fn remove(value: Item): Bool where Item: Equals
   var fn swapAt(first: Int, second: Int)
   var fn update(index: Int, change: (var element: Item) => Void)
@@ -108,7 +108,7 @@ public trait Map<Key, Value>
   fn containsKey(key: Key): Bool
   fn keys(): Iterate<Key>
   fn values(): Iterate<Value>
-  fn mapValues<Output>(transform: (value: Value) => Output): Map<Key, Output> where Key: Hash
+  fn mapValues<Output>(transform: Transform<Value, Output>): Map<Key, Output> where Key: Hash
 }
 ```
 

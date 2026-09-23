@@ -170,8 +170,8 @@ show transformed(numbers) { item: Int => item * 2 }
 ```
 
 **Naming the implicit parameter is not always available.** It only works where the callee's own function type names
-its parameter, as `map`'s `transform: (value: Item) => Output` does; a call whose function type carries no parameter
-name still needs `_` or a written name.
+its parameter, as `map`'s `transform: Transform<Item, Output>` does - the alias is `(value: Item) => Output`; a call
+whose function type carries no parameter name still needs `_` or a written name.
 
 ## Related
 

@@ -172,19 +172,19 @@ public fn counting<Item>(): Accumulator<Item, Int> {
 }
 
 /** Every value, added together, starting from zero. */
-public fn summing<Item, Total: Add & From<Int>>(value: (value: Item) => Total): Accumulator<Item, Total> {
+public fn summing<Item, Total: Add & From<Int>>(value: Transform<Item, Total>): Accumulator<Item, Total> {
   collector(Total.from(0), finish: { _ }) { sum, item => sum + value(item) }
 }
 
 /** `None` for an empty pipeline. */
-public fn averaging<Item>(value: (value: Item) => Float): Accumulator<Item, Float?> {
+public fn averaging<Item>(value: Transform<Item, Float>): Accumulator<Item, Float?> {
   collector((0.0, 0), finish: { state => if state.1 == 0 { None } else { Some(state.0 / Float.from(state.1)) } }) {
     state, item => (state.0 + value(item), state.1 + 1)
   }
 }
 
 /** The value with the smallest key, or `None` for an empty pipeline. Keeps the earlier of two equal keys. */
-public fn minBy<Item, Key: Compare>(key: (value: Item) => Key): Accumulator<Item, Item?> {
+public fn minBy<Item, Key: Compare>(key: Transform<Item, Key>): Accumulator<Item, Item?> {
   const initial: Item? = None
   collector(initial, finish: { _ }) { best, item =>
     match best {
@@ -195,7 +195,7 @@ public fn minBy<Item, Key: Compare>(key: (value: Item) => Key): Accumulator<Item
 }
 
 /** The value with the largest key, or `None` for an empty pipeline. Keeps the earlier of two equal keys. */
-public fn maxBy<Item, Key: Compare>(key: (value: Item) => Key): Accumulator<Item, Item?> {
+public fn maxBy<Item, Key: Compare>(key: Transform<Item, Key>): Accumulator<Item, Item?> {
   const initial: Item? = None
   collector(initial, finish: { _ }) { best, item =>
     match best {
@@ -219,7 +219,7 @@ public fn joining(separator: String = "", prefix: String = "", suffix: String = 
 }
 
 /** `(matching, rest)` */
-public fn partitioningBy<Item>(predicate: (value: Item) => Bool): Accumulator<Item, (List<Item>, List<Item>)> {
+public fn partitioningBy<Item>(predicate: Predicate<Item>): Accumulator<Item, (List<Item>, List<Item>)> {
   const initial: (List<Item>, List<Item>) = ([], [])
   collector(initial, finish: { _ }) { lists, item =>
     if predicate(item) { (lists.0.appended(item), lists.1) } else { (lists.0, lists.1.appended(item)) }
@@ -233,7 +233,7 @@ public fn partitioningBy<Item>(predicate: (value: Item) => Bool): Accumulator<It
  *     groupingBy { _.department }.then(counting())             // Map<String, Int>
  *     groupingBy { _.department }.then(maxBy { _.salary }) // Map<String, Employee?>
  */
-public fn groupingBy<Item, Key: Hash>(key: (value: Item) => Key): Grouping<Item, Key> {
+public fn groupingBy<Item, Key: Hash>(key: Transform<Item, Key>): Grouping<Item, Key> {
   Grouping key, GroupingAccumulator(key, listing())
 }
 
@@ -243,7 +243,7 @@ public fn groupingBy<Item, Key: Hash>(key: (value: Item) => Key): Grouping<Item,
  */
 public type Grouping<Item, Key: Hash> with Accumulator<Item, Map<Key, List<Item>>> {
   /** Picks the group a value belongs to. */
-  key: (value: Item) => Key
+  key: Transform<Item, Key>
   private var lists: GroupingAccumulator<Item, Key, List<Item>>
 
   /** Groups into a `List` per key, same as `then(listing())`. */
@@ -268,7 +268,7 @@ public type Grouping<Item, Key: Hash> with Accumulator<Item, Map<Key, List<Item>
  * it was given, and every further group takes another copy of the same starting state.
  */
 type GroupingAccumulator<Item, Key: Hash, Output> with Accumulator<Item, Map<Key, Output>> {
-  key: (value: Item) => Key
+  key: Transform<Item, Key>
   downstream: Accumulator<Item, Output>
   var groups: Map<Key, Accumulator<Item, Output>> = [:]
 

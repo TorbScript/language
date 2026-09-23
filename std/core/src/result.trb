@@ -77,7 +77,7 @@ public type Result<Value, Failure> with OrElse<Value> {
   }
 
   /** Changes the value of an `Ok` and leaves a `Fail` alone: one more step on the way that worked. */
-  fn map<Output>(transform: (value: Value) => Output): Result<Output, Failure> {
+  fn map<Output>(transform: Transform<Value, Output>): Result<Output, Failure> {
     match self {
       Ok(value) => .Ok(transform(value))
       Fail(error) => .Fail(error)
@@ -103,7 +103,7 @@ public type Result<Value, Failure> with OrElse<Value> {
   }
 
   /** Continues with a step that can fail itself and keeps one level: the explicit form of what `?` does. */
-  fn flatMap<Output>(transform: (value: Value) => Result<Output, Failure>): Result<Output, Failure> {
+  fn flatMap<Output>(transform: Transform<Value, Result<Output, Failure>>): Result<Output, Failure> {
     match self {
       Ok(value) => transform value
       Fail(error) => Fail error
@@ -111,7 +111,7 @@ public type Result<Value, Failure> with OrElse<Value> {
   }
 
   /** Runs the action if the operation worked: the statement form of [Result.map]. */
-  fn forEach(action: (value: Value) => Void) {
+  fn forEach(action: Action<Value>) {
     if const Ok(value) = self {
       action value
     }

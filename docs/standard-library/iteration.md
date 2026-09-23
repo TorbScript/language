@@ -64,32 +64,32 @@ just a count, shared by every collection and by `Range<Int>`.
 ```trb fragment
 public trait Iterate<Item> {
   fn iterate(): Iterator<Item>
-  fn map<Output>(transform: (value: Item) => Output): Iterate<Output>
-  fn filter(predicate: (value: Item) => Bool): Iterate<Item>
-  fn flatMap<Output>(transform: (value: Item) => Iterate<Output>): Iterate<Output>
-  fn filterMap<Output>(transform: (value: Item) => Output?): Iterate<Output>
-  fn mapWhile<Output>(transform: (value: Item) => Output?): Iterate<Output>
+  fn map<Output>(transform: Transform<Item, Output>): Iterate<Output>
+  fn filter(predicate: Predicate<Item>): Iterate<Item>
+  fn flatMap<Output>(transform: Transform<Item, Iterate<Output>>): Iterate<Output>
+  fn filterMap<Output>(transform: Transform<Item, Output?>): Iterate<Output>
+  fn mapWhile<Output>(transform: Transform<Item, Output?>): Iterate<Output>
   fn take(amount: Int): Iterate<Item>
   fn skip(amount: Int): Iterate<Item>
-  fn takeWhile(predicate: (value: Item) => Bool): Iterate<Item>
+  fn takeWhile(predicate: Predicate<Item>): Iterate<Item>
   fn zip<Output>(other: Iterate<Output>): Iterate<(Item, Output)>
   fn indexed(): Iterate<(index: Int, item: Item)>
-  fn sorted<Key: Compare>(by: (value: Item) => Key): Iterate<Item>
+  fn sorted<Key: Compare>(by: Transform<Item, Key>): Iterate<Item>
   fn through<Output>(stage: Stage<Item, Output>): Iterate<Output>
   fn collect<Output>(into: Accumulator<Item, Output>): Output
   fn to<Target: From<Iterate<Item>>>(): Target
   fn toList(): List<Item>
   fn toSet(): Set<Item> where Item: Hash
   fn joined(separator: String = ""): String where Item: Show
-  fn forEach(action: (value: Item) => Void)
+  fn forEach(action: Action<Item>)
   fn fold<State>(initial: State, combine: (State, Item) => State): State
-  fn find(predicate: (value: Item) => Bool): Item?
+  fn find(predicate: Predicate<Item>): Item?
   fn first(): Item?
-  fn any(predicate: (value: Item) => Bool): Bool
-  fn all(predicate: (value: Item) => Bool): Bool
+  fn any(predicate: Predicate<Item>): Bool
+  fn all(predicate: Predicate<Item>): Bool
   fn count(): Int
   fn sum(): Item where Item: Add & From<Int>
-  fn groupBy<Key: Hash>(key: (value: Item) => Key): Map<Key, List<Item>>
+  fn groupBy<Key: Hash>(key: Transform<Item, Key>): Map<Key, List<Item>>
 }
 ```
 
@@ -148,13 +148,13 @@ call. `collector(initial, finish:, step:)` writes one the functional way, as a f
 
 ```trb fragment
 public fn counting<Item>(): Accumulator<Item, Int>
-public fn summing<Item, Total: Add & From<Int>>(value: (value: Item) => Total): Accumulator<Item, Total>
-public fn averaging<Item>(value: (value: Item) => Float): Accumulator<Item, Float?>
-public fn minBy<Item, Key: Compare>(key: (value: Item) => Key): Accumulator<Item, Item?>
-public fn maxBy<Item, Key: Compare>(key: (value: Item) => Key): Accumulator<Item, Item?>
+public fn summing<Item, Total: Add & From<Int>>(value: Transform<Item, Total>): Accumulator<Item, Total>
+public fn averaging<Item>(value: Transform<Item, Float>): Accumulator<Item, Float?>
+public fn minBy<Item, Key: Compare>(key: Transform<Item, Key>): Accumulator<Item, Item?>
+public fn maxBy<Item, Key: Compare>(key: Transform<Item, Key>): Accumulator<Item, Item?>
 public fn joining(separator: String = "", prefix: String = "", suffix: String = ""): Accumulator<String, String>
-public fn partitioningBy<Item>(predicate: (value: Item) => Bool): Accumulator<Item, (List<Item>, List<Item>)>
-public fn groupingBy<Item, Key: Hash>(key: (value: Item) => Key): Grouping<Item, Key>
+public fn partitioningBy<Item>(predicate: Predicate<Item>): Accumulator<Item, (List<Item>, List<Item>)>
+public fn groupingBy<Item, Key: Hash>(key: Transform<Item, Key>): Grouping<Item, Key>
 ```
 
 `groupingBy` answers a `Grouping`, which has its own `then(downstream)` for a different one per group:

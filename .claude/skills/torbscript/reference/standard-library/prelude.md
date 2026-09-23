@@ -41,6 +41,7 @@ public use Indexed, MutableIndexed, Slice, MutableSlice from "std/core"
 public use Range, RangeFrom, RangeTo, Bounds from "std/core"
 public use Array, Shared, isSame from "std/core"
 public use do, unless, retry, using, Close from "std/core"
+public use Predicate, Action, Transform from "std/core"
 public use Char, String from "std/text"
 public use Numeric, Signed, Real, Bits, NumberParseError, NumberRangeError from "std/number"
 public use Int8, Int16, Int32, Int64 from "std/number"
@@ -80,7 +81,9 @@ Every re-export keeps its original name, so `use Option from "std/prelude"` and 
 same type. `math` keeps its namespace even in the prelude - `math.power(a, 2.0)` reads as a function of a value, and
 the bare name `power` would say nothing. `Result.Ok`, `Result.Fail`, `Option.Some` and `Option.None` are the one reason
 these two types can be matched and constructed without their type name, in a pattern (`None =>`) as well as in an
-expression (`Ok value`).
+expression (`Ok value`). `Predicate`, `Action` and `Transform` are here so that a signature taking a closure reads
+the same in every file: `predicate: Predicate<Item>` rather than `predicate: (value: Item) => Bool` (see
+[Predicate, Action and Transform](function-types.md)).
 
 ## Related
 

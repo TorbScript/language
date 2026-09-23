@@ -70,7 +70,7 @@ public native shared type Task<Value> {
   }
 
   /** Changes the value once the task finishes, without waiting for it here. A cancelled task stays cancelled. */
-  fn map<Output>(transform: (value: Value) => Output): Task<Output> {
+  fn map<Output>(transform: Transform<Value, Output>): Task<Output> {
     match await() {
       Ok(value) => transform value
       Fail(_) => stopAsCancelled()
@@ -78,7 +78,7 @@ public native shared type Task<Value> {
   }
 
   /** Continues with another task once this one finishes, and keeps one level: the async form of [Result.flatMap]. */
-  fn flatMap<Output>(transform: (value: Value) => Task<Output>): Task<Output> {
+  fn flatMap<Output>(transform: Transform<Value, Task<Output>>): Task<Output> {
     const value = match await() {
       Ok(found) => found
       Fail(_) => stopAsCancelled()

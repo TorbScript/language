@@ -63,14 +63,14 @@ machine. It extends `List`, so anything else that can be iterated is made one fi
 
 ```trb fragment
 public type Parallel<Item> {
-  fn map<Output>(transform: (value: Item) => Output): Parallel<Output>
-  fn filter(predicate: (value: Item) => Bool): Parallel<Item>
-  fn filterMap<Output>(transform: (value: Item) => Output?): Parallel<Output>
+  fn map<Output>(transform: Transform<Item, Output>): Parallel<Output>
+  fn filter(predicate: Predicate<Item>): Parallel<Item>
+  fn filterMap<Output>(transform: Transform<Item, Output?>): Parallel<Output>
   fn toList(): Task<List<Item>>
   fn count(): Task<Int>
   fn sum(): Task<Item> where Item: Add & From<Int>
-  fn find(predicate: (value: Item) => Bool): Task<Item?>
-  fn forEach(body: (value: Item) => Void): Task<Void>
+  fn find(predicate: Predicate<Item>): Task<Item?>
+  fn forEach(body: Action<Item>): Task<Void>
 }
 ```
 

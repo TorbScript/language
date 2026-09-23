@@ -15,7 +15,7 @@ public type Mapped<Item, Output> with Iterate<Output> {
   /** The values before the transform. */
   source: Iterate<Item>
   /** Applied to every value of `source`, in order. */
-  transform: (value: Item) => Output
+  transform: Transform<Item, Output>
 
   /** A cursor that pulls one value from `source` and answers it transformed. */
   fn iterate(): Iterator<Output> {
@@ -25,7 +25,7 @@ public type Mapped<Item, Output> with Iterate<Output> {
 
 type MappedIterator<Item, Output> with Iterator<Output> {
   var source: Iterator<Item>
-  transform: (value: Item) => Output
+  transform: Transform<Item, Output>
 
   var fn next(): Output? {
     source.next().map(transform)
@@ -39,7 +39,7 @@ public type Filtered<Item> with Iterate<Item> {
   /** The values before the predicate is applied. */
   source: Iterate<Item>
   /** Kept when it answers `true`. */
-  predicate: (value: Item) => Bool
+  predicate: Predicate<Item>
 
   /** A cursor that reads from `source` until it finds a value `predicate` keeps, or `source` is exhausted. */
   fn iterate(): Iterator<Item> {
@@ -49,7 +49,7 @@ public type Filtered<Item> with Iterate<Item> {
 
 type FilteredIterator<Item> with Iterator<Item> {
   var source: Iterator<Item>
-  predicate: (value: Item) => Bool
+  predicate: Predicate<Item>
 
   var fn next(): Item? {
     while const Some(value) = source.next() {
@@ -68,7 +68,7 @@ public type FilterMapped<Item, Output> with Iterate<Output> {
   /** The values before the transform. */
   source: Iterate<Item>
   /** Answers `None` to drop a value, `Some(output)` to keep one. */
-  transform: (value: Item) => Output?
+  transform: Transform<Item, Output?>
 
   /** A cursor that reads from `source` until `transform` answers `Some`, or `source` is exhausted. */
   fn iterate(): Iterator<Output> {
@@ -78,7 +78,7 @@ public type FilterMapped<Item, Output> with Iterate<Output> {
 
 type FilterMappedIterator<Item, Output> with Iterator<Output> {
   var source: Iterator<Item>
-  transform: (value: Item) => Output?
+  transform: Transform<Item, Output?>
 
   var fn next(): Output? {
     while const Some(value) = source.next() {
@@ -95,7 +95,7 @@ public type MappedWhile<Item, Output> with Iterate<Output> {
   /** The values before the transform. */
   source: Iterate<Item>
   /** The first `None` ends the pipeline; `source` is never asked for a value again. */
-  transform: (value: Item) => Output?
+  transform: Transform<Item, Output?>
 
   /** A cursor that stops for good the moment `transform` answers `None`. */
   fn iterate(): Iterator<Output> {
@@ -105,7 +105,7 @@ public type MappedWhile<Item, Output> with Iterate<Output> {
 
 type MappedWhileIterator<Item, Output> with Iterator<Output> {
   var source: Iterator<Item>
-  transform: (value: Item) => Output?
+  transform: Transform<Item, Output?>
   var done: Bool = false
 
   var fn next(): Output? {
@@ -125,7 +125,7 @@ public type FlatMapped<Item, Output> with Iterate<Output> {
   /** The values before the transform. */
   source: Iterate<Item>
   /** Turns one value of `source` into an Iterate of its own, which is flattened into the result. */
-  transform: (value: Item) => Iterate<Output>
+  transform: Transform<Item, Iterate<Output>>
 
   /** A cursor that walks the Iterate `transform` produced for the current value, then moves to the next one. */
   fn iterate(): Iterator<Output> {
@@ -135,7 +135,7 @@ public type FlatMapped<Item, Output> with Iterate<Output> {
 
 type FlatMappedIterator<Item, Output> with Iterator<Output> {
   var source: Iterator<Item>
-  transform: (value: Item) => Iterate<Output>
+  transform: Transform<Item, Iterate<Output>>
   var current: Iterator<Output>? = None
 
   var fn next(): Output? {
@@ -201,7 +201,7 @@ public type TakenWhile<Item> with Iterate<Item> {
   /** The values before the predicate is applied. */
   source: Iterate<Item>
   /** The first value that answers `false` ends the pipeline. */
-  predicate: (value: Item) => Bool
+  predicate: Predicate<Item>
 
   /** A cursor that stops for good the moment `predicate` answers `false`. */
   fn iterate(): Iterator<Item> {
@@ -211,7 +211,7 @@ public type TakenWhile<Item> with Iterate<Item> {
 
 type TakenWhileIterator<Item> with Iterator<Item> {
   var source: Iterator<Item>
-  predicate: (value: Item) => Bool
+  predicate: Predicate<Item>
   var done: Bool = false
 
   var fn next(): Item? {
@@ -261,7 +261,7 @@ public type Sorted<Item, Key: Compare> with Iterate<Item> {
   /** The values to sort. */
   source: Iterate<Item>
   /** What to compare two values by. */
-  key: (value: Item) => Key
+  key: Transform<Item, Key>
 
   /** Sorting needs all values: the buffer is filled when the iteration starts, not when the stage is created. */
   fn iterate(): Iterator<Item> {

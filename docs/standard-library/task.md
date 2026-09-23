@@ -51,8 +51,8 @@ public native shared type Task<Value> {
   fn await(): Result<Value, Cancelled>
   var fn cancel()
   var fn within(limit: Duration): Task<Result<Value, TimedOut>>
-  fn map<Output>(transform: (value: Value) => Output): Task<Output>
-  fn flatMap<Output>(transform: (value: Value) => Task<Output>): Task<Output>
+  fn map<Output>(transform: Transform<Value, Output>): Task<Output>
+  fn flatMap<Output>(transform: Transform<Value, Task<Output>>): Task<Output>
   static fn all(tasks: Iterate<Task<Value>>): Task<List<Value>>
 }
 

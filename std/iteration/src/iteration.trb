@@ -96,27 +96,27 @@ public trait Iterate<Item> {
   // --- Lazy stages -----------------------------------------------------------------------------
 
   /** Transforms every value into another one, in order. */
-  fn map<Output>(transform: (value: Item) => Output): Iterate<Output> {
+  fn map<Output>(transform: Transform<Item, Output>): Iterate<Output> {
     Mapped self, transform
   }
 
   /** Keeps every value that answers the predicate, and drops the rest. */
-  fn filter(predicate: (value: Item) => Bool): Iterate<Item> {
+  fn filter(predicate: Predicate<Item>): Iterate<Item> {
     Filtered self, predicate
   }
 
   /** Transforms every value into its own Iterate, and flattens all of them into one sequence. */
-  fn flatMap<Output>(transform: (value: Item) => Iterate<Output>): Iterate<Output> {
+  fn flatMap<Output>(transform: Transform<Item, Iterate<Output>>): Iterate<Output> {
     FlatMapped self, transform
   }
 
   /** `map` and `filter` in one: keeps the values of all `Some`. The bridge for functions that return an Option. */
-  fn filterMap<Output>(transform: (value: Item) => Output?): Iterate<Output> {
+  fn filterMap<Output>(transform: Transform<Item, Output?>): Iterate<Output> {
     FilterMapped self, transform
   }
 
   /** Like `filterMap`, but ends the pipeline at the first `None`. */
-  fn mapWhile<Output>(transform: (value: Item) => Output?): Iterate<Output> {
+  fn mapWhile<Output>(transform: Transform<Item, Output?>): Iterate<Output> {
     MappedWhile self, transform
   }
 
@@ -131,7 +131,7 @@ public trait Iterate<Item> {
   }
 
   /** Values up to, but not including, the first one that fails the predicate. */
-  fn takeWhile(predicate: (value: Item) => Bool): Iterate<Item> {
+  fn takeWhile(predicate: Predicate<Item>): Iterate<Item> {
     TakenWhile self, predicate
   }
 
@@ -155,7 +155,7 @@ public trait Iterate<Item> {
   }
 
   /** Lazy as a stage, but has to buffer all values as soon as it is iterated. */
-  fn sorted<Key: Compare>(by: (value: Item) => Key): Iterate<Item> {
+  fn sorted<Key: Compare>(by: Transform<Item, Key>): Iterate<Item> {
     Sorted self, by
   }
 
@@ -227,7 +227,7 @@ public trait Iterate<Item> {
   }
 
   /** Runs `action` once for every value, for a step that produces nothing itself. */
-  fn forEach(action: (value: Item) => Void) {
+  fn forEach(action: Action<Item>) {
     for value in self {
       action value
     }
@@ -243,7 +243,7 @@ public trait Iterate<Item> {
   }
 
   /** The first value that answers the predicate, or `None`. Stops pulling as soon as one is found. */
-  fn find(predicate: (value: Item) => Bool): Item? {
+  fn find(predicate: Predicate<Item>): Item? {
     for value in self {
       if predicate(value) {
         return Some value
@@ -259,12 +259,12 @@ public trait Iterate<Item> {
   }
 
   /** Whether at least one value answers the predicate. Stops at the first one that does. */
-  fn any(predicate: (value: Item) => Bool): Bool {
+  fn any(predicate: Predicate<Item>): Bool {
     find(predicate).isSome()
   }
 
   /** Whether every value answers the predicate. Stops at the first one that does not. */
-  fn all(predicate: (value: Item) => Bool): Bool {
+  fn all(predicate: Predicate<Item>): Bool {
     !any { !predicate(_) }
   }
 
@@ -279,7 +279,7 @@ public trait Iterate<Item> {
   }
 
   /** Shorthand for `collect(groupingBy(key))` */
-  fn groupBy<Key: Hash>(key: (value: Item) => Key): Map<Key, List<Item>> {
+  fn groupBy<Key: Hash>(key: Transform<Item, Key>): Map<Key, List<Item>> {
     collect groupingBy(key)
   }
 }

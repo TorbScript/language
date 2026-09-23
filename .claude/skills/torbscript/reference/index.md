@@ -276,6 +276,7 @@ that answers the question. A page marked (planned) describes a feature that does
 - `standard-library/environment.md` - **std/environment** (package): Environment, the one type that reads a process environment variable.
 - `standard-library/expression.md` - **std/expression** (package): Expression and ExpressionNode, the typed tree a quoted parameter hands over, plus assert and nameOf.
 - `standard-library/fs.md` - **std/fs** (package): File and IoError - whole-file helpers for what fits in memory, and a File as both ends of a byte stream.
+- `standard-library/function-types.md` - **Predicate, Action and Transform** (reference): Three aliases in the prelude for the closure shapes signatures take most - a question about one value, an effect on one value, and a conversion of one value into another.
 - `standard-library/geometry.md` - **std/geometry** (package): The shapes of the plane and of space, with the half-open rule that makes a row of rectangles a tiling and the ray tests that answer a distance.
 - `standard-library/http.md` - **std/http** (package): A minimal HTTP client - get, post and request answer a Task, and a response body is a stream of any size.
 - `standard-library/index.md` - **The standard library** (index): One page per package of std, what each contains, and which of them are in scope everywhere without an import.

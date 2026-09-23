@@ -84,7 +84,7 @@ source.collect(accumulator)
    answers an `Accumulator` that folds `step` over every value and applies `finish` once at the end.
 
    ```trb check
-   fn median<Item>(value: (value: Item) => Int): Accumulator<Item, Int?> {
+   fn median<Item>(value: Transform<Item, Int>): Accumulator<Item, Int?> {
      collector([], finish: { values: List<Int> => values.sorted { it => it }.skip(values.length() / 2).first() }) {
        values, item => values.appended value(item)
      }

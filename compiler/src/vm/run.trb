@@ -18,6 +18,7 @@ use check, Checked from "../semantics/check"
 use insertOwnership from "../ir/ownership"
 use verifyOwnedProgram from "../ir/ownership-verify"
 use lowerWorkspace, pathsOfModules from "../ir/lower/lower"
+use hostTarget from "../project/target"
 use entryNameOf from "../ir/lower/function"
 use renderDiagnostic, renderProblem from "../cli/render"
 use emitBytecode from "../backend/bytecode/emit"
@@ -43,7 +44,7 @@ public fn runInMachine(path: String, arguments: List<String>): Result<Int, IoErr
       return Ok refusedCode
     }
   }
-  var lowering = lowerWorkspace checked.checker, pathsOfModules(checked), [module], false
+  var lowering = lowerWorkspace checked.checker, pathsOfModules(checked), [module], false, hostTarget()
   insertOwnership lowering.program
   var refused = 0
   for problem in lowering.problems {

@@ -65,22 +65,22 @@ public shared trait Source<Item, Failure: From<Cancelled>> with Close {
   }
 
   /** Transforms every item as it is read. */
-  var fn map<Output>(transform: (value: Item) => Output): Source<Output, Failure> {
+  var fn map<Output>(transform: Transform<Item, Output>): Source<Output, Failure> {
     through mapping(transform)
   }
 
   /** Reads only the items that answer the question. */
-  var fn filter(predicate: (value: Item) => Bool): Source<Item, Failure> {
+  var fn filter(predicate: Predicate<Item>): Source<Item, Failure> {
     through filtering(predicate)
   }
 
   /** Transforms every item and drops the ones that answer `None`. */
-  var fn filterMap<Output>(transform: (value: Item) => Output?): Source<Output, Failure> {
+  var fn filterMap<Output>(transform: Transform<Item, Output?>): Source<Output, Failure> {
     through filterMapping(transform)
   }
 
   /** Transforms items until one answers `None`, and ends the stream there. */
-  var fn mapWhile<Output>(transform: (value: Item) => Output?): Source<Output, Failure> {
+  var fn mapWhile<Output>(transform: Transform<Item, Output?>): Source<Output, Failure> {
     through mappingWhile(transform)
   }
 
@@ -90,7 +90,7 @@ public shared trait Source<Item, Failure: From<Cancelled>> with Close {
   }
 
   /** Reads items while they answer the question, then ends the stream at the first one that does not. */
-  var fn takeWhile(predicate: (value: Item) => Bool): Source<Item, Failure> {
+  var fn takeWhile(predicate: Predicate<Item>): Source<Item, Failure> {
     through takingWhile(predicate)
   }
 
@@ -160,7 +160,7 @@ public shared trait Source<Item, Failure: From<Cancelled>> with Close {
   }
 
   /** Runs `action` on every item as it arrives. */
-  var fn forEach(action: (value: Item) => Void): Task<Result<Void, Failure>> {
+  var fn forEach(action: Action<Item>): Task<Result<Void, Failure>> {
     while const Some(item) = next().outcome()? {
       action item
     }
@@ -168,7 +168,7 @@ public shared trait Source<Item, Failure: From<Cancelled>> with Close {
   }
 
   /** Stops at the first item that matches, which leaves the rest of the stream unread. */
-  var fn find(predicate: (value: Item) => Bool): Task<Result<Item?, Failure>> {
+  var fn find(predicate: Predicate<Item>): Task<Result<Item?, Failure>> {
     while const Some(item) = next().outcome()? {
       if predicate(item) {
         return Ok Some(item)
