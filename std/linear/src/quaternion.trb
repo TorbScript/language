@@ -65,7 +65,7 @@ public type Quaternion<Scalar: Real = Float> with Multiply, Negate {
     const axis = around.normalized()
     if axis.isZero() {
       const nothing = Scalar.zero
-      return Quaternion nothing, nothing, nothing, around.x.unit()
+      return Quaternion nothing, nothing, nothing, Scalar.one
     }
     const half = by.halved()
     const sine = half.sine()
@@ -102,7 +102,7 @@ public type Quaternion<Scalar: Real = Float> with Multiply, Negate {
     const size: Scalar = self.length()
     if size == Scalar.zero {
       const nothing = Scalar.zero
-      return Quaternion nothing, nothing, nothing, w.unit()
+      return Quaternion nothing, nothing, nothing, Scalar.one
     }
     Quaternion(x / size, y / size, z / size, w / size)
   }
@@ -128,12 +128,12 @@ public type Quaternion<Scalar: Real = Float> with Multiply, Negate {
     const axis = axisPart()
     const once = axis.cross to
     const twice = axis.cross once
-    to.add once.multiply(w).add(twice).multiply(w.unit().doubled())
+    to.add once.multiply(w).add(twice).multiply(Scalar.one.doubled())
   }
 
   /** The same rotation as a matrix, which is the form a shader and a scene graph want. */
   fn toMatrix3(): Matrix3<Scalar> {
-    const whole = w.unit()
+    const whole = Scalar.one
     const two = whole.doubled()
     Matrix3(
       Vector3(whole - two * (y * y + z * z), two * (x * y + z * w), two * (x * z - y * w)),

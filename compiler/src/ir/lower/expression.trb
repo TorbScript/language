@@ -719,6 +719,29 @@ fn lowerImmortalConstant(
   at: Span,
   owner: TypeId?,
 ): Slot {
+  // A constant a `by` implementation forwards: the field type's constant, constructed into each delegating type
+  const reached = reachedConstantOf lowering, symbol, owner
+  if !reached.wrapping.isEmpty() {
+    var current = lowerConstantReference lowering, builder, None, reached.symbol, at, reached.owner
+    for index in 0..reached.wrapping.length() {
+      const wrapper = irTypeOfClosed lowering, reached.wrapping[index]
+      const layout = match layoutOfType(lowering.program, wrapper) {
+        Some(found) => found
+        None => {
+          return unsupportedSlot lowering, builder, destination, "a delegated constant of a type without a layout", at
+        }
+      }
+      // The outermost wrapper is the value of the read, so it goes where the reader wants it
+      const target = if index == reached.wrapping.length() - 1 {
+        valueSlot lowering, builder, destination, wrapper
+      } else {
+        addTemporary builder, wrapper
+      }
+      emit builder, Instruction.Construct(target, layout, 0, [borrowed(current)])
+      current = target
+    }
+    return current
+  }
   const accessor = match constantAccessorOf(lowering, symbol, at, owner) {
     Some(found) => found
     None => {

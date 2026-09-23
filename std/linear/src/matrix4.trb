@@ -151,6 +151,51 @@ public type Matrix4<Scalar: Numeric = Float> with Add, Subtract, Multiply {
   fn determinant(): Scalar {
     minorsOf(self).determinant()
   }
+
+  /** A diagonal matrix: each axis scaled on its own, and the translation left at the origin. */
+  static fn scaling(by: Vector3<Scalar>): Matrix4<Scalar> {
+    const nothing = Scalar.zero
+    Matrix4(
+      Vector4(by.x, nothing, nothing, nothing),
+      Vector4(nothing, by.y, nothing, nothing),
+      Vector4(nothing, nothing, by.z, nothing),
+      Vector4(nothing, nothing, nothing, Scalar.one),
+    )
+  }
+
+  /**
+   * The transformation that moves everything by that much and changes nothing else.
+   *
+   *     const move = Matrix4.translation of: Vector3(1.0, 0.0, 0.0)
+   *     print move.translationPart()
+   */
+  static fn translation(of: Vector3<Scalar>): Matrix4<Scalar> {
+    const nothing = Scalar.zero
+    const whole = Scalar.one
+    Matrix4(
+      Vector4(whole, nothing, nothing, nothing),
+      Vector4(nothing, whole, nothing, nothing),
+      Vector4(nothing, nothing, whole, nothing),
+      Vector4(of.x, of.y, of.z, whole),
+    )
+  }
+
+  /** The affine transformation that applies the linear part and then moves by `by`. */
+  static fn affine(linear: Matrix3<Scalar>, by: Vector3<Scalar>): Matrix4<Scalar> {
+    const nothing = Scalar.zero
+    Matrix4(
+      Vector4.of(linear.xAxis, nothing),
+      Vector4.of(linear.yAxis, nothing),
+      Vector4.of(linear.zAxis, nothing),
+      Vector4.of(by, Scalar.one),
+    )
+  }
+
+  /** A point, moved by the transformation: the translation is applied. */
+  fn transformedPoint(point: Vector3<Scalar>): Vector3<Scalar> {
+    const moved = applied to: Vector4.of(point, Scalar.one)
+    moved.toVector3()
+  }
 }
 
 /**
@@ -223,52 +268,8 @@ extend<Scalar: Signed> Matrix4<Scalar> with Negate {
   }
 }
 
-/** What a one and a division buy: the constructors, the points and the inverse of an affine transformation. */
+/** What a division buys: the inverse of an affine transformation, and the general one. */
 extend<Scalar: Real> Matrix4<Scalar> {
-  /** A diagonal matrix: each axis scaled on its own, and the translation left at the origin. */
-  static fn scaling(by: Vector3<Scalar>): Matrix4<Scalar> {
-    const nothing = Scalar.zero
-    Matrix4(
-      Vector4(by.x, nothing, nothing, nothing),
-      Vector4(nothing, by.y, nothing, nothing),
-      Vector4(nothing, nothing, by.z, nothing),
-      Vector4(nothing, nothing, nothing, by.x.unit()),
-    )
-  }
-
-  /**
-   * The transformation that moves everything by that much and changes nothing else.
-   *
-   *     print Matrix4.translation of: Vector3(1.0, 0.0, 0.0)).translationPart(
-   */
-  static fn translation(of: Vector3<Scalar>): Matrix4<Scalar> {
-    const nothing = Scalar.zero
-    const whole = of.x.unit()
-    Matrix4(
-      Vector4(whole, nothing, nothing, nothing),
-      Vector4(nothing, whole, nothing, nothing),
-      Vector4(nothing, nothing, whole, nothing),
-      Vector4(of.x, of.y, of.z, whole),
-    )
-  }
-
-  /** The affine transformation that applies the linear part and then moves by `by`. */
-  static fn affine(linear: Matrix3<Scalar>, by: Vector3<Scalar>): Matrix4<Scalar> {
-    const nothing = Scalar.zero
-    Matrix4(
-      Vector4.of(linear.xAxis, nothing),
-      Vector4.of(linear.yAxis, nothing),
-      Vector4.of(linear.zAxis, nothing),
-      Vector4.of(by, by.x.unit()),
-    )
-  }
-
-  /** A point, moved by the transformation: the translation is applied. */
-  fn transformedPoint(point: Vector3<Scalar>): Vector3<Scalar> {
-    const moved = applied to: Vector4.of(point, point.x.unit())
-    moved.toVector3()
-  }
-
   /**
    * The transformation that undoes this one, read as an affine transformation: the linear part is inverted and the
    * translation is carried back through it. `None` where the linear part has no inverse.

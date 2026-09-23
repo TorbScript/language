@@ -93,6 +93,21 @@ public trait Signed
  * - [Numeric] - the bound the arithmetic half of a vector library lives under.
  */
 public trait Real with Signed {
+  /**
+   * Half a turn in radians - the ratio of a circle's circumference to its diameter - in this scalar's type:
+   * `Scalar.pi` in a body that is generic over it, whose literals could not write the digits.
+   */
+  static pi: Self
+
+  /** A whole turn in radians, twice [Real.pi], rounded once in this scalar's type rather than doubled. */
+  static tau: Self
+
+  /**
+   * The gap between one and the next value this scalar can hold: the resolution a tolerance cannot go below. It is
+   * the machine epsilon of a float and the one part of a fixed-point number.
+   */
+  static epsilon: Self
+
   /** The non-negative square root. Negative input answers a value the implementor documents. */
   fn squareRoot(): Self
 
@@ -153,12 +168,6 @@ public trait Real with Signed {
 
   /** The angle in degrees that this many radians is. */
   fn degreesOfRadians(): Self
-
-  /**
-   * The value one, of this scalar's type, asked of a value of it. `self` is not read at all. [Numeric.one] is the same
-   * constant asked of the type - `Scalar.one` - which is the spelling for a body that has no value at hand.
-   */
-  fn unit(): Self
 }
 
 /**
@@ -386,8 +395,12 @@ extend Float64 {
   static zero: Float64 = 0.0
   /** One, the [Numeric.one] of an `Float64`. */
   static one: Float64 = 1.0
-  /** The ratio of a circle's circumference to its diameter. */
+  /** The ratio of a circle's circumference to its diameter: the [Real.pi] of a `Float64`. */
   static pi: Float64 = 3.141592653589793
+  /** A whole turn in radians, twice [Float64.pi]: the [Real.tau] of a `Float64`. */
+  static tau: Float64 = 6.283185307179586
+  /** The gap between `1.0` and the next `Float64`, which is two to the power of minus 52: its [Real.epsilon]. */
+  static epsilon: Float64 = 0.0000000000000002220446049250313
   /** The base of the natural logarithm. */
   static e: Float64 = 2.718281828459045
 
@@ -469,10 +482,6 @@ extend Float64 with Real {
 
   fn degreesOfRadians(): Float64 {
     self * 57.29577951308232
-  }
-
-  fn unit(): Float64 {
-    1.0
   }
 }
 

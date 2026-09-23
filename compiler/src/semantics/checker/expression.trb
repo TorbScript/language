@@ -2936,7 +2936,11 @@ public fn checkValue(var checker: Checker, found: TypeId, expected: TypeId, at: 
   }
   const isTraitForParameter = traitForParameter checker, given, wanted
   if !isTraitForParameter && (isUndecided(checker, given) || isUndecided(checker, wanted)) {
-    return true
+    if !conflictsWhereDecided(checker, given, wanted) {
+      return true
+    }
+    // The mismatch is the root cause: what the rest of the call would have solved from this argument is not asked for
+    suppressVariables checker, wanted
   }
   const shown = checker.describe wanted
   const written = checker.describe given
@@ -3067,6 +3071,50 @@ fn matchedBound(var checker: Checker, found: TypeId, wanted: TypeId): TypeId {
     }
   }
   resolveType checker, wanted
+}
+
+/**
+ * Whether two function types that did not unify disagree already in a part both of them decide, so that no solution of
+ * what is still open could make them fit. `shout`, a `(text: String) => String`, handed to a parameter
+ * `Transform<Input, Output>` whose `Input` an earlier argument made `Int64`, meets `(value: Int64) => _`: the open
+ * `Output` changes nothing about the parameter, and waiting for it would end in "Cannot infer `Output`" - a message about
+ * the variable instead of about the function that was passed.
+ *
+ * Only a function type is judged this way, position by position, and a position counts only where neither side is
+ * undecided. Everything else keeps its silence until the variables are solved.
+ */
+fn conflictsWhereDecided(var checker: Checker, given: TypeId, wanted: TypeId): Bool {
+  const found = match checker.types.form(given) {
+    .Function(form) => form
+    _ => {
+      return false
+    }
+  }
+  const expected = match checker.types.form(wanted) {
+    .Function(form) => form
+    _ => {
+      return false
+    }
+  }
+  if found.parameters.length() != expected.parameters.length() {
+    return false
+  }
+  for index in 0..found.parameters.length() {
+    if disagreesWhereDecided(checker, found.parameters[index].annotation, expected.parameters[index].annotation) {
+      return true
+    }
+  }
+  disagreesWhereDecided checker, found.result, expected.result
+}
+
+/** Two types that are both decided and still not the same type. */
+fn disagreesWhereDecided(var checker: Checker, left: TypeId, right: TypeId): Bool {
+  const first = resolveType checker, left
+  const second = resolveType checker, right
+  if isUndecided(checker, first) || isUndecided(checker, second) {
+    return false
+  }
+  !sameType(checker.types, first, second)
 }
 
 /**

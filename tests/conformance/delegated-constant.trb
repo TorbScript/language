@@ -1,0 +1,64 @@
+/**
+ * **A constant a trait requires, reached through `by`.** A delegating type writes no constant of its own: the one
+ * field's type provides it, and a constant that is a `Self` is that value wrapped into the delegating type - what a
+ * forwarded member does with its result. A constant of another type is the field type's value as it is, a field whose
+ * own type delegates again wraps twice, a value that is not static data is constructed at the read, and a default of
+ * the trait is instantiated for the delegating type and not forwarded.
+ */
+
+/** Where a quantity starts, what it is called, and a default built from the first. */
+trait Origin {
+  static origin: Self
+
+  static label: String
+
+  static start: Self = Self.origin
+}
+
+extend Int64 with Origin {
+  static origin: Int64 = 7
+
+  static label: String = "whole"
+}
+
+/** A value that is not static data: its origin is a list, built once at the first read. */
+type Stock with Show, Origin {
+  names: List<String>
+
+  static origin: Stock = Stock(["first", "second"])
+
+  static label: String = "stock"
+}
+
+type Meters with Show, Origin by value {
+  value: Int
+}
+
+type Kilometers with Show, Origin by distance {
+  distance: Meters
+}
+
+type Shelf with Show, Origin by stock {
+  stock: Stock
+}
+
+/** The origin of whichever type is asked for. */
+fn originOf<Value: Origin>(): Value {
+  Value.origin
+}
+
+/** The name of whichever type is asked for. */
+fn labelOf<Value: Origin>(): String {
+  Value.label
+}
+
+print Meters.origin
+print Meters.label
+const meters: Meters = originOf()
+print "{meters} {labelOf<Meters>()} {Meters.start}"
+print Kilometers.origin
+const kilometers: Kilometers = originOf()
+print "{kilometers.distance.value} {labelOf<Kilometers>()}"
+print Shelf.origin
+const shelf: Shelf = originOf()
+print "{shelf.stock.names.length()} {labelOf<Shelf>()}"

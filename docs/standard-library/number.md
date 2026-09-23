@@ -63,6 +63,9 @@ every other operation that leaves its range.
 
 ```trb fragment
 public trait Real with Signed {
+  static pi: Self
+  static tau: Self
+  static epsilon: Self
   fn squareRoot(): Self
   fn sine(): Self
   fn cosine(): Self
@@ -77,7 +80,6 @@ public trait Real with Signed {
   fn halved(): Self
   fn radiansOfDegrees(): Self
   fn degreesOfRadians(): Self
-  fn unit(): Self
   fn doubled(): Self
 }
 ```
@@ -92,9 +94,11 @@ Two implementors. `Float64` is the fast one and answers whatever the platform's 
 the same bits on every machine. `Fixed` (`std/linear`) is the deterministic one: every operation on it, the square root
 and the trigonometry included, is integer arithmetic, so a lockstep simulation and a replay run on it.
 
-`unit`, `halved` and `doubled` are the constants a body that is generic over its scalar cannot write for itself: a
-numeric literal has a type, and inside such a body that type is the type parameter. `unit()` does not read `self` at
-all - it is the scalar type asked for its own one, through a value of it.
+`pi`, `tau` and `epsilon` are required constants: every implementor carries them under those names (`Float64.pi`,
+`Fixed.tau`), and a body that is generic over its scalar reads them through its parameter - `Scalar.pi` - where it
+could not write the digits. `epsilon` is the gap between one and the next value the scalar holds: the machine epsilon
+of a `Float64`, one part of a `Fixed`. The one such a body needs is `Scalar.one`, which every `Numeric` has, and
+`halved` and `doubled` are the two pieces of arithmetic it would otherwise write with a literal.
 
 ### NumberParseError, NumberRangeError
 

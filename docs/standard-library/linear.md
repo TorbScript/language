@@ -70,7 +70,8 @@ public type Angle<Scalar: Real = Float> with Add, Subtract, Negate, Multiply<Sca
 A rotation, held in radians and constructed by the unit it is written in: `Angle(1.5)` is radians - the field says so -
 and `Angle.degrees 90.0` is the other unit, spelled out. That wrapper is the whole point: a quarter turn written as `90`
 can never be read as `90` radians. `sine`, `cosine`, `tangent`, `toDegrees`, `halved` and `normalized` (the same rotation
-in `(-pi, pi]`) round it out; `Angle<Float>.zero`, `.quarterTurn`, `.halfTurn` and `.fullTurn` are the four constants.
+in `(-pi, pi]`) round it out; `Angle.zero`, `.quarterTurn`, `.halfTurn` and `.fullTurn` are the four constants, for
+every scalar, made of its own `pi` and `tau`.
 
 Angles grow from the first axis towards the second: a quarter turn takes `unitX` onto `unitY`. Whether a viewer calls
 that clockwise depends on which way the program draws its second axis, and the library does not decide it.
@@ -90,8 +91,9 @@ left as it does in mathematics.
 
 `Matrix2` is the linear part in the plane, `Matrix3` is both the linear transformation of space and the affine
 transformation of the plane (`affine`, `linearPart`, `translationPart`, `transformedPoint`, `transformedDirection`), and
-`Matrix4` is the affine transformation of space. `transposed`, `determinant`, `at`, `column`, `row`, `scaling` and
-`applied(to:)` are everywhere; `rotation` (`rotationAroundX`/`Y`/`Z` for `Matrix3`), `inverse` and `isCloseTo` need a
+`Matrix4` is the affine transformation of space. `transposed`, `determinant`, `at`, `column`, `row`, `scaling`,
+`applied(to:)` and the affine forms (`affine`, `Matrix4.translation`, `transformedPoint`) are everywhere, so a tile
+grid has them; `rotation` (`rotationAroundX`/`Y`/`Z` for `Matrix3`), `inverse` and `isCloseTo` need a
 `Real` scalar. `Matrix4` answers both a general `inverse` - the adjugate over the determinant, for a matrix of any
 shape - and `inverseAffine`, the short way for the matrices a scene graph is made of.
 

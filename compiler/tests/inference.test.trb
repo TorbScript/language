@@ -39,6 +39,27 @@ group "Unification variables" {
     )
   }
 
+  /**
+   * `shout` has a type of its own, and it disagrees with the parameter in the part an earlier argument decided already:
+   * that is the message, and not the `Output` that nothing could solve after it.
+   */
+  test "a function of the wrong shape names the mismatch, not the parameter it left open" {
+    const convert = "fn convert<Input, Output>(value: Input, transform: (value: Input) => Output): Output \{\n"
+      + "  transform(value)\n\}\n\n"
+    const shout = "fn shout(text: String): String \{\n  text\n\}\n\n"
+    const bound = convert + shout + inBody("  const number: Int = 3\n  const found = convert(number, shout)")
+    assert(problems(bound) == ["Expected `(value: Int64) => _`, found `(text: String) => String`"])
+    const printed = convert + shout + inBody("  print convert(3, shout)")
+    assert(problems(printed) == ["Expected `(value: Int64) => _`, found `(text: String) => String`"])
+  }
+
+  test "a function that fits where it is decided still waits for the rest" {
+    const convert = "fn convert<Input, Output>(value: Input, transform: (value: Input) => Output): Output \{\n"
+      + "  transform(value)\n\}\n\n"
+    const shout = "fn shout(text: String): String \{\n  text\n\}\n\n"
+    assert problems(convert + shout + inBody("  const found = convert(\"loud\", shout)")).isEmpty()
+  }
+
   test "the expected type of the binding decides what a call produces" {
     const source = "fn make<Value>(): Value \{\n  panic \"no\"\n\}\n\n"
       + inBody("  const found: Int = make()")

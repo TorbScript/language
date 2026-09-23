@@ -66,6 +66,13 @@ group "Angle" {
     assert long.normalized().toDegrees().isCloseTo(exact(10), tolerance: nearly)
   }
 
+  test "the named turns are the scalar's own pi and tau" {
+    assert(Angle<Fixed>.halfTurn.radians == Fixed.pi)
+    assert(Angle<Fixed>.fullTurn.radians == Fixed.tau)
+    assert(Angle<Fixed>.quarterTurn.radians == Fixed.pi.halved())
+    assert(Angle<Float>.halfTurn.radians == Float.pi)
+  }
+
   test "half of a rotation is half of its radians" {
     const quarter = Angle.degrees exact(90)
     assert quarter.halved().toDegrees().isCloseTo(exact(45), tolerance: nearly)
@@ -152,6 +159,12 @@ group "Matrix3" {
     assert(move.linearPart() == Matrix2<Fixed>.identity)
   }
 
+  test "an affine transformation of a grid stays in whole numbers" {
+    const move = Matrix3.affine Matrix2<Int>.identity, by: Vector2(3, 4)
+    assert(move.transformedPoint(Vector2(1, 1)) == Vector2(4, 5))
+    assert(move.transformedDirection(Vector2(1, 1)) == Vector2(1, 1))
+  }
+
   test "a rotation around the third axis is the rotation of the plane" {
     const turn = Matrix3.rotationAroundZ by: Angle.degrees(exact(90))
     assert turn.applied(to: deep(1, 0, 0)).isCloseTo(deep(0, 1, 0), tolerance: nearly)
@@ -183,6 +196,12 @@ group "Matrix4" {
     assert(move.transformedPoint(deep(0, 0, 0)) == deep(1, 2, 3))
     assert(move.transformedDirection(deep(1, 0, 0)) == deep(1, 0, 0))
     assert(move.translationPart() == deep(1, 2, 3))
+  }
+
+  test "a translation of a grid stays in whole numbers" {
+    const move = Matrix4.translation of: Vector3(1, 2, 3)
+    assert(move.transformedPoint(Vector3(0, 0, 0)) == Vector3(1, 2, 3))
+    assert(Matrix4.scaling(by: Vector3(2, 3, 4)).transformedPoint(Vector3(1, 1, 1)) == Vector3(2, 3, 4))
   }
 
   test "the identity changes nothing, and a row is read out" {

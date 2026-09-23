@@ -24,12 +24,6 @@ use Matrix2 from "./matrix2"
  *     const move = Matrix3.affine Matrix2<Float>.identity, by: Vector2(3.0, 4.0)
  *     print move.transformedPoint(Vector2(1.0, 1.0))
  *
- * # Open
- *
- * - The affine form needs a `Real` scalar, although an affine transformation of a tile grid is ordinary whole-number
- *   arithmetic. The one its bottom row ends in is `Scalar.one`, which every `Numeric` carries, so only its place in
- *   the `Real` extension keeps it from a grid; until it moves, a `Matrix3<Int>` is built by writing its columns out.
- *
  * # Related
  *
  * - `Matrix4` - the same for affine transformations of space.
@@ -136,6 +130,28 @@ public type Matrix3<Scalar: Numeric = Float> with Add, Subtract, Multiply {
     const turned = applied to: Vector3(direction.x, direction.y, Scalar.zero)
     Vector2 turned.x, turned.y
   }
+
+  /**
+   * The affine transformation of the plane that applies the linear part and then moves by `by`. Its bottom row ends in
+   * `Scalar.one`, which every number type has, so a tile grid gets one as well as a scene: `Matrix3<Int>.affine`.
+   *
+   *     const move = Matrix3.affine Matrix2<Float>.identity, by: Vector2(1.0, 2.0)
+   *     print move.translationPart()
+   */
+  static fn affine(linear: Matrix2<Scalar>, by: Vector2<Scalar>): Matrix3<Scalar> {
+    const nothing = Scalar.zero
+    Matrix3(
+      Vector3(linear.xAxis.x, linear.xAxis.y, nothing),
+      Vector3(linear.yAxis.x, linear.yAxis.y, nothing),
+      Vector3(by.x, by.y, Scalar.one),
+    )
+  }
+
+  /** A point of the plane, moved by the affine transformation: the translation is applied. */
+  fn transformedPoint(point: Vector2<Scalar>): Vector2<Scalar> {
+    const moved = applied to: Vector3(point.x, point.y, Scalar.one)
+    Vector2 moved.x, moved.y
+  }
 }
 
 /** Every cell turned around. */
@@ -146,35 +162,15 @@ extend<Scalar: Signed> Matrix3<Scalar> with Negate {
   }
 }
 
-/** What an angle, a division and a one buy: the affine form, the three rotations, and the way back. */
+/** What an angle and a division buy: the three rotations, and the way back. */
 extend<Scalar: Real> Matrix3<Scalar> {
-  /**
-   * The affine transformation of the plane that applies the linear part and then moves by `by`.
-   *
-   *     print Matrix3.affine Matrix2<Float>.identity, by: Vector2(1.0, 2.0)).translationPart(
-   */
-  static fn affine(linear: Matrix2<Scalar>, by: Vector2<Scalar>): Matrix3<Scalar> {
-    const nothing = Scalar.zero
-    Matrix3(
-      Vector3(linear.xAxis.x, linear.xAxis.y, nothing),
-      Vector3(linear.yAxis.x, linear.yAxis.y, nothing),
-      Vector3(by.x, by.y, by.x.unit()),
-    )
-  }
-
-  /** A point of the plane, moved by the affine transformation: the translation is applied. */
-  fn transformedPoint(point: Vector2<Scalar>): Vector2<Scalar> {
-    const moved = applied to: Vector3(point.x, point.y, point.x.unit())
-    Vector2 moved.x, moved.y
-  }
-
   /** The rotation of space around the first axis. */
   static fn rotationAroundX(by: Angle<Scalar>): Matrix3<Scalar> {
     const sine = by.sine()
     const cosine = by.cosine()
     const nothing = Scalar.zero
     Matrix3(
-      Vector3(sine.unit(), nothing, nothing),
+      Vector3(Scalar.one, nothing, nothing),
       Vector3(nothing, cosine, sine),
       Vector3(nothing, -sine, cosine),
     )
@@ -187,7 +183,7 @@ extend<Scalar: Real> Matrix3<Scalar> {
     const nothing = Scalar.zero
     Matrix3(
       Vector3(cosine, nothing, -sine),
-      Vector3(nothing, sine.unit(), nothing),
+      Vector3(nothing, Scalar.one, nothing),
       Vector3(sine, nothing, cosine),
     )
   }
@@ -200,7 +196,7 @@ extend<Scalar: Real> Matrix3<Scalar> {
     Matrix3(
       Vector3(cosine, sine, nothing),
       Vector3(-sine, cosine, nothing),
-      Vector3(nothing, nothing, sine.unit()),
+      Vector3(nothing, nothing, Scalar.one),
     )
   }
 

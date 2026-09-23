@@ -62,6 +62,9 @@ type <Name> with <Trait>, <Trait> & <Trait> by <field> { ... }   `by` binds to t
 4. **`by` forwards the required members; the default members still come from the trait.** `total.max(Seconds(10))` is
    `Compare.max`, a default that is written in terms of `compare` - the forwarded member - so it returns a `Seconds`
    and nothing has to be rewrapped by hand.
+   A constant the trait requires is forwarded the same way: `Seconds.zero` of a `static zero: Self` is the field
+   type's `Int.zero` wrapped into a `Seconds`, a constant of another type is the field type's value as it is, and a
+   constant the trait gives a default is that default, read with `Self` as the wrapper.
 
 5. **A trait that is neither derived, delegated nor written by hand is not available on the wrapper.** `Seconds` has
    no `Multiply`, so `Seconds(5) * Seconds(2)` does not type check - which is the point, since multiplying two

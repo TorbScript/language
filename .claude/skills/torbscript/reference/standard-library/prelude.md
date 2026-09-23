@@ -40,7 +40,7 @@ public use Add, Subtract, Multiply, Divide, Remainder, Negate, OrElse from "std/
 public use Indexed, MutableIndexed, Slice, MutableSlice from "std/core"
 public use Range, RangeFrom, RangeTo, Bounds from "std/core"
 public use Array, Shared, isSame from "std/core"
-public use do, unless, retry, using, Close from "std/core"
+public use do, unless, retry, Close from "std/core"
 public use Predicate, Action, Transform from "std/core"
 public use Char, String from "std/text"
 public use Numeric, Signed, Real, Bits, NumberParseError, NumberRangeError from "std/number"
@@ -83,7 +83,9 @@ the bare name `power` would say nothing. `Result.Ok`, `Result.Fail`, `Option.Som
 these two types can be matched and constructed without their type name, in a pattern (`None =>`) as well as in an
 expression (`Ok value`). `Predicate`, `Action` and `Transform` are here so that a signature taking a closure reads
 the same in every file: `predicate: Predicate<Item>` rather than `predicate: (value: Item) => Bool` (see
-[Predicate, Action and Transform](function-types.md)).
+[Predicate, Action and Transform](function-types.md)). `Cancelled`, `TimedOut` and `both` come with `Task` because a
+program that spawns one needs them to say how it ended and to wait for two at once (see [std/task](task.md)). `using`
+is not in the list: it is grammar, a binding form, and needs no name in scope.
 
 ## Related
 

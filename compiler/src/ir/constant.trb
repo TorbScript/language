@@ -18,8 +18,8 @@ use Span from "../syntax/source"
 use Expression, Argument, TextSegment, PrefixOperator, InfixOperator from "../syntax/ast"
 use Pattern, FieldPattern from "../syntax/ast"
 use SymbolId from "../semantics/symbols"
-use LiteralValue, TypeId, ParameterId from "../semantics/checker/type"
-use bindingOfSite, resultOf, signatureOf, isTraitConstant from "../semantics/checker/signature"
+use LiteralValue, TypeId, ParameterId, ImplementationId from "../semantics/checker/type"
+use bindingOfSite, resultOf, signatureOf, typeSignatureOf, isTraitConstant from "../semantics/checker/signature"
 use matchTypePattern, witnessFor, traitArgumentsOf from "../semantics/checker/implementation"
 use substitute from "../semantics/checker/unify"
 use integerLiteral from "../semantics/checker/lowering"
@@ -555,7 +555,9 @@ public fn constantInstanceOf(var lowering: Lowering, symbol: SymbolId, owner: Ty
  * `Numeric`, and only the instance that is being lowered says that `Scalar` is `Int64` and therefore that the constant is
  * `Int64.zero`. Which declaration provides it is the question a witness table asks for a member (`providerOfMember`):
  * the implementation's own constant, a constant of the type's body or of another `extend` of it, or the trait's default
- * value, which is then instantiated with `Self` bound to that type (`traitConstantInstanceOf`).
+ * value, which is then instantiated with `Self` bound to that type (`traitConstantInstanceOf`). A `by` implementation
+ * provides none of these for a constant without a default: the one field's type does, and the answer says which types
+ * to wrap its value into (`delegatedConstantOf`).
  *
  * Every other constant - and a trait's constant read on a type that is not closed yet - is its own answer.
  */
@@ -582,15 +584,105 @@ public fn reachedConstantOf(var lowering: Lowering, symbol: SymbolId, owner: Typ
   if const .Implementation(implementation, _, _) = witnessFor(lowering.checker, subject, bound) {
     const name = lowering.checker.symbolAt(symbol).name
     const provider = providerOfMember lowering, subject, implementation, symbol, name
+    if provider.value == symbol.value && isDelegated(lowering, implementation) {
+      if const Some(delegated) = delegatedConstantOf(lowering, symbol, subject) {
+        return delegated
+      }
+    }
     return ReachedConstant provider, Some(subject)
   }
   ReachedConstant symbol, Some(subject)
 }
 
-/** What [reachedConstantOf] answers: the declaration that provides the value, and the type it is read on. */
+/**
+ * What [reachedConstantOf] answers: the declaration that provides the value, the type it is read on, and the types a
+ * `by` delegation wraps that value into on the way out - innermost first, empty for every other constant.
+ */
 public type ReachedConstant {
   symbol: SymbolId
   owner: TypeId?
+  wrapping: List<TypeId> = []
+}
+
+/** Whether an implementation is a `by` delegation: `type Meters with Add by value`. */
+fn isDelegated(var lowering: Lowering, implementation: ImplementationId): Bool {
+  match lowering.checker.implementations.at(implementation).origin {
+    .Delegated => true
+    _ => false
+  }
+}
+
+/**
+ * A required constant of a `by` implementation (`type Meters with Origin by value`): the constant of the one field's
+ * type, reached on that type, and - where the constant is a `Self` - its value wrapped into the delegating type, which is
+ * what a forwarded member does with its result (`delegateBody` in `ir/lower/derive.trb`). A field whose own type
+ * delegates again adds its wrapper inside this one.
+ *
+ * A default value of the trait is not forwarded: it is instantiated for the delegating type like for any other, so this
+ * answers `None` for one. It also answers `None` where the type is not exactly one field, and where the constant's type
+ * mentions `Self` other than being it (`static all: List<Self>`), which no wrapping of one value could build.
+ */
+fn delegatedConstantOf(var lowering: Lowering, symbol: SymbolId, subject: TypeId): ReachedConstant? {
+  const identifier = signatureOf lowering.checker, symbol
+  const signature = lowering.checker.signature identifier
+  if signature.hasBody {
+    return None
+  }
+  const field = onlyFieldOf(lowering, subject)?
+  const inner = reachedConstantOf lowering, symbol, Some(field)
+  const owner = signature.owner?
+  const declared = signature.form.result
+  if declared == owner {
+    var wrapping = inner.wrapping
+    wrapping.append subject
+    return Some ReachedConstant(inner.symbol, inner.owner, wrapping)
+  }
+  const itself = match lowering.checker.types.form(owner) {
+    .Parameter(found) => found
+    _ => {
+      return None
+    }
+  }
+  var mapping: Map<ParameterId, TypeId> = [:]
+  mapping.set itself, field
+  if substitute(lowering.checker.types, declared, mapping) != declared {
+    return None
+  }
+  Some inner
+}
+
+/** The type of the one field of a type that has exactly one and no cases: what a `by` delegation forwards to. */
+fn onlyFieldOf(var lowering: Lowering, subject: TypeId): TypeId? {
+  const (symbol, arguments) = match lowering.checker.types.form(subject) {
+    .Nominal(found, given) => (found, given)
+    _ => {
+      return None
+    }
+  }
+  const shape = lowering.checker.typeSignature typeSignatureOf(lowering.checker, symbol)
+  if shape.fields.length() != 1 || !shape.cases.isEmpty() {
+    return None
+  }
+  var mapping: Map<ParameterId, TypeId> = [:]
+  for index in 0..shape.generics.length().min(arguments.length()) {
+    mapping.set shape.generics[index], arguments[index]
+  }
+  Some substitute(lowering.checker.types, shape.fields[0].annotation, mapping)
+}
+
+/**
+ * The static value of a delegated constant: the field type's own static, wrapped into each delegating type as the one
+ * field of an aggregate. `None` where the inner value or a wrapper is not static data, which leaves the read to the
+ * immortal path (`lowerImmortalConstant`), where the wrapping is a construction.
+ */
+fn wrappedStaticOf(var lowering: Lowering, reached: ReachedConstant): StaticId? {
+  var current = staticOfConstant(lowering, reached.symbol, reached.owner)?
+  for wrapper in reached.wrapping {
+    const annotation = irTypeOfClosed lowering, wrapper
+    const layout = staticLayoutOf(lowering, annotation)?
+    current = internStatic lowering, StaticContents.Aggregate(layout, 0, [current]), annotation
+  }
+  Some current
 }
 
 /**
@@ -651,6 +743,9 @@ public type ConstantInstance {
  */
 public fn staticOfConstant(var lowering: Lowering, written: SymbolId, writtenOwner: TypeId? = None): StaticId? {
   const reached = reachedConstantOf lowering, written, writtenOwner
+  if !reached.wrapping.isEmpty() {
+    return wrappedStaticOf lowering, reached
+  }
   const symbol = reached.symbol
   const instance = constantInstanceOf(lowering, symbol, reached.owner)?
   if const Some(known) = lowering.constants.get(instance.key) {

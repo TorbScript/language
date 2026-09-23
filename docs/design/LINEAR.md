@@ -54,7 +54,7 @@ What each instantiation *can do* is decided by three bounds, and the bounds are 
 |-------|-------------|--------------|----------------|
 | `Numeric` | `std/number` | `+ - * / %`, `==`, `<`, `Show`, `TryFrom<String, _>` | every integer type, `Float32`, `Float64`, `Decimal`, `Fixed` |
 | `Signed` | `std/number` | unary `-`, `absolute` | the signed integers, the floats, `Fixed` |
-| `Real` | `std/number` (new) | `squareRoot`, the eight trigonometric functions, `floor`/`ceiling`/`round`, `halved`, `unit`, the two degree conversions | `Float64`, `Fixed` |
+| `Real` | `std/number` (new) | the constants `pi`, `tau` and `epsilon`, `squareRoot`, the eight trigonometric functions, `floor`/`ceiling`/`round`, `halved`, the two degree conversions | `Float64`, `Fixed` |
 
 `Real` is the line this library is built along. Everything that is arithmetic alone — `dot`, `lengthSquared`, `cross`,
 `min`, `max`, `clamped`, a Manhattan length, a rectangle intersection, a tile lookup — lives under `Numeric`, so a grid
@@ -66,6 +66,9 @@ The full shape of `Real`:
 
 ```trb fragment
 public trait Real with Signed {
+  static pi: Self
+  static tau: Self
+  static epsilon: Self
   fn squareRoot(): Self
   fn sine(): Self
   fn cosine(): Self
@@ -80,34 +83,35 @@ public trait Real with Signed {
   fn halved(): Self
   fn radiansOfDegrees(): Self
   fn degreesOfRadians(): Self
-  fn unit(): Self
   fn doubled(): Self { self + self }
 }
 ```
 
 Three of those need a word.
 
-**`halved`, `unit` and `doubled` are not mathematics, they are a workaround, and they are named so that they read as
+**`halved` and `doubled` are not mathematics, they are a workaround, and they are named so that they read as
 members rather than as a hack.** A body that is generic over its scalar cannot write a numeric literal at all: a literal
 has a type, and inside `extend<Scalar: Real> Vector2<Scalar>` that type is `Scalar`, which no back end substitutes (see
 [section 12](#12-what-the-language-and-the-compiler-must-provide)). So `size / 2` cannot be written, `1` cannot be
 written, and the midpoint of a rectangle, the bottom row of a transformation matrix and a "full" interpolation factor all
-need one of the two constants. `unit(self)` does not read `self`; it is the scalar type asked for its own one, through a
-value of it. **Both are answered now.** A literal adapts to the parameter (item 14 of section 12), and `Numeric`
+need one of the two constants. **Both are answered now.** A literal adapts to the parameter (item 14 of section 12), and `Numeric`
 requires `static zero: Self` and `static one: Self` of every number type (item 10), so a generic body writes
 `Scalar.zero` and `Scalar.one` - the free function `zeroOf(value)` that derived the zero as `value - value` is
-deleted, and `unit()` stays only until its callers read `Scalar.one` instead.
+deleted, and so is the member `unit()` that asked a value of the scalar for its one: every caller reads `Scalar.one`.
 
 **`radiansOfDegrees` and `degreesOfRadians` are members of the scalar and not functions of `std/linear`** for the same
 reason: the conversion needs the value of pi *in this scalar's type*, and `180` cannot be written in a generic body
 either. Each implementor carries its own exact factor, which for `Fixed` is a precomputed count of parts rather than a
 division.
 
-`Real` does **not** carry the constants `pi`, `tau` or `epsilon` yet. A trait can require a constant now
-(`static pi: Self`, section 12 item 10), and the scalars already carry them as constants of their own —
-`Float64.pi`, `Fixed.pi`, `Fixed.tau` — under exactly the names such a requirement would use, so `Real` can absorb
-them without renaming anything; that step is the next round of this library and not a gap of the language. Where generic code needs pi, it takes `arcCosine` of minus one, which is pi by definition;
-`std/geometry`'s `halfTurnOf` is that one line.
+**`Real` requires the constants `pi`, `tau` and `epsilon`** (`static pi: Self`, section 12 item 10), under the
+names the scalars already carried them by, so nothing was renamed: `Float64.pi` and `Fixed.pi`, `Float64.tau` and
+`Fixed.tau`, and `epsilon`, the gap between one and the next value the scalar holds - two to the power of minus 52 for
+a `Float64`, one part (`Fixed.step`) for a `Fixed`. `tau` is its own constant and not `pi.doubled()`, because it is
+rounded once in the scalar's type: for `Fixed` the two differ by a part. A generic body reads `Scalar.pi`, so the turns
+of `Angle` are one declaration for every scalar and `Circle.area` and `circumference` read `Scalar.pi` and
+`Scalar.tau`; `std/geometry`'s `halfTurnOf`, which took `arcCosine` of minus one because nothing else could name pi,
+is deleted.
 
 ## 2. The types
 
@@ -163,7 +167,7 @@ Short form; the docblocks are the full list.
 | `scaled(by:)`, `divided(by:)` (component-wise) | `manhattanLength`, `manhattanDistanceTo` | `angle`, `angleTo`, `rotated`, `rotatedAround` |
 | `min`, `max`, `clamped`, `withX`/`withY`/`withZ` | `perpendicular` (2D) | `interpolated`, `projectedOnto`, `reflected`, `isCloseTo` |
 | `filled`, `isZero`, `sum`, `largestComponent` | | |
-| `Matrix.transposed`, `determinant`, `multiply`, `applied(to:)`, `at`, `column`, `row`, `scaling` | `Matrix.negate` | `Matrix.rotation`, `inverse`, `affine`, `translation`, `transformedPoint`, `isCloseTo` |
+| `Matrix.transposed`, `determinant`, `multiply`, `applied(to:)`, `at`, `column`, `row`, `scaling`, `affine`, `translation`, `transformedPoint` | `Matrix.negate` | `Matrix.rotation`, `inverse`, `inverseAffine`, `isCloseTo` |
 | `Rectangle`/`Box`: `contains`, `encloses`, `intersects`, `intersection`, `combined`, `covering`, `translated`, `grown`, `closestPoint`, `bounds`, `area`/`volume`, `isEmpty` | `manhattanDistanceTo` | `center`, `centered`, `distanceTo`, `distanceSquaredTo` |
 | `Segment2`: `step`, `sideOf`, `bounds`, `intersects` | `manhattanLength` | `length`, `direction`, `center`, `at`, `closestPoint`, `distanceTo`, `intersection` |
 | `Triangle2`: `signedArea`, `bounds`, `edges`, `contains`, `translated` | `doubledArea` | `area`, `center`, `closestPoint`, `distanceTo` |
@@ -171,11 +175,8 @@ Short form; the docblocks are the full list.
 | `Triangle3`: `firstEdge`, `secondEdge`, `doubledAreaVector`, `bounds` | | `normal`, `area`, `plane`, `center`, `weightsOf`, `contains` |
 | — (the whole type needs `Real`) | | `Circle`, `Sphere`, `Ray2`, `Ray3`, `Plane`, `Quaternion`, `Angle` |
 
-Two entries in that table are compromises and say so in their `# Open`:
+One entry in that table is a compromise and says so in its `# Open`:
 
-- **`Matrix3.affine` and `Matrix4.translation` need `Real`**, although an affine transformation of a tile grid is
-  ordinary whole-number arithmetic. Their bottom row ends in a one, which is `Scalar.one` and needs no more than
-  `Numeric`; they stay in the `Real` extension until they move, and a `Matrix3<Int>` is built by writing its columns out.
 - **`Rectangle.center` needs `Real`** because it halves, and the midpoint of a whole-number rectangle is not a whole
   number. The library does not pick a rounding for a program.
 
@@ -400,8 +401,8 @@ would say so if they came back. The rest quote the diagnostic that is the reprod
    `Float64` and `return` carries `Int64`" for the `Float64` instance. The substitution is not what is missing - there
    is no parameter in the recorded type to substitute - so this is the **checker's** half of item 14, and it closes
    there: the literal has to adapt to the parameter, and the back end then does with it exactly what it does with
-   `const x: Float = 1`, which compiles today. Everything in [section 1](#1-the-scalar-tower) about `unit`, `halved` and
-   the deleted `zeroOf` existed only because of this. Reproduction: `examples/generic-scalar/src/main.trb`, `doubled`.
+   `const x: Float = 1`, which compiles today. Everything in [section 1](#1-the-scalar-tower) about `halved` and the
+   deleted `unit` and `zeroOf` existed only because of this. Reproduction: `examples/generic-scalar/src/main.trb`, `doubled`.
 3. ~~A `const` member of a generic type is not instantiated per type argument.~~ **Closed in the back end.**
    `Box<Int>.empty` and `Box<String>.empty` are one declaration and two values, and a binary keeps one cell per
    instance, named after the arguments the read decided. Stage 0's interpreter answered the same value for every scalar
@@ -448,8 +449,9 @@ would say so if they came back. The rest quote the diagnostic that is the reprod
     `Numeric` requires `zero` and `one`, every number type of `std/number` and `Fixed` provide them, `zeroOf` is
     deleted from `std/linear` and `std/geometry`, and the constants of the vectors, matrices, quaternions and angles are
     one declaration per type for every scalar. A constant without a value outside a trait is "A constant of the type
-    needs a value"; a `static fn` does not stand in for a required constant. `Real` may now carry `pi`, `tau` and
-    `epsilon` under the names the scalars already use (section 1). Gates: `compiler/tests/traits.test.trb` ("A
+    needs a value"; a `static fn` does not stand in for a required constant. `Real` requires `pi`, `tau` and `epsilon`
+    as well, under the names the scalars already used (section 1), and `Matrix3.affine`, `Matrix4.translation` and
+    the other affine forms moved from the `Real` extension down to `Numeric`, since a one was all they needed. Gates: `compiler/tests/traits.test.trb` ("A
     constant a trait requires"), `tests/conformance/trait-constants.trb`, `examples/generic-scalar`.
 11. **A member-level `where` clause on a method of a generic `type` adds nothing.** `fn manhattanLength(): Scalar
     where Scalar: Signed` inside `type Vector2<Scalar: Numeric>` reports "`Scalar` has no member `absolute`" in its own
