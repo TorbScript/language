@@ -216,7 +216,7 @@ Simple to use like npm, strict like Maven. The rules exist so that adding a depe
   participle ("`append` needs a `var`. Did you mean `appended`?").
 - **A `Bool` is an adjective, a question is a method.** A `Bool` field, parameter or binding is an adjective or a
   participle (`inclusive`, `discarded`, `signed`, `retryable`); a question that is *computed* is a method whose name
-  starts with `is` or `has` (`isEmpty()`, `hasGuard()`, `isRetryable()`). So `range.inclusive` is data and
+  may start with `is` or `has` (`isEmpty()`, `hasGuard()`, `isRetryable()`). So `range.inclusive` is data and
   `list.isEmpty()` is work, and a reader sees which is which without guessing where the parentheses are. It follows
   from the same rule as the verbs: a field is a promise about data, and what could ever be computed is a method from
   the start (see [Visibility and Encapsulation](#visibility-and-encapsulation)).

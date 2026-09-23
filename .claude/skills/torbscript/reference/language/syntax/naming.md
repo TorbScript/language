@@ -10,14 +10,16 @@ keywords:
   - ASCII
   - MACRO_CASE
   - abbreviation
+  - is prefix
+  - Bool field
 source:
   - CONCEPT.md#lexical-structure
 ---
 
-Three things decide how a name in this language looks: which characters it may contain, which case its first letter
-is, and whether it is abbreviated. The first two are rules the compiler enforces - the first letter of a name in a
-pattern already decides whether the pattern binds or names a case, so it has to mean the same thing at every
-declaration. Only the third is a convention.
+Four things decide how a name in this language looks: which characters it may contain, which case its first letter
+is, whether it is abbreviated, and whether a field may start with `is`. The first two are rules the compiler enforces -
+the first letter of a name in a pattern already decides whether the pattern binds or names a case, so it has to mean
+the same thing at every declaration. The last two are conventions.
 
 ## Example
 
@@ -116,6 +118,49 @@ lowerCamelCase           a function, a method, a field, a parameter, a binding, 
 10. **A type parameter is written out like any other name.** `List<Item>`, `Map<Key, Value>`,
     `Result<Value, Failure>` - never `List<T>`, `Map<K, V>`, `Result<V, E>`.
 
+11. **A field never starts with `is`; a method may.** A `Bool` field is an adjective or a participle - `enabled: Bool`,
+    `inclusive: Bool`, `retryable: Bool` - never `isEnabled: Bool`, because a field is data and `is` reads as a
+    question somebody asks. A method that answers a `Bool` may start with `is` or `has` (`isEmpty()`, `hasGuard()`),
+    and need not: `enabled()` is as good a method name as `isEnabled()`, wherever the type has no field `enabled`
+    already. Like rule 8, this is a convention rather than a diagnostic.
+
+    ```trb check
+    type Feature {
+      name: String
+      enabled: Bool = false
+      var tags: List<String> = []
+
+      fn isTagged(): Bool {
+        !tags.isEmpty()
+      }
+    }
+
+    type Dimmer {
+      level: Int
+
+      fn enabled(): Bool {
+        level > 0
+      }
+    }
+
+    const search = Feature "search"
+    print "{search.enabled} {search.isTagged()} {Dimmer(3).enabled()}"
+    ```
+
+    A type has one namespace of members, so a field and a method cannot both be called `enabled`: where the field
+    exists, the question it answers needs no method at all.
+
+    ```trb error
+    type Dimmer {
+      enabled: Bool
+
+      fn enabled(): Bool {
+        true
+      }
+    }
+    // error: `enabled` is already declared in `Dimmer`
+    ```
+
 ## What this is not
 
 **A name in the wrong case is not a style warning.** It is an error of the checker, reported at the declaration, and
@@ -154,4 +199,7 @@ abbreviations in other codebases; none of them is one of the names rule 9 lists,
 - [Declaring a type](../types/declaring-a-type.md) - where a type's name and its cases are written.
 - [Angle brackets or comparison](generics-or-comparison.md) - how a written-out type parameter is told apart from a
   comparison.
+- [Why a method is a constant](../../explanation/why-one-member-namespace.md) - why a field and a method cannot share
+  a name, which rule 11 leans on.
+- [Idiomatic TorbScript](../../guide/idiomatic-torbscript.md) - these rules next to the other habits of the language.
 

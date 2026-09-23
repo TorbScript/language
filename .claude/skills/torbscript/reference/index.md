@@ -70,6 +70,7 @@ that answers the question. A page marked (planned) describes a feature that does
 - `guide/control-flow-and-dsls.md` - **Control flow and your own constructs** (guide): if, for, while and loop as you would expect, and why unless is an ordinary function you could have written yourself.
 - `guide/errors.md` - **Errors** (guide): How a function says it can fail with Result, and how a caller handles that with match or the question mark operator.
 - `guide/functions-and-closures.md` - **Functions and closures** (guide): How to declare a function, when it must spell out its return type, and the one closure form the language has.
+- `guide/idiomatic-torbscript.md` - **Idiomatic TorbScript** (guide): The habits that make TorbScript read like TorbScript - names, mutation, calls, types, errors, closures, resources and tasks - each as one rule, one runnable example and the reason behind it.
 - `guide/index.md` - **Learn TorbScript** (index): The learning path from nothing to a working program, in order, one step per page.
 - `guide/installing-and-running.md` - **Run your first program** (guide): Build the toolchain, run a single file, and create a project with a manifest, a source file and a test.
 - `guide/modules-and-packages.md` - **Modules and packages** (guide): How use brings a name in from another file or the standard library, and what public means for a top-level declaration.

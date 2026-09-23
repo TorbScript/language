@@ -165,6 +165,8 @@ of `let mut` and `mutating func`, a copy or a `var` parameter instead of a borro
 - [Values and bindings](reference/guide/values-and-bindings.md) - the mutation rules in full.
 - [What a model trained on other languages gets wrong](reference/explanation/mistakes-models-make.md) - the mistakes, with the
   diagnostics they produce.
+- [Idiomatic TorbScript](reference/guide/idiomatic-torbscript.md) - the habits the standard library follows once the code compiles:
+  names, verbs and participles, capsules, `using`, tasks.
 - [The language reference](reference/language/index.md) - one page per construct.
 
 Source: `reference/guide/the-language-in-sixty-seconds.md`
@@ -325,4 +327,4 @@ Every page is self-contained: it defines or links every term it uses, so one pag
 question. A page marked `status: draft` may still be wrong, so verify it against the compiler. A page marked
 `status: planned` describes a designed feature that does not compile yet, and its first line says so.
 
-There are 216 pages.
+There are 217 pages.

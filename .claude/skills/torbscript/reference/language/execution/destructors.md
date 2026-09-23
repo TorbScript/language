@@ -27,14 +27,14 @@ was declared in, the last declared first, so the moment an object closes is a li
 
 ```trb check
 shared type Connection with Close {
-  var isOpen: Bool = true
+  var open: Bool = true
 
   fn send(message: String) {
     print message
   }
 
   var fn close() {
-    isOpen = false
+    open = false
     print "closed"
   }
 }

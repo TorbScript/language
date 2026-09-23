@@ -39,6 +39,7 @@ isolation, which is a [how-to](../how-to/index.md); and the argument for a desig
 - **[Modules and packages](modules-and-packages.md)** - How use brings a name in from another file or the standard library, and what public means for a top-level declaration.
 - **[Tests and the toolchain](tests-and-tooling.md)** - How to write a test with test, group and assert, and the two commands that check whether what you wrote is correct.
 - **[Put it together](a-small-program.md)** - One small program - a type with cases, a function that can fail, and a pipeline - that uses everything this path taught.
+- **[Idiomatic TorbScript](idiomatic-torbscript.md)** - The habits that make TorbScript read like TorbScript - names, mutation, calls, types, errors, closures, resources and tasks - each as one rule, one runnable example and the reason behind it.
 
 <!-- torb:index:end -->
 

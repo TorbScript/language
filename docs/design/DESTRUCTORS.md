@@ -60,14 +60,14 @@ a call reads like a keyword and is not one. The whole of `std/core/src/control.t
 
 ```trb check
 shared type Connection with Close {
-  var isOpen: Bool = true
+  var open: Bool = true
 
   fn send(message: String) {
     print message
   }
 
   var fn close() {
-    isOpen = false
+    open = false
   }
 }
 
@@ -294,7 +294,7 @@ diagnostic at all.)*
 
 **The reason is the states a direct call invents.** A `close()` that both runs by itself at the last reference and can
 be called by hand has to answer what the second call sees — the fields half torn down, a flag nobody declared, or a
-second `isOpen = false` racing nothing because there is only one thread per heap but two callers of the same method.
+second `open = false` racing nothing because there is only one thread per heap but two callers of the same method.
 Every one of those answers is a case `close()`'s signature (section 6: `Void`, infallible) cannot report, so the
 rule is not "check that `close` is not called twice" — it is that `close` is never in the caller's vocabulary at all,
 the same way a value's release is not.

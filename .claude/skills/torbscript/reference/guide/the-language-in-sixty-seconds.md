@@ -169,5 +169,7 @@ of `let mut` and `mutating func`, a copy or a `var` parameter instead of a borro
 - [Values and bindings](values-and-bindings.md) - the mutation rules in full.
 - [What a model trained on other languages gets wrong](../explanation/mistakes-models-make.md) - the mistakes, with the
   diagnostics they produce.
+- [Idiomatic TorbScript](idiomatic-torbscript.md) - the habits the standard library follows once the code compiles:
+  names, verbs and participles, capsules, `using`, tasks.
 - [The language reference](../language/index.md) - one page per construct.
 
