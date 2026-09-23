@@ -1,0 +1,95 @@
+/**
+ * A constant a trait requires, read through a type parameter: the constant of the type the parameter stands for.
+ *
+ * `Numeric` requires `static zero: Self` and `static one: Self`, and `Scalar.zero` in a generic body is `Int64.zero` in
+ * one instance and `Float64.zero` in the next. A trait of the program's own requires one without a value and gives
+ * another a default: an implementation that writes its own replaces the default, one that writes none reads the
+ * default with `Self` bound to it, and a `native type` provides its constant in an `extend` like any other type. A
+ * constant of a generic type built from them is one value per scalar, and a bare type name means its declared default.
+ */
+
+/** Something with a neutral element and a default starting point built from it. */
+trait Neutral {
+  static neutral: Self
+
+  static start: Self = Self.neutral
+}
+
+/** A word whose neutral element is the empty one. */
+type Word with Neutral {
+  text: String
+
+  static neutral = Word ""
+}
+
+/** A counter whose default start it replaces. */
+type Counter with Neutral {
+  count: Int
+
+  static neutral: Counter = Counter 0
+
+  static start: Counter = Counter 1
+}
+
+extend Int64 with Neutral {
+  static neutral: Int64 = 0
+}
+
+/** The neutral element of whichever type is asked for. */
+fn neutralOf<Value: Neutral>(): Value {
+  Value.neutral
+}
+
+/** The starting point of whichever type is asked for: a default, or the implementation's own. */
+fn startOf<Value: Neutral>(): Value {
+  Value.start
+}
+
+/** The sum of the values, from the number type's own zero. */
+fn total<Scalar: Numeric>(values: List<Scalar>): Scalar {
+  var sum = Scalar.zero
+  for value in values {
+    sum = sum + value
+  }
+  sum
+}
+
+/** The product of the values, from the number type's own one. */
+fn product<Scalar: Numeric>(values: List<Scalar>): Scalar {
+  var result = Scalar.one
+  for value in values {
+    result = result * value
+  }
+  result
+}
+
+/** A pair of numbers whose constants exist for every number type. */
+type Pair<Scalar: Numeric = Float> {
+  first: Scalar
+  second: Scalar
+
+  /** Both zero. */
+  static zero: Pair<Scalar> = Pair Scalar.zero, Scalar.zero
+
+  /** One and zero. */
+  static unit: Pair<Scalar> = Pair Scalar.one, Scalar.zero
+}
+
+const word: Word = neutralOf()
+const counter: Counter = neutralOf()
+const number: Int = neutralOf()
+print "{word} {counter} {number}"
+
+const wordStart: Word = startOf()
+const counterStart: Counter = startOf()
+const numberStart: Int = startOf()
+print "{wordStart} {counterStart} {numberStart}"
+print "{Word.start} {Counter.start}"
+
+print "{total([1, 2, 3])} {total([0.5, 0.25])} {product([2, 3, 4])} {product([1.5, 2.0])}"
+const bytes: List<UInt8> = [3, 4]
+print "{total(bytes)} {product(bytes)}"
+
+const grid: Pair<Int> = Pair.zero
+print "{Pair.zero} {grid} {Pair<UInt8>.unit} {Pair<Int32>.unit}"
+print "{Int.zero} {Int.one} {Float.zero} {Float.one} {UInt64.one} {Int8.one}"

@@ -6,7 +6,6 @@
  */
 
 use Numeric, Signed, Real from "std/number"
-use zeroOf from "./scalar"
 use Add, Subtract, Multiply, Divide, Negate from "std/core"
 use Fixed from "./fixed"
 use Vector3 from "./vector3"
@@ -20,9 +19,10 @@ use Vector3 from "./vector3"
  *     const point = Vector4 1.0, 2.0, 3.0, 1.0
  *     print "{point.toVector3()} {point.dot(point)}"
  *
- * # Open
+ * # Pitfalls
  *
- * - The constants need their scalar written out: `Vector4<Float>.zero`.
+ * - The constants exist for every scalar and take it from the expected type. With nothing expected, the bare
+ *   `Vector4.zero` is the `Float` one, the declared default.
  *
  * # Related
  *
@@ -43,6 +43,19 @@ public type Vector4<Scalar: Numeric = Float> with Add, Subtract, Multiply<Scalar
   static fn filled(value: Scalar): Vector4<Scalar> {
     Vector4 value, value, value, value
   }
+
+  /** Every component zero, over whichever scalar is asked for: `Vector4<Int>.zero`, `Vector4<Fixed>.zero`. */
+  static zero: Vector4<Scalar> = Vector4 Scalar.zero, Scalar.zero, Scalar.zero, Scalar.zero
+  /** Every component one. */
+  static one: Vector4<Scalar> = Vector4 Scalar.one, Scalar.one, Scalar.one, Scalar.one
+  /** The first basis vector. */
+  static unitX: Vector4<Scalar> = Vector4 Scalar.one, Scalar.zero, Scalar.zero, Scalar.zero
+  /** The second basis vector. */
+  static unitY: Vector4<Scalar> = Vector4 Scalar.zero, Scalar.one, Scalar.zero, Scalar.zero
+  /** The third basis vector. */
+  static unitZ: Vector4<Scalar> = Vector4 Scalar.zero, Scalar.zero, Scalar.one, Scalar.zero
+  /** The fourth basis vector, which is the origin as a homogeneous point. */
+  static unitW: Vector4<Scalar> = Vector4 Scalar.zero, Scalar.zero, Scalar.zero, Scalar.one
 
   /** A point in space as a homogeneous point, with `w` set to what is given. */
   static fn of(point: Vector3<Scalar>, w: Scalar): Vector4<Scalar> {
@@ -101,7 +114,7 @@ public type Vector4<Scalar: Numeric = Float> with Add, Subtract, Multiply<Scalar
 
   /** Whether every component is zero. */
   fn isZero(): Bool {
-    const nothing = zeroOf x
+    const nothing = Scalar.zero
     x == nothing && y == nothing && z == nothing && w == nothing
   }
 
@@ -137,7 +150,7 @@ extend<Scalar: Real> Vector4<Scalar> {
   /** The same direction with length one. A zero vector answers itself. */
   fn normalized(): Vector4<Scalar> {
     const size: Scalar = self.length()
-    if size == zeroOf(size) {
+    if size == Scalar.zero {
       return self
     }
     divide size
@@ -165,29 +178,8 @@ extend<Scalar: Real> Vector4<Scalar> {
   }
 }
 
-/** The float vector's constants. */
-extend Vector4<Float> {
-  /** Every component zero. */
-  static zero: Vector4<Float> = Vector4 0.0, 0.0, 0.0, 0.0
-  /** Every component one. */
-  static one: Vector4<Float> = Vector4 1.0, 1.0, 1.0, 1.0
-  /** The first basis vector. */
-  static unitX: Vector4<Float> = Vector4 1.0, 0.0, 0.0, 0.0
-  /** The second basis vector. */
-  static unitY: Vector4<Float> = Vector4 0.0, 1.0, 0.0, 0.0
-  /** The third basis vector. */
-  static unitZ: Vector4<Float> = Vector4 0.0, 0.0, 1.0, 0.0
-  /** The fourth basis vector, which is the origin as a homogeneous point. */
-  static unitW: Vector4<Float> = Vector4 0.0, 0.0, 0.0, 1.0
-}
-
-/** The grid vector's constants, and the way up to a scalar that has fractions. */
+/** The grid vector: the way up to a scalar that has fractions. */
 extend Vector4<Int> {
-  /** Every component zero. */
-  static zero: Vector4<Int> = Vector4 0, 0, 0, 0
-  /** Every component one. */
-  static one: Vector4<Int> = Vector4 1, 1, 1, 1
-
   /** The same vector over `Float`, exactly. */
   fn toFloat(): Vector4<Float> {
     Vector4 Float.from(x), Float.from(y), Float.from(z), Float.from(w)
@@ -199,12 +191,3 @@ extend Vector4<Int> {
   }
 }
 
-/** The deterministic vector's constants. */
-extend Vector4<Fixed> {
-  /** Every component zero. */
-  static zero: Vector4<Fixed> = Vector4 Fixed(0), Fixed(0), Fixed(0), Fixed(0)
-  /** Every component one. */
-  static one: Vector4<Fixed> = Vector4 Fixed(65536), Fixed(65536), Fixed(65536), Fixed(65536)
-  /** The fourth basis vector, which is the origin as a homogeneous point. */
-  static unitW: Vector4<Fixed> = Vector4 Fixed(0), Fixed(0), Fixed(0), Fixed(65536)
-}

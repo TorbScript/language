@@ -1,7 +1,7 @@
 # Linear Algebra and Geometry
 
 **Status: implemented** — `std/linear` and `std/geometry` exist and their tests pass natively; section 12 lists the
-language gaps that remain (items 10, 12 and 16 are still open) and section 13 the packages that come after.
+language gaps that remain (item 12 is still open) and section 13 the packages that come after.
 
 One vector type per width, over whatever number the program counts in. This is the specification of `std/linear` and
 `std/geometry`, of the scalar tower they stand on, and of the rule that decides which member exists for which scalar.
@@ -93,20 +93,20 @@ has a type, and inside `extend<Scalar: Real> Vector2<Scalar>` that type is `Scal
 [section 12](#12-what-the-language-and-the-compiler-must-provide)). So `size / 2` cannot be written, `1` cannot be
 written, and the midpoint of a rectangle, the bottom row of a transformation matrix and a "full" interpolation factor all
 need one of the two constants. `unit(self)` does not read `self`; it is the scalar type asked for its own one, through a
-value of it, because a static member cannot be reached through a type parameter either. **Both disappear the day a back
-end substitutes the type of a literal.** `zeroOf(value)` is the same thing for the zero, and it is a free function rather
-than a trait member because `value - value` needs nothing a `Numeric` does not already promise.
+value of it. **Both are answered now.** A literal adapts to the parameter (item 14 of section 12), and `Numeric`
+requires `static zero: Self` and `static one: Self` of every number type (item 10), so a generic body writes
+`Scalar.zero` and `Scalar.one` - the free function `zeroOf(value)` that derived the zero as `value - value` is
+deleted, and `unit()` stays only until its callers read `Scalar.one` instead.
 
 **`radiansOfDegrees` and `degreesOfRadians` are members of the scalar and not functions of `std/linear`** for the same
 reason: the conversion needs the value of pi *in this scalar's type*, and `180` cannot be written in a generic body
 either. Each implementor carries its own exact factor, which for `Fixed` is a precomputed count of parts rather than a
 division.
 
-`Real` deliberately does **not** carry the constants `pi`, `tau` or `epsilon`. A trait cannot require a `const` at all
-("A binding needs a value: there are no uninitialized bindings"), and requiring them as `static fn`s would clash with
-the `const pi: Float64` that `Float64` already has and is the nicer spelling. They stay `const`s on each scalar —
-`Float64.pi`, `Fixed.pi`, `Fixed.tau` — under exactly those names, so that a future trait constant can absorb them
-without renaming anything. Where generic code needs pi, it takes `arcCosine` of minus one, which is pi by definition;
+`Real` does **not** carry the constants `pi`, `tau` or `epsilon` yet. A trait can require a constant now
+(`static pi: Self`, section 12 item 10), and the scalars already carry them as constants of their own —
+`Float64.pi`, `Fixed.pi`, `Fixed.tau` — under exactly the names such a requirement would use, so `Real` can absorb
+them without renaming anything; that step is the next round of this library and not a gap of the language. Where generic code needs pi, it takes `arcCosine` of minus one, which is pi by definition;
 `std/geometry`'s `halfTurnOf` is that one line.
 
 ## 2. The types
@@ -174,8 +174,8 @@ Short form; the docblocks are the full list.
 Two entries in that table are compromises and say so in their `# Open`:
 
 - **`Matrix3.affine` and `Matrix4.translation` need `Real`**, although an affine transformation of a tile grid is
-  ordinary whole-number arithmetic. Their bottom row ends in a one, and a generic body cannot write that literal. A
-  `Matrix3<Int>` is built by writing its three columns out.
+  ordinary whole-number arithmetic. Their bottom row ends in a one, which is `Scalar.one` and needs no more than
+  `Numeric`; they stay in the `Real` extension until they move, and a `Matrix3<Int>` is built by writing its columns out.
 - **`Rectangle.center` needs `Real`** because it halves, and the midpoint of a whole-number rectangle is not a whole
   number. The library does not pick a rounding for a program.
 
@@ -198,9 +198,8 @@ Two entries in that table are compromises and say so in their `# Open`:
   `Vector2<Float>` and nowhere else. The reason was stage 0's interpreter, which had no types and therefore could not
   tell `extend Vector2<Int>` from `extend Vector2<Fixed>`; two `toFloat`s would have made one of them silently answer
   the other's arithmetic. Stage 0 is gone and the VM of milestone 7 reads the typed IR, so the trap is gone with it; the
-  names stay, because each one says what it converts to. The four constants (`zero`, `one`, `unitX`, `unitY`) share
-  their names across instantiations, which was the one place where a program on stage 0 had to write the components
-  out instead.
+  names stay, because each one says what it converts to. The constants (`zero`, `one`, `unitX`, `unitY`) are one
+  declaration for every instantiation, over `Scalar.zero` and `Scalar.one`.
 
 ## 5. Literals and inference
 
@@ -218,9 +217,10 @@ Three inference rules are worth knowing, and two of them are sharp edges:
 
 1. **A literal adapts to a declared scalar.** `const size: Vector2<Float> = Vector2(1, 2)` works, because the annotation
    says `Float64` and `1` adapts to it.
-2. **A constant of a concrete `extend` needs its scalar written out.** `Vector2<Float>.zero`, not `Vector2.zero` — the
-   type parameter's *default* is not consulted for a member of an `extend` of one instantiation, and neither is the
-   expected type. This is a gap and not a decision; see [section 12](#12-what-the-language-and-the-compiler-must-provide).
+2. **A constant takes its scalar from the expected type, and from the declared default where nothing expects one.**
+   The constants (`zero`, `one`, `unitX`, ..., `identity`) are declared once, for every scalar, over the scalar's own
+   `Scalar.zero` and `Scalar.one`: `const tile: Vector2<Int> = Vector2.zero` is the grid's zero, `Vector2<Fixed>.zero`
+   the deterministic one, and a bare `print Vector2.zero` the `Float` one.
 3. **A `const` binding of a generic result may need an annotation.** Inside `extend<Scalar: Real> Vector2<Scalar>`,
    `const size = self.length()` does not infer, and `const size: Scalar = self.length()` does. A result position infers
    fine; only a bare binding does not.
@@ -393,15 +393,15 @@ would say so if they came back. The rest quote the diagnostic that is the reprod
    instance's arguments. `operandTypeOf` in `compiler/src/ir/lower/call.trb` therefore prefers the written operand
    wherever the target is not closed, and the operator form and the method form of one call are the same function -
    inside a generic body as well. `tests/conformance/generic-operators.trb` is the gate.
-2. ~~**A numeric literal in a generic body is never adapted to the parameter.**~~ **Closed with item 14.** `oneOf` and
-   `doubled` in `examples/generic-scalar/src/main.trb` build natively and print `1 1.0 6 3.0`. What it said:
+2. ~~**A numeric literal in a generic body is never adapted to the parameter.**~~ **Closed with item 14.** `doubled` in
+   `examples/generic-scalar/src/main.trb` builds natively and prints `6 3.0`. What it said:
    `fn oneOf<Scalar: Numeric>(): Scalar
    { 1 }` type checks, the checker records `Int64` for the literal, and the back end then reports "the function returns
    `Float64` and `return` carries `Int64`" for the `Float64` instance. The substitution is not what is missing - there
    is no parameter in the recorded type to substitute - so this is the **checker's** half of item 14, and it closes
    there: the literal has to adapt to the parameter, and the back end then does with it exactly what it does with
    `const x: Float = 1`, which compiles today. Everything in [section 1](#1-the-scalar-tower) about `unit`, `halved` and
-   `zeroOf` exists only because of this. Reproduction: `examples/generic-scalar/src/main.trb`, `oneOf` and `doubled`.
+   the deleted `zeroOf` existed only because of this. Reproduction: `examples/generic-scalar/src/main.trb`, `doubled`.
 3. ~~A `const` member of a generic type is not instantiated per type argument.~~ **Closed in the back end.**
    `Box<Int>.empty` and `Box<String>.empty` are one declaration and two values, and a binary keeps one cell per
    instance, named after the arguments the read decided. Stage 0's interpreter answered the same value for every scalar
@@ -420,17 +420,18 @@ would say so if they came back. The rest quote the diagnostic that is the reprod
    `Unknown name Vector2` in a package that does not declare `std/linear` there - which is every package of `std/`
    testing a sibling, and the workspace of `tests/conformance/`, since none of them declares a dependency at all
    (a conformance program is one file with no manifest of its own). Everything of `std/` they need therefore imports
-   **by path**, and a `std/` package can only call functions from its own directory. That is why `zeroOf` is one line
-   in `std/linear/src/scalar.trb` and one line in `std/geometry/src/scalar.trb` instead of living once in
-   `std/number`, and why `std/geometry` reaches `std/linear` as `"../../linear/src/vector2"`.
+   **by path**, and a `std/` package can only call functions from its own directory. That is why `std/geometry`
+   reaches `std/linear` as `"../../linear/src/vector2"`; the copy of `zeroOf` each of the two packages held is gone
+   with item 10, because the zero is `Numeric.zero` now.
 6. ~~**The interpreter cannot tell two instantiations of one `extend` apart.**~~ **Gone with stage 0.** Stage 0's
    untyped interpreter answered `Vector2(x: 1.0, y: 0.0)` for `Vector2<Int>.unitX`, because `extend Vector2<Float>`
    was declared first. The VM of milestone 7 reads the typed IR and cannot make that mistake; the library still keeps
    every conversion under a name of its own ([section 4](#4-naming)), because each name says what it converts to.
 7. **A static member cannot be reached through a type parameter.** `Scalar.zero()` inside a generic body answered
    `Unknown name Scalar` on stage 0 (gone), and `Vector2.from(other)` through `From` reported "a call of a trait member
-   without a receiver" in the back end (not re-verified on 2026-09-22). This is what makes `Real.unit()` an instance
-   member that ignores `self`, and what makes a `From` between two instantiations unreachable.
+   without a receiver" in the back end (not re-verified on 2026-09-22). A **constant** is reached through a parameter
+   since item 10 closed (`Scalar.zero`); a `static fn` through `From` is what this item still is, and it keeps a
+   `From` between two instantiations unreachable.
 8. **`Float32` cannot carry `Real`.** It has no `squareRoot`, the C back end marks all eleven of its arithmetic members
    planned, and there is **no conversion from a `Float64` down to a `Float32`** at all, so no body can be written for one
    even through `Float64`. **Smallest change, in order:** a `Float32 with TryFrom<Float64, NumberRangeError>` native, then
@@ -438,11 +439,18 @@ would say so if they came back. The rest quote the diagnostic that is the reprod
 9. **`Array<Item, const Size: Int>` runs nowhere.** Stage 0 answered `Unknown name Array` while it existed, and the C
    back end marks every member planned. It is the reason a matrix is fields and not storage, and it will be the reason `std/tensor` waits
    for `Buffer<Item>`.
-10. **A trait cannot require a constant. Still open (2026-09-22).** `static pi: Self` inside a trait now reports "A
-    constant of the type needs a value — A trait cannot require one without a value yet: declare it in every
-    implementation", beside the older "A binding needs a value: there are no uninitialized bindings and no default
-    values" - a clearer refusal, not the feature. With it, `Real` would carry `pi`, `tau` and `epsilon` under the names
-    the scalars already use, and `Scalar.pi` would work in a generic body.
+10. ~~**A trait cannot require a constant.**~~ **Closed (2026-09-23).** A trait declares `static zero: Self` without a
+    value - a requirement every implementation provides as a constant of its own, in the type, in the `extend` that
+    implements the trait or in any other `extend` of the type - or with a value, a default an implementation may
+    replace. A generic body reads it through its parameter (`Scalar.zero`), and the lowering reads the constant of the
+    type the parameter stands for in each instance, or instantiates the default with `Self` bound to it
+    (`reachedConstantOf` in `compiler/src/ir/constant.trb`, the same question `providerOfMember` asks for a table).
+    `Numeric` requires `zero` and `one`, every number type of `std/number` and `Fixed` provide them, `zeroOf` is
+    deleted from `std/linear` and `std/geometry`, and the constants of the vectors, matrices, quaternions and angles are
+    one declaration per type for every scalar. A constant without a value outside a trait is "A constant of the type
+    needs a value"; a `static fn` does not stand in for a required constant. `Real` may now carry `pi`, `tau` and
+    `epsilon` under the names the scalars already use (section 1). Gates: `compiler/tests/traits.test.trb` ("A
+    constant a trait requires"), `tests/conformance/trait-constants.trb`, `examples/generic-scalar`.
 11. **A member-level `where` clause on a method of a generic `type` adds nothing.** `fn manhattanLength(): Scalar
     where Scalar: Signed` inside `type Vector2<Scalar: Numeric>` reports "`Scalar` has no member `absolute`" in its own
     body, although the documentation describes exactly that form for a trait member. The library uses a conditional
@@ -516,21 +524,21 @@ Interpolation happens in a space the caller names, conversion is explicit, and `
 
 ## 14. Open questions
 
-1. **`isCloseTo` or `isNear`?** The plan said `isNear`; `std/number` already has `Float64.isCloseTo` with a default
-   tolerance, and this design used that name everywhere for consistency. Renaming `Float64.isCloseTo` to `isNear` across
-   `std/` is a small mechanical change if `isNear` is preferred.
-2. **`interpolated(toward:by:)` or `lerp`?** `lerp` is what every other library calls it and an abbreviation this
-   language does not otherwise allow. `interpolated` is the full word and reads well at a call
-   (`here.interpolated(toward: there, by: 0.5)`).
+1. ~~**`isCloseTo` or `isNear`?**~~ **Answered by the owner (2026-09-23):** `isCloseTo`, the name `std/number` already
+   has. The plan said `isNear`; nothing is renamed.
+2. ~~**`interpolated(toward:by:)` or `lerp`?**~~ **Answered by the owner (2026-09-23):** `interpolated(toward:by:)`,
+   the full word. `lerp` is what every other library calls it and an abbreviation this language does not otherwise
+   allow.
 3. ~~**`Segment` or `Segment2`?**~~ Decided: `Segment2`. `Ray2`/`Ray3` and `Triangle2`/`Triangle3` carry the digit,
    and a segment of space has no word of its own the way a `Box` and a `Sphere` have one.
-4. **Should the four vector constants stay on every instantiation?** They are the one place where a program that runs on
-   the interpreter reads the wrong scalar's value ([section 12](#12-what-the-language-and-the-compiler-must-provide),
-   item 6). Keeping them on `Float` alone would remove the trap and cost `Vector2<Int>.zero`.
+4. ~~**Should the four vector constants stay on every instantiation?**~~ **Answered by the owner (2026-09-23):** yes,
+   on every number type. They are one declaration per type over `Scalar.zero` and `Scalar.one` now, so
+   `Vector2<Int>.zero`, `Vector2<UInt8>.zero` and `Vector2<Fixed>.zero` all exist, and the interpreter trap of item 6
+   is gone with stage 0.
 5. ~~**Should `Matrix4` carry a general inverse?**~~ Decided: yes. `Matrix4.inverse` is the general one by cofactors
    and `inverseAffine` stays beside it as the short way for the matrices a scene graph is made of.
 6. **`Quaternion.interpolated` takes the straight path and renormalizes**, not the constant-speed path along the sphere.
    The difference shows in the middle of a long rotation. A constant-speed version needs an arc cosine whose accuracy
    near a zero angle should be measured on `Fixed` before it is written.
-7. **Does `std/linear` belong in the prelude?** It is an explicit import today, which the plan asked for. A game project
-   would import it in every file.
+7. ~~**Does `std/linear` belong in the prelude?**~~ **Answered by the owner (2026-09-23):** no. It stays an explicit
+   import, which the plan asked for; a game project imports it in the files that compute with vectors.

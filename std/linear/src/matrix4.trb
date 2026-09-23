@@ -9,9 +9,7 @@
  */
 
 use Numeric, Signed, Real from "std/number"
-use zeroOf from "./scalar"
 use Add, Subtract, Multiply, Negate from "std/core"
-use Fixed from "./fixed"
 use Vector3 from "./vector3"
 use Vector4 from "./vector4"
 use Matrix3 from "./matrix3"
@@ -27,10 +25,6 @@ use Matrix3 from "./matrix3"
  *     const move = Matrix4.translation of: Vector3(1.0, 2.0, 3.0)
  *     print move.transformedPoint(Vector3(0.0, 0.0, 0.0))
  *
- * # Open
- *
- * - [Matrix4.identity] needs its scalar written out: `Matrix4<Float>.identity`.
- *
  * # Related
  *
  * - [Matrix3] - the linear part on its own, and the affine form for the plane.
@@ -45,6 +39,14 @@ public type Matrix4<Scalar: Numeric = Float> with Add, Subtract, Multiply {
   zAxis: Vector4<Scalar>
   /** Where the origin lands: the translation, with a one in its fourth component. */
   wAxis: Vector4<Scalar>
+
+  /** The transformation that changes nothing, over whichever scalar is asked for: `Matrix4<Int>.identity`. */
+  static identity: Matrix4<Scalar> = Matrix4(
+    Vector4(Scalar.one, Scalar.zero, Scalar.zero, Scalar.zero),
+    Vector4(Scalar.zero, Scalar.one, Scalar.zero, Scalar.zero),
+    Vector4(Scalar.zero, Scalar.zero, Scalar.one, Scalar.zero),
+    Vector4(Scalar.zero, Scalar.zero, Scalar.zero, Scalar.one),
+  )
 
   /** The three rows and columns that are the linear part: the rotation, the scale and the shear, without the move. */
   fn linearPart(): Matrix3<Scalar> {
@@ -136,7 +138,7 @@ public type Matrix4<Scalar: Numeric = Float> with Add, Subtract, Multiply {
 
   /** A direction, turned by the transformation: the translation is not applied. */
   fn transformedDirection(direction: Vector3<Scalar>): Vector3<Scalar> {
-    const turned = applied to: Vector4.of(direction, zeroOf(direction.x))
+    const turned = applied to: Vector4.of(direction, Scalar.zero)
     turned.toVector3()
   }
 
@@ -225,7 +227,7 @@ extend<Scalar: Signed> Matrix4<Scalar> with Negate {
 extend<Scalar: Real> Matrix4<Scalar> {
   /** A diagonal matrix: each axis scaled on its own, and the translation left at the origin. */
   static fn scaling(by: Vector3<Scalar>): Matrix4<Scalar> {
-    const nothing = zeroOf(by.x)
+    const nothing = Scalar.zero
     Matrix4(
       Vector4(by.x, nothing, nothing, nothing),
       Vector4(nothing, by.y, nothing, nothing),
@@ -240,7 +242,7 @@ extend<Scalar: Real> Matrix4<Scalar> {
    *     print Matrix4.translation of: Vector3(1.0, 0.0, 0.0)).translationPart(
    */
   static fn translation(of: Vector3<Scalar>): Matrix4<Scalar> {
-    const nothing = zeroOf of.x
+    const nothing = Scalar.zero
     const whole = of.x.unit()
     Matrix4(
       Vector4(whole, nothing, nothing, nothing),
@@ -252,7 +254,7 @@ extend<Scalar: Real> Matrix4<Scalar> {
 
   /** The affine transformation that applies the linear part and then moves by `by`. */
   static fn affine(linear: Matrix3<Scalar>, by: Vector3<Scalar>): Matrix4<Scalar> {
-    const nothing = zeroOf(by.x)
+    const nothing = Scalar.zero
     Matrix4(
       Vector4.of(linear.xAxis, nothing),
       Vector4.of(linear.yAxis, nothing),
@@ -299,7 +301,7 @@ extend<Scalar: Real> Matrix4<Scalar> {
   fn inverse(): Matrix4<Scalar>? {
     const blocks = minorsOf self
     const scale = blocks.determinant()
-    if scale == zeroOf(scale) {
+    if scale == Scalar.zero {
       return None
     }
     const first = xAxis
@@ -345,26 +347,4 @@ extend<Scalar: Real> Matrix4<Scalar> {
       && zAxis.isCloseTo(other.zAxis, tolerance: tolerance)
       && wAxis.isCloseTo(other.wAxis, tolerance: tolerance)
   }
-}
-
-/** The float matrix's identity. */
-extend Matrix4<Float> {
-  /** The transformation that changes nothing. */
-  static identity: Matrix4<Float> = Matrix4(
-    Vector4(1.0, 0.0, 0.0, 0.0),
-    Vector4(0.0, 1.0, 0.0, 0.0),
-    Vector4(0.0, 0.0, 1.0, 0.0),
-    Vector4(0.0, 0.0, 0.0, 1.0),
-  )
-}
-
-/** The deterministic matrix's identity. */
-extend Matrix4<Fixed> {
-  /** The transformation that changes nothing. */
-  static identity: Matrix4<Fixed> = Matrix4(
-    Vector4(Fixed(65536), Fixed(0), Fixed(0), Fixed(0)),
-    Vector4(Fixed(0), Fixed(65536), Fixed(0), Fixed(0)),
-    Vector4(Fixed(0), Fixed(0), Fixed(65536), Fixed(0)),
-    Vector4(Fixed(0), Fixed(0), Fixed(0), Fixed(65536)),
-  )
 }

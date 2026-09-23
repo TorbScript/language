@@ -8,9 +8,7 @@
  */
 
 use Real from "std/number"
-use zeroOf from "./scalar"
 use Multiply, Negate, Equals from "std/core"
-use Fixed from "./fixed"
 use Angle from "./angle"
 use Vector3 from "./vector3"
 use Matrix3 from "./matrix3"
@@ -35,7 +33,6 @@ use Matrix3 from "./matrix3"
  *
  * # Open
  *
- * - [Quaternion.identity] needs its scalar written out: `Quaternion<Float>.identity`.
  * - [Quaternion.interpolated] takes the straight path between the two and puts the length back, rather than the
  *   constant-speed path along the sphere. The two agree at both ends and differ in the middle, and the constant-speed
  *   form needs an arc cosine whose accuracy near a zero angle is worth measuring before it is written.
@@ -55,6 +52,9 @@ public type Quaternion<Scalar: Real = Float> with Multiply, Negate {
   /** The cosine of half the angle. */
   w: Scalar
 
+  /** No rotation, over whichever scalar is asked for: `Quaternion<Fixed>.identity`. */
+  static identity: Quaternion<Scalar> = Quaternion Scalar.zero, Scalar.zero, Scalar.zero, Scalar.one
+
   /**
    * The rotation by that angle around that axis. The axis is normalized first, so it may have any length; a zero axis
    * answers no rotation at all.
@@ -64,7 +64,7 @@ public type Quaternion<Scalar: Real = Float> with Multiply, Negate {
   static fn rotation(around: Vector3<Scalar>, by: Angle<Scalar>): Quaternion<Scalar> {
     const axis = around.normalized()
     if axis.isZero() {
-      const nothing = zeroOf around.x
+      const nothing = Scalar.zero
       return Quaternion nothing, nothing, nothing, around.x.unit()
     }
     const half = by.halved()
@@ -100,8 +100,8 @@ public type Quaternion<Scalar: Real = Float> with Multiply, Negate {
   /** The same rotation with the length put back to one. A zero quaternion answers no rotation. */
   fn normalized(): Quaternion<Scalar> {
     const size: Scalar = self.length()
-    if size == zeroOf(size) {
-      const nothing = zeroOf size
+    if size == Scalar.zero {
+      const nothing = Scalar.zero
       return Quaternion nothing, nothing, nothing, w.unit()
     }
     Quaternion(x / size, y / size, z / size, w / size)
@@ -147,7 +147,7 @@ public type Quaternion<Scalar: Real = Float> with Multiply, Negate {
    * back onto the sphere. It takes the shorter of the two ways around, which is what an animation means by it.
    */
   fn interpolated(toward: Quaternion<Scalar>, by: Scalar): Quaternion<Scalar> {
-    const nearest = if dot(toward) < zeroOf(w) { toward.negate() } else { toward }
+    const nearest = if dot(toward) < Scalar.zero { toward.negate() } else { toward }
     const mixed = Quaternion(
       x + (nearest.x - x) * by,
       y + (nearest.y - y) * by,
@@ -169,16 +169,4 @@ public type Quaternion<Scalar: Real = Float> with Multiply, Negate {
       && (z - other.z).absolute() <= tolerance
       && (w - other.w).absolute() <= tolerance
   }
-}
-
-/** The float rotation's identity. */
-extend Quaternion<Float> {
-  /** No rotation. */
-  static identity: Quaternion<Float> = Quaternion 0.0, 0.0, 0.0, 1.0
-}
-
-/** The deterministic rotation's identity. */
-extend Quaternion<Fixed> {
-  /** No rotation. */
-  static identity: Quaternion<Fixed> = Quaternion Fixed(0), Fixed(0), Fixed(0), Fixed(65536)
 }

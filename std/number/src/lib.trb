@@ -13,12 +13,36 @@ use Add, Subtract, Multiply, Divide, Remainder, Negate from "std/core"
 use * as math from "std/math"
 
 /**
- * The arithmetic and comparison every number has: `+`, `-`, `*`, `/`, `%`, `==`, `<`, and reading one from text.
+ * The arithmetic and comparison every number has: `+`, `-`, `*`, `/`, `%`, `==`, `<`, reading one from text, and its
+ * zero and its one.
  *
  * Text is a source like any other, so `Int.tryFrom("42")` is the conversion and there is no `parse` beside it.
+ *
+ * # Examples
+ *
+ *     fn total<Scalar: Numeric>(values: List<Scalar>): Scalar {
+ *       var sum = Scalar.zero
+ *       for value in values {
+ *         sum = sum + value
+ *       }
+ *       sum
+ *     }
+ *
+ *     print total([1, 2, 3])
+ *     print total([0.5, 0.25])
  */
 public trait Numeric
-  with Add, Subtract, Multiply, Divide, Remainder, Equals, Compare, Show, TryFrom<String, NumberParseError> {}
+  with Add, Subtract, Multiply, Divide, Remainder, Equals, Compare, Show, TryFrom<String, NumberParseError>
+{
+  /**
+   * Zero of this type: what a sum starts from, and what a generic body compares against. `Scalar.zero` reads it
+   * through a type parameter, `Int.zero` and `Float.zero` through the type.
+   */
+  static zero: Self
+
+  /** One of this type: what a product starts from, and the unit of an identity matrix or a homogeneous coordinate. */
+  static one: Self
+}
 
 /** [Numeric] plus a sign: the unary `-` and [Signed.absolute]. What every signed number has beyond an unsigned one. */
 public trait Signed
@@ -131,9 +155,8 @@ public trait Real with Signed {
   fn degreesOfRadians(): Self
 
   /**
-   * The value one, of this scalar's type. `self` is not read at all: it is there because a body that is generic over
-   * the scalar cannot write the literal `1`, and asking a value of the type for it is the way to get one. The
-   * homogeneous row of a transformation matrix, an identity and a "full" interpolation factor are all made of it.
+   * The value one, of this scalar's type, asked of a value of it. `self` is not read at all. [Numeric.one] is the same
+   * constant asked of the type - `Scalar.one` - which is the spelling for a body that has no value at hand.
    */
   fn unit(): Self
 }
@@ -204,9 +227,9 @@ public native type UInt64 with Numeric, Hash, Bits {}
 
 /** The range of an `Int8`, and its zero and one. */
 extend Int8 {
-  /** Zero, the `Numeric.zero` of an `Int8`. */
+  /** Zero, the [Numeric.zero] of an `Int8`. */
   static zero: Int8 = 0
-  /** One, the `Numeric.one` of an `Int8`. */
+  /** One, the [Numeric.one] of an `Int8`. */
   static one: Int8 = 1
   /** The smallest `Int8`. */
   static minimum: Int8 = -128
@@ -216,9 +239,9 @@ extend Int8 {
 
 /** The range of an `Int16`, and its zero and one. */
 extend Int16 {
-  /** Zero, the `Numeric.zero` of an `Int16`. */
+  /** Zero, the [Numeric.zero] of an `Int16`. */
   static zero: Int16 = 0
-  /** One, the `Numeric.one` of an `Int16`. */
+  /** One, the [Numeric.one] of an `Int16`. */
   static one: Int16 = 1
   /** The smallest `Int16`. */
   static minimum: Int16 = -32768
@@ -228,9 +251,9 @@ extend Int16 {
 
 /** The range of an `Int32`, and its zero and one. */
 extend Int32 {
-  /** Zero, the `Numeric.zero` of an `Int32`. */
+  /** Zero, the [Numeric.zero] of an `Int32`. */
   static zero: Int32 = 0
-  /** One, the `Numeric.one` of an `Int32`. */
+  /** One, the [Numeric.one] of an `Int32`. */
   static one: Int32 = 1
   /** The smallest `Int32`. */
   static minimum: Int32 = -2147483648
@@ -240,9 +263,9 @@ extend Int32 {
 
 /** The range of a `UInt8`, and its zero and one. */
 extend UInt8 {
-  /** Zero, the `Numeric.zero` of a `UInt8`. */
+  /** Zero, the [Numeric.zero] of a `UInt8`. */
   static zero: UInt8 = 0
-  /** One, the `Numeric.one` of a `UInt8`. */
+  /** One, the [Numeric.one] of a `UInt8`. */
   static one: UInt8 = 1
   /** Always `0`. */
   static minimum: UInt8 = 0
@@ -252,9 +275,9 @@ extend UInt8 {
 
 /** The range of a `UInt16`, and its zero and one. */
 extend UInt16 {
-  /** Zero, the `Numeric.zero` of a `UInt16`. */
+  /** Zero, the [Numeric.zero] of a `UInt16`. */
   static zero: UInt16 = 0
-  /** One, the `Numeric.one` of a `UInt16`. */
+  /** One, the [Numeric.one] of a `UInt16`. */
   static one: UInt16 = 1
   /** Always `0`. */
   static minimum: UInt16 = 0
@@ -264,9 +287,9 @@ extend UInt16 {
 
 /** The range of a `UInt32`, and its zero and one. */
 extend UInt32 {
-  /** Zero, the `Numeric.zero` of a `UInt32`. */
+  /** Zero, the [Numeric.zero] of a `UInt32`. */
   static zero: UInt32 = 0
-  /** One, the `Numeric.one` of a `UInt32`. */
+  /** One, the [Numeric.one] of a `UInt32`. */
   static one: UInt32 = 1
   /** Always `0`. */
   static minimum: UInt32 = 0
@@ -279,9 +302,9 @@ public native type Float32 with Signed {}
 
 /** The zero and the one of a `Float32`. */
 extend Float32 {
-  /** Zero, the `Numeric.zero` of an `Float32`. */
+  /** Zero, the [Numeric.zero] of an `Float32`. */
   static zero: Float32 = 0.0
-  /** One, the `Numeric.one` of an `Float32`. */
+  /** One, the [Numeric.one] of an `Float32`. */
   static one: Float32 = 1.0
 }
 /** A 64-bit floating-point number, and the type of a decimal literal. */
@@ -299,9 +322,9 @@ public native type Decimal with Signed, Hash {}
 
 /** The zero and the one of a `Decimal`. */
 extend Decimal {
-  /** Zero, the `Numeric.zero` of an `Decimal`. */
+  /** Zero, the [Numeric.zero] of an `Decimal`. */
   static zero: Decimal = 0.0
-  /** One, the `Numeric.one` of an `Decimal`. */
+  /** One, the [Numeric.one] of an `Decimal`. */
   static one: Decimal = 1.0
 }
 
@@ -315,9 +338,9 @@ public type Float = Float64
 
 /** The range of an `Int64`, its zero and one, and reading digits in another base. */
 extend Int64 {
-  /** Zero, the `Numeric.zero` of an `Int64`. */
+  /** Zero, the [Numeric.zero] of an `Int64`. */
   static zero: Int64 = 0
-  /** One, the `Numeric.one` of an `Int64`. */
+  /** One, the [Numeric.one] of an `Int64`. */
   static one: Int64 = 1
   /**
    * The smallest `Int64` cannot be written as a positive literal negated (`9223372036854775808` alone does not fit
@@ -333,9 +356,9 @@ extend Int64 {
 
 /** The range of a `UInt64`, its zero and one, and the two operations that wrap instead of panicking. */
 extend UInt64 {
-  /** Zero, the `Numeric.zero` of a `UInt64`. */
+  /** Zero, the [Numeric.zero] of a `UInt64`. */
   static zero: UInt64 = 0
-  /** One, the `Numeric.one` of a `UInt64`. */
+  /** One, the [Numeric.one] of a `UInt64`. */
   static one: UInt64 = 1
   /** Always `0`. */
   static minimum: UInt64 = 0
@@ -359,9 +382,9 @@ extend UInt64 {
 
 /** The constants and the operations of a `Float64` that read as its own, not as a function of a value. */
 extend Float64 {
-  /** Zero, the `Numeric.zero` of an `Float64`. */
+  /** Zero, the [Numeric.zero] of an `Float64`. */
   static zero: Float64 = 0.0
-  /** One, the `Numeric.one` of an `Float64`. */
+  /** One, the [Numeric.one] of an `Float64`. */
   static one: Float64 = 1.0
   /** The ratio of a circle's circumference to its diameter. */
   static pi: Float64 = 3.141592653589793

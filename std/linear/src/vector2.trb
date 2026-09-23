@@ -9,7 +9,6 @@
  */
 
 use Numeric, Signed, Real from "std/number"
-use zeroOf from "./scalar"
 use Add, Subtract, Multiply, Divide, Negate from "std/core"
 use Fixed from "./fixed"
 use Angle from "./angle"
@@ -33,15 +32,9 @@ use Angle from "./angle"
  *   two do not mix. Cross the boundary on purpose with [Vector2.toFloat] and [Vector2.rounded].
  * - Overflow panics, here as everywhere. `lengthSquared` on a `Vector2<Int>` squares both components, so a pair of
  *   coordinates above three billion leaves the range of an `Int` although the vector itself is ordinary.
- *
- * # Open
- *
- * - The constants need their scalar written out - `Vector2<Float>.zero`, not `Vector2.zero` - because a member of an
- *   `extend` of one instantiation does not take the scalar from the expected type and does not fall back to the
- *   declared default either.
- * - The interpreter has no types, so it cannot tell `extend Vector2<Float>` from `extend Vector2<Int>`: a program run
- *   on it reads whichever of the four constants was declared first, whatever scalar it asked for. Build such a program
- *   to a binary, or write the components out.
+ * - The constants ([Vector2.zero], [Vector2.one], [Vector2.unitX], [Vector2.unitY]) exist for every scalar and take
+ *   it from the expected type: `const tile: Vector2<Int> = Vector2.zero` is the grid's zero. With nothing expected,
+ *   the bare `Vector2.zero` is the `Float` one, the declared default.
  *
  * # Related
  *
@@ -63,6 +56,15 @@ public type Vector2<Scalar: Numeric = Float> with Add, Subtract, Multiply<Scalar
   static fn filled(value: Scalar): Vector2<Scalar> {
     Vector2 value, value
   }
+
+  /** Both components zero, over whichever scalar is asked for: `Vector2<Int>.zero`, `Vector2<Fixed>.zero`. */
+  static zero: Vector2<Scalar> = Vector2 Scalar.zero, Scalar.zero
+  /** Both components one. */
+  static one: Vector2<Scalar> = Vector2 Scalar.one, Scalar.one
+  /** The first basis vector. */
+  static unitX: Vector2<Scalar> = Vector2 Scalar.one, Scalar.zero
+  /** The second basis vector. */
+  static unitY: Vector2<Scalar> = Vector2 Scalar.zero, Scalar.one
 
   /** The sum, component by component. */
   fn add(other: Vector2<Scalar>): Vector2<Scalar> {
@@ -146,7 +148,7 @@ public type Vector2<Scalar: Numeric = Float> with Add, Subtract, Multiply<Scalar
 
   /** Whether both components are zero. */
   fn isZero(): Bool {
-    const nothing = zeroOf x
+    const nothing = Scalar.zero
     x == nothing && y == nothing
   }
 
@@ -230,7 +232,7 @@ extend<Scalar: Real> Vector2<Scalar> {
    */
   fn normalized(): Vector2<Scalar> {
     const size: Scalar = self.length()
-    if size == zeroOf(size) {
+    if size == Scalar.zero {
       return self
     }
     divide size
@@ -292,17 +294,8 @@ extend<Scalar: Real> Vector2<Scalar> {
   }
 }
 
-/** The float vector: its constants, and the three ways down to a grid. */
+/** The float vector: the three ways down to a grid. */
 extend Vector2<Float> {
-  /** Both components zero. */
-  static zero: Vector2<Float> = Vector2 0.0, 0.0
-  /** Both components one. */
-  static one: Vector2<Float> = Vector2 1.0, 1.0
-  /** The first basis vector. */
-  static unitX: Vector2<Float> = Vector2 1.0, 0.0
-  /** The second basis vector. */
-  static unitY: Vector2<Float> = Vector2 0.0, 1.0
-
   /**
    * Every component rounded to the nearest whole number, halves away from zero. Panics outside the range of an `Int`.
    *
@@ -323,17 +316,8 @@ extend Vector2<Float> {
   }
 }
 
-/** The grid vector: its constants, and the two ways up to a scalar that has fractions. */
+/** The grid vector: the two ways up to a scalar that has fractions. */
 extend Vector2<Int> {
-  /** Both components zero. */
-  static zero: Vector2<Int> = Vector2 0, 0
-  /** Both components one. */
-  static one: Vector2<Int> = Vector2 1, 1
-  /** The first basis vector. */
-  static unitX: Vector2<Int> = Vector2 1, 0
-  /** The second basis vector. */
-  static unitY: Vector2<Int> = Vector2 0, 1
-
   /** The same vector over `Float`, exactly. */
   fn toFloat(): Vector2<Float> {
     Vector2 Float.from(x), Float.from(y)
@@ -343,22 +327,6 @@ extend Vector2<Int> {
   fn toFixed(): Vector2<Fixed> {
     Vector2 Fixed.from(x), Fixed.from(y)
   }
-}
-
-/**
- * The deterministic vector. It needs no conversions of its own: `Fixed` carries them
- * (`Vector2(point.x.toFloat(), point.y.toFloat())`), and giving the same name to two instantiations is what the
- * interpreter cannot tell apart.
- */
-extend Vector2<Fixed> {
-  /** Both components zero. */
-  static zero: Vector2<Fixed> = Vector2 Fixed(0), Fixed(0)
-  /** Both components one. */
-  static one: Vector2<Fixed> = Vector2 Fixed(65536), Fixed(65536)
-  /** The first basis vector. */
-  static unitX: Vector2<Fixed> = Vector2 Fixed(65536), Fixed(0)
-  /** The second basis vector. */
-  static unitY: Vector2<Fixed> = Vector2 Fixed(0), Fixed(65536)
 }
 
 /**

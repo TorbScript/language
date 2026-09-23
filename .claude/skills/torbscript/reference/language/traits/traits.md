@@ -56,6 +56,8 @@ print "{square} {square.describe()}"
   fn <name>(...): <Type>                    a requirement
   fn <name>(...): <Type> { ... }            a default member
   var fn <name>(...): <Type>                a requirement that changes the receiver
+  static <name>: <Type>                     a constant every implementation provides
+  static <name>: <Type> = <value>           a constant with a default value
 }
 
 type <Name> with <Trait>, <Trait> & <Trait> by <field> { ... }
@@ -80,6 +82,44 @@ fn sum<Item: Add>(values: List<Item>)       a bound
 
 3. **A member without a body is a requirement; a member with a body is a default.** A default written in terms of the
    required members stays correct for every implementor.
+
+   That holds for a constant as well. `static zero: Self` without a value is a constant every implementation provides
+   as a `static` constant of its own - in the type, in the `extend` that implements the trait, or in any other
+   `extend` of the type - and one with a value is a default an implementation may replace. A body that is generic over
+   the trait reads it through the type parameter, and which constant that is follows from the type the parameter
+   stands for: `Numeric` requires `zero` and `one`, so `Scalar.zero` is `Int.zero` in one instance and `Float.zero`
+   in the next.
+
+   ```trb check
+   trait Empty {
+     static empty: Self
+   }
+
+   type Label with Empty {
+     text: String
+
+     static empty = Label ""
+   }
+
+   fn emptyOf<Value: Empty>(): Value {
+     Value.empty
+   }
+
+   const blank: Label = emptyOf()
+   print blank
+   ```
+
+   A `static fn` does not stand in for a required constant, and a constant without a value anywhere but in a trait is
+   an error.
+
+   ```trb error
+   type Label {
+     text: String
+
+     static empty: Label
+   }
+   // error: A constant of the type needs a value
+   ```
 
 4. **A bound is written `where Item: Hash & Equals` or inline as `<Item: Hash>`.** A member may carry a `where` clause of
    its own, and then the member exists only where the clause holds - it is not a requirement on implementors.

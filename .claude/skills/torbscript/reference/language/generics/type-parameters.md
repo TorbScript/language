@@ -124,14 +124,21 @@ A call or a construction that writes the arguments out uses the same angle brack
 7. **The one exception is a numeric literal, and only where the bound says the parameter is a number.** The neutral
    element of an algorithm over a `Scalar: Numeric` is the literal itself, so `0` and `1` *become* the parameter. An
    integer literal needs a bound that implies `Numeric`, a decimal one needs `Real` - without such a bound the literal
-   is an `Int64` or a `Float64` and then does not fit.
+   is an `Int64` or a `Float64` and then does not fit. The two neutral elements need no literal at all: `Numeric`
+   requires `static zero: Self` and `static one: Self` of every number type, so `Scalar.zero` and `Scalar.one` are
+   the constants of whichever type the call site chose.
 
    ```trb check
-   fn oneOf<Scalar: Numeric>(): Scalar {
-     1
+   fn doubled<Scalar: Numeric>(value: Scalar): Scalar {
+     value * 2
    }
 
-   print oneOf<Int>()
+   fn total<Scalar: Numeric>(values: List<Scalar>): Scalar {
+     values.fold Scalar.zero { sum, value => sum + value }
+   }
+
+   print doubled<Int>(4)
+   print total([0.5, 0.25])
    ```
 
    ```trb error

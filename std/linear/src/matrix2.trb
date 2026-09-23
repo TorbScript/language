@@ -7,9 +7,7 @@
  */
 
 use Numeric, Signed, Real from "std/number"
-use zeroOf from "./scalar"
 use Add, Subtract, Multiply, Negate from "std/core"
-use Fixed from "./fixed"
 use Angle from "./angle"
 use Vector2 from "./vector2"
 
@@ -24,10 +22,6 @@ use Vector2 from "./vector2"
  *     const turn = Matrix2.rotation by: Angle.degrees(90.0)
  *     print turn.applied(to: Vector2(1.0, 0.0)).isCloseTo(Vector2(0.0, 1.0), tolerance: 0.0001)
  *
- * # Open
- *
- * - [Matrix2.identity] needs its scalar written out: `Matrix2<Float>.identity`.
- *
  * # Related
  *
  * - `Matrix3` - the same with a translation, for the plane.
@@ -39,9 +33,12 @@ public type Matrix2<Scalar: Numeric = Float> with Add, Subtract, Multiply {
   /** Where the second basis vector lands. */
   yAxis: Vector2<Scalar>
 
+  /** The transformation that changes nothing, over whichever scalar is asked for: `Matrix2<Int>.identity`. */
+  static identity: Matrix2<Scalar> = Matrix2 Vector2(Scalar.one, Scalar.zero), Vector2(Scalar.zero, Scalar.one)
+
   /** A diagonal matrix: each axis scaled on its own, and nothing mixed. */
   static fn scaling(by: Vector2<Scalar>): Matrix2<Scalar> {
-    const nothing = zeroOf(by.x)
+    const nothing = Scalar.zero
     Matrix2 Vector2(by.x, nothing), Vector2(nothing, by.y)
   }
 
@@ -110,7 +107,7 @@ extend<Scalar: Real> Matrix2<Scalar> {
    */
   fn inverse(): Matrix2<Scalar>? {
     const scale: Scalar = self.determinant()
-    if scale == zeroOf(scale) {
+    if scale == Scalar.zero {
       return None
     }
     Some Matrix2(Vector2(yAxis.y / scale, -xAxis.y / scale), Vector2(-yAxis.x / scale, xAxis.x / scale))
@@ -120,22 +117,4 @@ extend<Scalar: Real> Matrix2<Scalar> {
   fn isCloseTo(other: Matrix2<Scalar>, tolerance: Scalar): Bool {
     xAxis.isCloseTo(other.xAxis, tolerance: tolerance) && yAxis.isCloseTo(other.yAxis, tolerance: tolerance)
   }
-}
-
-/** The float matrix's identity. */
-extend Matrix2<Float> {
-  /** The transformation that changes nothing. */
-  static identity: Matrix2<Float> = Matrix2 Vector2(1.0, 0.0), Vector2(0.0, 1.0)
-}
-
-/** The grid matrix's identity. */
-extend Matrix2<Int> {
-  /** The transformation that changes nothing. */
-  static identity: Matrix2<Int> = Matrix2 Vector2(1, 0), Vector2(0, 1)
-}
-
-/** The deterministic matrix's identity. */
-extend Matrix2<Fixed> {
-  /** The transformation that changes nothing. */
-  static identity: Matrix2<Fixed> = Matrix2 Vector2(Fixed(65536), Fixed(0)), Vector2(Fixed(0), Fixed(65536))
 }

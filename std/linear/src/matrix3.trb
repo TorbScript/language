@@ -7,9 +7,7 @@
  */
 
 use Numeric, Signed, Real from "std/number"
-use zeroOf from "./scalar"
 use Add, Subtract, Multiply, Negate from "std/core"
-use Fixed from "./fixed"
 use Angle from "./angle"
 use Vector2 from "./vector2"
 use Vector3 from "./vector3"
@@ -28,10 +26,9 @@ use Matrix2 from "./matrix2"
  *
  * # Open
  *
- * - [Matrix3.identity] needs its scalar written out: `Matrix3<Float>.identity`.
  * - The affine form needs a `Real` scalar, although an affine transformation of a tile grid is ordinary whole-number
- *   arithmetic: its bottom row ends in a one, and a body that is generic over the scalar cannot write that literal.
- *   A `Matrix3<Int>` is built by writing its three columns out.
+ *   arithmetic. The one its bottom row ends in is `Scalar.one`, which every `Numeric` carries, so only its place in
+ *   the `Real` extension keeps it from a grid; until it moves, a `Matrix3<Int>` is built by writing its columns out.
  *
  * # Related
  *
@@ -46,9 +43,16 @@ public type Matrix3<Scalar: Numeric = Float> with Add, Subtract, Multiply {
   /** Where the third basis vector lands, which for an affine transformation of the plane is the translation. */
   zAxis: Vector3<Scalar>
 
+  /** The transformation that changes nothing, over whichever scalar is asked for: `Matrix3<Int>.identity`. */
+  static identity: Matrix3<Scalar> = Matrix3(
+    Vector3(Scalar.one, Scalar.zero, Scalar.zero),
+    Vector3(Scalar.zero, Scalar.one, Scalar.zero),
+    Vector3(Scalar.zero, Scalar.zero, Scalar.one),
+  )
+
   /** A diagonal matrix: each axis scaled on its own. */
   static fn scaling(by: Vector3<Scalar>): Matrix3<Scalar> {
-    const nothing = zeroOf(by.x)
+    const nothing = Scalar.zero
     Matrix3(
       Vector3(by.x, nothing, nothing),
       Vector3(nothing, by.y, nothing),
@@ -129,7 +133,7 @@ public type Matrix3<Scalar: Numeric = Float> with Add, Subtract, Multiply {
 
   /** A direction of the plane, turned by the affine transformation: the translation is not applied. */
   fn transformedDirection(direction: Vector2<Scalar>): Vector2<Scalar> {
-    const turned = applied to: Vector3(direction.x, direction.y, zeroOf(direction.x))
+    const turned = applied to: Vector3(direction.x, direction.y, Scalar.zero)
     Vector2 turned.x, turned.y
   }
 }
@@ -150,7 +154,7 @@ extend<Scalar: Real> Matrix3<Scalar> {
    *     print Matrix3.affine Matrix2<Float>.identity, by: Vector2(1.0, 2.0)).translationPart(
    */
   static fn affine(linear: Matrix2<Scalar>, by: Vector2<Scalar>): Matrix3<Scalar> {
-    const nothing = zeroOf(by.x)
+    const nothing = Scalar.zero
     Matrix3(
       Vector3(linear.xAxis.x, linear.xAxis.y, nothing),
       Vector3(linear.yAxis.x, linear.yAxis.y, nothing),
@@ -168,7 +172,7 @@ extend<Scalar: Real> Matrix3<Scalar> {
   static fn rotationAroundX(by: Angle<Scalar>): Matrix3<Scalar> {
     const sine = by.sine()
     const cosine = by.cosine()
-    const nothing = zeroOf sine
+    const nothing = Scalar.zero
     Matrix3(
       Vector3(sine.unit(), nothing, nothing),
       Vector3(nothing, cosine, sine),
@@ -180,7 +184,7 @@ extend<Scalar: Real> Matrix3<Scalar> {
   static fn rotationAroundY(by: Angle<Scalar>): Matrix3<Scalar> {
     const sine = by.sine()
     const cosine = by.cosine()
-    const nothing = zeroOf sine
+    const nothing = Scalar.zero
     Matrix3(
       Vector3(cosine, nothing, -sine),
       Vector3(nothing, sine.unit(), nothing),
@@ -192,7 +196,7 @@ extend<Scalar: Real> Matrix3<Scalar> {
   static fn rotationAroundZ(by: Angle<Scalar>): Matrix3<Scalar> {
     const sine = by.sine()
     const cosine = by.cosine()
-    const nothing = zeroOf sine
+    const nothing = Scalar.zero
     Matrix3(
       Vector3(cosine, sine, nothing),
       Vector3(-sine, cosine, nothing),
@@ -203,7 +207,7 @@ extend<Scalar: Real> Matrix3<Scalar> {
   /** The transformation that undoes this one, or `None` where the determinant is zero and there is none. */
   fn inverse(): Matrix3<Scalar>? {
     const scale: Scalar = self.determinant()
-    if scale == zeroOf(scale) {
+    if scale == Scalar.zero {
       return None
     }
     // The adjugate is the transpose of the cofactors, and each cofactor is a cross product of two columns
@@ -219,28 +223,5 @@ extend<Scalar: Real> Matrix3<Scalar> {
       && yAxis.isCloseTo(other.yAxis, tolerance: tolerance)
       && zAxis.isCloseTo(other.zAxis, tolerance: tolerance)
   }
-}
-
-/** The float matrix's identity. */
-extend Matrix3<Float> {
-  /** The transformation that changes nothing. */
-  static identity: Matrix3<Float> =
-    Matrix3 Vector3(1.0, 0.0, 0.0), Vector3(0.0, 1.0, 0.0), Vector3(0.0, 0.0, 1.0)
-}
-
-/** The grid matrix's identity. */
-extend Matrix3<Int> {
-  /** The transformation that changes nothing. */
-  static identity: Matrix3<Int> = Matrix3 Vector3(1, 0, 0), Vector3(0, 1, 0), Vector3(0, 0, 1)
-}
-
-/** The deterministic matrix's identity. */
-extend Matrix3<Fixed> {
-  /** The transformation that changes nothing. */
-  static identity: Matrix3<Fixed> = Matrix3(
-    Vector3(Fixed(65536), Fixed(0), Fixed(0)),
-    Vector3(Fixed(0), Fixed(65536), Fixed(0)),
-    Vector3(Fixed(0), Fixed(0), Fixed(65536)),
-  )
 }
 

@@ -204,6 +204,7 @@ tasks, `test` and `group`, keys that their own `equals` compares, and the execut
 | `literal-union-show.trb` | A literal type is its base at run time: its `Show`, `Equals` and `Hash` are the base's |
 | `constants.trb` | Top-level `const`s of every shape, from a function and from the top level, and the mutated copy of one |
 | `generic-constants.trb` | A `const` of a generic type is one value per type argument, named after the arguments the read decided |
+| `trait-constants.trb` | A constant a trait requires or defaults, read through a type parameter: the implementation's own, the default with `Self` bound, `Numeric.zero`/`one` of every number type, and a generic type's constants over them |
 | `show-compound.trb` | `Show` of everything compound, and of a type whose field carries the name of a member |
 | `tuple-compare.trb` | The generated `compare` of a tuple: lexicographic, each field through its own `Compare` |
 
