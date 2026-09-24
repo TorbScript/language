@@ -337,6 +337,30 @@ torb_text torb_text_to_lower_case(torb_text text);
 torb_text torb_text_to_upper_case(torb_text text);
 /* String.trim */
 torb_text torb_text_trim(torb_text text);
+/* tlsClient */
+int64_t torb_tls_client(torb_text server_name, torb_text trusted);
+/* tlsClose */
+void torb_tls_close(int64_t handle);
+/* tlsErrorText */
+torb_text torb_tls_error_text(int64_t failure);
+/* tlsFeed */
+void torb_tls_feed(int64_t session, torb_list bytes);
+/* tlsHandshake */
+int64_t torb_tls_handshake(int64_t session);
+/* tlsIdentity */
+int64_t torb_tls_identity(torb_text certificates, torb_text private_key);
+/* tlsNotifyClose */
+void torb_tls_notify_close(int64_t session);
+/* tlsProtocol */
+torb_text torb_tls_protocol(int64_t session);
+/* tlsRead */
+int64_t torb_tls_read(int64_t session, torb_list *into, int64_t maximum);
+/* tlsServer */
+int64_t torb_tls_server(int64_t identity);
+/* tlsTakeOutgoing */
+void torb_tls_take_outgoing(int64_t session, torb_list *into);
+/* tlsWrite */
+int64_t torb_tls_write(int64_t session, torb_list bytes, int64_t from);
 /* Workers.blocking */
 int64_t torb_workers_blocking(void);
 /* Workers.count */

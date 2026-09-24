@@ -26,7 +26,8 @@ use Process from "std/process"
 use joinPath from "../project/path"
 use threadArguments from "../project/toolchain"
 use hostTarget from "../project/target"
-use runtimeSourcesOf from "../cli/build"
+use runtimeSourcesOf, tlsArgumentsOf from "../cli/build"
+use tlsSymbolPrefix from "../backend/c/natives"
 use Checked from "../semantics/check"
 use ModuleId from "../semantics/module"
 use Lowering from "../ir/lower/context"
@@ -212,9 +213,10 @@ fn runSnippets(
   }
   File.createDirectory(options.directory)?
   const source = joinPath options.directory, "program.c"
-  File.writeText(source, emittedText(emission))?
+  const text = emittedText emission
+  File.writeText(source, text)?
   const binary = joinPath options.directory, "snippets"
-  const failure = compileProgram(source, binary, options.runtime)?
+  const failure = compileProgram(source, binary, options.runtime, text.contains(tlsSymbolPrefix))?
   if !failure.isEmpty() {
     return Ok([DocumentationProblem(runnable[0].path, runnable[0].line, failure)])
   }
@@ -228,7 +230,7 @@ fn runSnippets(
  * program prints, and `-O0` is what makes one C compile of every block cost seconds rather than a minute. The answer is
  * empty on success, and otherwise what went wrong.
  */
-fn compileProgram(source: String, binary: String, runtime: String): Result<String, IoError> {
+fn compileProgram(source: String, binary: String, runtime: String, usesTls: Bool): Result<String, IoError> {
   const compiler = match cCompiler() {
     Some(found) => found
     None => {
@@ -240,6 +242,9 @@ fn compileProgram(source: String, binary: String, runtime: String): Result<Strin
   }
   var arguments = ["-std=c11", "-O0", "-g0", "-I{joinPath(runtime, "include")}", "-o", binary, source]
   arguments.appendAll(runtimeSourcesOf(runtime)?)
+  if usesTls {
+    arguments.appendAll(tlsArgumentsOf(runtime, compiler, false, binary)?)
+  }
   arguments.appendAll threadArguments()
   arguments.append "-lm"
   const output = Process.runBlocking(compiler, arguments)?

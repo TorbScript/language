@@ -93,13 +93,15 @@ public shared type TcpListener with Close {
   static fn listen(address: SocketAddress, backlog: Int = 128): Result<TcpListener, NetworkError>
   fn localAddress(): SocketAddress
   fn accept(): Task<Result<TcpStream, NetworkError>>
+  fn stop()
 }
 ```
 
 A socket that listens. `listen` is synchronous - binding never waits for the network - and port 0 asks the system for
 a free port, which `localAddress()` then says. An IPv6 listener hears IPv6 only, on every system alike. `accept` waits
-for the next connection; an accept that is cancelled leaves the connection for the next one. The socket closes when
-the last reference to the listener goes.
+for the next connection; an accept that is cancelled leaves the connection for the next one. `stop()` closes the socket
+before the listener is released, and an `accept` that waits then fails with `isClosed()` - which is how a server stops
+accepting while it is shut down. Otherwise the socket closes when the last reference to the listener goes.
 
 ### TcpStream
 
@@ -135,16 +137,21 @@ public type NetworkError with Show, Error {
   fn isHostNotFound(): Bool
   fn isUnreachable(): Bool
   fn isClosed(): Bool
-  fn isCancelled(): Bool
+  fn isTlsFailure(): Bool
+  fn isCertificateRejected(): Bool
   fn isRetryable(): Bool
 }
 ```
 
 What went wrong, as one wrapper type: a new kind of failure is never a breaking change. The kind is a question, and
-`show()` is the operating system's own words. It converts from `Cancelled`, so `?` folds a cancelled wait into it.
+`show()` is the operating system's own words. A cancelled wait is not one of its kinds: cancelling a task ends it, and
+`result()` of the task says `Cancelled`.
+`isTlsFailure()` and `isCertificateRejected()` are the failures of [std/tls](tls.md), which reports through this type
+too.
 
 ## Related
 
+- [std/tls](tls.md) - TLS over a `TcpStream`.
 - [std/http](http.md) - HTTP/1.1 over these streams.
 - [std/stream](stream.md) - `Source`, `Sink` and `Bytes`.
 - [std/task](task.md) - `within`, the timeout of every network task, and `cancel`.

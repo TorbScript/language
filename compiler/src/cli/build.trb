@@ -31,6 +31,8 @@ use lowerWorkspace, pathsOfModules from "../ir/lower/lower"
 use entryNameOf from "../ir/lower/function"
 use emitProgram, ProgramEntry from "../backend/c/emit"
 use emittedText from "../backend/c/emission"
+use tlsPartMacro, tlsSymbolPrefix from "../backend/c/natives"
+use Clock from "std/time"
 use renderDiagnostic, renderProblem, counted from "./render"
 
 /**
@@ -184,7 +186,7 @@ public fn build(options: BuildOptions): Result<Int, IoError> {
     }
     return Ok 0
   }
-  compile source, text.byteLength(), binary, options
+  compile source, text.byteLength(), binary, options, text.contains(tlsSymbolPrefix)
 }
 
 // --- What was wrong with the program --------------------------------------------------------------------------------
@@ -426,7 +428,109 @@ public fn runtimeSourcesOf(directory: String): Result<List<String>, IoError> {
   Ok sources
 }
 
-fn compile(source: String, size: Int, binary: String, options: BuildOptions): Result<Int, IoError> {
+/**
+ * What a program that calls a function of the TLS part of the runtime needs beside the runtime (docs/design/NETWORK.md
+ * section 5): the part's macro, the include directories of `runtime/tls/` and of mbedTLS, the glue's sources, and the
+ * objects of mbedTLS. Those are compiled once per checkout, C compiler, version and configuration into `build/vendor/`
+ * beside the runtime, because mbedTLS is a library of somebody else's that takes longer to compile than all of the rest
+ * of a program; where that directory cannot be written, they are compiled beside the program instead.
+ */
+public fn tlsArgumentsOf(runtime: String, command: String, microsoft: Bool, binary: String): Result<List<String>, IoError> {
+  const tls = joinPath runtime, "tls"
+  const vendor = joinPath runtime, "vendor/mbedtls"
+  const prefix = if microsoft { "/" } else { "-" }
+  // An angle-bracket name needs no quotes on any command line: mbedTLS reads it with `#include MBEDTLS_USER_CONFIG_FILE`
+  const flags = [
+    "{prefix}D{tlsPartMacro}",
+    "{prefix}DMBEDTLS_USER_CONFIG_FILE=<torb_mbedtls_user.h>",
+    "{prefix}I{tls}",
+    "{prefix}I{joinPath(vendor, "include")}",
+  ]
+  var arguments: List<String> = []
+  arguments.appendAll flags
+  for entry in File.list(tls)? {
+    if entry.endsWith(".c") {
+      arguments.append joinPath(tls, entry)
+    }
+  }
+  const versionText = File.readText(joinPath(vendor, "VERSION"))?
+  const version = versionText.trim()
+  const configurationText = File.readText(joinPath(tls, "torb_mbedtls_user.h"))?
+  // A hash below zero would put `--` into the name: its sign is a letter
+  const configuration = "{configurationText.hash()}".replace("-", "n")
+  const key = "mbedtls-{version}-{configuration}-{pathName(command)}"
+  const common = joinPath parentPath(runtime), "build/vendor/{key}"
+  const unique = "{binary.hash()}-{Clock.milliseconds()}".replace("-", "n")
+  const objects = match vendorObjectsOf(common, unique, vendor, flags, command, microsoft) {
+    Ok(found) => found
+    Fail(_) => vendorObjectsOf(joinPath(parentPath(binary), key), unique, vendor, flags, command, microsoft)?
+  }
+  arguments.appendAll objects
+  Ok arguments
+}
+
+/**
+ * The objects of mbedTLS in `directory`: those of a build that finished there, or compiled now into a directory of
+ * this build's own - so two builds that compile at the same time never write one file, and neither reads a file the
+ * other is still writing. A build that finished leaves `compiled-version` behind, and only then is it read.
+ */
+fn vendorObjectsOf(
+  directory: String,
+  unique: String,
+  vendor: String,
+  flags: List<String>,
+  command: String,
+  microsoft: Bool,
+): Result<List<String>, IoError> {
+  const suffix = if microsoft { ".obj" } else { ".o" }
+  if File.isDirectory(directory) {
+    for entry in File.list(directory)? {
+      const candidate = joinPath directory, entry
+      if File.exists(joinPath(candidate, "compiled-version")) {
+        return objectsIn candidate, suffix
+      }
+    }
+  }
+  const target = joinPath directory, "objects-{unique}"
+  File.createDirectory(target)?
+  const library = joinPath vendor, "library"
+  printError "compiling mbedTLS once into {target}"
+  for entry in File.list(library)? {
+    if !entry.endsWith(".c") {
+      continue
+    }
+    const object = joinPath target, "{entry.substringBefore(".c") ?? entry}{suffix}"
+    var arguments: List<String> = []
+    if microsoft {
+      arguments.appendAll(["/c", "/O2", "/w", "/nologo", "/std:c11", "/Fo{object}"])
+    } else {
+      arguments.appendAll(["-std=c11", "-O2", "-w", "-c", "-o", object])
+    }
+    arguments.appendAll flags
+    arguments.append(if microsoft { "/I{library}" } else { "-I{library}" })
+    arguments.append joinPath(library, entry)
+    const output = Process.runBlocking(command, arguments)?
+    if output.exitCode != 0 {
+      const said = if output.standardError.trim().isEmpty() { output.standardOutput } else { output.standardError }
+      return Fail IoError(joinPath(library, entry), said)
+    }
+  }
+  File.writeText(joinPath(target, "compiled-version"), "{directory}\n")?
+  objectsIn target, suffix
+}
+
+/** The object files of a directory, sorted. */
+fn objectsIn(directory: String, suffix: String): Result<List<String>, IoError> {
+  var objects: List<String> = []
+  for entry in File.list(directory)? {
+    if entry.endsWith(suffix) {
+      objects.append joinPath(directory, entry)
+    }
+  }
+  Ok objects
+}
+
+fn compile(source: String, size: Int, binary: String, options: BuildOptions, usesTls: Bool): Result<Int, IoError> {
   const compiler = match findCompiler() {
     Some(found) => found
     None => {
@@ -445,7 +549,10 @@ fn compile(source: String, size: Int, binary: String, options: BuildOptions): Re
       return Ok noCompilerCode
     }
   }
-  const sources = runtimeSourcesOf(runtime)?
+  var sources = runtimeSourcesOf(runtime)?
+  if usesTls {
+    sources.appendAll(tlsArgumentsOf(runtime, compiler.command, compiler.isMicrosoft, binary)?)
+  }
   const arguments = compilerArguments compiler, source, binary, runtime, sources, options.profile
   const output = match runCompiler(compiler, arguments, source, size, runtime) {
     Ok(found) => found

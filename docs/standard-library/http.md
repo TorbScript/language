@@ -1,12 +1,13 @@
 ---
 title: std/http
-summary: HTTP/1.1, client and server, over std/network - get, post and send answer a Task, a handler answers a Task of a Response, and every body is a stream.
+summary: HTTP/1.1 and HTTPS, client and server, over std/network and std/tls - get, post and send answer a Task, a handler answers a Task of a Response, and every body is a stream.
 kind: package
 status: stable
 order: 180
 keywords:
   - std/http
   - HTTP
+  - HTTPS
   - Request
   - Response
   - Body
@@ -23,14 +24,15 @@ source:
   - std/http/src/parse.trb
   - std/http/src/write.trb
   - std/http/src/connection.trb
+  - std/http/src/transport.trb
   - docs/design/NETWORK.md
 ---
 
-`std/http` is HTTP/1.1 in TorbScript over [std/network](network.md): a client, a server, and the messages both speak.
+`std/http` is HTTP/1.1 in TorbScript over [std/network](network.md), and HTTPS over [std/tls](tls.md): a client, a
+server, and the messages both speak.
 Every body is a stream (see [std/stream](stream.md)): `Body` is a `Source<Bytes, HttpError>`, so a body of any size is
 read chunk by chunk, and the convenience that covers the common case (`body.text()`, `body.json<User>()`) sits on top of
-it with a limit. It needs the network capability inside a sandboxed script, and is not in the prelude. `https` waits for
-TLS ([docs/design/NETWORK.md](../design/NETWORK.md) section 5).
+it with a limit. It needs the network capability inside a sandboxed script, and is not in the prelude.
 
 ## Import
 
@@ -62,7 +64,7 @@ fn hello(request: Request): Task<Result<Response, HttpError>> {
 }
 
 fn serveForever(): Task<Result<Void, HttpError>> {
-  const server = Server.listen(SocketAddress(IpAddress.loopback, 8080), hello)?
+  var server = Server.listen(SocketAddress(IpAddress.loopback, 8080), hello)?
   server.serve().await()
 }
 ```
@@ -74,13 +76,23 @@ fn serveForever(): Task<Result<Void, HttpError>> {
 ```trb fragment
 public fn get(url: String, headers: Headers = Headers()): Task<Result<Response, HttpError>>
 public fn post(url: String, body: Body, headers: Headers = Headers()): Task<Result<Response, HttpError>>
-public fn send(method: Method, url: String, headers: Headers = Headers(), body: Body = Body.empty()): Task<Result<Response, HttpError>>
+public fn send(
+  method: Method,
+  url: String,
+  headers: Headers = Headers(),
+  body: Body = Body.empty(),
+  tls: TlsSettings = TlsSettings(),
+): Task<Result<Response, HttpError>>
 ```
 
 The client. A request opens a connection to the host of the URL, writes the request - with `Content-Length` where the
 body's length is known, in chunks where it is not - and answers once the head of the response arrived; its body is read
 from the connection as the program pulls it, and the connection closes with the response. A status that is not a
 success is a `Response` too, and no redirect is followed. A timeout is `within`: `http.get(url).within(10.seconds())`.
+An `https` URL is the same request over [TLS](tls.md), on port 443 unless the URL names another: the server's
+certificate is checked for the host the way the platform checks it, or against the roots of `tls` where `send` names
+some, and a certificate that is refused is an `HttpError` whose `cause()` is the `NetworkError` that
+`isCertificateRejected()`.
 
 ### Server
 
@@ -88,10 +100,17 @@ success is a `Response` too, and no redirect is followed. A timeout is `within`:
 public type Handler = (request: Request) => Task<Result<Response, HttpError>>
 
 public shared type Server with Close {
-  static fn listen(address: SocketAddress, handler: Handler, limits: ServerLimits = ServerLimits()): Result<Server, HttpError>
+  static fn listen(
+    address: SocketAddress,
+    handler: Handler,
+    limits: ServerLimits = ServerLimits(),
+    tls: ServerIdentity? = None,
+  ): Result<Server, HttpError>
   fn localAddress(): SocketAddress
-  fn serve(): Task<Result<Void, HttpError>>
-  fn serveOne(): Task<Result<Void, HttpError>>
+  var fn serve(): Task<Result<Void, HttpError>>
+  var fn serveOne(): Task<Result<Void, HttpError>>
+  var fn shutdown(grace: Duration = 10.seconds()): Task<Void>
+  var fn close()
 }
 
 public type ServerLimits {
@@ -104,8 +123,13 @@ public type ServerLimits {
 ```
 
 The server. A handler is a function from a request to a task of a response - a web framework is one of these, built out
-of routes. `serve()` accepts until its task is cancelled, and each connection is a task of its own that serves its
-requests one after another (a persistent connection, and pipelined requests in order). A handler that fails is answered
+of routes. `serve()` accepts until the server is shut down or closed, and each connection is a task of its own that
+serves its requests one after another (a persistent connection, and pipelined requests in order). `shutdown(grace)`
+stops accepting, closes the connections that wait for their next request, lets the requests in progress finish - each
+answered with `Connection: close` - and cancels what still runs after `grace`; then `serve()` answers `Ok`. `close()`,
+which the release of the server runs, stops at once and cancels every connection. With `tls`, every connection is
+HTTPS: the TLS handshake comes first and has to finish within `headMilliseconds`. The server writes no `Server` field
+of its own, so it does not tell a scanner what it is; a handler that wants one sets it. A handler that fails is answered
 `500` without telling the client why. A request the parser refuses is answered with the status its failure names -
 `400` for a malformed message, `408` for a head that took longer than `headMilliseconds`, `431` for one over
 `headBytes` or `headFields`, `501` for a transfer coding that is not `chunked`, `505` for another version - and the
@@ -226,6 +250,7 @@ its `NetworkError` as `cause()`.
 ## Related
 
 - [std/network](network.md) - the TCP streams under HTTP.
+- [std/tls](tls.md) - the TLS under HTTPS: `TlsSettings` and `ServerIdentity`.
 - [std/stream](stream.md) - `Source`, which `Body` is, and `Sink`.
 - [std/json](json.md) - `Json().decode`, which `Response.json` and `Body.json` call.
 - [The standard library](index.md) - the other packages.

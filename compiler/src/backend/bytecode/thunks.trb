@@ -18,7 +18,7 @@
  * - [nativeSymbols] - the order both the bytecode and this table use.
  */
 
-use NativeEntry from "../c/natives"
+use NativeEntry, tlsPart, tlsPartMacro from "../c/natives"
 use readPrototype, Prototype from "../c/prototype"
 use nativeSymbols, systemsOfSymbols from "./natives"
 use TargetSystem from "../../project/target"
@@ -26,6 +26,7 @@ use TargetSystem from "../../project/target"
 /** The whole of `runtime/machine_natives.c`: a pure function of the manifest. */
 public fn renderMachineNatives(entries: List<NativeEntry>): String {
   var prototypes: Map<String, String> = [:]
+  var parts: Map<String, String> = [:]
   for entry in entries {
     if const .Planned(_) = entry.state {
       continue
@@ -33,6 +34,9 @@ public fn renderMachineNatives(entries: List<NativeEntry>): String {
     if const .Runtime(function) = entry.target {
       if !prototypes.containsKey(function) {
         prototypes.set function, entry.prototype
+      }
+      if !entry.part.isEmpty() {
+        parts.set function, entry.part
       }
     }
   }
@@ -56,9 +60,13 @@ public fn renderMachineNatives(entries: List<NativeEntry>): String {
   for index in 0..symbols.length() {
     const symbol = symbols[index]
     const thunk = thunkLines(index, symbol, prototypes.get(symbol) ?? "")
-    match bound.get(symbol) {
-      Some(systems) => lines.appendAll boundThunkLines(index, symbol, systems, thunk)
-      None => lines.appendAll thunk
+    if parts.get(symbol) == Some(tlsPart) {
+      lines.appendAll partThunkLines(index, symbol, tlsPartMacro, thunk)
+    } else {
+      match bound.get(symbol) {
+        Some(systems) => lines.appendAll boundThunkLines(index, symbol, systems, thunk)
+        None => lines.appendAll thunk
+      }
     }
     lines.append ""
   }
@@ -101,6 +109,26 @@ fn boundThunkLines(index: Int, symbol: String, systems: List<TargetSystem>, thun
   lines.append "  (void)base;"
   lines.append "  (void)operands;"
   const message = "internal error: `{symbol}` does not exist on this operating system"
+  lines.append "  torb_panic_text(\"{message}\", torb_location_unknown);"
+  lines.append "\}"
+  lines.append "#endif"
+  lines
+}
+
+/**
+ * The thunk of a function of a part of the runtime that is linked only where a program calls it (`runtime/tls/`): the
+ * thunk calls it where the driver defined the part's macro, and everywhere else it is a thunk that panics, so the table
+ * stays one file, the numbering the manifest's, and a binary without the part links.
+ */
+fn partThunkLines(index: Int, symbol: String, macro: String, thunk: List<String>): List<String> {
+  var lines = ["/* {symbol} */", "#if defined({macro})"]
+  lines.appendAll thunk.skip(1)
+  lines.append "#else"
+  lines.append "static void {thunkName(index)}(int64_t *words, int64_t base, const int64_t *operands) \{"
+  lines.append "  (void)words;"
+  lines.append "  (void)base;"
+  lines.append "  (void)operands;"
+  const message = "internal error: `{symbol}` is not linked into this program"
   lines.append "  torb_panic_text(\"{message}\", torb_location_unknown);"
   lines.append "\}"
   lines.append "#endif"

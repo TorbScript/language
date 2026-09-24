@@ -67,7 +67,24 @@ public type NativeEntry {
    * (`runtime/os/`), so it is never a link error.
    */
   availableOn: List<TargetSystem> = []
+  /**
+   * The part of the runtime the native's C function lives in, empty for the runtime every program links. `"tls"` is
+   * `runtime/tls/` over the mbedTLS of `runtime/vendor/`, which the driver compiles into a program only where its C
+   * calls such a function (docs/design/NETWORK.md section 5): the thunk of the VM for one is guarded by
+   * [tlsPartMacro] and panics in a binary without the part.
+   */
+  part: String = ""
 }
+
+/** The name of the TLS part of the runtime, in [NativeEntry.part]. */
+public const tlsPart = "tls"
+
+/** The macro the driver defines for a program that links the TLS part. */
+public const tlsPartMacro = "TORB_WITH_TLS"
+
+/** The prefix every C function of the TLS part has: what the driver looks for in a program's C. */
+public const tlsSymbolPrefix = "torb_tls_"
+
 
 /**
  * Which constant of the build a `.Target` native answers: the three `native fn`s of `std/core/src/target.trb` behind
@@ -215,7 +232,7 @@ public type ArrayOperation {
 /** Whether a `native` declaration can be called today, or is still a named, clean compile error where it is used. */
 public type NativeState {
   case Ready
-  /** `Decimal`, `Float32` arithmetic, `std/http`: a clean compile error naming what is still missing. */
+  /** `Decimal`, `Float32` arithmetic: a clean compile error naming what is still missing. */
   case Planned(milestone: String)
 }
 
@@ -1320,10 +1337,6 @@ fn plannedPackageEntries(var entries: List<NativeEntry>) {
   entries.append NativeEntry(name: "scriptBody", target: NativeTarget.ScriptTable(ScriptTableKind.Body))
   entries.append NativeEntry(name: "scriptImports", target: NativeTarget.ScriptTable(ScriptTableKind.Imports))
   entries.append NativeEntry(name: "runScript", target: NativeTarget.Machine(runScriptFunction))
-
-  entries.append plannedRuntimeOf("get", "torb_http_get", "8")
-  entries.append plannedRuntimeOf("post", "torb_http_post", "8")
-  entries.append plannedRuntimeOf("request", "torb_http_request", "8")
 }
 
 /**
@@ -1333,6 +1346,55 @@ fn plannedPackageEntries(var entries: List<NativeEntry>) {
  * the runtime, and what it delivered is taken afterwards through a `var` list. `std/http` is TorbScript over these and
  * has no native of its own.
  */
+/** A function of the TLS part of the runtime (`runtime/tls/`), linked only into a program that calls one. */
+fn tlsRuntimeOf(name: String, function: String, prototype: String): NativeEntry {
+  NativeEntry name: name, target: NativeTarget.Runtime(function), prototype: prototype, part: tlsPart
+}
+
+/**
+ * `std/tls`, over mbedTLS (docs/design/NETWORK.md section 5, runtime/include/torb_tls.h): a session is a state machine
+ * over bytes the program feeds and takes, so every wait stays a wait of `std/network`. A session and an identity are
+ * handles; an answer is an `Int64` whose negative values are packed failures, as the network's are.
+ */
+fn tlsEntries(var entries: List<NativeEntry>) {
+  entries.append(tlsRuntimeOf(
+    "tlsClient",
+    "torb_tls_client",
+    "int64_t torb_tls_client(torb_text server_name, torb_text trusted);",
+  ))
+  entries.append(tlsRuntimeOf(
+    "tlsIdentity",
+    "torb_tls_identity",
+    "int64_t torb_tls_identity(torb_text certificates, torb_text private_key);",
+  ))
+  entries.append tlsRuntimeOf("tlsServer", "torb_tls_server", "int64_t torb_tls_server(int64_t identity);")
+  entries.append tlsRuntimeOf("tlsFeed", "torb_tls_feed", "void torb_tls_feed(int64_t session, torb_list bytes);")
+  entries.append tlsRuntimeOf("tlsHandshake", "torb_tls_handshake", "int64_t torb_tls_handshake(int64_t session);")
+  entries.append(tlsRuntimeOf(
+    "tlsTakeOutgoing",
+    "torb_tls_take_outgoing",
+    "void torb_tls_take_outgoing(int64_t session, torb_list *into);",
+  ))
+  entries.append(tlsRuntimeOf(
+    "tlsWrite",
+    "torb_tls_write",
+    "int64_t torb_tls_write(int64_t session, torb_list bytes, int64_t from);",
+  ))
+  entries.append(tlsRuntimeOf(
+    "tlsRead",
+    "torb_tls_read",
+    "int64_t torb_tls_read(int64_t session, torb_list *into, int64_t maximum);",
+  ))
+  entries.append tlsRuntimeOf("tlsNotifyClose", "torb_tls_notify_close", "void torb_tls_notify_close(int64_t session);")
+  entries.append tlsRuntimeOf("tlsClose", "torb_tls_close", "void torb_tls_close(int64_t handle);")
+  entries.append tlsRuntimeOf("tlsProtocol", "torb_tls_protocol", "torb_text torb_tls_protocol(int64_t session);")
+  entries.append(tlsRuntimeOf(
+    "tlsErrorText",
+    "torb_tls_error_text",
+    "torb_text torb_tls_error_text(int64_t failure);",
+  ))
+}
+
 fn networkEntries(var entries: List<NativeEntry>) {
   entries.append(runtimeOf(
     "networkListen",
@@ -1412,6 +1474,7 @@ public fn nativeEntries(): List<NativeEntry> {
   systemEntries entries
   taskEntries entries
   networkEntries entries
+  tlsEntries entries
   machineEntries entries
   plannedPackageEntries entries
   entries

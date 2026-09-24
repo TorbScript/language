@@ -1,9 +1,12 @@
 /**
  * The HTTP/1.1 client: `get`, `post` and `send` answer a task of a `Response` whose `Body` is a stream
- * (docs/design/NETWORK.md section 7). One connection per request, closed with its response; a pool is a later slice.
+ * (docs/design/NETWORK.md section 7), over TCP for `http` and over TLS for `https`. One connection per request, closed
+ * with its response; a pool is a later slice.
  */
 
 use TcpStream from "std/network"
+use TlsStream, TlsSettings from "std/tls"
+use Transport from "./transport"
 use Body, Headers, Method, Response, Status from "./message"
 use Connection, FixedReader, ChunkedReader, UntilEndReader from "./connection"
 use Framing, headLines, statusLineOf, fieldsOf, responseFraming from "./parse"
@@ -12,6 +15,8 @@ use HttpError from "./error"
 
 /** Where a URL points: the host and the port to connect to, the target to ask for, and the `Host` to name. */
 type Destination {
+  /** `https`: the connection is TLS, and the certificate has to be the host's. */
+  secure: Bool
   host: String
   port: Int
   target: String
@@ -19,7 +24,7 @@ type Destination {
 }
 
 /**
- * `http://host[:port][/path][?query]`, read as far as a request needs it. `std/uri` replaces this one function once it
+ * `http://host[:port][/path][?query]` or `https://...`, read as far as a request needs it. `std/uri` replaces this one function once it
  * exists (docs/design/URI.md); every signature that takes a URL keeps its `String` until then.
  */
 fn destinationOf(url: String): Result<Destination, HttpError> {
@@ -28,10 +33,7 @@ fn destinationOf(url: String): Result<Destination, HttpError> {
     return Fail HttpError.invalidUrl("`{url}` has no scheme")
   }
   const scheme = url.sliceBytes(0, separator).toLowerCase()
-  if scheme == "https" {
-    return Fail HttpError.unsupported("`https`: TLS is not built yet (docs/design/NETWORK.md section 5)")
-  }
-  if scheme != "http" {
+  if scheme != "http" && scheme != "https" {
     return Fail HttpError.invalidUrl("`{scheme}` is not a scheme of HTTP")
   }
   const rest = url.sliceBytes(separator + 3, url.byteLength())
@@ -76,7 +78,8 @@ fn destinationOf(url: String): Result<Destination, HttpError> {
   if host.isEmpty() {
     return Fail HttpError.invalidUrl("`{url}` has no host")
   }
-  var port = 80
+  const secure = scheme == "https"
+  var port = if secure { 443 } else { 80 }
   if !portText.isEmpty() {
     const number = Int.tryFrom(portText).ok() ?? -1
     if number < 1 || number > 65535 || portText.chars().any({ !_.isDigit() }) {
@@ -84,7 +87,7 @@ fn destinationOf(url: String): Result<Destination, HttpError> {
     }
     port = number
   }
-  Ok Destination(host, port, target, authority)
+  Ok Destination(secure, host, port, target, authority)
 }
 
 /**
@@ -107,13 +110,15 @@ public fn post(url: String, body: Body, headers: Headers = Headers()): Task<Resu
  *
  * # Errors
  *
- * - [HttpError] for a URL that is not `http`, a connection that fails, and a response that breaks HTTP/1.1.
+ * - [HttpError] for a URL that is not `http` or `https`, a connection that fails, a certificate that is not the
+ *   host's (its `cause()` is the `NetworkError` that `isCertificateRejected()`), and a response that breaks HTTP/1.1.
  */
 public fn send(
   method: Method,
   url: String,
   headers: Headers = Headers(),
   body: Body = Body.empty(),
+  tls: TlsSettings = TlsSettings(),
 ): Task<Result<Response, HttpError>> {
   const destination = destinationOf(url)?
   const host = if destination.host.startsWith("[") {
@@ -122,7 +127,12 @@ public fn send(
     destination.host
   }
   const stream = TcpStream.connectTo(host, destination.port).await()?
-  const connection = Connection.of stream
+  var transport = Transport.plain stream
+  if destination.secure {
+    const session = TlsStream.connect(stream, host, tls).await()?
+    transport = Transport.encrypted stream, session
+  }
+  var connection = Connection.of transport
   const length = body.length()
   // A body of no bytes on a method that means none is not announced at all (RFC 9110 section 8.6)
   const announced = length != Some(0) || method == Method.Post || method == Method.Put || method == Method.Patch

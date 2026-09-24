@@ -1,6 +1,7 @@
 # The TorbScript Runtime
 
-Portable C11, no dependency beyond libc. Every binary `torb build` produces links against this, and the bytecode VM
+Portable C11, no dependency beyond libc - except TLS, which is mbedTLS vendored under `vendor/` and linked only
+into a program that reaches `std/tls`. Every binary `torb build` produces links against this, and the bytecode VM
 calls the same functions through the same manifest - so there is exactly one `ArrayList`, one hash table and one
 `String` in a process, whichever back end is running.
 
@@ -31,6 +32,7 @@ deliberately panics says `TORB_IGNORE_LEAKS()`, because a panic runs nothing on 
 | `include/torb_natives.h` | Generated from the manifest by `torb natives --header`. Do not edit                      |
 | `include/torb_task.h` | The task ABI of 7.3: the task block, the resume function a `Task` function is lowered to, the suspension primitives, `sleep`/`pause`/`cancel`/`within`, channels, the scheduler and the worker pool, the tests of what may cross a worker (`docs/design/CONCURRENCY.md` section 16) |
 | `include/torb_network.h` | The natives of `std/network`: listen, accept, connect, receive, send, shutdown, close, addresses, name resolution, and the words of a failure - over handles, numbers and tasks of the runtime (docs/design/NETWORK.md section 2) |
+| `include/torb_tls.h` | The natives of `std/tls`: a client or server session, an identity, feeding received bytes, the handshake, taking the bytes to send, reading and writing, `close_notify`, and the words of a failure (docs/design/NETWORK.md section 5) |
 | `include/torb_io.h`   | What `io.c` and the pollers of `os/` share: the socket record, the operation, the packed failures, and the interface every poller implements. Never included by generated C |
 | `include/torb_posix_io.h` | What `os/posix_io.c` shares with the two readiness pollers, `os/epoll.c` and `os/kqueue.c` |
 | `include/torb_pool.h` | What the runtime's own files share about a worker: its heap counters, its scheduler, the threads, locks and conditions of `platform.c`, the atomics, the one-load `torb_worker_current`. Never included by generated C |
@@ -51,6 +53,8 @@ deliberately panics says `TORB_IGNORE_LEAKS()`, because a panic runs nothing on 
 | `include/torb_os.h`   | The prototypes of every native of `runtime/os/`, declared on every machine so a signature is compared with the manifest's everywhere |
 | `os/<family>.c`       | The natives of `std/os` one family of systems has: `windows.c`, `linux.c`, `macos.c`, `freebsd.c`, `posix.c` for what Linux, macOS and FreeBSD share, and `bsd.c` for the `sysctl` interface of macOS and FreeBSD. **Each file is one `#if` from its first line after the includes to its last**, so every file is compiled on every machine and is empty where it does not belong, and no function has an `#ifdef` inside it. A row of the manifest names the systems its native exists on (`availableOn`), which is what keeps a call of one out of another system's build (docs/design/OS.md section 7) |
 | `os/<poller>.c`       | The pollers of the IO core, one `#if` each like the family files: `iocp.c` (IOCP and Winsock, loaded on first use), `epoll.c`, `kqueue.c` (macOS and FreeBSD), and `posix_io.c` for the socket calls and the readiness logic the last two share |
+| `tls/`                | The glue of `std/tls` over mbedTLS, compiled only into a program that calls a `torb_tls_` function (`-DTORB_WITH_TLS`): `tls.c` (sessions over two memory buffers, one lock around every mbedTLS call, randomness as mbedTLS's hardware source), `platform_windows.c` (the chain handed to `CertGetCertificateChain` and the SSL policy of crypt32), `platform_posix.c` (the system's bundle of roots), and `torb_mbedtls_user.h`, every change to mbedTLS's default configuration |
+| `vendor/mbedtls/`     | mbedTLS 3.6 (`VERSION`), vendored whole and unchanged under its Apache-2.0 `LICENSE`; compiled once per checkout and C compiler into `build/vendor/` by the driver, into `build/runtime/mbedtls/` by `build.sh`, without `-Werror` |
 | `tests/`              | `harness.h`/`harness.c` plus one `*_test.c` per area, one executable                       |
 
 Not here yet, by design: the streams over files and pipes (`standardInput`, `Process.start`, `File.chunks`), which

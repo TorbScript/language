@@ -73,6 +73,7 @@ int main(void) {
   torb_register_pool_tests();
   torb_register_sandbox_tests();
   torb_register_io_tests();
+  torb_register_tls_tests();
 
   for (index = 0u; index < torb_test_count; index += 1u) {
     size_t before = torb_live_block_count();

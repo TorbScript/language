@@ -1,0 +1,127 @@
+use TcpListener, TcpStream, SocketAddress, IpAddress, NetworkError from "std/network"
+use TlsStream, TlsSettings, ServerIdentity from "std/tls"
+use textOf from "std/stream"
+
+/**
+ * TLS over loopback: a server proves itself with a certificate for `localhost` that a test root signed, and a client
+ * that trusts that root reads what the server wrote, in TLS 1.3. A client that trusts another root, one that asks for
+ * another name, and one that leaves the verdict to the platform - which has never seen the test root - are refused
+ * before a byte of data crosses, each with a `NetworkError` that `isCertificateRejected()`. The session ends with
+ * `close_notify`, which the reader sees as the end of the stream.
+ */
+
+/** The test root: nothing but these programs trusts it. */
+const testRoot = """
+  -----BEGIN CERTIFICATE-----
+  MIIBpjCCAUugAwIBAgIUX0ocJiSTMF4EyI948Ywl9dBFuIgwCgYIKoZIzj0EAwIw
+  HzEdMBsGA1UEAwwUVG9yYlNjcmlwdCBUZXN0IFJvb3QwIBcNMjYwOTI0MTgwMDA2
+  WhgPMjEyNjA4MzExODAwMDZaMB8xHTAbBgNVBAMMFFRvcmJTY3JpcHQgVGVzdCBS
+  b290MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEnoU8ZlkjCCHuMztPRGCb7EKo
+  y7KLXmMddFh+kw1uKQKo18Dtx4zsURLEMCqklHgEARKvsbTVjXtzvfqkxXUWzKNj
+  MGEwHQYDVR0OBBYEFBz/+wIsZils42wBpvVRftEGr2wwMB8GA1UdIwQYMBaAFBz/
+  +wIsZils42wBpvVRftEGr2wwMA8GA1UdEwEB/wQFMAMBAf8wDgYDVR0PAQH/BAQD
+  AgEGMAoGCCqGSM49BAMCA0kAMEYCIQCYnzkVoRbZZ3bCLbuSRf+yC46iVY+2ACKV
+  ttODjyX9TgIhAPq6TrV57XFD683pgB37633cYgqQOLTlf0+5FJ3Dgu1W
+  -----END CERTIFICATE-----
+  """
+
+/** A certificate for `localhost` and `127.0.0.1`, signed by the test root. */
+const serverCertificate = """
+  -----BEGIN CERTIFICATE-----
+  MIIByDCCAW2gAwIBAgIUWW3sNf3SaLIOaLhiA3l8ZCE7EugwCgYIKoZIzj0EAwIw
+  HzEdMBsGA1UEAwwUVG9yYlNjcmlwdCBUZXN0IFJvb3QwIBcNMjYwOTI0MTgwMDA3
+  WhgPMjEyNjA4MzExODAwMDdaMBQxEjAQBgNVBAMMCWxvY2FsaG9zdDBZMBMGByqG
+  SM49AgEGCCqGSM49AwEHA0IABEXvBfnFsZ5jZuUd75E2cE7UrRYne0C63+Fxn5Dr
+  LvdEOFnewKfyQ1fSkK3wTe8HZswifmx1YYrX2LX/uB7QD8ijgY8wgYwwCQYDVR0T
+  BAIwADAOBgNVHQ8BAf8EBAMCB4AwEwYDVR0lBAwwCgYIKwYBBQUHAwEwGgYDVR0R
+  BBMwEYIJbG9jYWxob3N0hwR/AAABMB0GA1UdDgQWBBR5X0QnapZcnsquwu+THlWj
+  wWAAMzAfBgNVHSMEGDAWgBQc//sCLGYpbONsAab1UX7RBq9sMDAKBggqhkjOPQQD
+  AgNJADBGAiEAuFtnGP9Pd3gKzfzkSNvnYnCy0fJzaXiBlIiLmbs+P7MCIQClGtvD
+  ds8yyzK7J9iXnKnTwH4dd92UaqZcruOde6Ozgg==
+  -----END CERTIFICATE-----
+  """
+
+/** The private key of `serverCertificate`. */
+const serverKey = """
+  -----BEGIN PRIVATE KEY-----
+  MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQg5JAlAbPbwYok2Sif
+  prLNFLAwadIBxYtUO1YQRe2Awp6hRANCAARF7wX5xbGeY2blHe+RNnBO1K0WJ3tA
+  ut/hcZ+Q6y73RDhZ3sCn8kNX0pCt8E3vB2bMIn5sdWGK19i1/7ge0A/I
+  -----END PRIVATE KEY-----
+  """
+
+/** A second root, which signed nothing these programs present. */
+const otherRoot = """
+  -----BEGIN CERTIFICATE-----
+  MIIBhDCCASugAwIBAgIUNcppcxsoJh3LC4SuNV2905it3z8wCgYIKoZIzj0EAwIw
+  FzEVMBMGA1UEAwwMQW5vdGhlciBSb290MCAXDTI2MDkyNDE4MDAwN1oYDzIxMjYw
+  ODMxMTgwMDA3WjAXMRUwEwYDVQQDDAxBbm90aGVyIFJvb3QwWTATBgcqhkjOPQIB
+  BggqhkjOPQMBBwNCAATLN2hr7FX0WCIiSRX1v5bZC60+2bFil4GqNtO0DcKfuo5z
+  WtIeQIcdDMzuCEdgJfrRCqcXm/xWKegAYjx4330bo1MwUTAdBgNVHQ4EFgQUh8D0
+  fw0tYqO2TaSAwEphjdSdT9AwHwYDVR0jBBgwFoAUh8D0fw0tYqO2TaSAwEphjdSd
+  T9AwDwYDVR0TAQH/BAUwAwEB/zAKBggqhkjOPQQDAgNHADBEAiBWPzUV+BUG2+cM
+  31/S88kys7fpZvwRMg/vOlUArTwroAIgfP1AbNwjvS0UJUpnGX/y2WpXBFm9aF+j
+  R/XhisYKo4c=
+  -----END CERTIFICATE-----
+  """
+
+/** Accepts `count` connections, answers each with a greeting and its protocol, and ends each with `close_notify`. */
+fn greet(listener: TcpListener, identity: ServerIdentity, count: Int): Task<Result<Int, NetworkError>> {
+  var greeted = 0
+  for _ in 0..count {
+    const stream = listener.accept().await()?
+    match TlsStream.accept(stream, identity).await() {
+      Ok(session) => {
+        var writing = session
+        writing.send("hello over {session.protocol()}".bytes().toList()).await()?
+        writing.shutdown().await()?
+        greeted = greeted + 1
+      }
+      // A client that refused the certificate ends the handshake: nothing to greet
+      Fail(_) => {}
+    }
+  }
+  Ok greeted
+}
+
+/** Connects, and reads to the end what the server wrote. */
+fn visit(address: SocketAddress, name: String, settings: TlsSettings): Task<Result<String, NetworkError>> {
+  const stream = TcpStream.connect(address).await()?
+  var session = TlsStream.connect(stream, name, settings).await()?
+  var answer: List<UInt8> = []
+  while const Some(chunk) = session.receive().await()? {
+    answer.appendAll chunk
+  }
+  Ok(textOf(answer).ok() ?? "not UTF-8")
+}
+
+/** What a visit ended with, as a line of output. */
+fn shown(result: Result<String, NetworkError>): String {
+  match result {
+    Ok(text) => "read: {text}"
+    Fail(problem) => "refused: certificate rejected {problem.isCertificateRejected()}"
+  }
+}
+
+match ServerIdentity.of(serverCertificate, serverKey) {
+  Ok(identity) => {
+    match TcpListener.listen(SocketAddress(IpAddress.loopback, 0)) {
+      Ok(listener) => {
+        const address = listener.localAddress()
+        const server = greet listener, identity, 4
+        print shown(visit(address, "localhost", TlsSettings(trusted: [testRoot])).await())
+        print shown(visit(address, "localhost", TlsSettings(trusted: [otherRoot])).await())
+        print shown(visit(address, "example.test", TlsSettings(trusted: [testRoot])).await())
+        print shown(visit(address, "localhost", TlsSettings()).await())
+        print "greeted {server.await()}"
+      }
+      Fail(problem) => print "could not listen: {problem}"
+    }
+  }
+  Fail(problem) => print "no identity: {problem}"
+}
+
+match ServerIdentity.of(otherRoot, serverKey) {
+  Ok(_) => print "a key of another certificate was taken"
+  Fail(problem) => print "a key of another certificate: TLS failure {problem.isTlsFailure()}"
+}

@@ -2029,8 +2029,246 @@ static void torb_machine_native_162(int64_t *words, int64_t base, const int64_t 
   if (operands[0] >= 0) memcpy(words + base + operands[0], &r, sizeof r);
 }
 
-/* torb_workers_blocking */
+/* torb_tls_client */
+#if defined(TORB_WITH_TLS)
 static void torb_machine_native_163(int64_t *words, int64_t base, const int64_t *operands) {
+  (void)words;
+  (void)base;
+  (void)operands;
+  torb_text a0;
+  memcpy(&a0, words + base + operands[1], sizeof a0);
+  torb_text a1;
+  memcpy(&a1, words + base + operands[2], sizeof a1);
+  int64_t r = torb_tls_client(a0, a1);
+  if (operands[0] >= 0) words[base + operands[0]] = (int64_t)r;
+}
+#else
+static void torb_machine_native_163(int64_t *words, int64_t base, const int64_t *operands) {
+  (void)words;
+  (void)base;
+  (void)operands;
+  torb_panic_text("internal error: `torb_tls_client` is not linked into this program", torb_location_unknown);
+}
+#endif
+
+/* torb_tls_close */
+#if defined(TORB_WITH_TLS)
+static void torb_machine_native_164(int64_t *words, int64_t base, const int64_t *operands) {
+  (void)words;
+  (void)base;
+  (void)operands;
+  int64_t a0 = (int64_t)words[base + operands[1]];
+  torb_tls_close(a0);
+}
+#else
+static void torb_machine_native_164(int64_t *words, int64_t base, const int64_t *operands) {
+  (void)words;
+  (void)base;
+  (void)operands;
+  torb_panic_text("internal error: `torb_tls_close` is not linked into this program", torb_location_unknown);
+}
+#endif
+
+/* torb_tls_error_text */
+#if defined(TORB_WITH_TLS)
+static void torb_machine_native_165(int64_t *words, int64_t base, const int64_t *operands) {
+  (void)words;
+  (void)base;
+  (void)operands;
+  int64_t a0 = (int64_t)words[base + operands[1]];
+  torb_text r = torb_tls_error_text(a0);
+  if (operands[0] >= 0) memcpy(words + base + operands[0], &r, sizeof r);
+}
+#else
+static void torb_machine_native_165(int64_t *words, int64_t base, const int64_t *operands) {
+  (void)words;
+  (void)base;
+  (void)operands;
+  torb_panic_text("internal error: `torb_tls_error_text` is not linked into this program", torb_location_unknown);
+}
+#endif
+
+/* torb_tls_feed */
+#if defined(TORB_WITH_TLS)
+static void torb_machine_native_166(int64_t *words, int64_t base, const int64_t *operands) {
+  (void)words;
+  (void)base;
+  (void)operands;
+  int64_t a0 = (int64_t)words[base + operands[1]];
+  torb_list a1;
+  memcpy(&a1, words + base + operands[2], sizeof a1);
+  torb_tls_feed(a0, a1);
+}
+#else
+static void torb_machine_native_166(int64_t *words, int64_t base, const int64_t *operands) {
+  (void)words;
+  (void)base;
+  (void)operands;
+  torb_panic_text("internal error: `torb_tls_feed` is not linked into this program", torb_location_unknown);
+}
+#endif
+
+/* torb_tls_handshake */
+#if defined(TORB_WITH_TLS)
+static void torb_machine_native_167(int64_t *words, int64_t base, const int64_t *operands) {
+  (void)words;
+  (void)base;
+  (void)operands;
+  int64_t a0 = (int64_t)words[base + operands[1]];
+  int64_t r = torb_tls_handshake(a0);
+  if (operands[0] >= 0) words[base + operands[0]] = (int64_t)r;
+}
+#else
+static void torb_machine_native_167(int64_t *words, int64_t base, const int64_t *operands) {
+  (void)words;
+  (void)base;
+  (void)operands;
+  torb_panic_text("internal error: `torb_tls_handshake` is not linked into this program", torb_location_unknown);
+}
+#endif
+
+/* torb_tls_identity */
+#if defined(TORB_WITH_TLS)
+static void torb_machine_native_168(int64_t *words, int64_t base, const int64_t *operands) {
+  (void)words;
+  (void)base;
+  (void)operands;
+  torb_text a0;
+  memcpy(&a0, words + base + operands[1], sizeof a0);
+  torb_text a1;
+  memcpy(&a1, words + base + operands[2], sizeof a1);
+  int64_t r = torb_tls_identity(a0, a1);
+  if (operands[0] >= 0) words[base + operands[0]] = (int64_t)r;
+}
+#else
+static void torb_machine_native_168(int64_t *words, int64_t base, const int64_t *operands) {
+  (void)words;
+  (void)base;
+  (void)operands;
+  torb_panic_text("internal error: `torb_tls_identity` is not linked into this program", torb_location_unknown);
+}
+#endif
+
+/* torb_tls_notify_close */
+#if defined(TORB_WITH_TLS)
+static void torb_machine_native_169(int64_t *words, int64_t base, const int64_t *operands) {
+  (void)words;
+  (void)base;
+  (void)operands;
+  int64_t a0 = (int64_t)words[base + operands[1]];
+  torb_tls_notify_close(a0);
+}
+#else
+static void torb_machine_native_169(int64_t *words, int64_t base, const int64_t *operands) {
+  (void)words;
+  (void)base;
+  (void)operands;
+  torb_panic_text("internal error: `torb_tls_notify_close` is not linked into this program", torb_location_unknown);
+}
+#endif
+
+/* torb_tls_protocol */
+#if defined(TORB_WITH_TLS)
+static void torb_machine_native_170(int64_t *words, int64_t base, const int64_t *operands) {
+  (void)words;
+  (void)base;
+  (void)operands;
+  int64_t a0 = (int64_t)words[base + operands[1]];
+  torb_text r = torb_tls_protocol(a0);
+  if (operands[0] >= 0) memcpy(words + base + operands[0], &r, sizeof r);
+}
+#else
+static void torb_machine_native_170(int64_t *words, int64_t base, const int64_t *operands) {
+  (void)words;
+  (void)base;
+  (void)operands;
+  torb_panic_text("internal error: `torb_tls_protocol` is not linked into this program", torb_location_unknown);
+}
+#endif
+
+/* torb_tls_read */
+#if defined(TORB_WITH_TLS)
+static void torb_machine_native_171(int64_t *words, int64_t base, const int64_t *operands) {
+  (void)words;
+  (void)base;
+  (void)operands;
+  int64_t a0 = (int64_t)words[base + operands[1]];
+  torb_list *a1 = (torb_list *)torb_machine_address(words, words[base + operands[2]]);
+  int64_t a2 = (int64_t)words[base + operands[3]];
+  int64_t r = torb_tls_read(a0, a1, a2);
+  if (operands[0] >= 0) words[base + operands[0]] = (int64_t)r;
+}
+#else
+static void torb_machine_native_171(int64_t *words, int64_t base, const int64_t *operands) {
+  (void)words;
+  (void)base;
+  (void)operands;
+  torb_panic_text("internal error: `torb_tls_read` is not linked into this program", torb_location_unknown);
+}
+#endif
+
+/* torb_tls_server */
+#if defined(TORB_WITH_TLS)
+static void torb_machine_native_172(int64_t *words, int64_t base, const int64_t *operands) {
+  (void)words;
+  (void)base;
+  (void)operands;
+  int64_t a0 = (int64_t)words[base + operands[1]];
+  int64_t r = torb_tls_server(a0);
+  if (operands[0] >= 0) words[base + operands[0]] = (int64_t)r;
+}
+#else
+static void torb_machine_native_172(int64_t *words, int64_t base, const int64_t *operands) {
+  (void)words;
+  (void)base;
+  (void)operands;
+  torb_panic_text("internal error: `torb_tls_server` is not linked into this program", torb_location_unknown);
+}
+#endif
+
+/* torb_tls_take_outgoing */
+#if defined(TORB_WITH_TLS)
+static void torb_machine_native_173(int64_t *words, int64_t base, const int64_t *operands) {
+  (void)words;
+  (void)base;
+  (void)operands;
+  int64_t a0 = (int64_t)words[base + operands[1]];
+  torb_list *a1 = (torb_list *)torb_machine_address(words, words[base + operands[2]]);
+  torb_tls_take_outgoing(a0, a1);
+}
+#else
+static void torb_machine_native_173(int64_t *words, int64_t base, const int64_t *operands) {
+  (void)words;
+  (void)base;
+  (void)operands;
+  torb_panic_text("internal error: `torb_tls_take_outgoing` is not linked into this program", torb_location_unknown);
+}
+#endif
+
+/* torb_tls_write */
+#if defined(TORB_WITH_TLS)
+static void torb_machine_native_174(int64_t *words, int64_t base, const int64_t *operands) {
+  (void)words;
+  (void)base;
+  (void)operands;
+  int64_t a0 = (int64_t)words[base + operands[1]];
+  torb_list a1;
+  memcpy(&a1, words + base + operands[2], sizeof a1);
+  int64_t a2 = (int64_t)words[base + operands[3]];
+  int64_t r = torb_tls_write(a0, a1, a2);
+  if (operands[0] >= 0) words[base + operands[0]] = (int64_t)r;
+}
+#else
+static void torb_machine_native_174(int64_t *words, int64_t base, const int64_t *operands) {
+  (void)words;
+  (void)base;
+  (void)operands;
+  torb_panic_text("internal error: `torb_tls_write` is not linked into this program", torb_location_unknown);
+}
+#endif
+
+/* torb_workers_blocking */
+static void torb_machine_native_175(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2039,7 +2277,7 @@ static void torb_machine_native_163(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_workers_count */
-static void torb_machine_native_164(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_176(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2213,6 +2451,18 @@ const torb_machine_native torb_machine_natives[] = {
   torb_machine_native_162,
   torb_machine_native_163,
   torb_machine_native_164,
+  torb_machine_native_165,
+  torb_machine_native_166,
+  torb_machine_native_167,
+  torb_machine_native_168,
+  torb_machine_native_169,
+  torb_machine_native_170,
+  torb_machine_native_171,
+  torb_machine_native_172,
+  torb_machine_native_173,
+  torb_machine_native_174,
+  torb_machine_native_175,
+  torb_machine_native_176,
 };
 
-const size_t torb_machine_native_count = 165;
+const size_t torb_machine_native_count = 177;

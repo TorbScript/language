@@ -1,12 +1,13 @@
 # Networking, TLS and HTTP
 
-**Status: partly implemented** — decided on 2026-09-23. Slices 1 to 4 are in (section 11): the IO core of the runtime
-(`runtime/io.c`, IOCP in `runtime/os/iocp.c`, epoll in `runtime/os/epoll.c`, kqueue in `runtime/os/kqueue.c`) with TCP
-and name resolution, `std/network` over it, and an HTTP/1.1 server and client in TorbScript in `std/http`. The Windows
-half is built and tested on every commit; the POSIX halves are written against their manuals and were only checked
-for syntax and types against stub headers (with the runtime's `-Wall -Wextra -Wpedantic -Werror`, as Linux, macOS and
-FreeBSD), because this machine has no POSIX toolchain. TLS, UDP, the sandbox's network grant, HTTP/2 and HTTP/3 are
-later slices, each with its reason below.
+**Status: partly implemented** — decided on 2026-09-23, the owner's three questions answered on 2026-09-24 (section
+14). Slices 1 to 4 and 6 are in (section 11): the IO core of the runtime (`runtime/io.c`, IOCP in `runtime/os/iocp.c`,
+epoll in `runtime/os/epoll.c`, kqueue in `runtime/os/kqueue.c`) with TCP and name resolution, `std/network` over it, an
+HTTP/1.1 server and client in TorbScript in `std/http`, and TLS 1.2 and 1.3 over mbedTLS 3.6 in `std/tls`, with `https`
+in the client and the server. The Windows half is built and tested on every commit; the POSIX halves were written
+against their manuals, checked for syntax and types against stub headers, and are built for the first time by the
+Linux and macOS jobs of CI. UDP, the connection pool, the sandbox's network grant, HTTP/2 and HTTP/3 are later slices,
+each with its reason below.
 
 This is the record of how a TorbScript program talks to another machine: which packages there are and what each one
 owns, how a socket meets the task scheduler of `docs/design/CONCURRENCY.md`, which TLS implementation the language
@@ -38,7 +39,7 @@ slice G (the IO poller) for sockets.
 - **[11. Slices](#11-slices)**
 - **[12. HTTP/2, HTTP/3 and compression](#12-http2-http3-and-compression)** — why later
 - **[13. What `docs/design/WEB.md` asked for](#13-what-docsdesignwebmd-asked-for)**
-- **[14. Owner questions](#14-owner-questions)**
+- **[14. Owner questions, answered](#14-owner-questions-answered)**
 
 ---
 
@@ -304,8 +305,8 @@ every platform, the platform's trust decisions where the platform has them:
 
 | Platform | Roots | Chain verification |
 |---|---|---|
-| Windows | the `ROOT` store through crypt32 (loaded on first use, like Winsock) | `CertGetCertificateChain` and `CertVerifyCertificateChainPolicy(SSL)`: enterprise roots, revocation and policy as the machine has them |
-| macOS | the keychain's anchors | `SecTrustEvaluateWithError` |
+| Windows | the machine's, through crypt32 (loaded on first use, like Winsock) | `CertGetCertificateChain` and `CertVerifyCertificateChainPolicy(SSL)`: enterprise roots and policy as the machine has them |
+| macOS | the keychain's anchors | `SecTrustEvaluateWithError` - *as built, the bundle macOS ships at `/etc/ssl/cert.pem`, verified by mbedTLS; the Security framework is the step after slice 6* |
 | Linux, FreeBSD | the first bundle that exists of the well-known paths (`/etc/ssl/certs/ca-certificates.crt`, `/etc/pki/tls/certs/ca-bundle.crt`, `/etc/ssl/cert.pem`, `/usr/local/share/certs/ca-root-nss.crt`), `SSL_CERT_FILE` overriding | mbedTLS's own, against those roots |
 
 - **Why not the system libraries**: three implementations of one protocol behind one TorbScript API is three sets of
@@ -318,11 +319,43 @@ every platform, the platform's trust decisions where the platform has them:
   has, and it needs constant-time arithmetic the language cannot promise today. **The interface of `std/tls` does not
   depend on the choice**, so the protocol can move into TorbScript over a C crypto core later - the rustls-over-ring
   shape - without a program noticing.
-- **The build learns one thing**: a runtime source that is compiled only where a native needs it (a `sources` column
-  of the manifest's rows). That is slice 6's, and it also keeps the vendored library's warnings out of `-Werror`.
-- **The API is the stream's**: `TlsStream.connect(stream, serverName:)` and `TlsStream.accept(stream, identity:)`
-  answer a `TlsStream` with `source()` and `sink()` of the same types as a `TcpStream`'s, and `std/http` takes either
-  through one private trait. `https` URLs and `Server.listen(..., tls:)` are the two places a program sees it.
+- **The build learns one thing**: a part of the runtime that is compiled only where a native needs it. That is slice
+  6's, and it also keeps the vendored library's warnings out of `-Werror`.
+- **The API is the stream's**: `TlsStream.connect(stream, serverName, settings)` and `TlsStream.accept(stream, identity)`
+  answer a `TlsStream` with `receive`, `send`, `source()` and `sink()` like a `TcpStream`'s, and `std/http` reads and
+  writes either through one `Transport`. `https` URLs and `Server.listen(..., tls: identity)` are the two places an HTTP
+  program sees it.
+
+### TLS, as built (slice 6)
+
+- **mbedTLS 3.6.7, the long-term branch**, vendored whole under `runtime/vendor/mbedtls` (`include/`, `library/`, the
+  license, a `VERSION`), not the 4.x line, whose split into TF-PSA-Crypto is a build of its own and whose support window
+  is shorter than 3.6's. The changes to its default configuration are one file, `runtime/tls/torb_mbedtls_user.h`: no
+  sockets, no timers and no key storage of mbedTLS's own, randomness from the runtime, IP names in certificates read by
+  mbedTLS's parser, and a trusted-certificate callback. Everything else - TLS 1.2 and 1.3, the ciphers and curves - is
+  mbedTLS's default, so an advisory is a re-vendoring and nothing else.
+- **A state machine over memory.** A session reads and writes two buffers of the glue (`runtime/tls/tls.c`), and the
+  TorbScript side receives from the `TcpStream`, feeds, and sends what the session produced. So every wait is a wait
+  of `std/network` - cancelled, timed out and paced as a TCP wait is - and the IO core learned nothing.
+- **Linked where it is reached.** The rows of the manifest name their part (`NativeEntry.part`, `"tls"`); the driver
+  adds `runtime/tls/` and mbedTLS to a program whose C calls a `torb_tls_` function, and defines `TORB_WITH_TLS`, under
+  which the VM's thunks for those rows exist - elsewhere they panic, so every other program links as before. mbedTLS is
+  compiled once per checkout, C compiler, version and configuration into `build/vendor/` (half a minute with gcc), in a
+  directory per build that is read only once a marker says it finished, so two builds at once never share a file.
+- **One lock around every call of mbedTLS.** PSA's key store and generator are global in mbedTLS and not safe for two
+  threads without `MBEDTLS_THREADING_C`; the calls never wait, so one mutex is correct and costs only parallel
+  handshakes. `MBEDTLS_THREADING_ALT` over the runtime's mutexes is the speed change when a benchmark asks for it.
+- **Randomness** is the platform's: `BCryptGenRandom` loaded on first use on Windows, `/dev/urandom` elsewhere, as
+  mbedTLS's hardware source; PSA's generator is seeded from it.
+- **Trust on Windows is the platform's, in the handshake.** mbedTLS gets no roots (a callback answers none) and a
+  verification callback that, at depth 0, hands the whole presented chain to `CertGetCertificateChain` with the server
+  name in the SSL policy. So a rejected certificate stops the handshake before a byte of data, exactly as mbedTLS's own
+  verdict would. Revocation is not checked: a check goes to the network and waits, and neither Go nor rustls does it by
+  default.
+- **No switch turns verification off.** A program that talks to a server with a private root names that root
+  (`TlsSettings(trusted: [pem])`); that is what the tests do with a root of their own.
+- **A failure says who refused**: `isCertificateRejected()` for a chain the platform or mbedTLS did not trust for the
+  name, `isTlsFailure()` for everything else of TLS, with the platform's or mbedTLS's words.
 
 ## 6. HTTP messages
 
@@ -410,7 +443,8 @@ public fn send(
 - **No redirects are followed and no status is a failure.** A `404` is a `Response` whose `status` says so; a program
   that wants a failure writes `response.status.isSuccess()`. A redirect policy is a `Client` setting, because a client
   that follows `Location` across origins sends the request somewhere its author did not name.
-- **`https` fails with `HttpError` "TLS is not built yet"** until slice 6, and so does any scheme but `http`.
+- **`https` is the same request over TLS** since slice 6 (section 5), on port 443 by default; `send(..., tls:)` takes the
+  `TlsSettings` of a program that trusts a root of its own. Any scheme but `http` and `https` is an `HttpError`.
 - **A timeout is `within`**, as for every task: `http.get(url).within(10.seconds())`.
 
 ## 8. The server
@@ -421,20 +455,31 @@ public shared type Server with Close {
     address: SocketAddress,
     handler: (request: Request) => Task<Result<Response, HttpError>>,
     limits: ServerLimits = ServerLimits(),
+    tls: ServerIdentity? = None,
   ): Result<Server, HttpError>
   fn localAddress(): SocketAddress
-  fn serve(): Task<Result<Void, HttpError>>
-  fn serveOne(): Task<Result<Void, HttpError>>
+  var fn serve(): Task<Result<Void, HttpError>>
+  var fn serveOne(): Task<Result<Void, HttpError>>
+  var fn shutdown(grace: Duration = 10.seconds()): Task<Void>
+  var fn close()
 }
 ```
+
+- **The server is a value, closed or shut down gracefully** (the owner's decision, section 14). `shutdown(grace)`
+  stops accepting at once, closes every connection that waits for its next request, lets every request in progress
+  finish and answers it with `Connection: close`, and cancels what still runs once `grace` has passed. `close()` - what
+  the release of the server runs - stops at once: the listener closes and every connection's task is cancelled. There
+  is no free `serve` function.
+- **No `Server` field** is written (the owner's decision): a product name on the wire tells an attacker what to try
+  first. A handler that wants one sets it.
 
 - **A handler is a function from a request to a task of a response.** It is the smallest contract that is still
   asynchronous and still a value: a web framework (the next round's) is a function of this type built out of routes,
   and middleware is a function from one handler to another. A handler that fails answers `500 Internal Server Error`
   and the failure is not sent to the client, whose business it is not.
-- **`serve()` accepts forever; each connection is a task**, started by a task function with the stream as its argument,
-  so it is pinned to the worker that accepted it (section 4) and cancelled with the server's task. `serveOne()` accepts
-  and serves exactly one connection, which is what a test wants.
+- **`serve()` accepts until the server is shut down or closed; each connection is a task**, started by a task function
+  with the stream as its argument, so it is pinned to the worker that accepted it (section 4). `serveOne()` accepts and
+  serves exactly one connection, which is what a test wants.
 - **A connection serves requests one after another** (HTTP/1.1 persistent connections): the next request is read only
   after the response was written, which also serves a pipelining client correctly, in order. The connection ends after
   a response to `Connection: close`, after an HTTP/1.0 request without `keep-alive`, after an error the parser found,
@@ -535,7 +580,7 @@ not have is flagged by the registry. It is slice 11, with the registry.
 | 3 | `std/network`: the address types, `resolve`, `TcpListener`, `TcpStream` with its source and sink, `NetworkError`; conformance programs over loopback | **Done** |
 | 4 | `std/http`: messages, the HTTP/1.1 parser and writer, the server and the client (one connection per request); parser tests; conformance over loopback | **Done** |
 | 5 | UDP | Open |
-| 6 | TLS: mbedTLS vendored, compiled only where it is reached, the platform verifiers, `std/tls`, `https` in the client and the server | Open |
+| 6 | TLS: mbedTLS vendored, compiled only where it is reached, the platform verifiers, `std/tls`, `https` in the client and the server | **Done** (Windows' verifier; macOS verifies against its bundle until the Security framework step) |
 | 7 | The client's connection pool and redirect policy (`Client`) | Open |
 | 8 | Serving on every worker: several accept loops on one listening socket | Open |
 | 9 | A poller per worker, if a benchmark asks for it | Open |
@@ -572,14 +617,12 @@ task of a `Response` - and asks six more in its section 9. The answers, each wit
 | 5 | A duplex connection for the live UI | **Accepted, slice 14**: a handler answers `101 Switching Protocols` with an upgrade closure, and the server hands it the connection's `source()` and `sink()` once the head is written; WebSocket framing is a `Stage` of `std/web`, as WEB.md proposes |
 | 6 | One program as several processes | **Decided: a listening socket handed to a child**, not `SO_REUSEPORT`. Only Linux balances `SO_REUSEPORT` across processes (FreeBSD needs `SO_REUSEPORT_LB`, Windows has neither), so it is not one behaviour on every platform; inheriting a socket (`WSADuplicateSocketW`, a descriptor without `FD_CLOEXEC`) is. It rides with the supervisor WEB.md section 3.8 wants, after slice 8 |
 
-## 14. Owner questions
+## 14. Owner questions, answered
 
-Everything above is decided and the reason stands next to it. These are questions of taste:
+Everything above is decided and the reason stands next to it. These three were questions of taste, answered by the owner
+on 2026-09-24:
 
-1. **`std/network` against `std/net`.** The record follows the full-word rule and OS.md; `net` is what Go, Rust and
-   .NET say, and it is shorter in every import line.
-2. **`Server.listen(address, handler)` against `http.serve(address, handler)`.** The record makes the server a value
-   (it has a local address, a `close`, and a `serveOne` for tests); a free function reads better in the ten-line
-   program and hides all three.
-3. **The `Server` header.** The server writes `Server: torbscript` where the handler did not. Some deployments want no
-   product name on the wire; the alternative is to write none by default.
+1. **`std/network` against `std/net`.** **Decided: `std/network`**, by the full-word rule.
+2. **`Server.listen(address, handler)` against `http.serve(address, handler)`.** **Decided: `Server.listen` answers a
+   `Server` value that can be closed and shut down gracefully; no free `serve`.** Section 8 has the shutdown.
+3. **The `Server` header.** **Decided: none by default** - no fingerprinting; a handler that wants one sets it.

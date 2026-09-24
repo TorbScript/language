@@ -1,0 +1,68 @@
+/**
+ * What HTTP reads and writes a connection through: a `TcpStream`, or a `TlsStream` over one. One type with the four
+ * things HTTP asks of either, so the parser, the writer, the server and the client are one piece of code for `http` and
+ * `https`.
+ */
+
+use ArrayList from "std/collections"
+use TcpStream, SocketAddress, NetworkError from "std/network"
+use TlsStream from "std/tls"
+
+/** A connection as HTTP sees it: plain TCP, or TLS over TCP. */
+public shared type Transport {
+  private tcp: TcpStream
+  private secure: TlsStream?
+
+  /** Plain TCP. */
+  static fn plain(stream: TcpStream): Transport {
+    Transport stream, None
+  }
+
+  /** TLS over `stream`, after its handshake. */
+  static fn encrypted(stream: TcpStream, session: TlsStream): Transport {
+    Transport stream, Some(session)
+  }
+
+  /** Whether the bytes are encrypted. */
+  fn isEncrypted(): Bool {
+    secure.isSome()
+  }
+
+  /** At most `maximum` bytes, as soon as any arrived; `None` at the end of the stream. */
+  var fn receiveBuffer(maximum: Int = 65536): Task<Result<ArrayList<UInt8>?, NetworkError>> {
+    match secure {
+      Some(session) => {
+        var reading = session
+        reading.receiveBuffer(maximum).await()
+      }
+      None => tcp.receiveBuffer(maximum).await()
+    }
+  }
+
+  /** Writes all of `bytes`. */
+  var fn sendBuffer(bytes: ArrayList<UInt8>): Task<Result<Void, NetworkError>> {
+    match secure {
+      Some(session) => {
+        var writing = session
+        writing.sendBuffer(bytes).await()
+      }
+      None => tcp.sendBuffer(bytes).await()
+    }
+  }
+
+  /** Ends the writing half: `close_notify` first where the bytes are encrypted. */
+  var fn finish(): Task<Result<Void, NetworkError>> {
+    match secure {
+      Some(session) => {
+        var ending = session
+        ending.shutdown().await()
+      }
+      None => tcp.shutdown()
+    }
+  }
+
+  /** The address of the other end, where the system still knows it. */
+  fn remote(): SocketAddress? {
+    tcp.remoteAddress().ok()
+  }
+}

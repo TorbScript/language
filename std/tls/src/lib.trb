@@ -1,0 +1,320 @@
+/**
+ * TLS over a `TcpStream`: [TlsStream.connect] for a client, [TlsStream.accept] with a [ServerIdentity] for a server,
+ * and a stream with the same two directions a `TcpStream` has (docs/design/NETWORK.md section 5).
+ *
+ *     const tcp = TcpStream.connectTo("example.test", 443).await()?
+ *     var stream = TlsStream.connect(tcp, "example.test").await()?
+ *     stream.send("GET / HTTP/1.1\r\nHost: example.test\r\n\r\n".bytes().toList()).await()?
+ *
+ * The protocol is mbedTLS 3, TLS 1.2 and 1.3. A client checks the server's certificate for the name it asks for: on
+ * Windows the platform decides - its roots, its enterprise roots, its policies - and elsewhere the system's bundle of
+ * roots does; [TlsSettings.trusted] replaces both with roots of the program's own. There is no switch that turns the
+ * check off.
+ *
+ * TLS is a state machine over bytes here: every wait is a wait of the `TcpStream` under it, so a TLS read is cancelled,
+ * timed out and paced exactly as a TCP read is.
+ */
+
+use ArrayList from "std/collections"
+use Source, Sink, Bytes from "std/stream"
+use TcpStream, SocketAddress, NetworkError from "std/network"
+
+/** What a client trusts. The default is the platform's judgement, which is what every other program of the machine trusts. */
+public type TlsSettings {
+  /**
+   * PEM certificates to trust instead of the platform: a private root of a company, the root of a test. Empty is the
+   * platform's roots, and a list that names any is only these.
+   */
+  trusted: List<String> = []
+}
+
+/**
+ * What a server proves who it is with: its certificate chain and the private key of the first certificate, both PEM.
+ * Parsed once and shared by every connection of a server; a `shared type`, because the key it holds is the runtime's.
+ */
+public shared type ServerIdentity with Close {
+  /** The runtime's handle: what a server session is started with. Read by [TlsStream.accept], written by nothing. */
+  private(var) handle: Int
+
+  /**
+   * The identity of a PEM chain - the server's own certificate first, then the intermediates - and the PEM private key
+   * that belongs to the first certificate.
+   *
+   * # Errors
+   *
+   * - [NetworkError] that `isTlsFailure()` where a certificate or the key cannot be read, or the key is not the
+   *   certificate's.
+   */
+  static fn of(certificates: String, privateKey: String): Result<ServerIdentity, NetworkError> {
+    const handle = tlsIdentity certificates, privateKey
+    if handle < 0 {
+      return Fail NetworkError.withWords(handle, tlsErrorText(handle))
+    }
+    Ok ServerIdentity(handle)
+  }
+
+  var fn close() {
+    tlsClose handle
+  }
+}
+
+/**
+ * One TLS connection over a `TcpStream`: bytes in both directions, encrypted and authenticated. A `shared type`, like the
+ * stream it holds; it closes when the last reference to it goes, and the TCP stream with it.
+ */
+public shared type TlsStream with Close {
+  private stream: TcpStream
+  private session: Int
+  /** The peer ended the session with `close_notify`: every later receive is the end of the stream. */
+  private var ended: Bool = false
+
+  /**
+   * The client's side: a handshake over `stream` with a server that must prove it is `serverName`.
+   *
+   * # Errors
+   *
+   * - [NetworkError] that `isCertificateRejected()` where the certificate is not trusted for that name, and
+   *   `isTlsFailure()` where the handshake fails otherwise.
+   */
+  static fn connect(stream: TcpStream, serverName: String, settings: TlsSettings = TlsSettings()): Task<Result<TlsStream, NetworkError>> {
+    const session = tlsClient serverName, settings.trusted.joined(separator: "\n")
+    if session < 0 {
+      return Fail NetworkError.withWords(session, tlsErrorText(session))
+    }
+    var connection = TlsStream stream, session
+    connection.handshake().await()?
+    Ok connection
+  }
+
+  /** The server's side: a handshake over an accepted `stream`, proving `identity`. */
+  static fn accept(stream: TcpStream, identity: ServerIdentity): Task<Result<TlsStream, NetworkError>> {
+    const session = tlsServer identity.handle
+    if session < 0 {
+      return Fail NetworkError.withWords(session, tlsErrorText(session))
+    }
+    var connection = TlsStream stream, session
+    connection.handshake().await()?
+    Ok connection
+  }
+
+  /** The version the two sides agreed on: `"TLSv1.3"` or `"TLSv1.2"`. */
+  fn protocol(): String {
+    tlsProtocol session
+  }
+
+  /** The address of this end. */
+  fn localAddress(): Result<SocketAddress, NetworkError> {
+    stream.localAddress()
+  }
+
+  /** The address of the other end. */
+  fn remoteAddress(): Result<SocketAddress, NetworkError> {
+    stream.remoteAddress()
+  }
+
+  /** At most `maximum` bytes, as soon as any were decrypted: `Some(bytes)`, or `None` once the peer ended the session. */
+  var fn receive(maximum: Int = 65536): Task<Result<Bytes?, NetworkError>> {
+    match receiveBuffer(maximum).await()? {
+      Some(bytes) => Ok Some(bytes)
+      None => Ok None
+    }
+  }
+
+  /** [TlsStream.receive] as the `ArrayList` the bytes arrive in. */
+  var fn receiveBuffer(maximum: Int = 65536): Task<Result<ArrayList<UInt8>?, NetworkError>> {
+    loop {
+      if ended {
+        return Ok None
+      }
+      var into: ArrayList<UInt8> = ArrayList.withCapacity 0
+      const answer = tlsRead session, into, maximum
+      // A read may answer the peer (a key update, an alert): what it wrote goes out before anything else happens
+      flush().await()?
+      if answer > 0 {
+        return Ok Some(into)
+      }
+      if answer == -1 {
+        ended = true
+        return Ok None
+      }
+      if answer < 0 {
+        return Fail failureOf(answer)
+      }
+      if !feed().await()? {
+        // The connection ended without `close_notify`: somebody may have cut the stream, so it is no clean end
+        return Fail NetworkError.withWords(tlsNoCloseNotify, "the peer ended the connection without TLS close_notify")
+      }
+    }
+  }
+
+  /** Writes all of `bytes`, encrypted; finishes once the operating system took the ciphertext. */
+  var fn send(bytes: Bytes): Task<Result<Void, NetworkError>> {
+    const buffer: ArrayList<UInt8> = ArrayList.from bytes
+    sendBuffer(buffer).await()
+  }
+
+  /** [TlsStream.send] for bytes that are an `ArrayList` already. */
+  var fn sendBuffer(bytes: ArrayList<UInt8>): Task<Result<Void, NetworkError>> {
+    var from = 0
+    while from < bytes.length() {
+      const taken = tlsWrite session, bytes, from
+      if taken < 0 {
+        return Fail failureOf(taken)
+      }
+      flush().await()?
+      if taken == 0 {
+        // The session needs to hear from the peer before it can write (a renegotiation, a key update)
+        if !feed().await()? {
+          return Fail NetworkError.closed()
+        }
+      }
+      from = from + taken
+    }
+    Ok void
+  }
+
+  /** Ends this half: a `close_notify` for the peer, then the end of the TCP stream's writing half. */
+  var fn shutdown(): Task<Result<Void, NetworkError>> {
+    tlsNotifyClose session
+    flush().await()?
+    stream.shutdown()
+  }
+
+  /** The reading direction as a `Source`: at most `chunk` bytes per `next()`, and `None` once the peer ended. */
+  fn source(chunk: Int = 65536): TlsSource {
+    TlsSource.of self, chunk
+  }
+
+  /** The writing direction as a `Sink`: `end()` ends this half with `close_notify`. */
+  fn sink(): TlsSink {
+    TlsSink.of self
+  }
+
+  /** Frees the session; the TCP stream closes with its own release. */
+  var fn close() {
+    tlsClose session
+  }
+
+  /** The handshake, receiving and sending until it is done. */
+  private var fn handshake(): Task<Result<Void, NetworkError>> {
+    loop {
+      const answer = tlsHandshake session
+      flush().await()?
+      if answer == 0 {
+        return Ok void
+      }
+      if answer < 0 {
+        return Fail failureOf(answer)
+      }
+      if !feed().await()? {
+        return Fail NetworkError.withWords(tlsNoCloseNotify, "the peer ended the connection during the TLS handshake")
+      }
+    }
+  }
+
+  /** Sends whatever ciphertext the session produced. */
+  private var fn flush(): Task<Result<Void, NetworkError>> {
+    var outgoing: ArrayList<UInt8> = ArrayList.withCapacity 0
+    tlsTakeOutgoing session, outgoing
+    if outgoing.length() == 0 {
+      return Ok void
+    }
+    stream.sendBuffer(outgoing).await()
+  }
+
+  /** Receives ciphertext once and hands it to the session: `false` at the end of the TCP stream. */
+  private var fn feed(): Task<Result<Bool, NetworkError>> {
+    match stream.receiveBuffer().await()? {
+      Some(bytes) => {
+        tlsFeed session, bytes
+        Ok true
+      }
+      None => Ok false
+    }
+  }
+
+  private fn failureOf(failure: Int): NetworkError {
+    NetworkError.withWords failure, tlsErrorText(failure)
+  }
+}
+
+/** The reading direction of a [TlsStream]: a `Source<Bytes, NetworkError>`. */
+public shared type TlsSource with Source<Bytes, NetworkError> {
+  private stream: TlsStream
+  private chunk: Int
+
+  /** The source of `stream`: what [TlsStream.source] answers. */
+  static fn of(stream: TlsStream, chunk: Int): TlsSource {
+    TlsSource stream, chunk
+  }
+
+  var fn next(): Task<Result<Bytes?, NetworkError>> {
+    stream.receive(chunk).await()
+  }
+
+  /** Nothing of its own: the stream closes once its last holder is gone. */
+  var fn close() {}
+}
+
+/** The writing direction of a [TlsStream]: a `Sink<Bytes, NetworkError>`. */
+public shared type TlsSink with Sink<Bytes, NetworkError> {
+  private stream: TlsStream
+
+  /** The sink of `stream`: what [TlsStream.sink] answers. */
+  static fn of(stream: TlsStream): TlsSink {
+    TlsSink stream
+  }
+
+  var fn add(item: Bytes): Task<Result<Void, NetworkError>> {
+    stream.send(item).await()
+  }
+
+  /** Ends this half of the session with `close_notify`. */
+  var fn end(): Task<Result<Void, NetworkError>> {
+    stream.shutdown().await()
+  }
+
+  /** Nothing of its own: the stream closes once its last holder is gone. */
+  var fn close() {}
+}
+
+/** A failure of TLS with no code of mbedTLS: kind 12 of runtime/include/torb_io.h, packed. */
+const tlsNoCloseNotify = -51539607552
+
+// --- the natives of runtime/tls/tls.c (runtime/include/torb_tls.h) --------------------------------------------------
+
+/** A client session for `serverName`, trusting the PEM certificates of `trusted` or, where it is empty, the platform. */
+native fn tlsClient(serverName: String, trusted: String): Int
+
+/** An identity of a PEM chain and a PEM private key. */
+native fn tlsIdentity(certificates: String, privateKey: String): Int
+
+/** A server session proving `identity`. */
+native fn tlsServer(identity: Int): Int
+
+/** Ciphertext from the peer, for the session to read. */
+native fn tlsFeed(session: Int, bytes: ArrayList<UInt8>)
+
+/** 0 once the handshake is done, 1 where it needs more from the peer, or a failure. */
+native fn tlsHandshake(session: Int): Int
+
+/** The ciphertext the session produced, appended to `into`. */
+native fn tlsTakeOutgoing(session: Int, var into: ArrayList<UInt8>)
+
+/** How many bytes of `bytes` from `from` on were encrypted, or a failure. */
+native fn tlsWrite(session: Int, bytes: ArrayList<UInt8>, from: Int): Int
+
+/** How many bytes were decrypted into `into`, 0 where it needs more, -1 at `close_notify`, or a failure. */
+native fn tlsRead(session: Int, var into: ArrayList<UInt8>, maximum: Int): Int
+
+/** A `close_notify` into the outgoing ciphertext. */
+native fn tlsNotifyClose(session: Int)
+
+/** Frees a session or an identity. */
+native fn tlsClose(handle: Int)
+
+/** `"TLSv1.3"`, `"TLSv1.2"`, or `""` before the handshake is done. */
+native fn tlsProtocol(session: Int): String
+
+/** The words for a failure one of these answered. */
+native fn tlsErrorText(failure: Int): String

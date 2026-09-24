@@ -5,11 +5,14 @@
 
 use ArrayList from "std/collections"
 use TcpListener, TcpStream, SocketAddress from "std/network"
+use TlsStream, ServerIdentity from "std/tls"
+use Duration from "std/time"
 use Body, Method, Request, Response, Status from "./message"
 use Connection, FixedReader, ChunkedReader from "./connection"
 use Framing, headLines, requestLineOf, fieldsOf, requestFraming, keepsAlive from "./parse"
 use writeResponse from "./write"
 use HttpError from "./error"
+use Transport from "./transport"
 
 /** What serves a request: a function from the request to a task of the response. A web framework is one of these. */
 public type Handler = (request: Request) => Task<Result<Response, HttpError>>
@@ -32,30 +35,46 @@ public type ServerLimits {
 }
 
 /**
- * An HTTP/1.1 server. It listens as soon as it is made; [Server.serve] accepts connections until its task is cancelled,
- * and every connection is a task of its own, on the worker that accepted it.
+ * An HTTP/1.1 server. It listens as soon as it is made; [Server.serve] accepts connections until the server is shut
+ * down or closed, and every connection is a task of its own, on the worker that accepted it.
  *
  *     fn hello(request: Request): Task<Result<Response, HttpError>> {
  *       Ok Response.text("hello from {request.path()}")
  *     }
  *
- *     const server = Server.listen(SocketAddress(IpAddress.loopback, 8080), hello)?
- *     server.serve().await()?
+ *     var server = Server.listen(SocketAddress(IpAddress.loopback, 8080), hello)?
+ *     var serving = server.serve()
+ *     // ... and when the program is to stop:
+ *     server.shutdown().await()
  *
  * A handler that fails is answered with the status its failure names where it names one - the body it read was cut
  * short, not UTF-8 or not the JSON asked for - and `500 Internal Server Error` otherwise; the failure itself is not sent
  * to the client. A request the parser refuses is answered with the status its failure names
- * ([HttpError.answerStatus]), and the connection is closed.
+ * ([HttpError.answerStatus]), and the connection is closed. The server writes no `Server` field: a product name on the
+ * wire tells an attacker what to try first, and a handler that wants one sets it.
  */
 public shared type Server with Close {
   private listener: TcpListener
   private handler: Handler
   private limits: ServerLimits
+  private state: ServerState
+  /** What the server proves itself with where it speaks TLS; `None` for plain HTTP. */
+  private identity: ServerIdentity?
+  /** The connections served now, and some that ended since the last accept. */
+  private var connections: List<Serving> = []
 
-  /** A server listening on `address`; port 0 asks the system for a free one, which [Server.localAddress] then says. */
-  static fn listen(address: SocketAddress, handler: Handler, limits: ServerLimits = ServerLimits()): Result<Server, HttpError> {
+  /**
+   * A server listening on `address`; port 0 asks the system for a free one, which [Server.localAddress] then says. With
+   * `tls`, every connection is HTTPS: the TLS handshake comes first, within the head time of the limits.
+   */
+  static fn listen(
+    address: SocketAddress,
+    handler: Handler,
+    limits: ServerLimits = ServerLimits(),
+    tls: ServerIdentity? = None,
+  ): Result<Server, HttpError> {
     const listener = TcpListener.listen(address)?
-    Ok Server(listener, handler, limits)
+    Ok Server(listener, handler, limits, ServerState(), tls)
   }
 
   /** Where it listens. */
@@ -63,32 +82,163 @@ public shared type Server with Close {
     listener.localAddress()
   }
 
-  /** Accepts connections and serves each in a task of its own, until this task is cancelled. */
-  fn serve(): Task<Result<Void, HttpError>> {
-    loop {
-      const stream = listener.accept().await()?
-      const _ = serveConnection stream, handler, limits
+  /**
+   * Accepts connections and serves each in a task of its own, until the server is shut down or closed - then it
+   * answers `Ok` - or the listening socket fails.
+   */
+  var fn serve(): Task<Result<Void, HttpError>> {
+    while !state.closing {
+      const stream = match listener.accept().await() {
+        Ok(accepted) => accepted
+        Fail(problem) => {
+          if state.closing {
+            return Ok void
+          }
+          return Fail HttpError.network(problem)
+        }
+      }
+      track stream
     }
+    Ok void
   }
 
   /** Accepts one connection and serves it to its end: what a test wants. */
-  fn serveOne(): Task<Result<Void, HttpError>> {
+  var fn serveOne(): Task<Result<Void, HttpError>> {
     const stream = listener.accept().await()?
-    serveConnection(stream, handler, limits).await()
+    const serving = Serving()
+    serveConnection(stream, handler, limits, state, serving, identity).await()
   }
 
-  /** Nothing of its own: the listener closes when the server is gone. */
-  var fn close() {}
+  /**
+   * Stops gracefully: no connection is accepted any more, a connection that waits for its next request is closed at
+   * once, a request in progress is finished and answered with `Connection: close`, and what still runs once `grace`
+   * has passed is cancelled. Finishes when every connection has ended.
+   */
+  var fn shutdown(grace: Duration = 10.seconds()): Task<Void> {
+    state.closing = true
+    listener.stop()
+    var busy: List<Task<Result<Void, HttpError>>> = []
+    for serving in connections {
+      if const Some(task) = serving.task {
+        if serving.busy {
+          busy.append task
+        } else {
+          cancelConnection task
+        }
+      }
+    }
+    var finishing = waitForAll busy
+    const inTime = finishing.within(grace).await()
+    if !inTime.isOk() {
+      for task in busy {
+        cancelConnection task
+      }
+    }
+    connections = []
+  }
+
+  /** Stops at once: the listener closes and every connection is cancelled where it is. What the release of a server runs. */
+  var fn close() {
+    state.closing = true
+    listener.stop()
+    for serving in connections {
+      if const Some(task) = serving.task {
+        cancelConnection task
+      }
+    }
+    connections = []
+  }
+
+  /** Starts serving an accepted connection, and forgets the connections that ended since. */
+  private var fn track(stream: TcpStream) {
+    const serving = Serving()
+    serving.task = Some serveTracked(stream, handler, limits, state, serving, identity)
+    var kept: List<Serving> = []
+    for known in connections {
+      if !known.done {
+        kept.append known
+      }
+    }
+    kept.append serving
+    connections = kept
+  }
+}
+
+/** What a server shares with the tasks of its connections: whether it shuts down. */
+shared type ServerState {
+  var closing: Bool = false
+}
+
+/** One connection a server serves: its task, whether a request is in progress on it, and whether it ended. */
+shared type Serving {
+  var task: Task<Result<Void, HttpError>>? = None
+  var busy: Bool = false
+  var done: Bool = false
+}
+
+/** Cancels a connection's task. */
+fn cancelConnection(task: Task<Result<Void, HttpError>>) {
+  var stopping = task
+  stopping.cancel()
+}
+
+/** Waits for every task, whatever it ends with. */
+fn waitForAll(tasks: List<Task<Result<Void, HttpError>>>): Task<Void> {
+  for task in tasks {
+    const _ = task.result()
+  }
+}
+
+/** Serves a connection and marks it done, so the server forgets it at its next accept. */
+fn serveTracked(
+  stream: TcpStream,
+  handler: Handler,
+  limits: ServerLimits,
+  state: ServerState,
+  serving: Serving,
+  identity: ServerIdentity?,
+): Task<Result<Void, HttpError>> {
+  const outcome = serveConnection(stream, handler, limits, state, serving, identity).result()
+  serving.done = true
+  match outcome {
+    Ok(result) => result
+    Fail(_) => Ok void
+  }
 }
 
 /**
- * Serves the requests of one connection, one after another, until the client closes it, a response closes it, or the
- * connection waits longer than the limits allow.
+ * Serves the requests of one connection, one after another, until the client closes it, a response closes it, the
+ * server shuts down, or the connection waits longer than the limits allow.
  */
-fn serveConnection(stream: TcpStream, handler: Handler, limits: ServerLimits): Task<Result<Void, HttpError>> {
-  const connection = Connection.of stream
+fn serveConnection(
+  stream: TcpStream,
+  handler: Handler,
+  limits: ServerLimits,
+  state: ServerState,
+  serving: Serving,
+  identity: ServerIdentity?,
+): Task<Result<Void, HttpError>> {
   const remote = stream.remoteAddress().ok()
+  var transport = Transport.plain stream
+  if const Some(proof) = identity {
+    // The handshake is part of the head: a client that starts one and never finishes it is cut off the same way
+    var handshake = TlsStream.accept stream, proof
+    match handshake.within(limits.headMilliseconds.milliseconds()).await() {
+      Ok(Ok(session)) => {
+        transport = Transport.encrypted stream, session
+      }
+      _ => {
+        return Ok void
+      }
+    }
+  }
+  var connection = Connection.of transport
   loop {
+    serving.busy = false
+    if state.closing {
+      closeGently(connection).await()?
+      return Ok void
+    }
     // The next request's first byte, within the idle time
     if !connection.hasBuffered() {
       var waiting = connection.fill()
@@ -101,11 +251,12 @@ fn serveConnection(stream: TcpStream, handler: Handler, limits: ServerLimits): T
           return Ok void
         }
         Fail(_) => {
-          connection.shutdown()
+          connection.finish().await()
           return Ok void
         }
       }
     }
+    serving.busy = true
     // The whole head, within the head time
     var reading = connection.head limits.headBytes
     const head = match reading.within(limits.headMilliseconds.milliseconds()).await() {
@@ -136,7 +287,8 @@ fn serveConnection(stream: TcpStream, handler: Handler, limits: ServerLimits): T
     }
     // What the handler did not read of the body is read here, up to a limit; more than that closes the connection
     const drained = request.body.bytes(limit: limits.drainBytes).await().isOk()
-    const keepOpen = writeResponse(connection, response, request.method, request.version, !keepAlive || !drained).await()?
+    const closing = !keepAlive || !drained || state.closing
+    const keepOpen = writeResponse(connection, response, request.method, request.version, closing).await()?
     if !keepOpen {
       closeGently(connection).await()?
       return Ok void
@@ -180,7 +332,7 @@ fn failureResponse(problem: HttpError): Response {
  * Answers a request the server could not read with the status its failure names, and ends the connection. Where the
  * failure names none - the connection broke - there is nobody to answer.
  */
-fn refuse(connection: Connection, problem: HttpError): Task<Result<Void, HttpError>> {
+fn refuse(var connection: Connection, problem: HttpError): Task<Result<Void, HttpError>> {
   if const Some(code) = problem.answerStatus() {
     const status = Status.of(code)?
     const answer = Response.text "{problem}\n", status: status
@@ -194,15 +346,15 @@ fn refuse(connection: Connection, problem: HttpError): Task<Result<Void, HttpErr
  * before the connection closes. A socket closed with bytes unread is reset by the system, and a reset can destroy the
  * answer on its way before the client read it: the lingering close every server does.
  */
-fn closeGently(connection: Connection): Task<Result<Void, HttpError>> {
-  connection.shutdown()
+fn closeGently(var connection: Connection): Task<Result<Void, HttpError>> {
+  connection.finish().await()
   var lingering = discardRest connection, 262144
   const _ = lingering.within(1000.milliseconds()).await()
   Ok void
 }
 
 /** Reads and drops at most `limit` bytes, until the peer ends its half. */
-fn discardRest(connection: Connection, limit: Int): Task<Result<Void, HttpError>> {
+fn discardRest(var connection: Connection, limit: Int): Task<Result<Void, HttpError>> {
   var discarded = 0
   while discarded < limit {
     match connection.take(65536).await()? {

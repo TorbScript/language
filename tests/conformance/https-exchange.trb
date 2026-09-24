@@ -1,0 +1,108 @@
+use * as http from "std/http"
+use Server, Request, Response, Method, HttpError from "std/http"
+use SocketAddress, IpAddress from "std/network"
+use TlsSettings, ServerIdentity from "std/tls"
+
+/**
+ * HTTPS on loopback: the HTTP server with a TLS identity, and the client with a URL of the scheme `https` - the same
+ * parser, writer and handler as plain HTTP, over a `TlsStream`. The client trusts the test root that signed the
+ * server's certificate; a client that trusts the platform instead is refused, and says so through the `NetworkError`
+ * under its `HttpError`.
+ */
+
+/** The test root: nothing but these programs trusts it. */
+const testRoot = """
+  -----BEGIN CERTIFICATE-----
+  MIIBpjCCAUugAwIBAgIUX0ocJiSTMF4EyI948Ywl9dBFuIgwCgYIKoZIzj0EAwIw
+  HzEdMBsGA1UEAwwUVG9yYlNjcmlwdCBUZXN0IFJvb3QwIBcNMjYwOTI0MTgwMDA2
+  WhgPMjEyNjA4MzExODAwMDZaMB8xHTAbBgNVBAMMFFRvcmJTY3JpcHQgVGVzdCBS
+  b290MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEnoU8ZlkjCCHuMztPRGCb7EKo
+  y7KLXmMddFh+kw1uKQKo18Dtx4zsURLEMCqklHgEARKvsbTVjXtzvfqkxXUWzKNj
+  MGEwHQYDVR0OBBYEFBz/+wIsZils42wBpvVRftEGr2wwMB8GA1UdIwQYMBaAFBz/
+  +wIsZils42wBpvVRftEGr2wwMA8GA1UdEwEB/wQFMAMBAf8wDgYDVR0PAQH/BAQD
+  AgEGMAoGCCqGSM49BAMCA0kAMEYCIQCYnzkVoRbZZ3bCLbuSRf+yC46iVY+2ACKV
+  ttODjyX9TgIhAPq6TrV57XFD683pgB37633cYgqQOLTlf0+5FJ3Dgu1W
+  -----END CERTIFICATE-----
+  """
+
+/** A certificate for `localhost` and `127.0.0.1`, signed by the test root. */
+const serverCertificate = """
+  -----BEGIN CERTIFICATE-----
+  MIIByDCCAW2gAwIBAgIUWW3sNf3SaLIOaLhiA3l8ZCE7EugwCgYIKoZIzj0EAwIw
+  HzEdMBsGA1UEAwwUVG9yYlNjcmlwdCBUZXN0IFJvb3QwIBcNMjYwOTI0MTgwMDA3
+  WhgPMjEyNjA4MzExODAwMDdaMBQxEjAQBgNVBAMMCWxvY2FsaG9zdDBZMBMGByqG
+  SM49AgEGCCqGSM49AwEHA0IABEXvBfnFsZ5jZuUd75E2cE7UrRYne0C63+Fxn5Dr
+  LvdEOFnewKfyQ1fSkK3wTe8HZswifmx1YYrX2LX/uB7QD8ijgY8wgYwwCQYDVR0T
+  BAIwADAOBgNVHQ8BAf8EBAMCB4AwEwYDVR0lBAwwCgYIKwYBBQUHAwEwGgYDVR0R
+  BBMwEYIJbG9jYWxob3N0hwR/AAABMB0GA1UdDgQWBBR5X0QnapZcnsquwu+THlWj
+  wWAAMzAfBgNVHSMEGDAWgBQc//sCLGYpbONsAab1UX7RBq9sMDAKBggqhkjOPQQD
+  AgNJADBGAiEAuFtnGP9Pd3gKzfzkSNvnYnCy0fJzaXiBlIiLmbs+P7MCIQClGtvD
+  ds8yyzK7J9iXnKnTwH4dd92UaqZcruOde6Ozgg==
+  -----END CERTIFICATE-----
+  """
+
+/** The private key of `serverCertificate`. */
+const serverKey = """
+  -----BEGIN PRIVATE KEY-----
+  MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQg5JAlAbPbwYok2Sif
+  prLNFLAwadIBxYtUO1YQRe2Awp6hRANCAARF7wX5xbGeY2blHe+RNnBO1K0WJ3tA
+  ut/hcZ+Q6y73RDhZ3sCn8kNX0pCt8E3vB2bMIn5sdWGK19i1/7ge0A/I
+  -----END PRIVATE KEY-----
+  """
+
+/** A second root, which signed nothing these programs present. */
+const otherRoot = """
+  -----BEGIN CERTIFICATE-----
+  MIIBhDCCASugAwIBAgIUNcppcxsoJh3LC4SuNV2905it3z8wCgYIKoZIzj0EAwIw
+  FzEVMBMGA1UEAwwMQW5vdGhlciBSb290MCAXDTI2MDkyNDE4MDAwN1oYDzIxMjYw
+  ODMxMTgwMDA3WjAXMRUwEwYDVQQDDAxBbm90aGVyIFJvb3QwWTATBgcqhkjOPQIB
+  BggqhkjOPQMBBwNCAATLN2hr7FX0WCIiSRX1v5bZC60+2bFil4GqNtO0DcKfuo5z
+  WtIeQIcdDMzuCEdgJfrRCqcXm/xWKegAYjx4330bo1MwUTAdBgNVHQ4EFgQUh8D0
+  fw0tYqO2TaSAwEphjdSdT9AwHwYDVR0jBBgwFoAUh8D0fw0tYqO2TaSAwEphjdSd
+  T9AwDwYDVR0TAQH/BAUwAwEB/zAKBggqhkjOPQQDAgNHADBEAiBWPzUV+BUG2+cM
+  31/S88kys7fpZvwRMg/vOlUArTwroAIgfP1AbNwjvS0UJUpnGX/y2WpXBFm9aF+j
+  R/XhisYKo4c=
+  -----END CERTIFICATE-----
+  """
+
+/** Answers with what it was asked and whether the connection was encrypted end to end. */
+fn answer(request: Request): Task<Result<Response, HttpError>> {
+  const text = request.body.text().await()?
+  Ok Response.text("{request.method} {request.path()} [{text}]")
+}
+
+match ServerIdentity.of(serverCertificate, serverKey) {
+  Ok(identity) => {
+    match Server.listen(SocketAddress(IpAddress.loopback, 0), answer, tls: Some(identity)) {
+      Ok(server) => {
+        var serving = server.serve()
+        const base = "https://localhost:{server.localAddress().port}"
+        const trusting = TlsSettings trusted: [testRoot]
+        var first = http.send(Method.Get, "{base}/hello", tls: trusting).await()
+        match first {
+          Ok(response) => {
+            var reading = response
+            print "{reading.status}: {reading.body.text().await()}"
+          }
+          Fail(problem) => print "failed: {problem}"
+        }
+        var second = http.send(Method.Post, "{base}/echo", body: http.Body.from("sealed"), tls: trusting).await()
+        match second {
+          Ok(response) => {
+            var reading = response
+            print "{reading.status}: {reading.body.text().await()}"
+          }
+          Fail(problem) => print "failed: {problem}"
+        }
+        match http.get("{base}/hello").await() {
+          Ok(_) => print "the platform trusted the test root"
+          Fail(problem) => print "refused without the test root: {problem.cause().isSome()}"
+        }
+        server.shutdown().await()
+        print "server: {serving.await()}"
+      }
+      Fail(problem) => print "could not listen: {problem}"
+    }
+  }
+  Fail(problem) => print "no identity: {problem}"
+}

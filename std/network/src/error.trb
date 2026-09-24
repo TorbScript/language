@@ -48,6 +48,16 @@ public type NetworkError with Show, Error {
     kind == .Closed
   }
 
+  /** TLS failed: the peer spoke no TLS, agreed on nothing, or broke the protocol (`std/tls`). */
+  fn isTlsFailure(): Bool {
+    kind == .TlsFailed
+  }
+
+  /** The peer's certificate was not trusted for the name it was asked for (`std/tls`). */
+  fn isCertificateRejected(): Bool {
+    kind == .CertificateRejected
+  }
+
   /** Worth trying again unchanged: a refused, reset or timed-out connection, or a network that cannot be reached. */
   fn isRetryable(): Bool {
     kind == .Refused || kind == .Reset || kind == .Aborted || kind == .TimedOut || kind == .Unreachable
@@ -60,20 +70,15 @@ public type NetworkError with Show, Error {
 
   /** A failure a native of the runtime answered: its kind packed into the number, its words from the runtime. */
   static fn of(failure: Int): NetworkError {
-    const kind = match (0 - failure).shiftedRight(by: 32) {
-      2 => NetworkErrorKind.Refused
-      3 => NetworkErrorKind.Reset
-      4 => NetworkErrorKind.Aborted
-      5 => NetworkErrorKind.TimedOut
-      6 => NetworkErrorKind.AddressInUse
-      7 => NetworkErrorKind.AddressNotAvailable
-      8 => NetworkErrorKind.HostNotFound
-      9 => NetworkErrorKind.Unreachable
-      10 => NetworkErrorKind.Closed
-      11 => NetworkErrorKind.Invalid
-      _ => NetworkErrorKind.Other
-    }
-    NetworkError kind, networkErrorText(failure)
+    NetworkError kindOf(failure), networkErrorText(failure)
+  }
+
+  /**
+   * A failure a native of `std/tls` answered, with the words that package's runtime found for it: the kind is read out
+   * of the number as [NetworkError.of] reads it, and the words are not the IO core's, which knows nothing of TLS.
+   */
+  static fn withWords(failure: Int, words: String): NetworkError {
+    NetworkError kindOf(failure), words
   }
 
   /** The socket is closed: an operation on a stream or a listener after its `close()`. */
@@ -108,7 +113,28 @@ type NetworkErrorKind with Equals {
   case Unreachable
   case Closed
   case Invalid
+  case TlsFailed
+  case CertificateRejected
   case Other
+}
+
+/** The kind packed into a failure a native answered: `-(kind << 32 | code)`, the numbers of runtime/include/torb_io.h. */
+fn kindOf(failure: Int): NetworkErrorKind {
+  match (0 - failure).shiftedRight(by: 32) {
+    2 => NetworkErrorKind.Refused
+    3 => NetworkErrorKind.Reset
+    4 => NetworkErrorKind.Aborted
+    5 => NetworkErrorKind.TimedOut
+    6 => NetworkErrorKind.AddressInUse
+    7 => NetworkErrorKind.AddressNotAvailable
+    8 => NetworkErrorKind.HostNotFound
+    9 => NetworkErrorKind.Unreachable
+    10 => NetworkErrorKind.Closed
+    11 => NetworkErrorKind.Invalid
+    12 => NetworkErrorKind.TlsFailed
+    13 | 14 => NetworkErrorKind.CertificateRejected
+    _ => NetworkErrorKind.Other
+  }
 }
 
 /** An address read from text that is none. */

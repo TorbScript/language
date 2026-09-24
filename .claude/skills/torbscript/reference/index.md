@@ -277,7 +277,7 @@ that answers the question. A page marked (planned) describes a feature that does
 - `standard-library/fs.md` - **std/fs** (package): File and IoError - whole-file helpers for what fits in memory, and a File as both ends of a byte stream.
 - `standard-library/function-types.md` - **Predicate, Action and Transform** (reference): Three aliases in the prelude for the closure shapes signatures take most - a question about one value, an effect on one value, and a conversion of one value into another.
 - `standard-library/geometry.md` - **std/geometry** (package): The shapes of the plane and of space, with the half-open rule that makes a row of rectangles a tiling and the ray tests that answer a distance.
-- `standard-library/http.md` - **std/http** (package): HTTP/1.1, client and server, over std/network - get, post and send answer a Task, a handler answers a Task of a Response, and every body is a stream.
+- `standard-library/http.md` - **std/http** (package): HTTP/1.1 and HTTPS, client and server, over std/network and std/tls - get, post and send answer a Task, a handler answers a Task of a Response, and every body is a stream.
 - `standard-library/index.md` - **The standard library** (index): One page per package of std, what each contains, and which of them are in scope everywhere without an import.
 - `standard-library/io.md` - **std/io** (package): Standard input and the streams every process is started with - readLine for the short form, Source and Sink for the rest.
 - `standard-library/iteration.md` - **std/iteration** (package): Iterate and Iterator, the lazy stages between them, and the collectors a pipeline ends in.
@@ -298,6 +298,7 @@ that answers the question. A page marked (planned) describes a feature that does
 - `standard-library/test.md` - **std/test** (package): test and group, the two functions a .test.trb file calls, with assert doing all of the checking.
 - `standard-library/text.md` - **std/text** (package): Char, a Unicode scalar value, and String, always-valid UTF-8 text with no length() and no indexing by character.
 - `standard-library/time.md` - **std/time** (package): Instant and Duration, the two time values, plus Clock and sleep, which read and wait on the wall clock.
+- `standard-library/tls.md` - **std/tls** (package): TLS 1.2 and 1.3 over a TcpStream - a client that checks the server's certificate the way the platform does, a server with an identity, and a stream like the TCP one.
 
 ## tooling
 

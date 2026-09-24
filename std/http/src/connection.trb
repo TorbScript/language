@@ -1,13 +1,13 @@
 /**
- * A connection as HTTP reads it: a `TcpStream` with what arrived and was not consumed yet, so a head, a line and a body
+ * A connection as HTTP reads it: a [Transport] - TCP, or TLS over TCP - with what arrived and was not consumed yet, so a head, a line and a body
  * are read from the same bytes whatever the borders of the chunks were - and so a second request a client sent before
  * the first was answered (pipelining) waits in the buffer until its turn. The three body readers are sources over it.
  */
 
 use ArrayList from "std/collections"
 use Source, Bytes from "std/stream"
-use TcpStream from "std/network"
 use HttpError from "./error"
+use Transport from "./transport"
 
 /** The byte of `\r`. */
 const carriageReturn: UInt8 = 13
@@ -16,20 +16,15 @@ const lineFeed: UInt8 = 10
 
 /** A connection with a buffer of what was received and not consumed. Every read of HTTP goes through it. */
 public shared type Connection with Close {
-  private stream: TcpStream
+  private stream: Transport
   private var buffer: ArrayList<UInt8>
   /** How far `head` has looked for the empty line already, so a head in many chunks is scanned once. */
   private var scanned: Int = 0
   private var ended: Bool = false
 
   /** A connection over `stream`, with nothing buffered. */
-  static fn of(stream: TcpStream): Connection {
+  static fn of(stream: Transport): Connection {
     Connection stream, ArrayList.withCapacity(0)
-  }
-
-  /** The stream under it. */
-  fn socket(): TcpStream {
-    stream
   }
 
   /** Whether bytes are buffered that nobody consumed yet. */
@@ -150,7 +145,7 @@ public shared type Connection with Close {
   }
 
   /** Writes all of `bytes`. */
-  fn send(bytes: ArrayList<UInt8>): Task<Result<Void, HttpError>> {
+  var fn send(bytes: ArrayList<UInt8>): Task<Result<Void, HttpError>> {
     match stream.sendBuffer(bytes).await() {
       Ok(_) => Ok void
       Fail(problem) => Fail HttpError.network(problem)
@@ -158,14 +153,17 @@ public shared type Connection with Close {
   }
 
   /** Writes a text as UTF-8. */
-  fn sendText(text: String): Task<Result<Void, HttpError>> {
+  var fn sendText(text: String): Task<Result<Void, HttpError>> {
     const bytes: ArrayList<UInt8> = ArrayList.from text.bytes()
     send(bytes).await()
   }
 
-  /** Ends the writing half, so the peer reads the end of the stream. A failure is nobody's business any more. */
-  fn shutdown() {
-    const _ = stream.shutdown()
+  /**
+   * Ends the writing half, so the peer reads the end of the stream - after a TLS `close_notify` where the connection is
+   * encrypted. A failure is nobody's business any more.
+   */
+  var fn finish(): Task<Void> {
+    const _ = stream.finish().await()
   }
 
   /** Nothing of its own: the stream closes when its last holder is gone. */
