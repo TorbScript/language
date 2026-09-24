@@ -229,7 +229,7 @@ Simple to use like npm, strict like Maven. The rules exist so that adding a depe
 - Number literals: `10`, `1_000_000`, `0xFF`, `0b1010`, `3.14`, `1e9`
 - String literals: `"text"`, interpolation with `{expr}`, literal brace with `\{`. Multi-line strings with `"""`, dedented by
   the indentation of their first line (see "Strings").
-  Raw strings (`r"..."`, `r"""..."""`) have no interpolation and no escapes (JSON, regular expressions, paths).
+  Raw strings (`raw"..."`, `raw"""..."""`) have no interpolation and no escapes (JSON, regular expressions, paths).
 - Char literals: `'A'`
 
 ### Doc Comments
@@ -411,13 +411,13 @@ text.substringAfter("ü")           // Some("ße 👋") - most code never sees a
   `String.from(Iterate<Char>)` and runtime functions that validate - so reading a file whose bytes are not UTF-8 is an
   `IoError`, never a replacement character, and neither `chars()` nor a back end needs a rule for broken text.
 
-**A `"""`/`r"""` string is dedented by its first line,** so a block of code reads at the indentation of the call
+**A `"""`/`raw"""` string is dedented by its first line,** so a block of code reads at the indentation of the call
 around it instead of jammed against the left margin:
 
 ```trb
 fn count(limit: Int): Int {
   var total = 0
-  const source = r"""
+  const source = raw"""
     fn double(value: Int): Int {
       value * 2
     }
@@ -746,7 +746,7 @@ port 8080                   // A command on a field writes it - that is what it 
 onStart(event)              // ...so calling a function held in a field always needs parentheses
 ```
 
-**A multi-line `"""` or `r"""` string is indented.** The opening quotes stay where they are, the content is two
+**A multi-line `"""` or `raw"""` string is indented.** The opening quotes stay where they are, the content is two
 spaces deeper than the line the statement starts on, and a closing `"""` that stands alone is aligned with the
 content. Because the first content line is the reference that is subtracted from every line (Text and Strings), the
 **value** does not depend on any of this - moving a whole block left or right changes nothing about what it says:

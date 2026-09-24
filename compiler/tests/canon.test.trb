@@ -241,7 +241,7 @@ group "Multi-line strings" {
   }
 
   test "a raw string and an interpolated one are indented too" {
-    assert(defaultCanon("const text = r\"\"\"\nfirst\\n\n\"\"\"") == "const text = r\"\"\"\n  first\\n\n  \"\"\"")
+    assert(defaultCanon("const text = raw\"\"\"\nfirst\\n\n\"\"\"") == "const text = raw\"\"\"\n  first\\n\n  \"\"\"")
     assert(defaultCanon("const text = \"\"\"\na\{1\}\nb\n\"\"\"") == "const text = \"\"\"\n  a\{1\}\n  b\n  \"\"\"")
     assert(defaultCanon("const text = \"\"\"\n\\\{literal\}\n\"\"\"") == "const text = \"\"\"\n  \\\{literal\}\n  \"\"\"")
   }
@@ -253,11 +253,11 @@ group "Multi-line strings" {
 
   test "content on the line of the opening quotes moves to the next line" {
     assert(defaultCanon("const text = \"\"\"first\nsecond\n\"\"\"") == "const text = \"\"\"\n  first\n  second\n  \"\"\"")
-    assert(defaultCanon("const text = r\"\"\"  first\n    nested\n  last\"\"\"") == "const text = r\"\"\"\n  first\n    nested\n  last\"\"\"")
+    assert(defaultCanon("const text = raw\"\"\"  first\n    nested\n  last\"\"\"") == "const text = raw\"\"\"\n  first\n    nested\n  last\"\"\"")
   }
 
   test "a line indented less than the reference is a lexer error, so that file never reaches the rule at all" {
-    const source = "const text = r\"\"\"  first\nflush\n  \"\"\""
+    const source = "const text = raw\"\"\"  first\nflush\n  \"\"\""
     const outcome = rewrite source, [Rule.Strings]
     assert(outcome.text == source)
     assert(outcome.skipped == ["it does not parse"])
@@ -271,10 +271,10 @@ group "Multi-line strings" {
     const sources = [
       "const text = \"\"\"\nfn main() \\\{\n  print \"x\"\n\\\}\n\"\"\"",
       "const text = \"\"\"\n        first\n          nested\n\n        last\n        \"\"\"",
-      "const text = r\"\"\"\nfirst\\n\n\{ignored\}\n\"\"\"",
+      "const text = raw\"\"\"\nfirst\\n\n\{ignored\}\n\"\"\"",
       "const text = \"\"\"\na\{1\}\n  b\{2\}\n\"\"\"",
-      "const text = r\"\"\"  const found = 1\n    .Circle(radius) => radius\n  print found\"\"\"",
-      "const text = r\"\"\"static void f(void) \\\{\n  goto L1;\n\\\}\"\"\"",
+      "const text = raw\"\"\"  const found = 1\n    .Circle(radius) => radius\n  print found\"\"\"",
+      "const text = raw\"\"\"static void f(void) \\\{\n  goto L1;\n\\\}\"\"\"",
     ]
     for source in sources {
       const rewritten = defaultCanon source
@@ -453,48 +453,17 @@ group "`while true` becomes `loop`" {
 
 }
 
-group "`r\"...\"` becomes `raw\"...\"`" {
-  test "raw string prefixes are off by default" {
-    unchanged "const x = r\"a\""
-    // Already in the form `strings` wants, so only the (off) prefix rule could still change it
-    unchanged "const x = r\"\"\"\n  a\n  \"\"\""
+group "`raw\"...\"` is the only spelling the canon ever sees" {
+  test "the older `r\"...\"` is a lexer diagnostic now, so the whole file is left alone like any other that does not parse" {
+    const outcome = rewrite "const x = r\"a\"", [Rule.Calls, Rule.Strings]
+    assert(outcome.text == "const x = r\"a\"")
+    assert(outcome.skipped == ["it does not parse"])
   }
 
-  test "a one-line raw string is migrated, which `strings` never touches at all" {
-    const rules = [Rule.RawStringPrefix]
-    assert(applied("const x = r\"a\"", rules) == "const x = raw\"a\"")
-    // The value is untouched: `\` and `\{` inside a raw string are ordinary characters, before and after the rename
-    assert(applied("const x = r\"C:\\Users\\\{name\}\"", rules) == "const x = raw\"C:\\Users\\\{name\}\"")
+  test "`raw` alone, in front of anything but `\"`, is an ordinary name and never rewritten" {
+    unchanged "const raw = 1"
+    unchanged "fn raw(): Int \{\n  1\n\}"
   }
-
-  test "a multi-line raw string is migrated too, indentation untouched" {
-    const rules = [Rule.RawStringPrefix]
-    assert(
-      applied("const x = r\"\"\"\n  first\n  \"\"\"", rules)
-        == "const x = raw\"\"\"\n  first\n  \"\"\""
-    )
-  }
-
-  test "already migrated and every non-raw string are left alone" {
-    const rules = [Rule.RawStringPrefix]
-    const leaves = { source: String => assert(applied(source, rules) == source) }
-    leaves "const x = raw\"a\""
-    leaves "const x = raw\"\"\"\n  first\n  \"\"\""
-    leaves "const x = \"a\""
-    leaves "const x = \"\"\"\n  first\n  \"\"\""
-    // `raw` alone, in front of anything but `\"`, is an ordinary name
-    leaves "const raw = 1"
-    leaves "fn raw(): Int \{\n  1\n\}"
-  }
-
-  test "the rule combines with `strings`: the prefix is migrated and the content indented in one run" {
-    const rules = [Rule.Strings, Rule.RawStringPrefix]
-    assert(
-      applied("const x = r\"\"\"\nfirst\n\"\"\"", rules)
-        == "const x = raw\"\"\"\n  first\n  \"\"\""
-    )
-  }
-
 }
 
 group "The safety net" {

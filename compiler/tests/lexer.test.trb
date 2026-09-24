@@ -154,16 +154,16 @@ group "Multi-line strings" {
   }
 
   test "raw multi-line strings are dedented too" {
-    const source = "r\"\"\"\n  first\n  \"\"\""
+    const source = "raw\"\"\"\n  first\n  \"\"\""
     assert(kinds(source)[0] == TokenKind.TextLiteral([TextPart.Literal("first\n")]))
   }
 
-  test "`raw` is the current spelling of the raw-string prefix, `r` the older one, both decode the same way" {
-    const expected = [TextPart.Literal("a\\\{b\}")]
-    assert(kinds("raw\"a\\\{b\}\"")[0] == TokenKind.TextLiteral(expected))
-    assert(kinds("r\"a\\\{b\}\"")[0] == TokenKind.TextLiteral(expected))
-    const block = [TextPart.Literal("first\n")]
-    assert(kinds("raw\"\"\"\n  first\n  \"\"\"")[0] == TokenKind.TextLiteral(block))
+  test "the older `r\"...\"` still lexes as a raw string, with the one diagnostic that says what to write instead" {
+    const expected = [TokenKind.TextLiteral([TextPart.Literal("a\\\{b\}")]), .EndOfFile]
+    assert(tokensOf("r\"a\\\{b\}\"") == expected)
+    assert(messages("r\"a\\\{b\}\"") == ["`r\"...\"` is written `raw\"...\"`"])
+    // One diagnostic per use, and the rest of the file is read normally either way
+    assert(messages("const a = r\"x\"\nconst b = r\"y\"").length() == 2)
   }
 
   test "`raw` directly in front of `\"` is the prefix, and an ordinary name everywhere else" {

@@ -11,7 +11,7 @@ use test, group from "std/test"
 use irOf, textOf, countsOf, unsupportedIn from "./lower-harness"
 use preludeSource from "./harness"
 
-const declarations = r"""
+const declarations = raw"""
   fn connect(host: String, port: Int = 5432, retries: Int = 1): Int {
     port + retries
   }
@@ -28,7 +28,7 @@ const declarations = r"""
 group "The argument plan" {
   test "a default is evaluated at the call site, after the written arguments" {
     assert(
-      irOf(declarations, "t_acme_x2f_app_main_positional") == r"""
+      irOf(declarations, "t_acme_x2f_app_main_positional") == raw"""
         fn t_acme_x2f_app_main_positional() -> Int64 {
           slot %0 temporary: String
           slot %1 temporary: Int64
@@ -46,7 +46,7 @@ group "The argument plan" {
 
   test "labeled arguments are evaluated in written order and passed in declaration order" {
     assert(
-      irOf(declarations, "t_acme_x2f_app_main_labeled") == r"""
+      irOf(declarations, "t_acme_x2f_app_main_labeled") == raw"""
         fn t_acme_x2f_app_main_labeled() -> Int64 {
           slot %0 temporary: Int64
           slot %1 temporary: String
@@ -63,7 +63,7 @@ group "The argument plan" {
   }
 
   test "a call whose result is `Void` takes no slot, and the caller still returns" {
-    const source = r"""
+    const source = raw"""
       fn note(value: Int) {
         const doubled = value + value
       }
@@ -73,7 +73,7 @@ group "The argument plan" {
       }
       """
     assert(
-      irOf(source, "t_acme_x2f_app_main_caller") == r"""
+      irOf(source, "t_acme_x2f_app_main_caller") == raw"""
         fn t_acme_x2f_app_main_caller() -> Void {
           slot %0 temporary: Int64
           slot %1 temporary: Void
@@ -88,7 +88,7 @@ group "The argument plan" {
 
 group "Methods of a concrete type" {
   test "the receiver is the first parameter, and a member of `self` without it puts it back" {
-    const source = r"""
+    const source = raw"""
       type Counter {
         value: Int
 
@@ -102,7 +102,7 @@ group "Methods of a concrete type" {
       }
       """
     assert(
-      irOf(source, "t_acme_x2f_app_main_Counter_twice") == r"""
+      irOf(source, "t_acme_x2f_app_main_Counter_twice") == raw"""
         fn t_acme_x2f_app_main_Counter_twice(self: Record(T_acme_x2f_app_main_Counter) borrowed) -> Int64 {
           slot %0 parameter self: Record(T_acme_x2f_app_main_Counter)
           slot %1 temporary: Int64
@@ -116,7 +116,7 @@ group "Methods of a concrete type" {
   }
 
   test "a static function of a type has no receiver" {
-    const source = r"""
+    const source = raw"""
       type Counter {
         value: Int
 
@@ -126,7 +126,7 @@ group "Methods of a concrete type" {
       }
       """
     assert(
-      irOf(source, "t_acme_x2f_app_main_Counter_zero") == r"""
+      irOf(source, "t_acme_x2f_app_main_Counter_zero") == raw"""
         fn t_acme_x2f_app_main_Counter_zero() -> Record(T_acme_x2f_app_main_Counter) {
           slot %0 temporary: Int64
           slot %1 temporary: Record(T_acme_x2f_app_main_Counter)
@@ -139,7 +139,7 @@ group "Methods of a concrete type" {
   }
 
   test "a call of a method reaches the instance, and the receiver is the value in front of the dot" {
-    const source = r"""
+    const source = raw"""
       type Counter {
         value: Int
 
@@ -158,7 +158,7 @@ group "Methods of a concrete type" {
 
 group "The worklist of instances" {
   test "a function that calls itself finds its own instance" {
-    const source = r"""
+    const source = raw"""
       fn factorial(value: Int): Int {
         if value <= 1 {
           return 1
@@ -171,7 +171,7 @@ group "The worklist of instances" {
   }
 
   test "two routes to the same declaration are one function of the program" {
-    const source = r"""
+    const source = raw"""
       fn twice(value: Int): Int {
         value + value
       }
@@ -196,7 +196,7 @@ group "The worklist of instances" {
   }
 
   test "nothing unreachable stops a reachable function: a stub is still a well typed callee" {
-    const source = r"""
+    const source = raw"""
       fn broken(value: Int): Int {
         const items = [value]
         items.length()
@@ -225,7 +225,7 @@ const withTrim = [
 
 group "Operators and natives" {
   test "an operator of a type of the program is an ordinary call of the member the implementation provides" {
-    const source = r"""
+    const source = raw"""
       type Meters with Add {
         size: Int
 
@@ -239,7 +239,7 @@ group "Operators and natives" {
       }
       """
     assert(
-      irOf(source, "t_acme_x2f_app_main_total") == r"""
+      irOf(source, "t_acme_x2f_app_main_total") == raw"""
         fn t_acme_x2f_app_main_total(first: Record(T_acme_x2f_app_main_Meters) borrowed, second: Record(T_acme_x2f_app_main_Meters) borrowed) -> Record(T_acme_x2f_app_main_Meters) {
           slot %0 parameter first: Record(T_acme_x2f_app_main_Meters)
           slot %1 parameter second: Record(T_acme_x2f_app_main_Meters)
@@ -252,7 +252,7 @@ group "Operators and natives" {
   }
 
   test "a `native` the manifest maps to an intrinsic is one instruction" {
-    const source = r"""
+    const source = raw"""
       fn sizes(text: String): Int {
         text.byteLength()
       }
@@ -261,7 +261,7 @@ group "Operators and natives" {
   }
 
   test "a `native` the runtime provides is a function with a signature and no body" {
-    const source = r"""
+    const source = raw"""
       fn empty(text: String): Bool {
         text.isEmpty()
       }
@@ -274,7 +274,7 @@ group "Operators and natives" {
   }
 
   test "a chained call finds its target although the checker records the inner one as deferred" {
-    const source = r"""
+    const source = raw"""
       fn sizes(text: String): Int {
         text.trim().byteLength()
       }
@@ -289,7 +289,7 @@ group "What a call cannot reach yet" {
 
   /** `isSame` waits for the identity of a `shared type` object: a planned entry is a finding and never a link error. */
   test "a native the runtime does not have yet is a finding instead of a link error" {
-    const source = r"""
+    const source = raw"""
       shared type Counter {
         var count: Int = 0
       }
@@ -316,7 +316,7 @@ group "The callee is an expression" {
    * *callee* resolved to would answer for the inner call - which would lower one call with the other's arguments.
    */
   test "a callee that is itself a call is a call of the value it answered" {
-    const source = r"""
+    const source = raw"""
       fn adder(amount: Int): (Int) => Int {
         { value => value + amount }
       }
@@ -326,7 +326,7 @@ group "The callee is an expression" {
       }
       """
     assert(
-      irOf(source, "t_acme_x2f_app_main_raised") == r"""
+      irOf(source, "t_acme_x2f_app_main_raised") == raw"""
         fn t_acme_x2f_app_main_raised(start: Int64 borrowed) -> Int64 {
           slot %0 parameter start: Int64
           slot %1 temporary: Int64

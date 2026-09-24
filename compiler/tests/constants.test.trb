@@ -13,7 +13,7 @@
 use test, group from "std/test"
 use problemsOf, notesOf from "./harness"
 
-const importsHelper = r"""
+const importsHelper = raw"""
   use value from "./helper"
 
   fn probe(): Int {
@@ -27,7 +27,7 @@ fn withHelper(helper: String): Map<String, String> {
 
 group "What is compile-time evaluable" {
   test "literals of every kind" {
-    const files = withHelper(r"""
+    const files = withHelper(raw"""
       const answer = 42
       const hex = 0xFF
       const ratio = 1.5
@@ -40,7 +40,7 @@ group "What is compile-time evaluable" {
   }
 
   test "the arithmetic, comparison and logical operators of the number types and of `Bool`" {
-    const files = withHelper(r"""
+    const files = withHelper(raw"""
       const frameTime = 1.0 / 60.0
       const half = 10 / 2
       const rest = 10 % 3
@@ -53,7 +53,7 @@ group "What is compile-time evaluable" {
   }
 
   test "interpolation, because it is not a function call" {
-    const files = withHelper(r"""
+    const files = withHelper(raw"""
       const version = 1
       const tag = "v{version}"
       """)
@@ -61,7 +61,7 @@ group "What is compile-time evaluable" {
   }
 
   test "tuple, list and map literals of such" {
-    const files = withHelper(r"""
+    const files = withHelper(raw"""
       const pair = (1, "one")
       const items = [1, 2, 3]
       const table = ["a": 1, "b": 2]
@@ -71,7 +71,7 @@ group "What is compile-time evaluable" {
   }
 
   test "a constructor call and a case constructor call" {
-    const files = withHelper(r"""
+    const files = withHelper(raw"""
       const origin = Point(0, 0)
       const nothing: Int? = None
       const some = Some(1)
@@ -86,10 +86,10 @@ group "What is compile-time evaluable" {
 
   test "another compile-time constant, of this module or of another one" {
     const files = [
-      "app/src/first.trb": r"""
+      "app/src/first.trb": raw"""
         public const base = 10
         """,
-      "app/src/helper.trb": r"""
+      "app/src/helper.trb": raw"""
         use base from "./first"
 
         public const value = base * 2
@@ -102,7 +102,7 @@ group "What is compile-time evaluable" {
 
 group "What is not" {
   test "a function call" {
-    const files = withHelper(r"""
+    const files = withHelper(raw"""
       const answer = twice(21)
 
       fn twice(number: Int): Int {
@@ -121,14 +121,14 @@ group "What is not" {
   }
 
   test "a `native` call, which `+` on a `String` is one of" {
-    const files = withHelper(r"""
+    const files = withHelper(raw"""
       const greeting = "hello" + " world"
       """)
     assert(problemsOf(files) == ["The initializer of a top-level `const` has to be known at compile time"])
   }
 
   test "a static function of a type" {
-    const files = withHelper(r"""
+    const files = withHelper(raw"""
       const origin = Point.zero()
 
       type Point {
@@ -144,7 +144,7 @@ group "What is not" {
   }
 
   test "a constant that is defined through a call" {
-    const files = withHelper(r"""
+    const files = withHelper(raw"""
       const answer = twice(21)
       const doubled = answer
 
@@ -162,7 +162,7 @@ group "What is not" {
   }
 
   test "a `copy` of a constant, which is a call like any other" {
-    const files = withHelper(r"""
+    const files = withHelper(raw"""
       const origin = Point(0, 0)
       const moved = origin.copy(x: 1)
 
@@ -176,7 +176,7 @@ group "What is not" {
 
   test "an entry file is ordinary code, and asks none of this" {
     const files = [
-      "app/src/main.trb": r"""
+      "app/src/main.trb": raw"""
         const answer = twice(21)
 
         fn twice(number: Int): Int {
@@ -192,7 +192,7 @@ group "What is not" {
 
 group "Overflow and a division by zero are caught where they are written (BACKEND gap 11)" {
   test "an addition that leaves `Int64`" {
-    const files = withHelper(r"""
+    const files = withHelper(raw"""
       const tooLarge = 9223372036854775807 + 1
       """)
     assert(problemsOf(files) == ["This does not fit into an `Int64`"])
@@ -206,21 +206,21 @@ group "Overflow and a division by zero are caught where they are written (BACKEN
   }
 
   test "a subtraction that leaves it at the other end" {
-    const files = withHelper(r"""
+    const files = withHelper(raw"""
       const tooSmall = -9223372036854775807 - 2
       """)
     assert(problemsOf(files) == ["This does not fit into an `Int64`"])
   }
 
   test "a multiplication that leaves it" {
-    const files = withHelper(r"""
+    const files = withHelper(raw"""
       const tooLarge = 4294967296 * 4294967296
       """)
     assert(problemsOf(files) == ["This does not fit into an `Int64`"])
   }
 
   test "the negation of the smallest `Int64`" {
-    const files = withHelper(r"""
+    const files = withHelper(raw"""
       const smallest = -9223372036854775807 - 1
       const flipped = 0 - smallest
       """)
@@ -228,7 +228,7 @@ group "Overflow and a division by zero are caught where they are written (BACKEN
   }
 
   test "the smallest `Int64` itself is fine, and so is the largest" {
-    const files = withHelper(r"""
+    const files = withHelper(raw"""
       const smallest = -9223372036854775807 - 1
       const largest = 9223372036854775807
       const sum = smallest + largest
@@ -237,7 +237,7 @@ group "Overflow and a division by zero are caught where they are written (BACKEN
   }
 
   test "an integer division by zero" {
-    const files = withHelper(r"""
+    const files = withHelper(raw"""
       const broken = 1 / 0
       """)
     assert(problemsOf(files) == ["This divides by zero"])
@@ -251,21 +251,21 @@ group "Overflow and a division by zero are caught where they are written (BACKEN
   }
 
   test "a remainder by zero" {
-    const files = withHelper(r"""
+    const files = withHelper(raw"""
       const broken = 1 % 0
       """)
     assert(problemsOf(files) == ["This divides by zero"])
   }
 
   test "a floating point division by zero, which would be an infinity" {
-    const files = withHelper(r"""
+    const files = withHelper(raw"""
       const broken = 1.0 / 0.0
       """)
     assert(problemsOf(files) == ["This divides by zero"])
   }
 
   test "the division that is written through a constant is caught too" {
-    const files = withHelper(r"""
+    const files = withHelper(raw"""
       const zero = 3 - 3
       const broken = 60 / zero
       """)

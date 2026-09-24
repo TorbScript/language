@@ -40,7 +40,7 @@ ln -s "$PWD/.vscode/extensions/torbscript" ~/.vscode/extensions/torbscript
 
 - `//`, `/* */`, `/** */` doc comments
 - Strings with `{interpolation}` (nested, full highlighting inside), `\{` escapes, `"""` multi-line strings,
-  raw strings (`r"..."`, `r"""..."""`), chars
+  raw strings (`raw"..."`, `raw"""..."""`), chars
 - Declarations (`fn`, `type`, `trait`, `extend`, `case`, `const`, `var`), modifiers, control flow,
   contextual keywords (`from` only in `use ... from "..."`)
 - Types (uppercase names), primitives, `Self`, `Some`/`Ok`/`Fail`/`None`

@@ -159,13 +159,20 @@ type Lexer {
         '/' if peekAt(1) == Some('*') => skipBlockComment()
         '"' => textLiteral start, raw: false
         // `raw` is contextual: it is the prefix only directly in front of `"`, an ordinary name everywhere else, so
-        // `const raw = 1` still declares one. `r"..."` is the older spelling of the same prefix, kept for one round
-        // while the repository migrates to `raw"..."` (docs/RUST-EXIT.md 4.2, "the two-commit rename").
+        // `const raw = 1` still declares one.
         'r' if isAt("raw\"") => {
           position = position + 3
           textLiteral start, raw: true
         }
+        // The one-letter prefix this replaced (docs/RUST-EXIT.md 4.2, "the two-commit rename"): still lexed as a raw
+        // string, so the rest of the file reports nothing else about it, but with the one diagnostic that says what
+        // to write instead.
         'r' if peekAt(1) == Some('"') => {
+          errorWithNote(
+            "`r\"...\"` is written `raw\"...\"`",
+            "The one-letter prefix was retired: `raw` is the prefix everywhere a raw string starts",
+            start,
+          )
           position = position + 1
           textLiteral start, raw: true
         }
@@ -405,8 +412,8 @@ type Lexer {
     }
   }
 
-  /** `"..."`, `"""..."""`, and their raw variants `raw"..."`, `raw"""..."""` (or `r"..."`, `r"""..."""`, the older
-   * spelling). The position is at the first quote. */
+  /** `"..."`, `"""..."""`, and their raw variants `raw"..."`, `raw"""..."""` (the older
+   * spelling `r"..."` is an error that names this one). The position is at the first quote. */
   var fn textLiteral(start: Int, raw: Bool) {
     const quotes = if isAt("\"\"\"") { "\"\"\"" } else { "\"" }
     const isTripleQuoted = quotes != "\""

@@ -11,7 +11,7 @@ use test, group from "std/test"
 use probe, problems, notes from "./harness"
 
 /** A callee that only calls its closure, and one that keeps it in the list it answers. */
-const callees = r"""
+const callees = raw"""
 
   fn run(action: () => Void) {
     action()
@@ -24,7 +24,7 @@ const callees = r"""
 
 group "A closure that captures a `var` binding does not escape" {
   test "bound to a name it may outlive the binding, and that is the error" {
-    const source = r"""
+    const source = raw"""
       fn probe(): Int {
         var count = 0
         const bump = { count = count + 1 }
@@ -43,7 +43,7 @@ group "A closure that captures a `var` binding does not escape" {
   }
 
   test "returned, two copies of the value it lands in would share the binding" {
-    const source = r"""
+    const source = raw"""
       type Counter {
         bump: () => Int
       }
@@ -60,7 +60,7 @@ group "A closure that captures a `var` binding does not escape" {
   }
 
   test "a closure that calls itself through its own binding is the same escape" {
-    const source = r"""
+    const source = raw"""
       fn countdown(): Int {
         var step: (value: Int) => Int = { _ }
         step = { value =>
@@ -81,7 +81,7 @@ group "A closure that captures a `var` binding does not escape" {
   }
 
   test "written straight as the argument of a parameter that only calls it, it may" {
-    const source = r"""
+    const source = raw"""
       fn probe(): Int {
         var count = 0
         run { count = count + 1 }
@@ -94,7 +94,7 @@ group "A closure that captures a `var` binding does not escape" {
   }
 
   test "a parameter that keeps the closure is named with what keeps it" {
-    const source = r"""
+    const source = raw"""
       fn probe(): List<() => Void> {
         var count = 0
         wrap { count = count + 1 }
@@ -104,7 +104,7 @@ group "A closure that captures a `var` binding does not escape" {
   }
 
   test "a parameter whose type is a type parameter keeps what it is handed" {
-    const source = r"""
+    const source = raw"""
       fn probe(var sink: List<() => Int>) {
         var count = 0
         sink.append {
@@ -117,7 +117,7 @@ group "A closure that captures a `var` binding does not escape" {
   }
 
   test "a case keeps its payload" {
-    const source = r"""
+    const source = raw"""
       fn probe(var items: List<Int>): (() => Int)? {
         Some {
           items.append 1
@@ -129,7 +129,7 @@ group "A closure that captures a `var` binding does not escape" {
   }
 
   test "a closure that changes a binding while a `var` access to it runs is refused where it is bound" {
-    const source = r"""
+    const source = raw"""
       fn apply(var target: List<Int>, action: () => Void) {
         action()
         target.append 1
@@ -149,7 +149,7 @@ group "A closure that captures a `var` binding does not escape" {
 /** Whether a parameter only calls its closure is a fact of its body, including what the body hands it on to. */
 group "What a callee does with its closure" {
   test "a parameter handed on by name to one that only calls it only calls it too" {
-    const source = r"""
+    const source = raw"""
       fn probe(): Int {
         var count = 0
         forward { count = count + 1 }
@@ -164,7 +164,7 @@ group "What a callee does with its closure" {
   }
 
   test "handed on to one that keeps it, it is kept, and the message is at the closure that captured the binding" {
-    const source = r"""
+    const source = raw"""
       fn probe(): Int {
         var count = 0
         const _ = forward { count = count + 1 }
@@ -179,7 +179,7 @@ group "What a callee does with its closure" {
   }
 
   test "called inside a closure that only runs during the call, it is still only called" {
-    const source = r"""
+    const source = raw"""
       fn probe(): Int {
         var count = 0
         twice { count = count + 1 }
@@ -195,7 +195,7 @@ group "What a callee does with its closure" {
   }
 
   test "a recursive callee that hands its closure to itself only calls it" {
-    const source = r"""
+    const source = raw"""
       fn probe(): Int {
         var count = 0
         visit 3 {
@@ -215,7 +215,7 @@ group "What a callee does with its closure" {
   }
 
   test "a trait member reached through a witness table keeps a closure where any implementation does" {
-    const source = r"""
+    const source = raw"""
       trait Walk {
         fn walk(action: () => Void) {
           action()
@@ -243,7 +243,7 @@ group "What a callee does with its closure" {
   }
 
   test "a block that configures a field runs in place, and one assigned to a field is stored" {
-    const source = r"""
+    const source = raw"""
       type Limits {
         var maximum: Int = 0
       }
@@ -275,7 +275,7 @@ group "What a callee does with its closure" {
  */
 group "What crosses into a task" {
   test "a value of a type parameter may be an object, whatever fills it" {
-    const source = r"""
+    const source = raw"""
       fn later<Value>(value: Value): Task<Int> {
         const task = spawn {
           const _ = value
@@ -299,7 +299,7 @@ group "What crosses into a task" {
   }
 
   test "a function value does not say what it captured" {
-    const source = r"""
+    const source = raw"""
       fn later(): Task<Int> {
         const read = { 1 }
         spawn({ read() }).await()
@@ -309,7 +309,7 @@ group "What crosses into a task" {
   }
 
   test "a function-typed parameter may cross, and every caller hands in what may" {
-    const source = r"""
+    const source = raw"""
       shared type Counter {
         var count: Int = 0
       }
@@ -338,7 +338,7 @@ group "What crosses into a task" {
   }
 
   test "a function value handed to such a parameter is refused, because what it captured is not in its type" {
-    const source = r"""
+    const source = raw"""
       fn later(body: () => Int): Task<Int> {
         spawn({ body() }).await()
       }
@@ -363,7 +363,7 @@ group "What crosses into a task" {
 
 /** `?` returns from the closure it stands in, so the closure has to produce an `Option` or a `Result` for it. */
 group "`?` inside a closure" {
-  const parse = r"""
+  const parse = raw"""
 
     fn parse(text: String): Result<Int, String> {
       if text == "x" {

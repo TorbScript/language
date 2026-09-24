@@ -21,7 +21,7 @@ fn located(source: String): List<String> {
   found
 }
 
-const connection = r"""
+const connection = raw"""
   shared type Connection with Close {
     var open: Bool = true
 
@@ -38,7 +38,7 @@ const connection = r"""
 
 group "Only a `shared type` implements `Close`" {
   test "a value type that implements it is refused at its name, with the reason" {
-    const source = r"""
+    const source = raw"""
       type Ticket with Close {
         var used: Bool = false
 
@@ -58,7 +58,7 @@ group "Only a `shared type` implements `Close`" {
   }
 
   test "a capsule is a value too, and so is an `extend` of one" {
-    const capsule = r"""
+    const capsule = raw"""
       type Token with Close {
         private secret: String
 
@@ -66,7 +66,7 @@ group "Only a `shared type` implements `Close`" {
       }
       """
     assert(problems(capsule) == ["`Close` may only be implemented by a `shared type`"])
-    const extended = r"""
+    const extended = raw"""
       type Ticket {
         var used: Bool = false
       }
@@ -79,7 +79,7 @@ group "Only a `shared type` implements `Close`" {
   }
 
   test "a trait that comes with `Close` is `Close` for this rule" {
-    const source = r"""
+    const source = raw"""
       shared trait Resource with Close {
         fn name(): String
       }
@@ -96,7 +96,7 @@ group "Only a `shared type` implements `Close`" {
   }
 
   test "a `shared type` implements it, directly and through a trait that comes with it" {
-    const through = r"""
+    const through = raw"""
       shared trait Resource with Close {
         fn name(): String
       }
@@ -131,7 +131,7 @@ group "Nothing calls `close()`" {
     const message = "`close` runs automatically when the last reference to this value goes away, and cannot be called directly"
     assert(problems("fn probe(resource: Close) \{\n  resource.close()\n\}\n") == [message])
     assert(problems("fn probe<Resource: Close>(resource: Resource) \{\n  resource.close()\n\}\n") == [message])
-    const implicit = r"""
+    const implicit = raw"""
       shared type Door with Close {
         var fn shut() {
           close()
@@ -144,7 +144,7 @@ group "Nothing calls `close()`" {
   }
 
   test "not even inside `close()`: the fields are released after it, by the release itself" {
-    const source = connection + r"""
+    const source = connection + raw"""
       shared type Pair with Close {
         var inner: Connection
 
@@ -160,7 +160,7 @@ group "Nothing calls `close()`" {
   }
 
   test "a `close` of a type without `Close` is an ordinary method" {
-    const source = r"""
+    const source = raw"""
       shared type Door {
         var open: Bool = true
 
@@ -179,7 +179,7 @@ group "Nothing calls `close()`" {
 }
 
 group "`self` does not escape `close()`" {
-  const node = r"""
+  const node = raw"""
     shared type Node with Close {
       name: String
       var others: List<Node> = []
@@ -221,7 +221,7 @@ group "`using` binds a name that cannot escape its block" {
   const kept = "`connection` is bound by `using`, so it cannot be"
 
   test "the name is a `const` for everything that only uses it" {
-    const source = connection + r"""
+    const source = connection + raw"""
       fn describe(connection: Connection): String {
         "connection"
       }

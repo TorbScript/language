@@ -24,31 +24,6 @@ public type Skipped {
   reason: String
 }
 
-/**
- * Rule `raw-string-prefix`: `r"..."` and `r"""..."""` become `raw"..."` and `raw"""..."""` - the older spelling of the
- * raw-string prefix (docs/RUST-EXIT.md 4.2) rewritten to the current one, nothing else touched. The decoded value is
- * exactly the same either way, so the edit never changes the tree.
- *
- * Off by default and not part of `strings`: it exists to migrate a tree that still has the old spelling, not to run
- * on every plain `torb canon`, and it fires for a one-line raw string too, which `strings` never touches.
- */
-public fn rawPrefixEdits(source: String, tokens: List<Token>): List<Edit> {
-  var edits: List<Edit> = []
-  for token in tokens {
-    match token.kind {
-      .TextLiteral(_) => {
-        const start = token.span.start
-        const literal = source[start..token.span.end]
-        if literal.startsWith("r\"") {
-          edits.append Edit(EditKind.RawStringPrefix, start, [Replacement(start, start + 1, "raw")])
-        }
-      }
-      _ => {}
-    }
-  }
-  edits
-}
-
 public fn stringEdits(source: String, tokens: List<Token>): (edits: List<Edit>, skipped: List<Skipped>) {
   var edits: List<Edit> = []
   var skipped: List<Skipped> = []
@@ -125,9 +100,6 @@ fn quotePrefixLength(literal: String): Int? {
   }
   if literal.startsWith("raw\"\"\"") {
     return Some 6
-  }
-  if literal.startsWith("r\"\"\"") {
-    return Some 4
   }
   None
 }

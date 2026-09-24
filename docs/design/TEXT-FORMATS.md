@@ -39,7 +39,7 @@ replace it, and the rest of `std`'s formats follow them in milestone 10 ([ROADMA
 
 - **No `/.../` literal**, as JavaScript has. `/` is division, and telling the two apart takes parser heuristics that
   the lexer, the highlighter, the formatter canon and the language server would all have to repeat. The language has no
-  special literals for other values either (paths, durations and URIs are values), and raw strings (`r"\d+"`) exist
+  special literals for other values either (paths, durations and URIs are values), and raw strings (`raw"\d+"`) exist
   for exactly this text.
 - **The check at compile time comes from the literal rule** of [URI.md](URI.md) section 9: a string *literal* whose
   expected type is `Regex` is compiled by the compiler where it is written, and an invalid pattern is a compile error at

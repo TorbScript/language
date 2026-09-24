@@ -107,7 +107,7 @@ group "The format" {
 
 group "Chunks" {
   test "arithmetic, a branch and two calls are registers of one frame" {
-    const source = r"""
+    const source = raw"""
       fn fibonacci(value: Int): Int {
         if value < 2 {
           return value
@@ -118,7 +118,7 @@ group "Chunks" {
       const _ = fibonacci(10)
       """
     assert(
-      chunkOf(source, "t_acme_x2f_app_main_fibonacci") == r"""
+      chunkOf(source, "t_acme_x2f_app_main_fibonacci") == raw"""
         chunk 1 t_acme_x2f_app_main_fibonacci(r0) -> 1 word, frame of 11 words, at acme/app/src/main.trb:1:31
           r0 %0 Int64
           r1 %1 Int64
@@ -151,7 +151,7 @@ group "Chunks" {
   }
 
   test "an inline record is its fields, flattened, and a boxed one is a block with a shape" {
-    const source = r"""
+    const source = raw"""
       type Point {
         x: Int
         y: Int
@@ -180,7 +180,7 @@ group "Chunks" {
       const _ = sum(Point(1, 2)) + ageOf(born("Ada"))
       """
     assert(
-      chunkOf(source, "t_acme_x2f_app_main_sum") == r"""
+      chunkOf(source, "t_acme_x2f_app_main_sum") == raw"""
         chunk 3 t_acme_x2f_app_main_sum(r0) -> 1 word, frame of 5 words, at acme/app/src/main.trb:14:27
           r0 %0 T_acme_x2f_app_main_Point
           r2 %1 Int64
@@ -196,7 +196,7 @@ group "Chunks" {
         """,
     )
     assert(
-      chunkOf(source, "t_acme_x2f_app_main_born") == r"""
+      chunkOf(source, "t_acme_x2f_app_main_born") == raw"""
         chunk 2 t_acme_x2f_app_main_born(r0) -> 1 word, frame of 8 words, at acme/app/src/main.trb:18:31
           r0 %0 String
           r2 %1 String
@@ -214,7 +214,7 @@ group "Chunks" {
         """,
     )
     assert(
-      chunkOf(source, "t_acme_x2f_app_main_ageOf") == r"""
+      chunkOf(source, "t_acme_x2f_app_main_ageOf") == raw"""
         chunk 1 t_acme_x2f_app_main_ageOf(r0) -> 1 word, frame of 2 words, at acme/app/src/main.trb:22:31
           r0 %0 T_acme_x2f_app_main_Person
           r1 %1 Int64
@@ -227,7 +227,7 @@ group "Chunks" {
   }
 
   test "a variant is its tag word and the group of its case, and `match` switches on the tag" {
-    const source = r"""
+    const source = raw"""
       type Shape {
         case Circle(radius: Int)
         case Named(name: String, size: Int)
@@ -243,7 +243,7 @@ group "Chunks" {
       const _ = describe(Shape.Named("n", 2))
       """
     assert(
-      chunkOf(source, "t_acme_x2f_app_main_describe") == r"""
+      chunkOf(source, "t_acme_x2f_app_main_describe") == raw"""
         chunk 1 t_acme_x2f_app_main_describe(r0) -> 2 words, frame of 9 words, at acme/app/src/main.trb:6:35
           r0 %0 T_acme_x2f_app_main_Shape
           r4 %1 String
@@ -276,7 +276,7 @@ group "Chunks" {
   }
 
   test "a `var` parameter is one reference word, read and written through its place" {
-    const source = r"""
+    const source = raw"""
       fn bump(var counter: Int) {
         counter = counter + 1
       }
@@ -286,7 +286,7 @@ group "Chunks" {
       const _ = count
       """
     assert(
-      chunkOf(source, "t_acme_x2f_app_main_bump") == r"""
+      chunkOf(source, "t_acme_x2f_app_main_bump") == raw"""
         chunk 1 t_acme_x2f_app_main_bump(&r0) -> 0 words, frame of 4 words, at acme/app/src/main.trb:1:27
           r0 %0 &Int64
           r1 %1 Int64
@@ -302,7 +302,7 @@ group "Chunks" {
         """,
     )
     assert(
-      chunkOf(source, entryName) == r"""
+      chunkOf(source, entryName) == raw"""
         chunk 0 t_acme_x2f_app_main() -> 0 words, frame of 3 words, at acme/app/src/main.trb:5:1
           r0 %0 Int64
           r1 %1 Void
@@ -317,7 +317,7 @@ group "Chunks" {
   }
 
   test "text is two words, a concatenation and `print` are the kernel's" {
-    const source = r"""
+    const source = raw"""
       fn greet(name: String): String {
         "hello {name}!"
       }
@@ -325,7 +325,7 @@ group "Chunks" {
       print greet("you")
       """
     assert(
-      chunkOf(source, "t_acme_x2f_app_main_greet") == r"""
+      chunkOf(source, "t_acme_x2f_app_main_greet") == raw"""
         chunk 1 t_acme_x2f_app_main_greet(r0) -> 2 words, frame of 8 words, at acme/app/src/main.trb:1:32
           r0 %0 String
           r2 %1 String
@@ -342,7 +342,7 @@ group "Chunks" {
   }
 
   test "a closure is its function and an environment block, called through the closure word" {
-    const source = r"""
+    const source = raw"""
       fn apply(value: Int, operation: (Int) => Int): Int {
         operation(value)
       }
@@ -354,7 +354,7 @@ group "Chunks" {
       const _ = apply(1, offsetBy(2))
       """
     assert(
-      chunkOf(source, "t_acme_x2f_app_main_offsetBy") == r"""
+      chunkOf(source, "t_acme_x2f_app_main_offsetBy") == raw"""
         chunk 2 t_acme_x2f_app_main_offsetBy(r0) -> 2 words, frame of 3 words, at acme/app/src/main.trb:5:40
           r0 %0 Int64
           r1 %1 closure
@@ -365,7 +365,7 @@ group "Chunks" {
         """,
     )
     assert(
-      chunkOf(source, "t_acme_x2f_app_main_apply") == r"""
+      chunkOf(source, "t_acme_x2f_app_main_apply") == raw"""
         chunk 1 t_acme_x2f_app_main_apply(r0, r1) -> 1 word, frame of 4 words, at acme/app/src/main.trb:1:52
           r0 %0 Int64
           r1 %1 closure
@@ -378,7 +378,7 @@ group "Chunks" {
   }
 
   test "the shapes say which words are counted, and how" {
-    const source = r"""
+    const source = raw"""
       type Person {
         name: String
         nickname: String
@@ -404,7 +404,7 @@ group "Chunks" {
 
 group "Module constants" {
   test "a constant that is no static data is a cell: built once by its initializer, copied on every read" {
-    const source = r"""
+    const source = raw"""
       fn doubled(value: Int): Int {
         value * 2
       }
@@ -419,7 +419,7 @@ group "Module constants" {
       """
     assert findingsOf(source).isEmpty()
     assert(
-      chunkOf(source, "t_acme_x2f_app_main_answer") == r"""
+      chunkOf(source, "t_acme_x2f_app_main_answer") == raw"""
         chunk 1 t_acme_x2f_app_main_answer() -> 1 word, frame of 1 word, at -
         b0:
           0: cell r0, 1 word, cell at 1, built by t_constant__t_acme_x2f_app_main_answer

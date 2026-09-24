@@ -13,7 +13,7 @@
 use test, group from "std/test"
 use problems, notes, problemsOf, notesOf, problemsAt from "./harness"
 
-const importsHelper = r"""
+const importsHelper = raw"""
   use value from "./helper"
 
   fn probe(): Int {
@@ -27,7 +27,7 @@ fn withHelper(helper: String): Map<String, String> {
 
 group "Top-level code (gap 28)" {
   test "an entry file is ordinary code" {
-    const source = r"""
+    const source = raw"""
       const greeting = "hello"
 
       print greeting
@@ -36,7 +36,7 @@ group "Top-level code (gap 28)" {
   }
 
   test "a module that something imports consists of declarations only" {
-    const files = withHelper(r"""
+    const files = withHelper(raw"""
       public const value = 1
 
       print value
@@ -54,7 +54,7 @@ group "Top-level code (gap 28)" {
   }
 
   test "checking the entry file alone checks what it imports through a relative path, and reports it" {
-    const files = withHelper(r"""
+    const files = withHelper(raw"""
       public const value = 1
 
       print value
@@ -67,12 +67,12 @@ group "Top-level code (gap 28)" {
 
   test "a file nothing imports is a script, whatever else is in the package" {
     const files = [
-      "app/src/loose.trb": r"""
+      "app/src/loose.trb": raw"""
         const answer = 42
 
         print answer
         """,
-      "app/src/main.trb": r"""
+      "app/src/main.trb": raw"""
         fn probe(): Int {
           1
         }
@@ -83,12 +83,12 @@ group "Top-level code (gap 28)" {
 
   test "`src/lib.trb` is what other packages import, so it is always a module" {
     const files = [
-      "app/src/lib.trb": r"""
+      "app/src/lib.trb": raw"""
         public const answer = 42
 
         print answer
         """,
-      "app/src/main.trb": r"""
+      "app/src/main.trb": raw"""
         fn probe(): Int {
           1
         }
@@ -98,7 +98,7 @@ group "Top-level code (gap 28)" {
   }
 
   test "a module has no mutable state, so it has no top-level `var`" {
-    const files = withHelper(r"""
+    const files = withHelper(raw"""
       public const value = 1
 
       var counter = 0
@@ -110,7 +110,7 @@ group "Top-level code (gap 28)" {
 
 group "A `public fn` and a trait method never infer their result" {
   test "an omitted result type is `Void`, and a body that produces nothing is legal" {
-    const source = r"""
+    const source = raw"""
       public fn reset(var counter: Counter) {
         counter.value = 0
       }
@@ -123,7 +123,7 @@ group "A `public fn` and a trait method never infer their result" {
   }
 
   test "and it really is `Void`: nothing is inferred from the body" {
-    const source = r"""
+    const source = raw"""
       public fn probe(): Int {
         answer()
       }
@@ -142,7 +142,7 @@ group "A `public fn` and a trait method never infer their result" {
   }
 
   test "the value the body ends in is where the message points" {
-    const source = r"""
+    const source = raw"""
       public fn answer() {
         42
       }
@@ -155,7 +155,7 @@ group "A `public fn` and a trait method never infer their result" {
   }
 
   test "and so is the value a `return` produces" {
-    const source = r"""
+    const source = raw"""
       public fn answer(flag: Bool) {
         if flag {
           return "yes"
@@ -166,7 +166,7 @@ group "A `public fn` and a trait method never infer their result" {
   }
 
   test "declaring it settles it" {
-    const source = r"""
+    const source = raw"""
       public fn answer(): Int {
         42
       }
@@ -175,7 +175,7 @@ group "A `public fn` and a trait method never infer their result" {
   }
 
   test "a function that is not `public` infers it as before" {
-    const source = r"""
+    const source = raw"""
       fn answer() {
         42
       }
@@ -188,7 +188,7 @@ group "A `public fn` and a trait method never infer their result" {
   }
 
   test "a trait requirement without a result type produces `Void`, as the concept writes it" {
-    const source = r"""
+    const source = raw"""
       trait Sink {
         var fn write(text: String)
       }
@@ -197,7 +197,7 @@ group "A `public fn` and a trait method never infer their result" {
   }
 
   test "a default member of a trait does not infer either" {
-    const source = r"""
+    const source = raw"""
       trait Sink {
         var fn write(text: String)
 
@@ -215,7 +215,7 @@ group "A `public fn` and a trait method never infer their result" {
   }
 
   test "a member of a `type` still infers it" {
-    const source = r"""
+    const source = raw"""
       type Counter {
         var value: Int = 0
 
@@ -228,7 +228,7 @@ group "A `public fn` and a trait method never infer their result" {
   }
 
   test "a function without a body is a requirement of a trait or a `native` declaration" {
-    const source = r"""
+    const source = raw"""
       type Counter {
         var fn step(): Void
       }
@@ -240,7 +240,7 @@ group "A `public fn` and a trait method never infer their result" {
 
 group "An `extend` adds constants and functions (gap 39)" {
   test "a field in an `extend` belongs to the declaration of the type" {
-    const source = r"""
+    const source = raw"""
       extend Counter {
         var extra: Int = 0
       }
@@ -257,7 +257,7 @@ group "An `extend` adds constants and functions (gap 39)" {
   }
 
   test "and so does a case" {
-    const source = r"""
+    const source = raw"""
       extend Shape {
         case Triangle(side: Int)
       }
@@ -274,7 +274,7 @@ group "An `extend` adds constants and functions (gap 39)" {
   }
 
   test "a constant and a function are what it is for" {
-    const source = r"""
+    const source = raw"""
       extend Counter {
         static start: Int = 0
 
@@ -295,7 +295,7 @@ group "What cannot be extended, and what has no default" {
   test "a literal type cannot be extended, with or without a trait" {
     // "That identity is structural, so a literal type has no owner and cannot be extended" (CONCEPT, "Literal Types").
     // It compiled silently, and the member it added was simply unreachable at every use
-    const source = r"""
+    const source = raw"""
       type Status = "online" | "offline"
 
       extend Status {
@@ -336,7 +336,7 @@ group "What cannot be extended, and what has no default" {
 
 group "`native` belongs to the standard library (gap 22)" {
   test "a `native` function of an ordinary package" {
-    const source = r"""
+    const source = raw"""
       native fn clock(): Int
       """
     assert(problems(source) == ["`native` is only allowed in a package of the standard library"])
@@ -350,14 +350,14 @@ group "`native` belongs to the standard library (gap 22)" {
   }
 
   test "a `native` type of an ordinary package" {
-    const source = r"""
+    const source = raw"""
       public native type Handle {}
       """
     assert(problems(source) == ["`native` is only allowed in a package of the standard library"])
   }
 
   test "a `native` member of an ordinary package" {
-    const source = r"""
+    const source = raw"""
       type Handle {
         native var fn close(): Void
       }
@@ -368,7 +368,7 @@ group "`native` belongs to the standard library (gap 22)" {
 
 group "`shared type` and `shared trait`" {
   test "a `shared type` may only implement a `shared trait`" {
-    const source = r"""
+    const source = raw"""
       shared type Connection with Show {
         url: String
 
@@ -385,7 +385,7 @@ group "`shared type` and `shared trait`" {
   }
 
   test "a `shared trait` is what it may implement" {
-    const source = r"""
+    const source = raw"""
       shared type Connection with Close {
         var url: String
 
@@ -398,7 +398,7 @@ group "`shared type` and `shared trait`" {
   }
 
   test "an ordinary `type` may implement a `shared trait`: `Show` is one in the real prelude" {
-    const source = r"""
+    const source = raw"""
       shared trait Named {
         fn name(): String
       }
@@ -418,7 +418,7 @@ group "`shared type` and `shared trait`" {
    * `Source.next()` answer a `Task` (docs/design/STREAMS.md).
    */
   test "a `var self` that answers a `Task` needs a shared type" {
-    const source = r"""
+    const source = raw"""
       type Bag {
         var items: List<Int>
 
@@ -435,7 +435,7 @@ group "`shared type` and `shared trait`" {
   }
 
   test "and so does a `var` parameter that answers a `Task`" {
-    const source = r"""
+    const source = raw"""
       fn fill(var bag: Bag, amount: Int): Task<Int> {
         amount
       }
@@ -448,7 +448,7 @@ group "`shared type` and `shared trait`" {
   }
 
   test "an ordinary trait is not enough either: a value could implement it" {
-    const source = r"""
+    const source = raw"""
       trait Counter {
         var fn bump(): Task<Int>
       }
@@ -466,7 +466,7 @@ group "`shared type` and `shared trait`" {
   }
 
   test "a `shared trait` and a `shared type` may be changed by a task" {
-    const source = r"""
+    const source = raw"""
       shared trait Ticking {
         var fn tick(): Task<Int>
       }
@@ -489,7 +489,7 @@ group "`shared type` and `shared trait`" {
 
   /** Two pulls in a row through one `var` binding: a shared object is never an exclusive access across an `await`. */
   test "exclusivity says nothing about two changes of one shared object in a row" {
-    const source = r"""
+    const source = raw"""
       shared trait Ticking {
         var fn tick(): Task<Int>
       }
@@ -510,7 +510,7 @@ group "`shared type` and `shared trait`" {
 
   /** A wrapper pulls from a `var` field across an `await`, which is what every stage of `std/stream` does. */
   test "a `var` field of a shared object may be changed across an `await`" {
-    const source = r"""
+    const source = raw"""
       shared trait Ticking {
         var fn tick(): Task<Int>
       }
@@ -531,7 +531,7 @@ group "`shared type` and `shared trait`" {
 
   /** The shape of `Source.produce`: a closure that takes the end it writes into as a `var` parameter. */
   test "a closure may take a shared object as a `var` parameter" {
-    const source = r"""
+    const source = raw"""
       shared trait Ticking {
         var fn tick(): Task<Int>
       }
@@ -546,7 +546,7 @@ group "`shared type` and `shared trait`" {
 
 group "`isSame` compares identity (BACKEND gap 15)" {
   test "on a value it has no meaning" {
-    const source = r"""
+    const source = raw"""
       fn probe(first: Point, second: Point): Bool {
         isSame(first, second)
       }
@@ -564,7 +564,7 @@ group "`isSame` compares identity (BACKEND gap 15)" {
   }
 
   test "on a `shared type` it is the whole point" {
-    const source = r"""
+    const source = raw"""
       fn probe(first: Connection, second: Connection): Bool {
         isSame(first, second)
       }
@@ -579,7 +579,7 @@ group "`isSame` compares identity (BACKEND gap 15)" {
 
 group "`private(var)` is a modifier of a field (gap 30)" {
   test "not of a top-level declaration" {
-    const source = r"""
+    const source = raw"""
       private(var) fn probe(): Int {
         1
       }
@@ -594,7 +594,7 @@ group "`private(var)` is a modifier of a field (gap 30)" {
   }
 
   test "not of a constant of a type" {
-    const source = r"""
+    const source = raw"""
       type Counter {
         private(var) static start: Int = 0
       }
@@ -603,7 +603,7 @@ group "`private(var)` is a modifier of a field (gap 30)" {
   }
 
   test "and it already says `var`, so a second one is a mistake" {
-    const source = r"""
+    const source = raw"""
       type Account {
         private(var) var balance: Int = 0
       }
@@ -620,7 +620,7 @@ group "`private(var)` is a modifier of a field (gap 30)" {
 
 group "Defaults are evaluated without a receiver (gap 26)" {
   test "a field default cannot read `self`" {
-    const source = r"""
+    const source = raw"""
       type Box {
         width: Int = 1
         height: Int = self.width
@@ -637,7 +637,7 @@ group "Defaults are evaluated without a receiver (gap 26)" {
   }
 
   test "a field default cannot read another field" {
-    const source = r"""
+    const source = raw"""
       type Box {
         width: Int = 1
         height: Int = width
@@ -654,7 +654,7 @@ group "Defaults are evaluated without a receiver (gap 26)" {
   }
 
   test "a parameter default cannot read another parameter" {
-    const source = r"""
+    const source = raw"""
       fn connect(host: String, port: Int = host.byteLength()): String {
         host
       }
@@ -663,7 +663,7 @@ group "Defaults are evaluated without a receiver (gap 26)" {
   }
 
   test "a default of a literal, of a constructor call and of a constant of the file is fine" {
-    const source = r"""
+    const source = raw"""
       const standardPort = 5432
 
       fn connect(host: String = "localhost", port: Int = standardPort, limits: Limits = Limits()): String {
@@ -680,7 +680,7 @@ group "Defaults are evaluated without a receiver (gap 26)" {
 
 group "A field default is a constant" {
   test "a call of a `static fn` is code, and the message offers the empty literal of the field's type" {
-    const source = r"""
+    const source = raw"""
       type Buffer {
         var slots: List<Int> = List.of(1, 2)
       }
@@ -699,7 +699,7 @@ group "A field default is a constant" {
   }
 
   test "a call of a function, a method and an operator that is a trait's are code too" {
-    const function = r"""
+    const function = raw"""
       fn seed(): Int {
         4
       }
@@ -709,7 +709,7 @@ group "A field default is a constant" {
       }
       """
     assert(problems(function) == ["A field default is a constant: `seed` is a call - compute it in a `static fn`"])
-    const method = r"""
+    const method = raw"""
       const limit = 3
 
       type Probe {
@@ -717,7 +717,7 @@ group "A field default is a constant" {
       }
       """
     assert(problems(method) == ["A field default is a constant: `limit.max` is a call - compute it in a `static fn`"])
-    const text = r"""
+    const text = raw"""
       type Probe {
         name: String = "a" + "b"
       }
@@ -728,7 +728,7 @@ group "A field default is a constant" {
   }
 
   test "an empty `Set` is `[]` and an empty `Map` is `[:]`, and an array has no empty literal to offer" {
-    const set = r"""
+    const set = raw"""
       type Probe {
         seen: Set<Int> = TrieSet.from([1])
       }
@@ -737,7 +737,7 @@ group "A field default is a constant" {
       problems(set)
         == ["A field default is a constant: `TrieSet.from` is a call - compute it in a `static fn`, or start from `[]`"]
     )
-    const array = r"""
+    const array = raw"""
       type Probe {
         cells: Array<Int, 4> = Array.filled(0)
       }
@@ -746,7 +746,7 @@ group "A field default is a constant" {
   }
 
   test "literals, collection literals, constructors, cases, named constants and operators on them are constants" {
-    const source = r"""
+    const source = raw"""
       const limit = 16
 
       type Point {
@@ -781,7 +781,7 @@ group "A field default is a constant" {
   }
 
   test "a default never makes an object: every value needs one of its own" {
-    const source = r"""
+    const source = raw"""
       shared type Connection {
         url: String
       }
@@ -800,7 +800,7 @@ group "A field default is a constant" {
   }
 
   test "a default that already has a message gets no second one" {
-    const source = r"""
+    const source = raw"""
       type Probe {
         count: Int = missing()
       }
@@ -811,7 +811,7 @@ group "A field default is a constant" {
 
 group "The parameters and the top level of a body are one scope" {
   test "a `const` of the body cannot shadow a parameter" {
-    const source = r"""
+    const source = raw"""
       fn probe(value: Int): Int {
         const value = value + 1
         value
@@ -827,7 +827,7 @@ group "The parameters and the top level of a body are one scope" {
   }
 
   test "a nested block may shadow, as everywhere else" {
-    const source = r"""
+    const source = raw"""
       fn probe(value: Int): Int {
         if value > 0 {
           const value = 2
@@ -840,7 +840,7 @@ group "The parameters and the top level of a body are one scope" {
   }
 
   test "a closure has parameters of its own" {
-    const source = r"""
+    const source = raw"""
       fn probe(value: Int): Int {
         const step: (Int) => Int = { value => value + 1 }
         step(value)
@@ -856,7 +856,7 @@ group "The parameters and the top level of a body are one scope" {
  */
 group "One namespace of members" {
   test "a field and a method cannot share a name" {
-    const source = r"""
+    const source = raw"""
       type Report {
         title: String
 
@@ -877,7 +877,7 @@ group "One namespace of members" {
   }
 
   test "two fields cannot either" {
-    const source = r"""
+    const source = raw"""
       type Report {
         title: String
         title: Int
@@ -887,7 +887,7 @@ group "One namespace of members" {
   }
 
   test "a `const` and a `fn` cannot either" {
-    const source = r"""
+    const source = raw"""
       type Report {
         static width = 2
 
@@ -900,7 +900,7 @@ group "One namespace of members" {
   }
 
   test "and neither can two members of a trait" {
-    const source = r"""
+    const source = raw"""
       trait Sized {
         fn size(): Int
 
@@ -911,7 +911,7 @@ group "One namespace of members" {
   }
 
   test "a field of a case is not a member of the type, so it may be named like one" {
-    const source = r"""
+    const source = raw"""
       type Shape {
         case Circle(radius: Int)
         case Square(radius: Int)
@@ -929,7 +929,7 @@ group "One namespace of members" {
 }
 
 group "A `static fn` is reached through the type" {
-  const rectangle = r"""
+  const rectangle = raw"""
     type Rectangle {
       width: Int
       height: Int
@@ -954,7 +954,7 @@ group "A `static fn` is reached through the type" {
   }
 
   test "a method is reached through the value" {
-    const source = r"""
+    const source = raw"""
       type Rectangle {
         width: Int
         height: Int
@@ -972,7 +972,7 @@ group "A `static fn` is reached through the type" {
   }
 
   test "the type is not a way to a method, and the message names the two ways out" {
-    const source = r"""
+    const source = raw"""
       type Rectangle {
         width: Int
         height: Int
@@ -1104,7 +1104,7 @@ group "Where `await()` is allowed" {
 
 group "`foreign` declares functions of a C library" {
   test "with their result types, because the C ABI is the contract" {
-    const source = r"""
+    const source = raw"""
       foreign "sqlite3" {
         fn sqlite3_close(database: Int)
       }
@@ -1114,7 +1114,7 @@ group "`foreign` declares functions of a C library" {
   }
 
   test "and without bodies: the library is the implementation" {
-    const source = r"""
+    const source = raw"""
       foreign "sqlite3" {
         fn sqlite3_close(database: Int): Int32 {
           0
@@ -1129,7 +1129,7 @@ group "`foreign` declares functions of a C library" {
   }
 
   test "a declaration of a signature is all a block holds" {
-    const source = r"""
+    const source = raw"""
       foreign "sqlite3" {
         fn sqlite3_close(database: Int): Int32
       }

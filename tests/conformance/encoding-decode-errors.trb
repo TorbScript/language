@@ -46,21 +46,21 @@ fn expect(actual: String, wanted: String): Int {
 
 const json = Json()
 
-failed = failed + expect("{json.decode<Order>(r"""{"price": {"amount": 1}}""")}", "Fail(id: a value is needed)")
+failed = failed + expect("{json.decode<Order>(raw"""{"price": {"amount": 1}}""")}", "Fail(id: a value is needed)")
 failed = failed + expect(
-  "{json.decode<Order>(r"""{"id": 1, "price": {"currency": "USD"}}""")}",
+  "{json.decode<Order>(raw"""{"id": 1, "price": {"currency": "USD"}}""")}",
   "Fail(price.amount: a value is needed)",
 )
 failed = failed + expect(
-  "{json.decode<Order>(r"""{"id": 1, "price": {"amount": 1}, "items": [{"amount": 2}, {"amount": "x"}]}""")}",
+  "{json.decode<Order>(raw"""{"id": 1, "price": {"amount": 1}, "items": [{"amount": 2}, {"amount": "x"}]}""")}",
   "Fail(items[1].amount: a whole number is needed, not \"x\")",
 )
 failed = failed + expect(
-  "{json.decode<Order>(r"""{"id": 1, "price": {"amount": 1}, "status": "Lost"}""")}",
+  "{json.decode<Order>(raw"""{"id": 1, "price": {"amount": 1}, "status": "Lost"}""")}",
   "Fail(status: `Lost` is not a case of `Status`)",
 )
 failed = failed + expect(
-  "{json.decode<Order>(r"""{"id": 1, "price": {"amount": 1}, "status": {"Shipped": {}}}""")}",
+  "{json.decode<Order>(raw"""{"id": 1, "price": {"amount": 1}, "status": {"Shipped": {}}}""")}",
   "Fail(status.tracking: a value is needed)",
 )
 failed = failed + expect("{json.decode<Order>("[1, 2]")}", "Fail(a record is needed, not [1, 2])")
@@ -74,7 +74,7 @@ failed = failed + expect("{json.decode<Int>("1 2")}", "Fail(line 1: there is mor
 failed = failed + expect("{json.decode<String>("\"open")}", "Fail(line 1: this text is not closed)")
 failed = failed + expect("{json.decode<Bool>("yes")}", "Fail(line 1: `yes` is not a JSON value)")
 failed = failed + expect("{json.decode<String>("\"a\\qb\"")}", "Fail(line 1: `\\q` is not an escape of JSON)")
-const lone = json.decode<String>("\"" + r"""\udc00""" + "\"")
+const lone = json.decode<String>("\"" + raw"""\udc00""" + "\"")
 failed = failed + expect("{lone}", "Fail(line 1: a low surrogate needs a high one in front of it)")
 
 // A syntax error and a shape error are told apart
@@ -82,7 +82,7 @@ failed = failed + expect("{json.decode<Int>("[").mapError({ _.isSyntaxError() })
 failed = failed + expect("{json.decode<Int>("\"a\"").mapError({ _.isSyntaxError() })}", "Fail(false)")
 
 // A field no type asked for is ignored by default, and an error where the format is strict
-const extra = r"""{"amount": 1, "discount": 5}"""
+const extra = raw"""{"amount": 1, "discount": 5}"""
 failed = failed + expect("{json.decode<Price>(extra)}", "Ok(Price(amount: 1, currency: \"EUR\"))")
 failed = failed + expect(
   "{Json(strict: true).decode<Price>(extra)}",

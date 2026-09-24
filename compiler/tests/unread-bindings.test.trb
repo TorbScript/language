@@ -51,7 +51,7 @@ group "An arm of a `match`" {
   test "of alternatives it is the one binding the body sees that counts" {
     // Every alternative binds the same name and the body sees one binding whichever one matched, so there is one finding
     // and not one per branch
-    const shapes = r"""
+    const shapes = raw"""
       type Shape {
         case Circle(radius: Int)
         case Square(side: Int)
@@ -64,7 +64,7 @@ group "An arm of a `match`" {
       }
       """
     assert(problems(shapes) == ["`size` is never read: write `_`, or `_size` to keep the name"])
-    const read = r"""
+    const read = raw"""
       type Shape {
         case Circle(radius: Int)
         case Square(side: Int)
@@ -85,7 +85,7 @@ group "An arm of a `match`" {
   }
 
   test "a binding of a nested pattern counts like any other" {
-    const source = r"""
+    const source = raw"""
       type Wrapper {
         case Inner(shape: Int?)
       }
@@ -116,7 +116,7 @@ group "The head of an `if` and of a `while`" {
   }
 
   test "`if var` is the same rule: a change through the binding is a use of it" {
-    const source = r"""
+    const source = raw"""
       fn probe(value: Int?): Int {
         var current = value
         if var Some(inner) = current {
@@ -130,7 +130,7 @@ group "The head of an `if` and of a `while`" {
   }
 
   test "`while const` binds for the body of the loop" {
-    const unread = r"""
+    const unread = raw"""
       fn next(): Int? {
         None
       }
@@ -144,7 +144,7 @@ group "The head of an `if` and of a `while`" {
       }
       """
     assert(problems(unread) == ["`item` is never read: write `_`, or `_item` to keep the name"])
-    const read = r"""
+    const read = raw"""
       fn next(): Int? {
         None
       }
@@ -164,7 +164,7 @@ group "The head of an `if` and of a `while`" {
 group "What counts as a read" {
   test "an interpolation, a quotation, a nested closure, an assignment and a nested subject all count" {
     // Every one of these goes through the one place a name resolves, so none of them is a false positive
-    const interpolated = r"""
+    const interpolated = raw"""
       fn probe(value: Int?): String {
         match value {
           Some(number) => "got {number}"
@@ -174,7 +174,7 @@ group "What counts as a read" {
       """
     assert problems(interpolated).isEmpty()
     // `assert` quotes its argument, and the quotation reads the resolution the ordinary check recorded
-    const quoted = r"""
+    const quoted = raw"""
       fn probe(value: Int?) {
         match value {
           Some(number) => assert(number > 1)
@@ -183,7 +183,7 @@ group "What counts as a read" {
       }
       """
     assert problems(quoted).isEmpty()
-    const captured = r"""
+    const captured = raw"""
       fn applied(body: (Int) => Int): Int {
         body(2)
       }
@@ -196,7 +196,7 @@ group "What counts as a read" {
       }
       """
     assert problems(captured).isEmpty()
-    const assigned = r"""
+    const assigned = raw"""
       fn probe(value: Int?): Int {
         var current = value
         if var Some(inner) = current {
@@ -206,7 +206,7 @@ group "What counts as a read" {
       }
       """
     assert problems(assigned).isEmpty()
-    const nested = r"""
+    const nested = raw"""
       fn probe(value: Int?): Int {
         match value {
           Some(number) => match number {
@@ -230,7 +230,7 @@ group "What the rule is not about" {
 
   test "a `for` binding, a closure parameter and a function parameter are not part of it" {
     assert problems(inBody("  for item in [1, 2, 3] \{\n    print \"tick\"\n  \}")).isEmpty()
-    const closure = r"""
+    const closure = raw"""
       fn applied(body: (Int) => Int): Int {
         body(2)
       }

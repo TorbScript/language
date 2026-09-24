@@ -16,7 +16,7 @@ use BuildTarget, TargetSystem, TargetArchitecture, everyTarget from "../src/proj
 use problemsOfEveryTarget, entriesOf from "../src/cli/targets"
 use workspaceWith, problemsOf from "./harness"
 
-const targetModule = r"""
+const targetModule = raw"""
   public type OperatingSystem with Equals {
     case Windows
     case Linux
@@ -39,25 +39,25 @@ const targetModule = r"""
   """
 
 const nativeModules = [
-  "std/core/project.trb": r"""
+  "std/core/project.trb": raw"""
     name "std/core"
     """,
-  "std/core/src/lib.trb": r"""
+  "std/core/src/lib.trb": raw"""
     public use OperatingSystem, Architecture from "./target"
     """,
   "std/core/src/target.trb": targetModule,
-  "std/os/project.trb": r"""
+  "std/os/project.trb": raw"""
     name "std/os"
     """,
-  "std/os/src/lib.trb": r"""
+  "std/os/src/lib.trb": raw"""
     public use OperatingSystem from "std/core"
     """,
-  "std/os/src/windows/native.trb": r"""
+  "std/os/src/windows/native.trb": raw"""
     public native type Windows {
       native static fn tickCount(): Int64
     }
     """,
-  "std/os/src/posix/native.trb": r"""
+  "std/os/src/posix/native.trb": raw"""
     public native type Posix {
       native static fn effectiveUserIdentifier(): Int64
     }
@@ -103,7 +103,7 @@ fn problemMessages(lowering: Lowering): List<String> {
   found
 }
 
-const systemMatch = r"""
+const systemMatch = raw"""
   use OperatingSystem from "std/core"
 
   fn windowsName(): String {
@@ -135,7 +135,7 @@ group "A match on the target keeps one arm" {
   }
 
   test "a tuple of two target constants selects by both" {
-    const source = r"""
+    const source = raw"""
       use OperatingSystem, Architecture from "std/core"
 
       fn appleSilicon(): Int {
@@ -164,7 +164,7 @@ group "A match on the target keeps one arm" {
   }
 
   test "a name the selected arm binds is the constant's value" {
-    const source = r"""
+    const source = raw"""
       use OperatingSystem from "std/core"
 
       fn describe(system: OperatingSystem): Int {
@@ -193,7 +193,7 @@ group "A match on the target keeps one arm" {
   }
 
   test "an arm with a guard is code, so the match is lowered whole" {
-    const source = r"""
+    const source = raw"""
       use OperatingSystem from "std/core"
 
       fn guarded(): Int {
@@ -219,7 +219,7 @@ group "A match on the target keeps one arm" {
   }
 
   test "a local const is not a compile-time constant, so every arm is lowered" {
-    const source = r"""
+    const source = raw"""
       use OperatingSystem from "std/core"
 
       fn windowsName(): String {
@@ -249,7 +249,7 @@ group "A match on the target keeps one arm" {
 group "Every arm is type checked on every machine" {
   test "a mistake in the arm another target takes is reported, whatever the target" {
     var files = nativeModules
-    files.set("app/src/main.trb", r"""
+    files.set("app/src/main.trb", raw"""
       use OperatingSystem from "std/core"
 
       fn systemName(): String {
@@ -266,7 +266,7 @@ group "Every arm is type checked on every machine" {
 
   test "exhaustiveness is judged by the type, never by the value" {
     var files = nativeModules
-    files.set("app/src/main.trb", r"""
+    files.set("app/src/main.trb", raw"""
       use OperatingSystem from "std/core"
 
       fn systemName(): String {
@@ -285,12 +285,12 @@ group "Every arm is type checked on every machine" {
 
   test "a module constant may read the target, because the target is a constant of the build" {
     var files = nativeModules
-    files.set("app/src/settings.trb", r"""
+    files.set("app/src/settings.trb", raw"""
       use OperatingSystem from "std/core"
 
       public const system = OperatingSystem.current
       """)
-    files.set("app/src/main.trb", r"""
+    files.set("app/src/main.trb", raw"""
       use system from "./settings"
 
       print(system == .Linux)
@@ -301,10 +301,10 @@ group "Every arm is type checked on every machine" {
 
 group "An if and an if const on a constant keep one branch" {
   test "a module-level Bool decides an if, and the branch it does not take is not lowered" {
-    const settings = r"""
+    const settings = raw"""
       public const verbose = false
       """
-    const source = r"""
+    const source = raw"""
       use verbose from "./settings"
 
       fn loud() {
@@ -331,7 +331,7 @@ group "An if and an if const on a constant keep one branch" {
   }
 
   test "== between the target and a case decides an if" {
-    const source = r"""
+    const source = raw"""
       use OperatingSystem from "std/core"
 
       fn windowsOnly() {
@@ -351,7 +351,7 @@ group "An if and an if const on a constant keep one branch" {
   }
 
   test "an if const on the target takes the block or the else" {
-    const source = r"""
+    const source = raw"""
       use OperatingSystem from "std/core"
 
       fn onWindows() {
@@ -378,7 +378,7 @@ group "An if and an if const on a constant keep one branch" {
   }
 
   test "a top-level const of the entry file is a local of it, so its if is lowered whole" {
-    const source = r"""
+    const source = raw"""
       fn loud() {
         print "loud"
       }
@@ -393,7 +393,7 @@ group "An if and an if const on a constant keep one branch" {
 }
 
 group "A native of one operating system" {
-  const windowsCall = r"""
+  const windowsCall = raw"""
     use Windows from "std/os/windows/native"
 
     print Windows.tickCount()
@@ -411,7 +411,7 @@ group "A native of one operating system" {
   }
 
   test "a native of several systems names all of them" {
-    const source = r"""
+    const source = raw"""
       use Posix from "std/os/posix/native"
 
       print Posix.effectiveUserIdentifier()
@@ -422,7 +422,7 @@ group "A native of one operating system" {
   }
 
   test "in the arm of its own system, it is reached on no other target" {
-    const source = r"""
+    const source = raw"""
       use OperatingSystem from "std/core"
       use Windows from "std/os/windows/native"
       use Posix from "std/os/posix/native"

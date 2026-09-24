@@ -9,7 +9,7 @@
 use test, group from "std/test"
 use probe, problems, notes from "./harness"
 
-const declarations = r"""
+const declarations = raw"""
 
   type Shape {
     case Circle(radius: Float)
@@ -38,7 +38,7 @@ fn inBody(body: String): String {
 
 group "Cases of a type" {
   test "a match over every case of a type needs no wildcard" {
-    const source = inBody(r"""
+    const source = inBody(raw"""
       const area = match Shape.Empty {
         .Circle(radius) => radius
         .Rectangle(width, height) => width * height
@@ -49,7 +49,7 @@ group "Cases of a type" {
   }
 
   test "a case that no arm handles is named as the witness" {
-    const source = inBody(r"""
+    const source = inBody(raw"""
       const area = match Shape.Empty {
         .Circle(radius) => radius
         .Empty => 0.0
@@ -59,7 +59,7 @@ group "Cases of a type" {
   }
 
   test "two cases that no arm handles are named with `and`" {
-    const source = inBody(r"""
+    const source = inBody(raw"""
       const area = match Shape.Empty {
         .Circle(radius) => radius
       }""")
@@ -67,7 +67,7 @@ group "Cases of a type" {
   }
 
   test "three cases are separated by commas" {
-    const source = inBody(r"""
+    const source = inBody(raw"""
       const shown = match Direction.North {
         .North => 1
       }""")
@@ -75,7 +75,7 @@ group "Cases of a type" {
   }
 
   test "more than three cases are counted" {
-    const source = r"""
+    const source = raw"""
       fn probe(value: Kind): Int {
         match value {
           .One => 1
@@ -95,7 +95,7 @@ group "Cases of a type" {
   }
 
   test "a wildcard covers every case that is left" {
-    const source = inBody(r"""
+    const source = inBody(raw"""
       const area = match Shape.Empty {
         .Circle(radius) => radius
         _ => 0.0
@@ -104,7 +104,7 @@ group "Cases of a type" {
   }
 
   test "a lowercase name covers every case that is left, because it binds" {
-    const source = inBody(r"""
+    const source = inBody(raw"""
       const area = match Shape.Empty {
         .Circle(radius) => radius
         _other => 0.0
@@ -113,7 +113,7 @@ group "Cases of a type" {
   }
 
   test "a case nested in a case is walked into" {
-    const source = r"""
+    const source = raw"""
       fn probe(value: Wrapper): Int {
         match value {
           .Inner(.North) => 1
@@ -136,7 +136,7 @@ group "Cases of a type" {
   }
 
   test "`Option` and `Result` are ordinary types with cases" {
-    const source = r"""
+    const source = raw"""
       fn probe(value: Result<Int, String>): Int {
         match value {
           Ok(inner) => inner
@@ -147,7 +147,7 @@ group "Cases of a type" {
   }
 
   test "a type with fields is destructured by its one constructor, which covers everything" {
-    const source = inBody(r"""
+    const source = inBody(raw"""
       const sum = match Point(1, 2) {
         Point(x, y) => x + y
       }""")
@@ -156,7 +156,7 @@ group "Cases of a type" {
 
   /** A pattern mirrors the constructor, where a labeled argument names its field wherever it stands. */
   test "a label in a pattern names the field it matches, in whatever order they are written" {
-    const source = inBody(r"""
+    const source = inBody(raw"""
       const sum = match Point(1, 2) {
         Point(y: a, x: b) => a + b
       }""")
@@ -164,7 +164,7 @@ group "Cases of a type" {
   }
 
   test "a label that names no field of the type" {
-    const source = inBody(r"""
+    const source = inBody(raw"""
       const sum = match Point(1, 2) {
         Point(x, z: b) => x + b
       }""")
@@ -176,12 +176,12 @@ group "Cases of a type" {
    * items. What the `...` stands for decides nothing, so such a pattern still covers the whole type.
    */
   test "a `...` stands for the fields the pattern does not name, and covers them" {
-    const source = inBody(r"""
+    const source = inBody(raw"""
       const sum = match Point(1, 2) {
         Point(x, ...) => x
       }""")
     assert problems(source).isEmpty()
-    const only = inBody(r"""
+    const only = inBody(raw"""
       const sum = match Point(1, 2) {
         Point(...) => 0
       }""")
@@ -189,13 +189,13 @@ group "Cases of a type" {
   }
 
   test "a `...` works with a labeled sub-pattern, and the value it names still decides" {
-    const source = inBody(r"""
+    const source = inBody(raw"""
       const sum = match Point(1, 2) {
         Point(y: 0, ...) => 0
         _ => 1
       }""")
     assert problems(source).isEmpty()
-    const missing = inBody(r"""
+    const missing = inBody(raw"""
       const sum = match Point(1, 2) {
         Point(y: 0, ...) => 0
       }""")
@@ -203,7 +203,7 @@ group "Cases of a type" {
   }
 
   test "a pattern that names fewer fields without a `...`" {
-    const source = inBody(r"""
+    const source = inBody(raw"""
       const sum = match Point(1, 2) {
         Point(x) => x
       }""")
@@ -214,7 +214,7 @@ group "Cases of a type" {
   }
 
   test "a `...` on a case of a type, where the fields it does not name still decide nothing" {
-    const source = inBody(r"""
+    const source = inBody(raw"""
       const found = match Shape.Empty {
         .Circle(...) => 1
         .Rectangle(width, ...) => width
@@ -224,7 +224,7 @@ group "Cases of a type" {
   }
 
   test "a type that has no constructors at all is only covered by a wildcard" {
-    const source = r"""
+    const source = raw"""
       fn probe(value: Shown): Int {
         match value {
           _other => 1
@@ -239,7 +239,7 @@ group "Cases of a type" {
   }
 
   test "a trait-typed value that is matched by a case is not covered" {
-    const source = r"""
+    const source = raw"""
       fn probe(value: Shown): Int {
         match value {
           1 => 1
@@ -258,7 +258,7 @@ group "Cases of a type" {
 
 group "Literals and ranges" {
   test "`Bool` has exactly two values" {
-    const source = inBody(r"""
+    const source = inBody(raw"""
       const shown = match true {
         true => 1
         false => 2
@@ -267,7 +267,7 @@ group "Literals and ranges" {
   }
 
   test "one of the two values of `Bool` is named as the witness" {
-    const source = inBody(r"""
+    const source = inBody(raw"""
       const shown = match true {
         true => 1
       }""")
@@ -275,7 +275,7 @@ group "Literals and ranges" {
   }
 
   test "a match over integers always needs a wildcard, because `Int64` cannot be enumerated" {
-    const source = inBody(r"""
+    const source = inBody(raw"""
       const shown = match 3 {
         0 => "zero"
         1 | 2 | 3 => "small"
@@ -285,7 +285,7 @@ group "Literals and ranges" {
   }
 
   test "literals, alternatives, a range, a guard and a wildcard together" {
-    const source = inBody(r"""
+    const source = inBody(raw"""
       const shown = match 3 {
         0 => "zero"
         1 | 2 | 3 => "small"
@@ -297,7 +297,7 @@ group "Literals and ranges" {
   }
 
   test "an integer type whose width is known can be covered by ranges alone" {
-    const source = r"""
+    const source = raw"""
       fn probe(value: Int8): Int {
         match value {
           -128..=0 => 1
@@ -309,7 +309,7 @@ group "Literals and ranges" {
   }
 
   test "a hole between two ranges of a narrow integer type is found" {
-    const source = r"""
+    const source = raw"""
       fn probe(value: Int8): Int {
         match value {
           -128..=0 => 1
@@ -321,7 +321,7 @@ group "Literals and ranges" {
   }
 
   test "an exclusive range stops one before its end" {
-    const source = r"""
+    const source = raw"""
       fn probe(value: UInt8): Int {
         match value {
           0..255 => 1
@@ -332,7 +332,7 @@ group "Literals and ranges" {
   }
 
   test "a match over a literal type needs no wildcard" {
-    const source = r"""
+    const source = raw"""
       fn probe(status: "online" | "offline"): Int {
         match status {
           "online" => 1
@@ -344,7 +344,7 @@ group "Literals and ranges" {
   }
 
   test "a member of a literal type that no arm handles is named as the witness" {
-    const source = r"""
+    const source = raw"""
       fn probe(status: "online" | "offline"): Int {
         match status {
           "online" => 1
@@ -355,7 +355,7 @@ group "Literals and ranges" {
   }
 
   test "a `String` without a literal type can only be covered by a wildcard" {
-    const source = inBody(r"""
+    const source = inBody(raw"""
       const shown = match "a" {
         "a" => 1
         "b" => 2
@@ -368,7 +368,7 @@ group "Literals and ranges" {
 
 group "Tuples and lists" {
   test "a tuple of two types needs every combination, and the witness spells one out" {
-    const source = inBody(r"""
+    const source = inBody(raw"""
       const shown = match (Shape.Empty, true) {
         (.Circle(_), true) => 1
         (.Rectangle(_, _), _) => 2
@@ -378,7 +378,7 @@ group "Tuples and lists" {
   }
 
   test "a wildcard in one position of a tuple covers that position" {
-    const source = inBody(r"""
+    const source = inBody(raw"""
       const shown = match (Shape.Empty, true) {
         (.Circle(_), _) => 1
         (_, _) => 2
@@ -387,7 +387,7 @@ group "Tuples and lists" {
   }
 
   test "a list is covered by its lengths plus one rest pattern" {
-    const source = inBody(r"""
+    const source = inBody(raw"""
       const shown = match [1, 2] {
         [] => 0
         [only] => only
@@ -397,7 +397,7 @@ group "Tuples and lists" {
   }
 
   test "a list without a rest pattern is never covered: any longer list is missing" {
-    const source = inBody(r"""
+    const source = inBody(raw"""
       const shown = match [1, 2] {
         [] => 0
         [only] => only
@@ -406,7 +406,7 @@ group "Tuples and lists" {
   }
 
   test "a list pattern with a literal in it is walked into" {
-    const source = r"""
+    const source = raw"""
       fn probe(arguments: List<String>): Int {
         match arguments {
           ["check", ...] => 1
@@ -423,7 +423,7 @@ group "Tuples and lists" {
 
 group "An arm that is never reached" {
   test "an arm behind a wildcard, with the wildcard as the note" {
-    const source = inBody(r"""
+    const source = inBody(raw"""
       const area = match Shape.Empty {
         _ => 1.0
         .Empty => 0.0
@@ -433,7 +433,7 @@ group "An arm that is never reached" {
   }
 
   test "the same case twice, with the arm that covers it as the note" {
-    const source = inBody(r"""
+    const source = inBody(raw"""
       const area = match Shape.Empty {
         .Circle(radius) => radius
         .Circle(other) => other
@@ -445,7 +445,7 @@ group "An arm that is never reached" {
   }
 
   test "a range inside another range" {
-    const source = inBody(r"""
+    const source = inBody(raw"""
       const shown = match 3 {
         4..=9 => "a"
         5..=7 => "b"
@@ -456,7 +456,7 @@ group "An arm that is never reached" {
   }
 
   test "the same literal twice" {
-    const source = inBody(r"""
+    const source = inBody(raw"""
       const shown = match "a" {
         "a" => 1
         "a" => 2
@@ -467,7 +467,7 @@ group "An arm that is never reached" {
   }
 
   test "the same decimal literal twice, told apart by the text it is written as" {
-    const source = inBody(r"""
+    const source = inBody(raw"""
       const shown = match 1.5 {
         1.5 => 1
         1.5 => 2
@@ -477,7 +477,7 @@ group "An arm that is never reached" {
   }
 
   test "an arm that only all the arms above it together cover" {
-    const source = inBody(r"""
+    const source = inBody(raw"""
       const shown = match (true, true) {
         (true, _) => 1
         (false, _) => 2
@@ -488,7 +488,7 @@ group "An arm that is never reached" {
   }
 
   test "an arm with a guard is reachable and covers nothing" {
-    const source = inBody(r"""
+    const source = inBody(raw"""
       const area = match Shape.Empty {
         _everything if true => 1.0
         .Empty => 0.0
@@ -497,7 +497,7 @@ group "An arm that is never reached" {
   }
 
   test "an arm behind a guarded wildcard is reached" {
-    const source = inBody(r"""
+    const source = inBody(raw"""
       const area = match Shape.Empty {
         _everything if true => 1.0
         _ => 0.0
@@ -506,7 +506,7 @@ group "An arm that is never reached" {
   }
 
   test "the arm is recorded as unreachable in the plan" {
-    const source = inBody(r"""
+    const source = inBody(raw"""
       const area = match Shape.Empty {
         _ => 1.0
         .Empty => 0.0
@@ -519,7 +519,7 @@ group "An arm that is never reached" {
 
 group "Alternatives" {
   test "every alternative may bind, as long as all of them bind the same names" {
-    const source = inBody(r"""
+    const source = inBody(raw"""
       const area = match Shape.Empty {
         .Circle(size) | .Rectangle(size, _) => size
         .Empty => 0.0
@@ -528,7 +528,7 @@ group "Alternatives" {
   }
 
   test "a name that only one alternative binds" {
-    const source = inBody(r"""
+    const source = inBody(raw"""
       const area = match Shape.Empty {
         .Circle(size) | .Rectangle(size, other) => size
         .Empty => 0.0
@@ -541,7 +541,7 @@ group "Alternatives" {
   }
 
   test "a name the first alternative binds and another one does not" {
-    const source = inBody(r"""
+    const source = inBody(raw"""
       const area = match Shape.Empty {
         .Rectangle(size, _other) | .Circle(size) => size
         .Empty => 0.0
@@ -550,7 +550,7 @@ group "Alternatives" {
   }
 
   test "a name that two alternatives bind with two types" {
-    const source = inBody(r"""
+    const source = inBody(raw"""
       const shown = match (Shape.Empty, 1) {
         (.Circle(_value), _) | (_, _value) => 1
         _ => 2
@@ -559,7 +559,7 @@ group "Alternatives" {
   }
 
   test "alternatives are one branch each in the plan, with the path of that alternative" {
-    const source = inBody(r"""
+    const source = inBody(raw"""
       const area = match Shape.Empty {
         .Circle(size) | .Rectangle(size, _) => size
         .Empty => 0.0
@@ -574,7 +574,7 @@ group "Alternatives" {
   }
 
   test "alternatives together cover a type" {
-    const source = inBody(r"""
+    const source = inBody(raw"""
       const shown = match Direction.North {
         .North | .East => 1
         .South | .West => 2
@@ -587,7 +587,7 @@ group "Alternatives" {
 
 group "One root cause, one message" {
   test "a case that does not exist is reported once, and the match is not reported as incomplete" {
-    const source = inBody(r"""
+    const source = inBody(raw"""
       const shown = match Shape.Empty {
         .Nope => 1
       }""")
@@ -595,7 +595,7 @@ group "One root cause, one message" {
   }
 
   test "a subject the checker could not type says nothing about its arms" {
-    const source = inBody(r"""
+    const source = inBody(raw"""
       const shown = match missing() {
         .Circle(_) => 1
       }""")
@@ -603,7 +603,7 @@ group "One root cause, one message" {
   }
 
   test "a pattern with the wrong number of fields is reported once" {
-    const source = inBody(r"""
+    const source = inBody(raw"""
       const shown = match Shape.Empty {
         .Circle(_, _) => 1
       }""")

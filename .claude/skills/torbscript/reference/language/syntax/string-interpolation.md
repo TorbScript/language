@@ -64,7 +64,7 @@ print "escaped: \{not interpolated\}"
    tracks brace depth and skips over a nested string literal as one unit while it looks for the interpolation's
    closing `}`, which is what lets a `match` or another string literal stand inside the braces.
 
-5. **A raw string (`r"..."`) never interpolates.** `{` is an ordinary character inside one; see
+5. **A raw string (`raw"..."`) never interpolates.** `{` is an ordinary character inside one; see
    [Literals](literals.md) for the two string forms.
 
 ## What this is not

@@ -10,7 +10,7 @@
 use test, group from "std/test"
 use probe, problems, notes from "./harness"
 
-const declarations = r"""
+const declarations = raw"""
 
   type Shape {
     case Circle(radius: Float)
@@ -39,7 +39,7 @@ fn inBody(body: String): String {
 
 group "A pattern that has to match every value" {
   test "a `const` binding with a case pattern" {
-    const source = inBody(r"""
+    const source = inBody(raw"""
       const Some(value) = Some(1)
       print value""")
     assert(problems(source) == ["The pattern of a binding has to match every value, and `.None` does not"])
@@ -47,7 +47,7 @@ group "A pattern that has to match every value" {
   }
 
   test "destructuring a type and a tuple is fine, because neither can fail" {
-    const source = inBody(r"""
+    const source = inBody(raw"""
       const Point(x, y) = Point(1, 2)
       const (first, second) = (1, 2)
       print x + y + first + second""")
@@ -55,7 +55,7 @@ group "A pattern that has to match every value" {
   }
 
   test "the pattern of a `for`" {
-    const source = inBody(r"""
+    const source = inBody(raw"""
       for Some(value) in [Some(1)] {
         print value
       }""")
@@ -63,7 +63,7 @@ group "A pattern that has to match every value" {
   }
 
   test "a tuple pattern in a `for` is fine" {
-    const source = inBody(r"""
+    const source = inBody(raw"""
       for (first, second) in [(1, 2)] {
         print first + second
       }""")
@@ -71,23 +71,23 @@ group "A pattern that has to match every value" {
   }
 
   test "the parameter of a closure, where the expected function type says what it takes" {
-    const source = inBody(r"""
+    const source = inBody(raw"""
       const unwrap: (Int?) => Int = { Some(value) => value }
       print unwrap(Some(1))""")
     assert(problems(source) == ["The parameter of a closure has to match every value, and `.None` does not"])
   }
 
   test "a literal as the pattern of a binding" {
-    const source = inBody r"""  const 1 = 1"""
+    const source = inBody raw"""  const 1 = 1"""
     assert(problems(source) == ["The pattern of a binding has to match every value, and `_` does not"])
   }
 
   test "a bare case in scope is that case, not a constant that is spelled wrong" {
-    const source = inBody(r"""
+    const source = inBody(raw"""
       const found: Int? = Some(1)
       const None = found""")
     assert(problems(source) == ["The pattern of a binding has to match every value, and `.Some(_)` does not"])
-    const written = inBody(r"""
+    const written = inBody(raw"""
       const found: Int? = Some(1)
       var None = found""")
     assert(problems(written) == ["The pattern of a binding has to match every value, and `.Some(_)` does not"])
@@ -115,7 +115,7 @@ group "A pattern that has to match every value" {
 
 group "`if const` and `while const`" {
   test "a pattern that can fail is what `if const` is for" {
-    const source = inBody(r"""
+    const source = inBody(raw"""
       if const Some(value) = Some(1) {
         print value
       }""")
@@ -123,7 +123,7 @@ group "`if const` and `while const`" {
   }
 
   test "a pattern that always matches is a `const` written in the wrong place" {
-    const source = inBody(r"""
+    const source = inBody(raw"""
       if const value = 1 {
         print value
       }""")
@@ -131,7 +131,7 @@ group "`if const` and `while const`" {
   }
 
   test "a tuple pattern always matches, so it is a `const` as well" {
-    const source = inBody(r"""
+    const source = inBody(raw"""
       if const (first, second) = (1, 2) {
         print first + second
       }""")
@@ -139,7 +139,7 @@ group "`if const` and `while const`" {
   }
 
   test "a `while` whose pattern always matches never ends" {
-    const source = inBody(r"""
+    const source = inBody(raw"""
       while const value = 1 {
         print value
       }""")
@@ -147,7 +147,7 @@ group "`if const` and `while const`" {
   }
 
   test "`while const Some(x)` is what a loop over an iterator looks like" {
-    const source = inBody(r"""
+    const source = inBody(raw"""
       var queue: Int? = Some(1)
       while const Some(next) = queue {
         print next
@@ -157,7 +157,7 @@ group "`if const` and `while const`" {
   }
 
   test "`if var` binds a mutable name, which the plan records" {
-    const source = inBody(r"""
+    const source = inBody(raw"""
       var current: Int? = Some(1)
       if var Some(inner) = current {
         print inner
@@ -171,7 +171,7 @@ group "`if const` and `while const`" {
 
 group "The recorded plan" {
   test "the arms are in source order, with the case they test and the field every name comes from" {
-    const source = inBody(r"""
+    const source = inBody(raw"""
       const area = match Shape.Empty {
         .Circle(radius) => radius
         .Rectangle(width, height) => width * height
@@ -188,7 +188,7 @@ group "The recorded plan" {
   }
 
   test "a tuple pattern tests every position and reaches into it" {
-    const source = inBody(r"""
+    const source = inBody(raw"""
       const shown = match (Shape.Empty, Direction.North) {
         (.Circle(radius), .North) => 1
         (_, _) => 2
@@ -200,7 +200,7 @@ group "The recorded plan" {
   }
 
   test "a list pattern records the length it needs and the index of every item" {
-    const source = inBody(r"""
+    const source = inBody(raw"""
       const shown = match [1, 2] {
         [] => 0
         [only] => only
@@ -217,7 +217,7 @@ group "The recorded plan" {
   }
 
   test "a literal, a range and a guard, with the value of every literal" {
-    const source = inBody(r"""
+    const source = inBody(raw"""
       const shown = match 3 {
         0 => "zero"
         1 | 2 => "small"
@@ -238,14 +238,14 @@ group "The recorded plan" {
   }
 
   test "a destructuring binding is recorded under the span of its pattern, as one arm" {
-    const source = inBody(r"""
+    const source = inBody(raw"""
       const Point(x, y) = Point(1, 2)
       print x + y""")
     assert(probe(source).matchPlanOf("Point(x, y)") == ["x=subject.x y=subject.y"])
   }
 
   test "a `var` binding binds mutable names" {
-    const source = inBody(r"""
+    const source = inBody(raw"""
       var (first, second) = (1, 2)
       first = second
       print first""")
@@ -253,7 +253,7 @@ group "The recorded plan" {
   }
 
   test "the pattern of a `for` is recorded the same way" {
-    const source = inBody(r"""
+    const source = inBody(raw"""
       for (first, second) in [(1, 2)] {
         print first + second
       }""")
@@ -261,7 +261,7 @@ group "The recorded plan" {
   }
 
   test "the plan says whether the match is exhaustive, and what it does not cover" {
-    const source = inBody(r"""
+    const source = inBody(raw"""
       const area = match Shape.Empty {
         .Circle(radius) => radius
       }""")

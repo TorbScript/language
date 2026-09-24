@@ -17,7 +17,7 @@ use irOf, ownedIrOf, unsupportedIn from "./lower-harness"
 
 group "`a[key]`" {
   test "an index is a call of the `at` the type provides, the receiver before the key" {
-    const source = r"""
+    const source = raw"""
       type Grid with Indexed<Int, Int> {
         base: Int
 
@@ -31,7 +31,7 @@ group "`a[key]`" {
       }
       """
     assert(
-      irOf(source, "t_acme_x2f_app_main_cell") == r"""
+      irOf(source, "t_acme_x2f_app_main_cell") == raw"""
         fn t_acme_x2f_app_main_cell(grid: Record(T_acme_x2f_app_main_Grid) borrowed) -> Int64 {
           slot %0 parameter grid: Record(T_acme_x2f_app_main_Grid)
           slot %1 temporary: Int64
@@ -46,7 +46,7 @@ group "`a[key]`" {
 
   /** `at` mentions `Self` nowhere but as its receiver, so it is an ordinary member of the table of a trait-typed value. */
   test "an index on a trait-typed value goes through the table it carries" {
-    const source = r"""
+    const source = raw"""
       type Grid with Indexed<Int, Int> {
         base: Int
 
@@ -70,7 +70,7 @@ group "`a[key]`" {
       }
       """
     assert(
-      irOf(source, "t_acme_x2f_app_main_cell") == r"""
+      irOf(source, "t_acme_x2f_app_main_cell") == raw"""
         fn t_acme_x2f_app_main_cell(grid: Object(Indexed<Int64, Int64>) borrowed) -> Int64 {
           slot %0 parameter grid: Object(Indexed<Int64, Int64>)
           slot %1 temporary: Int64
@@ -91,7 +91,7 @@ group "`a[key]`" {
   test "a write through an index is the `set` the container provides, the key before the value" {
     const source = "fn write(var items: ArrayList<Int>) \{\n  items[0] = 1\n\}"
     assert(
-      irOf(source, "t_acme_x2f_app_main_write") == r"""
+      irOf(source, "t_acme_x2f_app_main_write") == raw"""
         fn t_acme_x2f_app_main_write(var items: List(Int64) borrowed) -> Void {
           slot %0 parameter items: List(Int64)
           slot %1 temporary: Int64
@@ -108,7 +108,7 @@ group "`a[key]`" {
 }
 
 /** The container these tests index into: a type of the program, so the `at` and the `set` in the IR are its own. */
-const indexedContainer = r"""
+const indexedContainer = raw"""
   type Cell {
     var value: Int
   }
@@ -146,13 +146,13 @@ group "a `var` path through `a[key]`" {
    * once everything the assignment needs has been evaluated (BACKEND 2.3).
    */
   test "a field of an element is a write to a slot of the frame, between the `at` and the `set`" {
-    const source = indexedProgram(r"""
+    const source = indexedProgram(raw"""
       fn writeField(var row: Row) {
         row[0].value = 5
       }
       """)
     assert(
-      irOf(source, "t_acme_x2f_app_main_writeField") == r"""
+      irOf(source, "t_acme_x2f_app_main_writeField") == raw"""
         fn t_acme_x2f_app_main_writeField(var row: Record(T_acme_x2f_app_main_Row) borrowed) -> Void {
           slot %0 parameter row: Record(T_acme_x2f_app_main_Row)
           slot %1 temporary: Int64
@@ -177,7 +177,7 @@ group "a `var` path through `a[key]`" {
    * `List.update`'s `change self[index]` an ordinary place - and the put-back is what makes the change reach the list.
    */
   test "a `var` argument through an index is the address of the element the frame holds" {
-    const source = indexedProgram(r"""
+    const source = indexedProgram(raw"""
       fn bumped(var value: Int) {
         value = value + 1
       }
@@ -187,7 +187,7 @@ group "a `var` path through `a[key]`" {
       }
       """)
     assert(
-      irOf(source, "t_acme_x2f_app_main_writeArgument") == r"""
+      irOf(source, "t_acme_x2f_app_main_writeArgument") == raw"""
         fn t_acme_x2f_app_main_writeArgument(var row: Record(T_acme_x2f_app_main_Row) borrowed) -> Void {
           slot %0 parameter row: Record(T_acme_x2f_app_main_Row)
           slot %1 temporary: Int64
@@ -211,7 +211,7 @@ group "a `var` path through `a[key]`" {
    * back in the sheet after the cell is back in the row, or the change would be lost.
    */
   test "the nested case evaluates every key first and puts the elements back innermost first" {
-    const source = r"""
+    const source = raw"""
       type Cell {
         var value: Int
       }
@@ -245,7 +245,7 @@ group "a `var` path through `a[key]`" {
       }
       """
     assert(
-      irOf(source, "t_acme_x2f_app_main_write") == r"""
+      irOf(source, "t_acme_x2f_app_main_write") == raw"""
         fn t_acme_x2f_app_main_write(var sheet: Record(T_acme_x2f_app_main_Sheet) borrowed) -> Void {
           slot %0 parameter sheet: Record(T_acme_x2f_app_main_Sheet)
           slot %1 temporary: Int64
@@ -280,7 +280,7 @@ group "which of the three shapes a literal is" {
    */
   test "a literal that fills an `Array` is one `arrayNew` of its items in written order" {
     assert(
-      irOf("fn fixed(): Array<Int, 2> \{\n  [1, 2]\n\}", "t_acme_x2f_app_main_fixed") == r"""
+      irOf("fn fixed(): Array<Int, 2> \{\n  [1, 2]\n\}", "t_acme_x2f_app_main_fixed") == raw"""
         fn t_acme_x2f_app_main_fixed() -> Array(Int64, 2) {
           slot %0 temporary: Int64
           slot %1 temporary: Int64
@@ -302,13 +302,13 @@ group "a range as a value" {
    * its type.
    */
   test "a range with both ends is one `Construct` of the two ends and the flag" {
-    const source = r"""
+    const source = raw"""
       fn span(): Range<Int> {
         3..7
       }
       """
     assert(
-      irOf(source, "t_acme_x2f_app_main_span") == r"""
+      irOf(source, "t_acme_x2f_app_main_span") == raw"""
         fn t_acme_x2f_app_main_span() -> Record(T_std_x2f_prelude_types_Range__Int64) {
           slot %0 temporary: Int64
           slot %1 temporary: Int64
@@ -335,7 +335,7 @@ group "a range as a value" {
   }
 }
 
-const walked = r"""
+const walked = raw"""
   type Counting with Iterator<Int> {
     var seen: Int = 0
 
@@ -369,7 +369,7 @@ group "`for` over a collection" {
   test "the subject is evaluated once, the cursor is a `var` local, and the head switches on the `Option`" {
     assert(unsupportedIn(walked) == [])
     assert(
-      irOf(walked, "t_acme_x2f_app_main_total") == r"""
+      irOf(walked, "t_acme_x2f_app_main_total") == raw"""
         fn t_acme_x2f_app_main_total(values: Record(T_acme_x2f_app_main_Three) borrowed) -> Int64 {
           slot %0 parameter values: Record(T_acme_x2f_app_main_Three)
           slot %1 local sum: Int64
@@ -397,7 +397,7 @@ group "`for` over a collection" {
 
   /** `continue` pulls the next value and `break` leaves, so neither needs a step block the way a counter does. */
   test "`continue` jumps to the head and `break` to the block after the loop" {
-    const source = r"""
+    const source = raw"""
       type Counting with Iterator<Int> {
         var seen: Int = 0
 
@@ -429,7 +429,7 @@ group "`for` over a collection" {
       """
     // `continue` is `jump b1` - the head, where the next value is pulled - and `break` is `jump b3`, the block after it
     assert(
-      irOf(source, "t_acme_x2f_app_main_total") == r"""
+      irOf(source, "t_acme_x2f_app_main_total") == raw"""
         fn t_acme_x2f_app_main_total(values: Record(T_acme_x2f_app_main_Three) borrowed) -> Int64 {
           slot %0 parameter values: Record(T_acme_x2f_app_main_Three)
           slot %1 local sum: Int64
@@ -478,7 +478,7 @@ group "`for` over a collection" {
    * on the back edge and the drop lands on it like any other edge drop (BACKEND 2.2 step 5).
    */
   test "a counted item is released on the back edge, and the cursor once after the loop" {
-    const source = r"""
+    const source = raw"""
       type Texts with Iterator<String> {
         var seen: Int = 0
         var tag: String = "a"

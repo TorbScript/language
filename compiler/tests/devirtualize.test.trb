@@ -14,7 +14,7 @@
 use test, group from "std/test"
 use irOf, ownedIrOf, textOf from "./lower-harness"
 
-const declarations = r"""
+const declarations = raw"""
   trait Sized {
     fn size(): Int
   }
@@ -35,14 +35,14 @@ fn program(body: String): String {
 group "what loses its box" {
   /** The annotation says the trait and the value never leaves the frame, so the slot is the payload itself. */
   test "a value written as the trait, used in its own frame, is the payload" {
-    const source = program(r"""
+    const source = program(raw"""
       fn total(): Int {
         const value: Sized = Small(1)
         value.size()
       }
       """)
     assert(
-      ownedIrOf(source, "t_acme_x2f_app_main_total") == r"""
+      ownedIrOf(source, "t_acme_x2f_app_main_total") == raw"""
         fn t_acme_x2f_app_main_total() -> Int64 {
           slot %0 local value: Record(T_acme_x2f_app_main_Small)
           slot %1 temporary: Int64
@@ -64,7 +64,7 @@ group "what loses its box" {
    * literal of a collection is built in one function and indexed in the next one in every program there is.
    */
   test "a result and a parameter of the trait become the payload together" {
-    const source = program(r"""
+    const source = program(raw"""
       fn made(): Sized {
         Small(1)
       }
@@ -78,7 +78,7 @@ group "what loses its box" {
       }
       """)
     assert(
-      irOf(source, "t_acme_x2f_app_main_total") == r"""
+      irOf(source, "t_acme_x2f_app_main_total") == raw"""
         fn t_acme_x2f_app_main_total() -> Int64 {
           slot %0 temporary: Record(T_acme_x2f_app_main_Small)
           slot %1 temporary: Int64
@@ -89,7 +89,7 @@ group "what loses its box" {
         }"""
     )
     assert(
-      irOf(source, "t_acme_x2f_app_main_sizeOf") == r"""
+      irOf(source, "t_acme_x2f_app_main_sizeOf") == raw"""
         fn t_acme_x2f_app_main_sizeOf(value: Record(T_acme_x2f_app_main_Small) borrowed) -> Int64 {
           slot %0 parameter value: Record(T_acme_x2f_app_main_Small)
           slot %1 temporary: Int64
@@ -106,7 +106,7 @@ group "what loses its box" {
    * slot, and there is no box left to make unique.
    */
   test "a member that writes through its receiver is the place the slot is" {
-    const source = r"""
+    const source = raw"""
       trait Counter {
         var fn bump()
 
@@ -132,7 +132,7 @@ group "what loses its box" {
       }
       """
     assert(
-      ownedIrOf(source, "t_acme_x2f_app_main_counted") == r"""
+      ownedIrOf(source, "t_acme_x2f_app_main_counted") == raw"""
         fn t_acme_x2f_app_main_counted() -> Int64 {
           slot %0 local tally: Record(T_acme_x2f_app_main_Tally)
           slot %1 temporary: Int64
@@ -157,7 +157,7 @@ group "what keeps its box" {
    * read back out as the trait. Peeling the slot would not reach the storage inside the layout at all.
    */
   test "a value that is built into a record is boxed, and the read out of it dispatches" {
-    const source = program(r"""
+    const source = program(raw"""
       type Holder {
         inner: Sized
       }
@@ -168,7 +168,7 @@ group "what keeps its box" {
       }
       """)
     assert(
-      ownedIrOf(source, "t_acme_x2f_app_main_held") == r"""
+      ownedIrOf(source, "t_acme_x2f_app_main_held") == raw"""
         fn t_acme_x2f_app_main_held() -> Int64 {
           slot %0 local holder: Record(T_acme_x2f_app_main_Holder)
           slot %1 temporary: Int64
@@ -195,7 +195,7 @@ group "what keeps its box" {
    * about the payload, so it keeps its box and the call stays a member of the table the value carries.
    */
   test "two implementations that meet in one parameter keep the dispatch" {
-    const source = program(r"""
+    const source = program(raw"""
       type Fixed with Sized {
         fn size(): Int {
           9
@@ -211,7 +211,7 @@ group "what keeps its box" {
       }
       """)
     assert(
-      irOf(source, "t_acme_x2f_app_main_sizeOf") == r"""
+      irOf(source, "t_acme_x2f_app_main_sizeOf") == raw"""
         fn t_acme_x2f_app_main_sizeOf(value: Object(Sized) borrowed) -> Int64 {
           slot %0 parameter value: Object(Sized)
           slot %1 temporary: Int64
@@ -228,7 +228,7 @@ group "what keeps its box" {
    * index and not its declaration. So the `Sized` a boxed value answers is the box the table promises.
    */
   test "a member a table points at keeps the signature the thunk calls" {
-    const source = program(r"""
+    const source = program(raw"""
       trait Wrapping {
         fn inner(): Sized
       }
@@ -263,7 +263,7 @@ group "what keeps its box" {
  * list. The copy no table names is free of that, and the second run of the analysis peels it.
  */
 group "a copy of a frozen member" {
-  const iterated = program(r"""
+  const iterated = program(raw"""
     type Counting with Iterator<Int> {
       var seen: Int = 0
 
@@ -310,13 +310,13 @@ group "a copy of a frozen member" {
   test "a `for` whose iterable is concrete gets a cursor on the frame, although a table names the member" {
     assert(
       irOf(iterated, "t_acme_x2f_app_main_total").contains(
-        r"""
+        raw"""
           slot %2 local iterator: Record(T_acme_x2f_app_main_Counting)"""
       )
     )
     assert(
       irOf(iterated, "t_acme_x2f_app_main_total").contains(
-        r"""
+        raw"""
           %2 = call t_acme_x2f_app_main_Three_iterate_x24_direct(%0 borrowed)"""
       )
     )

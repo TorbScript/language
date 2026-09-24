@@ -55,7 +55,7 @@ fn emitterFindingsOf(source: String): List<String> {
 }
 
 /** A resource with an identity, handed to a generic `var` parameter as a temporary. */
-const resources = r"""
+const resources = raw"""
   shared type Connection with Close {
     fn send(text: String) {
       print text
@@ -76,7 +76,7 @@ const resources = r"""
   }
   """
 
-const counters = r"""
+const counters = raw"""
   type Counter {
     var hits: Int
 
@@ -111,7 +111,7 @@ const counters = r"""
 group "A `var` parameter" {
   test "is a reference in the signature, and an assignment through it is a write" {
     assert(
-      irOf(counters, "t_acme_x2f_app_main_grow") == r"""
+      irOf(counters, "t_acme_x2f_app_main_grow") == raw"""
         fn t_acme_x2f_app_main_grow(var total: Int64 borrowed, by: Int64 borrowed) -> Void {
           slot %0 parameter total: Int64
           slot %1 parameter by: Int64
@@ -126,7 +126,7 @@ group "A `var` parameter" {
 
   test "is handed on as the place it already is, and never as a copy of the value" {
     assert(
-      irOf(counters, "t_acme_x2f_app_main_growTwice") == r"""
+      irOf(counters, "t_acme_x2f_app_main_growTwice") == raw"""
         fn t_acme_x2f_app_main_growTwice(var total: Int64 borrowed, by: Int64 borrowed) -> Void {
           slot %0 parameter total: Int64
           slot %1 parameter by: Int64
@@ -141,7 +141,7 @@ group "A `var` parameter" {
 
   test "the call site passes the address of the local the value lives in" {
     assert(
-      irOf(counters, "t_acme_x2f_app_main_run") == r"""
+      irOf(counters, "t_acme_x2f_app_main_run") == raw"""
         fn t_acme_x2f_app_main_run() -> Int64 {
           slot %0 local total: Int64
           slot %1 temporary: Int64
@@ -167,7 +167,7 @@ group "A `var` parameter" {
   test "a `var self` receiver is the first parameter, and a field of it is one step from it" {
     assert(
       irOf(counters, "t_acme_x2f_app_main_Counter_increment")
-        == r"""
+        == raw"""
           fn t_acme_x2f_app_main_Counter_increment(var self: Record(T_acme_x2f_app_main_Counter) borrowed) -> Void {
             slot %0 parameter self: Record(T_acme_x2f_app_main_Counter)
             slot %1 temporary: Int64
@@ -186,7 +186,7 @@ group "A `var` parameter" {
   test "in C it is a pointer, and every read through it one dereference" {
     assert(
       functionOf(counters, "t_acme_x2f_app_main_Counter_increment")
-        == r"""
+        == raw"""
           static void t_acme_x2f_app_main_Counter_increment(T_acme_x2f_app_main_Counter *s0_self) {
             int64_t s1 = { 0 };
             int64_t s2 = { 0 };
@@ -206,7 +206,7 @@ group "A `var` parameter" {
   test "in C a place that is already a pointer is passed on as it is, never as `&*p`" {
     assert(
       functionOf(counters, "t_acme_x2f_app_main_growTwice")
-        == r"""
+        == raw"""
           static void t_acme_x2f_app_main_growTwice(int64_t *s0_total, int64_t s1_by) {
             TORB_CHECK_STACK(TORB_LOCATION("acme/app/src/main.trb", 13, 39));
             torb_void s2 = { 0 };
@@ -221,7 +221,7 @@ group "A `var` parameter" {
   }
 }
 
-const lines = r"""
+const lines = raw"""
   type Point {
     var x: Int
     var y: Int
@@ -245,7 +245,7 @@ const lines = r"""
 group "An interior projection" {
   test "is one `Reference` of several steps, and not a read followed by a write" {
     assert(
-      irOf(lines, "t_acme_x2f_app_main_stretch") == r"""
+      irOf(lines, "t_acme_x2f_app_main_stretch") == raw"""
         fn t_acme_x2f_app_main_stretch(var line: Record(T_acme_x2f_app_main_Line) borrowed, by: Int64 borrowed) -> Void {
           slot %0 parameter line: Record(T_acme_x2f_app_main_Line)
           slot %1 parameter by: Int64
@@ -267,7 +267,7 @@ group "An interior projection" {
   test "in C it is a member path, and a field of it the address of that member" {
     assert(
       functionOf(lines, "t_acme_x2f_app_main_stretch")
-        == r"""
+        == raw"""
           static void t_acme_x2f_app_main_stretch(T_acme_x2f_app_main_Line *s0_line, int64_t s1_by) {
             TORB_CHECK_STACK(TORB_LOCATION("acme/app/src/main.trb", 15, 37));
             T_acme_x2f_app_main_Point s2 = { 0 };
@@ -289,7 +289,7 @@ group "An interior projection" {
   }
 }
 
-const bundles = r"""
+const bundles = raw"""
   type Bundle {
     var first: String
     var second: String
@@ -320,7 +320,7 @@ group "Copy on write on the path" {
   test "a write through a counted owner makes it unique first, and releases what was there" {
     assert(
       ownedIrOf(bundles, "t_acme_x2f_app_main_rename")
-        == r"""
+        == raw"""
           fn t_acme_x2f_app_main_rename(var bundle: Record(T_acme_x2f_app_main_Bundle) borrowed, name: String owned) -> Void {
             slot %0 parameter bundle: Record(T_acme_x2f_app_main_Bundle)
             slot %1 parameter name: String
@@ -335,7 +335,7 @@ group "Copy on write on the path" {
   test "the owner that is made unique is the counted one on the path, not the base" {
     assert(
       ownedIrOf(bundles, "t_acme_x2f_app_main_renameInside")
-        == r"""
+        == raw"""
           fn t_acme_x2f_app_main_renameInside(var holder: Record(T_acme_x2f_app_main_Holder) borrowed, name: String owned) -> Void {
             slot %0 parameter holder: Record(T_acme_x2f_app_main_Holder)
             slot %1 parameter name: String
@@ -350,7 +350,7 @@ group "Copy on write on the path" {
   test "a place the callee writes through needs no `MakeUnique` here: the callee makes it unique itself" {
     assert(
       ownedIrOf(bundles, "t_acme_x2f_app_main_renameOnce")
-        == r"""
+        == raw"""
           fn t_acme_x2f_app_main_renameOnce(var holder: Record(T_acme_x2f_app_main_Holder) borrowed, name: String owned) -> Void {
             slot %0 parameter holder: Record(T_acme_x2f_app_main_Holder)
             slot %1 parameter name: String
@@ -365,7 +365,7 @@ group "Copy on write on the path" {
   test "in C make-unique writes the new block back through the caller's pointer" {
     assert(
       functionOf(bundles, "t_acme_x2f_app_main_renameInside")
-        == r"""
+        == raw"""
           static void t_acme_x2f_app_main_renameInside(T_acme_x2f_app_main_Holder *s0_holder, torb_text s1_name) {
           #line 18 "acme/app/src/main.trb"
             /* body */
@@ -380,7 +380,7 @@ group "Copy on write on the path" {
 
 group "Places the source writes another way" {
   test "a temporary is a valid argument of a `var` parameter: the callee is its only owner" {
-    const source = r"""
+    const source = raw"""
       type Counter {
         var hits: Int
       }
@@ -395,7 +395,7 @@ group "Places the source writes another way" {
       }
       """
     assert(
-      irOf(source, "t_acme_x2f_app_main_run") == r"""
+      irOf(source, "t_acme_x2f_app_main_run") == raw"""
         fn t_acme_x2f_app_main_run() -> Int64 {
           slot %0 temporary: Record(T_acme_x2f_app_main_Counter)
           slot %1 temporary: Int64
@@ -412,7 +412,7 @@ group "Places the source writes another way" {
   }
 
   test "a property command writes the field it names, through the place the checker recorded" {
-    const source = r"""
+    const source = raw"""
       type Server {
         var port: Int = 0
       }
@@ -423,7 +423,7 @@ group "Places the source writes another way" {
       """
     assert(
       irOf(source, "t_acme_x2f_app_main_configure")
-        == r"""
+        == raw"""
           fn t_acme_x2f_app_main_configure(var server: Record(T_acme_x2f_app_main_Server) borrowed) -> Void {
             slot %0 parameter server: Record(T_acme_x2f_app_main_Server)
             slot %1 temporary: Int64
@@ -437,7 +437,7 @@ group "Places the source writes another way" {
   }
 
   test "a call whose result would land in the base of its own place writes the result instead" {
-    const source = r"""
+    const source = raw"""
       type Counter {
         var hits: Int
       }
@@ -454,7 +454,7 @@ group "Places the source writes another way" {
       }
       """
     assert(
-      irOf(source, "t_acme_x2f_app_main_run") == r"""
+      irOf(source, "t_acme_x2f_app_main_run") == raw"""
         fn t_acme_x2f_app_main_run() -> Int64 {
           slot %0 local counter: Record(T_acme_x2f_app_main_Counter)
           slot %1 temporary: Int64
@@ -616,7 +616,7 @@ group "What the verifier demands of a place" {
 group "A `var` argument of a generic callee" {
   test "the temporary of a `var` argument has the type the callee declares, for this instance" {
     assert(
-      ownedIrOf(resources, "t_acme_x2f_app_main_opened") == r"""
+      ownedIrOf(resources, "t_acme_x2f_app_main_opened") == raw"""
         fn t_acme_x2f_app_main_opened() -> Int64 {
           slot %0 temporary: Shared(T_acme_x2f_app_main_Connection)
           slot %1 temporary: Closure((Shared(T_acme_x2f_app_main_Connection)) -> Int64)

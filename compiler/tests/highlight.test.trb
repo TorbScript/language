@@ -68,7 +68,7 @@ fn count(found: List<Found>, text: String): Int {
 
 group "Highlight: generic parameters" {
   test "a type parameter is typed at its declaration and at every use, a const parameter included" {
-    const source = r"""
+    const source = raw"""
       type Array<Item, const Size: Int> {
         fn first(): Item { .Empty }
         fn size(): Int { Size }
@@ -86,7 +86,7 @@ group "Highlight: generic parameters" {
   }
 
   test "a function's own type parameter is typed too" {
-    const source = r"""
+    const source = raw"""
       fn identity<Value>(value: Value): Value {
         value
       }
@@ -101,7 +101,7 @@ group "Highlight: generic parameters" {
 
 group "Highlight: types, traits and cases" {
   test "a type declaration and a trait declaration are colored apart" {
-    const found = tokensOf(r"""
+    const found = tokensOf(raw"""
       type Shape {}
       trait Show {}
       """)
@@ -110,7 +110,7 @@ group "Highlight: types, traits and cases" {
   }
 
   test "a case is its own kind in every written form" {
-    const source = r"""
+    const source = raw"""
       type Shape {
         case Circle(radius: Float)
 
@@ -137,7 +137,7 @@ group "Highlight: types, traits and cases" {
   }
 
   test "a prelude case is bare everywhere, with a defaultLibrary modifier" {
-    const source = r"""
+    const source = raw"""
       fn parse(text: String): Result<Int, String> {
         match Int.tryParse(text) {
           Some(value) => Ok(value)
@@ -154,7 +154,7 @@ group "Highlight: types, traits and cases" {
   }
 
   test "a type used as a constructor stays a type, in an expression and in a pattern" {
-    const source = r"""
+    const source = raw"""
       type Point {
         x: Int
         y: Int
@@ -175,7 +175,7 @@ group "Highlight: types, traits and cases" {
   }
 
   test "an upper-case pattern name this file cannot place gets no token" {
-    const source = r"""
+    const source = raw"""
       fn run(value: Something) {
         match value {
           NotImported(x) => x
@@ -190,7 +190,7 @@ group "Highlight: types, traits and cases" {
 
 group "Highlight: functions and methods" {
   test "command style and call style produce the same token" {
-    const source = r"""
+    const source = raw"""
       fn greet(name: String): String {
         "hi"
       }
@@ -204,7 +204,7 @@ group "Highlight: functions and methods" {
   }
 
   test "a dotted call is a method, a bare call a function" {
-    const source = r"""
+    const source = raw"""
       type Greeter {
         fn greet(): String { "hi" }
       }
@@ -222,7 +222,7 @@ group "Highlight: functions and methods" {
   }
 
   test "a bare call that names a method of the enclosing type is a method" {
-    const source = r"""
+    const source = raw"""
       type Shape {
         fn area(): Float { 1.0 }
         fn describe(): String {
@@ -237,7 +237,7 @@ group "Highlight: functions and methods" {
   }
 
   test "a static fn is marked static and a var fn is marked mutable" {
-    const statics = tokensOf(r"""
+    const statics = tokensOf(raw"""
       type Point {
         static fn origin(): Point { Point(0, 0) }
         x: Int
@@ -247,7 +247,7 @@ group "Highlight: functions and methods" {
     assert only(statics, "origin").modifiers.contains("static")
 
     // A `var fn` is underlined like a `var` field, at its declaration and at every call of it
-    const source = r"""
+    const source = raw"""
       type Counter {
         var count: Int = 0
         var fn grow() { count = count + 1 }
@@ -262,7 +262,7 @@ group "Highlight: functions and methods" {
   }
 
   test "a static value is a static property where it is declared and where it is read" {
-    const source = r"""
+    const source = raw"""
       type Point {
         x: Int
         static origin = Point(0)
@@ -285,7 +285,7 @@ group "Highlight: functions and methods" {
 
 group "Highlight: parameters, locals and fields" {
   test "a parameter is typed at its declaration and at every use, apart from a local" {
-    const source = r"""
+    const source = raw"""
       fn add(a: Int, b: Int): Int {
         const total = a + b
         total
@@ -299,7 +299,7 @@ group "Highlight: parameters, locals and fields" {
   }
 
   test "a field read bare inside a method of its own type is a property" {
-    const source = r"""
+    const source = raw"""
       type Counter {
         var sent: Int = 0
 
@@ -318,7 +318,7 @@ group "Highlight: parameters, locals and fields" {
   }
 
   test "a field read through a value is a property, apart from the parameter it is read through" {
-    const source = r"""
+    const source = raw"""
       type Point {
         x: Int
       }
@@ -334,7 +334,7 @@ group "Highlight: parameters, locals and fields" {
   }
 
   test "a var binding and a const binding share a kind and differ only by a modifier" {
-    const found = tokensOf(r"""
+    const found = tokensOf(raw"""
       const a = 1
       var b = 2
       """)
@@ -347,7 +347,7 @@ group "Highlight: parameters, locals and fields" {
   }
 
   test "the implicit parameters of a closure are parameters" {
-    const found = tokensOf(r"""
+    const found = tokensOf(raw"""
       fn run(): Int {
         [1, 2].map({ _ + 1 }).length()
       }
@@ -358,7 +358,7 @@ group "Highlight: parameters, locals and fields" {
 
 group "Highlight: scopes" {
   test "a closure parameter shadows a local around it" {
-    const found = tokensOf(r"""
+    const found = tokensOf(raw"""
       fn run(): Int {
         const x = 1
         [1, 2].map({ x => x + 1 }).length()
@@ -371,7 +371,7 @@ group "Highlight: scopes" {
   }
 
   test "a nested fn does not see the locals around it" {
-    const found = tokensOf(r"""
+    const found = tokensOf(raw"""
       fn outer(): Int {
         const x = 1
         fn inner(): Int {
@@ -388,7 +388,7 @@ group "Highlight: scopes" {
   }
 
   test "a for binding is a variable, scoped to the body of the loop" {
-    const found = tokensOf(r"""
+    const found = tokensOf(raw"""
       fn run(list: List<Int>) {
         for item in list {
           item
@@ -400,7 +400,7 @@ group "Highlight: scopes" {
   }
 
   test "if const binds inside the then block alone" {
-    const found = tokensOf(r"""
+    const found = tokensOf(raw"""
       fn run(value: Int?) {
         if const Some(found) = value {
           found
@@ -413,7 +413,7 @@ group "Highlight: scopes" {
   }
 
   test "if var marks the bound place mutable" {
-    const found = tokensOf(r"""
+    const found = tokensOf(raw"""
       fn run(value: Int?) {
         if var Some(found) = value {
           found
@@ -435,7 +435,7 @@ group "Highlight: scopes" {
   }
 
   test "the label of a case pattern field is a property" {
-    const found = tokensOf(r"""
+    const found = tokensOf(raw"""
       fn run(shape: Shape) {
         match shape {
           Point(x: a, y: b) => a
@@ -452,7 +452,7 @@ group "Highlight: scopes" {
 
 group "Highlight: labels, extend and namespaces" {
   test "a labeled argument of a constructor is a property, of a function call a parameter" {
-    const source = r"""
+    const source = raw"""
       type Point {
         x: Int
         y: Int
@@ -471,7 +471,7 @@ group "Highlight: labels, extend and namespaces" {
   }
 
   test "a member an extend adds is a method of the type it targets" {
-    const source = r"""
+    const source = raw"""
       trait Show {
         fn show(): String
       }
@@ -497,7 +497,7 @@ group "Highlight: labels, extend and namespaces" {
   }
 
   test "the delegate of a with by clause is a property" {
-    const found = tokensOf(r"""
+    const found = tokensOf(raw"""
       trait Show {
         fn show(): String
       }
@@ -513,7 +513,7 @@ group "Highlight: labels, extend and namespaces" {
   }
 
   test "use star as alias is a namespace, and a call through it is a function" {
-    const found = tokensOf(r"""
+    const found = tokensOf(raw"""
       use * as http from "std/http"
       const response = http.get("/")
       """)

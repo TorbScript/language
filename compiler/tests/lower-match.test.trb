@@ -11,7 +11,7 @@
 use test, group from "std/test"
 use irOf, ownedIrOf, unsupportedIn from "./lower-harness"
 
-const shapes = r"""
+const shapes = raw"""
 
   type Shape {
     case Circle(radius: Int)
@@ -22,7 +22,7 @@ const shapes = r"""
 
 group "`match`" {
   test "one switch over the tag, one block per arm, and one join" {
-    const source = r"""
+    const source = raw"""
       fn area(shape: Shape): Int {
         match shape {
           .Circle(radius) => radius
@@ -32,7 +32,7 @@ group "`match`" {
       }
       """ + shapes
     assert(
-      ownedIrOf(source, "t_acme_x2f_app_main_area") == r"""
+      ownedIrOf(source, "t_acme_x2f_app_main_area") == raw"""
         fn t_acme_x2f_app_main_area(shape: Variant(T_acme_x2f_app_main_Shape) borrowed) -> Int64 {
           slot %0 parameter shape: Variant(T_acme_x2f_app_main_Shape)
           slot %1 temporary: Int64
@@ -72,7 +72,7 @@ group "`match`" {
   }
 
   test "a guard is a branch that falls back to the block of the next arm" {
-    const source = r"""
+    const source = raw"""
       fn sized(value: Int): Int {
         match value {
           found if found > 10 => 1
@@ -81,7 +81,7 @@ group "`match`" {
       }
       """
     assert(
-      ownedIrOf(source, "t_acme_x2f_app_main_sized") == r"""
+      ownedIrOf(source, "t_acme_x2f_app_main_sized") == raw"""
         fn t_acme_x2f_app_main_sized(value: Int64 borrowed) -> Int64 {
           slot %0 parameter value: Int64
           slot %1 temporary: Int64
@@ -110,7 +110,7 @@ group "`match`" {
   }
 
   test "a counted name a guard binds is released on the edge where the guard did not hold" {
-    const source = r"""
+    const source = raw"""
       type Label {
         case Named(text: String)
         case Anonymous
@@ -124,7 +124,7 @@ group "`match`" {
       }
       """
     assert(
-      ownedIrOf(source, "t_acme_x2f_app_main_sizeOf") == r"""
+      ownedIrOf(source, "t_acme_x2f_app_main_sizeOf") == raw"""
         fn t_acme_x2f_app_main_sizeOf(label: Variant(T_acme_x2f_app_main_Label) borrowed) -> Int64 {
           slot %0 parameter label: Variant(T_acme_x2f_app_main_Label)
           slot %1 temporary: Int64
@@ -162,7 +162,7 @@ group "`match`" {
 
 group "`?` and `??`" {
   test "`?` on a `Result` whose error converts through the generated `From` of a wrapper case" {
-    const source = r"""
+    const source = raw"""
       fn doubled(value: Int): Result<Int, AppError> {
         const found = checked(value)?
         Ok(found + 1)
@@ -181,7 +181,7 @@ group "`?` and `??`" {
       }
       """
     assert(
-      ownedIrOf(source, "t_acme_x2f_app_main_doubled") == r"""
+      ownedIrOf(source, "t_acme_x2f_app_main_doubled") == raw"""
         fn t_acme_x2f_app_main_doubled(value: Int64 borrowed) -> Variant(T_std_x2f_prelude_types_Result__Int64_T_acme_x2f_app_main_AppError) {
           slot %0 parameter value: Int64
           slot %1 local found: Int64
@@ -213,14 +213,14 @@ group "`?` and `??`" {
   }
 
   test "`?` on an `Option` builds the empty case of the enclosing one and returns it" {
-    const source = r"""
+    const source = raw"""
       fn addedOne(value: Int?): Int? {
         const found = value?
         Some(found + 1)
       }
       """
     assert(
-      ownedIrOf(source, "t_acme_x2f_app_main_addedOne") == r"""
+      ownedIrOf(source, "t_acme_x2f_app_main_addedOne") == raw"""
         fn t_acme_x2f_app_main_addedOne(value: Variant(T_std_x2f_prelude_types_Option__Int64) borrowed) -> Variant(T_std_x2f_prelude_types_Option__Int64) {
           slot %0 parameter value: Variant(T_std_x2f_prelude_types_Option__Int64)
           slot %1 local found: Int64
@@ -246,13 +246,13 @@ group "`?` and `??`" {
   }
 
   test "`??` inlines the thunk of its fallback: the right side runs only where there is no value" {
-    const source = r"""
+    const source = raw"""
       fn orZero(value: Int?): Int {
         value ?? 0
       }
       """
     assert(
-      ownedIrOf(source, "t_acme_x2f_app_main_orZero") == r"""
+      ownedIrOf(source, "t_acme_x2f_app_main_orZero") == raw"""
         fn t_acme_x2f_app_main_orZero(value: Variant(T_std_x2f_prelude_types_Option__Int64) borrowed) -> Int64 {
           slot %0 parameter value: Variant(T_std_x2f_prelude_types_Option__Int64)
           slot %1 temporary: Int64
@@ -275,7 +275,7 @@ group "`?` and `??`" {
 
 group "`if const` and `while const`" {
   test "`if const` is the decision tree with the `else` as the block a value that does not match goes to" {
-    const source = r"""
+    const source = raw"""
       fn unwrapped(value: Int?): Int {
         if const Some(found) = value {
           found
@@ -285,7 +285,7 @@ group "`if const` and `while const`" {
       }
       """
     assert(
-      ownedIrOf(source, "t_acme_x2f_app_main_unwrapped") == r"""
+      ownedIrOf(source, "t_acme_x2f_app_main_unwrapped") == raw"""
         fn t_acme_x2f_app_main_unwrapped(value: Variant(T_std_x2f_prelude_types_Option__Int64) borrowed) -> Int64 {
           slot %0 parameter value: Variant(T_std_x2f_prelude_types_Option__Int64)
           slot %1 temporary: Int64
@@ -314,7 +314,7 @@ group "`if const` and `while const`" {
   }
 
   test "`while const` matches the pattern again at the head of every round" {
-    const source = r"""
+    const source = raw"""
       fn total(first: Int?): Int {
         var current = first
         var sum = 0
@@ -326,7 +326,7 @@ group "`if const` and `while const`" {
       }
       """
     assert(
-      ownedIrOf(source, "t_acme_x2f_app_main_total") == r"""
+      ownedIrOf(source, "t_acme_x2f_app_main_total") == raw"""
         fn t_acme_x2f_app_main_total(first: Variant(T_std_x2f_prelude_types_Option__Int64) borrowed) -> Int64 {
           slot %0 parameter first: Variant(T_std_x2f_prelude_types_Option__Int64)
           slot %1 local current: Variant(T_std_x2f_prelude_types_Option__Int64)
@@ -360,7 +360,7 @@ group "`if const` and `while const`" {
 
 group "A destructuring binding" {
   test "a record pattern is one `read` per name, along the paths of the plan" {
-    const source = r"""
+    const source = raw"""
       type Point {
         x: Int
         y: Int
@@ -372,7 +372,7 @@ group "A destructuring binding" {
       }
       """
     assert(
-      ownedIrOf(source, "t_acme_x2f_app_main_sum") == r"""
+      ownedIrOf(source, "t_acme_x2f_app_main_sum") == raw"""
         fn t_acme_x2f_app_main_sum(point: Record(T_acme_x2f_app_main_Point) borrowed) -> Int64 {
           slot %0 parameter point: Record(T_acme_x2f_app_main_Point)
           slot %1 local x: Int64
@@ -399,7 +399,7 @@ group "A destructuring binding" {
  * `skip` and no `toList` - it is the real standard library that has to provide them.
  */
 group "A list pattern" {
-  const lists = r"""
+  const lists = raw"""
     fn describe(words: List<String>): Int {
       match words {
         [] => 0
@@ -424,7 +424,7 @@ group "A list pattern" {
 
   /** `[..., last]` counts from the back, which is `at(length() - 1 - index)` and nothing else. */
   test "an item from the end is read at `length() - 1 - index`" {
-    const source = r"""
+    const source = raw"""
       fn lastOf(words: List<String>): String {
         match words {
           [..., last] => last
@@ -433,7 +433,7 @@ group "A list pattern" {
       }
       """
     assert(
-      ownedIrOf(source, "t_acme_x2f_app_main_lastOf") == r"""
+      ownedIrOf(source, "t_acme_x2f_app_main_lastOf") == raw"""
         fn t_acme_x2f_app_main_lastOf(words: Object(List<String>) borrowed) -> String {
           slot %0 parameter words: Object(List<String>)
           slot %1 temporary: String
@@ -477,7 +477,7 @@ group "A list pattern" {
    * type step by step, asking the checker what a case field, a field, a tuple position and an item of an `Iterate` are.
    */
   test "a list inside another pattern is lowered through the type at the path" {
-    const source = r"""
+    const source = raw"""
       type Wrapper {
         case Words(items: List<String>)
       }
@@ -498,7 +498,7 @@ group "A list pattern" {
 
   /** A list inside a list: the outer item opens the column the inner pattern tests, which is the `Item` of an `Iterate`. */
   test "a list inside a list reaches the item type of the item type" {
-    const source = r"""
+    const source = raw"""
       fn firstOf(rows: List<List<String>>): Int {
         match rows {
           [[only]] => only.byteLength()
@@ -511,7 +511,7 @@ group "A list pattern" {
 
   /** A tuple position and a record field are the other two steps a walk can take towards a list. */
   test "a list inside a tuple and inside a field are lowered" {
-    const source = r"""
+    const source = raw"""
       type Holder {
         items: List<String>
       }
@@ -545,7 +545,7 @@ group "A list pattern" {
  */
 group "`?` at the top level of an entry file" {
   test "the failure is reported through `Show` and the program ends with 1" {
-    const source = r"""
+    const source = raw"""
       type ConfigError with Show {
         key: String
 
@@ -580,7 +580,7 @@ group "`?` at the top level of an entry file" {
  */
 group "`?` at the top level walking the `cause()` chain of a trait-typed `Error`" {
   test "one witness call per link, until `cause()` answers `None`" {
-    const source = r"""
+    const source = raw"""
       type FileError with Error {
         path: String
 
@@ -638,7 +638,7 @@ group "`if var`" {
    * and the value is never copied into a binding of its own.
    */
   test "binds a path into its subject and no copy" {
-    const other = r"""
+    const other = raw"""
       fn taken(value: Int?): Int {
         var current = value
         if var Some(inner) = current {

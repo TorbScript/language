@@ -18,13 +18,13 @@ use lowered from "./lower-harness"
 
 group "Functions, slots and blocks" {
   test "the parameters are slots in declaration order, and the body is one block" {
-    const source = r"""
+    const source = raw"""
       fn double(value: Int): Int {
         value * 2
       }
       """
     assert(
-      irOf(source, "t_acme_x2f_app_main_double") == r"""
+      irOf(source, "t_acme_x2f_app_main_double") == raw"""
         fn t_acme_x2f_app_main_double(value: Int64 borrowed) -> Int64 {
           slot %0 parameter value: Int64
           slot %1 temporary: Int64
@@ -38,7 +38,7 @@ group "Functions, slots and blocks" {
   }
 
   test "a local is a slot the value is computed into, and an assignment writes the same one" {
-    const source = r"""
+    const source = raw"""
       fn sum(first: Int, second: Int): Int {
         const doubled = first * 2
         var total = doubled
@@ -47,7 +47,7 @@ group "Functions, slots and blocks" {
       }
       """
     assert(
-      irOf(source, "t_acme_x2f_app_main_sum") == r"""
+      irOf(source, "t_acme_x2f_app_main_sum") == raw"""
         fn t_acme_x2f_app_main_sum(first: Int64 borrowed, second: Int64 borrowed) -> Int64 {
           slot %0 parameter first: Int64
           slot %1 parameter second: Int64
@@ -65,13 +65,13 @@ group "Functions, slots and blocks" {
   }
 
   test "a function that produces nothing returns without a value" {
-    const source = r"""
+    const source = raw"""
       fn nothing(value: Int) {
         const doubled = value + value
       }
       """
     assert(
-      irOf(source, "t_acme_x2f_app_main_nothing") == r"""
+      irOf(source, "t_acme_x2f_app_main_nothing") == raw"""
         fn t_acme_x2f_app_main_nothing(value: Int64 borrowed) -> Void {
           slot %0 parameter value: Int64
           slot %1 local doubled: Int64
@@ -83,7 +83,7 @@ group "Functions, slots and blocks" {
   }
 
   test "one static value per distinct literal, whatever it is written in" {
-    const source = r"""
+    const source = raw"""
       fn twice(): Int {
         const first = 7
         const second = 7
@@ -98,7 +98,7 @@ group "Functions, slots and blocks" {
 
 group "Control flow" {
   test "both arms of an `if` produce into one slot, and an arm that returns does not join" {
-    const source = r"""
+    const source = raw"""
       fn pick(flag: Bool, value: Int): Int {
         const found = if flag { value } else { 0 - value }
         if found > 10 {
@@ -108,7 +108,7 @@ group "Control flow" {
       }
       """
     assert(
-      irOf(source, "t_acme_x2f_app_main_pick") == r"""
+      irOf(source, "t_acme_x2f_app_main_pick") == raw"""
         fn t_acme_x2f_app_main_pick(flag: Bool borrowed, value: Int64 borrowed) -> Int64 {
           slot %0 parameter flag: Bool
           slot %1 parameter value: Int64
@@ -141,13 +141,13 @@ group "Control flow" {
   }
 
   test "`&&` is control flow: the right side runs only where it decides anything" {
-    const source = r"""
+    const source = raw"""
       fn both(first: Bool, second: Bool): Bool {
         first && second
       }
       """
     assert(
-      irOf(source, "t_acme_x2f_app_main_both") == r"""
+      irOf(source, "t_acme_x2f_app_main_both") == raw"""
         fn t_acme_x2f_app_main_both(first: Bool borrowed, second: Bool borrowed) -> Bool {
           slot %0 parameter first: Bool
           slot %1 parameter second: Bool
@@ -165,7 +165,7 @@ group "Control flow" {
   }
 
   test "`||` is the same branch the other way round" {
-    const source = r"""
+    const source = raw"""
       fn either(first: Bool, second: Bool): Bool {
         first || second
       }
@@ -179,7 +179,7 @@ group "Control flow" {
    * `total + index` inside the body keeps its check, because nothing bounds `total`.
    */
   test "`for` over a range is a counter, a comparison and an increment, and `break` leaves it" {
-    const source = r"""
+    const source = raw"""
       fn count(limit: Int): Int {
         var total = 0
         for index in 0..limit {
@@ -192,7 +192,7 @@ group "Control flow" {
       }
       """
     assert(
-      irOf(source, "t_acme_x2f_app_main_count") == r"""
+      irOf(source, "t_acme_x2f_app_main_count") == raw"""
         fn t_acme_x2f_app_main_count(limit: Int64 borrowed) -> Int64 {
           slot %0 parameter limit: Int64
           slot %1 local total: Int64
@@ -231,7 +231,7 @@ group "Control flow" {
   }
 
   test "the end of a `loop` without a `break` is an empty `unreachable` marker" {
-    const source = r"""
+    const source = raw"""
       fn forever(): Int {
         loop {
           const _ = 1
@@ -243,7 +243,7 @@ group "Control flow" {
   }
 
   test "a `loop` with a `break` ends in the block the `break` jumps to" {
-    const source = r"""
+    const source = raw"""
       fn halve(value: Int): Int {
         var total = value
         loop {
@@ -261,7 +261,7 @@ group "Control flow" {
 
 group "Values" {
   test "a comparison of a built-in type is one intrinsic and never a call" {
-    const source = r"""
+    const source = raw"""
       fn compareThem(first: Int, second: Int, text: String, other: String, flag: Bool): Bool {
         first < second && text == other && flag != flag
       }
@@ -273,7 +273,7 @@ group "Values" {
   }
 
   test "`+` on two strings is one concatenation, never a call of `String.add`" {
-    const source = r"""
+    const source = raw"""
       fn joined(first: String, second: String): String {
         first + second
       }
@@ -282,7 +282,7 @@ group "Values" {
   }
 
   test "a tuple is a layout, and a tuple pattern reads its positions" {
-    const source = r"""
+    const source = raw"""
       fn parts(pair: (Int, Bool)): Int {
         const (number, flag) = pair
         if flag {
@@ -292,7 +292,7 @@ group "Values" {
       }
       """
     assert(
-      irOf(source, "t_acme_x2f_app_main_parts") == r"""
+      irOf(source, "t_acme_x2f_app_main_parts") == raw"""
         fn t_acme_x2f_app_main_parts(pair: Tuple(T_tuple__Int64_Bool) borrowed) -> Int64 {
           slot %0 parameter pair: Tuple(T_tuple__Int64_Bool)
           slot %1 local number: Int64
@@ -313,7 +313,7 @@ group "Values" {
   }
 
   test "a record is a layout, a field is a `read`, and `copy` builds from the old fields" {
-    const source = r"""
+    const source = raw"""
       type Point {
         x: Int
         y: Int = 0
@@ -326,7 +326,7 @@ group "Values" {
     const text = textOf source
     assert text.contains("layout T_acme_x2f_app_main_Point inline size 16 align 8 fields(x: Int64, y: Int64)")
     assert(
-      irOf(source, "t_acme_x2f_app_main_Point_moved") == r"""
+      irOf(source, "t_acme_x2f_app_main_Point_moved") == raw"""
         fn t_acme_x2f_app_main_Point_moved(self: Record(T_acme_x2f_app_main_Point) borrowed) -> Record(T_acme_x2f_app_main_Point) {
           slot %0 parameter self: Record(T_acme_x2f_app_main_Point)
           slot %1 temporary: Int64
@@ -342,13 +342,13 @@ group "Values" {
   }
 
   test "`panic` is an instruction, and nothing after it in the block is reachable" {
-    const source = r"""
+    const source = raw"""
       fn never(): Int {
         panic "no"
       }
       """
     assert(
-      irOf(source, "t_acme_x2f_app_main_never") == r"""
+      irOf(source, "t_acme_x2f_app_main_never") == raw"""
         fn t_acme_x2f_app_main_never() -> Int64 {
           slot %0 temporary: String
           slot %1 temporary: Void
@@ -363,7 +363,7 @@ group "Values" {
 
 group "The top level of a file" {
   test "a top-level `const` is static data with a name, and there is no module initialization" {
-    const source = r"""
+    const source = raw"""
       const greeting = "hi"
 
       fn shout(text: String): String {
@@ -376,7 +376,7 @@ group "The top level of a file" {
   }
 
   test "the top-level code of an entry file is the entry function, named after the file" {
-    const source = r"""
+    const source = raw"""
       fn twice(value: Int): Int {
         value + value
       }
@@ -384,7 +384,7 @@ group "The top level of a file" {
       const _ = twice(21)
       """
     assert(
-      irOf(source, "t_acme_x2f_app_main") == r"""
+      irOf(source, "t_acme_x2f_app_main") == raw"""
         fn t_acme_x2f_app_main() -> Void {
           slot %0 temporary: Int64
           slot %1 temporary: Int64
@@ -402,7 +402,7 @@ group "The top level of a file" {
    * that half. The `const total = counter` at the end is the read the dead-change rule asks for.
    */
   test "the top-level bindings of an entry file are locals of the entry function, and a `var` can be assigned to" {
-    const source = r"""
+    const source = raw"""
       var counter = 0
 
       const step = 2
@@ -411,7 +411,7 @@ group "The top level of a file" {
       const total = counter
       """
     assert(
-      irOf(source, "t_acme_x2f_app_main") == r"""
+      irOf(source, "t_acme_x2f_app_main") == raw"""
         fn t_acme_x2f_app_main() -> Void {
           slot %0 local counter: Int64
           slot %1 local step: Int64
@@ -429,7 +429,7 @@ group "The top level of a file" {
   }
 
   test "a top-level `var` a function reads is a clean finding, because it would read the initializer" {
-    const source = r"""
+    const source = raw"""
       var counter = 0
 
       fn read(): Int {
@@ -444,7 +444,7 @@ group "The top level of a file" {
 
 group "What the back end does not lower yet" {
   test "every construct of a later sub-milestone is named, and the function becomes an `unreachable` stub" {
-    const source = r"""
+    const source = raw"""
       fn collected(value: Int): Int {
         const items = [value, value]
         items.length()
@@ -453,7 +453,7 @@ group "What the back end does not lower yet" {
     assert(unsupportedIn(source)
       == ["`iterate`, which neither the source nor the natives manifest provides is not supported by the native back end yet"])
     assert(
-      irOf(source, "t_acme_x2f_app_main_collected") == r"""
+      irOf(source, "t_acme_x2f_app_main_collected") == raw"""
         fn t_acme_x2f_app_main_collected(value: Int64 borrowed) -> Int64 {
           slot %0 parameter value: Int64
         b0: # not supported yet
@@ -524,14 +524,14 @@ group "The closed world is the program" {
    * `acme/app` does not depend on `acme/lab` at all.
    */
   const lab = [
-    "project.trb": r"""
+    "project.trb": raw"""
       name "acme/all"
       workspace { members "std/*", "app", "lab" }
       """,
-    "lab/project.trb": r"""
+    "lab/project.trb": raw"""
       name "acme/lab"
       """,
-    "lab/src/main.trb": r"""
+    "lab/src/main.trb": raw"""
       type Rows with Iterate<Int> {
         var items: List<Int> = []
 
@@ -546,7 +546,7 @@ group "The closed world is the program" {
       """,
   ]
 
-  const walking = r"""
+  const walking = raw"""
     fn total(numbers: List<Int>): Int {
       var sum = 0
       for value in numbers {
@@ -572,7 +572,7 @@ group "The closed world is the program" {
   }
 
   test "the lab really is in the workspace, so the test above is not vacuous" {
-    const plain = r"""
+    const plain = raw"""
       fn used(): Int {
         1
       }

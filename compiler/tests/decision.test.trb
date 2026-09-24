@@ -14,7 +14,7 @@ use test, group from "std/test"
 use probe from "./harness"
 use decisionTreeOf, printDecisionGraph from "../src/ir/decision"
 
-const declarations = r"""
+const declarations = raw"""
 
   type Shape {
     case Circle(radius: Int)
@@ -63,7 +63,7 @@ fn treeOf(source: String, written: String): String {
 
 group "Cases" {
   test "one switch over the cases of the subject, and one arm per edge" {
-    const source = inBody(r"""
+    const source = inBody(raw"""
       const found = match shapeOf() {
         .Circle(radius) => radius
         .Rectangle(width, height) => width * height
@@ -71,7 +71,7 @@ group "Cases" {
       }
       print found""")
     assert(
-      treeOf(source, "shapeOf()") == r"""
+      treeOf(source, "shapeOf()") == raw"""
         root n4
         n0: arm 0 branch 0
         n1: arm 1 branch 0
@@ -82,7 +82,7 @@ group "Cases" {
   }
 
   test "nested cases test the outer value first and the inner one after it" {
-    const source = inBody(r"""
+    const source = inBody(raw"""
       const found = match treeValue() {
         .Branch(.Leaf(left), .Leaf(right)) => left + right
         .Branch(_, _) => 0
@@ -90,7 +90,7 @@ group "Cases" {
       }
       print found""")
     assert(
-      treeOf(source, "treeValue()") == r"""
+      treeOf(source, "treeValue()") == raw"""
         root n6
         n0: arm 0 branch 0
         n1: arm 1 branch 0
@@ -105,7 +105,7 @@ group "Cases" {
 
 group "Literals, ranges and alternatives" {
   test "a chain of literal tests, then a range, then the catch-all" {
-    const source = inBody(r"""
+    const source = inBody(raw"""
       const found = match numberOf() {
         0 => 100
         1 | 2 => 200
@@ -114,7 +114,7 @@ group "Literals, ranges and alternatives" {
       }
       print found""")
     assert(
-      treeOf(source, "numberOf()") == r"""
+      treeOf(source, "numberOf()") == raw"""
         root n8
         n0: arm 0 branch 0
         n1: arm 1 branch 0
@@ -129,7 +129,7 @@ group "Literals, ranges and alternatives" {
   }
 
   test "a guard falls back to the arm after it" {
-    const source = inBody(r"""
+    const source = inBody(raw"""
       const found = match numberOf() {
         value if value > 10 => 1
         value if value > 5 => 2
@@ -137,7 +137,7 @@ group "Literals, ranges and alternatives" {
       }
       print found""")
     assert(
-      treeOf(source, "numberOf()") == r"""
+      treeOf(source, "numberOf()") == raw"""
         root n2
         n0: arm 2 branch 0
         n1: guard arm 1 branch 0 otherwise n0
@@ -148,7 +148,7 @@ group "Literals, ranges and alternatives" {
 
 group "Tuples and nested options" {
   test "a tuple tests one position after the other" {
-    const source = inBody(r"""
+    const source = inBody(raw"""
       const found = match pairOf() {
         (0, true) => 1
         (number, false) => number
@@ -156,7 +156,7 @@ group "Tuples and nested options" {
       }
       print found""")
     assert(
-      treeOf(source, "pairOf()") == r"""
+      treeOf(source, "pairOf()") == raw"""
         root n7
         n0: arm 0 branch 0
         n1: arm 1 branch 0
@@ -170,7 +170,7 @@ group "Tuples and nested options" {
   }
 
   test "`Option<Option<Int>>` tests the outer `Option` and then the inner one" {
-    const source = inBody(r"""
+    const source = inBody(raw"""
       const found = match nestedOf() {
         Some(Some(inner)) => inner
         Some(.None) => 1
@@ -178,7 +178,7 @@ group "Tuples and nested options" {
       }
       print found""")
     assert(
-      treeOf(source, "nestedOf()") == r"""
+      treeOf(source, "nestedOf()") == raw"""
         root n5
         n0: arm 0 branch 0
         n1: arm 1 branch 0

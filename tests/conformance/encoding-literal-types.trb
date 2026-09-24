@@ -40,31 +40,31 @@ fn expect(actual: String, wanted: String): Int {
 }
 
 const json = Json()
-const good = json.decode<Letter>(r"""{"status": "sent", "color": "red", "level": 2}""")
+const good = json.decode<Letter>(raw"""{"status": "sent", "color": "red", "level": 2}""")
 failed = failed + expect("{good}", "Ok(Letter(status: \"sent\", color: \"red\", level: 2, tags: []))")
 failed = failed + expect(
-  "{json.decode<Letter>(r"""{"status": "lost", "color": "red", "level": 2}""")}",
+  "{json.decode<Letter>(raw"""{"status": "lost", "color": "red", "level": 2}""")}",
   "Fail(status: 'lost' is not one of \"draft\", \"sent\")",
 )
 failed = failed + expect(
-  "{json.decode<Letter>(r"""{"status": "sent", "color": "blue", "level": 2}""")}",
+  "{json.decode<Letter>(raw"""{"status": "sent", "color": "blue", "level": 2}""")}",
   "Fail(color: 'blue' is not one of \"green\", \"red\")",
 )
 failed = failed + expect(
-  "{json.decode<Letter>(r"""{"status": "sent", "color": "red", "level": 7}""")}",
+  "{json.decode<Letter>(raw"""{"status": "sent", "color": "red", "level": 7}""")}",
   "Fail(level: '7' is not one of \"1\", \"2\", \"3\")",
 )
 failed = failed + expect(
-  "{json.decode<Letter>(r"""{"status": "sent", "color": "red", "level": 1, "tags": ["draft", "gone"]}""")}",
+  "{json.decode<Letter>(raw"""{"status": "sent", "color": "red", "level": 1, "tags": ["draft", "gone"]}""")}",
   "Fail(tags[1]: 'gone' is not one of \"draft\", \"sent\")",
 )
 failed = failed + expect("{json.decode<Status>("\"gone\"")}", "Fail('gone' is not one of \"draft\", \"sent\")")
 failed = failed + expect("{json.decode<String>("\"gone\"")}", "Ok(\"gone\")")
 failed = failed + expect(
-  "{json.decode<List<Color>>(r"""["red", "pink"]""")}",
+  "{json.decode<List<Color>>(raw"""["red", "pink"]""")}",
   "Fail([1]: 'pink' is not one of \"green\", \"red\")",
 )
-failed = failed + expect("{json.decode<List<String>>(r"""["red", "pink"]""")}", "Ok([\"red\", \"pink\"])")
+failed = failed + expect("{json.decode<List<String>>(raw"""["red", "pink"]""")}", "Ok([\"red\", \"pink\"])")
 failed = failed + expect("{json.decode<Color>("\"green\"")}", "Ok(\"green\")")
 
 Process.exit failed

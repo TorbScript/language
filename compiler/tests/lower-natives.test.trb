@@ -21,13 +21,13 @@ group "an element the runtime takes by address" {
   }
 
   test "the wrapper hands the receiver over as a place and the element as a value" {
-    const source = r"""
+    const source = raw"""
       fn push(var items: ArrayList<Int>) {
         items.append(1)
       }
       """
     assert(
-      irOf(source, "n_std_x2f_prelude_types_List_append__List_Int64_Int64") == r"""
+      irOf(source, "n_std_x2f_prelude_types_List_append__List_Int64_Int64") == raw"""
         fn n_std_x2f_prelude_types_List_append__List_Int64_Int64(var self: List(Int64) borrowed, value: Int64 borrowed) -> Void {
           slot %0 parameter self: List(Int64)
           slot %1 parameter value: Int64
@@ -39,7 +39,7 @@ group "an element the runtime takes by address" {
   }
 
   test "the call site calls the wrapper and never the runtime symbol" {
-    const source = r"""
+    const source = raw"""
       fn push(var items: ArrayList<Int>) {
         items.append(1)
       }
@@ -53,7 +53,7 @@ group "an element the runtime takes by address" {
   }
 
   test "the runtime function itself takes the addressed parameter by address" {
-    const source = r"""
+    const source = raw"""
       fn push(var items: ArrayList<Int>) {
         items.append(1)
       }
@@ -69,7 +69,7 @@ group "an element the runtime takes by address" {
 
 group "`bool` plus an out parameter" {
   test "an `Option` result becomes a branch over the two cases" {
-    const source = r"""
+    const source = raw"""
       fn found(text: String, part: String): Int {
         match text.indexOf(part) {
           Some(index) => index
@@ -78,7 +78,7 @@ group "`bool` plus an out parameter" {
       }
       """
     assert(
-      irOf(source, "n_std_x2f_prelude_types_String_indexOf") == r"""
+      irOf(source, "n_std_x2f_prelude_types_String_indexOf") == raw"""
         fn n_std_x2f_prelude_types_String_indexOf(self: String borrowed, part: String borrowed) -> Variant(T_std_x2f_prelude_types_Option__Int64) {
           slot %0 parameter self: String
           slot %1 parameter part: String
@@ -101,7 +101,7 @@ group "`bool` plus an out parameter" {
   }
 
   test "the out parameter of the runtime function is written out as `out`" {
-    const source = r"""
+    const source = raw"""
       fn found(text: String, part: String): Int {
         match text.indexOf(part) {
           Some(index) => index
@@ -118,7 +118,7 @@ group "`bool` plus an out parameter" {
   }
 
   test "the out parameter owns what the runtime wrote, and the extended verifier agrees" {
-    const source = r"""
+    const source = raw"""
       fn found(text: String, part: String): Int {
         match text.indexOf(part) {
           Some(index) => index
@@ -162,7 +162,7 @@ fn functionOf(source: String, name: String): String {
  * not build. So the wrapper builds it.
  */
 group "`bool` plus two out parameters" {
-  const cursor = r"""
+  const cursor = raw"""
     fn firstEntry(entries: TrieMap<String, Int>): (String, Int)? {
       var cursor = 0
       entries.entryAfter cursor
@@ -171,7 +171,7 @@ group "`bool` plus two out parameters" {
 
   test "the wrapper builds the tuple out of the two out parameters and the `Some` around it" {
     assert(
-      irOf(cursor, "n_std_x2f_prelude_types_TrieMap_entryAfter__String_Int64") == r"""
+      irOf(cursor, "n_std_x2f_prelude_types_TrieMap_entryAfter__String_Int64") == raw"""
         fn n_std_x2f_prelude_types_TrieMap_entryAfter__String_Int64(self: Map(String, Int64) borrowed, var cursor: Int64 borrowed) -> Variant(T_std_x2f_prelude_types_Option__T_tuple__String_Int64) {
           slot %0 parameter self: Map(String, Int64)
           slot %1 parameter cursor: Int64
@@ -221,7 +221,7 @@ group "`bool` plus two out parameters" {
 
 group "the C of a wrapper" {
   test "an element goes to the runtime as the address of the slot that holds it" {
-    const source = r"""
+    const source = raw"""
       fn push(var items: ArrayList<Int>) {
         items.append(1)
       }
@@ -231,7 +231,7 @@ group "the C of a wrapper" {
   }
 
   test "an out parameter is the address of a slot of the wrapper's own frame" {
-    const source = r"""
+    const source = raw"""
       fn found(text: String, part: String): Int {
         match text.indexOf(part) {
           Some(index) => index

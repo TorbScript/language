@@ -16,7 +16,7 @@ group "a check the ranges prove cannot fire" {
    * and cannot underflow, and the addition of the two results can overflow and keeps its check.
    */
   test "a guard in front of the arithmetic drops the two checks that cannot fire" {
-    const source = r"""
+    const source = raw"""
       fn fibonacci(index: Int): Int {
         if index < 2 {
           return index
@@ -32,7 +32,7 @@ group "a check the ranges prove cannot fire" {
 
   /** Two constants: the sum is one value and it is inside `Int64`, so there is nothing to check. */
   test "arithmetic on two known values is the plain operation" {
-    const source = r"""
+    const source = raw"""
       fn total(): Int {
         const first = 2
         const second = 3
@@ -47,7 +47,7 @@ group "a check the ranges prove cannot fire" {
    * away from it: widening is applied to the slots a loop writes and to no others.
    */
   test "the counter of a nested loop and the counter around it are both free" {
-    const source = r"""
+    const source = raw"""
       fn total(width: Int, height: Int): Int {
         var sum = 0
         for row in 0..height {
@@ -68,7 +68,7 @@ group "a check the ranges prove cannot fire" {
 group "an index the ranges keep inside an array" {
   /** `values[index]` under the guard of `for index in 0..4` over an `Array<Int, 4>` reads the slot without comparing. */
   test "the counter of a loop over the size indexes without a check" {
-    const source = r"""
+    const source = raw"""
       fn total(values: Array<Int, 4>): Int {
         var sum = 0
         for index in 0..4 {
@@ -83,7 +83,7 @@ group "an index the ranges keep inside an array" {
 
   /** One slot past the end is reachable, so the step keeps its comparison and the panic of `a[key]` with it. */
   test "a loop that runs one past the size keeps the check" {
-    const source = r"""
+    const source = raw"""
       fn total(values: Array<Int, 4>): Int {
         var sum = 0
         var index = 0
@@ -101,7 +101,7 @@ group "an index the ranges keep inside an array" {
 
   /** An index the function is handed may be anything an `Int` holds. */
   test "an index from a parameter keeps the check" {
-    const source = r"""
+    const source = raw"""
       fn at(values: Array<Int, 4>, index: Int): Int {
         values[index]
       }
@@ -113,7 +113,7 @@ group "an index the ranges keep inside an array" {
 group "a check that stays" {
   /** Two values the function knows nothing about can overflow, and nothing here may pretend otherwise. */
   test "arithmetic on two parameters keeps every check" {
-    const source = r"""
+    const source = raw"""
       fn total(first: Int, second: Int): Int {
         first + second
       }
@@ -128,7 +128,7 @@ group "a check that stays" {
    * and `index + 1` checked, because the upper end of `index` is still whatever an `Int64` allows.
    */
   test "a guard bounds one end and the other end keeps its check" {
-    const source = r"""
+    const source = raw"""
       fn around(index: Int): Int {
         if index > 0 {
           return (index - 1) + (index + 1)
@@ -143,7 +143,7 @@ group "a check that stays" {
 
   /** A division checks its divisor and not a width, so no range of this analysis ever drops one. */
   test "a division keeps its check although both operands are known" {
-    const source = r"""
+    const source = raw"""
       fn half(): Int {
         const value = 8
         const two = 2

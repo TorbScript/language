@@ -12,7 +12,7 @@
 use test, group from "std/test"
 use problems, notes, problemsOf, notesOf from "./harness"
 
-const account = r"""
+const account = raw"""
   public type Account {
     owner: String
     private(var) balance: Int = 0
@@ -29,7 +29,7 @@ const account = r"""
   }
   """
 
-const importsAccount = r"""
+const importsAccount = raw"""
   use Account from "./account"
 
   """
@@ -40,14 +40,14 @@ fn withAccount(body: String): Map<String, String> {
 
 /** A second package, so that "the package is the unit of privacy" has something to be measured against. */
 const otherPackage = [
-  "project.trb": r"""
+  "project.trb": raw"""
     name "acme/all"
     workspace { members "std/*", "app", "other" }
     """,
-  "other/project.trb": r"""
+  "other/project.trb": raw"""
     name "acme/other"
     """,
-  "other/src/lib.trb": r"""
+  "other/src/lib.trb": raw"""
     public type Thing {
       label: String = ""
       private hidden: Int = 0
@@ -57,13 +57,13 @@ const otherPackage = [
       }
     }
     """,
-  "app/project.trb": r"""
+  "app/project.trb": raw"""
     name "acme/app"
     dependencies { runtime "acme/other" }
     """,
 ]
 
-const importsThing = r"""
+const importsThing = raw"""
   use Thing from "acme/other"
 
   """
@@ -84,7 +84,7 @@ fn outside(name: String, declaration: String, body: String): Map<String, String>
 
 group "A `private` member" {
   test "is visible in the body of its own type" {
-    const files = withAccount(r"""
+    const files = withAccount(raw"""
       fn probe(account: Account): String {
         account.spent()
       }
@@ -93,7 +93,7 @@ group "A `private` member" {
   }
 
   test "is invisible outside of it" {
-    const files = withAccount(r"""
+    const files = withAccount(raw"""
       fn probe(account: Account): String {
         account.history
       }
@@ -115,7 +115,7 @@ group "A `private` member" {
   test "is visible in an `extend` and in a free function of the file that declares it" {
     const files = [
       "app/src/account.trb": account
-        + r"""
+        + raw"""
 
           extend Account {
             fn shown(): String {
@@ -127,7 +127,7 @@ group "A `private` member" {
             account.history
           }
           """,
-      "app/src/main.trb": r"""
+      "app/src/main.trb": raw"""
         use Account, spentOf from "./account"
 
         fn probe(account: Account): String {
@@ -141,7 +141,7 @@ group "A `private` member" {
   test "is invisible in an `extend` in another file of the same package" {
     const files = [
       "app/src/account.trb": account,
-      "app/src/extra.trb": r"""
+      "app/src/extra.trb": raw"""
         use Account from "./account"
 
         extend Account {
@@ -150,7 +150,7 @@ group "A `private` member" {
           }
         }
         """,
-      "app/src/main.trb": r"""
+      "app/src/main.trb": raw"""
         use Account from "./account"
 
         fn probe(account: Account): String {
@@ -162,7 +162,7 @@ group "A `private` member" {
   }
 
   test "is invisible in an `extend` of another package" {
-    const files = withOtherPackage(r"""
+    const files = withOtherPackage(raw"""
       extend Thing {
         fn peeked(): Int {
           hidden
@@ -173,7 +173,7 @@ group "A `private` member" {
   }
 
   test "is invisible in an ordinary function of another package" {
-    const files = withOtherPackage(r"""
+    const files = withOtherPackage(raw"""
       fn probe(thing: Thing): Int {
         thing.hidden
       }
@@ -182,7 +182,7 @@ group "A `private` member" {
   }
 
   test "a public field of a foreign type stays readable" {
-    const files = withOtherPackage(r"""
+    const files = withOtherPackage(raw"""
       fn probe(thing: Thing): String {
         thing.label
       }
@@ -190,7 +190,7 @@ group "A `private` member" {
     assert problemsOf(files).isEmpty()
   }
 
-  const counter = r"""
+  const counter = raw"""
     public type Counter {
       var value: Int = 0
 
@@ -206,7 +206,7 @@ group "A `private` member" {
     const files = outside(
       "Counter",
       counter,
-      r"""
+      raw"""
         fn probe(counter: Counter): Int {
           counter.step()
         }
@@ -219,7 +219,7 @@ group "A `private` member" {
     const files = outside(
       "Counter",
       counter,
-      r"""
+      raw"""
         fn probe(): Int {
           Counter.offset
         }
@@ -231,7 +231,7 @@ group "A `private` member" {
 
 group "`private(var)`" {
   test "is readable from everywhere" {
-    const files = withAccount(r"""
+    const files = withAccount(raw"""
       fn probe(account: Account): Int {
         account.balance
       }
@@ -240,7 +240,7 @@ group "`private(var)`" {
   }
 
   test "is written only by its own type" {
-    const files = withAccount(r"""
+    const files = withAccount(raw"""
       fn probe(var account: Account): Void {
         account.balance = 1000
       }
@@ -252,7 +252,7 @@ group "`private(var)`" {
   }
 
   test "is written by its own type without a `var` keyword: the modifier *is* the `var`" {
-    const files = withAccount(r"""
+    const files = withAccount(raw"""
       fn probe(var account: Account): Void {
         account.deposit(5)
       }
@@ -263,12 +263,12 @@ group "`private(var)`" {
   test "a property command of one is refused from outside, too" {
     const files = outside(
       "Options",
-      r"""
+      raw"""
         public type Options {
           private(var) port: Int = 80
         }
         """,
-      r"""
+      raw"""
         fn probe(): Options {
           serve {
             port 9000
@@ -291,7 +291,7 @@ group "The constructor and `copy` (gap 24)" {
     const files = outside(
       "Email",
       "public type Email \{\n  private value: String\n\}\n",
-      r"""
+      raw"""
         fn probe(): Email {
           Email("info@example.test")
         }
@@ -308,7 +308,7 @@ group "The constructor and `copy` (gap 24)" {
   }
 
   test "inside the type `Self(...)` passes every field" {
-    const source = r"""
+    const source = raw"""
       type Email {
         private value: String
 
@@ -326,7 +326,7 @@ group "The constructor and `copy` (gap 24)" {
     const files = outside(
       "Token",
       token,
-      r"""
+      raw"""
         fn probe(): Token {
           Token(value: "secret")
         }
@@ -343,7 +343,7 @@ group "The constructor and `copy` (gap 24)" {
   }
 
   test "omitting it is fine" {
-    const source = r"""
+    const source = raw"""
       fn probe(): Token {
         Token()
       }
@@ -359,7 +359,7 @@ group "The constructor and `copy` (gap 24)" {
     const files = outside(
       "Pair",
       "public type Pair \{\n  first: Int = 0\n  private second: Int = 0\n\}\n",
-      r"""
+      raw"""
         fn probe(): Pair {
           Pair(1, 2)
         }
@@ -372,7 +372,7 @@ group "The constructor and `copy` (gap 24)" {
     const files = outside(
       "Token",
       token,
-      r"""
+      raw"""
         fn probe(token: Token): Token {
           token.copy(value: "other")
         }
@@ -382,7 +382,7 @@ group "The constructor and `copy` (gap 24)" {
   }
 
   test "`copy` of a public field is fine, private field without a default and all" {
-    const source = r"""
+    const source = raw"""
       fn probe(token: Token): Token {
         token.copy(label: "other")
       }
@@ -401,7 +401,7 @@ group "Patterns read fields, so `private` reaches them" {
     const files = outside(
       "Point",
       "public type Point \{\n  x: Int\n  private y: Int = 0\n\}\n",
-      r"""
+      raw"""
         fn probe(point: Point): Int {
           match point {
             Point(a, b) => a + b
@@ -420,7 +420,7 @@ group "Patterns read fields, so `private` reaches them" {
   }
 
   test "inside the type it is ordinary" {
-    const source = r"""
+    const source = raw"""
       type Point {
         x: Int
         private y: Int = 0
@@ -438,7 +438,7 @@ group "Patterns read fields, so `private` reaches them" {
 
 group "What `public` promises about its types" {
   test "a `public fn` cannot name a type that is private to its file" {
-    const source = r"""
+    const source = raw"""
       public fn make(): Helper {
         Helper(1)
       }
@@ -455,7 +455,7 @@ group "What `public` promises about its types" {
   }
 
   test "a parameter is part of the promise, however deeply the type is buried" {
-    const source = r"""
+    const source = raw"""
       public fn take(values: List<Helper>): Int {
         values.length()
       }
@@ -468,7 +468,7 @@ group "What `public` promises about its types" {
   }
 
   test "a field of a `public type` is part of it" {
-    const source = r"""
+    const source = raw"""
       public type Report {
         helper: Helper
       }
@@ -481,7 +481,7 @@ group "What `public` promises about its types" {
   }
 
   test "a `private` field is not: nobody outside can read it, so its type is nobody's business there" {
-    const source = r"""
+    const source = raw"""
       public type Report {
         private helper: Helper
 
@@ -498,7 +498,7 @@ group "What `public` promises about its types" {
   }
 
   test "a `private(var)` field is part of it, because everybody reads it" {
-    const source = r"""
+    const source = raw"""
       public type Report {
         private(var) helper: Helper = Helper(0)
       }
@@ -511,7 +511,7 @@ group "What `public` promises about its types" {
   }
 
   test "a `public const` is part of it" {
-    const source = r"""
+    const source = raw"""
       public const fallback: Helper = Helper(1)
 
       type Helper {
@@ -522,7 +522,7 @@ group "What `public` promises about its types" {
   }
 
   test "marking the type `public` settles it" {
-    const source = r"""
+    const source = raw"""
       public fn make(): Helper {
         Helper(1)
       }
@@ -535,7 +535,7 @@ group "What `public` promises about its types" {
   }
 
   test "a private type inside the body of a `public fn` is nobody's business" {
-    const source = r"""
+    const source = raw"""
       public fn make(): Int {
         const helper = Helper(1)
         helper.value

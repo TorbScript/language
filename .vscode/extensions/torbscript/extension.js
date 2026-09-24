@@ -18,7 +18,7 @@ const BUILTINS = new Set(['print', 'panic', 'assert', 'do', 'spawn']);
 
 const TOKEN = new RegExp([
   /(\/\/[^\n]*)/,                                                                  // 1 line comment
-  /(r"""[\s\S]*?"""|r"[^"\n]*"|"""[\s\S]*?"""|"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])+')/, // 2 string / char
+  /(raw"""[\s\S]*?"""|raw"[^"\n]*"|"""[\s\S]*?"""|"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])+')/, // 2 string / char
   /(\b0x[\da-fA-F_]+\b|\b0b[01_]+\b|\b\d[\d_]*(?:\.\d[\d_]*)?(?:[eE][+-]?\d+)?\b)/,     // 3 number
   /\b([A-Za-z_]\w*)\b/,                                                            // 4 identifier
 ].map((part) => part.source).join('|'), 'g');
