@@ -4,11 +4,12 @@
 rows 7.1-7.2). Every slice but 8 is in (section 9): the bytecode and `torb ir --bytecode`
 (`compiler/src/backend/bytecode/`), the kernel of `std/machine` with `runtime/machine.c` and the generated table of
 thunks, and the interpreter with `torb run --vm` (`compiler/src/vm/`). `tools/conformance.sh --vm` runs the programs of
-`tests/conformance/vm.list` - 174 of the 176 of the suite, all but two (section 8), and a script of `vm-only/` - and
-compares them byte for byte with their native run. `test`/`group`, keys compared by a program's own `equals` and tasks run
-through the call back of section 10, `Array<Item, Size>` is inline words, the leak gate holds the VM to "live blocks at
-exit: 0" as it holds a native binary, and `fibonacci(30)` interprets in 0.19 s (section 8). Open: tasks on more than
-one worker, and `torb test --vm`.
+`tests/conformance/vm.list` - 179 of the 184 of the suite (section 8 says which five are not), and two scripts of
+`vm-only/` - and compares them byte for byte with their native run, a program with a `.workers` file on that many
+workers and on one. `test`/`group`, keys compared by a program's own `equals` and tasks run through the call back of
+section 10, tasks run on every worker of the pool (section 4), `Array<Item, Size>` is inline words, the leak gate holds
+the VM to "live blocks at exit: 0" as it holds a native binary, `torb test --vm` runs a test suite with the native
+binary's report, and `fibonacci(30)` interprets in about 0.2 s (section 8).
 
 TorbScript has two back ends that read one IR. The C back end turns it into a native binary; the VM turns it into
 bytecode and runs that inside `torb`, for `torb run --vm`, the sandbox (7.4), `project.trb` as a script (7.5) and the
@@ -194,8 +195,23 @@ many calls it made, so its bottom frame's `return` ends it.
   gap of the constant pool per cell and per flag) are released after all of it by one chunk, which skips a cell its
   flag says was never set; a program that ends in `Process.exit` never gets there, so the run hands the kernel that
   chunk first (`OnExit`) and `torb_process_on_exit` runs it through a call back, as the native `main` hands it
-  `entry_cells_release`. One worker runs every task of the
-  VM: its registers belong to one thread, and the programs with a `.workers` file print the same bytes with one.
+  `entry_cells_release`.
+- **Tasks run on every worker of the pool - decided: registers and an interpreter per thread, the program shared by
+  address.** Every thread that may resume a task - the workers of `torb`'s own pool after the first, and the threads
+  of its blocking pool - gets `Registers` of its own before the first instruction (`workersFor` of
+  `compiler/src/vm/interpret.trb`): its own words for its frames, a stack of a million words, and an image that has
+  the program's addresses and none of its lists, installed as that thread's interpreter (`InstallFor`, then
+  `Machine.install`). What the threads share - the constant pool with the cells in its gaps, the code, the headers,
+  the places and witness entries, which are words of the image for this reason - they only read by address, so no
+  count of the interpreter's is ever touched by two threads, which is the memory model's one rule (docs/design/
+  CONCURRENCY.md section 2). The kernel keeps one interpreter and one queue of destructors per thread. A task is
+  started portable where the C back end's test says its frame may cross: `TaskNew` carries the runtime's tests of
+  the frame's texts, lists, maps and closures, written from the IR types as `crossing.trb` writes them, and a type
+  that never crosses pins it (nothing is copied at the crossing yet: such a frame stays on its worker). A module
+  constant is built under the runtime's lock of constants and published with a release, as the C accessor does
+  (`ConstantLock`, `ConstantUnlock`). A thread of the pool that runs a task of the program counts what its scheduler
+  frees as the program's, so the leak gate stays exact whichever worker ran what. A program that runs scripts keeps
+  its tasks on one thread, because the sandbox is the whole process's.
 - **The recursion limit is the VM's own** (a word stack of bounded size), and exceeding it is the same
   `panic: stack overflow` with the site of the function entry that C reports. How deep a program may recurse before it
   panics differs between the two back ends - as it already differs between two machines of the C back end, whose limit
@@ -311,7 +327,15 @@ compares standard output, standard error (folded as for the native run) and the 
 - **Not in the list, and why.** `process-executable-path`, whose executable is `torb` in the VM and not the `prog`
   the suite builds - a difference that belongs to running inside the toolchain and that the sandbox of 7.4 will answer
   for itself - and `memory-limit`, whose `TORB_MEMORY_LIMIT` of 64 MiB is a limit of the whole process, and the
-  process of `torb run --vm` is `torb`, which needs more than that before the program's first instruction. `target-branch` is in: the table of thunks has a thunk for every native of `runtime/os/`, which
+  process of `torb run --vm` is `torb`, which needs more than that before the program's first instruction. And three
+  programs of the network, `network-echo`, `http-exchange` and `http-wire`, which hand a `List<UInt8>` to a native:
+  every element of a list of the VM is at least a word, where the runtime reads a byte per element, so what they send is
+  not what they meant. `network-addresses` and `network-refused` are in.
+- **Workers.** A program with a `.workers` file runs on that many workers of `torb`'s pool (`TORB_WORKERS`) and again
+  on one, and has to print the same bytes both times, as its native binary does; every other program runs on one.
+  `task-workers-callbacks` holds the per-thread parts to it: a map whose key is compared by the program's `equals`
+  and objects with a destructor, in tasks that idle workers take. Eight tasks of a million steps each take 7.9 s of
+  interpretation on one worker, 2.4 s on four and 1.6 s on eight. `target-branch` is in: the table of thunks has a thunk for every native of `runtime/os/`, which
   calls it where its file is compiled and panics elsewhere, and the lowering keeps only the branch of the machine it
   runs on. So is `destructor-slice-concrete`: a slice of a list whose items may hold a `Close` object copies them,
   through the kernel's `ListSliceCopied`, where the C back end calls `torb_list_slice_copied`. `stack-overflow` is in:
@@ -350,8 +374,9 @@ compares standard output, standard error (folded as for the native run) and the 
 | 4 | Keys compared by a program's own `equals`: a callback from the runtime into the interpreter | **Done**: the slots of the element pool call the program's `equals` and `hash` back; `capsule`, `paths` |
 | 5 | The leak gate of the VM: the program's blocks counted apart from `torb`'s | **Done**: section 8; `tools/conformance.sh --vm` checks every program of `vm.list` |
 | 6 | `test` and `group`: the runtime's recovery point around a closure of the interpreter | **Done**: `Machine.install` and the substitutes `torb_machine_test_case`/`_group`; `tests`, `test-failure`, `assert-values` |
-| 7 | Tasks: `TaskNew`, `Suspend`, `Stop`, channels, the FIFO order of `runtime/task.c` (docs/BACKEND.md 7.3's VM half) | **Done**, on one worker: section 4; the entry cells of a top-level `const` too; the nineteen programs with tasks |
-| 8 | The gate of 7.2: every conformance program in both back ends; `vm.list` deleted | 164 of 165: `vm.list` stays for `process-executable-path` until the sandbox (7.4) answers the executable of a script |
+| 7 | Tasks: `TaskNew`, `Suspend`, `Stop`, channels, the FIFO order of `runtime/task.c` (docs/BACKEND.md 7.3's VM half) | **Done**, on every worker of the pool: section 4; the entry cells of a top-level `const` too; every program with tasks |
+| 8 | The gate of 7.2: every conformance program in both back ends; `vm.list` deleted | 179 of 184: `vm.list` stays for the five of section 8 |
+| 11 | `torb test --vm`: every test file an entry of one program, the report of `runtime/test.c` | **Done**: `TestFile`, `TestFinish`; tier B runs the test packages of `std/` and `examples/` with it |
 | 9 | `Array<Item, Size>`, added to the language after the interpreter: inline items, a checked item step | **Done**: `ArrayNew`, the static `Items`, `PlaceStep.Item`, the counted words of every item; the eleven programs with an array |
 | 10 | Speed: register reads without `Indexed.at`, return records in the word stack (section 10) | **Done**: the image, addresses and inline `load`/`store` (section 4); six times faster (section 8) |
 
@@ -367,18 +392,25 @@ compares standard output, standard error (folded as for the native run) and the 
   (`Reserve`), so a call back never moves the words a kernel call holds a pointer into, and a call back uses a kernel
   scratch of its own. A queue the interpreter drains would have done for tasks, but an `equals` needs its answer at
   once, and one mechanism serves all three. A call back runs with an unlimited budget of its own, and a sandboxed
-  script that stops inside one (a panic in an `equals`, a refusal in a resumed task) is passed on: the interpreter
-  says so (`StopInCallBack`), and `torb_machine_call_back` panics again with the stop the inner operation recorded,
-  which the recovery point of the operation that made the call takes as it is - so the loop that made that call
-  unwinds the script as for any other stop. A host that loads a program once (`LoadedProgram`: a session of
+  script that stops inside one (a panic in an `equals`) is passed on: the interpreter says so (`StopInCallBack`), and
+  `torb_machine_call_back` panics again with the stop the inner operation recorded, which the recovery point of the
+  operation that made the call takes as it is - so the loop that made that call unwinds the script as for any other
+  stop. **A stop inside a task the scheduler resumed, or inside a test body, jumps through nothing** - a jump would
+  leave the scheduler in the middle of a run: the task answers `TORB_POLL_STOPPED`, the test body returns, and the
+  stop waits until the operation that ran the scheduler returns, which then stops the script with it. **A script's
+  tasks belong to it**: each opening of a sandbox is a generation, a task remembers the one it was started in, and it
+  runs only while that sandbox is open - one the script left behind, or one of a script that stopped, stops where it
+  is without running again, so a script's code never runs outside its grant, in the program or in another script's
+  test (`vm-only/sandbox-tasks.trb`). What such a frame holds is not given back, as nothing is when a script stops. A host that loads a program once (`LoadedProgram`: a session of
   `torb repl`, the scripts of a manifest) keeps its registers and its image in the one `Registers` the call back
   reads, and lays the image out again when a continuation adds chunks.
 - **Where the tasks' scheduler runs - decided: in the runtime.** The runtime's own FIFO scheduler drives a VM task
   through one resume function of `runtime/machine.c` that calls the interpreter back (section 4), so the process has
-  one scheduler and the order of `runtime/task.c` is the VM's by construction. **Open: the pool's workers.** A second
-  worker would run the interpreter on a second thread over registers of its own - one `Registers` per worker, the
-  kernel's call back per thread, and the element pool and the closers' queue per thread too; until then every task
-  of the VM starts pinned to the one worker that runs the program.
+  one scheduler and the order of `runtime/task.c` is the VM's by construction, on every worker of the pool (section 4).
+  **Open:** the copy at the crossing, which the C back end makes of a frame whose texts or lists somebody else holds
+  too, and `torb_share` of a closure's environment, without which a closure pins the task that holds it; a destructor
+  queued by a release in a worker's own scheduler (a result nobody awaits) runs with that thread's next call back
+  rather than at once; and a task of the program that a script's test scope resumes runs under the script's grant.
 - **Calling compiled code from bytecode.** BACKEND 5.2 promised that a compiled function can be called from bytecode
   and back. With the VM's own inline layouts that is a marshalling step at the boundary for any record of the program.
   docs/design/SCRIPTS.md section 5 decided it for the sandbox: only text crosses between `torb` and the VM (the kernel

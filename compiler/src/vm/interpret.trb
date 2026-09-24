@@ -12,8 +12,12 @@
  * the kernel (`std/machine`), which is C and the one runtime of the process.
  *
  * The chunks are laid out once, before the first instruction, as an [Image]: every chunk's code in one list with its
- * jump targets relocated, and what a call needs of a chunk - where its code starts, its frame, its parameters - in lists
- * of words as well, which the loop reads by address like the registers.
+ * jump targets relocated, and what a call needs of a chunk - where its code starts, its frame, its parameters, its
+ * places and witness entries - in lists of words as well, which the loop reads by address like the registers.
+ *
+ * **Tasks run on every worker of the pool** (docs/design/VM.md section 4). Every thread that may resume a task has
+ * registers of its own and an interpreter of its own installed in the kernel ([workersFor]); what they share - the
+ * constant pool, the image - they only read by address, so no count of the interpreter's is ever touched by two threads.
  *
  * A destructor runs inside the instruction whose release dropped the last count: the kernel queues the block, and
  * [execute] runs its `close()` to its return before the next instruction, as one more `execute` on top of the words in
@@ -35,6 +39,7 @@
 use Machine from "std/machine"
 use Environment from "std/os"
 use Clock from "std/time"
+use Workers from "std/task"
 use Opcode, KernelOperation, kernelNumberOf, opcodeOf, tailLengthOf, stoppedWord from "../backend/bytecode/format"
 use BytecodeProgram, Chunk, Place, PlaceStep, WitnessEntry, WitnessRootEntry from "../backend/bytecode/format"
 use ConstantPart, Shape, CountedWord from "../backend/bytecode/format"
@@ -56,32 +61,58 @@ public shared type Registers {
   var top: Int = 0
   /** How many registers are zeroed: a frame beyond this is zeroed before its first use. */
   var extent: Int = 0
+  /**
+   * The program; a worker's registers hold an empty one, and read everything of the program the loop needs out of the
+   * image by address.
+   */
   var program: BytecodeProgram
   var image: Image
+  /**
+   * The address of the constant pool's first word, and of the cells in its gaps: the registers' own for the thread that
+   * runs the program, and that thread's for a worker, whose frames are registers of its own.
+   */
+  var pool: Int = 0
+  /** How far a frame may reach: beyond it a call is the runtime's `stack overflow`. */
+  var limit: Int = largestStack
 }
 
 /**
  * The program laid out for the loop. `code` is every chunk's code one after the other, with the jump targets, resume
  * points and stop paths offsets of it; `headers` holds [headerWords] words per chunk, `parameters` four words per
- * parameter, and `tables` the witness tables - all of them lists of words the loop reads at their addresses.
+ * parameter, and `tables` the witness tables - all of them lists of words the loop reads at their addresses, and never
+ * as lists, so the image of a worker ([sharedImageOf]) has the addresses alone.
  */
 public type Image {
   code: ArrayList<Int>
   headers: ArrayList<Int>
   parameters: ArrayList<Int>
   tables: ArrayList<Int>
-  /** Every place of every chunk; a chunk's first one is its header's word [placesWord]. */
-  places: ArrayList<Place>
-  /** Every witness entry of every chunk; a chunk's first one is its header's word [witnessesWord]. */
-  witnesses: ArrayList<WitnessEntry>
+  /**
+   * The words of every place of every chunk ([appendPlace]), and where each one starts: a chunk's first place is its
+   * header's word [placesWord] in `placeStarts`.
+   */
+  places: ArrayList<Int>
+  placeStarts: ArrayList<Int>
+  /** The words of every witness entry ([appendWitness]), and where each starts: from the header's [witnessesWord]. */
+  witnesses: ArrayList<Int>
+  witnessStarts: ArrayList<Int>
+  /** The code offset every state of a task's body resumes at: from its header's word [resumesWord] on. */
+  resumes: ArrayList<Int>
+  /** Whether a chunk runs a script: the sandbox is the process's, so such a program's tasks stay on one thread. */
+  runsScripts: Bool = false
   codeAddress: Int = 0
   headersAddress: Int = 0
   parametersAddress: Int = 0
   tablesAddress: Int = 0
+  placesAddress: Int = 0
+  placeStartsAddress: Int = 0
+  witnessesAddress: Int = 0
+  witnessStartsAddress: Int = 0
+  resumesAddress: Int = 0
 }
 
 /** The words of a chunk's header, and which is which. */
-const headerWords = 9
+const headerWords = 10
 
 const codeWord = 0
 
@@ -100,6 +131,8 @@ const witnessesWord = 6
 const locationWord = 7
 
 const taskRegisterWord = 8
+
+const resumesWord = 9
 
 /** The words of a parameter in [Image.parameters]: its register, its width, whether it is a reference, its shape. */
 const parameterWords = 4
@@ -156,6 +189,13 @@ const recordWords = 4
  */
 const largestStack = 4194304
 
+/**
+ * How many words the stack of a worker of the pool may hold: a task's body starts at the bottom of it, and recursion
+ * inside a task on another worker than the first ends in `stack overflow` sooner, as a native worker's smaller stack
+ * does.
+ */
+const workerStack = 1048576
+
 /** How many registers are zeroed at once when a frame reaches beyond [Registers.extent]. */
 const zeroedAtOnce = 65536
 
@@ -173,7 +213,60 @@ const contentsOffset = 16
  */
 public fn runProgram(program: BytecodeProgram, arguments: List<String>): Int {
   const registers = registersFor program
-  run registers.words, kernelScratch(), registers, registers.image, program, arguments
+  const workers = workersFor registers, program
+  const ended = run registers.words, kernelScratch(), registers, registers.image, program, arguments
+  releaseWorkers registers, workers
+  ended
+}
+
+/**
+ * Registers and an interpreter for every other thread that may resume a task of the program: the workers of the pool
+ * after the first, and the threads of the blocking pool (docs/design/VM.md section 4). Each gets words of its own for
+ * its frames and an image that shares the program's lists by address only, so what one thread's interpreter counts no
+ * other thread ever touches. Then the kernel lets a task whose frame may cross start portable. A program without tasks
+ * needs none of it, and neither does one that runs scripts: the sandbox is the whole process's, so its tasks stay on
+ * the thread that runs it.
+ */
+fn workersFor(main: Registers, program: BytecodeProgram): List<Registers> {
+  var workers: List<Registers> = []
+  if !program.usesTasks || main.image.runsScripts {
+    return workers
+  }
+  // A worker of the ring by its index (kind 0), a thread of the blocking pool by its number (kind 1)
+  var threads: List<(Int, Int)> = []
+  for index in 1..Workers.count() {
+    threads.append((0, index))
+  }
+  for index in 0..Workers.blocking() {
+    threads.append((1, index))
+  }
+  for (kind, number) in threads {
+    const worker = Registers(
+      words: ArrayList.withCapacity(0),
+      program: BytecodeProgram(),
+      image: sharedImageOf(main.image),
+      pool: main.pool,
+      limit: workerStack,
+    )
+    var kernel = kernelScratch()
+    const capacity = [workerStack + 4 * scratchWords]
+    const _ = kernelCall worker.words, kernel, 0, KernelOperation.Reserve, capacity
+    worker.address = kernelCall worker.words, kernel, 0, KernelOperation.RegisterAddress, []
+    const _ = kernelCall worker.words, kernel, 0, KernelOperation.InstallFor, [kind, number]
+    Machine.install { answer worker, _ }
+    workers.append worker
+  }
+  const _ = kernelCall main.words, kernelScratch(), 0, KernelOperation.Portable, [1]
+  workers
+}
+
+/** The interpreters of the other threads given back once the program is done: every task has stopped by then. */
+fn releaseWorkers(main: Registers, workers: List<Registers>) {
+  if workers.isEmpty() {
+    return
+  }
+  const _ = kernelCall main.words, kernelScratch(), 0, KernelOperation.Portable, [0]
+  const _ = kernelCall main.words, kernelScratch(), 0, KernelOperation.InstallFor, [2, 0]
 }
 
 /**
@@ -186,6 +279,7 @@ fn registersFor(program: BytecodeProgram): Registers {
   const capacity = [largestStack + 4 * scratchWords]
   const _ = kernelCall registers.words, kernelScratch(), 0, KernelOperation.Reserve, capacity
   registers.address = kernelCall registers.words, kernelScratch(), 0, KernelOperation.RegisterAddress, []
+  registers.pool = registers.address
   registers.program = program
   registers.image = imageOf registers.words, program
   Machine.install { answer registers, _ }
@@ -220,7 +314,16 @@ fn run(
   if program.entryCellRelease >= 0 {
     const _ = kernelCall words, kernel, scratch, KernelOperation.OnExit, [program.entryCellRelease]
   }
-  for entry in program.entries {
+  for position in 0..program.entries.length() {
+    // A test run prints the file in front of its tests, as the `main` of a native test binary does
+    if const Some(file) = program.entryFiles.get(position) {
+      Machine.placeText words, scratch, file
+      const _ = kernelCall words, kernel, scratch, KernelOperation.TestFile, [0]
+    }
+    const entry = program.entries[position]
+    if entry < 0 {
+      continue
+    }
     const chunk = program.chunks[entry]
     // An entry file that waits is the main task: the scheduler runs until it has completed. Where it ended cancelled,
     // the kernel said so (`torb_task_end_main`) and the run ends with `TORB_EXIT_CANCELLED` once the rest has stopped
@@ -233,7 +336,7 @@ fn run(
       }
       continue
     }
-    const _ = execute(words, kernel, budget, registers, image, program, entry, scratch, 0 - 1, 0 - 1)
+    const _ = execute(words, kernel, budget, registers, image, program, entry, scratch, 0 - 1, 0)
     // Tasks it started and did not wait for run once it is done, in the order they were queued
     if program.usesTasks {
       schedule words, kernel, registers, image, program, KernelOperation.SchedulerRun, []
@@ -247,7 +350,14 @@ fn run(
   if program.entryCellRelease >= 0 {
     const _ = kernelCall words, kernel, scratch, KernelOperation.OnExit, [0 - 1]
     const release = program.entryCellRelease
-    const _ = execute(words, kernel, budget, registers, image, program, release, scratch, 0 - 1, 0 - 1)
+    const _ = execute(words, kernel, budget, registers, image, program, release, scratch, 0 - 1, 0)
+  }
+  // The summary of a test run, before the leak report, and its exit code where the run failed
+  if !program.entryFiles.isEmpty() {
+    const failed = kernelCall words, kernel, scratch, KernelOperation.TestFinish, []
+    if failed != 0 {
+      return failed
+    }
   }
   ended
 }
@@ -432,7 +542,8 @@ public fn callSandboxed(
   const image = registers.image
   var finished = ensureFrame registers, base, image, chunk
   if finished {
-    const poll = execute(registers.words, loaded.kernel, budget, registers, image, program, chunk, base, 0 - 1, target)
+    const into = registers.address + 8 * target
+    const poll = execute(registers.words, loaded.kernel, budget, registers, image, program, chunk, base, 0 - 1, into)
     finished = poll != haltedPoll
   } else {
     budget.frames.append((chunk, 0))
@@ -597,7 +708,7 @@ fn runScriptInstruction(
       first = 1
     }
     storeRegister(registers, scratch + chunk.parameters[first].offset, loadRegister(registers, base + receiver))
-    const poll = execute(words, kernel, budget, registers, image, program, callee, scratch, 0 - 1, 0 - 1)
+    const poll = execute(words, kernel, budget, registers, image, program, callee, scratch, 0 - 1, 0)
     finished = poll != haltedPoll
   } else {
     budget.frames.append((callee, 0))
@@ -638,8 +749,12 @@ fn imageOf(var words: ArrayList<Int>, program: BytecodeProgram): Image {
   var code: ArrayList<Int> = ArrayList.withCapacity 4096
   var headers: ArrayList<Int> = ArrayList.withCapacity(program.chunks.length() * headerWords + 1)
   var parameters: ArrayList<Int> = ArrayList.withCapacity 1024
-  var places: ArrayList<Place> = ArrayList.withCapacity 1024
-  var witnesses: ArrayList<WitnessEntry> = ArrayList.withCapacity 64
+  var places: ArrayList<Int> = ArrayList.withCapacity 4096
+  var placeStarts: ArrayList<Int> = ArrayList.withCapacity 1024
+  var witnesses: ArrayList<Int> = ArrayList.withCapacity 256
+  var witnessStarts: ArrayList<Int> = ArrayList.withCapacity 64
+  var resumes: ArrayList<Int> = ArrayList.withCapacity 64
+  var runsScripts = false
   for chunk in program.chunks {
     const start = code.length()
     headers.append start
@@ -647,19 +762,29 @@ fn imageOf(var words: ArrayList<Int>, program: BytecodeProgram): Image {
     headers.append(if chunk.takesEnvironment { 1 } else { 0 })
     headers.append(parameters.length() / parameterWords)
     headers.append chunk.parameters.length()
-    headers.append places.length()
-    headers.append witnesses.length()
+    headers.append placeStarts.length()
+    headers.append witnessStarts.length()
     headers.append chunk.location
     headers.append chunk.taskRegister
+    headers.append resumes.length()
     for parameter in chunk.parameters {
       parameters.append parameter.offset
       parameters.append parameter.width
       parameters.append(if parameter.isReference { 1 } else { 0 })
       parameters.append parameter.retainedThroughWitness
     }
-    places.appendAll chunk.places
-    witnesses.appendAll chunk.witnesses
-    appendRelocated code, chunk.code, start
+    for place in chunk.places {
+      placeStarts.append places.length()
+      appendPlace places, place
+    }
+    for witness in chunk.witnesses {
+      witnessStarts.append witnesses.length()
+      appendWitness witnesses, witness
+    }
+    resumes.appendAll chunk.resumes
+    if appendRelocated(code, chunk.code, start) {
+      runsScripts = true
+    }
   }
   var tables: ArrayList<Int> = ArrayList.withCapacity 256
   for _ in 0..program.tables.length() {
@@ -678,30 +803,130 @@ fn imageOf(var words: ArrayList<Int>, program: BytecodeProgram): Image {
   const headersAddress = addressOf words, headers
   const parametersAddress = addressOf words, parameters
   const tablesAddress = addressOf words, tables
+  const placesAddress = addressOf words, places
+  const placeStartsAddress = addressOf words, placeStarts
+  const witnessesAddress = addressOf words, witnesses
+  const witnessStartsAddress = addressOf words, witnessStarts
+  const resumesAddress = addressOf words, resumes
   Image(
-    code,
-    headers,
-    parameters,
-    tables,
-    places,
-    witnesses,
-    codeAddress,
-    headersAddress,
-    parametersAddress,
-    tablesAddress,
+    code: code,
+    headers: headers,
+    parameters: parameters,
+    tables: tables,
+    places: places,
+    placeStarts: placeStarts,
+    witnesses: witnesses,
+    witnessStarts: witnessStarts,
+    resumes: resumes,
+    runsScripts: runsScripts,
+    codeAddress: codeAddress,
+    headersAddress: headersAddress,
+    parametersAddress: parametersAddress,
+    tablesAddress: tablesAddress,
+    placesAddress: placesAddress,
+    placeStartsAddress: placeStartsAddress,
+    witnessesAddress: witnessesAddress,
+    witnessStartsAddress: witnessStartsAddress,
+    resumesAddress: resumesAddress,
   )
 }
 
 /** An image of nothing: what the registers hold until the program is laid out. */
 fn emptyImage(): Image {
   Image(
-    ArrayList.withCapacity(0),
-    ArrayList.withCapacity(0),
-    ArrayList.withCapacity(0),
-    ArrayList.withCapacity(0),
-    ArrayList.withCapacity(0),
-    ArrayList.withCapacity(0),
+    code: ArrayList.withCapacity(0),
+    headers: ArrayList.withCapacity(0),
+    parameters: ArrayList.withCapacity(0),
+    tables: ArrayList.withCapacity(0),
+    places: ArrayList.withCapacity(0),
+    placeStarts: ArrayList.withCapacity(0),
+    witnesses: ArrayList.withCapacity(0),
+    witnessStarts: ArrayList.withCapacity(0),
+    resumes: ArrayList.withCapacity(0),
   )
+}
+
+/**
+ * The image of a worker: the program's addresses and no list of its own. The lists stay the program's, whose image
+ * holds them for the whole run, so a worker reads their words and never counts them.
+ */
+fn sharedImageOf(image: Image): Image {
+  emptyImage().copy(
+    runsScripts: image.runsScripts,
+    codeAddress: image.codeAddress,
+    headersAddress: image.headersAddress,
+    parametersAddress: image.parametersAddress,
+    tablesAddress: image.tablesAddress,
+    placesAddress: image.placesAddress,
+    placeStartsAddress: image.placeStartsAddress,
+    witnessesAddress: image.witnessesAddress,
+    witnessStartsAddress: image.witnessStartsAddress,
+    resumesAddress: image.resumesAddress,
+  )
+}
+
+/** The kinds of a step in the words of a place, and how many words a step takes: its kind and four operands. */
+const offsetStep = 0
+
+const dereferenceStep = 1
+
+const elementStep = 2
+
+const itemStep = 3
+
+const stepWords = 6
+
+/**
+ * A place as words: its base register, whether that register holds a reference, its width, how many steps, then
+ * [stepWords] words per step - the kind and its operands.
+ */
+fn appendPlace(var words: ArrayList<Int>, place: Place) {
+  words.append place.base
+  words.append(if place.isThroughReference { 1 } else { 0 })
+  words.append place.width
+  words.append place.steps.length()
+  for step in place.steps {
+    const (kind, first, second, third, fourth, fifth) = match step {
+      .Offset(count) => (offsetStep, count, 0, 0, 0, 0)
+      .Dereference => (dereferenceStep, 0, 0, 0, 0, 0)
+      .Element(index, missing, location) => (elementStep, index, missing, location, 0, 0)
+      .Item(index, size, width, missing, location) => (itemStep, index, size, width, missing, location)
+    }
+    words.append kind
+    words.append first
+    words.append second
+    words.append third
+    words.append fourth
+    words.append fifth
+  }
+}
+
+/** A witness entry as words: its root (0 a static table, 1 a value's place and bound), how many steps, the steps. */
+fn appendWitness(var words: ArrayList<Int>, witness: WitnessEntry) {
+  match witness.root {
+    .Table(table) => {
+      words.append 0
+      words.append table
+      words.append 0
+    }
+    .Value(place, bound) => {
+      words.append 1
+      words.append place
+      words.append bound
+    }
+  }
+  words.append witness.steps.length()
+  words.appendAll witness.steps
+}
+
+/** The address of the words of the place `index` of a chunk whose first place is `places`. */
+fn placeAt(image: Image, places: Int, index: Int): Int {
+  image.placesAddress + 8 * Machine.load(image.placeStartsAddress + 8 * (places + index))
+}
+
+/** The address of the words of a witness entry, by its index among every chunk's. */
+fn witnessAt(image: Image, index: Int): Int {
+  image.witnessesAddress + 8 * Machine.load(image.witnessStartsAddress + 8 * index)
 }
 
 /**
@@ -713,13 +938,20 @@ fn addressOf(var words: ArrayList<Int>, var list: ArrayList<Int>): Int {
   Machine.operate(words, 0, list, list.length() - 1)
 }
 
-/** One chunk's code at the end of `into`, every code offset it names moved by `start`. */
-fn appendRelocated(var into: ArrayList<Int>, code: ArrayList<Int>, start: Int) {
+/**
+ * One chunk's code at the end of `into`, every code offset it names moved by `start`. Answers whether the chunk runs a
+ * script.
+ */
+fn appendRelocated(var into: ArrayList<Int>, code: ArrayList<Int>, start: Int): Bool {
+  var runsScripts = false
   var pc = 0
   while pc < code.length() {
     const head = code[pc]
     const opcode = opcodeOf head.bitwiseAnd(255)
     const tail = tailLengthOf opcode, head
+    if opcode == Opcode.RunScript {
+      runsScripts = true
+    }
     into.append head
     for index in 0..tail {
       const word = code[pc + 1 + index]
@@ -736,6 +968,7 @@ fn appendRelocated(var into: ArrayList<Int>, code: ArrayList<Int>, start: Int) {
     }
     pc = pc + 1 + tail
   }
+  runsScripts
 }
 
 // --- Calls back ------------------------------------------------------------------------------------------------------
@@ -779,7 +1012,7 @@ fn answer(registers: Registers, request: Int): Int {
     // A chunk without parameters: the release of the entry cells when the program ends in `Process.exit`
     const function = Machine.load(request + requestChunk)
     if ensureFrame(registers, base, image, function) {
-      poll = execute(registers.words, kernelScratch(), budget, registers, image, program, function, base, 0 - 1, 0 - 1)
+      poll = execute(registers.words, kernelScratch(), budget, registers, image, program, function, base, 0 - 1, 0)
     } else {
       poll = haltedPoll
     }
@@ -790,25 +1023,27 @@ fn answer(registers: Registers, request: Int): Int {
       if header(image, function, environmentWord) != 0 {
         storeRegister(registers, base + parameterWord(image, function, 0, 0), Machine.load(request + requestFirst))
       }
-      poll = execute(registers.words, kernelScratch(), budget, registers, image, program, function, base, 0 - 1, 0 - 1)
+      poll = execute(registers.words, kernelScratch(), budget, registers, image, program, function, base, 0 - 1, 0)
     } else {
       poll = haltedPoll
     }
   } else if kind == resumeRequest {
     // A task's body, resumed by the scheduler: its frame out of the task block, its task in its register, and on at
     // the state it recorded. The answer is the poll of `torb_task.h`
+    // Out of the image alone: a worker's registers hold no program
     const function = Machine.load(request + requestChunk)
-    const chunk = program.chunks[function]
+    const taskRegister = header image, function, taskRegisterWord
     const task = Machine.load(request + requestFirst)
     const frame = Machine.load(request + requestSecond)
     const state = Machine.load(request + requestWords)
     if ensureFrame(registers, base, image, function) {
-      for offset in 0..chunk.taskRegister {
+      for offset in 0..taskRegister {
         storeRegister(registers, base + offset, Machine.load(frame + 8 * offset))
       }
-      storeRegister(registers, base + chunk.taskRegister, task)
-      const at = header(image, function, codeWord) + chunk.resumes[state]
-      poll = execute(registers.words, kernelScratch(), budget, registers, image, program, function, base, at, 0 - 1)
+      storeRegister(registers, base + taskRegister, task)
+      const resumed = Machine.load(image.resumesAddress + 8 * (header(image, function, resumesWord) + state))
+      const at = header(image, function, codeWord) + resumed
+      poll = execute registers.words, kernelScratch(), budget, registers, image, program, function, base, at, 0
       answered = poll
     } else {
       poll = haltedPoll
@@ -830,7 +1065,8 @@ fn answer(registers: Registers, request: Int): Int {
         }
       }
       storeRegister registers, result, 0
-      poll = execute(registers.words, kernelScratch(), budget, registers, image, program, function, base, 0 - 1, result)
+      const into = registers.address + 8 * result
+      poll = execute(registers.words, kernelScratch(), budget, registers, image, program, function, base, 0 - 1, into)
       answered = loadRegister registers, result
     } else {
       poll = haltedPoll
@@ -1108,8 +1344,8 @@ fn ensureRegisters(registers: Registers, count: Int) {
   if reached < count {
     reached = count
   }
-  if reached > largestStack + 4 * scratchWords {
-    reached = largestStack + 4 * scratchWords
+  if reached > registers.limit + 4 * scratchWords {
+    reached = registers.limit + 4 * scratchWords
   }
   for index in registers.extent..reached {
     storeRegister registers, index, 0
@@ -1134,7 +1370,7 @@ fn parameterWord(image: Image, chunk: Int, parameter: Int, word: Int): Int {
  */
 fn ensureFrame(registers: Registers, calleeBase: Int, image: Image, callee: Int): Bool {
   const needed = calleeBase + header(image, callee, frameWord) + scratchWords
-  if needed > largestStack {
+  if needed > registers.limit {
     const location = header image, callee, locationWord
     const _ = kernelCall registers.words, kernelScratch(), 0, KernelOperation.StackOverflow, [location]
     return false
@@ -1152,42 +1388,43 @@ fn resolvePlace(
   var words: ArrayList<Int>,
   var kernel: ArrayList<Int>,
   registers: Registers,
-  place: Place,
+  place: Int,
   base: Int,
   top: Int,
 ): Int {
-  const register = registers.address + 8 * (base + place.base)
-  var address = if place.isThroughReference { Machine.load register } else { register }
-  for step in place.steps {
-    match step {
-      .Offset(count) => {
-        address = address + 8 * count
+  const register = registers.address + 8 * (base + Machine.load(place))
+  var address = if Machine.load(place + 8) != 0 { Machine.load register } else { register }
+  const steps = Machine.load(place + 24)
+  for position in 0..steps {
+    const step = place + 32 + 8 * stepWords * position
+    const kind = Machine.load step
+    if kind == offsetStep {
+      address = address + 8 * Machine.load(step + 8)
+    } else if kind == dereferenceStep {
+      address = Machine.load(address) + contentsOffset
+    } else if kind == elementStep {
+      // The container's address and the missing text, out of the constant pool, go into the scratch words above the
+      // frame
+      const missing = registers.pool + 8 * Machine.load(step + 16)
+      storeRegister registers, top, address
+      storeRegister(registers, top + 1, Machine.load(missing))
+      storeRegister(registers, top + 2, Machine.load(missing + 8))
+      const operands = [0, base + Machine.load(step + 8) - top, 1, Machine.load(step + 24)]
+      address = kernelCall words, kernel, top, KernelOperation.ElementAddress, operands
+      if address == stoppedWord {
+        return stoppedWord
       }
-      .Dereference => {
-        address = Machine.load(address) + contentsOffset
+    } else {
+      const at = loadRegister(registers, base + Machine.load(step + 8))
+      if at < 0 || at >= Machine.load(step + 16) {
+        // The language's own message of `a[key]`, at the site the step carries
+        const missing = registers.pool + 8 * Machine.load(step + 32)
+        storeRegister registers, top, Machine.load(missing)
+        storeRegister(registers, top + 1, Machine.load(missing + 8))
+        const _ = kernelCall words, kernel, top, KernelOperation.Panic, [0, Machine.load(step + 40)]
+        return stoppedWord
       }
-      .Element(index, missing, location) => {
-        // The container's address and the missing text go into the scratch words above the frame
-        storeRegister registers, top, address
-        storeRegister(registers, top + 1, loadRegister(registers, missing))
-        storeRegister(registers, top + 2, loadRegister(registers, missing + 1))
-        const operands = [0, base + index - top, 1, location]
-        address = kernelCall words, kernel, top, KernelOperation.ElementAddress, operands
-        if address == stoppedWord {
-          return stoppedWord
-        }
-      }
-      .Item(index, size, width, missing, location) => {
-        const at = loadRegister(registers, base + index)
-        if at < 0 || at >= size {
-          // The language's own message of `a[key]`, at the site the step carries
-          storeRegister registers, top, loadRegister(registers, missing)
-          storeRegister(registers, top + 1, loadRegister(registers, missing + 1))
-          const _ = kernelCall words, kernel, top, KernelOperation.Panic, [0, location]
-          return stoppedWord
-        }
-        address = address + 8 * at * width
-      }
+      address = address + 8 * at * Machine.load(step + 24)
     }
   }
   address
@@ -1197,8 +1434,8 @@ fn resolvePlace(
 
 /**
  * Runs one chunk to its return, with its frame from `entryBase` on - from its first instruction, or from `entryPc`
- * where the scheduler resumes a task's body. Every call it makes is a frame of this loop, with its return record in the
- * words below it; a destructor that has to run in the middle of an instruction is one more `execute`, above every word
+ * where the scheduler resumes a task's body - and hands the bottom frame's result to the words at `resultAddress`, 0
+ * for none. Every call it makes is a frame of this loop, with its return record in the words below it; a destructor that has to run in the middle of an instruction is one more `execute`, above every word
  * in use. Answers the poll of a task's body, [finishedPoll] for a chunk that returns, and [haltedPoll] where a
  * sandboxed script stopped - after adding the frames of this loop to `budget.frames`.
  */
@@ -1212,13 +1449,14 @@ fn execute(
   entry: Int,
   entryBase: Int,
   entryPc: Int,
-  resultTarget: Int,
+  resultAddress: Int,
 ): Int {
   const tracing = Environment.get("TORB_VM_TRACE").isSome()
   const code = image.codeAddress
-  // The list itself, which a call of the kernel reads its operands out of
-  const instructions = image.code
+  // An empty list: a call of the kernel then reads its operation at the address it is given, in the code
+  const instructions: ArrayList<Int> = ArrayList.withCapacity 0
   const first = registers.address
+  const pool = registers.pool
   var chunk = entry
   var base = entryBase
   var frame = first + 8 * base
@@ -1242,7 +1480,7 @@ fn execute(
     const c = head.shiftedRight(40).bitwiseAnd(65535)
     const opcode = opcodeOf head.bitwiseAnd(255)
     if tracing {
-      printError "{program.chunks[chunk].name} {pc} {opcode.spelling()} base {base}"
+      printError "{nameOf(program, chunk)} {pc} {opcode.spelling()} base {base}"
     }
     match opcode {
       .Move => {
@@ -1254,7 +1492,7 @@ fn execute(
       .Constant => {
         const offset = Machine.load(code + 8 * (pc + 1))
         for index in 0..b {
-          Machine.store(frame + 8 * (a + index), Machine.load(first + 8 * (offset + index)))
+          Machine.store(frame + 8 * (a + index), Machine.load(pool + 8 * (offset + index)))
         }
         pc = pc + 2
       }
@@ -1269,31 +1507,31 @@ fn execute(
         pc = pc + 1
       }
       .Load => {
-        const place = image.places[places + b]
+        const place = placeAt image, places, b
         const address = resolvePlace words, kernel, registers, place, base, top
         if address == stoppedWord {
           noteFrames budget, image, first, chunk, pc, base, depth
           return haltedPoll
         }
-        for offset in 0..place.width {
+        for offset in 0..Machine.load(place + 16) {
           Machine.store(frame + 8 * (a + offset), Machine.load(address + 8 * offset))
         }
         pc = pc + 1
       }
       .Store => {
-        const place = image.places[places + a]
+        const place = placeAt image, places, a
         const address = resolvePlace words, kernel, registers, place, base, top
         if address == stoppedWord {
           noteFrames budget, image, first, chunk, pc, base, depth
           return haltedPoll
         }
-        for offset in 0..place.width {
+        for offset in 0..Machine.load(place + 16) {
           Machine.store(address + 8 * offset, Machine.load(frame + 8 * (b + offset)))
         }
         pc = pc + 1
       }
       .Reference => {
-        const place = image.places[places + b]
+        const place = placeAt image, places, b
         const address = resolvePlace words, kernel, registers, place, base, top
         if address == stoppedWord {
           noteFrames budget, image, first, chunk, pc, base, depth
@@ -1304,7 +1542,7 @@ fn execute(
       }
       .Kernel => {
         registers.top = top
-        const queued = Machine.operate(words, base, instructions, pc + 1)
+        const queued = Machine.operate(words, base, instructions, code + 8 * (pc + 1))
         if queued == stoppedWord {
           noteFrames budget, image, first, chunk, pc, base, depth
           return haltedPoll
@@ -1375,7 +1613,7 @@ fn execute(
         pc = header image, chunk, codeWord
       }
       .CallWitness => {
-        const witness = image.witnesses[header(image, chunk, witnessesWord) + Machine.load(code + 8 * (pc + 1))]
+        const witness = witnessAt(image, header(image, chunk, witnessesWord) + Machine.load(code + 8 * (pc + 1)))
         const member = Machine.load(code + 8 * (pc + 2))
         const (table, payload) = resolveWitness words, kernel, registers, image, witness, places, base, top
         if table == stoppedWord {
@@ -1426,7 +1664,7 @@ fn execute(
         pc = header image, chunk, codeWord
       }
       .WitnessTable => {
-        const witness = image.witnesses[header(image, chunk, witnessesWord) + b]
+        const witness = witnessAt(image, header(image, chunk, witnessesWord) + b)
         const (table, _) = resolveWitness words, kernel, registers, image, witness, places, base, top
         if table == stoppedWord {
           noteFrames budget, image, first, chunk, pc, base, depth
@@ -1439,9 +1677,9 @@ fn execute(
         const source = frame + 8 * a
         if depth == 0 {
           // The bottom frame hands its result to whoever ran this loop: a module constant's cell, a call back
-          if resultTarget >= 0 {
+          if resultAddress != 0 {
             for offset in 0..b {
-              Machine.store(first + 8 * (resultTarget + offset), Machine.load(source + 8 * offset))
+              Machine.store(resultAddress + 8 * offset, Machine.load(source + 8 * offset))
             }
           }
           return finishedPoll
@@ -1604,7 +1842,7 @@ fn execute(
         pc = next
       }
       .Unreachable => {
-        panicInternal "the VM reached code the IR says nothing reaches, in `{program.chunks[chunk].name}`"
+        panicInternal "the VM reached code the IR says nothing reaches, in `{nameOf(program, chunk)}`"
       }
       .Stop => {
         return stoppedPoll
@@ -1633,7 +1871,7 @@ fn execute(
           // Registered where it waits: the frame goes into the task block, and the scheduler resumes the body at the
           // state's `resume` - which only happens to the bottom frame, the one the scheduler called
           if depth != 0 {
-            panicInternal "a task suspended below the frame the scheduler resumed, in `{program.chunks[chunk].name}`"
+            panicInternal "a task suspended below the frame the scheduler resumed, in `{nameOf(program, chunk)}`"
           }
           const saved = header(image, chunk, taskRegisterWord) + 1
           if kernelCall(words, kernel, base, KernelOperation.TaskSave, [a, saved]) == stoppedWord {
@@ -1668,7 +1906,7 @@ fn execute(
         return finishedPoll
       }
       .EntryCell => {
-        const cell = first + 8 * Machine.load(code + 8 * (pc + 1))
+        const cell = pool + 8 * Machine.load(code + 8 * (pc + 1))
         for offset in 0..b {
           if c == 0 {
             Machine.store(frame + 8 * (a + offset), Machine.load(cell + 8 * offset))
@@ -1679,34 +1917,74 @@ fn execute(
         pc = pc + 2
       }
       .Cell => {
-        const cell = Machine.load(code + 8 * (pc + 1))
-        if loadRegister(registers, cell) == 0 {
+        const cell = pool + 8 * Machine.load(code + 8 * (pc + 1))
+        if Machine.load(cell) == 0 {
           const initializer = Machine.load(code + 8 * (pc + 2))
-          if kernelCall(words, kernel, top, KernelOperation.BeginImmortal, []) == stoppedWord {
+          if !buildCell(words, kernel, budget, registers, image, program, initializer, cell, top) {
             noteFrames budget, image, first, chunk, pc, base, depth
             return haltedPoll
           }
-          const inner = top + scratchWords
-          var built = ensureFrame registers, inner, image, initializer
-          if built {
-            const poll = execute(words, kernel, budget, registers, image, program, initializer, inner, 0 - 1, cell + 1)
-            built = poll != haltedPoll
-          }
-          // The region is closed whether or not the initializer ran to its end: a stop must not leave the host
-          // allocating immortal blocks
-          const closed = kernelCall words, kernel, top, KernelOperation.EndImmortal, []
-          if !built || closed == stoppedWord {
-            noteFrames budget, image, first, chunk, pc, base, depth
-            return haltedPoll
-          }
-          storeRegister registers, cell, 1
         }
         for offset in 0..b {
-          Machine.store(frame + 8 * (a + offset), loadRegister(registers, cell + 1 + offset))
+          Machine.store(frame + 8 * (a + offset), Machine.load(cell + 8 * (1 + offset)))
         }
         pc = pc + 3
       }
     }
+  }
+}
+
+/**
+ * The first read of a module constant builds it, into the cell at the address `cell` - its flag, then its value: under
+ * the runtime's lock of constants, because two workers may read it at once, inside an immortal region, and with the
+ * flag published once the value is in place, as the C back end's accessor does (`torb_constant_ready`). Answers false
+ * where a sandboxed script stopped on the way; the lock is given back either way.
+ */
+fn buildCell(
+  var words: ArrayList<Int>,
+  var kernel: ArrayList<Int>,
+  var budget: Budget,
+  registers: Registers,
+  image: Image,
+  program: BytecodeProgram,
+  initializer: Int,
+  cell: Int,
+  top: Int,
+): Bool {
+  if kernelCall(words, kernel, top, KernelOperation.ConstantLock, []) == stoppedWord {
+    return false
+  }
+  var built = true
+  var publish = 0
+  // Another thread may have built it while this one waited for the lock
+  if Machine.load(cell) == 0 {
+    built = kernelCall(words, kernel, top, KernelOperation.BeginImmortal, []) != stoppedWord
+    if built {
+      const inner = top + scratchWords
+      built = ensureFrame registers, inner, image, initializer
+      if built {
+        const poll = execute(words, kernel, budget, registers, image, program, initializer, inner, 0 - 1, cell + 8)
+        built = poll != haltedPoll
+      }
+      // The region is closed whether or not the initializer ran to its end: a stop must not leave the host allocating
+      // immortal blocks
+      if kernelCall(words, kernel, top, KernelOperation.EndImmortal, []) == stoppedWord {
+        built = false
+      }
+    }
+    if built {
+      publish = 1
+    }
+  }
+  const unlocked = kernelCall words, kernel, top, KernelOperation.ConstantUnlock, [cell, publish]
+  built && unlocked != stoppedWord
+}
+
+/** The name of a chunk for a message of the VM itself; a worker's registers hold no program, so there it is a number. */
+fn nameOf(program: BytecodeProgram, chunk: Int): String {
+  match program.chunks.get(chunk) {
+    Some(found) => found.name
+    None => "chunk {chunk}"
   }
 }
 
@@ -1812,30 +2090,28 @@ fn resolveWitness(
   var kernel: ArrayList<Int>,
   registers: Registers,
   image: Image,
-  witness: WitnessEntry,
+  witness: Int,
   places: Int,
   base: Int,
   top: Int,
 ): (Int, Int) {
   var table = 0
   var payload = 0
-  match witness.root {
-    .Table(found) => {
-      table = found
+  if Machine.load(witness) == 0 {
+    table = Machine.load(witness + 8)
+  } else {
+    const place = placeAt image, places, Machine.load(witness + 8)
+    const address = resolvePlace words, kernel, registers, place, base, top
+    if address == stoppedWord {
+      return (stoppedWord, 0)
     }
-    .Value(place, bound) => {
-      const address = resolvePlace words, kernel, registers, image.places[places + place], base, top
-      if address == stoppedWord {
-        return (stoppedWord, 0)
-      }
-      payload = Machine.load address
-      table = Machine.load(address + 8 * (1 + bound)) - 1
-    }
+    payload = Machine.load address
+    table = Machine.load(address + 8 * (1 + Machine.load(witness + 16))) - 1
   }
-  for step in witness.steps {
+  for position in 0..Machine.load(witness + 24) {
     // A table's nested tables follow its members: the count of members, the members, the count of nested ones
     const members = tableWord image, table, 0
-    table = tableWord(image, table, members + 2 + step)
+    table = tableWord(image, table, members + 2 + Machine.load(witness + 32 + 8 * position))
   }
   (table, payload)
 }
@@ -1883,7 +2159,7 @@ fn runClosers(
     } else {
       storeRegister registers, receiver, block
     }
-    if execute(words, kernel, budget, registers, image, program, closer, calleeBase, 0 - 1, 0 - 1) == haltedPoll {
+    if execute(words, kernel, budget, registers, image, program, closer, calleeBase, 0 - 1, 0) == haltedPoll {
       return false
     }
     storeRegister registers, top, block

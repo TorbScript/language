@@ -1,0 +1,42 @@
+/**
+ * The tasks of a receiver script belong to it (docs/design/VM.md section 10): a task runs only while the sandbox of the
+ * script that started it is open, and a script that stops inside a task stops there, with the scheduler whole.
+ *
+ * `leaves-a-task.trb` starts a task that would panic and ends without waiting: the script is done, and its task never
+ * runs outside its sandbox - not in the next script's test, which runs the scheduler, and not when the program waits
+ * later. `tests-a-task.trb` starts one inside a `test`, which waits for it: the task panics there, the script stops
+ * with that panic's line and message, and the program goes on and waits for a task of its own, which a scheduler left
+ * in the middle of a resume could not run.
+ *
+ * Only the VM runs a receiver script, so this program is named in `vm.list` and has no native run.
+ */
+
+use Sandbox, Script, SandboxError from "std/sandbox"
+use sleep from "std/time"
+
+type Settings {
+  var port: Int = 8080
+}
+
+/** What the script configured, or where and why it failed. */
+fn configured(loading: Result<Script<Settings>, SandboxError>): String {
+  const script = match loading {
+    Ok(found) => found
+    Fail(error) => {
+      return "not loaded: {error}"
+    }
+  }
+  var settings = Settings()
+  match script.apply(settings) {
+    Ok(_) => "port {settings.port}"
+    Fail(error) => "stopped: {error}"
+  }
+}
+
+print configured(Sandbox.load<Settings>("./vm-only/leaves-a-task.trb"))
+const testing = Sandbox.load<Settings>("./vm-only/tests-a-task.trb") {
+  modules "std/test"
+}
+print configured(testing)
+sleep(0.01).await()
+print "the program goes on"

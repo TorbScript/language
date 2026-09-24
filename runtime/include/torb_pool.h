@@ -251,6 +251,13 @@ typedef struct torb_worker {
 extern torb_worker torb_main_worker;
 
 /**
+ * The blocking pool's workers are numbered above every worker of the ring (task.c, "The blocking pool"):
+ * `TORB_BLOCKING_INBOX` is the queue they share - a worker without a thread - and thread `k` is
+ * `TORB_BLOCKING_INBOX + 1 + k`. The VM's kernel keeps an interpreter per thread by the same numbers (machine.c).
+ */
+#define TORB_BLOCKING_INBOX 2048u
+
+/**
  * Nonzero while the pool runs more than one thread: what makes a `TORB_SHARED_COUNT` block's count atomic (memory.c).
  * It changes only while one thread is left - set before the first worker thread starts, cleared after the last one was
  * joined - so reading it plainly is exact.

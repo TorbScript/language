@@ -16,7 +16,7 @@
 # once is built with `--profile dev`, which `torb test` and `torb run` do by default.
 #
 # Tier B: `tools/conformance.sh` (the conformance suite, and with `--vm` the programs of its `vm.list` in the bytecode
-# VM), `tools/bootstrap.sh` (the fixpoint: seed -> torb -> torb, byte-identical C), and the C runtime's own tests.
+# VM), `torb test --vm` of the std/example packages, `tools/bootstrap.sh` (the fixpoint: seed -> torb -> torb, byte-identical C), and the C runtime's own tests.
 #
 # A run holds one of the machine-wide gate slots (`tools/gate-slot.sh`, `$TORB_GATE_SLOTS`, default 2) from its first
 # gate to its last, and says so while it waits for one: several checkouts running their gates at once once ran the
@@ -183,6 +183,15 @@ torb=$(binary_of "$torb_path")
 
 gate "conformance suite" sh tools/conformance.sh
 gate "conformance suite in the VM" sh tools/conformance.sh --vm
+# The same test packages as tier A, as one program in the VM: `torb test --vm` prints the report the native binary does
+packages=""
+for candidate in std/*/tests examples/*/tests; do
+  if [ -d "$candidate" ]; then
+    packages="$packages $candidate"
+  fi
+done
+# shellcheck disable=SC2086
+gate "test (std/example packages, VM)" "$torb" test --vm $packages
 gate "fixpoint (seed -> torb -> torb)" sh tools/bootstrap.sh
 gate "runtime tests" sh runtime/build.sh
 

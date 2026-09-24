@@ -26,6 +26,7 @@ panics - there are no matchers to learn beyond [`assert`](../standard-library/ex
 torb test [path]... [--jobs N]   Run every *.test.trb below the paths (default: tests)
     --profile dev|release           How hard the C compiler optimizes (default: dev)
     --release                       The same as --profile release
+    --vm                            Run them in the bytecode VM instead of building a binary
 ```
 
 ## What it does
@@ -93,6 +94,13 @@ panic: out of memory: the limit of 8 GiB was reached (the default of a dev build
 `16G`) - and `0` or `none` sets none. A `--release` binary has no limit unless the variable asks for one. The variable
 reaches every TorbScript program that runs with it, `torb` itself included, so a limit meant for the suite alone is
 set on the binary: `TORB_MEMORY_LIMIT=2G tests/build/dev/tests`.
+
+### `--vm`: the bytecode VM
+
+`torb test --vm` builds nothing: the same program - every test file an entry, its name printed in front of its tests -
+is lowered to the typed IR a binary is compiled from, encoded as bytecode and run by the VM inside `torb`, on the same
+runtime. The report is the one the binary writes, line for line, and so is the exit code; tier B of the repository's
+gates holds the test packages of `std/` and `examples/` to that ([torb run](torb-run.md) says what the VM is).
 
 ### `--jobs`
 

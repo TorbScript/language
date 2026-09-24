@@ -1,0 +1,61 @@
+/**
+ * Tasks on several workers that make the runtime call back into the program: a map whose key holds a text, which the
+ * runtime compares and hashes by the key's own `equals` and `hash`, and objects with a destructor, whose `close()` runs
+ * inside the task that let go of them. Every task's frame holds numbers alone, so an idle worker may take it; whatever
+ * worker runs which, the answers are read in the order the tasks were started. The program runs with four workers and
+ * again with one (`task-workers-callbacks.workers`), prints the same bytes both times, and frees every block. In the VM
+ * each thread of the pool calls back into an interpreter of its own (docs/design/VM.md section 4).
+ */
+
+/** A key whose words are not its identity: a text and a number, compared and hashed as a value. */
+type Key {
+  name: String
+  number: Int
+}
+
+/** What a task counts its closed probes in: an object of the task alone. */
+shared type Tally {
+  var closed: Int = 0
+}
+
+/** Closed at the end of every round of the loop that holds it, into the task's own tally. */
+shared type Probe with Close {
+  tally: Tally
+
+  var fn close() {
+    tally.closed = tally.closed + 1
+  }
+}
+
+/** A table of `count` entries under keys of 37 names, and how many probes were closed on the way. */
+fn tabulated(seed: Int, count: Int): Task<Int> {
+  const tally = Tally()
+  var table: Map<Key, Int> = [:]
+  for index in 0..count {
+    using probe = Probe tally
+    const key = Key("name {(seed + index) % 37}", (seed + index) % 37)
+    table.set(key, (table.get(key) ?? 0) + index)
+  }
+  var total = 0
+  for (key, value) in table {
+    total = total + key.number * value
+  }
+  total * 1000 + tally.closed
+}
+
+var tasks: List<Task<Int>> = []
+for seed in 0..24 {
+  tasks.append tabulated(seed, 400 + seed * 10)
+}
+var answers: List<Int> = []
+for task in tasks {
+  answers.append task.await()
+}
+print "twenty-four tables: {answers.length()}"
+print "first: {answers[0]}"
+print "last: {answers[23]}"
+var sum = 0
+for answer in answers {
+  sum = sum + answer
+}
+print "sum: {sum}"

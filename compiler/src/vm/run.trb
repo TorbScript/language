@@ -23,6 +23,9 @@ use entryNameOf from "../ir/lower/function"
 use renderDiagnostic, renderProblem from "../cli/render"
 use emitBytecode from "../backend/bytecode/emit"
 use runProgram from "./interpret"
+use SourceTree from "../project/source-tree"
+use ModuleId from "../semantics/module"
+use BuildOptions, entryModulesOf from "../cli/build"
 
 /** The exit code of a program that could not be run at all: the one `torb build` answers for a refused program. */
 const refusedCode = 1
@@ -44,7 +47,39 @@ public fn runInMachine(path: String, arguments: List<String>): Result<Int, IoErr
       return Ok refusedCode
     }
   }
-  var lowering = lowerWorkspace checked.checker, pathsOfModules(checked), [module], false, hostTarget(), true
+  runModules checked, tree, [module], arguments, false
+}
+
+/**
+ * `torb test --vm`: every `*.test.trb` below the paths an entry of one program, as `torb test` builds them into one
+ * binary, run in the VM with the report `runtime/test.c` writes - the file in front of its tests, the summary, the exit
+ * code.
+ */
+public fn testInMachine(paths: List<String>): Result<Int, IoError> {
+  const tree = readSourceTree(paths)?
+  const checked = check(tree, absolutePaths(paths)?, false, true)
+  if reportChecked(checked) > 0 {
+    return Ok refusedCode
+  }
+  const modules = match entryModulesOf(checked, tree, BuildOptions(paths, isTestRun: true)) {
+    Some(found) => found
+    None => {
+      printError "error: no test file (`*.test.trb`) below {paths.joined(", ")}"
+      return Ok refusedCode
+    }
+  }
+  runModules checked, tree, modules, [], true
+}
+
+/** The entry files lowered, owned, verified, encoded and run; a test run with the file of every entry. */
+fn runModules(
+  checked: Checked,
+  tree: SourceTree,
+  modules: List<ModuleId>,
+  arguments: List<String>,
+  isTestRun: Bool,
+): Result<Int, IoError> {
+  var lowering = lowerWorkspace checked.checker, pathsOfModules(checked), modules, false, hostTarget(), true
   insertOwnership lowering.program
   var refused = 0
   for problem in lowering.problems {
@@ -71,8 +106,15 @@ public fn runInMachine(path: String, arguments: List<String>): Result<Int, IoErr
   if refused > 0 {
     return Ok refusedCode
   }
-  const entry = entryNameOf lowering, module
-  const emission = emitBytecode lowering.program, [entry]
+  var entries: List<String> = []
+  var files: List<String> = []
+  for module in modules {
+    entries.append entryNameOf(lowering, module)
+    if isTestRun {
+      files.append tree.display(checked.program.graph.at(module).path)
+    }
+  }
+  const emission = emitBytecode lowering.program, entries, files: files
   if !emission.unsupported.isEmpty() {
     for what in emission.unsupported {
       printError "error: {what} is not supported by the VM yet"

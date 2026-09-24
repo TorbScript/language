@@ -64,6 +64,7 @@ fn printUsage() {
   printError "  torb test [path]...    Build every *.test.trb below the paths into one binary and run it"
   printError "                         --profile dev|release, --release (default: dev)"
   printError "                         --jobs N: accepted and ignored - one binary is one process"
+  printError "                         --vm: run them in the bytecode VM instead of building a binary"
   printError "  torb new <name>        Scaffold a package: project.trb, src/main.trb, tests/main.test.trb"
   printError "                         refuses if <name> already exists"
   printError "  torb repl              Read entries from standard input and run each in the VM, keeping their bindings"
@@ -440,9 +441,14 @@ fn testOptionsOf(arguments: List<String>): TestOptions? {
   const choice = profileChoiceOf(arguments, Profile.Dev)?
   var paths: List<String> = []
   var wantsJobs = false
+  var usesMachine = false
   for argument in choice.rest {
     if wantsJobs {
       wantsJobs = false
+      continue
+    }
+    if argument == "--vm" {
+      usesMachine = true
       continue
     }
     if argument == "--jobs" {
@@ -455,7 +461,7 @@ fn testOptionsOf(arguments: List<String>): TestOptions? {
     paths.append argument
   }
   const given = if paths.isEmpty() { ["tests"] } else { paths }
-  Some TestOptions(given, choice.profile)
+  Some TestOptions(given, choice.profile, usesMachine)
 }
 
 /**

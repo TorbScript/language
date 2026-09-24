@@ -23,11 +23,13 @@
 #   sh tools/conformance.sh --filter closures
 #   sh tools/conformance.sh --update             # rewrite .expected/.stderr/.exit from a native run
 #   sh tools/conformance.sh --vm                 # the programs of tests/conformance/vm.list, run by the VM
+#   sh tools/conformance.sh --torb build/x/torb  # another compiler than build/release/torb
 #
 # `--vm` is the second leg of docs/design/VM.md section 8: every program named in `tests/conformance/vm.list` is run
 # with `torb run --vm` and compared against the same `.expected`/`.stderr`/`.exit` as its native run, byte for byte.
 # The list grows until it is the whole suite. The leak gate applies as it does natively - the kernel counts the
-# program's blocks apart from torb's own - and the two checks of the C do not apply to it.
+# program's blocks apart from torb's own - and so does a `.workers` file: the VM's tasks run on the pool of `torb`,
+# with as many workers as it names and again with one. The two checks of the C do not apply to it.
 
 set -eu
 
@@ -300,6 +302,20 @@ run_one_vm() {
   absolute="$CONFORMANCE_ROOT/$program"
   wait_for_room
 
+  # The workers of the pool `torb` runs the program's tasks on: one, unless a `.workers` file names how many - and then
+  # once more with one, which has to print the same bytes, exactly as the native run does
+  workers_file="${program%.trb}.workers"
+  workers=1
+  if [ -f "$workers_file" ]; then
+    workers=$(tr -d ' \t\r\n' <"$workers_file")
+  fi
+  if [ "$workers" = "all" ]; then
+    unset TORB_WORKERS
+  else
+    TORB_WORKERS=$workers
+    export TORB_WORKERS
+  fi
+
   set +e
   (cd "$work/run" && "$CONFORMANCE_TORB" run --vm "$absolute" >"$work/stdout" 2>"$work/stderr")
   code=$?
@@ -317,6 +333,17 @@ run_one_vm() {
       problems="$problems
 unexpected standard output in the VM:
 $(diff -u "$work/expected.norm" "$work/stdout" 2>&1 || true)"
+    fi
+  fi
+
+  if [ -f "$workers_file" ] && [ "$workers" != "1" ] && [ -f "$expected_file" ]; then
+    set +e
+    (cd "$work/run" && TORB_WORKERS=1 "$CONFORMANCE_TORB" run --vm "$absolute" >"$work/stdout.one" 2>"$work/stderr.one")
+    set -e
+    if ! cmp -s "$work/expected.norm" "$work/stdout.one"; then
+      problems="$problems
+with one worker the standard output in the VM is not the same:
+$(diff -u "$work/expected.norm" "$work/stdout.one" 2>&1 || true)"
     fi
   fi
   if [ -f "$exit_file" ]; then
@@ -386,6 +413,7 @@ jobs=2
 filter=""
 update=0
 machine=0
+chosen_torb="build/release/torb"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -413,8 +441,12 @@ while [ $# -gt 0 ]; do
       machine=1
       shift
       ;;
+    --torb)
+      chosen_torb=$2
+      shift 2
+      ;;
     -h | --help)
-      say "usage: sh tools/conformance.sh [--jobs N] [--filter substring] [--update] [--vm]"
+      say "usage: sh tools/conformance.sh [--jobs N] [--filter substring] [--update] [--vm] [--torb path]"
       exit 0
       ;;
     *)
@@ -435,8 +467,8 @@ if [ "$jobs" -gt "$processors" ]; then
   jobs=$processors
 fi
 
-torb=$(binary_of "build/release/torb")
-[ -n "$torb" ] || fail "no native compiler at build/release/torb - run: sh tools/bootstrap.sh"
+torb=$(binary_of "$chosen_torb")
+[ -n "$torb" ] || fail "no native compiler at $chosen_torb - run: sh tools/bootstrap.sh"
 torb=$(cd "$(dirname "$torb")" && pwd)/$(basename "$torb")
 
 directory="tests/conformance"

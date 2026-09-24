@@ -79,10 +79,11 @@ A build that **fails** says so, on standard error, in the form [`check`](torb-ch
 `torb run --vm <path>` builds nothing: the program is checked and lowered to the same typed IR `build` compiles, encoded
 as bytecode, and run by the VM inside `torb` itself, on the same runtime a native binary links. Its output, its exit
 code and its panics are the native binary's, which the conformance suite checks for every program it lists
-(`tools/conformance.sh --vm`). A program that uses what the VM does not run yet - a task, `test` and `group`, a map key
-that its own `equals` compares - is refused before anything runs, with a message that names what is missing. Two things
-answer differently because the program runs inside `torb`: `Process.executablePath()` is the path of `torb`, and a
-recursion reaches the `stack overflow` panic at a depth of its own.
+(`tools/conformance.sh --vm`). Its tasks run on the workers of `torb`'s own pool - as many as `TORB_WORKERS` says, the
+core count by default - under the rules of a native binary's. A program that uses what the VM does not run yet is
+refused before anything runs, with a message that names what is missing. Three things answer differently because the
+program runs inside `torb`: `Process.executablePath()` is the path of `torb`, a recursion reaches the `stack overflow`
+panic at a depth of its own, and a `TORB_MEMORY_LIMIT` limits `torb` as a whole.
 
 ### The memory limit
 

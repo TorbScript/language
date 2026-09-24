@@ -156,12 +156,7 @@ static torb_pool_state torb_pool = { NULL, 1u, 0u, 0u, 0u, 0u, 0, 0, 0u, 0u, NUL
 /** The parent, child and live links of every task. The first lock of the order at the top of the file. */
 static torb_mutex torb_tree = TORB_MUTEX_INITIALIZER;
 
-/*
- * The blocking pool ("The blocking pool" below). Its threads are workers whose indices start above every worker of the
- * ring: `TORB_BLOCKING_INBOX` is the queue they share - a worker without a thread - and thread `k` is
- * `TORB_BLOCKING_INBOX + 1 + k`.
- */
-#define TORB_BLOCKING_INBOX 2048u
+/* The blocking pool ("The blocking pool" below), whose workers are numbered from `TORB_BLOCKING_INBOX` on (torb_pool.h). */
 #define TORB_BLOCKING_DEFAULT 4u
 
 typedef struct torb_blocking_state {

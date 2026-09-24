@@ -21,6 +21,7 @@ use File, IoError from "std/fs"
 use Process from "std/process"
 use normalizePath, joinPath, parentPath from "../project/path"
 use BuildOptions, Profile, build, buildFailedCode from "./build"
+use testInMachine from "../vm/run"
 
 /**
  * What `torb test` needs from the command line, which is the paths alone: `--jobs N` is read off the arguments and
@@ -35,10 +36,18 @@ public type TestOptions {
   paths: List<String> = ["tests"]
   /** `--profile`: `dev` unless told otherwise, because a suite is run once per build and the C compiler is the wait */
   profile: Profile = Profile.Dev
+  /**
+   * `--vm`: nothing is built, and the same program - every test file an entry - runs in the bytecode VM inside this
+   * process, with the report `runtime/test.c` writes for a native test binary (docs/design/VM.md).
+   */
+  usesMachine: Bool = false
 }
 
 /** The exit code of the whole command: what the test binary answered, or what went wrong before it ran. */
 public fn runTests(options: TestOptions): Result<Int, IoError> {
+  if options.usesMachine {
+    return testInMachine options.paths
+  }
   const first = options.paths.first() ?? "tests"
   // Where a run of several packages puts its binary: the first path is the one the command line names first, and the
   // key of the cache the binary is not - a test run is asked for, so it is built

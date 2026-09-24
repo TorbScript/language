@@ -484,9 +484,12 @@ public type KernelOperation {
    */
   case Reserve
   /**
-   * `target, chunk, frame words, element, count`, then per argument `register, offset, width`: `torb_task_new` over the
-   * kernel's resume function with room for the frame of the body `chunk`, the arguments moved into it, and the task
-   * started. `element` describes the task's value, -1 for a `Void` task.
+   * `target, chunk, frame words, element, count`, then per argument `register, offset, width`, then the crossing tests:
+   * `torb_task_new` over the kernel's resume function with room for the frame of the body `chunk`, the arguments moved
+   * into it, and the task started. `element` describes the task's value, -1 for a `Void` task. The tests say whether
+   * an idle worker may take the task (docs/design/CONCURRENCY.md section 16, "What crosses a worker"): -1 where a type
+   * of the frame never crosses, otherwise how many follow, each a kind (0 a text, 1 a list, 2 a map or a set, 3 a
+   * closure's environment) and the register of the value the runtime tests.
    */
   case TaskNew
   /** `task`: answers whether the task was cancelled (`torb_task_cancelled`). */
@@ -527,6 +530,21 @@ public type KernelOperation {
    * never comes back to the end of the run (`torb_process_on_exit`); -1 takes it back once the run ends normally.
    */
   case OnExit
+  /**
+   * `kind, number`: the next `Machine.install` is the interpreter of a worker of the pool's ring (kind 0) or of a thread
+   * of the blocking pool (kind 1) with that number; kind 2 gives every interpreter but the first back.
+   */
+  case InstallFor
+  /** `flag`: whether a task whose frame may cross is started portable - only while every thread has an interpreter. */
+  case Portable
+  /** The runtime's lock around the first build of a module constant (`torb_constant_lock`). */
+  case ConstantLock
+  /** `address, publish`: the lock given back, the cell's flag at the address set with a release first where `publish`. */
+  case ConstantUnlock
+  /** `register`: the text of a test file, whose tests come next (`torb_test_file`): the line the report prints. */
+  case TestFile
+  /** The summary of a test run (`torb_test_finish`), answering its exit code. */
+  case TestFinish
 
   /** The name the disassembly writes. */
   fn spelling(): String {
@@ -582,6 +600,12 @@ public type KernelOperation {
       .ListSliceCopied => "list.slice.copied"
       .StopInCallBack => "stop.in.call.back"
       .OnExit => "on.exit"
+      .InstallFor => "install.for"
+      .Portable => "portable"
+      .ConstantLock => "constant.lock"
+      .ConstantUnlock => "constant.unlock"
+      .TestFile => "test.file"
+      .TestFinish => "test.finish"
     }
   }
 }
@@ -639,6 +663,12 @@ public const allKernelOperations: List<KernelOperation> = [
   KernelOperation.ListSliceCopied,
   KernelOperation.StopInCallBack,
   KernelOperation.OnExit,
+  KernelOperation.InstallFor,
+  KernelOperation.Portable,
+  KernelOperation.ConstantLock,
+  KernelOperation.ConstantUnlock,
+  KernelOperation.TestFile,
+  KernelOperation.TestFinish,
 ]
 
 /**
@@ -902,8 +932,13 @@ public type Chunk {
 /** The whole program, as the interpreter loads it. */
 public type BytecodeProgram {
   var chunks: List<Chunk> = []
-  /** The chunks the program runs, in order: the top-level code of the entry file, or of every test file. */
+  /**
+   * The chunks the program runs, in order: the top-level code of the entry file, or of every test file - `-1` for a
+   * test file that runs nothing, whose name the report prints all the same.
+   */
   var entries: List<Int> = []
+  /** A test run's file of every entry, by position: what the report prints in front of its tests. Empty otherwise. */
+  var entryFiles: List<String> = []
   /**
    * The words below the first frame, in order: the static values, and the gaps a module constant's cell (per cell a
    * flag that says it is built, then its value) or a host keeps its own words in.
