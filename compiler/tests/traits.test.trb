@@ -514,6 +514,70 @@ group "Operators through their traits" {
   }
 }
 
+group "`**` through `Power`" {
+  test "an integer is raised by an `Int`, and the power has the type of the base" {
+    const source = inBody "  const small: Int8 = 3\n  const power = small ** 4\n  print power"
+    assert problems(source).isEmpty()
+    const found = probe source
+    assert(found.typeOf("small ** 4") == "Int8")
+    assert(found.dispatchOf("small ** 4") == "implementation Int8: Power<Int64, Int8>")
+  }
+
+  test "a float is raised by a float or by an `Int`, and the right operand says which" {
+    const source = inBody "  const root = 2.0 ** 0.5\n  const cube = 2.0 ** 3\n  print root + cube"
+    assert problems(source).isEmpty()
+    const found = probe source
+    assert(found.typeOf("2.0 ** 0.5") == "Float64")
+    assert(found.dispatchOf("2.0 ** 0.5") == "implementation Float64: Power<Float64, Float64>")
+    assert(found.dispatchOf("2.0 ** 3") == "implementation Float64: Power<Int64, Float64>")
+  }
+
+  test "a literal base takes the type the power is expected to have" {
+    const source = inBody "  const small: Int8 = 2 ** 3\n  const wide: Float = 2 ** 3\n  print \"\{small\} \{wide\}\""
+    assert problems(source).isEmpty()
+    const found = probe source
+    assert(found.dispatchOf("2 ** 3") == "implementation Int8: Power<Int64, Int8>")
+  }
+
+  test "an integer is not raised by a float" {
+    const source = inBody "  const wrong = 2 ** 0.5\n  print wrong"
+    assert(problems(source) == ["Expected `Int64`, found `Float64`"])
+  }
+
+  test "a type without `Power` is told so" {
+    const source = inBody "  const wrong = \"two\" ** 2\n  print wrong"
+    assert(problems(source) == ["`String` does not implement `Power`, so `a ** b` has no meaning for it"])
+  }
+
+  test "a type of the program raises through its own implementation" {
+    const source = "type Cell with Power<Int, Cell> \{\n  value: Int\n\n"
+      + "  fn power(exponent: Int): Cell \{\n    Cell(value * exponent)\n  \}\n\}\n\n"
+      + inBody("  const raised = Cell(2) ** 3\n  print raised.value")
+    assert problems(source).isEmpty()
+    const found = probe source
+    assert(found.typeOf("Cell(2) ** 3") == "Cell")
+    assert(found.dispatchOf("Cell(2) ** 3") == "implementation Cell: Power<Int64, Cell>")
+  }
+
+  test "the exponent is checked against the `Exponent` of the implementation" {
+    const source = "type Cell with Power<Int, Cell> \{\n  value: Int\n\n"
+      + "  fn power(exponent: Int): Cell \{\n    self\n  \}\n\}\n\n"
+      + inBody("  const raised = Cell(2) ** 0.5\n  print raised.value")
+    assert(problems(source) == ["Expected `Int64`, found `Float64`"])
+  }
+
+  test "a type that raises by two kinds of exponent, and the right operand says which" {
+    const source = "type Cell with Power<Int, Cell> \{\n  value: Int\n\n"
+      + "  fn power(exponent: Int): Cell \{\n    self\n  \}\n\}\n\n"
+      + "extend Cell with Power<Float, Float> \{\n  fn power(exponent: Float): Float \{\n    exponent\n  \}\n\}\n\n"
+      + inBody("  const whole = Cell(2) ** 3\n  const part = Cell(2) ** 0.5\n  print \"\{whole.value\} \{part\}\"")
+    assert problems(source).isEmpty()
+    const found = probe source
+    assert(found.typeOf("Cell(2) ** 3") == "Cell")
+    assert(found.typeOf("Cell(2) ** 0.5") == "Float64")
+  }
+}
+
 group "Interpolation and iteration" {
   test "every interpolated part records the `Show` implementation that renders it" {
     const source = "type Amount with Show \{\n  fn show(): String \{\n    \"a\"\n  \}\n\}\n\n"

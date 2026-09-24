@@ -227,6 +227,59 @@ static bool close_enough(double a, double b) {
   return difference < 1e-9;
 }
 
+TORB_TEST(an_integer_power_is_exact_up_to_the_edge_of_every_width) {
+  TORB_CHECK_INTEGER(torb_power_i8(2, 6, somewhere), 64);
+  TORB_CHECK_INTEGER(torb_power_i8(-2, 7, somewhere), -128);
+  TORB_CHECK_INTEGER(torb_power_i16(3, 9, somewhere), 19683);
+  TORB_CHECK_INTEGER(torb_power_i32(-7, 11, somewhere), -1977326743);
+  TORB_CHECK_INTEGER(torb_power_i64(-2, 63, somewhere), INT64_MIN);
+  TORB_CHECK_INTEGER(torb_power_i64(3, 39, somewhere), 4052555153018976267);
+  TORB_CHECK_INTEGER(torb_power_i64(0, 0, somewhere), 1);
+  TORB_CHECK_INTEGER(torb_power_i64(-1, INT64_MAX, somewhere), -1);
+  TORB_CHECK_INTEGER(torb_power_i64(-1, INT64_MAX - 1, somewhere), 1);
+  TORB_CHECK_INTEGER(torb_power_u8(3, 5, somewhere), 243);
+  TORB_CHECK_INTEGER(torb_power_u16(2, 15, somewhere), 32768);
+  TORB_CHECK_INTEGER(torb_power_u32(65535, 2, somewhere), 4294836225u);
+  TORB_CHECK(torb_power_u64(2, 63, somewhere) == (uint64_t)1 << 63);
+  TORB_CHECK(torb_power_u64(3, 40, somewhere) == 12157665459056928801u);
+}
+
+TORB_TEST(an_integer_power_panics_on_overflow_and_on_a_negative_exponent) {
+  TORB_EXPECT_PANIC(torb_power_i8(2, 7, somewhere));
+  TORB_CHECK_PANIC_CONTAINS("arithmetic overflow in `**`");
+  TORB_EXPECT_PANIC(torb_power_i8(-2, 8, somewhere));
+  TORB_EXPECT_PANIC(torb_power_i16(2, 15, somewhere));
+  TORB_EXPECT_PANIC(torb_power_i32(2, 31, somewhere));
+  TORB_EXPECT_PANIC(torb_power_i64(2, 63, somewhere));
+  TORB_EXPECT_PANIC(torb_power_i64(3, 40, somewhere));
+  TORB_EXPECT_PANIC(torb_power_u8(2, 8, somewhere));
+  TORB_EXPECT_PANIC(torb_power_u64(2, 64, somewhere));
+  TORB_EXPECT_PANIC(torb_power_i64(2, -1, somewhere));
+  TORB_CHECK_PANIC_CONTAINS("negative exponent in `**`: an integer raised to -1 is not a whole number");
+  TORB_EXPECT_PANIC(torb_power_u8(1, -1, somewhere));
+}
+
+TORB_TEST(a_float_power_is_pow) {
+  TORB_CHECK(torb_power_f64(2.0, 10.0) == 1024.0);
+  TORB_CHECK(torb_power_f64(2.0, -1.0) == 0.5);
+  TORB_CHECK(torb_is_nan_f64(torb_power_f64(-1.0, 0.5)));
+}
+
+TORB_TEST(the_real_members_of_a_float_match_known_values) {
+  TORB_CHECK(torb_exponential_f64(0.0) == 1.0);
+  TORB_CHECK(torb_natural_logarithm_f64(1.0) == 0.0);
+  TORB_CHECK(torb_sine_f64(0.0) == 0.0);
+  TORB_CHECK(torb_cosine_f64(0.0) == 1.0);
+  TORB_CHECK(torb_tangent_f64(0.0) == 0.0);
+  TORB_CHECK(torb_arc_sine_f64(0.0) == 0.0);
+  TORB_CHECK(torb_arc_cosine_f64(1.0) == 0.0);
+  TORB_CHECK(torb_arc_tangent_f64(0.0) == 0.0);
+  /* The quadrant comes from the sign of both, which a plain arc tangent of the quotient cannot pick. */
+  TORB_CHECK(close_enough(torb_arc_tangent_divided_f64(1.0, -1.0), 2.356194490192345));
+  TORB_CHECK(torb_is_nan_f64(torb_natural_logarithm_f64(-1.0)));
+  TORB_CHECK(torb_is_nan_f64(torb_arc_sine_f64(2.0)));
+}
+
 TORB_TEST(math_functions_match_known_values) {
   TORB_CHECK(torb_math_power(2.0, 10.0) == 1024.0);
   TORB_CHECK(torb_math_exponential(0.0) == 1.0);
@@ -273,6 +326,10 @@ void torb_register_number_tests(void) {
   TORB_ADD(the_remainder_of_two_floats_is_fmod);
   TORB_ADD(the_total_order_of_floats_puts_nan_above_everything);
   TORB_ADD(parsing_integers_checks_the_range);
+  TORB_ADD(an_integer_power_is_exact_up_to_the_edge_of_every_width);
+  TORB_ADD(an_integer_power_panics_on_overflow_and_on_a_negative_exponent);
+  TORB_ADD(a_float_power_is_pow);
+  TORB_ADD(the_real_members_of_a_float_match_known_values);
   TORB_ADD(math_functions_match_known_values);
   TORB_ADD(math_domain_errors_answer_nan_and_never_panic);
 }

@@ -13,6 +13,14 @@
 
 /* UInt64.addedWrapping */
 uint64_t torb_added_wrapping_u64(uint64_t first, uint64_t second);
+/* Float64.arcCosine */
+double torb_arc_cosine_f64(double value);
+/* Float64.arcSine */
+double torb_arc_sine_f64(double value);
+/* Float64.arcTangentDivided */
+double torb_arc_tangent_divided_f64(double value, double by);
+/* Float64.arcTangent */
+double torb_arc_tangent_f64(double value);
 /* blockingTurn */
 torb_task *torb_blocking_turn(void);
 /* Float64.ceiling */
@@ -63,10 +71,14 @@ bool torb_convert_i64_u64_checked(int64_t value, uint64_t *out, torb_text *messa
 bool torb_convert_i64_u8_checked(int64_t value, uint8_t *out, torb_text *message);
 /* Int64.tryFrom(UInt64) */
 bool torb_convert_u64_i64_checked(uint64_t value, int64_t *out, torb_text *message);
+/* Float64.cosine */
+double torb_cosine_f64(double value);
 /* Environment.entries */
 void torb_environment_entries(torb_list *names, torb_list *values);
 /* Environment.get */
 bool torb_environment_get(torb_text name, torb_text *out);
+/* Float64.exponential */
+double torb_exponential_f64(double value);
 /* File.absolutePath */
 bool torb_file_absolute_path(torb_text path, torb_text *out, torb_text *error);
 /* File.close */
@@ -171,6 +183,8 @@ double torb_math_sine(double value);
 double torb_math_tangent(double value);
 /* UInt64.multipliedWrapping */
 uint64_t torb_multiplied_wrapping_u64(uint64_t first, uint64_t second);
+/* Float64.naturalLogarithm */
+double torb_natural_logarithm_f64(double value);
 /* networkAccept */
 torb_task *torb_network_accept(int64_t listener);
 /* networkAddress */
@@ -243,6 +257,24 @@ bool torb_parse_i64_digits(torb_text text, int64_t radix, int64_t *out);
 bool torb_parse_u64(torb_text text, uint64_t *out);
 /* pause */
 torb_task *torb_pause(void);
+/* Float64.power */
+double torb_power_f64(double base, double exponent);
+/* Int16.power */
+int16_t torb_power_i16(int16_t base, int64_t exponent, torb_location at);
+/* Int32.power */
+int32_t torb_power_i32(int32_t base, int64_t exponent, torb_location at);
+/* Int64.power */
+int64_t torb_power_i64(int64_t base, int64_t exponent, torb_location at);
+/* Int8.power */
+int8_t torb_power_i8(int8_t base, int64_t exponent, torb_location at);
+/* UInt16.power */
+uint16_t torb_power_u16(uint16_t base, int64_t exponent, torb_location at);
+/* UInt32.power */
+uint32_t torb_power_u32(uint32_t base, int64_t exponent, torb_location at);
+/* UInt64.power */
+uint64_t torb_power_u64(uint64_t base, int64_t exponent, torb_location at);
+/* UInt8.power */
+uint8_t torb_power_u8(uint8_t base, int64_t exponent, torb_location at);
 /* printError */
 void torb_print_error_parts(const torb_text *parts, size_t count);
 /* print */
@@ -289,10 +321,14 @@ torb_text torb_show_i64(int64_t value);
 torb_text torb_show_u64(uint64_t value);
 /* Void.show */
 torb_text torb_show_void(torb_void value);
+/* Float64.sine */
+double torb_sine_f64(double value);
 /* sleep */
 torb_task *torb_sleep(double seconds);
 /* Float64.squareRoot */
 double torb_square_root_f64(double value);
+/* Float64.tangent */
+double torb_tangent_f64(double value);
 /* cancelTask */
 void torb_task_cancel(torb_task *self);
 /* completedWithin */

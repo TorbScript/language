@@ -466,6 +466,7 @@ fn integerEntries(var entries: List<NativeEntry>) {
     bitsMembers entries, owner, kind
     entries.append derivedOf("{owner}.compare", DerivedKind.Compare)
     entries.append runtimeOf("{owner}.hash", "torb_hash_i64", "uint64_t torb_hash_i64(int64_t value);")
+    entries.append powerOf(owner, "int{width}_t", numericSuffix(kind))
   }
   for width in widths {
     const owner = "UInt{width}"
@@ -482,7 +483,17 @@ fn integerEntries(var entries: List<NativeEntry>) {
     bitsMembers entries, owner, kind
     entries.append derivedOf("{owner}.compare", DerivedKind.Compare)
     entries.append runtimeOf("{owner}.hash", "torb_hash_u64", "uint64_t torb_hash_u64(uint64_t value);")
+    entries.append powerOf(owner, "uint{width}_t", numericSuffix(kind))
   }
+}
+
+/**
+ * `Power<Int64>` of one integer width: `a ** b` is no instruction of any machine, so it is a function of the runtime,
+ * which takes the location to panic at like the checked operators do.
+ */
+fn powerOf(owner: String, spelling: String, suffix: String): NativeEntry {
+  const function = "torb_power_{suffix}"
+  runtimeOf "{owner}.power", function, "{spelling} {function}({spelling} base, int64_t exponent, torb_location at);"
 }
 
 fn floatEntries(var entries: List<NativeEntry>) {
@@ -505,6 +516,27 @@ fn floatEntries(var entries: List<NativeEntry>) {
     "int32_t torb_compare_f64(double first, double second);",
   ))
   entries.append runtimeOf("Float64.squareRoot", "torb_square_root_f64", "double torb_square_root_f64(double value);")
+  entries.append runtimeOf("Float64.power", "torb_power_f64", "double torb_power_f64(double base, double exponent);")
+  // `Real` of a `Float64`: one thin wrapper over `<math.h>` per member
+  const realMembers = [
+    ("exponential", "exponential"),
+    ("naturalLogarithm", "natural_logarithm"),
+    ("sine", "sine"),
+    ("cosine", "cosine"),
+    ("tangent", "tangent"),
+    ("arcSine", "arc_sine"),
+    ("arcCosine", "arc_cosine"),
+    ("arcTangent", "arc_tangent"),
+  ]
+  for (member, symbol) in realMembers {
+    const function = "torb_{symbol}_f64"
+    entries.append runtimeOf("Float64.{member}", function, "double {function}(double value);")
+  }
+  entries.append(runtimeOf(
+    "Float64.arcTangentDivided",
+    "torb_arc_tangent_divided_f64",
+    "double torb_arc_tangent_divided_f64(double value, double by);",
+  ))
   entries.append runtimeOf("Float64.floor", "torb_floor_f64", "double torb_floor_f64(double value);")
   entries.append runtimeOf("Float64.ceiling", "torb_ceiling_f64", "double torb_ceiling_f64(double value);")
   entries.append runtimeOf("Float64.round", "torb_round_f64", "double torb_round_f64(double value);")

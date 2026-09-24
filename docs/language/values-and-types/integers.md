@@ -124,12 +124,14 @@ const masked = flags & 0b0110
 // error: Expected the end of the statement, found `&`
 ```
 
-**`^` is not written for exclusive-or, with or without a fallback meaning.** It is not an operator of the language at
-all, unlike `&`, which at least means something in a type position.
+**`^` is not written for exclusive-or, and not for a power either.** Half of the readers of `a ^ b` take it for the
+one and half for the other, so it is no operator of the language at all: a power is `**`, and exclusive or is
+`bitwiseExclusiveOr`. The message says both.
 
 ```trb error
 const flipped = 0b1010 ^ 0b0110
-// error: There is no `^` operator
+// error: There is no `^` operator. A power is written `**`, and `^` is not exclusive or either: bit operations are the methods of `Bits` (`bitwiseExclusiveOr`)
+// error: `Int64` does not implement `Power`, so `a ** b` has no meaning for it
 ```
 
 ## Related

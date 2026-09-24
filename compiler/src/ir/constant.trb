@@ -236,8 +236,32 @@ fn integerOperation(
     }
     .Divide => dividedConstant lowering, first, second, annotation, at
     .Remainder => remainderConstant lowering, first, second, annotation, at
+    // The checker reported a negative exponent already; the value of a constant is never computed from one
+    .Power => {
+      if second < 0 {
+        return None
+      }
+      integerResult lowering, poweredChecked(first, second), annotation, "**", at
+    }
     _ => None
   }
+}
+
+/** `base ** exponent` by squaring, or `None` where it overflows. The factor is squared only while it is still needed. */
+fn poweredChecked(base: Int, exponent: Int): Int? {
+  var result = 1
+  var factor = base
+  var left = exponent
+  while left > 0 {
+    if left % 2 == 1 {
+      result = multipliedChecked(result, factor)?
+    }
+    left = left / 2
+    if left > 0 {
+      factor = multipliedChecked(factor, factor)?
+    }
+  }
+  Some result
 }
 
 fn comparisonValue(value: Bool, annotation: IrTypeId): ConstantValue {

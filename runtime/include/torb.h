@@ -178,6 +178,7 @@ TORB_NORETURN void torb_panic_text(const char *message, torb_location at);
 TORB_NORETURN void torb_panic_overflow(const char *operation, torb_location at);
 TORB_NORETURN void torb_panic_division_by_zero(const char *operation, torb_location at);
 TORB_NORETURN void torb_panic_shift_amount(int64_t amount, int64_t width, torb_location at);
+TORB_NORETURN void torb_panic_negative_exponent(int64_t exponent, torb_location at);
 TORB_NORETURN void torb_panic_index_out_of_bounds(int64_t index, int64_t length, torb_location at);
 TORB_NORETURN void torb_panic_range_reversed(int64_t from, int64_t to, torb_location at);
 TORB_NORETURN void torb_panic_offset_past_end(int64_t offset, int64_t length, torb_location at);

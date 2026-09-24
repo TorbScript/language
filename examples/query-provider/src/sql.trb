@@ -62,7 +62,7 @@ public fn translate(node: ExpressionNode, captures: List<EncodedValue>): Result<
     .Binary(operator, left, right, _) => {
       const a = translate(left, captures)?
       const b = translate(right, captures)?
-      Ok a.join(keyword(operator), b)
+      Ok combined(operator, a, b)
     }
 
     // A few methods this provider knows
@@ -90,21 +90,25 @@ public fn translate(node: ExpressionNode, captures: List<EncodedValue>): Result<
   }
 }
 
-/** The SQL operator for a [BinaryOperator], `AND`/`OR` included alongside the arithmetic and comparison ones. */
-fn keyword(operator: BinaryOperator): String {
+/**
+ * Two fragments combined by a [BinaryOperator]: the SQL operator between them, `AND`/`OR` included alongside the
+ * arithmetic and comparison ones - and `POWER(a, b)` for a power, which SQL writes as a function.
+ */
+fn combined(operator: BinaryOperator, left: Fragment, right: Fragment): Fragment {
   match operator {
-    .Add => "+"
-    .Subtract => "-"
-    .Multiply => "*"
-    .Divide => "/"
-    .Remainder => "%"
-    .Equal => "="
-    .NotEqual => "<>"
-    .Less => "<"
-    .LessOrEqual => "<="
-    .Greater => ">"
-    .GreaterOrEqual => ">="
-    .And => "AND"
-    .Or => "OR"
+    .Add => left.join "+", right
+    .Subtract => left.join "-", right
+    .Multiply => left.join "*", right
+    .Divide => left.join "/", right
+    .Remainder => left.join "%", right
+    .Power => Fragment "POWER({left.sql}, {right.sql})", left.parameters.appendedAll(right.parameters)
+    .Equal => left.join "=", right
+    .NotEqual => left.join "<>", right
+    .Less => left.join "<", right
+    .LessOrEqual => left.join "<=", right
+    .Greater => left.join ">", right
+    .GreaterOrEqual => left.join ">=", right
+    .And => left.join "AND", right
+    .Or => left.join "OR", right
   }
 }

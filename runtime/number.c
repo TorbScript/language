@@ -18,6 +18,86 @@ uint64_t torb_multiplied_wrapping_u64(uint64_t first, uint64_t second) {
   return first * second;
 }
 
+/*
+ * `base ** exponent` on magnitudes, false where it passes `limit`. The factor is squared only while a bit of the
+ * exponent is left to use it: then the result is at least the square, so a square past the limit is an overflow of
+ * the result as well, and nothing is ever reported that the result would not have.
+ */
+static bool torb_power_magnitude(uint64_t base, int64_t exponent, uint64_t limit, uint64_t *out) {
+  uint64_t result = 1;
+  uint64_t factor = base;
+  while (exponent > 0) {
+    if ((exponent & 1) != 0) {
+      if (factor != 0 && result > limit / factor) {
+        return false;
+      }
+      result *= factor;
+    }
+    exponent >>= 1;
+    if (exponent > 0) {
+      if (factor != 0 && factor > limit / factor) {
+        return false;
+      }
+      factor *= factor;
+    }
+  }
+  *out = result;
+  return true;
+}
+
+/* The sign is known before the first multiplication: negative exactly when the base is and the exponent is odd. */
+static int64_t torb_power_signed(int64_t base, int64_t exponent, int64_t lowest, int64_t highest, torb_location at) {
+  bool negative;
+  uint64_t magnitude;
+  uint64_t limit;
+  uint64_t result;
+  if (exponent < 0) torb_panic_negative_exponent(exponent, at);
+  negative = base < 0 && (exponent & 1) != 0;
+  magnitude = base < 0 ? (uint64_t)0 - (uint64_t)base : (uint64_t)base;
+  limit = negative ? (uint64_t)0 - (uint64_t)lowest : (uint64_t)highest;
+  if (!torb_power_magnitude(magnitude, exponent, limit, &result)) torb_panic_overflow("**", at);
+  return negative ? (int64_t)((uint64_t)0 - result) : (int64_t)result;
+}
+
+static uint64_t torb_power_unsigned(uint64_t base, int64_t exponent, uint64_t highest, torb_location at) {
+  uint64_t result;
+  if (exponent < 0) torb_panic_negative_exponent(exponent, at);
+  if (!torb_power_magnitude(base, exponent, highest, &result)) torb_panic_overflow("**", at);
+  return result;
+}
+
+int8_t torb_power_i8(int8_t base, int64_t exponent, torb_location at) {
+  return (int8_t)torb_power_signed(base, exponent, INT8_MIN, INT8_MAX, at);
+}
+
+int16_t torb_power_i16(int16_t base, int64_t exponent, torb_location at) {
+  return (int16_t)torb_power_signed(base, exponent, INT16_MIN, INT16_MAX, at);
+}
+
+int32_t torb_power_i32(int32_t base, int64_t exponent, torb_location at) {
+  return (int32_t)torb_power_signed(base, exponent, INT32_MIN, INT32_MAX, at);
+}
+
+int64_t torb_power_i64(int64_t base, int64_t exponent, torb_location at) {
+  return torb_power_signed(base, exponent, INT64_MIN, INT64_MAX, at);
+}
+
+uint8_t torb_power_u8(uint8_t base, int64_t exponent, torb_location at) {
+  return (uint8_t)torb_power_unsigned(base, exponent, UINT8_MAX, at);
+}
+
+uint16_t torb_power_u16(uint16_t base, int64_t exponent, torb_location at) {
+  return (uint16_t)torb_power_unsigned(base, exponent, UINT16_MAX, at);
+}
+
+uint32_t torb_power_u32(uint32_t base, int64_t exponent, torb_location at) {
+  return (uint32_t)torb_power_unsigned(base, exponent, UINT32_MAX, at);
+}
+
+uint64_t torb_power_u64(uint64_t base, int64_t exponent, torb_location at) {
+  return torb_power_unsigned(base, exponent, UINT64_MAX, at);
+}
+
 #define TORB_NARROWING_FROM_I64(suffix, type, lowest, highest)                    \
   bool torb_convert_i64_##suffix##_checked(int64_t value, type *out,             \
                                           torb_text *message) {                 \
@@ -103,6 +183,46 @@ float torb_remainder_f32(float first, float second) {
 
 double torb_square_root_f64(double value) {
   return sqrt(value);
+}
+
+double torb_power_f64(double base, double exponent) {
+  return pow(base, exponent);
+}
+
+double torb_exponential_f64(double value) {
+  return exp(value);
+}
+
+double torb_natural_logarithm_f64(double value) {
+  return log(value);
+}
+
+double torb_sine_f64(double value) {
+  return sin(value);
+}
+
+double torb_cosine_f64(double value) {
+  return cos(value);
+}
+
+double torb_tangent_f64(double value) {
+  return tan(value);
+}
+
+double torb_arc_sine_f64(double value) {
+  return asin(value);
+}
+
+double torb_arc_cosine_f64(double value) {
+  return acos(value);
+}
+
+double torb_arc_tangent_f64(double value) {
+  return atan(value);
+}
+
+double torb_arc_tangent_divided_f64(double value, double by) {
+  return atan2(value, by);
 }
 
 double torb_floor_f64(double value) {

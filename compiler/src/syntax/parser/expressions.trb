@@ -18,6 +18,8 @@ use parsePattern from "./patterns"
 const comparisonPower = 3
 const coalescePower = 4
 const rangePower = 5
+/** `**` binds tighter than `*` and groups to the right: `2 ** 3 ** 2` is `2 ** 9`. */
+const exponentPower = 8
 
 fn infixOperator(kind: TokenKind): (Int, InfixOperator)? {
   const found = match kind {
@@ -35,6 +37,7 @@ fn infixOperator(kind: TokenKind): (Int, InfixOperator)? {
     .Star => (7, InfixOperator.Multiply)
     .Slash => (7, InfixOperator.Divide)
     .Percent => (7, InfixOperator.Remainder)
+    .StarStar => (exponentPower, InfixOperator.Power)
     _ => {
       return None
     }
@@ -193,11 +196,14 @@ fn isAtRange(parser: Parser, minimum: Int): Bool {
 
 fn parseBinary(var parser: Parser, minimum: Int): Expression {
   const start = parser.span()
+  // Whether `left` is still a prefix operator as it was written, without parentheses around it: `-x ** 2`
+  var isBarePrefix = parser.isAtAny([TokenKind.Minus, TokenKind.Bang])
   // `..end`: a range without a start
   var left = if isAtRange(parser, minimum) { parseRange parser, start, None } else { parseUnary parser }
   loop {
     if isAtRange(parser, minimum) {
       left = parseRange parser, start, Some(left)
+      isBarePrefix = false
       continue
     }
     const (power, operator) = match infixOperator(parser.kind()) {
@@ -207,8 +213,13 @@ fn parseBinary(var parser: Parser, minimum: Int): Expression {
       }
     }
     parser.bump()
-    // `??` groups to the right, everything else to the left
-    const right = parseBinary(parser, minimum: if power == coalescePower { power } else { power + 1 })
+    // `??` and `**` group to the right, everything else to the left
+    const groupsRight = power == coalescePower || power == exponentPower
+    const right = parseBinary(parser, minimum: if groupsRight { power } else { power + 1 })
+    if power == exponentPower && isBarePrefix {
+      reportPrefixedBase parser, left, right
+    }
+    isBarePrefix = false
     left = Expression ExpressionKind.Binary(operator, left, right), start.to(parser.previousSpan())
     if power == comparisonPower && isComparison(parser.kind()) {
       parser.errorHere "Comparisons do not chain. Use `&&`: `a < b && b < c`"
@@ -222,6 +233,30 @@ fn parseBinary(var parser: Parser, minimum: Int): Expression {
     }
   }
   left
+}
+
+/**
+ * `-x ** 2`: a prefix operator written directly in front of the base of a power. Mathematics reads it as `-(x ** 2)`
+ * and a prefix operator binds tighter than any infix one, so each reader gets another number out of it - it is an
+ * error, with both lines to write instead. The exponent may start with one: `x ** -2` means only one thing.
+ */
+fn reportPrefixedBase(var parser: Parser, base: Expression, exponent: Expression) {
+  const power = parser.text exponent.span
+  const (message, note) = match base.kind {
+    .Unary(.Negate, inner) => {
+      const written = parser.text inner.span
+      const negated = "Write `-({written} ** {power})` to negate the power, or `(-{written}) ** {power}` to raise the negative number"
+      ("A unary `-` directly in front of the base of `**` is ambiguous", negated)
+    }
+    .Unary(.Not, inner) => {
+      const written = parser.text inner.span
+      ("A `!` directly in front of the base of `**` is ambiguous", "Write `!({written} ** {power})` or `(!{written}) ** {power}`")
+    }
+    _ => {
+      return
+    }
+  }
+  parser.errorWithNote message, note, base.span
 }
 
 /** `0..10`, `0..=10`, `1..` (open end), `..10` (open start) */

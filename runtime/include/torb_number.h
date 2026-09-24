@@ -256,6 +256,20 @@ static inline uint64_t torb_shifted_right_u64(uint64_t value, int64_t by, torb_l
 uint64_t torb_added_wrapping_u64(uint64_t first, uint64_t second);
 uint64_t torb_multiplied_wrapping_u64(uint64_t first, uint64_t second);
 
+/**
+ * `base ** exponent` on the integers: exact, by squaring, with the overflow check of `*` and the panic of `**`. A
+ * negative exponent panics, because its result is not a whole number. Ordinary functions for the same reason as the
+ * wrapping pair above; `**` is no single instruction anyway.
+ */
+int8_t torb_power_i8(int8_t base, int64_t exponent, torb_location at);
+int16_t torb_power_i16(int16_t base, int64_t exponent, torb_location at);
+int32_t torb_power_i32(int32_t base, int64_t exponent, torb_location at);
+int64_t torb_power_i64(int64_t base, int64_t exponent, torb_location at);
+uint8_t torb_power_u8(uint8_t base, int64_t exponent, torb_location at);
+uint16_t torb_power_u16(uint16_t base, int64_t exponent, torb_location at);
+uint32_t torb_power_u32(uint32_t base, int64_t exponent, torb_location at);
+uint64_t torb_power_u64(uint64_t base, int64_t exponent, torb_location at);
+
 /* --------------------------------------------------------------------------------------------- conversions --- */
 
 /**
@@ -299,6 +313,24 @@ int32_t torb_compare_f64(double first, double second);
 int32_t torb_compare_f32(float first, float second);
 
 double torb_square_root_f64(double value);
+/** `a ** b` on two floats: `pow`, so IEEE-754 and never a panic. `Float64 ** Int` is written over it in `std/number`. */
+double torb_power_f64(double base, double exponent);
+
+/**
+ * The members of `Real` on a `Float64`: thin wrappers over `<math.h>`. A domain error (the logarithm of a negative
+ * number, the arc sine of 2) answers `nan` and a pole an infinity, exactly like `torb_square_root_f64`; none of them
+ * ever panics. Results are bit-identical across platforms only where libm itself guarantees it.
+ */
+double torb_exponential_f64(double value);
+double torb_natural_logarithm_f64(double value);
+double torb_sine_f64(double value);
+double torb_cosine_f64(double value);
+double torb_tangent_f64(double value);
+double torb_arc_sine_f64(double value);
+double torb_arc_cosine_f64(double value);
+double torb_arc_tangent_f64(double value);
+/** `value.arcTangentDivided(by:)`: `atan2(value, by)`, the angle of the point `(by, value)`. */
+double torb_arc_tangent_divided_f64(double value, double by);
 double torb_floor_f64(double value);
 double torb_ceiling_f64(double value);
 /** Half away from zero, like `round` in C99. */

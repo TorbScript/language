@@ -140,12 +140,12 @@ public const preludeSource = raw"""
 
   public trait Signed with Numeric, Negate {}
 
-  public native type Int8 with Signed, Hash, Encode {}
-  public native type Int32 with Signed, Hash, Encode {}
-  public native type Int64 with Signed, Hash, Encode {}
-  public native type UInt8 with Numeric, Hash, Encode {}
+  public native type Int8 with Signed, Hash, Encode, Power<Int64> {}
+  public native type Int32 with Signed, Hash, Encode, Power<Int64> {}
+  public native type Int64 with Signed, Hash, Encode, Power<Int64> {}
+  public native type UInt8 with Numeric, Hash, Encode, Power<Int64> {}
   public native type Float32 with Signed, Encode {}
-  public native type Float64 with Signed, Encode {}
+  public native type Float64 with Signed, Encode, Power {}
   public native type Bool with Equals, Hash, Show, Encode {}
 
   /** As in `std/core`: the traits of `Void` are declared here, not on the name the language provides. */
@@ -552,6 +552,18 @@ public const preludeSource = raw"""
   public native shared type Channel<Item> {
     capacity: Int = 0
   }
+
+  /** `a ** b`. Last in this file, so that adding it moved no line a test of the lowering names. */
+  public trait Power<Exponent = Self, Output = Self> {
+    fn power(exponent: Exponent): Output
+  }
+
+  /** As in `std/number`: a whole exponent of a float has a body, and a float one is the runtime's. */
+  extend Float64 with Power<Int64> {
+    fn power(exponent: Int64): Float64 {
+      self
+    }
+  }
   """
 
 public const workspace = [
@@ -565,7 +577,7 @@ public const workspace = [
   "std/prelude/src/types.trb": preludeSource,
   "std/prelude/src/lib.trb": raw"""
     public use Show, Equals, Compare, Hash, Negate, Iterate, Iterator from "./types"
-    public use Add, Subtract, Multiply, Divide, Remainder, Indexed, Slice from "./types"
+    public use Add, Subtract, Multiply, Divide, Remainder, Power, Indexed, Slice from "./types"
     public use MutableIndexed, MutableSlice, OrElse from "./types"
     public use Numeric, Signed, Int8, Int32, Int64, UInt8, Float32, Float64 from "./types"
     public use Bool, Char, String, Int, Float, Option, Result, List, ArrayList, Map, Array from "./types"

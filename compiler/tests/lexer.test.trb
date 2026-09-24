@@ -74,6 +74,14 @@ group "Lexer" {
     assert(kinds("A & B") == [.Identifier, .Ampersand, .Identifier, .EndOfFile])
   }
 
+  test "`**` is one token, and a line may end or start with it" {
+    assert(kinds("a ** b") == [.Identifier, .StarStar, .Identifier, .EndOfFile])
+    assert(kinds("a**b") == [.Identifier, .StarStar, .Identifier, .EndOfFile])
+    assert(kinds("a * *") == [.Identifier, .Star, .Star, .EndOfFile])
+    assert(kinds("a **\nb") == [.Identifier, .StarStar, .Identifier, .EndOfFile])
+    assert(kinds("a\n** b") == [.Identifier, .StarStar, .Identifier, .EndOfFile])
+  }
+
   test "a part of a file keeps the offsets of the file" {
     const source = SourceText.of "print \"ß \{name\}\""
     const lexed = lexRange source, Span(11, 15)
@@ -88,9 +96,9 @@ group "Lexer" {
   }
 
   test "a broken token still stands for what it meant, so the parser has nothing to add" {
-    // `;` is the line break it stands for, `^` the `*` it is read as
+    // `;` is the line break it stands for, `^` the `**` it is read as
     assert(tokensOf("a; b") == [.Identifier, .Newline, .Identifier, .EndOfFile])
-    assert(tokensOf("a ^ b") == [.Identifier, .Star, .Identifier, .EndOfFile])
+    assert(tokensOf("a ^ b") == [.Identifier, .StarStar, .Identifier, .EndOfFile])
     // `'ab'` ends at its quote and is its first character
     assert(tokensOf("'ab'") == [.CharLiteral('a'), .EndOfFile])
     assert(messages("'ab'") == ["A character literal contains exactly one character and ends with `'`"])

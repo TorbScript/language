@@ -162,6 +162,7 @@ fn operatorSpelling(operator: InfixOperator): String {
     .Multiply => "*"
     .Divide => "/"
     .Remainder => "%"
+    .Power => "**"
     .Equal => "=="
     .NotEqual => "!="
     .Less => "<"
@@ -570,7 +571,7 @@ fn binaryConstant(
     }
   }
   match operator {
-    .Add | .Subtract | .Multiply | .Divide | .Remainder => arithmeticConstant checker, module, operator, a, b, at
+    .Add | .Subtract | .Multiply | .Divide | .Remainder | .Power => arithmeticConstant checker, module, operator, a, b, at
     .Equal | .NotEqual => equalityConstant operator, a, b, at
     .Less | .LessOrEqual | .Greater | .GreaterOrEqual => orderConstant operator, a, b, at
     .And | .Or => logicalConstant operator, a, b, at
@@ -637,6 +638,12 @@ fn integerArithmetic(
       } else {
         Some(left % right)
       }
+    }
+    .Power => {
+      if right < 0 {
+        return reportNegativeExponent checker, module, at
+      }
+      poweredIntegers left, right
     }
     _ => None
   }
@@ -739,6 +746,27 @@ fn multipliedIntegers(left: Int, right: Int): Int? {
   Some(left * right)
 }
 
+/**
+ * `base ** exponent` for an exponent that is not negative, by squaring, or `None` where it does not fit. The factor is
+ * squared only while a bit of the exponent is left to use it, so no intermediate is larger than the result and nothing
+ * overflows that the result would not.
+ */
+fn poweredIntegers(base: Int, exponent: Int): Int? {
+  var result = 1
+  var factor = base
+  var left = exponent
+  while left > 0 {
+    if left % 2 == 1 {
+      result = multipliedIntegers(result, factor)?
+    }
+    left = left / 2
+    if left > 0 {
+      factor = multipliedIntegers(factor, factor)?
+    }
+  }
+  Some result
+}
+
 /** `==` and `!=` on the number types and on `Bool`. Everything else is `Equals.equals` and therefore a call. */
 fn equalityConstant(operator: InfixOperator, a: ConstantValue, b: ConstantValue, at: Span): ConstantResult {
   var isEqual = false
@@ -825,6 +853,15 @@ fn reportOverflow(var checker: Checker, module: ModuleId, at: Span): ConstantRes
     module,
     Diagnostic.error("This does not fit into an `Int64`", at)
       .withNote("A compile-time constant is evaluated while the program is compiled, so an overflow it is written with is caught here")
+  )
+  ConstantResult.Broken
+}
+
+fn reportNegativeExponent(var checker: Checker, module: ModuleId, at: Span): ConstantResult {
+  checker.report(
+    module,
+    Diagnostic.error("This raises an integer to a negative power, which is not a whole number", at)
+      .withNote("A compile-time constant is evaluated while the program is compiled, so a program that cannot start does not compile")
   )
   ConstantResult.Broken
 }

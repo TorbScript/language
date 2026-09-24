@@ -47,6 +47,7 @@ const punctuationTable: List<(String, TokenKind)> = [
   (">=", TokenKind.GreaterEqual),
   ("&&", TokenKind.AndAnd),
   ("||", TokenKind.OrOr),
+  ("**", TokenKind.StarStar),
   (".", TokenKind.Dot),
   ("?", TokenKind.Question),
   ("=", TokenKind.Equal),
@@ -69,7 +70,7 @@ const punctuationTable: List<(String, TokenKind)> = [
   ("&", TokenKind.Ampersand),
   ("|", TokenKind.Pipe),
   (";", TokenKind.Newline),
-  ("^", TokenKind.Star),
+  ("^", TokenKind.StarStar),
 ]
 
 fn isAsciiDigit(character: Char): Bool {
@@ -674,9 +675,10 @@ type Lexer {
         error "There are no semicolons. A statement ends at the end of its line", start
         push kind, start
       }
-      // Read as the `*` the table maps it to from here on: the operands are still one expression
+      // Read as the `**` the table maps it to from here on: the operands are still one expression. `^` is left unused
+      // on purpose - half of the readers take it for a power and the other half for exclusive or
       "^" => {
-        error "There is no `{text}` operator", start
+        error "There is no `^` operator. A power is written `**`, and `^` is not exclusive or either: bit operations are the methods of `Bits` (`bitwiseExclusiveOr`)", start
         push kind, start
       }
       _ => push kind, start

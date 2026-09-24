@@ -1,7 +1,7 @@
 /**
- * `Add`, `Subtract`, `Multiply`, `Divide`, `Remainder` and `Negate`, the traits the arithmetic operators go through,
- * plus `OrElse` for `??` and `Indexed`/`MutableIndexed`/`Slice`/`MutableSlice` for `a[i]` and `a[from..to]`. Each type
- * parameter list has defaults, which is why `with Add` alone means `Add<Self, Self>`.
+ * `Add`, `Subtract`, `Multiply`, `Divide`, `Remainder`, `Power` and `Negate`, the traits the arithmetic operators go
+ * through, plus `OrElse` for `??` and `Indexed`/`MutableIndexed`/`Slice`/`MutableSlice` for `a[i]` and `a[from..to]`.
+ * Each type parameter list has defaults, which is why `with Add` alone means `Add<Self, Self>`.
  */
 
 /**
@@ -48,6 +48,30 @@ public trait Divide<Other = Self, Output = Self> {
 public trait Remainder<Other = Self, Output = Self> {
   /** What is left of `self` after dividing out as many `other` as fit. This is `%`. */
   fn remainder(other: Other): Output
+}
+
+/**
+ * `a ** b`: `a` raised to the power of `b`.
+ *
+ * `**` binds tighter than `*`, `/` and `%` and groups to the right, so `2 ** 3 ** 2` is `2 ** 9`. A unary `-` directly
+ * in front of the base is an error, because `-x ** 2` reads as `-(x ** 2)` to a mathematician and as `(-x) ** 2` to
+ * a parser: write the one that is meant. The exponent may start with one - `x ** -2` means only one thing.
+ *
+ * The exponent is a parameter of its own and not `Other`, because a power is rarely taken by a value of the same kind:
+ * every integer type is raised by an `Int` (`Int8 ** Int`), and a float by a float or by an `Int`.
+ *
+ * On the integer types the power is exact, it panics on overflow exactly as `*` does, and a negative exponent panics
+ * too, because its result is not a whole number. On a float it is IEEE-754 and never panics.
+ *
+ * # Examples
+ *
+ *     print(2 ** 10)
+ *     print(2.0 ** 0.5)
+ *     print(10.0 ** -3)
+ */
+public trait Power<Exponent = Self, Output = Self> {
+  /** `self` raised to the power of `exponent`. This is `**`. */
+  fn power(exponent: Exponent): Output
 }
 
 /** `-a` */

@@ -132,6 +132,54 @@ group "Operators" {
   test "comparisons do not chain" {
     assert(messages("const x = a < b > c") == ["Comparisons do not chain. Use `&&`: `a < b && b < c`"])
   }
+
+  test "`**` binds tighter than `*` and groups to the right" {
+    const product = "a * b ** c"
+    match expression(product) {
+      .Binary(InfixOperator.Multiply, left, right) => {
+        assert(source(product, left) == "a")
+        assert(source(product, right) == "b ** c")
+      }
+      other => panic "Unexpected tree: {other}"
+    }
+    const tower = "2 ** 3 ** 2"
+    match expression(tower) {
+      .Binary(InfixOperator.Power, left, right) => {
+        assert(source(tower, left) == "2")
+        assert(source(tower, right) == "3 ** 2")
+      }
+      other => panic "Unexpected tree: {other}"
+    }
+  }
+
+  test "the exponent may start with a `-`, and a parenthesized base may too" {
+    const inverse = "x ** -2"
+    match expression(inverse) {
+      .Binary(InfixOperator.Power, _, right) => assert(source(inverse, right) == "-2")
+      other => panic "Unexpected tree: {other}"
+    }
+    assert(messages("const a = (-x) ** 2") == [])
+    assert(messages("const b = -(x ** 2)") == [])
+    assert(messages("const c = y - x ** 2") == [])
+    assert(messages("const d = y * -x") == [])
+  }
+
+  test "a prefix operator directly in front of the base of `**` is ambiguous" {
+    const ambiguous = "A unary `-` directly in front of the base of `**` is ambiguous"
+    assert(messages("const x = -x ** 2") == [ambiguous])
+    assert(noteMessages("const x = -x ** 2") == [
+      "Write `-(x ** 2)` to negate the power, or `(-x) ** 2` to raise the negative number",
+    ])
+    // Wherever the power stands, and in the exponent of another power as well
+    assert(messages("const x = 2 * -a.b ** 2") == [ambiguous])
+    assert(messages("const x = y ** -z ** 2") == [ambiguous])
+    assert(messages("const x = !flag ** 2") == ["A `!` directly in front of the base of `**` is ambiguous"])
+  }
+
+  test "`^` is no operator, and the message names `**` and `Bits`" {
+    const caret = "There is no `^` operator. A power is written `**`, and `^` is not exclusive or either: bit operations are the methods of `Bits` (`bitwiseExclusiveOr`)"
+    assert(messages("const x = a ^ b") == [caret])
+  }
 }
 
 group "Generics or less than" {

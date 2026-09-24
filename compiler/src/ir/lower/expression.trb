@@ -1435,7 +1435,10 @@ fn lowerTextComparison(
   intrinsicSlot lowering, builder, destination, operation, Some(kind), [order, zero], annotation, at
 }
 
-/** `+`, `-`, `*`, `/`, `%` on the built-in numbers, and `+` on two strings. Everything else is a call of `Add.add`. */
+/**
+ * `+`, `-`, `*`, `/`, `%` on the built-in numbers, and `+` on two strings. Everything else is a call of `Add.add` -
+ * `**` included, which is no instruction of any machine: on the numbers it is `Power.power` of the runtime.
+ */
 fn lowerArithmetic(
   var lowering: Lowering,
   var builder: FunctionBuilder,
@@ -1448,6 +1451,9 @@ fn lowerArithmetic(
   operand: TypeId? = None,
 ): Slot {
   const operands = builder.typeOfSlot first
+  if const .Power = operator {
+    return lowerOperator lowering, builder, destination, at, [first, second], annotation, operand
+  }
   if const Some(kind) = numericKindOf(lowering.program, operands) {
     const operation = arithmeticOperation operator
     return intrinsicSlot lowering, builder, destination, operation, Some(kind), [first, second], annotation, at

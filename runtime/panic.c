@@ -162,6 +162,13 @@ void torb_panic_shift_amount(int64_t amount, int64_t width, torb_location at) {
   torb_finish_panic(text, at);
 }
 
+void torb_panic_negative_exponent(int64_t exponent, torb_location at) {
+  char text[TORB_MESSAGE_BUFFER_SIZE];
+  snprintf(text, sizeof text, "negative exponent in `**`: an integer raised to %lld is not a whole number",
+           (long long)exponent);
+  torb_finish_panic(text, at);
+}
+
 void torb_panic_index_out_of_bounds(int64_t index, int64_t length, torb_location at) {
   char text[TORB_MESSAGE_BUFFER_SIZE];
   snprintf(text, sizeof text, "index %lld is out of bounds for a length of %lld", (long long)index,
