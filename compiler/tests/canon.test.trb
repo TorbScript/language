@@ -453,6 +453,50 @@ group "`while true` becomes `loop`" {
 
 }
 
+group "`r\"...\"` becomes `raw\"...\"`" {
+  test "raw string prefixes are off by default" {
+    unchanged "const x = r\"a\""
+    // Already in the form `strings` wants, so only the (off) prefix rule could still change it
+    unchanged "const x = r\"\"\"\n  a\n  \"\"\""
+  }
+
+  test "a one-line raw string is migrated, which `strings` never touches at all" {
+    const rules = [Rule.RawStringPrefix]
+    assert(applied("const x = r\"a\"", rules) == "const x = raw\"a\"")
+    // The value is untouched: `\` and `\{` inside a raw string are ordinary characters, before and after the rename
+    assert(applied("const x = r\"C:\\Users\\\{name\}\"", rules) == "const x = raw\"C:\\Users\\\{name\}\"")
+  }
+
+  test "a multi-line raw string is migrated too, indentation untouched" {
+    const rules = [Rule.RawStringPrefix]
+    assert(
+      applied("const x = r\"\"\"\n  first\n  \"\"\"", rules)
+        == "const x = raw\"\"\"\n  first\n  \"\"\""
+    )
+  }
+
+  test "already migrated and every non-raw string are left alone" {
+    const rules = [Rule.RawStringPrefix]
+    const leaves = { source: String => assert(applied(source, rules) == source) }
+    leaves "const x = raw\"a\""
+    leaves "const x = raw\"\"\"\n  first\n  \"\"\""
+    leaves "const x = \"a\""
+    leaves "const x = \"\"\"\n  first\n  \"\"\""
+    // `raw` alone, in front of anything but `\"`, is an ordinary name
+    leaves "const raw = 1"
+    leaves "fn raw(): Int \{\n  1\n\}"
+  }
+
+  test "the rule combines with `strings`: the prefix is migrated and the content indented in one run" {
+    const rules = [Rule.Strings, Rule.RawStringPrefix]
+    assert(
+      applied("const x = r\"\"\"\nfirst\n\"\"\"", rules)
+        == "const x = raw\"\"\"\n  first\n  \"\"\""
+    )
+  }
+
+}
+
 group "The safety net" {
   test "a file that does not parse is left alone" {
     const source = "fn f( \{\n"

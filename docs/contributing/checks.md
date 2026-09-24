@@ -164,8 +164,8 @@ Two of the rules of the formatter canon are decided on every block that parses:
 - **calls**: a call is a command wherever the grammar allows it, and has parentheses everywhere else. Both directions
   are reported. A call whose callee names a field of the type it stands in is left alone, because there the parentheses
   are meaning and not style.
-- **strings**: a multi-line `"""` or `r"""` is indented two spaces deeper than the line its statement starts on, with a
-  closing `"""` that stands alone aligned with the content.
+- **strings**: a multi-line `"""` or `raw"""` is indented two spaces deeper than the line its statement starts on, with
+  a closing `"""` that stands alone aligned with the content.
 
 What is **not** checked is the layout that milestone 8's `torb format` will own: line length, blank lines, and where a
 long call breaks. A snippet that passes here is in the canon of `torb canon`; the reverse is not promised.

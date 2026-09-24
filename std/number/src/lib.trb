@@ -309,12 +309,28 @@ extend UInt32 {
 /** A 32-bit floating-point number. */
 public native type Float32 with Signed {}
 
-/** The zero and the one of a `Float32`. */
+/** The zero and the one of a `Float32`, its two infinities, and the one value for which `==` is never true. */
 extend Float32 {
   /** Zero, the [Numeric.zero] of an `Float32`. */
   static zero: Float32 = 0.0
   /** One, the [Numeric.one] of an `Float32`. */
   static one: Float32 = 1.0
+  /** "Not a number" - the one value for which `==` is never true, not even with itself. See [Float64.nan]. */
+  static nan: Float32 = 0.0 / 0.0
+  /** Larger than every finite `Float32`. [Float32.negativeInfinity] is smaller than every finite one. */
+  static infinity: Float32 = 1.0 / 0.0
+  /** Smaller than every finite `Float32`, the one value below every finite one. */
+  static negativeInfinity: Float32 = -1.0 / 0.0
+
+  /** Whether the value is [Float32.infinity] or [Float32.negativeInfinity]. */
+  fn isInfinite(): Bool {
+    self == Float32.infinity || self == Float32.negativeInfinity
+  }
+
+  /** Whether the value is neither `nan` nor infinite. */
+  fn isFinite(): Bool {
+    self == self && !isInfinite()
+  }
 }
 /** A 64-bit floating-point number, and the type of a decimal literal. */
 public native type Float64 with Signed {}
@@ -403,6 +419,17 @@ extend Float64 {
   static epsilon: Float64 = 0.0000000000000002220446049250313
   /** The base of the natural logarithm. */
   static e: Float64 = 2.718281828459045
+  /**
+   * "Not a number" - the one value for which `==` is never true, not even with itself ([Float64.isNaN]). Named the way
+   * [Real.pi] is: the compile-time constant evaluator (`ir/constant.trb`) only allows this one declaration and
+   * [Float32.nan] to fold to it, because an ordinary expression that produces `nan` is a mistake and stays an error
+   * (`docs/language/modules-and-packages/top-level-code.md`, rule 6).
+   */
+  static nan: Float64 = 0.0 / 0.0
+  /** Larger than every finite `Float64`. [Float64.negativeInfinity] is smaller than every finite one. */
+  static infinity: Float64 = 1.0 / 0.0
+  /** Smaller than every finite `Float64`, the one value below every finite one. */
+  static negativeInfinity: Float64 = -1.0 / 0.0
 
   /** The non-negative square root. */
   native fn squareRoot(): Float64
@@ -414,6 +441,14 @@ extend Float64 {
   native fn round(): Float64
   /** Whether the value is "not a number" - the one value for which `==` is never true, not even with itself. */
   native fn isNaN(): Bool
+  /** Whether the value is [Float64.infinity] or [Float64.negativeInfinity]. */
+  fn isInfinite(): Bool {
+    self == Float64.infinity || self == Float64.negativeInfinity
+  }
+  /** Whether the value is neither `nan` nor infinite. */
+  fn isFinite(): Bool {
+    !isNaN() && !isInfinite()
+  }
 
   /**
    * Floats are compared with a tolerance: `assert(length.isCloseTo(1.0))`

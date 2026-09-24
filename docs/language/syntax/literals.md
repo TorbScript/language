@@ -41,7 +41,7 @@ print "{decimal} {million} {byte} {flags} {ratio} {large} {letter} {wave} {greet
 3.14  1e9  1.5e-3                      a float literal: a fraction, an exponent, or both
 'A'  '\n'  '\u{1F44B}'                 a character literal: exactly one character
 "text"  "line {expression}"            a string literal, with interpolation
-r"text"                                a raw string literal: no escapes, no interpolation
+raw"text"                              a raw string literal: no escapes, no interpolation
 ```
 
 ## Rules
@@ -108,11 +108,13 @@ r"text"                                a raw string literal: no escapes, no inte
 8. **A string literal interpolates `{expression}` and escapes a literal brace as `\{` or `\}`.** See
    [String interpolation](string-interpolation.md) for what may stand inside the braces.
 
-9. **A raw string (`r"text"`) has no escapes and no interpolation.** `\` and `{` are ordinary characters inside one,
-   which is what a path, a regular expression or a snippet of JSON needs.
+9. **A raw string (`raw"text"`) has no escapes and no interpolation.** `\` and `{` are ordinary characters inside one,
+   which is what a path, a regular expression or a snippet of JSON needs. `raw` is a contextual keyword: it is the
+   prefix only directly in front of `"`, and an ordinary name everywhere else, so `const raw = 1` still declares a
+   binding called `raw`.
 
    ```trb check
-   const pattern = r"C:\Users\{name}"
+   const pattern = raw"C:\Users\{name}"
    print pattern
    ```
 

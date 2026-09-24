@@ -7,7 +7,7 @@
  * moves parentheses and indentation, and it never reprints a file.
  *
  * ```text
- * torb canon [--check] [--rule calls|strings|imported-case-patterns|unused-bindings|loops]... <path>...
+ * torb canon [--check] [--rule calls|strings|imported-case-patterns|unused-bindings|loops|raw-string-prefix]... <path>...
  * ```
  *
  * `calls` and `strings` run by default; `--rule` picks a set instead. `--check` writes nothing and leaves with a
@@ -29,7 +29,7 @@ use parse from "../syntax/parser/parser"
 use walk from "./walk"
 use Edit, EditKind, Document from "./edit"
 use callEdits from "./calls"
-use stringEdits from "./strings"
+use stringEdits, rawPrefixEdits from "./strings"
 use patternEdits from "./patterns"
 use bindingEdits from "./bindings"
 use loopEdits from "./loops"
@@ -49,18 +49,20 @@ public fn canonUsage(): String {
     "  imported-case-patterns   `.None` becomes `None` for a case a `use` imported (changes the tree, off by default)",
     "  unused-bindings          A binding of a refutable pattern that nobody reads becomes `_` (changes the tree, off by default)",
     "  loops                    `while true \{` becomes `loop \{` (changes the tree, off by default)",
+    "  raw-string-prefix        `r\"...\"` becomes `raw\"...\"` (migrates the older spelling, off by default)",
     "",
     "  --check   Write nothing, list what would change, leave with a non-zero code",
   ].joined(separator: "\n")
 }
 
-/** The five rules of the canon. `Calls` and `Strings` run by default. */
+/** The six rules of the canon. `Calls` and `Strings` run by default. */
 public type Rule {
   case Calls
   case Strings
   case ImportedCasePatterns
   case UnusedBindings
   case Loops
+  case RawStringPrefix
 
   static fn fromText(text: String): Rule? {
     match text {
@@ -69,6 +71,7 @@ public type Rule {
       "imported-case-patterns" => Some Rule.ImportedCasePatterns
       "unused-bindings" => Some Rule.UnusedBindings
       "loops" => Some Rule.Loops
+      "raw-string-prefix" => Some Rule.RawStringPrefix
       _ => None
     }
   }
@@ -127,6 +130,7 @@ public type Counts {
   var patterns: Int = 0
   var bindings: Int = 0
   var endless: Int = 0
+  var rawPrefixes: Int = 0
 
   var fn add(kind: EditKind) {
     match kind {
@@ -148,6 +152,9 @@ public type Counts {
       .EndlessLoop => {
         endless = endless + 1
       }
+      .RawStringPrefix => {
+        rawPrefixes = rawPrefixes + 1
+      }
     }
   }
 
@@ -158,6 +165,7 @@ public type Counts {
     patterns = patterns + other.patterns
     bindings = bindings + other.bindings
     endless = endless + other.endless
+    rawPrefixes = rawPrefixes + other.rawPrefixes
   }
 }
 
@@ -197,7 +205,8 @@ fn printCanonReport(report: Report, check: Bool) {
     "{report.changed.length()} of {counted(report.files, "file")} {verb}: "
       + "{counted(counts.toCommand, "call")} to commands, {counted(counts.toParentheses, "call")} to parentheses, "
       + "{counted(counts.strings, "string")} indented, {counted(counts.patterns, "case pattern")}, "
-      + "{counted(counts.bindings, "unread binding")}, {counted(counts.endless, "endless loop")}"
+      + "{counted(counts.bindings, "unread binding")}, {counted(counts.endless, "endless loop")}, "
+      + "{counted(counts.rawPrefixes, "raw string")} migrated"
   )
   if !report.dropped.isEmpty() {
     print "{counted(report.dropped.length(), "edit")} dropped by the safety net"
@@ -294,6 +303,9 @@ public fn rewrite(source: String, rules: List<Rule>): Outcome {
       const at = lines.lineAndColumn skip.offset
       outcome.skipped.append "{at.line}:{at.column}: {skip.reason}"
     }
+  }
+  if rules.contains(Rule.RawStringPrefix) {
+    edits.appendAll rawPrefixEdits(source, lexed.tokens)
   }
   edits.sort({ _.position })
   // The rule that changes the tree comes last, so that it starts from a file the safety net has settled

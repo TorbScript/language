@@ -38,7 +38,7 @@ print generated()
   text
   """                                     dedented by the indentation of the first content line
 """text"""                                one line: unchanged, not dedented
-r"""
+raw"""
   text
   """                                     the raw form: no escapes, no interpolation
 ```
@@ -88,8 +88,9 @@ r"""
 6. **An interpolated value is never dedented, only the literal text around it, and an interpolation counts as content
    for rule 2.** Escapes in the literal text run after dedenting, not before.
 
-7. **`r"""..."""` is the raw form: no escapes, no interpolation, same dedenting rules otherwise.** It is what a
-   multi-line path, regular expression or JSON body is written in.
+7. **`raw"""..."""` is the raw form: no escapes, no interpolation, same dedenting rules otherwise.** It is what a
+   multi-line path, regular expression or JSON body is written in. `raw` is a contextual keyword: it is the prefix
+   only directly in front of `"""`, and an ordinary name everywhere else.
 
 ## What this is not
 

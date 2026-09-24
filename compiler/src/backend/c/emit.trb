@@ -1969,13 +1969,20 @@ fn integerOf(number: Int): CExpression {
 
 /**
  * A float constant as the shortest decimal that reads back as the same value, which is what `Show` of a `Float`
- * answers. A value that is not finite cannot be a compile-time constant, so there is nothing else.
+ * answers - except for the three values `Show` spells as words, which C has no literal for either: `nan`, `inf` and
+ * `-inf` become the division that IEEE-754 defines them as, exactly the constant evaluator folded in the first place
+ * (`ir/constant.trb`, `floatResult` and the named constants of `std/number`, `Float64.nan` among them).
  */
 fn floatOf(var emission: Emission, number: Float): CExpression {
   const shown = "{number}"
-  if shown.contains("n") || shown.contains("N") || shown.contains("i") {
-    reportUnsupported emission, "a constant that is not a finite number"
-    return CExpression.Literal "0.0"
+  if shown == "nan" {
+    return CExpression.Literal "(0.0 / 0.0)"
+  }
+  if shown == "inf" {
+    return CExpression.Literal "(1.0 / 0.0)"
+  }
+  if shown == "-inf" {
+    return CExpression.Literal "(-1.0 / 0.0)"
   }
   if shown.contains(".") || shown.contains("e") {
     return CExpression.Literal shown

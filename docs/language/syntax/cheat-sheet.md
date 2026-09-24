@@ -104,7 +104,7 @@ do { ... }                                   a block evaluated immediately
 if condition { a } else { b }                an expression
 match subject { pattern => value }           an expression, and exhaustive
 "text {expression}"                          interpolation; a literal brace is `\{`
-r"text"                                      a raw string: no escapes, no interpolation
+raw"text"                                    a raw string: no escapes, no interpolation
 """                                          a multi-line string, dedented by its first line
   text
   """

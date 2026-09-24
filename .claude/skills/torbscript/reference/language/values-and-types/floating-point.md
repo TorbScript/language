@@ -8,6 +8,9 @@ keywords:
   - Float32
   - Float64
   - nan
+  - infinity
+  - isInfinite
+  - isFinite
   - total order
   - isCloseTo
 source:
@@ -23,10 +26,10 @@ hiding the other two.
 
 ```trb check
 const ratio: Float = 1.5
-const nan = 0.0 / 0.0
 
 print "{ratio.floor()} {ratio.ceiling()} {ratio.round()} {ratio.squareRoot()}"
-print "{0.0 == -0.0} {nan == nan} {nan.isNaN()}"
+print "{0.0 == -0.0} {Float64.nan == Float64.nan} {Float64.nan.isNaN()}"
+print "{Float64.infinity.isInfinite()} {ratio.isFinite()}"
 print ratio.isCloseTo(1.5000001)
 ```
 
@@ -35,7 +38,9 @@ print ratio.isCloseTo(1.5000001)
 ```text
 Float32 Float64                          the two widths; `Float` is an alias for `Float64`
 value.isCloseTo(other, tolerance: 0.000001)   comparison with a tolerance
-Float64.pi  Float64.e                    the two named constants
+Float64.pi  Float64.e                    two of the named constants
+Float64.nan  Float64.infinity  Float64.negativeInfinity   the other three
+value.isNaN()  value.isInfinite()  value.isFinite()        what the three constants are compared against
 ```
 
 ## Rules
@@ -47,10 +52,9 @@ Float64.pi  Float64.e                    the two named constants
    true, every comparison with a `nan` on either side is `false`, and `0.0 == -0.0` is true.
 
    ```trb check
-   const nan = 0.0 / 0.0
-   print(nan == nan)
-   print(nan < 1.5)
-   print(nan > 1.5)
+   print(Float64.nan == Float64.nan)
+   print(Float64.nan < 1.5)
+   print(Float64.nan > 1.5)
    print(0.0 == -0.0)
    ```
 
@@ -63,8 +67,7 @@ Float64.pi  Float64.e                    the two named constants
    Only a total order is an order at all; an IEEE `<=` would leave a `nan` wherever it happened to start.
 
    ```trb check
-   const nan = 0.0 / 0.0
-   const mixed = [1.5, nan, 0.5]
+   const mixed = [1.5, Float64.nan, 0.5]
 
    print mixed.sorted({ _ }).toList()
    ```
@@ -85,8 +88,22 @@ Float64.pi  Float64.e                    the two named constants
 5. **Where a tolerance is meant, `isCloseTo` says so in the name.** `a.isCloseTo(b, tolerance: 0.000001)` is
    `(a - b).absolute() <= tolerance`, with `0.000001` as the default tolerance.
 
-6. **`squareRoot`, `floor`, `ceiling`, `round` and `isNaN` are methods, not operators or free functions.** `pi` and
-   `e` are named constants of `Float64`.
+6. **`squareRoot`, `floor`, `ceiling`, `round`, `isNaN`, `isInfinite` and `isFinite` are methods, not operators or free
+   functions.** `pi`, `e`, `nan`, `infinity` and `negativeInfinity` are named constants of `Float64` (and, all but `pi`
+   and `e`, of `Float32` too).
+
+7. **`Float64.nan` and `Float32.nan` are the one way to write `nan` as a constant.** Every other constant expression
+   that produces `nan` is a compile error where it is written
+   ([Top-level code](../modules-and-packages/top-level-code.md), rule 6) - `nan` is not *computed* from one of these
+   two, it is the language's own name for it.
+
+   ```trb check
+   print Float64.nan
+   ```
+
+   ```trb skip a module cannot be produced inside one snippet of this documentation, which is always checked as an unimported file, where a top-level `const` is ordinary code and not a compile-time constant; the real diagnostic is: `/` produces `nan` here, which a compile-time constant cannot hold
+   const broken: Float64 = 0.0 / 0.0
+   ```
 
 ## What this is not
 

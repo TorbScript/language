@@ -76,6 +76,10 @@ print "moved {move(from: 3, to: 10)}, total {total}"
    `from`, `as` and `by` are contextual: the lexer reads them as ordinary names everywhere, which is what
    `use Name from "./module"` and `type Seconds with Compare by value` rely on.
 
+   `raw` is contextual too, but at the lexer rather than the parser: it starts a raw string (`raw"text"`,
+   `raw"""text"""`) only directly in front of `"`, and is an ordinary name everywhere else - `const raw = 1` and
+   `fn raw(): Int` both declare a `raw`. See [Literals](literals.md), rule 9.
+
 6. **After a `.` and as an argument label, the parser accepts a reserved word as a name too** - but a *declaration's*
    name always has to be a plain identifier, so nothing can be declared with a keyword's spelling. The rule therefore
    has an effect only for `from`, `as` and `by`, which are not reserved to begin with.

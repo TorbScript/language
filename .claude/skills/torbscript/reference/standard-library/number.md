@@ -147,6 +147,14 @@ compares equal to `0.0`) - which is also why `Float32` and `Float64` are deliber
 be a `Map` key and the `nan` key does not exist. `Int`, `UInt` and `Float` are plain aliases for the default width,
 nothing the language treats specially.
 
+Both `Float32` and `Float64` also carry `nan`, `infinity` and `negativeInfinity`, and `isInfinite()` and `isFinite()`
+alongside `isNaN()` (`Float64.nan`, `Float32.infinity.isInfinite()`). `nan` and `infinity` are named the way `pi` and
+`e` are, but a constant expression that *computes* `nan` - `0.0 / 0.0` written anywhere else - stays a compile error at
+that expression ([Floating-point numbers](../language/values-and-types/floating-point.md), rule 7): `Float64.nan` and
+`Float32.nan` are the only two declarations the constant evaluator lets fold to it, because that is what the name of
+each of them already says. An infinity has no such exception to make - it is an ordinary IEEE-754 value like any
+other, which is why `1.0 / 0.0` needs none to be a constant.
+
 ### Decimal {#decimal}
 
 ```trb fragment

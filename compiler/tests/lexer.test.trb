@@ -158,6 +158,25 @@ group "Multi-line strings" {
     assert(kinds(source)[0] == TokenKind.TextLiteral([TextPart.Literal("first\n")]))
   }
 
+  test "`raw` is the current spelling of the raw-string prefix, `r` the older one, both decode the same way" {
+    const expected = [TextPart.Literal("a\\\{b\}")]
+    assert(kinds("raw\"a\\\{b\}\"")[0] == TokenKind.TextLiteral(expected))
+    assert(kinds("r\"a\\\{b\}\"")[0] == TokenKind.TextLiteral(expected))
+    const block = [TextPart.Literal("first\n")]
+    assert(kinds("raw\"\"\"\n  first\n  \"\"\"")[0] == TokenKind.TextLiteral(block))
+  }
+
+  test "`raw` directly in front of `\"` is the prefix, and an ordinary name everywhere else" {
+    // No space between `raw` and the quote: still the prefix
+    assert(kinds("raw\"x\"") == [TokenKind.TextLiteral([TextPart.Literal("x")]), .EndOfFile])
+    // `raw` followed by anything but `\"` is a plain identifier
+    assert(kinds("raw") == [.Identifier, .EndOfFile])
+    assert(kinds("const raw = 1") == [.Reserved(Keyword.Const), .Identifier, .Equal, .IntegerLiteral, .EndOfFile])
+    assert(kinds("raw.length()").length() == 6)
+    // A name that merely starts with `raw` is unaffected
+    assert(kinds("rawText") == [.Identifier, .EndOfFile])
+  }
+
   test "an interpolation counts as content, and its value is never dedented" {
     const source = "\"\"\"\n  a\{1\}\n  b\{2\}\n  \"\"\""
     const expected = [

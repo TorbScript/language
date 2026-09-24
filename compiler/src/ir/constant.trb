@@ -30,7 +30,7 @@ use irTypeOfClosed, substituted from "./lower/context"
 use numericKindOf, layoutOfType from "./verify"
 use isStaticLayout from "./layout"
 use describeIrType from "./print"
-use staticName from "./mangle"
+use staticName, SymbolPath from "./mangle"
 use symbolPathOf from "./instantiate"
 use providerOfMember, memberMappingOf from "./witness"
 
@@ -326,7 +326,9 @@ fn floatOperation(
 
 /**
  * A float operation follows IEEE-754, so an infinity is a value and not an error - but a `nan` out of a literal
- * expression is one, because nothing a program can write down afterwards distinguishes it from a mistake.
+ * expression is one, because nothing a program can write down afterwards distinguishes it from a mistake. The one
+ * exception is `lowering.nanConstantAllowed` ([Lowering]), which [staticOfConstant] sets while it folds the
+ * initializer of `Float64.nan` or `Float32.nan` and nothing else ever does.
  */
 fn floatResult(
   var lowering: Lowering,
@@ -335,7 +337,7 @@ fn floatResult(
   operator: String,
   at: Span,
 ): ConstantValue? {
-  if value != value {
+  if value != value && !lowering.nanConstantAllowed {
     reportProblem lowering, "`{operator}` produces `nan` here, which a compile-time constant cannot hold", at
     return None
   }
@@ -738,6 +740,20 @@ public type ConstantInstance {
 }
 
 /**
+ * Whether `path` is the one declaration allowed to fold to `nan`: `Float64.nan` or `Float32.nan` of `std/number`,
+ * named the way `Real.pi` and `Real.epsilon` are (owner decision 2026-09-24, "Named float constants"). Identified by
+ * where the declaration is written, never by what its initializer computes, so nothing else can spell its way into
+ * the exception - an ordinary module or type that happens to compute `nan` still hits [floatResult]'s error.
+ */
+fn isNamedNaNConstant(path: SymbolPath): Bool {
+  if path.package != "std/number" || path.name != "nan" || path.owners.length() != 1 {
+    return false
+  }
+  const owner = path.owners[0]
+  owner == "Float64" || owner == "Float32"
+}
+
+/**
  * The static value of one instance of a `const`, evaluated once. There is no module initialization, ever: a constant is
  * static data with a name, and `Instruction.Constant` names it.
  */
@@ -769,11 +785,14 @@ public fn staticOfConstant(var lowering: Lowering, written: SymbolId, writtenOwn
   const name = staticName lowering.program, path, instance.arguments
   const outer = lowering.module
   const around = lowering.substitution
+  const allowedNaNBefore = lowering.nanConstantAllowed
   lowering.module = site.module
   lowering.substitution = instance.mapping
+  lowering.nanConstantAllowed = isNamedNaNConstant path
   const value = evaluateConstant lowering, binding.value
   lowering.module = outer
   lowering.substitution = around
+  lowering.nanConstantAllowed = allowedNaNBefore
   const whole = value?
   // `const Point(x, y) = Point(1, 2)`: the names share one initializer, and each of them is one field of what it
   // evaluates to. Without this every name of the binding would be the whole value under its own type
