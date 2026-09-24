@@ -1,6 +1,6 @@
 ---
 title: Trailing closures
-summary: When the last parameter of a call is a function, the closure argument can follow the call as a brace instead of sitting inside the parentheses, and it can name its parameter after the function type instead of using _.
+summary: When the last parameter of a call is a function, the closure argument can follow the call as a brace instead of sitting inside the parentheses.
 kind: reference
 status: stable
 order: 60
@@ -54,9 +54,27 @@ print total
    // error: The trailing closure fills `seed`, which was already given by name
    ```
 
-3. **The implicit parameter of a trailing closure can be named after the parameter name the function type itself
-   carries**, instead of `_`. `fn map<Output>(transform: (value: Item) => Output)` lets a caller write
-   `numbers.map { value * 2 }`, because the function type names its own parameter `value`.
+3. **The implicit parameter of a trailing closure is always `_` (`_2`, `_3`, ...), never a name taken from the
+   expected function type.** `fn map<Output>(transform: (value: Item) => Output)` documents its parameter as `value`,
+   but that name is not in scope inside the closure - it acts at a distance, and renaming the parameter of a library
+   function would silently break every caller that relied on it. `_` or a written parameter name are the two ways to
+   read the value.
+
+   ```trb error
+   fn mapped<Output>(items: List<Int>, transform: (value: Int) => Output): List<Output> {
+     var result: List<Output> = []
+     for item in items {
+       result.append transform(item)
+     }
+     result
+   }
+
+   const doubled = mapped([1, 2, 3]) { value * 2 }
+   // error: Cannot find `value` here
+   ```
+
+   The diagnostic's note names the fix exactly: `The parameter of this closure is \`_\`; to name it, write
+   \`{ value => ... }\``. Writing `_` or naming the parameter explicitly both work.
 
    ```trb check
    fn mapped<Output>(items: List<Int>, transform: (value: Int) => Output): List<Output> {
@@ -67,8 +85,10 @@ print total
      result
    }
 
-   const doubled = mapped([1, 2, 3]) { value * 2 }
+   const doubled = mapped([1, 2, 3]) { _ * 2 }
+   const named = mapped([1, 2, 3]) { value => value * 2 }
    print doubled
+   print named
    ```
 
 4. **A trailing closure always belongs to the outermost command call of the statement.** Commands do not nest, so the
@@ -96,36 +116,6 @@ print total
 
 5. **A trailing closure is also the body of the head of `if`, `for`, `while` and `match` when the head is a command
    call**, for the same reason: a command's `{` is read as its body, exactly like the built-in statements.
-
-6. **Naming the implicit parameter is rejected when it would shadow a local that is already visible.** There is no
-   silent shadowing: if a parameter or a binding named `amount` is already in scope, `increase { amount + 1 }` is an
-   error instead of quietly reading the outer `amount`, because nothing in the source would say which one was meant.
-
-   ```trb error
-   fn probe(amount: Int): Int {
-     increase { amount + 1 }
-   }
-
-   fn increase(transform: (amount: Int) => Int): Int {
-     transform 1
-   }
-   // error: The implicit parameter `amount` would shadow `amount`
-   ```
-
-   Naming the closure's parameter something else is the fix, and then the outer `amount` is reachable again inside
-   the closure body.
-
-   ```trb check
-   fn probe(amount: Int): Int {
-     increase { item => item + amount }
-   }
-
-   fn increase(transform: (amount: Int) => Int): Int {
-     transform 1
-   }
-
-   print probe(5)
-   ```
 
 ## What this is not
 
@@ -168,10 +158,6 @@ show transformed(numbers) { item: Int => item * 2 }
 // error: The trailing closure fills `value`, which was already given by name
 // error: `transformed` takes 2 arguments, 1 was given
 ```
-
-**Naming the implicit parameter is not always available.** It only works where the callee's own function type names
-its parameter, as `map`'s `transform: Transform<Item, Output>` does - the alias is `(value: Item) => Output`; a call
-whose function type carries no parameter name still needs `_` or a written name.
 
 ## Related
 

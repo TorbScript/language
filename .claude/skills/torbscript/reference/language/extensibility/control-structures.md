@@ -71,9 +71,9 @@ fn <name>(..., body: () => <Type>) { ... }     a control structure: a function w
    `extend` and `use` bind one; the declarations share one shape, `modifier* keyword Name clauses* { body }`, because
    binding a name is the one thing a function cannot do on a caller's behalf.
 
-5. **There are no macros, because names are resolved with the help of types.** A receiver, a named implicit
-   parameter and an overload all need to know what a name refers to before a macro could rewrite anything, so a
-   macro that ran before name resolution and one that ran after would not agree on what the code even says.
+5. **There are no macros, because names are resolved with the help of types.** A receiver and an overload both need
+   to know what a name refers to before a macro could rewrite anything, so a macro that ran before name resolution
+   and one that ran after would not agree on what the code even says.
 
 ## What this is not
 

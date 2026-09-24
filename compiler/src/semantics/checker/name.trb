@@ -21,7 +21,7 @@ use typeSignatureOf from "./signature"
 use hiddenExtensionOf, hiddenTraitMemberOf, importPathOf from "./implementation"
 use signatureOf, aliasTargetOf, genericsOf, resultOf from "./signature"
 use substitute, substituteBounds, resolveType from "./unify"
-use implicitParameterTarget, isImplicitName, namesImplicitParameter from "./closure"
+use implicitParameterTarget, isImplicitName, implicitParameterHint from "./closure"
 use noteRead, noteDeclaredRead, noteCapturedBinding from "./mutation"
 
 /** What a name, a member path or any other callee resolved to. */
@@ -99,17 +99,9 @@ public fn resolveName(
     }
   }
   if const Some(found) = checker.findLocal(text) {
-    // The local wins, and that is exactly the silent shadowing CONCEPT forbids: the closure around this name offers an
-    // implicit parameter of the same name, and nothing in the source says which of the two is meant
-    if namesImplicitParameter(checker, text) {
-      checker.reportHere(
-        Diagnostic.error("The implicit parameter `{text}` would shadow `{text}`", at)
-          .withNote("There is no silent shadowing: name the parameter of the closure (`\{ item => ... \}`)")
-      )
-    }
     return localTarget checker, found, text, at, expected, explicit
   }
-  // `numbers.map { value * 2 }`, `{ _ * 3 }`: the parameters the expected function type names
+  // `{ _ * 3 }`, `{ _ + _2 }`: the positional parameters of a closure that declared no parameters of its own
   if const Some(found) = implicitParameterTarget(checker, text, at) {
     return found
   }
@@ -618,7 +610,11 @@ fn reportUnknownName(var checker: Checker, text: String, at: Span, expected: Typ
     }
   }
   var problem = Diagnostic.error "Cannot find `{text}` here", at
-  if checker.receiverType.isSome() {
+  // `numbers.map { value * 2 }`: `value` is the name the expected function type gives the closure's parameter, so the
+  // fix is exact - the parameter is implicit under `_`, and naming it is what makes `value` a name in this body
+  if const Some(hint) = implicitParameterHint(checker, text) {
+    problem = problem.withNote hint
+  } else if checker.receiverType.isSome() {
     problem = problem.withNote(
       "Only the innermost receiver is implicit: name the parameter to reach an outer one (`report \{ r => r.{text} \}`)"
     )

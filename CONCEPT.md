@@ -22,9 +22,9 @@
 ## Design Principles
 
 1. **The parameter type decides how an argument is read.** A closure passed to a parameter of type
-   `(self: Receiver) => Value` resolves names against `Receiver`. A closure passed to `(value: Int) => Int` may use `value` implicitly.
-   An expression passed to `lazy Value` is not evaluated at the call site. This one principle powers DSLs,
-   custom control structures and query providers, without macros or annotations.
+   `(self: Receiver) => Value` resolves names against `Receiver`. An expression passed to `lazy Value` is not
+   evaluated at the call site. This one principle powers DSLs, custom control structures and query providers,
+   without macros or annotations.
 2. **Mutation is always visible.** `var` bindings, `var` fields (`private(var)`: only the type itself), `var` parameters,
    `var fn` methods. Everything not marked does not change. Values are never aliased, so a mutation happens
    exactly where it is written and nowhere else.
@@ -663,15 +663,14 @@ numbers.map { _ * 2 }
 numbers.fold(0) { sum, number => sum + number }
 ```
 
-The implicit parameter can be named by the _type of the function_:
+The implicit parameters are always `_`, `_2`, `_3`, ... - never a name taken from the expected function type. A
+closure that wants a name writes its own parameter list, exactly as it does everywhere else:
 
 ```trb
 fn map<Output>(transform: (value: Item) => Output): Iterate<Output>
 
-numbers.map { value * 2 }
+numbers.map { value => value * 2 }
 ```
-
-If such a name would shadow a name that is visible at the closure, it is a compile error (no silent shadowing).
 
 ### Command Calls (calls without parentheses)
 

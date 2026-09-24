@@ -109,8 +109,7 @@ unless items.isEmpty() { print "not empty" }
 Nothing about `unless` is special to the compiler - `do` and `retry` from the standard library are written
 the same way, as ordinary functions with a closure or a
 [`lazy`](../language/functions/parameter-modes.md) parameter. See
-[Control structures are functions](../language/extensibility/control-structures.md) for `retry`, and how a
-function like this names its closure's implicit parameter.
+[Control structures are functions](../language/extensibility/control-structures.md) for `retry`.
 
 ## A configuration block is a receiver closure
 

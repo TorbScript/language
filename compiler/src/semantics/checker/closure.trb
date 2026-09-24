@@ -352,59 +352,56 @@ fn implicitIndexOf(text: String): Int {
 }
 
 /**
- * A name that means a parameter of the closure that is being checked: `_`, `_2`, or the name the expected function type
- * gives the parameter (`numbers.map { value * 2 }`). Only a closure that declared no parameters of its own has them.
+ * `_`, `_2`, ...: the implicit parameter of the closure that is being checked. Only a closure that declared no
+ * parameters of its own has them, and `_` always means the innermost such closure - it never reaches an outer one.
  *
- * `_` always means the innermost such closure; a name reaches outward, and reading one from further out captures it.
+ * A bare name is never resolved against the expected function type's own parameter names (CONCEPT, "Trailing
+ * Closures"): that acted at a distance, and renaming a library's parameter would silently break every caller that
+ * relied on it. [implicitParameterHint] is the note offered instead, once the name turns out to be nowhere.
  */
 public fn implicitParameterTarget(var checker: Checker, text: String, at: Span): Target? {
-  const isPositional = isImplicitName text
+  const index = implicitIndexOf text
+  if index < 0 {
+    return None
+  }
   var frame = checker.closureFrames.length() - 1
   while frame >= 0 {
     if checker.closureFrames[frame].hasParameters {
       frame = frame - 1
       continue
     }
-    const index = if isPositional {
-      implicitIndexOf text
-    } else {
-      nameIndexOf checker.closureFrames[frame].implicit, text
-    }
-    if index >= 0 && index < checker.closureFrames[frame].types.length() {
+    if index < checker.closureFrames[frame].types.length() {
       return Some parameterBindingOf(checker, frame, index, text, at)
     }
     // `_` belongs to the innermost closure without a parameter list and never reaches an outer one
-    if isPositional {
-      return None
-    }
-    frame = frame - 1
+    return None
   }
   None
 }
 
 /**
- * Whether the closure that is being checked offers an implicit parameter of this name. CONCEPT ("Trailing Closures"):
- * naming the implicit parameter after a name that is visible at the closure is a compile error, because otherwise the
- * local silently wins and nothing in the source says which of the two `value` is meant.
+ * The note for a name that is nowhere, when it is exactly the name the expected function type gives a parameter of
+ * the closure that is being checked (`numbers.map { value * 2 }`, where `value` is not in scope): the closure's
+ * parameter is implicit under `_` (or `_2`, ...), and naming it explicitly is the fix.
  *
- * Only a *name* is asked about: `_` and `_2` cannot collide with anything, and a closure that wrote its parameters down
- * is an ordinary scope that may shadow (CONCEPT: "a nested block and a closure are scopes of their own").
+ * A name reaches outward the same way `implicitParameterTarget` used to resolve one: the innermost closure without a
+ * parameter list first, then the ones further out.
  */
-public fn namesImplicitParameter(checker: Checker, text: String): Bool {
+public fn implicitParameterHint(checker: Checker, text: String): String? {
   if isImplicitName(text) {
-    return false
+    return None
   }
   var frame = checker.closureFrames.length() - 1
   while frame >= 0 {
     if !checker.closureFrames[frame].hasParameters {
       const index = nameIndexOf checker.closureFrames[frame].implicit, text
       if index >= 0 && index < checker.closureFrames[frame].types.length() {
-        return true
+        return Some hintFor(checker, frame, index, text)
       }
     }
     frame = frame - 1
   }
-  false
+  None
 }
 
 fn nameIndexOf(implicit: List<String?>, text: String): Int {
@@ -414,6 +411,30 @@ fn nameIndexOf(implicit: List<String?>, text: String): Int {
     }
   }
   -1
+}
+
+/** `_` at the first parameter, `_2` at the second, and so on - the placeholder that stands at this position. */
+fn placeholderNameOf(index: Int): String {
+  if index == 0 { "_" } else { "_{index + 1}" }
+}
+
+/** `value` for a closure with one parameter, `_, value` once there is more than one to place. */
+fn rewriteWith(checker: Checker, frame: Int, index: Int, text: String): String {
+  const length = checker.closureFrames[frame].types.length()
+  if length == 1 {
+    return text
+  }
+  var parts: List<String> = []
+  for position in 0..length {
+    parts.append(if position == index { text } else { placeholderNameOf position })
+  }
+  parts.joined ", "
+}
+
+fn hintFor(checker: Checker, frame: Int, index: Int, text: String): String {
+  const placeholder = placeholderNameOf index
+  const rewritten = rewriteWith checker, frame, index, text
+  "The parameter of this closure is `{placeholder}`; to name it, write `\{ {rewritten} => ... \}`"
 }
 
 /** The binding of one implicit parameter, made the first time it is used so that the unused ones cost nothing. */

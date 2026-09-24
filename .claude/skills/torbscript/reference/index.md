@@ -166,7 +166,7 @@ that answers the question. A page marked (planned) describes a feature that does
 - `language/functions/index.md` - **Functions** (index): Declaring a function, its arguments and defaults, variadic parameters, closures, trailing closures, parameter modes and quoted expressions.
 - `language/functions/parameter-modes.md` - **Parameter modes** (reference): A parameter is an ordinary value unless it says otherwise; var hands over a path to mutate, lazy defers evaluation once, a self-named closure resolves names against a receiver, and Expression also hands over the typed tree.
 - `language/functions/quoted-expressions.md` - **Quoted expressions** (reference): A parameter or binding typed Expression<Value> gets the ordinary value plus the typed tree of what was written, its source text and the values it captured, which is what assert and a query provider read instead of running the code twice.
-- `language/functions/trailing-closures.md` - **Trailing closures** (reference): When the last parameter of a call is a function, the closure argument can follow the call as a brace instead of sitting inside the parentheses, and it can name its parameter after the function type instead of using _.
+- `language/functions/trailing-closures.md` - **Trailing closures** (reference): When the last parameter of a call is a function, the closure argument can follow the call as a brace instead of sitting inside the parentheses.
 - `language/functions/variadics.md` - **Variadic parameters** (reference): A parameter written ...name collects every remaining positional argument into a List, and a collection is only unpacked into it when the call spreads it with the same three dots.
 
 ## language/generics

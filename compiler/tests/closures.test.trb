@@ -101,15 +101,6 @@ group "Implicit parameters" {
     assert(probed.adaptationsOf("_2") == ["parameter 1"])
   }
 
-  test "the name the function type gives the parameter works as well" {
-    const source = "fn probe() \{\n  const found = increase \{ amount + 1 \}\n\}\n\n"
-      + "fn increase(transform: (amount: Int) => Int): Int \{\n  transform(1)\n\}"
-    assert problems(source).isEmpty()
-    const probed = probe source
-    assert(probed.adaptationsOf("amount") == ["parameter 0"])
-    assert(probed.resolutionOf("amount") == "local _")
-  }
-
   test "fewer implicit parameters than the function type has is allowed" {
     const source = "fn probe() \{\n  const found = twice \{ _ + 1 \}\n\}\n{twice}"
     assert problems(source).isEmpty()
@@ -126,35 +117,45 @@ group "Implicit parameters" {
     assert problems(source).contains("The parameters of this closure need types: `\{ value: Int => ... \}`")
   }
 
-  test "an implicit name that would shadow a visible one is an error (CONCEPT, Trailing Closures)" {
-    // Without this rule the local would win silently, and nothing in the source would say which `amount` was meant
-    const source = "fn probe(amount: Int): Int \{\n  increase \{ amount + 1 \}\n\}\n\n"
+  test "a bare name is never read against the expected function type (CONCEPT, Trailing Closures)" {
+    // The name is not in scope at all: reading it against the function type acted at a distance, and renaming a
+    // library's parameter would silently break every caller that relied on it (owner decision, 2026-09-24)
+    const source = "fn probe(): Int \{\n  increase \{ amount + 1 \}\n\}\n\n"
       + "fn increase(transform: (amount: Int) => Int): Int \{\n  transform(1)\n\}"
-    assert(problems(source) == ["The implicit parameter `amount` would shadow `amount`"])
+    assert(problems(source) == ["Cannot find `amount` here"])
     assert(
-      notes(source) == ["There is no silent shadowing: name the parameter of the closure (`\{ item => ... \}`)"]
+      notes(source) == ["The parameter of this closure is `_`; to name it, write `\{ amount => ... \}`"]
     )
   }
 
-  test "a binding of the body around the closure shadows just as much" {
-    const source = "fn probe(): Int \{\n  const amount = 2\n  increase \{ amount + 1 \}\n\}\n\n"
+  test "the note only fires when the name matches a parameter of the expected function type" {
+    const source = "fn probe(): Int \{\n  increase \{ nothingNamesThis + 1 \}\n\}\n\n"
       + "fn increase(transform: (amount: Int) => Int): Int \{\n  transform(1)\n\}"
-    assert(problems(source) == ["The implicit parameter `amount` would shadow `amount`"])
+    assert(problems(source) == ["Cannot find `nothingNamesThis` here"])
+    assert(notes(source) == [])
   }
 
-  test "naming the parameter of the closure is the fix, and then the local is reachable again" {
+  test "a local of the same name as the parameter wins, and nothing is reported" {
+    // There is no silent-shadowing error any more, because the bare name never reads the function type at all - it
+    // always means the local, exactly like anywhere else a name resolves
+    const source = "fn probe(amount: Int): Int \{\n  increase \{ amount + 1 \}\n\}\n\n"
+      + "fn increase(transform: (amount: Int) => Int): Int \{\n  transform(1)\n\}"
+    assert problems(source).isEmpty()
+  }
+
+  test "naming the parameter of the closure is how a caller reads the value" {
     const source = "fn probe(amount: Int): Int \{\n  increase \{ item => item + amount \}\n\}\n\n"
       + "fn increase(transform: (amount: Int) => Int): Int \{\n  transform(1)\n\}"
     assert problems(source).isEmpty()
   }
 
-  test "`_` collides with nothing, so it is the other fix" {
+  test "`_` reads it just as well" {
     const source = "fn probe(amount: Int): Int \{\n  increase \{ _ + amount \}\n\}\n\n"
       + "fn increase(transform: (other: Int) => Int): Int \{\n  transform(1)\n\}"
     assert problems(source).isEmpty()
   }
 
-  test "a name that is not a local is not shadowed: the implicit parameter comes before the file scope" {
+  test "a top-level declaration of the same name as the parameter is found, and nothing is reported" {
     const source = "const amount = 2\n\nfn probe(): Int \{\n  increase \{ amount + 1 \}\n\}\n\n"
       + "fn increase(transform: (amount: Int) => Int): Int \{\n  transform(1)\n\}"
     assert problems(source).isEmpty()

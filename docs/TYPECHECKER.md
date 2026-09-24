@@ -381,7 +381,7 @@ A closure is read from the expected function type:
 | Expected                              | `{ _ * 3 }`                    | `{ x => ... }`         | `{ x: Int => ... }` |
 |---------------------------------------|--------------------------------|------------------------|---------------------|
 | `(Int) => Int`                        | `_` is the first parameter     | `x` is the parameter   | annotation must match |
-| `(value: Item) => Output`             | `_` is `value`; `value` also works | `x` names it       | ditto               |
+| `(value: Item) => Output`             | `_` is `value`; a bare `value` is "Cannot find" | `x` names it | ditto      |
 | `(var self: Element) => Void`         | receiver closure, `self` implicit | `x` is the receiver | ditto               |
 | `None`                                | error: "Cannot infer …"        | error                  | fine                |
 
@@ -389,8 +389,9 @@ A closure is read from the expected function type:
   only `_`; unused parameters are allowed).
 - Patterns work as parameters (`{ (a, b) => (b, a) }`); the pattern is checked against the parameter type.
 - The result type is always inferred from the body; the expected result flows into the body.
-- A name from the function type that would shadow a name visible at the closure is an error ("no silent shadowing"),
-  and so is mixing `_` with named parameters in one closure.
+- A bare name is never read against the function type's own parameter names (owner decision, 2026-09-24, superseding
+  gap 56 below): only `_` (`_2`, ...) and a parameter the closure wrote down itself are in scope. Mixing `_` with
+  named parameters in one closure is still an error.
 - `return` inside a closure returns from the closure, and is checked against the closure's result.
 
 ### 2.5 Coercion, and what is not subtyping
@@ -2661,6 +2662,14 @@ not a second span). It found **five** ambiguous reads in the sources, and every 
 `any { _ == value }` in `Collection.contains`, `(0..count).map { value }` in `List.filled`,
 `indexed().find { _.item == value }` in `List.indexOf`, `box.update { _.added value }` in `Queueing.add` and
 `indicators.any({ value.startsWith _ })` in the documentation's own index writer. All five name the parameter now.
+
+_Superseded (owner decision, 2026-09-24):_ the feature this gap was about is gone, not just the shadow error. A bare
+name is never read against the expected function type's own parameter names any more - it acts at a distance (this
+very gap is the proof: adding a `const value = ...` above a closure turned valid code into "would shadow"), a
+library renaming its parameter silently broke every caller that relied on the name, and the reader could not see
+where the name came from. `_`, `_2`, `_3` and a parameter the closure writes down itself are what remain.
+`namesImplicitParameter` is gone; `implicitParameterHint` in `closure.trb` only offers a note once the ordinary
+"Cannot find" diagnostic already fired.
 
 **57. Does a binding that destructures work at the top level of a file?**
 CONCEPT's own examples of patterns in bindings are `const (quotient, remainder) = divide(7, 2)` and

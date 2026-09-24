@@ -14,7 +14,7 @@ const gravity = Vector2 0.0, 9.81
 
 /** Moves every entity that has a position and a velocity by `velocity * deltaTime`. */
 public fn movement(world: World, deltaTime: Float): World {
-  world.mapEntities([ComponentKind.Transform, ComponentKind.Velocity]) {
+  world.mapEntities([ComponentKind.Transform, ComponentKind.Velocity]) { entity =>
     match (entity.position(), entity.velocity()) {
       (Some(position), Some(velocity)) => entity.attached(.Transform(position + velocity * deltaTime))
       _ => entity
@@ -24,7 +24,7 @@ public fn movement(world: World, deltaTime: Float): World {
 
 /** Applies gravity to every entity that has a velocity. */
 public fn falling(world: World, deltaTime: Float): World {
-  world.mapEntities([ComponentKind.Velocity]) {
+  world.mapEntities([ComponentKind.Velocity]) { entity =>
     const velocity = entity.velocity() ?? Vector2.zero
     entity.attached(.Velocity(velocity + gravity * deltaTime))
   }
@@ -39,7 +39,7 @@ public fn collisions(world: World, deltaTime: Float): World {
     if hits == 0 {
       return current                     // Returns from the closure, not from `collisions`
     }
-    current.updated body.id { damage(entity, amount: hits * 10) }
+    current.updated body.id { damage(_, amount: hits * 10) }
   }
 }
 

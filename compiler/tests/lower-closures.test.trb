@@ -613,27 +613,12 @@ group "A closure that keeps what it was lent" {
 }
 
 group "What a closure cannot do yet" {
-  test "a closure that captures an implicit parameter of a closure around it is a clean finding" {
-    const source = r"""
-      fn outer(transform: (value: Int) => Int): Int {
-        transform 1
-      }
-
-      fn inner(transform: (Int) => Int): Int {
-        transform 2
-      }
-
-      fn nested(): Int {
-        outer({ inner({ _ + value }) })
-      }
-      """
-    assert(
-      unsupportedIn(source)
-        == [
-          "a closure that captures an implicit parameter of a closure around it is not supported by the native back end yet",
-        ]
-    )
-  }
+  // There is no longer a source program that reaches `describeCapture`'s `"_"` branch or the equivalent check in
+  // `ir/lower/expression.trb`: a bare name is never read against the expected function type's own parameter names
+  // any more (owner decision, 2026-09-24), which was the only way an inner closure's body could name an implicit
+  // parameter of a closure around it. `_` itself only ever means the innermost closure without a parameter list and
+  // never reaches outward, before or after that decision. The checks stay in the lowering as a clean finding rather
+  // than a silent wrong read, should a future language change make the case reachable again.
 
   /** It is not a closure and never was: the lowering lowers it as the control flow it is (`lower-text.test.trb`). */
   test "`?.` is control flow and not a closure, and needs none" {
