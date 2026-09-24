@@ -1,6 +1,6 @@
 ---
 title: Delegation with by
-summary: by forwards a trait's required members to the one field of a single-field type, binding only to the trait or & group written directly in front of it.
+summary: by forwards a trait's required members to the one field of a single-field type, binding only to the trait or parenthesised group written directly in front of it.
 kind: reference
 status: stable
 order: 60
@@ -20,7 +20,7 @@ members that only ever call through to it.
 ## Example
 
 ```trb check
-type Seconds with Show, Add & Subtract by value, Compare by value {
+type Seconds with Show, (Add, Subtract) by value, Compare by value {
   value: Int
 }
 
@@ -33,17 +33,53 @@ print total.max(Seconds(10))
 
 ```text
 type <Name> with <Trait> by <field> { ... }
-type <Name> with <Trait>, <Trait> & <Trait> by <field> { ... }   `by` binds to the group right before it
+type <Name> with <Trait>, (<Trait>, <Trait>) by <field> { ... }   `by` binds to the group right before it
 ```
 
 ## Rules
 
-1. **`by <field>` forwards the trait written directly in front of it to that field.** In `Add & Subtract by value`,
+1. **`by <field>` forwards the trait written directly in front of it to that field.** In `(Add, Subtract) by value`,
    `value` is the field that provides `add` and `subtract`.
 
-2. **`by` binds to one element of the `with` list - the trait or the `&` group directly before it - never to the
-   whole list.** `Show, Add & Subtract by value, Compare by value` derives `Show`, delegates `Add` and `Subtract` to
-   `value` in one group, and delegates `Compare` to `value` on its own; nothing about `by` reaches back to `Show`.
+2. **`by` binds to one element of the `with` list - the trait or the parenthesised group directly before it - never
+   to the whole list.** `Show, (Add, Subtract) by value, Compare by value` derives `Show`, delegates `Add` and
+   `Subtract` to `value` in one group, and delegates `Compare` to `value` on its own; nothing about `by` reaches
+   back to `Show`. A group needs at least one trait and a `by` after it - `(Show)` alone is the same as writing
+   `Show`, and a group without `by` is an error:
+
+   ```trb error
+   trait Loud {
+     fn shout(): String
+   }
+
+   trait Quiet {
+     fn whisper(): String
+   }
+
+   type Wrapper with (Loud, Quiet) {
+     value: Int
+
+     fn shout(): String {
+       "loud"
+     }
+
+     fn whisper(): String {
+       "quiet"
+     }
+   }
+   // error: A group without `by` is an error: write the traits without parentheses
+   ```
+
+   A `with` list separates its entries with commas only - `&`, which combines traits into one type everywhere a
+   type is expected ([Trait intersections](intersections.md)), is not a separator here and is a parse error that
+   names the fix:
+
+   ```trb error
+   type Wrapper with Add & Subtract by value {
+     value: Int
+   }
+   // error: Traits delegated to the same field are grouped with parentheses, not `&`: write `(Add, Subtract) by value`
+   ```
 
    ```trb error
    trait Loud {

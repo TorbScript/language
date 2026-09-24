@@ -245,7 +245,7 @@ group "An operator whose trait is implemented more than once" {
     const source = "trait Draw<Surface> \{\n  fn draw(on: Surface): Int\n\}\n\n"
       + "type Paper \{\n  weight: Int\n\}\n\n"
       + "type Screen \{\n  pixels: Int\n\}\n\n"
-      + "type Sketch with Draw<Paper> & Draw<Screen> \{\n  ink: Int\n\n"
+      + "type Sketch with Draw<Paper>, Draw<Screen> \{\n  ink: Int\n\n"
       + "  fn draw(on: Paper): Int \{\n    ink\n  \}\n\n"
       + "  fn draw(on: Screen): Int \{\n    ink\n  \}\n\}\n"
     assert(problems(source) == ["`draw` is already declared in `Sketch`"])
@@ -272,11 +272,14 @@ group "An operator whose trait is implemented more than once" {
     )
   }
 
-  test "an `&` group is the same `with` list, so it is read the same way" {
+  test "`&` in the `with` list is rejected, and the type is still checked as the comma list it names" {
     const source = "type Twice with Indexed<Int, Int> & Indexed<Bounds<Int>, Twice> \{\n"
       + "  fn at(key: Int): Int \{\n    key\n  \}\n\}\n"
     assert(
-      problems(source) == ["`Twice` comes with `Indexed` more than once, and `at` is the body of the first one"]
+      problems(source) == [
+        "A `with` list separates entries with commas, not `&`: write `with Indexed<Int, Int>, Indexed<Bounds<Int>, Twice>`",
+        "`Twice` comes with `Indexed` more than once, and `at` is the body of the first one",
+      ]
     )
   }
 

@@ -60,7 +60,7 @@ print "{square} {square.describe()}"
   static <name>: <Type> = <value>           a constant with a default value
 }
 
-type <Name> with <Trait>, <Trait> & <Trait> by <field> { ... }
+type <Name> with <Trait>, (<Trait>, <Trait>) by <field> { ... }
 extend <Name> with <Trait> { ... }
 extend <Name> { ... }
 extend<Item> List<Item> with <Trait> where Item: <Bound> { ... }
@@ -232,10 +232,10 @@ fn sum<Item: Add>(values: List<Item>)       a bound
     `` `valueOf` fits more than one implementation here ``.
 
 14. **`by` delegates a trait to the one field of a single-field type**, and it binds to the element of the `with` list
-    directly in front of it - which may be an `&` group - never to the whole list.
+    directly in front of it - a trait alone, or a parenthesised group of them - never to the whole list.
 
     ```trb
-    type Seconds with Show, Add & Subtract by value, Compare by value {
+    type Seconds with Show, (Add, Subtract) by value, Compare by value {
       value: Int
     }
 

@@ -200,7 +200,7 @@ type Square {
   side: Float
 }
 
-type Canvas with Draw<Circle> & Draw<Square> {
+type Canvas with Draw<Circle>, Draw<Square> {
   scale: Float
 
   fn draw(shape: Circle): String {

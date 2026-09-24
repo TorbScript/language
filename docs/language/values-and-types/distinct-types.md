@@ -36,7 +36,7 @@ print raw
 ## Syntax
 
 ```text
-type Name with Trait, Trait & Trait by field, Trait by field { ... }
+type Name with Trait, (Trait, Trait) by field, Trait by field { ... }
 ```
 
 ## Rules

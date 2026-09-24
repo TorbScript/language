@@ -539,13 +539,15 @@ public type EntityId = Int
 
 There is no separate concept for this. A distinct type is a `type` with a single field, and `by` forwards traits to
 that field so the wrapper does not cost boilerplate. `by` binds to **the one element of the `with` list directly in
-front of it** - which may be an `&` group - never to the whole list, so a mixed line says exactly what happens to
-each trait:
+front of it** - a trait alone, or a parenthesised group of them - never to the whole list, so a mixed line says
+exactly what happens to each trait. A `with` list separates its entries with commas only; `&` (which combines traits
+into one type everywhere a type is expected, `where Item: Hash & Equals`) is not a separator here and is a parse
+error that names the fix, either `with Y, Z` or `(Y, Z) by f`:
 
 ```trb
 type UserId { value: Int }
 
-type Seconds with Show, Add & Subtract by value, Compare by value {
+type Seconds with Show, (Add, Subtract) by value, Compare by value {
   value: Int
 }
 
@@ -2737,7 +2739,7 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
 - The capabilities of a `Sandbox` are a closed list defined by the runtime. What a library wants to offer to a script
   goes through the receiver type, which already is the whitelist.
 - Literal defaults (`Int64`, `Float64`) are fixed and do not follow a shadowed `Int` alias
-- No `opaque alias`. Distinct types are single-field `type`s plus trait delegation (`with Add & Compare by value`).
+- No `opaque alias`. Distinct types are single-field `type`s plus trait delegation (`with (Add, Compare) by value`).
   Scala-3-style opaque types (transparent inside the declaring scope, opaque outside) make type identity depend on
   the scope, which hurts error messages and the coherence rules of `extend`. Go-style `type X Y` would need its own
   rules for construction, visibility and which operations carry over - the `type` already has all of them.
@@ -2964,10 +2966,16 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
   pipeline; the collector `joining` stays for a prefix, a suffix, or a step inside `collect`.
 - `&` instead of `+` for an intersection of traits (was: `+`, from Rust).
 - `by` belongs to one element of the `with` list and needs a single-field type (was: one `by` for the whole list).
-  `with Show, Add & Subtract by value, Compare by value` derives `Show` and delegates the other two, each to
-  `value`; an element may be an `&` group, so the group delegates together. The old form (`with A, B by field` for
-  the whole list) is gone rather than kept as a shorthand, so that "which trait goes where" is always in the line
-  and never implied by what the type happens to have.
+  `with Show, (Add, Subtract) by value, Compare by value` derives `Show` and delegates the other two, each to
+  `value`; an element may be a parenthesised group, so the group delegates together. The old form (`with A, B by
+  field` for the whole list) is gone rather than kept as a shorthand, so that "which trait goes where" is always in
+  the line and never implied by what the type happens to have.
+- A `with` list separates its entries with commas only; several traits delegated to the same field are grouped with
+  parentheses instead of `&` (decided 2026-09-24, was: `&` meant the same as `,` in a `with` list, and also grouped a
+  delegation, e.g. `with Show, Add & Subtract by value`). `&` still combines traits everywhere a type is expected
+  (`where Item: Hash & Equals`); reusing it as the `with` list's separator made one token mean two different things
+  depending on position, and reading a mixed line (derives, delegates alone, delegates as a group) needed the
+  precedence of `,` and `&` to be kept in your head. `&` in a `with` list is now a parse error that names the fix.
 - **A name is ASCII** (`[A-Za-z_][A-Za-z0-9_]*`), while strings, char literals and comments stay full Unicode. An
   identifier is then the same text everywhere - in an editor, in a terminal, in every back end's symbol table - and
   there is no Unicode normalization question to answer about whether two names are the same name. A letter from

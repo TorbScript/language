@@ -65,8 +65,8 @@ place data lives and there is no diamond to resolve. `&` builds an intersection 
 
 **Because inheriting an implementation couples a type to decisions its parent might change.** The fragile base class
 problem - a subclass breaking because its parent's internals changed underneath it, even though the public interface
-did not - only exists where a child reuses a parent's *implementation* by construction. Delegation (`with Add &
-Subtract by value`) reuses an implementation the same way inheritance would, but explicitly and only for the traits
+did not - only exists where a child reuses a parent's *implementation* by construction. Delegation (`with (Add,
+Subtract) by value`) reuses an implementation the same way inheritance would, but explicitly and only for the traits
 named: nothing is inherited that was not asked for, and nothing is coupled beyond the field the delegation names.
 
 **Because a trait-typed value stays a value, not a pointer to something with an unknown, possibly larger shape.** A
@@ -104,7 +104,7 @@ a base type or any data at all.
 an inherited method table:
 
 ```trb check
-type Seconds with Show, Add & Subtract by value {
+type Seconds with Show, (Add, Subtract) by value {
   value: Int
 }
 

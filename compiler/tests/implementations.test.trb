@@ -355,7 +355,7 @@ group "A supertrait a trait promises for itself" {
 
 group "Delegation with `by`" {
   test "`by field` forwards every required member, and the default members come from the trait (gap 14)" {
-    const source = "type Meters with Add<Meters, Meters> & Compare by value \{\n  value: Float\n\}\n\n"
+    const source = "type Meters with (Add<Meters, Meters>, Compare) by value \{\n  value: Float\n\}\n\n"
       + inBody("  const sum = Meters(1.0) + Meters(2.0)\n  const longer = Meters(1.0).max(Meters(2.0))")
     assert problems(source).isEmpty()
     const found = probe source
@@ -385,7 +385,7 @@ group "Delegation with `by`" {
 
   test "`by` binds to one element of the `with` list: derived, a delegated group, a delegated trait alone, and a hand-written one all coexist" {
     const source = "trait Named \{\n  fn name(): String\n\}\n\n"
-      + "type Seconds with Show, Add<Seconds, Seconds> & Subtract<Seconds, Seconds> by value, Compare by value, Named \{\n"
+      + "type Seconds with Show, (Add<Seconds, Seconds>, Subtract<Seconds, Seconds>) by value, Compare by value, Named \{\n"
       + "  value: Int\n\n  fn name(): String \{\n    \"seconds\"\n  \}\n\}\n\n"
       + inBody(
         "  const sum = Seconds(1) + Seconds(2)\n"

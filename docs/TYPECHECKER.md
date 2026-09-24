@@ -576,7 +576,7 @@ public type Implementation {
   module: ModuleId
   package: PackageId
   members: Map<String, SymbolId>
-  /** `with Add & Compare by value` */
+  /** `with (Add, Compare) by value` */
   delegate: SymbolId?
   origin: ImplementationOrigin      // .Declared, .Derived, .Delegated, .Native
 }
@@ -932,7 +932,7 @@ The catalogue (the ~40 that matter):
 | Supertrait | ``` `Compare` requires `Equals`. `Square` has neither an `equals` nor a derived one ``` |
 | Orphan | ``` `extend String with Show`: neither `String` nor `Show` belongs to this package ``` |
 | Overlap | ``` `String` already implements `Show` (in `std/prelude/src/convert`) ``` |
-| Not delegated | ``` `Meters` has no `multiply`: `Multiply` was not forwarded by `with Add & Subtract & Compare by value` ``` |
+| Not delegated | ``` `Meters` has no `multiply`: `Multiply` was not forwarded by `with (Add, Subtract, Compare) by value` ``` |
 | Not object-safe here | ``` `equals` cannot be called on a `Show & Hash` value: it needs two values of the same type ``` |
 | List `+` | ``` `List<Encode>` has no `+`: lists have no `Add`. Use `addedAll` ``` |
 | `?` conversion | ``` `IoError` does not convert into `AppError`. Add a case that wraps it, or `extend AppError with From<IoError>` ``` |

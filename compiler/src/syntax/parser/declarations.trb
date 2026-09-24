@@ -3,6 +3,7 @@
  * `use` and `foreign`, and [parseFunction] for the parameter list and body a function and a member share.
  */
 
+use Span from "../source"
 use TokenKind, Keyword, TextPart, staticKeyword from "../token"
 use Declaration, DeclarationKind, Modifiers, Visibility, UseDeclaration, UseItem, UseItems, UseSource from "../ast"
 use FunctionDeclaration, Parameter, GenericParameter, WhereClause, TypeReference, TraitClause from "../ast"
@@ -303,15 +304,17 @@ fn parseWhereClauses(var parser: Parser): List<WhereClause> {
 
 /**
  * `with Add, Compare`, for a `trait`'s supertraits and an `extend`'s implementations - neither has a field of its
- * own to delegate to, so a stray `by` is rejected here rather than parsed and ignored.
+ * own to delegate to, so a stray `by` is rejected here rather than parsed and ignored, and a parenthesised group
+ * (only meaningful in front of a `by`) is the same error a delegated group without `by` is. Entries are separated
+ * by `,` only: `&` is a bound or a type position's intersection, never a `with` list's separator.
  */
 fn parseTraitList(var parser: Parser): List<TypeReference> {
   if !parser.eatKeyword(Keyword.With) {
     return []
   }
-  var traits = [parseType(parser)]
+  var traits = parseWithListEntry parser
   while parser.eat(TokenKind.Comma) {
-    traits.append parseType(parser)
+    traits.appendAll parseWithListEntry(parser)
   }
   if parser.isAtWord("by") {
     parser.errorHere "`by` delegates to a field: only a `type` has fields to name"
@@ -322,8 +325,32 @@ fn parseTraitList(var parser: Parser): List<TypeReference> {
 }
 
 /**
- * `with Show, Add & Subtract by value, Compare by value`: `by` binds to the one element directly in front of it,
- * which may be an `&` group.
+ * One entry of a `with` list that never delegates. `&` between traits is the mistake [reportAmpersandTypo] names,
+ * and a parenthesised group - only meaningful in front of a `by` this list never has - is the same error a
+ * delegated group without `by` is.
+ */
+fn parseWithListEntry(var parser: Parser): List<TypeReference> {
+  if parser.isAt(TokenKind.ParenOpen) {
+    const group = parseParenthesizedTraitGroup parser
+    parser.error "A group without `by` is an error: write the traits without parentheses", group.span
+    return group.items
+  }
+  const start = parser.span()
+  var items = [parseSingleType(parser)]
+  const sawTypo = isAtSeparatorTypo parser
+  while eatSeparatorTypo(parser) {
+    items.append parseSingleType(parser)
+  }
+  if sawTypo {
+    reportAmpersandTypo parser, items, None, start.to(parser.previousSpan())
+  }
+  items
+}
+
+/**
+ * `with Show, (Add, Subtract) by value, Compare by value`: `by` binds to the one element directly in front of it,
+ * the trait or the parenthesised group. A group is written `(Trait, Trait)`; `&` between traits is the mistake
+ * [reportAmpersandTypo] names, whether or not a `by` follows.
  */
 fn parseDelegatedTraitList(var parser: Parser): List<TraitClause> {
   if !parser.eatKeyword(Keyword.With) {
@@ -337,13 +364,90 @@ fn parseDelegatedTraitList(var parser: Parser): List<TraitClause> {
 }
 
 fn parseTraitClause(var parser: Parser): TraitClause {
-  const capability = parseType parser
+  if parser.isAt(TokenKind.ParenOpen) {
+    return parseGroupedTraitClause parser
+  }
+  const start = parser.span()
+  var items = [parseSingleType(parser)]
+  const sawTypo = isAtSeparatorTypo parser
+  while eatSeparatorTypo(parser) {
+    items.append parseSingleType(parser)
+  }
+  const itemsSpan = start.to parser.previousSpan()
   var delegate: Name? = None
   if parser.isAtWord("by") {
     parser.bump()
     delegate = Some parser.name()
   }
-  TraitClause capability, delegate
+  if sawTypo {
+    reportAmpersandTypo parser, items, delegate, itemsSpan
+  }
+  TraitClause combineTraitItems(items, itemsSpan), delegate
+}
+
+/** `(Add, Subtract, Compare) by value`: several traits delegated together to the same field. */
+fn parseGroupedTraitClause(var parser: Parser): TraitClause {
+  const group = parseParenthesizedTraitGroup parser
+  var delegate: Name? = None
+  if parser.isAtWord("by") {
+    parser.bump()
+    delegate = Some parser.name()
+  } else {
+    parser.error "A group without `by` is an error: write the traits without parentheses", group.span
+  }
+  TraitClause combineTraitItems(group.items, group.span), delegate
+}
+
+/** `(Trait, Trait)`: the parenthesised part of a group, before anything decides what a `by` or its absence means. */
+fn parseParenthesizedTraitGroup(var parser: Parser): (items: List<TypeReference>, span: Span) {
+  const start = parser.span()
+  parser.bump()
+  const items = parser.commaSeparated TokenKind.ParenClose, parseSingleType
+  const span = start.to parser.previousSpan()
+  if items.isEmpty() {
+    parser.error "A group needs at least one trait: `(Add, Subtract) by value`", span
+  }
+  (items: items, span: span)
+}
+
+fn isAtSeparatorTypo(parser: Parser): Bool {
+  parser.isAt(TokenKind.Ampersand) || parser.isAt(TokenKind.Plus)
+}
+
+fn eatSeparatorTypo(var parser: Parser): Bool {
+  parser.eat(TokenKind.Ampersand) || parser.eat(TokenKind.Plus)
+}
+
+/** `with Y & Z` -> "write `with Y, Z`"; `Y & Z by f` -> "write `(Y, Z) by f`". */
+fn reportAmpersandTypo(var parser: Parser, items: List<TypeReference>, delegate: Name?, at: Span) {
+  const joined = joinedTraitTexts parser, items
+  match delegate {
+    Some(field) => {
+      const message = "Traits delegated to the same field are grouped with parentheses, not `&`: write `({joined}) by {field.text}`"
+      parser.error message, at
+    }
+    None => parser.error "A `with` list separates entries with commas, not `&`: write `with {joined}`", at
+  }
+}
+
+/** `Y, Z` for the items of an `&`-typo, read back from the source rather than reprinted from the tree. */
+fn joinedTraitTexts(parser: Parser, items: List<TypeReference>): String {
+  var joined = ""
+  for item in items {
+    if !joined.isEmpty() {
+      joined = joined + ", "
+    }
+    joined = joined + parser.text(item.span)
+  }
+  joined
+}
+
+/** One or several trait items as the `TypeReference` a [TraitClause] carries. */
+fn combineTraitItems(items: List<TypeReference>, at: Span): TypeReference {
+  if items.length() == 1 {
+    return items[0]
+  }
+  TypeReference TypeKind.Intersection(items), at
 }
 
 fn parseTypeDeclaration(var parser: Parser): DeclarationKind {

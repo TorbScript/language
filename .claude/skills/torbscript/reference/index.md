@@ -222,7 +222,7 @@ that answers the question. A page marked (planned) describes a feature that does
 ## language/traits
 
 - `language/traits/coherence.md` - **Coherence and blanket implementations** (reference): A package may implement a trait for a type only if it owns the type, the trait, or a type named as an argument of the trait, and two implementations of one trait may never overlap.
-- `language/traits/delegation.md` - **Delegation with by** (reference): by forwards a trait's required members to the one field of a single-field type, binding only to the trait or & group written directly in front of it.
+- `language/traits/delegation.md` - **Delegation with by** (reference): by forwards a trait's required members to the one field of a single-field type, binding only to the trait or parenthesised group written directly in front of it.
 - `language/traits/extend.md` - **extend** (reference): extend adds constants and functions to a type after its declaration, with a trait or without one, never adds a field or a case, and is named by the file that uses it when it targets a type of another package.
 - `language/traits/index.md` - **Traits** (index): How a capability is declared, how a type comes with one, and how a trait is used as a type.
 - `language/traits/intersections.md` - **Trait intersections** (reference): The & operator combines two or more traits into one type, in a parameter, a field or a bound, and only traits can be combined this way.

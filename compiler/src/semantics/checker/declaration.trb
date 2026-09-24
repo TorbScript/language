@@ -842,7 +842,7 @@ fn requireOneNamespace(
             + " writes, so one of the two needs another name"
         )
       }
-      // `type Sketch with Draw<Paper> & Draw<Screen>` writing two `draw`s: the two members belong to two
+      // `type Sketch with Draw<Paper>, Draw<Screen>` writing two `draw`s: the two members belong to two
       // implementations and not to one body, and the form that has a body per implementation is `extend`
       if const Some(capability) = repeated {
         problem = problem.withNote(
@@ -924,7 +924,7 @@ fn requireOneBodyPerInstantiation(var checker: Checker, module: ModuleId, typeDe
   }
 }
 
-/** The trait references one `with` element writes: `Add & Subtract` is two, `Draw<Paper>` is one. */
+/** The trait references one `with` element writes: `(Add, Subtract)` is two, `Draw<Paper>` is one. */
 fn traitReferencesOf(reference: TypeReference): List<TypeReference> {
   if const .Intersection(parts) = reference.kind {
     var found: List<TypeReference> = []
@@ -936,7 +936,7 @@ fn traitReferencesOf(reference: TypeReference): List<TypeReference> {
   [reference]
 }
 
-/** The trait a `with` list names twice with different arguments, if there is one: `Draw<Paper> & Draw<Screen>`. */
+/** The trait a `with` list names twice with different arguments, if there is one: `Draw<Paper>, Draw<Screen>`. */
 fn repeatedTraitOf(traits: List<TraitClause>): String? {
   var seen: Map<String, Bool> = [:]
   for clause in traits {
@@ -950,7 +950,7 @@ fn repeatedTraitOf(traits: List<TraitClause>): String? {
   None
 }
 
-/** The head names one `with` element writes: `Add & Subtract` is two, `Draw<Paper>` is one. */
+/** The head names one `with` element writes: `(Add, Subtract)` is two, `Draw<Paper>` is one. */
 fn traitHeadsOf(reference: TypeReference): List<String> {
   match reference.kind {
     .Named(path, _) => {
