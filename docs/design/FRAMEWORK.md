@@ -1,7 +1,7 @@
 # The Application Framework
 
-**Status: planned** — nothing of it exists, and it comes last in milestone 10 ([ROADMAP.md](../ROADMAP.md)), after
-the network, HTTP and the formats it stands on. This record is a stub that keeps the guideline decided on 2026-09-19;
+**Status: planned** — nothing of it exists, and it comes late in milestone 10 ([ROADMAP.md](../ROADMAP.md)), after
+the network, HTTP and the formats it stands on, and before language models, agents and the engine packages. This record is a stub that keeps the guideline decided on 2026-09-19;
 the design comes before any of it is built.
 
 **`std` provides an application framework with the scope of Spring Boot or Symfony - dependency injection, a

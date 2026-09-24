@@ -1,7 +1,8 @@
 # Entities, Components and Scenes
 
 **Status: proposed** — there is no `std/ecs` or `std/scene` yet; `examples/ecs-probe` and `examples/ecs-probe-2` are
-the probes, and the slices of section 13 wait on the language gaps of section 12.
+the probes, and the slices of section 13 wait on the language gaps of section 12. The engine packages are the last part
+of milestone 10 ([ROADMAP.md](../ROADMAP.md)), after the application framework.
 
 An open set of component types that **packages bring with them**, dense typed storage, queries that are ordinary
 pipelines, a behaviour tree of trait values above the data, and scenes that are TorbScript. This is the specification

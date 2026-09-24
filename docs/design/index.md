@@ -30,6 +30,7 @@ documents:
   - CLI.md
   - COMPUTE.md
   - FRAMEWORK.md
+  - LANGUAGE-MODELS.md
   - JAVASCRIPT-AND-PHP.md
   - ../ROADMAP.md
 ---
@@ -84,6 +85,7 @@ the reasons behind a decision that no longer needs a whole record, which belong 
 - **[Command Lines](CLI.md)**
 - **[Tensors, Gradients and the GPU](COMPUTE.md)**
 - **[The Application Framework](FRAMEWORK.md)**
+- **[Language Models and Agents](LANGUAGE-MODELS.md)**
 - **[JavaScript and PHP Back Ends](JAVASCRIPT-AND-PHP.md)**
 - **[Roadmap](../ROADMAP.md)**
 

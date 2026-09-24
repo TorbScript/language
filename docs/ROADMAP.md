@@ -97,21 +97,46 @@ the natives that exist.** In this order, because each part stands on the one bef
    [design/WEB.md](design/WEB.md).
 3. **Formats**, as packages on `Encode` and `Decode` ([design/ENCODING.md](design/ENCODING.md) section 9): `json`
    exists, then `toml`, `xml` and `html` (the document formats, each with its tree), JSON Schema and JSON Patch, in the
-   versions that are in use. `yaml`, `regex` and `markdown` come earlier
+   versions of the table below. `yaml`, `regex` and `markdown` come earlier
    ([design/TEXT-FORMATS.md](design/TEXT-FORMATS.md)).
-4. **The engine packages**: `std/ecs`, `std/scene`, `std/transform`, `std/collision`, `std/animation`, `std/render` and
-   `std/input`, independent of any one graphics interface ([design/ECS.md](design/ECS.md)). `std/linear` and
-   `std/geometry`, which they stand on, exist ([design/LINEAR.md](design/LINEAR.md)).
-5. **Computation and machine learning** on the same foundation: `std/tensor`, `std/gradient`, `std/gpu` and
-   `std/learning` ([design/COMPUTE.md](design/COMPUTE.md)).
-6. **The application framework**, last: the scope of Spring Boot or Symfony, wired at compile time through traits,
+4. **Computation and machine learning** on `std/linear` and `std/geometry`, which exist
+   ([design/LINEAR.md](design/LINEAR.md)): `std/tensor`, `std/gradient`, `std/gpu` and `std/learning`
+   ([design/COMPUTE.md](design/COMPUTE.md)).
+5. **The application framework**: the scope of Spring Boot or Symfony, wired at compile time through traits,
    constructors and a module DSL instead of annotations and reflection ([design/FRAMEWORK.md](design/FRAMEWORK.md)).
+6. **Language models and agents**: `std/language-model` with clients for the important providers over one streamed
+   protocol of messages and threads, and `std/agent`, an agent framework after the model of pi
+   ([design/LANGUAGE-MODELS.md](design/LANGUAGE-MODELS.md)).
+7. **The engine packages**, last: `std/ecs`, `std/scene`, `std/transform`, `std/collision`, `std/animation`,
+   `std/render` and `std/input`, independent of any one graphics interface ([design/ECS.md](design/ECS.md)). They
+   share `std/linear`, `std/geometry` and `std/gpu` with the computation of part 4.
+
+### Which versions a format supports
+
+**A format package reads its current version and every earlier version that a large share of the documents in
+circulation still uses, and writes the current version unless the caller asks for an earlier one** (the consumer of a
+document is often older than its producer). The versions of one format share one model: an earlier version is read
+into the model of the current one, not into a second set of types. A version that is no longer written is not
+supported, and neither is a dialect with its own name.
+
+| Format | Supported | Not supported |
+|---|---|---|
+| YAML | 1.2, 1.1 ([design/TEXT-FORMATS.md](design/TEXT-FORMATS.md)) | 1.0 |
+| JSON | RFC 8259, and JSON Lines as a stream of values | JSON5, HJSON |
+| TOML | 1.0 and every later 1.x | the 0.x drafts |
+| XML | 1.0 (fifth edition) with namespaces; a DTD's entities are read, an external entity is never fetched | 1.1, validation against a DTD |
+| HTML | the parsing algorithm of the WHATWG standard, which also reads older documents | a separate HTML 4 or XHTML parser (XHTML is XML) |
+| JSON Schema | 2020-12, 2019-09, draft 07 (draft 06 is read as 07), draft 04 (the dialect of OpenAPI 3.0 and Swagger 2.0) | draft 03 and older |
+| OpenAPI | 3.2, 3.1, 3.0; Swagger 2.0 is read into the 3.x model | writing Swagger 2.0 |
+| JSON Patch | RFC 6902, and JSON Merge Patch (RFC 7396) | |
+| Protocol Buffers | proto3, proto2 and the editions | |
+| Markdown | CommonMark with the tables of GitHub | other flavours |
 
 ## Packages designed outside the milestones
 
 | Package | What it is | Record | Waits for |
 |---|---|---|---|
-| `std/yaml` | YAML 1.2, core schema, without anchors, aliases and tags | [design/TEXT-FORMATS.md](design/TEXT-FORMATS.md) | nothing |
+| `std/yaml` | YAML 1.2 and 1.1 in full, anchors, aliases and tags included; a schema is an option, the target type resolves scalars | [design/TEXT-FORMATS.md](design/TEXT-FORMATS.md) | nothing |
 | `std/regex` | a `Regex` whose literal is checked by the compiler; RE2 semantics | [design/TEXT-FORMATS.md](design/TEXT-FORMATS.md) | nothing |
 | `std/markdown` | CommonMark, the document tree as a value | [design/RELEASE.md](design/RELEASE.md) slice 1 | `std/yaml` |
 | `std/random` | a seedable, splittable generator that is a value | [design/RANDOM.md](design/RANDOM.md) | nothing |
