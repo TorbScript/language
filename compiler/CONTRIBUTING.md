@@ -108,6 +108,18 @@ language *means* changes the page that says so - `docs check` names the page who
 
 ## Repository Operations
 
+**Commit messages** follow [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/):
+`<type>(<scope>): <summary>`, at most 100 characters, the summary in the imperative and lower case, a body after a
+blank line when the change needs one. The types are `feat`, `fix`, `perf`, `refactor`, `docs`, `test`,
+`build`, `ci`, `chore` and `revert`; `!` after the scope, or a `BREAKING CHANGE:` line in the body, marks a
+change that breaks a program. The scope is the part the change is about: `checker`, `parser`, `lower`, `backend`,
+`vm`, `repl`, `runtime`, `std/<package>`, `docs`, `tools`, `ci` - or none when it spans many.
+
+**The history is linear.** `main` has no merge commits: a branch lands rebased onto `main` (each of its commits a
+Conventional Commit that builds) or squashed into one commit, and `main` only moves forward. The two commits of a
+change that needs a seed refresh stay two commits. `sh tools/check-commits.sh <base>` checks a range - no merge
+commit, every subject a Conventional Commit - and CI runs it on every push and pull request.
+
 **The seed.** `seed/` holds `torb(.exe)` and `program.c`, is not in git, and exists only in the main checkout of this
 machine; a worktree has none and bootstraps with `TORB_SEED=<main checkout>/seed/torb.exe sh tools/bootstrap.sh` (a
 relative `TORB_SEED` works too). After a merge whose tier A is green, `sh tools/refresh-seed.sh` in the main checkout

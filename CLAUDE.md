@@ -57,6 +57,9 @@ Code rules, gates and repository operations: `compiler/CONTRIBUTING.md`.
   members as `fn area(): Int` (no `self` in the list) and `var fn` for mutation.
 - `docs/` is generated into `.claude/skills/torbscript`: after a docs change run
   `build/release/torb.exe docs skill docs .claude/skills/torbscript` and commit both (`--check` is a tier A gate).
+- Commit messages are Conventional Commits (`feat(vm): ...`, `fix(checker): ...`), at most 100 characters, and the
+  history is linear: no merge commits - a branch lands rebased or squashed (`compiler/CONTRIBUTING.md`, "Repository
+  Operations"). CI checks both. A worktree takes a newer `main` with `git rebase main`, not `git merge`.
 - Questions and requests go through the chat. There is no to-do file in the repository: what is planned is in
   `docs/ROADMAP.md` and the design records under `docs/design/`, what is undecided in CONCEPT's "Open Questions".
 

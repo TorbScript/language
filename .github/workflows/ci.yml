@@ -26,6 +26,30 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  commits:
+    name: commit messages
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD_OF_PULL: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # What the push or the pull request adds: linear, and every subject a Conventional Commit
+          if [ "$EVENT" = "pull_request" ]; then
+            sh tools/check-commits.sh "$BASE" "$HEAD_OF_PULL"
+          elif git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            sh tools/check-commits.sh "$BEFORE" HEAD
+          else
+            echo "a new branch or a force push: there is no earlier commit to compare against"
+          fi
+
   scope:
     name: what the change touches
     runs-on: ubuntu-latest
