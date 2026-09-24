@@ -1,0 +1,218 @@
+/**
+ * The HTTP/1.1 server: a listener, a handler that is a function from a request to a task of a response, and one task
+ * per connection that serves its requests one after another (docs/design/NETWORK.md section 8).
+ */
+
+use ArrayList from "std/collections"
+use TcpListener, TcpStream, SocketAddress from "std/network"
+use Body, Method, Request, Response, Status from "./message"
+use Connection, FixedReader, ChunkedReader from "./connection"
+use Framing, headLines, requestLineOf, fieldsOf, requestFraming, keepsAlive from "./parse"
+use writeResponse from "./write"
+use HttpError from "./error"
+
+/** What serves a request: a function from the request to a task of the response. A web framework is one of these. */
+public type Handler = (request: Request) => Task<Result<Response, HttpError>>
+
+/**
+ * What a server allows a client, each against an attack of its own. Times are milliseconds, because a field's default
+ * is a constant and a `Duration` is none.
+ */
+public type ServerLimits {
+  /** The request line and every field together: nginx allows 8 KiB a line and 32 KiB in all; a browser with many cookies needs more. */
+  headBytes: Int = 65536
+  /** Fields of one head: the count Go and Node refuse above. */
+  headFields: Int = 100
+  /** The time from the first byte of a request to the end of its head: a client that sends it a byte a minute (slowloris) is cut off. */
+  headMilliseconds: Int = 10000
+  /** How long a kept-alive connection may wait for its next request. */
+  idleMilliseconds: Int = 60000
+  /** What of a request's body the handler did not read is read and dropped up to this; more closes the connection. */
+  drainBytes: Int = 65536
+}
+
+/**
+ * An HTTP/1.1 server. It listens as soon as it is made; [Server.serve] accepts connections until its task is cancelled,
+ * and every connection is a task of its own, on the worker that accepted it.
+ *
+ *     fn hello(request: Request): Task<Result<Response, HttpError>> {
+ *       Ok Response.text("hello from {request.path()}")
+ *     }
+ *
+ *     const server = Server.listen(SocketAddress(IpAddress.loopback, 8080), hello)?
+ *     server.serve().await()?
+ *
+ * A handler that fails is answered with the status its failure names where it names one - the body it read was cut
+ * short, not UTF-8 or not the JSON asked for - and `500 Internal Server Error` otherwise; the failure itself is not sent
+ * to the client. A request the parser refuses is answered with the status its failure names
+ * ([HttpError.answerStatus]), and the connection is closed.
+ */
+public shared type Server with Close {
+  private listener: TcpListener
+  private handler: Handler
+  private limits: ServerLimits
+
+  /** A server listening on `address`; port 0 asks the system for a free one, which [Server.localAddress] then says. */
+  static fn listen(address: SocketAddress, handler: Handler, limits: ServerLimits = ServerLimits()): Result<Server, HttpError> {
+    const listener = TcpListener.listen(address)?
+    Ok Server(listener, handler, limits)
+  }
+
+  /** Where it listens. */
+  fn localAddress(): SocketAddress {
+    listener.localAddress()
+  }
+
+  /** Accepts connections and serves each in a task of its own, until this task is cancelled. */
+  fn serve(): Task<Result<Void, HttpError>> {
+    loop {
+      const stream = listener.accept().await()?
+      const _ = serveConnection stream, handler, limits
+    }
+  }
+
+  /** Accepts one connection and serves it to its end: what a test wants. */
+  fn serveOne(): Task<Result<Void, HttpError>> {
+    const stream = listener.accept().await()?
+    serveConnection(stream, handler, limits).await()
+  }
+
+  /** Nothing of its own: the listener closes when the server is gone. */
+  var fn close() {}
+}
+
+/**
+ * Serves the requests of one connection, one after another, until the client closes it, a response closes it, or the
+ * connection waits longer than the limits allow.
+ */
+fn serveConnection(stream: TcpStream, handler: Handler, limits: ServerLimits): Task<Result<Void, HttpError>> {
+  const connection = Connection.of stream
+  const remote = stream.remoteAddress().ok()
+  loop {
+    // The next request's first byte, within the idle time
+    if !connection.hasBuffered() {
+      var waiting = connection.fill()
+      match waiting.within(limits.idleMilliseconds.milliseconds()).await() {
+        Ok(Ok(true)) => {}
+        Ok(Ok(false)) => {
+          return Ok void
+        }
+        Ok(Fail(_)) => {
+          return Ok void
+        }
+        Fail(_) => {
+          connection.shutdown()
+          return Ok void
+        }
+      }
+    }
+    // The whole head, within the head time
+    var reading = connection.head limits.headBytes
+    const head = match reading.within(limits.headMilliseconds.milliseconds()).await() {
+      Ok(Ok(Some(found))) => found
+      Ok(Ok(None)) => {
+        return Ok void
+      }
+      Ok(Fail(problem)) => {
+        refuse(connection, problem).await()?
+        return Ok void
+      }
+      Fail(_) => {
+        refuse(connection, HttpError.timeout()).await()?
+        return Ok void
+      }
+    }
+    const request = match requestOf(head, connection, remote, limits) {
+      Ok(read) => read
+      Fail(problem) => {
+        refuse(connection, problem).await()?
+        return Ok void
+      }
+    }
+    const keepAlive = keepsAlive request.headers, request.version
+    const response = match handler(request).await() {
+      Ok(answer) => answer
+      Fail(problem) => failureResponse problem
+    }
+    // What the handler did not read of the body is read here, up to a limit; more than that closes the connection
+    const drained = request.body.bytes(limit: limits.drainBytes).await().isOk()
+    const keepOpen = writeResponse(connection, response, request.method, request.version, !keepAlive || !drained).await()?
+    if !keepOpen {
+      closeGently(connection).await()?
+      return Ok void
+    }
+  }
+}
+
+/** The request a head describes, with a body that reads from the connection as its framing says. */
+fn requestOf(
+  head: ArrayList<UInt8>,
+  connection: Connection,
+  remote: SocketAddress?,
+  limits: ServerLimits,
+): Result<Request, HttpError> {
+  const lines = headLines(head)?
+  const line = requestLineOf(lines[0])?
+  const headers = fieldsOf(lines[1..lines.length()], limits.headFields)?
+  if line.version == "HTTP/1.1" && headers.all("Host").length() != 1 {
+    return Fail HttpError.malformed("an HTTP/1.1 request has exactly one `Host`")
+  }
+  const body = match requestFraming(headers, line.version)? {
+    .Fixed(length) => Body.of FixedReader.of(connection, length), length: Some(length)
+    .Chunked => Body.of ChunkedReader.of(connection)
+    .Empty => Body.empty()
+    .UntilEnd => Body.empty()
+  }
+  Ok Request(line.method, line.target, headers, body, remote: remote, version: line.version)
+}
+
+/**
+ * What a client is answered where the handler failed: the status the failure names - the request was malformed, its
+ * body cut short or not the JSON asked for - and `500` otherwise, with the phrase of the status as the whole body. The
+ * failure itself is the server's business and never sent: it may name a file, a query or a secret.
+ */
+fn failureResponse(problem: HttpError): Response {
+  const status = Status.of(problem.answerStatus() ?? 500).ok() ?? Status.internalServerError
+  Response.text "{status}\n", status: status
+}
+
+/**
+ * Answers a request the server could not read with the status its failure names, and ends the connection. Where the
+ * failure names none - the connection broke - there is nobody to answer.
+ */
+fn refuse(connection: Connection, problem: HttpError): Task<Result<Void, HttpError>> {
+  if const Some(code) = problem.answerStatus() {
+    const status = Status.of(code)?
+    const answer = Response.text "{problem}\n", status: status
+    const _ = writeResponse(connection, answer, Method.Get, "HTTP/1.1", true).await()
+  }
+  closeGently(connection).await()
+}
+
+/**
+ * Ends the writing half, then reads and drops what the client still sends - for a second at most, and 256 KiB at most -
+ * before the connection closes. A socket closed with bytes unread is reset by the system, and a reset can destroy the
+ * answer on its way before the client read it: the lingering close every server does.
+ */
+fn closeGently(connection: Connection): Task<Result<Void, HttpError>> {
+  connection.shutdown()
+  var lingering = discardRest connection, 262144
+  const _ = lingering.within(1000.milliseconds()).await()
+  Ok void
+}
+
+/** Reads and drops at most `limit` bytes, until the peer ends its half. */
+fn discardRest(connection: Connection, limit: Int): Task<Result<Void, HttpError>> {
+  var discarded = 0
+  while discarded < limit {
+    match connection.take(65536).await()? {
+      Some(chunk) => {
+        discarded = discarded + chunk.length()
+      }
+      None => {
+        return Ok void
+      }
+    }
+  }
+  Ok void
+}

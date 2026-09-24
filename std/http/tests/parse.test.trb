@@ -1,0 +1,225 @@
+/**
+ * The HTTP/1.1 parser on its own, without a connection: the lines of a head, the request and status lines, the fields,
+ * the framing of a body and the size of a chunk - and every refusal of docs/design/NETWORK.md section 9 with the status a
+ * server answers it with. The imports are relative, because the interpreter resolves no package import at all and reads
+ * a module of `std/` only by its path.
+ */
+
+use test, group from "std/test"
+use ArrayList from "std/collections"
+use HttpError from "../src/error"
+use Method, Status, Headers from "../src/message"
+use Framing, headLines, requestLineOf, statusLineOf, fieldsOf, requestFraming, responseFraming, keepsAlive from "../src/parse"
+use chunkSize from "../src/connection"
+
+/** The bytes of `text`. */
+fn bytesOf(text: String): ArrayList<UInt8> {
+  ArrayList.from text.bytes()
+}
+
+/** The status a server answers a failure with, or 0 where the result is none. */
+fn answerOf<Value>(result: Result<Value, HttpError>): Int {
+  match result {
+    Ok(_) => 0
+    Fail(problem) => problem.answerStatus() ?? -1
+  }
+}
+
+/** The fields of a head given as its lines. */
+fn fields(lines: List<String>): Result<Headers, HttpError> {
+  fieldsOf lines, 100
+}
+
+group "the lines of a head" {
+  test "every line ends in CR LF, and the empty line ends the head" {
+    const lines = headLines bytesOf("GET / HTTP/1.1\r\nHost: a\r\n\r\n")
+    assert(lines.map({ _.length() }) == Ok(2))
+    assert(lines.map({ _[0] }) == Ok("GET / HTTP/1.1"))
+  }
+
+  test "a bare LF or a bare CR is malformed" {
+    assert(answerOf(headLines(bytesOf("GET / HTTP/1.1\nHost: a\r\n\r\n"))) == 400)
+    assert(answerOf(headLines(bytesOf("GET / HTTP/1.1\rHost: a\r\n\r\n"))) == 400)
+  }
+
+  test "bytes that are not UTF-8 are refused" {
+    var raw = bytesOf "GET / HTTP/1.1\r\nX: "
+    raw.append 255
+    raw.appendAll "\r\n\r\n".bytes()
+    assert(answerOf(headLines(raw)) == 400)
+  }
+}
+
+group "the request line" {
+  test "a method, a target and a version, one space apart" {
+    const line = requestLineOf "POST /users?id=7 HTTP/1.1"
+    assert(line.map({ _.method }) == Ok(Method.Post))
+    assert(line.map({ _.target }) == Ok("/users?id=7"))
+    assert(line.map({ _.version }) == Ok("HTTP/1.1"))
+  }
+
+  test "two spaces, a missing part, or a method that is no token is malformed" {
+    assert(answerOf(requestLineOf("GET  / HTTP/1.1")) == 400)
+    assert(answerOf(requestLineOf("GET /")) == 400)
+    assert(answerOf(requestLineOf("GE(T / HTTP/1.1")) == 400)
+    assert(answerOf(requestLineOf("GET / HTTP/1.1 ")) == 400)
+  }
+
+  test "another version of HTTP is not supported, and no version at all is malformed" {
+    assert(answerOf(requestLineOf("GET / HTTP/2.0")) == 505)
+    assert(answerOf(requestLineOf("GET / HTTP/0.9")) == 505)
+    assert(answerOf(requestLineOf("GET / SPDY/3")) == 400)
+  }
+}
+
+group "the method" {
+  test "a registered name is its case, and only an unregistered one is Other" {
+    assert(Method.of("GET") == Ok(Method.Get))
+    assert(Method.of("PATCH") == Ok(Method.Patch))
+    assert(Method.of("PROPFIND") == Ok(Method.Other("PROPFIND")))
+    assert(Method.of("get") == Ok(Method.Other("get")))
+    assert(Method.of("PROPFIND").map({ _.name() }) == Ok("PROPFIND"))
+  }
+
+  test "a name that is no token is malformed" {
+    assert(answerOf(Method.of("")) == 400)
+    assert(answerOf(Method.of("GE T")) == 400)
+  }
+}
+
+group "the status line" {
+  test "a version, three digits and a phrase that may be empty" {
+    assert(statusLineOf("HTTP/1.1 200 OK").map({ _.status }) == Ok(Status.ok))
+    assert(statusLineOf("HTTP/1.0 404 Not Found").map({ _.status.code() }) == Ok(404))
+    assert(statusLineOf("HTTP/1.1 599").map({ _.status.code() }) == Ok(599))
+    assert(statusLineOf("HTTP/1.1 204 ").map({ _.status.code() }) == Ok(204))
+  }
+
+  test "a status that is not three digits is malformed" {
+    assert(answerOf(statusLineOf("HTTP/1.1 20 OK")) == 400)
+    assert(answerOf(statusLineOf("HTTP/1.1 2000 OK")) == 400)
+    assert(answerOf(statusLineOf("HTTP/1.1 abc OK")) == 400)
+    assert(answerOf(statusLineOf("HTTP/1.1")) == 400)
+  }
+}
+
+group "the fields" {
+  test "a name and a value, the blanks around the value dropped, the order and the repetition kept" {
+    const read = fields(["Host: example.test", "Set-Cookie: a=1", "set-cookie:b=2", "X-Blank: \t spaced \t"])
+    assert(read.map({ _.get "host" }) == Ok(Some("example.test")))
+    assert(read.map({ _.all "Set-Cookie" }) == Ok(["a=1", "b=2"]))
+    assert(read.map({ _.get "x-blank" }) == Ok(Some("spaced")))
+  }
+
+  test "whitespace before the colon, a name that is no token, or no colon is malformed" {
+    assert(answerOf(fields(["Host : a"])) == 400)
+    assert(answerOf(fields(["Ho st: a"])) == 400)
+    assert(answerOf(fields(["Host"])) == 400)
+    assert(answerOf(fields([": a"])) == 400)
+  }
+
+  test "obsolete line folding is malformed" {
+    assert(answerOf(fields(["X-Long: one", " two"])) == 400)
+    assert(answerOf(fields(["X-Long: one", "\ttwo"])) == 400)
+  }
+
+  test "a control character in a value is malformed" {
+    assert(answerOf(fields(["X: a\u{1}b"])) == 400)
+    assert(answerOf(fields(["X: a\u{7F}b"])) == 400)
+  }
+
+  test "more fields than the limit is a head that is too large" {
+    var many: List<String> = []
+    for index in 0..101 {
+      many.append "X-{index}: {index}"
+    }
+    assert(answerOf(fields(many)) == 431)
+  }
+}
+
+group "the framing of a request" {
+  test "no length and no coding is no body" {
+    assert(requestFraming(Headers(), "HTTP/1.1") == Ok(Framing.Empty))
+  }
+
+  test "a length is a body of that many bytes" {
+    const read = fields(["Content-Length: 42"]).ok() ?? Headers()
+    assert(requestFraming(read, "HTTP/1.1") == Ok(Framing.Fixed(42)))
+  }
+
+  test "chunked is chunked" {
+    const read = fields(["Transfer-Encoding: Chunked"]).ok() ?? Headers()
+    assert(requestFraming(read, "HTTP/1.1") == Ok(Framing.Chunked))
+  }
+
+  test "a length and a coding together are refused: the classic smuggling vector" {
+    const read = fields(["Content-Length: 4", "Transfer-Encoding: chunked"]).ok() ?? Headers()
+    assert(answerOf(requestFraming(read, "HTTP/1.1")) == 400)
+  }
+
+  test "two lengths, a list of lengths, a sign or no digits are refused" {
+    for lines in [
+      ["Content-Length: 4", "Content-Length: 4"],
+      ["Content-Length: 4, 4"],
+      ["Content-Length: +4"],
+      ["Content-Length: -1"],
+      ["Content-Length: "],
+      ["Content-Length: 0x10"],
+    ] {
+      const read = fields(lines).ok() ?? Headers()
+      assert(answerOf(requestFraming(read, "HTTP/1.1")) == 400)
+    }
+  }
+
+  test "a coding other than exactly chunked is not implemented" {
+    for coding in ["gzip", "gzip, chunked", "chunked, gzip", "identity"] {
+      const read = fields(["Transfer-Encoding: {coding}"]).ok() ?? Headers()
+      assert(answerOf(requestFraming(read, "HTTP/1.1")) == 501)
+    }
+  }
+
+  test "an HTTP/1.0 request with a coding is malformed" {
+    const read = fields(["Transfer-Encoding: chunked"]).ok() ?? Headers()
+    assert(answerOf(requestFraming(read, "HTTP/1.0")) == 400)
+  }
+}
+
+group "the framing of a response" {
+  test "no body after HEAD, and none for 1xx, 204 and 304, whatever the fields say" {
+    const read = fields(["Content-Length: 10"]).ok() ?? Headers()
+    assert(responseFraming(read, Status.ok, Method.Head) == Ok(Framing.Empty))
+    assert(responseFraming(read, Status.noContent, Method.Get) == Ok(Framing.Empty))
+    assert(responseFraming(read, Status.notModified, Method.Get) == Ok(Framing.Empty))
+  }
+
+  test "without a length and a coding, the body ends with the connection" {
+    assert(responseFraming(Headers(), Status.ok, Method.Get) == Ok(Framing.UntilEnd))
+  }
+}
+
+group "persistence" {
+  test "HTTP/1.1 stays open unless it says close, HTTP/1.0 closes unless it says keep-alive" {
+    const closing = fields(["Connection: Keep-Alive, close"]).ok() ?? Headers()
+    const keeping = fields(["Connection: keep-alive"]).ok() ?? Headers()
+    assert keepsAlive(Headers(), "HTTP/1.1")
+    assert(!keepsAlive(closing, "HTTP/1.1"))
+    assert(!keepsAlive(Headers(), "HTTP/1.0"))
+    assert keepsAlive(keeping, "HTTP/1.0")
+  }
+}
+
+group "the size of a chunk" {
+  test "hexadecimal digits of either case, with extensions after a semicolon ignored" {
+    assert(chunkSize(bytesOf("1a")) == Ok(26))
+    assert(chunkSize(bytesOf("FF")) == Ok(255))
+    assert(chunkSize(bytesOf("0")) == Ok(0))
+    assert(chunkSize(bytesOf("10;name=value")) == Ok(16))
+  }
+
+  test "no digits, a stray character, or more than fifteen digits is malformed" {
+    assert(answerOf(chunkSize(bytesOf(""))) == 400)
+    assert(answerOf(chunkSize(bytesOf("x1"))) == 400)
+    assert(answerOf(chunkSize(bytesOf(";a"))) == 400)
+    assert(answerOf(chunkSize(bytesOf("1000000000000000"))) == 400)
+  }
+}

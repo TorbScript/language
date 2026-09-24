@@ -310,4 +310,49 @@ void torb_clock_prepare(void);
 /** One block copied at a crossing, for `torb_pool_statistics.copied` (text.c, list.c, map.c). From any thread. */
 void torb_pool_count_copy(void);
 
+/* ------------------------------------------------------------------------------------------ waiting on IO --- */
+
+/*
+ * A task that waits for an operation of the IO core (runtime/io.c, docs/design/NETWORK.md section 2). The operation is
+ * the IO core's; this is the part of it task.c reads, and the one lock both sides take. While a task waits here it
+ * counts as something that can still happen (`busy`), like an armed timer: a program whose only task waits for a
+ * connection waits, and is no deadlock.
+ */
+typedef struct torb_io_waiting {
+  /** A spin lock over the two fields below and the waiting fields of the waiter. */
+  uint32_t lock;
+  /** The operation completed: a wait that starts now is ready at once. */
+  uint8_t done;
+  /** The task waiting for it, or `NULL`. */
+  torb_task *waiter;
+} torb_io_waiting;
+
+/**
+ * `self` waits for the operation: ready at once where it is done, and otherwise registered and woken, with
+ * `TORB_OUTCOME_READY`, by `torb_task_io_done`. The running task only, once per wait.
+ */
+torb_wait torb_task_wait_io(torb_task *self, torb_io_waiting *waiting);
+
+/** The operation is done: its waiter, where it has one, is queued on its worker. From any thread, the IO thread's too. */
+void torb_task_io_done(torb_io_waiting *waiting);
+
+/**
+ * io.c's: the waiter of the operation was cancelled and taken out of it, so the kernel is asked to give the operation
+ * up. Called with the tree lock of task.c held; it takes no lock of task.c.
+ */
+void torb_io_waiter_cancelled(torb_io_waiting *waiting);
+
+/**
+ * Makes the process ready for a thread of the runtime that is no worker (the IO thread, a resolver thread), where the
+ * calling thread is the only one yet: the console, the clock and the worker's slot are set up, and the counts of shared
+ * blocks become atomic. What `torb_pool_start` does before it starts the workers.
+ */
+void torb_pool_prepare_thread(void);
+
+/**
+ * io.c's: the end of the program stops the IO core - every handle closed, every operation completed, the IO thread and
+ * the resolver threads joined. True where it ran. Called by the stop of the pool, on the main thread, with no task left.
+ */
+bool torb_io_stop(void);
+
 #endif /* TORB_POOL_H */

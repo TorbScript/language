@@ -1,0 +1,244 @@
+/**
+ * The HTTP/1.1 parser (RFC 9112): the lines of a head, a request line, a status line, the fields, and the framing of a
+ * body. It is strict on purpose - request smuggling lives in the space between two parsers that disagree, so nothing
+ * is accepted that a stricter parser behind this one could read otherwise (docs/design/NETWORK.md section 9).
+ */
+
+use ArrayList from "std/collections"
+use textOf from "std/stream"
+use HttpError from "./error"
+use Method, Status, Headers, isToken from "./message"
+
+/** How a body is framed: not at all, by a length, in chunks, or by the end of the connection. */
+public type Framing with Equals {
+  case Empty
+  case Fixed(length: Int)
+  case Chunked
+  case UntilEnd
+}
+
+/** The start line of a request, read. */
+public type RequestLine {
+  method: Method
+  target: String
+  version: String
+}
+
+/** The start line of a response, read. */
+public type StatusLine {
+  version: String
+  status: Status
+}
+
+/**
+ * The lines of a head without their CR LF, the empty line at its end left out. Every line ends in CR LF: a bare CR or
+ * a bare LF is malformed, because two parsers that split lines differently read two different messages.
+ */
+public fn headLines(head: ArrayList<UInt8>): Result<List<String>, HttpError> {
+  var lines: List<String> = []
+  var start = 0
+  var index = 0
+  const end = head.length()
+  while index < end {
+    const byte = head[index]
+    if byte == 10 {
+      return Fail HttpError.malformed("a line ends in CR LF and in nothing else")
+    }
+    if byte == 13 {
+      if index + 1 >= end || head[index + 1] != 10 {
+        return Fail HttpError.malformed("a CR stands alone")
+      }
+      if index > start {
+        const text = textOf(head.slice(start..index)).mapError(HttpError.invalidText)?
+        lines.append text
+      }
+      index = index + 2
+      start = index
+      continue
+    }
+    index = index + 1
+  }
+  if lines.isEmpty() {
+    return Fail HttpError.malformed("the head is empty")
+  }
+  Ok lines
+}
+
+/** `GET /path HTTP/1.1`: three parts, separated by exactly one space each. */
+public fn requestLineOf(line: String): Result<RequestLine, HttpError> {
+  const parts = line.split " "
+  if parts.length() != 3 {
+    return Fail HttpError.malformed("a request line is a method, a target and a version, separated by one space")
+  }
+  const method = Method.of(parts[0])?
+  const target = parts[1]
+  if target.isEmpty() || target.bytes().any({ Int.from(_) < 33 || Int.from(_) == 127 }) {
+    return Fail HttpError.malformed("the target of a request has no spaces and no control characters")
+  }
+  const version = versionOf(parts[2])?
+  Ok RequestLine(method, target, version)
+}
+
+/** `HTTP/1.1 200 OK`: a version, a status of three digits, and a phrase that may be empty. */
+public fn statusLineOf(line: String): Result<StatusLine, HttpError> {
+  const firstSpace = line.indexOf(" ") ?? -1
+  if firstSpace < 0 {
+    return Fail HttpError.malformed("a status line is a version, a status and a phrase")
+  }
+  const version = versionOf(line.sliceBytes(0, firstSpace))?
+  const rest = line.sliceBytes(firstSpace + 1, line.byteLength())
+  const code = rest.sliceBytes(0, if rest.byteLength() < 3 { rest.byteLength() } else { 3 })
+  if code.byteLength() != 3 || code.chars().any({ !_.isDigit() }) || (rest.byteLength() > 3 && !rest.startsWith("{code} ")) {
+    return Fail HttpError.malformed("a status is three digits")
+  }
+  const status = Status.of(Int.tryFrom(code).ok() ?? 0)?
+  Ok StatusLine(version, status)
+}
+
+/** `HTTP/1.1` or `HTTP/1.0`. Any other version of the right form is not supported; anything else is malformed. */
+fn versionOf(text: String): Result<String, HttpError> {
+  if text == "HTTP/1.1" || text == "HTTP/1.0" {
+    return Ok text
+  }
+  if text.startsWith("HTTP/") {
+    return Fail HttpError.unsupportedVersion(text)
+  }
+  Fail HttpError.malformed("`{text}` is not an HTTP version")
+}
+
+/**
+ * The fields of a head: `name: value`, the name a token right before its colon, the value without the spaces and tabs
+ * around it and without a control character. A line that starts with a space or a tab continued the line before it in
+ * HTTP/1.0 (obsolete line folding) and is malformed now. More than `limit` fields is a head that is too large.
+ */
+public fn fieldsOf(lines: List<String>, limit: Int): Result<Headers, HttpError> {
+  var headers = Headers()
+  if lines.length() > limit {
+    return Fail HttpError.headTooLarge(limit)
+  }
+  for line in lines {
+    if line.startsWith(" ") || line.startsWith("\t") {
+      return Fail HttpError.malformed("a field continues the line before it (obsolete line folding)")
+    }
+    const colon = line.indexOf(":") ?? -1
+    if colon < 0 {
+      return Fail HttpError.malformed("a field is a name, a colon and a value")
+    }
+    const name = line.sliceBytes 0, colon
+    if !isToken(name) {
+      return Fail HttpError.malformed("the name of a field is a token right before its colon")
+    }
+    const value = trimmedValue line.sliceBytes(colon + 1, line.byteLength())
+    if value.bytes().any({ Int.from(_) == 127 || (Int.from(_) < 32 && Int.from(_) != 9) }) {
+      return Fail HttpError.malformed("the value of `{name}` has a control character")
+    }
+    headers.add name, value
+  }
+  Ok headers
+}
+
+/** A value without the spaces and tabs around it - and no other whitespace, which `trim()` would take too. */
+fn trimmedValue(text: String): String {
+  var start = 0
+  var end = text.byteLength()
+  while start < end && isBlank(text.byteAt(start) ?? 0) {
+    start = start + 1
+  }
+  while end > start && isBlank(text.byteAt(end - 1) ?? 0) {
+    end = end - 1
+  }
+  text.sliceBytes start, end
+}
+
+fn isBlank(byte: UInt8): Bool {
+  byte == 32 || byte == 9
+}
+
+/** The comma-separated tokens of every field of `name`, lower case: `Connection: keep-alive, Upgrade`. */
+public fn tokensOf(headers: Headers, name: String): List<String> {
+  var tokens: List<String> = []
+  for value in headers.all(name) {
+    for part in value.split(",") {
+      const token = trimmedValue(part).toLowerCase()
+      if !token.isEmpty() {
+        tokens.append token
+      }
+    }
+  }
+  tokens
+}
+
+/**
+ * How the body of a request is framed (RFC 9112 section 6). `Transfer-Encoding` and `Content-Length` together are
+ * refused, and so is a transfer coding other than exactly `chunked`, two lengths, or a length that is not digits: every
+ * one of them is a way two servers in a row read two different bodies.
+ */
+public fn requestFraming(headers: Headers, version: String): Result<Framing, HttpError> {
+  const codings = headers.all "Transfer-Encoding"
+  const lengths = headers.all "Content-Length"
+  if !codings.isEmpty() {
+    if !lengths.isEmpty() {
+      return Fail HttpError.malformed("a request has `Transfer-Encoding` or `Content-Length`, never both")
+    }
+    if version == "HTTP/1.0" {
+      return Fail HttpError.malformed("an HTTP/1.0 request has no `Transfer-Encoding`")
+    }
+    const tokens = tokensOf headers, "Transfer-Encoding"
+    if tokens != ["chunked"] {
+      return Fail HttpError.unsupported("the transfer coding `{codings.joined(separator: ", ")}`: only `chunked` is built")
+    }
+    return Ok Framing.Chunked
+  }
+  if lengths.isEmpty() {
+    return Ok Framing.Empty
+  }
+  Ok Framing.Fixed(lengthOf(lengths)?)
+}
+
+/**
+ * How the body of a response is framed (RFC 9112 section 6.3): none after `HEAD`, `1xx`, `204` and `304`; chunked
+ * where the coding says so; a length where one is given; and otherwise the rest of the connection.
+ */
+public fn responseFraming(headers: Headers, status: Status, method: Method): Result<Framing, HttpError> {
+  const code = status.code()
+  if method == Method.Head || code < 200 || code == 204 || code == 304 {
+    return Ok Framing.Empty
+  }
+  const codings = headers.all "Transfer-Encoding"
+  if !codings.isEmpty() {
+    const tokens = tokensOf headers, "Transfer-Encoding"
+    if tokens.isEmpty() || tokens[tokens.length() - 1] != "chunked" || tokens.length() > 1 {
+      return Fail HttpError.unsupported("the transfer coding `{codings.joined(separator: ", ")}`: only `chunked` is built")
+    }
+    return Ok Framing.Chunked
+  }
+  const lengths = headers.all "Content-Length"
+  if lengths.isEmpty() {
+    return Ok Framing.UntilEnd
+  }
+  Ok Framing.Fixed(lengthOf(lengths)?)
+}
+
+/** One `Content-Length`: decimal digits and nothing else, at most eighteen of them. */
+fn lengthOf(lengths: List<String>): Result<Int, HttpError> {
+  if lengths.length() != 1 {
+    return Fail HttpError.malformed("a message has one `Content-Length` at most")
+  }
+  const text = lengths[0]
+  if text.isEmpty() || text.byteLength() > 18 || text.chars().any({ !_.isDigit() }) {
+    return Fail HttpError.malformed("`Content-Length` is decimal digits")
+  }
+  Ok(Int.tryFrom(text).ok() ?? 0)
+}
+
+/**
+ * Whether the connection stays open after this message: HTTP/1.1 unless `Connection: close`, HTTP/1.0 only with
+ * `Connection: keep-alive`.
+ */
+public fn keepsAlive(headers: Headers, version: String): Bool {
+  const tokens = tokensOf headers, "Connection"
+  if tokens.contains("close") {
+    return false
+  }
+  version == "HTTP/1.1" || tokens.contains("keep-alive")
+}

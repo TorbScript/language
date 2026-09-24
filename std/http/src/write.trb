@@ -1,0 +1,130 @@
+/**
+ * The HTTP/1.1 writer: the head of a request or a response, and a body - with `Content-Length` where its length is
+ * known, in chunks where it is not (RFC 9112 sections 6 and 7). The writer owns the framing, so a field a program set
+ * for it (`Content-Length`, `Transfer-Encoding`, `Connection`) is replaced by what the writer does.
+ */
+
+use ArrayList from "std/collections"
+use Body, Headers, Method, Response, isToken from "./message"
+use Connection from "./connection"
+use HttpError from "./error"
+
+/** The fields the writer decides itself, never copied from a message. */
+fn isFramingField(name: String): Bool {
+  const lower = name.toLowerCase()
+  lower == "content-length" || lower == "transfer-encoding" || lower == "connection"
+}
+
+/**
+ * The fields of `headers` as lines of a head. A field whose name is not a token is left out, and a line break or a
+ * `NUL` in a value becomes a space: a header built from what a peer sent cannot carry a second header in it.
+ */
+public fn fieldLines(headers: Headers): String {
+  var text = ""
+  for (name, value) in headers.entries() {
+    if !isToken(name) || isFramingField(name) {
+      continue
+    }
+    text = text + "{name}: {sanitized(value)}\r\n"
+  }
+  text
+}
+
+/** `value` with every CR, LF and NUL replaced by a space. */
+fn sanitized(value: String): String {
+  if !value.bytes().any({ _ == 13 || _ == 10 || _ == 0 }) {
+    return value
+  }
+  value.replace("\r", " ").replace("\n", " ").replace("\u{0}", " ")
+}
+
+/** `n` in lower-case hexadecimal, for the size line of a chunk. */
+fn hexadecimalOf(value: Int): String {
+  const digits = "0123456789abcdef"
+  if value == 0 {
+    return "0"
+  }
+  var text = ""
+  var rest = value
+  while rest > 0 {
+    const digit = rest.bitwiseAnd 15
+    text = digits.sliceBytes(digit, digit + 1) + text
+    rest = rest.shiftedRight by: 4
+  }
+  text
+}
+
+/**
+ * Writes what `body` delivers, each chunk framed where `chunked`, and the last chunk after them. Answers how many bytes
+ * of the body were written.
+ */
+public fn writeBody(connection: Connection, body: Body, chunked: Bool): Task<Result<Int, HttpError>> {
+  var written = 0
+  while const Some(chunk) = body.next().await()? {
+    if chunk.length() == 0 {
+      continue
+    }
+    var frame: ArrayList<UInt8> = ArrayList.withCapacity(chunk.length() + 20)
+    if chunked {
+      frame.appendAll "{hexadecimalOf(chunk.length())}\r\n".bytes()
+    }
+    frame.appendAll chunk
+    if chunked {
+      frame.appendAll "\r\n".bytes()
+    }
+    connection.send(frame).await()?
+    written = written + chunk.length()
+  }
+  if chunked {
+    connection.sendText("0\r\n\r\n").await()?
+  }
+  Ok written
+}
+
+/**
+ * Writes a response to a request of `method` and `version`, and answers whether the connection may stay open: not
+ * where `closing` says so, not where a body of unknown length has to end with the connection (an HTTP/1.0 client knows
+ * no chunks), and not where the body delivered another number of bytes than its length promised.
+ */
+public fn writeResponse(
+  connection: Connection,
+  response: Response,
+  method: Method,
+  version: String,
+  closing: Bool,
+): Task<Result<Bool, HttpError>> {
+  const code = response.status.code()
+  const bodiless = method == Method.Head || code < 200 || code == 204 || code == 304
+  const length = response.body.length()
+  const chunked = !bodiless && length.isNone() && version == "HTTP/1.1"
+  const keepOpen = !closing && (bodiless || length.isSome() || chunked)
+  const phrase = response.status.reason()
+  var head = "HTTP/1.1 {code} {phrase}\r\n"
+  head = head + fieldLines(response.headers)
+  if code >= 200 && code != 204 {
+    if chunked {
+      head = head + "Transfer-Encoding: chunked\r\n"
+    } else if const Some(known) = length {
+      head = head + "Content-Length: {known}\r\n"
+    }
+  }
+  if !response.headers.contains("Server") {
+    head = head + "Server: torbscript\r\n"
+  }
+  if !keepOpen {
+    head = head + "Connection: close\r\n"
+  } else if version == "HTTP/1.0" {
+    head = head + "Connection: keep-alive\r\n"
+  }
+  connection.sendText(head + "\r\n").await()?
+  if bodiless {
+    return Ok keepOpen
+  }
+  const written = writeBody(connection, response.body, chunked).await()?
+  if const Some(known) = length {
+    if written != known {
+      return Ok false
+    }
+  }
+  Ok keepOpen
+}

@@ -877,6 +877,11 @@ void torb_list_make_unique(torb_list *list);
 void torb_list_add(torb_list *list, const void *value);
 /** `values` borrowed; each element is retained into the list. */
 void torb_list_add_all(torb_list *list, torb_list values);
+/**
+ * `count` elements of a plain element type (no `retain`, no `release`) appended from `values`, which is `count` times
+ * the element's size in bytes: how the IO core hands received bytes to an `ArrayList<UInt8>`. `values` borrowed.
+ */
+void torb_list_add_plain(torb_list *list, const void *values, size_t count);
 /** `value` consumed; the old element at `index` is released. */
 void torb_list_set(torb_list *list, int64_t index, const void *value, torb_location at);
 /** `value` consumed. `index` may be the length, which appends. */
@@ -1398,6 +1403,7 @@ uint64_t torb_hash_combine(uint64_t first, uint64_t second);
 
 #include "torb_number.h"
 #include "torb_task.h"
+#include "torb_network.h"
 #include "torb_os.h"
 
 #endif /* TORB_H */

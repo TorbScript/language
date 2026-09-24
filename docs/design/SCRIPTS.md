@@ -125,7 +125,7 @@ runtime - and every limit is exact about what it counts.**
 | The file system | `files readOnly: "./config", readWrite: "./out"` | `std/fs` has to be in `modules` | every path a file function of the runtime is handed |
 | The environment | `environment "APP_*"`, `"*"` for all | `std/os/environment` in `modules` | `Environment.get` of a name no pattern matches answers `None` |
 | Processes | `modules "std/process"` | the import | `Process.exit` inside a script stops the script, always |
-| The network | `modules "std/http"` | the import | - (its natives are milestone 8) |
+| The network | `modules "std/network"` (or `std/http`) and `network connect: "host:port", listen: "address:port"` | the import | a resolve, connect or listen outside the grant stops the script - designed in `docs/design/NETWORK.md` section 10, built with the VM's tasks |
 | The clock | `modules "std/time"` | the import | - |
 | Output | the prelude's `print` and `printError` | - | - |
 | Foreign functions | never | - | - |

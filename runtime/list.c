@@ -247,6 +247,23 @@ void torb_list_add_all(torb_list *list, torb_list values) {
   list->storage->length = list->length;
 }
 
+void torb_list_add_plain(torb_list *list, const void *values, size_t count) {
+  const torb_element *element = list->storage->element;
+  if (count == 0u) {
+    return;
+  }
+  if (count > (size_t)UINT32_MAX) {
+    torb_panic_text("a list longer than 4 294 967 295 elements is not supported", torb_location_unknown);
+  }
+  if (element->retain != NULL || element->release != NULL) {
+    torb_panic_text("internal error: plain elements appended to a list of counted ones", torb_location_unknown);
+  }
+  torb_list_prepare(list, (uint32_t)count);
+  memcpy(torb_list_bytes(*list) + (size_t)list->length * (size_t)element->size, values, count * (size_t)element->size);
+  list->length += (uint32_t)count;
+  list->storage->length = list->length;
+}
+
 void torb_list_set(torb_list *list, int64_t index, const void *value, torb_location at) {
   const torb_element *element = list->storage->element;
   uint8_t *target;

@@ -1,0 +1,46 @@
+use TcpListener, TcpStream, SocketAddress, IpAddress, NetworkError from "std/network"
+use textOf from "std/stream"
+
+/**
+ * TCP over loopback, end to end: a listener on a port the system chooses, a server task that echoes what it reads until
+ * the client ends its half, and a client that writes, ends its half, and reads the echo to the end of the stream. Both
+ * tasks run on one worker, so every wait of either one is a wait for the other through the operating system: the IO
+ * poller wakes each of them when its bytes arrive. The sockets close when the last reference to them goes.
+ */
+
+/** Echoes one connection back to itself, and answers how many bytes it echoed. */
+fn echoOnce(listener: TcpListener): Task<Result<Int, NetworkError>> {
+  const connection = listener.accept().await()?
+  var echoed = 0
+  while const Some(chunk) = connection.receive().await()? {
+    echoed = echoed + chunk.length()
+    connection.send(chunk).await()?
+  }
+  connection.shutdown()?
+  Ok echoed
+}
+
+/** Sends every part, ends its half, and reads the answer to the end. */
+fn converse(address: SocketAddress, parts: List<String>): Task<Result<String, NetworkError>> {
+  const connection = TcpStream.connect(address).await()?
+  for part in parts {
+    connection.send(part.bytes().toList()).await()?
+  }
+  connection.shutdown()?
+  var answer: List<UInt8> = []
+  while const Some(chunk) = connection.receive().await()? {
+    answer.appendAll chunk
+  }
+  Ok(textOf(answer).ok() ?? "not UTF-8")
+}
+
+match TcpListener.listen(SocketAddress(IpAddress.loopback, 0)) {
+  Ok(listener) => {
+    const bound = listener.localAddress()
+    print "listening on {bound.address}, a port was chosen: {bound.port > 0}"
+    const server = echoOnce listener
+    print converse(bound, ["hello, ", "network", "!"]).await()
+    print "server echoed {server.await()}"
+  }
+  Fail(problem) => print "could not listen: {problem}"
+}

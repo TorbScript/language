@@ -1,0 +1,351 @@
+/**
+ * TCP: `TcpListener` accepts connections, `TcpStream` is one, and `resolve` turns a name into addresses. Everything that
+ * waits for the network answers a `Task`, and a connection's two directions are a `Source` and a `Sink` of `Bytes`
+ * (docs/design/NETWORK.md sections 2 and 4).
+ *
+ * A socket is a handle of the runtime, an `Int`: the types here are TorbScript over the natives of `runtime/io.c`, and
+ * a handle is closed exactly once, by the `close()` the release of its owner runs.
+ */
+
+use ArrayList from "std/collections"
+use Source, Sink, Bytes from "std/stream"
+use IpAddress, Ipv4Address, Ipv6Address, SocketAddress from "./address"
+use NetworkError from "./error"
+
+/**
+ * The addresses `host` names: a literal address as it is, `localhost` as the two loopback addresses, and every other
+ * name through the system's resolver, in the order it answered.
+ *
+ *     const addresses = resolve("localhost").await()?
+ *
+ * # Errors
+ *
+ * - [NetworkError] that `isHostNotFound()` where the name resolves to nothing.
+ */
+public fn resolve(host: String): Task<Result<List<IpAddress>, NetworkError>> {
+  const bare = if host.startsWith("[") && host.endsWith("]") { host.sliceBytes(1, host.byteLength() - 1) } else { host }
+  if const Ok(literal) = IpAddress.tryFrom(bare) {
+    return Ok([literal])
+  }
+  // RFC 6761 section 6.3: the loopback, without asking anybody - so a program that talks to itself needs no resolver
+  if bare.toLowerCase() == "localhost" {
+    return Ok([IpAddress.loopback, IpAddress.Version6(Ipv6Address.loopback)])
+  }
+  const resolution = networkResolve(bare).await()
+  if resolution < 0 {
+    return Fail NetworkError.of(resolution).about("resolving `{bare}`")
+  }
+  var parts: ArrayList<Int> = ArrayList.withCapacity 0
+  networkTakeResolved resolution, parts
+  var addresses: List<IpAddress> = []
+  var index = 0
+  while index + 2 < parts.length() {
+    addresses.append addressOf(parts[index], parts[index + 1], parts[index + 2])
+    index = index + 3
+  }
+  if addresses.isEmpty() {
+    return Fail NetworkError.hostNotFound(bare)
+  }
+  Ok addresses
+}
+
+/**
+ * A socket that listens for connections. It has an identity - the operating system's socket - so it is a `shared
+ * type`, and it closes when the last reference to it goes.
+ *
+ *     using listener = TcpListener.listen(SocketAddress(IpAddress.loopback, 0))?
+ *     var connection = listener.accept().await()?
+ *
+ * # Related
+ *
+ * - [TcpStream] - what `accept` answers.
+ */
+public shared type TcpListener with Close {
+  private handle: Int
+  private bound: SocketAddress
+
+  /**
+   * Listens on `address`. Port 0 asks the system for a free port, which [TcpListener.localAddress] then says. An IPv6
+   * address listens for IPv6 only, on every system.
+   *
+   * # Errors
+   *
+   * - [NetworkError] that `isAddressInUse()` where another socket has the address.
+   */
+  static fn listen(address: SocketAddress, backlog: Int = 128): Result<TcpListener, NetworkError> {
+    const (family, high, low) = numbersOf address.address
+    const handle = networkListen family, high, low, address.port, backlog
+    if handle < 0 {
+      return Fail NetworkError.of(handle).about("listening on {address}")
+    }
+    match socketAddressOf(handle, false) {
+      Ok(bound) => Ok TcpListener(handle, bound)
+      Fail(problem) => {
+        networkClose handle
+        Fail problem
+      }
+    }
+  }
+
+  /** Where it listens, with the port the system chose where port 0 was asked for. */
+  fn localAddress(): SocketAddress {
+    bound
+  }
+
+  /** The next connection. Waits until one arrives; a cancelled accept leaves the connection to the next one. */
+  fn accept(): Task<Result<TcpStream, NetworkError>> {
+    const answer = networkAccept(handle).await()
+    if answer < 0 {
+      return Fail NetworkError.of(answer).about("accepting on {bound}")
+    }
+    Ok TcpStream.of(answer)
+  }
+
+  /** Stops listening. An `accept` that waits fails with a closed socket. */
+  var fn close() {
+    networkClose handle
+  }
+}
+
+/**
+ * One TCP connection: bytes in both directions, in order, until either side ends its half. A `shared type`, because it
+ * is the operating system's socket; it closes when the last reference to it - the stream, its source or its sink - goes.
+ *
+ *     using stream = TcpStream.connectTo("localhost", 8080).await()?
+ *     var writing = stream.sink()
+ *     writing.addText("ping").await()?
+ *
+ * # Related
+ *
+ * - [TcpSource] and [TcpSink] - the two directions as a `Source` and a `Sink`.
+ */
+public shared type TcpStream with Close {
+  private handle: Int
+
+  /** A stream over a handle the runtime answered. */
+  static fn of(handle: Int): TcpStream {
+    TcpStream handle
+  }
+
+  /**
+   * A connection to `address`.
+   *
+   * # Errors
+   *
+   * - [NetworkError] that `isConnectionRefused()` where nothing listens there.
+   */
+  static fn connect(address: SocketAddress): Task<Result<TcpStream, NetworkError>> {
+    const (family, high, low) = numbersOf address.address
+    const answer = networkConnect(family, high, low, address.port).await()
+    if answer < 0 {
+      return Fail NetworkError.of(answer).about("connecting to {address}")
+    }
+    Ok TcpStream(answer)
+  }
+
+  /**
+   * A connection to `port` of `host`: the host is resolved, and each of its addresses is tried in turn until one
+   * connects. The failure of the last one is the failure.
+   */
+  static fn connectTo(host: String, port: Int): Task<Result<TcpStream, NetworkError>> {
+    const addresses = resolve(host).await()?
+    var last = NetworkError.hostNotFound host
+    for address in addresses {
+      match TcpStream.connect(SocketAddress(address, port)).await() {
+        Ok(stream) => {
+          return Ok stream
+        }
+        Fail(problem) => {
+          last = problem
+        }
+      }
+    }
+    Fail last
+  }
+
+  /** The address of this end. */
+  fn localAddress(): Result<SocketAddress, NetworkError> {
+    socketAddressOf handle, false
+  }
+
+  /** The address of the other end. */
+  fn remoteAddress(): Result<SocketAddress, NetworkError> {
+    socketAddressOf handle, true
+  }
+
+  /**
+   * At most `maximum` bytes, as soon as any arrived: `Some(bytes)`, or `None` once the peer ended its half. One receive at
+   * a time; bytes that arrive while nobody receives wait in the operating system.
+   */
+  fn receive(maximum: Int = 65536): Task<Result<Bytes?, NetworkError>> {
+    match receiveBuffer(maximum).await()? {
+      Some(bytes) => Ok Some(bytes)
+      None => Ok None
+    }
+  }
+
+  /** [TcpStream.receive] as the `ArrayList` the bytes arrive in, which a reader that buffers appends without a copy. */
+  fn receiveBuffer(maximum: Int = 65536): Task<Result<ArrayList<UInt8>?, NetworkError>> {
+    const count = networkReceive(handle, maximum).await()
+    if count < 0 {
+      return Fail NetworkError.of(count)
+    }
+    if count == 0 {
+      return Ok None
+    }
+    var bytes: ArrayList<UInt8> = ArrayList.withCapacity count
+    networkTakeReceived handle, bytes
+    Ok Some(bytes)
+  }
+
+  /** Writes all of `bytes`; finishes once the operating system took them, which is when a full peer has read. */
+  fn send(bytes: Bytes): Task<Result<Void, NetworkError>> {
+    const buffer: ArrayList<UInt8> = ArrayList.from bytes
+    sendBuffer(buffer).await()
+  }
+
+  /** [TcpStream.send] for bytes that are an `ArrayList` already, which is copied once instead of twice. */
+  fn sendBuffer(bytes: ArrayList<UInt8>): Task<Result<Void, NetworkError>> {
+    var from = 0
+    while from < bytes.length() {
+      const sent = networkSend(handle, bytes, from).await()
+      if sent < 0 {
+        return Fail NetworkError.of(sent)
+      }
+      from = from + sent
+    }
+    Ok void
+  }
+
+  /** Ends this half: the peer reads the end of the stream, and may still answer. */
+  fn shutdown(): Result<Void, NetworkError> {
+    const answer = networkShutdown handle
+    if answer < 0 {
+      return Fail NetworkError.of(answer)
+    }
+    Ok void
+  }
+
+  /** The reading direction as a `Source`: at most `chunk` bytes per `next()`, and `None` once the peer ended. */
+  fn source(chunk: Int = 65536): TcpSource {
+    TcpSource.of self, chunk
+  }
+
+  /** The writing direction as a `Sink`: `end()` ends this half, `close()` does nothing of its own. */
+  fn sink(): TcpSink {
+    TcpSink.of self
+  }
+
+  /** Closes the socket. What waits on it fails; the peer reads the end of the stream, or a reset. */
+  var fn close() {
+    networkClose handle
+  }
+}
+
+/** The reading direction of a [TcpStream]: a `Source<Bytes, NetworkError>`. */
+public shared type TcpSource with Source<Bytes, NetworkError> {
+  private stream: TcpStream
+  private chunk: Int
+
+  /** The source of `stream`: what [TcpStream.source] answers. */
+  static fn of(stream: TcpStream, chunk: Int): TcpSource {
+    TcpSource stream, chunk
+  }
+
+  var fn next(): Task<Result<Bytes?, NetworkError>> {
+    stream.receive(chunk).await()
+  }
+
+  /** Nothing of its own: the stream closes once its last holder is gone. */
+  var fn close() {}
+}
+
+/** The writing direction of a [TcpStream]: a `Sink<Bytes, NetworkError>`. */
+public shared type TcpSink with Sink<Bytes, NetworkError> {
+  private stream: TcpStream
+
+  /** The sink of `stream`: what [TcpStream.sink] answers. */
+  static fn of(stream: TcpStream): TcpSink {
+    TcpSink stream
+  }
+
+  var fn add(item: Bytes): Task<Result<Void, NetworkError>> {
+    stream.send(item).await()
+  }
+
+  /** Ends this half of the connection: the peer reads the end of the stream. */
+  var fn end(): Task<Result<Void, NetworkError>> {
+    stream.shutdown()
+  }
+
+  /** Nothing of its own: the stream closes once its last holder is gone. */
+  var fn close() {}
+}
+
+// --- the numbers an address crosses into the runtime as ---------------------------------------------------------------
+
+/** The family, the high and the low half of an address, as the natives take it. */
+fn numbersOf(address: IpAddress): (Int, Int, Int) {
+  match address {
+    .Version4(inside) => (4, 0, inside.value())
+    .Version6(inside) => (6, inside.high(), inside.low())
+  }
+}
+
+/** An address out of the numbers the runtime answered. */
+fn addressOf(family: Int, high: Int, low: Int): IpAddress {
+  if family == 6 {
+    return IpAddress.Version6 Ipv6Address.ofHalves(high, low)
+  }
+  IpAddress.Version4(Ipv4Address.of(
+    UInt8.tryFrom(low.shiftedRight(by: 24).bitwiseAnd(255)).ok() ?? 0,
+    UInt8.tryFrom(low.shiftedRight(by: 16).bitwiseAnd(255)).ok() ?? 0,
+    UInt8.tryFrom(low.shiftedRight(by: 8).bitwiseAnd(255)).ok() ?? 0,
+    UInt8.tryFrom(low.bitwiseAnd(255)).ok() ?? 0,
+  ))
+}
+
+/** The local address of a socket, or with `peer` the remote one. */
+fn socketAddressOf(handle: Int, peer: Bool): Result<SocketAddress, NetworkError> {
+  var parts: ArrayList<Int> = ArrayList.withCapacity 4
+  const answer = networkAddress handle, peer, parts
+  if answer < 0 {
+    return Fail NetworkError.of(answer)
+  }
+  Ok SocketAddress(addressOf(parts[0], parts[1], parts[2]), parts[3])
+}
+
+// --- the natives of runtime/io.c (runtime/include/torb_network.h) --------------------------------------------------
+
+/** A listening socket's handle, or a failure. */
+native fn networkListen(family: Int, high: Int, low: Int, port: Int, backlog: Int): Int
+
+/** The handle of the next connection, or a failure. */
+native fn networkAccept(listener: Int): Task<Int>
+
+/** The handle of a new connection, or a failure. */
+native fn networkConnect(family: Int, high: Int, low: Int, port: Int): Task<Int>
+
+/** How many bytes arrived (0 at the end), or a failure; the bytes wait for [networkTakeReceived]. */
+native fn networkReceive(stream: Int, maximum: Int): Task<Int>
+
+/** Every byte that arrived and nobody took yet, appended to `into`. */
+native fn networkTakeReceived(stream: Int, var into: ArrayList<UInt8>)
+
+/** How many bytes of `bytes` from `from` on were written, or a failure. */
+native fn networkSend(stream: Int, bytes: ArrayList<UInt8>, from: Int): Task<Int>
+
+/** 0, or a failure. */
+native fn networkShutdown(stream: Int): Int
+
+/** Closes a handle; twice is nothing. */
+native fn networkClose(handle: Int)
+
+/** An address as four numbers appended to `parts`: the family, the high and the low half, the port. 0, or a failure. */
+native fn networkAddress(handle: Int, peer: Bool, var parts: ArrayList<Int>): Int
+
+/** The handle of a resolution, or a failure. */
+native fn networkResolve(host: String): Task<Int>
+
+/** The addresses of a resolution, three numbers each, appended to `parts`; the handle is closed. */
+native fn networkTakeResolved(resolution: Int, var parts: ArrayList<Int>)

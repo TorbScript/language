@@ -1,0 +1,197 @@
+/**
+ * `HttpError`: what every operation of `std/http` fails with - the client's, the server's and the parser's - as one
+ * wrapper type, so a new kind of failure is never a breaking change (see "Algebraic Data Types and Pattern Matching"
+ * in CONCEPT.md).
+ */
+
+use JsonError from "std/json"
+use Utf8Error from "std/stream"
+use NetworkError from "std/network"
+
+/**
+ * What went wrong with a request or a response. The kind is a question (`isTimeout()`, `statusCode()`, ...), and a
+ * failure the parser found carries the status a server answers it with ([HttpError.answerStatus]).
+ */
+public type HttpError with Show, Error {
+  private kind: HttpErrorKind
+
+  /** The server did not respond in time, or the client did not send its request in time. */
+  static fn timeout(): HttpError {
+    Self kind: .Timeout
+  }
+
+  /** The request never reached a server (DNS, refused connection, broken transport, ...). */
+  static fn connectionFailed(message: String): HttpError {
+    Self kind: .ConnectionFailed(message)
+  }
+
+  /** The network failed under the message: the failure of `std/network`, kept. */
+  static fn network(cause: NetworkError): HttpError {
+    Self kind: .Network(cause)
+  }
+
+  /** The server responded, but not with success. */
+  static fn status(code: Int, message: String): HttpError {
+    Self kind: .Status(code, message)
+  }
+
+  /** `url` could not be parsed as a request at all. */
+  static fn invalidUrl(message: String): HttpError {
+    Self kind: .InvalidUrl(message)
+  }
+
+  /** `Response.json` failed: the body was not the JSON `Value` expected. */
+  static fn decodeFailed(cause: JsonError): HttpError {
+    Self kind: .Decode(cause)
+  }
+
+  /** A body that was read in one piece was longer than the limit that was given. */
+  static fn tooLarge(limit: Int): HttpError {
+    Self kind: .TooLarge(limit)
+  }
+
+  /** The bytes of the body are not UTF-8, so they are not a `String`. */
+  static fn invalidText(cause: Utf8Error): HttpError {
+    Self kind: .InvalidText(cause)
+  }
+
+  /** A message that breaks the syntax of HTTP/1.1: a server answers it with `400 Bad Request`. */
+  static fn malformed(message: String): HttpError {
+    Self kind: .Malformed(message)
+  }
+
+  /** A head longer than `limit` bytes, or with more fields than allowed: `431 Request Header Fields Too Large`. */
+  static fn headTooLarge(limit: Int): HttpError {
+    Self kind: .HeadTooLarge(limit)
+  }
+
+  /** A feature of HTTP this implementation does not have, such as a transfer coding: `501 Not Implemented`. */
+  static fn unsupported(message: String): HttpError {
+    Self kind: .Unsupported(message)
+  }
+
+  /** A version other than HTTP/1.0 and HTTP/1.1: `505 HTTP Version Not Supported`. */
+  static fn unsupportedVersion(version: String): HttpError {
+    Self kind: .UnsupportedVersion(version)
+  }
+
+  /** The connection ended in the middle of a message. */
+  static fn incomplete(): HttpError {
+    Self kind: .Incomplete
+  }
+
+  /** Whether the server did not respond in time. */
+  fn isTimeout(): Bool {
+    match kind {
+      .Timeout => true
+      _ => false
+    }
+  }
+
+  /** Worth trying again unchanged: timeouts, connection failures, `5xx` responses. */
+  fn isRetryable(): Bool {
+    match kind {
+      .Timeout => true
+      .ConnectionFailed(_) => true
+      .Network(cause) => cause.isRetryable()
+      .Status(code, _) => code >= 500
+      _ => false
+    }
+  }
+
+  /** The status code, if the request reached the server at all. */
+  fn statusCode(): Int? {
+    match kind {
+      .Status(code, _) => Some code
+      _ => None
+    }
+  }
+
+  /**
+   * The status a server answers a request with that failed this way while it was read - by the server, or by a handler
+   * that read the body: `400` for a malformed message, a body cut short, text that is not UTF-8 or JSON that is not the
+   * type asked for; `408` for one that took too long; `413` for a body over its limit; `431` for a head over its limit;
+   * `501` for a coding that is not built; `505` for another version. `None` for everything else - the network broke, or
+   * the failure is the server's own.
+   */
+  fn answerStatus(): Int? {
+    match kind {
+      .Malformed(_) => Some 400
+      .InvalidText(_) => Some 400
+      .Decode(_) => Some 400
+      .Incomplete => Some 400
+      .Timeout => Some 408
+      .TooLarge(_) => Some 413
+      .HeadTooLarge(_) => Some 431
+      .Unsupported(_) => Some 501
+      .UnsupportedVersion(_) => Some 505
+      _ => None
+    }
+  }
+
+  /** A message naming what went wrong, e.g. `"404: Not Found"` or `"request timed out"`. */
+  fn show(): String {
+    match kind {
+      .Timeout => "request timed out"
+      .ConnectionFailed(message) => "connection failed: {message}"
+      .Network(cause) => "{cause}"
+      .Status(code, message) => "{code}: {message}"
+      .InvalidUrl(message) => "invalid URL: {message}"
+      .Decode(cause) => "{cause}"
+      .TooLarge(limit) => "the body is longer than {limit} bytes"
+      .InvalidText(cause) => "{cause}"
+      .Malformed(message) => "malformed HTTP message: {message}"
+      .HeadTooLarge(limit) => "the head of the message is larger than {limit} bytes or has too many fields"
+      .Unsupported(message) => "not supported: {message}"
+      .UnsupportedVersion(version) => "HTTP version `{version}` is not supported"
+      .Incomplete => "the connection ended in the middle of a message"
+    }
+  }
+
+  /** The failure a rejected body carries, so a report can unwind the chain down to the field or the byte. */
+  fn cause(): Error? {
+    match kind {
+      .Decode(problem) => Some problem
+      .InvalidText(problem) => Some problem
+      .Network(problem) => Some problem
+      _ => None
+    }
+  }
+}
+
+type HttpErrorKind {
+  case Timeout
+  case ConnectionFailed(message: String)
+  case Network(cause: NetworkError)
+  case Status(code: Int, message: String)
+  case InvalidUrl(message: String)
+  case Decode(cause: JsonError)
+  case TooLarge(limit: Int)
+  case InvalidText(cause: Utf8Error)
+  case Malformed(message: String)
+  case HeadTooLarge(limit: Int)
+  case Unsupported(message: String)
+  case UnsupportedVersion(version: String)
+  case Incomplete
+}
+
+/** What makes `body.lines()` work: a stage over bytes, so it needs nothing of HTTP. */
+extend HttpError with From<Utf8Error> {
+  static fn from(value: Utf8Error): HttpError {
+    HttpError.invalidText value
+  }
+}
+
+/** ...and what makes `body.through(Json.items<User>()).checked()` work without naming a second failure type. */
+extend HttpError with From<JsonError> {
+  static fn from(value: JsonError): HttpError {
+    HttpError.decodeFailed value
+  }
+}
+
+/** A failure of the connection under a message is the message's failure. */
+extend HttpError with From<NetworkError> {
+  static fn from(value: NetworkError): HttpError {
+    HttpError.network value
+  }
+}

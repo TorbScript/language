@@ -1,0 +1,476 @@
+/**
+ * IP addresses and socket addresses: values like any other, parsed from text and shown as text (docs/design/OS.md
+ * section 5.5, docs/design/NETWORK.md section 4). Nothing here touches the network.
+ */
+
+/** Text that is not an address of the kind it was read as, and why. */
+public type AddressError with Show, Error {
+  /** The text that was read. */
+  text: String
+  /** What is wrong with it. */
+  reason: String
+
+  /** `"not an IP address: 300.1.2.3 (the part 300 is larger than 255)"`. */
+  fn show(): String {
+    "not an address: {text} ({reason})"
+  }
+}
+
+/** An IPv4 address: four octets, held as one number from 0 to 4294967295. */
+public type Ipv4Address with Show, Equals, Hash, Compare, TryFrom<String, AddressError> {
+  private storedValue: Int
+
+  /** `127.0.0.1`. */
+  static loopback = Ipv4Address 2130706433
+  /** `0.0.0.0`, which a listener binds to for every interface. */
+  static unspecified = Ipv4Address 0
+
+  /** The address of four octets, most significant first: `Ipv4Address.of(127, 0, 0, 1)`. */
+  static fn of(first: UInt8, second: UInt8, third: UInt8, fourth: UInt8): Ipv4Address {
+    const value = Int.from(first).shiftedLeft(by: 24)
+      .bitwiseOr(Int.from(second).shiftedLeft(by: 16))
+      .bitwiseOr(Int.from(third).shiftedLeft(by: 8))
+      .bitwiseOr(Int.from(fourth))
+    Ipv4Address value
+  }
+
+  /** The address as the number it is, from 0 to 4294967295: what the runtime is handed. */
+  fn value(): Int {
+    storedValue
+  }
+
+  /** The four octets, most significant first. */
+  fn octets(): List<Int> {
+    [
+      storedValue.shiftedRight(by: 24).bitwiseAnd(255),
+      storedValue.shiftedRight(by: 16).bitwiseAnd(255),
+      storedValue.shiftedRight(by: 8).bitwiseAnd(255),
+      storedValue.bitwiseAnd(255),
+    ]
+  }
+
+  /** Inside `127.0.0.0/8`. */
+  fn isLoopback(): Bool {
+    storedValue.shiftedRight(by: 24) == 127
+  }
+
+  /** `0.0.0.0`. */
+  fn isUnspecified(): Bool {
+    storedValue == 0
+  }
+
+  /** Inside `10.0.0.0/8`, `172.16.0.0/12` or `192.168.0.0/16` (RFC 1918). */
+  fn isPrivate(): Bool {
+    const first = storedValue.shiftedRight by: 24
+    const second = storedValue.shiftedRight(by: 16).bitwiseAnd(255)
+    first == 10 || (first == 172 && second >= 16 && second <= 31) || (first == 192 && second == 168)
+  }
+
+  /** Inside `169.254.0.0/16`. */
+  fn isLinkLocal(): Bool {
+    storedValue.shiftedRight(by: 16) == 43518
+  }
+
+  /** Inside `224.0.0.0/4`. */
+  fn isMulticast(): Bool {
+    storedValue.shiftedRight(by: 28) == 14
+  }
+
+  /** `192.168.1.23`. */
+  fn show(): String {
+    octets().map({ "{_}" }).joined(separator: ".")
+  }
+
+  /** In the order of their numbers. */
+  fn compare(other: Ipv4Address): Ordering {
+    storedValue.compare other.storedValue
+  }
+
+  /**
+   * Four decimal parts from 0 to 255, separated by dots. A part with a leading zero is refused, because some systems
+   * read `010` as octal and some as decimal, and an address two readers disagree on is no address.
+   */
+  static fn tryFrom(text: String): Result<Ipv4Address, AddressError> {
+    const parts = text.split "."
+    if parts.length() != 4 {
+      return Fail AddressError(text, "an IPv4 address has four parts separated by dots")
+    }
+    var value = 0
+    for part in parts {
+      const number = decimalPart(text, part)?
+      value = value.shiftedLeft(by: 8).bitwiseOr(number)
+    }
+    Ok Ipv4Address(value)
+  }
+}
+
+/** One part of an IPv4 address: 0 to 255, written in decimal digits without a leading zero. */
+fn decimalPart(text: String, part: String): Result<Int, AddressError> {
+  if part.isEmpty() || part.byteLength() > 3 {
+    return Fail AddressError(text, "the part `{part}` is not a number from 0 to 255")
+  }
+  for character in part.chars() {
+    if !character.isDigit() {
+      return Fail AddressError(text, "the part `{part}` is not a number from 0 to 255")
+    }
+  }
+  if part.byteLength() > 1 && part.startsWith("0") {
+    return Fail AddressError(text, "the part `{part}` has a leading zero")
+  }
+  const number = Int.tryFrom(part).ok() ?? 256
+  if number > 255 {
+    return Fail AddressError(text, "the part `{part}` is larger than 255")
+  }
+  Ok number
+}
+
+/**
+ * An IPv6 address: eight 16-bit segments, held as two 64-bit halves. `show()` is the RFC 5952 form: lower case, no
+ * leading zeros, the longest run of zero segments collapsed to `::`.
+ */
+public type Ipv6Address with Show, Equals, Hash, Compare, TryFrom<String, AddressError> {
+  /** Segments 0 to 3, as the bits of an `Int`. */
+  private storedHigh: Int
+  /** Segments 4 to 7. */
+  private storedLow: Int
+
+  /** `::1`. */
+  static loopback = Ipv6Address 0, 1
+  /** `::`, which a listener binds to for every interface. */
+  static unspecified = Ipv6Address 0, 0
+
+  /** The address of eight segments, most significant first. Each is taken modulo 65536. */
+  static fn of(segments: List<Int>): Result<Ipv6Address, AddressError> {
+    if segments.length() != 8 {
+      return Fail AddressError("{segments}", "an IPv6 address has eight segments")
+    }
+    var high = 0
+    var low = 0
+    for (index, segment) in segments.indexed() {
+      if index < 4 {
+        high = high.shiftedLeft(by: 16).bitwiseOr(segment.bitwiseAnd(65535))
+      } else {
+        low = low.shiftedLeft(by: 16).bitwiseOr(segment.bitwiseAnd(65535))
+      }
+    }
+    Ok Ipv6Address(high, low)
+  }
+
+  /** The address of its two halves, as the runtime hands them over. */
+  static fn ofHalves(high: Int, low: Int): Ipv6Address {
+    Ipv6Address high, low
+  }
+
+  /** Segments 0 to 3 as the bits of an `Int`: what the runtime is handed. */
+  fn high(): Int {
+    storedHigh
+  }
+
+  /** Segments 4 to 7 as the bits of an `Int`. */
+  fn low(): Int {
+    storedLow
+  }
+
+  /** The eight segments, most significant first, each from 0 to 65535. */
+  fn segments(): List<Int> {
+    var result: List<Int> = []
+    for shift in [48, 32, 16, 0] {
+      result.append storedHigh.shiftedRight(by: shift).bitwiseAnd(65535)
+    }
+    for shift in [48, 32, 16, 0] {
+      result.append storedLow.shiftedRight(by: shift).bitwiseAnd(65535)
+    }
+    result
+  }
+
+  /** `::1`. */
+  fn isLoopback(): Bool {
+    storedHigh == 0 && storedLow == 1
+  }
+
+  /** `::`. */
+  fn isUnspecified(): Bool {
+    storedHigh == 0 && storedLow == 0
+  }
+
+  /** Inside `fe80::/10`. */
+  fn isLinkLocal(): Bool {
+    storedHigh.shiftedRight(by: 54).bitwiseAnd(1023) == 1018
+  }
+
+  /** Inside `fc00::/7`. */
+  fn isUniqueLocal(): Bool {
+    storedHigh.shiftedRight(by: 57).bitwiseAnd(127) == 126
+  }
+
+  /** Inside `ff00::/8`. */
+  fn isMulticast(): Bool {
+    storedHigh.shiftedRight(by: 56).bitwiseAnd(255) == 255
+  }
+
+  /** The IPv4 address inside an IPv4-mapped one: `::ffff:192.0.2.1`. */
+  fn mappedVersion4(): Ipv4Address? {
+    if storedHigh != 0 || storedLow.shiftedRight(by: 32).bitwiseAnd(4294967295) != 65535 {
+      return None
+    }
+    Some Ipv4Address(storedLow.bitwiseAnd(4294967295))
+  }
+
+  /** The RFC 5952 form: `2001:db8::1`, `::1`, `::ffff:192.0.2.1`. */
+  fn show(): String {
+    if const Some(inside) = mappedVersion4() {
+      return "::ffff:{inside}"
+    }
+    const parts = segments()
+    // The longest run of at least two zero segments, the first of equal ones
+    var bestStart = -1
+    var bestLength = 0
+    var index = 0
+    while index < 8 {
+      if parts[index] == 0 {
+        var end = index
+        while end < 8 && parts[end] == 0 {
+          end = end + 1
+        }
+        if end - index > bestLength && end - index >= 2 {
+          bestStart = index
+          bestLength = end - index
+        }
+        index = end
+      } else {
+        index = index + 1
+      }
+    }
+    if bestStart < 0 {
+      return parts.map(hexadecimal).joined(separator: ":")
+    }
+    const before = parts[0..bestStart].map(hexadecimal).joined(separator: ":")
+    const after = parts[(bestStart + bestLength)..].map(hexadecimal).joined(separator: ":")
+    "{before}::{after}"
+  }
+
+  /** Half by half, as the numbers they are without a sign. */
+  fn compare(other: Ipv6Address): Ordering {
+    const first = compareUnsigned storedHigh, other.storedHigh
+    if first != .Equal {
+      return first
+    }
+    compareUnsigned storedLow, other.storedLow
+  }
+
+  /**
+   * RFC 4291 section 2.2: up to eight segments of one to four hexadecimal digits, one `::` for a run of zeros, and an
+   * IPv4 address in place of the last two. A zone (`fe80::1%eth0`) is not part of an address and is refused.
+   */
+  static fn tryFrom(text: String): Result<Ipv6Address, AddressError> {
+    if text.contains("%") {
+      return Fail AddressError(text, "a zone is not part of an address")
+    }
+    const halves = text.split "::"
+    if halves.length() > 2 {
+      return Fail AddressError(text, "`::` may appear once")
+    }
+    const head = segmentsOf(text, halves[0], halves.length() == 1)?
+    if halves.length() == 1 {
+      if head.length() != 8 {
+        return Fail AddressError(text, "an IPv6 address without `::` has eight segments")
+      }
+      return Ipv6Address.of head
+    }
+    const tail = segmentsOf(text, halves[1], true)?
+    if head.length() + tail.length() > 7 {
+      return Fail AddressError(text, "`::` stands for at least one segment")
+    }
+    var all: List<Int> = []
+    all.appendAll head
+    for _ in 0..(8 - head.length() - tail.length()) {
+      all.append 0
+    }
+    all.appendAll tail
+    Ipv6Address.of all
+  }
+}
+
+/** A segment as RFC 5952 writes it: lower-case hexadecimal, no leading zeros. */
+fn hexadecimal(segment: Int): String {
+  const digits = "0123456789abcdef"
+  if segment == 0 {
+    return "0"
+  }
+  var text = ""
+  var rest = segment
+  while rest > 0 {
+    const digit = rest.bitwiseAnd 15
+    text = digits.sliceBytes(digit, digit + 1) + text
+    rest = rest.shiftedRight by: 4
+  }
+  text
+}
+
+/** Two halves compared as numbers without a sign. */
+fn compareUnsigned(first: Int, second: Int): Ordering {
+  if (first < 0) != (second < 0) {
+    return if first < 0 { .Greater } else { .Less }
+  }
+  first.compare second
+}
+
+/**
+ * The segments of one side of `::`. `last` says whether this side ends the address, where an IPv4 address may stand in
+ * for the last two segments.
+ */
+fn segmentsOf(text: String, side: String, last: Bool): Result<List<Int>, AddressError> {
+  var result: List<Int> = []
+  if side.isEmpty() {
+    return Ok result
+  }
+  const parts = side.split ":"
+  for (index, part) in parts.indexed() {
+    if last && index == parts.length() - 1 && part.contains(".") {
+      const inside = Ipv4Address.tryFrom(part).mapError({ _ => AddressError text, "`{part}` is not an IPv4 address" })?
+      result.append inside.value().shiftedRight(by: 16)
+      result.append inside.value().bitwiseAnd(65535)
+      continue
+    }
+    result.append(hexadecimalSegment(text, part)?)
+  }
+  Ok result
+}
+
+/** One to four hexadecimal digits. */
+fn hexadecimalSegment(text: String, part: String): Result<Int, AddressError> {
+  if part.isEmpty() || part.byteLength() > 4 {
+    return Fail AddressError(text, "the segment `{part}` is not one to four hexadecimal digits")
+  }
+  var value = 0
+  for character in part.chars() {
+    const digit = hexadecimalDigit(character) ?? -1
+    if digit < 0 {
+      return Fail AddressError(text, "the segment `{part}` is not one to four hexadecimal digits")
+    }
+    value = value * 16 + digit
+  }
+  Ok value
+}
+
+/** The value of one hexadecimal digit, either case. */
+fn hexadecimalDigit(character: Char): Int? {
+  const code = Int.from character
+  if code >= 48 && code <= 57 {
+    return Some(code - 48)
+  }
+  if code >= 97 && code <= 102 {
+    return Some(code - 87)
+  }
+  if code >= 65 && code <= 70 {
+    return Some(code - 55)
+  }
+  None
+}
+
+/** Either version. Reading tells them apart by the text: a colon is IPv6. */
+public type IpAddress with Show, Equals, Hash, Compare, TryFrom<String, AddressError> {
+  case Version4(address: Ipv4Address)
+  case Version6(address: Ipv6Address)
+
+  /** `127.0.0.1`. */
+  static loopback = IpAddress.Version4 Ipv4Address.loopback
+
+  /** The loopback address of either version. */
+  fn isLoopback(): Bool {
+    match self {
+      .Version4(address) => address.isLoopback()
+      .Version6(address) => address.isLoopback()
+    }
+  }
+
+  /** The unspecified address of either version, which a listener binds to for every interface. */
+  fn isUnspecified(): Bool {
+    match self {
+      .Version4(address) => address.isUnspecified()
+      .Version6(address) => address.isUnspecified()
+    }
+  }
+
+  /** `4` or `6`. */
+  fn version(): Int {
+    match self {
+      .Version4(_) => 4
+      .Version6(_) => 6
+    }
+  }
+
+  fn show(): String {
+    match self {
+      .Version4(address) => address.show()
+      .Version6(address) => address.show()
+    }
+  }
+
+  /** Every IPv4 address before every IPv6 address, and each version in the order of its numbers. */
+  fn compare(other: IpAddress): Ordering {
+    match (self, other) {
+      (.Version4(first), .Version4(second)) => first.compare second
+      (.Version6(first), .Version6(second)) => first.compare second
+      (.Version4(_), .Version6(_)) => .Less
+      (.Version6(_), .Version4(_)) => .Greater
+    }
+  }
+
+  static fn tryFrom(text: String): Result<IpAddress, AddressError> {
+    if text.contains(":") {
+      return Ok IpAddress.Version6(Ipv6Address.tryFrom(text)?)
+    }
+    Ok IpAddress.Version4(Ipv4Address.tryFrom(text)?)
+  }
+}
+
+/** An IP address and a port: where a listener listens and where a connection goes. */
+public type SocketAddress with Show, Equals, Hash, TryFrom<String, AddressError> {
+  address: IpAddress
+  /** From 0 to 65535; 0 asks the system to choose a free port where a listener binds. */
+  port: Int
+
+  /** `127.0.0.1:8080`, or `[::1]:8080` - the brackets tell the port from the address. */
+  fn show(): String {
+    match address {
+      .Version4(inside) => "{inside}:{port}"
+      .Version6(inside) => "[{inside}]:{port}"
+    }
+  }
+
+  /** `host:port` with an IPv4 address, `[host]:port` with an IPv6 one. */
+  static fn tryFrom(text: String): Result<SocketAddress, AddressError> {
+    if text.startsWith("[") {
+      const closing = text.indexOf("]:") ?? -1
+      if closing < 0 {
+        return Fail AddressError(text, "an IPv6 socket address is `[address]:port`")
+      }
+      const inside = Ipv6Address.tryFrom(text.sliceBytes(1, closing))?
+      const port = portOf(text, text.sliceBytes(closing + 2, text.byteLength()))?
+      return Ok SocketAddress(IpAddress.Version6(inside), port)
+    }
+    const colon = text.lastIndexOf(":") ?? -1
+    if colon < 0 {
+      return Fail AddressError(text, "a socket address is `address:port`")
+    }
+    if text.sliceBytes(0, colon).contains(":") {
+      return Fail AddressError(text, "an IPv6 socket address is `[address]:port`")
+    }
+    const inside = Ipv4Address.tryFrom(text.sliceBytes(0, colon))?
+    const port = portOf(text, text.sliceBytes(colon + 1, text.byteLength()))?
+    Ok SocketAddress(IpAddress.Version4(inside), port)
+  }
+}
+
+/** A port: decimal digits for a number from 0 to 65535. */
+fn portOf(text: String, part: String): Result<Int, AddressError> {
+  if part.isEmpty() || part.byteLength() > 5 || part.chars().any({ !_.isDigit() }) {
+    return Fail AddressError(text, "the port `{part}` is not a number from 0 to 65535")
+  }
+  const number = Int.tryFrom(part).ok() ?? 65536
+  if number > 65535 {
+    return Fail AddressError(text, "the port `{part}` is larger than 65535")
+  }
+  Ok number
+}

@@ -45,6 +45,7 @@ void torb_register_console_tests(void);
 void torb_register_task_tests(void);
 void torb_register_pool_tests(void);
 void torb_register_sandbox_tests(void);
+void torb_register_io_tests(void);
 
 #define TORB_CHECK(condition)                                        \
   do {                                                               \

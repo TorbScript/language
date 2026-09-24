@@ -1,0 +1,319 @@
+/**
+ * A connection as HTTP reads it: a `TcpStream` with what arrived and was not consumed yet, so a head, a line and a body
+ * are read from the same bytes whatever the borders of the chunks were - and so a second request a client sent before
+ * the first was answered (pipelining) waits in the buffer until its turn. The three body readers are sources over it.
+ */
+
+use ArrayList from "std/collections"
+use Source, Bytes from "std/stream"
+use TcpStream from "std/network"
+use HttpError from "./error"
+
+/** The byte of `\r`. */
+const carriageReturn: UInt8 = 13
+/** The byte of `\n`. */
+const lineFeed: UInt8 = 10
+
+/** A connection with a buffer of what was received and not consumed. Every read of HTTP goes through it. */
+public shared type Connection with Close {
+  private stream: TcpStream
+  private var buffer: ArrayList<UInt8>
+  /** How far `head` has looked for the empty line already, so a head in many chunks is scanned once. */
+  private var scanned: Int = 0
+  private var ended: Bool = false
+
+  /** A connection over `stream`, with nothing buffered. */
+  static fn of(stream: TcpStream): Connection {
+    Connection stream, ArrayList.withCapacity(0)
+  }
+
+  /** The stream under it. */
+  fn socket(): TcpStream {
+    stream
+  }
+
+  /** Whether bytes are buffered that nobody consumed yet. */
+  fn hasBuffered(): Bool {
+    buffer.length() > 0
+  }
+
+  /** Receives once more into the buffer: `false` at the end of the stream. */
+  var fn fill(): Task<Result<Bool, HttpError>> {
+    if ended {
+      return Ok false
+    }
+    match stream.receiveBuffer().await() {
+      Ok(Some(received)) => {
+        if buffer.length() == 0 {
+          buffer = received
+        } else {
+          buffer.replace(buffer.length()..buffer.length(), received)
+        }
+        Ok true
+      }
+      Ok(None) => {
+        ended = true
+        Ok false
+      }
+      Fail(problem) => Fail HttpError.network(problem)
+    }
+  }
+
+  /** Consumes the first `count` bytes of the buffer and answers them. */
+  private var fn consume(count: Int): ArrayList<UInt8> {
+    const taken = buffer.slice(0..count)
+    buffer = buffer.slice(count..buffer.length())
+    scanned = 0
+    taken
+  }
+
+  /**
+   * The head of a message: everything up to and including the empty line that ends it. Empty lines in front of it are
+   * skipped, as RFC 9112 section 2.2 asks. `None` where the stream ended cleanly before its first byte.
+   *
+   * # Errors
+   *
+   * - [HttpError] `headTooLarge` where no end was found within `limit` bytes; `incomplete` where the stream ended
+   *   inside the head.
+   */
+  var fn head(limit: Int): Task<Result<ArrayList<UInt8>?, HttpError>> {
+    loop {
+      // Empty lines in front of a head are skipped: a client may send one after the body of the request before
+      while buffer.length() >= 2 && buffer[0] == carriageReturn && buffer[1] == lineFeed {
+        const _ = consume 2
+      }
+      var index = if scanned > 3 { scanned - 3 } else { 0 }
+      while index + 3 < buffer.length() {
+        if buffer[index] == carriageReturn && buffer[index + 1] == lineFeed && buffer[index + 2] == carriageReturn
+          && buffer[index + 3] == lineFeed {
+          // A head that arrived whole in a few large chunks is still held to its limit
+          if index + 4 > limit {
+            return Fail HttpError.headTooLarge(limit)
+          }
+          return Ok Some(consume(index + 4))
+        }
+        index = index + 1
+      }
+      scanned = buffer.length()
+      if buffer.length() > limit {
+        return Fail HttpError.headTooLarge(limit)
+      }
+      if !fill().await()? {
+        if buffer.length() == 0 {
+          return Ok None
+        }
+        return Fail HttpError.incomplete()
+      }
+    }
+  }
+
+  /**
+   * One line that ends in CR LF, without it: a chunk size, a trailer field. A line longer than `limit` bytes, or a
+   * line break that is not CR LF, is malformed.
+   */
+  var fn line(limit: Int): Task<Result<ArrayList<UInt8>, HttpError>> {
+    var index = 0
+    loop {
+      while index < buffer.length() {
+        const byte = buffer[index]
+        if byte == lineFeed {
+          return Fail HttpError.malformed("a line ends in CR LF and in nothing else")
+        }
+        if byte == carriageReturn {
+          if index + 1 >= buffer.length() {
+            break
+          }
+          if buffer[index + 1] != lineFeed {
+            return Fail HttpError.malformed("a CR stands alone")
+          }
+          const found = consume(index + 2)
+          return Ok found.slice(0..index)
+        }
+        index = index + 1
+      }
+      if index > limit {
+        return Fail HttpError.malformed("a line is longer than {limit} bytes")
+      }
+      if !fill().await()? {
+        return Fail HttpError.incomplete()
+      }
+    }
+  }
+
+  /** At most `maximum` bytes, from the buffer or from one more receive; `None` at the end of the stream. */
+  var fn take(maximum: Int): Task<Result<ArrayList<UInt8>?, HttpError>> {
+    if buffer.length() == 0 && !fill().await()? {
+      return Ok None
+    }
+    const count = if buffer.length() < maximum { buffer.length() } else { maximum }
+    Ok Some(consume(count))
+  }
+
+  /** Writes all of `bytes`. */
+  fn send(bytes: ArrayList<UInt8>): Task<Result<Void, HttpError>> {
+    match stream.sendBuffer(bytes).await() {
+      Ok(_) => Ok void
+      Fail(problem) => Fail HttpError.network(problem)
+    }
+  }
+
+  /** Writes a text as UTF-8. */
+  fn sendText(text: String): Task<Result<Void, HttpError>> {
+    const bytes: ArrayList<UInt8> = ArrayList.from text.bytes()
+    send(bytes).await()
+  }
+
+  /** Ends the writing half, so the peer reads the end of the stream. A failure is nobody's business any more. */
+  fn shutdown() {
+    const _ = stream.shutdown()
+  }
+
+  /** Nothing of its own: the stream closes when its last holder is gone. */
+  var fn close() {}
+}
+
+/** A body of `remaining` bytes, as `Content-Length` said. */
+public shared type FixedReader with Source<Bytes, HttpError> {
+  private connection: Connection
+  private var remaining: Int
+
+  static fn of(connection: Connection, length: Int): FixedReader {
+    FixedReader connection, length
+  }
+
+  var fn next(): Task<Result<Bytes?, HttpError>> {
+    if remaining <= 0 {
+      return Ok None
+    }
+    const maximum = if remaining < 65536 { remaining } else { 65536 }
+    match connection.take(maximum).await()? {
+      Some(chunk) => {
+        remaining = remaining - chunk.length()
+        Ok Some(chunk)
+      }
+      None => Fail HttpError.incomplete()
+    }
+  }
+
+  var fn close() {}
+}
+
+/** A body in the chunked transfer coding (RFC 9112 section 7.1): sizes in hexadecimal, and trailers at the end. */
+public shared type ChunkedReader with Source<Bytes, HttpError> {
+  private connection: Connection
+  /** Bytes of the current chunk not read yet. */
+  private var remaining: Int = 0
+  /** A chunk was read to its end, and its CR LF has not been. */
+  private var afterChunk: Bool = false
+  private var finished: Bool = false
+  /** How many trailer fields a body may have. */
+  private trailerLimit: Int
+
+  static fn of(connection: Connection, trailerLimit: Int = 100): ChunkedReader {
+    ChunkedReader connection, trailerLimit: trailerLimit
+  }
+
+  var fn next(): Task<Result<Bytes?, HttpError>> {
+    loop {
+      if finished {
+        return Ok None
+      }
+      if remaining > 0 {
+        const maximum = if remaining < 65536 { remaining } else { 65536 }
+        match connection.take(maximum).await()? {
+          Some(chunk) => {
+            remaining = remaining - chunk.length()
+            afterChunk = remaining == 0
+            return Ok Some(chunk)
+          }
+          None => {
+            return Fail HttpError.incomplete()
+          }
+        }
+      }
+      if afterChunk {
+        const ending = connection.line(0).await()?
+        if ending.length() != 0 {
+          return Fail HttpError.malformed("a chunk is longer than its size says")
+        }
+        afterChunk = false
+      }
+      const sizeLine = connection.line(4096).await()?
+      const size = chunkSize(sizeLine)?
+      if size == 0 {
+        // The trailers: fields like the head's, read and not kept
+        var trailers = 0
+        loop {
+          const trailer = connection.line(8192).await()?
+          if trailer.length() == 0 {
+            break
+          }
+          trailers = trailers + 1
+          if trailers > trailerLimit {
+            return Fail HttpError.headTooLarge(trailerLimit)
+          }
+        }
+        finished = true
+        return Ok None
+      }
+      remaining = size
+    }
+  }
+
+  var fn close() {}
+}
+
+/**
+ * The size of a chunk: one to fifteen hexadecimal digits, then maybe `;` and extensions, which are ignored. Fifteen
+ * digits keep every size below 2^60, so no size overflows an `Int`.
+ */
+public fn chunkSize(line: ArrayList<UInt8>): Result<Int, HttpError> {
+  var size = 0
+  var digits = 0
+  for byte in line {
+    const code = Int.from byte
+    const digit = if code >= 48 && code <= 57 {
+      code - 48
+    } else if code >= 97 && code <= 102 {
+      code - 87
+    } else if code >= 65 && code <= 70 {
+      code - 55
+    } else {
+      -1
+    }
+    if digit < 0 {
+      // A chunk extension, or whitespace before one (RFC 9112 7.1.1): what follows is ignored
+      if digits > 0 && (code == 59 || code == 32 || code == 9) {
+        break
+      }
+      return Fail HttpError.malformed("a chunk size is hexadecimal digits")
+    }
+    digits = digits + 1
+    if digits > 15 {
+      return Fail HttpError.malformed("a chunk size has more than fifteen digits")
+    }
+    size = size * 16 + digit
+  }
+  if digits == 0 {
+    return Fail HttpError.malformed("a chunk size is hexadecimal digits")
+  }
+  Ok size
+}
+
+/** A body that ends where the connection ends: a response without a length and without chunks. */
+public shared type UntilEndReader with Source<Bytes, HttpError> {
+  private connection: Connection
+
+  static fn of(connection: Connection): UntilEndReader {
+    UntilEndReader connection
+  }
+
+  var fn next(): Task<Result<Bytes?, HttpError>> {
+    match connection.take(65536).await()? {
+      Some(chunk) => Ok Some(chunk)
+      None => Ok None
+    }
+  }
+
+  var fn close() {}
+}

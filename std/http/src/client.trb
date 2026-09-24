@@ -1,0 +1,166 @@
+/**
+ * The HTTP/1.1 client: `get`, `post` and `send` answer a task of a `Response` whose `Body` is a stream
+ * (docs/design/NETWORK.md section 7). One connection per request, closed with its response; a pool is a later slice.
+ */
+
+use TcpStream from "std/network"
+use Body, Headers, Method, Response, Status from "./message"
+use Connection, FixedReader, ChunkedReader, UntilEndReader from "./connection"
+use Framing, headLines, statusLineOf, fieldsOf, responseFraming from "./parse"
+use fieldLines, writeBody from "./write"
+use HttpError from "./error"
+
+/** Where a URL points: the host and the port to connect to, the target to ask for, and the `Host` to name. */
+type Destination {
+  host: String
+  port: Int
+  target: String
+  authority: String
+}
+
+/**
+ * `http://host[:port][/path][?query]`, read as far as a request needs it. `std/uri` replaces this one function once it
+ * exists (docs/design/URI.md); every signature that takes a URL keeps its `String` until then.
+ */
+fn destinationOf(url: String): Result<Destination, HttpError> {
+  const separator = url.indexOf("://") ?? -1
+  if separator < 0 {
+    return Fail HttpError.invalidUrl("`{url}` has no scheme")
+  }
+  const scheme = url.sliceBytes(0, separator).toLowerCase()
+  if scheme == "https" {
+    return Fail HttpError.unsupported("`https`: TLS is not built yet (docs/design/NETWORK.md section 5)")
+  }
+  if scheme != "http" {
+    return Fail HttpError.invalidUrl("`{scheme}` is not a scheme of HTTP")
+  }
+  const rest = url.sliceBytes(separator + 3, url.byteLength())
+  var end = rest.byteLength()
+  for mark in ["/", "?", "#"] {
+    if const Some(at) = rest.indexOf(mark) {
+      if at < end {
+        end = at
+      }
+    }
+  }
+  const authority = rest.sliceBytes 0, end
+  var target = rest.sliceBytes end, rest.byteLength()
+  if const Some(fragment) = target.indexOf("#") {
+    target = target.sliceBytes 0, fragment
+  }
+  if target.isEmpty() || target.startsWith("?") {
+    target = "/{target}"
+  }
+  if authority.contains("@") {
+    return Fail HttpError.invalidUrl("a URL with credentials is not sent: `{url}`")
+  }
+  var host = authority
+  var portText = ""
+  if authority.startsWith("[") {
+    const closing = authority.indexOf("]") ?? -1
+    if closing < 0 {
+      return Fail HttpError.invalidUrl("`{authority}` opens a bracket and does not close it")
+    }
+    host = authority.sliceBytes(0, closing + 1)
+    const after = authority.sliceBytes(closing + 1, authority.byteLength())
+    if !after.isEmpty() {
+      if !after.startsWith(":") {
+        return Fail HttpError.invalidUrl("`{authority}` has something after its address that is no port")
+      }
+      portText = after.sliceBytes 1, after.byteLength()
+    }
+  } else if const Some(colon) = authority.lastIndexOf(":") {
+    host = authority.sliceBytes 0, colon
+    portText = authority.sliceBytes(colon + 1, authority.byteLength())
+  }
+  if host.isEmpty() {
+    return Fail HttpError.invalidUrl("`{url}` has no host")
+  }
+  var port = 80
+  if !portText.isEmpty() {
+    const number = Int.tryFrom(portText).ok() ?? -1
+    if number < 1 || number > 65535 || portText.chars().any({ !_.isDigit() }) {
+      return Fail HttpError.invalidUrl("`{portText}` is not a port")
+    }
+    port = number
+  }
+  Ok Destination(host, port, target, authority)
+}
+
+/**
+ * `http.get(url).await()?`: a `GET` of `url`. A status that is not a success is a `Response` too - `status` says what
+ * it is - and no redirect is followed.
+ */
+public fn get(url: String, headers: Headers = Headers()): Task<Result<Response, HttpError>> {
+  send(Method.Get, url, headers: headers).await()
+}
+
+/** `http.post(url, Body.from(text)).await()?` - the body may be a stream, so an upload is not held in memory. */
+public fn post(url: String, body: Body, headers: Headers = Headers()): Task<Result<Response, HttpError>> {
+  send(Method.Post, url, headers: headers, body: body).await()
+}
+
+/**
+ * A request of any method: connects to the host of `url`, writes the request - with `Content-Length` where the body's
+ * length is known, in chunks where it is not - and answers the response once its head arrived. The body of the
+ * response is read from the connection as the program pulls it, and the connection closes with the response.
+ *
+ * # Errors
+ *
+ * - [HttpError] for a URL that is not `http`, a connection that fails, and a response that breaks HTTP/1.1.
+ */
+public fn send(
+  method: Method,
+  url: String,
+  headers: Headers = Headers(),
+  body: Body = Body.empty(),
+): Task<Result<Response, HttpError>> {
+  const destination = destinationOf(url)?
+  const host = if destination.host.startsWith("[") {
+    destination.host.sliceBytes(1, destination.host.byteLength() - 1)
+  } else {
+    destination.host
+  }
+  const stream = TcpStream.connectTo(host, destination.port).await()?
+  const connection = Connection.of stream
+  const length = body.length()
+  // A body of no bytes on a method that means none is not announced at all (RFC 9110 section 8.6)
+  const announced = length != Some(0) || method == Method.Post || method == Method.Put || method == Method.Patch
+  const chunked = length.isNone()
+  var head = "{method} {destination.target} HTTP/1.1\r\nHost: {destination.authority}\r\n"
+  head = head + fieldLines(headers)
+  if !headers.contains("User-Agent") {
+    head = head + "User-Agent: torbscript\r\n"
+  }
+  if chunked {
+    head = head + "Transfer-Encoding: chunked\r\n"
+  } else if announced {
+    head = head + "Content-Length: {length ?? 0}\r\n"
+  }
+  head = head + "Connection: close\r\n\r\n"
+  connection.sendText(head).await()?
+  const _ = writeBody(connection, body, chunked).await()?
+  loop {
+    const found = connection.head(65536).await()?
+    const bytes = match found {
+      Some(read) => read
+      None => {
+        return Fail HttpError.incomplete()
+      }
+    }
+    const lines = headLines(bytes)?
+    const line = statusLineOf(lines[0])?
+    const fields = fieldsOf(lines[1..lines.length()], 100)?
+    // An interim response (`100 Continue`, `103 Early Hints`) is followed by the real one
+    if line.status.isInformational() {
+      continue
+    }
+    const responseBody = match responseFraming(fields, line.status, method)? {
+      .Empty => Body.empty()
+      .Fixed(size) => Body.of FixedReader.of(connection, size), length: Some(size)
+      .Chunked => Body.of ChunkedReader.of(connection)
+      .UntilEnd => Body.of UntilEndReader.of(connection)
+    }
+    return Ok Response(line.status, fields, responseBody)
+  }
+}

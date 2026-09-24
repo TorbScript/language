@@ -1,12 +1,12 @@
 /**
  * Concurrency: `Task` and `await()`, sequential versus concurrent awaiting, `spawn` for parallel work, and
- * `Channel` for tasks that talk to each other.
+ * `Channel` for tasks that talk to each other. An HTTP server on loopback stands in for a real API, so every request
+ * below goes over a real socket and the tour still runs on any machine.
  */
 
-// DRAFT - see "Concurrency" in CONCEPT.md
-
 use * as http from "std/http"
-use HttpError from "std/http"
+use HttpError, Request, Response, Server, Status from "std/http"
+use SocketAddress, IpAddress from "std/network"
 use sleep from "std/time"
 
 /** A user fetched by [fetchUser]. */
@@ -20,37 +20,50 @@ type Post {
   title: String
 }
 
+// A server is a function from a request to a task of a response, and a listener to hand it the requests
+/** The API the tour talks to: one user and her posts. */
+fn api(request: Request): Task<Result<Response, HttpError>> {
+  match request.path() {
+    "/users/1" => Ok Response.jsonOf(User(1, "Ada"))
+    "/users/1/posts" => {
+      const posts = [Post("Notes on the Analytical Engine"), Post("Sketch of the Engine")]
+      Ok Response.jsonOf(posts)
+    }
+    _ => Ok Response.of(Status.notFound)
+  }
+}
+
 // There is no `async` keyword. A function that returns a `Task` may `await()`, and its body produces the value.
 // `await()` is a method on Task and answers the value. A cancellation is passed on, not answered: a task that awaits
 // a cancelled task is cancelled itself, right there. `result()` is the one wait that answers `Fail(Cancelled)` instead.
 /** Fetches a user by id. `await()` answers the task's own `Result`, which composes with `?` like any fallible step. */
-fn fetchUser(id: Int): Task<Result<User, HttpError>> {
+fn fetchUser(base: String, id: Int): Task<Result<User, HttpError>> {
   // A `Response` owns one end of a stream and is read once, so it is a shared object in a `var` binding
-  var response = http.get("https://example.test/users/{id}").await()?
+  var response = http.get("{base}/users/{id}").await()?
   response.json<User>().await()
 }
 
 /** Fetches a user's posts by their id. */
-fn fetchPosts(userId: Int): Task<Result<List<Post>, HttpError>> {
-  var response = http.get("https://example.test/users/{userId}/posts").await()?
+fn fetchPosts(base: String, userId: Int): Task<Result<List<Post>, HttpError>> {
+  var response = http.get("{base}/users/{userId}/posts").await()?
   response.json<List<Post>>().await()
 }
 
 // Sequential
 /** Fetches a user and their posts one after the other. */
-fn loadProfile(id: Int): Task<Result<String, HttpError>> {
-  const user = fetchUser(id).await()?
-  const posts = fetchPosts(user.id).await()?
+fn loadProfile(base: String, id: Int): Task<Result<String, HttpError>> {
+  const user = fetchUser(base, id).await()?
+  const posts = fetchPosts(base, user.id).await()?
   Ok "{user.name} wrote {posts.length()} posts"
 }
 
 // Concurrent: start both tasks, then wait for both
 /** The same result as [loadProfile], but starts both fetches before waiting for either one. */
-fn loadProfileFast(id: Int): Task<Result<String, HttpError>> {
-  const (userResult, postsResult) = both(fetchUser(id), fetchPosts(id)).await()
+fn loadProfileFast(base: String, id: Int): Task<Result<String, HttpError>> {
+  const (userResult, postsResult) = both(fetchUser(base, id), fetchPosts(base, id)).await()
   const user = userResult?
   const posts = postsResult?
-  Ok "{user.name} wrote {posts.length()} posts"
+  Ok "{user.name} wrote {posts.length()} posts, fetched at once"
 }
 
 // Parallel computation. Values are copied into tasks, which is cheap: slices and copies share their storage.
@@ -82,7 +95,14 @@ const sums = Task.all(tasks).await()
 const total = sums.sum()
 print "sum: {total}, consumed: {consumer.await().orElse(0)}, sent: {producer.await().isOk()}"
 
-match loadProfile(1).await() {
+// The server listens on a port the system chooses, and serves until its task is cancelled
+const server = Server.listen(SocketAddress(IpAddress.loopback, 0), api)?
+var serving = server.serve()
+const base = "http://127.0.0.1:{server.localAddress().port}"
+
+match loadProfile(base, 1).await() {
   Ok(profile) => print profile
   Fail(error) => print "Failed: {error}"
 }
+print loadProfileFast(base, 1).await()
+serving.cancel()

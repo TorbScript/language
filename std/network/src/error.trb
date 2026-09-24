@@ -1,0 +1,122 @@
+/**
+ * `NetworkError`: what every operation of `std/network` fails with, one wrapper type, so a new kind of failure is never
+ * a breaking change (see "Algebraic Data Types and Pattern Matching" in CONCEPT.md).
+ */
+
+use AddressError from "./address"
+
+/**
+ * What went wrong on the network. The kind is a question (`isConnectionRefused()`, `isTimedOut()`, ...), and `show()`
+ * is the operating system's own words, so a log line says what the system said.
+ */
+public type NetworkError with Show, Error {
+  private kind: NetworkErrorKind
+  private message: String
+
+  /** The peer refused the connection: nothing listens on that port. */
+  fn isConnectionRefused(): Bool {
+    kind == .Refused
+  }
+
+  /** The peer reset the connection, or it broke while it was in use. */
+  fn isConnectionReset(): Bool {
+    kind == .Reset || kind == .Aborted
+  }
+
+  /** The system gave up waiting (a connection attempt the peer never answered). */
+  fn isTimedOut(): Bool {
+    kind == .TimedOut
+  }
+
+  /** The address a listener asked for is taken by another socket. */
+  fn isAddressInUse(): Bool {
+    kind == .AddressInUse
+  }
+
+  /** The name did not resolve to any address. */
+  fn isHostNotFound(): Bool {
+    kind == .HostNotFound
+  }
+
+  /** The network or the host cannot be reached from here. */
+  fn isUnreachable(): Bool {
+    kind == .Unreachable
+  }
+
+  /** The socket was closed before or while the operation ran. */
+  fn isClosed(): Bool {
+    kind == .Closed
+  }
+
+  /** Worth trying again unchanged: a refused, reset or timed-out connection, or a network that cannot be reached. */
+  fn isRetryable(): Bool {
+    kind == .Refused || kind == .Reset || kind == .Aborted || kind == .TimedOut || kind == .Unreachable
+  }
+
+  /** What the operating system said, or what the operation found. */
+  fn show(): String {
+    message
+  }
+
+  /** A failure a native of the runtime answered: its kind packed into the number, its words from the runtime. */
+  static fn of(failure: Int): NetworkError {
+    const kind = match (0 - failure).shiftedRight(by: 32) {
+      2 => NetworkErrorKind.Refused
+      3 => NetworkErrorKind.Reset
+      4 => NetworkErrorKind.Aborted
+      5 => NetworkErrorKind.TimedOut
+      6 => NetworkErrorKind.AddressInUse
+      7 => NetworkErrorKind.AddressNotAvailable
+      8 => NetworkErrorKind.HostNotFound
+      9 => NetworkErrorKind.Unreachable
+      10 => NetworkErrorKind.Closed
+      11 => NetworkErrorKind.Invalid
+      _ => NetworkErrorKind.Other
+    }
+    NetworkError kind, networkErrorText(failure)
+  }
+
+  /** The socket is closed: an operation on a stream or a listener after its `close()`. */
+  static fn closed(): NetworkError {
+    NetworkError(.Closed, "the socket is closed")
+  }
+
+  /** `host` resolved to no address. */
+  static fn hostNotFound(host: String): NetworkError {
+    NetworkError(.HostNotFound, "the host `{host}` was not found")
+  }
+
+  /** An address that is none, where one was read from text. */
+  static fn invalidAddress(cause: AddressError): NetworkError {
+    NetworkError(.Invalid, cause.show())
+  }
+
+  /** The same failure, with what the operation was about in front: `"connecting to 127.0.0.1:9: ..."`. */
+  fn about(subject: String): NetworkError {
+    NetworkError kind, "{subject}: {message}"
+  }
+}
+
+type NetworkErrorKind with Equals {
+  case Refused
+  case Reset
+  case Aborted
+  case TimedOut
+  case AddressInUse
+  case AddressNotAvailable
+  case HostNotFound
+  case Unreachable
+  case Closed
+  case Invalid
+  case Other
+}
+
+/** An address read from text that is none. */
+extend NetworkError with From<AddressError> {
+  static fn from(value: AddressError): NetworkError {
+    NetworkError.invalidAddress value
+  }
+}
+
+/** The words of the runtime for a failure one of its natives answered. */
+native fn networkErrorText(failure: Int): String

@@ -180,7 +180,9 @@ typedef enum torb_task_waiting {
   TORB_WAITING_TASK = 1,
   TORB_WAITING_TIMER = 2,
   TORB_WAITING_SEND = 3,
-  TORB_WAITING_RECEIVE = 4
+  TORB_WAITING_RECEIVE = 4,
+  /** An operation of the IO core (runtime/io.c): a socket, a name resolution. */
+  TORB_WAITING_IO = 5
 } torb_task_waiting;
 
 /** An intrusive list of tasks through `wait_previous`/`wait_next`: the waiters of a task, the senders of a channel. */

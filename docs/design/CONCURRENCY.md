@@ -8,7 +8,9 @@ real threads, a heap and a scheduler per worker, the stealing of unstarted tasks
 across workers, `Workers.count`, and `parallel()` in the prelude running its chunks on the pool - slices E and H, and
 the environment half of D, the copy of a value that cannot move as it is ("The copy at the crossing"), and the blocking
 pool with `offload` and `Workers.blocking` ("The blocking pool, as built"). The manifest setting, `Merge`, borrowing
-(`Plain`, `Window`, `windows`) and IO with its poller are not built (section 14). **Since 2026-09-23 `await()` answers
+(`Plain`, `Window`, `windows`) and IO for files and processes are not built (section 14). **The IO poller is built for
+sockets** (slice G, `docs/design/NETWORK.md` section 2): `runtime/io.c` with IOCP, epoll and kqueue, one IO thread of the
+process rather than a poller per worker, for the reasons that record gives. **Since 2026-09-23 `await()` answers
 the `Value` and passes a cancellation on to the waiter** (section 8, "The cascade"; section 15, decision 12), which
 replaced `await(): Result<Value, Cancelled>` and deleted `outcome()`.
 
@@ -1216,8 +1218,11 @@ real timer rather than only its type - driven by hand-written state machines in 
   suite unchanged, plus a program that reads eight files at once and prints them in a fixed order, on all three
   platforms; and a cancelled read on each of the three mechanisms, with the live-block counter at zero afterwards —
   which is what proves the "not before" rows of section 7 rather than assuming them.
-  *The blocking pool is built, with `offload` over it (section 16, "The blocking pool, as built"); `runtime/io.c`,
-  the poller, and with them the cancellation of a read that waits, are not.*
+  *The blocking pool is built, with `offload` over it (section 16, "The blocking pool, as built"). `runtime/io.c` and
+  the poller are built for sockets and name resolution, with the cancellation of a wait on each mechanism
+  (`docs/design/NETWORK.md` sections 2 and 3, `runtime/tests/io_test.c`): one IO thread instead of a poller per worker,
+  and the kernel's buffer owned by the operation instead of the frame, so a cancelled wait frees its frame at once.
+  Files, pipes and the eight-file gate are not.*
 - **Slice H — the inbox and stealing** (gap 9), with the measurements of section 9. Gate: the skewed-cost benchmark
   within its stated factor, and the fraction of stolen tasks reported. The parent link of gap 14 travels in the same
   message, so this slice re-runs slice A2's parent tests with the inbox in place.
@@ -1477,7 +1482,9 @@ program that calls `within` does not build. A `Source` or `Sink` held as a **tra
 witness table holds every default member some implementation overrides, `through` among them, and `through` reaches
 `Stage.onto` - a generic member through a trait-typed value (gap 11). `Source.produce`, `std/stream`'s tests and
 `examples/tour/src/13-streams.trb` stop there. `?` that converts a failure through a `From` the program declares is not
-lowered yet, which is what stops `examples/tour/src/10-async.trb` (and `std/http` has no runtime at all). A
+lowered yet. (`examples/tour/src/10-async.trb` builds and runs natively since `std/http` became TorbScript over
+`std/network`, `docs/design/NETWORK.md`, against a server of its own on loopback - which makes it a program with real IO
+and no longer one the VM can be held to.) A
 `Process.exit` from inside a task ends the program with the main task's block still counted, the way a panic does.
 
 ### Manifest rows that change
@@ -1684,8 +1691,8 @@ still synchronous, and `offload` is what a program wraps one in. The `blocking` 
 
 **Not built, and why each waits:**
 
-- **The IO poller** (slice G): there is no `runtime/io.c`; a file or process call blocks the worker that makes it
-  unless the program wraps it in `offload`.
+- **IO for files and processes** (slice G): `runtime/io.c` and its poller exist for sockets (`docs/design/NETWORK.md`),
+  but a file or process call still blocks the worker that makes it unless the program wraps it in `offload`.
 - **The manifest setting `tasks { workers, blocking }`** and the sandbox limit (slice D): the project model has no
   `tasks`, and there is no sandbox yet.
 - **`Merge`, `collect` and `minBy`** on `Parallel` (slice B), and **`Plain`, `Window`, `windows`** (slice F).

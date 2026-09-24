@@ -672,6 +672,23 @@ static bool torb_take_out(torb_task *task, torb_outcome outcome, bool cancelling
       /* A waiting task holds its channel, because its frame need not: the last use of a channel may be the send */
       torb_channel_release(channel);
     }
+  } else if (waiting == (uint8_t)TORB_WAITING_IO) {
+    /* The operation is alive: the frame of the task of the runtime that waits holds it */
+    torb_io_waiting *io = (torb_io_waiting *)task->wait_target;
+    torb_spin_lock(&io->lock);
+    if (task->waiting == (uint8_t)TORB_WAITING_IO && io->waiter == task) {
+      io->waiter = NULL;
+      torb_atomic_store_u8(&task->waiting, (uint8_t)TORB_WAITING_NOTHING);
+      task->outcome = (int32_t)outcome;
+      removed = true;
+    }
+    torb_spin_unlock(&io->lock);
+    if (removed) {
+      /* The kernel may still write into the operation, which is the operation's and not the frame's: it lets go later */
+      torb_io_waiter_cancelled(io);
+      /* What waited counted as something that could still happen; the caller queues the task, or it runs already */
+      torb_busy_less();
+    }
   }
   if (removed) {
     task->wait_target = NULL;
@@ -1207,6 +1224,64 @@ torb_wait torb_task_sleep_until(torb_task *self, torb_instant deadline) {
   torb_atomic_store_u8(&self->waiting, (uint8_t)TORB_WAITING_TIMER);
   torb_timer_add(worker, self, deadline);
   return TORB_WAIT_SUSPENDED;
+}
+
+/*
+ * # Waiting on IO
+ *
+ * A task of the IO core (runtime/io.c) waits for an operation of it: a receive, a send, an accept, a connect, a name
+ * resolution. The operation is completed by the IO thread or a resolver thread - threads without a worker, which run no
+ * task and touch no count - and they wake the waiter here, under the operation's lock: the waiter is taken out and
+ * queued on its own worker **before** the lock is let go, so a cancellation on another worker, which takes the same lock
+ * to take it out, finds either a waiting task or one that is queued already, never one in between. While it waits the
+ * task counts in `busy` like an armed timer, so a program whose tasks all wait for the network waits and is no deadlock.
+ */
+
+torb_wait torb_task_wait_io(torb_task *self, torb_io_waiting *waiting) {
+  torb_worker *worker = torb_worker_self();
+  torb_expect_idle(worker, self);
+  torb_spin_lock(&waiting->lock);
+  if (waiting->done != 0u) {
+    torb_spin_unlock(&waiting->lock);
+    self->outcome = (int32_t)TORB_OUTCOME_READY;
+    return TORB_WAIT_READY;
+  }
+  waiting->waiter = self;
+  self->wait_target = waiting;
+  torb_atomic_store_u8(&self->waiting, (uint8_t)TORB_WAITING_IO);
+  (void)torb_atomic_add_i64(&torb_pool.busy, 1);
+  torb_spin_unlock(&waiting->lock);
+  return TORB_WAIT_SUSPENDED;
+}
+
+void torb_task_io_done(torb_io_waiting *waiting) {
+  torb_task *waiter;
+  torb_spin_lock(&waiting->lock);
+  waiting->done = 1u;
+  waiter = waiting->waiter;
+  waiting->waiter = NULL;
+  if (waiter != NULL) {
+    torb_atomic_store_u8(&waiter->waiting, (uint8_t)TORB_WAITING_NOTHING);
+    waiter->outcome = (int32_t)TORB_OUTCOME_READY;
+    waiter->wait_target = NULL;
+    torb_post(waiter);
+  }
+  torb_spin_unlock(&waiting->lock);
+  if (waiter != NULL) {
+    /* Queued first, counted out second, so `busy` never reads zero in between */
+    torb_busy_less();
+  }
+}
+
+void torb_pool_prepare_thread(void) {
+  if (torb_pool_threaded != 0u) {
+    return;
+  }
+  torb_console_prepare();
+  torb_clock_prepare();
+  (void)torb_worker_self();
+  torb_platform_set_worker(&torb_main_worker);
+  torb_pool_threaded = 1u;
 }
 
 /* --------------------------------------------------------------------------- the tasks the runtime writes --- */
@@ -2326,6 +2401,12 @@ static void torb_pool_stop(void) {
   uint32_t index;
   uint32_t count = torb_pool.count;
   uint32_t blocking = torb_blocking.count;
+  /* The IO core first: its threads wake tasks, and every task has completed by now, so what it still holds is closed */
+  bool io = torb_io_stop();
+  if (io && count <= 1u && blocking == 0u) {
+    /* Its threads were the only other ones: the counts of shared blocks need not be atomic any more */
+    torb_pool_threaded = 0u;
+  }
   if (torb_pool.started == 0u && blocking == 0u) {
     return;
   }

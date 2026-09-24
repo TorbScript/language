@@ -1,0 +1,71 @@
+use Server, Request, Response, HttpError from "std/http"
+use SocketAddress, IpAddress, TcpStream, NetworkError from "std/network"
+use textOf from "std/stream"
+
+/**
+ * The server on the wire, byte for byte: raw requests over TCP and the raw answers, headers and all. Persistent
+ * connections serve requests one after another, also two that arrived in one write (pipelining); a chunked request
+ * body with an extension and a trailer is read whole; and every message two parsers could read differently is refused
+ * with the status its failure names and a closed connection - a length beside a coding, a coding other than `chunked`,
+ * a bare LF, a folded line, a missing `Host`, another version, a head over its limit (docs/design/NETWORK.md section 9).
+ */
+
+/** Echoes the method, the target and the body. */
+fn handle(request: Request): Task<Result<Response, HttpError>> {
+  const text = request.body.text().await()?
+  Ok Response.text("{request.method} {request.target} [{text}]")
+}
+
+/** Sends `raw`, ends the writing half, and reads everything the server answered until it closed. */
+fn exchange(address: SocketAddress, raw: String): Task<Result<String, NetworkError>> {
+  const connection = TcpStream.connect(address).await()?
+  connection.send(raw.bytes().toList()).await()?
+  connection.shutdown()?
+  var answer: List<UInt8> = []
+  while const Some(chunk) = connection.receive().await()? {
+    answer.appendAll chunk
+  }
+  Ok(textOf(answer).ok() ?? "not UTF-8")
+}
+
+/** The answer with its line breaks visible, one line of output per line of the wire. */
+fn shown(answer: Result<String, NetworkError>): String {
+  match answer {
+    Ok(text) => text.replace "\r\n", "\\r\\n\n  "
+    Fail(problem) => "failed: {problem}"
+  }
+}
+
+const big = "a".repeat(70000)
+const cases = [
+  ("a request", "GET /hello HTTP/1.1\r\nHost: t\r\n\r\n"),
+  ("two requests in one write", "GET /1 HTTP/1.1\r\nHost: t\r\n\r\nGET /2 HTTP/1.1\r\nHost: t\r\n\r\n"),
+  ("a length", "POST /upload HTTP/1.1\r\nHost: t\r\nContent-Length: 5\r\n\r\nhello"),
+  (
+    "chunks with an extension and a trailer",
+    "POST /upload HTTP/1.1\r\nHost: t\r\nTransfer-Encoding: chunked\r\n\r\n5;name=value\r\nhello\r\n6\r\n world\r\n0\r\nChecksum: 1\r\n\r\n",
+  ),
+  ("HEAD", "HEAD /hello HTTP/1.1\r\nHost: t\r\n\r\n"),
+  ("HTTP/1.0 without a Host", "GET /old HTTP/1.0\r\n\r\n"),
+  ("a length and a coding", "POST / HTTP/1.1\r\nHost: t\r\nContent-Length: 3\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n"),
+  ("a coding that is not chunked", "POST / HTTP/1.1\r\nHost: t\r\nTransfer-Encoding: gzip, chunked\r\n\r\n"),
+  ("a bare LF", "GET / HTTP/1.1\nHost: t\r\n\r\n"),
+  ("a folded line", "GET / HTTP/1.1\r\nHost: t\r\nX-Long: one\r\n two\r\n\r\n"),
+  ("no Host", "GET / HTTP/1.1\r\n\r\n"),
+  ("two Hosts", "GET / HTTP/1.1\r\nHost: a\r\nHost: b\r\n\r\n"),
+  ("another version", "GET / HTTP/2.0\r\nHost: t\r\n\r\n"),
+  ("a head over its limit", "GET / HTTP/1.1\r\nHost: t\r\nX-Big: {big}\r\n\r\n"),
+  ("a body cut short", "POST / HTTP/1.1\r\nHost: t\r\nContent-Length: 10\r\n\r\nshort"),
+]
+
+match Server.listen(SocketAddress(IpAddress.loopback, 0), handle) {
+  Ok(server) => {
+    const address = server.localAddress()
+    var serving = server.serve()
+    for (name, raw) in cases {
+      print "{name}:\n  {shown(exchange(address, raw).await())}"
+    }
+    serving.cancel()
+  }
+  Fail(problem) => print "could not listen: {problem}"
+}

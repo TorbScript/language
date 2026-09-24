@@ -1,0 +1,39 @@
+use TcpListener, TcpStream, SocketAddress, IpAddress, NetworkError, resolve from "std/network"
+
+/**
+ * A failure of the network is a value: a connection to a port nothing listens on is refused, a second listener on a
+ * taken port finds the address in use, and each says so through a question of `NetworkError` rather than a message a
+ * program would have to parse. A name that is an address, and `localhost`, resolve without asking any resolver.
+ */
+
+/** The port a listener got, and nothing listens there any more once this returns. */
+fn freedPort(): Int {
+  match TcpListener.listen(SocketAddress(IpAddress.loopback, 0)) {
+    Ok(listener) => listener.localAddress().port
+    Fail(_) => 0
+  }
+}
+
+/** Connects to a port that was just freed. */
+fn refused(port: Int): Task<Result<Bool, NetworkError>> {
+  match TcpStream.connect(SocketAddress(IpAddress.loopback, port)).await() {
+    Ok(_) => Ok false
+    Fail(problem) => Ok problem.isConnectionRefused()
+  }
+}
+
+print "refused: {refused(freedPort()).await()}"
+
+match TcpListener.listen(SocketAddress(IpAddress.loopback, 0)) {
+  Ok(first) => {
+    match TcpListener.listen(first.localAddress()) {
+      Ok(_) => print "a second listener on the same port"
+      Fail(problem) => print "in use: {problem.isAddressInUse()}"
+    }
+  }
+  Fail(problem) => print "could not listen: {problem}"
+}
+
+print resolve("localhost").await()
+print resolve("192.0.2.7").await()
+print resolve("[::1]").await()

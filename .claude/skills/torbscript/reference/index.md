@@ -277,13 +277,14 @@ that answers the question. A page marked (planned) describes a feature that does
 - `standard-library/fs.md` - **std/fs** (package): File and IoError - whole-file helpers for what fits in memory, and a File as both ends of a byte stream.
 - `standard-library/function-types.md` - **Predicate, Action and Transform** (reference): Three aliases in the prelude for the closure shapes signatures take most - a question about one value, an effect on one value, and a conversion of one value into another.
 - `standard-library/geometry.md` - **std/geometry** (package): The shapes of the plane and of space, with the half-open rule that makes a row of rectangles a tiling and the ray tests that answer a distance.
-- `standard-library/http.md` - **std/http** (package): A minimal HTTP client - get, post and request answer a Task, and a response body is a stream of any size.
+- `standard-library/http.md` - **std/http** (package): HTTP/1.1, client and server, over std/network - get, post and send answer a Task, a handler answers a Task of a Response, and every body is a stream.
 - `standard-library/index.md` - **The standard library** (index): One page per package of std, what each contains, and which of them are in scope everywhere without an import.
 - `standard-library/io.md` - **std/io** (package): Standard input and the streams every process is started with - readLine for the short form, Source and Sink for the rest.
 - `standard-library/iteration.md` - **std/iteration** (package): Iterate and Iterator, the lazy stages between them, and the collectors a pipeline ends in.
 - `standard-library/json.md` - **std/json** (package): Json, a value with the options of the format, for encoding and decoding any Encode/Decode type, and JsonValue for the rare document whose shape is not known ahead of time.
 - `standard-library/linear.md` - **std/linear** (package): Vectors, matrices, quaternions and angles over one generic scalar, plus Fixed, the fixed-point scalar whose answers are the same bits everywhere.
 - `standard-library/math.md` - **std/math** (package): The functions on Float that read as an operation rather than a method, under the math namespace import.
+- `standard-library/network.md` - **std/network** (package): IP and socket addresses as values, name resolution, and TCP - a listener, and a stream whose two directions are a Source and a Sink of Bytes.
 - `standard-library/number.md` - **std/number** (package): Every numeric type of the language, the traits their arithmetic and bit operations go through, and Real.
 - `standard-library/os.md` - **std/os** (package, draft): Environment, System and Directories - the environment a program was started with, which system and version it runs on, and where the user's files belong - with OsError and the three target constants.
 - `standard-library/parallel.md` - **std/parallel** (package): parallel() and Parallel, a pipeline whose stages run on the workers of the pool with the results in input order, in scope through the prelude.

@@ -51,7 +51,8 @@ What does not belong here: the language rules that a type participates in, which
 - **[std/process](process.md)** - Process for arguments, exiting and running a program to its end as a task, Child for a running program's pipes, and ProcessOutput for what it left behind.
 - **[std/os](os.md)** _(draft)_ - Environment, System and Directories - the environment a program was started with, which system and version it runs on, and where the user's files belong - with OsError and the three target constants.
 - **[std/test](test.md)** - test and group, the two functions a .test.trb file calls, with assert doing all of the checking.
-- **[std/http](http.md)** - A minimal HTTP client - get, post and request answer a Task, and a response body is a stream of any size.
+- **[std/network](network.md)** - IP and socket addresses as values, name resolution, and TCP - a listener, and a stream whose two directions are a Source and a Sink of Bytes.
+- **[std/http](http.md)** - HTTP/1.1, client and server, over std/network - get, post and send answer a Task, a handler answers a Task of a Response, and every body is a stream.
 - **[std/sandbox](sandbox.md)** - Sandbox and Script, which load a .trb file as a type-checked, capability-limited receiver closure.
 - **[std/project](project.md)** - The receiver type of project.trb - Project, Dependencies, Build, Test and Workspace.
 - **[std/prelude](prelude.md)** - The package of re-exports that is in scope in every file of a project, unless project.trb names another one.

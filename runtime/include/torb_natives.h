@@ -171,6 +171,30 @@ double torb_math_sine(double value);
 double torb_math_tangent(double value);
 /* UInt64.multipliedWrapping */
 uint64_t torb_multiplied_wrapping_u64(uint64_t first, uint64_t second);
+/* networkAccept */
+torb_task *torb_network_accept(int64_t listener);
+/* networkAddress */
+int64_t torb_network_address(int64_t handle, bool peer, torb_list *parts);
+/* networkClose */
+void torb_network_close(int64_t handle);
+/* networkConnect */
+torb_task *torb_network_connect(int64_t family, int64_t high, int64_t low, int64_t port);
+/* networkErrorText */
+torb_text torb_network_error_text(int64_t failure);
+/* networkListen */
+int64_t torb_network_listen(int64_t family, int64_t high, int64_t low, int64_t port, int64_t backlog);
+/* networkReceive */
+torb_task *torb_network_receive(int64_t stream, int64_t maximum);
+/* networkResolve */
+torb_task *torb_network_resolve(torb_text host);
+/* networkSend */
+torb_task *torb_network_send(int64_t stream, torb_list bytes, int64_t from);
+/* networkShutdown */
+int64_t torb_network_shutdown(int64_t stream);
+/* networkTakeReceived */
+void torb_network_take_received(int64_t stream, torb_list *into);
+/* networkTakeResolved */
+void torb_network_take_resolved(int64_t resolution, torb_list *parts);
 /* Bsd.sysctlInteger */
 int64_t torb_os_bsd_sysctl_integer(torb_text name, int64_t *number, torb_text *failure);
 /* Bsd.sysctlText */

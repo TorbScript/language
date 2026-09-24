@@ -1,0 +1,549 @@
+/**
+ * The parts of an HTTP message: `Method`, `Status`, `Headers`, the `Body` that is a stream, and the two messages,
+ * `Request` and `Response` (docs/design/NETWORK.md section 6).
+ */
+
+use Json from "std/json"
+use SocketAddress from "std/network"
+use Source, Bytes, textOf from "std/stream"
+use lines as streamLines from "std/stream"
+use HttpError from "./error"
+
+/**
+ * An HTTP method: a case per method RFC 9110 registers, and `Other` for the rest - the set is open (a WebDAV server
+ * meets `PROPFIND`), so a router matches on the cases and still sees every method.
+ *
+ *     match request.method {
+ *       .Get => ...
+ *       .Post => ...
+ *       _ => ...
+ *     }
+ *
+ * [Method.of] is the one way in from text: it answers the case for a registered name and `Other` only for the rest, so
+ * `GET` is never `Other("GET")`. A name is case-sensitive, as RFC 9110 section 9.1 says: `get` is `Other("get")`.
+ */
+public type Method with Show, Equals, Hash {
+  case Get
+  case Head
+  case Post
+  case Put
+  case Delete
+  case Patch
+  case Options
+  case Trace
+  case Connect
+  /** A method RFC 9110 does not register. Made by [Method.of], which never makes one for a registered name. */
+  case Other(name: String)
+
+  /**
+   * The method of that name. A name that is not a token of RFC 9110 - empty, with a space, a control character or a
+   * separator - is no method.
+   */
+  static fn of(name: String): Result<Method, HttpError> {
+    if !isToken(name) {
+      return Fail HttpError.malformed("`{name}` is not a method: a method is a token")
+    }
+    const method = match name {
+      "GET" => Method.Get
+      "HEAD" => Method.Head
+      "POST" => Method.Post
+      "PUT" => Method.Put
+      "DELETE" => Method.Delete
+      "PATCH" => Method.Patch
+      "OPTIONS" => Method.Options
+      "TRACE" => Method.Trace
+      "CONNECT" => Method.Connect
+      _ => Method.Other name
+    }
+    Ok method
+  }
+
+  /** `"GET"`. */
+  fn name(): String {
+    match self {
+      .Get => "GET"
+      .Head => "HEAD"
+      .Post => "POST"
+      .Put => "PUT"
+      .Delete => "DELETE"
+      .Patch => "PATCH"
+      .Options => "OPTIONS"
+      .Trace => "TRACE"
+      .Connect => "CONNECT"
+      .Other(text) => text
+    }
+  }
+
+  /** `GET`, `HEAD`, `OPTIONS` and `TRACE`: a request of these asks and changes nothing (RFC 9110 section 9.2.1). */
+  fn isSafe(): Bool {
+    match self {
+      .Get | .Head | .Options | .Trace => true
+      _ => false
+    }
+  }
+
+  fn show(): String {
+    name()
+  }
+}
+
+/**
+ * An HTTP status: a capsule over its code, from 100 to 599, with the common ones as constants.
+ *
+ *     Response.text("no such user", status: Status.notFound)
+ */
+public type Status with Show, Equals, Hash, Compare {
+  private storedCode: Int
+
+  static ok = Status 200
+  static created = Status 201
+  static accepted = Status 202
+  static noContent = Status 204
+  static movedPermanently = Status 301
+  static found = Status 302
+  static seeOther = Status 303
+  static notModified = Status 304
+  static temporaryRedirect = Status 307
+  static permanentRedirect = Status 308
+  static badRequest = Status 400
+  static unauthorized = Status 401
+  static forbidden = Status 403
+  static notFound = Status 404
+  static methodNotAllowed = Status 405
+  static notAcceptable = Status 406
+  static requestTimeout = Status 408
+  static conflict = Status 409
+  static gone = Status 410
+  static lengthRequired = Status 411
+  static contentTooLarge = Status 413
+  static uriTooLong = Status 414
+  static unsupportedMediaType = Status 415
+  static unprocessableContent = Status 422
+  static tooManyRequests = Status 429
+  static requestHeaderFieldsTooLarge = Status 431
+  static internalServerError = Status 500
+  static notImplemented = Status 501
+  static badGateway = Status 502
+  static serviceUnavailable = Status 503
+  static gatewayTimeout = Status 504
+  static httpVersionNotSupported = Status 505
+
+  /** The status of that code: 100 to 599, which is every code HTTP can carry. */
+  static fn of(code: Int): Result<Status, HttpError> {
+    if code < 100 || code > 599 {
+      return Fail HttpError.malformed("{code} is not a status: a status is from 100 to 599")
+    }
+    Ok Status(code)
+  }
+
+  /** `404`. */
+  fn code(): Int {
+    storedCode
+  }
+
+  /** The phrase RFC 9110 registers for the code, or `""` for a code it does not. */
+  fn reason(): String {
+    match storedCode {
+      100 => "Continue"
+      101 => "Switching Protocols"
+      200 => "OK"
+      201 => "Created"
+      202 => "Accepted"
+      203 => "Non-Authoritative Information"
+      204 => "No Content"
+      205 => "Reset Content"
+      206 => "Partial Content"
+      300 => "Multiple Choices"
+      301 => "Moved Permanently"
+      302 => "Found"
+      303 => "See Other"
+      304 => "Not Modified"
+      307 => "Temporary Redirect"
+      308 => "Permanent Redirect"
+      400 => "Bad Request"
+      401 => "Unauthorized"
+      402 => "Payment Required"
+      403 => "Forbidden"
+      404 => "Not Found"
+      405 => "Method Not Allowed"
+      406 => "Not Acceptable"
+      407 => "Proxy Authentication Required"
+      408 => "Request Timeout"
+      409 => "Conflict"
+      410 => "Gone"
+      411 => "Length Required"
+      412 => "Precondition Failed"
+      413 => "Content Too Large"
+      414 => "URI Too Long"
+      415 => "Unsupported Media Type"
+      416 => "Range Not Satisfiable"
+      417 => "Expectation Failed"
+      421 => "Misdirected Request"
+      422 => "Unprocessable Content"
+      426 => "Upgrade Required"
+      428 => "Precondition Required"
+      429 => "Too Many Requests"
+      431 => "Request Header Fields Too Large"
+      500 => "Internal Server Error"
+      501 => "Not Implemented"
+      502 => "Bad Gateway"
+      503 => "Service Unavailable"
+      504 => "Gateway Timeout"
+      505 => "HTTP Version Not Supported"
+      _ => ""
+    }
+  }
+
+  /** `1xx`. */
+  fn isInformational(): Bool {
+    storedCode < 200
+  }
+
+  /** `2xx`. */
+  fn isSuccess(): Bool {
+    storedCode >= 200 && storedCode < 300
+  }
+
+  /** `3xx`. */
+  fn isRedirect(): Bool {
+    storedCode >= 300 && storedCode < 400
+  }
+
+  /** `4xx`. */
+  fn isClientError(): Bool {
+    storedCode >= 400 && storedCode < 500
+  }
+
+  /** `5xx`. */
+  fn isServerError(): Bool {
+    storedCode >= 500
+  }
+
+  /** `404 Not Found`, or the code alone where no phrase is registered. */
+  fn show(): String {
+    const phrase = reason()
+    if phrase.isEmpty() {
+      return "{storedCode}"
+    }
+    "{storedCode} {phrase}"
+  }
+
+  fn compare(other: Status): Ordering {
+    storedCode.compare other.storedCode
+  }
+}
+
+/** One field of a head: its name as it was written, and its value. */
+type Field {
+  name: String
+  value: String
+}
+
+/**
+ * The fields of a head, in the order they arrived. A name is compared without regard to case and kept as it was
+ * written; a name may repeat (`Set-Cookie`), which is why this is not a `Map`.
+ *
+ *     var headers = Headers()
+ *     headers.set "Content-Type", "text/plain"
+ *     print headers.get("content-type")
+ *
+ * A value that holds a line break or a `NUL` is written with spaces in their place, and a field whose name is not a
+ * token is not written at all: a header built from what a client sent cannot smuggle a second header in.
+ */
+public type Headers with Show, Equals {
+  private var fields: List<Field> = []
+
+  /** The first value of `name`, or `None`. */
+  fn get(name: String): String? {
+    const wanted = name.toLowerCase()
+    for field in fields {
+      if field.name.toLowerCase() == wanted {
+        return Some field.value
+      }
+    }
+    None
+  }
+
+  /** Every value of `name`, in order. */
+  fn all(name: String): List<String> {
+    const wanted = name.toLowerCase()
+    var values: List<String> = []
+    for field in fields {
+      if field.name.toLowerCase() == wanted {
+        values.append field.value
+      }
+    }
+    values
+  }
+
+  /** Whether a field of that name is there. */
+  fn contains(name: String): Bool {
+    get(name).isSome()
+  }
+
+  /** How many fields there are, repeated names counted each time. */
+  fn length(): Int {
+    fields.length()
+  }
+
+  /** Replaces every field of `name` by one with `value`, where the first of them was; at the end where there was none. */
+  var fn set(name: String, value: String) {
+    const wanted = name.toLowerCase()
+    var kept: List<Field> = []
+    var placed = false
+    for field in fields {
+      if field.name.toLowerCase() == wanted {
+        if !placed {
+          kept.append Field(name, value)
+          placed = true
+        }
+        continue
+      }
+      kept.append field
+    }
+    if !placed {
+      kept.append Field(name, value)
+    }
+    fields = kept
+  }
+
+  /** Adds a field, also where one of that name is there already. */
+  var fn add(name: String, value: String) {
+    fields.append Field(name, value)
+  }
+
+  /** Removes every field of `name`. */
+  var fn remove(name: String) {
+    const wanted = name.toLowerCase()
+    var kept: List<Field> = []
+    for field in fields {
+      if field.name.toLowerCase() != wanted {
+        kept.append field
+      }
+    }
+    fields = kept
+  }
+
+  /** Every field, in order: `for (name, value) in headers.entries() { ... }`. */
+  fn entries(): List<(name: String, value: String)> {
+    fields.map({ (_.name, _.value) }).toList()
+  }
+
+  /** `Content-Type: text/plain`, one field per line. */
+  fn show(): String {
+    fields.map({ "{_.name}: {_.value}" }).joined(separator: "\n")
+  }
+}
+
+/** `Headers.from(["Accept": "application/json"])`: the entries of a map, in its order. */
+extend Headers with From<Map<String, String>> {
+  static fn from(value: Map<String, String>): Headers {
+    var headers = Headers()
+    for (name, text) in value {
+      headers.add name, text
+    }
+    headers
+  }
+}
+
+/**
+ * The bytes of a request or a response, as a stream that is read once.
+ *
+ *     const all = response.body.through(Json.items<User>()).checked().toList().await()?   // one at a time
+ *     const text = response.body.text().await()?                                          // or all of it
+ *     File.write(path, response.body.mapFailure(IoError.from)).await()?  // or straight to disk
+ *
+ * The convenience methods come first on purpose - that is the lesson of `fetch` and Bun, where `await response.json()`
+ * is what almost every program wants - and every one of them takes a `limit`, because a peer that decides how much
+ * memory a program allocates is a denial of service.
+ */
+public shared type Body with Source<Bytes, HttpError> {
+  /**
+   * 16 MiB: large enough for any document a program means to hold in one piece, small enough that a body nobody
+   * expected is refused instead of filling the machine. Streaming is the way past it, not a bigger number.
+   */
+  static defaultLimit: Int = 16777216
+
+  private var reading: Source<Bytes, HttpError>
+  /** How many bytes the body has, where that is known before it is read: what `Content-Length` says. */
+  private knownLength: Int?
+
+  /** The next chunk, or `None` at the end of the body. Most callers reach for [Body.bytes] or [Body.text] instead. */
+  var fn next(): Task<Result<Bytes?, HttpError>> {
+    reading.next().await()
+  }
+
+  /**
+   * Nothing of its own: `reading` is a field, and the release of the body releases it - and with it the underlying
+   * connection - right after this, without reading the rest.
+   */
+  var fn close() {}
+
+  /** How many bytes the body has, where that is known before it is read. */
+  fn length(): Int? {
+    knownLength
+  }
+
+  /** The whole body. More than `limit` bytes is an `HttpError` and the rest is not read. */
+  var fn bytes(limit: Int = Body.defaultLimit): Task<Result<Bytes, HttpError>> {
+    var collected: Bytes = []
+    while const Some(chunk) = next().await()? {
+      if collected.length() + chunk.length() > limit {
+        return Fail HttpError.tooLarge(limit)
+      }
+      collected.appendAll chunk
+    }
+    Ok collected
+  }
+
+  /** The whole body as text. Bytes that are not UTF-8 are an `HttpError`, never a replacement character. */
+  var fn text(limit: Int = Body.defaultLimit): Task<Result<String, HttpError>> {
+    const raw = bytes(limit: limit).await()?
+    textOf(raw).mapError(HttpError.invalidText)
+  }
+
+  /** The whole body, decoded as JSON: `response.body.json<User>().await()?` */
+  var fn json<Value: Decode>(limit: Int = Body.defaultLimit): Task<Result<Value, HttpError>> {
+    const document = text(limit: limit).await()?
+    Json().decode<Value>(document).mapError(HttpError.decodeFailed)
+  }
+
+  /** Lines of text, as a stream: a log, an event stream, a CSV of any size. */
+  var fn lines(): Source<String, HttpError> {
+    through(streamLines()).checked()
+  }
+
+  /**
+   * A body of any size - what an upload or a proxy hands on - with its length where the source knows it. Not
+   * `Body.from(source)`: `From.from` takes its argument by value, and handing a stream over needs the permission to
+   * read it (`var`), because the `Body` reads it from now on.
+   */
+  static fn of(var source: Source<Bytes, HttpError>, length: Int? = None): Body {
+    Body source, length
+  }
+
+  /** A body with nothing in it, e.g. for a `GET` request. */
+  static fn empty(): Body {
+    const nothing: List<Bytes> = []
+    Body Source.from(nothing), Some(0)
+  }
+
+  /**
+   * An `Encode` value as a JSON body. Not `Body.json(value)`: a type has one namespace for its members, and `json` is
+   * taken by the reading side, where it matters more (`body.json<User>()`).
+   */
+  static fn jsonOf<Value: Encode>(value: Value): Body {
+    Body.from Json().encode(value)
+  }
+}
+
+/** `Body.from("hello")` - the text as UTF-8. */
+extend Body with From<String> {
+  static fn from(value: String): Body {
+    Body.from value.bytes().toList()
+  }
+}
+
+/** `Body.from(bytes)` - one chunk, already in memory. */
+extend Body with From<Bytes> {
+  static fn from(value: Bytes): Body {
+    Body Source.from([value]), Some(value.length())
+  }
+}
+
+/**
+ * A request: what a client sends and what a server's handler is handed. A `shared type` and not a value, because it
+ * owns its body, a stream that is read once.
+ *
+ *     fn handle(request: Request): Task<Result<Response, HttpError>> {
+ *       if request.path() == "/hello" {
+ *         return Ok Response.text("hello")
+ *       }
+ *       Ok Response.of(Status.notFound)
+ *     }
+ */
+public shared type Request {
+  method: Method
+  /** The request target as it was sent: `/users/7?details=true`. */
+  target: String
+  headers: Headers = Headers()
+  /** `var`, because reading a body changes it: whoever reads one needs a `var` path to it. */
+  var body: Body
+  /** Where the request came from, on a server; `None` on a client. */
+  remote: SocketAddress? = None
+  /** `HTTP/1.1` or `HTTP/1.0`. */
+  version: String = "HTTP/1.1"
+
+  /** The target without its query: `/users/7`. */
+  fn path(): String {
+    target.substringBefore("?") ?? target
+  }
+
+  /** What follows the first `?` of the target, or `None`. */
+  fn query(): String? {
+    target.substringAfter "?"
+  }
+}
+
+/**
+ * What came back from a server, or what a handler answers. A `shared type` and not a value: it owns one end of a stream
+ * that is read once, and a copy would promise a second read of a body that is already gone. So a response that is read
+ * from sits in a `var` binding, for the same reason a `File` does.
+ */
+public shared type Response {
+  status: Status
+  /** `var`, so that a handler can add a field to a response it made. */
+  var headers: Headers = Headers()
+  /** `var`, because reading a body changes it: whoever reads one needs a `var` path to it. */
+  var body: Body
+
+  /** A response of `status` with no body: `Response.of(Status.notFound)`. */
+  static fn of(status: Status): Response {
+    Response status, Headers(), Body.empty()
+  }
+
+  /** A text as UTF-8, with `Content-Type: text/plain; charset=utf-8`. */
+  static fn text(content: String, status: Status = Status.ok): Response {
+    var headers = Headers()
+    headers.set "Content-Type", "text/plain; charset=utf-8"
+    Response status, headers, Body.from(content)
+  }
+
+  /** An `Encode` value as JSON, with `Content-Type: application/json`. */
+  static fn jsonOf<Value: Encode>(value: Value, status: Status = Status.ok): Response {
+    var headers = Headers()
+    headers.set "Content-Type", "application/json"
+    Response status, headers, Body.jsonOf(value)
+  }
+
+  /**
+   * Decodes the body as JSON. A `Task`, because the body arrives over the network and decoding it means reading it.
+   */
+  var fn json<Value: Decode>(limit: Int = Body.defaultLimit): Task<Result<Value, HttpError>> {
+    body.json<Value>(limit: limit).await()
+  }
+}
+
+/** Whether `text` is a token of RFC 9110 section 5.6.2: one or more of the letters, digits and ``!#$%&'*+-.^_`|~``. */
+public fn isToken(text: String): Bool {
+  if text.isEmpty() {
+    return false
+  }
+  for byte in text.bytes() {
+    if !isTokenByte(byte) {
+      return false
+    }
+  }
+  true
+}
+
+/** One byte of a token. */
+public fn isTokenByte(byte: UInt8): Bool {
+  const code = Int.from byte
+  if (code >= 48 && code <= 57) || (code >= 65 && code <= 90) || (code >= 97 && code <= 122) {
+    return true
+  }
+  // ! # $ % & ' * + - . ^ _ ` | ~
+  code == 33 || (code >= 35 && code <= 39) || code == 42 || code == 43 || code == 45 || code == 46 || code == 94
+    || code == 95 || code == 96 || code == 124 || code == 126
+}

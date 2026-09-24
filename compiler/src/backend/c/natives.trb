@@ -1326,6 +1326,72 @@ fn plannedPackageEntries(var entries: List<NativeEntry>) {
   entries.append plannedRuntimeOf("request", "torb_http_request", "8")
 }
 
+/**
+ * `std/network`, over the IO core of `runtime/io.c` (docs/design/NETWORK.md section 2). A socket crosses as a handle, an
+ * `Int64` of the runtime's table, an address as numbers, and an answer as an `Int64` whose negative values are packed
+ * failures: the runtime builds no `Result`, no `NetworkError` and no address of the program. What waits answers a task of
+ * the runtime, and what it delivered is taken afterwards through a `var` list. `std/http` is TorbScript over these and
+ * has no native of its own.
+ */
+fn networkEntries(var entries: List<NativeEntry>) {
+  entries.append(runtimeOf(
+    "networkListen",
+    "torb_network_listen",
+    "int64_t torb_network_listen(int64_t family, int64_t high, int64_t low, int64_t port, int64_t backlog);",
+  ))
+  entries.append(runtimeOf(
+    "networkAccept",
+    "torb_network_accept",
+    "torb_task *torb_network_accept(int64_t listener);",
+  ))
+  entries.append(runtimeOf(
+    "networkConnect",
+    "torb_network_connect",
+    "torb_task *torb_network_connect(int64_t family, int64_t high, int64_t low, int64_t port);",
+  ))
+  entries.append(runtimeOf(
+    "networkReceive",
+    "torb_network_receive",
+    "torb_task *torb_network_receive(int64_t stream, int64_t maximum);",
+  ))
+  entries.append(runtimeOf(
+    "networkTakeReceived",
+    "torb_network_take_received",
+    "void torb_network_take_received(int64_t stream, torb_list *into);",
+  ))
+  entries.append(runtimeOf(
+    "networkSend",
+    "torb_network_send",
+    "torb_task *torb_network_send(int64_t stream, torb_list bytes, int64_t from);",
+  ))
+  entries.append(runtimeOf(
+    "networkShutdown",
+    "torb_network_shutdown",
+    "int64_t torb_network_shutdown(int64_t stream);",
+  ))
+  entries.append runtimeOf("networkClose", "torb_network_close", "void torb_network_close(int64_t handle);")
+  entries.append(runtimeOf(
+    "networkAddress",
+    "torb_network_address",
+    "int64_t torb_network_address(int64_t handle, bool peer, torb_list *parts);",
+  ))
+  entries.append(runtimeOf(
+    "networkResolve",
+    "torb_network_resolve",
+    "torb_task *torb_network_resolve(torb_text host);",
+  ))
+  entries.append(runtimeOf(
+    "networkTakeResolved",
+    "torb_network_take_resolved",
+    "void torb_network_take_resolved(int64_t resolution, torb_list *parts);",
+  ))
+  entries.append(runtimeOf(
+    "networkErrorText",
+    "torb_network_error_text",
+    "torb_text torb_network_error_text(int64_t failure);",
+  ))
+}
+
 /** The whole manifest, in the order the sections above build it. */
 public fn nativeEntries(): List<NativeEntry> {
   var entries: List<NativeEntry> = []
@@ -1345,6 +1411,7 @@ public fn nativeEntries(): List<NativeEntry> {
   targetEntries entries
   systemEntries entries
   taskEntries entries
+  networkEntries entries
   machineEntries entries
   plannedPackageEntries entries
   entries

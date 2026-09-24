@@ -1,0 +1,44 @@
+use Ipv4Address, Ipv6Address, IpAddress, SocketAddress from "std/network"
+
+/**
+ * An IP address is a value, read from text and shown as text: IPv4 as four decimal parts without leading zeros, IPv6
+ * in the RFC 5952 form - lower case, no leading zeros, the longest run of zero segments collapsed, an IPv4-mapped
+ * address with its IPv4 part - and a socket address with brackets around an IPv6 address. Text that is no address is
+ * refused with the reason, never guessed at.
+ */
+
+for text in ["127.0.0.1", "0.0.0.0", "255.255.255.255", "192.168.1.23"] {
+  print "{text} -> {Ipv4Address.tryFrom(text)}"
+}
+for text in ["256.1.1.1", "1.2.3", "01.2.3.4", "1.2.3.4.5", "a.b.c.d", ""] {
+  print "{text} -> {Ipv4Address.tryFrom(text)}"
+}
+for text in [
+  "::1",
+  "::",
+  "2001:DB8:0:0:0:0:0:1",
+  "2001:db8:0:0:1:0:0:1",
+  "fe80::1:2",
+  "1:2:3:4:5:6:7:8",
+  "::ffff:192.0.2.1",
+  "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+  "1::2::3",
+  "12345::1",
+  "fe80::1%eth0",
+  "1:2:3:4:5:6:7:8:9",
+] {
+  print "{text} -> {Ipv6Address.tryFrom(text)}"
+}
+for text in ["127.0.0.1:8080", "[::1]:443", "[2001:db8::1]:0", "::1:80", "1.2.3.4:65536", "1.2.3.4"] {
+  print "{text} -> {SocketAddress.tryFrom(text)}"
+}
+
+const loopback = Ipv4Address.of 127, 0, 0, 1
+print "{loopback} loopback {loopback.isLoopback()}, private {loopback.isPrivate()}, equal {loopback == Ipv4Address.loopback}"
+const home = Ipv4Address.tryFrom("192.168.0.9").ok() ?? Ipv4Address.unspecified
+print "{home} private {home.isPrivate()}, octets {home.octets()}"
+const linkLocal = Ipv6Address.tryFrom("fe80::1").ok() ?? Ipv6Address.unspecified
+print "{linkLocal} link-local {linkLocal.isLinkLocal()}, segments {linkLocal.segments()}"
+const both = [IpAddress.Version6(Ipv6Address.loopback), IpAddress.loopback]
+print "{both.sorted({ _ })}"
+print "{IpAddress.tryFrom("::1")} {IpAddress.tryFrom("10.0.0.1")} {IpAddress.tryFrom("nope")}"
