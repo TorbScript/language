@@ -1,0 +1,46 @@
+/**
+ * A trait member that answers a `Task` and takes a record by value, called through a trait-typed value: the thunk of
+ * the table retains the record it hands on owned, because the task keeps it in its frame. That retain is the record's
+ * `R_` helper, and the back end has to define it even where no instruction of the program copies such a record.
+ */
+
+type Request {
+  path: String
+}
+
+/** A value with a counted field, so that handing it on owned is a retain. */
+type Next {
+  prefix: String
+
+  fn run(request: Request): Task<String> {
+    "{prefix} {request.path}"
+  }
+}
+
+trait Middleware {
+  fn around(request: Request, next: Next): Task<String>
+}
+
+type RequestLog with Middleware {
+  label: String = "logged"
+
+  fn around(request: Request, next: Next): Task<String> {
+    const answer = next.run(request).await()
+    "{label}: {answer}"
+  }
+}
+
+/** A value the program builds, so that its storage is counted and not the immortal storage of a literal. */
+fn repeated(part: String, times: Int): String {
+  var total = ""
+  for _ in 0..times {
+    total = total + part
+  }
+  total
+}
+
+const layers: List<Middleware> = [RequestLog()]
+for layer in layers {
+  const answer = layer.around Request(repeated("/orders", 1)), Next(repeated("ok", 2))
+  print answer.await()
+}

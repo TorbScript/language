@@ -1575,9 +1575,31 @@ fn demandFlagsOf(program: IrProgram, functions: List<IrFunction>): DemandFlags {
       markLayoutFlag program, drops, found
       markLayoutFlag program, retains, found
     }
+    markThunkRetains program, retains, table
   }
   closeHelperDemand program, retains, drops
   DemandFlags retains, drops
+}
+
+/**
+ * The retains the thunks of one table write ([retainedReceiverOf], [retainedArgumentOf]): every operand the member
+ * takes **owned** is retained in the thunk, and for an inline record that is its `R_`. No instruction of the program
+ * names it where the member is only ever called through the table - a task member such as
+ * `fn around(request: Request, next: Next): Task<...>` keeps its `Next` in its frame, and its `R_T_Next` was named by the
+ * thunk and defined nowhere.
+ */
+fn markThunkRetains(program: IrProgram, var retains: List<Bool>, table: WitnessTable) {
+  for member in table.members {
+    if !program.hasFunction(member) {
+      continue
+    }
+    for parameter in program.functionAt(member).signature.parameters {
+      if parameter.isReference || parameter.ownership != Ownership.Owned {
+        continue
+      }
+      markRetained program, retains, parameter.annotation
+    }
+  }
 }
 
 fn filledFalse(count: Int): List<Bool> {
