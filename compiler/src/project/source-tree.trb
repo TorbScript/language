@@ -4,6 +4,8 @@
  */
 
 use normalizePath, isInside, relativePath from "./path"
+use SourceText from "../syntax/source"
+use Parsed, parse from "../syntax/parser/parser"
 
 /**
  * Every file the front end may look at, with its text. Reading happens once, in `read.trb`; from here on the whole
@@ -19,6 +21,11 @@ public type SourceTree {
   private base: String
   /** The toolchain's `std` directory, whose files are part of the tree, or empty. See [SourceTree.standardLibrary]. */
   private standardLibraryValue: String
+  /**
+   * Files parsed once, by normalized path: a tree that is checked again and again with one file changing - a session of
+   * `torb repl` - parses everything else once ([SourceTree.parsedEverything]). Empty otherwise.
+   */
+  private parsedFiles: Map<String, (SourceText, Parsed)> = [:]
 
   static fn of(files: Map<String, String>, base: String = ".", standardLibrary: String = ""): SourceTree {
     var normalized: Map<String, String> = [:]
@@ -63,5 +70,42 @@ public type SourceTree {
   /** How a path is written in a message. */
   fn display(path: String): String {
     relativePath base, path
+  }
+
+  /** The same tree with one file added, or its text replaced; a parse the tree kept of it is forgotten. */
+  fn withFile(path: String, text: String): SourceTree {
+    const normalized = normalizePath path
+    var texts = files
+    var paths = sortedPaths
+    if !texts.containsKey(normalized) {
+      paths.append normalized
+      paths.sort({ _ })
+    }
+    texts.set normalized, text
+    var parsed = parsedFiles
+    const _ = parsed.remove normalized
+    Self texts, paths, base, standardLibraryValue, parsed
+  }
+
+  /** The same tree with every file parsed once, which [SourceTree.parsedAt] then answers without parsing again. */
+  fn parsedEverything(): SourceTree {
+    var parsed = parsedFiles
+    for (path, text) in files {
+      if !parsed.containsKey(path) {
+        const source = SourceText.of text
+        parsed.set path, (source, parse(source))
+      }
+    }
+    Self files, sortedPaths, base, standardLibraryValue, parsed
+  }
+
+  /** The text of a file as the parser reads it, and what the parser made of it: kept, or parsed now. */
+  fn parsedAt(path: String): (SourceText, Parsed) {
+    const normalized = normalizePath path
+    if const Some(found) = parsedFiles.get(normalized) {
+      return found
+    }
+    const source = SourceText.of(files.get(normalized) ?? "")
+    (source, parse(source))
   }
 }

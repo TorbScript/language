@@ -18,8 +18,10 @@
  *
  * The grant is text, one setting per line and a tab between the word and the value, written by
  * compiler/src/vm/sandbox.trb or by `SandboxCapabilities.grant` of std/sandbox: `base`, `read` and `write`
- * (directories), `variable` (a name, or a prefix followed by `*`) and `memory` (bytes, 0 for no limit); other words are
- * the interpreter's. A directory is made absolute against the working directory when the sandbox opens, and it and
+ * (directories), `variable` (a name, or a prefix followed by `*`), `memory` (bytes, 0 for no limit) and `unrestricted`
+ * (any value: every path and every variable, which is the grant of an entry of `torb repl` - its sandbox is only the
+ * recovery point that turns a panic and `Process.exit` into a stop, docs/design/REPL.md section 7); other words are the
+ * interpreter's. A directory is made absolute against the working directory when the sandbox opens, and it and
  * every path of the script are normalized by the same rules as `normalizePath` of compiler/src/project/path.trb, so
  * the two compare as text.
  *
@@ -47,6 +49,7 @@ static int64_t torb_sandbox_memory_limit = 0;
 static int64_t torb_sandbox_allocated = 0;
 static int torb_sandbox_guards = 0;
 static int64_t torb_sandbox_stop_kind = 0;
+static int torb_sandbox_unrestricted = 0;
 
 static char *torb_sandbox_absolute(char *written);
 
@@ -106,6 +109,8 @@ void torb_sandbox_open(const char *grant, size_t length) {
         torb_sandbox_append(&torb_sandbox_writes, line + 6, size - 6u);
       } else if (torb_sandbox_word_is(line, size, "variable")) {
         torb_sandbox_append(&torb_sandbox_patterns, line + 9, size - 9u);
+      } else if (torb_sandbox_word_is(line, size, "unrestricted")) {
+        torb_sandbox_unrestricted = 1;
       } else if (torb_sandbox_word_is(line, size, "memory")) {
         char *number = torb_sandbox_copy(line + 7, size - 7u);
         torb_sandbox_memory_limit = (int64_t)strtoll(number, NULL, 10);
@@ -141,6 +146,7 @@ void torb_sandbox_close(void) {
   torb_sandbox_memory_limit = 0;
   torb_sandbox_allocated = 0;
   torb_sandbox_guards = 0;
+  torb_sandbox_unrestricted = 0;
 }
 
 bool torb_sandbox_is_open(void) {
@@ -206,7 +212,7 @@ void torb_sandbox_exit(int64_t code) {
 /* ------------------------------------------------------------------------------------------------ environment --- */
 
 bool torb_sandbox_allows_variable(const char *name) {
-  if (torb_sandbox_active == 0) {
+  if (torb_sandbox_active == 0 || torb_sandbox_unrestricted != 0) {
     return true;
   }
   for (size_t index = 0; index < torb_sandbox_patterns.count; index++) {
@@ -373,7 +379,7 @@ char *torb_sandbox_path(torb_text path, bool writes, size_t *capacity) {
   char *joined;
   size_t base_length;
   const char *root;
-  if (torb_sandbox_active == 0) {
+  if (torb_sandbox_active == 0 || torb_sandbox_unrestricted != 0) {
     char *copy = (char *)torb_raw_allocate(length + 1u);
     if (length > 0u) {
       memcpy(copy, bytes, length);

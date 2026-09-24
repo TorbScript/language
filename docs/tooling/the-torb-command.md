@@ -9,6 +9,7 @@ keywords:
   - check
   - build
   - run
+  - repl
   - test
   - canon
   - highlight
@@ -16,6 +17,7 @@ source:
   - compiler/src/main.trb
   - compiler/src/highlight/command.trb
   - compiler/src/cli/run.trb
+  - compiler/src/cli/repl.trb
   - CONCEPT.md#toolchain
 ---
 
@@ -26,6 +28,7 @@ the language server are all in it. That keeps a project's setup to one installat
 
 ```text
 torb run <path> [...]  Build a file or a project into a cache and run it
+torb repl              Read entries from standard input, run each in the VM, keep their bindings
 torb check [path]...   Check projects, workspaces or single files
 torb build [path]      Compile an entry file to a native binary through C
 torb ir <path>...      Print the typed IR the back end lowers
@@ -60,6 +63,13 @@ an unchanged program is not rebuilt. A script may hold top-level code because no
 What it starts is the binary [`build`](torb-build.md) would have written, with the program's three streams and its
 exit code passed through. `torb run --vm` runs the same program in the bytecode VM instead, over the same typed IR and
 the same runtime, without building anything ([torb run](torb-run.md)).
+
+### `repl`
+
+Reads entries from standard input - a line, or as many as it takes to close what the line opened - checks each against
+the declarations and bindings of the entries before it, runs it in the VM and keeps what it declares and binds. The value
+of an entry that ends in an expression is shown behind `= `; messages name the entry (`<entry 3>`) and its own lines.
+A piped file is the same session as a typed one ([torb repl](torb-repl.md)).
 
 ### `check`
 
@@ -168,7 +178,6 @@ These are in the design and not in the binary. A page about one of them carries 
 | `torb format` | The formatter, taking over from `canon` |
 | `torb lint` | The naming and style rules the compiler does not care about |
 | `torb doc` | Documentation from the doc comments, including the standard-library pages |
-| `torb repl` | An interactive session where every input is a nested scope of the previous one |
 | `torb add`, `remove`, `update`, `audit` | The package manager and the advisory database |
 
 ## Examples
@@ -196,7 +205,7 @@ wrote ../build/dev/scratch.exe
 
 - [Verify your work](verifying-your-work.md) - the commands to run before you are done.
 - [Run your first program](../guide/installing-and-running.md) - the first use of `run` and `check`.
-- [torb check](torb-check.md), [torb run](torb-run.md), [torb build](torb-build.md), [torb test](torb-test.md),
-  [torb canon](torb-canon.md) - one page per command, in depth.
+- [torb check](torb-check.md), [torb run](torb-run.md), [torb repl](torb-repl.md), [torb build](torb-build.md),
+  [torb test](torb-test.md), [torb canon](torb-canon.md) - one page per command, in depth.
 - [Command calls](../language/syntax/command-calls.md) - the canon that `canon` enforces.
 - [The docs commands](../contributing/checks.md) - the four `docs` subcommands.

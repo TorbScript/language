@@ -96,9 +96,9 @@ public type Opcode {
   /** Ends a task as cancelled (the IR's `Stop`). */
   case Stop
   /**
-   * `A` = target, `B` = width; `T0` = the cell's first word (after the constant pool: its flag, then its value), `T1` = the chunk of
-   * the initializer. The accessor of a module constant that is no static data: the value is built once, inside an
-   * immortal region, and every read after the first copies it.
+   * `A` = target, `B` = width; `T0` = the cell's first word (a gap of the constant pool: its flag, then its value), `T1` =
+   * the chunk of the initializer. The accessor of a module constant that is no static data: the value is built once,
+   * inside an immortal region, and every read after the first copies it.
    */
   case Cell
   /**
@@ -574,6 +574,11 @@ public type ConstantPart {
   case Text(value: String)
   /** One word: an immortal counted block of the VM, holding these parts, with this shape of its contents. */
   case Block(shape: Int, parts: List<ConstantPart>)
+  /**
+   * Words the program writes itself, zero when it is loaded: the flag and the value of a module constant's cell, or
+   * what a host keeps below every frame (the bindings of a session of `torb repl`, docs/design/REPL.md section 5).
+   */
+  case Gap(width: Int)
 }
 
 /** One step of a compiled place. */
@@ -663,6 +668,13 @@ public type ParameterEntry {
    * same); `-1` where there is nothing to retain.
    */
   retainedThroughWitness: Int = -1
+  /**
+   * The shape of the value the parameter holds or refers to, plus one, `0` where nothing in it is counted: what a host
+   * releases a value it passed in by when it lets go of it. Only an entry chunk of the emission carries it.
+   */
+  valueShape: Int = 0
+  /** The words of that value: what a host reserves for a value a `var` parameter refers to. Only for an entry chunk. */
+  valueWidth: Int = 0
 }
 
 /** One slot of a frame, for the disassembly: the IR slot, its register and width, and its type. */
@@ -704,14 +716,13 @@ public type BytecodeProgram {
   var chunks: List<Chunk> = []
   /** The chunks the program runs, in order: the top-level code of the entry file, or of every test file. */
   var entries: List<Int> = []
-  var constants: List<ConstantPart> = []
-  /** How many words the constant pool places. */
-  var constantWords: Int = 0
   /**
-   * How many words the cells of the module constants take, after the constant pool: per cell a flag that says it is
-   * built, then its value. The first frame begins after them.
+   * The words below the first frame, in order: the static values, and the gaps a module constant's cell (per cell a
+   * flag that says it is built, then its value) or a host keeps its own words in.
    */
-  var cellWords: Int = 0
+  var constants: List<ConstantPart> = []
+  /** How many words the constant pool places. The first frame begins after them. */
+  var constantWords: Int = 0
   var shapes: List<Shape> = []
   var tables: List<TableEntry> = []
   var elements: List<ElementEntry> = []
@@ -725,5 +736,6 @@ public fn widthOfPart(part: ConstantPart): Int {
     .Floating(_) => 1
     .Text(_) => 2
     .Block(_, _) => 1
+    .Gap(width) => width
   }
 }

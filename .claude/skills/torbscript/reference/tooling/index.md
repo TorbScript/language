@@ -29,6 +29,7 @@ design, which is in internals. A page here is about what you type and what comes
 - **[torb new](torb-new.md)** - torb new scaffolds a package - project.trb, a src/main.trb that prints a greeting, and a tests/main.test.trb with one passing test - refusing where the name already exists.
 - **[torb check](torb-check.md)** - torb check resolves every module, import and name in a type position, types every expression, and reports one block per diagnostic - the gate every other command trusts.
 - **[torb run](torb-run.md)** - torb run builds a file or a project into a cache and executes it, passing the rest of the command line, the three streams and the exit code through.
+- **[torb repl](torb-repl.md)** - torb repl reads entries from standard input, checks each against the session, runs it in the bytecode VM and keeps what it binds and declares for the next entry - a typed session and a piped file behave the same.
 - **[torb build](torb-build.md)** - torb build type checks a program, lowers it to C, and hands the C to whatever compiler it finds - one file in, one native binary out, nothing to configure.
 - **[torb test](torb-test.md)** - torb test runs every *.test.trb file below the paths it is given - one binary for all of them - and prints ok or FAILED for every test call it sees.
 - **[torb canon](torb-canon.md)** - torb canon rewrites sources into the formatter canon over the syntax tree, checks every edit against a second parse, and drops anything that would change what the program means.

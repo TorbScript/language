@@ -28,6 +28,7 @@ use RunOptions, runProgram from "./cli/run"
 use TestOptions, runTests from "./cli/test"
 use NewOptions, runNew from "./cli/new"
 use runManifest from "./cli/manifest"
+use runRepl from "./cli/repl"
 use insertOwnership from "./ir/ownership"
 use entryNameOf from "./ir/lower/function"
 use emitBytecode from "./backend/bytecode/emit"
@@ -65,6 +66,7 @@ fn printUsage() {
   printError "                         --jobs N: accepted and ignored - one binary is one process"
   printError "  torb new <name>        Scaffold a package: project.trb, src/main.trb, tests/main.test.trb"
   printError "                         refuses if <name> already exists"
+  printError "  torb repl              Read entries from standard input and run each in the VM, keeping their bindings"
   printError "  torb manifest [path]...  Evaluate every project.trb the paths reach in the sandboxed VM, print its settings"
   printError "                         --check: compare them with the static reader instead, fail where they differ"
   printError "  torb ir <path>...      Print the typed IR of what the back end lowers, and what it does not yet"
@@ -592,6 +594,12 @@ match Process.arguments() {
       }
     }
     const code = runNew(options)?
+    if code != 0 {
+      Process.exit code
+    }
+  }
+  ["repl"] => {
+    const code = runRepl()?
     if code != 0 {
       Process.exit code
     }

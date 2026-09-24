@@ -1,0 +1,275 @@
+/**
+ * An entry of `torb repl` before anything about it is checked (docs/design/REPL.md sections 2 and 3): whether the lines
+ * read so far are a whole entry ([isComplete]), and what the entry is made of ([planEntry]) - the declarations the
+ * session keeps, the statements that run once, the names its top level binds, and the expression whose value is shown.
+ *
+ * Everything here reads the entry alone, with the parser: what a name means is the checker's business, once the
+ * entry is part of the session's module.
+ */
+
+use Span, SourceText from "../syntax/source"
+use Diagnostic from "../syntax/diagnostic"
+use Parsed, parse from "../syntax/parser/parser"
+use Declaration, Pattern, ExpressionKind from "../syntax/ast"
+
+/** One name the top level of an entry binds: a binding the session keeps once the entry ran. */
+public type NewBinding {
+  name: String
+  isVar: Bool
+  /** The name in the entry: where the checker records its type. */
+  span: Span
+}
+
+/** One declaration of an entry: the session keeps it for every entry after this one. */
+public type EntryDeclaration {
+  /** The names it declares. Empty for an `extend`, which adds to a type and replaces nothing. */
+  names: List<String>
+  /** The declaration, from the start of the line it begins on. */
+  span: Span
+  isImport: Bool
+  /**
+   * A `use` of several names as one `use` per name, `(name, text)`: what the session keeps, so that a later `use` of
+   * one of the names replaces that name alone. Empty for every other declaration.
+   */
+  imports: List<(String, String)> = []
+}
+
+/** An entry, taken apart. Spans are byte offsets into `text`. */
+public type EntryPlan {
+  text: String
+  /** What the parser found: an entry that does not parse is reported and nothing of it runs. */
+  diagnostics: List<Diagnostic>
+  declarations: List<EntryDeclaration>
+  /** Every statement that runs, from the start of the line it begins on. */
+  statements: List<Span>
+  /** The names the top level binds and keeps; a `using` binding ends with its entry and is not one of them. */
+  bindings: List<NewBinding>
+  /**
+   * The last statement, where it is an expression whose value the session shows: its span from the start of its line.
+   * An `if` without `else` has no value, and a statement that is not an expression shows nothing.
+   */
+  shown: Span?
+  /** A `return` at the top level, which an entry has no function for: the span of the first one. */
+  topLevelReturn: Span?
+}
+
+/**
+ * Whether the text is a whole entry, or the reader has to read another line first: an open bracket, a trailing operator
+ * that still wants its operand, a multi-line string or a block comment that is not closed. Anything else that does not
+ * parse is complete, and the parser's message is what the entry gets.
+ */
+public fn isComplete(text: String): Bool {
+  const end = significantEnd text
+  if end == 0 {
+    return true
+  }
+  const trimmed = text[0..end]
+  const parsed = parse SourceText.of(trimmed)
+  for diagnostic in parsed.diagnostics {
+    if diagnostic.span.start >= end {
+      return false
+    }
+    if diagnostic.message.startsWith("This comment is never closed") {
+      return false
+    }
+    if diagnostic.message.startsWith("This string is never closed") {
+      if trimmed[diagnostic.span.start..].startsWith("\"\"\"") {
+        return false
+      }
+    }
+  }
+  true
+}
+
+/** The byte offset after the last character that is not white space. */
+fn significantEnd(text: String): Int {
+  var end = text.byteLength()
+  while end > 0 {
+    const byte = text.byteAt(end - 1) ?? 0
+    if byte != 32 && byte != 10 && byte != 13 && byte != 9 {
+      break
+    }
+    end = end - 1
+  }
+  end
+}
+
+/** The entry taken apart by its top-level statements. */
+public fn planEntry(text: String): EntryPlan {
+  const parsed = parse SourceText.of(text)
+  planOf text, parsed
+}
+
+fn planOf(text: String, parsed: Parsed): EntryPlan {
+  var declarations: List<EntryDeclaration> = []
+  var statements: List<Span> = []
+  var bindings: List<NewBinding> = []
+  var shown: Span? = None
+  var topLevelReturn: Span? = None
+  const all = parsed.file.statements
+  for index in 0..all.length() {
+    const statement = all[index]
+    const span = Span lineStartOf(text, statement.span.start), statement.span.end
+    const isLast = index == all.length() - 1
+    match statement.kind {
+      .Declare(declaration) => {
+        const isImport = isImportDeclaration declaration
+        declarations.append EntryDeclaration(namesOf(declaration), span, isImport, importsOf(declaration))
+      }
+      .Bind(binding) => {
+        statements.append span
+        if !binding.scoped {
+          for (name, at) in namesBoundBy(binding.pattern) {
+            bindings.append NewBinding(name, binding.isVar, at)
+          }
+        }
+      }
+      .Evaluate(expression) => {
+        statements.append span
+        if isLast && hasValue(expression.kind) {
+          shown = Some span
+        }
+      }
+      .Return(_) => {
+        statements.append span
+        if topLevelReturn.isNone() {
+          topLevelReturn = Some statement.span
+        }
+      }
+      _ => statements.append span
+    }
+  }
+  EntryPlan text, parsed.diagnostics, declarations, statements, bindings, shown, topLevelReturn
+}
+
+/** An expression statement has a value unless it is an `if` without `else`, whose branches are statements. */
+fn hasValue(kind: ExpressionKind): Bool {
+  if const .If(_, _, otherwise) = kind {
+    return otherwise.isSome()
+  }
+  true
+}
+
+/** The offset of the first byte of the line `offset` is on. */
+public fn lineStartOf(text: String, offset: Int): Int {
+  var at = offset.min text.byteLength()
+  while at > 0 && text.byteAt(at - 1) != Some(10) {
+    at = at - 1
+  }
+  at
+}
+
+/** The names a top-level declaration introduces into the file's scope. */
+fn namesOf(declaration: Declaration): List<String> {
+  match declaration.kind {
+    .Use(usage) => {
+      match usage.items {
+        .Names(items) => {
+          var names: List<String> = []
+          for item in items {
+            names.append(
+              match item.alias {
+                Some(alias) => alias.text
+                None => item.name().text
+              },
+            )
+          }
+          names
+        }
+        .All(alias) => [alias.text]
+      }
+    }
+    .Function(inner) => [inner.name.text]
+    .Type(inner) => [inner.name.text]
+    .Alias(inner) => [inner.name.text]
+    .Trait(inner) => [inner.name.text]
+    .Extend(_) => []
+    .Foreign(_) => []
+    .Constant(binding) => {
+      var names: List<String> = []
+      for (name, _) in namesBoundBy(binding.pattern) {
+        names.append name
+      }
+      names
+    }
+  }
+}
+
+/** A `use` of names, one `use` per name, each as it would be written on its own. */
+fn importsOf(declaration: Declaration): List<(String, String)> {
+  var found: List<(String, String)> = []
+  if const .Use(usage) = declaration.kind {
+    if const .Names(items) = usage.items {
+      const from = match usage.source {
+        .Module(path) => " from \"{path}\""
+        .Local => ""
+      }
+      for item in items {
+        const path = item.path.map({ _.text }).toList().joined(separator: ".")
+        match item.alias {
+          Some(alias) => found.append((alias.text, "use {path} as {alias.text}{from}"))
+          None => found.append((item.name().text, "use {path}{from}"))
+        }
+      }
+    }
+  }
+  found
+}
+
+fn isImportDeclaration(declaration: Declaration): Bool {
+  if const .Use(_) = declaration.kind {
+    return true
+  }
+  false
+}
+
+/** Every name a pattern binds, with its span, in the order they are written. `_` binds nothing. */
+fn namesBoundBy(pattern: Pattern): List<(String, Span)> {
+  var found: List<(String, Span)> = []
+  collectNames pattern, found
+  found
+}
+
+fn collectNames(pattern: Pattern, var found: List<(String, Span)>) {
+  match pattern.kind {
+    .Binding(name) => {
+      if name != "_" {
+        found.append((name, pattern.span))
+      }
+    }
+    .TuplePattern(items) => {
+      for item in items {
+        collectNames item, found
+      }
+    }
+    .ListPattern(items, rest) => {
+      for item in items {
+        collectNames item, found
+      }
+      if const Some(tail) = rest {
+        if const Some(name) = tail.name {
+          found.append((name.text, name.span))
+        }
+      }
+    }
+    .Variant(_, fields, _) => {
+      for field in fields {
+        collectNames field.pattern, found
+      }
+    }
+    .ImplicitVariant(_, fields, _) => {
+      for field in fields {
+        collectNames field.pattern, found
+      }
+    }
+    .Alternatives(patterns) => {
+      if const Some(first) = patterns.first() {
+        collectNames first, found
+      }
+    }
+    .Wildcard => {}
+    .Literal(_) => {}
+    .RangePattern(_, _, _) => {}
+    .Invalid => {}
+  }
+}

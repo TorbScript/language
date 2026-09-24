@@ -12,7 +12,7 @@ use SourceTree from "../project/source-tree"
 use Workspace, Package, findWorkspace from "../project/workspace"
 use ModuleId from "./module"
 use SymbolId from "./symbols"
-use Graph, buildGraph, resolveImport from "./graph"
+use Graph, buildGraph, resolveImport, programPackagesOf from "./graph"
 use Program, resolveNames, checkNames from "./scope"
 use resolveTypes from "./resolve-types"
 use Checker, Timing from "./checker/context"
@@ -80,12 +80,10 @@ public fn check(
   var resolutions: List<Map<Span, SymbolId>> = []
   var unresolved: List<List<Diagnostic>> = []
   var requested: List<ModuleId> = []
-  var everything: List<ModuleId> = []
   for module in graph.modules {
     const resolved = resolveTypes symbols, program, module.id
     resolutions.append resolved.names
     unresolved.append resolved.diagnostics
-    everything.append module.id
     if isRequested(targets, module.path) {
       requested.append module.id
     }
@@ -93,10 +91,12 @@ public fn check(
   before.append Timing("names in type positions", clock.taken())
   const reported = withRelativeImports graph, workspace, requested
   const resolvedProgram = program.copy symbols: symbols
-  // A lowering may reach the body of any module - a default member of a trait of `std/prelude`, a generic function of
-  // another package - and a body whose tables were never filled cannot be lowered at all. What is *reported* stays what
-  // was asked for either way, because `files` below is filtered by the request and not by this
-  const bodies = if checksEveryBody { everything } else { reported }
+  // A lowering may reach the body of any module of the program - a default member of a trait of `std/prelude`, a
+  // generic function of another package - and a body whose tables were never filled cannot be lowered at all. The
+  // program is the packages the lowering itself closes the world over (`programPackagesOf`), never more: a scratch file
+  // at the root of a large workspace does not check the bodies of every member. What is *reported* stays what was asked
+  // for either way, because `files` below is filtered by the request and not by this
+  const bodies = if checksEveryBody { modulesOfProgram graph, workspace, reported } else { reported }
   var checked = checkTypes resolvedProgram, resolutions, bodies, withTimings
   // The passes before the checker existed cannot be recorded on it as they run, so they are put in front here
   if withTimings {
@@ -194,6 +194,18 @@ fn withRelativeImports(graph: Graph, workspace: Workspace, requested: List<Modul
           }
         }
       }
+    }
+  }
+  found
+}
+
+/** Every module of the packages the program of `roots` is made of. */
+fn modulesOfProgram(graph: Graph, workspace: Workspace, roots: List<ModuleId>): List<ModuleId> {
+  const packages = programPackagesOf graph, workspace, roots
+  var found: List<ModuleId> = []
+  for module in graph.modules {
+    if packages.containsKey(module.package) {
+      found.append module.id
     }
   }
   found

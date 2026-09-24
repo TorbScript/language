@@ -166,6 +166,9 @@ fn applyOwnedParameters(var program: IrProgram, index: Int, positions: List<Int>
  *
  * It costs one copy inside a closure that really stores an argument, which is BACKEND 2.1's own rule: getting the
  * summary wrong costs speed, never correctness.
+ *
+ * A function a **host** calls ([IrProgram.hosted]) is the same case: the host passes words it keeps and never reads a
+ * summary, so what the function stores it retains.
  */
 fn closureBodiesOf(program: IrProgram): List<Bool> {
   const count = program.functions.length()
@@ -179,6 +182,11 @@ fn closureBodiesOf(program: IrProgram): List<Bool> {
           }
         }
       }
+    }
+  }
+  for function in program.hosted {
+    if function.value >= 0 && function.value < count {
+      found.set function.value, true
     }
   }
   found

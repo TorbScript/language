@@ -10,7 +10,8 @@
 # `std/`, the runtime), `check .`, `check --statistics .`, `check tests/conformance tests/language`,
 # `manifest --check` over every `project.trb`, `test compiler/tests`, `test` of the std/example packages (one that waits for a back-end gap is named in
 # docs/RUST-EXIT.md section 2.4 and skipped here), the programs of `tests/language/` against their
-# `.expected`, the three docs gates, and `canon --check` with the five rules. Every binary that is only built to be run
+# `.expected`, the sessions of `tests/repl/` piped into `torb repl` (`tools/repl.sh`), the three docs gates, and
+# `canon --check` with the five rules. Every binary that is only built to be run
 # once is built with `--profile dev`, which `torb test` and `torb run` do by default.
 #
 # Tier B: `tools/conformance.sh` (the conformance suite, and with `--vm` the programs of its `vm.list` in the bytecode
@@ -148,6 +149,9 @@ if [ "$tier" = "a" ]; then
   # A program that waits for a back-end gap is named here and skipped; none does.
   language_broken=""
   gate "tests/language against .expected (native)" language_programs "$torb"
+
+  # docs/design/REPL.md: whole sessions of `torb repl`, each against its exact standard output, standard error and exit code
+  gate "tests/repl against .expected (torb repl)" sh tools/repl.sh
 
   gate "docs check" "$torb" docs check docs
   gate "docs index --check" "$torb" docs index --check docs

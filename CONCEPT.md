@@ -3016,4 +3016,5 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
   the argument list is too long. Until then the size is written out.
 - Registry protocol and the exact format of `project.lock.trb`
 - REPL: every input is a nested scope of the previous one (so redefining a name is ordinary shadowing). A type that
-  is defined again shadows the old one, values of the old type keep it and show up as `Point#1`.
+  is defined again shadows the old one, values of the old type keep it and show up as `Point#1`. docs/design/REPL.md
+  builds the first half; until the second is decided, a binding of a type that is declared again is dropped.

@@ -493,7 +493,9 @@ fn collectProgram(var peeling: Peeling, places: Locations, program: IrProgram) {
  * - a function of the **runtime**, whose signature belongs to the natives manifest, and the `resume` of a task, whose
  *   state machine a back end drives;
  * - the accessor of a module `const` and the initializer it names, because the cell between the two lives in the back
- *   end and nothing in the IR ties their signatures together.
+ *   end and nothing in the IR ties their signatures together;
+ * - a function a **host** calls ([IrProgram.hosted]): the entry of a `torb repl` session receives values an earlier
+ *   program of the session laid out, so its parameters keep the declared type in every program.
  */
 fn frozenFunctionsOf(program: IrProgram): List<Bool> {
   const count = program.functions.length()
@@ -506,6 +508,9 @@ fn frozenFunctionsOf(program: IrProgram): List<Bool> {
     for member in members {
       freeze frozen, member
     }
+  }
+  for function in program.hosted {
+    freeze frozen, function
   }
   for descriptor in program.elements {
     freezeOptional frozen, descriptor.retain

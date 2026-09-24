@@ -1772,10 +1772,21 @@ static const torb_machine_element_callbacks torb_machine_element_pool[TORB_MACHI
 /*
  * A descriptor of one slot of the pool: counted by `shape` (-1 for a trivial element), and compared word by word where
  * it is a key - which is exact for every key the VM lets through, one of integers, `Bool`s and `Char`s.
+ *
+ * A slot is shared by every element type of the same words and shape: the descriptors would be the same, and a session
+ * of `torb repl` loads one continuation of the program per entry, each with its own element table (the interpreter
+ * names the first of equal shapes, so a `List<Point>` of every entry lands in one slot).
  */
+static const torb_element *torb_machine_element_made[TORB_MACHINE_ELEMENT_SLOTS];
+
 static const torb_element *torb_machine_counted_element(int64_t words, int64_t shape) {
   torb_element *made;
   size_t slot = torb_machine_element_slots;
+  for (size_t known = 0; known < torb_machine_element_slots; known++) {
+    if (torb_machine_element_shapes[known] == shape && torb_machine_element_words[known] == words) {
+      return torb_machine_element_made[known];
+    }
+  }
   if (slot >= TORB_MACHINE_ELEMENT_SLOTS) {
     torb_panic_text("internal error: the VM ran out of slots for the counted element types of the program",
                     torb_location_unknown);
@@ -1795,6 +1806,7 @@ static const torb_element *torb_machine_counted_element(int64_t words, int64_t s
   }
   made->equals = torb_machine_element_pool[slot].equals;
   made->hash = torb_machine_element_pool[slot].hash;
+  torb_machine_element_made[slot] = made;
   return made;
 }
 

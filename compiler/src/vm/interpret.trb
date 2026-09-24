@@ -125,11 +125,25 @@ public fn runProgram(program: BytecodeProgram, arguments: List<String>) {
 
 // --- A host that calls into the program ------------------------------------------------------------------------------
 
-/** A program loaded into the kernel once, whose chunks a host calls one at a time: a script per call. */
+/**
+ * A program loaded into the kernel once, whose chunks a host calls one at a time: a script per call, or an entry of a
+ * session of `torb repl`, whose program grows by one continuation per entry ([appendProgram]).
+ */
 public type LoadedProgram {
-  program: BytecodeProgram
+  var program: BytecodeProgram
   var words: ArrayList<Int>
   var kernel: ArrayList<Int>
+  /** How much of `program` the kernel and the words have: where the next continuation starts loading. */
+  var counts: LoadedCounts = LoadedCounts()
+}
+
+/** How much of a program is loaded: its parts of the constant pool and their words, and the kernel's tables. */
+public type LoadedCounts {
+  parts: Int = 0
+  words: Int = 0
+  locations: Int = 0
+  elements: Int = 0
+  shapes: Int = 0
 }
 
 /** The program's constant pool and tables in place, ready for [callSandboxed]. */
@@ -139,8 +153,65 @@ public fn loadedProgram(program: BytecodeProgram): LoadedProgram {
   for _ in 0..64 {
     kernel.append 0
   }
-  loadProgram words, kernel, program
-  LoadedProgram program, words, kernel
+  const counts = loadFrom words, kernel, program, LoadedCounts()
+  LoadedProgram program, words, kernel, counts
+}
+
+/**
+ * `program` continues the loaded one (`emitBytecode` with `after`): what it adds - the constants and the gaps after the
+ * old pool, the locations, shapes and element descriptors after the old ones - is loaded, and nothing that is loaded
+ * already is touched, so every value the earlier part made keeps its meaning.
+ */
+public fn appendProgram(var loaded: LoadedProgram, program: BytecodeProgram) {
+  loaded.counts = loadFrom loaded.words, loaded.kernel, program, loaded.counts
+  loaded.program = program
+}
+
+/**
+ * `width` words below every frame for the host, zero, which no program of the continuation touches: a gap appended to
+ * the constant pool. Answers where they begin.
+ */
+public fn reserveWords(var loaded: LoadedProgram, width: Int): Int {
+  const offset = loaded.program.constantWords
+  loaded.program.constants.append ConstantPart.Gap(width)
+  loaded.program.constantWords = offset + width
+  ensureWords(loaded.words, offset + width + scratchWords * 4)
+  for index in 0..width {
+    loaded.words.set(offset + index, 0)
+  }
+  loaded.counts = loaded.counts.copy(parts: loaded.program.constants.length(), words: offset + width)
+  offset
+}
+
+/**
+ * Releases the value in the words at `register` - an absolute register below every frame - by the shape `shape` (its
+ * index plus one, `0` for a value nothing in is counted), and runs the destructors that release queues, inside a
+ * sandbox of `grant` so that a destructor that panics stops and the host goes on. The words are zero afterwards.
+ */
+public fn releaseSandboxed(var loaded: LoadedProgram, grant: String, register: Int, width: Int, shape: Int): Result<Void, Stop> {
+  if shape > 0 {
+    const scratch = firstFrameOf loaded.program
+    const top = scratch + scratchWords
+    ensureWords(loaded.words, top + scratchWords * 4)
+    Machine.placeText loaded.words, scratch, grant
+    const _ = kernelCall loaded.words, loaded.kernel, scratch, KernelOperation.SandboxOpen, [0]
+    var budget = unlimitedBudget()
+    var finished = true
+    const queued = kernelCall loaded.words, loaded.kernel, 0, KernelOperation.Release, [register, shape - 1]
+    if queued == stoppedWord {
+      finished = false
+    } else if queued > 0 {
+      finished = runClosers loaded.words, loaded.kernel, budget, loaded.program, top
+    }
+    const _ = kernelCall loaded.words, loaded.kernel, scratch, KernelOperation.SandboxClose, []
+    if !finished {
+      return Fail stopAt(loaded.words, loaded.kernel, budget, scratch)
+    }
+  }
+  for index in 0..width {
+    loaded.words.set(register + index, 0)
+  }
+  Ok void
 }
 
 /** Why a sandboxed call stopped, as the kernel and the interpreter saw it. */
@@ -376,35 +447,124 @@ fn textOfCodePoints(points: List<Int>): String {
  * locations, element descriptors and shapes of the kernel's tables.
  */
 public fn loadProgram(var words: ArrayList<Int>, var kernel: ArrayList<Int>, program: BytecodeProgram) {
+  const _ = loadFrom words, kernel, program, LoadedCounts()
+}
+
+/** What [loadProgram] does for the part of the program after `from`: the part a continuation added. */
+fn loadFrom(
+  var words: ArrayList<Int>,
+  var kernel: ArrayList<Int>,
+  program: BytecodeProgram,
+  from: LoadedCounts,
+): LoadedCounts {
   ensureWords(words, firstFrameOf(program) + scratchWords * 4)
-  var offset = 0
-  for part in program.constants {
+  var offset = from.words
+  for index in from.parts..program.constants.length() {
+    const part = program.constants[index]
     placePart words, kernel, part, offset, firstFrameOf(program)
     offset = offset + widthOfPart(part)
   }
   const scratch = firstFrameOf program
-  for index in 0..program.locations.length() {
+  for index in from.locations..program.locations.length() {
     const location = program.locations[index]
     Machine.placeText words, scratch, location.path
     kernelCall words, kernel, scratch, KernelOperation.DefineLocation, [index, 0, location.line, location.column]
   }
-  for index in 0..program.elements.length() {
+  var canonical = CanonicalShapes()
+  for index in from.elements..program.elements.length() {
     const element = program.elements[index]
     const (kind, shape) = match element.kind {
       .Trivial => (0, 0 - 1)
       .TextElement => (1, 0 - 1)
-      .Counted(found) => (2, found)
+      .Counted(found) => (2, canonicalShapeOf(canonical, program, found))
     }
     kernelCall words, kernel, scratch, KernelOperation.DefineElement, [index, element.words, kind, shape]
   }
-  for index in 0..program.shapes.length() {
+  for index in from.shapes..program.shapes.length() {
     kernelCall words, kernel, scratch, KernelOperation.DefineShape, shapeOperands(index, program.shapes[index])
   }
+  LoadedCounts(
+    program.constants.length(),
+    offset,
+    program.locations.length(),
+    program.elements.length(),
+    program.shapes.length(),
+  )
 }
 
-/** Where the first frame begins: after the constant pool and the cells of the module constants. */
+/**
+ * The first shape of the program that is the same as a shape: the same name, words, counts, variants and destructor
+ * function. A counted element descriptor is made from the canonical one, so that two continuations of a session that
+ * both hold a `List<Point>` share one of the kernel's callback slots instead of taking one each, and the slots last as
+ * long as the session does.
+ */
+type CanonicalShapes {
+  var keys: Map<Int, String> = [:]
+  var firsts: Map<String, Int> = [:]
+  var known: Int = 0
+}
+
+fn canonicalShapeOf(var canonical: CanonicalShapes, program: BytecodeProgram, shape: Int): Int {
+  while canonical.known < program.shapes.length() {
+    const key = shapeKey program, canonical.known, []
+    if !canonical.firsts.containsKey(key) {
+      canonical.firsts.set key, canonical.known
+    }
+    canonical.keys.set canonical.known, key
+    canonical.known = canonical.known + 1
+  }
+  const key = canonical.keys.get(shape) ?? ""
+  canonical.firsts.get(key) ?? shape
+}
+
+/** What a shape does, as text: a nested shape by its own key, and one already being described by its name alone. */
+fn shapeKey(program: BytecodeProgram, index: Int, visiting: List<Int>): String {
+  const shape = match program.shapes.get(index) {
+    Some(found) => found
+    None => {
+      return "?"
+    }
+  }
+  if visiting.contains(index) {
+    return "^{shape.name}"
+  }
+  const inside = visiting.appended index
+  const closer = match program.chunks.get(shape.closer) {
+    Some(chunk) => chunk.name
+    None => ""
+  }
+  var key = "{shape.name.byteLength()}:{shape.name}|{shape.width}|{shape.tag}|{closer}|{shape.isReversed}|"
+  key = key + groupKey(program, shape.counted, inside)
+  for group in shape.groups {
+    key = key + "/" + groupKey(program, group, inside)
+  }
+  key
+}
+
+fn groupKey(program: BytecodeProgram, words: List<CountedWord>, visiting: List<Int>): String {
+  var key = "["
+  for word in words {
+    const kind = match word.kind {
+      .TextStorage => "t"
+      .ListStorage => "l"
+      .MapStorage => "m"
+      .SetStorage => "s"
+      .TaskObject => "k"
+      .ChannelObject => "c"
+      .FileHandle => "f"
+      .Block(contents) => "b" + shapeKey(program, contents, visiting)
+      .Environment => "e"
+      .Payload => "p"
+      .Nested(inner) => "n" + shapeKey(program, inner, visiting)
+    }
+    key = key + "{word.offset}{kind};"
+  }
+  key + "]"
+}
+
+/** Where the first frame begins: after the constant pool, whose gaps hold the cells of the module constants. */
 fn firstFrameOf(program: BytecodeProgram): Int {
-  program.constantWords + program.cellWords
+  program.constantWords
 }
 
 /** One part of the constant pool into its words; a block part becomes an immortal block, as a static of C is. */
@@ -430,6 +590,11 @@ fn placePart(var words: ArrayList<Int>, var kernel: ArrayList<Int>, part: Consta
       kernelCall words, kernel, scratch, KernelOperation.BlockNew, operands
       kernelCall words, kernel, scratch, KernelOperation.MakeImmortal, [scratchWords - 1]
       words.set offset, words[scratch + scratchWords - 1]
+    }
+    .Gap(width) => {
+      for index in 0..width {
+        words.set(offset + index, 0)
+      }
     }
   }
 }
@@ -991,7 +1156,7 @@ fn execute(
         pc = pc + 2
       }
       .Cell => {
-        const cell = program.constantWords + code[pc + 1]
+        const cell = code[pc + 1]
         if words[cell] == 0 {
           if kernelCall(words, kernel, top, KernelOperation.BeginImmortal, []) == stoppedWord {
             noteFrames budget, chunkIndex, pc, frames

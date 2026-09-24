@@ -1,0 +1,134 @@
+/**
+ * The parts of `torb repl` that read and write text (docs/design/REPL.md sections 2 to 4): when the lines read so far
+ * are a whole entry, what an entry is made of, and the module an entry is checked as - with every piece of it traced
+ * back to the entry it came from, so that a message names the entry's own line and column.
+ *
+ * Running entries is `tests/repl/`: a session piped into `torb repl` against its exact output.
+ */
+
+use test, group from "std/test"
+use Span from "../src/syntax/source"
+use isComplete, planEntry from "../src/repl/entry"
+use EntrySource, KeptDeclaration, ParameterText, Form, Shown, synthesize, blanked from "../src/repl/synthesis"
+
+group "A whole entry" {
+  test "a line that parses is an entry" {
+    assert isComplete("const total = 1 + 2")
+    assert isComplete("print total")
+  }
+
+  test "an open bracket waits for the lines that close it" {
+    assert(!isComplete("fn double(value: Int): Int \{"))
+    assert(!isComplete("const items = [1,"))
+    assert(!isComplete("names.map(\{ name =>"))
+    assert isComplete("fn double(value: Int): Int \{\n  value * 2\n}")
+  }
+
+  test "a trailing operator waits for its operand" {
+    assert(!isComplete("const total = 1 +"))
+    assert(!isComplete("const total ="))
+  }
+
+  test "a multi-line string and a block comment wait to be closed, a plain string does not" {
+    assert(!isComplete("const text = \"\"\"\n  first"))
+    assert(!isComplete("/* a comment"))
+    assert isComplete("const text = \"never closed")
+  }
+
+  test "a mistake that is not at the end is complete, and the parser reports it" {
+    assert isComplete("print 1\n}")
+    assert isComplete("")
+  }
+}
+
+group "An entry taken apart" {
+  test "declarations, statements, the names it binds and the value it shows" {
+    const plan = planEntry "fn double(value: Int): Int \{\n  value * 2\n}\nconst total = double(4)\nvar (low, high) = (1, 2)\ntotal + low"
+    assert plan.diagnostics.isEmpty()
+    assert(plan.declarations.length() == 1)
+    assert(plan.declarations[0].names == ["double"])
+    assert(plan.statements.length() == 3)
+    assert(plan.bindings.map({ _.name }).toList() == ["total", "low", "high"])
+    assert(plan.bindings.map({ _.isVar }).toList() == [false, true, true])
+    assert plan.shown.isSome()
+  }
+
+  test "a statement that is not an expression shows nothing, and neither does an `if` without `else`" {
+    assert planEntry("const total = 3").shown.isNone()
+    assert planEntry("if true \{\n  print 1\n}").shown.isNone()
+    assert planEntry("if true \{ 1 } else \{ 2 }").shown.isSome()
+  }
+
+  test "a `using` binding ends with its entry and is not kept" {
+    assert planEntry("using file = open()").bindings.isEmpty()
+  }
+
+  test "a `use` declares the names it imports, under their aliases" {
+    const plan = planEntry "use File, IoError as Problem from \"std/fs\""
+    assert(plan.declarations[0].names == ["File", "Problem"])
+    assert plan.declarations[0].isImport
+  }
+
+  test "a `return` at the top level is found" {
+    assert planEntry("return").topLevelReturn.isSome()
+  }
+}
+
+group "The module of an entry" {
+  test "blanking keeps every offset and every line break" {
+    const text = "fn f() \{}\nprint ä\nconst x = 1"
+    const result = blanked text, [Span(10, 18)]
+    assert(result.byteLength() == text.byteLength())
+    assert(result == "fn f() \{}\n        \nconst x = 1")
+  }
+
+  test "the statements run in `replEntry`, the declarations stand at the top level" {
+    const entry = "fn double(value: Int): Int \{\n  value * 2\n}\ndouble total"
+    const plan = planEntry entry
+    const sources = [EntrySource("<repl>", entry)]
+    const parameters = [ParameterText("total", false, "Int")]
+    const form = Form outputs: [], shown: Shown.Printed
+    const synthesis = synthesize sources, [], parameters, 0, plan, form
+    assert synthesis.text.contains("fn replEntry(total: Int): Void \{")
+    assert synthesis.text.contains("const replShown =\ndouble total")
+    assert synthesis.text.contains("print \"= \{replShown}\"")
+    assert synthesis.text.startsWith("fn double(value: Int): Int \{\n  value * 2\n}\n            \n")
+  }
+
+  test "a span of the module is traced back to its entry, offset for offset" {
+    const entry = "const total = 3\nprint missing"
+    const plan = planEntry entry
+    const synthesis = synthesize([EntrySource("<repl>", entry)], [], [], 0, plan, Form())
+    const at = synthesis.text.indexOf("print missing") ?? 0
+    assert(synthesis.locate(Span(at + 6, at + 13)) == Some((0, Span(22, 29), true)))
+    assert(synthesis.statementOffset(0, 22) == Some(at + 6))
+  }
+
+  test "a declaration the session keeps is copied from its own entry" {
+    const first = "type Point \{\n  x: Int\n}"
+    const second = "Point(1)"
+    const sources = [EntrySource("<repl>", first), EntrySource("<repl>", second)]
+    const kept = [KeptDeclaration(["Point"], 0, Span(0, first.byteLength()), false)]
+    const synthesis = synthesize sources, kept, [], 1, planEntry(second), Form()
+    assert synthesis.text.startsWith(first)
+    assert(synthesis.locate(Span(5, 10)) == Some((0, Span(5, 10), false)))
+  }
+
+  test "the new bindings are handed out through `var` parameters, in the order they are bound" {
+    const entry = "const total = 3\nvar names = [\"a\"]"
+    const form = Form outputs: [("total", "Int"), ("names", "List<String>")]
+    const synthesis = synthesize([EntrySource("<repl>", entry)], [], [], 0, planEntry(entry), form)
+    assert synthesis.text.contains("fn replEntry(var replOut0: Int, var replOut1: List<String>): Void \{")
+    assert synthesis.text.contains("replOut0 = total\nreplOut1 = names\n")
+    assert(synthesis.outputSpans.map({ _.0 }).toList() == ["total", "names"])
+  }
+
+  test "a `?` at the top level makes the statements the body of a function that can fail" {
+    const entry = "const text = read()?"
+    const form = Form failure: Some("IoError"), outputs: [("text", "String")]
+    const synthesis = synthesize([EntrySource("<repl>", entry)], [], [], 0, planEntry(entry), form)
+    assert synthesis.text.contains("fn replEntry(var replOut0: String): Bool \{\n  match replBody(replOut0) \{")
+    assert synthesis.text.contains("fn replBody(var replOut0: String): Result<Void, IoError> \{")
+    assert synthesis.text.contains("replOut0 = text\n}\nOk void\n}")
+  }
+}

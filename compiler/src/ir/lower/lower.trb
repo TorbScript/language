@@ -7,7 +7,7 @@
  */
 
 use ModuleId from "../../semantics/module"
-use resolveImport from "../../semantics/graph"
+use programPackagesOf as programPackagesIn from "../../semantics/graph"
 use Checker from "../../semantics/checker/context"
 use Checked from "../../semantics/check"
 use Package, Workspace from "../../project/workspace"
@@ -96,6 +96,7 @@ public fn lowerScripts(
   for symbol in hosts {
     if const Some(function) = instanceOfSymbol(lowering, symbol) {
       lowering.scriptHosts.append function
+      lowering.program.hosted.append function
     }
     drainPending lowering
   }
@@ -169,105 +170,9 @@ fn dropUncountedMakeUnique(var program: IrProgram) {
   }
 }
 
-/**
- * The packages whose declarations are part of the **program**: the packages of the roots, everything they depend on
- * (transitively, runtime and development alike), the prelude each of them names, and every package one of their
- * modules imports. The imports are what a program really reaches - a standalone file has no manifest, and a package of
- * `std` names none of the packages it imports - so a manifest alone would leave an override in an imported package
- * out of the closed world, and a trait-typed value would run the default where that override should have run.
- *
- * **A package next to yours in a workspace must not change your binary.** Two questions of the back end are
- * *closed-world* - "does any implementation override this default" (`overridesAnyMember`, which decides the member list of
- * every witness table) and, through it, how many instances the worklist reaches - and a closed world has to be the
- * **program**. It was the whole `SourceTree` instead, and `readSourceTree` always reads the entire workspace: adding
- * `examples/encoding-lab`, which overrides defaults of `Iterate` for types of its own, took the instance count of
- * `source.trb`'s program from 121 declarations to 192 without a line of the program changing.
- *
- * The unit is the **package** and not the module, because that is the unit of coherence
- * (docs/language/traits/coherence.md) and of what a project declares it depends on: an implementation is visible to
- * a program exactly where its package is.
- */
+/** The packages whose declarations are part of the program (`programPackagesOf` of `semantics/graph.trb`). */
 fn programPackagesOf(checker: Checker, modules: List<ModuleId>): Map<Int, Bool> {
-  const workspace = checker.program.workspace
-  var found: Map<Int, Bool> = [:]
-  var pending: List<Int> = []
-  const modulesByPackage = modulesOfPackages checker
-  for module in modules {
-    const index = checker.program.graph.at(module).package
-    if !found.containsKey(index) {
-      found.set index, true
-      pending.append index
-    }
-  }
-  var at = 0
-  while at < pending.length() {
-    const index = pending[at]
-    at = at + 1
-    if index < 0 || index >= workspace.packages.length() {
-      continue
-    }
-    const manifest = workspace.packages[index].manifest
-    var others: List<Int> = []
-    var names = manifest.runtimeDependencies
-    names.appendAll manifest.developmentDependencies
-    names.append manifest.prelude
-    for name in names {
-      others.append packageIndexNamed(workspace, name)
-    }
-    for module in modulesByPackage.get(index) ?? [] {
-      others.appendAll importedPackagesOf(checker, module)
-    }
-    for other in others {
-      if other < 0 || found.containsKey(other) {
-        continue
-      }
-      found.set other, true
-      pending.append other
-    }
-  }
-  found
-}
-
-/** Every module of the graph by the index of its package: what `programPackagesOf` follows the imports of. */
-fn modulesOfPackages(checker: Checker): Map<Int, List<ModuleId>> {
-  var found: Map<Int, List<ModuleId>> = [:]
-  for module in checker.program.graph.modules {
-    var inside = found.get(module.package) ?? []
-    inside.append module.id
-    found.set module.package, inside
-  }
-  found
-}
-
-/** The packages the `use` declarations of one module reach. */
-fn importedPackagesOf(checker: Checker, module: ModuleId): List<Int> {
-  const graph = checker.program.graph
-  const workspace = checker.program.workspace
-  var found: List<Int> = []
-  for statement in graph.at(module).file.statements {
-    if const .Declare(declaration) = statement.kind {
-      if const .Use(usage) = declaration.kind {
-        if const .Module(path) = usage.source {
-          if const .Found(target) = resolveImport(graph, workspace, module, path) {
-            found.append graph.at(target).package
-          }
-        }
-      }
-    }
-  }
-  found
-}
-
-fn packageIndexNamed(workspace: Workspace, name: String): Int {
-  if name.isEmpty() {
-    return 0 - 1
-  }
-  for index in 0..workspace.packages.length() {
-    if workspace.packages[index].name == name {
-      return index
-    }
-  }
-  0 - 1
+  programPackagesIn checker.program.graph, checker.program.workspace, modules
 }
 
 /**

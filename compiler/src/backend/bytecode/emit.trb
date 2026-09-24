@@ -58,6 +58,9 @@ type Emitter {
   closing: Closing
   /** By `FunctionId.value`: the chunk the function became, `-1` where it is not emitted. */
   chunks: List<Int>
+  /** Where the witness tables and the element descriptors of this IR program begin in the tables of the bytecode. */
+  tableBase: Int
+  elementBase: Int
   natives: Map<String, Int>
   prototypes: Map<String, String>
   /** `type <id>` and `block <layout>` to the index of their shape. */
@@ -95,23 +98,37 @@ type Body {
   var sites: List<(Int, Int)> = []
 }
 
-/** The bytecode of a whole program: the chunks, the tables, and the entry chunks named by `entries`. */
-public fn emitBytecode(program: IrProgram, entries: List<String>): BytecodeEmission {
+/**
+ * The bytecode of a whole program: the chunks, the tables, and the entry chunks named by `entries`.
+ *
+ * `after` is a program already loaded that this one continues (a session of `torb repl`, docs/design/REPL.md section 5):
+ * every chunk, constant, shape, witness table, element descriptor and location of the new program is numbered after
+ * the ones `after` has, so a value the earlier program made - a closure, a boxed record, a list - means the same in
+ * both. The answer is `after` with the new program appended, and `entries` names chunks of the new part only.
+ */
+public fn emitBytecode(
+  program: IrProgram,
+  entries: List<String>,
+  after: BytecodeProgram = BytecodeProgram(),
+): BytecodeEmission {
   const functions = emittedFunctionsOf program
+  const chunkBase = after.chunks.length()
   var byName: Map<String, Int> = [:]
   for index in 0..functions.length() {
-    byName.set functions[index].name, index
+    byName.set(functions[index].name, chunkBase + index)
   }
   var chunks: List<Int> = []
   for function in program.functions {
     chunks.append(byName.get(function.name) ?? (0 - 1))
   }
   var emitter = Emitter(
-    BytecodeProgram(),
+    after.copy(entries: []),
     [],
     wordTablesOf(program),
     closingOf(program),
     chunks,
+    after.tables.length(),
+    after.elements.length(),
     nativeIndices(),
     runtimePrototypes(),
     [:],
@@ -119,17 +136,38 @@ public fn emitBytecode(program: IrProgram, entries: List<String>): BytecodeEmiss
     [:],
     [:],
   )
-  for function in functions {
-    const chunk = emitChunk emitter, program, function
-    emitter.bytecode.chunks.append chunk
-  }
-  emitTables emitter, program
+  var entryChunks: List<Int> = []
   for entry in entries {
     if const Some(index) = byName.get(entry) {
-      emitter.bytecode.entries.append index
+      entryChunks.append index
     }
   }
+  for function in functions {
+    const emitted = emitChunk emitter, program, function
+    if entryChunks.contains(emitter.bytecode.chunks.length()) {
+      const shaped = withValueShapes emitter, program, function, emitted
+      emitter.bytecode.chunks.append shaped
+    } else {
+      emitter.bytecode.chunks.append emitted
+    }
+  }
+  emitTables emitter, program
+  emitter.bytecode.entries = entryChunks
   BytecodeEmission emitter.bytecode, emitter.unsupported
+}
+
+/** The chunk of an entry with the shape of every parameter's value, which a host that passes values in releases by. */
+fn withValueShapes(var emitter: Emitter, program: IrProgram, function: IrFunction, chunk: Chunk): Chunk {
+  var parameters: List<ParameterEntry> = []
+  for position in 0..chunk.parameters.length() {
+    var entry = chunk.parameters[position]
+    if const Some(declared) = function.signature.parameters.get(position) {
+      const shape = shapeOperand emitter, program, declared.annotation
+      entry = entry.copy valueShape: shape, valueWidth: emitter.tables.widthOf(declared.annotation)
+    }
+    parameters.append entry
+  }
+  chunk.copy parameters: parameters
 }
 
 fn report(var emitter: Emitter, what: String) {
@@ -151,7 +189,7 @@ fn emitTables(var emitter: Emitter, program: IrProgram) {
     for inner in table.nested {
       nested.append(
         match inner {
-          Some(found) => found.value
+          Some(found) => emitter.tableBase + found.value
           None => 0 - 1
         },
       )
@@ -479,6 +517,7 @@ fn keyOfParts(parts: List<ConstantPart>): String {
       .Floating(value) => "f{value};"
       .Text(value) => "t{value.byteLength()}:{value};"
       .Block(shape, inner) => "b{shape}({keyOfParts(inner)});"
+      .Gap(width) => "g{width};"
     }
   }
   key
@@ -715,8 +754,8 @@ fn noteSite(var emitter: Emitter, var body: Body, program: IrProgram, at: Locati
 
 /**
  * The accessor of a module constant whose value is no static data: `cell` builds it on the first read and copies it on
- * every read, then `return`. The cell's words - a flag and the value - follow the constant pool, which is where the
- * VM keeps what the C back end keeps in two file-scope statics beside the function.
+ * every read, then `return`. The cell's words - a flag and the value - are a gap of the constant pool, which is where
+ * the VM keeps what the C back end keeps in two file-scope statics beside the function.
  */
 fn cellChunk(var emitter: Emitter, program: IrProgram, function: IrFunction, initializer: FunctionId): Chunk {
   const width = resultWidthOf emitter, program, function.signature.result
@@ -724,8 +763,9 @@ fn cellChunk(var emitter: Emitter, program: IrProgram, function: IrFunction, ini
   if built < 0 {
     report emitter, "a constant whose initializer is not emitted"
   }
-  const cell = emitter.bytecode.cellWords
-  emitter.bytecode.cellWords = cell + 1 + width
+  const cell = emitter.bytecode.constantWords
+  emitter.bytecode.constants.append ConstantPart.Gap(1 + width)
+  emitter.bytecode.constantWords = cell + 1 + width
   var code: ArrayList<Int> = ArrayList.withCapacity 8
   code.append headWord(Opcode.Cell, 0, width, 0)
   code.append cell
@@ -1070,7 +1110,7 @@ fn emitInstruction(var emitter: Emitter, var body: Body, program: IrProgram, ins
       const register = targetOf emitter, body, target
       var operands = [register, runtimeKindCode(kind), elements.length()]
       for element in elements {
-        operands.append element.value
+        operands.append(emitter.elementBase + element.value)
       }
       emitKernel emitter, body, kernelNumberOf(KernelOperation.ContainerNew), operands
     }
@@ -1087,7 +1127,7 @@ fn emitInstruction(var emitter: Emitter, var body: Body, program: IrProgram, ins
       const size = operand emitter, body, program, capacity
       const register = targetOf emitter, body, target
       const location = locationIndex emitter, program, at
-      emitKernel emitter, body, kernelNumberOf(KernelOperation.ChannelNew), [register, size, item.value, location]
+      emitKernel emitter, body, kernelNumberOf(KernelOperation.ChannelNew), [register, size, emitter.elementBase + item.value, location]
     }
   }
 }
@@ -1879,7 +1919,7 @@ fn emitTraitValue(
     if const .Table(found) = table.root {
       if table.steps.isEmpty() {
         emitHead(emitter, body, Opcode.Word, register + 1 + index, 0, 0)
-        emitTail(body, found.value + 1)
+        emitTail(body, emitter.tableBase + found.value + 1)
         continue
       }
     }
@@ -1891,7 +1931,7 @@ fn emitTraitValue(
 /** A witness source, compiled into the chunk's witness table. */
 fn witnessEntryOf(var emitter: Emitter, var body: Body, program: IrProgram, witness: WitnessSource): Int {
   const root = match witness.root {
-    .Table(table) => WitnessRootEntry.Table table.value
+    .Table(table) => WitnessRootEntry.Table(emitter.tableBase + table.value)
     .Value(place, bound) => WitnessRootEntry.Value placeOf(emitter, body, program, place), bound
     .Parameter(_) => {
       report emitter, "a witness table the caller passed, which the lowering never builds"

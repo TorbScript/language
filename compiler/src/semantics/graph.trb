@@ -3,8 +3,6 @@
  * turns a written path into an [Import], which is the module it names or the reason it names none.
  */
 
-use SourceText from "../syntax/source"
-use parse from "../syntax/parser/parser"
 use normalizePath, parentPath, joinPath from "../project/path"
 use SourceTree from "../project/source-tree"
 use Workspace, Package from "../project/workspace"
@@ -39,8 +37,7 @@ public fn buildGraph(tree: SourceTree, workspace: Workspace): Graph {
   for index in 0..workspace.packages.length() {
     const package = workspace.packages[index]
     for path in package.files {
-      const source = SourceText.of(tree.text(path) ?? "")
-      const parsed = parse source
+      const (source, parsed) = tree.parsedAt path
       const id = ModuleId modules.length()
       const entry = isEntryFile package, path
       modules.append Module(id, index, path, source, parsed.file, parsed.diagnostics, entry, tree.display(path))
@@ -107,8 +104,7 @@ fn addReceiverScripts(tree: SourceTree, workspace: Workspace, var modules: List<
 }
 
 fn addScript(tree: SourceTree, var modules: List<Module>, package: Int, path: String, receiver: ScriptReceiver) {
-  const source = SourceText.of(tree.text(path) ?? "")
-  const parsed = parse source
+  const (source, parsed) = tree.parsedAt path
   const id = ModuleId modules.length()
   const shown = tree.display path
   modules.append Module(id, package, path, source, parsed.file, parsed.diagnostics, true, shown, receiver: Some(receiver))
@@ -172,4 +168,102 @@ public fn resolveImport(graph: Graph, workspace: Workspace, from: ModuleId, path
  */
 fn isAvailable(importer: Package, name: String): Bool {
   name == importer.name || name.startsWith("std/") || importer.manifest.dependsOn(name)
+}
+
+/**
+ * The packages whose declarations are part of the **program**: the packages of the roots, everything they depend on
+ * (transitively, runtime and development alike), the prelude each of them names, and every package one of their
+ * modules imports. The imports are what a program really reaches - a standalone file has no manifest, and a package of
+ * `std` names none of the packages it imports - so a manifest alone would leave an override in an imported package
+ * out of the closed world, and a trait-typed value would run the default where that override should have run.
+ *
+ * **A package next to yours in a workspace must not change your binary.** Two questions of the back end are
+ * *closed-world* - "does any implementation override this default" (`overridesAnyMember`, which decides the member list of
+ * every witness table) and, through it, how many instances the worklist reaches - and a closed world has to be the
+ * **program**. It was the whole `SourceTree` instead, and `readSourceTree` always reads the entire workspace: adding
+ * `examples/encoding-lab`, which overrides defaults of `Iterate` for types of its own, took the instance count of
+ * `source.trb`'s program from 121 declarations to 192 without a line of the program changing.
+ *
+ * The unit is the **package** and not the module, because that is the unit of coherence
+ * (docs/language/traits/coherence.md) and of what a project declares it depends on: an implementation is visible to
+ * a program exactly where its package is.
+ */
+public fn programPackagesOf(graph: Graph, workspace: Workspace, modules: List<ModuleId>): Map<Int, Bool> {
+  var found: Map<Int, Bool> = [:]
+  var pending: List<Int> = []
+  const modulesByPackage = modulesOfPackages graph
+  for module in modules {
+    const index = graph.at(module).package
+    if !found.containsKey(index) {
+      found.set index, true
+      pending.append index
+    }
+  }
+  var at = 0
+  while at < pending.length() {
+    const index = pending[at]
+    at = at + 1
+    if index < 0 || index >= workspace.packages.length() {
+      continue
+    }
+    const manifest = workspace.packages[index].manifest
+    var others: List<Int> = []
+    var names = manifest.runtimeDependencies
+    names.appendAll manifest.developmentDependencies
+    names.append manifest.prelude
+    for name in names {
+      others.append packageIndexNamed(workspace, name)
+    }
+    for module in modulesByPackage.get(index) ?? [] {
+      others.appendAll importedPackagesOf(graph, workspace, module)
+    }
+    for other in others {
+      if other < 0 || found.containsKey(other) {
+        continue
+      }
+      found.set other, true
+      pending.append other
+    }
+  }
+  found
+}
+
+/** Every module of the graph by the index of its package: what `programPackagesOf` follows the imports of. */
+fn modulesOfPackages(graph: Graph): Map<Int, List<ModuleId>> {
+  var found: Map<Int, List<ModuleId>> = [:]
+  for module in graph.modules {
+    var inside = found.get(module.package) ?? []
+    inside.append module.id
+    found.set module.package, inside
+  }
+  found
+}
+
+/** The packages the `use` declarations of one module reach. */
+fn importedPackagesOf(graph: Graph, workspace: Workspace, module: ModuleId): List<Int> {
+  var found: List<Int> = []
+  for statement in graph.at(module).file.statements {
+    if const .Declare(declaration) = statement.kind {
+      if const .Use(usage) = declaration.kind {
+        if const .Module(path) = usage.source {
+          if const .Found(target) = resolveImport(graph, workspace, module, path) {
+            found.append graph.at(target).package
+          }
+        }
+      }
+    }
+  }
+  found
+}
+
+fn packageIndexNamed(workspace: Workspace, name: String): Int {
+  if name.isEmpty() {
+    return 0 - 1
+  }
+  for index in 0..workspace.packages.length() {
+    if workspace.packages[index].name == name {
+      return index
+    }
+  }
+  0 - 1
 }

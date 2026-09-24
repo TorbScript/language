@@ -1,0 +1,908 @@
+/**
+ * A session of `torb repl` (docs/design/REPL.md): one growing program in the VM, one entry at a time.
+ *
+ * An entry is checked as a module of its own ([synthesize]): the declarations the session keeps, the entry's own
+ * declarations, and `replEntry`, whose parameters are the session's bindings and whose body is the entry's statements.
+ * A first check (the probe) finds the types of the names the entry binds and of the value it shows; a second one checks
+ * the module that hands those names out through `var` parameters. The module is lowered, encoded as bytecode that
+ * **continues** the program the VM has loaded (`emitBytecode` with `after`), and `replEntry` is called with a reference
+ * to the words of every binding - the words of a binding lie below every frame, in a gap of the constant pool, and stay
+ * there until the binding is replaced.
+ *
+ * The entry runs in a sandbox that grants everything: the sandbox is only the recovery point, so a panic, a `?` that
+ * fails and `Process.exit` end the entry and never the session.
+ *
+ * # Related
+ *
+ * - [evaluate] - one entry, from its text to what it printed.
+ * - [typeOf] - `:type`, which checks and runs nothing.
+ * - [closeSession] - the bindings released at the end, their destructors run.
+ */
+
+use SourceTree from "../project/source-tree"
+use hostTarget from "../project/target"
+use Span, LineIndex from "../syntax/source"
+use Diagnostic from "../syntax/diagnostic"
+use check, Checked from "../semantics/check"
+use TypeId, TypeForm from "../semantics/checker/type"
+use ModuleId from "../semantics/module"
+use SymbolId from "../semantics/symbols"
+use joinPath from "../project/path"
+use Checker from "../semantics/checker/context"
+use implementsBound from "../semantics/checker/implementation"
+use lowerScripts, pathsOfModules from "../ir/lower/lower"
+use insertOwnership from "../ir/ownership"
+use verifyOwnedProgram from "../ir/ownership-verify"
+use emitBytecode from "../backend/bytecode/emit"
+use BytecodeProgram from "../backend/bytecode/format"
+use LoadedProgram, Stop, loadedProgram, appendProgram, reserveWords, releaseSandboxed from "../vm/interpret"
+use callSandboxed, unlimitedBudget, unsupportedByInterpreter from "../vm/interpret"
+use renderDiagnostic, renderProblem from "../cli/render"
+use EntryPlan, planEntry from "./entry"
+use EntrySource, KeptDeclaration, ParameterText, Form, Shown, Synthesis, synthesize, entryFunctionName from "./synthesis"
+
+/** One binding of the session: its name, its type as the next entry writes it, and where its words are. */
+public type SessionBinding {
+  name: String
+  isVar: Bool
+  typeText: String
+  /** The first of its words: an absolute register below every frame. */
+  register: Int
+  width: Int
+  /** The shape it is released by, plus one; `0` where nothing in it is counted. */
+  shape: Int
+  /** The `use` its type needs where the session never imported a name of it: `(name, path)`. */
+  imports: List<(String, String)> = []
+}
+
+/** Where the locations of one entry's part of the program are, and the module they are lines of. */
+public type EntryLocations {
+  first: Int
+  end: Int
+  synthesis: Synthesis
+  lineStarts: List<Int>
+  /** How the program's locations spell the session's module. */
+  path: String
+  /** How a message names the entry. */
+  label: String
+}
+
+/** Everything a session holds between two entries. */
+public type Session {
+  /** The session's module: a file of the working directory that exists only in memory. */
+  modulePath: String
+  /** Every file around it, parsed once when the session started. */
+  tree: SourceTree
+  /** The grant of the sandbox every entry runs in: everything, relative paths against the working directory. */
+  grant: String
+  var sources: List<EntrySource> = []
+  var declarations: List<KeptDeclaration> = []
+  var bindings: List<SessionBinding> = []
+  var machine: LoadedProgram
+  var locations: List<EntryLocations> = []
+  /** How many entries were read: what names the next one in a message, `<entry 3>`. */
+  var entryCount: Int = 0
+}
+
+/** How an entry ended. */
+public type Outcome {
+  /** It ran to its end: its bindings are the session's now. */
+  case Done
+  /** It did not check or could not be compiled, and nothing of it ran. */
+  case Refused
+  /** It ran and stopped: a panic, or a `?` that failed. What it changed before the stop stays. */
+  case Stopped
+  /** It called `Process.exit`: the session ends with this code. */
+  case Exited(code: Int)
+}
+
+/** The name the session's module has in messages about code the session wrote itself. */
+const sessionLabel = "<session>"
+
+/** A fresh session over the files around `directory`, which it reads relative paths against. */
+public fn newSession(tree: SourceTree, directory: String): Session {
+  const path = "{directory}/repl-session.trb"
+  Session(
+    modulePath: path,
+    tree: tree.parsedEverything(),
+    grant: "unrestricted\t1\nbase\t{directory}",
+    machine: loadedProgram(BytecodeProgram()),
+  )
+}
+
+// --- One entry --------------------------------------------------------------------------------------------------------
+
+/** What the checks of an entry found out: the module that runs, and what it hands to the session. */
+type Compiled {
+  synthesis: Synthesis
+  checked: Checked
+  form: Form
+  /** The bindings of the session it takes, in the order of its parameters. */
+  parameters: List<SessionBinding>
+  /** The new bindings it hands out, in the order of its outputs: name, `var`-ness, type, and the imports it needs. */
+  outputs: List<(String, Bool, String, List<(String, String)>)>
+  /** Bindings the entry's declarations take the meaning of, with why: released once the declarations are kept. */
+  displaced: List<(SessionBinding, String)>
+}
+
+/**
+ * Checks, compiles and runs one entry. What it prints goes to the two standard streams as it happens. A message names
+ * the entry `<entry 3>`, the third of the session, unless it is `named` otherwise - by the path `:load` read it from.
+ */
+public fn evaluate(var session: Session, text: String, named: String? = None): Outcome {
+  session.entryCount = session.entryCount + 1
+  const plan = planEntry text
+  const label = named ?? "<entry {session.entryCount}>"
+  session.sources.append EntrySource(label, text)
+  const current = session.sources.length() - 1
+  if !plan.diagnostics.isEmpty() {
+    for diagnostic in plan.diagnostics {
+      printError renderDiagnostic(label, LineIndex.of(text), diagnostic)
+    }
+    return Outcome.Refused
+  }
+  if const Some(at) = plan.topLevelReturn {
+    const problem = Diagnostic.error "An entry is not a function: this `return` has nothing to return from", at
+    printError renderDiagnostic(label, LineIndex.of(text), problem)
+    return Outcome.Refused
+  }
+  const compiled = match compileEntry(session, current, plan) {
+    Some(found) => found
+    None => {
+      return Outcome.Refused
+    }
+  }
+  const lowered = match lowerEntry(session, compiled) {
+    Some(found) => found
+    None => {
+      return Outcome.Refused
+    }
+  }
+  // Compiled: the program grows by this entry's part whatever happens when it runs
+  const locationsBefore = session.machine.program.locations.length()
+  appendProgram session.machine, lowered
+  session.locations.append(
+    EntryLocations(
+      locationsBefore,
+      lowered.locations.length(),
+      compiled.synthesis,
+      lineStartsOf(compiled.synthesis.text),
+      modulePathOf(compiled.checked),
+      label,
+    ),
+  )
+  const chunk = lowered.entries.first() ?? 0
+  const entry = lowered.chunks[chunk]
+  var registers: List<Int> = []
+  var arguments: List<Int> = []
+  for index in 0..compiled.parameters.length() {
+    const binding = compiled.parameters[index]
+    const parameter = entry.parameters[index]
+    if parameter.isReference {
+      arguments.append(binding.register * 2 + 1)
+    } else {
+      for offset in 0..binding.width {
+        arguments.append session.machine.words[binding.register + offset]
+      }
+    }
+  }
+  for index in 0..compiled.outputs.length() {
+    const parameter = entry.parameters[compiled.parameters.length() + index]
+    const register = reserveWords session.machine, parameter.valueWidth.max(1)
+    registers.append register
+    arguments.append(register * 2 + 1)
+  }
+  const answered = callSandboxed session.machine, session.grant, unlimitedBudget(), chunk, arguments
+  // The declarations checked, so they are the session's from here on, whatever the statements did
+  keepDeclarations session, current, plan, compiled.displaced
+  var outputs: List<SessionBinding> = []
+  for index in 0..compiled.outputs.length() {
+    const (name, isVar, typeText, imports) = compiled.outputs[index]
+    const parameter = entry.parameters[compiled.parameters.length() + index]
+    const width = parameter.valueWidth
+    outputs.append SessionBinding(name, isVar, typeText, registers[index], width, parameter.valueShape, imports)
+  }
+  const ran = match answered {
+    Ok(words) => compiled.form.failure.isNone() || (words.first() ?? 0) != 0
+    Fail(stop) => {
+      if stop.kind == exitStop {
+        return Outcome.Exited exitCodeOf(stop.message)
+      }
+      reportStop session, stop
+      false
+    }
+  }
+  if !ran {
+    // Whatever an output holds is released: it was assigned before the stop, or it is still zero
+    for binding in outputs {
+      release session, binding
+    }
+    return Outcome.Stopped
+  }
+  // A binding the entry bound again is replaced: the old value is released after the new one is in place
+  var kept: List<SessionBinding> = []
+  var replaced: List<SessionBinding> = []
+  for binding in session.bindings {
+    if outputs.any({ _.name == binding.name }) {
+      replaced.append binding
+    } else {
+      kept.append binding
+    }
+  }
+  kept.appendAll outputs
+  session.bindings = kept
+  for binding in replaced.reversed() {
+    release session, binding
+  }
+  Outcome.Done
+}
+
+/** The two checks of an entry, and the report of what they found. `None` where it does not check. */
+fn compileEntry(var session: Session, current: Int, plan: EntryPlan): Compiled? {
+  const source = session.sources[current]
+  var declared: List<String> = []
+  for declaration in plan.declarations {
+    declared.appendAll declaration.names
+  }
+  // A declaration of a name takes it from a binding of that name, and from a binding whose type names it
+  var parameters: List<SessionBinding> = []
+  var displaced: List<(SessionBinding, String)> = []
+  for binding in session.bindings {
+    if declared.contains(binding.name) {
+      displaced.append((binding, "`{binding.name}` is declared again"))
+    } else if const Some(name) = namedIn(binding.typeText, declared) {
+      const why = if binding.typeText == name {
+        "its type `{name}` is declared again"
+      } else {
+        "its type `{binding.typeText}` names `{name}`, which is declared again"
+      }
+      displaced.append((binding, why))
+    } else {
+      parameters.append binding
+    }
+  }
+  const declarations = keptWithout session.declarations, declared
+  const texts = parameterTexts parameters
+  const (named, bindingImports) = importsOfBindings declarations, declared, parameters
+  const probed = probe session, declarations, texts, current, plan, bindingImports, named
+  const form = probed.form
+  // The imports of the bindings and of what a `?` fails with, and below those of the new bindings
+  var imports = form.imports
+  var synthesis = probed.synthesis
+  var checked = probed.checked
+  var problems = probed.problems
+  if !reportProblems(session, checked, synthesis, current, problems) {
+    return None
+  }
+  // What the probe says about the names the entry binds and the value it shows
+  const module = checked.requested.first()?
+  var checker = checked.checker
+  var outputs: List<(String, Bool, String, List<(String, String)>)> = []
+  var unwritable: List<String> = []
+  for binding in plan.bindings {
+    const found = match synthesis.statementOffset(current, binding.span.start) {
+      Some(start) => checker.patternType module, Span(start, start + binding.span.end - binding.span.start)
+      None => None
+    }
+    if const Some(annotation) = found {
+      const typeText = checker.describe annotation
+      match importsOf(checked, module, annotation) {
+        Some(needed) => {
+          outputs.append((binding.name, binding.isVar, typeText, needed))
+          addImports imports, needed, named
+        }
+        None => {
+          printError "note: `{binding.name}` is not kept: its type `{typeText}` cannot be written in this session"
+          unwritable.append binding.name
+        }
+      }
+    }
+  }
+  var shown = Shown.Bound
+  if const Some(value) = plan.shown {
+    if const Some(start) = synthesis.statementOffset(current, value.start) {
+      if const Some(annotation) = checker.expressionType(module, Span(start, start + value.end - value.start)) {
+        shown = shownOf checker, annotation
+      }
+    }
+  }
+  // The module that runs: the same statements, handing the new bindings out
+  var final = form.copy outputs: outputTexts(outputs), shown: shown, imports: imports
+  synthesis = synthesize session.sources, declarations, texts, current, plan, final
+  checked = checkSession session, synthesis.text, true
+  problems = problemsOf session, checked, synthesis
+  // A binding whose type cannot be written here is not handed out; it lives as long as its entry, as `using` does
+  unwritable = []
+  for problem in problems {
+    for (name, span) in synthesis.outputSpans {
+      if problem.span.start >= span.start && problem.span.start < span.end && !unwritable.contains(name) {
+        unwritable.append name
+      }
+    }
+  }
+  if !unwritable.isEmpty() {
+    for name in unwritable {
+      const typeText = outputs.find({ _.0 == name }).map({ _.2 }) ?? "?"
+      printError "note: `{name}` is not kept: its type `{typeText}` cannot be written in this session"
+    }
+    const dropped = unwritable
+    outputs = outputs.filter({ !dropped.contains(_.0) }).toList()
+    final = final.copy outputs: outputTexts(outputs)
+    synthesis = synthesize session.sources, declarations, texts, current, plan, final
+    checked = checkSession session, synthesis.text, true
+    problems = problemsOf session, checked, synthesis
+  }
+  if !reportProblems(session, checked, synthesis, current, problems) {
+    return None
+  }
+  Some Compiled(synthesis, checked, final, parameters, outputs, displaced)
+}
+
+/** What the probe of an entry found: how it is written, and what the check said about it. */
+type Probed {
+  form: Form
+  synthesis: Synthesis
+  checked: Checked
+  problems: List<Diagnostic>
+}
+
+/**
+ * The probe: the entry checked as the body of a function that answers nothing, and where the only complaint is a `?`
+ * that has nothing to return to, checked again as the body of one that answers the `Result` those `?`s fail with.
+ */
+fn probe(
+  session: Session,
+  declarations: List<KeptDeclaration>,
+  texts: List<ParameterText>,
+  current: Int,
+  plan: EntryPlan,
+  imports: List<(String, String)>,
+  named: List<String>,
+): Probed {
+  const plain = Form imports: imports
+  const synthesis = synthesize session.sources, declarations, texts, current, plan, plain
+  const checked = checkSession session, synthesis.text, false
+  const problems = problemsOf session, checked, synthesis
+  if problems.isEmpty() || !problems.all({ isTopLevelTry _ }) {
+    return Probed plain, synthesis, checked, problems
+  }
+  const (failure, needed) = match failureOf(checked, problems) {
+    Some(found) => found
+    None => {
+      return Probed plain, synthesis, checked, problems
+    }
+  }
+  var withFailure = imports
+  addImports withFailure, needed, named
+  const failing = Form failure: Some(failure), imports: withFailure
+  const again = synthesize session.sources, declarations, texts, current, plan, failing
+  const checkedAgain = checkSession session, again.text, false
+  Probed failing, again, checkedAgain, problemsOf(session, checkedAgain, again)
+}
+
+/**
+ * The one type the `?`s of the top level fail with: the second argument of the `Result` each of them unwraps. `None`
+ * where one of them unwraps an `Option`, or where two fail with different types - the checker's own message says so.
+ */
+fn failureOf(checked: Checked, problems: List<Diagnostic>): (String, List<(String, String)>)? {
+  const module = checked.requested.first()?
+  const checker = checked.checker
+  const result = checker.wellKnown.result?
+  var found: List<String> = []
+  var imports: List<(String, String)> = []
+  for problem in problems {
+    // The `?` is the last byte of its span, and the type of what it unwraps is recorded without it
+    const unwrapped = checker.expressionType(module, Span(problem.span.start, problem.span.end - 1))?
+    const failure = match checker.types.form(unwrapped) {
+      .Nominal(symbol, arguments) => {
+        if symbol != result || arguments.length() != 2 {
+          return None
+        }
+        const needed = importsOf(checked, module, arguments[1])?
+        addImports imports, needed, []
+        checker.describe arguments[1]
+      }
+      _ => {
+        return None
+      }
+    }
+    if !found.contains(failure) {
+      found.append failure
+    }
+  }
+  if found.length() != 1 {
+    return None
+  }
+  Some((found[0], imports))
+}
+
+/**
+ * The `use` of every name in a type that the session's module does not name as that type yet, as `(name, path)`:
+ * what makes `Result<String, IoError>` writable where only `File` was imported. `None` where a name cannot be imported -
+ * it is private to its file, or no package exports it, or the session gave the name to something else.
+ */
+fn importsOf(checked: Checked, module: ModuleId, annotation: TypeId): List<(String, String)>? {
+  var found: List<(String, String)> = []
+  var pending = [annotation]
+  var at = 0
+  while at < pending.length() {
+    const next = pending[at]
+    at = at + 1
+    if pending[0..(at - 1)].contains(next) {
+      continue
+    }
+    match checked.checker.types.form(next) {
+      .Nominal(symbol, arguments) => {
+        pending.appendAll arguments
+        const name = checked.checker.symbolAt(symbol).name
+        if checked.program.lookUp(module, name) == Some(symbol) {
+          continue
+        }
+        if checked.program.lookUp(module, name).isSome() {
+          return None
+        }
+        const path = importPathOf(checked, symbol, name)?
+        if !found.contains((name, path)) {
+          found.append((name, path))
+        }
+      }
+      .Traits(bounds) => pending.appendAll bounds
+      .Tuple(fields) => {
+        for field in fields {
+          pending.append field.annotation
+        }
+      }
+      .Function(form) => {
+        for parameter in form.parameters {
+          pending.append parameter.annotation
+        }
+        pending.append form.result
+      }
+      _ => {}
+    }
+  }
+  Some found
+}
+
+/** The path a `use` imports a symbol by: the package whose `src/lib.trb` exports it under its own name. */
+fn importPathOf(checked: Checked, symbol: SymbolId, name: String): String? {
+  const declared = checked.checker.symbolAt(symbol).module?
+  const program = checked.program
+  const package = program.workspace.packages.get(program.graph.at(declared).package)?
+  if package.name.isEmpty() {
+    return None
+  }
+  const library = program.graph.moduleAt(joinPath(package.directory, "src/lib.trb"))?
+  if program.scopes[library.value].exported.get(name) != Some(symbol) {
+    return None
+  }
+  Some package.name
+}
+
+/**
+ * What the declarations name, and the imports the bindings' types need besides: a name the session declares itself is
+ * never imported behind its back.
+ */
+fn importsOfBindings(
+  declarations: List<KeptDeclaration>,
+  declared: List<String>,
+  bindings: List<SessionBinding>,
+): (List<String>, List<(String, String)>) {
+  var named = declared
+  for kept in declarations {
+    named.appendAll kept.names
+  }
+  var imports: List<(String, String)> = []
+  for binding in bindings {
+    addImports imports, binding.imports, named
+  }
+  (named, imports)
+}
+
+/** `more` added to `imports`, without one that is there already or names what the session declares itself. */
+fn addImports(var imports: List<(String, String)>, more: List<(String, String)>, named: List<String>) {
+  for (name, path) in more {
+    if !named.contains(name) && !imports.contains((name, path)) {
+      imports.append((name, path))
+    }
+  }
+}
+
+/** The value an entry shows: through `Show` where its type has one, as its type where not, and nothing for `Void`. */
+fn shownOf(var checker: Checker, annotation: TypeId): Shown {
+  const typeText = checker.describe annotation
+  if typeText == "Void" || typeText == "Never" || checker.isBroken(annotation) {
+    return Shown.Nothing
+  }
+  // A function is shown by its type: neither back end has a `show` for one
+  if const .Function(_) = checker.types.form(annotation) {
+    return Shown.Described typeText
+  }
+  const show = match checker.wellKnown.show {
+    Some(found) => found
+    None => {
+      return Shown.Described typeText
+    }
+  }
+  const bound = checker.nominal show, []
+  if implementsBound(checker, annotation, bound) {
+    return Shown.Printed
+  }
+  Shown.Described typeText
+}
+
+fn outputTexts(outputs: List<(String, Bool, String, List<(String, String)>)>): List<(String, String)> {
+  var texts: List<(String, String)> = []
+  for (name, _, typeText, _) in outputs {
+    texts.append((name, typeText))
+  }
+  texts
+}
+
+fn parameterTexts(bindings: List<SessionBinding>): List<ParameterText> {
+  var texts: List<ParameterText> = []
+  for binding in bindings {
+    texts.append ParameterText(binding.name, binding.isVar, binding.typeText)
+  }
+  texts
+}
+
+/** The session's module in the tree, checked. `forLowering` checks every body the program may reach. */
+fn checkSession(session: Session, text: String, forLowering: Bool): Checked {
+  check session.tree.withFile(session.modulePath, text), [session.modulePath], false, forLowering
+}
+
+/** The diagnostics of the session's module. */
+fn problemsOf(session: Session, checked: Checked, synthesis: Synthesis): List<Diagnostic> {
+  const shown = session.tree.display session.modulePath
+  var found: List<Diagnostic> = []
+  for file in checked.files {
+    if file.path == shown {
+      found.appendAll file.diagnostics
+    }
+  }
+  found
+}
+
+/** The one message a `?` at the top level gets in a function that answers nothing: what the second form is for. */
+fn isTopLevelTry(diagnostic: Diagnostic): Bool {
+  diagnostic.message.startsWith "`?` needs a function that returns an `Option` or a `Result`"
+}
+
+/** Prints every problem of a check, each against the entry it is about. Answers whether there were none. */
+fn reportProblems(
+  session: Session,
+  checked: Checked,
+  synthesis: Synthesis,
+  current: Int,
+  problems: List<Diagnostic>,
+): Bool {
+  for problem in checked.problems {
+    printError renderProblem(problem)
+  }
+  for problem in problems {
+    printError renderAgainst(session, synthesis, current, problem)
+  }
+  checked.problems.isEmpty() && problems.isEmpty()
+}
+
+/** A diagnostic of the module, rendered against the entry - this one or an earlier one - whose text it points into. */
+fn renderAgainst(session: Session, synthesis: Synthesis, current: Int, problem: Diagnostic): String {
+  match synthesis.locate(problem.span) {
+    Some((index, span, inStatements)) => {
+      const source = session.sources[index]
+      var shown = problem.copy span: span
+      if index != current {
+        shown = shown.withNote "This is a declaration of an earlier entry, which this entry changed the meaning of"
+      } else if !inStatements {
+        if const Some(name) = unknownName(problem.message) {
+          if session.bindings.any({ _.name == name }) {
+            shown = shown.withNote(
+              "A declaration sees the session's declarations, not its bindings: pass `{name}` in as a parameter",
+            )
+          }
+        }
+      }
+      renderDiagnostic source.label, LineIndex.of(source.text), shown
+    }
+    None => renderDiagnostic sessionLabel, LineIndex.of(synthesis.text), problem
+  }
+}
+
+/** `x` of "Cannot find `x` here". */
+fn unknownName(message: String): String? {
+  const rest = message.substringAfter("Cannot find `")?
+  rest.substringBefore "`"
+}
+
+/** The first name of `names` the type text names, as a whole word. */
+fn namedIn(typeText: String, names: List<String>): String? {
+  var word: List<Char> = []
+  for character in "{typeText} ".chars() {
+    if character.isLetter() || character.isDigit() || character == '_' {
+      word.append character
+      continue
+    }
+    if !word.isEmpty() {
+      const found = String.from word
+      if names.contains(found) {
+        return Some found
+      }
+      word = []
+    }
+  }
+  None
+}
+
+/** The kept declarations without the ones that declare one of `names`. */
+fn keptWithout(declarations: List<KeptDeclaration>, names: List<String>): List<KeptDeclaration> {
+  declarations.filter({ !_.names.any({ names.contains _ }) }).toList()
+}
+
+/** The entry's declarations join the session's, and what they took the meaning of goes. */
+fn keepDeclarations(
+  var session: Session,
+  current: Int,
+  plan: EntryPlan,
+  displaced: List<(SessionBinding, String)>,
+) {
+  var names: List<String> = []
+  for declaration in plan.declarations {
+    names.appendAll declaration.names
+  }
+  const declared = names
+  for old in session.declarations {
+    if old.isImport && old.names.any({ declared.contains _ }) {
+      const lost = old.names.filter({ !declared.contains(_) }).toList()
+      if !lost.isEmpty() {
+        const listed = lost.map({ "`{_}`" }).toList().joined(separator: ", ")
+        printError "note: an earlier `use` is replaced, and {listed} with it"
+      }
+    }
+  }
+  var declarations = keptWithout session.declarations, declared
+  const label = session.sources[current].label
+  for declaration in plan.declarations {
+    if declaration.imports.length() < 2 {
+      declarations.append KeptDeclaration(declaration.names, current, declaration.span, declaration.isImport)
+      continue
+    }
+    // One `use` per name, so that a later `use` of one of them replaces that one alone
+    for (name, text) in declaration.imports {
+      session.sources.append EntrySource(label, text)
+      const source = session.sources.length() - 1
+      declarations.append KeptDeclaration([name], source, Span(0, text.byteLength()), true)
+    }
+  }
+  session.declarations = declarations
+  if displaced.isEmpty() {
+    return
+  }
+  var remaining: List<SessionBinding> = []
+  for binding in session.bindings {
+    if !displaced.any({ _.0.name == binding.name }) {
+      remaining.append binding
+    }
+  }
+  session.bindings = remaining
+  for (binding, why) in displaced {
+    printError "note: `{binding.name}` is gone: {why}"
+    release session, binding
+  }
+}
+
+/** A binding's value released and its destructors run; a destructor that stops is reported. */
+fn release(var session: Session, binding: SessionBinding) {
+  const released = releaseSandboxed session.machine, session.grant, binding.register, binding.width, binding.shape
+  if const Fail(stop) = released {
+    reportStop session, stop
+  }
+}
+
+// --- Lowering and running ---------------------------------------------------------------------------------------------
+
+/** The entry's module lowered and encoded as the continuation of the loaded program, or `None` with the reasons. */
+fn lowerEntry(session: Session, compiled: Compiled): BytecodeProgram? {
+  const checked = compiled.checked
+  const module = checked.requested.first()?
+  const symbol = checked.program.scopes[module.value].names.get(entryFunctionName)?
+  var lowering = lowerScripts checked.checker, pathsOfModules(checked), [], [symbol], hostTarget()
+  insertOwnership lowering.program
+  var refused: List<String> = []
+  for problem in lowering.problems {
+    refused.append renderAgainst(session, compiled.synthesis, session.sources.length() - 1, problem.diagnostic)
+  }
+  for blocked in lowering.unsupported {
+    refused.append "error: {blocked.what}"
+  }
+  for what in lowering.program.planned {
+    refused.append "error: {what}"
+  }
+  for problem in lowering.program.problems {
+    refused.append "internal error: {problem}"
+  }
+  for problem in verifyOwnedProgram(lowering.program) {
+    refused.append "internal error: {problem}"
+  }
+  const function = lowering.scriptHosts.first()?
+  const name = lowering.program.functionAt(function).name
+  if refused.isEmpty() {
+    const emission = emitBytecode lowering.program, [name], session.machine.program
+    for what in emission.unsupported {
+      refused.append "error: {what} is not supported by the VM yet"
+    }
+    const before = session.machine.program.elements.length()
+    for what in unsupportedByInterpreter(emission.program.copy(elements: emission.program.elements[before..])) {
+      refused.append "error: {what} is not supported by the VM yet"
+    }
+    if refused.isEmpty() {
+      return Some emission.program
+    }
+  }
+  for line in refused {
+    printError line
+  }
+  None
+}
+
+/** The stop kind of `Process.exit` inside a sandbox (`TORB_SANDBOX_EXIT` of `runtime/include/torb.h`). */
+const exitStop = 4
+
+/** The stop kind of a panic. */
+const panicStop = 1
+
+/** The code of "The script called Process.exit(3)". */
+fn exitCodeOf(message: String): Int {
+  const inside = message.substringAfter("(") ?? ""
+  const number = inside.substringBefore(")") ?? ""
+  Int.tryFrom(number).ok() ?? 1
+}
+
+/**
+ * A stop as a native program reports its panic - `panic: <message>` and `at <site>` - with the site in the entry's own
+ * lines; where the site is in code the session did not write, the innermost line of an entry follows as `in`.
+ */
+fn reportStop(session: Session, stop: Stop) {
+  const program = session.machine.program
+  const heading = if stop.kind == panicStop { "panic: {stop.message}" } else { "error: {stop.message}" }
+  var lines = [heading]
+  var inSession = false
+  if const Some(site) = program.locations.get(stop.site) {
+    match sessionSiteOf(session, stop.site) {
+      Some(shown) => {
+        lines.append "  at {shown}"
+        inSession = true
+      }
+      None => lines.append "  at {site.path}:{site.line}:{site.column}"
+    }
+  }
+  if !inSession {
+    if const Some(shown) = innermostSessionSite(session, stop.frames) {
+      lines.append "  in {shown}"
+    }
+  }
+  printError lines.joined(separator: "\n")
+}
+
+/** `<repl>:2:5`: a location of the program, where it is in the session's module, in the lines of its entry. */
+fn sessionSiteOf(session: Session, index: Int): String? {
+  const location = session.machine.program.locations.get(index)?
+  for part in session.locations {
+    if index < part.first || index >= part.end || location.path != part.path {
+      continue
+    }
+    const start = part.lineStarts.get(location.line - 1)?
+    const (source, span, _) = part.synthesis.locate(Span(start, start))?
+    const entry = session.sources[source]
+    const (line, _) = LineIndex.of(entry.text).lineAndColumn(span.start)
+    return Some "{entry.label}:{line}:{location.column}"
+  }
+  None
+}
+
+/** The site of the innermost frame that is in the session's module: the entry line a call into other code came from. */
+fn innermostSessionSite(session: Session, frames: List<(Int, Int)>): String? {
+  const program = session.machine.program
+  var isInnermost = true
+  for (chunkIndex, pc) in frames {
+    const chunk = match program.chunks.get(chunkIndex) {
+      Some(found) => found
+      None => {
+        continue
+      }
+    }
+    const last = if isInnermost { pc } else { pc - 1 }
+    isInnermost = false
+    var location = chunk.location
+    for (offset, index) in chunk.sites {
+      if offset > last {
+        break
+      }
+      location = index
+    }
+    if const Some(shown) = sessionSiteOf(session, location) {
+      return Some shown
+    }
+    // A call the lowering gave no site of its own, `items[7]` say, is at least in its entry
+    if const Some(part) = partOf(session, location) {
+      return Some part.label
+    }
+  }
+  None
+}
+
+/** The entry whose part of the program a location of the session's module belongs to. */
+fn partOf(session: Session, index: Int): EntryLocations? {
+  const location = session.machine.program.locations.get(index)?
+  session.locations.find({ index >= _.first && index < _.end && location.path == _.path })
+}
+
+/** How the locations of the program spell the session's module. */
+fn modulePathOf(checked: Checked): String {
+  const module = match checked.requested.first() {
+    Some(found) => found
+    None => {
+      return ""
+    }
+  }
+  pathsOfModules(checked).get(module.value) ?? ""
+}
+
+/** The byte offset every line of a text starts at. */
+fn lineStartsOf(text: String): List<Int> {
+  var starts = [0]
+  var offset = 0
+  for character in text.chars() {
+    offset = offset + character.byteLength()
+    if character == '\n' {
+      starts.append offset
+    }
+  }
+  starts
+}
+
+// --- :type and the end ------------------------------------------------------------------------------------------------
+
+/** `:type`: the type of an expression, checked against the session and never run. Answers it, or `None` after a report. */
+public fn typeOf(var session: Session, text: String): String? {
+  const plan = planEntry text
+  session.sources.append EntrySource("<type>", text)
+  const current = session.sources.length() - 1
+  if !plan.diagnostics.isEmpty() {
+    for diagnostic in plan.diagnostics {
+      printError renderDiagnostic("<type>", LineIndex.of(text), diagnostic)
+    }
+    return None
+  }
+  const value = match plan.shown {
+    Some(found) => found
+    None => {
+      printError "error: `:type` takes an expression"
+      return None
+    }
+  }
+  if !plan.declarations.isEmpty() || plan.statements.length() != 1 {
+    printError "error: `:type` takes one expression"
+    return None
+  }
+  const (named, imports) = importsOfBindings session.declarations, [], session.bindings
+  const texts = parameterTexts session.bindings
+  const probed = probe session, session.declarations, texts, current, plan, imports, named
+  const synthesis = probed.synthesis
+  const checked = probed.checked
+  if !reportProblems(session, checked, synthesis, current, probed.problems) {
+    return None
+  }
+  const module = checked.requested.first()?
+  const start = synthesis.statementOffset(current, value.start)?
+  const annotation = checked.checker.expressionType(module, Span(start, start + value.end - value.start))?
+  Some checked.checker.describe(annotation)
+}
+
+/** The end of a session: every binding released, the newest first, so that a destructor runs as it would in a program. */
+public fn closeSession(session: Session) {
+  var closing = session
+  for binding in session.bindings.reversed() {
+    release closing, binding
+  }
+}

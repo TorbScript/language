@@ -1,0 +1,127 @@
+/**
+ * `torb repl`: entries read from standard input, one after the other, each checked against the session and run in the
+ * VM inside this process (docs/design/REPL.md).
+ *
+ * The reader is plain standard input, so a file piped in is a session like a typed one - every entry, every message,
+ * every value - which is how `tests/repl/` drives it. A line is joined to the lines before it until they are a whole
+ * entry: a bracket that is open, an operator that still wants its operand, a string or a comment that is not closed.
+ *
+ * What an entry prints and the values it shows go to standard output; messages go to standard error.
+ */
+
+use File, IoError from "std/fs"
+use readLine from "std/io"
+use readSourceTree from "../project/read"
+use normalizePath from "../project/path"
+use Session, Outcome, newSession, evaluate, typeOf, closeSession from "../repl/session"
+use isComplete from "../repl/entry"
+
+/** The commands of a session, as `:help` lists them. */
+const commandLines = [
+  ":type <expression>  the type of an expression, checked and not run",
+  ":load <file>        a file as one entry: its declarations, its code and its bindings join the session",
+  ":reset              a new session: every binding released, every declaration forgotten, the files read again",
+  ":help               this list",
+  ":quit               the end of the session, as the end of the input is",
+]
+
+/** Runs a session to its end. Answers the exit code: `0`, or the code an entry handed to `Process.exit`. */
+public fn runRepl(): Result<Int, IoError> {
+  const directory = normalizePath(File.absolutePath(".")?)
+  var session = newSession(readSourceTree([directory])?, directory)
+  printError "torb repl: one entry at a time, :help lists the commands"
+  var pending: List<String> = []
+  var blanks = 0
+  while const Some(line) = readLine() {
+    if pending.isEmpty() && line.trim().startsWith(":") {
+      match command(session, directory, line.trim())? {
+        Some(code) => {
+          return Ok code
+        }
+        None => {
+          continue
+        }
+      }
+    }
+    if line.trim().isEmpty() {
+      if pending.isEmpty() {
+        continue
+      }
+      // Two empty lines give up on an entry that never became whole
+      blanks = blanks + 1
+      if blanks >= 2 {
+        printError "note: the unfinished entry is dropped"
+        pending = []
+        blanks = 0
+        continue
+      }
+    } else {
+      blanks = 0
+    }
+    pending.append line
+    const text = pending.joined separator: "\n"
+    if !isComplete(text) {
+      continue
+    }
+    pending = []
+    if const Some(code) = exitCodeOf(evaluate(session, text)) {
+      return Ok code
+    }
+  }
+  // The end of the input ends an entry that is still open: the parser says what is missing
+  if !pending.isEmpty() {
+    if const Some(code) = exitCodeOf(evaluate(session, pending.joined(separator: "\n"))) {
+      return Ok code
+    }
+  }
+  closeSession session
+  Ok 0
+}
+
+/** The code the session ends with where an entry called `Process.exit`. */
+fn exitCodeOf(outcome: Outcome): Int? {
+  if const .Exited(code) = outcome {
+    return Some code
+  }
+  None
+}
+
+/** One command. Answers the exit code where the command ends the session. */
+fn command(var session: Session, directory: String, line: String): Result<Int?, IoError> {
+  const name = line.substringBefore(" ") ?? line
+  const rest = (line.substringAfter(" ") ?? "").trim()
+  match name {
+    ":quit" => {
+      closeSession session
+      return Ok Some(0)
+    }
+    ":help" => {
+      for shown in commandLines {
+        printError shown
+      }
+    }
+    ":reset" => {
+      closeSession session
+      session = newSession(readSourceTree([directory])?, directory)
+    }
+    ":type" => {
+      if rest.isEmpty() {
+        printError "error: `:type` needs an expression"
+      } else if const Some(shown) = typeOf(session, rest) {
+        print shown
+      }
+    }
+    ":load" => {
+      if rest.isEmpty() {
+        printError "error: `:load` needs a file"
+      } else if !File.exists(rest) {
+        printError "error: `{rest}` does not exist"
+      } else {
+        const text = File.readText(rest)?
+        return Ok exitCodeOf(evaluate(session, text, Some(rest)))
+      }
+    }
+    _ => printError "error: `{name}` is no command of the session: :help lists them"
+  }
+  Ok None
+}

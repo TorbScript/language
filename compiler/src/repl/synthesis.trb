@@ -1,0 +1,313 @@
+/**
+ * The module one entry of `torb repl` is checked and compiled as (docs/design/REPL.md section 4): the declarations the
+ * session keeps, the entry's own declarations beside them, and one function `replEntry` whose parameters are the
+ * session's bindings and whose body is the entry's statements.
+ *
+ * ```text
+ *   <every declaration the session keeps>        pieces of earlier entries, verbatim
+ *   <the entry, its statements blanked>          the entry's declarations, at the top level
+ *   fn replEntry(count: Int, var names: List<String>, var replOut0: Int): Void {
+ *     if true {
+ *   <the entry, its declarations blanked>        the statements, in a scope of their own
+ *   const replShown =
+ *   <the last statement>                         where it is an expression with a value
+ *   replOut0 = total                              each new binding into the session's words
+ *   print "= {replShown}"
+ *     }
+ *   }
+ * ```
+ *
+ * Every piece that comes from an entry is copied **verbatim**, and what stands where something else was is blanked
+ * byte for byte, so a byte offset inside a piece is the same offset in its entry: [Synthesis.locate] turns a span of
+ * the module back into a span of the entry a message is about, and the line and the column follow from the entry's own
+ * text.
+ */
+
+use Span from "../syntax/source"
+use EntryPlan, lineStartOf from "./entry"
+
+/** A text the module copies pieces of: an entry of the session, with the label a message names it by. */
+public type EntrySource {
+  /** `<repl>` for a typed entry, the path for one `:load` read. */
+  label: String
+  text: String
+}
+
+/** A declaration the session keeps: a stretch of an earlier entry, with the names it declares. */
+public type KeptDeclaration {
+  names: List<String>
+  /** The entry it came from, as an index of the session's sources. */
+  source: Int
+  span: Span
+  isImport: Bool
+}
+
+/** One binding of the session, as the parameter list of `replEntry` writes it. */
+public type ParameterText {
+  name: String
+  isVar: Bool
+  typeText: String
+}
+
+/** Where a stretch of the module was copied from. */
+public type Piece {
+  moduleStart: Int
+  length: Int
+  source: Int
+  sourceStart: Int
+  /** Whether it is the entry's statements: where a name the entry binds is checked. */
+  holdsStatements: Bool
+}
+
+/** What the last statement's value turns into. */
+public type Shown {
+  /** Bound to `replShown` and not printed: the probe, which asks for the value's type and would otherwise be told it is unused. */
+  case Bound
+  /** Left the statement it is: a value of `Void` or `Never`, which there is nothing to show of. */
+  case Nothing
+  /** `= ` and the value through `Show`. */
+  case Printed
+  /** `= <Type>`, for a value of a type that has no `Show`. */
+  case Described(typeText: String)
+}
+
+/** How an entry is written into the module. */
+public type Form {
+  /**
+   * A `?` at the top level, with the type its failures have: the statements are the body of `replBody`, which answers
+   * `Result<Void, failure>`, and the wrapper `replEntry` answers whether it ran after it printed the failure.
+   */
+  failure: String? = None
+  /** The new bindings handed to the session, as `(name, type)`; empty for a probe, which only asks for the types. */
+  outputs: List<(String, String)> = []
+  shown: Shown = Shown.Bound
+  /**
+   * `(name, path)` of every type the written types name that the session never imported itself - the `IoError` of a
+   * binding `File.readText` answered - each written as `use <name> from "<path>"` in front of everything else.
+   */
+  imports: List<(String, String)> = []
+}
+
+/** The module text, and where every piece of it came from. */
+public type Synthesis {
+  text: String
+  pieces: List<Piece>
+  /** For every output: the new binding's name, and the span of its parameter in the module. */
+  outputSpans: List<(String, Span)>
+
+  /**
+   * The source and the span in it that a span of the module is about, and whether it is among the entry's statements;
+   * `None` where the module wrote it itself.
+   */
+  fn locate(span: Span): (Int, Span, Bool)? {
+    for piece in pieces {
+      if span.start >= piece.moduleStart && span.start < piece.moduleStart + piece.length {
+        const delta = piece.sourceStart - piece.moduleStart
+        const end = span.end.min(piece.moduleStart + piece.length).max(span.start)
+        return Some((piece.source, Span(span.start + delta, end + delta), piece.holdsStatements))
+      }
+    }
+    None
+  }
+
+  /** Where an offset of the current entry's statements is in the module. */
+  fn statementOffset(source: Int, offset: Int): Int? {
+    for piece in pieces {
+      if piece.source == source && piece.holdsStatements {
+        if offset >= piece.sourceStart && offset < piece.sourceStart + piece.length {
+          return Some(piece.moduleStart + offset - piece.sourceStart)
+        }
+      }
+    }
+    None
+  }
+}
+
+/** The name of the function a host calls: the one entry chunk of every continuation. */
+public const entryFunctionName = "replEntry"
+
+/** Writes the module of one entry. `current` is the entry's index among `sources`. */
+public fn synthesize(
+  sources: List<EntrySource>,
+  declarations: List<KeptDeclaration>,
+  parameters: List<ParameterText>,
+  current: Int,
+  plan: EntryPlan,
+  form: Form,
+): Synthesis {
+  var writer = ModuleWriter()
+  for (name, path) in form.imports {
+    writer.write "use {name} from \"{path}\"\n"
+  }
+  if !form.imports.isEmpty() {
+    writer.write "\n"
+  }
+  for kept in declarations {
+    const source = sources[kept.source]
+    writer.copy kept.source, source.text, kept.span.start, kept.span.end, false
+    writer.write "\n\n"
+  }
+  // The declarations of the entry at the top level, with its statements blanked where they stood
+  const declared = blanked plan.text, plan.statements
+  writer.copy current, declared, 0, declared.byteLength(), false
+  writer.write "\n\n"
+  var signature: List<String> = []
+  var arguments: List<String> = []
+  for parameter in parameters {
+    const written = if parameter.isVar { "var {parameter.name}" } else { parameter.name }
+    signature.append "{written}: {parameter.typeText}"
+    arguments.append parameter.name
+  }
+  var outputSpans: List<(String, Span)> = []
+  var outputTexts: List<String> = []
+  for index in 0..form.outputs.length() {
+    const (name, typeText) = form.outputs[index]
+    outputTexts.append "var replOut{index}: {typeText}"
+    arguments.append "replOut{index}"
+  }
+  const body = if form.failure.isSome() { "replBody" } else { entryFunctionName }
+  if const Some(failure) = form.failure {
+    writer.write "fn {entryFunctionName}("
+    const _ = writeParameters writer, signature, outputTexts, form.outputs
+    writer.write "): Bool \{\n"
+    writer.write "  match {body}({arguments.joined(separator: ", ")}) \{\n"
+    writer.write "    Ok(_) => true\n"
+    writer.write "    Fail(problem) => \{\n"
+    writer.write "      printError \"error: \{problem}\"\n"
+    writer.write "      false\n"
+    writer.write "    }\n"
+    writer.write "  }\n"
+    writer.write "}\n\n"
+    writer.write "fn {body}("
+    outputSpans = writeParameters writer, signature, outputTexts, form.outputs
+    writer.write "): Result<Void, {failure}> \{\n"
+  } else {
+    writer.write "fn {body}("
+    outputSpans = writeParameters writer, signature, outputTexts, form.outputs
+    writer.write "): Void \{\n"
+  }
+  writer.write "if true \{\n"
+  // The statements, with the declarations blanked where they stood
+  var declarationSpans: List<Span> = []
+  for declaration in plan.declarations {
+    declarationSpans.append declaration.span
+  }
+  const statements = blanked plan.text, declarationSpans
+  const last = match form.shown {
+    .Nothing => None
+    _ => plan.shown
+  }
+  match last {
+    Some(value) => {
+      const start = lineStartOf plan.text, value.start
+      writer.copy current, statements, 0, start, true
+      if start > 0 && statements.byteAt(start - 1) != Some(10) {
+        writer.write "\n"
+      }
+      writer.write "const replShown =\n"
+      writer.copy current, statements, start, statements.byteLength(), true
+    }
+    None => writer.copy current, statements, 0, statements.byteLength(), true
+  }
+  writer.write "\n"
+  for index in 0..form.outputs.length() {
+    const (name, _) = form.outputs[index]
+    writer.write "replOut{index} = {name}\n"
+  }
+  match form.shown {
+    .Bound => {}
+    .Nothing => {}
+    .Printed => writer.write "print \"= \{replShown}\"\n"
+    .Described(typeText) => writer.write "print \"= <{escaped(typeText)}>\"\n"
+  }
+  writer.write "}\n"
+  if form.failure.isSome() {
+    writer.write "Ok void\n"
+  }
+  writer.write "}\n"
+  Synthesis writer.parts.joined(separator: ""), writer.pieces, outputSpans
+}
+
+/** The parameter list: the session's bindings, then the outputs. Answers where each output's type is written. */
+fn writeParameters(
+  var writer: ModuleWriter,
+  signature: List<String>,
+  outputTexts: List<String>,
+  outputs: List<(String, String)>,
+): List<(String, Span)> {
+  var spans: List<(String, Span)> = []
+  var first = true
+  for text in signature {
+    if !first {
+      writer.write ", "
+    }
+    first = false
+    writer.write text
+  }
+  for index in 0..outputTexts.length() {
+    if !first {
+      writer.write ", "
+    }
+    first = false
+    const start = writer.offset
+    writer.write outputTexts[index]
+    const (name, _) = outputs[index]
+    spans.append((name, Span(start, writer.offset)))
+  }
+  spans
+}
+
+/** A text inside a string literal of the module: its braces and quotes escaped. */
+fn escaped(text: String): String {
+  text.replace("\\", "\\\\").replace("\"", "\\\"").replace("\{", "\\\{")
+}
+
+/** The module being written: its parts, and which of them are pieces of a source. */
+type ModuleWriter {
+  var parts: List<String> = []
+  var pieces: List<Piece> = []
+  var offset: Int = 0
+
+  var fn write(text: String) {
+    parts.append text
+    offset = offset + text.byteLength()
+  }
+
+  /** `text[from..to]`, recorded as a piece of `source`. */
+  var fn copy(source: Int, text: String, from: Int, to: Int, holdsStatements: Bool) {
+    if to <= from {
+      return
+    }
+    pieces.append Piece(offset, to - from, source, from, holdsStatements)
+    write text[from..to]
+  }
+}
+
+/** The text with every byte inside the spans a space, line breaks kept: the offsets of everything else stay put. */
+public fn blanked(text: String, spans: List<Span>): String {
+  if spans.isEmpty() {
+    return text
+  }
+  var parts: List<String> = []
+  var offset = 0
+  var cursor = 0
+  for character in text.chars() {
+    const width = character.byteLength()
+    if character != '\n' && isInside(spans, offset) {
+      if cursor < offset {
+        parts.append text[cursor..offset]
+      }
+      parts.append " ".repeat(width)
+      cursor = offset + width
+    }
+    offset = offset + width
+  }
+  if cursor < text.byteLength() {
+    parts.append text[cursor..]
+  }
+  parts.joined separator: ""
+}
+
+fn isInside(spans: List<Span>, offset: Int): Bool {
+  spans.any({ offset >= _.start && offset < _.end })
+}
