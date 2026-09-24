@@ -310,8 +310,9 @@ public fn valueSlot(
   destination: Slot?,
   annotation: IrTypeId,
 ): Slot {
-  // `Never` has no values, so a slot may not have that type: the expression diverges and nothing reads this one
-  const inner = if isNeverType(lowering, annotation) { voidTypeOf lowering } else { annotation }
+  // A slot of `Never` is never written: an expression of that type diverges, and a binding of it - the `item` of a
+  // `for` over a `List<Never>` - is reached by no value. It keeps its type, so what it is handed to agrees with it
+  const inner = annotation
   if const Some(slot) = destination {
     // The one `Void` slot of the function is the **wrong** hint for a value that is not `Void`. An `if` used as a
     // statement has the type `Void`, so both of its arms produce into that one slot - and an arm whose last expression

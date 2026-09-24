@@ -113,7 +113,9 @@ fn verifyParameters(program: IrProgram, function: IrFunction, var found: List<St
   for index in 0..function.slots.length() {
     const annotation = function.slots[index].annotation
     match program.typeAt(annotation) {
-      .NeverType => found.append "{function.name}: slot %{index} has the type `Never`, which has no values"
+      // A slot of `Never` is allowed: an instance of a generic with `Never` - `ArrayList<Never>.append(value: Never)`,
+      // the `Some(item)` of an `Option<Never>` - has one, and no value ever arrives in it, so every instruction that
+      // reads it is unreachable. The back end gives it the representation of `Void`
       .ConstantValue(_, _) => found.append "{function.name}: slot %{index} holds a const argument, which is not a value"
       _ => {}
     }

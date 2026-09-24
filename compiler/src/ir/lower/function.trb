@@ -21,7 +21,7 @@ use taskValueOf, resumeSignatureOf, buildTaskConstructor, numberSuspensions, has
 use moduleComponentOf, instantiateSignature from "../instantiate"
 use mangledName from "../mangle"
 use instanceOfSymbol, instanceKeyOf, functionDeclarationOf, isMonomorphic from "../instances"
-use Lowering, reportUnsupported, locationOf, isVoidType, isNeverType, isTaskType from "./context"
+use Lowering, reportUnsupported, locationOf, isVoidType, isNeverType, isTaskType, typeAtSpan from "./context"
 use finishBlock, continueIn, voidTypeOf from "./context"
 use lowerBlockInto, lowerBlockValue, lowerStatement from "./statement"
 use capturedVariablesOf, capturedVariablesIn, savedFrame, restoreFrame, enterBody from "./closure"
@@ -183,6 +183,12 @@ public fn lowerBody(var lowering: Lowering, var builder: FunctionBuilder, body: 
   if isNeverType(lowering, result) {
     lowerBlockInto lowering, builder, body, None
     if !lowering.isDiverged {
+      // A generic body instantiated with `Never` ends in a value of it: `Some(value) => value` of
+      // `Option<Never>.expect`. There is no value of `Never`, so the end of that body is never reached
+      if lowering.isSupported && endsInNever(lowering, body) {
+        finishBlock lowering, builder, Terminator.Unreachable
+        return
+      }
       // A function that does not return has to leave through a panic or a call of another such function
       reportUnsupported lowering, "a body of a function that returns `Never` and does return", body.span
       return
@@ -204,6 +210,22 @@ public fn lowerBody(var lowering: Lowering, var builder: FunctionBuilder, body: 
     // A body that produces nothing and does not diverge is what the checker reports, so nothing is said here
     None => reportUnsupported lowering, "a body that produces no value", body.span
   }
+}
+
+/** Whether the last expression of a body has the type `Never` as instantiated, which no value has. */
+fn endsInNever(var lowering: Lowering, body: Block): Bool {
+  const last = match body.statements.last() {
+    Some(found) => found
+    None => {
+      return false
+    }
+  }
+  if const .Evaluate(expression) = last.kind {
+    if const Some(annotation) = typeAtSpan(lowering, expression.span) {
+      return isNeverType lowering, annotation
+    }
+  }
+  false
 }
 
 /** Whether any block of the body leaves the function through a `return`, which a `Never` result may not. */

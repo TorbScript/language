@@ -1,0 +1,52 @@
+/**
+ * `Never` as a type argument: a list of `Never` is always empty, and a generic type that holds one builds natively.
+ * The instances of `ArrayList<Never>` have parameters of `Never` (`append(value: Never)`), and `Option<Never>.expect`
+ * ends in a value of it - no value of `Never` exists, so none of that code is ever reached, and it still has to compile.
+ */
+
+type Markup<Message = Never> {
+  private var buffer: String = ""
+  private(var) handlers: List<Message> = []
+
+  var fn text(content: String) {
+    buffer = buffer + content
+  }
+
+  var fn button(onClick: Message, label: String) {
+    handlers.append onClick
+    text "<button>{label}</button>"
+  }
+
+  fn rendered(): String {
+    buffer
+  }
+}
+
+extend<Message> Markup<Message> {
+  var fn badge(count: Int) {
+    text "<span>{count}</span>"
+  }
+}
+
+fn staticPage(): Markup {
+  var markup: Markup = Markup()
+  markup.badge 3
+  markup
+}
+
+const page = staticPage()
+print page.handlers.length()
+print page.rendered()
+
+const nothing: List<Never> = []
+print nothing.isEmpty()
+print nothing
+print nothing.first().isNone()
+for item in nothing {
+  print "never printed"
+}
+
+var clicks: Markup<Int> = Markup()
+clicks.button 7, label: "go"
+print clicks.handlers
+print clicks.rendered()

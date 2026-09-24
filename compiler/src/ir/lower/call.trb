@@ -172,6 +172,18 @@ fn lowerCallable(
   if loweredNativeOf(lowering, symbol) == Some("spawn") {
     return lowerSpawn lowering, builder, destination, arguments, annotation, expression.span
   }
+  // A method called on a value of `Never` - `_.showNested()` inside `List<Never>.show` - is never reached, and `Never`
+  // has no implementation to dispatch to: what the receiver is read from is evaluated, and the call is unreachable
+  if isNeverReceiver(lowering, symbol, receiver) {
+    const written = if receiverWritten { Some arguments[0].value } else { receiverExpressionOf callee }
+    if const Some(value) = written {
+      const _ = lowerValue lowering, builder, value
+    }
+    if !lowering.isDiverged {
+      finishBlock lowering, builder, Terminator.Unreachable
+    }
+    return abandonedSlot lowering, builder, destination
+  }
   const dispatched = match dispatchedMember(lowering, symbol, typeArguments, dispatch, receiver, at) {
     Some(found) => found
     None => {
@@ -493,6 +505,36 @@ fn separatedFromPlaces(var builder: FunctionBuilder, operands: List<Slot>, place
  * The checker type of what a call is written on: the receiver, or the `self` the source left out. `None` for a free
  * function and for a static member, whose owner carries no arguments a call site could decide.
  */
+/** Whether a call is a method of a receiver whose type, as instantiated, is `Never`. */
+fn isNeverReceiver(var lowering: Lowering, symbol: SymbolId, receiver: TypeId?): Bool {
+  const written = match receiver {
+    Some(found) => found
+    None => {
+      return false
+    }
+  }
+  const identifier = signatureOf lowering.checker, symbol
+  if !lowering.checker.signature(identifier).takesSelf {
+    return false
+  }
+  const applied = substituted lowering, written
+  if const .NeverType = lowering.checker.types.form(applied) {
+    return true
+  }
+  false
+}
+
+/** The expression in front of the dot of a method call, where there is one: `base` of `base.member(...)`. */
+fn receiverExpressionOf(callee: Expression): Expression? {
+  if const .Generic(inner, _) = callee.kind {
+    return receiverExpressionOf inner
+  }
+  if const .Member(base, _, _) = callee.kind {
+    return Some base
+  }
+  None
+}
+
 public fn receiverTypeOf(var lowering: Lowering, callee: Expression): TypeId? {
   const module = lowering.module
   // `values.to<Map<Key, Value>>()` writes its type arguments *between* the receiver and the call, so the receiver is one

@@ -590,7 +590,11 @@ group "The verifier" {
     )
   }
 
-  test "a slot may not hold `Never`, and may not hold a const argument" {
+  /**
+   * An instance of a generic with `Never` has slots of it - `ArrayList<Never>.append(value: Never)` - and no value ever
+   * arrives in one, so what reads it is unreachable: the slot is allowed, a const argument is not.
+   */
+  test "a slot may hold `Never`, and may not hold a const argument" {
     var program = IrProgram()
     const int64 = integerType program, 64
     const never = program.internType IrType.NeverType
@@ -603,10 +607,7 @@ group "The verifier" {
     finishProgram program
     assert(
       verifyFunction(program, program.functionAt(identifier))
-        == [
-          "t_main_impossible: slot %0 has the type `Never`, which has no values",
-          "t_main_impossible: slot %1 holds a const argument, which is not a value",
-        ]
+        == ["t_main_impossible: slot %1 holds a const argument, which is not a value"]
     )
   }
 
