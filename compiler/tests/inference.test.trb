@@ -326,3 +326,58 @@ group "What the expected type reaches" {
     )
   }
 }
+
+/** A trait with an argument, and a function whose parameter `Message` only its bound mentions. */
+fn liveSource(): String {
+  "trait Live<Message> \{\n  fn update(message: Message): Int\n\}\n\n"
+    + "fn render<Model: Live<Message>, Message>(model: Model): List<Message> \{\n  []\n\}\n\n"
+}
+
+/** A type that implements `Live` twice, with two different arguments: one `extend` per instantiation. */
+fn twiceLiveSource(): String {
+  "type Both \{\n  name: String = \"both\"\n\}\n\n"
+    + "extend Both with Live<Int> \{\n  fn update(message: Int): Int \{\n    message\n  \}\n\}\n\n"
+    + "extend Both with Live<String> \{\n  fn update(message: String): Int \{\n    0\n  \}\n\}\n\n"
+}
+
+/**
+ * `fn render<Model: Live<Message>, Message>(model: Model)`: the argument decides `Model`, and nothing the call writes
+ * mentions `Message`. The one implementation of `Live` the model has does.
+ */
+group "A parameter only a bound mentions" {
+  test "the one implementation of the bounded trait solves it" {
+    const counter = "type Counter with Live<Int> \{\n  fn update(message: Int): Int \{\n    message\n  \}\n\}\n\n"
+    const source = liveSource() + counter + inBody("  const found = render(Counter())")
+    assert problems(source).isEmpty()
+    const probed = probe source
+    assert(probed.typeArgumentsOf("render(Counter())") == ["Counter", "Int64"])
+    assert(probed.typeOf("render(Counter())") == "List<Int64>")
+  }
+
+  test "a type parameter bounded by the trait solves it from its own bound" {
+    const source = liveSource() + "fn outer<Model: Live<String>>(model: Model) \{\n  const found = render(model)\n\}"
+    assert problems(source).isEmpty()
+    const probed = probe source
+    assert(probed.typeArgumentsOf("render(model)") == ["Model", "String"])
+  }
+
+  test "a type that implements the trait twice decides nothing, and the note spells the argument to write" {
+    const source = liveSource() + twiceLiveSource() + inBody("  const found = render(Both())")
+    assert(problems(source) == ["Cannot infer `Message` of `render`"])
+    assert(
+      notes(source)
+        == ["Annotate the closure parameter or the result, or write the type argument: `render<Both, Message>(...)`"]
+    )
+  }
+
+  test "the expected type still decides where the implementations do not" {
+    const source = liveSource() + twiceLiveSource() + inBody("  const found: List<String> = render(Both())")
+    assert problems(source).isEmpty()
+  }
+
+  test "a type that does not implement the trait at all says so, and not that a type argument is missing" {
+    const source = liveSource() + inBody("  const found = render(3)")
+    assert(problems(source) == ["`Int64` does not implement `Live<_>`"])
+    assert(notes(source) == ["`render` asks for it"])
+  }
+}

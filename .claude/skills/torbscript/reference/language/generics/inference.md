@@ -82,6 +82,30 @@ into<Set<Employee>>()    the one type argument written, the rest (here, none) in
 7. **Coercion to a trait type or a literal type never solves an inference variable.** It only fires once the
    expected type is already known some other way, so it cannot be the reason a type argument gets picked.
 
+8. **A type argument that only a bound mentions is read off the one implementation of that trait.** In
+   `fn render<Model: Live<Message>, Message>(model: Model)` the argument decides `Model`, and where that type implements
+   `Live` exactly once, its arguments decide `Message`. A type that implements the trait twice decides nothing, and
+   one that does not implement it at all is reported as such.
+
+   ```trb check
+   trait Live<Message> {
+     fn update(message: Message): Int
+   }
+
+   type Counter with Live<Int> {
+     fn update(message: Int): Int {
+       message
+     }
+   }
+
+   fn render<Model: Live<Message>, Message>(model: Model): List<Message> {
+     []
+   }
+
+   const messages = render Counter()
+   print messages.length()
+   ```
+
 ## What this is not
 
 **Inference is not global.** An annotation two lines below a call does not reach back into it - a call is solved
@@ -113,6 +137,6 @@ next line, `numbers`, arrives one statement too late to help it.
 ## Related
 
 - [Type parameters](type-parameters.md) - where the type argument being inferred comes from.
-- [Bounds](bounds.md) - a bound restricts what an inferred type can be, it does not help infer it.
+- [Bounds](bounds.md) - a bound restricts what an inferred type can be, and names the trait rule 8 reads a type argument off.
 - [Traits as types](../traits/trait-types.md) - the coercion that never solves an inference variable.
 

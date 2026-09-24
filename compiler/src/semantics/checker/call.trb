@@ -23,7 +23,7 @@ use checkExpression, inferExpression, deferExpression, deferArguments, optionVal
 use resolveTarget, expectationOf from "./expression"
 use substituteFunction, substituteBounds, sameType, unify, resolveType, resolveTypes, openVariableOf from "./unify"
 use hasVariable, suppressVariables from "./unify"
-use witnessFor, isConcrete, traitArgumentsOf, fitsType, resolveBound, hasParameter from "./implementation"
+use witnessFor, isConcrete, traitArgumentsOf, fitsType, resolveBound, resolveTrait, hasParameter from "./implementation"
 use propertyWrite from "./command"
 use openReceiverAccess, openArgumentAccess, closeAccessesTo, checkCallReads, isDeclaredVar from "./place"
 use resultOf from "./signature"
@@ -1110,6 +1110,7 @@ public fn checkBounds(var checker: Checker, bounds: List<Bound>, owner: String, 
   for bound in bounds {
     const subject = resolveType checker, bound.subject
     for capability in bound.traits {
+      solveFromImplementation checker, subject, capability
       const wanted = resolveType checker, capability
       const found = witnessFor checker, subject, wanted
       if const .Unresolved = found {
@@ -1122,12 +1123,38 @@ public fn checkBounds(var checker: Checker, bounds: List<Bound>, owner: String, 
 }
 
 /**
+ * A type parameter that only a bound mentions: `fn render<Model: Live<Message>, Message>(model: Model)` learns `Model`
+ * from the argument and `Message` from nothing the call writes - but `Counter with Live<CounterMessage>` says what it
+ * is. Where the subject is known and implements the trait **once**, the arguments of that one implementation solve the
+ * open ones of the bound. A subject that implements it more than once (`with Live<Click>, Live<Key>`) decides nothing,
+ * and neither does one that is still open itself: both stay "Cannot infer", which names the type argument to write.
+ */
+fn solveFromImplementation(var checker: Checker, subject: TypeId, capability: TypeId) {
+  const wanted = resolveType checker, capability
+  if !hasVariable(checker, wanted) || hasVariable(checker, subject) || checker.absorbs(subject) {
+    return
+  }
+  const form = checker.types.form wanted
+  if const .Nominal(symbol, arguments) = form {
+    const known = traitArgumentsOf(checker, subject, symbol) ?? []
+    if known.length() != arguments.length() {
+      return
+    }
+    for index in 0..arguments.length() {
+      // A mismatch solves nothing here: the witness asked for right after this reports the bound that does not hold
+      const _ = unify checker, arguments[index], known[index]
+    }
+  }
+}
+
+/**
  * A bound that does not hold. Nothing is said about a subject that is not concrete: what a generic parameter of the
  * *enclosing* declaration implements is decided where that one is called, and an unsolved variable was already reported
  * as "cannot infer".
  */
 fn reportUnmetBound(var checker: Checker, subject: TypeId, wanted: TypeId, owner: String, at: Span) {
   if !isConcrete(checker, wanted) {
+    reportMissingTrait checker, subject, wanted, owner, at
     return
   }
   const shown = checker.describe wanted
@@ -1156,6 +1183,36 @@ fn reportUnmetBound(var checker: Checker, subject: TypeId, wanted: TypeId, owner
     problem = problem.withNote note
   }
   checker.reportHere problem
+}
+
+/**
+ * `render(3)` where `render<Model: Live<Message>, Message>`: the bound still has an open variable, and the subject does
+ * not implement the trait with any arguments at all. That is the one root cause - "Cannot infer `Message`" would send
+ * the reader to write a type argument that cannot help - so it is said instead, and the variable is answered by it.
+ */
+fn reportMissingTrait(var checker: Checker, subject: TypeId, wanted: TypeId, owner: String, at: Span) {
+  if !hasVariable(checker, wanted) || hasVariable(checker, subject) || !isConcrete(checker, subject) {
+    return
+  }
+  const form = checker.types.form wanted
+  if const .Nominal(symbol, _) = form {
+    // Implemented once, with other arguments, the bound itself is what does not hold; implemented twice, nothing
+    // says which of the two is meant - and both stay "Cannot infer", which names the type argument to write
+    match resolveTrait(checker, subject, symbol) {
+      .Missing => {}
+      _ => {
+        return
+      }
+    }
+    const given = checker.describe subject
+    const shown = checker.describe wanted
+    var problem = Diagnostic.error "`{given}` does not implement `{shown}`", at
+    if !owner.isEmpty() {
+      problem = problem.withNote "`{owner}` asks for it"
+    }
+    checker.reportHere problem
+    suppressVariables checker, wanted
+  }
 }
 
 /** The resolution of a call, with everything the call site learned: the type arguments and the witnesses. */
