@@ -726,7 +726,7 @@ one that decides it.
    under compilation; evaluating it at check time is constant evaluation of user code, which is the VM and milestone
    7.x (`docs/design/RESOURCES.md` section 8 fences the same thing for a folded initializer, with six conditions). The
    closed list needs none of it, because **its members are standard-library types the compiler may simply import**:
-   `compiler/` already depends on `std/fs`, `std/io`, `std/process`, `std/time` and `std/environment`, and
+   `compiler/` already depends on `std/fs`, `std/io`, `std/process`, `std/time` and `std/os`, and
    `use Uri from "std/uri"` in the checker is one more line. The checker then calls `Uri.tryFrom(text)` like any other
    function, on stage 0 (which interprets the checker) and in the compiled toolchain (which compiles it). **No new
    capability in either implementation.**
@@ -1004,7 +1004,7 @@ drivers, in one expression, in the file where it decides what it can reach.**
 ```trb
 use Storage, FileStorage from "std/storage"
 use S3Storage, S3Credentials from "acme/s3"
-use Environment from "std/environment"
+use Environment from "std/os"
 
 const region = Environment.get("AWS_REGION") ?? "eu-central-1"
 const storage = Storage.registry([FileStorage(), S3Storage.of(region, S3Credentials.fromEnvironment()?)])

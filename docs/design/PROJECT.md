@@ -597,7 +597,7 @@ else.** No network, no writing, no clock, no processes, no foreign functions.
 
 ```trb
 use File from "std/fs"
-use Environment from "std/environment"
+use Environment from "std/os/environment"
 
 name "acme/shop"
 version Environment.get("CI_COMMIT_TAG") ?? File.readText("VERSION").ok()?.trim() ?? "0.0.0"
@@ -610,7 +610,7 @@ line and is therefore *not* known when the toolchain is compiled:
 
 ```trb
 const manifest = Sandbox.read<Project>(projectDirectory.joined("project.trb")) {
-  modules "std/fs", "std/text", "std/environment"
+  modules "std/fs", "std/text", "std/os/environment"
   files readOnly: <the project directory>
   environment "*"
   limits steps: 1_000_000, memory: 16.megabytes(), time: 2.seconds()
@@ -618,7 +618,8 @@ const manifest = Sandbox.read<Project>(projectDirectory.joined("project.trb")) {
 ```
 
 - **Three modules and no more.** `std/fs` is the file reading; `std/text` is what you do with the text you read
-  (`trim`, `lines`, `split`); `std/environment` is `Environment.get(name): String?` and nothing else. `std/time`
+  (`trim`, `lines`, `split`); `std/os/environment` is `Environment` - `get(name): String?`, the listing and the search
+  path - and nothing else of `std/os`. `std/time`
   would be a clock, `std/process` a shell, `std/http` a network: each of those is a way for a manifest to reach
   something the project neither contains nor was handed, which is the line this grant draws.
 - **`files readOnly:` is the project directory, and `docs/design/PATH.md` section 7 is what "below" means.** The check is
@@ -659,10 +660,10 @@ anyway, so they are written down as pitfalls rather than as a prohibition. Both 
 
 **A dependency does not get the environment.** The grant above is for the project `torb` was invoked in and for its
 workspace members, and for nothing else. A `git:` or `path:` dependency is evaluated with file access to **its own**
-directory and **without `std/environment` in `modules`** — so a dependency's manifest that reads a variable fails to
+directory and **without `std/os/environment` in `modules`** — so a dependency's manifest that reads a variable fails to
 load, with the sandbox's own "a module the script may not import" naming the module and the dependency. Refusing the
 *module* rather than handing back `None` is deliberate: `Environment.get` answers `None` both for a variable that is
-unset and for one the sandbox denied (`std/environment` says so under `# Pitfalls`), so a silent denial would let a
+unset and for one the sandbox denied (`Environment.get` says so under `# Pitfalls`), so a silent denial would let a
 dependency fall back to some default and nothing would ever say why. The reason for the refusal is the first pitfall
 read backwards: a dependency that could read your environment could carry your secret into its own settings, and from
 there into your binary.
@@ -1037,7 +1038,7 @@ So a project file may do this —
 
 ```trb
 use File from "std/fs"
-use Environment from "std/environment"
+use Environment from "std/os/environment"
 
 name "acme/shop"
 version Environment.get("CI_COMMIT_TAG") ?? File.readText("VERSION").ok()?.trim() ?? "0.0.0"
@@ -1149,7 +1150,7 @@ every `.trb` file and nothing should be rebased across it.
 | 4 | **Profiles and targets.** `--profile`, `--release`, `--target`, with `dev` as the default; `build/<profile>/<program>`; the `profile` block in the vocabulary and in the static reader; `output` on a `program` taken literally | `compiler/src/cli/build.trb`, `std/project/src/lib.trb`, `compiler/src/project/manifest.trb` | **Low.** `buildTarget = "release"` is one constant today, and the layout already has the shape |
 | 5 | **The specifier grammar.** One function that takes a specifier apart, with a message per shape: a dot in a relative component, a `scheme:`, a host-qualified owner, a `..` inside a package path, a climb out of the package | `compiler/src/semantics/graph.trb`, `compiler/src/semantics/scope.trb`, `compiler/tests/check.test.trb` | **Low**, and it is the slice with the most new diagnostics, so it is mostly tests with exact messages |
 | 6 | **Sources and the static subset.** `source` in `std/project` and in the static reader; a plain-string rule with a diagnostic for the nine static settings; `language`, `description`, `license`, `repository` | `std/project/src/lib.trb`, `compiler/src/project/manifest.trb`, `compiler/tests/project.test.trb` | **Low** on its own. It does not resolve anything — resolution needs the registry protocol, which is CONCEPT's open question |
-| 7 | **The manifest that reads.** The toolchain becomes a `Sandbox` caller: the grant of section 8 (files, the environment for the invoked project and its members only, three modules), the evaluation only when the static read is not enough, `build/manifest-inputs.trb` by name and hash, the diagnostics for a failing script | `compiler/src/project/*`, `compiler/src/cli/*`, `std/sandbox`, `std/environment`, the VM | **Highest, and blocked.** Probe 21: `Sandbox` runs on neither implementation, so this slice cannot start before 7.x. Nothing in the repository's own manifests needs it, which is what makes waiting free |
+| 7 | **The manifest that reads.** The toolchain becomes a `Sandbox` caller: the grant of section 8 (files, the environment for the invoked project and its members only, three modules), the evaluation only when the static read is not enough, `build/manifest-inputs.trb` by name and hash, the diagnostics for a failing script | `compiler/src/project/*`, `compiler/src/cli/*`, `std/sandbox`, `std/os`, the VM | **Highest, and blocked.** Probe 21: `Sandbox` runs on neither implementation, so this slice cannot start before 7.x. Nothing in the repository's own manifests needs it, which is what makes waiting free |
 | 8 | **The locked manifest.** `Lock` in `std/project` with its `settings` and `graph` sections; the deterministic printer that writes an evaluated `Project` back as literals in a fixed order; `torb lock` and `torb lock --check`; `torb publish` writing and verifying `settings` and printing `from`; both files travelling in an archive; the consumer side reading a dependency's `settings` instead of its `project.trb` | `std/project/src/lib.trb`, `compiler/src/project/*`, `compiler/src/cli/*` | **Medium, and it needs slice 7 in front of it.** The printer is the interesting half: "a value is its constructor call" has to hold for the whole vocabulary, `torb lock --check` is the gate that says it is deterministic, and `torb publish`'s static re-read is the one that says it round-trips |
 | 9 | **Resources.** `docs/design/RESOURCES.md`'s slices, which are a plan of their own | see that document | see that document |
 

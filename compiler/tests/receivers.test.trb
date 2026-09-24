@@ -219,6 +219,16 @@ fn probeScript(files: Map<String, String>, path: String): Probed {
 /** A `std/fs` of one type, which is all an import of it needs. */
 const fileSource = "public type File \{\}\n"
 
+/** A project file beside a `std/os` of two modules of one type each. */
+fn osFiles(manifest: String): Map<String, String> {
+  [
+    "app/project.trb": manifest,
+    "std/os/project.trb": "name \"std/os\"",
+    "std/os/src/environment.trb": "public type Environment \{\}\n",
+    "std/os/src/system.trb": "public type System \{\}\n",
+  ]
+}
+
 const loader = "type Sandbox \{\n  static fn load<Value>(path: String): Int \{\n    0\n  \}\n\}\n\n"
   + "public type Config \{\n  var port: Int = 8080\n  var host: String = \"\"\n\}\n\n"
   + "const script = Sandbox.load<Config>(\"./config.trb\")\n"
@@ -259,7 +269,17 @@ group "project.trb is a receiver script against `Project`" {
     const manifest = "use Thing from \"./src/thing\"\nname \"acme/app\"\n"
     assert(
       scriptProblems(["app/project.trb": manifest, "app/src/thing.trb": "public type Thing \{\}\n"])
-        == ["A project file may import `std/fs`, `std/text` and `std/environment`, and not `./src/thing`"]
+        == ["A project file may import `std/fs`, `std/text` and `std/os/environment`, and not `./src/thing`"]
+    )
+  }
+
+  test "the environment is one module of std/os, and the rest of the package is not granted" {
+    const environment = "use Environment from \"std/os/environment\"\nname \"acme/app\"\n"
+    const system = "use System from \"std/os/system\"\nname \"acme/app\"\n"
+    assert scriptProblems(osFiles(environment)).isEmpty()
+    assert(
+      scriptProblems(osFiles(system))
+        == ["A project file may import `std/fs`, `std/text` and `std/os/environment`, and not `std/os/system`"]
     )
   }
 }
@@ -312,6 +332,16 @@ group "Sandbox.load makes a file part of the project" {
       "std/machine/src/lib.trb": "public type Machine \{\}\n",
     ]
     assert(scriptProblems(files) == ["A receiver script cannot import `std/machine`"])
+  }
+
+  test "no grant gives a script the natives of one operating system" {
+    const files = [
+      "app/src/main.trb": loader,
+      "app/config.trb": "use Windows from \"std/os/windows/native\"\nport 9000\n",
+      "std/os/project.trb": "name \"std/os\"",
+      "std/os/src/windows/native.trb": "public type Windows \{\}\n",
+    ]
+    assert(scriptProblems(files) == ["A receiver script cannot import `std/os/windows`"])
   }
 
   test "a path that is not a literal is not checked here: only the sandbox can know it" {

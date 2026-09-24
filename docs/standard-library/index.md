@@ -12,7 +12,7 @@ come with the toolchain and have its version, so none of them needs an entry in 
 The **prelude** (`std/prelude`) is a package of re-exports whose public names are in scope in every file. It holds the
 pure part of the library - values, text, numbers, collections, pipelines, encoding, quotations, tasks, printing,
 mathematics, JSON and the time values. What a program can *touch* is deliberately not in it: `std/fs`, `std/io`,
-`std/process`, `std/environment`, `std/http`, `std/sandbox` and `Clock` stay explicit imports, so that
+`std/process`, `std/os`, `std/http`, `std/sandbox` and `Clock` stay explicit imports, so that
 `use File from "std/fs"` at the top of a file is the statement "this file touches files".
 
 ## What belongs here
@@ -50,7 +50,6 @@ What does not belong here: the language rules that a type participates in, which
 - **[std/io](io.md)** - Standard input and the streams every process is started with - readLine for the short form, Source and Sink for the rest.
 - **[std/process](process.md)** - Process for arguments and exiting, Child for a running program's pipes, and ProcessOutput for what it left behind.
 - **[std/os](os.md)** _(draft)_ - Environment, System and Directories - the environment a program was started with, which system and version it runs on, and where the user's files belong - with OsError and the three target constants.
-- **[std/environment](environment.md)** - Environment, the one type that reads a process environment variable.
 - **[std/test](test.md)** - test and group, the two functions a .test.trb file calls, with assert doing all of the checking.
 - **[std/http](http.md)** - A minimal HTTP client - get, post and request answer a Task, and a response body is a stream of any size.
 - **[std/sandbox](sandbox.md)** - Sandbox and Script, which load a .trb file as a type-checked, capability-limited receiver closure.

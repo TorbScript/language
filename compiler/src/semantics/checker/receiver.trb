@@ -82,10 +82,25 @@ public fn checkReceiverScript(var checker: Checker, module: ModuleId, receiver: 
  * The modules a `project.trb` may import: the toolchain's grant, which never changes (docs/design/SCRIPTS.md section 7
  * and PROJECT.md section 8) - the files of its directory, what to do with their text, and the environment.
  */
-public const projectFileModules = ["std/fs", "std/text", "std/environment"]
+public const projectFileModules = ["std/fs", "std/text", "std/os/environment"]
 
 /** What no grant gives a script (docs/design/SCRIPTS.md section 2): the VM's own kernel, and loading scripts itself. */
 public const neverGrantedModules = ["std/machine", "std/sandbox"]
+
+/**
+ * The directories of `std/os` that hold the raw natives of one operating system, or of one standard several share: no
+ * grant gives a script one, because the sandbox grants the OS-neutral questions only (docs/design/OS.md section 8). A
+ * granted neutral module still reaches them - that is its implementation, not the script's import.
+ */
+public const systemModules = [
+  "std/os/windows",
+  "std/os/linux",
+  "std/os/macos",
+  "std/os/freebsd",
+  "std/os/posix",
+  "std/os/bsd",
+  "std/os/xdg",
+]
 
 /**
  * An import is a capability. What no grant gives is an error in every script; for a `project.trb`, whose grant the
@@ -113,6 +128,17 @@ fn reportImport(var checker: Checker, statement: Statement, isProjectFile: Bool)
     }
   }
   const package = packageOfImport path
+  const module = moduleOfImport path
+  if systemModules.contains(module) {
+    checker.reportHere(
+      Diagnostic.error("A receiver script cannot import `{module}`", declaration.span)
+        .withNote(
+          "The directory holds the natives of one system, and a script is granted the modules of `std/os` that ask the"
+            + " same question on every system: `std/os/environment`, `std/os/system`, `std/os/directories`"
+        )
+    )
+    return
+  }
   if neverGrantedModules.contains(package) {
     checker.reportHere(
       Diagnostic.error("A receiver script cannot import `{package}`", declaration.span)
@@ -123,10 +149,10 @@ fn reportImport(var checker: Checker, statement: Statement, isProjectFile: Bool)
     )
     return
   }
-  if isProjectFile && !projectFileModules.contains(package) {
+  if isProjectFile && !projectFileModules.contains(module) {
     checker.reportHere(
       Diagnostic.error(
-        "A project file may import `std/fs`, `std/text` and `std/environment`, and not `{path}`",
+        "A project file may import `std/fs`, `std/text` and `std/os/environment`, and not `{path}`",
         declaration.span,
       )
         .withNote("A project file reads its own directory and the environment it was started in, nothing else")
@@ -144,4 +170,21 @@ public fn packageOfImport(path: String): String {
     return path
   }
   "{segments[0]}/{segments[1]}"
+}
+
+/**
+ * What a grant names for an import: its package, `std/text` of `"std/text/lines"` - except inside `std/os`, whose modules
+ * are granted one at a time (docs/design/OS.md section 8), so `"std/os/environment"` is itself and `"std/os"` the whole
+ * package. A relative path is itself.
+ */
+public fn moduleOfImport(path: String): String {
+  const package = packageOfImport path
+  if package != "std/os" {
+    return package
+  }
+  const segments = path.split("/").toList()
+  if segments.length() < 3 {
+    return package
+  }
+  "std/os/{segments[2]}"
 }

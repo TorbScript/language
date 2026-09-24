@@ -249,7 +249,7 @@ markers so that milestone 8's `torb doc` can fill it.
 | `standard-library/fs.md` | std/fs | `File` and `IoError` | `std/fs` |
 | `standard-library/io.md` | std/io | Standard input and the streams | `std/io` |
 | `standard-library/process.md` | std/process | Arguments, exit, running a program | `std/process` |
-| `standard-library/environment.md` | std/environment | Environment variables | `std/environment` |
+| `standard-library/os.md` | std/os | The environment, the system, the well-known directories | `std/os` |
 | `standard-library/test.md` | std/test | `test`, `group`, `assert` | `std/test` |
 | `standard-library/http.md` | std/http | Requests and responses | `std/http` |
 | `standard-library/sandbox.md` | std/sandbox | `Sandbox`, `Script`, the capabilities | `std/sandbox` |

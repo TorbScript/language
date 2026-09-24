@@ -87,7 +87,6 @@ public type EnvironmentVariables with Show, Equals {
 
   fn get(name: String): String?
   fn names(): List<String>
-  fn count(): Int
   var fn set(name: String, value: String)
   var fn remove(name: String)
 }

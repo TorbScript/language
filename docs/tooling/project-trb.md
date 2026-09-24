@@ -73,7 +73,7 @@ literal string argument with no `{...}` in it is.
 
 ### What a project file may do
 
-A project file may import `std/fs`, `std/text` and `std/environment`, and nothing else - `torb check` reports any other
+A project file may import `std/fs`, `std/text` and `std/os/environment`, and nothing else - `torb check` reports any other
 `use` at its line. When it is evaluated, it may read files below its own directory (a relative path is read against
 that directory) and every variable of the environment, and it runs at most 1 000 000 steps, 16 MB of allocations and
 two seconds. Anything outside that stops the evaluation with an error at the line that asked for it:

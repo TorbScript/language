@@ -72,7 +72,7 @@ import.
   not allow, at the `use`, with the list of what is allowed:
 
   ```text
-  error: A project file may import `std/fs`, `std/text` and `std/environment`, and not `std/process`
+  error: A project file may import `std/fs`, `std/text` and `std/os/environment`, and not `std/process`
    --> project.trb:1:1
     |
   1 | use Process from "std/process"
@@ -121,9 +121,9 @@ runtime - and every limit is exact about what it counts.**
 
 | Capability | How it is granted | The first lock (import) | The second lock (runtime) |
 |---|---|---|---|
-| Other modules of `std` | `modules "std/text"` | the script's `use` against the list | - |
+| Other modules of `std` | `modules "std/text"`; inside `std/os` one module at a time, `modules "std/os/system"` | the script's `use` against the list: a package, or the module of `std/os`, and a grant of a package covers its modules | - |
 | The file system | `files readOnly: "./config", readWrite: "./out"` | `std/fs` has to be in `modules` | every path a file function of the runtime is handed |
-| The environment | `environment "APP_*"`, `"*"` for all | `std/environment` in `modules` | `Environment.get` of a name no pattern matches answers `None` |
+| The environment | `environment "APP_*"`, `"*"` for all | `std/os/environment` in `modules` | `Environment.get` of a name no pattern matches answers `None` |
 | Processes | `modules "std/process"` | the import | `Process.exit` inside a script stops the script, always |
 | The network | `modules "std/http"` | the import | - (its natives are milestone 8) |
 | The clock | `modules "std/time"` | the import | - |
@@ -140,7 +140,7 @@ runtime - and every limit is exact about what it counts.**
   an `IoError` the script could catch and ignore.
 - **The environment: a pattern is a name, or a prefix followed by one `*`.** A variable no pattern matches reads as
   unset. That is quiet on purpose and is the reason the loud lock is the module: a host that grants no environment
-  grants no `std/environment`, and the script fails to load with a message that names the module
+  grants no `std/os/environment`, and the script fails to load with a message that names the module
   (PROJECT.md section 8, "A dependency does not get the environment").
 - **`Process.exit` never ends the host.** Inside a sandbox it stops the script with the code in the message.
 - **Output is allowed** and goes to the host's standard output and standard error, unchanged. A script cannot read
@@ -227,9 +227,9 @@ public fn evaluated(script: (var self: Project) => Void): String {
 }
 ```
 
-- **The grant** is PROJECT.md section 8's: modules `std/fs`, `std/text` and `std/environment`; files read-only below the
+- **The grant** is PROJECT.md section 8's: modules `std/fs`, `std/text` and `std/os/environment`; files read-only below the
   project's own directory, which is also the base a relative path is resolved against; the environment `"*"`; limits of
-  1 000 000 steps, 16 MB and 2 s. A dependency's manifest will get the same without `std/environment` once
+  1 000 000 steps, 16 MB and 2 s. A dependency's manifest will get the same without `std/os/environment` once
   dependencies are resolved (PROJECT.md section 7).
 - **`settings()` prints what differs from the vocabulary's defaults**, in the order of the vocabulary, every argument a
   literal. A default is not printed because the static reader has defaults of its own - a workspace without a `test`

@@ -1,5 +1,5 @@
 /*
- * environment.c - `std/environment`: `Environment.get`, and the listing `Environment.entries`.
+ * environment.c - `Environment` of `std/os`: `Environment.get`, and the listing `Environment.entries`.
  *
  * A native program sees every variable the platform can. A sandboxed script sees the ones a pattern of its grant
  * matches (`environment "APP_*"`, docs/design/SCRIPTS.md section 4), and every other one reads as unset: the loud lock

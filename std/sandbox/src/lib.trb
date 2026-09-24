@@ -160,12 +160,20 @@ public native type Sandbox {
           continue
         }
       }
-      if !granted.moduleNames.contains(module) {
+      if !isGranted(granted.moduleNames, module) {
         return Fail SandboxError(at, "The script may not import `{module}`: the caller grants it with `modules \"{module}\"`")
       }
     }
     Ok Script(body, granted)
   }
+}
+
+/**
+ * Whether an import is granted: the grant names its module, or the package the module is in - `modules "std/os"` grants
+ * `std/os/environment` and every other module of the package.
+ */
+fn isGranted(grants: List<String>, module: String): Bool {
+  grants.contains(module) || grants.any({ module.startsWith "{_}/" })
 }
 
 /** `./config/../config.trb` is `config.trb`: the path as the table of the program's scripts spells it. */

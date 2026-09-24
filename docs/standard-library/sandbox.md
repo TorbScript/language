@@ -108,5 +108,5 @@ What went wrong loading a script: a syntax or type error against the receiver ty
 ## Related
 
 - [std/project](project.md) - `Project`, the receiver type `project.trb` is loaded against.
-- [std/environment](environment.md) - `Environment`, gated by `SandboxCapabilities.environment`.
+- [std/os](os.md) - `Environment`, gated by `SandboxCapabilities.environment`.
 - [The standard library](index.md) - the other packages.

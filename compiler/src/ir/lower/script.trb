@@ -15,7 +15,7 @@ use SymbolId from "../../semantics/symbols"
 use ModuleId from "../../semantics/module"
 use TypeId, ParameterId from "../../semantics/checker/type"
 use signatureOf from "../../semantics/checker/signature"
-use scriptReceiverOf, packageOfImport from "../../semantics/checker/receiver"
+use scriptReceiverOf, moduleOfImport from "../../semantics/checker/receiver"
 use ScriptTableKind from "../../backend/c/natives"
 use relativePath from "../../project/path"
 use IrType, IrTypeId, FunctionId, BlockId, Slot, Instruction, Terminator, Intrinsic, IntrinsicOperation from "../ir"
@@ -137,7 +137,10 @@ fn scriptsOf(var lowering: Lowering, receiver: TypeId): List<(ModuleId, String)>
   found
 }
 
-/** The modules the script imports, `"std/fs\t3"` per line: what `Sandbox.load` holds against the grant. */
+/**
+ * The modules the script imports, `"std/fs\t3"` per line: what `Sandbox.load` holds against the grant. A module is what
+ * a grant names, the package or a module of `std/os` (`moduleOfImport`).
+ */
 fn importsOf(var lowering: Lowering, module: ModuleId): String {
   const inside = lowering.checker.program.graph.at module
   const lines = LineIndex.of inside.source.text
@@ -147,7 +150,7 @@ fn importsOf(var lowering: Lowering, module: ModuleId): String {
       if const .Use(usage) = declaration.kind {
         if const .Module(path) = usage.source {
           const (line, _) = lines.lineAndColumn declaration.span.start
-          found.append "{packageOfImport(path)}\t{line}"
+          found.append "{moduleOfImport(path)}\t{line}"
         }
       }
     }

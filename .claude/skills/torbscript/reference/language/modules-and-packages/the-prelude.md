@@ -49,7 +49,7 @@ use <Name> from "std/prelude"    // Legal, but redundant for a name the prelude 
 
 3. **The prelude holds the pure part of the standard library, and none of its capabilities.** Values, text, numbers,
    collections, pipelines, encoding, quotations, tasks and printing are in scope everywhere; `std/fs`,
-   `std/environment`, `std/process`, `std/io`, `std/http`, `std/sandbox` and `Clock` are not.
+   `std/os`, `std/process`, `std/io`, `std/http`, `std/sandbox` and `Clock` are not.
 
    ```trb error
    fn checkExists(path: String): Bool {

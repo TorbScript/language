@@ -1,15 +1,16 @@
 # The Operating System
 
-**Status: decided; slice 0 (the construct) is implemented, slices 1 to 7 are not.** `OperatingSystem`,
+**Status: decided; slices 0 (the construct) and 1 (the environment, identity, directories) are implemented, slices 2
+to 7 are not.** `OperatingSystem`,
 `Architecture` and `ByteOrder` are in `std/core/src/target.trb`; the lowering keeps the one arm of a `match`, an `if` or
 an `if const` on a compile-time constant (`compiler/src/ir/fold.trb`); a manifest row names the systems its native
 exists on (`availableOn`), and reaching one on another target is an error of that target at the call; `torb build
 --target <os>-<arch>` sets the constants and `torb check --every-target` lowers every program and test once per target
-without C; `runtime/os/` holds one guarded file per family and `runtime/include/torb_os.h` every prototype. `std/os` is
-a skeleton: its `lib.trb` re-exports the three types, and `windows/native.trb` and `posix/native.trb` hold one native each
-(`Windows.tickCount`, `Posix.effectiveUserIdentifier`), which the conformance program `tests/conformance/target-branch.trb`
-calls from the arms of its own system. `std/environment` still exists, and `Process.executablePath()` in `std/process`
-still answers on Windows and Linux only.
+without C; `runtime/os/` holds one guarded file per family and `runtime/include/torb_os.h` every prototype. `std/os`
+has `Environment` and `EnvironmentVariables`, `System` (without `bootTime`), `Directories` (the base six) and `OsError`,
+with the raw layers `windows/`, `linux/`, `macos/`, `posix/` and `bsd/` and the rule of `xdg/` (see "How slice 1
+landed" in section 10); `std/environment` is gone. `Process.executablePath()` in `std/process` still answers on Windows
+and Linux only.
 
 **An operating-system branch is a `match`, and the compiler decides it.** That is the whole design of `std/os`.
 Operating systems differ and always will, so the language does not hide the branch in C or in a build file: it is
@@ -1608,7 +1609,7 @@ first: the construct, then the environment, identity and directories that the to
 | # | Slice | Files | Depends on | Risk |
 |---|---|---|---|---|
 | 0 | **Done (2026-09-23).** **The construct.** `std/core/src/target.trb` with the three types and intrinsics; the constant evaluator; the lowering of a constant `match`/`if`; `availableOn` and its diagnostic; `torb check --every-target`; `runtime/os/` with `torb_os.h` and empty guarded files; the language page of section 2 | `std/core`, `compiler/src/ir/{constant.trb,lower/match.trb,lower/statement.trb}`, `compiler/src/backend/c/natives.trb`, `compiler/src/main.trb` (the `check` subcommand), `runtime/{build.sh,os/,include/torb_os.h}`, `docs/language/execution/` | — | **Medium.** It touches the lowering and the manifest, so it needs `gates.sh b` and the two-commit seed refresh. The fold itself is small; the test is a program whose untaken arm calls a native that does not exist on the host, built on the host |
-| 1 | **Environment, identity, directories.** `std/os` created; `Environment` moved with `variables()` and `searchPath()`; `EnvironmentVariables`; `OsError` and `outcome`; `System.version`, `hostName`, `uptime`, `pageSize`, `machineArchitecture`; `Directories` (the base six); the Windows, Linux, macOS, POSIX and XDG natives these need; `std/environment` removed and every importer migrated (section 6) | `std/os/**`, `std/environment/` (deleted), `compiler/src/{cli,documentation,project}/*`, `examples/config-dsl`, `tests/conformance/*`, `runtime/os/{windows,linux,posix,macos}.c`, `runtime/platform.c`, `docs/standard-library/os.md` and the pages of section 6 | 0 | **Medium.** The compiler imports the package, so it is part of the fixpoint; the natives are small. FreeBSD's arms are written and answer `Unsupported` until slice 7 |
+| 1 | **Done (2026-09-23).** **Environment, identity, directories.** `std/os` created; `Environment` moved with `variables()` and `searchPath()`; `EnvironmentVariables`; `OsError` and `outcome`; `System.version`, `hostName`, `uptime`, `pageSize`, `machineArchitecture`; `Directories` (the base six); the Windows, Linux, macOS, POSIX and XDG natives these need; `std/environment` removed and every importer migrated (section 6) | `std/os/**`, `std/environment/` (deleted), `compiler/src/{cli,documentation,project}/*`, `examples/config-dsl`, `tests/conformance/*`, `runtime/os/{windows,linux,posix,macos}.c`, `runtime/platform.c`, `docs/standard-library/os.md` and the pages of section 6 | 0 | **Medium.** The compiler imports the package, so it is part of the fixpoint; the natives are small. FreeBSD's arms are written and answer `Unsupported` until slice 7 |
 | 2 | **`ByteSize`, memory and the current process.** `ByteSize` in `std/number` and the prelude, the sandbox's `megabytes` replaced; `Memory`, `Swap`; `CurrentProcess` whole, with `Process.executablePath` moved | `std/number`, `std/prelude`, `std/sandbox`, `std/process`, `std/os/src/{memory,process}.trb` and the per-system halves, `compiler/src/project/toolchain.trb`, `runtime/os/*.c`, `runtime/process.c` | 1 | **Low.** `megabytes` changes type, and every `64.megabytes()` in docs and tests follows |
 | 3 | **Processors.** Counts, `describe` with `x86/`, `times`, `timesOfEach`, `usage` (a `Task` over `sleep`), `frequencies`, `Frequency` | `std/os/src/processor.trb`, `x86/`, per-system halves, `runtime/os/{x86,windows,linux,macos,bsd}.c` | 2 | **Low.** The decoders are pure and tested on every machine with captured inputs |
 | 4 | **Volumes.** `Volume.all`, `space`, `containing`, the `/proc/self/mountinfo` parser, `getmntinfo` | `std/os/src/volumes.trb`, per-system halves, `runtime/os/{windows,posix,bsd}.c` | 2 | **Low**, and `space` runs synchronously until 7.7 |
@@ -1622,6 +1623,25 @@ first: the construct, then the environment, identity and directories that the to
 the first use that takes the two commits. The raw layer has one native per family so far, enough for the conformance
 program and for the error of a native reached on the wrong target. A target that is not the host builds with `--emit-c`
 only, because the C compiler `torb` finds builds for the host.
+
+**How slice 1 landed.** Two commits, because the compiler imports the package: the first added `std/os` and its natives
+beside `std/environment`, the seed was refreshed from it, and the second moved every importer to `std/os` and deleted
+`std/environment`. What differs from the sections above:
+
+- **`System.pageSize()` answers an `Int` of bytes**, because `ByteSize` is slice 2's; it becomes a `ByteSize` there.
+- **macOS and FreeBSD share `bsd/` already.** `Bsd.sysctlText` and `Bsd.sysctlInteger` read by name as section 7 says;
+  `Bsd.uptime` computes `kern.boottime` against the wall clock in C instead of handing `sysctlBytes` a structure,
+  because a `Bytes` out-parameter is no shape of the manifest yet and `std/time` has no wall-clock point to subtract
+  from. With `posix/` and `xdg/`, FreeBSD answers every question of this slice, so none of its arms is `Unsupported`.
+  The C of `macos.c`, `bsd.c` and the POSIX half is compiled on those systems only and has not run there yet.
+- **`Posix.account`** (`getpwuid_r`) is here, not in slice 6: `Directories.home()` falls back to the account entry
+  where `HOME` is unset. `User.current()` is still slice 6's.
+- **`Windows.knownFolder`** parses the GUID text itself and looks up `CoTaskMemFree` at the call, and `RtlGetVersion`,
+  `IsWow64Process2` and `GetTempPath2W` are looked up the same way, so no build names a library beyond the defaults.
+- **The sandbox grants `std/os` per module.** `moduleOfImport` (`semantics/checker/receiver.trb`) is what a grant names:
+  the package, except inside `std/os`, where it is `std/os/<module>`; `Sandbox.load` accepts a module whose package is
+  granted, so `modules "std/os"` covers `std/os/environment`. A `project.trb` may import `std/fs`, `std/text` and
+  `std/os/environment`. The per-system directories are refused in every receiver script by the checker.
 
 `System.bootTime` lands with `std/time`'s `Timestamp`, whenever that is; the sandbox grants of section 8 are checked
 from 7.4; the waiting calls move onto the blocking pool with 7.7; signals are `std/process`'s and CONCURRENCY's.

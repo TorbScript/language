@@ -273,7 +273,6 @@ that answers the question. A page marked (planned) describes a feature that does
 - `standard-library/console.md` - **std/console** (package): print and printError, the two functions that write to the standard streams.
 - `standard-library/core.md` - **std/core** (package): The bottom of the standard library: Option, Result, Error, the operator and conversion traits, and the control structures that are functions.
 - `standard-library/encoding.md` - **std/encoding** (package): Encode, Decode and Describe, the Encoder, Decoder and Describer a format implements, EncodedValue and Structure for a value or a structure without its type, and Format for the streaming side.
-- `standard-library/environment.md` - **std/environment** (package): Environment, the one type that reads a process environment variable.
 - `standard-library/expression.md` - **std/expression** (package): Expression and ExpressionNode, the typed tree a quoted parameter hands over, plus assert and nameOf.
 - `standard-library/fs.md` - **std/fs** (package): File and IoError - whole-file helpers for what fits in memory, and a File as both ends of a byte stream.
 - `standard-library/function-types.md` - **Predicate, Action and Transform** (reference): Three aliases in the prelude for the closure shapes signatures take most - a question about one value, an effect on one value, and a conversion of one value into another.
