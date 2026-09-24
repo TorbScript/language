@@ -102,6 +102,23 @@ group "Unification variables" {
       notes(source) == ["An empty literal needs a type: annotate the binding (`const items: List<Int> = []`)"]
     )
   }
+
+  /**
+   * `take(clicked)` solves the variable `first` left open one statement earlier, so `before[1]` resolves to a type that
+   * nothing had interned yet. The check of an index read the type table before it resolved the receiver, and a table
+   * read before the intern does not have the new type in it: the checker panicked instead of reporting.
+   */
+  test "a variable an earlier statement left open and a later one solved does not break a later index" {
+    const declarations = "fn make<Message>(): List<Message> \{\n  []\n\}\n\n"
+      + "fn first<Message>(box: List<Message>): Message \{\n  box[0]\n\}\n\n"
+      + "fn take(message: Int): Int \{\n  message\n\}\n\n"
+    const statements = "  const before = make()\n  const clicked = first(before[0])\n"
+      + "  const _taken = take(clicked)\n  const _renamed = first(before[1])"
+    assert(
+      problems(declarations + inBody(statements))
+        == ["Cannot infer `Message` of `make`", "Cannot infer `Message` of `first`"]
+    )
+  }
 }
 
 group "Literals through a variable" {

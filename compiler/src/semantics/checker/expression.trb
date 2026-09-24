@@ -286,7 +286,10 @@ fn memberTarget(
  * anything.
  */
 fn reportCaseAfterFunction(var checker: Checker, base: Expression, receiver: TypeId, text: String, at: Span): Bool {
-  match checker.types.form(resolveType(checker, receiver)) {
+  // Resolved before `checker.types` is read: the receiver of `form` is evaluated first, so a table read in the same
+  // expression as the `resolveType` that interns a new type would not have that type in it yet
+  const resolved = resolveType checker, receiver
+  match checker.types.form(resolved) {
     .Function(_) => {}
     _ => {
       return false
@@ -557,7 +560,8 @@ fn indexType(var checker: Checker, target: Expression, index: Expression, at: Sp
   // `grid.append ["c"]` is `grid.append["c"]`: a function is never indexed, so this is the command whose first argument
   // started with `[`
   if const Some(callee) = writtenPathOf(target) {
-    if const .Function(_) = checker.types.form(resolveType(checker, receiver)) {
+    const resolved = resolveType checker, receiver
+    if const .Function(_) = checker.types.form(resolved) {
       checker.reportHere(
         Diagnostic.error("`{callee}` is a function, and `[...]` right after it indexes it", at)
           .withNote("The first argument of a command may not start with `[`: write `{callee}([...])`")
@@ -1988,7 +1992,8 @@ fn negativeCommandArgument(
     }
   }
   const callee = writtenPathOf(left)?
-  match checker.types.form(resolveType(checker, found)) {
+  const resolved = resolveType checker, found
+  match checker.types.form(resolved) {
     .Function(_) => {}
     _ => {
       return None
