@@ -114,3 +114,5 @@ current=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)
 printf '%s\n' "$current" >"$seed/commit"
 rm -f "$seed/$name.old-$$" 2>/dev/null || true
 say "seed: $seed/$name and $seed/program.c, built from $current"
+say "CI and fresh clones bootstrap from the published seed: once $current is on main, the nightly publishes it, or"
+say "Actions -> seed -> Run workflow does at once (docs/contributing/releasing.md)"

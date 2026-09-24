@@ -14,7 +14,7 @@ short, and together they are the whole contract.
 ## What belongs here
 
 Pages about **this documentation**: its structure, its front matter, its writing rules, its commands, its skill, and the
-research behind all of it.
+research behind all of it - and one about how a release of the toolchain is cut, which a contributor meets beside them.
 
 What does not belong here: anything about the language itself, which is in `language/`, and anything about the compiler's
 internals, which is in `internals/`. A page here is marked `skill: omit`, because an agent writing TorbScript has no use
@@ -37,5 +37,6 @@ about what a program *does* comes with a program there.
 - **[Add a page](adding-a-page.md)** - The seven steps from an empty file to a page that passes the gate, with a template for every kind of page to copy.
 - **[The docs commands](checks.md)** - What torb docs check, index, skill and bundle each do, which rules they decide, and which rules only a reviewer can decide.
 - **[The Agent Skill](the-skill.md)** - How torb docs skill turns this documentation into an Agent Skill, what it copies, what it leaves out, and how to install the result.
+- **[Cut a release](releasing.md)** - The steps from a green main to a signed release on GitHub, how a seed is published on its own, and what to do when a release job fails.
 
 <!-- torb:index:end -->

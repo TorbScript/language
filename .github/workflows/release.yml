@@ -1,0 +1,147 @@
+# The stable channel (docs/design/RELEASE.md sections 3 to 5 and 13): pushing a tag `v0.MINOR.PATCH` - and nothing
+# else - makes a release.
+#
+#   1. check      the tag is a version, it equals the `version` of project.trb and compiler/project.trb, its commit is
+#                 on main, and a public repository has a LICENSE
+#   2. gates      every gate on every tier 1 target (gates.yml), the release binaries, the archives, the seed
+#   3. publish    SHA256SUMS signed with Sigstore (keyless, this job's OIDC identity), the GitHub release with every
+#                 archive, the source, the seed and the signature, and the seed added to the `seeds` index
+#
+# A red gate anywhere stops the release before anything is published. Nothing here runs for a pull request: the only
+# trigger is a tag, which only somebody with write access can push, and the only job with write permissions is the
+# last one, which runs no code of the repository except tools/publish-seed.sh from the tagged commit.
+name: release
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: the tag is a release
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - id: check
+        env:
+          TAG: ${{ github.ref_name }}
+          PRIVATE: ${{ github.event.repository.private }}
+        run: |
+          version=${TAG#v}
+          case "$version" in
+            0.*) ;;
+            *)
+              echo "::error::before 1.0 a release is 0.MINOR.PATCH (docs/design/RELEASE.md section 3), not $version"
+              exit 1
+              ;;
+          esac
+          printf '%s\n' "$version" | grep -q -E '^0\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' || {
+            echo "::error::$TAG is not v0.MINOR.PATCH without leading zeros"
+            exit 1
+          }
+          # The download, the manifests and the documentation carry one number (RELEASE.md section 3)
+          for manifest in project.trb compiler/project.trb; do
+            declared=$(sed -n 's/^version "\(.*\)"$/\1/p' "$manifest" | tr -d '\r')
+            if [ "$declared" != "$version" ]; then
+              echo "::error file=$manifest::says version \"$declared\", and the tag is $TAG"
+              exit 1
+            fi
+          done
+          # fetch-depth 0 fetched every branch, main among them
+          if ! git merge-base --is-ancestor HEAD origin/main; then
+            echo "::error::$TAG is not a commit of main"
+            exit 1
+          fi
+          # RELEASE.md section 9: without a license nobody may use it, so nothing public is released without one. A
+          # private repository may cut test releases (RELEASE.md section 10, slice 7).
+          if [ "$PRIVATE" != "true" ] && ! ls LICENSE* >/dev/null 2>&1; then
+            echo "::error::a public release needs a LICENSE file at the root"
+            exit 1
+          fi
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+
+  gates:
+    needs: check
+    uses: ./.github/workflows/gates.yml
+    with:
+      tier-b: true
+      seed: true
+      package: true
+      version: ${{ needs.check.outputs.version }}
+
+  publish:
+    name: publish the release
+    needs: [check, gates]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # A deployment environment: required reviewers set on it in the repository's settings hold the release until one
+    # of them approves, after every gate is green
+    environment: release
+    concurrency:
+      group: seeds
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: dist
+          path: dist
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - name: Sign SHA256SUMS
+        working-directory: dist
+        run: cosign sign-blob --yes --bundle SHA256SUMS.sigstore.json SHA256SUMS
+      - name: The release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.check.outputs.version }}
+          WORKFLOW: ${{ github.workflow_ref }}
+        run: |
+          identity="https://github.com/${WORKFLOW%@*}@refs/tags/$TAG"
+          notes="docs/releases/$VERSION.md"
+          {
+            if [ -f "$notes" ]; then
+              cat "$notes"
+            else
+              echo "TorbScript $VERSION."
+            fi
+            echo ""
+            echo "## Verifying a download"
+            echo ""
+            echo '```sh'
+            echo "cosign verify-blob --bundle SHA256SUMS.sigstore.json \\"
+            echo "  --certificate-identity \"$identity\" \\"
+            echo "  --certificate-oidc-issuer https://token.actions.githubusercontent.com SHA256SUMS"
+            echo "sha256sum --check --ignore-missing SHA256SUMS"
+            echo '```'
+          } >release-notes.md
+          gh release create "$TAG" --repo "$REPOSITORY" --verify-tag --title "TorbScript $VERSION" \
+            --notes-file release-notes.md dist/*
+      - name: The seed of the release, in the seeds index
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TORB_SEED_REPOSITORY: ${{ github.repository }}
+        run: |
+          for archive in dist/torb-seed-*.tar.gz; do
+            sh tools/publish-seed.sh "$archive"
+          done

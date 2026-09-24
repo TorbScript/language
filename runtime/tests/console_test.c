@@ -15,6 +15,11 @@
 #if !defined(_WIN32) && !defined(_POSIX_C_SOURCE)
 #  define _POSIX_C_SOURCE 200809L
 #endif
+/* On macOS `_POSIX_C_SOURCE` alone hides every Darwin extension (`_SC_NPROCESSORS_ONLN`, `SO_NOSIGPIPE`,
+ * `pthread_cond_timedwait_relative_np`); `_DARWIN_C_SOURCE` shows them again beside POSIX. */
+#if defined(__APPLE__) && !defined(_DARWIN_C_SOURCE)
+#  define _DARWIN_C_SOURCE
+#endif
 
 #include "harness.h"
 

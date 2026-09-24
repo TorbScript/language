@@ -1,0 +1,58 @@
+# Publishes the seed of main without a release: Actions -> seed -> Run workflow.
+#
+# This is the CI half of the two-commit rule (compiler/CONTRIBUTING.md, "Two commits for a breaking change"): the
+# first commit teaches the compiler both forms, this workflow publishes the seed built from it, and only then can the
+# second commit, which uses the new form, bootstrap anywhere - in CI and in every fresh clone. The nightly publishes a
+# seed as well, so a breaking change that can wait a day needs nothing but the nightly.
+#
+# The seed is packed only when linux-x64 bootstraps (the fixpoint) and passes tier A and tier B. The other targets are
+# not needed for it: a seed is C, and the C is the same on every target (gates.yml, `agree`).
+name: seed
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: seed-workflow
+  cancel-in-progress: false
+
+jobs:
+  gates:
+    if: github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/gates.yml
+    with:
+      portable: "[]"
+      tier-b: true
+      seed: true
+
+  publish:
+    name: publish the seed
+    needs: gates
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Every job that writes seeds.txt shares this group, in every workflow
+    concurrency:
+      group: seeds
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: seed
+          path: seed-archive
+      - name: sh tools/publish-seed.sh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TORB_SEED_REPOSITORY: ${{ github.repository }}
+        run: |
+          for archive in seed-archive/torb-seed-*.tar.gz; do
+            sh tools/publish-seed.sh "$archive"
+          done

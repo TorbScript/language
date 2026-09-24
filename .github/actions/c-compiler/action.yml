@@ -1,0 +1,68 @@
+# The C compiler of a target, on the PATH and named in TORB_CC, so that every step after it - tools/build-seed.sh,
+# tools/bootstrap.sh, every `torb build` - compiles with the same one.
+#
+#   windows-x64   gcc of MSYS2's UCRT64 environment: MinGW-w64, the compiler the maintainer's machine uses. clang is on
+#                 the runner as well, but it targets MSVC there, and `torb build` links with `-lm`, which MSVC has not.
+#   linux-*       gcc of the image; musl-gcc beside it when `musl` is true (the static release binary)
+#   macos-arm64   clang of the Xcode command line tools, the only C compiler there is
+name: C compiler
+description: Installs the C compiler of the target and sets TORB_CC.
+inputs:
+  target:
+    description: windows-x64, linux-x64, linux-arm64 or macos-arm64
+    required: true
+  musl:
+    description: Also install musl-gcc (Linux only), for a static binary.
+    required: false
+    default: "false"
+runs:
+  using: composite
+  steps:
+    - name: gcc (MSYS2 UCRT64)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        if (-not (Test-Path 'C:\msys64\usr\bin\bash.exe')) {
+          Write-Error 'MSYS2 is not at C:\msys64 on this runner image'
+          exit 1
+        }
+        C:\msys64\usr\bin\bash.exe -lc 'pacman -Sy --noconfirm --needed mingw-w64-ucrt-x86_64-gcc'
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        'C:\msys64\ucrt64\bin' | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+        'TORB_CC=gcc' | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+    - name: gcc
+      if: runner.os == 'Linux'
+      shell: bash
+      env:
+        MUSL: ${{ inputs.musl }}
+      run: |
+        packages=""
+        command -v gcc >/dev/null 2>&1 || packages="gcc libc6-dev"
+        if [ "$MUSL" = "true" ]; then
+          packages="$packages musl-tools"
+        fi
+        if [ -n "$packages" ]; then
+          sudo apt-get update -q
+          # shellcheck disable=SC2086
+          sudo apt-get install -y -q --no-install-recommends $packages
+        fi
+        echo "TORB_CC=gcc" >>"$GITHUB_ENV"
+
+    - name: clang
+      if: runner.os == 'macOS'
+      shell: bash
+      run: echo "TORB_CC=clang" >>"$GITHUB_ENV"
+
+    - name: Which compiler
+      shell: bash
+      env:
+        TARGET: ${{ inputs.target }}
+      run: |
+        "$TORB_CC" --version
+        {
+          echo "### C compiler ($TARGET)"
+          echo '```'
+          "$TORB_CC" --version | head -n 1
+          echo '```'
+        } >>"$GITHUB_STEP_SUMMARY"

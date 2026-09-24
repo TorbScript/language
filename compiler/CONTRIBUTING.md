@@ -114,12 +114,25 @@ one-line program - and records the commit in `seed/commit`. The seed it replaces
 `../torbscript-seeds/<commit>-<date>/` beside the checkout, the five newest are kept, and a broken seed is rolled back
 by copying one of them into `seed/`. Never delete `seed/`, and never refresh it from a red tree.
 
+**The published seed.** A checkout without `seed/` - a fresh clone, a CI runner - bootstraps from a *published* seed:
+`torb-seed-<commit>.tar.gz`, the compiler's `program.c` and the runtime of the same commit plus `build.sh`, an asset of
+the GitHub release `seeds`, whose `seeds.txt` lists every seed with its SHA-256, the newest first.
+`sh tools/fetch-seed.sh` downloads the newest (or `sh tools/fetch-seed.sh <commit>` a named one) with curl or wget,
+checks the hash, compiles `program.c` with the local C compiler (`tools/build-seed.sh`, `$TORB_CC`) into
+`build/seed/torb`, and keeps it only when it checks a one-line program. `tools/bootstrap.sh` takes its seed from
+`$TORB_SEED`, `seed/`, the archives and `build/seed/`, in that order, and runs `tools/fetch-seed.sh` itself when there
+is none (`TORB_SEED_FETCH=0` forbids it). A private repository needs `GH_TOKEN` for the download. The nightly and every
+release publish the seed of main once linux-x64 passes tier A and tier B; the `seed` workflow (Actions -> seed -> Run
+workflow) publishes one at once, which is the second half of the rule below.
+
 **Two commits for a breaking change.** The checkout builds from the seed, so the seed has to understand the sources. A
 syntax change, a new native, or renaming a std name the compiler looks up by string
 (`semantics/checker/wellknown.trb`, the operator traits in `checker/expression.trb`, the member lookups in
 `ir/lower/collection.trb`) is two commits: the first teaches both forms (or adds the native without using it), the
 seed is refreshed from it, and the second migrates (docs/design/COLLECTIONS.md 6a, docs/RUST-EXIT.md 4.2). A new flag of the
-driver is the same: `tools/bootstrap.sh` passes the seed nothing it may not know yet.
+driver is the same: `tools/bootstrap.sh` passes the seed nothing it may not know yet. CI bootstraps from the published
+seed, so between the two commits the `seed` workflow publishes the seed of the first one, and the second is pushed only
+after it.
 
 **Build slots.** A C file of 8 MB or more - the compiler, a test suite of it - is compiled through
 `tools/build-slot.sh`, which `torb build` finds beside the runtime: at most `$TORB_BUILD_SLOTS` (default 3) such

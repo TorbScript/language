@@ -1,0 +1,348 @@
+# The gates of compiler/CONTRIBUTING.md on the tier 1 targets of docs/design/RELEASE.md section 5, and - when asked -
+# the release binaries, the archives and the seed. Every other workflow calls this one; it never writes anything but
+# artifacts and caches, so it runs with a read-only token even for a release.
+#
+# The split, and why (docs/design/RELEASE.md section 13):
+#
+#   linux-x64     bootstrap (seed from program.c -> torb -> torb, fixpoint), then tier A and tier B as two parallel jobs
+#   windows-x64   bootstrap, `check .`, the conformance suite, the runtime's tests
+#   linux-arm64   the same
+#   macos-arm64   the same
+#   agree         every target's compiler emits byte-identical C (program.hash): the C is a pure function of the source
+#
+# Tier A and tier B run in full on one target because almost all of them test the compiler, which is the same C on
+# every machine (the `agree` job proves it). What differs per machine is the C compiler, libc and the runtime's
+# platform layer - and those are exactly what the bootstrap (the compiler builds itself natively), the conformance
+# suite (every behaviour, built and run natively) and the runtime's own tests exercise.
+name: gates
+
+on:
+  workflow_call:
+    inputs:
+      portable:
+        description: JSON list of the targets besides linux-x64 to bootstrap and check
+        type: string
+        default: '["windows-x64", "linux-arm64", "macos-arm64"]'
+      tier-b:
+        description: Run tier B on linux-x64
+        type: boolean
+        default: true
+      seed:
+        description: Pack the seed (artifact `seed`) once linux-x64 passes tier A and tier B
+        type: boolean
+        default: false
+      package:
+        description: Build the release binaries and the archives (artifact `dist`); needs every target
+        type: boolean
+        default: false
+      version:
+        description: The version in the archive names (0.4.0, nightly-20260923)
+        type: string
+        default: ""
+      save-cache:
+        description: Write the caches (a push to main)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  # One large C compile at a time: a runner has 7 to 16 GB, and one cc1 over the compiler's 100 MB of C takes 1.5-2 GB
+  # before the rest of the job runs beside it
+  TORB_BUILD_SLOTS: "1"
+  TORB_SEED_REPOSITORY: ${{ github.repository }}
+
+jobs:
+  linux-x64:
+    name: bootstrap (linux-x64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/c-compiler
+        with:
+          target: linux-x64
+          musl: ${{ inputs.package }}
+      - uses: ./.github/actions/bootstrap
+        with:
+          target: linux-x64
+          token: ${{ github.token }}
+          save-cache: ${{ inputs.save-cache }}
+      - name: Keep the compiler for the tier jobs
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: compiler-linux-x64
+          path: |
+            build/release/torb
+            build/release/program.c
+            build/release/program.hash
+          retention-days: 3
+          if-no-files-found: error
+      - name: The release binary (static, musl)
+        if: inputs.package
+        run: |
+          TORB_CC=musl-gcc TORB_CFLAGS=-static sh tools/build-seed.sh build/release build/dist-binary/torb
+          file build/dist-binary/torb || true
+          if ldd build/dist-binary/torb >/dev/null 2>&1; then
+            echo "::error::the release binary is linked dynamically"
+            exit 1
+          fi
+      - name: Smoke test of the release binary
+        if: inputs.package
+        run: sh tools/smoke-test.sh build/dist-binary/torb
+      - name: Keep the release binary
+        if: inputs.package
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: binary-linux-x64
+          path: build/dist-binary/torb
+          retention-days: 3
+          if-no-files-found: error
+
+  tier-a:
+    name: tier A (linux-x64)
+    needs: linux-x64
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/c-compiler
+        with:
+          target: linux-x64
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: compiler-linux-x64
+          path: build/release
+      # The download is newer than the checkout, so gates.sh finds build/release/torb current and does not bootstrap
+      - run: |
+          chmod +x build/release/torb
+          touch build/release/*
+      - name: sh tools/gates.sh a
+        env:
+          TORB_SEED_FETCH: "0"
+        run: sh tools/gates.sh a
+
+  tier-b:
+    name: tier B (linux-x64)
+    if: inputs.tier-b
+    needs: linux-x64
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/c-compiler
+        with:
+          target: linux-x64
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: compiler-linux-x64
+          path: build/release
+      # Tier B's fixpoint gate bootstraps again. Its seed is this compiler itself: the job before already showed that
+      # the published seed builds these sources, and this shows that the compiler reproduces its own C
+      - name: The compiler as its own seed
+        run: |
+          chmod +x build/release/torb
+          mkdir -p build/ci-seed
+          cp build/release/torb build/ci-seed/torb
+      - name: sh tools/gates.sh b
+        env:
+          TORB_SEED: build/ci-seed/torb
+        run: sh tools/gates.sh b
+      # gcc built everything above; the runtime's own tests with clang as well (-Wpedantic -Werror), which is the
+      # compiler macOS has
+      - name: The runtime's tests with clang
+        env:
+          TORB_CC: clang
+        run: sh runtime/build.sh
+
+  portable:
+    name: bootstrap and conformance (${{ matrix.target }})
+    if: inputs.portable != '[]'
+    runs-on: ${{ matrix.target == 'windows-x64' && 'windows-latest' || matrix.target == 'macos-arm64' && 'macos-latest' || 'ubuntu-24.04-arm' }}
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(inputs.portable) }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/c-compiler
+        with:
+          target: ${{ matrix.target }}
+          musl: ${{ inputs.package && startsWith(matrix.target, 'linux-') }}
+      - uses: ./.github/actions/bootstrap
+        with:
+          target: ${{ matrix.target }}
+          token: ${{ github.token }}
+          save-cache: ${{ inputs.save-cache }}
+      - name: Keep program.hash for the agreement check
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: hash-${{ matrix.target }}
+          path: build/release/program.hash
+          retention-days: 3
+          if-no-files-found: error
+      - name: torb check .
+        run: |
+          torb=build/release/torb.exe
+          [ -f "$torb" ] || torb=build/release/torb
+          "$torb" check .
+      - name: The conformance suite
+        run: sh tools/conformance.sh --jobs 3
+      - name: The runtime's tests
+        run: sh runtime/build.sh
+
+      - name: The release binary (static, musl)
+        if: inputs.package && startsWith(matrix.target, 'linux-')
+        run: |
+          TORB_CC=musl-gcc TORB_CFLAGS=-static sh tools/build-seed.sh build/release build/dist-binary/torb
+          file build/dist-binary/torb || true
+          if ldd build/dist-binary/torb >/dev/null 2>&1; then
+            echo "::error::the release binary is linked dynamically"
+            exit 1
+          fi
+      - name: The release binary (the bootstrapped one)
+        if: inputs.package && !startsWith(matrix.target, 'linux-')
+        run: |
+          mkdir -p build/dist-binary
+          cp build/release/torb* build/dist-binary/
+          rm -f build/dist-binary/*.old-*
+      - name: Only system libraries (Windows)
+        if: inputs.package && matrix.target == 'windows-x64'
+        run: |
+          imports=$(objdump -p build/dist-binary/torb.exe | sed -n 's/^[[:space:]]*DLL Name: //p')
+          echo "$imports"
+          foreign=$(printf '%s\n' "$imports" | grep -v -i -E '^(kernel32|user32|shell32|advapi32|ws2_32|bcrypt|ntdll|ucrtbase|msvcrt|api-ms-win-[a-z0-9-]+)\.dll$' || true)
+          if [ -n "$foreign" ]; then
+            echo "::error::torb.exe needs DLLs a Windows machine does not have: $foreign"
+            exit 1
+          fi
+      - name: An ad hoc signature (macOS)
+        if: inputs.package && matrix.target == 'macos-arm64'
+        run: |
+          codesign --verify --verbose build/dist-binary/torb
+          otool -L build/dist-binary/torb
+      - name: Smoke test of the release binary
+        if: inputs.package
+        run: |
+          # .exe first: Git Bash answers true for `torb` when only `torb.exe` is there
+          binary=build/dist-binary/torb.exe
+          [ -f "$binary" ] || binary=build/dist-binary/torb
+          sh tools/smoke-test.sh "$binary"
+      - name: Keep the release binary
+        if: inputs.package
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: binary-${{ matrix.target }}
+          path: build/dist-binary/torb*
+          retention-days: 3
+          if-no-files-found: error
+
+  agree:
+    name: every target emits the same C
+    if: always() && needs.linux-x64.result == 'success'
+    needs: [linux-x64, portable]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: compiler-linux-x64
+          path: compiler
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: hash-*
+          path: hashes
+      - name: Compare program.hash
+        run: |
+          reference=$(cat compiler/program.hash)
+          echo "linux-x64: $reference"
+          status=0
+          for file in hashes/*/program.hash; do
+            [ -f "$file" ] || continue
+            target=$(basename "$(dirname "$file")")
+            target=${target#hash-}
+            hash=$(cat "$file")
+            echo "$target: $hash"
+            if [ "$hash" != "$reference" ]; then
+              echo "::error::$target emits other C than linux-x64 ($hash, not $reference)"
+              status=1
+            fi
+          done
+          exit "$status"
+
+  seed:
+    name: pack the seed
+    if: always() && inputs.seed && needs.linux-x64.result == 'success' && needs.tier-a.result == 'success' && (needs.tier-b.result == 'success' || needs.tier-b.result == 'skipped')
+    needs: [linux-x64, tier-a, tier-b]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: compiler-linux-x64
+          path: build/release
+      - run: sh tools/pack-seed.sh build/release build/seed-archive
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: seed
+          path: build/seed-archive/
+          retention-days: 7
+          if-no-files-found: error
+
+  package:
+    name: archives
+    if: >-
+      always() && inputs.package && needs.seed.result == 'success'
+      && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
+    needs: [linux-x64, tier-a, tier-b, portable, agree, seed]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: binary-*
+          path: binaries
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: seed
+          path: dist
+      - name: One archive per target, the source, SHA256SUMS
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          [ -n "$VERSION" ] || { echo "::error::package needs a version"; exit 1; }
+          for directory in binaries/binary-*; do
+            target=${directory#binaries/binary-}
+            binary="$directory/torb"
+            [ -f "$binary" ] || binary="$directory/torb.exe"
+            sh tools/package.sh archive "$VERSION" "$target" "$binary" dist
+          done
+          git archive --format=tar.gz --prefix="torb-$VERSION-source/" -o "dist/torb-$VERSION-source.tar.gz" HEAD
+          (cd dist && sha256sum -- *) | LC_ALL=C sort -k 2 >SHA256SUMS
+          mv SHA256SUMS dist/SHA256SUMS
+          cat dist/SHA256SUMS
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dist
+          path: dist/
+          retention-days: 7
+          if-no-files-found: error

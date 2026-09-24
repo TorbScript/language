@@ -1,9 +1,17 @@
 #!/bin/sh
 # Builds `torb` from the seed, and then builds it again with itself.
 #
-# This is how a checkout gets a compiler without Rust in it. The seed is a `torb` that already exists - a binary under
-# `seed/`, or `seed/program.c`, the compiler's own generated C, which builds anywhere a C compiler does. Neither is in
-# git: `seed/` is ignored, and what goes in it is produced by an earlier `torb` (`sh tools/refresh-seed.sh`).
+# This is how a checkout gets a compiler without Rust in it. The seed is a `torb` that already exists, taken from the
+# first of these that has one:
+#
+#   1. `$TORB_SEED`: the binary it names, and nothing else - an explicit seed never falls back
+#   2. `seed/torb`, or `seed/program.c` compiled into it (the main checkout of the maintainer's machine)
+#   3. the newest archive of `tools/refresh-seed.sh` in `../torbscript-seeds/` (`$TORB_SEED_ARCHIVE`)
+#   4. `build/seed/torb`: a published seed, downloaded, verified and compiled by `tools/fetch-seed.sh`. When there is
+#      none, this script runs `tools/fetch-seed.sh` itself - a fresh clone needs nothing but a C compiler and the
+#      network. `TORB_SEED_FETCH=0` forbids the download.
+#
+# None of them is in git: `seed/` and `build/` are ignored, and what goes in them is produced by an earlier `torb`.
 #
 # Two steps and not one, because one says nothing. The seed compiles the *current* sources, so the binary that comes
 # out is built by an older compiler; that binary compiles the sources again, and if the two `program.c` are identical
@@ -22,6 +30,7 @@
 #   sh tools/bootstrap.sh              # seed -> torb -> torb, into build/release/torb
 #   TORB_SEED=/path/to/torb sh tools/bootstrap.sh
 #   TORB_CC=clang sh tools/bootstrap.sh
+#   TORB_SEED_FETCH=0 sh tools/bootstrap.sh    # never download a seed
 
 set -eu
 
@@ -58,21 +67,6 @@ binary_of() {
   fi
 }
 
-# The same order `torb build` uses, so the seed and everything it builds are compiled by one compiler.
-find_compiler() {
-  if [ -n "${TORB_CC-}" ]; then
-    printf '%s\n' "$TORB_CC"
-    return 0
-  fi
-  for candidate in clang gcc cc; do
-    if command -v "$candidate" >/dev/null 2>&1; then
-      printf '%s\n' "$candidate"
-      return 0
-    fi
-  done
-  return 1
-}
-
 # ----------------------------------------------------------------------------- the seed ---------------------------
 
 seed=""
@@ -84,17 +78,8 @@ else
 fi
 
 if [ -z "$seed" ] && [ -f "seed/program.c" ]; then
-  # The portable seed: the compiler as one C file. No `-Werror` here - the C was emitted by another version of the
-  # compiler and may be read by another version of the C compiler, and a warning is not this script's business. It is
-  # compiled inside a machine-wide build slot, like every C file of this size.
-  compiler=$(find_compiler) || fail "no C compiler found (tried \$TORB_CC, clang, gcc, cc)"
-  say "building the seed from seed/program.c with $compiler - this takes a few minutes"
-  # shellcheck disable=SC2086
-  if ! sh tools/build-slot.sh seed/c-compiler.log "$compiler" -std=c11 -O2 -g0 -I runtime/include -o seed/torb \
-    seed/program.c runtime/*.c -lm; then
-    cat seed/c-compiler.log >&2
-    fail "the C compiler could not build seed/program.c"
-  fi
+  # The portable seed: the compiler as one C file, compiled the way every seed is (tools/build-seed.sh)
+  sh tools/build-seed.sh seed seed/torb || fail "the C compiler could not build seed/program.c"
   seed=$(binary_of "seed/torb")
   [ -n "$seed" ] || fail "the C compiler wrote no binary"
 fi
@@ -115,14 +100,33 @@ if [ -z "$seed" ]; then
   [ -z "$seed" ] || say "seed/ has no seed: falling back to the newest archive, $seed"
 fi
 
+# A published seed: the one tools/fetch-seed.sh built before, or the newest one, fetched now
+fetched=0
+may_fetch() {
+  [ -z "${TORB_SEED-}" ] && [ "${TORB_SEED_FETCH-1}" != "0" ]
+}
+if [ -z "$seed" ]; then
+  seed=$(binary_of "build/seed/torb")
+  if [ -n "$seed" ]; then
+    fetched=1
+    say "no seed on this machine: using the published seed $(cat build/seed/commit 2>/dev/null || echo '?') in build/seed/"
+  elif may_fetch; then
+    say "no seed on this machine: fetching the newest published seed (sh tools/fetch-seed.sh)"
+    sh tools/fetch-seed.sh >/dev/null || fail "tools/fetch-seed.sh could not provide a seed"
+    seed=$(binary_of "build/seed/torb")
+    fetched=1
+  fi
+fi
+
 if [ -z "$seed" ]; then
   say "bootstrap.sh: there is no seed."
   say ""
-  say "  A seed is a \`torb\` that already exists, and it is not in git. Put one of the two in place:"
-  say "    seed/torb          a binary for this platform"
-  say "    seed/program.c     the compiler's own generated C, which builds anywhere a C compiler does"
+  say "  A seed is a \`torb\` that already exists, and it is not in git. One of these provides it:"
+  say "    sh tools/fetch-seed.sh    downloads the newest published seed and compiles it into build/seed/"
+  say "    seed/torb                 a binary for this platform"
+  say "    seed/program.c            the compiler's own generated C, which builds anywhere a C compiler does"
   say ""
-  say "  A checkout that has built build/release/torb writes both: sh tools/refresh-seed.sh"
+  say "  A checkout that has built build/release/torb writes seed/: sh tools/refresh-seed.sh"
   say "  A \`torb\` somewhere else on this machine: TORB_SEED=/path/to/torb sh tools/bootstrap.sh"
   exit 1
 fi
@@ -143,7 +147,21 @@ if ! "$seed" build ./compiler --output "./$staging/bootstrap/torb"; then
   # A seed that cannot build the sources is broken or too old; an archived one may still do it. The seed in seed/ is
   # left as it is - `tools/refresh-seed.sh` replaces it once a bootstrap is green.
   built=0
+  # A published seed that was fetched some time ago may be older than a change the sources already rely on (the first
+  # commit of a breaking change teaches the new form, and its seed is published before the second uses it)
+  if [ "$fetched" -eq 1 ] && may_fetch; then
+    before=$(cat build/seed/commit 2>/dev/null || echo "")
+    say "step 1 failed with the published seed $before: fetching the newest one"
+    if sh tools/fetch-seed.sh >/dev/null && [ "$(cat build/seed/commit 2>/dev/null)" != "$before" ]; then
+      candidate=$(binary_of "build/seed/torb")
+      if "$candidate" build ./compiler --output "./$staging/bootstrap/torb"; then
+        seed=$candidate
+        built=1
+      fi
+    fi
+  fi
   for candidate in $(archived_seeds); do
+    [ "$built" -eq 0 ] || break
     [ "$candidate" != "$seed" ] || continue
     say "step 1 failed with $seed: trying the archived seed $candidate"
     if "$candidate" build ./compiler --output "./$staging/bootstrap/torb"; then

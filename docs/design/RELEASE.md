@@ -1,9 +1,9 @@
 # Releasing TorbScript
 
-**Status: planning, nothing built** — this record plans the public release of the language: what has to exist first,
-what a download contains, the website at **torb.dev** and the package registry at **packages.torb.dev**. No command,
-page, server or file described here exists yet, the domain serves nothing, and nothing has been registered, published
-or announced. Every statement about what the repository does today comes from section 1, which was measured on the
+**Status: planning; the CI and the release pipeline of section 13 are built and have not run yet** — this record plans
+the public release of the language: what has to exist first, what a download contains, the website at **torb.dev** and
+the package registry at **packages.torb.dev**. Apart from section 13, no command, page, server or file described here
+exists yet, the domain serves nothing, and nothing has been registered, published or announced. Every statement about what the repository does today comes from section 1, which was measured on the
 commit this record was written on (`653af8bb`).
 
 **A release is three launches, not one, and each has its own gate.** The *preview* publishes the language: downloads,
@@ -37,6 +37,7 @@ that does not block core work can be built now, in the order of section 10.
 - **[10. Slices](#10-slices)** — from now to each launch
 - **[11. What this is not](#11-what-this-is-not)**
 - **[12. Open](#12-open)** — the questions for the owner
+- **[13. The release pipeline, as built](#13-the-release-pipeline-as-built)** — CI, the published seed, nightlies, releases, signing
 
 ---
 
@@ -725,12 +726,12 @@ beside the work on milestones 7 and 8, without touching a file that work touches
 |---|---|---|---|
 | 1 | **`std/markdown`**: CommonMark with tables and front matter, the document tree as a value, HTML output; the CommonMark specification's examples are its test suite; `compiler/src/documentation/markdown.trb` is replaced by it | nothing | preview |
 | 2 | **`torb docs site <root> <out>`** and `--check`: pages, navigation from the indexes, highlighting from the lexer and `torb highlight`, the search index, a stylesheet, `llms.txt`; the site of `main` built by tier A | 1 | preview |
-| 3 | **CI**: `tools/gates.sh a` and `b` on every tier 1 target; the macOS and FreeBSD `executablePath`; the `runtime/os/*.c` bodies compiled on their systems for the first time (fact 4) | nothing | preview |
+| 3 | **CI**: `tools/gates.sh a` and `b` on every tier 1 target; the macOS and FreeBSD `executablePath`; the `runtime/os/*.c` bodies compiled on their systems for the first time (fact 4). **Built, not yet run: section 13** | nothing | preview |
 | 4 | **The archive format and its hash**: SHA-256 and a deterministic `tar` + `gzip` reader and writer, as `std` packages over thin natives; the tree hash of 7.2 | nothing | registry |
 | 5 | **The index format** in `std/project` (or a `std/registry`): `release`, `yank`, `package`, `owner` as receiver-script vocabulary with a static reader and a deterministic printer, and a `--check` over a directory of such files in the shape of
 `canon --check`; the capability table of 7.8 in `std` | 4 for the hashes | registry |
 | 6 | **`torb pack` and `torb publish --dry-run`**: the file set of 7.2, the archive, the hash, the capability summary, the printed environment variables. No network. Needs PROJECT.md slice 8 (the locked manifest), which needs slice 7 | 4, PROJECT.md 7-8 | registry |
-| 7 | **The release pipeline**: archives, `SHA256SUMS`, Sigstore signatures, the portable seed, the install scripts, `install.trb`; run on every tag of a *private* test release until the preview | 3 | preview |
+| 7 | **The release pipeline**: archives, `SHA256SUMS`, Sigstore signatures, the portable seed, the install scripts, `install.trb`; run on every tag of a *private* test release until the preview. **Built except the install scripts and `install.trb`: section 13** | 3 | preview |
 | 8 | **The preview's language gaps**: milestone 7 finished, `run`/`test` on the VM by default, PROJECT.md slices 1-4 and `language`, `git:`/`path:` sources, a license | milestone 7, PROJECT.md | preview |
 | 9 | **`torb upgrade`** and `torb toolchain add c` (the managed `zig cc` of section 4) | 7 | preview |
 | 10 | **The playground**: `torb` for `wasm32-wasi`, the new `OperatingSystem` case, the page | VM slice 7 | preview or later |
@@ -769,10 +770,13 @@ Everything technical above is decided. These are the owner's: questions of direc
    `golang.org/x`) until they are ready. "The standard library is part of the language" (PROJECT.md section 10) makes
    this a question about what the language is.
 4. **The stability promise and the cadence.** Section 3 proposes Go-style strict compatibility within 1.x, no editions,
-   and a minor release every six weeks. Confirm, or say which surface should promise less.
+   and a minor release every six weeks. Confirm, or say which surface should promise less. **Decided by the owner:**
+   Go-style stability without editions, and a release every six weeks.
 5. **The license.** Apache-2.0 WITH LLVM-exception (recommended) or MIT OR Apache-2.0. Without an answer nothing may be
-   published.
-6. **DCO or CLA.** DCO is recommended; a CLA only if relicensing later should stay possible.
+   published. **Decided by the owner: MIT**, and MIT-0 for `runtime/` and `std/`, whose code ends up in every
+   program; every release archive carries the three `LICENSE` files.
+6. **DCO or CLA.** DCO is recommended; a CLA only if relicensing later should stay possible. **Decided by the owner:
+   DCO.**
 7. **Money.** Apple's developer membership for notarization, a Windows code signing certificate or service, the
    object storage and CDN of the registry, and mail for torb.dev. Every one of them can wait for the preview except
    mail, which `security@torb.dev` needs.
@@ -782,3 +786,243 @@ Everything technical above is decided. These are the owner's: questions of direc
 9. **Domain-verified owners with a dotted name.** PROJECT.md reserved `acme.com/x` as a name form. The registry could
    use it for owners that proved the domain (7.1). Recommended: not at launch; a verified domain is a badge on a plain
    owner, and the dotted form stays reserved.
+
+## 13. The release pipeline, as built
+
+**Status: written, not yet run.** The workflows, the composite actions and the scripts below exist in the repository;
+no workflow has run on GitHub yet, no seed and no release has been published, and the Linux and macOS halves of the
+runtime have still never been compiled (fact 4) - among them the whole POSIX side of the network (`runtime/os/posix_io.c`,
+the pollers `epoll.c` and `kqueue.c`, `runtime/tests/io_test.c`) and of `std/os` (`posix.c`, `linux.c`, `bsd.c`,
+`macos.c`). The first CI run is the first compile of all of it, and every job that can reach them runs the runtime's
+tests and the conformance suite. The Windows half of every script was run on the maintainer's machine;
+what the first run on the other targets is expected to report is listed at the end of this section. How the owner
+cuts a release is [docs/contributing/releasing.md](../contributing/releasing.md).
+
+### The files
+
+| File | What it does |
+|---|---|
+| `.github/workflows/ci.yml` | every push to `main` and every pull request: the gates on the targets the change can affect |
+| `.github/workflows/gates.yml` | the reusable workflow every other one calls: bootstrap, tier A, tier B, conformance, the agreement of the C, and on request the release binaries, the archives and the seed. Read-only |
+| `.github/workflows/nightly.yml` | every night that `main` changed: the gates everywhere, then the seed and a prerelease `nightly-YYYYMMDD` |
+| `.github/workflows/release.yml` | a pushed tag `v0.MINOR.PATCH`: the checks of the tag, the gates everywhere, the signed release, the seed |
+| `.github/workflows/seed.yml` | Actions -> seed -> Run workflow: the seed of `main`, published without a release |
+| `.github/actions/c-compiler` | the C compiler of a target on the `PATH` and in `TORB_CC` |
+| `.github/actions/bootstrap` | `build/release/torb` from the cache, or from a published seed with the fixpoint |
+| `tools/build-seed.sh` | compiles a seed's `program.c` with its runtime - the one place that knows that command line |
+| `tools/pack-seed.sh` | packs a seed into `torb-seed-<commit>.tar.gz` and its `.sha256`, reproducibly |
+| `tools/fetch-seed.sh` | downloads a published seed, verifies it, compiles it into `build/seed/torb` |
+| `tools/publish-seed.sh` | uploads a packed seed to the `seeds` release and puts it on top of `seeds.txt` (needs `gh`) |
+| `tools/package.sh` | lays out and packs the toolchain of one target (section 4) |
+| `tools/smoke-test.sh` | runs a laid-out toolchain from outside any checkout, with no variables |
+
+### The seed, published
+
+**Decision: a seed is published as `torb-seed-<commit>.tar.gz` on one GitHub release tagged `seeds`, listed in
+`seeds.txt` beside it, and fetched over plain HTTPS without `gh`.**
+
+```text
+torb-seed-1ae963fa1234/
+├ program.c      the compiler's C, emitted by the compiler of that commit from its own sources
+├ program.hash   what `torb run` keys its cache on
+├ commit         twelve hexadecimal digits
+├ runtime/       the runtime of the same commit: include/, *.c, os/*.c - not its tests
+├ build.sh       tools/build-seed.sh: `sh build.sh` writes ./torb with the machine's C compiler
+└ README.md
+```
+
+- **The runtime travels with the C.** `program.c` calls the runtime of the commit it was emitted at; the runtime of a
+  later commit may have renamed a native that C still calls. `tools/pack-seed.sh` therefore takes `runtime/` from git
+  at the seed's commit, never from the working tree - which is also why `seed/program.c` in the main checkout only
+  works with a runtime that has not moved on.
+- **`seeds.txt`** is one line per seed, newest first: `<commit> <sha256> <archive>`. An archive is found in the
+  directory of the index, so a mirror, a fork or a local directory is one variable away (`TORB_SEED_INDEX`); the tests
+  of `tools/fetch-seed.sh` use a `file://` index.
+- **One release for every seed**, rather than a tag per seed: no tag noise, one URL scheme, and a prerelease is never the
+  repository's "latest". The `seeds` tag points at whatever commit it was created on, which means nothing. Every seed is
+  kept; at about 6 MB each (5.9 MB for the 106 MB `program.c` of `653af8bb`, gzip -9) pruning can wait.
+- **`.tar.gz`**, not `.tar.xz` (4.1 MB): every machine that has `tar` has `gzip`, and the archive is not downloaded
+  often enough for the difference to matter.
+- **Reproducible**: entries sorted, owner 0, modes fixed, every timestamp the commit's, `gzip -n`. Packing the seed of
+  `653af8bb` twice gave the same SHA-256.
+- **Verification** is the SHA-256 of the index, over HTTPS. The Sigstore signature of a release (below) covers the
+  seed as one of its assets; a seed published by the nightly or the `seed` workflow carries none, because what signs a
+  release is the tag's identity and a seed between releases has no tag.
+- **A private repository** answers the plain download URL with a login page. With `GH_TOKEN` or `GITHUB_TOKEN` set,
+  `tools/fetch-seed.sh` goes through the REST API instead (the release of the tag, the asset's id, the asset with
+  `Accept: application/octet-stream`) - still curl or wget and no `gh`. CI passes the job's read-only token.
+
+**Where `tools/bootstrap.sh` takes its seed from**, in this order: `$TORB_SEED` (never falls back), `seed/torb` or
+`seed/program.c`, the newest archive in `../torbscript-seeds/`, `build/seed/torb` - and when there is none,
+`tools/fetch-seed.sh` is run for the newest seed (`TORB_SEED_FETCH=0` forbids it). When step 1 fails with a seed that
+was fetched earlier, the newest is fetched once more and tried before the archives, because the fetched one may predate
+the first commit of a breaking change.
+
+**When a seed is published**: by the nightly and by every release, once linux-x64 has bootstrapped and passed tier A and
+tier B - the other targets are not waited for, since the seed is C and the `agree` job shows the C is the same on
+every target - and at once by the `seed` workflow. That workflow is the CI half of the two-commit rule
+(`compiler/CONTRIBUTING.md`): the first commit teaches both forms, `seed` publishes its seed, and only then can the
+second commit bootstrap in CI and in a fresh clone.
+
+**The first seed** cannot come from CI, which needs a seed to build anything. The owner publishes it once from the main
+checkout: `sh tools/pack-seed.sh seed` and `sh tools/publish-seed.sh build/seed-archive/torb-seed-<commit>.tar.gz`
+(with `gh auth login`), or the same two files and a one-line `seeds.txt` uploaded by hand to a prerelease `seeds`.
+
+### CI: the jobs and why
+
+| Job | Runner | What | When |
+|---|---|---|---|
+| `bootstrap (linux-x64)` | `ubuntu-latest`, gcc | the seed compiled from `program.c`, seed -> torb -> torb with the fixpoint | always |
+| `tier A (linux-x64)` | `ubuntu-latest` | `sh tools/gates.sh a` with that compiler | always |
+| `tier B (linux-x64)` | `ubuntu-latest` | `sh tools/gates.sh b` (the fixpoint with the compiler as its own seed), and the runtime's tests with clang | every push to `main`; a pull request that touches `compiler/src/ir`, `compiler/src/backend`, `runtime/`, `tools/` or `.github/` |
+| `bootstrap and conformance (windows-x64)` | `windows-latest`, gcc of MSYS2 UCRT64 | bootstrap with the fixpoint, `torb check .`, the conformance suite, the runtime's tests | always |
+| `... (linux-arm64)` | `ubuntu-24.04-arm`, gcc | the same | public repository: always. Private: a change to `runtime/`, `compiler/src/backend`, `tools/`, `.github/`; the nightly; a release |
+| `... (macos-arm64)` | `macos-latest`, clang | the same | as linux-arm64 |
+| `every target emits the same C` | `ubuntu-latest` | `program.hash` of every target equals linux-x64's | always |
+
+**Why tier A and tier B run on one target only.** Nearly every gate tests the compiler, and the compiler is the same C on
+every machine - which the `agree` job proves on every run, and which is the strongest cross-platform statement the
+repository can make cheaply. What differs per machine is the C compiler, the C library and the runtime's platform
+layer, and exactly those are exercised by the bootstrap (the compiler builds itself natively, twice or three times),
+the conformance suite (every behaviour, built and run natively, byte for byte against its expectation) and the
+runtime's own tests. Tier A on macOS would cost a macOS hour per push for `torb test compiler/tests`, which checks
+what the `agree` job already shows is identical. linux-x64 carries both tiers because it is the cheapest runner and
+the most common machine of the people who will send pull requests. Tier A and tier B run as two jobs after one
+bootstrap, so the wall time is the longer of the two and not their sum.
+
+**Why the release scheme still meets section 5's "tier A and tier B on every tier 1 target" in substance**: the gates
+that can differ between machines run on every one; the ones that cannot run once. When a difference turns up that only
+a full tier catches, the fix is to move that gate into the portable job, not to run everything everywhere.
+
+**Why the compilers are these.** gcc on Linux is the compiler the maintainer's gcc 13 is closest to, so the first
+Linux run tests the POSIX runtime and not a change of compiler; clang meets the runtime once more on Linux (tier B's
+last step) and the generated C on macOS, where it is the only one. On Windows `clang` targets MSVC and `torb build`
+passes `-lm`, which MSVC does not have, so the Windows job installs gcc from the MSYS2 that every Windows image has.
+
+**Memory and time.** `TORB_BUILD_SLOTS=1` everywhere: a hosted runner has 7 GB (macOS) to 16 GB, one `cc1` over the
+compiler's C takes 1.5 to 2 GB, and a test suite's C is larger. Timeouts: 60 minutes for the Linux bootstrap, 90 for
+each tier, 150 for a portable target (three cores on macOS, a first seed compile, the whole conformance suite).
+
+**Caches**, written only by a push to `main` so a pull request reads them and never fills the repository's 10 GB:
+`build/release` keyed by the target and the hash of everything `torb` is built from (`compiler/src`, the manifests,
+`std/`, `runtime/`, `tools/bootstrap.sh`) - a hit skips the bootstrap, because those sources were bootstrapped on that
+target before - and `build/seed` keyed by the target and the seed's commit, so an unchanged seed is compiled once.
+
+**Concurrency and permissions.** `ci` cancels the run a newer push to the same branch or pull request supersedes;
+`nightly`, `release` and `seed` never cancel. Every workflow starts from `contents: read`; `contents: write` is given
+to the three publishing jobs only, `id-token: write` to the two that sign. Every checkout has
+`persist-credentials: false`, every third-party action is pinned by commit, and no workflow uses
+`pull_request_target` or a secret.
+
+### Versions, tags and channels
+
+- **A release is a pushed tag `v0.MINOR.PATCH`** and nothing else. `release.yml` refuses a tag that is not
+  `0.MINOR.PATCH` without leading zeros, whose version differs from `version` in `project.trb` or
+  `compiler/project.trb` (section 3: one number), whose commit is not on `main`, or - in a public repository - that has
+  no `LICENSE` (section 9; the owner chose MIT, question 5). A private repository may cut test releases, which is
+  slice 7's "private test release".
+- **stable**: the release, marked latest, kept forever. **nightly**: a prerelease `nightly-YYYYMMDD` of `main`, made only
+  when `main` changed since the last one and every target is green, deleted with its tag after 30 days. A second run on
+  one day replaces that day's nightly.
+- **The release notes** are `docs/releases/<version>.md` when it exists (section 6 plans that folder), plus the
+  commands that verify a download.
+
+### What a release contains
+
+| Asset | Content |
+|---|---|
+| `torb-<version>-<target>.tar.gz` | per target: `bin/torb`, `std/`, `runtime/` without its tests, `tools/build-slot.sh`, `LICENSE` (MIT; `runtime/` and `std/` carry their own, MIT-0), `README.md` |
+| `torb-<version>-windows-x64.zip` | the same for Windows, as a zip as well |
+| `torb-<version>-source.tar.gz` | `git archive` of the tag |
+| `torb-seed-<commit>.tar.gz` and `.sha256` | the portable seed, above |
+| `SHA256SUMS` | the SHA-256 of every asset above |
+| `SHA256SUMS.sigstore.json` | the Sigstore bundle that signs `SHA256SUMS` |
+
+- **The seed is beside the archives, not inside each**: it is the same file for every target and 6 MB.
+- **The binaries**: linux-x64 and linux-arm64 compile the fixpoint's `program.c` with `musl-gcc -static` (section 5 asks
+  it for linux-x64; linux-arm64 gets the same so that one Linux binary runs on every distribution of either
+  architecture), and the job fails if `ldd` finds it dynamic. windows-x64 and macos-arm64 ship the bootstrapped binary
+  itself; the Windows job fails if `torb.exe` imports a DLL a Windows machine does not have, the macOS job runs
+  `codesign --verify` (the linker's ad hoc signature, section 5).
+- **Every release binary is smoke-tested as a download**: laid out by `tools/package.sh layout`, started from a
+  directory outside any checkout with no `TORB_STD` or `TORB_RUNTIME`, it checks, builds and runs a program.
+- **The archives are packed on Linux**, one job for all targets, with GNU tar and zip: sorted entries, owner 0, fixed
+  modes, the commit's time. The binaries inside are not yet reproducible across runner images (below).
+
+### Signing
+
+**Decision: keyless Sigstore with `cosign sign-blob` over `SHA256SUMS`**, in the publishing job, with that job's OIDC
+identity; the bundle `SHA256SUMS.sigstore.json` is a release asset.
+
+```sh
+cosign verify-blob --bundle SHA256SUMS.sigstore.json \
+  --certificate-identity "https://github.com/TorbScript/language/.github/workflows/release.yml@refs/tags/v0.2.0" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com SHA256SUMS
+sha256sum --check --ignore-missing SHA256SUMS
+```
+
+| Option | For | Against |
+|---|---|---|
+| **cosign keyless over `SHA256SUMS`** — the decision | exactly section 5's plan; one signature covers every asset; verifiable with `cosign` alone, and later by `torb upgrade` from the bundle; works in a private repository | a tool to install in the job; the identity (repository, workflow, tag) goes into the public Rekor log, so a private test release makes the repository's name public |
+| `actions/attest-build-provenance` | first party, SLSA provenance per file, `gh attestation verify` | for a private repository it needs GitHub Enterprise Cloud; verifying needs `gh` or the attestation API; the same public Sigstore log for a public repository |
+
+Attestations can be added beside the signature once the repository is public, without changing anything a user does.
+
+### Where this departs from sections 4 and 5, and why
+
+- **Native runners, not one pinned `zig cc`.** Section 4 builds every target with a managed `zig cc` so binaries are
+  reproducible; that toolchain (`torb toolchain add c`, slice 9) does not exist yet. Today each binary is built by the
+  runner image's compiler, so it is reproducible for one image and not across images, and section 5's "built twice on
+  two runners and compared" is not done. The C (`program.c`) is reproducible already, and the `agree` job checks it
+  across four machines on every run.
+- **`linux-arm64` is static musl too**, above.
+- **FreeBSD** (tier 2) is not in the pipeline; it needs a virtual machine on a Linux runner.
+
+### What the first run is expected to report
+
+None of this has been compiled on Linux or macOS; the pipeline is built to say where it breaks, one job per target
+with `fail-fast: false`, so one target's failure never hides another's.
+
+1. **Every job, until the first seed is published**: `tools/fetch-seed.sh` finds no `seeds.txt` (see "The first seed").
+2. **macOS, the feature macros**: `platform.c`, `os/posix.c`, `os/posix_io.c` and `tests/console_test.c` define
+   `_POSIX_C_SOURCE 200809L`, which on macOS alone hides every Darwin extension - `pthread_cond_timedwait_relative_np`
+   (the macOS branch of `torb_condition_wait`), `_SC_NPROCESSORS_ONLN` (the processor count of the worker pool) and
+   `SO_NOSIGPIPE` (without which a write to a closed socket kills the process with `SIGPIPE`, since macOS has no
+   `MSG_NOSIGNAL` either). The four files now define `_DARWIN_C_SOURCE` beside it on Apple, which shows the extensions
+   again; that is the documented switch, but it has not met a macOS compiler yet, so this item stays until the first
+   run confirms it.
+3. **macOS, finding the toolchain**: `Process.executablePath()` answers `None` (fact 5), so the smoke test of a release
+   fails - correctly, a downloaded `torb` cannot find its `std/` today. The gates are unaffected: they run in the
+   checkout, where `std/` is found above the working directory.
+4. **The generated C under clang**: `torb build` compiles with `-Wall -Wextra -Werror`, and the C has only ever met gcc
+   13. Any warning clang adds stops every macOS build.
+5. **linux-arm64**: `char` is unsigned there. A comparison of a `char` with a negative number becomes a `-Wtype-limits`
+   warning (part of `-Wextra`), and with it an error; the same code is silent on x64.
+6. **Windows on CI**: MSYS2's gcc is newer than the maintainer's 13; a warning a newer gcc adds to `-Wall -Wextra` (gcc 15
+   added `-Wunterminated-string-initialization` there) fails the generated C under `-Werror`.
+7. **The conformance suite on POSIX**: `Process.run` goes through `/bin/sh` there (runtime/README.md), so a program that
+   cannot be started is the shell's exit code 127 and not a failure; a program whose expectation was recorded on
+   Windows and depends on that differs.
+8. **The static musl binary** calls `popen` and `fork` like the glibc build, but it has never run; the smoke test is the
+   first thing that exercises it. Name resolution (`getaddrinfo`) in a static binary is musl's own resolver, which
+   reads `/etc/resolv.conf` and `/etc/hosts` and nothing of NSS.
+9. **The network on POSIX**: `io_test.c` and the network programs of the conformance suite open sockets on the
+   loopback; a hosted runner allows that, but the epoll and kqueue pollers, the non-blocking `connect` and the resolver
+   thread have only been reasoned about, never run.
+
+### What the owner sets up on GitHub
+
+- **The first seed**, once, as above.
+- **Actions minutes**: on a private repository hosted runners are billed, macOS at ten times and Windows at twice the
+  Linux rate, and `ubuntu-24.04-arm` is a free standard runner only for a public repository (for a private one it
+  needs the plan's arm64 runners). `ci.yml` already keeps macOS and linux-arm64 to the changes that can affect them
+  while the repository is private; making the repository public (question 8) makes every standard runner free and
+  turns them on for every change.
+- **Workflow permissions**: Settings -> Actions -> General: "Read repository contents" as the default token permission
+  (every workflow asks for more where it needs it), and allow GitHub Actions to create releases.
+- **The `release` environment**: created by the first release run; add required reviewers to it to hold every release
+  for one click after the gates.
+- **Tag protection**: a ruleset on `v*`, `nightly-*` and `seeds` so that only maintainers (and the Actions bot for
+  `nightly-*`) can create them.
+- **Branch protection on `main`**: require the checks `gates / tier A (linux-x64)`, `gates / bootstrap (linux-x64)`,
+  `gates / bootstrap and conformance (windows-x64)` and `gates / every target emits the same C` before a merge.
