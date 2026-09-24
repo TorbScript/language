@@ -17,8 +17,8 @@
  *     }
  *
  *     fn fetchUser(id: Int): Task<Result<User, HttpError>> {
- *       var response = http.get("https://example.test/users/{id}").outcome()?
- *       response.json<User>().outcome()
+ *       var response = http.get("https://example.test/users/{id}").await()?
+ *       response.json<User>().await()
  *     }
  */
 
@@ -55,16 +55,16 @@ public shared type Response {
    * Decodes the body as JSON. A `Task`, because the body arrives over the network and decoding it means reading it.
    */
   var fn json<Value: Decode>(limit: Int = Body.defaultLimit): Task<Result<Value, HttpError>> {
-    body.json<Value>(limit: limit).outcome()
+    body.json<Value>(limit: limit).await()
   }
 }
 
 /**
  * The bytes of a request or a response, as a stream that is read once.
  *
- *     const all = response.body.through(Json.items<User>()).checked().toList().outcome()?   // one at a time
- *     const text = response.body.text().outcome()?                                          // or all of it
- *     File.write(path, response.body.mapFailure(IoError.from)).outcome()?  // or straight to disk
+ *     const all = response.body.through(Json.items<User>()).checked().toList().await()?   // one at a time
+ *     const text = response.body.text().await()?                                          // or all of it
+ *     File.write(path, response.body.mapFailure(IoError.from)).await()?  // or straight to disk
  *
  * The convenience methods come first on purpose - that is the lesson of `fetch` and Bun, where `await response.json()`
  * is what almost every program wants - and every one of them takes a `limit`, because a server that decides how much
@@ -81,7 +81,7 @@ public shared type Body with Source<Bytes, HttpError> {
 
   /** The next chunk, or `None` at the end of the body. Most callers reach for [Body.bytes] or [Body.text] instead. */
   var fn next(): Task<Result<Bytes?, HttpError>> {
-    reading.next().outcome()
+    reading.next().await()
   }
 
   /**
@@ -93,7 +93,7 @@ public shared type Body with Source<Bytes, HttpError> {
   /** The whole body. More than `limit` bytes is an `HttpError` and the rest is not read. */
   var fn bytes(limit: Int = Body.defaultLimit): Task<Result<Bytes, HttpError>> {
     var collected: Bytes = []
-    while const Some(chunk) = next().outcome()? {
+    while const Some(chunk) = next().await()? {
       if collected.length() + chunk.length() > limit {
         return Fail HttpError.tooLarge(limit)
       }
@@ -104,13 +104,13 @@ public shared type Body with Source<Bytes, HttpError> {
 
   /** The whole body as text. Bytes that are not UTF-8 are an `HttpError`, never a replacement character. */
   var fn text(limit: Int = Body.defaultLimit): Task<Result<String, HttpError>> {
-    const raw = bytes(limit: limit).outcome()?
+    const raw = bytes(limit: limit).await()?
     textOf(raw).mapError(HttpError.invalidText)
   }
 
-  /** The whole body, decoded as JSON: `response.body.json<User>().outcome()?` */
+  /** The whole body, decoded as JSON: `response.body.json<User>().await()?` */
   var fn json<Value: Decode>(limit: Int = Body.defaultLimit): Task<Result<Value, HttpError>> {
-    const document = text(limit: limit).outcome()?
+    const document = text(limit: limit).await()?
     Json().decode<Value>(document).mapError(HttpError.decodeFailed)
   }
 
@@ -236,7 +236,6 @@ public type HttpError with Show, Error {
       .Decode(cause) => "{cause}"
       .TooLarge(limit) => "the body is longer than {limit} bytes"
       .InvalidText(cause) => "{cause}"
-      .Cancelled => "the request was cancelled"
     }
   }
 
@@ -258,20 +257,12 @@ type HttpErrorKind {
   case Decode(cause: JsonError)
   case TooLarge(limit: Int)
   case InvalidText(cause: Utf8Error)
-  case Cancelled
 }
 
 /** What makes `body.lines()` work: a stage over bytes, so it needs nothing of HTTP. */
 extend HttpError with From<Utf8Error> {
   static fn from(value: Utf8Error): HttpError {
     HttpError.invalidText value
-  }
-}
-
-/** A request whose task was cancelled did not complete: the failure every stream's failure type converts from. */
-extend HttpError with From<Cancelled> {
-  static fn from(value: Cancelled): HttpError {
-    HttpError kind: .Cancelled
   }
 }
 
@@ -282,10 +273,10 @@ extend HttpError with From<JsonError> {
   }
 }
 
-/** `http.get(url).outcome()?` */
+/** `http.get(url).await()?` */
 public native fn get(url: String, headers: Map<String, String> = [:]): Task<Result<Response, HttpError>>
 
-/** `http.post(url, Body.from(text)).outcome()?` - the body may be a stream, so an upload is not held in memory. */
+/** `http.post(url, Body.from(text)).await()?` - the body may be a stream, so an upload is not held in memory. */
 public native fn post(
   url: String,
   body: Body,

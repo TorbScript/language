@@ -33,9 +33,9 @@
  *       task->state = 1;                                       // x = child.await()
  *       if (torb_task_await(task, frame->child) == TORB_WAIT_SUSPENDED) return TORB_POLL_SUSPENDED;
  *     state_1:
- *       if (torb_task_cancelled(task)) goto stop_1;
+ *       if (torb_task_cancelled(task)) goto stop_1;           // also where `child` ended cancelled: the cascade
  *       (void)torb_task_outcome(task);                         // after every wait, READY or resumed
- *       if (torb_task_result(frame->child, &frame->value)) { ...Ok(frame->value)... } else { ...Fail(Cancelled)... }
+ *       (void)torb_task_result(frame->child, &frame->value);   // finished: a cancelled child stopped us above
  *       torb_task_release(frame->child);
  *       ...
  *       *(int64_t *)torb_task_result_slot(task) = frame->sum;  // the value moves into the result slot
@@ -70,19 +70,26 @@
  *    where it waits, and the machine returns `TORB_POLL_SUSPENDED` at once. Ready: nothing was registered, the answer
  *    is already there, and the machine goes on at the label of the state it just set.
  * 5. **`TORB_POLL_FINISHED`: the value is in the result slot and nothing in the frame is live.**
- *    **`TORB_POLL_STOPPED`: nothing in the frame is live and there is no value**; every `await()` of the task answers
- *    `Fail(Cancelled)`. A machine may also stop without the flag, to end itself as cancelled - which is how a task that
- *    awaited a cancelled task and has no failure of its own to report passes the cancellation on (`Task.map`, `within`).
+ *    **`TORB_POLL_STOPPED`: nothing in the frame is live and there is no value**; every task that `await()`s it is
+ *    cancelled in turn, and every `result()` of it answers `Fail(Cancelled)`. A machine may also stop without the flag,
+ *    to end itself as cancelled - which is how `Task.all` and `both` end once they observed a cancellation.
  * 6. `torb_enter_frame`/`torb_leave_frame` stay balanced **per resume**: a resume function that enters leaves before
  *    every return, suspended or not, because the C stack is gone after it.
+ * 7. **`await()` passes a cancellation on, `result()` observes it** (docs/design/CONCURRENCY.md section 8). A machine
+ *    waits for a task through `torb_task_await` for `await()`: where the awaited task ends cancelled - before the wait
+ *    or while the machine waits - the runtime sets the waiter's own cancellation flag, so the check that follows the
+ *    wait stops the machine there, through the same stop path a `cancel()` reaches, and the waiter ends cancelled
+ *    itself: the cascade. `torb_task_observe` is the wait of `result()`, which leaves the waiter alone and lets it read
+ *    `torb_task_result` answering false.
  *
  * # How `Result` is built
  *
  * **The runtime never builds a `Result`, a `Cancelled` or a `TimedOut`**: all three are layouts of the program (BACKEND
- * 5.R1), and the runtime has no layout of the program in it. `await()` follows the `.Fallible` convention of every
- * other native: `torb_task_result` answers `bool` and writes the value through an out parameter, and the lowering
- * builds `Ok(value)` (variant 0) or `Fail(Cancelled())` (variant 1, no fields) in its own layout of
- * `Result<Value, Cancelled>` around it. The one native that has to put a `Result` *into* a task, `Task.within`, is
+ * 5.R1), and the runtime has no layout of the program in it. Reading a completed task follows the `.Fallible`
+ * convention of every other native: `torb_task_result` answers `bool` and writes the value through an out parameter,
+ * and the lowering builds `Ok(value)` (variant 0) or `Fail(Cancelled())` (variant 1, no fields) in its own layout of
+ * `Result<Value, Cancelled>` around it - which is what `result()` answers, and what `await()` unwraps after a wait that
+ * could only have ended with a value. The one native that has to put a `Result` *into* a task, `Task.within`, is
  * handed a `torb_within_shape` - two adapters the lowering emits per instance, the way it emits a `torb_element` per
  * type - and calls them.
  *
@@ -109,9 +116,10 @@
  *     torb_task *main_task = torb_task_new(entry_resume, sizeof(T_entry_frame), &torb_element_void);
  *     torb_task_start(main_task);
  *     torb_scheduler_run(main_task);
- *     torb_task_release(main_task);
+ *     ended = torb_task_end_main(main_task);   // 0, or TORB_EXIT_CANCELLED where the main task ended cancelled
  *     torb_scheduler_finish();                 // every task still running is cancelled and runs to its stop
  *     torb_process_finish();
+ *     return ended;
  */
 
 #ifndef TORB_TASK_H
@@ -218,6 +226,11 @@ struct torb_task {
   uint8_t hopping;
   /** Its worker is completing it: a cancellation passes it by (set and read under the tree lock). */
   uint8_t completing;
+  /**
+   * Its last wait for a task observes a cancellation instead of taking it over (`torb_task_observe`,
+   * `torb_task_await_until`). Written by the waiter before it joins a waiter list, read under the awaited task's lock.
+   */
+  uint8_t observing;
   int32_t outcome;         /**< `torb_outcome` of the last wait. */
   int32_t timer;           /**< The index in its worker's timer heap, or -1. */
   /** The worker that runs it: the one that started it, or the one that took it before its first run. */
@@ -330,20 +343,33 @@ void torb_task_release(torb_task *task);
  * joins the waiters of `awaited` and is woken, `TORB_OUTCOME_READY`, when it completes either way. Read the answer with
  * `torb_task_result(awaited, ...)`, so the frame keeps its handle of `awaited` across the suspension. A task awaiting
  * itself panics, because nothing could ever wake it.
+ *
+ * **Where `awaited` ends cancelled, `self` is cancelled too**: its cancellation flag is set before it goes on - at once
+ * where `awaited` had already ended cancelled, and when it is woken otherwise - so the check that follows the wait
+ * stops it there, and it ends cancelled in turn (docs/design/CONCURRENCY.md section 8, "The cascade"). Only the flag is
+ * set here: the children of `self` are cancelled when it stops, exactly as for any task that stops.
  */
 torb_wait torb_task_await(torb_task *self, torb_task *awaited);
 
 /**
- * The same, with a deadline on the monotonic clock (`torb_clock_now`): whichever comes first wakes `self`, and the
- * outcome is `TORB_OUTCOME_READY` or `TORB_OUTCOME_TIMED_OUT`. A timeout does nothing to `awaited`. Ready at once when
+ * `awaited.result()`, the suspension half: `torb_task_await` without the cascade. Where `awaited` ends cancelled `self`
+ * goes on, and `torb_task_result` answers false - the one way a waiter observes a cancellation as a value.
+ */
+torb_wait torb_task_observe(torb_task *self, torb_task *awaited);
+
+/**
+ * `torb_task_observe` with a deadline on the monotonic clock (`torb_clock_now`): whichever comes first wakes `self`, and
+ * the outcome is `TORB_OUTCOME_READY` or `TORB_OUTCOME_TIMED_OUT`. A timeout does nothing to `awaited`, and neither does
+ * a cancellation of `awaited` do anything to `self`. Ready at once when
  * `awaited` has completed (`READY`) or the deadline has passed (`TIMED_OUT`). It is what `within` is made of.
  */
 torb_wait torb_task_await_until(torb_task *self, torb_task *awaited, torb_instant deadline);
 
 /**
- * `awaited.await()`, the answer: true where the task finished, with a copy of its value in `*out` (owned - retained
+ * The answer of a completed task: true where it finished, with a copy of its value in `*out` (owned - retained
  * through the descriptor, because a `Task` may be awaited by any number of tasks); false where it was cancelled, which
- * the lowering turns into `Fail(Cancelled())`. `task` borrowed. Panics where the task has not completed.
+ * the lowering turns into `Fail(Cancelled())`. After `torb_task_await` it is always true, because a waiter whose task
+ * ended cancelled stopped at its check. `task` borrowed. Panics where the task has not completed.
  */
 bool torb_task_result(torb_task *task, void *out);
 
@@ -518,6 +544,25 @@ void torb_scheduler_finish(void);
  * and then its thread ends.
  */
 void torb_scheduler_exit(int64_t code);
+
+/**
+ * What a program exits with where its main task ended cancelled: 128 plus `SIGINT`, the code a shell reports for a
+ * program somebody stopped, and never the 101 of a panic - a cancellation is a request that was honoured, not a bug.
+ */
+#define TORB_EXIT_CANCELLED 130
+
+/**
+ * The end of the main task, in the generated `main` right after `torb_scheduler_run(main_task)`: releases the handle
+ * and answers the exit code the program ends with - 0 where the main task finished, and `TORB_EXIT_CANCELLED` where it
+ * ended cancelled, which only a top-level `await()` of a cancelled task does, and then this line went to standard
+ * error first:
+ *
+ *     cancelled: the program waited for a task that was cancelled
+ *
+ * The program still ends the ordinary way after it: `torb_scheduler_finish` stops the other tasks, every frame's
+ * `close()` runs and the leak report stays exact. `main_task` consumed.
+ */
+int torb_task_end_main(torb_task *main_task);
 
 /** How many tasks have not completed yet, on every worker. For the tests and the leak report. */
 size_t torb_task_live_count(void);

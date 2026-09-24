@@ -40,7 +40,7 @@ fn steps(start: Int): Int {
 }
 
 const numbers = (1..=100000).toList()
-const total = numbers.parallel().map({ steps _ }).sum().await() ?? 0
+const total = numbers.parallel().map({ steps _ }).sum().await()
 print total
 ```
 

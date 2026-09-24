@@ -230,7 +230,12 @@ public fn printInstruction(program: IrProgram, function: IrFunction, instruction
       "putBack {place}[%{key.value}] = %{value.value} {describeRuntimeKind(kind)}"
     }
     .Panic(message, at) => "panic {printArgument(program, message)} at {printLocation(program, at)}"
-    .Suspend(state, awaited) => "suspend state {state} %{awaited.value}"
+    .Suspend(state, awaited, observes) => {
+      if observes {
+        return "observe state {state} %{awaited.value}"
+      }
+      "suspend state {state} %{awaited.value}"
+    }
     .TaskNew(target, resume, result, arguments) => {
       const described = match result {
         Some(element) => program.elementAt(element).name

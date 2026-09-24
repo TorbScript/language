@@ -879,6 +879,10 @@ static void torb_complete(torb_worker *self, torb_task *task, bool finished) {
   while (task->waiters.first != NULL) {
     torb_task *waiter = task->waiters.first;
     torb_waiters_unlink(&task->waiters, waiter);
+    /* The cascade: a waiter of `await()` is cancelled by a cancellation it waited for, and stops at its next check */
+    if (!finished && waiter->observing == 0u) {
+      torb_atomic_store_u8(&waiter->cancelled, 1u);
+    }
     torb_atomic_store_u8(&waiter->waiting, (uint8_t)TORB_WAITING_NOTHING);
     waiter->outcome = (int32_t)TORB_OUTCOME_READY;
     waiter->wait_target = NULL;
@@ -1090,15 +1094,28 @@ void torb_task_release(torb_task *task) {
 
 /* ------------------------------------------------------------------------------------ suspension primitives --- */
 
-torb_wait torb_task_await(torb_task *self, torb_task *awaited) {
+/*
+ * `await()` and `result()`: the one wait for a task, and whether a cancellation of `awaited` is passed on to `self`
+ * (docs/design/CONCURRENCY.md section 8, "The cascade"). Passing it on is setting the flag and nothing else: the check
+ * the machine makes after every wait then stops it through the same stop path a `cancel()` reaches, and its children are
+ * cancelled when it completes as cancelled, as for every task that stops. Where `awaited` completes later, the flag is
+ * set by `torb_complete` under `awaited->lock`, before `self` is woken - so it is set before `self` runs again.
+ */
+static torb_wait torb_await_task(torb_task *self, torb_task *awaited, bool observing) {
   torb_worker *worker = torb_worker_self();
+  uint8_t status;
   if (self == awaited) {
     torb_panic_text("a task cannot await itself: nothing could ever wake it", torb_location_unknown);
   }
   torb_expect_idle(worker, self);
+  self->observing = observing ? 1u : 0u;
   torb_spin_lock(&awaited->lock);
-  if (torb_atomic_load_u8(&awaited->status) != (uint8_t)TORB_TASK_PENDING) {
+  status = torb_atomic_load_u8(&awaited->status);
+  if (status != (uint8_t)TORB_TASK_PENDING) {
     torb_spin_unlock(&awaited->lock);
+    if (status == (uint8_t)TORB_TASK_CANCELLED && !observing) {
+      torb_atomic_store_u8(&self->cancelled, 1u);
+    }
     self->outcome = (int32_t)TORB_OUTCOME_READY;
     return TORB_WAIT_READY;
   }
@@ -1109,12 +1126,21 @@ torb_wait torb_task_await(torb_task *self, torb_task *awaited) {
   return TORB_WAIT_SUSPENDED;
 }
 
+torb_wait torb_task_await(torb_task *self, torb_task *awaited) {
+  return torb_await_task(self, awaited, false);
+}
+
+torb_wait torb_task_observe(torb_task *self, torb_task *awaited) {
+  return torb_await_task(self, awaited, true);
+}
+
 torb_wait torb_task_await_until(torb_task *self, torb_task *awaited, torb_instant deadline) {
   torb_worker *worker = torb_worker_self();
   if (self == awaited) {
     torb_panic_text("a task cannot await itself: nothing could ever wake it", torb_location_unknown);
   }
   torb_expect_idle(worker, self);
+  self->observing = 1u;
   if (torb_atomic_load_u8(&awaited->status) != (uint8_t)TORB_TASK_PENDING) {
     self->outcome = (int32_t)TORB_OUTCOME_READY;
     return TORB_WAIT_READY;
@@ -2003,6 +2029,22 @@ void torb_scheduler_exit(int64_t code) {
   if (awaited != NULL) {
     torb_task_release(awaited);
   }
+}
+
+int torb_task_end_main(torb_task *main_task) {
+  const bool cancelled = torb_atomic_load_u8(&main_task->status) == (uint8_t)TORB_TASK_CANCELLED;
+  torb_task_release(main_task);
+  if (!cancelled) {
+    return 0;
+  }
+  {
+    /* As a panic writes its line: what the program printed first, then the line through the path `print` takes */
+    static const char line[] = "cancelled: the program waited for a task that was cancelled";
+    fflush(stdout);
+    torb_write_line_error(line, sizeof line - 1u);
+    fflush(stderr);
+  }
+  return TORB_EXIT_CANCELLED;
 }
 
 size_t torb_task_live_count(void) {

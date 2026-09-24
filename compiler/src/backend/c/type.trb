@@ -245,7 +245,9 @@ public fn structDeclarationOf(program: IrProgram, layout: Layout): CDeclaration 
 
 fn memberOf(program: IrProgram, field: FieldLayout): CMember {
   const spelling = cTypeOf program, field.annotation
-  const shown = if spelling.isEmpty() { "torb_void" } else { spelling }
+  // `Never` is spelled `void` and a field of it has no values - the failure of a `Result<Value, Never>`, the reading end
+  // of a channel - so it takes the byte a `Void` field takes, which nothing ever reads
+  const shown = if spelling.isEmpty() || spelling == "void" { "torb_void" } else { spelling }
   CMember.Field shown, memberNameOf(field)
 }
 

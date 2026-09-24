@@ -26,21 +26,21 @@ const channel = Channel<Int>(capacity: 8)
 const producer = spawn {
   var writing = channel.sink()
   for value in 0..5 {
-    writing.add(value).outcome()?
+    writing.add(value).await()?
   }
-  writing.end().outcome()
+  writing.end().await()
 }
 
 var reading = channel.source()
-const total = reading.collect(counting()).outcome()
-print "sent: {producer.outcome().isOk()}, total: {total}"
+const total = reading.collect(counting()).await().orElse(0)
+print "sent: {producer.await().isOk()}, total: {total}"
 ```
 
 ## Syntax
 
 ```text
 Channel<Item>(capacity: Int = 0)          a stream in memory
-channel.source(): ChannelSource<Item>     the reading end, a Source<Item, Cancelled>
+channel.source(): ChannelSource<Item>     the reading end, a Source<Item, Never>
 channel.sink(): ChannelSink<Item>         the writing end, a Sink<Item, ChannelClosed>
 ```
 
@@ -50,10 +50,10 @@ channel.sink(): ChannelSink<Item>         the writing end, a Sink<Item, ChannelC
    [Streams](streams.md) works on them.** They are methods, not fields, because they are computed and a field would
    have to be passed to the constructor.
 
-2. **The reading end fails only with `Cancelled`.** `channel.source()` is a `Source<Item, Cancelled>`: a closed
-   channel is the end of the stream, not a failure, so `next()` answers `Ok(None)` rather than a `Fail`. `Cancelled` is
-   there because every asynchronous read can be cancelled, and it is the floor every stream's failure type converts
-   from.
+2. **The reading end cannot fail.** `channel.source()` is a `Source<Item, Never>`: a closed channel is the end of the
+   stream, not a failure, so `next()` answers `Ok(None)` rather than a `Fail`, and a cancellation of the reader is passed
+   on by `await()` rather than answered. `?` on its answer converts `Never` into whatever the surrounding function
+   fails with, and a task that has no failure of its own reads it with `while const Ok(Some(item)) = source.next().await()`.
 
 3. **The writing end fails with `ChannelClosed` once nobody is reading any more.** `channel.sink()` is
    `Sink<Item, ChannelClosed>`; `ChannelClosed` is the one way a channel's writing end can fail, and it is a value, not

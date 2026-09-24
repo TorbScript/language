@@ -23,23 +23,26 @@ fn grind(seed: Int, rounds: Int): Task<Int> {
 fn produce(channel: Channel<Int>, count: Int): Task<Result<Void, ChannelClosed>> {
   var sink = channel.sink()
   for value in 0..count {
-    sink.add(value).outcome()?
+    sink.add(value).await()?
   }
-  sink.end().outcome()
+  sink.end().await()
 }
 
-/** Reads until the stream ends, and says whether every number came in the order it was sent. */
-fn consume(channel: Channel<Int>): Task<Result<(Int, Bool), Cancelled>> {
+/**
+ * Reads until the stream ends, and says whether every number came in the order it was sent. The reading end of a
+ * channel cannot fail, so every pull is an `Ok`.
+ */
+fn consume(channel: Channel<Int>): Task<(Int, Bool)> {
   var source = channel.source()
   var expected = 0
   var isInOrder = true
-  while const Some(value) = source.next().outcome()? {
+  while const Ok(Some(value)) = source.next().await() {
     if value != expected {
       isInOrder = false
     }
     expected = expected + 1
   }
-  Ok((expected, isInOrder))
+  (expected, isInOrder)
 }
 
 /** A text of its own, built wherever the task runs. */
@@ -60,7 +63,7 @@ fn forever(start: Int): Task<Int> {
   while count >= 0 {
     count = count + 1
     if count.remainder(100000) == 0 {
-      pause().await() ?? void
+      pause().await()
     }
   }
   count
@@ -72,7 +75,7 @@ for index in 0..40 {
 }
 var values: List<Int> = []
 for task in tasks {
-  values.append(task.await() ?? 0)
+  values.append task.await()
 }
 var expected: List<Int> = []
 for index in 0..40 {
@@ -87,20 +90,18 @@ print "forty tasks, read in the order they were started: {values == expected}"
 const numbers = Channel<Int>(capacity: 8)
 const producer = produce numbers, 1000
 const consumer = consume numbers
-match consumer.outcome() {
-  Ok((count, isInOrder)) => print "the channel carried {count} numbers, in order: {isInOrder}"
-  Fail(problem) => print "the consumer: {problem}"
-}
-print "the producer finished: {producer.outcome().isOk()}"
+const (count, isInOrder) = consumer.await()
+print "the channel carried {count} numbers, in order: {isInOrder}"
+print "the producer finished: {producer.await().isOk()}"
 
-const loud = shout("hey", 3).await() ?? ""
+const loud = shout("hey", 3).await()
 print "built on a worker: {loud}"
 
 var looping = forever 0
 // Long enough for the loop to be running when the request comes
-sleep(0.05).await() ?? void
+sleep(0.05).await()
 looping.cancel()
-match looping.await() {
+match looping.result() {
   Ok(count) => print "the loop finished after {count}"
   Fail(problem) => print "the loop: {problem}"
 }

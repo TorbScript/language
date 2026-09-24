@@ -8,7 +8,6 @@
  */
 
 use OperatingSystem from "std/core"
-use Cancelled from "std/task"
 
 /**
  * What asking the operating system went wrong with. `question` is what was asked: `the host name`, `the version`,
@@ -41,8 +40,6 @@ public type OsError with Show, Equals, Error {
   case Failed(question: String, message: String)
   /** An answer came back in a form its reader did not expect: a `/proc` line, a registry value of the wrong type. */
   case Malformed(source: String, detail: String)
-  /** A query that waits was cancelled. What `From<Cancelled>` produces. */
-  case Stopped
 
   /** One sentence that names the question and why it has no answer: `the host name: access is denied`. */
   fn show(): String {
@@ -52,15 +49,7 @@ public type OsError with Show, Equals, Error {
       .Missing(question, reason) => "{question}: missing: {reason}"
       .Failed(question, message) => "{question}: {message}"
       .Malformed(source, detail) => "{source}: not in the expected form: {detail}"
-      .Stopped => "the question was cancelled"
     }
-  }
-}
-
-/** A question that waited and was cancelled has no answer, which is a failure like any other. */
-extend OsError with From<Cancelled> {
-  static fn from(value: Cancelled): OsError {
-    OsError.Stopped
   }
 }
 

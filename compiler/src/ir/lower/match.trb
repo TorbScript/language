@@ -1433,7 +1433,11 @@ public fn lowerTry(
   emit builder, Instruction.Tag(tag, subject)
   finishBlock lowering, builder, Terminator.Switch(tag, [success], [value], failed)
   continueIn lowering, builder, failed
-  emitFailure lowering, builder, subject, subjectLayout, failure, resultLayout, wantedFailure, result, expression.span
+  if carriesNever(lowering, subjectLayout, failure) {
+    finishBlock lowering, builder, Terminator.Unreachable
+  } else {
+    emitFailure lowering, builder, subject, subjectLayout, failure, resultLayout, wantedFailure, result, expression.span
+  }
   continueIn lowering, builder, value
   const step = PathStep.Variant subjectLayout, success, 0
   emit builder, Instruction.Read(target, Reference(subject, [step]))
@@ -1487,11 +1491,30 @@ fn lowerTopLevelTry(
   emit builder, Instruction.Tag(tag, subject)
   finishBlock lowering, builder, Terminator.Switch(tag, [success], [value], failed)
   continueIn lowering, builder, failed
-  reportFailure lowering, builder, subject, subjectLayout, failure, at
+  if carriesNever(lowering, subjectLayout, failure) {
+    finishBlock lowering, builder, Terminator.Unreachable
+  } else {
+    reportFailure lowering, builder, subject, subjectLayout, failure, at
+  }
   continueIn lowering, builder, value
   const step = PathStep.Variant subjectLayout, success, 0
   emit builder, Instruction.Read(target, Reference(subject, [step]))
   target
+}
+
+/**
+ * Whether the failure case of a `?` carries a `Never`: `Result<Value, Never>` - the reading end of a `Channel`, or a
+ * generic stream instantiated with a failure it cannot have. That case has no values, so the path into it is unreachable
+ * and ends there, instead of reading a slot of a type that has none (which the verifier rightly refuses).
+ */
+fn carriesNever(var lowering: Lowering, layout: LayoutId, variant: Int): Bool {
+  const fields = lowering.program.layoutAt(layout).fieldsOfVariant(variant)
+  if const Some(field) = fields.first() {
+    if const .NeverType = lowering.program.typeAt(field.annotation) {
+      return true
+    }
+  }
+  false
 }
 
 /**

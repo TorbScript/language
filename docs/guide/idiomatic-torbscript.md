@@ -51,7 +51,7 @@ the calls, the types and the error handling all in the one form the language pic
 - [A closure over a `var` does not escape](#closures-over-var)
 - [A closure parameter names its shape](#closure-types)
 - [A resource is bound with `using`](#resources)
-- [A task answers a `Result` when it is awaited](#tasks)
+- [`await()` answers the value, and a cancellation stops the waiter](#tasks)
 - [`Into` comes from `From`](#conversions)
 - [An operating system branch is a `match`](#operating-system)
 - [A collection is walked with `for` or a pipeline](#loops-and-pipelines)
@@ -510,27 +510,30 @@ work()
 Why: the line where a resource is released is the end of the block, so no path through the function forgets it. See
 [Destructors](../language/execution/destructors.md).
 
-## A task answers a `Result` when it is awaited {#tasks}
+## `await()` answers the value, and a cancellation stops the waiter {#tasks}
 
-**A function that waits returns `Task<Value>`. `await()` answers `Result<Value, Cancelled>`, `outcome()` folds the
-cancellation into the task's own `Result`, and `cancel()` asks a task to stop.**
+**A function that waits returns `Task<Value>`. `await()` answers the value, so a task whose value is a `Result` is one
+`.await()?` per line - the `?` is the work's own failure. A cancellation is passed on, never answered: `cancel()` asks a
+task to stop, and whoever awaits it stops at that `await()` too. `result()` is for the code that has to observe one.**
 
 ```trb run
-fn doubled(value: Int): Task<Int> {
-  value * 2
+fn doubled(value: Int): Task<Result<Int, String>> {
+  Ok(value * 2)
 }
 
-fn sum(): Task<Result<Int, Cancelled>> {
+fn sum(): Task<Result<Int, String>> {
   const first = doubled(1).await()?
   const second = doubled(2).await()?
   Ok(first + second)
 }
 
-print(sum().outcome() ?? 0)    // prints 6
+print sum().await()    // prints Ok(6)
 ```
 
-Why: every task can be cancelled, so a wait that cannot fail would be a lie, and `?` hands a cancellation on like any
-other failure. See [Tasks](../language/concurrency-and-streams/tasks.md) and
+Why: a call that waits is never cancelled on its own - only the task that waits is, and then it has no use for an
+answer: it stops where it waits, its `using`s are closed, and whoever waits for it stops in turn. Answering the
+cancellation as a value nested a second `Result` into every line of IO for nothing. A supervisor that has to know writes
+`task.result()`, which answers `Fail(Cancelled)`. See [Tasks](../language/concurrency-and-streams/tasks.md) and
 [std/task](../standard-library/task.md).
 
 ## `Into` comes from `From` {#conversions}

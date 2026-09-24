@@ -926,7 +926,7 @@ public shared trait Storage with Schemes {
 
   /** The bytes read as UTF-8, which is the ninety-percent call. */
   fn readText(uri: Uri): Task<Result<String, StorageFailure>> {
-    const content = read(uri).outcome()?
+    const content = read(uri).await()?
     Ok textOf(content).mapError({ problem => StorageFailure.NotText(uri.show(), problem.show()) })?
   }
 
@@ -941,7 +941,6 @@ public type StorageFailure with Show, Error {
   case NotFound(uri: String)
   case NotText(uri: String, reason: String)
   case Refused(uri: String, reason: String)
-  case Stopped
 }
 ```
 
@@ -1009,7 +1008,7 @@ use Environment from "std/os"
 const region = Environment.get("AWS_REGION") ?? "eu-central-1"
 const storage = Storage.registry([FileStorage(), S3Storage.of(region, S3Credentials.fromEnvironment()?)])
 
-const page = storage.readText("s3://reports/2026-09/summary.md").outcome()?
+const page = storage.readText("s3://reports/2026-09/summary.md").await()?
 ```
 
 **An unknown scheme is a `Result` and the message lists what is known.** From the probe, run as a native binary:
@@ -1139,9 +1138,10 @@ From the probe, built and run:
 ### Asynchronous, per `docs/design/CONCURRENCY.md`
 
 Every driver operation reaches the outside world, so every one of them answers a `Task<Result<…, Failure>>` and every
-one of them is cancellable at its suspension points. That is CONCURRENCY section 8 applied without an exception:
-`Failure: From<Cancelled>` is the floor, `StorageFailure.Stopped` is what `From<Cancelled>` produces, and a caller
-writes `storage.read(uri).outcome()?` — `await()` plus the conversion the `?` would have applied anyway.
+one of them is cancellable at its suspension points. That is CONCURRENCY section 8 applied without an exception, and
+since 2026-09-23 it costs the failure type nothing: `await()` passes a cancellation on to the waiting task instead of
+answering it, so a caller writes `storage.read(uri).await()?` and `StorageFailure` needs no `Stopped` case and no
+`From<Cancelled>`.
 
 **What runs today is the synchronous form**, and the reason is `std/fs`: `File.readText`, `File.writeText`,
 `File.exists` and `File.list` are synchronous natives, and only the streaming side (`chunks`, `fill`) is a `Task`. So

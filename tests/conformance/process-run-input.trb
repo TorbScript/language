@@ -1,0 +1,30 @@
+/**
+ * **`Process.run` is a task, and `input:` is everything the child reads.** The child here is `sort`, which every machine
+ * has and whose answer is fixed: it reads three words and writes them in order. The input ends after them, so the child
+ * never waits for a terminal; an empty input ends at once. Every line of the program is `.await()?`: the `?` is the
+ * failure of the run, and a cancellation would need nothing.
+ *
+ * What the Windows `sort` writes ends its lines in `\r\n`, so the carriage returns are taken out before anything is
+ * printed.
+ */
+use IoError from "std/fs"
+use Process from "std/process"
+
+fn run(): Task<Result<Int, IoError>> {
+  const sorted = Process.run("sort", [], input: "cherry\nbanana\napple\n").await()?
+  print sorted.isSuccess()
+  print sorted.standardOutput.replace("\r", "").trim().replace("\n", " ")
+  const nothing = Process.run("sort", []).await()?
+  print nothing.standardOutput.trim().isEmpty()
+  // A program that is nowhere cannot be started at all, so it is a failure and not an exit code
+  print Process.run("torb-no-such-program-anywhere", []).await().isOk()
+  Ok sorted.exitCode
+}
+
+match run().await() {
+  Ok(code) => Process.exit code
+  Fail(problem) => {
+    printError "error: {problem}"
+    Process.exit 1
+  }
+}

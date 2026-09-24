@@ -8,7 +8,9 @@ real threads, a heap and a scheduler per worker, the stealing of unstarted tasks
 across workers, `Workers.count`, and `parallel()` in the prelude running its chunks on the pool - slices E and H, and
 the environment half of D, the copy of a value that cannot move as it is ("The copy at the crossing"), and the blocking
 pool with `offload` and `Workers.blocking` ("The blocking pool, as built"). The manifest setting, `Merge`, borrowing
-(`Plain`, `Window`, `windows`) and IO with its poller are not built (section 14).
+(`Plain`, `Window`, `windows`) and IO with its poller are not built (section 14). **Since 2026-09-23 `await()` answers
+the `Value` and passes a cancellation on to the waiter** (section 8, "The cascade"; section 15, decision 12), which
+replaced `await(): Result<Value, Cancelled>` and deleted `outcome()`.
 
 Many things waiting is one problem; one thing going faster is another. This is the specification of both: what a task
 is and what runs it, how many cores a program uses and who decides, how a pipeline is spread over them without copying
@@ -574,7 +576,8 @@ suspension point, and the compiler adds one check per back-edge:
 
 Before the worker resumes a task it reads the flag, and at a back-edge the running task reads it itself. If it is set,
 the state machine **stops**: the frame is released exactly as a finished task's frame is released, every live value in
-it goes with it, and the handle answers `Fail Cancelled` to whoever waits.
+it goes with it, and the task ends cancelled - whoever `await()`s it is cancelled in turn ("The cascade" below), and
+whoever observes it with `result()` reads `Fail(Cancelled)`.
 
 **This is what "cancellation is drop" means** (`docs/design/DESTRUCTORS.md` section 7): cancelling a task releases its
 *frame*, at its next suspension point or cancellation check, through the ordinary release. It does not mean that
@@ -629,13 +632,16 @@ would turn every window into a dangling pointer. The work `detached` is reached 
 request that started it — is spelled by spawning it from the main task, which every program has, and that spelling is
 visible at the place the decision is made instead of at the place the work is written.
 
-### It is visible in the type
+### The cascade: `await()` passes a cancellation on
 
 ```trb fragment
-/** Waits for the value, or answers `Cancelled` when the task stopped instead of finishing. */
-native fn await(): Result<Value, Cancelled>
+/** Waits for the value. Where the task ended cancelled, the waiter is cancelled too, right here. */
+fn await(): Value
 
-/** A task that stopped at a suspension point because somebody asked it to. */
+/** Waits the same way, and answers a cancellation instead of passing it on. */
+fn result(): Result<Value, Cancelled>
+
+/** A task that stopped because somebody asked it to, as `result()` answers it. */
 public type Cancelled with Show, Error {
   /** `"the task was cancelled"`. */
   fn show(): String {
@@ -644,80 +650,45 @@ public type Cancelled with Show, Error {
 }
 ```
 
-**type checks today**, with the members on a stand-in `Job<Value>` and bodies in place of the natives. So a waiter
-writes `task.await()?` or matches, and the compiler makes it decide — which is the point of answering a `Result` rather
-than a `Value?` or a sentinel.
+**`await()` answers the `Value`, and a cancellation is propagated, not returned.** A task that awaits a task that ended
+cancelled is itself cancelled at that suspension point: it stops there, its scopes end in reverse order - every `using`
+is closed - exactly as when it is cancelled at a back-edge, and it ends cancelled, so whatever awaits *it* is cancelled
+in turn. It is a cascade up the chain of waiters, and it stops at the first task that observes instead of awaiting.
+The top level of an entry file that awaits a cancelled task ends the program: the main task stops like any other, the
+program writes `cancelled: the program waited for a task that was cancelled` to standard error, the other tasks are
+stopped as at every end of a program, and the exit code is **130** - 128 plus `SIGINT`, what a shell reports for a
+program somebody stopped, and never the 101 of a panic, because a cancellation is a request that was honoured and not
+a bug.
+
+**It is one mechanism and not a second one.** The runtime sets the waiter's own cancellation flag where the awaited task
+ends cancelled - at once where it had already ended, and when it wakes the waiter otherwise - and the check the machine
+makes after every wait then takes the stop path a `cancel()` would have taken (section 16, "The cascade in the
+runtime"). The children of the stopped waiter are cancelled with it, as with every task that stops.
+
+**`result()` is the one way to observe a cancellation**, for the code that has to know: a supervisor that restarts
+what was cancelled, a test, the task that called `cancel()` and wants to confirm it. It is the same wait with the
+cascade left out, and it answers `Ok(value)` or `Fail(Cancelled)`. `Task.all` and `both` are written over it, because
+they have to cancel the parts that are still running before they end cancelled themselves.
 
 **`Cancelled` carries no reason**, and that is a decision. A reason field would be an open set nobody can match
 exhaustively, and the one reason with a name of its own — a deadline — belongs to the function that made the deadline,
 where it is `TimedOut` (below). What a bystander can honestly learn is that the value will not arrive; who asked for
 that and why is the canceller's knowledge, not the waiter's.
 
-**A waiter that is itself cancelled has no failure at all.** If task A awaits task B and A is cancelled, A's `await()`
-does not answer: A stops at that suspension point and its frame is released, the ordinary case of the rule above. So
-`Fail Cancelled` is observed in exactly one situation — **the awaited task was cancelled and the waiter was not** — and
-never as a cancellation of one's own. That is why there is one failure value and not a pair.
+**A waiter that is cancelled itself has no answer at all**, which was true before and is the reason the cascade is
+sound: a waiter never has a use for the value of a task that will not deliver one, because the only thing it could do
+with the knowledge is to stop - and stopping is what the cascade does for it, with the `using`s closed on the way out.
 
-### The `Task<Result<Value, Failure>>` shape, and the one member it needs
+### What the cascade replaced, and why
 
-Fallible asynchronous work answers `Task<Result<Value, Failure>>`, and `await()` makes that
-`Result<Result<Value, Failure>, Cancelled>`: two unwraps. The obvious spelling does not exist —
-
-```text
-error: Expected `Int64`, found `Result<Int64, Cancelled>`
-  --> probe.trb:47:6
-   |
-47 |   Ok(job.await()??)
-   |      ^^^^^^^^^^^^^
-```
-
-— because `??` is the fallback operator and lexes as one token. `(task.await()?)?` **type checks today** and reads
-badly in the place it would occur most, which is every pull of every stream. So `std/task` carries one member for the
-shape:
-
-```trb fragment
-extend<Value, Failure: From<Cancelled>> Task<Result<Value, Failure>> {
-  /** Waits, and folds a cancellation into the task's own failure: `source.next().outcome()?`. */
-  fn outcome(): Result<Value, Failure>
-}
-```
-
-**type checks today on the real `Task`** — an extension of a doubly instantiated generic is accepted, and so is the body
-that matches `await()` and converts through `From`. It is not a second vocabulary: it is `await()` plus the conversion
-the `?` would have applied anyway, written once instead of at every call site. And it is not an overload, because the
-language has one name per member and this one is `outcome` — what the task ended with, its own failure or a
-cancellation, folded into one channel.
-
-```trb fragment
-fn total(var reports: Source<Int, ReportError>): Task<Result<Int, ReportError>> {
-  var sum = 0
-  while const Some(size) = reports.next().outcome()? {
-    sum = sum + size
-    pause().await()?
-  }
-  Ok sum
-}
-```
-
-**type checks today against the real `Source` and the real `Task`**, with `outcome` declared as above and a
-`ReportError` that carries `From<Cancelled>` — so the shape this design asks of `std/stream` is one the checker already
-accepts, and only `await()`'s own result type is missing. The loop is cancellable twice over: at the pull, and at the
-`pause()`.
-
-### `Cancelled` is the floor of every asynchronous failure type
-
-The bound on `outcome` is the honest consequence and it has to be said out loud: **`Failure: From<Cancelled>`**, the
-same shape `Source.produce` already carries for `ChannelClosed` (STREAMS section 8). A failure type that cannot carry a
-cancellation cannot be the failure of work that waits — and `Never` is such a type. So **`Channel`'s reading end is a
-`Source<Item, Cancelled>` and not a `Source<Item, Never>`**, and `Source`/`Sink`'s `Failure` parameter carries the
-bound. STREAMS' decided answer 5 is untouched (the `extend<Target> Target with From<Never>` blanket is about `Never` as
-a *source* of a conversion, and there is still nothing to write); what changes is that no asynchronous read promises
-`Never` any more, because with universal cancellation that promise is false. Swift reaches the same place from the
-other side: its `AsyncSequence.next()` is `async throws`, and a failure channel on everything asynchronous is the price
-of being able to stop it.
-
-**The checker does not enforce this today**, which is probe 4 of section 12 and the reason the migration below looks
-smaller than it is.
+From 2026-09-22 to 2026-09-23 `await()` answered `Result<Value, Cancelled>`, and a member `outcome()` folded the
+cancellation into the task's own failure for a `Task<Result<Value, Failure>>`, whose `Failure` had to convert from
+`Cancelled` - so every `Source` and `Sink` carried `Failure: From<Cancelled>`, `IoError`, `HttpError` and
+`ChannelClosed` converted from it, and `Channel`'s reading end was a `Source<Item, Cancelled>`. **Every IO line nested
+two `Result`s** - the cancellation around the failure of the work - and the member that folded them existed only because
+`(task.await()?)?` read badly, `await()??` lexed as the fallback and `await()?.into()` as the optional chain. That was
+the symptom; section 15, decision 12 has the reversal and its reasons. `outcome()` is deleted, so are the
+`From<Cancelled>` implementations that existed for it, and `Source`/`Sink` have no bound on `Failure` any more.
 
 ### `within`: a deadline cancels the task
 
@@ -742,9 +713,11 @@ have three spellings:
 
 | `worker.within(2.seconds()).await()` | What happened |
 |---|---|
-| `Ok(Ok(value))` | the task finished inside the limit |
-| `Ok(Fail(TimedOut))` | the limit passed first, and `within` cancelled the task |
-| `Fail(Cancelled)` | somebody else cancelled the task, or the waiter's own `within` task was cancelled |
+| `Ok(value)` | the task finished inside the limit |
+| `Fail(TimedOut)` | the limit passed first, and `within` cancelled the task |
+| the waiter is cancelled | somebody else cancelled the task, or the waiter's own `within` task was cancelled: the cascade |
+
+`TimedOut` stays an answer and not a cascade, because a deadline is something the caller asked for and has a use for.
 
 **`TimedOut` carries the limit** because the one thing a reader of a log wants is the number that was too small, and
 `within` is the only place in this design that knows it. **It is `var fn`** for the same reason `cancel()` is: it can
@@ -762,25 +735,23 @@ something `Task.all` can see: for fallible work `Value` is a `Result`, and a `Fa
 collects like any other. Swift's task group cancels on the first `throw` because a throw reaches its scope;
 `join_all` and rayon do not cancel at all. This design is neither, and the reason is the one vocabulary: **a
 cancellation is the only event `Task.all` can observe that makes its own answer impossible to build**, because a list
-with a hole in it is not a `List<Value>`. So it answers `Fail Cancelled` and stops paying for results nobody can use.
+with a hole in it is not a `List<Value>`. So it cancels the others, ends cancelled itself - and whoever awaits it with
+it - and stops paying for results nobody can use.
 
-Determinism is not spent on this: the answer is the whole list or `Fail Cancelled`, and how far each of the others got
+Determinism is not spent on this: the answer is the whole list or a cancellation, and how far each of the others got
 before it stopped is not observable in the language — the same argument section 4 makes about the chunk that `find`
 never starts.
 
 ```trb fragment
-const loaded: Result<List<User>, HttpError> = (Task.all(fetches).await()?).into()
+const loaded: Result<List<User>, HttpError> = Task.all(fetches).await().into()
 ```
 
 `extend<Value, Failure, Target: From<Iterate<Value>>> Result<Target, Failure> with From<Iterate<Result<Value,
 Failure>>>` is in `std/core/src/result.trb` today. No second API, and the shape is honest about the fact that every
 task that was not cancelled ran to its end.
 
-**The parentheses are the second lexing trap and not a style**: `await()?.into()` lexes the `?.` as the optional chain
-and answers `` error: `?.` needs an `Option`, and `Result<…, Cancelled>` is not one ``, which was probed. Together with
-`??` that is two places where a postfix `?` on an `await()` runs into an operator that starts with the same character,
-and it is the second argument for `outcome`: the member that folds the two failures answers one `Result`, so nothing
-follows a `?` that the lexer can mistake for something else.
+*(Until 2026-09-23 this line needed parentheses, `(Task.all(fetches).await()?).into()`, because `await()?.into()`
+lexes the `?.` as the optional chain. With `await()` answering the value there is no `?` to write.)*
 
 ### Dropping a `Task` still does not cancel it
 
@@ -811,7 +782,7 @@ sandbox, where the VM is interpreting and the script has a heap of its own (BACK
 |---|---|---|
 | **Go** (`context.Context`) | Cooperative, checked at the points the program already has | The token in every signature. A `ctx` parameter is a colour by another name, and it is forgotten exactly where it matters; the flag rides with the task |
 | **C#** (`CancellationToken`, `CancellationTokenSource`) | The split between *asking* and *observing* | Two types and a parameter for what is one bit on a handle; `ThrowIfCancellationRequested()` in a body that already has suspension points |
-| **Kotlin** (`Job`, `CancellationException`) | Structured: a child of a cancelled job is cancelled | An exception that propagates invisibly and that a `catch (e: Exception)` swallows by accident. Here it is a `Result` the compiler makes the waiter handle |
+| **Kotlin** (`Job`, `CancellationException`) | Structured: a child of a cancelled job is cancelled; a coroutine that awaits a cancelled one is cancelled too | An exception that propagates invisibly and that a `catch (e: Exception)` swallows by accident. Here the propagation is not an exception: the waiter stops at its `await()` through the stop path, and nothing can catch it; `result()` is the one place that observes it |
 | **Swift** (structured cancellation, `Task.detached`) | Cancellation as a request the task notices at `await`; parent cancels children; a region cancelled as a whole | `Task.detached`, because the borrow of section 6 needs "no child outlives its region" to be true without exception |
 | **Rust / tokio** (drop the future) | Nothing | Cancellation at a moment nobody wrote down: the work stops wherever the last handle happens to go. Here releasing a handle stops nothing, and a cancelled frame is released at a suspension point or a back-edge check |
 | **Erlang** (`exit/2`, kill) | Nothing | A kill that a process cannot decline needs somebody to clean up after it. Per-process heaps make that affordable there and a per-*worker* heap does not: a task killed mid-frame would leave its allocations in a heap somebody else is still using |
@@ -912,8 +883,11 @@ public type TimedOut with Show, Error {
 }
 
 public native shared type Task<Value> {
-  /** Waits for the value, or answers `Cancelled` when the task stopped instead of finishing. */
-  native fn await(): Result<Value, Cancelled>
+  /** Waits for the value. A cancellation is passed on to the waiter instead of answered. */
+  fn await(): Value
+
+  /** Waits, and answers a cancellation as `Fail(Cancelled)` instead of passing it on. */
+  fn result(): Result<Value, Cancelled>
 
   /** Asks the task to stop at its next suspension point. A request and not a kill. */
   native var fn cancel()
@@ -923,14 +897,13 @@ public native shared type Task<Value> {
 
   // `map`, `flatMap` and `Task.all` unchanged
 }
-
-extend<Value, Failure: From<Cancelled>> Task<Result<Value, Failure>> {
-  /** Waits, and folds a cancellation into the task's own failure: `source.next().outcome()?`. */
-  fn outcome(): Result<Value, Failure>
-}
 ```
 
-**`await()`, `cancel()`, `within`, `outcome`, `pause`, `Cancelled` and `TimedOut` are in `std/task/src/lib.trb`.**
+**`await()`, `result()`, `cancel()`, `within`, `pause`, `Cancelled` and `TimedOut` are in `std/task/src/lib.trb`.**
+*(The paragraph below is the migration of 2026-09-22 and describes `outcome()`, which the cascade of 2026-09-23 deleted
+again: every `.outcome()` became `.await()`, every `.await() ?? fallback` and `.await()?` of a value that is no
+`Result` lost its fallback, `Source` and `Sink` lost their bound, and `Channel`'s reading end became a
+`Source<Item, Never>` - section 8, "What the cascade replaced, and why".)*
 Changing `await()`'s result from `Value` to `Result<Value, Cancelled>` produced **97 problems in 8 files** of the
 repository - `std/stream` (`source.trb` 41, `sink.trb` 13, `bytes.trb` 2), `std/http` 9, `std/fs` 1,
 `examples/tour/src/13-streams.trb` 14, `examples/tour/src/10-async.trb` 13 and `examples/game-engine/src/main.trb` 4 -
@@ -1007,7 +980,7 @@ underused.
 
 **Natives.** `Workers.count`, `Workers.blocking`, `pause`, `offload`, `Task.cancel`, `Task.within`, the fork-join
 barrier, `Window`'s two members, and the poller. Everything else — `Parallel` and all of its stages, the chunk
-arithmetic, `Merge` and every collector's implementation of it, `Task.outcome`, `Cancelled`, `TimedOut`, the
+arithmetic, `Merge` and every collector's implementation of it, `Task.await`, `Task.result`, `Cancelled`, `TimedOut`, the
 borrow-or-copy decision as far as the standard library can see it — is TorbScript over those. Cancellation adds exactly
 **two** natives to the list (`cancel` and `within`) and one bit to a structure that already exists, which is the
 measure of how little a cooperative design costs when the machine is already a state machine.
@@ -1093,9 +1066,9 @@ Both were accepted, while the same `?` into a named second failure type was reje
 (```Alpha` does not convert into `Failure```, with `where Failure: From<Alpha>` as the note), and `Never` is refused
 as a target because it has no values at all.
 
-This is not a cost of cancellation and it is older than section 8, but section 8 is where it matters: with `await()`
-answering a `Result<Value, Cancelled>`, `Failure: From<Cancelled>` is the bound that makes an asynchronous pipeline
-type-correct, and a signature that omitted it used to type check anyway. The migration measured in section 10 is
+This is not a cost of cancellation and it is older than section 8, but section 8 is where it mattered: while `await()`
+answered a `Result<Value, Cancelled>` (until 2026-09-23), `Failure: From<Cancelled>` was the bound that made an
+asynchronous pipeline type-correct, and a signature that omitted it used to type check anyway. The migration measured in section 10 is
 therefore a lower bound — **80 problems is what the checker found then, not what the design requires.**
 
 ## 13. What the language, the IR and the runtime must provide
@@ -1159,7 +1132,7 @@ counter per run, printed by the profile that BACKEND 6.3's timing work introduce
 
 **13. The cancellation flag, the check at every suspension point, and the check at every back-edge.** One bit in the
 task structure, set by `Task.cancel` and read by the worker before it resumes a task. Where it is set, the state
-machine does not resume: the frame is released and the handle is completed with `Fail Cancelled`. *Smallest fix:* one
+machine does not resume: the frame is released and the task ends cancelled. *Smallest fix:* one
 field, one branch in the resume path of `runtime/task.c` and of `vm/task.trb`, and the same branch reached from the four
 suspension points of section 8 — which are the only places a task is ever resumed, so it is one branch and not four.
 Beside it, the lowering of a function whose result is a `Task` (and of a `spawn` closure) inserts a flag check at every
@@ -1176,14 +1149,15 @@ are spawned by that task alone.
 flag on a blocking-pool job. *Smallest fix:* one cancel entry point per mechanism in `runtime/io.c`, behind the one
 interface gap 8 introduces.
 
-**16. `Cancelled`, `TimedOut`, `Task.await`'s result, `Task.cancel`, `Task.within` and `Task.outcome`. Done**, with
-the migration of section 10. The checker does not yet treat `outcome()` as the suspension point it is - its placement
-rule finds `await` by name - so an `outcome()` outside a task is refused by the lowering instead, a clean finding at
-build time rather than at the call.
+**16. `Cancelled`, `TimedOut`, `Task.await`, `Task.result`, `Task.cancel` and `Task.within`. Done**, with the
+migration of section 10 and its reversal of 2026-09-23: `await()` answers the `Value` and passes a cancellation on
+(the cascade of section 8), `result()` answers `Result<Value, Cancelled>`, and `outcome()` is gone. The checker's
+placement rule finds both waits by name (`await`, `result`) on a receiver that is a `Task`, and so does the lowering,
+which marks the `Suspend` of a `result()` as observing.
 
 **17. `?` asks the bound. Done.** Probe 4 of section 12: the `?` conversion consults a type parameter's bound instead
 of accepting it, and refuses `Never` as a conversion target because it has no values at all.
-`Failure: From<Cancelled>` is a rule now and not documentation.
+`Failure: From<Cancelled>` was a rule and not documentation until the cascade made the bound unnecessary.
 
 ## 14. Slices
 
@@ -1206,7 +1180,7 @@ real timer rather than only its type - driven by hand-written state machines in 
   worker the flag, the check at each suspension point, the parent link and the whole `std/task` surface are all
   testable, and they pin the type of `await()` before anything else is written against it — the same de-risking
   argument slice C makes for the pipeline. Gate: a task cancelled at each of the four suspension points stops there
-  and its waiter reads `Fail Cancelled`; a cancelled parent's child never runs a line; a loop in a `Task` function
+  and its observer reads `Fail Cancelled`; a cancelled parent's child never runs a line; a loop in a `Task` function
   stops at its next back-edge with and without a `pause()`, and a loop inside a synchronous callee finishes before the
   task stops; `check .` and `docs check docs` are green after the 80-place migration; and the
   live-block counter is zero after every one of them. **The order matters:** every `await()` written before this slice
@@ -1303,7 +1277,9 @@ carries it.
 
 ### Decided, from the answer to question 8
 
-9. **`Never` leaves the asynchronous side.** Section 8: a failure type that cannot carry a `Cancelled` cannot be the
+9. ~~**`Never` leaves the asynchronous side.**~~ *(Reversed with decision 12: a cancellation is no failure value any
+   more, so `Channel`'s reading end is a `Source<Item, Never>` again and `Source`/`Sink` carry no bound.)* Section 8: a
+   failure type that cannot carry a `Cancelled` cannot be the
    failure of work that waits, so `Channel`'s reading end becomes a `Source<Item, Cancelled>` and `Source`/`Sink` carry
    `where Failure: From<Cancelled>`. That overturns a promise STREAMS makes in its own words — "the reading end cannot
    fail; a closed channel is the end of the stream, not a failure" — which stays true about *closing* and stops being
@@ -1312,7 +1288,8 @@ carries it.
    the second reason and names it here because the first reason is real.
    **Decided (2026-09-22):** yes — `Never` leaves the asynchronous side. `Cancelled` is the floor of every asynchronous failure:
    one `?`, one world, the same place Swift's `async throws` lands once it is everywhere.
-10. **The name `outcome`** for "wait, and fold a cancellation into the task's own failure". It is the one member the
+10. ~~**The name `outcome`**~~ *(superseded by decision 12: `outcome()` is deleted)* for "wait, and fold a
+    cancellation into the task's own failure". It is the one member the
     `Task<Result<Value, Failure>>` shape needs, `(task.await()?)?` is what it replaces, and a postfix `?` on an
     `await()` runs into an operator that starts with the same character twice over: `await()??` is a parse error
     because `??` is the fallback, and `await()?.into()` is `?.`, the optional chain. `outcome` was chosen over
@@ -1324,6 +1301,38 @@ carries it.
     collection somebody else reads included, because there is no read-only view of an object (CONCEPT, "Identity").
     **Decided (2026-09-22):** `var fn`s, both of them — the same rule `source.next()` has: a method that changes the object is a
     `var fn`.
+
+### Decided on 2026-09-23: a cancellation is passed on, not answered
+
+12. **`task.await()` answers `Value` itself**, reversing the decision that it answers `Result<Value, Cancelled>`.
+    Cancellation is propagated, not returned: a task that awaits a task that ended cancelled is itself cancelled at that
+    suspension point - it stops there, its scopes end in reverse order (`using` and `close()` run exactly as when it is
+    cancelled at a back-edge), and it ends cancelled, so whatever awaits *it* is cancelled in turn. The top level of an
+    entry file that awaits a cancelled task ends the program with `cancelled: the program waited for a task that was
+    cancelled` on standard error and exit code 130 (section 8, "The cascade"). **`result()`** answers
+    `Result<Value, Cancelled>` for the code that observes a cancellation explicitly - supervisors, and code that
+    cancelled a task and wants to confirm it. `within` keeps `TimedOut`. `Task.all` and `both` follow the rule: where one
+    part is cancelled the whole is cancelled, after they cancelled the other parts. **`outcome()` is deleted**; every IO
+    line is `.await()?`, and the `From<Cancelled>` implementations that existed for it (`IoError`, `HttpError`,
+    `ChannelClosed`, `Cancelled` itself) are gone with the `Failure: From<Cancelled>` bound of `Source` and `Sink`.
+
+    **Why.** A call that waits is never cancelled on its own - only the task that waits is, by its parent, a deadline or
+    a supervisor. The waiter therefore never has a use for a value that says "the thing you waited for will not come":
+    the only honest reaction is to stop too, and stopping is what the cascade does for it, with its resources closed on
+    the way out. Answering the cancellation instead made every line of IO carry two `Result`s - the cancellation around
+    the failure of the work - and `outcome()` existed only to fold them, with `Failure: From<Cancelled>` spreading into
+    every stream's error type to make the fold type-check. Nesting two `Result`s per line was the symptom.
+
+    **The comparison.** *Rust*: a future that is dropped simply stops at its last `.await`; nothing downstream receives a
+    "cancelled" value, and `?` carries only the work's own error. *Swift*: structured concurrency cancels the child tasks
+    of a cancelled task, and a task learns of it where it waits (`Task.checkCancellation`, `CancellationError` thrown
+    from `await`) - a propagation through `throws`, not a value every caller unwraps. *C#*: a
+    `OperationCanceledException` thrown from the awaited `Task` unwinds the awaiting method unless somebody catches it on
+    purpose - `await` answers `T`, not a result of `T`. *Kotlin*: a coroutine that awaits a cancelled `Deferred` receives
+    `CancellationException`, which structured concurrency treats as normal completion and propagates to the parent.
+    All four propagate and none of them returns the cancellation from every await; TorbScript now does the same, with
+    the propagation through the stop path instead of an exception nothing can intercept by accident, and `result()` as
+    the one explicit place to observe it.
 
 ## 16. Runtime ABI, as built
 
@@ -1339,8 +1348,9 @@ nothing (section 8).
 
 **A resume function** is `torb_poll resume(torb_task *task)`: a switch over `task->state`, the only field the machine
 writes. It answers `TORB_POLL_SUSPENDED` (registered where it waits), `TORB_POLL_FINISHED` (the value is in the result
-slot) or `TORB_POLL_STOPPED` (no value; every `await()` answers `Fail(Cancelled)`). A suspension primitive
-(`torb_task_await`, `torb_task_await_until`, `torb_channel_send`, `torb_channel_receive`, `torb_task_pause`,
+slot) or `TORB_POLL_STOPPED` (no value; every `await()` of it cancels its waiter, every `result()` answers
+`Fail(Cancelled)`). A suspension primitive (`torb_task_await`, `torb_task_observe`, `torb_task_await_until`,
+`torb_channel_send`, `torb_channel_receive`, `torb_task_pause`,
 `torb_task_sleep_until`) answers `TORB_WAIT_SUSPENDED` - return now - or `TORB_WAIT_READY` - go on at once; either way
 the machine then calls `torb_task_outcome` once.
 
@@ -1364,6 +1374,40 @@ negative or `nan` `sleep` is zero; a task that stops without the flag ends as ca
 later `Task.map` - passes on a cancellation it observed; a parent that finishes hands its running children to its own
 parent, so cancelling the grandparent still reaches them.
 
+### The cascade in the runtime (2026-09-23)
+
+**The ABI change, for every back end that drives a machine (the C back end today, the VM next).**
+
+- `torb_task_await(self, awaited)` - the wait of `await()` - now **passes a cancellation on**: where `awaited` has
+  completed as cancelled, it sets `self`'s cancellation flag before it answers `TORB_WAIT_READY`; where `self` waits and
+  `awaited` completes as cancelled later, `torb_complete` sets the flag of every waiter that waits this way before it
+  wakes it (under `awaited`'s lock, so the flag is set before the waiter runs again). Nothing else happens: the machine's
+  existing check after the wait (`if (torb_task_cancelled(task)) goto stop_K;`) takes the stop path, which releases the
+  live set - and so closes every `using` - and answers `TORB_POLL_STOPPED`; `torb_complete` then cancels the stopped
+  task's children and wakes its own waiters, which cascades further. A back end therefore needs no new control flow,
+  only the second primitive below.
+- `torb_task_observe(self, awaited)` is **new**: the same wait without the cascade, for `result()`. After it,
+  `torb_task_result(awaited, &out)` answers `false` for a cancelled task. `torb_task_await_until` (the runtime's own
+  `within`) observes as well.
+- A task records which of the two its last wait was in a new byte of `torb_task`, `observing`, written by the waiter
+  before it joins the waiter list and read under the awaited task's lock. The struct keeps its size.
+- The IR says which wait a suspension is: `Instruction.Suspend(state, awaited, observes)`, `observes` true only for
+  `result()`. The C back end emits `torb_task_observe` for it and `torb_task_await` otherwise.
+- `int torb_task_end_main(torb_task *main_task)` is **new**, and the generated `main` calls it in place of
+  `torb_task_release(main_task)`: it releases the handle and answers 0, or - where the main task ended cancelled -
+  writes `cancelled: the program waited for a task that was cancelled` to standard error and answers
+  `TORB_EXIT_CANCELLED` (130), which `main` returns after `torb_scheduler_finish` and `torb_process_finish`.
+- `await()` and `result()` are TorbScript over the private native `finished()` (`.Fallible` `torb_task_result`);
+  `Task.await` is no manifest entry any more. `await()`'s `Fail` arm cannot be reached, because a waiter whose task
+  ended cancelled stopped at its check, and it panics as an internal error if it ever is.
+
+`runtime/tests/task_test.c` pins it with hand-written machines: a parent awaiting a cancelled child stops at its await
+and runs its stop path, the grandparent awaiting the parent stops in turn, a supervisor observing the grandparent reads
+the cancellation and finishes; an await of a task that had already ended cancelled stops at once; a finished task does
+not cascade; the cascade cancels the stopped task's children; and `torb_task_end_main` answers 0 and 130.
+`tests/conformance/task-cancel-cascade.trb` runs the same chain across four workers and one, and
+`tests/conformance/task-cancel-main.trb` the end of a program whose top level awaits a cancelled task.
+
 ### The compiler half, as built
 
 **The lowering (`ir/lower/task.trb`).** A function that *declares* `Task<Value>` - not one whose type parameter a task
@@ -1376,7 +1420,7 @@ checker decides that by the expected type and records no flag), and `spawn { ...
 environment plus a `TaskNew` of its body, the environment being the frame; `spawn` of a closure *value* runs it through
 one generated resume function per closure type. A `var` parameter crosses into the frame as the value it holds, which
 is the same thing only for an object with an identity, so one of any other type is a clean finding. `await()` - and
-`outcome()` - is `Suspend(state, awaited)` in front of the call that reads the answer, the states numbered 1, 2, ... in
+`result()` - is `Suspend(state, awaited, observes)` in front of the call that reads the answer, the states numbered 1, 2, ... in
 block order once the body is done. `stopAsCancelled()` is `Terminator.Stop`. The top-level code of an entry file that
 waits anywhere is a resume function too, and runs as the main task.
 
@@ -1440,13 +1484,13 @@ lowered yet, which is what stops `examples/tour/src/10-async.trb` (and `std/http
 
 | Row | Before | As built |
 |---|---|---|
-| `Task.await`, `Task.finished` | `.Planned` `torb_task_await` | `.Fallible` `torb_task_result`; the `Suspend` in front of the call is the lowering's |
+| `Task.await`, `Task.finished` | `.Planned` `torb_task_await` | `Task.finished` is `.Fallible` `torb_task_result`; `await()` and `result()` are TorbScript over it (since 2026-09-23), and the `Suspend` in front of the call is the lowering's |
 | `spawn`, `stopAsCancelled` | `.Planned` `torb_spawn` | `NativeTarget.Lowered`: a `TaskNew` over the closure's body, and `Terminator.Stop` |
 | `sleep`, `pause` | `.Planned` / missing | `torb_task *torb_sleep(double seconds);`, `torb_task *torb_pause(void);` |
 | `cancelTask`, `completedWithin` | missing | `torb_task_cancel(torb_task *)`, `torb_task_completed_within(torb_task *, torb_duration)`, under the TorbScript `Task.cancel` and `Task.within` |
 | `Channel(capacity:)` | - | `Instruction.ChannelNew` over `torb_channel_new` and the element descriptor of `Item` |
 | `Channel.source`, `Channel.sink` | `.Planned` | TorbScript: `ChannelSource`/`ChannelSink` over `received` (`torb_channel_received`), `offered` (`torb_channel_offered`), `endWriting` (`torb_channel_end`) and `closeReading` (`torb_channel_close`) |
-| `Task.map`, `Task.flatMap`, `Task.all`, `both` | `.Planned` natives | TorbScript over `await()` and `stopAsCancelled()` |
+| `Task.map`, `Task.flatMap`, `Task.all`, `both` | `.Planned` natives | TorbScript over `await()`, `result()` and `stopAsCancelled()` |
 | `standardInput`/`Output`/`Error`, `Process.start`, `Child.*`, `File.create`/`chunks`/`add`/`finish` | `.Planned` 7.3 | stay planned, for slice G: they are `Source`/`Sink` objects over real IO, which needs `runtime/io.c` and its poller |
 
 ### The pool, as built (7.7)
@@ -1476,7 +1520,7 @@ task the body makes on the main thread, and every task one of those makes, carri
 only once they have completed - the main thread runs tasks meanwhile, as `await()` would. A task of a test is resumed
 under a recovery point of the thread that runs it, whichever worker that is, so its panic lands there: the first one is
 the test's failure, with its message and site, every task of the test is cancelled, and the one that panicked is
-completed as cancelled without returning to its machine, so whoever awaits it reads `Fail(Cancelled)` and the pool's
+completed as cancelled without returning to its machine, so whoever observes it reads `Fail(Cancelled)` and the pool's
 counts stay exact. Waiting for the test's tasks was chosen over reporting a panic whenever it happens, because before
 it a task a test started ran after the whole file - outside every recovery point - or, with more workers, at a moment
 that decided which test the panic was blamed on. Where the body runs inside the main task (an entry file that waits),

@@ -20,36 +20,36 @@ fn collatz(start: Int): Int {
 const numbers = (1..=30000).toList()
 const sequential = numbers.map({ collatz _ }).toList()
 
-const mapped = numbers.parallel().map({ collatz _ }).toList().await() ?? []
+const mapped = numbers.parallel().map({ collatz _ }).toList().await()
 print "map: {mapped.length()} items, the same as the sequential map: {mapped == sequential}"
 print "the first ten: {mapped.take(10).toList()}"
 
-const odd = numbers.parallel().filter({ _.remainder(2) == 1 }).toList().await() ?? []
+const odd = numbers.parallel().filter({ _.remainder(2) == 1 }).toList().await()
 print "filter: {odd.length()} odd numbers, in order: {odd == numbers.filter({ _.remainder(2) == 1 }).toList()}"
 
-const long = numbers.parallel().filter({ collatz(_) > 150 }).count().await() ?? 0
+const long = numbers.parallel().filter({ collatz(_) > 150 }).count().await()
 print "count: {long} numbers take more than 150 steps"
 
-const total = numbers.parallel().map({ collatz _ }).sum().await() ?? 0
+const total = numbers.parallel().map({ collatz _ }).sum().await()
 print "sum: {total}, the same as the sequential sum: {total == sequential.sum()}"
 
-const first = (numbers.parallel().find({ collatz(_) > 250 }).await() ?? None) ?? 0
+const first = (numbers.parallel().find({ collatz(_) > 250 }).await()) ?? 0
 print "find: {first} is the first number that takes more than 250 steps"
 
 const halves = numbers.parallel().filterMap({ if _.remainder(1000) == 0 { Some(_ / 1000) } else { None } })
-print "filterMap: {halves.toList().await() ?? []}"
+print "filterMap: {halves.toList().await()}"
 
 const fractions = numbers.map({ 1.0 / Float.from(_) }).toList()
-const alone = fractions.parallel(workers: 1).sum().await() ?? 0.0
-const paired = fractions.parallel(workers: 2).sum().await() ?? 0.0
-const everywhere = fractions.parallel().sum().await() ?? 0.0
+const alone = fractions.parallel(workers: 1).sum().await()
+const paired = fractions.parallel(workers: 2).sum().await()
+const everywhere = fractions.parallel().sum().await()
 print "a Float sum is the same with one worker, two and all: {alone == paired && paired == everywhere}"
 
-const chunked = numbers.parallel(chunk: Some(7)).map({ _ * 2 }).toList().await() ?? []
+const chunked = numbers.parallel(chunk: Some(7)).map({ _ * 2 }).toList().await()
 print "seven chunks: {chunked == numbers.map({ _ * 2 }).toList()}"
 
 const nothing: List<Int> = []
-print "an empty input: {nothing.parallel().map({ _ + 1 }).toList().await() ?? [0]}"
+print "an empty input: {nothing.parallel().map({ _ + 1 }).toList().await()}"
 
 const words = ["one", "two", "three", "four", "five"]
-print "words: {words.parallel().map({ _.byteLength() }).toList().await() ?? []}"
+print "words: {words.parallel().map({ _.byteLength() }).toList().await()}"

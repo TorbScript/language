@@ -1055,20 +1055,39 @@ group "Where `await()` is allowed" {
     assert(problems(source) == ["`await()` is only allowed in a closure that becomes a task"])
   }
 
-  /** `outcome()` waits like `await()` and only answers the failure instead of passing it on, so it is the same rule. */
-  test "`outcome()` waits too, so it stands where `await()` may" {
+  /**
+   * `result()` waits like `await()` and answers a cancellation as a value instead of passing it on, so it is the same
+   * rule (docs/design/CONCURRENCY.md section 8).
+   */
+  test "`result()` waits too, so it stands where `await()` may" {
     // The prelude of the harness has no `std/task`, so the member is declared here: the rule finds it by its name and a
     // receiver that is a `Task`, which is all the real one of `std/task` has in common with it
-    const checked = "{task}extend<Value> Task<Value> \{\n  fn outcome(): Value \{\n    panic \"waits\"\n  \}\n\}\n\n"
-    const function = "{checked}fn sum(a: Int, b: Int): Int \{\n  later(a).outcome() + b\n\}"
-    assert(problems(function) == ["`outcome()` is only allowed in a function that returns a `Task`"])
-    const closure = "{checked}fn run(body: () => Int): Int \{\n  body()\n\}\n\n"
-      + "fn sum(a: Int): Int \{\n  run \{ later(a).outcome() \}\n\}"
-    assert(problems(closure) == ["`outcome()` is only allowed in a closure that becomes a task"])
-    const inTask = "{checked}fn sum(a: Int): Task<Int> \{\n  later(a).outcome()\n\}"
+    const checked = "{task}type Cancelled \{\}\n\n"
+      + "extend<Value> Task<Value> \{\n  fn result(): Result<Value, Cancelled> \{\n    panic \"waits\"\n  \}\n\}\n\n"
+    const function = "{checked}fn sum(a: Int, b: Int): Result<Int, Cancelled> \{\n  later(a).result()\n\}"
+    assert(problems(function) == ["`result()` is only allowed in a function that returns a `Task`"])
+    const closure = "{checked}fn run(body: () => Result<Int, Cancelled>): Result<Int, Cancelled> \{\n  body()\n\}\n\n"
+      + "fn sum(a: Int): Result<Int, Cancelled> \{\n  run \{ later(a).result() \}\n\}"
+    assert(problems(closure) == ["`result()` is only allowed in a closure that becomes a task"])
+    const inTask = "{checked}fn sum(a: Int): Task<Int> \{\n  match later(a).result() \{\n"
+      + "    Ok(value) => value\n    Fail(_) => 0\n  \}\n\}"
     assert problems(inTask).isEmpty()
-    const topLevel = "{checked}print later(1).outcome()"
+    const topLevel = "{checked}const found = later(1).result()\nconst _ = found"
     assert problems(topLevel).isEmpty()
+  }
+
+  /**
+   * `await()` answers the value of the task itself: a cancellation is passed on to the waiter, which stops there, and is
+   * never a failure to unwrap. So `?` after it is about the task's own `Result` and nothing else - one `?` per line.
+   */
+  test "`await()` answers the value itself, so `?` unwraps only the task's own failure" {
+    const plain = "{task}fn doubled(a: Int): Task<Int> \{\n  later(a).await() * 2\n\}"
+    assert problems(plain).isEmpty()
+    const unwrapped = "{task}fn doubled(a: Int): Task<Result<Int, String>> \{\n  Ok(later(a).await()? * 2)\n\}"
+    assert(problems(unwrapped) == ["`?` needs an `Option` or a `Result`, and `Int64` is not one"])
+    const fallible = "{task}fn read(): Task<Result<Int, String>> \{\n  Ok 1\n\}\n\n"
+      + "fn twice(): Task<Result<Int, String>> \{\n  const first = read().await()?\n  Ok(first + read().await()?)\n\}"
+    assert problems(fallible).isEmpty()
   }
 
   test "a `const` of a module may not wait: it is folded at compile time" {

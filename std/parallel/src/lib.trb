@@ -2,7 +2,7 @@
  * One thing going faster: [Parallel], a pipeline whose stages run on the workers of the pool, and the `parallel()` that
  * starts one from anything that can be iterated.
  *
- *     const squares = (0..1000).toList().parallel().map({ _ * _ }).toList().await() ?? []
+ *     const squares = (0..1000).toList().parallel().map({ _ * _ }).toList().await()
  *     print squares.length()
  *
  * The words are the ones of the sequential pipeline - `map`, `filter`, `filterMap`, `toList`, `count`, `sum`, `find`,
@@ -50,7 +50,7 @@ const defaultChunkCount = 64
  *
  * # Examples
  *
- *     const total = (1..=100).toList().parallel().map({ _ * 2 }).sum().await() ?? 0
+ *     const total = (1..=100).toList().parallel().map({ _ * 2 }).sum().await()
  *     print total
  */
 public type Parallel<Item> {
@@ -63,27 +63,26 @@ public type Parallel<Item> {
   fn map<Output>(transform: Transform<Item, Output>): Parallel<Output> {
     const previous = run
     const bound = limit
-    Parallel(bound, { spreadAfter(previous(), bound, { mapped _, transform }).await() ?? empty() })
+    Parallel(bound, { spreadAfter(previous(), bound, { mapped _, transform }).await() })
   }
 
   /** The items for which `predicate` answers `true`, in their order. */
   fn filter(predicate: Predicate<Item>): Parallel<Item> {
     const previous = run
     const bound = limit
-    Parallel(bound, { spreadAfter(previous(), bound, { filtered _, predicate }).await() ?? empty() })
+    Parallel(bound, { spreadAfter(previous(), bound, { filtered _, predicate }).await() })
   }
 
   /** Every item through `transform`, keeping the values that are there. */
   fn filterMap<Output>(transform: Transform<Item, Output?>): Parallel<Output> {
     const previous = run
     const bound = limit
-    Parallel(bound, { spreadAfter(previous(), bound, { filterMapped _, transform }).await() ?? empty() })
+    Parallel(bound, { spreadAfter(previous(), bound, { filterMapped _, transform }).await() })
   }
 
   /** Every item, in input order. */
   fn toList(): Task<List<Item>> {
-    // A chunk is cancelled only together with this task, which then stops at this very wait: the fallback is never read
-    const chunks = run().await() ?? empty()
+    const chunks = run().await()
     var items: List<Item> = []
     for chunk in chunks {
       items.appendAll chunk
@@ -93,7 +92,7 @@ public type Parallel<Item> {
 
   /** How many items come out of the pipeline. */
   fn count(): Task<Int> {
-    const chunks = run().await() ?? empty()
+    const chunks = run().await()
     var total = 0
     for chunk in chunks {
       total = total + chunk.length()
@@ -107,7 +106,7 @@ public type Parallel<Item> {
    */
   fn sum(): Task<Item> where Item: Add & From<Int> {
     const previous = run
-    const chunks = spreadAfter(previous(), limit, { summed _ }).await() ?? empty()
+    const chunks = spreadAfter(previous(), limit, { summed _ }).await()
     var total = Item.from 0
     for chunk in chunks {
       for value in chunk {
@@ -120,7 +119,7 @@ public type Parallel<Item> {
   /** The first item in input order for which `predicate` answers `true`, or `None`. */
   fn find(predicate: Predicate<Item>): Task<Item?> {
     const previous = run
-    const chunks = spreadAfter(previous(), limit, { found _, predicate }).await() ?? empty()
+    const chunks = spreadAfter(previous(), limit, { found _, predicate }).await()
     for chunk in chunks {
       if const Some(value) = chunk.first() {
         return Some value
@@ -132,7 +131,7 @@ public type Parallel<Item> {
   /** Runs `body` for every item, the chunks on the workers. The order in which items of two chunks run is the machine's. */
   fn forEach(body: Action<Item>): Task<Void> {
     const previous = run
-    const _ = spreadAfter(previous(), limit, { visited _, body }).await() ?? empty()
+    const _ = spreadAfter(previous(), limit, { visited _, body }).await()
   }
 }
 
@@ -145,7 +144,7 @@ extend<Item> List<Item> {
    *
    * # Examples
    *
-   *     const lengths = ["a", "bb", "ccc"].parallel(workers: 2).map({ _.byteLength() }).toList().await() ?? []
+   *     const lengths = ["a", "bb", "ccc"].parallel(workers: 2).map({ _.byteLength() }).toList().await()
    *     print lengths
    */
   fn parallel(workers: Int = Workers.count(), chunk: Int? = None): Parallel<Item> {
@@ -186,20 +185,19 @@ fn spreadAfter<Source, Output>(
   limit: Int,
   work: (chunk: ArrayList<Source>) => ArrayList<Output>,
 ): Task<ArrayList<ArrayList<Output>>> {
-  // Cancelled only together with this task, which then stops at this very wait: the fallback is never read
-  const chunks = before.await() ?? empty()
+  const chunks = before.await()
   var running: ArrayList<Task<ArrayList<Output>>> = empty()
   var outputs: ArrayList<ArrayList<Output>> = empty()
   for chunk in chunks {
     if running.length() >= limit {
       if const Some(oldest) = running.removeAt(0) {
-        outputs.append(oldest.await() ?? empty())
+        outputs.append oldest.await()
       }
     }
     running.append chunkTask(copied(chunk), work)
   }
   for task in running {
-    outputs.append(task.await() ?? empty())
+    outputs.append task.await()
   }
   outputs
 }

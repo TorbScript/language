@@ -2356,6 +2356,12 @@ const channel = Channel<Int>(capacity: 8)        // a stream in memory: `channel
   back-edge of a function that answers a `Task`, so a loop that never awaits stops too, while a synchronous callee runs
   to its end - there is no unwinding. Stopping releases the task's frame like a finished one's, which closes every
   object it held ("cancellation is drop"). Dropping the `Task` *handle* cancels nothing: the handle is not the frame.
+- **A cancellation is passed on, not answered.** `await()` answers the `Value`: a task that awaits a task that ended
+  cancelled is cancelled itself at that `await()` - its scopes end, its `using`s are closed - and whoever awaits *it*
+  is cancelled in turn; at the top level of an entry file the program ends with exit code 130. So an IO line is one
+  `.await()?`, the `?` being the failure of the work. `task.result()` is the one wait that answers `Fail(Cancelled)`
+  instead, for a supervisor or for code that cancelled a task and wants to confirm it
+  ([docs/design/CONCURRENCY.md](docs/design/CONCURRENCY.md) section 8, "The cascade").
 
 ## Foreign Functions (Draft)
 

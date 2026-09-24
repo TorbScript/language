@@ -1,7 +1,10 @@
+use sleep from "std/time"
+
 /**
- * `map`, `flatMap`, `Task.all`, `both` and `outcome()` are TorbScript over `await()`: `map` and `flatMap` go on with the
- * finished value, `Task.all` answers the values in the order of the tasks - not the order they finish in - and
- * `outcome()` waits for a task whose value is a `Result` and hands that `Result` on, so one `?` unwraps it.
+ * `map`, `flatMap`, `Task.all` and `both` are TorbScript over `await()` and `result()`: `map` and `flatMap` go on with
+ * the finished value, `Task.all` answers the values in the order of the tasks - not the order they finish in - and a
+ * task whose value is a `Result` hands that `Result` on from `await()`, so one `?` unwraps it. Where one part of
+ * `Task.all` or `both` is cancelled, the whole is cancelled with it.
  */
 
 /** A value the program builds, so that its storage is counted and not the immortal storage of a literal. */
@@ -17,28 +20,44 @@ fn square(value: Int): Task<Int> {
   value * value
 }
 
-fn parsed(text: String): Task<Result<Int, Cancelled>> {
+/** A word too long to count: the failure of `parsed`, which none of the words here has. */
+type TooLong with Show, Error {
+  fn show(): String {
+    "too long"
+  }
+}
+
+fn parsed(text: String): Task<Result<Int, TooLong>> {
   Ok text.byteLength()
 }
 
-/** Adds what two tasks answered, with `outcome()` and `?` for both. */
-fn added(first: String, second: String): Task<Result<Int, Cancelled>> {
-  const left = parsed(first).outcome()?
-  const right = parsed(second).outcome()?
+/** Adds what two tasks answered, with `await()` and `?` for both. */
+fn added(first: String, second: String): Task<Result<Int, TooLong>> {
+  const left = parsed(first).await()?
+  const right = parsed(second).await()?
   Ok(left + right)
 }
 
-print(square(3).map({ _ + 1 }).await() ?? 0)
-print(square(2).flatMap({ value => square(value).await() ?? 0 }).await() ?? 0)
-print(square(5).map({ repeated "a", _ }).await() ?? "")
+print(square(3).map({ _ + 1 }).await())
+print(square(2).flatMap({ value => square(value).await() }).await())
+print(square(5).map({ repeated "a", _ }).await())
 
 var tasks: List<Task<Int>> = []
 for index in 0..5 {
   tasks.append square(index)
 }
-print(Task.all(tasks).await() ?? [])
+print Task.all(tasks).await()
 
-const pair = both(square(4), spawn { repeated "b", 3 }).await()?
+const pair = both(square(4), spawn { repeated "b", 3 }).await()
 print "{pair.0} {pair.1}"
 
-print added(repeated("c", 2), repeated("d", 3)).outcome()
+print added(repeated("c", 2), repeated("d", 3)).await()
+
+// A part that is cancelled cancels the whole: `result()` observes it where `await()` would have been cancelled too
+var endless = spawn {
+  sleep(60.0).await()
+  repeated "e", 2
+}
+endless.cancel()
+print "all: {Task.all([spawn({ repeated "f", 2 }), endless]).result().isOk()}"
+print "both: {both(endless, square(7)).result().isOk()}"

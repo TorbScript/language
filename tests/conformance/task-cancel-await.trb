@@ -1,10 +1,10 @@
 use sleep from "std/time"
 
 /**
- * A task that is cancelled while it waits stops where it waits: it never sees an answer, and whoever waits for it reads
- * `Fail(Cancelled)`. Cancellation is structured - a task's parent is the task that started it, and cancelling the parent
- * cancels its children, so a child that has not run yet never runs a line. What the stopped tasks held is released on
- * the way out.
+ * A task that is cancelled while it waits stops where it waits: it never sees an answer. Whoever `await()`s it is
+ * cancelled in turn, at that very point - the cascade - and whoever observes it with `result()` reads `Fail(Cancelled)`.
+ * Cancellation is structured - a task's parent is the task that started it, and cancelling the parent cancels its
+ * children, so a child that has not run yet never runs a line. What the stopped tasks held is released on the way out.
  */
 
 /** A value the program builds, so that its storage is counted and not the immortal storage of a literal. */
@@ -18,7 +18,7 @@ fn repeated(part: String, times: Int): String {
 
 /** Waits a long time for a sleep, holding a counted word, and says so only if it ever gets past it. */
 fn waiting(word: String): Task<String> {
-  sleep(60.0).await() ?? void
+  sleep(60.0).await()
   print "the waiter woke up"
   word
 }
@@ -29,40 +29,49 @@ fn parent(word: String): Task<String> {
     print "the child ran"
     word
   }
-  child.await() ?? "child cancelled"
+  child.await()
 }
 
-/** Waits for a task and tells what it read. */
+/** Observes a task and tells what it read: a supervisor, which reads a cancellation as a value. */
 fn watching(watched: Task<String>): Task<String> {
-  match watched.await() {
+  match watched.result() {
     Ok(value) => "watched {value}"
     Fail(problem) => "watched: {problem}"
   }
 }
 
+/** Waits for a task with `await()`, and so is cancelled together with it: the line after the wait never runs. */
+fn forwarding(watched: Task<String>): Task<String> {
+  const value = watched.await()
+  print "the forwarder went on"
+  "forwarded {value}"
+}
+
 var sleeper = waiting repeated("ab", 2)
 const watcher = watching sleeper
-sleep(0.01).await() ?? void
+const forwarder = forwarding sleeper
+sleep(0.01).await()
 sleeper.cancel()
-print(watcher.await() ?? "the watcher was cancelled")
-print "sleeper: {sleeper.await().isOk()}"
+print watcher.await()
+print "forwarder: {forwarder.result().isOk()}"
+print "sleeper: {sleeper.result().isOk()}"
 
 // The parent is cancelled before it ran, and with it the child it would have started
 var cancelledParent = parent repeated("cd", 2)
 cancelledParent.cancel()
-print "parent: {cancelledParent.await().isOk()}"
+print "parent: {cancelledParent.result().isOk()}"
 
 // A parent that is cancelled while its child waits takes the child with it
 fn sleepingParent(): Task<String> {
   const child = spawn {
-    sleep(60.0).await() ?? void
+    sleep(60.0).await()
     print "the sleeping child woke up"
     repeated "ef", 2
   }
-  child.await() ?? "child cancelled"
+  child.await()
 }
 
 var outer = sleepingParent()
-sleep(0.01).await() ?? void
+sleep(0.01).await()
 outer.cancel()
-print "outer: {outer.await().isOk()}"
+print "outer: {outer.result().isOk()}"

@@ -175,6 +175,41 @@ TORB_TEST(an_argument_with_a_space_arrives_as_one_argument) {
   torb_text_release(failure);
 }
 
+/** `input` is everything the child reads, and then its input ends - an empty one at once. */
+TORB_TEST(the_input_a_program_is_fed_is_what_it_reads) {
+#if defined(_WIN32)
+  torb_text command = torb_text_from_cstring("cmd");
+  torb_list arguments = argument_list("/c", "more");
+#else
+  torb_text command = torb_text_from_cstring("/bin/sh");
+  torb_list arguments = argument_list("-c", "cat");
+#endif
+  torb_text input = torb_text_from_cstring("banana\napple\n");
+  torb_text nothing = torb_text_empty();
+  torb_text output = torb_text_empty();
+  torb_text failure = torb_text_empty();
+  torb_text banana = torb_text_from_cstring("banana");
+  torb_text apple = torb_text_from_cstring("apple");
+
+  TORB_CHECK_INTEGER(torb_process_run_feeding(command, arguments, input, &output, &failure), 0);
+  TORB_CHECK(torb_text_contains(output, banana));
+  TORB_CHECK(torb_text_contains(output, apple));
+  torb_text_release(output);
+  torb_text_release(failure);
+  output = torb_text_empty();
+  failure = torb_text_empty();
+  TORB_CHECK_INTEGER(torb_process_run_feeding(command, arguments, nothing, &output, &failure), 0);
+  TORB_CHECK(!torb_text_contains(output, banana));
+
+  torb_text_release(banana);
+  torb_text_release(apple);
+  torb_text_release(input);
+  torb_text_release(output);
+  torb_list_release(arguments);
+  torb_text_release(command);
+  torb_text_release(failure);
+}
+
 void torb_register_process_tests(void) {
   TORB_ADD(a_program_that_ran_answers_its_code_and_its_output);
   TORB_ADD(the_two_streams_of_a_program_come_back_apart);
@@ -182,4 +217,5 @@ void torb_register_process_tests(void) {
   TORB_ADD(a_command_that_is_nowhere_cannot_be_started);
   TORB_ADD(a_command_on_the_path_with_one_argument_runs);
   TORB_ADD(an_argument_with_a_space_arrives_as_one_argument);
+  TORB_ADD(the_input_a_program_is_fed_is_what_it_reads);
 }

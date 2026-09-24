@@ -20,7 +20,7 @@ fn write(channel: Channel<String>): Task<String> {
   var output = channel.sink()
   var written = 0
   for index in 0..10 {
-    match output.add(repeated("w", index + 1)).outcome() {
+    match output.add(repeated("w", index + 1)).await() {
       Ok(_) => {
         written = written + 1
       }
@@ -32,21 +32,25 @@ fn write(channel: Channel<String>): Task<String> {
   "wrote all {written}"
 }
 
-/** Reads `count` items and lets go of the reading end: the end of this function releases it, and that closes it. */
-fn readThenLetGo(channel: Channel<String>, count: Int): Task<Result<Void, Cancelled>> {
+/**
+ * Reads `count` items and lets go of the reading end: the end of this function releases it, and that closes it. The
+ * reading end of a channel cannot fail - its failure is `Never` - so every `next()` is an `Ok`.
+ */
+fn readThenLetGo(channel: Channel<String>, count: Int): Task<Void> {
   var reading = channel.source()
   for _ in 0..count {
-    print(reading.next().outcome()?)
+    if const Ok(item) = reading.next().await() {
+      print item
+    }
   }
-  Ok void
 }
 
 const unbuffered = Channel<String>()
 const writer = write unbuffered
-readThenLetGo(unbuffered, 2).outcome()?
-print(writer.await() ?? "cancelled")
+readThenLetGo(unbuffered, 2).await()
+print writer.await()
 
 const buffered = Channel<String>(capacity: 3)
 const filler = write buffered
-readThenLetGo(buffered, 1).outcome()?
-print(filler.await() ?? "cancelled")
+readThenLetGo(buffered, 1).await()
+print filler.await()

@@ -7,15 +7,9 @@ use Source from "std/stream"
  * `close()`, and nothing is left alive.
  */
 
-/** Why a stream failed. Nothing here fails; a stream still needs a failure type that a cancellation converts into. */
+/** Why a stream failed. Nothing here fails, and a cancellation is no failure: `await()` passes it on instead. */
 type Stopped {
   reason: String
-}
-
-extend Stopped with From<Cancelled> {
-  static fn from(value: Cancelled): Stopped {
-    Stopped value.show()
-  }
 }
 
 /** Counts from one to `last`, and says when it is closed. */
@@ -42,15 +36,15 @@ fn toTheEnd(): Task<Result<List<Int>, Stopped>> {
   var counting = Counting "all", 4
   var doubled = counting.map({ _ * 2 })
   var large = doubled.filter({ _ > 2 })
-  large.toList().outcome()
+  large.toList().await()
 }
 
 /** Takes two items: the source is closed where the last stage that reads it is released. */
 fn stoppingEarly(): Task<Result<List<Int>, Stopped>> {
   var counting = Counting "early", 100
   var taken = counting.take 2
-  taken.toList().outcome()
+  taken.toList().await()
 }
 
-print toTheEnd().outcome()
-print stoppingEarly().outcome()
+print toTheEnd().await()
+print stoppingEarly().await()

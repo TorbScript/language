@@ -21,7 +21,9 @@ source:
 `std/task` is a computation that finishes later. Asynchrony lives in the type: a function that returns `Task<Value>`
 may call `await()`, and its body produces the `Value` - the same way a function that returns `Result` may use `?`.
 `Task` and `Channel` are the two shared types that connect concurrent work; everything else is copied when it crosses
-into one. Every task can be cancelled, so `await()` answers `Result<Value, Cancelled>`. `Task`, `Channel`,
+into one. Every task can be cancelled, and `await()` passes a cancellation on instead of answering it: it answers the
+`Value`, and a task that awaits a cancelled task is cancelled in turn. `result()` answers `Result<Value, Cancelled>` for
+the code that has to know. `Task`, `Channel`,
 `ChannelClosed`, `Cancelled`, `TimedOut`, `spawn` and `both` are in scope through the prelude; `pause`, `offload` and
 `Workers` are imported from here.
 
@@ -38,7 +40,7 @@ const numbers: List<Int> = [1, 2, 3, 4]
 const tasks = numbers.map { number => spawn { number * number } }.toList()
 
 // Top-level `await()` is allowed in entry files and scripts. `Task.all` waits for all of them at once
-const squares = Task.all(tasks).await()?
+const squares = Task.all(tasks).await()
 print squares.sum()
 ```
 
@@ -48,30 +50,32 @@ print squares.sum()
 
 ```trb fragment
 public native shared type Task<Value> {
-  fn await(): Result<Value, Cancelled>
+  fn await(): Value
+  fn result(): Result<Value, Cancelled>
   var fn cancel()
   var fn within(limit: Duration): Task<Result<Value, TimedOut>>
   fn map<Output>(transform: Transform<Value, Output>): Task<Output>
   fn flatMap<Output>(transform: Transform<Value, Task<Output>>): Task<Output>
   static fn all(tasks: Iterate<Task<Value>>): Task<List<Value>>
 }
-
-extend<Value, Failure: From<Cancelled>> Task<Result<Value, Failure>> {
-  fn outcome(): Result<Value, Failure>
-}
 ```
 
 A task starts running the moment it is created (`spawn { ... }`, or calling a function that returns one). `await()`
 waits for the value and is allowed in a function that returns a `Task`, in a closure passed to `spawn`, and at the top
 level of an entry file or a script - everywhere else it is a compile error, because a function that waits says so in
-its return type. It answers `Fail(Cancelled)` where the task was cancelled instead of finishing. `outcome()` waits the
-same way for a task whose value is a `Result` and folds a cancellation into that `Result`'s failure, so one `?`
-unwraps both.
+its return type. It answers the `Value` itself, and where the task ended cancelled the waiter is cancelled too, at
+that very `await()`: it stops there, its scopes end in reverse order (every `using` is closed) as at any cancellation,
+and whoever awaits it is cancelled in turn. At the top level of an entry file that ends the program with `cancelled:
+the program waited for a task that was cancelled` and exit code 130. So a task whose value is a `Result` needs one `?`
+and nothing more: `file.addLine(text).await()?`. `result()` waits the same way and answers a cancellation as
+`Fail(Cancelled)` instead of passing it on - for a supervisor, a test, or the task that cancelled another one and wants
+to confirm it.
 
 `cancel()` asks the task to stop where it next waits or where a loop of it turns around; the tasks it started stop with
 it. `within(limit)` cancels the task once the limit has passed and answers `Fail(TimedOut)` then. Both are `var fn`s,
 so a task somebody may stop sits in a `var` binding. Dropping the last handle stops nothing. `Task` belongs to the
-vocabulary of `Option` and `Result` (`map`, `flatMap`, `all`), and all three are TorbScript over `await()`.
+vocabulary of `Option` and `Result` (`map`, `flatMap`, `all`), and all three are TorbScript over `await()` and
+`result()`; a cancelled task stays cancelled through `map` and `flatMap`.
 
 ### `spawn`, `both`, `pause`
 
@@ -83,8 +87,9 @@ public native fn pause(): Task<Void>
 
 `spawn` runs the closure as a new task; it gets copies of what it captures and cannot capture a `var` binding, so
 there is nothing to race for. The free function `both` waits for two tasks of different types at once
-(`const (user, posts) = both(fetchUser(1), fetchPosts(1)).await()?`); `Task.all` is the same idea for any number of
-tasks of the same type. Where one of them is cancelled, the others are cancelled too. `pause()` puts the running task
+(`const (user, posts) = both(fetchUser(1), fetchPosts(1)).await()`); `Task.all` is the same idea for any number of
+tasks of the same type. Where one of them is cancelled, the others are cancelled too, and so is the whole - and with
+it whoever awaits it. `pause()` puts the running task
 at the back of the queue, which is what makes a long loop fair.
 
 ### Workers
@@ -132,10 +137,9 @@ public native shared type Channel<Item> {
 ```
 
 A stream in memory of which one holder has both ends. `capacity: 0` hands every item over directly, so `add` waits
-until somebody pulls; `source()` is a `Source<Item, Cancelled>` and `sink()` a `Sink<Item, ChannelClosed>` (see
+until somebody pulls; `source()` is a `Source<Item, Never>` and `sink()` a `Sink<Item, ChannelClosed>` (see
 [std/stream](stream.md)), and they can be handed out separately, so a producer never sees the reading end and a
-consumer never sees the writing one. Reading fails only with `Cancelled`: a closed channel is the end of the stream,
-not a failure.
+consumer never sees the writing one. Reading cannot fail: a closed channel is the end of the stream, not a failure.
 
 ### ChannelClosed, Cancelled, TimedOut
 
@@ -147,9 +151,9 @@ public type TimedOut with Show, Error {
 }
 ```
 
-`ChannelClosed` is the only way a `Channel`'s writing end fails: nobody is reading any more. `Cancelled` is what a
-waiter reads of a task that stopped because somebody asked it to; it carries no reason, and every stream's failure type
-converts from it. `TimedOut` is the failure `within` answers, with the limit that was too small.
+`ChannelClosed` is the only way a `Channel`'s writing end fails: nobody is reading any more. `Cancelled` is what
+`result()` answers for a task that stopped because somebody asked it to; it carries no reason, and `await()` never
+answers it. `TimedOut` is the failure `within` answers, with the limit that was too small.
 
 ## Related
 

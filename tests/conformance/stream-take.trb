@@ -8,15 +8,9 @@ use mapping, taking from "std/iteration"
  * `isDone()` is the taking stage's own, which a trait-typed accumulator reaches through its witness table.
  */
 
-/** Why a stream failed. Nothing here fails; a stream still needs a failure type that a cancellation converts into. */
+/** Why a stream failed. Nothing here fails, and a cancellation is no failure: `await()` passes it on instead. */
 type Stopped {
   reason: String
-}
-
-extend Stopped with From<Cancelled> {
-  static fn from(value: Cancelled): Stopped {
-    Stopped value.show()
-  }
 }
 
 /** Counts up forever, and says what it hands out. */
@@ -37,10 +31,10 @@ shared type Endless with Source<Int, Stopped> {
 fn firstTwo(): Task<Result<List<Int>, Stopped>> {
   var endless = Endless()
   var taken = endless.take 2
-  taken.toList().outcome()
+  taken.toList().await()
 }
 
-print firstTwo().outcome()
+print firstTwo().await()
 
 const numbers = [1, 2, 3, 4, 5, 6]
 const pulled = numbers.through(mapping({ value: Int =>

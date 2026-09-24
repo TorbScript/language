@@ -277,7 +277,7 @@ group "A function that uses every instruction" {
     setFunctionKind builder, FunctionKind.TaskResume
     const resumed = openBlock builder, "resumed", None
     terminateBlock builder, BlockId(0), Terminator.Jump(resumed)
-    emit builder, Instruction.Suspend(2, Slot(0))
+    emit builder, Instruction.Suspend(2, Slot(0), false)
     terminate builder, Terminator.Return(None)
     const identifier = finishFunction program, builder
     finishProgram program
@@ -334,7 +334,7 @@ group "What an instruction reads and writes" {
     assert(usedSlots(Instruction.TakeOut(first, Reference(second), third, RuntimeKind.MapStorage)) == [second, third])
     assert(usedSlots(Instruction.PutBack(Reference(first), second, third, RuntimeKind.MapStorage)) == [first, second, third])
     assert(usedSlots(Instruction.Panic(owned(first), LocationId(0))) == [first])
-    assert(usedSlots(Instruction.Suspend(0, first)) == [first])
+    assert(usedSlots(Instruction.Suspend(0, first, false)) == [first])
 
     assert(definedSlot(Instruction.Constant(first, StaticId(0))) == Some(first))
     assert(definedSlot(Instruction.Move(first, second)) == Some(first))
@@ -357,7 +357,7 @@ group "What an instruction reads and writes" {
     assert(definedSlot(Instruction.Write(place, owned(third))) == None)
     assert(definedSlot(Instruction.PutBack(Reference(first), second, third, RuntimeKind.MapStorage)) == None)
     assert(definedSlot(Instruction.Panic(owned(first), LocationId(0))) == None)
-    assert(definedSlot(Instruction.Suspend(0, first)) == None)
+    assert(definedSlot(Instruction.Suspend(0, first, false)) == None)
 
     assert(usedByTerminator(Terminator.Jump(BlockId(0))) == [])
     assert(usedByTerminator(Terminator.Branch(first, BlockId(0), BlockId(1))) == [first])

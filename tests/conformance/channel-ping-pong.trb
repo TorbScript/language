@@ -15,11 +15,11 @@ fn repeated(part: String, times: Int): String {
 }
 
 /** Answers every ping with a pong until the pings end, then ends the pongs. */
-fn play(pings: Channel<String>, pongs: Channel<String>): Task<Result<Int, Cancelled>> {
+fn play(pings: Channel<String>, pongs: Channel<String>): Task<Result<Int, ChannelClosed>> {
   var input = pings.source()
   var output = pongs.sink()
   var rounds = 0
-  while const Some(ball) = input.next().outcome()? {
+  while const Some(ball) = input.next().await()? {
     print "got {ball}"
     const _ = output.add("{ball} pong").await()?
     rounds = rounds + 1
@@ -32,10 +32,10 @@ fn play(pings: Channel<String>, pongs: Channel<String>): Task<Result<Int, Cancel
 fn produce(channel: Channel<Int>): Task<Result<Void, ChannelClosed>> {
   var writing = channel.sink()
   for value in 0..5 {
-    writing.add(value).outcome()?
+    writing.add(value).await()?
     print "sent {value}"
   }
-  writing.end().outcome()
+  writing.end().await()
 }
 
 const pings = Channel<String>()
@@ -44,19 +44,22 @@ const player = play pings, pongs
 var serve = pings.sink()
 var answers = pongs.source()
 for round in 0..3 {
-  serve.add(repeated("ping", round + 1)).outcome()?
-  print(answers.next().outcome()?)
+  serve.add(repeated("ping", round + 1)).await()?
+  print(answers.next().await()?)
 }
-serve.end().outcome()?
-print "rounds: {player.outcome()}"
-print "after the end: {answers.next().outcome()}"
+serve.end().await()?
+print "rounds: {player.await()}"
+// The reading end of a channel cannot fail, so the answer is an `Ok` of the end of the stream
+if const Ok(after) = answers.next().await() {
+  print "after the end: {after}"
+}
 
 const numbers = Channel<Int>(capacity: 2)
 const producer = produce numbers
 var reading = numbers.source()
 var total = 0
-while const Some(value) = reading.next().outcome()? {
+while const Some(value) = reading.next().await()? {
   print "read {value}"
   total = total + value
 }
-print "total {total}, sent {producer.outcome().isOk()}"
+print "total {total}, sent {producer.await().isOk()}"

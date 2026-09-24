@@ -1297,6 +1297,8 @@ bool torb_platform_run_process(
   const char *command,
   const char **arguments,
   size_t count,
+  const uint8_t *input,
+  size_t inputLength,
   int64_t *code,
   uint8_t **output,
   size_t *length,
@@ -1318,6 +1320,7 @@ bool torb_platform_run_process(
   HANDLE readEnd = NULL;
   HANDLE writeEnd = NULL;
   HANDLE errorsFile = INVALID_HANDLE_VALUE;
+  HANDLE inputFile = INVALID_HANDLE_VALUE;
   DWORD status = 0u;
   size_t nameCapacity = 0u;
   char *name = torb_windows_command(command, &nameCapacity);
@@ -1353,6 +1356,25 @@ bool torb_platform_run_process(
   if (startup.hStdInput == INVALID_HANDLE_VALUE) {
     startup.hStdInput = NULL;
   }
+  /* Input of its own: the bytes in a temporary file, read from its start, and the end of the input after them */
+  if (input != NULL) {
+    DWORD written = 0u;
+    inputFile = torb_errors_file(&inheritable);
+    if (inputFile == INVALID_HANDLE_VALUE
+        || (inputLength > 0u && (!WriteFile(inputFile, input, (DWORD)inputLength, &written, NULL)
+                                 || (size_t)written != inputLength))) {
+      *message = "the input for the child process could not be written to a temporary file";
+      if (inputFile != INVALID_HANDLE_VALUE) {
+        CloseHandle(inputFile);
+      }
+      CloseHandle(readEnd);
+      CloseHandle(writeEnd);
+      torb_raw_free(wideLine, wideCapacity);
+      return false;
+    }
+    SetFilePointer(inputFile, 0, NULL, FILE_BEGIN);
+    startup.hStdInput = inputFile;
+  }
   errorsFile = torb_errors_file(&inheritable);
   startup.hStdOutput = writeEnd;
   startup.hStdError = errorsFile != INVALID_HANDLE_VALUE ? errorsFile : writeEnd;
@@ -1364,12 +1386,18 @@ bool torb_platform_run_process(
     if (errorsFile != INVALID_HANDLE_VALUE) {
       CloseHandle(errorsFile);
     }
+    if (inputFile != INVALID_HANDLE_VALUE) {
+      CloseHandle(inputFile);
+    }
     torb_raw_free(wideLine, wideCapacity);
     return false;
   }
   torb_raw_free(wideLine, wideCapacity);
-  /* And our copy of the write end has to go too, for the same reason */
+  /* And our copy of the write end has to go too, for the same reason; the child has its own handle of the input */
   CloseHandle(writeEnd);
+  if (inputFile != INVALID_HANDLE_VALUE) {
+    CloseHandle(inputFile);
+  }
   torb_read_handle(readEnd, output, length, capacity);
   CloseHandle(readEnd);
   WaitForSingleObject(child.hProcess, INFINITE);
@@ -1518,6 +1546,8 @@ bool torb_platform_run_process(
   const char *command,
   const char **arguments,
   size_t count,
+  const uint8_t *input,
+  size_t inputLength,
   int64_t *code,
   uint8_t **output,
   size_t *length,
@@ -1534,7 +1564,32 @@ bool torb_platform_run_process(
   FILE *pipe;
   int status;
   char errorsPath[] = "/tmp/torb-errors-XXXXXX";
-  const int errorsFile = mkstemp(errorsPath);
+  char inputPath[] = "/tmp/torb-input-XXXXXX";
+  int inputFile = -1;
+  int errorsFile;
+  /* Input of its own: the bytes in a temporary file the shell redirects the standard input from */
+  if (input != NULL) {
+    size_t written = 0u;
+    inputFile = mkstemp(inputPath);
+    while (inputFile >= 0 && written < inputLength) {
+      const ssize_t step = write(inputFile, input + written, inputLength - written);
+      if (step <= 0) {
+        break;
+      }
+      written += (size_t)step;
+    }
+    if (inputFile < 0 || written < inputLength) {
+      *message = "the input for the child process could not be written to a temporary file";
+      if (inputFile >= 0) {
+        close(inputFile);
+        unlink(inputPath);
+      }
+      torb_raw_free(line, lineCapacity);
+      return false;
+    }
+    close(inputFile);
+  }
+  errorsFile = mkstemp(errorsPath);
   line[0] = '\0';
   /* The shell gives the child the memory limit back that this process lowered for itself, if it did */
   if (torb_memory_shell_prefix[0] != '\0') {
@@ -1545,6 +1600,12 @@ bool torb_platform_run_process(
   torb_quote_argument(command, &line, &filled, &lineCapacity);
   for (index = 0u; index < count; index++) {
     torb_quote_argument(arguments[index], &line, &filled, &lineCapacity);
+  }
+  if (inputFile >= 0) {
+    torb_reserve_line(2u, &line, filled, &lineCapacity);
+    memcpy(line + filled, " <", 3u);
+    filled += 2u;
+    torb_quote_argument(inputPath, &line, &filled, &lineCapacity);
   }
   if (errorsFile >= 0) {
     close(errorsFile);
@@ -1565,10 +1626,16 @@ bool torb_platform_run_process(
     if (errorsFile >= 0) {
       unlink(errorsPath);
     }
+    if (inputFile >= 0) {
+      unlink(inputPath);
+    }
     return false;
   }
   torb_read_stream(pipe, output, length, capacity);
   status = pclose(pipe);
+  if (inputFile >= 0) {
+    unlink(inputPath);
+  }
   {
     FILE *written = errorsFile >= 0 ? fopen(errorsPath, "rb") : NULL;
     if (written != NULL) {

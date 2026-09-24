@@ -30,13 +30,14 @@ use Source, Sink, Bytes, Utf8Error, lines, textOf from "std/stream"
 ```
 
 ```trb check
-fn totalLength(channel: Channel<String>): Task<Result<Int, Cancelled>> {
+fn totalLength(channel: Channel<String>): Task<Int> {
   var reading = channel.source()
   var total = 0
-  while const Some(word) = reading.next().outcome()? {
+  // The reading end of a channel cannot fail, so every pull is an `Ok`
+  while const Ok(Some(word)) = reading.next().await() {
     total = total + word.byteLength()
   }
-  Ok total
+  total
 }
 ```
 
@@ -45,7 +46,7 @@ fn totalLength(channel: Channel<String>): Task<Result<Int, Cancelled>> {
 ### Source
 
 ```trb fragment
-public shared trait Source<Item, Failure: From<Cancelled>> with Close {
+public shared trait Source<Item, Failure> with Close {
   var fn next(): Task<Result<Item?, Failure>>
   var fn through<Output>(stage: Stage<Item, Output>): Source<Output, Failure>
   var fn map<Output>(transform: Transform<Item, Output>): Source<Output, Failure>
@@ -97,7 +98,7 @@ combined into a running state, left to right), `forEach` (an action run on every
 ### Sink
 
 ```trb fragment
-public shared trait Sink<Item, Failure: From<Cancelled>> with Close {
+public shared trait Sink<Item, Failure> with Close {
   var fn add(item: Item): Task<Result<Void, Failure>>
   var fn end(): Task<Result<Void, Failure>>
   var fn addAll(items: Iterate<Item>): Task<Result<Void, Failure>>
@@ -121,8 +122,9 @@ would have. `buffered(capacity:)` answers a
 `Buffered`, whose own `flush()` is where "when was it actually written" gets an answer; `end()` flushes too, but
 `close()` does not.
 
-Both traits carry `Failure: From<Cancelled>`: every asynchronous read and write can be cancelled, so a stream's failure
-type is one a cancellation converts into, and `outcome()` of [std/task](task.md) folds it in with one `?`.
+`Failure` is the stream's own failure and nothing else. A read or a write can be cancelled like every wait, but a
+cancellation is not a failure a stream answers: `await()` passes it on to the task that waits (see
+[std/task](task.md)), so every pull and every write is one `.await()?`, and a stream that cannot fail says `Never`.
 
 ### Bytes, Utf8Error
 

@@ -1,0 +1,34 @@
+use sleep from "std/time"
+use pause from "std/task"
+
+/**
+ * **The top level of an entry file that awaits a cancelled task ends the program.** The entry file is the main task,
+ * and `await()` passes the cancellation on to it like to any other task: it stops at that `await()`, and the program
+ * says so on standard error and exits with 130 - the code a shell reports for a program somebody stopped, and never the
+ * 101 of a panic, because a cancellation is a request that was honoured and not a bug. The other tasks are stopped as at
+ * every end of a program and close what they hold, so nothing is left behind.
+ */
+
+shared type Probe with Close {
+  name: String
+
+  var fn close() {
+    print "close {name}"
+  }
+}
+
+/** Sleeps far longer than the program lives, holding a probe. */
+fn sleeper(name: String): Task<Int> {
+  using probe = Probe name
+  sleep(60.0).await()
+  probe.name.byteLength()
+}
+
+var task = sleeper "the cancelled sleeper's probe"
+const other = sleeper "the other sleeper's probe"
+// Both sleepers run up to their sleep first, so each holds its probe when it is stopped
+pause().await()
+task.cancel()
+print "waiting for a cancelled task"
+const value = task.await()
+print "never printed {value}"

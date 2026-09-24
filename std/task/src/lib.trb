@@ -5,10 +5,11 @@
  * `Value` - the same way a function that returns `Result` may use `?`. `Task` and `Channel` are the two shared types
  * that connect concurrent work; everything else is copied when it crosses into one.
  *
- * Every task is cancellable ([Task.cancel]), and a waiter learns it from the type: `await()` answers
- * `Result<Value, Cancelled>`, so `task.await()?` inside a task hands a cancellation on and `task.await() ?? fallback`
- * replaces it. [Cancelled] is the floor of every asynchronous failure: a stream's failure type converts from it, which
- * is what lets [Task.outcome] fold a cancellation into the stream's own failure with one `?`.
+ * Every task is cancellable ([Task.cancel]), and a cancellation is passed on rather than answered: `await()` answers
+ * the `Value`, and a task that awaits a task that ended cancelled is cancelled itself, right there - its scopes end and
+ * whoever awaits *it* is cancelled in turn. So an IO line is `file.addLine(text).await()?`, one `?` for the failure of
+ * the work and nothing for a cancellation. [Task.result] is the one way to observe a cancellation as a value
+ * ([Cancelled]), for a supervisor or for code that cancelled a task and wants to confirm it.
  */
 
 use Source, Sink from "std/stream"
@@ -32,16 +33,41 @@ use Duration from "std/time"
  */
 public native shared type Task<Value> {
   /**
-   * Waits for the value, or answers `Cancelled` when the task stopped instead of finishing. Allowed in functions that
-   * return a `Task`, in closures passed to `spawn` and at the top level of entry files and scripts.
+   * Waits for the value. Allowed in functions that return a `Task`, in closures passed to `spawn` and at the top level
+   * of entry files and scripts.
    *
-   * A waiter that is cancelled itself never sees an answer: it stops where it waits.
+   * **A cancellation is passed on, not answered.** Where the task ends cancelled, the waiter is cancelled too, at this
+   * very point: it stops here, its scopes end in reverse order (every `using` is closed) exactly as when it is cancelled
+   * at a loop turn, and whoever awaits the waiter is cancelled in turn. At the top level of an entry file that ends the
+   * program with `cancelled: the program waited for a task that was cancelled` and exit code 130. A waiter that is
+   * cancelled itself never sees an answer either: it stops where it waits.
+   *
+   * # Related
+   *
+   * - [Task.result] - waits the same way and answers a cancellation as `Fail(Cancelled)` instead of passing it on.
    */
-  native fn await(): Result<Value, Cancelled>
+  fn await(): Value {
+    // The wait in front of this call passed a cancellation on to the caller, which stopped there: only a value is left
+    match finished() {
+      Ok(value) => value
+      Fail(_) => panic "a task read the value of a task that was cancelled"
+    }
+  }
 
   /**
-   * What a task that has completed answered, without waiting: the one half of [Task.await] that is not a suspension.
-   * [Task.outcome] reads it after the caller has waited.
+   * Waits like [Task.await], and answers a cancellation instead of passing it on: `Ok(value)` where the task finished,
+   * `Fail(Cancelled)` where it ended cancelled. The waiter goes on either way. Allowed where `await()` is.
+   *
+   * It is for the code that has to *know*: a supervisor that restarts what was cancelled, a test, the task that called
+   * [Task.cancel] and wants to confirm it. Everything else writes `await()`, and a cancellation stops it.
+   */
+  fn result(): Result<Value, Cancelled> {
+    finished()
+  }
+
+  /**
+   * What a task that has completed answered, without waiting: the one half of [Task.await] and [Task.result] that is
+   * not a suspension. Both read it after the caller has waited.
    */
   private native fn finished(): Result<Value, Cancelled>
 
@@ -55,49 +81,38 @@ public native shared type Task<Value> {
 
   /**
    * Cancels the task once the limit has passed: `Ok(value)` where it finished in time, `Fail(TimedOut)` where the
-   * limit passed first. A task that finished first is unaffected. Cancelling the answer does not cancel this task.
+   * limit passed first. A task that finished first is unaffected. Cancelling the answer does not cancel this task, and
+   * a task somebody else cancelled cancels the answer, as every `await()` of it would.
    */
   var fn within(limit: Duration): Task<Result<Value, TimedOut>> {
-    const isInTime = completedWithin(self, limit.nanoseconds()).await() ?? false
+    const isInTime = completedWithin(self, limit.nanoseconds()).await()
     if !isInTime {
       return Fail TimedOut(limit)
     }
-    // The task has completed, so this waits for nothing: it only tells a value from a cancellation
-    match await() {
-      Ok(value) => Ok value
-      Fail(_) => stopAsCancelled()
-    }
+    // The task has completed, so this waits for nothing: it reads the value, or passes a cancellation on
+    Ok await()
   }
 
   /** Changes the value once the task finishes, without waiting for it here. A cancelled task stays cancelled. */
   fn map<Output>(transform: Transform<Value, Output>): Task<Output> {
-    match await() {
-      Ok(value) => transform value
-      Fail(_) => stopAsCancelled()
-    }
+    transform await()
   }
 
   /** Continues with another task once this one finishes, and keeps one level: the async form of [Result.flatMap]. */
   fn flatMap<Output>(transform: Transform<Value, Task<Output>>): Task<Output> {
-    const value = match await() {
-      Ok(found) => found
-      Fail(_) => stopAsCancelled()
-    }
-    match transform(value).await() {
-      Ok(output) => output
-      Fail(_) => stopAsCancelled()
-    }
+    transform(await()).await()
   }
 
   /**
    * A task for every item, running at the same time. The values arrive in the order of the tasks. Where one of them is
-   * cancelled the answer cannot be built, so the others are cancelled too and this task ends as cancelled.
+   * cancelled the answer cannot be built, so the others are cancelled too and this task ends as cancelled - and
+   * whoever awaits it with it.
    */
   static fn all(tasks: Iterate<Task<Value>>): Task<List<Value>> {
     const started = tasks.toList()
     var values: List<Value> = []
     for task in started {
-      match task.await() {
+      match task.result() {
         Ok(value) => values.append value
         Fail(_) => {
           for other in started {
@@ -111,42 +126,26 @@ public native shared type Task<Value> {
   }
 }
 
-/**
- * Waits for a task whose value is a `Result`, and folds a cancellation into the task's own failure:
- * `source.next().outcome()?`.
- */
-extend<Value, Failure: From<Cancelled>> Task<Result<Value, Failure>> {
-  /**
-   * `await()` plus the conversion `?` would apply: the task's own `Result`, with a cancellation converted into
-   * `Failure`. A suspension point exactly like `await()`, and allowed where `await()` is.
-   */
-  fn outcome(): Result<Value, Failure> {
-    match finished() {
-      Ok(inner) => inner
-      Fail(cancelled) => Fail Failure.from(cancelled)
-    }
-  }
-}
-
 /** Runs the closure as a new task, in parallel. It gets copies of what it captures and cannot capture a `var`. */
 public native fn spawn<Value>(body: () => Value): Task<Value>
 
 /**
- * Waits for two tasks of different types at once: `const (user, posts) = both(fetchUser(1), fetchPosts(1)).await()?`.
- * Where one of them is cancelled, the other is cancelled too and this task ends as cancelled.
+ * Waits for two tasks of different types at once: `const (user, posts) = both(fetchUser(1), fetchPosts(1)).await()`.
+ * Where one of them is cancelled, the other is cancelled too and this task ends as cancelled - and whoever awaits it
+ * with it.
  *
  * It is `both` and not `all`: it takes exactly two tasks, each of its own type, while [Task.all] waits for a list of
  * tasks of one type and `Iterate.all` asks a predicate of every item.
  */
 public fn both<First, Second>(first: Task<First>, second: Task<Second>): Task<(First, Second)> {
-  const one = match first.await() {
+  const one = match first.result() {
     Ok(value) => value
     Fail(_) => {
       cancelTask second
       stopAsCancelled()
     }
   }
-  match second.await() {
+  match second.result() {
     Ok(two) => (one, two)
     Fail(_) => stopAsCancelled()
   }
@@ -200,8 +199,8 @@ public native fn pause(): Task<Void>
  *   thread, and what it answers is thrown away.
  */
 public fn offload<Value>(body: () => Value): Task<Value> {
-  // Cancelled only together with this task, which then stops at this very wait: the fallback is never read
-  blockingTurn().await() ?? void
+  // Cancelled only together with this task, which then stops at this very wait
+  blockingTurn().await()
   body()
 }
 
@@ -222,9 +221,9 @@ native fn cancelTask<Value>(task: Task<Value>)
 native fn completedWithin<Value>(task: Task<Value>, nanoseconds: Int64): Task<Bool>
 
 /**
- * Ends the running task as cancelled: what a task that waited for a cancelled task and has no failure of its own to
- * report does, so that its own waiters read `Fail(Cancelled)`. Nothing after it runs, and everything the task holds
- * is released as at a `return`.
+ * Ends the running task as cancelled: what a task that observed a cancellation with `result()` does to pass it on
+ * (`Task.all`, `both`), exactly as an `await()` of it would have. Nothing after it runs, everything the task holds is
+ * released as at a `return`, and its own waiters are cancelled in turn.
  */
 native fn stopAsCancelled(): Never
 
@@ -232,17 +231,17 @@ native fn stopAsCancelled(): Never
  * A stream in memory, of which one holder has both ends: a queue between two tasks.
  *
  *     const channel = Channel<Report>(capacity: 8)
- *     const writer = spawn { channel.sink().fill(reports).outcome() }
- *     const total = channel.source().count().outcome()
+ *     const writer = spawn { channel.sink().fill(reports).await() }
+ *     const total = channel.source().count().await()
  *
  * `channel.source()` and `channel.sink()` are a `Source` and a `Sink` and can be handed out separately, so a producer
  * never sees the reading end and a consumer never sees the writing one. They are methods and not fields because they are
  * computed, and because a field would have to be passed to the constructor. They answer the concrete [ChannelSource]
  * and [ChannelSink], so a call on one is a direct call; where a `Source` or a `Sink` is asked for, either of them is one.
  *
- * Reading fails only with `Cancelled`: a closed channel is the end of the stream, not a failure. The writing end fails
- * with `ChannelClosed` once the reader is gone, which is how a producer learns that nobody wants its items any more -
- * the cancellation signal of `Source.produce`.
+ * Reading cannot fail: a closed channel is the end of the stream, not a failure, and a cancellation is passed on
+ * rather than answered. The writing end fails with `ChannelClosed` once the reader is gone, which is how a producer
+ * learns that nobody wants its items any more - the cancellation signal of `Source.produce`.
  */
 public native shared type Channel<Item> {
   /** `0` hands every item over directly: `add` waits until somebody pulls. */
@@ -260,10 +259,10 @@ public native shared type Channel<Item> {
 }
 
 /**
- * The reading end of a [Channel], a `Source<Item, Cancelled>`: every `next()` waits for the next item, and `close()` tells
+ * The reading end of a [Channel], a `Source<Item, Never>`: every `next()` waits for the next item, and `close()` tells
  * the writers to stop.
  */
-public shared type ChannelSource<Item> with Source<Item, Cancelled> {
+public shared type ChannelSource<Item> with Source<Item, Never> {
   private channel: Channel<Item>
 
   /** The reading end of `channel`: what [Channel.source] answers. */
@@ -272,8 +271,8 @@ public shared type ChannelSource<Item> with Source<Item, Cancelled> {
   }
 
   /** The task that waits for the item ends as cancelled where the stream ended, which is `None` here. */
-  var fn next(): Task<Result<Item?, Cancelled>> {
-    match received(channel).await() {
+  var fn next(): Task<Result<Item?, Never>> {
+    match received(channel).result() {
       Ok(item) => Ok Some(item)
       Fail(_) => Ok None
     }
@@ -298,7 +297,7 @@ public shared type ChannelSink<Item> with Sink<Item, ChannelClosed> {
 
   /** The task that offers the item ends as cancelled where nobody reads any more, which is `ChannelClosed` here. */
   var fn add(item: Item): Task<Result<Void, ChannelClosed>> {
-    match offered(channel, item).await() {
+    match offered(channel, item).result() {
       Ok(_) => Ok void
       Fail(_) => Fail ChannelClosed()
     }
@@ -337,16 +336,6 @@ public type ChannelClosed with Show, Error {
   }
 }
 
-/**
- * A writer whose own `add` was cancelled has nobody left to write for either, so a cancellation reaches a producer's
- * failure type as a closed channel.
- */
-extend ChannelClosed with From<Cancelled> {
-  static fn from(value: Cancelled): ChannelClosed {
-    ChannelClosed()
-  }
-}
-
 /** A producer whose own failure is `ChannelClosed` needs no conversion to learn that nobody reads any more. */
 extend ChannelClosed with From<ChannelClosed> {
   static fn from(value: ChannelClosed): ChannelClosed {
@@ -355,20 +344,14 @@ extend ChannelClosed with From<ChannelClosed> {
 }
 
 /**
- * A task that stopped at a suspension point because somebody asked it to. It carries no reason: who asked and why is
- * the canceller's knowledge, and a deadline has a failure of its own, [TimedOut].
+ * A task that stopped because somebody asked it to, as [Task.result] answers it. It carries no reason: who asked and why
+ * is the canceller's knowledge, and a deadline has a failure of its own, [TimedOut]. `await()` never answers it - a
+ * cancellation it meets is passed on to the waiter instead.
  */
 public type Cancelled with Show, Error {
   /** `"the task was cancelled"`. */
   fn show(): String {
     "the task was cancelled"
-  }
-}
-
-/** A cancellation is its own failure, so a stream whose failure is `Cancelled` meets the bound every stream carries. */
-extend Cancelled with From<Cancelled> {
-  static fn from(value: Cancelled): Cancelled {
-    value
   }
 }
 

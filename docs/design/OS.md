@@ -699,16 +699,11 @@ public type OsError with Show, Error {
   case Failed(question: String, message: String)
   /** An answer came back in a form its reader did not expect: a `/proc` line, a registry value of the wrong type. */
   case Malformed(source: String, detail: String)
-  /** A query that waits was cancelled. What `From<Cancelled>` produces. */
-  case Stopped
-}
-
-extend OsError with From<Cancelled> {
-  static fn from(value: Cancelled): OsError {
-    OsError.Stopped
-  }
 }
 ```
+
+*(2026-09-23: the `Stopped` case and `From<Cancelled>` are gone. `await()` passes a cancellation on to the waiting task
+instead of answering it, so no failure type carries one - `docs/design/CONCURRENCY.md` section 15, decision 12.)*
 
 **A field the system may not know is an `Option`; a question it cannot answer is `Unsupported`.** The maximum
 frequency of a processor is `Frequency?` inside `ProcessorDescription`, because the description is still worth having
@@ -933,7 +928,7 @@ public type ProcessorUsage with Show, Equals {
 static fn usage(interval: Duration = 1.seconds()): Task<Result<ProcessorUsage, OsError>> {
   const before = Processor.times()?
   const beforeEach = Processor.timesOfEach()?
-  sleep(interval.seconds()).await()?
+  sleep(interval.seconds()).await()
   const after = Processor.times()?
   const afterEach = Processor.timesOfEach()?
   Ok ProcessorUsage.between(after - before, afterEach.zip(beforeEach).map({ _.0 - _.1 }).toList())

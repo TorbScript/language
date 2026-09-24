@@ -1,6 +1,6 @@
 /**
- * The process itself, and the child processes it starts: [Process] for arguments and exiting, [Child] for a running
- * program's pipes, and [ProcessOutput] for what a finished one left behind.
+ * The process itself, and the child processes it starts: [Process] for arguments and exiting, [Process.run] for a
+ * program run to its end, [Child] for a running program's pipes, and [ProcessOutput] for what a finished one left behind.
  *
  * A child process's three pipes are the same [Source] and [Sink] a file or a socket has, so a pipeline between two
  * programs is `first.output().into(second.input())`.
@@ -9,8 +9,9 @@
 use IoError from "std/fs"
 use ArrayList from "std/collections"
 use Source, Sink, Bytes from "std/stream"
+use offload from "std/task"
 
-/** What a program run with [Process.run] left behind. */
+/** What a program run with [Process.run] or [Process.runBlocking] left behind. */
 public type ProcessOutput {
   /** `0` for success, anything else for the code the program exited with. */
   exitCode: Int
@@ -34,14 +35,18 @@ public type ProcessOutput {
  *     fn sortTwo(): Task<Result<Void, IoError>> {
  *       using child = Process.start("sort", ["-u"])?
  *       var input = child.input()
- *       input.addLine("banana").outcome()?
- *       input.addLine("apple").outcome()?
- *       input.end().outcome()?
- *       const chunks = child.output().toList().outcome()?
- *       const code = child.wait().outcome()?
- *       print chunks.length(), code
+ *       input.addLine("banana").await()?
+ *       input.addLine("apple").await()?
+ *       input.end().await()?
+ *       const chunks = child.output().toList().await()?
+ *       const code = child.wait().await()?
+ *       print "{chunks.length()} chunks, exit code {code}"
  *       Ok void
  *     }
+ *
+ * Every line is `.await()?`: the `?` is the failure of the pipe, and a cancellation needs nothing - it stops the task
+ * at the `await()` it meets, and the `using` closes the child's pipes on the way out. A program whose whole input is
+ * known up front needs no pipe at all: [Process.run] feeds it.
  *
  * # Pitfalls
  *
@@ -92,30 +97,88 @@ public native type Process {
   native static fn executablePath(): String?
 
   /**
-   * Runs a program to its end and collects everything about it. The arguments are passed as they are: nothing about
-   * them is interpreted and nothing has to be quoted.
+   * Runs a program to its end as a task: feeds it `input` as the whole of its standard input, and collects its exit
+   * code and the two streams it wrote into a [ProcessOutput]. The arguments are passed as they are: nothing about them
+   * is interpreted and nothing has to be quoted.
+   *
+   *     fn sorted(): Task<Result<String, IoError>> {
+   *       const output = Process.run("sort", [], input: "banana\napple\n").await()?
+   *       Ok output.standardOutput
+   *     }
+   *
+   * A program that could not be started at all is an `IoError`; a program that ran and failed is an exit code, which
+   * is how a caller tells "there is no such program" from "the program said no".
+   *
+   * # Pitfalls
+   *
+   * - The input ends after `input`, and an empty one ends at once: the program never reads the terminal this program
+   *   was started from, so a program that would ask a question gets the end of its input instead of hanging.
+   * - The two streams arrive apart, so the order in which the program interleaved them is lost: a line of
+   *   [ProcessOutput.standardError] cannot be placed between two lines of [ProcessOutput.standardOutput]. A caller that
+   *   needs the output while it arrives reaches for [Process.start] instead, which hands out real pipes.
+   * - The wait for the program runs on the blocking pool where the arguments may move there ([offload]), and blocks the
+   *   worker that asked where they may not. Cancelling the task does not stop the program: it runs to its end, and what
+   *   it wrote is thrown away.
+   *
+   * # Related
+   *
+   * - [Process.runBlocking] - the same run for code that is not a task, without an input.
+   * - [Process.start] - a program whose output is read while it runs.
+   */
+  static fn run(program: String, arguments: List<String>, input: String = ""): Task<Result<ProcessOutput, IoError>> {
+    offload({ Process.fed program, arguments, input }).await()
+  }
+
+  /** The body of [Process.run], on the thread `offload` hands it. */
+  private static fn fed(program: String, arguments: List<String>, input: String): Result<ProcessOutput, IoError> {
+    var output = ""
+    var failure = ""
+    const collected: ArrayList<String> = ArrayList.from arguments
+    const code = Process.runFeeding program, collected, input, output, failure
+    if code < 0 {
+      return Fail IoError(program, failure)
+    }
+    Ok ProcessOutput(code, output, failure)
+  }
+
+  /**
+   * Runs a program to its end and collects everything about it, blocking the thread that asks - the form for code that
+   * is not a task, such as a driver that runs the C compiler. The child reads this program's own standard input. The
+   * arguments are passed as they are, like [Process.run]'s.
    *
    * A program that could not be started at all is an `IoError`; a program that ran and failed is an exit code, which
    * is why `torb build` can tell "there is no C compiler" from "the C compiler said no".
    *
    * # Pitfalls
    *
-   * The two streams arrive apart, so the order in which the program interleaved them is lost: a line of
-   * [ProcessOutput.standardError] cannot be placed between two lines of [ProcessOutput.standardOutput]. A caller that
-   * needs the output while it arrives reaches for [Process.start] instead, which hands out real pipes.
+   * - Inside a task it stalls every other task of the worker that runs it until the program ends: a task writes
+   *   `Process.run(program, arguments).await()?`.
+   * - The two streams arrive apart, as they do for [Process.run].
    */
-  static fn run(command: String, arguments: List<String>): Result<ProcessOutput, IoError> {
+  static fn runBlocking(program: String, arguments: List<String>): Result<ProcessOutput, IoError> {
     var output = ""
     var failure = ""
     // The runtime has one list, and it takes it as the buffer it is: a trait-typed `List<String>` says nothing about
     // which implementation carries it, so the concrete one is what crosses the boundary
     const collected: ArrayList<String> = ArrayList.from arguments
-    const code = Process.runCollecting command, collected, output, failure
+    const code = Process.runCollecting program, collected, output, failure
     if code < 0 {
-      return Fail IoError(command, failure)
+      return Fail IoError(program, failure)
     }
     Ok ProcessOutput(code, output, failure)
   }
+
+  /**
+   * [Process.runCollecting] with `input` as all the child reads: the one shape a runtime function can have for
+   * [Process.run], for the same reasons.
+   */
+  native static fn runFeeding(
+    command: String,
+    arguments: ArrayList<String>,
+    input: String,
+    var output: String,
+    var failure: String,
+  ): Int
 
   /**
    * The exit code of the program, with what it wrote to standard output in `output` and what it wrote to standard
@@ -153,12 +216,12 @@ public native type Process {
    *
    * - [Process.run] - the same run with everything it wrote collected into a [ProcessOutput].
    */
-  static fn runPassingThrough(command: String, arguments: List<String>): Result<Int, IoError> {
+  static fn runPassingThrough(program: String, arguments: List<String>): Result<Int, IoError> {
     var failure = ""
     const collected: ArrayList<String> = ArrayList.from arguments
-    const code = Process.runInheriting command, collected, failure
+    const code = Process.runInheriting program, collected, failure
     if code < 0 {
-      return Fail IoError(command, failure)
+      return Fail IoError(program, failure)
     }
     Ok code
   }
@@ -171,7 +234,7 @@ public native type Process {
 
   /**
    * Starts a program and hands back its pipes, for output that is too big to collect or that has to be read while it
-   * arrives. `run` is the short form for everything else.
+   * arrives. [Process.run] is the short form for everything else.
    */
-  native static fn start(command: String, arguments: List<String>): Result<Child, IoError>
+  native static fn start(program: String, arguments: List<String>): Result<Child, IoError>
 }

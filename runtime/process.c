@@ -97,14 +97,21 @@ static char *torb_argument_bytes(torb_text text, size_t *capacity) {
 }
 
 /**
- * `Process.run(command, arguments)`: the arguments out of the list, the platform layer, and the two output streams as
- * two texts - standard error in `*failure`, which only says why nothing ran where the result is -1.
+ * `Process.runBlocking(program, arguments)`: the arguments out of the list, the platform layer, and the two output
+ * streams as two texts - standard error in `*failure`, which only says why nothing ran where the result is -1. `input`
+ * `NULL` hands the child this program's own standard input, and otherwise its bytes are all the child reads.
  *
  * The list holds `torb_text`, which is not NUL terminated - so every argument is copied into a C string for the call
  * and freed right after. Nothing here interprets an argument; the quoting the command line needs is the platform
  * layer's, and it is the only thing that touches them.
  */
-int64_t torb_process_run(torb_text command, torb_list arguments, torb_text *output, torb_text *failure) {
+static int64_t torb_process_collect(
+  torb_text command,
+  torb_list arguments,
+  const torb_text *input,
+  torb_text *output,
+  torb_text *failure
+) {
   const int64_t count = torb_list_length(arguments);
   int64_t code = -1;
   size_t index;
@@ -120,6 +127,10 @@ int64_t torb_process_run(torb_text command, torb_list arguments, torb_text *outp
   size_t errorsLength = 0u;
   size_t errorsCapacity = 0u;
   bool ran;
+  /* The bytes of the input, where there is one: an empty text may have no storage, and is no bytes at all */
+  const uint8_t *fed = input == NULL ? NULL
+                       : input->length == 0u ? (const uint8_t *)""
+                                             : (const uint8_t *)(input->storage->data + input->offset);
   for (index = 0u; index < (size_t)count; index++) {
     torb_text argument = { NULL, 0u, 0u };
     (void)torb_list_get(arguments, (int64_t)index, &argument);
@@ -133,6 +144,8 @@ int64_t torb_process_run(torb_text command, torb_list arguments, torb_text *outp
     name,
     (const char **)given,
     (size_t)count,
+    fed,
+    input == NULL ? 0u : (size_t)input->length,
     &code,
     &bytes,
     &length,
@@ -177,8 +190,23 @@ int64_t torb_process_run(torb_text command, torb_list arguments, torb_text *outp
   return code;
 }
 
+int64_t torb_process_run(torb_text command, torb_list arguments, torb_text *output, torb_text *failure) {
+  return torb_process_collect(command, arguments, NULL, output, failure);
+}
+
+/** `Process.run(program, arguments, input:)`: the same, with `input` as all the child reads. */
+int64_t torb_process_run_feeding(
+  torb_text command,
+  torb_list arguments,
+  torb_text input,
+  torb_text *output,
+  torb_text *failure
+) {
+  return torb_process_collect(command, arguments, &input, output, failure);
+}
+
 /**
- * `Process.runPassingThrough(command, arguments)`: the same arguments, the same platform layer, and no pipe - the
+ * `Process.runPassingThrough(program, arguments)`: the same arguments, the same platform layer, and no pipe - the
  * child is handed this program's own three streams.
  *
  * Everything this program has buffered is written out first. Two processes share one console from the moment the

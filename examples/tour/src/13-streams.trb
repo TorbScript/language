@@ -41,17 +41,12 @@ type ImportError with Show, Error {
     Self kind: .Stopped(cause)
   }
 
-  static fn cancelled(cause: Cancelled): ImportError {
-    Self kind: .Cancelled(cause)
-  }
-
   fn show(): String {
     match kind {
       .Request(cause) => "the download failed: {cause}"
       .File(cause) => "the file failed: {cause}"
       .Document(cause) => "the document failed: {cause}"
       .Stopped(cause) => "{cause}"
-      .Cancelled(cause) => "{cause}"
     }
   }
 
@@ -61,7 +56,6 @@ type ImportError with Show, Error {
       .File(problem) => Some problem
       .Document(problem) => Some problem
       .Stopped(problem) => Some problem
-      .Cancelled(problem) => Some problem
     }
   }
 }
@@ -72,7 +66,6 @@ type ImportErrorKind {
   case File(cause: IoError)
   case Document(cause: JsonError)
   case Stopped(cause: ChannelClosed)
-  case Cancelled(cause: Cancelled)
 }
 
 /** Lets `?` convert a failed request into an [ImportError]. */
@@ -103,13 +96,6 @@ extend ImportError with From<ChannelClosed> {
   }
 }
 
-/** Every stream's failure converts from `Cancelled`, which is what lets `outcome()` fold a cancellation into it. */
-extend ImportError with From<Cancelled> {
-  static fn from(value: Cancelled): ImportError {
-    ImportError.cancelled value
-  }
-}
-
 // --- 1. Download straight into a file ------------------------------------------------------------
 // Nothing of the response is ever in memory: the body is pulled chunk by chunk and the file takes each chunk as it
 // arrives. `mapFailure` is where the two failure types meet, and it is written down instead of guessed.
@@ -120,12 +106,12 @@ extend ImportError with From<Cancelled> {
 
 /** Streams `url` straight into a file at `path`, without ever holding the whole response in memory. */
 fn download(url: String, path: String): Task<Result<Void, ImportError>> {
-  var response = http.get(url).outcome()?
+  var response = http.get(url).await()?
   using file = File.create(path)?
   response.body
     .mapFailure(ImportError.requestFailed)
     .into(file.mapFailure(ImportError.fileFailed))
-    .outcome()
+    .await()
 }
 
 // --- 2. Importing newline-separated JSON ----------------------------------------------------------
@@ -141,7 +127,7 @@ fn countActiveUsers(path: String): Task<Result<Int, ImportError>> {
     .checked()
     .filter({ _.active })
     .count()
-    .outcome()?
+    .await()?
   Ok total
 }
 
@@ -153,7 +139,7 @@ fn countActiveUsers(path: String): Task<Result<Int, ImportError>> {
 fn reports(names: List<String>): Source<String, ImportError> {
   Source.produce { sink =>
     for name in names {
-      sink.add("report for {name}").outcome()?
+      sink.add("report for {name}").await()?
     }
     Ok void
   }
@@ -165,7 +151,7 @@ fn reports(names: List<String>): Source<String, ImportError> {
 fn printReports(names: List<String>): Task<Result<Int, ImportError>> {
   var source = reports names
   var written = 0
-  while const Some(line) = source.next().outcome()? {
+  while const Some(line) = source.next().await()? {
     print line
     written = written + 1
   }
@@ -192,7 +178,7 @@ fn namesFrom(var body: Body): Task<Result<List<String>, ImportError>> {
     .checked()
     .through(activeNames)
     .toList()
-    .outcome()
+    .await()
 }
 
 // --- 5. Text on a byte sink, and buffering that says where it flushes ------------------------------
@@ -202,13 +188,13 @@ fn writeReport(path: String, lines: Iterate<String>): Task<Result<Void, IoError>
   using file = File.create(path)?
   var out = file.buffered capacity: 4096
   for line in lines {
-    out.addLine(line).outcome()?
+    out.addLine(line).await()?
   }
-  out.end().outcome()
+  out.end().await()
 }
 
 // What the whole file is about, in four lines
 const sample = [User(1, "Ada", true), User(2, "Bob", false)]
 print namesOf(sample).joined(separator: ", ")
-print "lines of a text body: {Body.from("a\nb\n").lines().count().outcome().isOk()}"
-print "reports: {printReports(["north", "south"]).outcome().orElse(0)}"
+print "lines of a text body: {Body.from("a\nb\n").lines().count().await().isOk()}"
+print "reports: {printReports(["north", "south"]).await().orElse(0)}"

@@ -21,33 +21,33 @@ type Post {
 }
 
 // There is no `async` keyword. A function that returns a `Task` may `await()`, and its body produces the value.
-// `await()` is a method on Task and answers a `Result`: `Fail(Cancelled)` where the task was cancelled instead.
-// `outcome()` waits for a task whose value is a `Result` and folds a cancellation into its failure.
-/** Fetches a user by id. `outcome()` waits like `await()` and composes with `?` like any other fallible step. */
+// `await()` is a method on Task and answers the value. A cancellation is passed on, not answered: a task that awaits
+// a cancelled task is cancelled itself, right there. `result()` is the one wait that answers `Fail(Cancelled)` instead.
+/** Fetches a user by id. `await()` answers the task's own `Result`, which composes with `?` like any fallible step. */
 fn fetchUser(id: Int): Task<Result<User, HttpError>> {
   // A `Response` owns one end of a stream and is read once, so it is a shared object in a `var` binding
-  var response = http.get("https://example.test/users/{id}").outcome()?
-  response.json<User>().outcome()
+  var response = http.get("https://example.test/users/{id}").await()?
+  response.json<User>().await()
 }
 
 /** Fetches a user's posts by their id. */
 fn fetchPosts(userId: Int): Task<Result<List<Post>, HttpError>> {
-  var response = http.get("https://example.test/users/{userId}/posts").outcome()?
-  response.json<List<Post>>().outcome()
+  var response = http.get("https://example.test/users/{userId}/posts").await()?
+  response.json<List<Post>>().await()
 }
 
 // Sequential
 /** Fetches a user and their posts one after the other. */
 fn loadProfile(id: Int): Task<Result<String, HttpError>> {
-  const user = fetchUser(id).outcome()?
-  const posts = fetchPosts(user.id).outcome()?
+  const user = fetchUser(id).await()?
+  const posts = fetchPosts(user.id).await()?
   Ok "{user.name} wrote {posts.length()} posts"
 }
 
 // Concurrent: start both tasks, then wait for both
 /** The same result as [loadProfile], but starts both fetches before waiting for either one. */
 fn loadProfileFast(id: Int): Task<Result<String, HttpError>> {
-  const (userResult, postsResult) = both(fetchUser(id), fetchPosts(id)).await()?
+  const (userResult, postsResult) = both(fetchUser(id), fetchPosts(id)).await()
   const user = userResult?
   const posts = postsResult?
   Ok "{user.name} wrote {posts.length()} posts"
@@ -67,22 +67,22 @@ const channel = Channel<Int>(capacity: 10)
 const producer = spawn {
   var writing = channel.sink()
   for i in 0..5 {
-    writing.add(i).outcome()?
-    sleep(0.1).await()?
+    writing.add(i).await()?
+    sleep(0.1).await()
   }
-  writing.end().outcome()
+  writing.end().await()
 }
 
 // Collectors are push-based and shared between `Iterate` and `Source`, so the same `summing` works for values
 // that arrive over time
-const consumer = spawn { channel.source().collect(summing { _ }).outcome() }
+const consumer = spawn { channel.source().collect(summing { _ }).await() }
 
 // Top-level `await()` is allowed in entry files and scripts. `Task.all` waits for all of them at once
-const sums = Task.all(tasks).await()?
+const sums = Task.all(tasks).await()
 const total = sums.sum()
-print "sum: {total}, consumed: {consumer.outcome().orElse(0)}, sent: {producer.outcome().isOk()}"
+print "sum: {total}, consumed: {consumer.await().orElse(0)}, sent: {producer.await().isOk()}"
 
-match loadProfile(1).outcome() {
+match loadProfile(1).await() {
   Ok(profile) => print profile
   Fail(error) => print "Failed: {error}"
 }

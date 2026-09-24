@@ -1070,6 +1070,18 @@ TORB_NORETURN void torb_process_exit(int64_t code);
  */
 int64_t torb_process_run(torb_text command, torb_list arguments, torb_text *output, torb_text *failure);
 /**
+ * `Process.runFeeding(command, arguments, input, var output, var failure)`: `torb_process_run` with `input` as the whole
+ * of the child's standard input, which ends after it - an empty `input` is an input that ends at once. The child never
+ * reads the terminal this program was started from. `input` borrowed.
+ */
+int64_t torb_process_run_feeding(
+  torb_text command,
+  torb_list arguments,
+  torb_text input,
+  torb_text *output,
+  torb_text *failure
+);
+/**
  * `Process.runInheriting(command, arguments, var failure)`: a program run to its end with **this program's own three
  * streams**. The result is its exit code, nothing is collected, and **-1** means it could not be started at all, with
  * the reason in `*failure` (owned).
@@ -1198,11 +1210,17 @@ bool torb_platform_create_directory(const char *path, const char **message);
  * what it wrote to standard error, each owned and freed with `torb_raw_free(*output, *capacity)` - the capacity and not
  * the length, because the buffer grows in doublings and the allocator is told the size it gave out. False only where
  * the process could not be started at all, with a libc message in `*message`, and then neither buffer is handed out.
+ *
+ * `input` `NULL` hands the child this process's own standard input; otherwise the child reads the `inputLength` bytes
+ * (borrowed) and then the end of its input, from a temporary file - which never makes either side wait, as a pipe that
+ * nobody drains would.
  */
 bool torb_platform_run_process(
   const char *command,
   const char **arguments,
   size_t count,
+  const uint8_t *input,
+  size_t inputLength,
   int64_t *code,
   uint8_t **output,
   size_t *length,

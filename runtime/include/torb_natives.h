@@ -231,6 +231,8 @@ bool torb_process_executable_path(torb_text *out);
 void torb_process_exit(int64_t code);
 /* Process.runCollecting */
 int64_t torb_process_run(torb_text command, torb_list arguments, torb_text *output, torb_text *failure);
+/* Process.runFeeding */
+int64_t torb_process_run_feeding(torb_text command, torb_list arguments, torb_text input, torb_text *output, torb_text *failure);
 /* Process.runInheriting */
 int64_t torb_process_run_inheriting(torb_text command, torb_list arguments, torb_text *failure);
 /* readLine */
@@ -271,7 +273,7 @@ double torb_square_root_f64(double value);
 void torb_task_cancel(torb_task *self);
 /* completedWithin */
 torb_task *torb_task_completed_within(torb_task *self, int64_t limit);
-/* Task.await, Task.finished */
+/* Task.finished */
 bool torb_task_result(torb_task *task, void *out);
 /* test */
 void torb_test_case(torb_text name, torb_closure body);

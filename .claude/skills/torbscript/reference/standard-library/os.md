@@ -189,7 +189,6 @@ public type OsError with Show, Equals, Error {
   case Missing(question: String, reason: String)
   case Failed(question: String, message: String)
   case Malformed(source: String, detail: String)
-  case Stopped
 }
 ```
 
@@ -197,7 +196,8 @@ What asking the operating system went wrong with. `Unsupported` is a question th
 `Denied` a refusal (a permission, a container that hides `/proc`); `Missing` a question without an answer on this
 machine (no `HOME` and no account entry); `Failed` the system's own words for anything else; `Malformed` an answer in
 a form its reader did not expect. No error code of a system is carried, because a portable caller that could read one
-would compare it. `From<Cancelled>` makes a cancelled question `Stopped`.
+would compare it. A cancelled question is no case of it: `await()` passes a cancellation on to the waiting task
+instead of answering it (see [std/task](task.md)).
 
 ## The per-system modules
 

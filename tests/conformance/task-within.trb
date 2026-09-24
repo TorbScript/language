@@ -2,13 +2,13 @@ use sleep from "std/time"
 
 /**
  * `within(limit)` races a task against a deadline. A task that finishes first answers `Ok(value)`; a limit that passes
- * first answers `Fail(TimedOut)` and cancels the task, so whoever waits for it afterwards reads `Fail(Cancelled)` and
+ * first answers `Fail(TimedOut)` and cancels the task, so whoever observes it afterwards reads `Fail(Cancelled)` and
  * the program does not wait for the rest of its sleep. The limit is part of the failure and shows in its message.
  */
 
 /** Sleeps, then answers the name. */
 fn napping(seconds: Float, name: String): Task<String> {
-  sleep(seconds).await() ?? void
+  sleep(seconds).await()
   name
 }
 
@@ -17,8 +17,7 @@ print quick.within(1.seconds()).await()
 
 var slow = napping 30.0, "slow"
 match slow.within(50.milliseconds()).await() {
-  Ok(Ok(name)) => print "in time: {name}"
-  Ok(Fail(problem)) => print problem
-  Fail(problem) => print "the waiter: {problem}"
+  Ok(name) => print "in time: {name}"
+  Fail(problem) => print problem
 }
-print slow.await().isOk()
+print slow.result().isOk()

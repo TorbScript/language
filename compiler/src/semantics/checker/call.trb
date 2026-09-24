@@ -101,7 +101,7 @@ public fn checkCall(
       return checker.deferredType
     }
   }
-  // `await()` says where it stands: a function that waits declares a `Task` result (CONCEPT, "Concurrency")
+  // `await()` and `result()` say where they stand: a function that waits declares a `Task` result (CONCEPT, "Concurrency")
   requireAwaitAllowed checker, callee, target.name, expression.span
   const instantiation = instantiateTarget checker, target, form, expression.span
   const inner = instantiation.form
@@ -920,13 +920,13 @@ fn isClosureArgument(argument: Argument): Bool {
  * Where `await()` may stand (CONCEPT, "Concurrency"): in a function that returns a `Task<...>`, in a closure handed to
  * `spawn`, at the top level of an entry file or a script, and inside a closure written in one of those - a closure runs
  * where it stands. Everywhere else it is a mistake, because "a function that waits says so in its return type"; a
- * blocking `await()` anywhere would need a stack per task in every back end. `outcome()` waits exactly the same way
- * and answers the `Result` instead of passing the failure on, so it stands under the same rule.
+ * blocking `await()` anywhere would need a stack per task in every back end. `result()` waits exactly the same way
+ * and answers a cancellation as a `Result` instead of passing it on, so it stands under the same rule.
  *
  * The member is found by its name plus a receiver that is a `Task`, which is the one thing that makes it this call.
  */
 fn requireAwaitAllowed(var checker: Checker, callee: Expression, name: String, at: Span) {
-  if (name != "await" && name != "outcome") || checker.awaitsTasks {
+  if (name != "await" && name != "result") || checker.awaitsTasks {
     return
   }
   const base = match callee.kind {

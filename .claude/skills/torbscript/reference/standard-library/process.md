@@ -1,6 +1,6 @@
 ---
 title: std/process
-summary: Process for arguments and exiting, Child for a running program's pipes, and ProcessOutput for what it left behind.
+summary: Process for arguments, exiting and running a program to its end as a task, Child for a running program's pipes, and ProcessOutput for what it left behind.
 kind: package
 status: stable
 order: 150
@@ -26,9 +26,15 @@ use Process, Child, ProcessOutput from "std/process"
 
 ```trb check
 use Process from "std/process"
+use IoError from "std/fs"
 
 fn firstArgument(): String? {
   Process.arguments().first()
+}
+
+fn sorted(): Task<Result<String, IoError>> {
+  const output = Process.run("sort", [], input: "banana\napple\n").await()?
+  Ok output.standardOutput
 }
 ```
 
@@ -41,9 +47,10 @@ public native type Process {
   static fn arguments(): List<String>
   static fn exit(code: Int): Never
   static fn executablePath(): String?
-  static fn run(command: String, arguments: List<String>): Result<ProcessOutput, IoError>
-  static fn runPassingThrough(command: String, arguments: List<String>): Result<Int, IoError>
-  static fn start(command: String, arguments: List<String>): Result<Child, IoError>
+  static fn run(program: String, arguments: List<String>, input: String = ""): Task<Result<ProcessOutput, IoError>>
+  static fn runBlocking(program: String, arguments: List<String>): Result<ProcessOutput, IoError>
+  static fn runPassingThrough(program: String, arguments: List<String>): Result<Int, IoError>
+  static fn start(program: String, arguments: List<String>): Result<Child, IoError>
 }
 ```
 
@@ -51,10 +58,15 @@ public native type Process {
 open resources, which is why returning from the entry file is preferred. `executablePath()` is the absolute path of
 the running program's own executable, with `/` between its parts, or `None` where the operating system does not say
 (macOS, a BSD without `/proc`) rather than a guess from `arguments()`; it is how a program finds files it was
-installed beside - `torb` finds its `std/` and `runtime/` this way. `run` runs a program to its end and collects
-everything about it - the arguments are passed as they are, there is no shell, so nothing is interpreted and nothing
-has to be quoted. A program that could not be started at all is an `IoError`; a program that ran and failed is an exit
-code, which is why `torb build` can tell "there is no C compiler" from "the C compiler said no". `runPassingThrough`
+installed beside - `torb` finds its `std/` and `runtime/` this way. `run` runs a program to its end as a task: it
+feeds `input` as the whole of the child's standard input, which then ends - an empty one at once, so the child never
+waits for a terminal - and collects the exit code and both streams into a `ProcessOutput`, so a task writes
+`Process.run(program, arguments).await()?`. The wait runs on the blocking pool (`offload` of [std/task](task.md)) where
+the arguments may move there. The arguments are passed as they are, there is no shell, so nothing is interpreted and
+nothing has to be quoted. A program that could not be started at all is an `IoError`; a program that ran and failed is
+an exit code, which is why `torb build` can tell "there is no C compiler" from "the C compiler said no". `runBlocking`
+is the same run for code that is not a task, such as the driver itself: it blocks the thread that asks, and the child
+reads this program's standard input. `runPassingThrough`
 is the same run with this program's own three streams instead of collecting them: nothing is buffered, so the
 child's output appears while it writes it and a program reading standard input reads what the user is typing - a
 driver that calls another program, such as `torb build` calling the C compiler, uses this and not `run`. `start` is
@@ -73,11 +85,11 @@ public type ProcessOutput {
 }
 ```
 
-`Process.run` collects the two streams of the child apart: `standardOutput` is what it wrote to standard output and
+`Process.run` and `Process.runBlocking` collect the two streams of the child apart: `standardOutput` is what it wrote to standard output and
 `standardError` what it wrote to standard error. The order in which it interleaved the two is lost; a caller that
 needs the output while it arrives starts the child with `Process.start` and reads `output()` and `errors()`.
 
-What a program run with `Process.run` left behind. `isSuccess()` is the usual question about a child process: did it do
+What a program run with `Process.run` or `Process.runBlocking` left behind. `isSuccess()` is the usual question about a child process: did it do
 what it was asked (`exitCode == 0`).
 
 ### Child
@@ -96,7 +108,8 @@ A child process that is still running, started with `Process.start`. `input().en
 which is how most filters learn that they are done. `close()` releases the pipes and stops waiting for the child; it
 does not kill it, because ending somebody else's program is a decision and not a cleanup. `wait()` and every use of a
 `Child`'s pipes need `.await()`, so `Process.start` and `Child` wait on the same milestone as [std/task](task.md),
-which is `status: planned`; `Process.run`, `Process.arguments` and `Process.exit` do not touch `Task` at all.
+which is `status: planned`. Every line over a pipe is `.await()?` - the `?` is the `IoError`, and a cancellation
+stops the task at the `await()` it meets, closing what its `using`s hold.
 
 ## Related
 

@@ -15,33 +15,34 @@ source:
 
 A stream is one flow, in one direction, with two ends. `Source<Item, Failure>` reads with `next`, exactly like
 `Iterator`; `Sink<Item, Failure>` writes with `add` and ends with `end`, like `Accumulator` - the only difference is
-that every verb answers a `Task`, and that every stream's failure type converts from `Cancelled`, so `outcome()`
-folds a cancellation into it.
+that every verb answers a `Task`. `Failure` is the stream's own failure and nothing else: a cancellation is not one,
+because `await()` passes it on to the task that waits instead of answering it ([Tasks](tasks.md), rule 9). So every
+pull and every write is one `.await()?`.
 
 ## Example
 
 ```trb check
-fn sumOf(var source: Source<Int, Cancelled>): Task<Result<Int, Cancelled>> {
-  source.collect(counting()).outcome()
+fn countOf(var source: Source<Int, ChannelClosed>): Task<Result<Int, ChannelClosed>> {
+  source.collect(counting()).await()
 }
 
-const total = sumOf Channel<Int>(capacity: 1).source()
-print total.outcome().orElse(0)
+const total = countOf Source<Int, ChannelClosed>.from([1, 2, 3])
+print total.await().orElse(0)
 ```
 
 ## Syntax
 
 ```text
-shared trait Source<Item, Failure: From<Cancelled>> with Close {
+shared trait Source<Item, Failure> with Close {
   var fn next(): Task<Result<Item?, Failure>>
 }
 
-shared trait Sink<Item, Failure: From<Cancelled>> with Close {
+shared trait Sink<Item, Failure> with Close {
   var fn add(item: Item): Task<Result<Void, Failure>>
   var fn end(): Task<Result<Void, Failure>>
 }
 
-while const Some(item) = source.next().outcome()? { ... }
+while const Some(item) = source.next().await()? { ... }
 ```
 
 ## Rules
@@ -56,11 +57,11 @@ while const Some(item) = source.next().outcome()? { ... }
    a source only means that the binding may be pointed at another one.
 
 3. **There is deliberately no `for` over a `Source`.** A `for` head has no place for the `?` that a failing pull
-   needs, so the loop is a `while` that names both `outcome()` and `?`:
+   needs, so the loop is a `while` that names both `await()` and `?`:
 
    ```trb check
-   fn printAll(var source: Source<Int, Cancelled>): Task<Result<Void, Cancelled>> {
-     while const Some(item) = source.next().outcome()? {
+   fn printAll(var source: Source<Int, ChannelClosed>): Task<Result<Void, ChannelClosed>> {
+     while const Some(item) = source.next().await()? {
        print item
      }
      Ok void
@@ -87,8 +88,8 @@ while const Some(item) = source.next().outcome()? { ... }
 form because its pull can fail.
 
 ```trb check
-fn printAll(var source: Source<Int, Cancelled>): Task<Result<Void, Cancelled>> {
-  while const Some(item) = source.next().outcome()? {
+fn printAll(var source: Source<Int, ChannelClosed>): Task<Result<Void, ChannelClosed>> {
+  while const Some(item) = source.next().await()? {
     print item
   }
   Ok void
@@ -96,12 +97,12 @@ fn printAll(var source: Source<Int, Cancelled>): Task<Result<Void, Cancelled>> {
 ```
 
 ```trb error
-fn printAll(source: Source<Int, Cancelled>) {
+fn printAll(source: Source<Int, ChannelClosed>) {
   for item in source {
     print item
   }
 }
-// error: `Source<Int64, Cancelled>` is not `Iterate`, so `for` cannot walk it
+// error: `Source<Int64, ChannelClosed>` is not `Iterate`, so `for` cannot walk it
 ```
 
 ## Related

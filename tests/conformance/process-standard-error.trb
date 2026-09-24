@@ -1,7 +1,8 @@
 /**
- * **`Process.run` keeps the two streams of a child apart.** What the child writes to standard output arrives in
- * `standardOutput` and what it writes to standard error in `standardError`, each without a line of the other - which is
- * what lets a driver show a C compiler's diagnostics and nothing else.
+ * **`Process.runBlocking` keeps the two streams of a child apart**, and so does `Process.run`, the task over it
+ * (`process-run-input.trb`); this program stays synchronous because it runs in the VM too (`vm.list`). What the child
+ * writes to standard output arrives in `standardOutput` and what it writes to standard error in `standardError`, each
+ * without a line of the other - which is what lets a driver show a C compiler's diagnostics and nothing else.
  *
  * The child is the shell of the platform, writing one word to each stream. What `cmd` writes ends in `\r\n`, so each
  * answer is trimmed before it is printed.
@@ -11,7 +12,7 @@ use Process from "std/process"
 use Environment from "std/os"
 
 fn run(): Result<Int, IoError> {
-  const outcome = Process.run(shell(), bothStreams())?
+  const outcome = Process.runBlocking(shell(), bothStreams())?
   print outcome.isSuccess()
   print outcome.standardOutput.trim()
   print outcome.standardError.trim()

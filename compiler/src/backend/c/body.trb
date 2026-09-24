@@ -277,7 +277,7 @@ fn markReadSlots(program: IrProgram, function: IrFunction, var reads: List<Bool>
       markRead reads, value
     }
     .Panic(message, _) => markRead reads, message.slot
-    .Suspend(_, awaited) => markRead reads, awaited
+    .Suspend(_, awaited, _) => markRead reads, awaited
     .TaskNew(_, _, _, arguments) => markArguments reads, arguments
     .ChannelNew(_, capacity, _, _) => markRead reads, capacity
   }
@@ -689,11 +689,19 @@ fn stopPathOf(
 /**
  * `awaited.await()`, the suspension half: record the state, wait - and return where the wait registered the task - then
  * the label the switch jumps to, the cancellation check, and the outcome the runtime asks to be read once.
+ *
+ * `torb_task_await` passes a cancellation of `awaited` on: it sets this task's flag, so the check after the label stops
+ * the machine through the same stop path a `cancel()` reaches. `result()` `observes` and waits with `torb_task_observe`.
  */
-fn suspendStatements(body: Body, state: Int, awaited: Slot): List<CStatement> {
+fn suspendStatements(body: Body, state: Int, awaited: Slot, observes: Bool): List<CStatement> {
   const task = CExpression.Name taskName
   const recorded = CStatement.Assignment CExpression.PointerMember(task, "state"), CExpression.Literal("{state}")
-  const waited = CExpression.Call CExpression.Name("torb_task_await"), [task, slotExpression(body, awaited)]
+  const primitive = if observes {
+    "torb_task_observe"
+  } else {
+    "torb_task_await"
+  }
+  const waited = CExpression.Call CExpression.Name(primitive), [task, slotExpression(body, awaited)]
   const suspended = CExpression.Binary waited, "==", CExpression.Name("TORB_WAIT_SUSPENDED")
   const returned = CStatement.Return Some(CExpression.Name("TORB_POLL_SUSPENDED"))
   const outcome = CExpression.Call CExpression.Name("torb_task_outcome"), [task]
@@ -1014,11 +1022,11 @@ fn instructionStatements(
     }
     .TakeOut(_, _, _, _) => reported emission, "a `var` path through a map"
     .PutBack(_, _, _, _) => reported emission, "a `var` path through a map"
-    .Suspend(state, awaited) => {
+    .Suspend(state, awaited, observes) => {
       if body.machine.isNone() {
         return reported emission, "a suspension outside the body of a task"
       }
-      suspendStatements body, state, awaited
+      suspendStatements body, state, awaited, observes
     }
     .TaskNew(target, resume, result, arguments) => {
       taskNewStatements emission, program, body, target, resume, result, arguments

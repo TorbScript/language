@@ -1,6 +1,5 @@
 /**
- * A task is started where it is made and waited for with `await()`, which answers a `Result`: `Ok` with the value of a
- * task that finished. A function that answers a `Task` has a body that produces the value, a `spawn` closure is a task
+ * A task is started where it is made and waited for with `await()`, which answers the value of the task. A function that answers a `Task` has a body that produces the value, a `spawn` closure is a task
  * over what it captured, and a counted value crosses into a task and back out of it as a copy - the words built here
  * are counted blocks, so a count too many or too few is a leak or a crash and not a wrong number.
  */
@@ -20,23 +19,21 @@ fn shouted(word: String): Task<String> {
 }
 
 /** A task that waits for two others and adds what they answered. */
-fn summed(first: Task<Int>, second: Task<Int>): Task<Result<Int, Cancelled>> {
-  const left = first.await()?
-  const right = second.await()?
-  Ok(left + right)
+fn summed(first: Task<Int>, second: Task<Int>): Task<Int> {
+  first.await() + second.await()
 }
 
 const word = repeated "ab", 3
 const loud = shouted word
-print(loud.await() ?? "cancelled")
+print loud.await()
 
 const lengths = spawn { word.byteLength() * 2 }
 const counted = spawn { [word, repeated("c", 2)] }
-print(lengths.await() ?? 0)
-print(counted.await() ?? [])
+print lengths.await()
+print counted.await()
 
 const total = summed(spawn { 20 }, spawn { 22 })
 print total.await()
 
 // A task that is awaited twice answers twice, a copy each time
-print "{loud.await() ?? ""} {loud.await() ?? ""}"
+print "{loud.await()} {loud.await()}"

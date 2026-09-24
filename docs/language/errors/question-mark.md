@@ -113,7 +113,7 @@ print firstLine("project.trb")
 
    **Two failure types carry nothing, and a `?` into either of them is the same mistake.** `Never` has no values at
    all, so a `Result<Value, Never>` promises that the function cannot fail; and a bare type parameter says nothing
-   about what it is made from, so the bound is where the conversion is written down (`where Failure: From<Cancelled>`).
+   about what it is made from, so the bound is where the conversion is written down (`where Failure: From<ChannelClosed>`).
 
    ```trb error
    type ConfigError {

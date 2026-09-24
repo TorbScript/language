@@ -2,7 +2,7 @@ use pause from "std/task"
 
 /**
  * Every task is cancellable, and a loop is where it notices: the machine reads its flag where a loop turns around, so a
- * task that loops without ever waiting stops at its next turn once somebody asked - and its waiter reads
+ * task that loops without ever waiting stops at its next turn once somebody asked - and `result()` reads
  * `Fail(Cancelled)`. A loop that pauses stops at the pause as well. What the task held is released on the way out: the
  * words here are counted blocks, so a stop that forgot one would leave a live block behind.
  */
@@ -32,27 +32,27 @@ fn pausing(word: String): Task<Int> {
   var turns = 0
   while turns >= 0 {
     turns = turns + word.byteLength()
-    pause().await() ?? void
+    pause().await()
   }
   turns
 }
 
 var looping = counting repeated("ab", 2)
 looping.cancel()
-match looping.await() {
+match looping.result() {
   Ok(count) => print "looping finished after {count}"
   Fail(problem) => print "looping: {problem}"
 }
 
 var pauses = pausing repeated("cd", 2)
-pause().await() ?? void
-pause().await() ?? void
+pause().await()
+pause().await()
 pauses.cancel()
-print "pausing: {pauses.await().isOk()}"
+print "pausing: {pauses.result().isOk()}"
 
 // A task that already finished is not changed by a cancellation, and asking twice changes nothing either
 var finished = spawn { repeated "ef", 2 }
-print(finished.await() ?? "cancelled")
+print finished.await()
 finished.cancel()
 finished.cancel()
-print(finished.await() ?? "cancelled")
+print finished.await()

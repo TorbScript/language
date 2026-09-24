@@ -693,8 +693,12 @@ public type Instruction {
    * after this instruction once it has - or stops there, releasing what is live, where it was cancelled meanwhile. Only
    * in the body of a task (docs/CONCURRENCY.md 16). `state` counts the suspension points of the body from 1, in the
    * order of its blocks; 0 is the entry.
+   *
+   * Where `awaited` ends cancelled, the machine is cancelled with it and stops right here - the cascade of `await()`
+   * (`torb_task_await`) - unless the wait `observes`: that is `result()`, which goes on and reads the cancellation as a
+   * value (`torb_task_observe`).
    */
-  case Suspend(state: Int, awaited: Slot)
+  case Suspend(state: Int, awaited: Slot, observes: Bool)
   /**
    * A task over a resume function, started: `torb_task_new`, every argument moved into the parameter of the same position
    * of `resume`, `torb_task_start`. It is what a call of a function that answers a `Task` does, and what `spawn` is -
@@ -721,9 +725,9 @@ public type Terminator {
   /** `panic`, `Process.exit`, a call of a `Never` function, an exhausted decision tree. */
   case Unreachable
   /**
-   * Ends the running task as cancelled: no value, and every `await()` of it answers `Fail(Cancelled)`. What is live is
-   * released before it, as before a `return`. Only in the body of a task, where a task that waited for a cancelled one
-   * passes the cancellation on (`stopAsCancelled` of `std/task`).
+   * Ends the running task as cancelled: no value, every `await()` of it cancels its waiter in turn, and every `result()`
+   * of it answers `Fail(Cancelled)`. What is live is released before it, as before a `return`. Only in the body of a
+   * task, where a task that observed a cancellation passes it on (`stopAsCancelled` of `std/task`: `Task.all`, `both`).
    */
   case Stop
 }

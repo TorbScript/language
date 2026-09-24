@@ -18,7 +18,7 @@ shared type Probe with Close {
 /** Sleeps far longer than the program lives, holding a probe. */
 fn sleeper(): Task<Int> {
   using held = Probe "the sleeper's"
-  sleep(60.0).await() ?? void
+  sleep(60.0).await()
   print "the sleeper woke up"
   held.name.byteLength()
 }
@@ -26,7 +26,7 @@ fn sleeper(): Task<Int> {
 /** Leaves the program from two tasks deep. */
 fn leaving(depth: Int): Task<Int> {
   if depth > 0 {
-    return leaving(depth - 1).await() ?? 0
+    return leaving(depth - 1).await()
   }
   print "leaving from inside a task"
   Process.exit 4
@@ -34,6 +34,6 @@ fn leaving(depth: Int): Task<Int> {
 
 const asleep = sleeper()
 print "started the sleeper"
-const answer = leaving(2).await() ?? 0
+const answer = leaving(2).await()
 print "never printed {answer}"
-print asleep.await().isOk()
+print asleep.result().isOk()

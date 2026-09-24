@@ -397,7 +397,7 @@ fn isMicrosoftName(command: String): Bool {
 
 /** Whether the command exists at all: a process that does not start is an `IoError` and not an exit code. */
 fn canRun(command: String, arguments: List<String>): Bool {
-  match Process.run(command, arguments) {
+  match Process.runBlocking(command, arguments) {
     Ok(output) => output.exitCode == 0
     Fail(_) => false
   }
@@ -497,7 +497,7 @@ fn runCompiler(
 ): Result<ProcessOutput, IoError> {
   const script = joinPath parentPath(runtime), "tools/build-slot.sh"
   if size < slottedSize || compiler.isMicrosoft || !File.exists(script) {
-    return Process.run compiler.command, arguments
+    return Process.runBlocking compiler.command, arguments
   }
   const log = joinPath parentPath(source), "c-compiler.log"
   var slotted = [script, log, compiler.command]
@@ -508,7 +508,7 @@ fn runCompiler(
       Ok ProcessOutput(code, text, "")
     }
     // No `sh` to start the script with
-    Fail(_) => Process.run compiler.command, arguments
+    Fail(_) => Process.runBlocking compiler.command, arguments
   }
 }
 

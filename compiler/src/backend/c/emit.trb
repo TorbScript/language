@@ -2314,6 +2314,7 @@ fn emitMain(var emission: Emission, entries: List<ProgramEntry>, functions: List
   var lines = ["torb_process_start(argument_count, argument_values);"]
   var isTestRun = false
   var isNamed = false
+  var isMainTask = false
   const isTasked = usesTasks functions
   for entry in entries {
     // A test file that declares things and runs nothing has no entry function; its name is still printed
@@ -2331,14 +2332,20 @@ fn emitMain(var emission: Emission, entries: List<ProgramEntry>, functions: List
         continue
       }
     }
-    // An entry file that waits is the main task: the scheduler runs until it has completed
+    // An entry file that waits is the main task: the scheduler runs until it has completed. Where it ended cancelled -
+    // a top-level `await()` of a cancelled task - the program says so and ends with `TORB_EXIT_CANCELLED` once the
+    // other tasks have stopped (docs/design/CONCURRENCY.md section 8, "The cascade")
     if found.kind == FunctionKind.TaskResume {
+      if !isMainTask {
+        lines.insert 1, "int ended = 0;"
+        isMainTask = true
+      }
       const frame = frameTypeName found
       lines.append "\{"
       lines.append "  torb_task *main_task = torb_task_new({entry.name}, sizeof({frame}), &torb_element_void);"
       lines.append "  torb_task_start(main_task);"
       lines.append "  torb_scheduler_run(main_task);"
-      lines.append "  torb_task_release(main_task);"
+      lines.append "  if (torb_task_end_main(main_task) != 0) ended = TORB_EXIT_CANCELLED;"
       lines.append "\}"
       continue
     }
@@ -2360,13 +2367,18 @@ fn emitMain(var emission: Emission, entries: List<ProgramEntry>, functions: List
     lines.append "{entryCellReleaseName}();"
   }
   // The summary of the run is written before the leak report, so the two reports read in the order they happened
+  const ending = if isMainTask {
+    "ended"
+  } else {
+    "0"
+  }
   if isTestRun {
     lines.append "int code = torb_test_finish();"
     lines.append "torb_process_finish();"
-    lines.append "return code;"
+    lines.append "return code != 0 ? code : {ending};"
   } else {
     lines.append "torb_process_finish();"
-    lines.append "return 0;"
+    lines.append "return {ending};"
   }
   var body = ""
   for line in lines {

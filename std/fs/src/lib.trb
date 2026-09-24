@@ -28,16 +28,6 @@ extend IoError with From<Utf8Error> {
 }
 
 /**
- * A read or a write that waited and was cancelled did not happen, which is a failure of the operation like any other -
- * and it is what every stream's failure type converts from.
- */
-extend IoError with From<Cancelled> {
-  static fn from(value: Cancelled): IoError {
-    IoError "", value.show()
-  }
-}
-
-/**
  * A file that is open. It has an identity (the handle of the operating system), so it is a `shared type`:
  *
  *     fn firstText(path: String): Result<String, IoError> {
@@ -98,11 +88,11 @@ public native shared type File with Close, Sink<Bytes, IoError> {
 
   /**
    * Creates `path` and writes everything `source` delivers into it, of any size and without holding it in memory:
-   * `File.write(path, response.body.mapFailure(IoError.from)).outcome()?`
+   * `File.write(path, response.body.mapFailure(IoError.from)).await()?`
    */
   static fn write(path: String, var source: Source<Bytes, IoError>): Task<Result<Void, IoError>> {
     var target = File.create(path)?
-    target.fill(source).outcome()
+    target.fill(source).await()
   }
 
   /**

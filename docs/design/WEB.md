@@ -123,7 +123,7 @@ const app = web {
   wrap RequestLog()
   wrap Sessions(key: sessionKey)
   assets "/assets", files: ["./public/site.css", "./public/logo.svg"]
-  handle { request => respond(request, shop).outcome() }
+  handle { request => respond(request, shop).await() }
   errors renderError
 }
 ```
@@ -174,16 +174,16 @@ fn respond(request: Request, shop: Shop): Task<Result<Response, WebError>> {
   match Route.of(request) {
     Some(.Home) => Ok Response.redirect(Route.Orders)
     Some(.Orders) => {
-      const orders = shop.orders().outcome()?
+      const orders = shop.orders().await()?
       Ok Response.html(ordersPage(orders))
     }
     Some(.Order(id)) => {
-      match shop.order(id).outcome()? {
+      match shop.order(id).await()? {
         Some(order) => Ok Response.html(orderPage(order))
         None => Fail WebError.notFound()
       }
     }
-    Some(.CreateOrder) => createOrder(request, shop).outcome()
+    Some(.CreateOrder) => createOrder(request, shop).await()
     None => Fail WebError.notFound()
   }
 }
@@ -228,8 +228,8 @@ type Next {
 
   fn run(request: Request): Task<Result<Response, WebError>> {
     match layers {
-      [] => endpoint(request).outcome()
-      [first, ...rest] => first.around(request, Next(rest, endpoint)).outcome()
+      [] => endpoint(request).await()
+      [first, ...rest] => first.around(request, Next(rest, endpoint)).await()
     }
   }
 }
@@ -238,7 +238,7 @@ type RequestLog with Middleware {
   prefix: String = "request"
 
   fn around(request: Request, next: Next): Task<Result<Response, WebError>> {
-    const answer = next.run(request).outcome()
+    const answer = next.run(request).await()
     print "{prefix} {request.path}"
     answer
   }
@@ -284,9 +284,9 @@ type NewOrder {
 }
 
 fn createOrder(request: Request, shop: Shop): Task<Result<Response, WebError>> {
-  match request.form<NewOrder>().outcome()? {
+  match request.form<NewOrder>().await()? {
     .Valid(order) => {
-      const created = shop.create(order).outcome()?
+      const created = shop.create(order).await()?
       Ok Response.redirect(Route.Order(created.id))
     }
     .Invalid(form) => Ok Response.html(newOrderPage(form)).withStatus(422)
@@ -342,9 +342,10 @@ did not name.
 ### 3.8 Errors, and what a panic does
 
 `WebError` is a capsule with a status, a public message and a private cause (`fn cause(): Error?`, as `HttpError` has).
-It converts from the failures a handler meets, so `?` works without ceremony: `From<DecodeError>` is a 400,
-`From<Cancelled>` is the client that went away (logged, never rendered), and a program adds `From<ShopError>` for its
-own. The `errors` member of the application renders a page per status; the cause is logged and never shown.
+It converts from the failures a handler meets, so `?` works without ceremony: `From<DecodeError>` is a 400, a client
+that went away cancels the handler's task (the `await()` it waits at stops it; nothing is rendered), and a program adds
+`From<ShopError>` for its own. The `errors` member of the application renders a page per status; the cause is logged and
+never shown.
 
 **A panic in a handler ends the process.** That is CONCURRENCY.md section 8, "Panics are unchanged", and it is the
 largest difference to every server framework of section 2, all of which turn an exception in a handler into a 500 and
@@ -357,7 +358,7 @@ language change as F9.
 
 ```trb
 fn checkUnknownOrder(): Task<Result<Void, WebError>> {
-  const answer = app.answer(Request.get("/orders/99")).outcome()
+  const answer = app.answer(Request.get("/orders/99")).await()
   match answer {
     Ok(response) => assert(response.status == 404)
     Fail(problem) => assert(problem.status() == 404)
@@ -770,12 +771,12 @@ fn session<Model: Live<Message>, Message>(
 ): Task<Result<Void, WebError>> {
   var model = initial
   var shown = Rendered.of Model.view(model)
-  connection.send(shown.everything()).outcome()?
-  while const Some(input) = connection.next().outcome()? {
+  connection.send(shown.everything()).await()?
+  while const Some(input) = connection.next().await()? {
     const effect = model.update(shown.message(input)?)
     connection.start effect
     const next = Rendered.of Model.view(model)
-    connection.send(next.changedSince(shown)).outcome()?
+    connection.send(next.changedSince(shown)).await()?
     shown = next
   }
   Ok void

@@ -1,6 +1,6 @@
 ---
 title: Tasks
-summary: Task<Value> is what an asynchronous function answers; await() waits for it and answers a Result, because every task can be cancelled.
+summary: Task<Value> is what an asynchronous function answers; await() waits for it and answers the value, and a cancellation is passed on to the waiter instead of answered.
 kind: reference
 status: stable
 order: 10
@@ -14,23 +14,26 @@ source:
   - std/task/src/lib.trb
 ---
 
-Asynchrony lives in the type system, not in a keyword. A function that returns `Task<Value>` may call `await()`
-inside its body, the same way a function that returns a `Result` may use `?`. Every task can be cancelled, so
-`await()` answers `Result<Value, Cancelled>`: `?` hands a cancellation on, `??` replaces it. A pool of workers - one
-operating-system thread per processor, `TORB_WORKERS` to say otherwise - runs the tasks of a program: each worker runs
-one task at a time in the order they became ready, and an idle worker takes a task that has not started yet where
-everything it holds may cross to another thread (numbers, a channel of numbers, a text nobody else holds). What a program
-reads of its tasks - their values, the items of a channel - does not depend on which worker ran them; what several
-tasks print at once interleaves as the machine runs them, and with `TORB_WORKERS=1` in the one order of the queue.
+Asynchrony lives in the type system, not in a keyword. A function that returns `Task<Value>` may call `await()` inside
+its body, the same way a function that returns a `Result` may use `?`. `await()` answers the `Value` itself. Every task
+can be cancelled, and a cancellation is **passed on, not answered**: a task that awaits a task that ended cancelled is
+cancelled itself, right at that `await()`, so an IO line is `file.addLine(text).await()?` - one `?` for the failure of
+the work, and nothing for a cancellation. `result()` is the one wait that answers a cancellation as a value. A pool of
+workers - one operating-system thread per processor, `TORB_WORKERS` to say otherwise - runs the tasks of a program: each
+worker runs one task at a time in the order they became ready, and an idle worker takes a task that has not started yet
+where everything it holds may cross to another thread (numbers, a channel of numbers, a text nobody else holds). What a
+program reads of its tasks - their values, the items of a channel - does not depend on which worker ran them; what
+several tasks print at once interleaves as the machine runs them, and with `TORB_WORKERS=1` in the one order of the
+queue.
 
 ## Example
 
 ```trb check
-fn double(value: Int): Task<Result<Int, Cancelled>> {
+fn double(value: Int): Task<Int> {
   spawn { value * 2 }.await()
 }
 
-const doubled = double(21).outcome()?
+const doubled = double(21).await()
 print doubled
 ```
 
@@ -39,8 +42,8 @@ print doubled
 ```text
 Task<Value>                                the type: a computation that finishes later
 spawn(body: () => Value): Task<Value>      starts body as a new task, running in parallel
-task.await(): Result<Value, Cancelled>     waits for the value, or Fail(Cancelled) where the task was cancelled
-task.outcome(): Result<Value, Failure>     for a Task<Result<Value, Failure>>: waits, and folds a cancellation in
+task.await(): Value                        waits for the value; a cancelled task cancels the waiter in turn
+task.result(): Result<Value, Cancelled>    waits, and answers a cancellation as Fail(Cancelled) instead
 task.cancel()                              asks the task to stop (a var fn)
 task.within(limit): Task<Result<Value, TimedOut>>
 pause(): Task<Void>                        lets every other ready task run first (std/task)
@@ -65,9 +68,9 @@ Task.all(tasks: Iterate<Task<Value>>): Task<List<Value>>
    whose declared result is a `Task`, and at the top level of an entry file or a script**, because a function that
    waits should say so in its own return type - the same reasoning `?` follows for `Result`. The checker rejects it
    everywhere else: `` `await()` is only allowed in a function that returns a `Task` `` for a function, and
-   `` `await()` is only allowed in a closure that becomes a task `` for a closure. `outcome()` waits exactly the
-   same way - it is `await()` plus the conversion of a cancellation into the task's own failure - so it stands under
-   the same rule, and the two messages name it.
+   `` `await()` is only allowed in a closure that becomes a task `` for a closure. `result()` waits exactly the
+   same way - it only answers a cancellation instead of passing it on - so it stands under the same rule, and the two
+   messages name it.
 
    An ordinary closure is not a task, and `tasks.map { _.await() }` is the mistake the rule is for: the closure runs
    where the pipeline is pulled, so the wait would block the worker underneath it. `Task.all(tasks).await()` waits for
@@ -75,7 +78,7 @@ Task.all(tasks: Iterate<Task<Value>>): Task<List<Value>>
 
    ```trb error
    fn sumAll(tasks: List<Task<Int>>): Int {
-     tasks.map({ _.await() ?? 0 }).sum()
+     tasks.map({ _.await() }).sum()
    }
    // error: `await()` is only allowed in a closure that becomes a task
    ```
@@ -104,16 +107,16 @@ Task.all(tasks: Iterate<Task<Value>>): Task<List<Value>>
    Read the value into a `const` before the closure, and every task gets its own copy:
 
    ```trb check
-   fn counted(): Task<Result<Int, Cancelled>> {
+   fn counted(): Task<Int> {
      var total = 0
      total = 1
      const now = total
      const first = spawn { now + 1 }
      const second = spawn { now + 2 }
-     Ok(first.await()? + second.await()?)
+     first.await() + second.await()
    }
 
-   print(counted().outcome()?)
+   print counted().await()
    ```
 
 5. **A `spawn` closure takes no object with it, and a `Channel` carries none either.** A `shared type` is confined to
@@ -134,7 +137,7 @@ Task.all(tasks: Iterate<Task<Value>>): Task<List<Value>>
      }
    }
 
-   fn counted(): Task<Result<Int, Cancelled>> {
+   fn counted(): Task<Int> {
      const counter = Counter.open()
      spawn({ counter.value() }).await()
    }
@@ -148,7 +151,7 @@ Task.all(tasks: Iterate<Task<Value>>): Task<List<Value>>
    a `spawn` closure may capture none of the three, whatever the bounds say:
 
    ```trb error
-   fn later<Value>(value: Value): Task<Result<Int, Cancelled>> {
+   fn later<Value>(value: Value): Task<Int> {
      const task = spawn {
        const _ = value
        1
@@ -172,12 +175,12 @@ Task.all(tasks: Iterate<Task<Value>>): Task<List<Value>>
      value
    }
 
-   fn pair(): Task<Result<String, Cancelled>> {
-     const (first, second) = both(asNumber(1), asNumber(2)).await()?
-     Ok "{first} {second}"
+   fn pair(): Task<String> {
+     const (first, second) = both(asNumber(1), asNumber(2)).await()
+     "{first} {second}"
    }
 
-   print(pair().outcome()?)
+   print pair().await()
    ```
 
 7. **A `var fn` method may answer a `Task` only when its type is a `shared type`.** A value's `var fn` receiver is a copy
@@ -185,10 +188,10 @@ Task.all(tasks: Iterate<Task<Value>>): Task<List<Value>>
    - can be changed this way. See [Shared types](../types/shared-types.md), rule 6.
 
 8. **Every task is cancellable, and `cancel()` is a request, not a kill.** A task notices it where it waits and where a
-   loop of it turns around, so a loop that never waits stops at its next turn too. It stops there, releasing what it
-   holds as a `return` would, and whoever waits for it reads `Fail(Cancelled)`. The tasks it started are cancelled with
-   it. `cancel()` is a `var fn`, so a task somebody may stop sits in a `var` binding; dropping the last handle stops
-   nothing.
+   loop of it turns around, so a loop that never waits stops at its next turn too. It stops there, its scopes end in
+   reverse order - every `using` is closed - and it releases what it holds as a `return` would. The tasks it started
+   are cancelled with it. `cancel()` is a `var fn`, so a task somebody may stop sits in a `var` binding; dropping the
+   last handle stops nothing.
 
    ```trb check
    fn counting(): Task<Int> {
@@ -201,12 +204,33 @@ Task.all(tasks: Iterate<Task<Value>>): Task<List<Value>>
 
    var worker = counting()
    worker.cancel()
-   print worker.await().isOk()
+   print worker.result().isOk()
    ```
 
-9. **`outcome()` is `await()` for a task whose value is a `Result`**, with a cancellation folded into that
-   `Result`'s own failure, so one `?` unwraps both: `source.next().outcome()?`. Its failure type has to convert from
-   `Cancelled`, which every stream's does.
+9. **`await()` passes a cancellation on.** Where the awaited task ended cancelled, the waiter is cancelled at that
+   `await()`: the line after it never runs, it stops the way rule 8 describes, and whoever awaits *it* is cancelled in
+   turn - a cascade up to the first task that observes it. At the top level of an entry file that ends the program with
+   `cancelled: the program waited for a task that was cancelled` on standard error and exit code 130, never the 101 of
+   a panic. So a waiter needs no value for a cancellation, and a task whose value is a `Result` is one `?` per line:
+
+   ```trb check
+   fn fetched(id: Int): Task<Result<String, String>> {
+     Ok "user {id}"
+   }
+
+   fn fetchedTwo(): Task<Result<String, String>> {
+     const first = fetched(1).await()?
+     const second = fetched(2).await()?
+     Ok "{first}, {second}"
+   }
+   ```
+
+10. **`result()` observes a cancellation instead**: `Ok(value)` where the task finished, `Fail(Cancelled)` where it
+    ended cancelled, and the waiter goes on either way. It is for the code that has to know - a supervisor that restarts
+    what was cancelled, a test, the task that called `cancel()` and wants to confirm it. `Task.all` and `both` are
+    written over it: where one part is cancelled they cancel the others and end cancelled themselves, so whoever awaits
+    them is cancelled in turn. `within(limit)` keeps its own failure, `TimedOut`, because a deadline is an answer the
+    caller asked for.
 
 ## What this is not
 
@@ -214,18 +238,28 @@ Task.all(tasks: Iterate<Task<Value>>): Task<List<Value>>
 `await()` is allowed; a function that answers a plain `Int` and calls `await()` anyway is rejected.
 
 ```trb check
-fn double(value: Int): Task<Result<Int, Cancelled>> {
+fn double(value: Int): Task<Int> {
   spawn { value * 2 }.await()
 }
 
-print(double(21).outcome()?)
+print double(21).await()
 ```
 
 ```trb error
-fn sum(a: Int, b: Int): Result<Int, Cancelled> {
+fn sum(a: Int, b: Int): Int {
   spawn { a }.await()
 }
 // error: `await()` is only allowed in a function that returns a `Task`
+```
+
+**`await()` does not answer a `Result` of its own.** A `?` after it unwraps the task's own failure, and a task that
+cannot fail has none:
+
+```trb error
+fn doubled(value: Int): Task<Result<Int, String>> {
+  Ok(spawn({ value }).await()? * 2)
+}
+// error: `?` needs an `Option` or a `Result`, and `Int64` is not one
 ```
 
 **A library that runs a closure as a task says so in the parameter's type.** `Source.produce`'s `body` parameter is a
@@ -238,7 +272,7 @@ use Source, Sink from "std/stream"
 
 fn ints(): Source<Int, ChannelClosed> {
   Source<Int, ChannelClosed>.produce { sink =>
-    sink.add(1).outcome()?
+    sink.add(1).await()?
     Ok void
   }
 }

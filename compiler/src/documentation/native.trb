@@ -219,7 +219,7 @@ fn runSnippets(
     return Ok([DocumentationProblem(runnable[0].path, runnable[0].line, failure)])
   }
   const executable = if File.exists(binary) { binary } else { "{binary}.exe" }
-  const ran = Process.run(executable, [])?
+  const ran = Process.runBlocking(executable, [])?
   Ok outputProblems(runnable, ran.standardOutput, ran.exitCode)
 }
 
@@ -242,7 +242,7 @@ fn compileProgram(source: String, binary: String, runtime: String): Result<Strin
   arguments.appendAll(runtimeSourcesOf(runtime)?)
   arguments.appendAll threadArguments()
   arguments.append "-lm"
-  const output = Process.run(compiler, arguments)?
+  const output = Process.runBlocking(compiler, arguments)?
   if output.exitCode == 0 {
     return Ok ""
   }
@@ -260,7 +260,7 @@ fn cCompiler(): String? {
     }
   }
   for candidate in ["clang", "gcc", "cc"] {
-    if const Ok(output) = Process.run(candidate, ["--version"]) {
+    if const Ok(output) = Process.runBlocking(candidate, ["--version"]) {
       if output.exitCode == 0 {
         return Some candidate
       }

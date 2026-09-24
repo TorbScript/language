@@ -1,0 +1,64 @@
+use sleep from "std/time"
+use pause from "std/task"
+
+/**
+ * **`await()` passes a cancellation on.** A task that awaits a task that ended cancelled is cancelled itself, at that
+ * very `await()`: the line after it never runs, its scopes end in reverse order - the `using` below is closed - and it
+ * ends cancelled, so whoever awaits *it* is cancelled in turn. `result()` is the one wait that observes the cancellation
+ * as a value instead, which is what the top level does here to report it.
+ *
+ * The child counts on whichever worker takes it (its frame holds a number only), the parent holds an object and stays on
+ * the worker that started it, so with four workers the cancellation crosses from one worker to another on its way up.
+ * The program runs with four workers and again with one (`task-cancel-cascade.workers`) and prints the same bytes.
+ */
+
+shared type Probe with Close {
+  name: String
+
+  var fn close() {
+    print "close {name}"
+  }
+}
+
+/** Counts until somebody stops it, letting the other tasks of its worker run now and then. */
+fn forever(start: Int): Task<Int> {
+  var count = start
+  while count >= 0 {
+    count = count + 1
+    if count.remainder(100000) == 0 {
+      pause().await()
+    }
+  }
+  count
+}
+
+/** Awaits `child` holding a probe: cancelled together with it, it closes the probe on the way out. */
+fn parent(child: Task<Int>): Task<Int> {
+  using probe = Probe "the parent's probe"
+  const value = child.await()
+  print "the parent went on"
+  value + probe.name.byteLength()
+}
+
+/** Awaits the parent, and is cancelled with it in turn. */
+fn grandparent(middle: Task<Int>): Task<String> {
+  const value = middle.await()
+  print "the grandparent went on"
+  "{value}"
+}
+
+var child = forever 1
+const middle = parent child
+const top = grandparent middle
+// Long enough for the loop to be running when the request comes
+sleep(0.05).await()
+child.cancel()
+match top.result() {
+  Ok(value) => print "the grandparent answered {value}"
+  Fail(problem) => print "the grandparent: {problem}"
+}
+print "the parent: {middle.result().isOk()}"
+print "the child: {child.result().isOk()}"
+
+// A task that awaits a task which already ended cancelled stops at that `await()` at once
+print "a late waiter: {parent(child).result().isOk()}"

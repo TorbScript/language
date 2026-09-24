@@ -9,11 +9,13 @@
  * the frame, the task started - plus the `return` of the handle. So a call of a task function stays an ordinary `Call`
  * for every pass, and the only thing that knows a task is a state machine is the back end that drives it.
  *
- * `await()` is a `Suspend` in front of the call that reads the answer: the machine waits there, goes on after it, and
- * the call - `torb_task_result` behind the `.Fallible` wrapper of `Task.await` - builds the `Result<Value, Cancelled>`
- * in the program's own layout. `outcome()` is the same suspension in front of its TorbScript body. Which slots live
- * across a suspension, and what a stop releases, is not decided here: the ownership pass places every release, and
- * `ir/suspension.trb` reads the answer off the finished body.
+ * `await()` and `result()` are a `Suspend` in front of the call that reads the answer: the machine waits there, goes
+ * on after it, and the call - TorbScript over `torb_task_result` behind the `.Fallible` wrapper of `Task.finished` -
+ * reads it in the program's own layout. The `Suspend` of an `await()` passes a cancellation of the awaited task on to
+ * this machine, which then stops at the check right after it, so its body only ever reads a value; the one of a
+ * `result()` observes, and its body answers the `Result<Value, Cancelled>` (docs/design/CONCURRENCY.md section 8).
+ * Which slots live across a suspension, and what a stop releases, is not decided here: the ownership pass places every
+ * release, and `ir/suspension.trb` reads the answer off the finished body.
  *
  * # Related
  *
@@ -203,9 +205,9 @@ public fn numberSuspensions(var builder: FunctionBuilder) {
     var numbered: List<Instruction> = []
     var isChanged = false
     for instruction in instructions {
-      if const .Suspend(_, awaited) = instruction {
+      if const .Suspend(_, awaited, observes) = instruction {
         state = state + 1
-        numbered.append Instruction.Suspend(state, awaited)
+        numbered.append Instruction.Suspend(state, awaited, observes)
         isChanged = true
         continue
       }
@@ -221,7 +223,7 @@ public fn numberSuspensions(var builder: FunctionBuilder) {
 public fn hasSuspension(builder: FunctionBuilder): Bool {
   for block in builder.function.blocks {
     for instruction in block.instructions {
-      if const .Suspend(_, _) = instruction {
+      if const .Suspend(_, _, _) = instruction {
         return true
       }
     }
@@ -229,14 +231,14 @@ public fn hasSuspension(builder: FunctionBuilder): Bool {
   false
 }
 
-// --- `await()` and `outcome()` ----------------------------------------------------------------------------------------
+// --- `await()` and `result()` -----------------------------------------------------------------------------------------
 
 /**
- * Whether a call waits: `await()` and `outcome()` of a `Task`, found by their name and a receiver that is a task - the
+ * Whether a call waits: `await()` and `result()` of a `Task`, found by their name and a receiver that is a task - the
  * same way the checker's placement rule finds them. The call itself reads the answer; the wait stands in front of it.
  */
 public fn isSuspendingCall(lowering: Lowering, var builder: FunctionBuilder, name: String, operands: List<Slot>): Bool {
-  if name != "await" && name != "outcome" {
+  if !isWaitingName(name) {
     return false
   }
   const receiver = match operands.first() {
@@ -248,17 +250,23 @@ public fn isSuspendingCall(lowering: Lowering, var builder: FunctionBuilder, nam
   taskValueOf(lowering, builder.typeOfSlot(receiver)).isSome()
 }
 
+/** The two members of `Task` that wait: `await()`, which passes a cancellation on, and `result()`, which observes it. */
+public fn isWaitingName(name: String): Bool {
+  name == "await" || name == "result"
+}
+
 /**
- * The suspension half of `task.await()`: the machine waits for `awaited` here and goes on after it - or stops there,
- * where it was cancelled meanwhile. Answers `false` in a body that is no task's, which is a clean finding: the checker's
- * placement rule keeps `await()` out of one, and `outcome()` is found by the lowering alone.
+ * The suspension half of `task.await()` and `task.result()`: the machine waits for `awaited` here and goes on after it -
+ * or stops there, where it was cancelled meanwhile, or where `awaited` ended cancelled and the wait is an `await()`
+ * (docs/design/CONCURRENCY.md section 8, "The cascade"). `result()` observes instead (`name`). Answers `false` in a body
+ * that is no task's, which is a clean finding: the checker's placement rule keeps both out of one.
  */
-public fn emitSuspension(var lowering: Lowering, var builder: FunctionBuilder, awaited: Slot, at: Span): Bool {
+public fn emitSuspension(var lowering: Lowering, var builder: FunctionBuilder, name: String, awaited: Slot, at: Span): Bool {
   if !lowering.isTaskBody {
-    reportUnsupported lowering, "`await()` or `outcome()` outside the body of a task", at
+    reportUnsupported lowering, "`{name}()` outside the body of a task", at
     return false
   }
-  emit builder, Instruction.Suspend(0, awaited)
+  emit builder, Instruction.Suspend(0, awaited, name == "result")
   true
 }
 

@@ -270,16 +270,18 @@ tasks, `test` and `group`, keys that their own `equals` compares, and the execut
 
 | Program | What it pins |
 |---------|--------------|
-| `tasks.trb` | A task function, `spawn` over what it captured, `await()` answering `Ok`, and counted values that cross into a task and back |
+| `tasks.trb` | A task function, `spawn` over what it captured, `await()` answering the value, and counted values that cross into a task and back |
 | `task-order.trb` | Tasks run in the order they became ready, and two that `pause()` between their steps interleave step by step |
 | `task-sleep.trb` | Tasks that `sleep` wake in the order of their deadlines, and `Task.all` answers in the order of the tasks |
 | `task-cancel-loop.trb` | A loop that never waits stops at its next turn once cancelled, and one that pauses stops at the pause |
-| `task-cancel-await.trb` | A task cancelled while it waits never sees an answer, its waiter reads `Fail(Cancelled)`, and a cancelled parent takes its children with it |
-| `task-combinators.trb` | `map`, `flatMap`, `Task.all`, `both` and `outcome()` |
+| `task-cancel-await.trb` | A task cancelled while it waits never sees an answer, a task that `await()`s it is cancelled in turn, one that observes it with `result()` reads `Fail(Cancelled)`, and a cancelled parent takes its children with it |
+| `task-cancel-cascade.trb` | The cascade over four workers and one: a parent awaiting a cancelled child stops at its `await()` and closes its `using`, the grandparent awaiting the parent stops too, `result()` observes it, and a late waiter stops at once |
+| `task-cancel-main.trb` | A top level that awaits a cancelled task ends the program with `cancelled: ...` on standard error and exit code 130, and the other tasks close what they hold |
+| `task-combinators.trb` | `map`, `flatMap`, `Task.all`, `both`, `?` after `await()` of a `Result`, and a cancelled part cancelling `Task.all` and `both` |
 | `task-thousand.trb` | A thousand tasks alive at once, and every block of them released |
 | `channel-ping-pong.trb` | A rendezvous channel alternates in lock-step, a buffered one carries every item once and in order, and `end()` is `None` for the reader |
 | `channel-closed.trb` | Letting go of the reading end closes it: every later `add` fails with `ChannelClosed`, and what was buffered is released |
-| `destructor-cancelled-task.trb` | A cancelled task closes what its frame held, the last declared first, before its waiter hears that it was cancelled |
+| `destructor-cancelled-task.trb` | A cancelled task closes what its frame held, the last declared first, before its observer hears that it was cancelled |
 | `task-exit.trb` | `Process.exit` inside a task ends the program with that code and takes every task down on the way out: a sleeping one closes what it held, and nothing is left behind |
 
 **Destructors** - `close()` runs at the last release, and a binding that holds an object with one is released where its block ends.
@@ -306,3 +308,4 @@ tasks, `test` and `group`, keys that their own `equals` compares, and the execut
 | `long-paths.trb` | The same steps through a path of 271 bytes, over the 260 of `MAX_PATH`, which one platform's plain path form cannot hold at all |
 | `absolute-path-form.trb` | `File.absolutePath` answers **one** form: forward slashes, an upper-cased drive letter, and no `.`, `..` or `\\?\` left in it |
 | `process-non-ascii-argument.trb` | An argument of a child process that is not ASCII arrives as the text that was passed, which the child answers in its exit code |
+| `process-run-input.trb` | `Process.run` is a task: `input:` is all the child reads, an empty input ends at once, and a program that is nowhere is a failure |

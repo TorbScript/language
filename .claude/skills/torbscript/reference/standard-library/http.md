@@ -24,8 +24,8 @@ convenience that covers the common case (`body.text()`, `body.json<User>()`) sit
 capability inside a sandboxed script, and is not in the prelude.
 
 Every request answers a `Task`, so a program that calls `get`, `post` or `request` waits for the result with
-`.outcome()` - `.await()` with a cancellation folded into `HttpError`, which is why `HttpError` converts from
-`Cancelled`. The types and rules below are the settled design and type check today; running a request end to end waits
+`.await()?`: the `?` is the `HttpError`, and a cancellation is passed on to the waiting task rather than answered. The
+types and rules below are the settled design and type check today; running a request end to end waits
 on the network half of the runtime.
 
 ## Import
@@ -45,8 +45,8 @@ type User {
 }
 
 fn fetchUser(id: Int): Task<Result<User, HttpError>> {
-  var response = http.get("https://example.test/users/{id}").outcome()?
-  response.json<User>().outcome()
+  var response = http.get("https://example.test/users/{id}").await()?
+  response.json<User>().await()
 }
 ```
 

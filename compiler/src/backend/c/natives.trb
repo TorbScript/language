@@ -988,7 +988,7 @@ fn fileEntries(var entries: List<NativeEntry>) {
   ))
   /*
    * The driver runs the C compiler through this. `ProcessOutput` is a record of the *program* with three fields, and the
-   * `.Fallible` convention writes the payload of `Ok` through **one** out parameter - so `run` is ordinary TorbScript
+   * `.Fallible` convention writes the payload of `Ok` through **one** out parameter - so `runBlocking` is TorbScript
    * over `runCollecting`, which answers the exit code and writes the output through a `var` parameter. What is native
    * is starting a process and collecting what it wrote, and nothing else.
    */
@@ -996,6 +996,12 @@ fn fileEntries(var entries: List<NativeEntry>) {
     "Process.runCollecting",
     "torb_process_run",
     "int64_t torb_process_run(torb_text command, torb_list arguments, torb_text *output, torb_text *failure);",
+  ))
+  // `Process.run`, the task: the same collection with an input of its own, which is all the child reads
+  entries.append(runtimeOf(
+    "Process.runFeeding",
+    "torb_process_run_feeding",
+    "int64_t torb_process_run_feeding(torb_text command, torb_list arguments, torb_text input, torb_text *output, torb_text *failure);",
   ))
   /*
    * And `torb run` runs what it built through this one, which hands the child the three streams this process holds
@@ -1061,17 +1067,13 @@ fn timeEntries(var entries: List<NativeEntry>) {
 }
 
 /**
- * `std/task`, over `runtime/task.c` (docs/CONCURRENCY.md 16). `await()` is a suspension point the lowering writes in
- * front of the call, and the call reads the answer: `torb_task_result` is the `.Fallible` convention, and the wrapper
- * builds `Ok(value)` or `Fail(Cancelled())` in the program's layout. `map`, `flatMap`, `Task.all` and `both` are
- * TorbScript over `await()`, because the runtime cannot call a closure of a signature it does not know.
+ * `std/task`, over `runtime/task.c` (docs/CONCURRENCY.md 16). `await()` and `result()` are suspension points the
+ * lowering writes in front of the call, and the call reads the answer: both are TorbScript over `finished()`, whose
+ * `torb_task_result` is the `.Fallible` convention, and the wrapper builds `Ok(value)` or `Fail(Cancelled())` in the
+ * program's layout. `map`, `flatMap`, `Task.all` and `both` are TorbScript over `await()` and `result()`, because the
+ * runtime cannot call a closure of a signature it does not know.
  */
 fn taskEntries(var entries: List<NativeEntry>) {
-  entries.append(fallibleRuntimeOf(
-    "Task.await",
-    "torb_task_result",
-    "bool torb_task_result(torb_task *task, void *out);",
-  ))
   entries.append(fallibleRuntimeOf(
     "Task.finished",
     "torb_task_result",

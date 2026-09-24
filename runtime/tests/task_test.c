@@ -62,7 +62,10 @@ typedef struct awaiting_frame {
   torb_task *awaited;
 } awaiting_frame;
 
-/* What the last `awaiting` task read: whether the awaited one finished, and its value where it is an `Int64`. */
+/*
+ * What the last `awaiting` task read: whether the awaited one finished, and its value where it is an `Int64`. It waits
+ * the way `result()` does (`torb_task_observe`), so a cancellation of what it awaits is an answer and not its own stop.
+ */
 static bool awaited_finished = false;
 static int64_t awaited_value = 0;
 
@@ -81,7 +84,7 @@ state_0:
     goto stop;
   }
   task->state = 1u;
-  if (torb_task_await(task, frame->awaited) == TORB_WAIT_SUSPENDED) {
+  if (torb_task_observe(task, frame->awaited) == TORB_WAIT_SUSPENDED) {
     return TORB_POLL_SUSPENDED;
   }
 state_1:
@@ -1438,6 +1441,210 @@ TORB_TEST(an_offer_to_a_closed_channel_stops_and_releases_its_item) {
   torb_scheduler_finish();
 }
 
+/* ------------------------------------------------------------------------------------------------ the cascade --- */
+
+/*
+ * `await()` of a task that ended cancelled cancels the waiter (docs/design/CONCURRENCY.md section 8, "The cascade"): it
+ * stops at the check after its wait, through its stop path - where the lowering releases the frame and runs the
+ * `close()` of every `using` in it, which "u" stands for here - and ends cancelled, so whoever awaits *it* is cancelled
+ * in turn, and whoever observes it with `result()` reads the cancellation.
+ */
+typedef struct cascading_frame {
+  torb_task *awaited;
+  torb_text held;
+} cascading_frame;
+
+static torb_poll cascading_resume(torb_task *task) {
+  cascading_frame *frame = (cascading_frame *)torb_task_frame(task);
+  switch (task->state) {
+    case 0u:
+      goto state_0;
+    case 1u:
+      goto state_1;
+    default:
+      TORB_UNREACHABLE();
+  }
+state_0:
+  if (torb_task_cancelled(task)) {
+    torb_task_release(frame->awaited);
+    return TORB_POLL_STOPPED;
+  }
+  frame->held = torb_show_i64(27182818);
+  log_add("a");
+  task->state = 1u;
+  if (torb_task_await(task, frame->awaited) == TORB_WAIT_SUSPENDED) {
+    return TORB_POLL_SUSPENDED;
+  }
+state_1:
+  if (torb_task_cancelled(task)) {
+    goto stop_1;
+  }
+  (void)torb_task_outcome(task);
+  /* The line after the `await()`: never reached where the awaited task ended cancelled. */
+  log_add("A");
+  torb_text_release(frame->held);
+  torb_task_release(frame->awaited);
+  *(torb_void *)torb_task_result_slot(task) = 0u;
+  return TORB_POLL_FINISHED;
+stop_1:
+  log_add("u");
+  torb_text_release(frame->held);
+  torb_task_release(frame->awaited);
+  return TORB_POLL_STOPPED;
+}
+
+/* `awaited` consumed: a task that awaits it the way `await()` does. */
+static torb_task *cascading(torb_task *awaited) {
+  torb_task *task = torb_task_new(cascading_resume, sizeof(cascading_frame), &torb_element_void);
+  ((cascading_frame *)torb_task_frame(task))->awaited = awaited;
+  torb_task_start(task);
+  return task;
+}
+
+TORB_TEST(a_task_that_awaits_a_cancelled_task_is_cancelled_in_turn) {
+  torb_task *child;
+  torb_task *parent;
+  torb_task *grandparent;
+  torb_task *supervisor;
+  torb_task *stopper;
+  log_reset();
+  child = stuck();
+  torb_retain(child);
+  parent = cascading(child);
+  torb_retain(parent);
+  grandparent = cascading(parent);
+  torb_retain(grandparent);
+  supervisor = awaiting(grandparent);
+  awaited_finished = true;
+  torb_scheduler_run(NULL);
+  /* Both wait, nobody went on yet. */
+  TORB_CHECK(strcmp(task_log, "aa") == 0);
+  stopper = canceller(child);
+  torb_scheduler_run(NULL);
+  /* The child was cancelled, the parent stopped at its await and released its frame, and the grandparent after it. */
+  TORB_CHECK(strcmp(task_log, "aakuu") == 0);
+  TORB_CHECK_INTEGER(child->status, TORB_TASK_CANCELLED);
+  TORB_CHECK_INTEGER(parent->status, TORB_TASK_CANCELLED);
+  TORB_CHECK_INTEGER(grandparent->status, TORB_TASK_CANCELLED);
+  /* The supervisor observed it with `result()`: it read the cancellation and finished itself. */
+  TORB_CHECK(!awaited_finished);
+  TORB_CHECK_INTEGER(supervisor->status, TORB_TASK_FINISHED);
+  TORB_CHECK_INTEGER(torb_task_live_count(), 0);
+  torb_task_release(child);
+  torb_task_release(parent);
+  torb_task_release(grandparent);
+  torb_task_release(supervisor);
+  torb_task_release(stopper);
+  torb_scheduler_finish();
+}
+
+TORB_TEST(awaiting_a_task_that_already_ended_cancelled_stops_at_once) {
+  torb_task *child = stuck();
+  torb_task *parent;
+  log_reset();
+  torb_task_cancel(child);
+  torb_scheduler_run(NULL);
+  TORB_CHECK_INTEGER(child->status, TORB_TASK_CANCELLED);
+  torb_retain(child);
+  parent = cascading(child);
+  torb_scheduler_run(NULL);
+  /* The wait answered READY, and the check right after it stopped the parent before its next line. */
+  TORB_CHECK(strcmp(task_log, "au") == 0);
+  TORB_CHECK_INTEGER(parent->status, TORB_TASK_CANCELLED);
+  TORB_CHECK_INTEGER(torb_task_live_count(), 0);
+  torb_task_release(child);
+  torb_task_release(parent);
+  torb_scheduler_finish();
+}
+
+TORB_TEST(a_finished_task_does_not_cascade) {
+  torb_task *parent;
+  log_reset();
+  parent = cascading(square(3));
+  torb_scheduler_run(parent);
+  TORB_CHECK(strcmp(task_log, "saA") == 0);
+  TORB_CHECK_INTEGER(parent->status, TORB_TASK_FINISHED);
+  torb_task_release(parent);
+  torb_scheduler_finish();
+}
+
+/* A cascade cancels the children of the task it stops, as every cancellation does. */
+typedef struct brood_frame {
+  torb_task *awaited;
+  torb_task *sibling;
+} brood_frame;
+
+static torb_task *brood_sibling = NULL;
+
+static torb_poll brood_resume(torb_task *task) {
+  brood_frame *frame = (brood_frame *)torb_task_frame(task);
+  if (task->state == 0u) {
+    if (torb_task_cancelled(task)) {
+      torb_task_release(frame->awaited);
+      return TORB_POLL_STOPPED;
+    }
+    /* A child of this task that would run forever: only the cascade's cancellation of this task ends it. */
+    frame->sibling = stuck();
+    torb_retain(frame->sibling);
+    brood_sibling = frame->sibling;
+    task->state = 1u;
+    if (torb_task_await(task, frame->awaited) == TORB_WAIT_SUSPENDED) {
+      return TORB_POLL_SUSPENDED;
+    }
+  }
+  if (torb_task_cancelled(task)) {
+    torb_task_release(frame->awaited);
+    torb_task_release(frame->sibling);
+    return TORB_POLL_STOPPED;
+  }
+  (void)torb_task_outcome(task);
+  torb_task_release(frame->awaited);
+  torb_task_release(frame->sibling);
+  *(torb_void *)torb_task_result_slot(task) = 0u;
+  return TORB_POLL_FINISHED;
+}
+
+TORB_TEST(a_cascade_cancels_the_children_of_the_task_it_stops) {
+  torb_task *awaited = stuck();
+  torb_task *brood = torb_task_new(brood_resume, sizeof(brood_frame), &torb_element_void);
+  torb_task *stopper;
+  log_reset();
+  torb_retain(awaited);
+  ((brood_frame *)torb_task_frame(brood))->awaited = awaited;
+  torb_task_start(brood);
+  torb_scheduler_run(NULL);
+  TORB_CHECK_INTEGER(brood_sibling->status, TORB_TASK_PENDING);
+  stopper = canceller(awaited);
+  torb_scheduler_run(NULL);
+  TORB_CHECK_INTEGER(brood->status, TORB_TASK_CANCELLED);
+  TORB_CHECK_INTEGER(brood_sibling->status, TORB_TASK_CANCELLED);
+  TORB_CHECK_INTEGER(torb_task_live_count(), 0);
+  torb_task_release(brood_sibling);
+  torb_task_release(awaited);
+  torb_task_release(brood);
+  torb_task_release(stopper);
+  torb_scheduler_finish();
+}
+
+/* The generated `main`: 0 after a main task that finished, 130 after one that ended cancelled (and a line on stderr). */
+TORB_TEST(the_end_of_a_cancelled_main_task_is_exit_code_130) {
+  torb_task *finished = square(2);
+  torb_task *blocked = stuck();
+  torb_task *cancelled;
+  torb_scheduler_run(finished);
+  TORB_CHECK_INTEGER(torb_task_end_main(finished), 0);
+  torb_retain(blocked);
+  cancelled = cascading(blocked);
+  torb_scheduler_run(NULL);
+  torb_task_cancel(blocked);
+  torb_scheduler_run(cancelled);
+  TORB_CHECK_INTEGER(cancelled->status, TORB_TASK_CANCELLED);
+  TORB_CHECK_INTEGER(torb_task_end_main(cancelled), TORB_EXIT_CANCELLED);
+  torb_task_release(blocked);
+  torb_scheduler_finish();
+  TORB_CHECK_INTEGER(torb_task_live_count(), 0);
+}
+
 void torb_register_task_tests(void) {
   TORB_ADD(spawn_and_await);
   TORB_ADD(a_result_is_copied_for_every_reader);
@@ -1462,4 +1669,9 @@ void torb_register_task_tests(void) {
   TORB_ADD(completed_within_says_whether_the_deadline_came_first);
   TORB_ADD(offered_and_received_items_cross_a_channel_once);
   TORB_ADD(an_offer_to_a_closed_channel_stops_and_releases_its_item);
+  TORB_ADD(a_task_that_awaits_a_cancelled_task_is_cancelled_in_turn);
+  TORB_ADD(awaiting_a_task_that_already_ended_cancelled_stops_at_once);
+  TORB_ADD(a_finished_task_does_not_cascade);
+  TORB_ADD(a_cascade_cancels_the_children_of_the_task_it_stops);
+  TORB_ADD(the_end_of_a_cancelled_main_task_is_exit_code_130);
 }

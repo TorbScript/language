@@ -119,7 +119,7 @@ that answers the question. A page marked (planned) describes a feature that does
 - `language/concurrency-and-streams/channels.md` - **Channels** (reference): A Channel is a stream in memory whose one holder has both ends, handed out separately as a Source and a Sink so a producer never sees the reading end and a consumer never sees the writing one.
 - `language/concurrency-and-streams/index.md` - **Concurrency and streams** (index): Task, Channel, Source and Sink - asynchrony in the type system instead of a keyword - designed and type-checked today, but not yet run by any back end.
 - `language/concurrency-and-streams/streams.md` - **Streams** (reference): Source and Sink are the asynchronous siblings of Iterator and Accumulator, with the same verbs, the same Stage values in between, and a failure that stands in the type on both ends.
-- `language/concurrency-and-streams/tasks.md` - **Tasks** (reference): Task<Value> is what an asynchronous function answers; await() waits for it and answers a Result, because every task can be cancelled.
+- `language/concurrency-and-streams/tasks.md` - **Tasks** (reference): Task<Value> is what an asynchronous function answers; await() waits for it and answers the value, and a cancellation is passed on to the waiter instead of answered.
 
 ## language/configuration
 
@@ -289,7 +289,7 @@ that answers the question. A page marked (planned) describes a feature that does
 - `standard-library/parallel.md` - **std/parallel** (package): parallel() and Parallel, a pipeline whose stages run on the workers of the pool with the results in input order, in scope through the prelude.
 - `standard-library/path.md` - **std/path** (package): Path, a root and a list of components, never a string, plus Root and PathError - the type behind Path.resolved.
 - `standard-library/prelude.md` - **std/prelude** (package): The package of re-exports that is in scope in every file of a project, unless project.trb names another one.
-- `standard-library/process.md` - **std/process** (package): Process for arguments and exiting, Child for a running program's pipes, and ProcessOutput for what it left behind.
+- `standard-library/process.md` - **std/process** (package): Process for arguments, exiting and running a program to its end as a task, Child for a running program's pipes, and ProcessOutput for what it left behind.
 - `standard-library/project.md` - **std/project** (package): The receiver type of project.trb - Project, Dependencies, Build, Test and Workspace.
 - `standard-library/sandbox.md` - **std/sandbox** (package): Sandbox and Script, which load a .trb file as a type-checked, capability-limited receiver closure.
 - `standard-library/stream.md` - **std/stream** (package): Source and Sink, the asynchronous ends of a stream, plus Bytes, Utf8Error and the stages between bytes and text.
