@@ -364,8 +364,8 @@ public type Lowering {
    * functions of its file read it, in whichever order the worklist reaches them.
    */
   var entryCells: Map<Int, EntryCellAccesses?> = [:]
-  /** The read of every entry cell a function read so far, by `SymbolId.value` of its `const`. */
-  var entryCellReads: Map<Int, FunctionId> = [:]
+  /** The reads of every entry cell a function read so far, by `SymbolId.value` of its `const`. */
+  var entryCellReads: Map<Int, EntryCellReads> = [:]
   /** The function of every receiver script lowered so far, by `ModuleId.value` (docs/design/SCRIPTS.md section 3). */
   var scriptFunctions: Map<Int, FunctionId> = [:]
   /** The functions `lowerScripts` was asked to call the scripts through, in the order it was given them. */
@@ -386,15 +386,30 @@ public type Lowering {
   var nanConstantAllowed: Bool = false
 }
 
-/** One entry cell (`FunctionKind.EntryCell`): its write, and what its read is made from when a function reads it. */
+/**
+ * One entry cell (`FunctionKind.EntryCell`) and the flag cell beside it: their writes, and what their reads are made from
+ * when a function reads them.
+ */
 public type EntryCellAccesses {
   write: FunctionId
+  /** The write of the flag, `true` once the value is in the cell: a read of an unset cell panics. */
+  mark: FunctionId
   /** The type the cell holds, which the entry's binding has to have. */
   held: IrTypeId
   /** The name of the cell in the back end. */
   cell: String
+  /** The name of the flag's cell in the back end, a `Bool`. */
+  flag: String
   /** The mangled name of the constant, which the names of the accesses are built from. */
   accessor: String
+  /** The name of the constant in the source, for the panic of a read before it is set. */
+  name: String
+}
+
+/** The reads of one entry cell: the value, and the flag that says whether the top-level code has set it. */
+public type EntryCellReads {
+  value: FunctionId
+  flag: FunctionId
 }
 
 /** A lowering for one checked program. `paths` holds one path per module, in the order of `program.graph.modules`. */

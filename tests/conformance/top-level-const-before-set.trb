@@ -1,0 +1,19 @@
+/**
+ * A function that reads a top-level `const` of the entry file before the top-level code reached its statement panics at
+ * the read. The checker orders the statements of a file, not the calls into its functions, so `report()` above
+ * `const table = loaded()` calls a function whose constant nothing has made yet - and evaluating the initializer there
+ * instead would run it a second time, or in an order nobody wrote.
+ */
+
+fn loaded(): List<String> {
+  ["alpha", "beta"]
+}
+
+fn report() {
+  print "{table.length()} names"
+}
+
+print "before"
+report()
+const table = loaded()
+print "not reached"

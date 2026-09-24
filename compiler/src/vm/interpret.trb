@@ -121,6 +121,10 @@ public fn runProgram(program: BytecodeProgram, arguments: List<String>) {
   for entry in program.entries {
     const _ = execute(words, kernel, budget, program, entry, firstFrameOf(program), 0 - 1)
   }
+  // The entry cells hold a count until nothing can read them any more: after the last entry
+  if program.entryCellRelease >= 0 {
+    const _ = execute(words, kernel, budget, program, program.entryCellRelease, firstFrameOf(program), 0 - 1)
+  }
 }
 
 // --- A host that calls into the program ------------------------------------------------------------------------------
@@ -1153,6 +1157,17 @@ fn execute(
       }
       .RunScript => {
         runScriptInstruction words, kernel, program, base, top, a, b, c, code[pc + 1]
+        pc = pc + 2
+      }
+      .EntryCell => {
+        const cell = code[pc + 1]
+        for offset in 0..b {
+          if c == 0 {
+            words.set(base + a + offset, words[cell + offset])
+          } else {
+            words.set(cell + offset, words[base + a + offset])
+          }
+        }
         pc = pc + 2
       }
       .Cell => {

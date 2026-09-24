@@ -23,8 +23,8 @@ use normalizePath, parentPath, pathDepth, joinPath from "../src/project/path"
 const entryName = "t_acme_x2f_app_main"
 
 /** One chunk of the final IR's bytecode, by the mangled name of its function. */
-fn chunkOf(source: String, name: String): String {
-  var found = lowered source
+fn chunkOf(source: String, name: String, extra: Map<String, String> = [:]): String {
+  var found = lowered source, extra
   insertOwnership found.program
   const emission = emitBytecode found.program, [entryName]
   // A snapshot's raw string ends in the newline in front of its closing quotes
@@ -32,8 +32,8 @@ fn chunkOf(source: String, name: String): String {
 }
 
 /** What the bytecode could not encode, in the order it was found. */
-fn findingsOf(source: String): List<String> {
-  var found = lowered source
+fn findingsOf(source: String, extra: Map<String, String> = [:]): List<String> {
+  var found = lowered source, extra
   insertOwnership found.program
   emitBytecode(found.program, [entryName]).unsupported
 }
@@ -403,7 +403,46 @@ group "Chunks" {
 }
 
 group "Module constants" {
-  test "a constant that is no static data is a cell: built once by its initializer, copied on every read" {
+  /** A module runs nothing, so its `const` is pure and built at the first read, whoever reads it (`lowerImmortalConstant`). */
+  test "a constant of a module that is no static data is a cell: built once by its initializer, copied on every read" {
+    const table = raw"""
+      /** Five fields: above the inline limit, so a value of it is a block and no static data. */
+      public type Entry {
+        first: Int
+        second: Int
+        third: Int
+        fourth: Int
+        fifth: Int
+      }
+
+      public const entry = Entry 1, 2, 3, 4, 5
+      """
+    const source = raw"""
+      use entry from "./table"
+
+      fn read(): Int {
+        entry.fifth
+      }
+
+      const _ = read()
+      """
+    const extra = ["app/src/table.trb": table]
+    assert findingsOf(source, extra).isEmpty()
+    assert(
+      chunkOf(source, "t_acme_x2f_app_table_entry", extra) == raw"""
+        chunk 2 t_acme_x2f_app_table_entry() -> 1 word, frame of 1 word, at -
+        b0:
+          0: cell r0, 1 word, cell at 0, built by t_constant__t_acme_x2f_app_table_entry
+          3: return r0, 1 word
+        """,
+    )
+  }
+
+  /**
+   * A top-level `const` of an entry file is evaluated by the top-level code, and a function reads it from its entry cell
+   * (`ir/lower/cell.trb`): a read copies the words out of a gap of the constant pool, a write copies them in.
+   */
+  test "a constant of an entry file a function reads is an entry cell, which the entry writes and the function reads" {
     const source = raw"""
       fn doubled(value: Int): Int {
         value * 2
@@ -419,11 +458,28 @@ group "Module constants" {
       """
     assert findingsOf(source).isEmpty()
     assert(
-      chunkOf(source, "t_acme_x2f_app_main_answer") == raw"""
-        chunk 1 t_acme_x2f_app_main_answer() -> 1 word, frame of 1 word, at -
+      chunkOf(source, "t_cellRead__t_acme_x2f_app_main_answer") == raw"""
+        chunk 5 t_cellRead__t_acme_x2f_app_main_answer() -> 1 word, frame of 1 word, at -
         b0:
-          0: cell r0, 1 word, cell at 1, built by t_constant__t_acme_x2f_app_main_answer
-          3: return r0, 1 word
+          0: entry.cell read r0, 1 word, cell at 6
+          2: return r0, 1 word
+        """,
+    )
+    assert(
+      chunkOf(source, "t_cellWrite__t_acme_x2f_app_main_answer") == raw"""
+        chunk 6 t_cellWrite__t_acme_x2f_app_main_answer(r0) -> 0 words, frame of 1 word, at -
+        b0:
+          0: entry.cell write r0, 1 word, cell at 6
+          2: return
+        """,
+    )
+    // The flag the read looks at first, a cell of its own
+    assert(
+      chunkOf(source, "t_cellIsSet__t_acme_x2f_app_main_answer") == raw"""
+        chunk 3 t_cellIsSet__t_acme_x2f_app_main_answer() -> 1 word, frame of 1 word, at -
+        b0:
+          0: entry.cell read r0, 1 word, cell at 5
+          2: return r0, 1 word
         """,
     )
   }

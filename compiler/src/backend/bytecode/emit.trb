@@ -24,7 +24,7 @@
 use IrProgram, IrFunction, IrTypeId, IrType, LayoutId, FunctionId, Slot, BlockId, StaticId, LocationId from "../../ir/ir"
 use Instruction, Terminator, Argument, Reference, PathStep, Capture, WitnessSource, WitnessRoot from "../../ir/ir"
 use Intrinsic, IntrinsicOperation, NumericKind, RuntimeKind, SlotRole, StaticContents, FunctionKind from "../../ir/ir"
-use Ownership from "../../ir/ir"
+use Ownership, CellAccess from "../../ir/ir"
 use LiteralValue from "../../semantics/checker/type"
 use Layout, Representation, containsCountedType, isManagedType, textPartKindOf, TextPartKind from "../../ir/layout"
 use closingOf, Closing from "../../ir/closing"
@@ -71,6 +71,8 @@ type Emitter {
   var constantKeys: Map<String, Int>
   /** By `LocationId.value`: the index in the program's location table. */
   var locationIndices: Map<Int, Int>
+  /** Every entry cell by its name: its first word in the constant pool, and the type it holds. */
+  var entryCells: Map<String, (Int, IrTypeId)> = [:]
 }
 
 /** The state of one function while its chunk is written. */
@@ -150,6 +152,11 @@ public fn emitBytecode(
     } else {
       emitter.bytecode.chunks.append emitted
     }
+  }
+  if !emitter.entryCells.isEmpty() {
+    const release = entryCellReleaseChunk emitter, program
+    emitter.bytecode.entryCellRelease = emitter.bytecode.chunks.length()
+    emitter.bytecode.chunks.append release
   }
   emitTables emitter, program
   emitter.bytecode.entries = entryChunks
@@ -683,6 +690,9 @@ fn emitChunk(var emitter: Emitter, program: IrProgram, function: IrFunction): Ch
   if const .ConstantCell(initializer) = function.kind {
     return cellChunk emitter, program, function, initializer
   }
+  if const .EntryCell(cell, access) = function.kind {
+    return entryCellChunk emitter, program, function, cell, access
+  }
   var body = Body function, offsets, widths, references, cursor, cursor, cursor, ArrayList.withCapacity(64)
   for index in 0..function.blocks.length() {
     body.blockStarts.append body.code.length()
@@ -772,6 +782,102 @@ fn cellChunk(var emitter: Emitter, program: IrProgram, function: IrFunction, ini
   code.append built
   code.append headWord(Opcode.Return, 0, width, 0)
   Chunk(function.name, [], width, false, width, 0 - 1, [], code, [], [], [0])
+}
+
+/**
+ * The accessor of an entry cell: `entry.cell` copies the value out of the cell's words, a gap of the constant pool, with
+ * one more count for the caller, or copies the binding in, whose count the cell keeps from then on.
+ */
+fn entryCellChunk(
+  var emitter: Emitter,
+  program: IrProgram,
+  function: IrFunction,
+  cell: String,
+  access: CellAccess,
+): Chunk {
+  const held = match access {
+    .Read => function.signature.result
+    .Write => function.signature.parameters[0].annotation
+  }
+  const width = emitter.tables.widthOf held
+  const offset = match emitter.entryCells.get(cell) {
+    Some((found, _)) => found
+    None => {
+      const found = emitter.bytecode.constantWords
+      emitter.bytecode.constants.append ConstantPart.Gap(width)
+      emitter.bytecode.constantWords = found + width
+      emitter.entryCells.set cell, (found, held)
+      found
+    }
+  }
+  var code: ArrayList<Int> = ArrayList.withCapacity 8
+  var parameters: List<ParameterEntry> = []
+  match access {
+    .Read => {
+      code.append headWord(Opcode.EntryCell, 0, width, 0)
+      code.append offset
+      const shape = shapeOperand emitter, program, held
+      if shape != 0 {
+        code.append headWord(Opcode.Kernel, 3, 0, 0)
+        code.append kernelNumberOf(KernelOperation.Retain)
+        code.append 0
+        code.append(shape - 1)
+      }
+      code.append headWord(Opcode.Return, 0, width, 0)
+    }
+    .Write => {
+      parameters.append ParameterEntry(0, width, false)
+      code.append headWord(Opcode.EntryCell, 0, width, 1)
+      code.append offset
+      code.append headWord(Opcode.Return, 0, 0, 0)
+    }
+  }
+  const result = if const .Read = access { width } else { 0 }
+  const frameWords = if width < 1 { 1 } else { width }
+  Chunk(function.name, parameters, result, false, frameWords, 0 - 1, [], code, [], [], [0])
+}
+
+/**
+ * The chunk that gives every entry cell's count back once the program is done, in the order the cells were first named:
+ * the value of a top-level `const` goes here, and an object runs its `close()` if it has one. A cell whose flag
+ * (`{cell}_set`, `ir/lower/cell.trb`) says the top-level code never set it holds no count and is skipped.
+ */
+fn entryCellReleaseChunk(var emitter: Emitter, program: IrProgram): Chunk {
+  var code: ArrayList<Int> = ArrayList.withCapacity 16
+  var widest = 1
+  for (cell, (offset, held)) in emitter.entryCells {
+    const width = emitter.tables.widthOf held
+    if width > widest {
+      widest = width
+    }
+    const shape = shapeOperand emitter, program, held
+    if shape == 0 {
+      continue
+    }
+    var patch = 0 - 1
+    if const Some((flag, _)) = emitter.entryCells.get("{cell}_set") {
+      code.append headWord(Opcode.EntryCell, 0, 1, 0)
+      code.append flag
+      code.append headWord(Opcode.Branch, 0, 0, 0)
+      patch = code.length()
+      code.append(patch + 2)
+      code.append 0
+    }
+    code.append headWord(Opcode.EntryCell, 0, width, 0)
+    code.append offset
+    code.append headWord(Opcode.Kernel, 3, 0, 0)
+    code.append kernelNumberOf(KernelOperation.Release)
+    code.append 0
+    code.append(shape - 1)
+    code.append headWord(Opcode.Zero, 0, width, 0)
+    code.append headWord(Opcode.EntryCell, 0, width, 1)
+    code.append offset
+    if patch >= 0 {
+      code.set(patch + 1, code.length())
+    }
+  }
+  code.append headWord(Opcode.Return, 0, 0, 0)
+  Chunk("entry cells release", [], 0, false, widest, 0 - 1, [], code, [], [], [0])
 }
 
 fn isReferenceRole(function: IrFunction, role: SlotRole): Bool {

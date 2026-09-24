@@ -1,0 +1,81 @@
+/**
+ * A top-level `const` of an entry file is evaluated **once**, by the top-level code, and a function of the file that
+ * reads it reads that one value - whatever it holds, not only a shared object.
+ *
+ * Every initializer here prints, so a second evaluation would be a second line: a list a function reads, a record with
+ * counted fields a function takes apart, a text, a closure a function calls, and both names of a destructuring
+ * binding. A `const` whose value is static data (`limit`) is read as its static and has nothing to evaluate. The leak
+ * gate pins that the cells give their counts back once the program is done; a task that reads a cell after the
+ * top-level code is done is `shared-top-level-const.trb`.
+ */
+
+type Entry {
+  label: String
+  names: List<String>
+}
+
+fn loaded(): List<String> {
+  print "loading the table"
+  ["alpha", "beta", "gamma"]
+}
+
+fn made(): Entry {
+  print "making the entry"
+  Entry "first", ["one", "two"]
+}
+
+fn greeted(name: String): String {
+  print "greeting {name}"
+  "hello {name}"
+}
+
+fn divided(dividend: Int, divisor: Int): (Int, Int) {
+  print "dividing {dividend} by {divisor}"
+  (dividend / divisor, dividend % divisor)
+}
+
+fn scaler(factor: Int): (Int) => Int {
+  print "making a scaler by {factor}"
+  { value => value * factor }
+}
+
+const limit = 64
+
+const table = loaded()
+
+const entry = made()
+
+const greeting = greeted "world"
+
+const (quotient, remainder) = divided 17, 5
+
+const scaled = scaler 3
+
+fn described(): String {
+  "{table.length()} names, the first {table[0]}"
+}
+
+fn joined(): String {
+  table.joined separator: ", "
+}
+
+fn entryText(): String {
+  "{entry.label}: {entry.names.joined(separator: " ")}"
+}
+
+fn shouted(): String {
+  greeting.toUpperCase()
+}
+
+fn arithmetic(): String {
+  "{quotient} remainder {remainder}, {scaled(quotient)}, below {limit}"
+}
+
+print described()
+print joined()
+print entryText()
+print shouted()
+print arithmetic()
+print described()
+print "{table.length()} {entry.names.length()}"
+print "the top level ends"

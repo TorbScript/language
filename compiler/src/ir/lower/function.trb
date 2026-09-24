@@ -348,7 +348,7 @@ fn lowerTopLevel(var lowering: Lowering, var builder: FunctionBuilder, statement
 /**
  * Every name a top-level binding declares, a destructuring one included: `const (quotient, remainder) = ...` is two
  * locals of the entry function, each found under the span of its own name, exactly like `const quotient = ...`. A name
- * whose value is a shared object goes into its entry cell as well (`ir/lower/cell.trb`).
+ * of a `const` goes into its entry cell as well, which is where a function of the file reads it (`ir/lower/cell.trb`).
  */
 fn rememberEntryLocal(var lowering: Lowering, var builder: FunctionBuilder, binding: Binding) {
   const module = lowering.module
@@ -356,7 +356,7 @@ fn rememberEntryLocal(var lowering: Lowering, var builder: FunctionBuilder, bind
     if const Some(symbol) = lowering.checker.resolvedName(module, name.span) {
       if const Some(slot) = lowering.slots.get(name.span) {
         lowering.entryLocals.set symbol.value, slot
-        writeEntryCell lowering, builder, symbol, slot
+        writeEntryCell lowering, builder, symbol, slot, name.span
       }
     }
   }

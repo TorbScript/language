@@ -1556,7 +1556,7 @@ allows, the code won and this is the list. Everything else is as written.
   "a closure that captures an implicit parameter of a closure around it". One entry per closure in the tables closes it.
 - **A closure of an entry file sees no top-level binding of that file.** Those bindings are locals of the entry function
   (5.4's list), and a closure is a function of its own - so `enterClosure` clears `entryLocals` and a top-level `const`
-  read inside a closure goes through the const evaluator like it does from any other function. A top-level `var` read
+  read inside a closure is read from its entry cell like it is from any other function ("The entry cell"). A top-level `var` read
   there is the clean finding it already was.
 - **`?.` is not a closure and stays a finding.** The checker resolves `a?.m` to `Option.map`/`flatMap` (gap 12), but there
   is no closure in the source to lower - it is a `Tag`, a `Switch` and the member on the payload, the way `??` is inlined.
@@ -3029,8 +3029,9 @@ somehow, and there is no order the language could name. What makes the laziness 
 rule for a module constant (docs/TYPECHECKER.md, What exactly is "compile-time evaluable"?) - literals, the operators of
 the number types, interpolation, collection literals, constructor calls and other constants, and never a function call -
 so there is no side effect whose timing anything could see. In an entry file or a test file, where the rule does not
-apply, a top-level `const` is a **local of the entry function**, and a function of the file that reads one holding a
-shared object reads it from its entry cell (below).
+apply, a top-level `const` is a **local of the entry function**, and a function of the file that reads one reads it
+from its entry cell (below) - never from an immortal cell, whose initializer would run a second time and keep every
+temporary it made.
 
 **Immortal by construction, so the leak gate stays exact.** `torb_begin_immortal()`/`torb_end_immortal()` open a region
 around the call of the initializer, and every block `torb_allocate` hands out while one is open is born with
@@ -3129,11 +3130,14 @@ has to say which entries are not written yet; a planned native reads `` `X`, whi
 
 ### The entry cell
 
-**A top-level `const` of an entry file that holds a shared object is one object for the entry function and for every
-function of its file.** The binding is a local of the entry function, and a function of the same file cannot see that
-frame - so without more it read the constant the way it reads a module constant, as an immortal value built from the
-initializer a second time. For a value nobody can tell; for a `shared type` object, a task, a channel or a file it is a
-second object, and `const evaluations = Tally()` counted in a function and printed at the top level printed `0`.
+**A top-level `const` of an entry file, a script or a test file is evaluated once, by the top-level code, and every
+function of its file reads that one value.** The binding is a local of the entry function, and a function of the same
+file cannot see that frame - so without more it read the constant the way it reads a module constant, as an immortal
+value built from the initializer a second time. That was two evaluations of an initializer that may call anything: a
+`print` in it printed twice, a `shared type` object was a second object (`const evaluations = Tally()` counted in a
+function and printed at the top level printed `0`), and the second evaluation ran inside an immortal region, where no
+temporary is ever freed - `const prepared = prepare()`, which checked and lowered a whole package, took the test binary
+of `compiler/tests/sandbox.test.trb` to 88 GB.
 
 `FunctionKind.EntryCell(cell, access)` is the same shape as the constant cell: a function with a signature and no
 blocks, and the storage is the back end's (one file-scope `static` per cell in C). `Write` takes the entry's binding
@@ -3141,11 +3145,25 @@ right after it is made, with a count of its own; `Read` answers the object with 
 from a function (`lowerConstantReference`) and the root of a path into the object (`rootReferenceOf` in
 `ir/lower/place.trb`) get. `main` releases every cell once the program is done - after the tasks the entry left
 running, which may still read it - so the leak gate stays exact (`entry_cells_release` in `backend/c/emit.trb`).
-A cell no function reads is not written at all (`dropUnreadCells`, once every function is lowered): then the binding is
+A cell no function reads is not written at all (`settleEntryCells`, once every function is lowered): then the binding is
 an ordinary local again, and a task handle or a file is released where it would be without a cell.
-Which constants get one is `entryCellOf` in `ir/lower/cell.trb`: a `const` of a single name, in a module that runs
-code, whose type is a shared object. A top-level `var` still has no cell: a function that assigns one is a finding.
-Test: `tests/conformance/shared-top-level-const.trb`.
+Which constants get one is `entryCellOf` in `ir/lower/cell.trb`: every name a top-level `const` binds (a destructuring
+one included), in a module that runs code, whose type has a value. A reader asks `entryCellRead`, which sends a
+constant whose value is static data (`const limit = 64`) to its static instead - it has nothing to evaluate twice, and a
+static is the cheapest read in a loop - except for a shared object, which always has its cell. A top-level `var` still
+has no cell: a function that assigns one is a finding.
+
+**A read before the top-level code set the cell panics, at the read.** The checker orders the statements of a file,
+not the calls into its functions, so `report()` above `const table = loaded()` calls a function that reads what no
+statement has made yet. Evaluating the initializer there instead would run it in an order nobody wrote, and it may name
+earlier locals of the entry function, which a function cannot see. So every cell has a flag beside it - a second entry
+cell, a `Bool` named `{cell}_set`, which the entry writes `true` right after the value (`cellMark`, added by
+`settleEntryCells` where a function reads the cell) - and a read is `cellIsSet`, a branch, and the panic
+``The top-level const `table` is read before its statement ran`` on the unset side. Both back ends know one kind of cell, and a zeroed cell is an unset one in both; the release at the end skips a
+cell whose flag is unset, because it holds no count. The VM keeps a cell in a gap of the constant pool (`entry.cell`
+copies its words in or out, the read's chunk retains) and runs the release chunk (`entryCellRelease`) after the last
+entry. Tests: `tests/conformance/shared-top-level-const.trb`, `top-level-const-once.trb` and
+`top-level-const-before-set.trb`, and `compiler/tests/top-level-constants.test.trb`.
 
 ### What 5.11 needs, measured before it is written
 

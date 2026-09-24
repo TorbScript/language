@@ -1,0 +1,48 @@
+/**
+ * A top-level `const` of a test file is evaluated once, by the file's top-level code, and every function and every test
+ * of the file that reads it reads that one value (`ir/lower/cell.trb`). The initializer counts its own evaluations in a
+ * shared object, which a second evaluation - the immortal module constant a function used to build for itself - would
+ * have counted as well.
+ */
+
+use test, group from "std/test"
+
+/** How often an initializer ran. A shared object, so that the initializer and the tests count on the same one. */
+shared type Counter {
+  var count: Int = 0
+}
+
+const evaluations = Counter()
+
+fn table(): List<Int> {
+  evaluations.count = evaluations.count + 1
+  [1, 2, 3]
+}
+
+const numbers = table()
+
+fn total(): Int {
+  var sum = 0
+  for number in numbers {
+    sum = sum + number
+  }
+  sum
+}
+
+fn largest(): Int {
+  numbers.last() ?? 0
+}
+
+group "A top-level const of a test file" {
+  test "is evaluated once, by the top-level code, however many functions read it" {
+    assert(total() == 6)
+    assert(largest() == 3)
+    assert(total() == 6)
+    assert(evaluations.count == 1)
+  }
+
+  test "is the same value in a test as in a function" {
+    assert(numbers == [1, 2, 3])
+    assert(numbers.length() == largest())
+  }
+}

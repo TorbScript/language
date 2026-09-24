@@ -43,7 +43,7 @@ use lowerClosureValue, lowerNamedFunctionValue, lowerForcedRead, bindingReferenc
 use savedFrame, restoreFrame, enterBody from "./closure"
 use lowerConstructorValue from "./closure"
 use lowerTextLiteral, showsHere from "./text"
-use entryCellType, readEntryCell from "./cell"
+use entryCellRead, readEntryCell from "./cell"
 
 /** One expression, lowered into `destination` where the caller has a slot for it, or into a fresh one otherwise. */
 public fn lowerExpression(
@@ -663,10 +663,10 @@ fn lowerConstantReference(
   if const Some(slot) = lowering.entryLocals.get(symbol.value) {
     return copiedInto builder, destination, slot
   }
-  // A shared object of the entry file, read from a function of it: the one object the entry made, from its cell
-  if const Some(held) = entryCellType(lowering, symbol) {
-    const target = valueSlot lowering, builder, destination, held
-    const _ = readEntryCell lowering, builder, symbol, target
+  // A top-level `const` of the entry file, read from a function of it: the one value the entry made, from its cell
+  if const Some(accesses) = entryCellRead(lowering, symbol) {
+    const target = valueSlot lowering, builder, destination, accesses.held
+    readEntryCell lowering, builder, symbol, accesses, target, at
     return target
   }
   if isVarBinding(lowering, symbol) {
@@ -708,8 +708,10 @@ fn lowerConstantReference(
  * Two constructs need exactly this shape, so they are one mechanism: a module `const` here, and the static
  * `ExpressionNode` tree of a quotation.
  *
- * In an entry file or a test file a top-level `const` is a **local of the entry function** and never reaches this, so the
- * purity rule not applying there costs nothing.
+ * In an entry file or a test file a top-level `const` is a **local of the entry function**, and a function of the file
+ * reads it from its entry cell (`ir/lower/cell.trb`) - so it never reaches this, and the purity rule not applying there
+ * costs nothing: an initializer that calls a function is evaluated once, by the top-level code, and never in a region
+ * that keeps its temporaries.
  */
 fn lowerImmortalConstant(
   var lowering: Lowering,

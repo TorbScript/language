@@ -56,6 +56,13 @@ void torb_process_start(int argument_count, char **argument_values) {
   torb_set_stack_limit();
 }
 
+/** What `torb_process_exit` runs before the leak report: the release of the entry cells, or nothing. */
+static void (*torb_exit_release)(void) = NULL;
+
+void torb_process_on_exit(void (*release)(void)) {
+  torb_exit_release = release;
+}
+
 void torb_process_finish(void) {
   if (torb_reports_leaks) {
     torb_report_leaks();
@@ -253,6 +260,11 @@ void torb_process_exit(int64_t code) {
     torb_sandbox_exit(code);
   }
   torb_scheduler_exit(code);
+  if (torb_exit_release != NULL) {
+    void (*release)(void) = torb_exit_release;
+    torb_exit_release = NULL;
+    release();
+  }
   torb_process_finish();
   fflush(stdout);
   fflush(stderr);

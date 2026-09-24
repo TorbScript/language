@@ -1054,6 +1054,12 @@ void torb_process_start(int argument_count, char **argument_values);
  * writes the live block count to stderr, which is the leak gate of the conformance suite.
  */
 void torb_process_finish(void);
+/**
+ * What `torb_process_exit` runs before the leak report, once: the generated `main` hands it the function that gives the
+ * count of every entry cell back (`entry_cells_release`), which a program that ends in `Process.exit` never reaches
+ * `main`'s own call of. `NULL` runs nothing.
+ */
+void torb_process_on_exit(void (*release)(void));
 /** `Process.arguments()`: the program's own name is not in it. Result owned. */
 torb_list torb_process_arguments(void);
 TORB_NORETURN void torb_process_exit(int64_t code);

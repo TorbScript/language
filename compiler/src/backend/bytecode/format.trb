@@ -106,6 +106,12 @@ public type Opcode {
    * the grant: `runScript` of `std/sandbox`, which only the VM has (docs/design/SCRIPTS.md sections 4 to 6).
    */
   case RunScript
+  /**
+   * `A` = register, `B` = width, `C` = 0 to read the cell and 1 to write it; `T0` = the cell's first word (a gap of the
+   * constant pool): an entry cell, the one value a top-level `const` of the entry file holds for every function that
+   * names it. A read copies the words out, a write copies them in; the count is the chunk's business.
+   */
+  case EntryCell
 
   /** The number the head word carries. */
   fn number(): Int {
@@ -148,6 +154,7 @@ public type Opcode {
       .Stop => 35
       .Cell => 36
       .RunScript => 37
+      .EntryCell => 38
     }
   }
 
@@ -192,6 +199,7 @@ public type Opcode {
       .Stop => "stop"
       .Cell => "cell"
       .RunScript => "run.script"
+      .EntryCell => "entry.cell"
     }
   }
 }
@@ -236,6 +244,7 @@ public const allOpcodes: List<Opcode> = [
   Opcode.Stop,
   Opcode.Cell,
   Opcode.RunScript,
+  Opcode.EntryCell,
 ]
 
 // --- The head word --------------------------------------------------------------------------------------------------
@@ -292,6 +301,7 @@ public fn tailLengthOf(opcode: Opcode, head: Int): Int {
     .Switch => 2 * operandB(head) + 1
     .Cell => 2
     .RunScript => 1
+    .EntryCell => 1
     _ => 0
   }
 }
@@ -727,6 +737,8 @@ public type BytecodeProgram {
   var tables: List<TableEntry> = []
   var elements: List<ElementEntry> = []
   var locations: List<Location> = []
+  /** The chunk that gives the count of every entry cell back once the program is done, `-1` where it has none. */
+  var entryCellRelease: Int = -1
 }
 
 /** The width of the words of a constant part. */

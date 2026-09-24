@@ -43,9 +43,6 @@ Code rules, gates and repository operations: `compiler/CONTRIBUTING.md`.
   ... was reached`, exit code 102, enforced by the OS (job object / `RLIMIT_DATA`). `TORB_MEMORY_LIMIT` (`16G`, `512M`,
   `0`/`none`) overrides it for every TorbScript process that sees it, `torb` included - so set it on the binary, not
   around `torb run`. Release binaries (the compiler) have no default limit. A runaway test once took the machine down.
-- A top-level `const` of an entry/test file that a `fn` reads is evaluated twice (compiler bug): once by the entry, once
-  as an immortal module constant whose temporaries are never freed - unless it holds a `shared type` (entry cell). Never
-  put a heavy computation (a `check`, a lowering) there; that was the 88 GB `tests.exe` (`sandbox.test.trb`).
 - Some files are CRLF: keep each file's line endings. Bulk edits only through a script that asserts exact matches;
   never PowerShell arrays.
 - TorbScript in docs and answers: no semicolons, no squeezed one-liners, command calls where the canon says so,

@@ -2235,20 +2235,29 @@ fn entryCellsOf(functions: List<IrFunction>): List<(String, IrTypeId)> {
 
 /**
  * The one function that releases every entry cell, called by `main` once the program is done: the cell's count is the
- * last one, so this is where the object of a top-level `const` of the entry file goes - and runs its `close()`, if it
- * has one.
+ * last one, so this is where the value of a top-level `const` of the entry file goes - and an object runs its `close()`,
+ * if it has one. A cell whose flag (`{cell}_set`, `ir/lower/cell.trb`) says the top-level code never set it holds no
+ * count.
  */
 fn emitEntryCellRelease(var emission: Emission, program: IrProgram, functions: List<IrFunction>) {
   const cells = entryCellsOf functions
   if cells.isEmpty() {
     return
   }
+  var names: Set<String> = []
+  for (cell, _) in cells {
+    names.insert cell
+  }
   var statements: List<CStatement> = []
   for (cell, held) in cells {
     if const Some(release) = releaseStatement(program, held, CExpression.Name(cell)) {
-      statements.append release
+      const flag = "{cell}_set"
+      if names.contains(flag) {
+        statements.append CStatement.If(CExpression.Name(flag), [release])
+      } else {
+        statements.append release
+      }
     }
-    statements.append CStatement.Assignment(CExpression.Name(cell), CExpression.Literal("NULL"))
   }
   const comment = "The count every entry cell holds, given back once the program is done"
   write emission, CDeclaration.Definition(comment, "static void {entryCellReleaseName}(void)", statements)
@@ -2285,7 +2294,7 @@ fn emitConstantCellStorage(var emission: Emission, program: IrProgram, functions
   const cells = entryCellsOf functions
   if !cells.isEmpty() {
     write(emission, CDeclaration.Comment(
-      "The one object of every top-level const of an entry file that holds a shared object, with a count of its own."
+      "The one value of every top-level const of an entry file a function reads, with a count of its own, and its flag."
     ))
   }
   for (cell, held) in cells {
@@ -2319,6 +2328,11 @@ fn emitMain(var emission: Emission, entries: List<ProgramEntry>, functions: List
     return
   }
   var lines = ["torb_process_start(argument_count, argument_values);"]
+  const hasCells = !entryCellsOf(functions).isEmpty()
+  // A program that ends in `Process.exit` never comes back here, so the runtime gives the cells' counts back there
+  if hasCells {
+    lines.append "torb_process_on_exit({entryCellReleaseName});"
+  }
   var isTestRun = false
   var isNamed = false
   var isMainTask = false
@@ -2370,7 +2384,8 @@ fn emitMain(var emission: Emission, entries: List<ProgramEntry>, functions: List
     lines.append "torb_scheduler_finish();"
   }
   // The entry cells hold a count until nothing can read them any more: after the last task
-  if !entryCellsOf(functions).isEmpty() {
+  if hasCells {
+    lines.append "torb_process_on_exit(NULL);"
     lines.append "{entryCellReleaseName}();"
   }
   // The summary of the run is written before the leak report, so the two reports read in the order they happened

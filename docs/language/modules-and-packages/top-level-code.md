@@ -135,6 +135,31 @@ const <name> = <compile-time expression>    a module's only top-level statement
     // error: This closure changes the top-level `var` `total` and may outlive its statement
     ```
 
+11. **A top-level `const` of an entry file, a script or a test file is evaluated once, when its statement runs, and a
+    function that reads it reads that value.** However many functions read it, and however often, the initializer runs
+    exactly once, in the order the statements are written. A function that reads the `const` before its statement ran -
+    called from a statement above it - panics at the read:
+    ``The top-level const `table` is read before its statement ran``.
+
+    ```trb run
+    fn loaded(): List<String> {
+      print "loading"
+      ["alpha", "beta"]
+    }
+
+    const table = loaded()
+
+    fn count(): Int {
+      table.length()
+    }
+
+    print count()
+    print count()
+    // prints loading
+    // prints 2
+    // prints 2
+    ```
+
 ## What this is not
 
 **Top-level code is not something a module can opt into.** Whether a file may hold a statement outside a declaration

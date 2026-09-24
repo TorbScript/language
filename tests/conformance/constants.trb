@@ -15,6 +15,10 @@ use Process from "std/process"
  * constant no path reads is never built. A write to a copy of one copies, which is what `torb_make_unique` does with an
  * immortal block, and the leak gate is what says every copy is counted right: `live blocks at exit: 0` plus a fixed
  * number of immortal ones.
+ *
+ * That is the `const` of a module that runs nothing. This file is an entry file, so each of its `const`s that is no
+ * static data is evaluated once, by the top-level code, and a function reads it from its **entry cell**
+ * (`ir/lower/cell.trb`): the same value with a count of its own, which a write to a copy of it copies just the same.
  */
 
 /** A `Boxed` layout: five fields, so it is above the inline limit and its constant cannot be static data. */
@@ -51,12 +55,12 @@ fn readFromFunction(): Int {
   total + entry.label.byteLength() + entry.fourth + folded
 }
 
-/** Read twice in one body: one block, two retains that are no-ops, and no build the second time. */
+/** Read twice in one body: one value, and no build the second time. */
 fn readTwice(): Int {
   words.length() + words.length()
 }
 
-/** Read in a loop, which is the read count that made the immortal static worth writing. */
+/** Read in a loop, which is the read count that made a constant that is built once worth writing. */
 fn readOften(): Int {
   var total = 0
   for _ in 0..100 {
@@ -66,8 +70,8 @@ fn readOften(): Int {
 }
 
 /**
- * A **mutated copy** of a constant: the value is immortal, so the write makes a copy of it and the constant itself is
- * untouched however often this runs.
+ * A **mutated copy** of a constant: the value is shared with its cell, so the write makes a copy of it and the constant
+ * itself is untouched however often this runs.
  */
 fn mutatedCopy(): Int {
   var mine = words

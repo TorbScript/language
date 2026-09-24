@@ -1,38 +1,51 @@
 /**
- * The entry cells: how a top-level `const` of an entry file that holds a shared object is **one** object for the entry
- * function and for every function of its file.
+ * The entry cells: how a top-level `const` of an entry file, a script or a test file is evaluated **once**, by the
+ * top-level code, and read by every function of its file as that one value.
  *
  * A top-level binding of an entry file is a local of the entry function, and a function of the same file cannot see the
- * entry's frame - so without a cell it reads the constant the way it reads a module constant, as an immortal value built
- * from the initializer a second time. For a value nobody can tell, because values have no identity. For a shared object
- * it is a second object: `const evaluations = Tally()` counted in a function and printed by the entry would print `0`.
+ * entry's frame. Without a cell it read the constant the way it reads a module constant - as an immortal value built
+ * from the initializer a second time, inside an immortal region where no temporary is ever freed. That was two
+ * evaluations of an initializer that may call anything: a `print` in it printed twice, and a `const` that checked and
+ * lowered a whole package kept every temporary of the second run (88 GB once, `compiler/tests/sandbox.test.trb`). For a
+ * shared object it was a second object besides: `const evaluations = Tally()` counted in a function and printed by the
+ * entry printed `0`.
  *
- * So such a binding gets a cell (`FunctionKind.EntryCell`): the entry function writes its binding into it right after
- * the binding is made, and every function of the file reads it from there. The cell holds a count of its own, so the
- * object lives while anything may still read it - a task the entry started and did not wait for runs after the entry
- * function returned - and the back end gives that count back once the program is done.
+ * So every such binding whose value is no static data gets a cell (`FunctionKind.EntryCell`): the entry function writes
+ * its binding into it right after the binding is made, and every function of the file reads it from there. The cell
+ * holds a count of its own, so the value lives while anything may still read it - a task the entry started and did not
+ * wait for runs after the entry function returned - and the back end gives that count back once the program is done.
+ * A `const` whose value is static data (`const limit = 64`) has nothing to evaluate twice and stays a static, which a
+ * read in a loop is cheapest as.
  *
- * # Pitfalls
- *
- * A function that runs before the entry reached the binding reads an empty cell. The checker orders a file's statements,
- * not the calls into its functions, so `bump()` above `const tally = Tally()` is a program that reads nothing yet.
+ * **A read before the top-level code set the cell panics.** The checker orders a file's statements, not the calls into
+ * its functions, so `report()` above `const table = load()` calls a function that reads what no statement has made yet.
+ * Beside the value every cell has a second one, a `Bool` the entry sets to `true` after the value, and a read checks it
+ * first: `The top-level const `table` is read before its statement ran`, at the read. The flag is a cell like the value
+ * - both back ends know one kind of cell and no more - and a zeroed cell is an unset one in both.
  */
 
-use Binding from "../../syntax/ast"
+use Span from "../../syntax/source"
 use SymbolId from "../../semantics/symbols"
+use LiteralValue from "../../semantics/checker/type"
 use signatureOf from "../../semantics/checker/signature"
 use IrTypeId, IrSignature, IrParameter, Slot, FunctionId, FunctionKind, CellAccess, Instruction from "../ir"
-use Ownership, WitnessSource, borrowed from "../ir"
-use FunctionBuilder, emit, newFunction, finishFunction, setFunctionKind from "../build"
+use SlotDeclaration, SlotRole from "../ir"
+use Ownership, WitnessSource, StaticContents, Terminator, borrowed from "../ir"
+use FunctionBuilder, emit, newFunction, finishFunction, setFunctionKind, addTemporary, addBlock from "../build"
 use functionName, mangledName from "../mangle"
 use symbolPathOf from "../instantiate"
-use Lowering, EntryCellAccesses, irTypeOfClosed, voidTypeOf from "./context"
+use staticOfConstant from "../constant"
+use Lowering, EntryCellAccesses, EntryCellReads, irTypeOfClosed, voidTypeOf, booleanTypeOf from "./context"
+use reportUnsupported, locationOf, internStatic, finishBlock, continueIn from "./context"
 use isEntryModule from "./function"
+use textSlot from "./text"
 
 /**
  * The entry cell of a top-level `const`, made the first time anything asks, or `None` for a declaration that has none:
- * a `var`, a binding that takes a value apart, a constant of a module that runs nothing, and a value that is no shared
- * object.
+ * a `var`, a constant of a module that runs nothing, and a value of no type a cell can hold.
+ *
+ * It says nothing about static data: a reader asks [entryCellRead], which sends a constant that is static data to its
+ * static instead.
  */
 public fn entryCellOf(var lowering: Lowering, symbol: SymbolId): EntryCellAccesses? {
   if const Some(known) = lowering.entryCells.get(symbol.value) {
@@ -47,11 +60,13 @@ fn madeEntryCell(var lowering: Lowering, symbol: SymbolId): EntryCellAccesses? {
   const site = lowering.checker.siteOf(symbol)?
   const binding = match site.kind {
     .Constant(found) => found
+    // One name of `const (quotient, remainder) = divided(17, 5)`: a cell per name, both written by the one evaluation
+    .Destructured(found) => found
     _ => {
       return None
     }
   }
-  if binding.isVar || !isNameBinding(binding) {
+  if binding.isVar {
     return None
   }
   const statements = lowering.checker.program.graph.at(site.module).file.statements
@@ -66,31 +81,39 @@ fn madeEntryCell(var lowering: Lowering, symbol: SymbolId): EntryCellAccesses? {
     return None
   }
   const held = irTypeOfClosed lowering, declared
-  if !isSharedObject(lowering, held) {
-    return None
+  // `Void` and `Never` have no value a cell could hold
+  match lowering.program.typeAt(held) {
+    .VoidType => {
+      return None
+    }
+    .NeverType => {
+      return None
+    }
+    _ => {}
   }
   const path = symbolPathOf lowering.checker, symbol
   const accessor = functionName lowering.program, path, []
   const cell = "{accessor}_entry"
+  const flag = "{accessor}_entry_set"
   const voidType = voidTypeOf lowering
-  const parameters = [IrParameter("value", held, false, Ownership.Owned)]
+  const boolean = booleanTypeOf lowering
   const write = cellAccess(
     lowering,
     mangledName("t", ["cellWrite"], accessor),
     symbol,
-    IrSignature(parameters, voidType),
+    IrSignature([IrParameter("value", held, false, Ownership.Owned)], voidType),
     cell,
     .Write,
   )
-  Some EntryCellAccesses(write, held, cell, accessor)
-}
-
-/** `const tally = Tally()`, and not `const (reader, writer) = ...`, whose names share one initializer. */
-fn isNameBinding(binding: Binding): Bool {
-  if const .Binding(_) = binding.pattern.kind {
-    return true
-  }
-  false
+  const mark = cellAccess(
+    lowering,
+    mangledName("t", ["cellMark"], accessor),
+    symbol,
+    IrSignature([IrParameter("value", boolean, false, Ownership.Owned)], voidType),
+    flag,
+    .Write,
+  )
+  Some EntryCellAccesses(write, mark, held, cell, flag, accessor, lowering.checker.symbolAt(symbol).name)
 }
 
 fn cellAccess(
@@ -124,8 +147,24 @@ fn isSharedObject(var lowering: Lowering, id: IrTypeId): Bool {
   }
 }
 
-/** A top-level binding of the entry function was just made: where it has a cell, the binding goes into it. */
-public fn writeEntryCell(var lowering: Lowering, var builder: FunctionBuilder, symbol: SymbolId, slot: Slot) {
+/**
+ * The cell a function of the file reads a top-level `const` from, or `None` where it reads something else: a constant
+ * that has no cell, and one whose value is static data, which is read as its static. An object with an identity is never
+ * static data, whatever its fields are.
+ */
+public fn entryCellRead(var lowering: Lowering, symbol: SymbolId): EntryCellAccesses? {
+  const accesses = entryCellOf(lowering, symbol)?
+  if !isSharedObject(lowering, accesses.held) && staticOfConstant(lowering, symbol).isSome() {
+    return None
+  }
+  Some accesses
+}
+
+/**
+ * A top-level binding of the entry function was just made: where it has a cell, the binding goes into it. The flag that
+ * says it is there is written right after it by [settleEntryCells], once it is known that a function reads the cell.
+ */
+public fn writeEntryCell(var lowering: Lowering, var builder: FunctionBuilder, symbol: SymbolId, slot: Slot, at: Span) {
   if lowering.isDiverged || !lowering.isSupported {
     return
   }
@@ -136,6 +175,7 @@ public fn writeEntryCell(var lowering: Lowering, var builder: FunctionBuilder, s
     }
   }
   if builder.typeOfSlot(slot) != accesses.held {
+    reportUnsupported lowering, "a top-level `const` whose binding is not the type of its entry cell", at
     return
   }
   const none: List<WitnessSource> = []
@@ -143,60 +183,75 @@ public fn writeEntryCell(var lowering: Lowering, var builder: FunctionBuilder, s
 }
 
 /**
- * A read of a top-level `const` from a function of its file, where the constant has a cell: the object the entry put
- * there, with a count of its own. `false` where it has none, and the caller reads the constant as a module constant.
+ * A read of a top-level `const` from a function of its file, where [entryCellRead] answered a cell: the flag first, a
+ * panic at `at` where the top-level code has not set it yet, and otherwise the value, with a count of its own.
  */
-public fn readEntryCell(var lowering: Lowering, var builder: FunctionBuilder, symbol: SymbolId, target: Slot): Bool {
-  const accesses = match entryCellOf(lowering, symbol) {
-    Some(found) => found
-    None => {
-      return false
-    }
-  }
-  const read = readAccessOf lowering, symbol, accesses
+public fn readEntryCell(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  symbol: SymbolId,
+  accesses: EntryCellAccesses,
+  target: Slot,
+  at: Span,
+) {
+  const reads = readAccessesOf lowering, symbol, accesses
   const none: List<WitnessSource> = []
-  emit builder, Instruction.Call(Some(target), read, [], none)
-  true
+  const isSet = addTemporary builder, booleanTypeOf(lowering)
+  emit builder, Instruction.Call(Some(isSet), reads.flag, [], none)
+  const location = locationOf lowering, at
+  const unset = addBlock builder, "cell.unset", Some(location)
+  const set = addBlock builder, "cell.set", Some(location)
+  finishBlock lowering, builder, Terminator.Branch(isSet, set, unset)
+  continueIn lowering, builder, unset
+  const message = textSlot lowering, builder, "The top-level const `{accesses.name}` is read before its statement ran"
+  emit builder, Instruction.Panic(borrowed(message), location)
+  finishBlock lowering, builder, Terminator.Unreachable
+  continueIn lowering, builder, set
+  emit builder, Instruction.Call(Some(target), reads.value, [], none)
 }
 
 /**
- * The read of a cell, made the first time a function reads it: a cell the entry fills and no function reads has no
- * read, because a `static` function nothing calls is an error of the C compiler.
+ * The reads of a cell and its flag, made the first time a function reads it: a cell the entry fills and no function
+ * reads has no read, because a `static` function nothing calls is an error of the C compiler.
  */
-fn readAccessOf(var lowering: Lowering, symbol: SymbolId, accesses: EntryCellAccesses): FunctionId {
+fn readAccessesOf(var lowering: Lowering, symbol: SymbolId, accesses: EntryCellAccesses): EntryCellReads {
   if const Some(known) = lowering.entryCellReads.get(symbol.value) {
     return known
   }
-  const name = mangledName "t", ["cellRead"], accesses.accessor
-  const read = cellAccess lowering, name, symbol, IrSignature([], accesses.held), accesses.cell, CellAccess.Read
-  lowering.entryCellReads.set symbol.value, read
-  read
-}
-
-/** The type a `const` with a cell holds, or `None` where it has none. */
-public fn entryCellType(var lowering: Lowering, symbol: SymbolId): IrTypeId? {
-  const accesses = entryCellOf(lowering, symbol)?
-  Some accesses.held
+  const valueName = mangledName "t", ["cellRead"], accesses.accessor
+  const value = cellAccess lowering, valueName, symbol, IrSignature([], accesses.held), accesses.cell, CellAccess.Read
+  const flagName = mangledName "t", ["cellIsSet"], accesses.accessor
+  const boolean = booleanTypeOf lowering
+  const flag = cellAccess lowering, flagName, symbol, IrSignature([], boolean), accesses.flag, CellAccess.Read
+  const reads = EntryCellReads value, flag
+  lowering.entryCellReads.set symbol.value, reads
+  reads
 }
 
 /**
- * The writes of every cell no function reads, gone again: the entry's binding is then an ordinary local, released where
- * it would be without a cell - a task handle is not held until the program ends, a file closes where its block ends.
- * Which cells are read is known only once every function is lowered, which is why the write is taken back and not left
- * out.
+ * Every write of a cell, settled once every function is lowered - which is when it is known which cells a function reads.
+ *
+ * The write of a cell no function reads is gone again: the entry's binding is then an ordinary local, released where it
+ * would be without a cell - a task handle is not held until the program ends, a file closes where its block ends. The
+ * write of a cell a function reads is followed by the write of its flag, `true` in a temporary of its own.
  */
-public fn dropUnreadCells(var lowering: Lowering) {
+public fn settleEntryCells(var lowering: Lowering) {
   var unread: Set<Int> = []
+  var marks: Map<Int, FunctionId> = [:]
   for (key, found) in lowering.entryCells {
     if const Some(accesses) = found {
-      if !lowering.entryCellReads.containsKey(key) {
+      if lowering.entryCellReads.containsKey(key) {
+        marks.set accesses.write.value, accesses.mark
+      } else {
         unread.insert accesses.write.value
       }
     }
   }
-  if unread.isEmpty() {
+  if unread.isEmpty() && marks.isEmpty() {
     return
   }
+  const boolean = booleanTypeOf lowering
+  const none: List<WitnessSource> = []
   for index in 0..lowering.program.functions.length() {
     var function = lowering.program.functions[index]
     var isChanged = false
@@ -205,6 +260,16 @@ public fn dropUnreadCells(var lowering: Lowering) {
       for instruction in function.blocks[block].instructions {
         if const .Call(None, callee, _, _, _) = instruction {
           if unread.contains(callee.value) {
+            isChanged = true
+            continue
+          }
+          if const Some(mark) = marks.get(callee.value) {
+            kept.append instruction
+            const isSet = Slot function.slots.length()
+            function.slots.append SlotDeclaration(boolean, SlotRole.Temporary, "")
+            const isTrue = internStatic lowering, StaticContents.Literal(LiteralValue.Boolean(true)), boolean
+            kept.append Instruction.Constant(isSet, isTrue)
+            kept.append Instruction.Call(None, mark, [borrowed(isSet)], none)
             isChanged = true
             continue
           }

@@ -428,6 +428,53 @@ group "The top level of a file" {
     assert(!textOf(source).contains("static s_acme_x2f_app_main_counter"))
   }
 
+  /**
+   * A top-level `const` of an entry file is evaluated once, by the entry function, and a function of the file reads that
+   * value from its entry cell: first the flag the entry sets after the value, a panic where it is not set yet, then the
+   * value. There is no immortal accessor that would run the initializer a second time (`ir/lower/cell.trb`).
+   */
+  test "a top-level `const` a function reads is evaluated once, and the function reads its entry cell" {
+    const source = raw"""
+      fn loaded(): List<Int> {
+        [1, 2]
+      }
+
+      const table = loaded()
+
+      fn count(): Int {
+        table.length()
+      }
+
+      const _ = count()
+      """
+    const entry = irOf source, "t_acme_x2f_app_main"
+    assert(entry.split("call t_acme_x2f_app_main_loaded()").length() == 2)
+    assert entry.contains("call t_cellWrite__t_acme_x2f_app_main_table(%0 borrowed)")
+    assert entry.contains("call t_cellMark__t_acme_x2f_app_main_table(")
+    const reader = irOf source, "t_acme_x2f_app_main_count"
+    assert reader.contains("= call t_cellIsSet__t_acme_x2f_app_main_table()")
+    assert reader.contains("The_x20_top_x2d_level_x20_const_x20__x60_table_x60__x20_is_x20_read_x20_before")
+    assert reader.contains("= call t_cellRead__t_acme_x2f_app_main_table()")
+    const text = textOf source
+    assert(!text.contains("constant fn t_acme_x2f_app_main_table"))
+    assert text.contains("cell fn t_cellRead__t_acme_x2f_app_main_table() -> ")
+    assert text.contains(" = Read t_acme_x2f_app_main_table_entry\n")
+  }
+
+  test "a top-level `const` that is static data is read as its static, and has no cell" {
+    const source = raw"""
+      const limit = 64
+
+      fn doubled(): Int {
+        limit * 2
+      }
+
+      const _ = doubled()
+      """
+    assert irOf(source, "t_acme_x2f_app_main_doubled").contains("= constant s_acme_x2f_app_main_limit")
+    assert(!textOf(source).contains("cellRead"))
+  }
+
   test "a top-level `var` a function reads is a clean finding, because it would read the initializer" {
     const source = raw"""
       var counter = 0
