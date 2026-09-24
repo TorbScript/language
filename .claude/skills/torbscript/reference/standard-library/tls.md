@@ -20,7 +20,8 @@ source:
 
 `std/tls` puts TLS over a [std/network](network.md) `TcpStream`: `TlsStream.connect` for a client, `TlsStream.accept`
 with a `ServerIdentity` for a server, and then a stream that receives and sends like the TCP one. The protocol is
-mbedTLS 3.6, TLS 1.2 and 1.3, vendored into the runtime and linked only into a program that reaches `std/tls`.
+mbedTLS 3.6, TLS 1.2 and 1.3, vendored into the runtime and linked only into a program that reaches `std/tls`; such a program carries
+mbedTLS's Apache-2.0 license notice, unlike the rest of the runtime (MIT-0).
 [std/http](http.md) is built on it: `https` URLs and `Server.listen(..., tls: identity)`. It needs the network
 capability inside a sandboxed script, and is not in the prelude.
 
