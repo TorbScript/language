@@ -123,6 +123,8 @@ void torb_list_reverse(torb_list *list);
 void torb_list_set(torb_list *list, int64_t index, const void *value, torb_location at);
 /* ArrayList.sliceBetween, TrieList.sliceBetween */
 torb_list torb_list_slice(torb_list list, int64_t from, int64_t to, torb_location at);
+/* Machine.install */
+void torb_machine_install(torb_closure interpreter);
 /* Machine.load */
 int64_t torb_machine_load(int64_t address);
 /* Machine.operate */

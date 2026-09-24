@@ -4,13 +4,14 @@
  * The VM is TorbScript compiled into `torb`. Its registers are one `ArrayList<Int64>` of 64-bit words, and a value is
  * the runtime's own bytes spread over as many words as it needs - a `torb_text` is two words, a list two, a pointer
  * one. What TorbScript cannot do on such words - read a `torb_text` out of two of them, call a function of the runtime
- * with them, allocate a counted block - is what this file does, behind five natives of `std/machine`:
+ * with them, allocate a counted block - is what this file does, behind six natives of `std/machine`:
  *
  *     torb_machine_operate      one operation of the kernel's table, or one function of the runtime through its thunk
  *     torb_machine_load         one word at an address (a field of a counted block)
  *     torb_machine_store        one word to an address
  *     torb_machine_place_text   an immortal copy of a text into two words: how the constant pool gets its strings
  *     torb_machine_place_float  the bits of a float into one word
+ *     torb_machine_install      the closure of the interpreter the kernel calls back into (`torb_machine_call_back`)
  *
  * `operate` reads its operands out of a list of words (`code`), beginning at `at`: the operation's number, then what
  * the operation takes. A register operand is an offset from `base`, the frame's first word. The numbers of the
@@ -91,6 +92,29 @@ void torb_machine_place_text(torb_list *words, int64_t at, torb_text text) {
 void torb_machine_place_float(torb_list *words, int64_t at, double value) {
   int64_t *registers = torb_machine_words(words);
   registers[at] = torb_machine_word_of_double(value);
+}
+
+/* ------------------------------------------------------------------------------------------- the call back --- */
+
+/*
+ * The interpreter, as the closure `Machine.install` handed over: what the kernel calls where the runtime has to run
+ * code of the program - a test body behind its recovery point, an `equals` a map asks for, a task the scheduler resumes.
+ * The kernel owns one count of its environment, and gives it back when the next closure replaces it.
+ */
+static torb_closure torb_machine_interpreter = { NULL, NULL };
+
+void torb_machine_install(torb_closure interpreter) {
+  torb_closure previous = torb_machine_interpreter;
+  torb_machine_interpreter = interpreter;
+  torb_environment_release(previous.environment);
+}
+
+int64_t torb_machine_call_back(int64_t request) {
+  if (torb_machine_interpreter.code == NULL) {
+    torb_panic_text("internal error: the kernel has no interpreter to call back", torb_location_unknown);
+  }
+  return ((int64_t (*)(torb_environment *, int64_t))torb_machine_interpreter.code)(torb_machine_interpreter.environment,
+                                                                                    request);
 }
 
 /* ------------------------------------------------------------------------------------------------- locations --- */

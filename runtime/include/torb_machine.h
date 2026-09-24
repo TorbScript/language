@@ -2,7 +2,7 @@
  * torb_machine.h - the kernel of the bytecode VM, between runtime/machine.c and the table of thunks that
  * `torb natives --header` writes into runtime/machine_natives.c (docs/design/VM.md section 6).
  *
- * Nothing but those two files includes it: the VM reaches the kernel through the five natives of `std/machine`, whose
+ * Nothing but those two files includes it: the VM reaches the kernel through the six natives of `std/machine`, whose
  * prototypes are in torb_natives.h like every other native's.
  */
 
@@ -30,6 +30,12 @@ int64_t *torb_machine_words(torb_list *words);
 
 /** Where a reference word points: an odd word is a register (`index * 2 + 1`), an even one an address. */
 void *torb_machine_address(int64_t *words, int64_t reference);
+
+/**
+ * Calls the interpreter `Machine.install` handed over with the address of a request, and answers its word. A panic
+ * without one: the kernel only calls back while a program runs.
+ */
+int64_t torb_machine_call_back(int64_t request);
 
 /** A location the VM defined, by its index; `torb_location_unknown` for -1. */
 torb_location torb_machine_location(int64_t index);

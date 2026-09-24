@@ -12,7 +12,7 @@
  * capabilities are its imports.
  */
 
-/** The five natives of the VM's kernel. Every one of them is `runtime/machine.c`. */
+/** The six natives of the VM's kernel. Every one of them is `runtime/machine.c`. */
 public native type Machine {
   /**
    * Runs one operation of the kernel on the registers, and answers one word. `code[at]` is the operation's number - an
@@ -57,4 +57,19 @@ public native type Machine {
    * because the language has no way to see the bits of a float.
    */
   native static fn placeFloat(var words: ArrayList<Int64>, at: Int64, value: Float64)
+
+  /**
+   * Hands the kernel the one function it calls back into the interpreter with: a test body `runtime/test.c` runs behind
+   * its recovery point, an `equals` or a `hash` of the program's own a map asks for, a task the scheduler resumes. The
+   * kernel calls `interpreter` with the address of a request it describes, and the answer is the request's one word.
+   *
+   * It is native because the runtime is what calls it: a closure handed to C is the one way C reaches TorbScript. The
+   * kernel keeps `interpreter` until the next `install` replaces it.
+   *
+   * # Pitfalls
+   *
+   * A request is only valid while the call that made it runs, and the interpreter has to answer it before anything
+   * else of the kernel runs on the same registers.
+   */
+  native static fn install(interpreter: (Int64) => Int64)
 }
