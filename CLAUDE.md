@@ -52,11 +52,11 @@ Code rules, gates and repository operations: `compiler/CONTRIBUTING.md`.
   members as `fn area(): Int` (no `self` in the list) and `var fn` for mutation.
 - `docs/` is generated into `.claude/skills/torbscript`: after a docs change run
   `build/release/torb.exe docs skill docs .claude/skills/torbscript` and commit both (`--check` is a tier A gate).
-- `TODO.md` is the owner's channel (German, very large): read `git diff TODO.md`, never the whole file; never delete
-  from it.
+- Questions and requests go through the chat. There is no to-do file in the repository: what is planned is in
+  `docs/ROADMAP.md` and the design records under `docs/design/`, what is undecided in CONCEPT's "Open Questions".
 
 ## Working as a subagent
 
-- You work in your own git worktree; commit there, never on `main`, never push. Do not touch `seed/`, `TODO.md` or
-  `.claude/` unless the task says so.
+- You work in your own git worktree; commit there, never on `main`, never push. Do not touch `seed/` or `.claude/`
+  unless the task says so.
 - Report what changed, the gate output, and anything left undone with the reason.

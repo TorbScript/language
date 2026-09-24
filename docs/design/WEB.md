@@ -131,7 +131,7 @@ const app = web {
 - **`web`** is a builder of three lines (`docs/language/configuration/builders.md`), its receiver `WebApp` has the
   vocabulary `wrap`, `assets`, `handle` and `errors`, and nothing in it is registered by scanning or annotation.
 - **The dependencies are captured values.** `shop` is a `const` of the program - a connection pool, a repository -
-  and the closure takes it along. That is constructor wiring, which is what TODO.md's milestone 10 note decides for
+  and the closure takes it along. That is constructor wiring, which is what `docs/design/FRAMEWORK.md` decides for
   dependency injection: Spring's layers and names, wired by the compiler instead of by reflection.
 - **The vocabulary of the receiver is kept small on purpose.** Probe 7: inside the block a module function `respond`
   lost against the receiver's member of the same name, and the closure captured `self` and was refused. That is
@@ -537,7 +537,7 @@ the syntax is worth what it costs. **It is not**, for six reasons:
 4. **A second lexical mode**, which is what Scala 3 is removing: the lexer, the canon, `torb canon`'s layout of markup,
    the LSP's completion inside tags, the docs checker and every tool that reads `.trb` learn it, and a syntax change is
    two commits and a seed refresh (CLAUDE.md, "Seed and breaking changes").
-5. **The language would know one format.** TODO.md wants `html`, `xml`, `yaml`, `toml` as packages of `std`; syntax for
+5. **The language would know one format.** `docs/ROADMAP.md` plans `html`, `xml`, `yaml`, `toml` as packages of `std`; syntax for
    one of them makes it special in a way no other format can follow, which is Scala's `scala-xml` lesson.
 6. **It buys almost nothing over the builder.** Probe 5's page is shorter as a builder than as markup, because the
    builder has no closing tags; what the literal buys is pasting HTML from elsewhere, and section 4.3 buys that too, at
@@ -926,7 +926,7 @@ Each item is its own decision; none of them is needed for slices 1 to 3 except w
 | **F7** | **`std/crypto`: SHA-256, HMAC-SHA256, a secure random source**, constant-time comparison | sessions, CSRF, snapshots (sections 3.6, 6.4) | new natives: two commits and a seed refresh | a portable C implementation of SHA-256 and HMAC in `runtime/`, `BCryptGenRandom`/`getrandom` for randomness; no TLS-grade library needed for this |
 | **F8** | **`ResourceDirectory`** | assets beyond a handful of files (section 3.7) | RESOURCES.md section 6, checker | a literal naming a directory, resolved to its file list at build time |
 | **F9** | **A panic that ends its task, not the process** | a server that survives one bad handler (section 3.8) | **language rule** (CONCURRENCY.md section 8 says the opposite), runtime | a recovery point per worker loop; the panicking task's frame is released as a cancelled one's, what the synchronous callees held leaks and is counted; the awaiter sees `Cancelled` or a new `Panicked` |
-| **F10** | **A web target** | the browser placement (section 6.4); the docs playground | back end | route 1: the C back end and `runtime/` compiled with clang for `wasm32-wasi`, one worker, the browser's event loop as the poller - tasks are already state machines, so nothing needs a stack switch; route 2: the JavaScript back end of milestone 9 (TODO.md: `Int` as a `number` with a range check) |
+| **F10** | **A web target** | the browser placement (section 6.4); the docs playground | back end | route 1: the C back end and `runtime/` compiled with clang for `wasm32-wasi`, one worker, the browser's event loop as the poller - tasks are already state machines, so nothing needs a stack switch; route 2: the JavaScript back end of milestone 9 (`docs/design/JAVASCRIPT-AND-PHP.md`) |
 | **F11** | **`==` on values that share storage answers by address first** | parts memoized by key, session diffs (section 6.3) | runtime and IR, no semantics | in the generated `equals` of a boxed record and in the runtime's list, map and text equality, when no `Float` is reachable (`NaN != NaN`) |
 | **F12** | **A text buffer that appends in place** | rendering (section 4.2) | runtime | only if the benchmark of slice 1 shows the joined list is slower than it should be; measure first |
 | **F13** | **A `test` whose body is a task** | handler tests (section 3.9), every asynchronous test | `std/test`, the runtime's recovery point, VM slice 6 | `test(name, body: () => Task<Void>)` beside today's `() => Void`, the body run to its end by the test runner |
@@ -986,7 +986,7 @@ Slices 1 and 2 need no language change at all.
 ## 11. What this is not
 
 - **Not the transport.** Sockets, TLS, HTTP parsing, keep-alive, the poller and HTTP/2 are NETWORK.md's.
-- **Not an ORM, a DI container or a migration tool.** TODO.md's milestone 10 plans those with the framework; this record
+- **Not an ORM, a DI container or a migration tool.** Milestone 10 plans those with the framework (`docs/design/FRAMEWORK.md`); this record
   covers the web layer and says only that dependencies are captured values (section 3.1).
 - **Not a template language.** There is no second grammar; markup is TorbScript (section 4.2), or with F1 a string
   literal the checker understands.

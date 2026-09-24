@@ -671,6 +671,12 @@ const xml = Xml.format {
 }
 ```
 
+**The acceptance test of steps 1 and 4.** A configuration whose keys are all `MACRO_CASE` except one that is
+`snake_case` stays one option and one line: the naming option of the format for all of them, and one mapping for the
+exception (`map<Config> { field { _.userName }, as: "user_name" }`). Step 4 also has to offer skipping a field,
+flattening a nested record, a default for a missing field, an alias the decoder accepts beside the name, and the names
+of variants - otherwise every one of those slides down to step 5, which changes the representation in every format.
+
 **5 — `encode`/`decode` by hand.** This changes the representation in **every** format, which is why it is step 5 and
 not step 1.
 
@@ -857,7 +863,7 @@ Ordered by how much the design depends on it. Each with the smallest change that
 | 4 | **Quoted expressions at run time**, and `nameOf` over them | stage 0 support for `Expression<Value>` parameters other than `assert`'s (it special-cases `assert` and hands a plain closure to everything else) | `attribute { _.currency }`. Without it a mapping names a field with a string, and the check moves from compile time to format-build time |
 | 5 | **`UInt8.tryFrom(Int64)` and `String` from bytes.** **Closed:** `std/number` narrows an `Int64` into every smaller width and a `UInt64` into an `Int64` through the runtime's checked conversions, and `std/stream`'s `textOf(bytes)` decodes UTF-8 in TorbScript - both build natively (`tests/conformance/narrowing.trb`) | two conversions in `std/number` and `std/text`, plus their natives | **any** byte-oriented format. The lab's packed format uses `List<Int64>` as its byte type because a `UInt8` cannot be made from a number at run time, and a decoded string cannot be rebuilt from bytes |
 | 6 | **Bit access to a `Float64`** (`bits()`/`fromBits()`) | two natives on `Float64`/`Float32` | IEEE-754 in a binary format. The lab writes a float as its decimal text |
-| 7 | **Extension visibility, and overload resolution over a type parameter** | a trait's extensions are visible where the trait is (already decided, TODO "Extension-Sichtbarkeit"); and overload resolution must unify a type parameter instead of comparing type ids | writing the new vocabulary next to the old one at all. Two `Encode`s on `Float64` make an overload set the checker rejects |
+| 7 | **Extension visibility, and overload resolution over a type parameter** | a trait's extensions are visible where the trait is (decided and implemented, CONCEPT "Traits"); and overload resolution must unify a type parameter instead of comparing type ids | writing the new vocabulary next to the old one at all. Two `Encode`s on `Float64` make an overload set the checker rejects |
 | 8 | **`by value` for a method with a `var` parameter** | delegation forwards the `var` path, not a copy. Stage 0 drops the change silently today | step 3 of the ladder |
 | 9 | **The doc comment of a field, at run time**. **Closed:** the derived `describe` embeds each field's doc comment as a text constant (`tests/conformance/encoding-describe.trb`) | the checker already has it in the syntax tree; the derived `describe` embeds it as a string literal | `FieldDescription.documentation`, and therefore every `--help` text and every schema description |
 | 10 | **A method and a case field must not share a name** | a diagnostic: `Structure.fields` as a case field and `fields()` as a method type check today, and stage 0 resolves the field | nothing in the design; found while writing the lab, and it is a hole in "a type has one namespace of members" |

@@ -36,6 +36,21 @@ kind of thing it is for, because the codebase already names one lint before the 
 (`hasCapacity: false`, not a bare `false`) everywhere except the two cases a reader can tell without the label - and
 telling those two cases apart today is a person's judgement, with the fix left for a future lint.
 
+### The rules named so far
+
+Each of these needs the types the checker works out, which is why none of them is a rule of `torb canon`, and each
+comes with a fix:
+
+- **A labeled literal**: `true`, `false` or `None` passed to a parameter declared as `Bool` or as an optional carries
+  the parameter's label, unless it is the call's only argument or the parameter's type is a type parameter.
+- **A closure that only passes its parameter on** is the function's name: `items.map(stripMargin)` rather than
+  `items.map { stripMargin(_) }`.
+- **A case whose type the expected type already names** is written with the dot: `.SwitchCase(path, edges)` rather
+  than `DecisionNode.SwitchCase(path, edges)` as the argument of a `DecisionNode` parameter.
+- **A binding of an irrefutable pattern that is never read** is written `_`.
+- **A field marked `deprecated`** in favour of a method is rewritten at every use (`.x` to `.x()`), which is how a
+  field becomes a method without breaking its callers.
+
 ### What exists today
 
 Nothing checks this. `torb check` resolves and types every one of these calls without objecting to an unlabeled

@@ -263,7 +263,8 @@ That is strictly stronger than a `Result` a caller could ignore. What it does **
 `base.joined("../../etc")` is text that escapes once it is normalized. Containment is `resolved(inside:)`'s job and
 section 7 says exactly what it promises; `joined` is honest text arithmetic and nothing more.
 
-The Range split in `TODO.md` is the case where a second type won, and the difference is worth naming: there the two
+The split of `Range` into `Range`, `RangeFrom` and `RangeTo` (CONCEPT, "Built-in Types") is the case where a second
+type won, and the difference is worth naming: there the two
 types have *different members* (a range without a start has no `iterate`), so the split removed two `expect`s and
 added nothing. Here the two types would have the same members, and the split would double a surface to express a
 condition that one sentence expresses.

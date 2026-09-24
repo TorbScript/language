@@ -58,8 +58,8 @@ that does not block core work can be built now, in the order of section 10.
 | 12 | 25 lines of the manifest of natives are still planned: `Float32` and `Decimal` (milestone 8), the streams of `File`, the three standard streams, `Process.start` and `Child` (7.3), `Expression.value`/`captures` (5.11), `isSame` (5.9), and `get`/`post`/`request` of `std/http` (8) | `grep plannedRuntimeOf compiler/src/backend/c/natives.trb` |
 | 13 | Nothing in `std/` or `runtime/` computes SHA-256, reads or writes a `tar` or `gzip` archive, or speaks TLS | `grep` |
 | 14 | `docs/` has 221 pages with `status: stable`, 6 `planned` and 2 `draft`. `torb docs bundle` writes `llms.txt` and `llms-full.txt`, `torb docs skill` the Agent Skill; nothing writes HTML | `grep`, `compiler/src/documentation/command.trb` |
-| 15 | The documentation tool's Markdown reader is "deliberately not a Markdown parser" (`compiler/src/documentation/markdown.trb`); `std/markdown` is planned before milestone 8 (TODO.md, 2026-09-21) | the file's module comment |
-| 16 | The VS Code extension lives in `.vscode/extensions/torbscript` (publisher `torbscript`, version 0.1.0) and has no language server | `package.json`, TODO.md |
+| 15 | The documentation tool's Markdown reader is "deliberately not a Markdown parser" (`compiler/src/documentation/markdown.trb`); `std/markdown` is planned before milestone 8 (`docs/design/TEXT-FORMATS.md`) | the file's module comment |
+| 16 | The VS Code extension lives in `.vscode/extensions/torbscript` (publisher `torbscript`, version 0.1.0) and has no language server | `package.json`, `docs/ROADMAP.md` |
 | 17 | The repository's remote is `github.com/TorbScript/language` | `git remote -v` |
 | 18 | `OperatingSystem` has four cases (`Windows`, `Linux`, `MacOs`, `FreeBsd`) and `Architecture` two (`X64`, `Arm64`); adding a case is a breaking change of `std/core` (OS.md, "Adding an operating system") | `std/core/src/target.trb` |
 
@@ -70,8 +70,8 @@ verified on one machine.
 
 **Decision: the three launches have three lists, and an item belongs to the earliest launch that cannot do without
 it.** The milestones are the repository's own (`docs/ARCHITECTURE.md`: 7 is the VM, tasks and the sandbox, 8 the
-formatter, the language server and the package manager; TODO.md adds 9, the JS and PHP back ends, and 10, the breadth
-of `std`).
+formatter, the language server and the package manager, 9 the JS and PHP back ends, and 10 the breadth of `std`;
+`docs/ROADMAP.md` lists them).
 
 ### The preview: torb.dev with downloads and documentation
 
@@ -97,7 +97,7 @@ says it is temporary), `Decimal`, the REPL, milestones 9 and 10.
 | PROJECT.md slices 5 to 8: the specifier grammar, the static subset with its diagnostics, the manifest that reads (SCRIPTS.md slice 5) and the locked manifest with `torb lock`, `torb pack` and `torb publish` | PROJECT.md sections 8 and 12 |
 | The package manager commands: `add`, `remove`, `update`, `publish`, `yank`, `login`, `owner`, `audit`, `vendor` | milestone 8, section 7 |
 | Resolution: semantic versions, `^` by default, the highest compatible version, one version per major (CONCEPT, "Packages and the Supply Chain") | CONCEPT |
-| **An HTTP client with TLS**: the three planned natives of `std/http` (fact 12). TODO.md's plan for `std/http` is TLS through the platform (SChannel on Windows, the system's stack on macOS, OpenSSL where Linux has it) | milestone 8 |
+| **An HTTP client with TLS**: the three planned natives of `std/http` (fact 12). The plan for `std/http` (`docs/ROADMAP.md`, milestone 8) is TLS through the platform (SChannel on Windows, the system's stack on macOS, OpenSSL where Linux has it) | milestone 8 |
 | SHA-256 and Ed25519 verification, as natives of `runtime/` or a `std` package | fact 13 |
 | Reading and writing a deterministic `tar` and `gzip` (inflate is the part that must be fast; deflate may be simple) | fact 13, section 7.2 |
 | `torb doc`, which renders doc comments; the registry runs it for every version | `docs/tooling/torb-doc.md` (planned) |
@@ -109,7 +109,7 @@ says it is temporary), `Decimal`, the REPL, milestones 9 and 10.
 
 | Item | Why it blocks a compatibility promise |
 |---|---|
-| The language server and a published editor extension (milestone 8) | a 1.0 without an editor story is not taken seriously, and the LSP is the compiler (TODO.md: incremental `check`, the checker's tables for hover, definition and completion) |
+| The language server and a published editor extension (milestone 8) | a 1.0 without an editor story is not taken seriously, and the LSP is the compiler (`docs/ROADMAP.md`: incremental `check`, the checker's tables for hover, definition and completion) |
 | `torb format` and `torb lint` (milestone 8), `torb lint --fix` as the migration tool | section 3: every breaking change before 1.0 needs a migration, and after 1.0 a deprecation needs a fix |
 | `deprecated` and `since` (CONCEPT "Open Questions") | there is no way to deprecate a `std` member today, and a promise without a deprecation mechanism can only freeze |
 | **A way for a public enum to grow**: fact 18 says a new case of `OperatingSystem` breaks every `match` on it; the same holds for `IoError`, `HttpError` and every error enum of `std` | the stability promise cannot hold for any `std` enum without one: either a marker that makes `_` mandatory outside the declaring package (Rust's `#[non_exhaustive]`, Swift's `@unknown default`), or a policy that such an enum never grows. A language question, and not decided here |
@@ -344,8 +344,8 @@ no server.**
 | Check only, in the browser | smallest | a playground that cannot print is not one |
 
 - **A target is needed for it.** A wasm `torb` is a new target, so `OperatingSystem` gains a case (fact 18), which is a
-  breaking change of `std/core` and therefore belongs **before 1.0**. What each capability does there follows TODO.md's
-  rule for the JS back end: real, simulated (`std/fs` over an in-memory file system), or a compile error at the import
+  breaking change of `std/core` and therefore belongs **before 1.0**. What each capability does there follows the
+  rule of the JS back end (`docs/design/JAVASCRIPT-AND-PHP.md`): real, simulated (`std/fs` over an in-memory file system), or a compile error at the import
   (`std/process`).
 - **Sharing is the URL**: the source compressed into the fragment (`/play#code=...`), which never reaches a server.
 - **Measured before it is built**: the time `torb check` takes for a ten-line program with the prelude, natively, is the
@@ -614,7 +614,7 @@ Written before the launch and linked from every page:
 | the documentation worker | the same program, or a second process, with the toolchain of every released version |
 
 **The write service is written in TorbScript**, as the first real server program of the language — which needs the
-HTTP *server* of milestone 10 (TODO.md orders `std/net`, then `std/http`, first in 10), TLS terminated by the proxy in
+HTTP *server* of milestone 10 (`docs/ROADMAP.md` orders `std/net`, then `std/http`, early in 10), TLS terminated by the proxy in
 front of it, and a database. That puts the registry launch after the first part of milestone 10; question 2 of section
 12 is whether to accept a server in another language to open earlier.
 
@@ -654,7 +654,7 @@ put side by side.
 | **library** | 505 (+ 10) | what `src/lib.trb` makes a package produce; "the standard library" | PROJECT.md section 3 |
 | crate | 11 | only in comparisons with Rust | — |
 
-No other word for the unit was ever proposed: neither the documents, CONCEPT's decision log, TODO.md nor the commit
+No other word for the unit was ever proposed: neither the documents, CONCEPT's decision log nor the commit
 messages discuss one.
 The one wobble is the glossary's "Workspace": "naming several member **projects**", where PROJECT.md says a member is a
 package. The fix is one sentence in the glossary, and it is a slice: **every package is a project; a project is a
@@ -713,8 +713,8 @@ but a kit is usually a toolkit), *parcel* (a JavaScript bundler's name). A theme
 - **Contribution flow once public**: issues and pull requests on `github.com/TorbScript/language`; CI runs tier A on
   every pull request and tier B where the change touches the IR, a back end or `runtime/` (`compiler/CONTRIBUTING.md`);
   the two-commit rule of RUST-EXIT section 4.2 and `docs/design/` records stay how a larger change is proposed — a
-  design record *is* the RFC process, and it already works. `TODO.md` is the owner's private channel and stays out of
-  the public repository or moves to a private one (question 8).
+  design record *is* the RFC process, and it already works. Planning happens in the open, in `docs/ROADMAP.md` and
+  the design records; there is no private channel in the repository (question 8).
 
 ## 10. Slices
 
@@ -777,7 +777,8 @@ Everything technical above is decided. These are the owner's: questions of direc
    object storage and CDN of the registry, and mail for torb.dev. Every one of them can wait for the preview except
    mail, which `security@torb.dev` needs.
 8. **What becomes public.** The repository including `docs/design/`, `docs/internals/` and the history is
-   recommended. `TODO.md` is the owner's channel in German: keep it in a private repository, or publish it as it is.
+   recommended. Decided: the private planning file left the repository, and what in it was still to be done moved to
+   `docs/ROADMAP.md`, the design records and CONCEPT's "Open Questions".
 9. **Domain-verified owners with a dotted name.** PROJECT.md reserved `acme.com/x` as a name form. The registry could
    use it for owners that proved the domain (7.1). Recommended: not at launch; a verified domain is a badge on a plain
    owner, and the dotted form stays reserved.

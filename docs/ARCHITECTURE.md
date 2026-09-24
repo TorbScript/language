@@ -1,7 +1,7 @@
 # TorbScript Implementation Architecture
 
-**Status: implemented** — this is how the toolchain is built today, milestones 1 to 6 are done, and 7 and 8 are the
-ones ahead.
+**Status: implemented** — this is how the toolchain is built today, milestones 1 to 6 are done, and 7 to 10 are the
+ones ahead ([ROADMAP.md](ROADMAP.md)).
 
 **TorbScript is written in TorbScript.** The toolchain in [`compiler/`](../compiler) is the whole of it, and it
 compiles itself. The one external tool a checkout needs is a C compiler.
@@ -124,8 +124,8 @@ binary" rests on: both back ends consume the same, fully resolved program, and e
 - Generics: monomorphized where the type is known, dictionary passing where it is not (generic methods on
   trait-typed values, see Open Questions in the concept). Both back ends support both.
 - **Back ends after the VM (JavaScript, PHP) keep the language's semantics, not the host's.** The integer types keep
-  their fixed widths and panic on overflow exactly as in C - an answer in `TODO.md` once preferred JavaScript's
-  `number` for `Int`, and the fixed widths of CONCEPT's Built-in Types win over it, so a JavaScript `Int` is an exact
+  their fixed widths and panic on overflow exactly as in C - an earlier answer preferred JavaScript's `number` for
+  `Int`, and the fixed widths of CONCEPT's Built-in Types win over it, so a JavaScript `Int` is an exact
   64-bit integer however it is represented. And a type that may contain a `Close` object stays reference counted
   even where the host has a garbage collector, because the moment its `close()` runs is part of the program's meaning
   (`docs/design/DESTRUCTORS.md` section 2a).
@@ -230,4 +230,10 @@ The language has value semantics; identity is the marked exception (`shared type
 7. Bytecode and VM, tasks, channels, the sandbox (`Sandbox.load`, receiver scripts, `project.trb`). The runtime half
    of streams comes with it: the specification and the declarations are in [docs/design/STREAMS.md](design/STREAMS.md) and
    `std/stream`, and section 14 there lists what 7 and 10 have to build.
-8. Formatter, language server, package manager.
+8. Formatter, linter, language server, package manager.
+9. The JavaScript and PHP back ends ([design/JAVASCRIPT-AND-PHP.md](design/JAVASCRIPT-AND-PHP.md)).
+10. The breadth of the standard library: file systems with drivers, the network and HTTP, formats, the engine and
+    computation packages, and an application framework wired at compile time.
+
+What each of 7 to 10 still needs, and the packages and features designed outside them, is in
+[ROADMAP.md](ROADMAP.md).

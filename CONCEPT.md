@@ -2489,6 +2489,31 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
 
 ## Decision Log
 
+- **A case may stand for a fixed number, and a set of such cases is `Flags<Case>`** (2026-09-19; planned,
+  docs/design/FLAGS.md). A type whose cases have no fields may give all of them a constant (`case Read = 1`), and gets
+  `rawValue()` and `fromRawValue(value)`; `Flags<Case>` in `std/collections` is a set of such cases stored as one
+  `UInt64` mask, with the vocabulary of a `Set`, `bits()` and `fromBits(mask)`, and every value a power of two. Bit
+  masks get no operators and no construct of their own: the two pieces serve C enums, protocol codes and database
+  columns as well.
+- **A regular expression is a value of `std/regex`, and there is no literal for it** (2026-09-22; planned,
+  docs/design/TEXT-FORMATS.md). A `/.../` literal collides with division, and every tool that reads `.trb` would have
+  to repeat the heuristic that tells them apart. The check at compile time comes from the rule that a string literal
+  adapts to a checked type (docs/design/URI.md section 9): a literal where a `Regex` is expected is compiled where it
+  is written, and an invalid pattern is a compile error. The engine is TorbScript with RE2's semantics, linear in the
+  input. `std/yaml` reads YAML 1.2's core schema without anchors, aliases and tags.
+- **A type has one form, the block.** `type Point(x: Int, y: Int)` beside `type Point { x: Int, y: Int }` would be two
+  spellings close enough that every author asks which is better; a positional `type Point(Int, Int)` with `.0` is what
+  a tuple is for; methods per case are a second spelling of `match self`. A `closed trait` (implementable only in its
+  own package, so a `match` over its types is exhaustive) is the honest form of "cases with an identity" and is not
+  planned either. Cases are not types: `Circle(1.0)` having the type `Circle` would need a join of `Circle` and
+  `Rectangle` in inference, which is the subtyping the language does not have.
+- **`match` always has a subject, and `_` stays both the wildcard and the implicit parameter.** `match { ... }` as a
+  short form of `match _ { ... }` would be a second spelling for something the repository needs twice; `*` or `?` as
+  the wildcard would give an operator another meaning, and `it` as the closure parameter was weighed and refused. The
+  two uses of `_` never meet in one position.
+- **The application framework of `std` is wired at compile time** (2026-09-19; planned, docs/design/FRAMEWORK.md):
+  the layers and words of Spring Boot and Symfony, dependency injection through traits, constructors and a module DSL,
+  routes and mappings as DSLs over quoted expressions - never annotations, reflection or scanning.
 - **A branch on a compile-time constant keeps one arm, and every arm is still checked** (2026-09-23;
   docs/design/OS.md section 2, docs/language/execution/compile-time-branches.md). A `match`, an `if` or an `if const`
   whose subject is a compile-time constant - a literal, a case without fields, a tuple of constants, the operators on
@@ -3014,6 +3039,31 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
   not in a signature, for a good reason), what it means in a `type` field, and whether it reads as an admission that
   the argument list is too long. Until then the size is written out.
 - Registry protocol and the exact format of `project.lock.trb`
+- `const Some(found) = lookup(key) else { return ... }` (let-else): it removes the most frequent awkward form, a
+  `match` whose only purpose is to leave at `None`, in a function whose result is not an `Option` (where `?` does the
+  job). A proposal, to be decided with examples from the repository.
+- Variadic type parameters, in their smallest form: a pack that expands only as the element list of a tuple and as the
+  subject of a bound. Until then a query over several components is spelled per arity (`pairs`, `triples`,
+  `quadruples`; docs/design/ECS.md section 4).
+- Fields on one line: `type P { x: Int, y: Int }` does not parse, because fields are separated by line ends. Whether
+  the comma form is allowed inside the block is a question of layout only; the head form `type P(x: Int, y: Int)` stays
+  refused (Decision Log).
+- A type whose fields are readable from outside but whose constructor, `copy` and field assignment are its own: one
+  line (`private constructor`) instead of private fields plus accessors. A candidate, taken up when the accessors of a
+  capsule turn out to hurt in practice.
+- `type fn` and `type const` instead of `static` (Swift's "type methods"). A candidate; the condition is that `const` is
+  then mandatory after `type`, because `type origin = Point(0, 0)` beside the alias `type Meters = Float` would differ
+  only in the first letter, and the place for nested or associated types would be taken. The keyword stands at one
+  place in the parser, so a later switch is one `canon` rule.
+- The head of a generic `extend` is hard to read (`extend<Value, Target: From<Iterable<Value>>> Option<Target> with
+  From<Iterable<Value?>>`). Two candidates, both left as they are for now: a convention with a `canon` rule that puts
+  every bound with type arguments of its own into the `where` clause on a line of its own; or Swift's rule that the
+  parameters of the extended type are in scope by their declared names (`extend Option with Show where Value: Show`),
+  at the price that those names become part of the interface.
+- `Into` written by hand on one's own type (`extend Celsius with Into<Float64>` beside `From`): buildable as a second
+  spelling of one conversion, with two lookups and a capsule rule that counts both forms. The recommendation is not to
+  build it: the package that declares `Celsius` already writes `extend Float64 with From<Celsius>`, because a type named as a trait
+  argument counts for coherence, and a hand-written `Into` gets a message that says so.
 - REPL: every input is a nested scope of the previous one (so redefining a name is ordinary shadowing). A type that
   is defined again shadows the old one, values of the old type keep it and show up as `Point#1`. docs/design/REPL.md
   builds the first half; until the second is decided, a binding of a type that is declared again is dropped.

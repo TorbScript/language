@@ -704,8 +704,8 @@ All five round trip exactly. The last row is the signature doing its job.
 
 ## 9. A literal adapts to a checked type
 
-This is the language rule, and it has three users: `docs/design/RESOURCES.md`'s resource types, `TODO.md`'s `Regex`
-("Regex und YAML, 2026-09-22"), and `Uri`.
+This is the language rule, and it has three users: `docs/design/RESOURCES.md`'s resource types, the `Regex` of
+`docs/design/TEXT-FORMATS.md`, and `Uri`.
 
 **The rule.** *A string literal whose expected type is one of a compiler-known set of types is a value of that type,
 parsed by the compiler where it is written. Anything that is not a literal is not.*
@@ -1330,9 +1330,9 @@ and an `Instant` can make identifiers and one that does not cannot, and the two 
 also makes a test reproducible without a mock, and it keeps `std/identifier` a pure package that the prelude could
 hold if it ever wanted to.
 
-**There is no `std/random`.** `std/` has twenty-five packages and none of them is one; `TODO.md` line 1364 plans it
-("seedbar und TEILBAR, ein Wert wie JAX-Keys — reproduzierbares Training"), and that shape — a splittable value, not a
-global generator — is exactly what the signatures above want. `std/identifier` is blocked on it and on nothing else:
+**There is no `std/random`.** `std/` has twenty-five packages and none of them is one; `docs/design/RANDOM.md` plans
+it (seedable and splittable, a value like JAX's keys, for reproducible training), and that shape — a splittable value,
+not a global generator — is exactly what the signatures above want. `std/identifier` is blocked on it and on nothing else:
 `Instant` and `Clock` are in `std/time` today.
 
 **Recommended default: UUID version 7, not ULID.** Both are 128 bits and both are time-ordered; the difference is
@@ -1449,7 +1449,7 @@ then it is an ordinary package nothing in `compiler/` depends on.
 | 3 | **`std/http`.** `get`, `post`, `request` and `Request.url` take a `Uri`; `HttpError.InvalidUrl` is deleted; the native side receives the canonical text | `std/http/src/lib.trb`, `compiler/src/backend/c/natives.trb`, `runtime/*` | **Low.** Three signatures and one error case, and every call site in the repository passes a literal |
 | 4 | **The manifest.** `source "...", git:/archive:/path:` and `registry "...", url:` are read as `Uri`s when the manifest is evaluated, so a typo is a manifest error and not a fetch failure; the lock records the canonical text | `compiler/src/project/*`, `docs/design/PROJECT.md` section 7 | **Low**, and it depends on `docs/design/PROJECT.md` slices 1 to 4 having landed |
 | 5 | **The documentation tooling.** `links.trb`'s four `startsWith` tests become `Uri.tryFrom(target)` and `resolved(against:)`, so an anchor, a relative link and an external link are told apart by the type | `compiler/src/documentation/links.trb` | **Medium.** The documentation gates compare generated text, so a changed classification changes output; the four cases have to answer exactly what they answer today |
-| 6 | **`std/identifier`.** `Identifier`, `Uuid`, `Ulid`, `IdentifierError`, the `urn:uuid:` bridge | `std/identifier/*`, and `std/random`, which has to exist first | **Blocked** on `std/random` (`TODO.md` line 1364). Everything else in it is probe 6, which builds |
+| 6 | **`std/identifier`.** `Identifier`, `Uuid`, `Ulid`, `IdentifierError`, the `urn:uuid:` bridge | `std/identifier/*`, and `std/random`, which has to exist first | **Blocked** on `std/random` (`docs/design/RANDOM.md`). Everything else in it is probe 6, which builds |
 | 7 | **IDNA.** `std/idna` with Punycode and UTS #46; `Uri.tryFrom` accepts a non-ASCII host and stores its ASCII form; `repaired(text)` for the WHATWG differences of section 6; gap 9 is answered before `Path` into `Uri` becomes infallible | `std/idna/*`, `std/uri/src/*`, `compiler/src/semantics/checker/derive.trb` | **Medium.** The tables are the work, and gap 9 has to be closed in the same slice or `Uri` loses `Decode` without a diagnostic |
 | 8 | **The driver layer.** `Schemes` in `std/uri`; `std/storage` with `Storage`, `StorageFailure`, `Storage.registry`, `FileStorage` over `std/fs` and `MemoryStorage`; `Uri.text` beside `Uri.show` and `compare` over `text` (that half belongs to slice 1 and is written there) | `std/uri/src/*`, `std/storage/*`, `std/fs/src/lib.trb` for gap 13's `remove` | **Blocked** on gap 10 and on `docs/design/CONCURRENCY.md`'s cancellation slice. Probe 7 builds the synchronous form; landing it before the trait is asynchronous would change every driver's signature afterwards, which is the one change an ecosystem cannot absorb |
 

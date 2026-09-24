@@ -24,6 +24,14 @@ documents:
   - WEB.md
   - REPL.md
   - PANICS.md
+  - FLAGS.md
+  - TEXT-FORMATS.md
+  - RANDOM.md
+  - CLI.md
+  - COMPUTE.md
+  - FRAMEWORK.md
+  - JAVASCRIPT-AND-PHP.md
+  - ../ROADMAP.md
 ---
 
 A design record is written before a feature is finished, sometimes before a line of it is implemented. It works out the
@@ -36,8 +44,11 @@ implemented, or done - so a reader knows how much of what follows exists yet.
 The specification of a feature that spans several packages or several `language/` pages: collections, streams,
 concurrency, encoding, paths, URIs, linear algebra, entities and components, resources, the project file,
 destructors, the operating system, the VM, the sandbox of receiver scripts, the REPL, the web layer on top of the network,
-the public release with its website and package registry, and where a program may panic. Each is plain Markdown without
-front matter, linked here rather than copied, and stays where the feature it describes keeps changing.
+the public release with its website and package registry, where a program may panic, cases with fixed values and bit
+flags, YAML and regular expressions, random numbers, command lines, tensors and gradients, the application framework,
+and the JavaScript and PHP back ends. Each is plain Markdown without front matter, linked here rather than copied, and
+stays where the feature it describes keeps changing. [The roadmap](../ROADMAP.md) orders them into the milestones that
+are still ahead.
 
 What does not belong here: the compiler's own implementation, which is in [`internals/`](../internals/index.md); the
 settled rules of the language, which are in [`language/`](../language/index.md) once a feature has a page there; and
@@ -67,5 +78,13 @@ the reasons behind a decision that no longer needs a whole record, which belong 
 - **[Web: Handlers, HTML and a Live UI](WEB.md)**
 - **[The REPL](REPL.md)**
 - **[Panics](PANICS.md)**
+- **[Cases with Fixed Values and Flags](FLAGS.md)**
+- **[YAML, Regular Expressions and Markdown](TEXT-FORMATS.md)**
+- **[Random Numbers](RANDOM.md)**
+- **[Command Lines](CLI.md)**
+- **[Tensors, Gradients and the GPU](COMPUTE.md)**
+- **[The Application Framework](FRAMEWORK.md)**
+- **[JavaScript and PHP Back Ends](JAVASCRIPT-AND-PHP.md)**
+- **[Roadmap](../ROADMAP.md)**
 
 <!-- torb:index:end -->
