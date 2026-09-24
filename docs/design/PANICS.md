@@ -1,6 +1,6 @@
 # Panics
 
-**Status: proposal for the owner, nothing built** — this record takes stock of every way a TorbScript program that
+**Status: decided (2026-09-24), not implemented; the last section lists the decisions.** — this record takes stock of every way a TorbScript program that
 looks correct can end in a panic today, compares the choice with nine other languages, and proposes one principle and
 the changes that follow from it. No compiler, runtime or standard library file was changed for it. Every count and every
 message in section 2 was measured on commit `1ae963fa`, and section 2.1 says how.
@@ -495,3 +495,12 @@ of a panic, what becomes a compile error. These are the owner's, as questions of
    language has no overloading, so `get(range)` beside `get(index)` is not available. **Recommended:** `TextIndex`,
    `dropping(characters:)` and `prefix(characters:)` (the label says what is counted, which is why `String` has no
    `length()`), `withoutPrefix`, `addedChecked`, and `part(range)`.
+
+## Decided (2026-09-24)
+
+- The principle goes into CONCEPT.md's error handling, as proposed.
+- `TextIndex` is adopted, after the total text vocabulary (recommendation 7) has removed most of the compiler's text
+  slices.
+- `map[key]` keeps panicking, and its message names the key.
+- The names are adopted as proposed: `TextIndex`, `dropping(characters:)`, `prefix(characters:)`, `withoutPrefix`,
+  `withoutSuffix`, `addedChecked`, `part(range)`.
