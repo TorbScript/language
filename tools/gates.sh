@@ -8,6 +8,7 @@
 #
 # Tier A: bootstrap if `build/release/torb` is missing or older than a file it is built from (the compiler's sources,
 # `std/`, the runtime), `check .`, `check --statistics .`, `check tests/conformance tests/language`,
+# `check --every-target std/os`,
 # `manifest --check` over every `project.trb`, `test compiler/tests`, `test` of the std/example packages (one that waits for a back-end gap is named in
 # docs/RUST-EXIT.md section 2.4 and skipped here), the programs of `tests/language/` against their
 # `.expected`, the sessions of `tests/repl/` piped into `torb repl` (`tools/repl.sh`), the three docs gates, and
@@ -126,6 +127,9 @@ if [ "$tier" = "a" ]; then
   gate "check ." "$torb" check .
   gate "check --statistics ." "$torb" check --statistics .
   gate "check tests/conformance tests/language" "$torb" check tests/conformance tests/language
+  # docs/design/OS.md section 2: every program and test of std/os lowered once per target, without C, so a native of one
+  # system reached from the arm of another is an error on this machine too
+  gate "check --every-target std/os" "$torb" check --every-target std/os
   # docs/design/SCRIPTS.md section 7: every project.trb of the repository, evaluated in the sandboxed VM, reads the same
   # as the file itself does to the static reader the other commands use
   gate "manifest --check (every project.trb, evaluated)" "$torb" manifest --check . tests/conformance tests/language \

@@ -1,0 +1,113 @@
+/**
+ * The system questions on Windows: the kernel's version from `RtlGetVersion`, the product's name and version from the
+ * registry, the host name, the tick count, and `GetNativeSystemInfo`.
+ */
+
+use Architecture from "std/core"
+use OsError, outcome from "../error"
+use SystemVersion from "../system"
+use Windows from "./native"
+
+/** The key below `HKEY_LOCAL_MACHINE` that names the product. */
+const currentVersionKey = "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion"
+
+/** The first build of Windows 11. The registry's `ProductName` still says `Windows 10` on every one of them. */
+const firstBuildOfWindows11: Int64 = 22000
+
+/**
+ * The name and version of this Windows: the kernel's numbers, and the product's name, display version and update
+ * build revision from the registry. A value the registry does not have is left out rather than failing the question.
+ */
+public fn version(): Result<SystemVersion, OsError> {
+  var major: Int64 = 0
+  var minor: Int64 = 0
+  var build: Int64 = 0
+  var failure = ""
+  outcome(Windows.version(major, minor, build, failure), "the version", failure)?
+  const kernel = "{major}.{minor}.{build}"
+  const registered = registryText("ProductName") ?? "Windows"
+  const release = registryText("DisplayVersion") ?? registryText("ReleaseId") ?? "{major}.{minor}"
+  const revision = match registryInteger("UBR") {
+    Some(number) => "{build}.{number}"
+    None => "{build}"
+  }
+  Ok SystemVersion(productName(registered, build), "windows", release, Some(revision), kernel)
+}
+
+/**
+ * The product's name as people know it: `Windows 10` becomes `Windows 11` from build 22000 on, because the registry
+ * was never changed to say so.
+ */
+public fn productName(registered: String, build: Int64): String {
+  if build >= firstBuildOfWindows11 && registered.startsWith("Windows 10") {
+    return "Windows 11" + (registered.substringAfter("Windows 10") ?? "")
+  }
+  registered
+}
+
+/** A text value of the product's key, or `None` where it has none. */
+fn registryText(value: String): String? {
+  var text = ""
+  var failure = ""
+  if Windows.registryText(currentVersionKey, value, text, failure) != 0 || text.isEmpty() {
+    return None
+  }
+  Some text
+}
+
+/** An integer value of the product's key, or `None` where it has none. */
+fn registryInteger(value: String): Int64? {
+  var number: Int64 = 0
+  var failure = ""
+  if Windows.registryInteger(currentVersionKey, value, number, failure) != 0 {
+    return None
+  }
+  Some number
+}
+
+/** `GetComputerNameExW(ComputerNameDnsHostname)`. */
+public fn hostName(): Result<String, OsError> {
+  var name = ""
+  var failure = ""
+  outcome(Windows.computerName(name, failure), "the host name", failure)?
+  Ok name
+}
+
+/** `GetTickCount64`, which never fails. */
+public fn uptime(): Duration {
+  Windows.tickCount().milliseconds()
+}
+
+/** The page size of `GetNativeSystemInfo`, and 4096 - the size of every Windows machine - where it did not answer. */
+public fn pageSize(): Int {
+  var pageSize: Int64 = 0
+  var architecture: Int64 = 0
+  var logical: Int64 = 0
+  var failure = ""
+  if Windows.systemInformation(pageSize, architecture, logical, failure) != 0 || pageSize <= 0 {
+    return 4096
+  }
+  pageSize
+}
+
+/** The machine's architecture from `IsWow64Process2`, and from `GetNativeSystemInfo` where that does not exist. */
+public fn machineArchitecture(): Result<Architecture, OsError> {
+  var pageSize: Int64 = 0
+  var architecture: Int64 = 0
+  var logical: Int64 = 0
+  var failure = ""
+  const question = "the machine architecture"
+  outcome(Windows.systemInformation(pageSize, architecture, logical, failure), question, failure)?
+  architectureOf architecture
+}
+
+/** The number [Windows.systemInformation] writes, as an [Architecture]. */
+public fn architectureOf(code: Int64): Result<Architecture, OsError> {
+  match code {
+    1 => Ok Architecture.X64
+    2 => Ok Architecture.Arm64
+    3 => Fail OsError.Failed("the machine architecture", "a 32-bit x86 machine, which the toolchain does not build for")
+    4 => Fail OsError.Failed("the machine architecture", "a 32-bit Arm machine, which the toolchain does not build for")
+    _ => Fail OsError.Failed("the machine architecture", "an architecture the toolchain does not know")
+  }
+}

@@ -1,0 +1,107 @@
+/**
+ * The system questions on Linux: the distribution from `os-release`, the kernel from `uname`, and the uptime from
+ * `/proc/uptime`. The parsers are public and pure, so their tests run on every machine with a copy of the file.
+ */
+
+use OsError, outcome from "../error"
+use SystemVersion from "../system"
+use systemNames from "../posix/system"
+use Linux from "./native"
+
+/** The whole of a file below `/proc` or `/sys`, or `os-release`. */
+public fn readSystemFile(path: String): Result<String, OsError> {
+  var text = ""
+  var failure = ""
+  outcome(Linux.readSystemFile(path, text, failure), path, failure)?
+  Ok text
+}
+
+/**
+ * The distribution from `/etc/os-release`, or `/usr/lib/os-release` where the first does not exist, and the kernel
+ * from `uname`. A system without either file - a minimal container - is still `Linux` with the kernel's release.
+ */
+public fn version(): Result<SystemVersion, OsError> {
+  const kernel = systemNames()?
+  const text = match readSystemFile("/etc/os-release") {
+    Ok(found) => found
+    Fail(_) => readSystemFile("/usr/lib/os-release").ok() ?? ""
+  }
+  Ok versionOf(parseOsRelease(text), kernel.release)
+}
+
+/**
+ * The version an `os-release` file describes: `PRETTY_NAME` (else `NAME`, else `Linux`), `ID` (else `linux`),
+ * `VERSION_ID` (else the kernel's release) and `BUILD_ID`.
+ */
+public fn versionOf(fields: Map<String, String>, kernel: String): SystemVersion {
+  const name = fields.get("PRETTY_NAME") ?? fields.get("NAME") ?? "Linux"
+  const identifier = fields.get("ID") ?? "linux"
+  const release = fields.get("VERSION_ID") ?? kernel
+  SystemVersion name, identifier, release, fields.get("BUILD_ID"), kernel
+}
+
+/**
+ * The assignments of an `os-release` file: `KEY=value` per line, the value in double or single quotes or none, with
+ * `\"`, `\\`, `\$` and `` \` `` escaped inside double quotes. Comments and blank lines are skipped.
+ */
+public fn parseOsRelease(text: String): Map<String, String> {
+  var fields: Map<String, String> = [:]
+  for line in text.lines() {
+    const trimmed = line.trim()
+    if trimmed.isEmpty() || trimmed.startsWith("#") {
+      continue
+    }
+    const key = match trimmed.substringBefore("=") {
+      Some(found) => found.trim()
+      None => {
+        continue
+      }
+    }
+    const raw = (trimmed.substringAfter("=") ?? "").trim()
+    fields.set key, unquoted(raw)
+  }
+  fields
+}
+
+/** A value of `os-release` without its quotes and escapes. */
+fn unquoted(raw: String): String {
+  if raw.byteLength() >= 2 && raw.startsWith("'") && raw.endsWith("'") {
+    return raw.sliceBytes(1, raw.byteLength() - 1)
+  }
+  if !(raw.byteLength() >= 2 && raw.startsWith("\"") && raw.endsWith("\"")) {
+    return raw
+  }
+  const inner = raw.sliceBytes(1, raw.byteLength() - 1)
+  var value = ""
+  var escaped = false
+  for character in inner.chars() {
+    if !escaped && character == '\\' {
+      escaped = true
+      continue
+    }
+    escaped = false
+    value = value + character.show()
+  }
+  value
+}
+
+/** `/proc/uptime`. */
+public fn uptime(): Result<Duration, OsError> {
+  parseUptime(readSystemFile("/proc/uptime")?)
+}
+
+/** The first number of `/proc/uptime`, seconds with two decimals (`350735.47 234388.90`), as a [Duration]. */
+public fn parseUptime(text: String): Result<Duration, OsError> {
+  const first = text.trim().split(" ")[0]
+  const whole = first.substringBefore(".") ?? first
+  const fraction = (first.substringAfter(".") ?? "") + "000"
+  const seconds = Int64.tryFrom whole
+  const milliseconds = Int64.tryFrom fraction.sliceBytes(0, 3)
+  match (seconds, milliseconds) {
+    (Ok(wholeSeconds), Ok(thousandths)) => {
+      const total = wholeSeconds * 1000 + thousandths
+      Ok total.milliseconds()
+    }
+    _ => Fail OsError.Malformed("/proc/uptime", "`{text.trim()}` does not begin with a number of seconds")
+  }
+}

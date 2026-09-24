@@ -1,5 +1,5 @@
 /*
- * environment.c - `std/environment`: `Environment.get`.
+ * environment.c - `std/environment`: `Environment.get`, and the listing `Environment.entries`.
  *
  * A native program sees every variable the platform can. A sandboxed script sees the ones a pattern of its grant
  * matches (`environment "APP_*"`, docs/design/SCRIPTS.md section 4), and every other one reads as unset: the loud lock
@@ -46,4 +46,12 @@ bool torb_environment_get(torb_text name, torb_text *out) {
   *out = torb_text_from_cstring(value);
   torb_raw_free(value, length + 1u);
   return true;
+}
+
+/**
+ * `Environment.variables()` of `std/os` is built from this: the variables of the platform layer, each held against the
+ * sandbox's patterns the way `torb_environment_get` holds one name.
+ */
+void torb_environment_entries(torb_list *names, torb_list *values) {
+  torb_platform_environment_entries(names, values, torb_sandbox_allows_variable);
 }

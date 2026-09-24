@@ -1,0 +1,30 @@
+/**
+ * The system questions on macOS: the product's version and build and the kernel's release from `sysctl`, and whether
+ * this program is translated by Rosetta.
+ */
+
+use Architecture from "std/core"
+use OsError from "../error"
+use SystemVersion from "../system"
+use sysctlText, sysctlInteger from "../bsd/system"
+use systemNames, architectureOf from "../posix/system"
+
+/** `kern.osproductversion`, `kern.osversion` and `kern.osrelease`. */
+public fn version(): Result<SystemVersion, OsError> {
+  const release = sysctlText("kern.osproductversion")?
+  const build = sysctlText("kern.osversion").ok()
+  const kernel = sysctlText("kern.osrelease")?
+  Ok SystemVersion("macOS {release}", "macos", release, build, kernel)
+}
+
+/**
+ * The machine of `uname` - except in a program Rosetta translates, which `uname` tells `x86_64` and
+ * `sysctl.proc_translated` gives away: the machine under it is Apple silicon.
+ */
+public fn machineArchitecture(): Result<Architecture, OsError> {
+  if sysctlInteger("sysctl.proc_translated").ok() == Some(1) {
+    return Ok Architecture.Arm64
+  }
+  const names = systemNames()?
+  architectureOf names.machine
+}

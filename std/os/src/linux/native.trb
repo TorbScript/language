@@ -1,0 +1,21 @@
+/**
+ * The raw layer of Linux: the natives of `runtime/os/linux.c`, which exist in a Linux build only. The manifest says so
+ * (`availableOn`), and a call that the build for another system reaches is a compile error there - reach it from a
+ * `.Linux` arm of `match OperatingSystem.current`.
+ *
+ * Almost everything Linux answers is a file below `/proc` or `/sys`, so the C is one reader and the parsing is
+ * TorbScript in this directory, where its tests run on every machine with a copy of the file.
+ *
+ * It is not the documented surface of `std/os`: the OS-neutral modules call it from their Linux arm.
+ */
+
+/** The natives only Linux has. */
+public native type Linux {
+  /**
+   * The whole of a system file, read until its end: a file of `/proc` reports the size 0, so a read by size would
+   * answer nothing. Only paths below `/proc/` and `/sys/`, and `/etc/os-release` and `/usr/lib/os-release`, are read;
+   * every other path is the outcome `2`, so this is no way around `std/fs` or the sandbox. A file that does not exist
+   * is the outcome `3`.
+   */
+  native static fn readSystemFile(path: String, var text: String, var failure: String): Int
+}

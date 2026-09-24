@@ -1,0 +1,66 @@
+/**
+ * The system questions every POSIX system answers the same way: `uname`, `gethostname` and `sysconf`. Linux, macOS and
+ * FreeBSD reach them from their arms; what differs between the three is in their own directories.
+ */
+
+use Architecture from "std/core"
+use OsError, outcome from "../error"
+use Posix from "./native"
+
+/** The five names of `uname`. */
+public type SystemNames {
+  /** `Linux`, `Darwin`, `FreeBSD`. */
+  system: String
+  /** The node name, which is usually the host name. */
+  node: String
+  /** The kernel's release: `6.8.0-45-generic`, `24.1.0`, `14.1-RELEASE`. */
+  release: String
+  /** The kernel's build: `#45-Ubuntu SMP PREEMPT_DYNAMIC …`. */
+  version: String
+  /** The hardware: `x86_64`, `aarch64`, `arm64`, `amd64`. */
+  machine: String
+}
+
+/** `uname`. */
+public fn systemNames(): Result<SystemNames, OsError> {
+  var system = ""
+  var node = ""
+  var release = ""
+  var version = ""
+  var machine = ""
+  var failure = ""
+  outcome(Posix.systemNames(system, node, release, version, machine, failure), "the system names", failure)?
+  Ok SystemNames(system, node, release, version, machine)
+}
+
+/** `gethostname`. */
+public fn hostName(): Result<String, OsError> {
+  var name = ""
+  var failure = ""
+  outcome(Posix.hostName(name, failure), "the host name", failure)?
+  Ok name
+}
+
+/** `sysconf(_SC_PAGESIZE)`, and 4096 where the system has no value for it. */
+public fn pageSize(): Int {
+  const size = Posix.configuration "PAGESIZE"
+  if size <= 0 {
+    return 4096
+  }
+  size
+}
+
+/** The machine of `uname`, as an [Architecture]. */
+public fn machineArchitecture(): Result<Architecture, OsError> {
+  const names = systemNames()?
+  architectureOf names.machine
+}
+
+/** The machine of `uname` as an [Architecture]: Linux says `x86_64` and `aarch64`, the BSDs `amd64` and `arm64`. */
+public fn architectureOf(machine: String): Result<Architecture, OsError> {
+  match machine {
+    "x86_64" | "amd64" => Ok Architecture.X64
+    "aarch64" | "arm64" => Ok Architecture.Arm64
+    _ => Fail OsError.Failed("the machine architecture", "`{machine}`, which the toolchain does not build for")
+  }
+}

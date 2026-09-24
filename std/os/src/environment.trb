@@ -1,0 +1,182 @@
+/**
+ * The environment this process was started with: [Environment] reads one variable, lists every one as a value, and
+ * splits the search path; [EnvironmentVariables] is that list as a value a program can change and hand on.
+ *
+ * Reach for [Environment.get] instead of a literal or a configuration file wherever a value is meant to come from
+ * outside the program - a host name, a feature flag, a secret. Inside a sandboxed script it needs the module
+ * `std/os/environment` granted, and only the variables matching the patterns granted there (`environment "APP_*"`) are
+ * visible to it.
+ */
+
+use OperatingSystem from "std/core"
+use Path from "std/path"
+
+/**
+ * The environment this process was started with: read, listed, and handed on as a value.
+ *
+ * There is no `Environment.set`. Changing a variable of the running process is global mutable state, which the
+ * language does not have, and on POSIX it is a data race besides: `setenv` may move `environ` while another thread's
+ * `getenv` reads it. What setting a variable is for is almost always a child process, and a child is handed an
+ * [EnvironmentVariables] value.
+ *
+ * # Examples
+ *
+ *     const home = Environment.get "HOME"
+ *     print(home ?? "not set")
+ *
+ * # Related
+ *
+ * - [EnvironmentVariables] - every variable as one value.
+ */
+public native type Environment {
+  /**
+   * The value of `name`, or `None` if it is not set, or if the caller is not allowed to see it. On Windows a name is
+   * looked up without regard to case, as the system does: `Path` and `PATH` are one variable.
+   *
+   * # Examples
+   *
+   *     const home = Environment.get "HOME"
+   *     print(home ?? "not set")
+   *
+   * # Pitfalls
+   *
+   * A missing variable and a variable the sandbox has not granted look identical: both answer `None`. A script
+   * cannot tell a capability it was denied from one that simply has nothing behind it.
+   */
+  native static fn get(name: String): String?
+
+  /**
+   * Every variable the caller may see, as a value that can be changed and given to a child. Inside a sandbox it holds
+   * the variables the granted patterns match and nothing else.
+   *
+   * # Examples
+   *
+   *     const variables = Environment.variables()
+   *     print variables.get("PATH").isSome()
+   */
+  static fn variables(): EnvironmentVariables {
+    var names: ArrayList<String> = ArrayList.withCapacity 0
+    var values: ArrayList<String> = ArrayList.withCapacity 0
+    Environment.entries names, values
+    var variables = EnvironmentVariables.empty()
+    for index in 0..names.length() {
+      variables.set names[index], values[index]
+    }
+    variables
+  }
+
+  /**
+   * `PATH` split at the system's separator, each entry a [Path], the empty ones dropped. On Windows the quotes an entry
+   * may be written in are removed, as the command interpreter does.
+   *
+   * # Examples
+   *
+   *     for directory in Environment.searchPath() {
+   *       print directory
+   *     }
+   */
+  static fn searchPath(): List<Path> {
+    const text = Environment.get("PATH") ?? ""
+    var directories: List<Path> = []
+    for entry in text.split(searchPathSeparator()) {
+      const unquoted = unquotedEntry entry
+      if !unquoted.trim().isEmpty() {
+        directories.append Path.from(unquoted)
+      }
+    }
+    directories
+  }
+
+  /**
+   * Every variable of the environment block the caller may see, as two parallel lists (`GetEnvironmentStringsW`,
+   * `environ`). The per-drive entries Windows keeps under names that begin with `=` are left out.
+   */
+  private native static fn entries(var names: ArrayList<String>, var values: ArrayList<String>)
+}
+
+/** The separator between the entries of `PATH`. */
+fn searchPathSeparator(): String {
+  match OperatingSystem.current {
+    .Windows => ";"
+    .Linux | .MacOs | .FreeBsd => ":"
+  }
+}
+
+/** An entry of `PATH` as the system reads it: Windows ignores the quotes around a directory with a `;` in its name. */
+fn unquotedEntry(entry: String): String {
+  match OperatingSystem.current {
+    .Windows => entry.replace "\"", ""
+    .Linux | .MacOs | .FreeBsd => entry
+  }
+}
+
+/** The key a name is stored under: folded on Windows, where `Path` and `PATH` are one variable. */
+fn keyOf(name: String): String {
+  match OperatingSystem.current {
+    .Windows => name.toUpperCase()
+    .Linux | .MacOs | .FreeBsd => name
+  }
+}
+
+/**
+ * A set of environment variables as a value. Names compare the way the target compares them: without regard to case
+ * on Windows, exactly everywhere else - so `set("PATH", …)` on Windows replaces an inherited `Path`, and keeps the
+ * spelling it was given.
+ *
+ * Its `show()` lists the names only: an environment carries secrets, and a `print` of it must not.
+ *
+ * # Examples
+ *
+ *     var variables = EnvironmentVariables.empty()
+ *     variables.set "APP_MODE", "debug"
+ *     variables.set "NO_COLOR", "1"
+ *     variables.remove "NO_COLOR"
+ *     print variables
+ *
+ * # Related
+ *
+ * - [Environment.variables] - the environment of this process as one of these.
+ */
+public type EnvironmentVariables with Show, Equals {
+  /** Each variable under [keyOf] its name, with the name as it was spelt. */
+  private var storedEntries: Map<String, (name: String, value: String)>
+
+  /** No variables at all: the environment of a child that is to inherit nothing. */
+  static fn empty(): EnvironmentVariables {
+    EnvironmentVariables([:])
+  }
+
+  /** The value of `name`, or `None` where it has none. */
+  fn get(name: String): String? {
+    storedEntries.get(keyOf(name))?.value
+  }
+
+  /** Every name, spelt as it was set, in the order the variables were first set. */
+  fn names(): List<String> {
+    var names: List<String> = []
+    for (_, entry) in storedEntries {
+      names.append entry.name
+    }
+    names
+  }
+
+  /** How many variables there are. */
+  fn count(): Int {
+    storedEntries.length()
+  }
+
+  /** Sets `name` to `value`, replacing a variable of the same name - on Windows, of any case. */
+  var fn set(name: String, value: String) {
+    storedEntries.set keyOf(name), (name: name, value: value)
+  }
+
+  /** Removes `name`, and on Windows every spelling of it. Removing a variable that is not there does nothing. */
+  var fn remove(name: String) {
+    storedEntries.remove keyOf(name)
+  }
+
+  /** The names only, never the values: `EnvironmentVariables(APP_MODE, HOME)`. */
+  fn show(): String {
+    "EnvironmentVariables({names().joined(separator: ", ")})"
+  }
+}

@@ -1,0 +1,48 @@
+/** The well-known directories on Windows: Known Folders, named by their `FOLDERID_` GUIDs, and the temporary path. */
+
+use Path from "std/path"
+use OsError, outcome from "../error"
+use Environment from "../environment"
+use Windows from "./native"
+
+/** `FOLDERID_Profile`: `C:\Users\ada`. */
+const profileFolder = "\{5E6C858F-0E22-4760-9AFE-EA3317B67173\}"
+
+/** `FOLDERID_RoamingAppData`: `C:\Users\ada\AppData\Roaming`. */
+const roamingFolder = "\{3EB685DB-65F9-4CF6-A03A-E3EF65729F3D\}"
+
+/** `FOLDERID_LocalAppData`: `C:\Users\ada\AppData\Local`. */
+const localFolder = "\{F1B32785-6FBA-4FCF-9D55-7B8E7F157091\}"
+
+/** A Known Folder by its GUID, `question` naming it for a failure. */
+fn knownFolder(identifier: String, question: String): Result<Path, OsError> {
+  var path = ""
+  var failure = ""
+  outcome(Windows.knownFolder(identifier, path, failure), question, failure)?
+  Ok Path.from(path)
+}
+
+/** `FOLDERID_Profile`. */
+public fn home(): Result<Path, OsError> {
+  knownFolder profileFolder, "the home directory"
+}
+
+/** `FOLDERID_RoamingAppData`, which follows the user from machine to machine in a domain. */
+public fn roaming(): Result<Path, OsError> {
+  knownFolder roamingFolder, "the roaming application data directory"
+}
+
+/** `FOLDERID_LocalAppData`, which stays on this machine. */
+public fn local(): Result<Path, OsError> {
+  knownFolder localFolder, "the local application data directory"
+}
+
+/** `GetTempPath2W`, else `TEMP`, else the system's own. */
+public fn temporary(): Path {
+  var path = ""
+  var failure = ""
+  if Windows.temporaryDirectory(path, failure) == 0 && !path.isEmpty() {
+    return Path.from path
+  }
+  Path.from(Environment.get("TEMP") ?? "C:/Windows/Temp")
+}

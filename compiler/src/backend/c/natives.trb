@@ -1118,6 +1118,13 @@ fn environmentEntries(var entries: List<NativeEntry>) {
     "torb_environment_get",
     "bool torb_environment_get(torb_text name, torb_text *out);",
   ))
+  // `Environment.variables()` of `std/os` is TorbScript over this: two parallel lists, because the runtime cannot build
+  // an `EnvironmentVariables`, and the sandbox filters them the way it filters `get`
+  entries.append(runtimeOf(
+    "Environment.entries",
+    "torb_environment_entries",
+    "void torb_environment_entries(torb_list *names, torb_list *values);",
+  ))
 }
 
 /**
@@ -1165,8 +1172,48 @@ fn systemRuntimeOf(name: String, function: String, prototype: String, systems: L
  * The raw layer of `std/os` (docs/design/OS.md section 7): one `native type` per family, each row bound to the systems
  * its C file is compiled on. The prototypes are in `torb_os.h` on every machine, so a signature cannot drift even where
  * the body is not compiled.
+ *
+ * Every native that can fail answers an outcome (`0` success, `1` failed, `2` denied, `3` missing, `4` unsupported)
+ * and writes its answer through `var` parameters, which is the shape `Process.runCollecting` has: `outcome` of
+ * `std/os/src/error.trb` turns it into a `Result`, so no row needs a wrapper of the lowering.
  */
 fn systemEntries(var entries: List<NativeEntry>) {
+  windowsEntries entries
+  posixEntries entries
+  entries.append(systemRuntimeOf(
+    "Linux.readSystemFile",
+    "torb_os_linux_read_system_file",
+    "int64_t torb_os_linux_read_system_file(torb_text path, torb_text *text, torb_text *failure);",
+    [.Linux],
+  ))
+  entries.append(systemRuntimeOf(
+    "Bsd.sysctlText",
+    "torb_os_bsd_sysctl_text",
+    "int64_t torb_os_bsd_sysctl_text(torb_text name, torb_text *text, torb_text *failure);",
+    [.MacOs, .FreeBsd],
+  ))
+  entries.append(systemRuntimeOf(
+    "Bsd.sysctlInteger",
+    "torb_os_bsd_sysctl_integer",
+    "int64_t torb_os_bsd_sysctl_integer(torb_text name, int64_t *number, torb_text *failure);",
+    [.MacOs, .FreeBsd],
+  ))
+  entries.append(systemRuntimeOf(
+    "Bsd.uptime",
+    "torb_os_bsd_uptime",
+    "int64_t torb_os_bsd_uptime(int64_t *milliseconds, torb_text *failure);",
+    [.MacOs, .FreeBsd],
+  ))
+  entries.append(systemRuntimeOf(
+    "MacOs.userTemporaryDirectory",
+    "torb_os_macos_user_temporary_directory",
+    "int64_t torb_os_macos_user_temporary_directory(torb_text *path, torb_text *failure);",
+    [.MacOs],
+  ))
+}
+
+/** `runtime/os/windows.c`, `native type Windows`. */
+fn windowsEntries(var entries: List<NativeEntry>) {
   entries.append(systemRuntimeOf(
     "Windows.tickCount",
     "torb_os_windows_tick_count",
@@ -1174,10 +1221,81 @@ fn systemEntries(var entries: List<NativeEntry>) {
     [.Windows],
   ))
   entries.append(systemRuntimeOf(
+    "Windows.version",
+    "torb_os_windows_version",
+    "int64_t torb_os_windows_version(int64_t *major, int64_t *minor, int64_t *build, torb_text *failure);",
+    [.Windows],
+  ))
+  entries.append(systemRuntimeOf(
+    "Windows.registryText",
+    "torb_os_windows_registry_text",
+    "int64_t torb_os_windows_registry_text(torb_text key, torb_text value, torb_text *text, torb_text *failure);",
+    [.Windows],
+  ))
+  entries.append(systemRuntimeOf(
+    "Windows.registryInteger",
+    "torb_os_windows_registry_integer",
+    "int64_t torb_os_windows_registry_integer(torb_text key, torb_text value, int64_t *number, torb_text *failure);",
+    [.Windows],
+  ))
+  entries.append(systemRuntimeOf(
+    "Windows.computerName",
+    "torb_os_windows_computer_name",
+    "int64_t torb_os_windows_computer_name(torb_text *name, torb_text *failure);",
+    [.Windows],
+  ))
+  entries.append(systemRuntimeOf(
+    "Windows.systemInformation",
+    "torb_os_windows_system_information",
+    "int64_t torb_os_windows_system_information(int64_t *page_size, int64_t *architecture, int64_t *logical, torb_text *failure);",
+    [.Windows],
+  ))
+  entries.append(systemRuntimeOf(
+    "Windows.knownFolder",
+    "torb_os_windows_known_folder",
+    "int64_t torb_os_windows_known_folder(torb_text identifier, torb_text *path, torb_text *failure);",
+    [.Windows],
+  ))
+  entries.append(systemRuntimeOf(
+    "Windows.temporaryDirectory",
+    "torb_os_windows_temporary_directory",
+    "int64_t torb_os_windows_temporary_directory(torb_text *path, torb_text *failure);",
+    [.Windows],
+  ))
+}
+
+/** `runtime/os/posix.c`, `native type Posix`: Linux, macOS and FreeBSD. */
+fn posixEntries(var entries: List<NativeEntry>) {
+  const posix: List<TargetSystem> = [.Linux, .MacOs, .FreeBsd]
+  entries.append(systemRuntimeOf(
     "Posix.effectiveUserIdentifier",
     "torb_os_posix_effective_user_identifier",
     "int64_t torb_os_posix_effective_user_identifier(void);",
-    [.Linux, .MacOs, .FreeBsd],
+    posix,
+  ))
+  entries.append(systemRuntimeOf(
+    "Posix.systemNames",
+    "torb_os_posix_system_names",
+    "int64_t torb_os_posix_system_names(torb_text *system, torb_text *node, torb_text *release, torb_text *version, torb_text *machine, torb_text *failure);",
+    posix,
+  ))
+  entries.append(systemRuntimeOf(
+    "Posix.hostName",
+    "torb_os_posix_host_name",
+    "int64_t torb_os_posix_host_name(torb_text *name, torb_text *failure);",
+    posix,
+  ))
+  entries.append(systemRuntimeOf(
+    "Posix.configuration",
+    "torb_os_posix_configuration",
+    "int64_t torb_os_posix_configuration(torb_text name);",
+    posix,
+  ))
+  entries.append(systemRuntimeOf(
+    "Posix.account",
+    "torb_os_posix_account",
+    "int64_t torb_os_posix_account(int64_t *identifier, torb_text *name, torb_text *full_name, torb_text *home, torb_text *failure);",
+    posix,
   ))
 }
 

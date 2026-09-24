@@ -1,11 +1,18 @@
 /**
- * What a program asks about the machine it runs on (docs/design/OS.md). Today it is the skeleton of the package: the
- * three target constants of `std/core`, re-exported so that a file that branches on the system writes one import, and
- * the raw layer of one `native type` per family of systems in a directory of its own.
+ * What a program asks about the machine it runs on (docs/design/OS.md): the environment it was started with, which
+ * system and version it is, and where the user's files belong. The three target constants of `std/core` are
+ * re-exported, so that a file that branches on the system writes one import.
+ *
+ * - [Environment] and [EnvironmentVariables] - read one variable, list them all, split the search path.
+ * - [System] and [SystemVersion] - the version, the host name, the uptime, the page size, the machine's architecture.
+ * - [Directories] - home, configuration, data, state, cache and temporary files, by the convention of the system.
+ * - [OsError] - what every question that can fail fails with.
  *
  * A branch on the system is a `match OperatingSystem.current`: every arm is type checked on every machine, and only the
- * arm of the build's target is compiled. So a call of the Windows layer belongs in a `.Windows` arm, and
- * `torb check --every-target` reports one that is reached on another system.
+ * arm of the build's target is compiled. Each module above is such a branch, and each arm hands its question to a
+ * directory of its own - `windows/`, `linux/`, `macos/`, `freebsd/` for one system, `posix/`, `bsd/`, `xdg/` for a
+ * standard several share. Those directories hold the raw natives; `torb check --every-target` reports one that is
+ * reached on a system it does not exist on.
  *
  * # Examples
  *
@@ -22,3 +29,7 @@
  */
 
 public use OperatingSystem, Architecture, ByteOrder from "std/core"
+public use OsError from "./error"
+public use Environment, EnvironmentVariables from "./environment"
+public use System, SystemVersion from "./system"
+public use Directories from "./directories"

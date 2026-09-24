@@ -3,6 +3,10 @@
  * says so (`availableOn`), and a call that the build for another system reaches is a compile error there - reach it
  * from a `.Windows` arm of `match OperatingSystem.current`.
  *
+ * Every native that can fail answers an outcome for [outcome] of `../error` - `0` success, `1` failed, `2` denied,
+ * `3` missing, `4` unsupported - and writes its answer through its `var` parameters, the reason into `failure`. Every
+ * text crosses as UTF-8, and every call of the system is the wide one.
+ *
  * It is not the documented surface of `std/os`: the OS-neutral modules call it from their Windows arm.
  */
 
@@ -16,4 +20,43 @@ public native type Windows {
    *     print Windows.tickCount()
    */
   native static fn tickCount(): Int64
+
+  /**
+   * The kernel's version (`RtlGetVersion`), which unlike `GetVersionExW` is not the version the program's manifest
+   * claims to know: `10`, `0`, `26100` on Windows 11 24H2.
+   */
+  native static fn version(var major: Int64, var minor: Int64, var build: Int64, var failure: String): Int
+
+  /**
+   * A text value (`REG_SZ` or `REG_EXPAND_SZ`, unexpanded) of the key `key` below `HKEY_LOCAL_MACHINE`
+   * (`RegGetValueW`). A key or a value that does not exist is the outcome `3`.
+   */
+  native static fn registryText(key: String, value: String, var text: String, var failure: String): Int
+
+  /** An integer value (`REG_DWORD` or `REG_QWORD`) of the key `key` below `HKEY_LOCAL_MACHINE` (`RegGetValueW`). */
+  native static fn registryInteger(key: String, value: String, var number: Int64, var failure: String): Int
+
+  /** The machine's DNS host name, without its domain (`GetComputerNameExW(ComputerNameDnsHostname)`). */
+  native static fn computerName(var name: String, var failure: String): Int
+
+  /**
+   * The size of a memory page, the architecture of the machine and how many logical processors it has
+   * (`GetNativeSystemInfo`, and `IsWow64Process2` for the machine an emulated program runs on). The architecture is a
+   * number: `1` x86-64, `2` Arm64, `3` 32-bit x86, `4` 32-bit Arm, `0` another one.
+   */
+  native static fn systemInformation(
+    var pageSize: Int64,
+    var architecture: Int64,
+    var logical: Int64,
+    var failure: String,
+  ): Int
+
+  /**
+   * The path of a Known Folder (`SHGetKnownFolderPath`), named by its `FOLDERID_` as text:
+   * `{5E6C858F-0E22-4760-9AFE-EA3317B67173}` is the profile. A folder the machine does not have is the outcome `3`.
+   */
+  native static fn knownFolder(identifier: String, var path: String, var failure: String): Int
+
+  /** The directory for temporary files (`GetTempPath2W`, and `GetTempPathW` before Windows 11). */
+  native static fn temporaryDirectory(var path: String, var failure: String): Int
 }

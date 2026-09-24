@@ -1202,6 +1202,12 @@ bool torb_platform_arguments(torb_list *out);
  */
 bool torb_platform_environment_variable(const char *name, char **value, size_t *length);
 /**
+ * Every environment variable whose name `keep` accepts, appended to `*names` and `*values` as texts, one pair per
+ * variable. A variable that has no UTF-8 spelling is left out, and so are the per-drive names Windows keeps under a
+ * leading `=`. `keep` is handed a NUL-terminated name it borrows.
+ */
+void torb_platform_environment_entries(torb_list *names, torb_list *values, bool (*keep)(const char *name));
+/**
  * `name` and `value` borrowed, NUL terminated. Only `runtime/tests` calls this - no native sets an environment
  * variable, so there is nothing above the platform layer to route it through. False on failure.
  */
@@ -1262,6 +1268,11 @@ int64_t torb_clock_milliseconds(void);
  * `getenv` can see is visible here, which is what a native, non-sandboxed program expects.
  */
 bool torb_environment_get(torb_text name, torb_text *out);
+/**
+ * `Environment.entries`: every variable a sandboxed script's patterns match, and every variable at all outside a
+ * sandbox, appended to `*names` and `*values` as two parallel lists of texts.
+ */
+void torb_environment_entries(torb_list *names, torb_list *values);
 
 /* ---------------------------------------------------------------------------------------------------- math --- */
 

@@ -1,0 +1,147 @@
+/**
+ * [System] - which operating system this is and which version, the host name, how long it has been running, the size
+ * of a memory page and the architecture of the machine - and [SystemVersion], the name and version it answers.
+ *
+ * Every question is a `match OperatingSystem.current` whose arm hands it to the directory of that system; only the arm
+ * of the build's target is compiled.
+ */
+
+use OperatingSystem, Architecture from "std/core"
+use OsError from "./error"
+use * as windows from "./windows/system"
+use * as linux from "./linux/system"
+use * as macos from "./macos/system"
+use * as freebsd from "./freebsd/system"
+use * as posix from "./posix/system"
+use * as bsd from "./bsd/system"
+
+/**
+ * Which system this is, which version, and how long it has been running.
+ *
+ * # Examples
+ *
+ *     const version = System.version()?
+ *     print "{version.name} on {System.hostName()?}"
+ *
+ * # Related
+ *
+ * - [SystemVersion] - what [System.version] answers.
+ * - [OperatingSystem.current] - which system the program was compiled for, which needs no call at all.
+ */
+public type System {
+  /**
+   * The operating system's name and version, as its vendor writes them. Windows reads its registry and its kernel,
+   * Linux `os-release` and `uname`, macOS `sysctl`, FreeBSD `uname`.
+   *
+   * # Examples
+   *
+   *     const version = System.version()?
+   *     print "{version.name} {version.kernel}"
+   */
+  static fn version(): Result<SystemVersion, OsError> {
+    match OperatingSystem.current {
+      .Windows => windows.version()
+      .Linux => linux.version()
+      .MacOs => macos.version()
+      .FreeBsd => freebsd.version()
+    }
+  }
+
+  /**
+   * The machine's host name, without a domain: `GetComputerNameExW(ComputerNameDnsHostname)` on Windows,
+   * `gethostname` everywhere else. It never asks DNS.
+   */
+  static fn hostName(): Result<String, OsError> {
+    match OperatingSystem.current {
+      .Windows => windows.hostName()
+      .Linux | .MacOs | .FreeBsd => posix.hostName()
+    }
+  }
+
+  /**
+   * How long since the system started, as each system counts it: `GetTickCount64` on Windows, `/proc/uptime` on
+   * Linux, `kern.boottime` against the clock on macOS and FreeBSD. All four include the time the machine was asleep.
+   */
+  static fn uptime(): Result<Duration, OsError> {
+    match OperatingSystem.current {
+      .Windows => Ok windows.uptime()
+      .Linux => linux.uptime()
+      .MacOs | .FreeBsd => bsd.uptime()
+    }
+  }
+
+  /**
+   * The size of a memory page in bytes: 4096 on most machines, 16384 on Apple silicon. Every system knows it without
+   * failing, so the answer is not a `Result`.
+   */
+  static fn pageSize(): Int {
+    match OperatingSystem.current {
+      .Windows => windows.pageSize()
+      .Linux | .MacOs | .FreeBsd => posix.pageSize()
+    }
+  }
+
+  /**
+   * The architecture of the machine, which is not always [Architecture.current]: an x86-64 program emulated on an
+   * Arm64 Windows machine, or translated by Rosetta on a Mac, runs on `.Arm64`.
+   */
+  static fn machineArchitecture(): Result<Architecture, OsError> {
+    match OperatingSystem.current {
+      .Windows => windows.machineArchitecture()
+      .MacOs => macos.machineArchitecture()
+      .Linux | .FreeBsd => posix.machineArchitecture()
+    }
+  }
+}
+
+/**
+ * The name and version of the running system.
+ *
+ * # Examples
+ *
+ *     const version = SystemVersion(
+ *       name: "Ubuntu 24.04.1 LTS",
+ *       identifier: "ubuntu",
+ *       release: "24.04",
+ *       build: None,
+ *       kernel: "6.8.0-45-generic",
+ *     )
+ *     print version.kernelNumbers()
+ */
+public type SystemVersion with Show, Equals {
+  /** For people: `Windows 11 Pro`, `Ubuntu 24.04.1 LTS`, `macOS 15.1`, `FreeBSD 14.1-RELEASE`. */
+  name: String
+  /** For programs, stable and lower case: `windows`, `ubuntu`, `fedora`, `macos`, `freebsd` (`ID` of `os-release`). */
+  identifier: String
+  /** The product's own version: `24H2`, `24.04`, `15.1`, `14.1`. */
+  release: String
+  /** The build, where the product has one: `26100.2314`, `24B83`. */
+  build: String?
+  /** The kernel's release: `10.0.26100`, `6.8.0-45-generic`, `24.1.0`, `14.1-RELEASE`. */
+  kernel: String
+
+  /** The leading numbers of [SystemVersion.kernel], for comparing: `[6, 8, 0]` of `6.8.0-45-generic`. */
+  fn kernelNumbers(): List<Int> {
+    var numbers: List<Int> = []
+    for part in kernel.split(".") {
+      var digits = ""
+      for character in part.chars() {
+        if character < '0' || character > '9' {
+          break
+        }
+        digits = digits + character.show()
+      }
+      const number = match Int.tryFrom(digits) {
+        Ok(found) => found
+        Fail(_) => {
+          return numbers
+        }
+      }
+      numbers.append number
+      if digits.byteLength() != part.byteLength() {
+        return numbers
+      }
+    }
+    numbers
+  }
+}

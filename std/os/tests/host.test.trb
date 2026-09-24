@@ -1,0 +1,126 @@
+/**
+ * The OS-neutral surface against the machine the test runs on: every question answers, and the answers have the shape
+ * every system gives them. What an answer *is* differs per machine, so no exact value is compared.
+ */
+
+use test, group from "std/test"
+use OperatingSystem, Architecture from "std/core"
+use outcome, OsError from "../src/error"
+use Environment, EnvironmentVariables from "../src/environment"
+use System from "../src/system"
+use Directories from "../src/directories"
+
+group "the environment" {
+  test "the variables of this process include its search path" {
+    const variables = Environment.variables()
+    assert variables.get("PATH").isSome()
+    assert(variables.get("PATH") == Environment.get("PATH"))
+    assert(variables.count() > 0)
+  }
+
+  test "the search path has no empty entry" {
+    for directory in Environment.searchPath() {
+      assert(!directory.show().isEmpty())
+    }
+  }
+
+  test "a value set, read, replaced and removed" {
+    var variables = EnvironmentVariables.empty()
+    variables.set "APP_MODE", "debug"
+    variables.set "NO_COLOR", "1"
+    assert(variables.get("APP_MODE") == Some("debug"))
+    variables.set "APP_MODE", "release"
+    assert(variables.get("APP_MODE") == Some("release"))
+    variables.remove "NO_COLOR"
+    assert(variables.get("NO_COLOR") == None)
+    assert(variables.names() == ["APP_MODE"])
+    assert(variables.show() == "EnvironmentVariables(APP_MODE)")
+  }
+
+  test "a name matches another spelling on Windows and only itself elsewhere" {
+    var variables = EnvironmentVariables.empty()
+    variables.set "Path", "a"
+    variables.set "PATH", "b"
+    match OperatingSystem.current {
+      .Windows => {
+        assert(variables.count() == 1)
+        assert(variables.get("path") == Some("b"))
+      }
+      .Linux | .MacOs | .FreeBsd => {
+        assert(variables.count() == 2)
+        assert(variables.get("path") == None)
+      }
+    }
+  }
+
+  test "two sets of the same variables are equal" {
+    var first = EnvironmentVariables.empty()
+    first.set "A", "1"
+    var second = EnvironmentVariables.empty()
+    second.set "A", "1"
+    assert(first == second)
+    second.set "A", "2"
+    assert(first != second)
+  }
+}
+
+group "the system" {
+  test "the version names the system and its kernel" {
+    const version = System.version().expect("the version")
+    assert(!version.name.isEmpty())
+    assert(!version.identifier.isEmpty())
+    assert(!version.kernel.isEmpty())
+    assert(!version.kernelNumbers().isEmpty())
+  }
+
+  test "the host name is a name" {
+    const name = System.hostName().expect("the host name")
+    assert(!name.isEmpty())
+  }
+
+  test "the machine has been running for a while" {
+    const uptime = System.uptime().expect("the uptime")
+    assert(uptime > 0.milliseconds())
+  }
+
+  test "a page is a power of two of at least 4 KiB" {
+    const size = System.pageSize()
+    assert(size >= 4096)
+    assert(size.bitwiseAnd(size - 1) == 0)
+  }
+
+  test "the machine's architecture is one the toolchain builds for" {
+    const architecture = System.machineArchitecture().expect("the machine architecture")
+    assert(architecture == .X64 || architecture == .Arm64)
+  }
+}
+
+group "the directories" {
+  test "every base is an absolute path" {
+    assert Directories.home().expect("the home").isAbsolute()
+    assert Directories.configuration().expect("the configuration").isAbsolute()
+    assert Directories.data().expect("the data").isAbsolute()
+    assert Directories.state().expect("the state").isAbsolute()
+    assert Directories.cache().expect("the cache").isAbsolute()
+    assert Directories.temporary().isAbsolute()
+  }
+
+  test "the configuration is below the home, where the system puts it there by default" {
+    const home = Directories.home().expect("the home")
+    match OperatingSystem.current {
+      .Windows | .MacOs => assert Directories.configuration().expect("the configuration").startsWith(home)
+      .Linux | .FreeBsd => {}
+    }
+  }
+}
+
+group "outcome" {
+  test "zero is success, and every other number the case it names" {
+    assert outcome(0, "q", "").isOk()
+    assert(outcome(1, "q", "why") == Fail(OsError.Failed("q", "why")))
+    assert(outcome(2, "q", "why") == Fail(OsError.Denied("q", "why")))
+    assert(outcome(3, "q", "why") == Fail(OsError.Missing("q", "why")))
+    assert(outcome(4, "q", "why") == Fail(OsError.Unsupported("q", OperatingSystem.current)))
+    assert(outcome(9, "q", "why") == Fail(OsError.Failed("q", "why")))
+  }
+}

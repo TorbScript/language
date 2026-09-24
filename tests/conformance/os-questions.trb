@@ -1,0 +1,63 @@
+use OperatingSystem from "std/core"
+use Environment, EnvironmentVariables, System, Directories from "std/os"
+
+/**
+ * The questions of `std/os` on the machine the program is built on. Each native of `runtime/os/` answers an outcome and
+ * writes its texts through `var` parameters, replacing what they held - so the program has to leave
+ * `live blocks at exit: 0` whichever system's arm was compiled, and it prints the same lines on every machine.
+ */
+
+fn environmentAnswers(): Bool {
+  const variables = Environment.variables()
+  var changed = variables
+  changed.set "TORB_CONFORMANCE", "1"
+  variables.get("PATH") == Environment.get("PATH") && changed.count() == variables.count() + 1
+}
+
+fn searchPathAnswers(): Bool {
+  const directories = Environment.searchPath()
+  !directories.isEmpty() && directories.all({ !_.show().isEmpty() })
+}
+
+fn systemAnswers(): Bool {
+  match System.version() {
+    Ok(version) => !version.name.isEmpty() && !version.kernelNumbers().isEmpty()
+    Fail(_) => false
+  }
+}
+
+fn hostAnswers(): Bool {
+  match System.hostName() {
+    Ok(name) => !name.isEmpty()
+    Fail(_) => false
+  }
+}
+
+fn directoriesAnswer(): Bool {
+  const home = Directories.home()
+  const cache = Directories.cache()
+  match (home, cache) {
+    (Ok(found), Ok(below)) => found.isAbsolute() && below.isAbsolute() && Directories.temporary().isAbsolute()
+    _ => false
+  }
+}
+
+fn namesFold(): Bool {
+  var variables = EnvironmentVariables.empty()
+  variables.set "Name", "a"
+  variables.set "NAME", "b"
+  match OperatingSystem.current {
+    .Windows => variables.count() == 1
+    .Linux | .MacOs | .FreeBsd => variables.count() == 2
+  }
+}
+
+print environmentAnswers()
+print searchPathAnswers()
+print systemAnswers()
+print hostAnswers()
+print(System.pageSize() >= 4096)
+print System.uptime().isOk()
+print System.machineArchitecture().isOk()
+print directoriesAnswer()
+print namesFold()

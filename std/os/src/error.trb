@@ -1,0 +1,85 @@
+/**
+ * [OsError], what asking the operating system can go wrong with, and [outcome], the one function that turns the answer
+ * of a native of `runtime/os/` into a `Result`.
+ *
+ * Every native of `std/os` answers an `Int` outcome and writes its payload through `var` parameters, because a function
+ * of the runtime may not build a type of the program (docs/design/OS.md section 4). The per-system modules hand that
+ * outcome to [outcome] and never look at the number themselves.
+ */
+
+use OperatingSystem from "std/core"
+use Cancelled from "std/task"
+
+/**
+ * What asking the operating system went wrong with. `question` is what was asked: `the host name`, `the version`,
+ * `the cache directory`.
+ *
+ * No error code of a system is carried: a code is a number of one system, and a portable caller that could read it
+ * would compare it. The natives classify it instead (`ERROR_ACCESS_DENIED` and `EACCES` both become `Denied`), and the
+ * message keeps the system's own words.
+ *
+ * # Examples
+ *
+ *     match System.hostName() {
+ *       Ok(name) => print name
+ *       Fail(.Unsupported(question, system)) => print "{system} cannot tell {question}"
+ *       Fail(problem) => printError "{problem}"
+ *     }
+ *
+ * # Related
+ *
+ * - [outcome] - where a native's number becomes one of these cases.
+ */
+public type OsError with Show, Equals, Error {
+  /** This operating system cannot answer the question at all. */
+  case Unsupported(question: String, operatingSystem: OperatingSystem)
+  /** The operating system refused: a permission, a container that hides `/proc`, a policy. */
+  case Denied(question: String, reason: String)
+  /** The question has no answer on this machine: no `HOME` and no account entry, no such registry value. */
+  case Missing(question: String, reason: String)
+  /** The call failed, in the operating system's own words. */
+  case Failed(question: String, message: String)
+  /** An answer came back in a form its reader did not expect: a `/proc` line, a registry value of the wrong type. */
+  case Malformed(source: String, detail: String)
+  /** A query that waits was cancelled. What `From<Cancelled>` produces. */
+  case Stopped
+
+  /** One sentence that names the question and why it has no answer: `the host name: access is denied`. */
+  fn show(): String {
+    match self {
+      .Unsupported(question, operatingSystem) => "{question}: {operatingSystem} cannot tell"
+      .Denied(question, reason) => "{question}: denied: {reason}"
+      .Missing(question, reason) => "{question}: missing: {reason}"
+      .Failed(question, message) => "{question}: {message}"
+      .Malformed(source, detail) => "{source}: not in the expected form: {detail}"
+      .Stopped => "the question was cancelled"
+    }
+  }
+}
+
+/** A question that waited and was cancelled has no answer, which is a failure like any other. */
+extend OsError with From<Cancelled> {
+  static fn from(value: Cancelled): OsError {
+    OsError.Stopped
+  }
+}
+
+/**
+ * The `Result` of a native's outcome: `Ok` for `0`, and otherwise the case its number names - `2` denied, `3` missing,
+ * `4` unsupported, anything else failed - with `failure`, what the native wrote about it, as the reason.
+ *
+ * # Examples
+ *
+ *     var name = ""
+ *     var failure = ""
+ *     outcome(Posix.hostName(name, failure), "the host name", failure)?
+ */
+public fn outcome(code: Int, question: String, failure: String): Result<Void, OsError> {
+  match code {
+    0 => Ok void
+    2 => Fail OsError.Denied(question, failure)
+    3 => Fail OsError.Missing(question, failure)
+    4 => Fail OsError.Unsupported(question, OperatingSystem.current)
+    _ => Fail OsError.Failed(question, failure)
+  }
+}

@@ -1,0 +1,31 @@
+/** The well-known directories on macOS: the `Library` of the home directory, and the per-user temporary directory. */
+
+use Path from "std/path"
+use OsError, outcome from "../error"
+use home, absoluteVariable from "../posix/directories"
+use MacOs from "./native"
+
+/** `~/Library/Application Support`, where configuration, data and state all belong on macOS. */
+public fn applicationSupport(): Result<Path, OsError> {
+  const directory = home()?
+  Ok directory.joined(Path.from("Library/Application Support"))
+}
+
+/** `~/Library/Caches`. */
+public fn caches(): Result<Path, OsError> {
+  const directory = home()?
+  Ok directory.joined(Path.from("Library/Caches"))
+}
+
+/** `TMPDIR`, else the per-user directory of `confstr`, else `/tmp`. */
+public fn temporary(): Path {
+  if const Some(given) = absoluteVariable("TMPDIR") {
+    return given
+  }
+  var path = ""
+  var failure = ""
+  if outcome(MacOs.userTemporaryDirectory(path, failure), "the temporary directory", failure).isOk() {
+    return Path.from path
+  }
+  Path.from "/tmp"
+}

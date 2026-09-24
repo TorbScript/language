@@ -3,6 +3,9 @@
  * manifest says so (`availableOn`), and a Windows build that reaches one is a compile error - reach it from an arm of
  * `.Linux | .MacOs | .FreeBsd`.
  *
+ * Every native that can fail answers an outcome for [outcome] of `../error` - `0` success, `1` failed, `2` denied,
+ * `3` missing, `4` unsupported - and writes its answer through its `var` parameters, the reason into `failure`.
+ *
  * It is not the documented surface of `std/os`: the OS-neutral modules call it from their POSIX arms.
  */
 
@@ -16,4 +19,36 @@ public native type Posix {
    *     print Posix.effectiveUserIdentifier()
    */
   native static fn effectiveUserIdentifier(): Int64
+
+  /** The five names of `uname`: `Linux`, the node, `6.8.0-45-generic`, the build, `x86_64`. */
+  native static fn systemNames(
+    var system: String,
+    var node: String,
+    var release: String,
+    var version: String,
+    var machine: String,
+    var failure: String,
+  ): Int
+
+  /** The host name (`gethostname`), which never asks DNS. */
+  native static fn hostName(var name: String, var failure: String): Int
+
+  /**
+   * A value of `sysconf`, **by name** - `"PAGESIZE"`, `"NPROCESSORS_ONLN"`, `"CLK_TCK"` - and `-1` where the name is
+   * unknown or the system has no value for it. By name, because the numbers of the `_SC_` constants differ between
+   * systems and must not appear in TorbScript.
+   */
+  native static fn configuration(name: String): Int64
+
+  /**
+   * The account entry of this process's real user (`getuid`, `getpwuid_r`): its id, login name, the GECOS field (empty
+   * where the entry has none) and home directory. An account without an entry is the outcome `3`.
+   */
+  native static fn account(
+    var identifier: Int64,
+    var name: String,
+    var fullName: String,
+    var home: String,
+    var failure: String,
+  ): Int
 }

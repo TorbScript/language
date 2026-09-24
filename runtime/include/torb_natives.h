@@ -63,6 +63,8 @@ bool torb_convert_i64_u64_checked(int64_t value, uint64_t *out, torb_text *messa
 bool torb_convert_i64_u8_checked(int64_t value, uint8_t *out, torb_text *message);
 /* Int64.tryFrom(UInt64) */
 bool torb_convert_u64_i64_checked(uint64_t value, int64_t *out, torb_text *message);
+/* Environment.entries */
+void torb_environment_entries(torb_list *names, torb_list *values);
 /* Environment.get */
 bool torb_environment_get(torb_text name, torb_text *out);
 /* File.absolutePath */
@@ -167,10 +169,42 @@ double torb_math_sine(double value);
 double torb_math_tangent(double value);
 /* UInt64.multipliedWrapping */
 uint64_t torb_multiplied_wrapping_u64(uint64_t first, uint64_t second);
+/* Bsd.sysctlInteger */
+int64_t torb_os_bsd_sysctl_integer(torb_text name, int64_t *number, torb_text *failure);
+/* Bsd.sysctlText */
+int64_t torb_os_bsd_sysctl_text(torb_text name, torb_text *text, torb_text *failure);
+/* Bsd.uptime */
+int64_t torb_os_bsd_uptime(int64_t *milliseconds, torb_text *failure);
+/* Linux.readSystemFile */
+int64_t torb_os_linux_read_system_file(torb_text path, torb_text *text, torb_text *failure);
+/* MacOs.userTemporaryDirectory */
+int64_t torb_os_macos_user_temporary_directory(torb_text *path, torb_text *failure);
+/* Posix.account */
+int64_t torb_os_posix_account(int64_t *identifier, torb_text *name, torb_text *full_name, torb_text *home, torb_text *failure);
+/* Posix.configuration */
+int64_t torb_os_posix_configuration(torb_text name);
 /* Posix.effectiveUserIdentifier */
 int64_t torb_os_posix_effective_user_identifier(void);
+/* Posix.hostName */
+int64_t torb_os_posix_host_name(torb_text *name, torb_text *failure);
+/* Posix.systemNames */
+int64_t torb_os_posix_system_names(torb_text *system, torb_text *node, torb_text *release, torb_text *version, torb_text *machine, torb_text *failure);
+/* Windows.computerName */
+int64_t torb_os_windows_computer_name(torb_text *name, torb_text *failure);
+/* Windows.knownFolder */
+int64_t torb_os_windows_known_folder(torb_text identifier, torb_text *path, torb_text *failure);
+/* Windows.registryInteger */
+int64_t torb_os_windows_registry_integer(torb_text key, torb_text value, int64_t *number, torb_text *failure);
+/* Windows.registryText */
+int64_t torb_os_windows_registry_text(torb_text key, torb_text value, torb_text *text, torb_text *failure);
+/* Windows.systemInformation */
+int64_t torb_os_windows_system_information(int64_t *page_size, int64_t *architecture, int64_t *logical, torb_text *failure);
+/* Windows.temporaryDirectory */
+int64_t torb_os_windows_temporary_directory(torb_text *path, torb_text *failure);
 /* Windows.tickCount */
 int64_t torb_os_windows_tick_count(void);
+/* Windows.version */
+int64_t torb_os_windows_version(int64_t *major, int64_t *minor, int64_t *build, torb_text *failure);
 /* panic */
 void torb_panic(torb_text message, torb_location at);
 /* Float64.tryFrom(String) */

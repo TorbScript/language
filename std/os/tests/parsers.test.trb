@@ -1,0 +1,136 @@
+/**
+ * The pure halves of the per-system modules, over copies of what each system really answers: they run on every machine,
+ * whichever system the parser is for, because none of them reaches a native.
+ */
+
+use test, group from "std/test"
+use Architecture from "std/core"
+use Path from "std/path"
+use OsError from "../src/error"
+use SystemVersion from "../src/system"
+use parseOsRelease, versionOf, parseUptime from "../src/linux/system"
+use productName, architectureOf from "../src/windows/system"
+use * as posix from "../src/posix/system"
+use * as freebsd from "../src/freebsd/system"
+use resolvedBase from "../src/xdg/directories"
+
+/** `/etc/os-release` of Ubuntu 24.04.1, as it ships. */
+const ubuntu = """
+  PRETTY_NAME="Ubuntu 24.04.1 LTS"
+  NAME="Ubuntu"
+  VERSION_ID="24.04"
+  VERSION="24.04.1 LTS (Noble Numbat)"
+  VERSION_CODENAME=noble
+  ID=ubuntu
+  ID_LIKE=debian
+  HOME_URL="https://www.ubuntu.com/"
+  UBUNTU_CODENAME=noble
+  """
+
+group "os-release" {
+  test "every assignment is read, with its quotes removed" {
+    const fields = parseOsRelease ubuntu
+    assert(fields.get("PRETTY_NAME") == Some("Ubuntu 24.04.1 LTS"))
+    assert(fields.get("ID") == Some("ubuntu"))
+    assert(fields.get("VERSION_CODENAME") == Some("noble"))
+    assert(fields.get("HOME_URL") == Some("https://www.ubuntu.com/"))
+  }
+
+  test "comments and blank lines are skipped, and escapes inside double quotes are undone" {
+    const fields = parseOsRelease "# a comment\n\nNAME=\"Say \\\"hi\\\"\"\nID='plain'\n"
+    assert(fields.get("NAME") == Some("Say \"hi\""))
+    assert(fields.get("ID") == Some("plain"))
+    assert(fields.length() == 2)
+  }
+
+  test "the version is the pretty name, the identifier and the version id, with the kernel of uname" {
+    const version = versionOf parseOsRelease(ubuntu), "6.8.0-45-generic"
+    const expected = SystemVersion(
+      name: "Ubuntu 24.04.1 LTS",
+      identifier: "ubuntu",
+      release: "24.04",
+      build: None,
+      kernel: "6.8.0-45-generic",
+    )
+    assert(version == expected)
+    assert(version.kernelNumbers() == [6, 8, 0])
+  }
+
+  test "a system without os-release is Linux with the kernel's release" {
+    const version = versionOf parseOsRelease(""), "6.1.0"
+    assert(version.name == "Linux")
+    assert(version.identifier == "linux")
+    assert(version.release == "6.1.0")
+  }
+}
+
+group "/proc/uptime" {
+  test "the first number is the uptime, to the millisecond" {
+    const uptime = parseUptime "350735.47 234388.90\n"
+    assert(uptime == Ok(350_735_470.milliseconds()))
+  }
+
+  test "a number without a fraction is whole seconds" {
+    assert(parseUptime("12 5") == Ok(12_000.milliseconds()))
+  }
+
+  test "a file that begins with no number is malformed" {
+    const uptime = parseUptime "up since yesterday"
+    assert uptime.isError()
+  }
+}
+
+group "Windows" {
+  test "the registry's Windows 10 is Windows 11 from build 22000 on" {
+    assert(productName("Windows 10 Pro", 26100) == "Windows 11 Pro")
+    assert(productName("Windows 10 Pro", 19045) == "Windows 10 Pro")
+    assert(productName("Windows Server 2022 Standard", 20348) == "Windows Server 2022 Standard")
+  }
+
+  test "the architecture numbers of the native" {
+    assert(architectureOf(1) == Ok(Architecture.X64))
+    assert(architectureOf(2) == Ok(Architecture.Arm64))
+    assert architectureOf(3).isError()
+    assert architectureOf(0).isError()
+  }
+}
+
+group "POSIX and FreeBSD" {
+  test "the machine of uname, as Linux and as the BSDs spell it" {
+    assert(posix.architectureOf("x86_64") == Ok(Architecture.X64))
+    assert(posix.architectureOf("amd64") == Ok(Architecture.X64))
+    assert(posix.architectureOf("aarch64") == Ok(Architecture.Arm64))
+    assert(posix.architectureOf("arm64") == Ok(Architecture.Arm64))
+    assert posix.architectureOf("riscv64").isError()
+  }
+
+  test "a FreeBSD release names the product's version before its dash" {
+    const version = freebsd.versionOf "14.1-RELEASE-p5"
+    assert(version.name == "FreeBSD 14.1-RELEASE-p5")
+    assert(version.release == "14.1")
+    assert(version.kernelNumbers() == [14, 1])
+  }
+}
+
+group "XDG base directories" {
+  test "an absolute value is the directory" {
+    const home = Path.from "/home/ada"
+    assert(resolvedBase(Some("/data/config"), home, ".config") == Path.from("/data/config"))
+  }
+
+  test "an unset, empty or relative value falls back below the home" {
+    const home = Path.from "/home/ada"
+    assert(resolvedBase(None, home, ".config") == Path.from("/home/ada/.config"))
+    assert(resolvedBase(Some(""), home, ".cache") == Path.from("/home/ada/.cache"))
+    assert(resolvedBase(Some("cache"), home, ".cache") == Path.from("/home/ada/.cache"))
+    assert(resolvedBase(None, home, ".local/share") == Path.from("/home/ada/.local/share"))
+  }
+}
+
+group "OsError" {
+  test "every case says what was asked" {
+    assert(OsError.Denied("the host name", "access is denied").show() == "the host name: denied: access is denied")
+    assert(OsError.Failed("the version", "it broke").show() == "the version: it broke")
+    assert(OsError.Malformed("/proc/uptime", "no number").show() == "/proc/uptime: not in the expected form: no number")
+  }
+}

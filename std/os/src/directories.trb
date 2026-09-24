@@ -1,0 +1,92 @@
+/**
+ * [Directories]: where a user's files belong by the convention of the system - the home directory, and the bases for
+ * configuration, data, state, cache and temporary files.
+ *
+ * Windows answers from its Known Folders, Linux and FreeBSD from the XDG base directories, macOS from its `Library`.
+ */
+
+use OperatingSystem from "std/core"
+use Path from "std/path"
+use OsError from "./error"
+use * as windows from "./windows/directories"
+use * as macos from "./macos/directories"
+use * as posix from "./posix/directories"
+use * as xdg from "./xdg/directories"
+
+/**
+ * Where a user's files belong, by the convention of the system. Each answers the base: an application joins its own
+ * name.
+ *
+ * - **Linux and FreeBSD** follow the XDG base directories: `HOME` (else the account entry), `XDG_CONFIG_HOME` (else
+ *   `~/.config`), `XDG_DATA_HOME` (else `~/.local/share`), `XDG_STATE_HOME` (else `~/.local/state`), `XDG_CACHE_HOME`
+ *   (else `~/.cache`), and `TMPDIR` (else `/tmp`).
+ * - **Windows** answers its Known Folders: `FOLDERID_Profile`, `FOLDERID_RoamingAppData` for configuration and data,
+ *   `FOLDERID_LocalAppData` for state and cache, and `GetTempPath2W`.
+ * - **macOS** answers `HOME` (else the account entry), `~/Library/Application Support` for configuration, data and
+ *   state, `~/Library/Caches`, and `TMPDIR` (else the user's own temporary directory).
+ *
+ * # Examples
+ *
+ *     const configuration = Directories.configuration()?
+ *     const settings = configuration.joined(Path.from("torb"))
+ *     print settings
+ *
+ * # Pitfalls
+ *
+ * - An XDG variable that holds a relative path is ignored, as the XDG specification requires: `XDG_CACHE_HOME=cache`
+ *   answers `~/.cache`.
+ */
+public type Directories {
+  /** The user's home directory. */
+  static fn home(): Result<Path, OsError> {
+    match OperatingSystem.current {
+      .Windows => windows.home()
+      .Linux | .MacOs | .FreeBsd => posix.home()
+    }
+  }
+
+  /** Where an application keeps what the user configured. */
+  static fn configuration(): Result<Path, OsError> {
+    match OperatingSystem.current {
+      .Windows => windows.roaming()
+      .Linux | .FreeBsd => xdg.configuration()
+      .MacOs => macos.applicationSupport()
+    }
+  }
+
+  /** Where an application keeps what it made for the user and that is worth keeping. */
+  static fn data(): Result<Path, OsError> {
+    match OperatingSystem.current {
+      .Windows => windows.roaming()
+      .Linux | .FreeBsd => xdg.data()
+      .MacOs => macos.applicationSupport()
+    }
+  }
+
+  /** Where an application keeps what should survive a restart but is no document: histories, logs, the last layout. */
+  static fn state(): Result<Path, OsError> {
+    match OperatingSystem.current {
+      .Windows => windows.local()
+      .Linux | .FreeBsd => xdg.state()
+      .MacOs => macos.applicationSupport()
+    }
+  }
+
+  /** Where an application keeps what it can make again, and what may be deleted at any time. */
+  static fn cache(): Result<Path, OsError> {
+    match OperatingSystem.current {
+      .Windows => windows.local()
+      .Linux | .FreeBsd => xdg.cache()
+      .MacOs => macos.caches()
+    }
+  }
+
+  /** The directory for temporary files. Always answers: every system has one, and `/tmp` is the last resort. */
+  static fn temporary(): Path {
+    match OperatingSystem.current {
+      .Windows => windows.temporary()
+      .Linux | .FreeBsd => posix.temporary()
+      .MacOs => macos.temporary()
+    }
+  }
+}

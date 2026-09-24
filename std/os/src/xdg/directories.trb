@@ -1,0 +1,54 @@
+/**
+ * The XDG base directories of freedesktop.org, which Linux and FreeBSD follow: a variable per directory, and a
+ * directory below the home where the variable is not set - or is set to a relative path, which the specification says
+ * to ignore.
+ */
+
+use Path from "std/path"
+use OsError from "../error"
+use Environment from "../environment"
+use home from "../posix/directories"
+
+/** `XDG_CONFIG_HOME`, else `~/.config`. */
+public fn configuration(): Result<Path, OsError> {
+  baseDirectory "XDG_CONFIG_HOME", ".config"
+}
+
+/** `XDG_DATA_HOME`, else `~/.local/share`. */
+public fn data(): Result<Path, OsError> {
+  baseDirectory "XDG_DATA_HOME", ".local/share"
+}
+
+/** `XDG_STATE_HOME`, else `~/.local/state`. */
+public fn state(): Result<Path, OsError> {
+  baseDirectory "XDG_STATE_HOME", ".local/state"
+}
+
+/** `XDG_CACHE_HOME`, else `~/.cache`. */
+public fn cache(): Result<Path, OsError> {
+  baseDirectory "XDG_CACHE_HOME", ".cache"
+}
+
+/** The directory `variable` names, else `fallback` below the home. The home is only asked where it is needed. */
+fn baseDirectory(variable: String, fallback: String): Result<Path, OsError> {
+  if const Some(given) = Environment.get(variable) {
+    if Path.from(given).isAbsolute() {
+      return Ok Path.from(given)
+    }
+  }
+  Ok resolvedBase(None, home()?, fallback)
+}
+
+/**
+ * The rule of the specification on its own, so that its tests run on every machine: the value of the variable where it
+ * is an absolute path, and `fallback` below `home` where it is unset, empty or relative.
+ */
+public fn resolvedBase(value: String?, home: Path, fallback: String): Path {
+  if const Some(given) = value {
+    const path = Path.from given
+    if path.isAbsolute() {
+      return path
+    }
+  }
+  home.joined Path.from(fallback)
+}

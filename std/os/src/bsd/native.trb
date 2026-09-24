@@ -1,0 +1,25 @@
+/**
+ * The raw layer macOS and FreeBSD share: the natives of `runtime/os/bsd.c`, over the `sysctl` interface both inherited
+ * from BSD. The manifest says so (`availableOn`), and a call that the build for another system reaches is a compile
+ * error there - reach it from a `.MacOs` or `.FreeBsd` arm of `match OperatingSystem.current`.
+ *
+ * A `sysctl` is read by its name, never by the numbers of a management information base, because those differ between
+ * the two systems.
+ *
+ * It is not the documented surface of `std/os`: the OS-neutral modules call it from their macOS and FreeBSD arms.
+ */
+
+/** The natives of the BSD `sysctl` interface. */
+public native type Bsd {
+  /** A text `sysctl` (`sysctlbyname`): `kern.osproductversion`. An unknown name is the outcome `3`. */
+  native static fn sysctlText(name: String, var text: String, var failure: String): Int
+
+  /** An integer `sysctl` of any width, widened (`sysctlbyname`): `hw.pagesize`, `sysctl.proc_translated`. */
+  native static fn sysctlInteger(name: String, var number: Int64, var failure: String): Int
+
+  /**
+   * Milliseconds since the system started: `kern.boottime` against the wall clock. It is computed in C because
+   * `std/time` has no point on the wall clock yet that the boot time could be.
+   */
+  native static fn uptime(var milliseconds: Int64, var failure: String): Int
+}

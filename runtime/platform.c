@@ -506,6 +506,47 @@ bool torb_platform_environment_variable(const char *name, char **value, size_t *
 }
 
 /**
+ * The environment block of `GetEnvironmentStringsW`, a copy owned by this call: `NAME=VALUE` entries one after the
+ * other, each NUL terminated, and an empty one at the end. The `=` between the two halves is overwritten with a NUL, so
+ * each half converts on its own. The names Windows keeps for the working directory of each drive (`=C:`) begin with `=`
+ * and are no variables of anybody's.
+ */
+void torb_platform_environment_entries(torb_list *names, torb_list *values, bool (*keep)(const char *name)) {
+  wchar_t *block = GetEnvironmentStringsW();
+  wchar_t *entry;
+  if (block == NULL) {
+    return;
+  }
+  for (entry = block; *entry != L'\0'; entry += wcslen(entry) + 1u) {
+    wchar_t *equals = wcschr(entry + 1, L'=');
+    size_t nameLength = 0u;
+    size_t valueLength = 0u;
+    char *name;
+    char *value;
+    if (entry[0] == L'=' || equals == NULL) {
+      continue;
+    }
+    *equals = L'\0';
+    name = torb_platform_utf8(entry, &nameLength);
+    value = torb_platform_utf8(equals + 1, &valueLength);
+    *equals = L'=';
+    if (name != NULL && value != NULL && keep(name)) {
+      torb_text nameText = torb_text_from_cstring(name);
+      torb_text valueText = torb_text_from_cstring(value);
+      torb_list_add(names, &nameText);
+      torb_list_add(values, &valueText);
+    }
+    if (name != NULL) {
+      torb_raw_free(name, nameLength + 1u);
+    }
+    if (value != NULL) {
+      torb_raw_free(value, valueLength + 1u);
+    }
+  }
+  FreeEnvironmentStringsW(block);
+}
+
+/**
  * `GetModuleFileNameW`, grown until the path fits. What the program sees is the `/` form every other path of this
  * runtime has, without the `\\?\` a very long path may come back with.
  */
@@ -734,6 +775,45 @@ bool torb_platform_environment_variable(const char *name, char **value, size_t *
   *value = (char *)torb_raw_allocate(*length + 1u);
   memcpy(*value, found, *length + 1u);
   return true;
+}
+
+/** Declared by no header of strict POSIX, and defined by every C library of it. */
+extern char **environ;
+
+/**
+ * `environ`, entry by entry. A name or a value that is not UTF-8 is left out: a `String` is always valid UTF-8, and a
+ * variable whose bytes are something else has no value a program could be handed.
+ */
+void torb_platform_environment_entries(torb_list *names, torb_list *values, bool (*keep)(const char *name)) {
+  char **entry;
+  if (environ == NULL) {
+    return;
+  }
+  for (entry = environ; *entry != NULL; entry += 1) {
+    const char *text = *entry;
+    const char *equals = strchr(text, '=');
+    size_t nameLength;
+    char *name;
+    torb_text nameText = torb_text_empty();
+    torb_text valueText = torb_text_empty();
+    size_t bad = 0u;
+    if (equals == NULL || equals == text) {
+      continue;
+    }
+    nameLength = (size_t)(equals - text);
+    name = (char *)torb_raw_allocate(nameLength + 1u);
+    memcpy(name, text, nameLength);
+    name[nameLength] = '\0';
+    if (keep(name) && torb_text_try_from_bytes((const uint8_t *)text, nameLength, &nameText, &bad)) {
+      if (torb_text_try_from_bytes((const uint8_t *)(equals + 1), strlen(equals + 1), &valueText, &bad)) {
+        torb_list_add(names, &nameText);
+        torb_list_add(values, &valueText);
+      } else {
+        torb_text_release(nameText);
+      }
+    }
+    torb_raw_free(name, nameLength + 1u);
+  }
 }
 
 bool torb_platform_set_environment_variable(const char *name, const char *value) {

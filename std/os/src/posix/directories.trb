@@ -1,0 +1,39 @@
+/** The directories every POSIX system finds the same way: the home directory, and `TMPDIR`. */
+
+use Path from "std/path"
+use OsError, outcome from "../error"
+use Environment from "../environment"
+use Posix from "./native"
+
+/** `HOME`, and the account entry where it is not set or not absolute. */
+public fn home(): Result<Path, OsError> {
+  if const Some(given) = absoluteVariable("HOME") {
+    return Ok given
+  }
+  var identifier: Int64 = 0
+  var name = ""
+  var fullName = ""
+  var directory = ""
+  var failure = ""
+  const code = Posix.account identifier, name, fullName, directory, failure
+  outcome(code, "the home directory", "`HOME` is not set, and {failure}")?
+  if directory.isEmpty() {
+    return Fail OsError.Missing("the home directory", "`HOME` is not set, and the account {name} names no home")
+  }
+  Ok Path.from(directory)
+}
+
+/** `TMPDIR`, else `/tmp`. */
+public fn temporary(): Path {
+  absoluteVariable("TMPDIR") ?? Path.from("/tmp")
+}
+
+/** The value of `name` as a path, where it is set to an absolute one. */
+public fn absoluteVariable(name: String): Path? {
+  const value = Environment.get(name)?
+  const path = Path.from value
+  if !path.isAbsolute() {
+    return None
+  }
+  Some path
+}

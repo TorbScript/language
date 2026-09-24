@@ -18,6 +18,7 @@ torb test compiler/tests                                # The TorbScript tests o
 torb test compiler/tests/calls.test.trb                 # ...one file
 torb check .                                            # The compiler checks the whole repository: "no problems"
 torb check tests/conformance tests/language             # ...and the two test workspaces, which stand outside it
+torb check --every-target std/os                        # Lowered once per target: no native reached on a wrong system
 torb manifest --check .                                 # Every project.trb evaluated in the VM agrees with the static reader
 torb check scratch.trb                                  # One file, wherever it is: it gets the toolchain's std/
 torb check --statistics .                               # Every expression has a type: "0 deferred"
@@ -63,7 +64,8 @@ runs.
 **Tier A is `sh tools/gates.sh a`**: it bootstraps `build/release/torb` with `sh tools/bootstrap.sh` if that is missing
 or older than a file it is built from (`compiler/src`, `std/`, the runtime's `.c`/`.h`, the manifests - never anything
 under a `build/` directory), then `check .` ("no problems"), `check --statistics .` ("0 deferred"),
-`check tests/conformance tests/language`, `manifest --check` over every `project.trb` of the repository (evaluated in
+`check tests/conformance tests/language`, `check --every-target std/os` (every program and test of the package lowered
+once per target, docs/design/OS.md section 2), `manifest --check` over every `project.trb` of the repository (evaluated in
 the sandboxed VM, it has to read as the static reader reads the file, docs/design/SCRIPTS.md section 7),
 `test compiler/tests` (which pins the recovery of the lexer and the parser
 over `tests/lexer-cases/` and `tests/parser-cases/` as well), `test` of every std/example test package (all of them
