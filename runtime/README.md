@@ -31,9 +31,9 @@ deliberately panics says `TORB_IGNORE_LEAKS()`, because a panic runs nothing on 
 | `include/torb_natives.h` | Generated from the manifest by `torb natives --header`. Do not edit                      |
 | `include/torb_task.h` | The task ABI of 7.3: the task block, the resume function a `Task` function is lowered to, the suspension primitives, `sleep`/`pause`/`cancel`/`within`, channels, the scheduler and the worker pool, the tests of what may cross a worker (`docs/design/CONCURRENCY.md` section 16) |
 | `include/torb_pool.h` | What the runtime's own files share about a worker: its heap counters, its scheduler, the threads, locks and conditions of `platform.c`, the atomics, the one-load `torb_worker_current`. Never included by generated C |
-| `memory.c`            | Block header, non-atomic counts (atomic only for a `TORB_SHARED_COUNT` block while there are threads), retain/release/is-unique/make-unique, immortal values and the lock around building a constant, the live-block counters of every worker summed |
+| `memory.c`            | Block header, non-atomic counts (atomic only for a `TORB_SHARED_COUNT` block while there are threads), retain/release/is-unique/make-unique, immortal values and the lock around building a constant, the live-block counters of every worker summed, the memory limit (`TORB_MEMORY_LIMIT`, the dev default, the count where the system takes no limit) |
 | `task.c`              | The worker pool: a FIFO run queue per worker that is also its inbox, the stealing of unstarted tasks, the timer heaps, waking and cancelling across workers, the tasks the runtime writes itself (`sleep`, `pause`, `within`), channels, the end-of-program drain, the tasks of a test (waited for, a panic in one on any worker the test's failure), the blocking pool and its turn (`offload`), `Workers.count`, `Workers.blocking` |
-| `panic.c`             | `torb_panic` and friends, the per-thread stack check, exit code 101, the test hook, one panic at a time |
+| `panic.c`             | `torb_panic` and friends, the per-thread stack check, exit code 101 (102 for out of memory), the test hook, one panic at a time |
 | `text.c`              | UTF-8, slices, concatenation, comparison, hashing, `Show`, float formatting, parsing       |
 | `list.c`              | The one contiguous list: growth, shared slices, copy on write, a stable merge sort         |
 | `map.c`               | The one insertion-ordered hash table, and the set on top of it                             |
@@ -43,7 +43,7 @@ deliberately panics says `TORB_IGNORE_LEAKS()`, because a panic runs nothing on 
 | `file.c`              | `readText`, `writeText`, `exists`, `isDirectory`, `list` (sorted), `absolutePath`, and the open handle (`File.open`/`readAll`/`close`) |
 | `clock.c`             | `std/time`: `Clock.now` and the arithmetic of `Instant` and `Duration`                     |
 | `environment.c`       | `std/environment`: `Environment.get`                                                       |
-| `platform.c`          | **The runtime's own portability layer, and the only file with an `#ifdef _WIN32` between its functions**: path kind, working directory, directory listing, opening and removing a file, whole-file read and write, running a child process, a monotonic clock reading, sleeping until a timer is due, the program's own arguments, reading an environment variable and setting one (for `runtime/tests` only). Everything crosses it as UTF-8; the Windows half converts to UTF-16 and calls the wide API, because the narrow one is the code page of the machine |
+| `platform.c`          | **The runtime's own portability layer, and the only file with an `#ifdef _WIN32` between its functions**: path kind, working directory, directory listing, opening and removing a file, whole-file read and write, running a child process, a monotonic clock reading, sleeping until a timer is due, the program's own arguments, reading an environment variable and setting one (for `runtime/tests` only), the memory limit of the process (a job object, `RLIMIT_DATA`, `RLIMIT_AS`), the physical memory and the size of a `malloc`ed block. Everything crosses it as UTF-8; the Windows half converts to UTF-16 and calls the wide API, because the narrow one is the code page of the machine |
 | `include/torb_os.h`   | The prototypes of every native of `runtime/os/`, declared on every machine so a signature is compared with the manifest's everywhere |
 | `os/<family>.c`       | The natives of `std/os` one family of systems has: `windows.c`, `linux.c`, `macos.c`, `freebsd.c`, `posix.c` for what Linux, macOS and FreeBSD share, and `bsd.c` for the `sysctl` interface of macOS and FreeBSD. **Each file is one `#if` from its first line after the includes to its last**, so every file is compiled on every machine and is empty where it does not belong, and no function has an `#ifdef` inside it. A row of the manifest names the systems its native exists on (`availableOn`), which is what keeps a call of one out of another system's build (docs/design/OS.md section 7) |
 | `tests/`              | `harness.h`/`harness.c` plus one `*_test.c` per area, one executable                       |
@@ -152,8 +152,37 @@ Two conventions follow from "a runtime function may not build a type of the prog
 
 **Panics.** `panic: <message>` and then `  at path/file.trb:12:5` to stderr, exit code 101, and nothing else runs:
 no release, no `Close`, no destructor (decided gap 9). The message is rendered into a fixed buffer, never allocated,
-so a panic still works when the heap is exhausted. `_exit` is used where it exists; where it does not, `exit` is the
+so a panic still works when the heap is exhausted. Running out of memory prints the same way and leaves with 102, past
+every recovery point (below). `_exit` is used where it exists; where it does not, `exit` is the
 same thing because the runtime registers no `atexit` handler.
+
+**Every process has a memory limit, and the operating system holds it.** A test binary once committed 88 GB and Windows
+paged the machine to death, so `torb_process_start` sets a limit before the program runs (`torb_memory_limit_start`,
+memory.c): `TORB_MEMORY_LIMIT` where it is set (bytes, or `512M`, `8G`; `0` or `none` for none; anything else is exit
+code 2), otherwise the smaller of 8 GiB and half the physical memory for a binary of the dev profile - `torb build`
+compiles what `torb test` and `torb run` build with `-DTORB_PROFILE_DEV` - and none for a release binary, the compiler
+among them. The system enforces it (`torb_platform_limit_memory`):
+
+- **Windows**: a job object of the process's own with `JOB_OBJECT_LIMIT_PROCESS_MEMORY`, nested inside whatever job the
+  process is already in (Windows 8 and later), with `JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK` so that a child - a C
+  compiler - is not held to it. What counts is committed memory: a commit over the limit fails and `malloc` answers
+  `NULL`.
+- **Linux**: `RLIMIT_DATA`, which since 4.7 counts every writable private mapping (the heap, `mmap`ed blocks, thread
+  stacks) and not the address space glibc only reserves - `RLIMIT_AS` would count 64 MiB per malloc arena and fail a
+  program with many threads that holds little.
+- **FreeBSD**: `RLIMIT_AS`, because its `RLIMIT_DATA` counts `brk` alone and its allocator maps.
+- **macOS**: no system limit fits (`RLIMIT_DATA` is not held against `mmap`, `RLIMIT_AS` against an address space that
+  already holds the shared cache), so the runtime counts.
+
+On POSIX a lowered limit is inherited, so a child started with `fork` gets the old one back before `exec`, and one
+started through the shell gets it back from a `ulimit` in front of its command line. **Where the system does not take
+the limit**, the runtime counts instead: every block of `torb_allocate` and `torb_raw_allocate` at the size the C
+allocator gave it (`_msize`, `malloc_usable_size`, `malloc_size`), atomically, and only while counting is on - one test
+of a flag per allocation and free otherwise. That sees the runtime's blocks and not the C library's, and it says so in
+one line on stderr where the limit was asked for explicitly. Either way the allocation over the limit ends the program
+with `panic: out of memory: the limit of 64 MiB was reached (TORB_MEMORY_LIMIT)` and exit code 102
+(`tests/conformance/memory-limit.trb`). No recovery point catches it: a recovered panic frees nothing, so every test
+after it would start at the limit. A program the VM runs is inside `torb`, and has the limit `torb` has.
 
 **Console output on Windows goes through `WriteConsoleW`, only where the target is a live console.** `print`,
 `printError` and `readLine` write and read raw UTF-8 bytes everywhere else, exactly as before; where the standard

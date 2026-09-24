@@ -1,0 +1,21 @@
+/**
+ * A program that allocates without end stops at its memory limit, with a message and an exit code of its own, instead
+ * of taking the machine down with it. `memory-limit.environment` runs it with `TORB_MEMORY_LIMIT=64M`, which the
+ * runtime hands to the operating system before the program starts (a job object on Windows, `RLIMIT_DATA` on Linux);
+ * the allocation that does not fit any more ends it with
+ * `panic: out of memory: the limit of 64 MiB was reached (TORB_MEMORY_LIMIT)` and exit code 102, which tells a program
+ * that ran out of memory apart from one that panicked (101).
+ *
+ * Every text it keeps is a new one of 1 MiB, so the limit is reached after about sixty of them whatever the allocator
+ * keeps for itself.
+ */
+
+var kept: List<String> = []
+var piece = "0123456789abcdef"
+for _ in 0..16 {
+  piece = piece + piece
+}
+print "one piece is {piece.byteLength()} bytes"
+loop {
+  kept.append "{kept.length()}{piece}"
+}

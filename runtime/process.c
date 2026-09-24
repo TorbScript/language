@@ -51,6 +51,8 @@ void torb_process_start(int argument_count, char **argument_values) {
   torb_argument_count = argument_count;
   torb_argument_values = argument_values;
   torb_reports_leaks = given != NULL && given[0] == '1' && given[1] == '\0';
+  /* Before anything of the program runs and before any thread starts: `TORB_MEMORY_LIMIT` or the dev default */
+  torb_memory_limit_start();
   torb_set_stack_limit();
 }
 

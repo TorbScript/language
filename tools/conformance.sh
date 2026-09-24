@@ -4,7 +4,7 @@
 # Every program under `tests/conformance/` (and `binary-only/`) is built with `build/release/torb build`, run,
 # and compared against its expectation files - `.expected` (standard output), `.stderr` (standard error, folded so a
 # line of `std/` reads `path:_:_` instead of its real position), `.exit` (the exit code) and `.leaks` (why the leak
-# gate does not apply). A file that is missing means "nothing to check" for `.expected`/`.exit`, and "must be empty"
+# gate does not apply); `.environment` (`NAME=value` lines) is set for every run of the binary. A file that is missing means "nothing to check" for `.expected`/`.exit`, and "must be empty"
 # for `.stderr`. `tests/conformance/README.md` is the contract.
 #
 # Two more things are asserted per program:
@@ -52,6 +52,29 @@ binary_of() {
   return 0
 }
 
+# Waits while the machine is short of memory, before a program is built and run: less than `$TORB_MINIMUM_FREE_MB`
+# (default 2048) available, as `/proc/meminfo` says where there is one (Linux, and Git Bash, which reads it from
+# Windows). A run of the suite goes on at its own pace while something else takes the memory, instead of adding to it.
+# After five minutes it goes on anyway, so a machine that is always this full still finishes.
+wait_for_room() {
+  [ -r /proc/meminfo ] || return 0
+  minimum=${TORB_MINIMUM_FREE_MB:-2048}
+  case "$minimum" in
+    '' | *[!0-9]*) minimum=2048 ;;
+  esac
+  waited=0
+  while [ "$waited" -lt 300 ]; do
+    available=$(awk '/^MemAvailable:/ { print $2; exit } /^MemFree:/ { free = $2 } END { if (free != "") print free }' \
+      /proc/meminfo | head -n 1)
+    case "$available" in
+      '' | *[!0-9]*) return 0 ;;
+    esac
+    [ "$available" -lt $((minimum * 1024)) ] || return 0
+    sleep 2
+    waited=$((waited + 2))
+  done
+}
+
 # ----------------------------------------------------------------------------- one program -------------------------
 #
 # Invoked as `sh tools/conformance.sh --run-one <program>`, once per program, so that `xargs -P` can run several at
@@ -65,6 +88,7 @@ run_one() {
   rm -rf "$work"
   mkdir -p "$work/again"
   result="$CONFORMANCE_SCRATCH/results/$name"
+  wait_for_room
 
   target="$work/prog"
   if ! "$CONFORMANCE_TORB" build "$program" --output "$target" >"$work/build.log" 2>&1; then
@@ -104,11 +128,20 @@ run_one() {
     export TORB_WORKERS
   fi
 
+  # The variables of a `.environment` file, one `NAME=value` per line, are set for every run of the binary and never
+  # for its build: `TORB_MEMORY_LIMIT=64M` limits the program and not the compiler that builds it
+  environment_file="${program%.trb}.environment"
+  settings=""
+  if [ -f "$environment_file" ]; then
+    settings=$(sed 's/\r$//; s/#.*//; /^[[:space:]]*$/d' "$environment_file" | tr '\n' ' ')
+  fi
+
   # The program runs in its own work directory, so a program that writes files (`build/native-*`) writes them there and
   # never into the checkout, and two programs never share one
   mkdir -p "$work/run"
   set +e
-  (cd "$work/run" && "$binary" >"$work/stdout" 2>"$work/stderr")
+  # shellcheck disable=SC2086
+  (cd "$work/run" && env $settings "$binary" >"$work/stdout" 2>"$work/stderr")
   code=$?
   set -e
   fold_library_positions <"$work/stderr" >"$work/stderr.folded"
@@ -150,7 +183,8 @@ $(diff -u "$work/expected.norm" "$work/stdout" 2>&1 || true)"
 
   if [ -f "$workers_file" ] && [ "$workers" != "1" ] && [ -f "$expected_file" ]; then
     set +e
-    (cd "$work/run" && TORB_WORKERS=1 "$binary" >"$work/stdout.one" 2>"$work/stderr.one")
+    # shellcheck disable=SC2086
+    (cd "$work/run" && env $settings TORB_WORKERS=1 "$binary" >"$work/stdout.one" 2>"$work/stderr.one")
     set -e
     if ! cmp -s "$work/expected.norm" "$work/stdout.one"; then
       problems="$problems
@@ -190,7 +224,8 @@ $(cat "$work/stderr.folded")"
   esac
   if [ "$is_binary_only" -eq 0 ] && [ ! -f "$stderr_file" ] && [ ! -f "$leaks_file" ]; then
     set +e
-    (cd "$work/run" && TORB_REPORT_LEAKS=1 "$binary" >"$work/leak.stdout" 2>"$work/leak.stderr")
+    # shellcheck disable=SC2086
+    (cd "$work/run" && env $settings TORB_REPORT_LEAKS=1 "$binary" >"$work/leak.stdout" 2>"$work/leak.stderr")
     set -e
     if ! grep -q 'live blocks at exit: 0$' "$work/leak.stderr"; then
       problems="$problems
@@ -262,6 +297,7 @@ run_one_vm() {
   mkdir -p "$work/run"
   result="$CONFORMANCE_SCRATCH/results/$name"
   absolute="$CONFORMANCE_ROOT/$program"
+  wait_for_room
 
   set +e
   (cd "$work/run" && "$CONFORMANCE_TORB" run --vm "$absolute" >"$work/stdout" 2>"$work/stderr")
@@ -361,6 +397,18 @@ while [ $# -gt 0 ]; do
       ;;
   esac
 done
+
+# Never more programs at a time than the machine has processors, whatever `--jobs` says: each one is a C compile
+case "$jobs" in
+  '' | *[!0-9]* | 0) fail "--jobs needs a whole number above zero, and it is \`$jobs\`" ;;
+esac
+processors=$(getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || echo 1)
+case "$processors" in
+  '' | *[!0-9]* | 0) processors=1 ;;
+esac
+if [ "$jobs" -gt "$processors" ]; then
+  jobs=$processors
+fi
 
 torb=$(binary_of "build/release/torb")
 [ -n "$torb" ] || fail "no native compiler at build/release/torb - run: sh tools/bootstrap.sh"

@@ -128,6 +128,24 @@ compiles run at the same time on the machine, whichever checkout they come from,
 process id, or older than an hour). `torb` prints one line while it waits. `cc1: out of memory` should not happen any
 more; if it does, lower `TORB_BUILD_SLOTS` and retry alone.
 
+**Gate slots.** `tools/gates.sh` and `tools/bootstrap.sh` run themselves through `tools/gate-slot.sh`: at most
+`$TORB_GATE_SLOTS` (default 2) gate runs or bootstraps at the same time on the machine, each one a directory
+`torb-gate-slots/slot-<n>` beside the build slots, held from the first gate to the last and taken over when its holder
+died (or after six hours). A run inside a slot takes no second one (`TORB_GATE_SLOT_HELD=1`), so the bootstrap of a
+gate run never waits for itself. Six gate runs at once once exhausted the machine's processes (`fork: Resource
+temporarily unavailable`); a run that waits says so in one line. The conformance runner keeps to two programs at a
+time and waits while the machine has less than 2 GiB of memory free.
+
+**The memory limit.** Every binary of the `dev` profile - the compiler's test suite, the std packages' tests, `torb
+run` - stops at the smaller of 8 GiB and half the physical memory, with `panic: out of memory: the limit of ... was
+reached` and exit code 102; the operating system enforces it (a job object on Windows, `RLIMIT_DATA` on Linux,
+`runtime/README.md`). A test binary that ran away once committed 88 GB and took the machine down. `TORB_MEMORY_LIMIT`
+sets another limit for every TorbScript process that sees it (`16G`, `512M`, `0` or `none` for none) - `torb`
+included, so set it on a binary rather than around `torb run`. The compiler is a release binary and has no limit
+of its own. Measured on 2026-09-24 (Windows, peak commit): `torb build ./compiler` about 0.7 GB, building the test
+suite 0.75 GB, the compiler's test suite itself 0.36 GB - the default leaves ten times that. A C compiler `torb` starts
+is never held to a limit (`cc1` over the compiler's C needs several GB).
+
 **Parallel work in one checkout.** `tools/bootstrap.sh` builds in `build/staging-<pid>/` and moves the binary into
 `build/release/` only when the fixpoint holds, renaming a running `torb.exe` out of the way instead of overwriting
 it; a red bootstrap leaves `build/release/` as it was and keeps its staging directory. The conformance programs run in

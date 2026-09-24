@@ -8,6 +8,8 @@
  * running more code in a broken program is how bugs get worse.
  *
  * The message is rendered into a fixed buffer, never allocated, so a panic still works when the heap is exhausted.
+ * Running out of memory prints the same way and leaves with `TORB_OUT_OF_MEMORY_EXIT_CODE` (102) instead, past every
+ * recovery point.
  */
 
 #include "torb.h"
@@ -71,17 +73,20 @@ void torb_end_recovery(torb_recovery *previous) {
 
 /**
  * Renders the whole message, hands it to the hook if a test build installed one, and otherwise writes it to stderr
- * and leaves with 101. Does not return either way: if a hook returns anyway, the process still leaves.
+ * and leaves with `code`: 101, or `TORB_OUT_OF_MEMORY_EXIT_CODE`. Does not return either way: if a hook returns
+ * anyway, the process still leaves.
  */
-static TORB_NORETURN void torb_finish_panic(const char *message, torb_location at) {
+static TORB_NORETURN void torb_end_with_panic(const char *message, torb_location at, int code) {
   char buffer[TORB_PANIC_BUFFER_SIZE];
   torb_worker *worker = torb_worker_current();
   /*
    * A test runner that set up a recovery point catches the panic instead: the message and the site go into the point
    * and the jump lands in the frame that owns it. The point is taken away first, so a panic *while* a failure is being
    * reported is an ordinary panic and never a jump into a frame that has already been left.
+   *
+   * Running out of memory is never caught: a recovered panic frees nothing, so the next test would start at the limit.
    */
-  if (worker->recovery != NULL) {
+  if (worker->recovery != NULL && code == TORB_PANIC_EXIT_CODE) {
     torb_recovery *point = worker->recovery;
     worker->recovery = NULL;
     snprintf(point->message, sizeof point->message, "%s", message);
@@ -114,7 +119,11 @@ static TORB_NORETURN void torb_finish_panic(const char *message, torb_location a
   /* The same path `print` takes: a console sees the message as the text it is, a pipe sees exactly these bytes */
   torb_write_line_error(buffer, strlen(buffer));
   fflush(stderr);
-  TORB_EXIT_IMMEDIATELY(TORB_PANIC_EXIT_CODE);
+  TORB_EXIT_IMMEDIATELY(code);
+}
+
+static TORB_NORETURN void torb_finish_panic(const char *message, torb_location at) {
+  torb_end_with_panic(message, at, TORB_PANIC_EXIT_CODE);
 }
 
 void torb_panic(torb_text message, torb_location at) {
@@ -186,10 +195,11 @@ void torb_panic_invalid_utf8(int64_t offset, torb_location at) {
   torb_finish_panic(text, at);
 }
 
+/* Names the memory limit where one is in force (memory.c), and leaves with its own exit code */
 void torb_panic_out_of_memory(size_t size) {
   char text[TORB_MESSAGE_BUFFER_SIZE];
-  snprintf(text, sizeof text, "out of memory: %lu bytes could not be allocated", (unsigned long)size);
-  torb_finish_panic(text, torb_location_unknown);
+  torb_memory_describe_exhaustion(text, sizeof text, size);
+  torb_end_with_panic(text, torb_location_unknown, TORB_OUT_OF_MEMORY_EXIT_CODE);
 }
 
 void torb_panic_stack_overflow(torb_location at) {

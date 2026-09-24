@@ -157,6 +157,14 @@ extern const torb_location torb_location_unknown;
  */
 #define TORB_PANIC_EXIT_CODE 101
 
+/**
+ * Running out of memory ends the program the way a panic does - `panic: out of memory: ...` on stderr, nothing else
+ * runs - but with this exit code, so a script can tell a program that hit its memory limit (`TORB_MEMORY_LIMIT`,
+ * memory.c) from one that failed an assertion. No recovery point catches it: a recovered panic frees nothing, so every
+ * test after it would run at the limit as well.
+ */
+#define TORB_OUT_OF_MEMORY_EXIT_CODE 102
+
 struct torb_text;
 
 /** `message` borrowed. Does not return. This is the `Panic` instruction of the IR. */
@@ -440,6 +448,45 @@ size_t torb_immortal_block_count(void);
 
 /** `torb build --report-leaks`: writes the live and the immortal block count to stderr, one line each. */
 void torb_report_leaks(void);
+
+/* ------------------------------------------------------------------------------------------- the memory limit --- */
+
+/**
+ * The memory limit of the process, which `torb_process_start` sets before the program runs (memory.c):
+ *
+ * - `TORB_MEMORY_LIMIT` in the environment: bytes, with an optional `K`, `M`, `G` or `T` (powers of 1024, a `B` or
+ *   `iB` behind it allowed) - `512M`, `8G`, `1073741824`. `0` and `none` mean no limit. Anything else makes the program
+ *   refuse to start, with one line that names the variable and exit code 2, as `TORB_WORKERS` does.
+ * - Where it is not set, a binary of the `dev` profile (`torb test`, `torb run`: compiled with `TORB_PROFILE_DEV`) takes
+ *   the smaller of 8 GiB and half the physical memory, and every other binary takes none.
+ *
+ * The operating system enforces it where it can (`torb_platform_limit_memory`); where it cannot, the runtime counts
+ * what `torb_allocate` and `torb_raw_allocate` hold against it. Either way an allocation over it ends the program with
+ * `panic: out of memory: the limit of ... was reached` and `TORB_OUT_OF_MEMORY_EXIT_CODE`.
+ */
+void torb_memory_limit_start(void);
+
+/** The limit in force, in bytes: 0 for none. */
+uint64_t torb_memory_limit(void);
+
+/**
+ * A size as `TORB_MEMORY_LIMIT` writes it, in `*bytes` (0 for `0` and `none`). False for anything that is not one,
+ * or that does not fit 64 bits. `text` borrowed, NUL terminated.
+ */
+bool torb_memory_size_parse(const char *text, uint64_t *bytes);
+
+/**
+ * Makes the runtime count its own allocations against `limit` (0: stop counting), the way it does where the operating
+ * system does not take the limit. For `runtime/tests`: the count starts at zero, so only what is allocated from here on
+ * is held against it.
+ */
+void torb_memory_limit_counted(uint64_t limit);
+
+/**
+ * Writes what an allocation of `size` bytes that failed says into `buffer`: the limit that was reached where there is
+ * one, the size otherwise. For `torb_panic_out_of_memory`.
+ */
+void torb_memory_describe_exhaustion(char *buffer, size_t capacity, size_t size);
 
 /* ---------------------------------------------------------------------------------------- element descriptors --- */
 
@@ -1217,6 +1264,24 @@ bool torb_platform_set_environment_variable(const char *name, const char *value)
  * `torb_raw_free(*value, *length + 1)`. False where the operating system does not say (and then nothing is allocated).
  */
 bool torb_platform_executable_path(char **value, size_t *length);
+/**
+ * Has the operating system hold this process to `bytes` of memory it commits, for the rest of its life; a child it
+ * starts afterwards is not held to it (a TorbScript child sets its own). True where the system took the limit. False
+ * where it did not, with why in `*message` - or `*message` `NULL` where this system has no mechanism the runtime uses
+ * (macOS), which is not a failure. Called once, before any thread is started.
+ *
+ * Windows: a job object of its own with `JOB_OBJECT_LIMIT_PROCESS_MEMORY` and silent breakaway for children. Linux:
+ * `RLIMIT_DATA`, which counts what is mapped writable and private - the heap and thread stacks, not a reservation.
+ * FreeBSD: `RLIMIT_AS`, because its `RLIMIT_DATA` counts `brk` alone and its allocator maps.
+ */
+bool torb_platform_limit_memory(uint64_t bytes, const char **message);
+/** The physical memory of the machine in bytes, or 0 where the platform does not say. */
+uint64_t torb_platform_physical_memory(void);
+/**
+ * How many bytes the C allocator really reserved for `block` (at least what was asked for), or 0 where the platform
+ * cannot say. `block` borrowed, from `malloc`. What the runtime counts a block as, where it counts its own allocations.
+ */
+size_t torb_platform_allocation_size(void *block);
 
 #if defined(_WIN32)
 

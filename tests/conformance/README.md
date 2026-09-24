@@ -10,6 +10,7 @@ compiler (`torb build <program>`), run, and compared against what is written dow
 | the exit code    | `<program>.exit`         |
 | whether the leak gate applies | `<program>.leaks`, which holds the reason it does not |
 | how many workers it runs with | `<program>.workers`: a number, or `all` for one per processor; no file means one |
+| what else its environment holds | `<program>.environment`: one `NAME=value` per line (no spaces, `#` starts a comment), set for every run of the binary and never for its build - `TORB_MEMORY_LIMIT=64M` limits the program and not the compiler |
 
 **One worker unless a program says otherwise.** Every program runs with `TORB_WORKERS=1`, the order the task programs
 pin: one worker runs one task at a time in the order they became ready. A program with a `.workers` file runs with that
@@ -38,7 +39,9 @@ Plus two things that are checked on the built program alone, because there is no
   any machine is in it.
 
 `tools/conformance.sh` is the runner (`sh tools/conformance.sh`, `sh tools/gates.sh b`), and a C compiler is what it
-needs (`$TORB_CC`, `clang`, `gcc`, `cc` - the order `torb build` uses).
+needs (`$TORB_CC`, `clang`, `gcc`, `cc` - the order `torb build` uses). It runs two programs at a time (`--jobs N`,
+never more than the machine has processors), and before each one it waits while less than `$TORB_MINIMUM_FREE_MB`
+(default 2048) of memory is available, for at most five minutes.
 
 ## What is *not* compared
 
@@ -261,6 +264,7 @@ tasks, `test` and `group`, keys that their own `equals` compares, and the execut
 | `text-slice-past-end.trb` | A text is sliced in **bytes**: `the offset 9 is past the end of a text of 6 bytes` |
 | `expect-none.trb` | `Option.expect` panics with its message alone |
 | `expect-failure.trb` | `Result.expect` panics with its message **and** the error |
+| `memory-limit.trb` | A program that allocates without end under `TORB_MEMORY_LIMIT=64M` (its `.environment`) stops with `out of memory: the limit of 64 MiB was reached (TORB_MEMORY_LIMIT)` and exit code **102**, held there by the operating system |
 
 **Tasks** - one worker, a FIFO queue, and a task that stops where it waits or where its loop turns around.
 

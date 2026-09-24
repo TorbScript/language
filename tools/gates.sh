@@ -18,9 +18,17 @@
 # Tier B: `tools/conformance.sh` (the conformance suite, and with `--vm` the programs of its `vm.list` in the bytecode
 # VM), `tools/bootstrap.sh` (the fixpoint: seed -> torb -> torb, byte-identical C), and the C runtime's own tests.
 #
+# A run holds one of the machine-wide gate slots (`tools/gate-slot.sh`, `$TORB_GATE_SLOTS`, default 2) from its first
+# gate to its last, and says so while it waits for one: several checkouts running their gates at once once ran the
+# machine out of processes. The bootstrap it runs inside takes no second slot.
+#
 # POSIX sh. Runs in Git Bash on Windows and on Linux/macOS.
 
 set -eu
+
+if [ "${TORB_GATE_SLOT_HELD-}" != "1" ]; then
+  exec sh "$(dirname -- "$0")/gate-slot.sh" sh "$0" "$@"
+fi
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$root"

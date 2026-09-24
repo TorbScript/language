@@ -14,6 +14,9 @@
 # time, never leaves `build/release/` half written, and a `torb` that is still running there is renamed out of the way
 # instead of overwritten.
 #
+# A bootstrap is as heavy as a gate run, so it holds one of the machine-wide gate slots (`tools/gate-slot.sh`,
+# `$TORB_GATE_SLOTS`, default 2) - unless it runs inside one already, as the bootstrap of `tools/gates.sh` does.
+#
 # POSIX sh. It runs in Git Bash on Windows, where the binaries are called `torb.exe`.
 #
 #   sh tools/bootstrap.sh              # seed -> torb -> torb, into build/release/torb
@@ -21,6 +24,10 @@
 #   TORB_CC=clang sh tools/bootstrap.sh
 
 set -eu
+
+if [ "${TORB_GATE_SLOT_HELD-}" != "1" ]; then
+  exec sh "$(dirname -- "$0")/gate-slot.sh" sh "$0" "$@"
+fi
 
 say() {
   printf '%s\n' "$*" >&2

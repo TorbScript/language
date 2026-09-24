@@ -3,8 +3,9 @@
  *
  * Fourteen functions: what kind of thing a path is, the working directory, the entries of a directory, creating one
  * directory and everything above it, opening a file, removing one, reading and writing a whole file, running a child
- * process to its end, a monotonic clock reading, sleeping until a timer is due, the program's own arguments, and
- * reading and setting an environment variable. Everything above this file is portable, and what it hands out and takes in is always UTF-8.
+ * process to its end, a monotonic clock reading, sleeping until a timer is due, the program's own arguments,
+ * reading and setting an environment variable, and the memory limit the operating system holds the process to (with the
+ * physical memory and the size of a block that go with it). Everything above this file is portable, and what it hands out and takes in is always UTF-8.
  *
  * On Windows that last sentence is the whole point of the file. A `String` of the language is UTF-8, every call of the
  * operating system comes in a narrow and a wide form, and the narrow one reads the **code page of the machine** (1252 on
@@ -48,6 +49,7 @@
 #  endif
 #  include <direct.h>
 #  include <io.h>
+#  include <malloc.h> /* _msize */
 #  include <wchar.h>
 #else
 #  include <dirent.h>
@@ -57,6 +59,33 @@
 #  include <sys/wait.h>
 #  include <time.h>
 #  include <unistd.h>
+/*
+ * The memory limit (`torb_platform_limit_memory`): which resource holds it, the `ulimit` flag of the same resource for
+ * a child that is started through the shell, and how large the C allocator made a block.
+ *
+ * Linux counts writable private mappings against `RLIMIT_DATA` since 4.7 - the heap, `mmap`ed blocks, thread stacks -
+ * and not the address space glibc only reserves (64 MiB per malloc arena, made writable as it is used), which
+ * `RLIMIT_AS` would count and which grows with the number of threads, not with what a program holds. FreeBSD counts
+ * only `brk` against `RLIMIT_DATA` and its allocator maps, so there it is `RLIMIT_AS`. macOS enforces neither in a way
+ * that fits: its address space already holds the shared cache of several GiB before `main` runs, so the runtime counts
+ * its own allocations there.
+ */
+#  if defined(__linux__)
+#    include <malloc.h>
+#    define TORB_MEMORY_RESOURCE RLIMIT_DATA
+#    define TORB_MEMORY_ULIMIT_FLAG "-d"
+#    define TORB_ALLOCATION_SIZE(block) malloc_usable_size(block)
+#  elif defined(__FreeBSD__)
+#    include <malloc_np.h>
+#    define TORB_MEMORY_RESOURCE RLIMIT_AS
+#    define TORB_MEMORY_ULIMIT_FLAG "-v"
+#    define TORB_ALLOCATION_SIZE(block) malloc_usable_size(block)
+#  elif defined(__APPLE__)
+#    include <malloc/malloc.h>
+#    define TORB_ALLOCATION_SIZE(block) malloc_size(block)
+#  else
+#    define TORB_ALLOCATION_SIZE(block) ((void)(block), (size_t)0u)
+#  endif
 #endif
 
 /* =============================================================== the boundary to Windows: UTF-8 and UTF-16 ====== */
@@ -601,6 +630,61 @@ bool torb_platform_set_environment_variable(const char *name, const char *value)
   return set;
 }
 
+/** Which call failed and the system's error code, for the one line `torb_memory_limit_start` may write. Static. */
+static const char *torb_job_failure(const char *call) {
+  static char message[96];
+  snprintf(message, sizeof message, "%s failed with error %lu", call, (unsigned long)GetLastError());
+  return message;
+}
+
+/**
+ * A job object of the process's own, which the process joins: `JOB_OBJECT_LIMIT_PROCESS_MEMORY` holds what it commits
+ * to `bytes`, and a commit over it fails - `malloc` answers `NULL` - instead of paging the machine to a standstill.
+ *
+ * A process that is already in a job (a terminal, an IDE, a CI runner puts it in one) joins a **nested** job, which
+ * Windows has done since Windows 8; where joining fails anyway the answer is false and the runtime counts instead.
+ * `JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK` keeps the children out of it: a C compiler that a program starts needs what it
+ * needs, and a child that is a TorbScript program sets a limit of its own. Such a child also leaves every job above
+ * this one that allows breaking away, and stays in the first one that does not.
+ *
+ * The handle is never closed: the job lives as long as the process is in it either way, and there is nothing to gain.
+ */
+bool torb_platform_limit_memory(uint64_t bytes, const char **message) {
+  JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits;
+  HANDLE job = CreateJobObjectW(NULL, NULL);
+  if (job == NULL) {
+    *message = torb_job_failure("CreateJobObject");
+    return false;
+  }
+  memset(&limits, 0, sizeof limits);
+  limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_PROCESS_MEMORY | JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK;
+  limits.ProcessMemoryLimit = bytes > (uint64_t)SIZE_MAX ? SIZE_MAX : (SIZE_T)bytes;
+  if (!SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limits, sizeof limits)) {
+    *message = torb_job_failure("SetInformationJobObject");
+    CloseHandle(job);
+    return false;
+  }
+  if (!AssignProcessToJobObject(job, GetCurrentProcess())) {
+    *message = torb_job_failure("AssignProcessToJobObject");
+    CloseHandle(job);
+    return false;
+  }
+  return true;
+}
+
+uint64_t torb_platform_physical_memory(void) {
+  MEMORYSTATUSEX status;
+  status.dwLength = sizeof status;
+  if (!GlobalMemoryStatusEx(&status)) {
+    return 0u;
+  }
+  return (uint64_t)status.ullTotalPhys;
+}
+
+size_t torb_platform_allocation_size(void *block) {
+  return _msize(block);
+}
+
 /* ============================================================================================== POSIX ========== */
 
 #else
@@ -847,6 +931,90 @@ bool torb_platform_executable_path(char **value, size_t *length) {
     }
     capacity *= 2u;
   }
+}
+
+#  if defined(TORB_MEMORY_RESOURCE)
+
+/**
+ * What the limit was before this process lowered it, and whether it did: a child gets it back (below), because a limit
+ * set with `setrlimit` is inherited and a C compiler that a program starts needs what it needs.
+ */
+static struct rlimit torb_memory_before;
+static bool torb_memory_lowered = false;
+/** `ulimit -S <flag> <before>; ` - what a command line run through the shell starts with once the limit is lowered. */
+static char torb_memory_shell_prefix[64] = "";
+
+/**
+ * The soft limit of `TORB_MEMORY_RESOURCE`, lowered to `bytes` and never raised: a hard limit below `bytes` is already
+ * the stricter one, and the soft one becomes that. An allocation over it fails, and `malloc` answers `NULL`.
+ */
+bool torb_platform_limit_memory(uint64_t bytes, const char **message) {
+  struct rlimit limit;
+  if (getrlimit(TORB_MEMORY_RESOURCE, &limit) != 0) {
+    *message = strerror(errno);
+    return false;
+  }
+  torb_memory_before = limit;
+  if (limit.rlim_max != RLIM_INFINITY && (uint64_t)limit.rlim_max < bytes) {
+    limit.rlim_cur = limit.rlim_max;
+  } else {
+    limit.rlim_cur = (rlim_t)bytes;
+  }
+  if (setrlimit(TORB_MEMORY_RESOURCE, &limit) != 0) {
+    *message = strerror(errno);
+    return false;
+  }
+  torb_memory_lowered = true;
+  if (torb_memory_before.rlim_cur == RLIM_INFINITY) {
+    snprintf(torb_memory_shell_prefix, sizeof torb_memory_shell_prefix, "ulimit -S %s unlimited 2>/dev/null;",
+             TORB_MEMORY_ULIMIT_FLAG);
+  } else {
+    snprintf(torb_memory_shell_prefix, sizeof torb_memory_shell_prefix, "ulimit -S %s %llu 2>/dev/null;",
+             TORB_MEMORY_ULIMIT_FLAG, (unsigned long long)(torb_memory_before.rlim_cur / 1024u));
+  }
+  return true;
+}
+
+/* In a child between `fork` and `exec`: the limit as it was before this process lowered it. Async-signal-safe. */
+static void torb_memory_restore_for_child(void) {
+  if (torb_memory_lowered) {
+    (void)setrlimit(TORB_MEMORY_RESOURCE, &torb_memory_before);
+  }
+}
+
+#  else
+
+static char torb_memory_shell_prefix[1] = "";
+
+/* No mechanism that fits this system: the runtime counts its own allocations, and that is no failure to report */
+bool torb_platform_limit_memory(uint64_t bytes, const char **message) {
+  (void)bytes;
+  *message = NULL;
+  return false;
+}
+
+static void torb_memory_restore_for_child(void) {
+}
+
+#  endif
+
+#  if defined(_SC_PHYS_PAGES) && defined(_SC_PAGESIZE)
+uint64_t torb_platform_physical_memory(void) {
+  const long pages = sysconf(_SC_PHYS_PAGES);
+  const long size = sysconf(_SC_PAGESIZE);
+  if (pages <= 0 || size <= 0) {
+    return 0u;
+  }
+  return (uint64_t)pages * (uint64_t)size;
+}
+#  else
+uint64_t torb_platform_physical_memory(void) {
+  return 0u;
+}
+#  endif
+
+size_t torb_platform_allocation_size(void *block) {
+  return TORB_ALLOCATION_SIZE(block);
 }
 
 #endif
@@ -1368,6 +1536,12 @@ bool torb_platform_run_process(
   char errorsPath[] = "/tmp/torb-errors-XXXXXX";
   const int errorsFile = mkstemp(errorsPath);
   line[0] = '\0';
+  /* The shell gives the child the memory limit back that this process lowered for itself, if it did */
+  if (torb_memory_shell_prefix[0] != '\0') {
+    filled = strlen(torb_memory_shell_prefix);
+    torb_reserve_line(filled, &line, 0u, &lineCapacity);
+    memcpy(line, torb_memory_shell_prefix, filled + 1u);
+  }
   torb_quote_argument(command, &line, &filled, &lineCapacity);
   for (index = 0u; index < count; index++) {
     torb_quote_argument(arguments[index], &line, &filled, &lineCapacity);
@@ -1474,6 +1648,7 @@ bool torb_platform_run_inheriting(
   }
   if (child == 0) {
     close(report[0]);
+    torb_memory_restore_for_child();
     execvp(command, argumentValues);
     failed = errno;
     (void)!write(report[1], &failed, sizeof(failed));

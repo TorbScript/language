@@ -18,7 +18,8 @@
  * and the **sum** over all workers is what is exact, which is what the report and the tests read. That is also why a
  * block needs no id of its heap in its header: libc frees it from any thread, and the counters balance in the sum.
  *
- * Every allocation failure panics: the language has no out-of-memory error.
+ * Every allocation failure panics: the language has no out-of-memory error. It ends the program with
+ * `TORB_OUT_OF_MEMORY_EXIT_CODE`, and where a memory limit is in force the message names it (the end of this file).
  */
 
 #include "torb.h"
@@ -39,6 +40,15 @@ static torb_heap *torb_heap_current(void) {
   return &torb_worker_current()->heap;
 }
 
+/*
+ * The runtime's own count of what it holds, against the memory limit, where the operating system does not enforce the
+ * limit (the end of this file). Off unless `torb_memory_counting` is set, which happens before any thread starts, so
+ * what every allocation and every free pays for it is the test of a flag that does not change afterwards.
+ */
+static int torb_memory_counting = 0;
+static void torb_memory_count(void *block);
+static void torb_memory_uncount(void *block);
+
 static void *torb_payload(void *block) {
   return (void *)((uint8_t *)block + sizeof(torb_header));
 }
@@ -57,6 +67,9 @@ void *torb_allocate(size_t size, torb_block_kind kind) {
   header = (torb_header *)malloc(size);
   if (header == NULL) {
     torb_panic_out_of_memory(size);
+  }
+  if (torb_memory_counting != 0) {
+    torb_memory_count(header);
   }
   header->kind = (uint16_t)kind;
   header->color = (uint16_t)TORB_COLOR_NONE;
@@ -91,6 +104,9 @@ void *torb_raw_allocate(size_t size) {
   if (buffer == NULL) {
     torb_panic_out_of_memory(size);
   }
+  if (torb_memory_counting != 0) {
+    torb_memory_count(buffer);
+  }
   torb_heap_current()->live_blocks += 1;
   return buffer;
 }
@@ -105,6 +121,9 @@ void torb_raw_free(void *buffer, size_t size) {
   (void)size;
   if (buffer == NULL) {
     return;
+  }
+  if (torb_memory_counting != 0) {
+    torb_memory_uncount(buffer);
   }
   free(buffer);
   torb_heap_current()->live_blocks -= 1;
@@ -161,6 +180,9 @@ void torb_release(void *block, torb_drop_function drop) {
   if (drop != NULL) {
     drop(block);
   }
+  if (torb_memory_counting != 0) {
+    torb_memory_uncount(block);
+  }
   free(block);
   torb_heap_current()->live_blocks -= 1;
 }
@@ -188,6 +210,9 @@ bool torb_count_down(void *block) {
 void torb_free_counted(void *block, torb_drop_function drop) {
   if (drop != NULL) {
     drop(block);
+  }
+  if (torb_memory_counting != 0) {
+    torb_memory_uncount(block);
   }
   free(block);
   torb_heap_current()->live_blocks -= 1;
@@ -346,4 +371,202 @@ void torb_constant_publish(bool *ready) {
 #else
   *(volatile bool *)ready = true;
 #endif
+}
+
+/* ------------------------------------------------------------------------------------------ the memory limit --- */
+
+/*
+ * A runaway program must never take the machine down with it: a test binary once committed 88 GB, and Windows paged
+ * until nothing answered any more. So every process has a memory limit, set here before the program runs (torb.h, the
+ * memory limit): `TORB_MEMORY_LIMIT` where it is set, the dev default where the binary was built with
+ * `TORB_PROFILE_DEV`, and none otherwise.
+ *
+ * The **operating system** enforces it wherever it can (`torb_platform_limit_memory`), because only the system sees
+ * every byte - the C library's own, a thread's stack, what a library maps - and because a limit the system holds costs
+ * the allocator nothing. An allocation over it fails, `malloc` answers `NULL`, and the panic below names the limit.
+ * Where the system does not take it, the runtime **counts** instead: every block of `torb_allocate` and
+ * `torb_raw_allocate` at the size the C allocator really gave it, added on the way in and taken off on the way out, and
+ * an allocation that would go over the limit is freed again and ends the program the same way. That count sees only
+ * the runtime's own blocks, which is almost all of a program's memory and none of the C library's.
+ *
+ * The dev default is the smaller of 8 GiB and half the physical memory: a test suite that legitimately needs more than
+ * that is rare (the compiler's own peaks far below it), and a machine is still usable with half its memory taken. A
+ * release binary has no default, because what it is allowed is its user's decision and not the toolchain's.
+ */
+
+#if defined(TORB_PROFILE_DEV)
+#  define TORB_LIMITS_MEMORY_BY_DEFAULT 1
+#else
+#  define TORB_LIMITS_MEMORY_BY_DEFAULT 0
+#endif
+
+#define TORB_MEBIBYTE ((uint64_t)1024u * 1024u)
+#define TORB_DEFAULT_LIMIT_CEILING ((uint64_t)8u * 1024u * TORB_MEBIBYTE)
+
+/** The limit in force: 0 for none. Written once, before any thread starts, and by the runtime's tests. */
+static uint64_t torb_memory_limit_bytes = 0u;
+/** Whether the limit came from `TORB_MEMORY_LIMIT` (1) or is the dev default (0), which the message tells apart. */
+static int torb_memory_limit_given = 0;
+/** What the runtime holds against the limit where it counts: the sum of the sizes of its live blocks. */
+static int64_t torb_memory_counted = 0;
+
+bool torb_memory_size_parse(const char *text, uint64_t *bytes) {
+  uint64_t value = 0u;
+  uint64_t unit = 1u;
+  size_t index = 0u;
+  if (strcmp(text, "none") == 0) {
+    *bytes = 0u;
+    return true;
+  }
+  if (text[0] < '0' || text[0] > '9') {
+    return false;
+  }
+  while (text[index] >= '0' && text[index] <= '9') {
+    const uint64_t digit = (uint64_t)(text[index] - '0');
+    if (value > (UINT64_MAX - digit) / 10u) {
+      return false;
+    }
+    value = value * 10u + digit;
+    index += 1u;
+  }
+  switch (text[index]) {
+    case 'K':
+    case 'k':
+      unit = (uint64_t)1024u;
+      break;
+    case 'M':
+    case 'm':
+      unit = TORB_MEBIBYTE;
+      break;
+    case 'G':
+    case 'g':
+      unit = (uint64_t)1024u * TORB_MEBIBYTE;
+      break;
+    case 'T':
+    case 't':
+      unit = TORB_MEBIBYTE * TORB_MEBIBYTE;
+      break;
+    default:
+      break;
+  }
+  if (unit != 1u) {
+    index += 1u;
+    if (text[index] == 'i' || text[index] == 'I') {
+      index += 1u;
+      if (text[index] != 'B' && text[index] != 'b') {
+        return false;
+      }
+    }
+  }
+  if (text[index] == 'B' || text[index] == 'b') {
+    index += 1u;
+  }
+  if (text[index] != '\0' || value > UINT64_MAX / unit) {
+    return false;
+  }
+  *bytes = value * unit;
+  return true;
+}
+
+/** `8 GiB`, `64 MiB`, `1536 KiB`, and `1000 bytes` for a size that is no whole number of KiB. */
+static void torb_memory_size_text(char *buffer, size_t capacity, uint64_t bytes) {
+  static const char *const names[] = { "TiB", "GiB", "MiB", "KiB" };
+  static const unsigned shifts[] = { 40u, 30u, 20u, 10u };
+  size_t index;
+  for (index = 0u; index < sizeof shifts / sizeof shifts[0]; index++) {
+    const uint64_t unit = (uint64_t)1u << shifts[index];
+    if (bytes >= unit && bytes % unit == 0u) {
+      snprintf(buffer, capacity, "%llu %s", (unsigned long long)(bytes / unit), names[index]);
+      return;
+    }
+  }
+  snprintf(buffer, capacity, "%llu bytes", (unsigned long long)bytes);
+}
+
+/** The smaller of 8 GiB and half the physical memory, in whole MiB; 8 GiB where the platform does not say. */
+static uint64_t torb_memory_default_limit(void) {
+  uint64_t half = torb_platform_physical_memory() / 2u;
+  half -= half % TORB_MEBIBYTE;
+  if (half == 0u || half > TORB_DEFAULT_LIMIT_CEILING) {
+    return TORB_DEFAULT_LIMIT_CEILING;
+  }
+  return half;
+}
+
+void torb_memory_limit_start(void) {
+  const char *given = getenv("TORB_MEMORY_LIMIT");
+  const char *message = NULL;
+  uint64_t limit = 0u;
+  if (given != NULL && given[0] != '\0') {
+    if (!torb_memory_size_parse(given, &limit)) {
+      fprintf(stderr,
+              "error: TORB_MEMORY_LIMIT must be a number of bytes with an optional K, M, G or T (\"512M\", \"8G\"), "
+              "or 0 or none for no limit, and it is \"%s\"\n",
+              given);
+      exit(2);
+    }
+    torb_memory_limit_given = 1;
+  } else if (TORB_LIMITS_MEMORY_BY_DEFAULT) {
+    limit = torb_memory_default_limit();
+  }
+  if (limit == 0u) {
+    return;
+  }
+  torb_memory_limit_bytes = limit;
+  if (torb_platform_limit_memory(limit, &message)) {
+    return;
+  }
+  torb_memory_counted = 0;
+  torb_memory_counting = 1;
+  /* Said once and only for a limit somebody asked for: the dev default is a safety net, not a request */
+  if (message != NULL && torb_memory_limit_given != 0) {
+    fprintf(stderr,
+            "note: the operating system did not take TORB_MEMORY_LIMIT (%s), so the runtime counts its own "
+            "allocations against it\n",
+            message);
+  }
+}
+
+uint64_t torb_memory_limit(void) {
+  return torb_memory_limit_bytes;
+}
+
+void torb_memory_limit_counted(uint64_t limit) {
+  torb_memory_limit_bytes = limit;
+  torb_memory_limit_given = 1;
+  torb_memory_counted = 0;
+  torb_memory_counting = limit != 0u ? 1 : 0;
+}
+
+/* A block the C allocator gave out: counted, and freed again and the end of the program where it goes over the limit */
+static void torb_memory_count(void *block) {
+  const int64_t size = (int64_t)torb_platform_allocation_size(block);
+  const int64_t after = torb_atomic_add_i64(&torb_memory_counted, size) + size;
+  if (after > 0 && (uint64_t)after > torb_memory_limit_bytes) {
+    (void)torb_atomic_add_i64(&torb_memory_counted, -size);
+    free(block);
+    torb_panic_out_of_memory((size_t)size);
+  }
+}
+
+static void torb_memory_uncount(void *block) {
+  (void)torb_atomic_add_i64(&torb_memory_counted, -(int64_t)torb_platform_allocation_size(block));
+}
+
+void torb_memory_describe_exhaustion(char *buffer, size_t capacity, size_t size) {
+  char limit[64];
+  const char *source = torb_memory_limit_given != 0
+                           ? "TORB_MEMORY_LIMIT"
+                           : "the default of a dev build; TORB_MEMORY_LIMIT sets another, 0 none";
+  if (torb_memory_limit_bytes == 0u) {
+    snprintf(buffer, capacity, "out of memory: %llu bytes could not be allocated", (unsigned long long)size);
+    return;
+  }
+  torb_memory_size_text(limit, sizeof limit, torb_memory_limit_bytes);
+  if ((uint64_t)size > torb_memory_limit_bytes) {
+    snprintf(buffer, capacity, "out of memory: %llu bytes were asked for at once, more than the limit of %s (%s)",
+             (unsigned long long)size, limit, source);
+    return;
+  }
+  snprintf(buffer, capacity, "out of memory: the limit of %s was reached (%s)", limit, source);
 }

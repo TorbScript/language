@@ -9,10 +9,12 @@ keywords:
   - test runner
   - jobs
   - assert
+  - memory limit
 source:
   - compiler/src/cli/test.trb
   - compiler/src/cli/build.trb
   - std/test/src/lib.trb
+  - runtime/memory.c
 ---
 
 A `.test.trb` file is an ordinary script: `test` and `group` are calls, not a keyword, and a test fails when its body
@@ -73,6 +75,24 @@ is the recovery point of the runtime, and it is what makes one binary behave lik
 `test` builds the `dev` profile unless told otherwise: the C compiler runs with `-O1` instead of `-O2`, which is the
 fastest suite from end to end, because a test binary is built to be run once. The binary goes to
 `<first path>/build/<profile>/tests`. [`torb build`](torb-build.md) says what a profile is.
+
+### The memory limit
+
+A test binary of the `dev` profile **stops at a memory limit** instead of taking the machine down with it: the smaller
+of 8 GiB and half the physical memory, which the runtime hands to the operating system before the first test runs (a
+job object on Windows, `RLIMIT_DATA` on Linux). A suite that allocates without end - a test that loops, a bug that
+doubles a list forever - ends with one line and exit code `102`, which no recovery point catches, because the next test
+would start at the limit too:
+
+```console
+$ torb test compiler/tests
+panic: out of memory: the limit of 8 GiB was reached (the default of a dev build; TORB_MEMORY_LIMIT sets another, 0 none)
+```
+
+`TORB_MEMORY_LIMIT` in the environment sets another limit - bytes, or a number with `K`, `M`, `G` or `T` (`512M`,
+`16G`) - and `0` or `none` sets none. A `--release` binary has no limit unless the variable asks for one. The variable
+reaches every TorbScript program that runs with it, `torb` itself included, so a limit meant for the suite alone is
+set on the binary: `TORB_MEMORY_LIMIT=2G tests/build/dev/tests`.
 
 ### `--jobs`
 

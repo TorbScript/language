@@ -307,6 +307,93 @@ TORB_TEST(a_destructor_that_keeps_self_panics) {
   closing_sample_keeps = false;
 }
 
+/* ------------------------------------------------------------------------------------------ the memory limit --- */
+
+static bool parses_to(const char *text, uint64_t expected) {
+  uint64_t bytes = 12345u;
+  return torb_memory_size_parse(text, &bytes) && bytes == expected;
+}
+
+static bool is_refused(const char *text) {
+  uint64_t bytes = 12345u;
+  return !torb_memory_size_parse(text, &bytes) && bytes == 12345u;
+}
+
+TORB_TEST(a_memory_limit_is_bytes_with_an_optional_unit) {
+  const uint64_t mebibyte = (uint64_t)1024u * 1024u;
+  TORB_CHECK(parses_to("0", 0u));
+  TORB_CHECK(parses_to("none", 0u));
+  TORB_CHECK(parses_to("1073741824", (uint64_t)1024u * mebibyte));
+  TORB_CHECK(parses_to("2K", 2048u));
+  TORB_CHECK(parses_to("2k", 2048u));
+  TORB_CHECK(parses_to("64M", 64u * mebibyte));
+  TORB_CHECK(parses_to("64MB", 64u * mebibyte));
+  TORB_CHECK(parses_to("64MiB", 64u * mebibyte));
+  TORB_CHECK(parses_to("8G", (uint64_t)8u * 1024u * mebibyte));
+  TORB_CHECK(parses_to("8gb", (uint64_t)8u * 1024u * mebibyte));
+  TORB_CHECK(parses_to("1T", mebibyte * mebibyte));
+  TORB_CHECK(parses_to("100B", 100u));
+  TORB_CHECK(is_refused(""));
+  TORB_CHECK(is_refused("-1"));
+  TORB_CHECK(is_refused("M"));
+  TORB_CHECK(is_refused("8 G"));
+  TORB_CHECK(is_refused("8X"));
+  TORB_CHECK(is_refused("8Gi"));
+  TORB_CHECK(is_refused("8iB"));
+  TORB_CHECK(is_refused("unlimited"));
+  TORB_CHECK(is_refused("99999999999999999999"));
+  TORB_CHECK(is_refused("20000000T"));
+}
+
+/* Where nothing limits the process, running out of memory names the size that could not be had */
+TORB_TEST(out_of_memory_without_a_limit_names_the_size) {
+  char message[256];
+  torb_memory_limit_counted(0u);
+  torb_memory_describe_exhaustion(message, sizeof message, 100u);
+  TORB_CHECK(strcmp(message, "out of memory: 100 bytes could not be allocated") == 0);
+}
+
+static void *limited_blocks[64];
+
+/* Allocates quarters of a MiB and keeps them, until the limit ends it. A static count, which `longjmp` leaves alone */
+static size_t limited_count = 0u;
+static void allocate_without_end(void) {
+  for (;;) {
+    limited_blocks[limited_count] = torb_allocate(256u * 1024u, TORB_BLOCK_RECORD);
+    limited_count += 1u;
+  }
+}
+
+/**
+ * The limit the runtime counts itself, where the operating system does not take it: blocks are held against it at
+ * their size, a freed one gives its room back, and the allocation that would go over it ends the program with the
+ * limit in the message. The panic is caught by the hook here; in a program it leaves with exit code 102.
+ */
+TORB_TEST(the_counted_limit_ends_the_program_when_it_is_reached) {
+  const size_t quarter = 256u * 1024u;
+  size_t index;
+  size_t before = torb_live_block_count();
+  torb_memory_limit_counted((uint64_t)1024u * 1024u);
+  TORB_CHECK_INTEGER(torb_memory_limit(), 1024 * 1024);
+  /* Freed room is room again: ten times three quarters of the limit, one after the other */
+  for (index = 0u; index < 10u; index++) {
+    void *block = torb_raw_allocate(3u * quarter);
+    torb_raw_free(block, 3u * quarter);
+  }
+  limited_count = 0u;
+  TORB_EXPECT_PANIC(allocate_without_end());
+  TORB_CHECK_PANIC_CONTAINS("panic: out of memory: the limit of 1 MiB was reached (TORB_MEMORY_LIMIT)");
+  TORB_CHECK(limited_count >= 3u && limited_count <= 4u);
+  for (index = 0u; index < limited_count; index++) {
+    torb_release(limited_blocks[index], NULL);
+  }
+  TORB_EXPECT_PANIC(torb_raw_allocate(4u * 1024u * 1024u));
+  TORB_CHECK_PANIC_CONTAINS("more than the limit of 1 MiB (TORB_MEMORY_LIMIT)");
+  torb_memory_limit_counted(0u);
+  TORB_CHECK_INTEGER(torb_memory_limit(), 0);
+  TORB_CHECK_INTEGER(torb_live_block_count(), before);
+}
+
 void torb_register_memory_tests(void) {
   TORB_ADD(allocation_starts_at_one_and_frees_at_zero);
   TORB_ADD(retain_and_release_balance);
@@ -326,4 +413,7 @@ void torb_register_memory_tests(void) {
   TORB_ADD(the_stack_check_panics_below_the_limit);
   TORB_ADD(a_destructor_runs_once_although_it_retains_and_releases_self);
   TORB_ADD(a_destructor_that_keeps_self_panics);
+  TORB_ADD(a_memory_limit_is_bytes_with_an_optional_unit);
+  TORB_ADD(out_of_memory_without_a_limit_names_the_size);
+  TORB_ADD(the_counted_limit_ends_the_program_when_it_is_reached);
 }

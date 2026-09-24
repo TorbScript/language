@@ -13,6 +13,7 @@ source:
   - CONCEPT.md#error-handling
   - CONCEPT.md#execution-model
   - runtime/panic.c
+  - runtime/memory.c
 ---
 
 Everything else on this page's neighbors is for a failure the caller can do something about. `panic` is for the other
@@ -64,6 +65,11 @@ panic <message>
    }
    print average([])
    ```
+
+6. **Running out of memory is a panic with an exit code of its own, 102.** It prints
+   `panic: out of memory: ...` the same way, naming the memory limit where one was reached (`TORB_MEMORY_LIMIT`, and
+   the default a `dev` build has - see [torb run](../../tooling/torb-run.md)), so a script can tell a program that ran
+   out of memory from one that failed an assertion. It has no site: an allocation happens inside the runtime.
 
 ## What this is not
 

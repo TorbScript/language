@@ -11,6 +11,7 @@ keywords:
   - emit-c
   - TORB_CC
   - TORB_RUNTIME
+  - TORB_MEMORY_LIMIT
 source:
   - compiler/src/cli/build.trb
 ---
@@ -90,6 +91,13 @@ under both, so a profile never changes what a program means - only how long the 
 is. `build` builds `release` unless told otherwise, and the default path of the binary is `build/<profile>/<name>`;
 `torb test` and `torb run` build `dev`.
 
+The one thing besides speed a profile decides is the **default memory limit**. A `dev` binary stops at the smaller of
+8 GiB and half the physical memory, with `panic: out of memory: the limit of ... was reached` and exit code `102`, so
+a scratch program or a test suite that allocates without end cannot take the machine down; a `release` binary has no
+limit of its own, because what a shipped program may use is its user's decision. `TORB_MEMORY_LIMIT` in the
+environment of the running binary overrides both: a number of bytes, or one with `K`, `M`, `G` or `T` (`512M`), and
+`0` or `none` for no limit. [`torb run`](torb-run.md) says what the limit does on each system.
+
 ### The C compiler
 
 Without `--emit-c`, `build` looks for one in this order: `$TORB_CC`, `clang`, `gcc`, `cc`, then `cl` (MSVC), and
@@ -106,7 +114,8 @@ out of memory; `build` prints one line when it has to wait for one.
 
 `0` for a binary (or, with `--emit-c`, a C file); `1` when the program does not check or the back end cannot lower
 part of it; `3` when no C compiler or no runtime was found; `70` when the C compiler itself fails on generated C,
-which is always a bug of `build` and never the program's fault.
+which is always a bug of `build` and never the program's fault. The binary it writes leaves with `101` on a `panic`
+and with `102` when it runs out of memory.
 
 ## Examples
 

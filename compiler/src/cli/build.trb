@@ -61,6 +61,19 @@ public type Profile {
       .Release => "-O2"
     }
   }
+
+  /**
+   * The macros the C is compiled with. `TORB_PROFILE_DEV` gives a binary of the dev profile its default memory limit,
+   * the smaller of 8 GiB and half the physical memory, where `TORB_MEMORY_LIMIT` does not say otherwise
+   * (`runtime/memory.c`): a test suite or a scratch program that allocates without end stops with a message instead of
+   * paging the machine to a standstill. A release binary has no default limit.
+   */
+  fn macros(): List<String> {
+    match self {
+      .Dev => ["TORB_PROFILE_DEV"]
+      .Release => []
+    }
+  }
 }
 
 /** The profile a `--profile` names, or `None` for a name that is none. */
@@ -518,6 +531,9 @@ fn compilerArguments(
     }
     const include = joinPath runtime, "include"
     var arguments = ["/std:c11", optimization, "/W3", "/WX", "/nologo", "/I{include}", "/Fe{binary}"]
+    for macro in profile.macros() {
+      arguments.append "/D{macro}"
+    }
     arguments.append source
     arguments.appendAll sources
     return arguments
@@ -533,6 +549,9 @@ fn compilerArguments(
     "-o",
     binary,
   ]
+  for macro in profile.macros() {
+    arguments.append "-D{macro}"
+  }
   arguments.append source
   arguments.appendAll sources
   arguments.appendAll threadArguments()

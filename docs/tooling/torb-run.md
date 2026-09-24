@@ -9,11 +9,14 @@ keywords:
   - cache
   - arguments
   - entry point
+  - memory limit
+  - TORB_MEMORY_LIMIT
 source:
   - compiler/src/cli/run.trb
   - compiler/src/vm/run.trb
   - compiler/src/cli/build.trb
   - tools/bootstrap.sh
+  - runtime/memory.c
 ---
 
 `run` is [`build`](torb-build.md) plus starting what came out. There is no second implementation of the language behind
@@ -81,10 +84,26 @@ that its own `equals` compares - is refused before anything runs, with a message
 answer differently because the program runs inside `torb`: `Process.executablePath()` is the path of `torb`, and a
 recursion reaches the `stack overflow` panic at a depth of its own.
 
+### The memory limit
+
+A program built for `run` - the `dev` profile - **stops at a memory limit**: the smaller of 8 GiB and half the physical
+memory, which the runtime hands to the operating system before the program starts (a job object on Windows,
+`RLIMIT_DATA` on Linux, its own count of what it allocates where the system has nothing that fits). A program that
+allocates without end ends with `panic: out of memory: the limit of 8 GiB was reached (...)` and exit code `102`
+instead of paging the machine to a standstill. A child process the program starts is not held to its limit.
+
+`TORB_MEMORY_LIMIT` sets another one - a number of bytes, or one with `K`, `M`, `G` or `T` (`512M`, `16G`) - and `0` or
+`none` sets none; a value that is neither makes the program refuse to start, with exit code `2`. With `--release` there
+is no limit unless the variable asks for one, and neither is there for `--vm`, whose program runs inside `torb`. The
+variable reaches every TorbScript program that runs with it, `torb` itself included, which also has to compile the
+program within it: `TORB_MEMORY_LIMIT=64M torb run big.trb` limits the compile as well, so a tight limit goes on the
+binary that [`torb build`](torb-build.md) wrote.
+
 ### Exit codes
 
-The program's own, unchanged. A `panic` leaves with `101`, the number `CONCEPT.md` specifies; an uncaught `Fail` at the
-top level leaves with `1`; a program that could not be built leaves with `1` and one that found no C compiler with `3`.
+The program's own, unchanged. A `panic` leaves with `101`, the number `CONCEPT.md` specifies, and running out of memory
+with `102`; an uncaught `Fail` at the top level leaves with `1`; a program that could not be built leaves with `1` and
+one that found no C compiler with `3`.
 
 ## Examples
 
