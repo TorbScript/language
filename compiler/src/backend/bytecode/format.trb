@@ -93,7 +93,7 @@ public type Opcode {
   case Switch
   /** `A` = register, `B` = width (0: no value). */
   case Return
-  /** Ends a task as cancelled (the IR's `Stop`). */
+  /** Ends a task as cancelled (the IR's `Stop`), and every stop path of its body. */
   case Stop
   /**
    * `A` = target, `B` = width; `T0` = the cell's first word (a gap of the constant pool: its flag, then its value), `T1` =
@@ -106,10 +106,23 @@ public type Opcode {
    * the grant: `runScript` of `std/sandbox`, which only the VM has (docs/design/SCRIPTS.md sections 4 to 6).
    */
   case RunScript
+  /** `A` = the task register; `T0` = the code offset of the stop path a cancelled task goes to. A resume point's check. */
+  case Cancelled
   /**
-   * `A` = register, `B` = width, `C` = 0 to read the cell and 1 to write it; `T0` = the cell's first word (a gap of the
-   * constant pool): an entry cell, the one value a top-level `const` of the entry file holds for every function that
-   * names it. A read copies the words out, a write copies them in; the count is the chunk's business.
+   * `A` = the task register, `B` = the task awaited, `C` = the state, `T0` = 1 where the wait only observes the
+   * awaited task (`result()`, `torb_task_observe`) and 0 where it takes over its cancellation (`await()`,
+   * `torb_task_await`): the IR's `Suspend`. The state is recorded and the task waits; where it was registered, its
+   * frame is saved into the task block and the body returns to the scheduler, and where the answer was there already
+   * it goes on at the `resume` that follows (docs/design/CONCURRENCY.md sections 8 and 16).
+   */
+  case Suspend
+  /** `A` = the task register, `T0` = the stop path: where the body goes on after a suspension - the check, the outcome. */
+  case Resume
+  /** `A` = the task register, `B` = the value, `C` = its width: the value into the task block, and the body is done. */
+  case Finish
+  /**
+   * `A` = register, `B` = width, `C` = 0 to read the cell and 1 to write it, `T0` = its first word, a gap of the constant
+   * pool: an entry cell, the one value a top-level `const` of the entry file holds for every function that names it.
    */
   case EntryCell
 
@@ -154,7 +167,11 @@ public type Opcode {
       .Stop => 35
       .Cell => 36
       .RunScript => 37
-      .EntryCell => 38
+      .Cancelled => 38
+      .Suspend => 39
+      .Resume => 40
+      .Finish => 41
+      .EntryCell => 42
     }
   }
 
@@ -199,6 +216,10 @@ public type Opcode {
       .Stop => "stop"
       .Cell => "cell"
       .RunScript => "run.script"
+      .Cancelled => "cancelled"
+      .Suspend => "suspend"
+      .Resume => "resume"
+      .Finish => "finish"
       .EntryCell => "entry.cell"
     }
   }
@@ -244,8 +265,64 @@ public const allOpcodes: List<Opcode> = [
   Opcode.Stop,
   Opcode.Cell,
   Opcode.RunScript,
+  Opcode.Cancelled,
+  Opcode.Suspend,
+  Opcode.Resume,
+  Opcode.Finish,
   Opcode.EntryCell,
 ]
+
+/**
+ * The opcode a head word's number names: [allOpcodes] as one `match`, which the loop decodes every instruction with
+ * and which a C compiler turns into a jump table. A number no opcode has is `Unreachable`.
+ */
+public fn opcodeOf(number: Int): Opcode {
+  match number {
+    1 => Opcode.Move
+    2 => Opcode.Constant
+    3 => Opcode.Word
+    4 => Opcode.Zero
+    5 => Opcode.Load
+    6 => Opcode.Store
+    7 => Opcode.Reference
+    8 => Opcode.Call
+    9 => Opcode.CallClosure
+    10 => Opcode.CallWitness
+    11 => Opcode.WitnessTable
+    12 => Opcode.Kernel
+    13 => Opcode.AddInteger
+    14 => Opcode.SubtractInteger
+    15 => Opcode.MultiplyInteger
+    16 => Opcode.DivideInteger
+    17 => Opcode.RemainderInteger
+    18 => Opcode.NegateInteger
+    19 => Opcode.AddUnchecked
+    20 => Opcode.SubtractUnchecked
+    21 => Opcode.MultiplyUnchecked
+    22 => Opcode.Equal
+    23 => Opcode.NotEqual
+    24 => Opcode.Less
+    25 => Opcode.LessOrEqual
+    26 => Opcode.Greater
+    27 => Opcode.GreaterOrEqual
+    28 => Opcode.Not
+    29 => Opcode.Tag
+    30 => Opcode.TagNiche
+    31 => Opcode.Jump
+    32 => Opcode.Branch
+    33 => Opcode.Switch
+    34 => Opcode.Return
+    35 => Opcode.Stop
+    36 => Opcode.Cell
+    37 => Opcode.RunScript
+    38 => Opcode.Cancelled
+    39 => Opcode.Suspend
+    40 => Opcode.Resume
+    41 => Opcode.Finish
+    42 => Opcode.EntryCell
+    _ => Opcode.Unreachable
+  }
+}
 
 // --- The head word --------------------------------------------------------------------------------------------------
 
@@ -301,6 +378,9 @@ public fn tailLengthOf(opcode: Opcode, head: Int): Int {
     .Switch => 2 * operandB(head) + 1
     .Cell => 2
     .RunScript => 1
+    .Suspend => 1
+    .Cancelled => 1
+    .Resume => 1
     .EntryCell => 1
     _ => 0
   }
@@ -368,7 +448,10 @@ public type KernelOperation {
   case ElementAddress
   /** `index, path, line, column`: one location of the program, the path a text in a register. */
   case DefineLocation
-  /** `index, words, kind, shape`: one element descriptor, trivial (0), a text (1) or counted by a shape (2). */
+  /**
+   * `index, words, kind, shape, equals, hash`: one element descriptor, trivial (0), a text (1) or counted by a shape (2),
+   * and the chunks of the `equals` and the `hash` it is compared and hashed by, -1 where its words decide.
+   */
   case DefineElement
   /** `index, width, tag, closer, reversed`, then the common group and one group per variant: one shape. */
   case DefineShape
@@ -395,6 +478,55 @@ public type KernelOperation {
   case TakeStop
   /** `target, source`: the code points of the text in `source`, one per word from `target` on. Answers how many. */
   case TextOut
+  /**
+   * `capacity`: storage for that many registers at once, so that they never move while a call of the kernel holds a
+   * pointer into them - a call back into the interpreter may grow them in the middle of one.
+   */
+  case Reserve
+  /**
+   * `target, chunk, frame words, element, count`, then per argument `register, offset, width`: `torb_task_new` over the
+   * kernel's resume function with room for the frame of the body `chunk`, the arguments moved into it, and the task
+   * started. `element` describes the task's value, -1 for a `Void` task.
+   */
+  case TaskNew
+  /** `task`: answers whether the task was cancelled (`torb_task_cancelled`). */
+  case TaskCancelled
+  /** `task, awaited, state`: records the state and answers `torb_task_await` - 0 registered, 1 ready. */
+  case TaskAwait
+  /** `task, frame words`: the frame of the body, from the frame's base on, into the task block. */
+  case TaskSave
+  /** `task`: `torb_task_outcome`, read once after every wait. */
+  case TaskOutcome
+  /** `task, value, width`: the value moved into the result slot of the task block. */
+  case TaskFinish
+  /**
+   * `chunk, frame words, target`: the entry file's body as the main task, the scheduler until it has completed, and
+   * `torb_task_end_main` into the target - 0, or the exit code of a main task that ended cancelled.
+   */
+  case RunMain
+  /** The scheduler, until every task that is queued has run (`torb_scheduler_run(NULL)`). */
+  case SchedulerRun
+  /** Every task still running cancelled and run to its stop (`torb_scheduler_finish`). */
+  case SchedulerFinish
+  /** Answers the address of the first word of the list the operation is read from: how the loop reads its code. */
+  case ListAddress
+  /** Answers the address of the first register, which never moves once the registers are reserved. */
+  case RegisterAddress
+  /**
+   * `target, list, from, to, location`: `torb_list_slice_copied`, what a slice of a list whose items may hold an object
+   * with a destructor calls instead of the thunk of `torb_list_slice`, with that thunk's operands.
+   */
+  case ListSliceCopied
+  /**
+   * A sandboxed script stopped inside the call back that is answering: the call back passes the stop on to the
+   * operation that made the call, which stops as well (`runtime/machine.c`, `torb_machine_call_back`).
+   */
+  case StopInCallBack
+  /**
+   * `chunk`: the chunk that gives the entry cells' counts back runs when the program ends in `Process.exit`, which
+   * never comes back to the end of the run (`torb_process_on_exit`); -1 takes it back once the run ends normally.
+   */
+  case OnExit
 
   /** The name the disassembly writes. */
   fn spelling(): String {
@@ -435,6 +567,21 @@ public type KernelOperation {
       .SandboxClose => "sandbox.close"
       .TakeStop => "take.stop"
       .TextOut => "text.out"
+      .Reserve => "reserve"
+      .TaskNew => "task.new"
+      .TaskCancelled => "task.cancelled"
+      .TaskAwait => "task.await"
+      .TaskSave => "task.save"
+      .TaskOutcome => "task.outcome"
+      .TaskFinish => "task.finish"
+      .RunMain => "run.main"
+      .SchedulerRun => "scheduler.run"
+      .SchedulerFinish => "scheduler.finish"
+      .ListAddress => "list.address"
+      .RegisterAddress => "register.address"
+      .ListSliceCopied => "list.slice.copied"
+      .StopInCallBack => "stop.in.call.back"
+      .OnExit => "on.exit"
     }
   }
 }
@@ -477,6 +624,21 @@ public const allKernelOperations: List<KernelOperation> = [
   KernelOperation.SandboxClose,
   KernelOperation.TakeStop,
   KernelOperation.TextOut,
+  KernelOperation.Reserve,
+  KernelOperation.TaskNew,
+  KernelOperation.TaskCancelled,
+  KernelOperation.TaskAwait,
+  KernelOperation.TaskSave,
+  KernelOperation.TaskOutcome,
+  KernelOperation.TaskFinish,
+  KernelOperation.RunMain,
+  KernelOperation.SchedulerRun,
+  KernelOperation.SchedulerFinish,
+  KernelOperation.ListAddress,
+  KernelOperation.RegisterAddress,
+  KernelOperation.ListSliceCopied,
+  KernelOperation.StopInCallBack,
+  KernelOperation.OnExit,
 ]
 
 /**
@@ -602,6 +764,11 @@ public type PlaceStep {
    * with the language's own message (`missing`, an offset of the constant pool) at `location` for an index out of range.
    */
   case Element(index: Int, missing: Int, location: Int)
+  /**
+   * An item of the `Array<Item, Size>` here, which holds its items inline: `index` items of `width` words further on,
+   * after the index is checked against `size` - out of range it panics with `missing` at `location`, as `a[key]` does.
+   */
+  case Item(index: Int, size: Int, width: Int, missing: Int, location: Int)
 }
 
 /**
@@ -719,6 +886,17 @@ public type Chunk {
    * a sandboxed script was when it stopped (docs/design/SCRIPTS.md section 6).
    */
   var sites: List<(Int, Int)> = []
+  /** Whether the chunk is the body of a task, which only the scheduler runs, through the kernel. */
+  isTask: Bool = false
+  /** The register a task's body holds its task in, right after its slots; `-1` for every other chunk. */
+  taskRegister: Int = -1
+  /** A task's body: the code offset each state goes on at, by state, 0 the entry. */
+  resumes: List<Int> = []
+
+  /** How many words of a task's frame a suspension saves: its slots and its task register. */
+  fn savedWords(): Int {
+    taskRegister + 1
+  }
 }
 
 /** The whole program, as the interpreter loads it. */
@@ -737,6 +915,8 @@ public type BytecodeProgram {
   var tables: List<TableEntry> = []
   var elements: List<ElementEntry> = []
   var locations: List<Location> = []
+  /** Whether the program starts a task: its run hands the scheduler what is left, and finishes it at the end. */
+  var usesTasks: Bool = false
   /** The chunk that gives the count of every entry cell back once the program is done, `-1` where it has none. */
   var entryCellRelease: Int = -1
 }

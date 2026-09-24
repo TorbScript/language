@@ -25,7 +25,7 @@ use lowerScripts, pathsOfModules from "../ir/lower/lower"
 use insertOwnership from "../ir/ownership"
 use verifyOwnedProgram from "../ir/ownership-verify"
 use emitBytecode from "../backend/bytecode/emit"
-use loadedProgram, unsupportedByInterpreter from "./interpret"
+use loadedProgram from "./interpret"
 use Grant, ScriptStop, runScript from "./sandbox"
 
 /** One `project.trb`: where it is, and what its evaluation answered. */
@@ -125,9 +125,6 @@ public fn evaluateManifests(paths: List<String>): Result<Result<List<EvaluatedMa
   }
   const emission = emitBytecode lowering.program, []
   for what in emission.unsupported {
-    refused.append "{what} is not supported by the VM yet"
-  }
-  for what in unsupportedByInterpreter(emission.program) {
     refused.append "{what} is not supported by the VM yet"
   }
   if !refused.isEmpty() {

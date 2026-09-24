@@ -41,6 +41,27 @@ static torb_heap *torb_heap_current(void) {
 }
 
 /*
+ * Whether a VM ever counted a program in this process: the leak report is then about that program's blocks, which the
+ * heap counts apart from `torb`'s own while the thread runs inside the VM's kernel (`torb_count_in_machine`).
+ */
+static bool torb_counts_machine = false;
+
+/* One block more or less, and the same for the VM's program where the thread runs inside its kernel. */
+static void torb_count_live(torb_heap *heap, int64_t change) {
+  heap->live_blocks += (size_t)change;
+  if (heap->in_machine != 0u) {
+    heap->machine_live_blocks += change;
+  }
+}
+
+static void torb_count_immortal(torb_heap *heap) {
+  heap->immortal_blocks += 1;
+  if (heap->in_machine != 0u) {
+    heap->machine_immortal_blocks += 1;
+  }
+}
+
+/*
  * The runtime's own count of what it holds, against the memory limit, where the operating system does not enforce the
  * limit (the end of this file). Off unless `torb_memory_counting` is set, which happens before any thread starts, so
  * what every allocation and every free pays for it is the test of a flag that does not change afterwards.
@@ -76,11 +97,11 @@ void *torb_allocate(size_t size, torb_block_kind kind) {
   heap = torb_heap_current();
   if (heap->immortal_depth > 0) {
     header->count = TORB_IMMORTAL_COUNT;
-    heap->immortal_blocks += 1;
+    torb_count_immortal(heap);
     return header;
   }
   header->count = 1;
-  heap->live_blocks += 1;
+  torb_count_live(heap, 1);
   return header;
 }
 
@@ -107,7 +128,7 @@ void *torb_raw_allocate(size_t size) {
   if (torb_memory_counting != 0) {
     torb_memory_count(buffer);
   }
-  torb_heap_current()->live_blocks += 1;
+  torb_count_live(torb_heap_current(), 1);
   return buffer;
 }
 
@@ -126,7 +147,7 @@ void torb_raw_free(void *buffer, size_t size) {
     torb_memory_uncount(buffer);
   }
   free(buffer);
-  torb_heap_current()->live_blocks -= 1;
+  torb_count_live(torb_heap_current(), -1);
 }
 
 void torb_retain(void *block) {
@@ -184,7 +205,7 @@ void torb_release(void *block, torb_drop_function drop) {
     torb_memory_uncount(block);
   }
   free(block);
-  torb_heap_current()->live_blocks -= 1;
+  torb_count_live(torb_heap_current(), -1);
 }
 
 bool torb_count_down(void *block) {
@@ -215,7 +236,7 @@ void torb_free_counted(void *block, torb_drop_function drop) {
     torb_memory_uncount(block);
   }
   free(block);
-  torb_heap_current()->live_blocks -= 1;
+  torb_count_live(torb_heap_current(), -1);
 }
 
 void torb_closing_begin(void *block) {
@@ -305,8 +326,8 @@ void torb_make_immortal(void *block) {
   header->count = TORB_IMMORTAL_COUNT;
   /* The block is never freed again, so it leaves the live count and joins the immortal one. */
   heap = torb_heap_current();
-  heap->live_blocks -= 1;
-  heap->immortal_blocks += 1;
+  torb_count_live(heap, -1);
+  torb_count_immortal(heap);
 }
 
 void torb_begin_immortal(void) {
@@ -330,8 +351,23 @@ size_t torb_immortal_block_count(void) {
 }
 
 void torb_report_leaks(void) {
+  if (torb_counts_machine) {
+    fprintf(stderr, "live blocks at exit: %lld\n", (long long)torb_pool_sum_machine_live_blocks());
+    fprintf(stderr, "immortal blocks at exit: %lld\n", (long long)torb_pool_sum_machine_immortal_blocks());
+    return;
+  }
   fprintf(stderr, "live blocks at exit: %lu\n", (unsigned long)torb_pool_sum_live_blocks());
   fprintf(stderr, "immortal blocks at exit: %lu\n", (unsigned long)torb_pool_sum_immortal_blocks());
+}
+
+unsigned torb_count_in_machine(unsigned inside) {
+  torb_heap *heap = torb_heap_current();
+  unsigned before = heap->in_machine;
+  heap->in_machine = inside;
+  if (inside != 0u) {
+    torb_counts_machine = true;
+  }
+  return before;
 }
 
 /* ------------------------------------------------------------------------------- building a constant once --- */

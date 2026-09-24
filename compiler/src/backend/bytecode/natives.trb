@@ -6,11 +6,13 @@
  * the list `torb_natives.h` declares. A `kernel` instruction that calls one carries `kernelNativeBase` plus its index
  * here, so the emitter and the table agree as long as both are generated from the same manifest.
  *
- * A row bound to some operating systems (`availableOn`) has no thunk: the table is one file for every machine, and
- * its C function exists only where its `runtime/os` file is compiled. The emitter refuses a call of one.
+ * A row bound to some operating systems (`availableOn`) is in the list too, and its thunk calls it only where its
+ * `runtime/os` file compiles it: the table is one file for every machine, and a program built for the machine it runs on
+ * calls only the natives of that machine, which the lowering already chose.
  */
 
 use nativeEntries from "../c/natives"
+use TargetSystem from "../../project/target"
 
 /** Every C symbol of a ready runtime function of the manifest, once, sorted. */
 public fn nativeSymbols(): List<String> {
@@ -18,9 +20,6 @@ public fn nativeSymbols(): List<String> {
   var symbols: List<String> = []
   for entry in nativeEntries() {
     if const .Planned(_) = entry.state {
-      continue
-    }
-    if !entry.availableOn.isEmpty() {
       continue
     }
     if const .Runtime(function) = entry.target {
@@ -43,4 +42,18 @@ public fn nativeIndices(): Map<String, Int> {
     index = index + 1
   }
   indices
+}
+
+/** The operating systems a symbol exists on, by symbol: only the symbols of rows bound to some of them. */
+public fn systemsOfSymbols(): Map<String, List<TargetSystem>> {
+  var systems: Map<String, List<TargetSystem>> = [:]
+  for entry in nativeEntries() {
+    if entry.availableOn.isEmpty() {
+      continue
+    }
+    if const .Runtime(function) = entry.target {
+      systems.set function, entry.availableOn
+    }
+  }
+  systems
 }

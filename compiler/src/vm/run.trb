@@ -22,7 +22,7 @@ use hostTarget from "../project/target"
 use entryNameOf from "../ir/lower/function"
 use renderDiagnostic, renderProblem from "../cli/render"
 use emitBytecode from "../backend/bytecode/emit"
-use runProgram, unsupportedByInterpreter from "./interpret"
+use runProgram from "./interpret"
 
 /** The exit code of a program that could not be run at all: the one `torb build` answers for a refused program. */
 const refusedCode = 1
@@ -73,16 +73,13 @@ public fn runInMachine(path: String, arguments: List<String>): Result<Int, IoErr
   }
   const entry = entryNameOf lowering, module
   const emission = emitBytecode lowering.program, [entry]
-  var missing = emission.unsupported
-  missing.appendAll unsupportedByInterpreter(emission.program)
-  if !missing.isEmpty() {
-    for what in missing {
+  if !emission.unsupported.isEmpty() {
+    for what in emission.unsupported {
       printError "error: {what} is not supported by the VM yet"
     }
     return Ok refusedCode
   }
-  runProgram emission.program, arguments
-  Ok 0
+  Ok runProgram(emission.program, arguments)
 }
 
 /** Everything the front end found, rendered the way `torb check` renders it. */

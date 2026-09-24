@@ -26,7 +26,8 @@
 #
 # `--vm` is the second leg of docs/design/VM.md section 8: every program named in `tests/conformance/vm.list` is run
 # with `torb run --vm` and compared against the same `.expected`/`.stderr`/`.exit` as its native run, byte for byte.
-# The list grows until it is the whole suite. The leak gate and the two checks of the C do not apply to it.
+# The list grows until it is the whole suite. The leak gate applies as it does natively - the kernel counts the
+# program's blocks apart from torb's own - and the two checks of the C do not apply to it.
 
 set -eu
 
@@ -336,6 +337,30 @@ $(diff -u "$work/stderr.expected.norm" "$work/stderr.folded" 2>&1 || true)"
     problems="$problems
 wrote to stderr in the VM and has no .stderr file:
 $(cat "$work/stderr.folded")"
+  fi
+
+  # The leak gate in the VM: the kernel counts the program's blocks apart from those of the `torb` it runs in, so the
+  # report is the program's alone (docs/design/VM.md section 8), and a `.stderr` or a `.leaks` file exempts it here as
+  # it does natively.
+  leaks_file="${program%.trb}.leaks"
+  case "$program" in
+    */binary-only/*) is_binary_only=1 ;;
+    *) is_binary_only=0 ;;
+  esac
+  if [ "$is_binary_only" -eq 0 ] && [ ! -f "$stderr_file" ] && [ ! -f "$leaks_file" ]; then
+    set +e
+    (cd "$work/run" && TORB_REPORT_LEAKS=1 "$CONFORMANCE_TORB" run --vm "$absolute" >"$work/leak.stdout" 2>"$work/leak.stderr")
+    set -e
+    if ! grep -q 'live blocks at exit: 0$' "$work/leak.stderr"; then
+      problems="$problems
+does not report zero live blocks in the VM:
+$(cat "$work/leak.stderr")"
+    fi
+    if ! grep -q 'immortal blocks at exit: ' "$work/leak.stderr"; then
+      problems="$problems
+does not report its immortal blocks in the VM:
+$(cat "$work/leak.stderr")"
+    fi
   fi
 
   if [ -z "$problems" ]; then

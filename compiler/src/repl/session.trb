@@ -36,7 +36,7 @@ use verifyOwnedProgram from "../ir/ownership-verify"
 use emitBytecode from "../backend/bytecode/emit"
 use BytecodeProgram from "../backend/bytecode/format"
 use LoadedProgram, Stop, loadedProgram, appendProgram, reserveWords, releaseSandboxed from "../vm/interpret"
-use callSandboxed, unlimitedBudget, unsupportedByInterpreter from "../vm/interpret"
+use callSandboxed, unlimitedBudget, wordAt, registerReferenceOf from "../vm/interpret"
 use renderDiagnostic, renderProblem from "../cli/render"
 use EntryPlan, planEntry from "./entry"
 use EntrySource, KeptDeclaration, ParameterText, Form, Shown, Synthesis, synthesize, entryFunctionName from "./synthesis"
@@ -179,10 +179,10 @@ public fn evaluate(var session: Session, text: String, named: String? = None): O
     const binding = compiled.parameters[index]
     const parameter = entry.parameters[index]
     if parameter.isReference {
-      arguments.append(binding.register * 2 + 1)
+      arguments.append registerReferenceOf(session.machine, binding.register)
     } else {
       for offset in 0..binding.width {
-        arguments.append session.machine.words[binding.register + offset]
+        arguments.append wordAt(session.machine, binding.register + offset)
       }
     }
   }
@@ -190,7 +190,7 @@ public fn evaluate(var session: Session, text: String, named: String? = None): O
     const parameter = entry.parameters[compiled.parameters.length() + index]
     const register = reserveWords session.machine, parameter.valueWidth.max(1)
     registers.append register
-    arguments.append(register * 2 + 1)
+    arguments.append registerReferenceOf(session.machine, register)
   }
   const answered = callSandboxed session.machine, session.grant, unlimitedBudget(), chunk, arguments
   // The declarations checked, so they are the session's from here on, whatever the statements did
@@ -729,10 +729,6 @@ fn lowerEntry(session: Session, compiled: Compiled): BytecodeProgram? {
   if refused.isEmpty() {
     const emission = emitBytecode lowering.program, [name], session.machine.program
     for what in emission.unsupported {
-      refused.append "error: {what} is not supported by the VM yet"
-    }
-    const before = session.machine.program.elements.length()
-    for what in unsupportedByInterpreter(emission.program.copy(elements: emission.program.elements[before..])) {
       refused.append "error: {what} is not supported by the VM yet"
     }
     if refused.isEmpty() {

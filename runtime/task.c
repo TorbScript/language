@@ -2326,6 +2326,30 @@ size_t torb_pool_sum_immortal_blocks(void) {
   return sum;
 }
 
+int64_t torb_pool_sum_machine_live_blocks(void) {
+  int64_t sum = torb_main_worker.heap.machine_live_blocks;
+  uint32_t index;
+  for (index = 1u; index < torb_pool.count; index += 1u) {
+    sum += torb_pool.workers[index]->heap.machine_live_blocks;
+  }
+  for (index = 0u; index < torb_blocking.count; index += 1u) {
+    sum += torb_blocking.workers[index]->heap.machine_live_blocks;
+  }
+  return sum;
+}
+
+int64_t torb_pool_sum_machine_immortal_blocks(void) {
+  int64_t sum = torb_main_worker.heap.machine_immortal_blocks;
+  uint32_t index;
+  for (index = 1u; index < torb_pool.count; index += 1u) {
+    sum += torb_pool.workers[index]->heap.machine_immortal_blocks;
+  }
+  for (index = 0u; index < torb_blocking.count; index += 1u) {
+    sum += torb_blocking.workers[index]->heap.machine_immortal_blocks;
+  }
+  return sum;
+}
+
 /* The thread of worker 1 to N-1: its pointer, the bottom of its stack, the loop, and its timer heap freed at the end. */
 static void torb_worker_main(void *argument) {
   torb_worker *self = (torb_worker *)argument;
@@ -2390,6 +2414,8 @@ static void torb_pool_start(void) {
 static void torb_fold_worker(torb_worker *worker) {
   torb_main_worker.heap.live_blocks += worker->heap.live_blocks;
   torb_main_worker.heap.immortal_blocks += worker->heap.immortal_blocks;
+  torb_main_worker.heap.machine_live_blocks += worker->heap.machine_live_blocks;
+  torb_main_worker.heap.machine_immortal_blocks += worker->heap.machine_immortal_blocks;
   torb_pool.totals.resumed += worker->ran;
   torb_pool.totals.stolen += worker->stole;
   torb_condition_destroy(&worker->wake);

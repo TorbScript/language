@@ -22,6 +22,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 /* -------------------------------------------------------------------------------------------------- portability --- */
 
@@ -446,9 +447,19 @@ size_t torb_live_block_count(void);
 /** How many blocks are immortal. They are never freed by construction, so they are no part of the live count. */
 size_t torb_immortal_block_count(void);
 
-/** `torb build --report-leaks`: writes the live and the immortal block count to stderr, one line each. */
+/**
+ * `torb build --report-leaks`: writes the live and the immortal block count to stderr, one line each. Once the VM
+ * counted a program (`torb_count_in_machine`), the counts are that program's alone, as its native binary would report
+ * them, and not those of the `torb` it runs in.
+ */
 void torb_report_leaks(void);
 
+/**
+ * The VM's accounting (runtime/machine.c): with `inside` set, what this thread allocates and frees is also counted as
+ * the program's the VM runs - the kernel sets it for its calls and clears it while it calls back into the interpreter.
+ * Answers what it was before, so a call can put it back.
+ */
+unsigned torb_count_in_machine(unsigned inside);
 /* ------------------------------------------------------------------------------------------- the memory limit --- */
 
 /**
@@ -1405,5 +1416,24 @@ uint64_t torb_hash_combine(uint64_t first, uint64_t second);
 #include "torb_task.h"
 #include "torb_network.h"
 #include "torb_os.h"
+
+/* ------------------------------------------------------------------------------------------ the VM's words --- */
+
+/*
+ * `Machine.load` and `Machine.store` of `std/machine`: one word at an address - a register of the bytecode VM, a field of
+ * one of its blocks, a word of its code. They are natives like every other, and they are defined here, `static inline`,
+ * because the interpreter's loop reads and writes every register through them: the declaration `torb_natives.h` writes
+ * after this one takes this one's internal linkage (C11 6.2.2), so a call of either is one load or one store and no
+ * call at all.
+ */
+static inline int64_t torb_machine_load(int64_t address) {
+  int64_t value;
+  memcpy(&value, (const void *)(intptr_t)address, sizeof value);
+  return value;
+}
+
+static inline void torb_machine_store(int64_t address, int64_t value) {
+  memcpy((void *)(intptr_t)address, &value, sizeof value);
+}
 
 #endif /* TORB_H */

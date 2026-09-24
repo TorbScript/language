@@ -20,7 +20,8 @@
 
 use NativeEntry from "../c/natives"
 use readPrototype, Prototype from "../c/prototype"
-use nativeSymbols from "./natives"
+use nativeSymbols, systemsOfSymbols from "./natives"
+use TargetSystem from "../../project/target"
 
 /** The whole of `runtime/machine_natives.c`: a pure function of the manifest. */
 public fn renderMachineNatives(entries: List<NativeEntry>): String {
@@ -51,9 +52,14 @@ public fn renderMachineNatives(entries: List<NativeEntry>): String {
     "",
   ]
   const symbols = nativeSymbols()
+  const bound = systemsOfSymbols()
   for index in 0..symbols.length() {
     const symbol = symbols[index]
-    lines.appendAll thunkLines(index, symbol, prototypes.get(symbol) ?? "")
+    const thunk = thunkLines(index, symbol, prototypes.get(symbol) ?? "")
+    match bound.get(symbol) {
+      Some(systems) => lines.appendAll boundThunkLines(index, symbol, systems, thunk)
+      None => lines.appendAll thunk
+    }
     lines.append ""
   }
   lines.append "const torb_machine_native torb_machine_natives[] = \{"
@@ -71,10 +77,47 @@ fn thunkName(index: Int): String {
 }
 
 /**
- * The functions of the runtime whose answer inside the VM is the program's and not `torb`'s: `Process.arguments()` is
- * what was written behind the path of `torb run --vm`, and `runtime/machine.c` holds it.
+ * The thunk of a function of `runtime/os/`, which is compiled on its own systems only: the thunk calls it there, and
+ * everywhere else it is a thunk that panics, so the table stays one file and the numbering the manifest's. A program
+ * never reaches the second one, because the lowering keeps only the branch of the machine it builds for.
  */
-const substitutes: Map<String, String> = ["torb_process_arguments": "torb_machine_process_arguments"]
+fn boundThunkLines(index: Int, symbol: String, systems: List<TargetSystem>, thunk: List<String>): List<String> {
+  var conditions: List<String> = []
+  for system in systems {
+    conditions.append(
+      match system {
+        .Windows => "defined(_WIN32)"
+        .Linux => "defined(__linux__)"
+        .MacOs => "defined(__APPLE__)"
+        .FreeBsd => "defined(__FreeBSD__)"
+      },
+    )
+  }
+  var lines = ["/* {symbol} */", "#if {conditions.joined(separator: " || ")}"]
+  lines.appendAll thunk.skip(1)
+  lines.append "#else"
+  lines.append "static void {thunkName(index)}(int64_t *words, int64_t base, const int64_t *operands) \{"
+  lines.append "  (void)words;"
+  lines.append "  (void)base;"
+  lines.append "  (void)operands;"
+  const message = "internal error: `{symbol}` does not exist on this operating system"
+  lines.append "  torb_panic_text(\"{message}\", torb_location_unknown);"
+  lines.append "\}"
+  lines.append "#endif"
+  lines
+}
+
+/**
+ * The functions of the runtime whose answer inside the VM is the program's and not `torb`'s: `Process.arguments()` is
+ * what was written behind the path of `torb run --vm`, and `runtime/machine.c` holds it. `test` and `group` run a
+ * closure of the program, which is a function of the bytecode and no C code: their substitutes hand the runtime a C
+ * closure that calls back into the interpreter, and take the program's closure as the address of its two words.
+ */
+const substitutes: Map<String, String> = [
+  "torb_process_arguments": "torb_machine_process_arguments",
+  "torb_test_case": "torb_machine_test_case",
+  "torb_test_group": "torb_machine_test_group",
+]
 
 /** The integer types a register holds widened to one word, and a thunk casts back. */
 const integerSpellings = [
@@ -140,6 +183,8 @@ fn thunkLines(index: Int, symbol: String, text: String): List<String> {
       body.append "  memcpy(&{name}, words + base + {operand}, sizeof {name});"
     } else if objectSpellings.contains(spelling) {
       body.append "  {spelling}{name} = ({spelling})(intptr_t)words[base + {operand}];"
+    } else if spelling == "torb_closure" && substitutes.containsKey(symbol) {
+      body.append "  const int64_t *{name} = words + base + {operand};"
     } else if spelling == "const void *" || spelling == "const torb_text *" {
       body.append "  {spelling}{name} = (const void *)(words + base + {operand});"
     } else if spelling.endsWith("*") {
@@ -156,6 +201,11 @@ fn thunkLines(index: Int, symbol: String, text: String): List<String> {
         continue
       }
       body.append "  {spelling}{name} = ({spelling})torb_machine_address(words, words[base + {operand}]);"
+      // An element the runtime itself describes may be narrower than a word - the flag a deadline task answers - and
+      // writes only its first bytes, so the word it goes into is zeroed first
+      if pointee == "void" {
+        body.append "  memset({name}, 0, sizeof(int64_t));"
+      }
     } else {
       lines.appendAll refusedLines(symbol)
       return lines

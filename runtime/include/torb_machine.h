@@ -37,6 +37,13 @@ void *torb_machine_address(int64_t *words, int64_t reference);
  */
 int64_t torb_machine_call_back(int64_t request);
 
+/**
+ * `test` and `group` as the table of thunks calls them inside the VM: the body is the address of the two words of the
+ * program's closure, which the kernel runs through the interpreter behind the runtime's own recovery point.
+ */
+void torb_machine_test_case(torb_text name, const int64_t *body);
+void torb_machine_test_group(torb_text name, const int64_t *body);
+
 /** A location the VM defined, by its index; `torb_location_unknown` for -1. */
 torb_location torb_machine_location(int64_t index);
 

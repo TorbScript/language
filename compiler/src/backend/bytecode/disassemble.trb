@@ -161,6 +161,13 @@ fn chunkLines(program: BytecodeProgram, index: Int, natives: List<String>): List
   for slot in chunk.slots {
     lines.append "  r{slot.offset} %{slot.slot} {slot.description}"
   }
+  if chunk.isTask {
+    var resumes: List<String> = []
+    for offset in chunk.resumes {
+      resumes.append "{offset}"
+    }
+    lines.append "  r{chunk.taskRegister} task, resumes at [{resumes.joined(separator: ", ")}]"
+  }
   for place in 0..chunk.places.length() {
     lines.append "  place {place}: {describePlace(chunk.places[place], program.locations)}"
   }
@@ -207,6 +214,9 @@ fn describePlace(place: Place, locations: List<Location>): String {
         .Dereference => "->"
         .Element(index, missing, location) => {
           "[r{index}] missing {missing} at {describeLocation(locations, location)}"
+        }
+        .Item(index, size, width, missing, location) => {
+          "[r{index} of {size} x {width}] missing {missing} at {describeLocation(locations, location)}"
         }
       },
     )
@@ -309,11 +319,15 @@ fn describeInstruction(
     .Unreachable => name
     .Stop => name
     .Cell => "{name} r{a}, {counted(b, "word")}, cell at {first}, built by {chunkName(program, second)}"
-    .RunScript => "{name} r{a} = r{b}(r{c}), grant r{first}"
+    .Cancelled => "{name} r{a}, stop {first}"
+    .Suspend => if first == 1 { "{name} r{a}, r{b}, state {c}, observing" } else { "{name} r{a}, r{b}, state {c}" }
+    .Resume => "{name} r{a}, stop {first}"
+    .Finish => if c == 0 { "{name} r{a}" } else { "{name} r{a}, r{b}, {counted(c, "word")}" }
     .EntryCell => {
       const direction = if c == 0 { "read" } else { "write" }
       "{name} {direction} r{a}, {counted(b, "word")}, cell at {first}"
     }
+    .RunScript => "{name} r{a} = r{b}(r{c}), grant r{first}"
     _ => "{name} r{a}, r{b}, r{c}"
   }
 }

@@ -191,6 +191,13 @@ typedef struct torb_heap {
   size_t immortal_blocks;
   /** How many immortal regions are open on this thread (memory.c, `torb_begin_immortal`). */
   unsigned immortal_depth;
+  /**
+   * Whether this thread runs inside a call of the VM's kernel (machine.c): what it allocates and frees there is the
+   * program's the VM runs, and is counted once more below, apart from the blocks of `torb` itself.
+   */
+  unsigned in_machine;
+  int64_t machine_live_blocks;
+  int64_t machine_immortal_blocks;
 } torb_heap;
 
 typedef struct torb_timer {
@@ -291,6 +298,9 @@ void torb_platform_set_worker(torb_worker *worker);
 /** The block counters summed over every worker, for memory.c's report. Exact once the other threads are quiet. */
 size_t torb_pool_sum_live_blocks(void);
 size_t torb_pool_sum_immortal_blocks(void);
+/** The same two counts of the blocks the VM's program allocated inside the kernel (`torb_heap.in_machine`). */
+int64_t torb_pool_sum_machine_live_blocks(void);
+int64_t torb_pool_sum_machine_immortal_blocks(void);
 
 /**
  * `torb_release` in two halves, for task.c's completion: the count goes down by one (atomically for a shared block

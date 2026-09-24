@@ -10,9 +10,9 @@ use test, group from "std/test"
 use lowered from "./lower-harness"
 use insertOwnership from "../src/ir/ownership"
 use emitBytecode from "../src/backend/bytecode/emit"
-use disassembleChunk, tableLines from "../src/backend/bytecode/disassemble"
+use disassemble, disassembleChunk, tableLines from "../src/backend/bytecode/disassemble"
 use Opcode, allOpcodes, allKernelOperations, kernelNumberOf, KernelOperation, headWord from "../src/backend/bytecode/format"
-use opcodeNumberOf, operandA, operandB, operandC, tailLengthOf from "../src/backend/bytecode/format"
+use opcodeNumberOf, opcodeOf, operandA, operandB, operandC, tailLengthOf from "../src/backend/bytecode/format"
 use nativeSymbols from "../src/backend/bytecode/natives"
 use renderMachineNatives from "../src/backend/bytecode/thunks"
 use nativeEntries from "../src/backend/c/natives"
@@ -44,6 +44,13 @@ group "The format" {
       assert(allOpcodes[index].number() == index)
     }
     assert(allOpcodes[0] == Opcode.Unreachable)
+  }
+
+  test "the loop decodes a head word's opcode with one match, and a number no opcode has is `unreachable`" {
+    for opcode in allOpcodes {
+      assert(opcodeOf(opcode.number()) == opcode)
+    }
+    assert(opcodeOf(255) == Opcode.Unreachable)
   }
 
   test "a head word carries the opcode and three operands of sixteen bits" {
@@ -92,7 +99,21 @@ group "The format" {
     const text = renderMachineNatives nativeEntries()
     assert text.contains("  torb_text a0;\n  memcpy(&a0, words + base + operands[1], sizeof a0);")
     assert text.contains("  torb_list *a0 = (torb_list *)torb_machine_address(words, words[base + operands[1]]);")
-    assert text.contains("internal error: the VM cannot call `torb_test_case` yet")
+    assert text.contains("internal error: the VM cannot call `torb_machine_install` yet")
+  }
+
+  test "`test` and `group` hand the runtime the program's closure through the kernel's substitutes" {
+    const text = renderMachineNatives nativeEntries()
+    assert text.contains("  const int64_t *a1 = words + base + operands[2];\n  torb_machine_test_case(a0, a1);")
+    assert text.contains("torb_machine_test_group(a0, a1);")
+    assert(!text.contains("internal error: the VM cannot call `torb_test_case` yet"))
+  }
+
+  test "a native of some operating systems has a thunk that calls it only where its file is compiled" {
+    const text = renderMachineNatives nativeEntries()
+    assert text.contains("/* torb_os_windows_tick_count */\n#if defined(_WIN32)\n")
+    assert text.contains("internal error: `torb_os_windows_tick_count` does not exist on this operating system")
+    assert nativeSymbols().contains("torb_os_posix_effective_user_identifier")
   }
 
   test "the natives are the manifest's runtime symbols, sorted and once each" {
@@ -482,5 +503,44 @@ group "Module constants" {
           2: return r0, 1 word
         """,
     )
+  }
+}
+
+group "Arrays" {
+  test "an array holds its items inline, and an item step checks the index against the size" {
+    const source = raw"""
+      fn third(values: Array<Int, 3>, index: Int): Int {
+        values[index]
+      }
+
+      const _ = third([1, 2, 3], 2)
+      """
+    assert findingsOf(source).isEmpty()
+    const chunk = chunkOf source, "t_acme_x2f_app_main_third"
+    assert chunk.contains("  r0 %0 Array[3]")
+    assert chunk.contains(" of 3 x 1] missing ")
+  }
+}
+
+group "Tasks" {
+  /**
+   * The harness's `await` is no suspension, so this pins the frame of a body, its checks and its ends; a `suspend` and
+   * its `resume` run in every program of the conformance suite that waits (`tools/conformance.sh --vm`).
+   */
+  test "a task's body keeps its task in a register after its slots, checks at its entry, and finishes into the block" {
+    const source = raw"""
+      fn answer(): Task<Int> {
+        41
+      }
+
+      const _ = answer()
+      """
+    assert findingsOf(source).isEmpty()
+    var found = lowered source
+    insertOwnership found.program
+    const text = disassemble emitBytecode(found.program, [entryName]).program
+    assert text.contains("  r1 task, resumes at [0]\n  0: cancelled r1, stop 5\n")
+    assert text.contains(": finish r1, r0, 1 word\n  5: stop")
+    assert text.contains(": kernel task.new ")
   }
 }

@@ -22,14 +22,16 @@
  */
 
 use IrProgram, IrFunction, IrTypeId, IrType, LayoutId, FunctionId, Slot, BlockId, StaticId, LocationId from "../../ir/ir"
+use ElementId, CellAccess from "../../ir/ir"
 use Instruction, Terminator, Argument, Reference, PathStep, Capture, WitnessSource, WitnessRoot from "../../ir/ir"
 use Intrinsic, IntrinsicOperation, NumericKind, RuntimeKind, SlotRole, StaticContents, FunctionKind from "../../ir/ir"
-use Ownership, CellAccess from "../../ir/ir"
+use Ownership from "../../ir/ir"
 use LiteralValue from "../../semantics/checker/type"
 use Layout, Representation, containsCountedType, isManagedType, textPartKindOf, TextPartKind from "../../ir/layout"
 use closingOf, Closing from "../../ir/closing"
+use taskMachineOf, TaskMachine from "../../ir/suspension"
 use payloadLayoutName from "../../ir/mangle"
-use emittedFunctionsOf, runtimePrototypes from "../c/emit"
+use emittedFunctionsOf, runtimePrototypes, usesTasks from "../c/emit"
 use environmentLayoutOfFunction from "../c/body"
 use readPrototype, matchPrototype, PrototypeMatch from "../c/prototype"
 use Opcode, KernelOperation, kernelNumberOf, kernelNativeBase, headWord, largestOperand from "./format"
@@ -96,6 +98,14 @@ type Body {
   var patches: List<(Int, Int)> = []
   /** Stores through a `var` parameter that the current instruction owes after it ran: (slot, scratch register). */
   var pendingStores: List<(Int, Int)> = []
+  /** The state machine of a task's body, which decides where it checks for cancellation and what each stop releases. */
+  machine: TaskMachine? = None
+  /** The register a task's body holds its task in, `-1` for every other function. */
+  taskRegister: Int = -1
+  /** The code offset every state resumes at, by state; state 0 is the entry. */
+  var resumes: List<Int> = []
+  /** Code positions that hold the index of a stop path, patched to its code offset once the paths are written. */
+  var stopPatches: List<(Int, Int)> = []
   /** `(code offset, location index)` of every block and instruction that carries a location, in code order. */
   var sites: List<(Int, Int)> = []
 }
@@ -153,6 +163,7 @@ public fn emitBytecode(
       emitter.bytecode.chunks.append emitted
     }
   }
+  emitter.bytecode.usesTasks = usesTasks functions
   if !emitter.entryCells.isEmpty() {
     const release = entryCellReleaseChunk emitter, program
     emitter.bytecode.entryCellRelease = emitter.bytecode.chunks.length()
@@ -227,6 +238,7 @@ fn comparesByWords(program: IrProgram, id: IrTypeId): Bool {
     .VoidType => true
     .Record(layout) => layoutComparesByWords program, layout
     .Tuple(layout) => layoutComparesByWords program, layout
+    .FixedArray(item, _) => comparesByWords program, item
     _ => false
   }
 }
@@ -405,6 +417,13 @@ fn countedWordsOf(
     .Record(layout) => countedLayoutWords emitter, program, id, layout, offset, into
     .Tuple(layout) => countedLayoutWords emitter, program, id, layout, offset, into
     .Variant(layout) => countedLayoutWords emitter, program, id, layout, offset, into
+    // The items of an array are inline, one after the other, and the C back end visits them in that order both ways
+    .FixedArray(item, size) => {
+      const width = emitter.tables.widthOf item
+      for index in 0..size {
+        countedWordsOf(emitter, program, item, offset + index * width, into)
+      }
+    }
     _ => report emitter, "a counted value of a type the VM does not represent"
   }
 }
@@ -550,9 +569,11 @@ fn constantPartsOf(var emitter: Emitter, program: IrProgram, id: StaticId, var i
     .Floating(number) => into.append ConstantPart.Floating(number)
     .VoidValue => into.append ConstantPart.Word(0)
     .Aggregate(layout, variant, fields) => aggregateParts emitter, program, layout, variant, fields, into
-    .Items(_, _) => {
-      report emitter, "an `Array<Item, Size>` value"
-      into.append ConstantPart.Word(0)
+    // An array is its items, inline, in order
+    .Items(_, items) => {
+      for item in items {
+        constantPartsOf emitter, program, item, into
+      }
     }
   }
 }
@@ -684,16 +705,40 @@ fn emitChunk(var emitter: Emitter, program: IrProgram, function: IrFunction): Ch
   if !function.signature.witnesses.isEmpty() {
     report emitter, "a function that takes a witness table"
   }
-  if const .TaskResume = function.kind {
-    report emitter, "the body of a task"
-  }
   if const .ConstantCell(initializer) = function.kind {
     return cellChunk emitter, program, function, initializer
   }
   if const .EntryCell(cell, access) = function.kind {
     return entryCellChunk emitter, program, function, cell, access
   }
-  var body = Body function, offsets, widths, references, cursor, cursor, cursor, ArrayList.withCapacity(64)
+  // A task's body keeps its task in one more register, right after its slots: saved and restored with them
+  var machine: TaskMachine? = None
+  var taskRegister = 0 - 1
+  if const .TaskResume = function.kind {
+    machine = Some taskMachineOf(program, function)
+    taskRegister = cursor
+    cursor = cursor + 1
+  }
+  var body = Body(
+    function,
+    offsets,
+    widths,
+    references,
+    cursor,
+    cursor,
+    cursor,
+    ArrayList.withCapacity(64),
+    machine: machine,
+    taskRegister: taskRegister,
+  )
+  if const Some(found) = machine {
+    // Every resume starts with the cancellation check, the entry included
+    body.resumes.append 0
+    for _ in 0..found.stateCount() {
+      body.resumes.append 0
+    }
+    emitCancellationCheck emitter, body, 0
+  }
   for index in 0..function.blocks.length() {
     body.blockStarts.append body.code.length()
     const block = function.blocks[index]
@@ -709,10 +754,19 @@ fn emitChunk(var emitter: Emitter, program: IrProgram, function: IrFunction): Ch
       flushStores emitter, body, program
     }
     body.scratch = body.firstScratch
+    // Where a loop of a task turns around, it reads its cancellation flag
+    if const Some(found) = machine {
+      if found.isBackEdge(index) {
+        emitCancellationCheck emitter, body, stopPathOfBackEdge(found, index)
+      }
+    }
     emitTerminator emitter, body, program, block.terminator
   }
   for (position, block) in body.patches {
     body.code.set(position, body.blockStarts.get(block) ?? 0)
+  }
+  if const Some(found) = machine {
+    emitStopPaths emitter, body, program, found
   }
   if body.highest > largestOperand {
     report emitter, "a frame of more than {largestOperand} words"
@@ -737,7 +791,123 @@ fn emitChunk(var emitter: Emitter, program: IrProgram, function: IrFunction): Ch
     body.witnesses,
     body.blockStarts,
     body.sites,
+    machine.isSome(),
+    taskRegister,
+    body.resumes,
   )
+}
+
+// --- The state machine of a task ------------------------------------------------------------------------------------
+
+/**
+ * The stop paths of a task's body are numbered: 0 for the entry, a state for the point after its suspension, and then
+ * one per block for the check where a loop turns around.
+ */
+fn stopPathOfBackEdge(machine: TaskMachine, block: Int): Int {
+  machine.stateCount() + 1 + block
+}
+
+/** `cancelled`: the task's flag, and the stop path a set one jumps to - patched once the paths are written. */
+fn emitCancellationCheck(var emitter: Emitter, var body: Body, path: Int) {
+  emitHead emitter, body, Opcode.Cancelled, body.taskRegister, 0, 0
+  body.stopPatches.append((body.code.length(), path))
+  emitTail body, path
+}
+
+/**
+ * After the last block, every stop path: the releases of what is live where the machine stops - the same values a
+ * `return` there would let go of (`ir/suspension.trb`) - and `stop`, which ends the task as cancelled.
+ */
+fn emitStopPaths(var emitter: Emitter, var body: Body, program: IrProgram, machine: TaskMachine) {
+  var starts: Map<Int, Int> = [:]
+  var paths: List<(Int, List<Slot>)> = [(0, machine.entry)]
+  for state in 1..machine.stateCount() + 1 {
+    paths.append((state, machine.resumes[state]))
+  }
+  for block in 0..machine.backEdges.length() {
+    if machine.isBackEdge(block) {
+      paths.append((stopPathOfBackEdge(machine, block), machine.backEdgeReleases[block]))
+    }
+  }
+  for (path, releases) in paths {
+    starts.set path, body.code.length()
+    for slot in releases {
+      body.scratch = body.firstScratch
+      emitInstruction emitter, body, program, Instruction.Release(slot)
+    }
+    emitHead emitter, body, Opcode.Stop, 0, 0, 0
+  }
+  for (position, path) in body.stopPatches {
+    body.code.set(position, starts.get(path) ?? 0)
+  }
+}
+
+/**
+ * `TaskNew`: the task block over the kernel's one resume function, with room for the frame of the body - its slots and
+ * its task register, the words a suspension saves - every argument moved into the slot of its parameter, and the task
+ * queued, pinned to the worker that makes it.
+ */
+fn emitTaskNew(
+  var emitter: Emitter,
+  var body: Body,
+  program: IrProgram,
+  target: Slot,
+  resume: FunctionId,
+  result: ElementId?,
+  arguments: List<Argument>,
+) {
+  if !program.hasFunction(resume) {
+    report emitter, "a task over a function that is not in the program"
+    return
+  }
+  const chunk = emitter.chunks.get(resume.value) ?? (0 - 1)
+  if chunk < 0 {
+    report emitter, "a task over a function that is not emitted"
+    return
+  }
+  const started = program.functionAt resume
+  const (offsets, frameWords) = savedFrameOf emitter, started
+  var placed: List<Int> = []
+  for index in 0..arguments.length() {
+    const slot = parameterSlotOf started, index
+    if slot < 0 {
+      report emitter, "a task whose body has no slot for an argument"
+      return
+    }
+    placed.append operand(emitter, body, program, arguments[index].slot)
+    placed.append offsets[slot]
+    placed.append emitter.tables.widthOf(typeOf(body, arguments[index].slot))
+  }
+  const element = match result {
+    Some(found) => emitter.elementBase + found.value
+    None => 0 - 1
+  }
+  const register = targetOf emitter, body, target
+  var operands = [register, chunk, frameWords, element, arguments.length()]
+  operands.appendAll placed
+  emitKernel emitter, body, kernelNumberOf(KernelOperation.TaskNew), operands
+}
+
+/**
+ * The register of every slot of a task's body and how many words a suspension saves: the slots, then the task register.
+ * It is the layout [emitChunk] gives the body, computed again for a `TaskNew` that may come before it.
+ */
+fn savedFrameOf(emitter: Emitter, function: IrFunction): (List<Int>, Int) {
+  var offsets: List<Int> = []
+  var cursor = 0
+  for index in 0..function.slots.length() {
+    offsets.append cursor
+    var width = if isReferenceRole(function, function.slots[index].role) {
+      1
+    } else {
+      emitter.tables.widthOf function.slots[index].annotation
+    }
+    if width < 1 {
+      width = 1
+    }
+    cursor = cursor + width
+  }
+  (offsets, cursor + 1)
 }
 
 /** The location an instruction carries, where it carries one: what a stop of a script names (SCRIPTS.md section 6). */
@@ -1045,7 +1215,14 @@ fn placeOf(var emitter: Emitter, var body: Body, program: IrProgram, reference: 
         pending = flushOffset steps, pending
         const register = operand emitter, body, program, index
         const constant = constantOffset emitter, program, missing
-        steps.append PlaceStep.Element(register, constant, locationIndex(emitter, program, at))
+        const location = locationIndex emitter, program, at
+        // An array holds its items inline: the step is an offset of the index times the item's words, checked against
+        // the size - always, where the range analysis let the C back end drop the comparison, because it cannot fail
+        if const .FixedArray(_, size) = program.typeAt(current) {
+          steps.append PlaceStep.Item(register, size, emitter.tables.widthOf(item), constant, location)
+        } else {
+          steps.append PlaceStep.Element(register, constant, location)
+        }
         current = item
       }
       .Contents(_) => report emitter, "a `contents` step, which the lowering never writes"
@@ -1208,7 +1385,7 @@ fn emitInstruction(var emitter: Emitter, var body: Body, program: IrProgram, ins
       emitHead emitter, body, Opcode.Store, place, from, 0
     }
     .Tag(target, source) => emitTag emitter, body, program, target, source
-    .ArrayNew(_, _) => report emitter, "an `Array<Item, Size>` value"
+    .ArrayNew(target, items) => emitArrayNew emitter, body, program, target, items
     .Closure(target, function, captures, _) => emitClosure emitter, body, program, target, function, captures
     .BoxNew(_, _) => report emitter, "a box built by an instruction instead of by a `construct`"
     .TraitValue(target, value, tables) => emitTraitValue emitter, body, program, target, value, tables
@@ -1227,8 +1404,23 @@ fn emitInstruction(var emitter: Emitter, var body: Body, program: IrProgram, ins
       const location = locationIndex emitter, program, at
       emitKernel emitter, body, kernelNumberOf(KernelOperation.Panic), [register, location]
     }
-    .Suspend(_, _, _) => report emitter, "a suspension of a task"
-    .TaskNew(_, _, _, _) => report emitter, "a task"
+    .Suspend(state, awaited, observes) => {
+      if body.taskRegister < 0 {
+        report emitter, "a suspension outside the body of a task"
+        return
+      }
+      // `suspend` records the state and waits; where the answer was there already it goes on at `resume`, which is also
+      // where the scheduler resumes the task at this state: the cancellation check, then the outcome read once. An
+      // `await()` takes over the cancellation of the task it waited for, a `result()` only observes it
+      const register = operand emitter, body, program, awaited
+      emitHead emitter, body, Opcode.Suspend, body.taskRegister, register, state
+      emitTail body, flagOf(observes)
+      body.resumes.set state, body.code.length()
+      emitHead emitter, body, Opcode.Resume, body.taskRegister, 0, 0
+      body.stopPatches.append((body.code.length(), state))
+      emitTail body, state
+    }
+    .TaskNew(target, resume, result, arguments) => emitTaskNew emitter, body, program, target, resume, result, arguments
     .ChannelNew(target, capacity, item, at) => {
       const size = operand emitter, body, program, capacity
       const register = targetOf emitter, body, target
@@ -1442,7 +1634,13 @@ fn emitRuntimeCall(
     operands.append argumentRegister(emitter, body, program, argument)
   }
   operands.append location
-  emitKernel(emitter, body, kernelNativeBase + index, operands)
+  // A slice of a list whose items may hold an object with a destructor copies them, as the C back end's does
+  // (docs/design/DESTRUCTORS.md 2a): the kernel's `torb_list_slice_copied`, with the operands of the thunk it replaces
+  if symbol == "torb_list_slice" && holdsCloser(emitter, program, function.signature.result) {
+    emitKernel emitter, body, kernelNumberOf(KernelOperation.ListSliceCopied), operands
+  } else {
+    emitKernel(emitter, body, kernelNativeBase + index, operands)
+  }
   // The runtime answers a number of the other sign in the same width: the C cast the C back end writes around the call
   if !conversion.isEmpty() {
     if const Some(slot) = target {
@@ -1458,6 +1656,19 @@ fn emitRuntimeCall(
       }
     }
   }
+}
+
+/** Whether the items of the list a runtime function answers may hold an object with a destructor. */
+fn holdsCloser(emitter: Emitter, program: IrProgram, result: IrTypeId): Bool {
+  if emitter.closing.isEmpty() {
+    return false
+  }
+  if const .Runtime(_, arguments) = program.typeAt(result) {
+    if const Some(item) = arguments.first() {
+      return emitter.closing.holds item
+    }
+  }
+  false
 }
 
 // --- Intrinsics -----------------------------------------------------------------------------------------------------
@@ -1864,6 +2075,33 @@ fn emitConstruct(
   }
 }
 
+/**
+ * `ArrayNew`: the items moved into their slots one after the other, or every slot zero for an array that `filled` or
+ * `generated` fills afterwards - the empty value of every item, which owns no count.
+ */
+fn emitArrayNew(var emitter: Emitter, var body: Body, program: IrProgram, target: Slot, items: List<Argument>) {
+  const width = emitter.tables.widthOf typeOf(body, target)
+  const item = match program.typeAt(typeOf(body, target)) {
+    .FixedArray(found, _) => emitter.tables.widthOf found
+    _ => {
+      report emitter, "an array built into a slot that is no array"
+      return
+    }
+  }
+  var registers: List<Int> = []
+  for argument in items {
+    registers.append operand(emitter, body, program, argument.slot)
+  }
+  const register = targetOf emitter, body, target
+  if registers.isEmpty() {
+    emitHead emitter, body, Opcode.Zero, register, width, 0
+    return
+  }
+  for index in 0..registers.length() {
+    emitHead(emitter, body, Opcode.Move, register + index * item, registers[index], item)
+  }
+}
+
 /** The positions in `Layout.fields` the fields of one `Construct` go to: all of them, or the common ones and a group. */
 fn constructedPositions(shape: Layout, variant: Int): List<Int> {
   var positions: List<Int> = []
@@ -2072,6 +2310,16 @@ fn emitTerminator(var emitter: Emitter, var body: Body, program: IrProgram, term
       emitBlockTarget body, otherwise
     }
     .Return(value) => {
+      // A task's body finishes: its value moves into the task block's result slot
+      if body.taskRegister >= 0 {
+        const width = resultWidthOf emitter, program, body.function.signature.result
+        const register = match value {
+          Some(argument) => if width == 0 { 0 } else { operand emitter, body, program, argument.slot }
+          None => 0
+        }
+        emitHead emitter, body, Opcode.Finish, body.taskRegister, register, width
+        return
+      }
       match value {
         Some(argument) => {
           const width = resultWidthOf emitter, program, body.function.signature.result
