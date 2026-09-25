@@ -24,7 +24,7 @@
  * (`torb_platform_system_path`). The POSIX half needs none of it: a path is bytes there and a UTF-8 `String` is bytes.
  */
 
-/* The POSIX half calls POSIX 2008 (`clock_gettime`, `nanosleep`, `popen`, `setenv`), which a strict `-std=c11` hides. */
+/* The POSIX half calls POSIX 2008 (`clock_gettime`, `nanosleep`, `setenv`), which a strict `-std=c11` hides. */
 #if !defined(_WIN32) && !defined(_POSIX_C_SOURCE)
 #  define _POSIX_C_SOURCE 200809L
 #endif
@@ -59,14 +59,14 @@
 #else
 #  include <dirent.h>
 #  include <fcntl.h>
+#  include <poll.h>
 #  include <sys/resource.h>
 #  include <sys/stat.h>
 #  include <sys/wait.h>
 #  include <time.h>
 #  include <unistd.h>
 /*
- * The memory limit (`torb_platform_limit_memory`): which resource holds it, the `ulimit` flag of the same resource for
- * a child that is started through the shell, and how large the C allocator made a block.
+ * The memory limit (`torb_platform_limit_memory`): which resource holds it, and how large the C allocator made a block.
  *
  * Linux counts writable private mappings against `RLIMIT_DATA` since 4.7 - the heap, `mmap`ed blocks, thread stacks -
  * and not the address space glibc only reserves (64 MiB per malloc arena, made writable as it is used), which
@@ -78,12 +78,10 @@
 #  if defined(__linux__)
 #    include <malloc.h>
 #    define TORB_MEMORY_RESOURCE RLIMIT_DATA
-#    define TORB_MEMORY_ULIMIT_FLAG "-d"
 #    define TORB_ALLOCATION_SIZE(block) malloc_usable_size(block)
 #  elif defined(__FreeBSD__)
 #    include <malloc_np.h>
 #    define TORB_MEMORY_RESOURCE RLIMIT_AS
-#    define TORB_MEMORY_ULIMIT_FLAG "-v"
 #    define TORB_ALLOCATION_SIZE(block) malloc_usable_size(block)
 #  elif defined(__APPLE__)
 #    include <malloc/malloc.h>
@@ -946,8 +944,6 @@ bool torb_platform_executable_path(char **value, size_t *length) {
  */
 static struct rlimit torb_memory_before;
 static bool torb_memory_lowered = false;
-/** `ulimit -S <flag> <before>; ` - what a command line run through the shell starts with once the limit is lowered. */
-static char torb_memory_shell_prefix[64] = "";
 
 /**
  * The soft limit of `TORB_MEMORY_RESOURCE`, lowered to `bytes` and never raised: a hard limit below `bytes` is already
@@ -970,13 +966,6 @@ bool torb_platform_limit_memory(uint64_t bytes, const char **message) {
     return false;
   }
   torb_memory_lowered = true;
-  if (torb_memory_before.rlim_cur == RLIM_INFINITY) {
-    snprintf(torb_memory_shell_prefix, sizeof torb_memory_shell_prefix, "ulimit -S %s unlimited 2>/dev/null;",
-             TORB_MEMORY_ULIMIT_FLAG);
-  } else {
-    snprintf(torb_memory_shell_prefix, sizeof torb_memory_shell_prefix, "ulimit -S %s %llu 2>/dev/null;",
-             TORB_MEMORY_ULIMIT_FLAG, (unsigned long long)(torb_memory_before.rlim_cur / 1024u));
-  }
   return true;
 }
 
@@ -988,8 +977,6 @@ static void torb_memory_restore_for_child(void) {
 }
 
 #  else
-
-static char torb_memory_shell_prefix[1] = "";
 
 /* No mechanism that fits this system: the runtime counts its own allocations, and that is no failure to report */
 bool torb_platform_limit_memory(uint64_t bytes, const char **message) {
@@ -1117,8 +1104,12 @@ bool torb_platform_write_file(const char *path, const uint8_t *bytes, size_t len
   return true;
 }
 
+/* ================================================================================== running a child process ===== */
+
+#if defined(_WIN32)
+
 /**
- * Room for `needed` more bytes plus the terminator, doubling. Both command line builders below grow the same way.
+ * Room for `needed` more bytes plus the terminator, doubling. The command line below grows this way.
  */
 static void torb_reserve_line(size_t needed, char **into, size_t filled, size_t *capacity) {
   size_t grown = *capacity;
@@ -1135,10 +1126,6 @@ static void torb_reserve_line(size_t needed, char **into, size_t filled, size_t 
   *into = buffer;
   *capacity = grown;
 }
-
-/* ================================================================================== running a child process ===== */
-
-#if defined(_WIN32)
 
 /**
  * One argument of a Windows command line, quoted the way `CommandLineToArgvW` reads it back - which is the rule the
@@ -1486,66 +1473,113 @@ bool torb_platform_run_inheriting(
 
 #else
 
-/**
- * Everything that can still be read from a stream, into a buffer that grows in doublings. Owned: freed with
- * `torb_raw_free(*bytes, *capacity)`. Ends at the end of the stream and at the first failed read.
- */
-static void torb_read_stream(FILE *stream, uint8_t **bytes, size_t *length, size_t *capacity) {
-  size_t bufferCapacity = 65536u;
-  size_t filled = 0u;
-  uint8_t *buffer = (uint8_t *)torb_raw_allocate(bufferCapacity);
-  for (;;) {
-    const size_t read = fread(buffer + filled, 1u, bufferCapacity - filled, stream);
-    filled += read;
-    if (filled < bufferCapacity) {
-      break;
-    }
-    {
-      uint8_t *grown = (uint8_t *)torb_raw_allocate(bufferCapacity * 2u);
-      memcpy(grown, buffer, filled);
-      torb_raw_free(buffer, bufferCapacity);
-      buffer = grown;
-      bufferCapacity *= 2u;
-    }
+/** Where the bytes read from one descriptor go: a buffer that grows in doublings. Owned: freed with `torb_raw_free`. */
+typedef struct torb_collected {
+  uint8_t *bytes;
+  size_t length;
+  size_t capacity;
+} torb_collected;
+
+static void torb_collected_start(torb_collected *collected) {
+  collected->capacity = 4096u;
+  collected->bytes = (uint8_t *)torb_raw_allocate(collected->capacity);
+  collected->length = 0u;
+}
+
+/** One read of what `descriptor` has. False at its end, and at a failure that is not an interruption. */
+static bool torb_collect_some(int descriptor, torb_collected *collected) {
+  ssize_t got;
+  if (collected->length == collected->capacity) {
+    uint8_t *grown = (uint8_t *)torb_raw_allocate(collected->capacity * 2u);
+    memcpy(grown, collected->bytes, collected->length);
+    torb_raw_free(collected->bytes, collected->capacity);
+    collected->bytes = grown;
+    collected->capacity *= 2u;
   }
-  *bytes = buffer;
-  *length = filled;
-  *capacity = bufferCapacity;
+  do {
+    got = read(descriptor, collected->bytes + collected->length, collected->capacity - collected->length);
+  } while (got < 0 && errno == EINTR);
+  if (got <= 0) {
+    return false;
+  }
+  collected->length += (size_t)got;
+  return true;
+}
+
+/** Closes a descriptor that is still open and marks it closed. */
+static void torb_close_descriptor(int *descriptor) {
+  if (*descriptor >= 0) {
+    close(*descriptor);
+    *descriptor = -1;
+  }
 }
 
 /**
- * One argument for `/bin/sh`, in single quotes, which is the one quoting a POSIX shell does not interpret at all. A
- * single quote inside the argument ends the run and is written as `'\''`.
+ * The input of a child as a file: a temporary one, removed from the directory at once, with `bytes` in it and its
+ * offset back at the start. The open descriptor keeps it alive until the child and this process have closed it. -1
+ * with the reason in `*message` where it cannot be made.
+ *
+ * A file and not a pipe, because a child that ends without reading all of a pipe makes the next write of this process
+ * a `SIGPIPE`, which ends the process - and a file is never full, so feeding it cannot wait for the child either.
  */
-static void torb_quote_argument(const char *argument, char **into, size_t *filled, size_t *capacity) {
-  size_t index;
-  const size_t length = strlen(argument);
-  /* Two quotes, four bytes for every quote of the argument, and one space in front of it */
-  torb_reserve_line(length * 4u + 4u, into, *filled, capacity);
-  (*into)[(*filled)++] = ' ';
-  (*into)[(*filled)++] = '\'';
-  for (index = 0u; index < length; index++) {
-    if (argument[index] == '\'') {
-      (*into)[(*filled)++] = '\'';
-      (*into)[(*filled)++] = '\\';
-      (*into)[(*filled)++] = '\'';
-      (*into)[(*filled)++] = '\'';
+static int torb_input_file(const uint8_t *bytes, size_t length, const char **message) {
+  char path[] = "/tmp/torb-input-XXXXXX";
+  size_t written = 0u;
+  const int file = mkstemp(path);
+  if (file < 0) {
+    *message = strerror(errno);
+    return -1;
+  }
+  (void)unlink(path);
+  while (written < length) {
+    const ssize_t step = write(file, bytes + written, length - written);
+    if (step < 0 && errno == EINTR) {
       continue;
     }
-    (*into)[(*filled)++] = argument[index];
+    if (step <= 0) {
+      *message = "the input for the child process could not be written to a temporary file";
+      close(file);
+      return -1;
+    }
+    written += (size_t)step;
   }
-  (*into)[(*filled)++] = '\'';
-  (*into)[*filled] = '\0';
+  if (lseek(file, 0, SEEK_SET) != 0) {
+    *message = strerror(errno);
+    close(file);
+    return -1;
+  }
+  return file;
 }
 
 /**
- * The same, through `popen`, which is `/bin/sh -c`. A shell here is a compromise the Windows half no longer makes: a
- * `fork` plus `execvp` would keep the promise of `std/process` exactly, and single quotes keep it in practice, because
- * nothing inside them is interpreted. It is `Process.start`'s job (7.3) to make both platforms shell free.
+ * In the child between `fork` and `exec`: `from` becomes the descriptor `to`. Where the two are one already (this
+ * process was started with that stream closed, and the pipe took its number) only the close-on-exec flag goes, which
+ * `dup2` would otherwise have cleared. Async-signal-safe.
+ */
+static bool torb_child_descriptor(int from, int to) {
+  if (from == to) {
+    return fcntl(to, F_SETFD, 0) == 0;
+  }
+  return dup2(from, to) == to;
+}
+
+/**
+ * A child process, run to its end, with its two output streams collected - through `fork` plus `execvp` and a pipe
+ * each, and through **no shell at all**, like the Windows half above: the arguments are handed over as the array they
+ * are, so nothing about them is interpreted and nothing has to be quoted.
  *
- * Standard output comes through `popen`'s pipe and standard error goes into a temporary file the shell redirects it to,
- * read and removed once the child has ended: two pipes would need two readers at once, and a file never makes the child
- * wait. Where no temporary file can be made, both streams go into the pipe and the errors come back empty.
+ * It went through `popen` - `/bin/sh -c` with every argument in single quotes - and that made the platforms disagree:
+ * a program that was nowhere was the shell's exit code 127 and not a failure, which is the difference `findCompiler`
+ * reads and the conformance suite asserts (`files`, `process-run-input`).
+ *
+ * A program that could not be started has to be told apart from one that ran and left with 127, and after `fork` the
+ * child cannot answer in a return value any more. So it answers through a pipe that is closed on a successful `exec`:
+ * bytes on it mean the `exec` failed and carry its `errno`, and end of file means the program is running.
+ *
+ * The two output streams are two pipes, read as they fill with `poll`, so a child that writes much to either one never
+ * waits for a reader. `input` `NULL` hands the child this process's own standard input; otherwise it reads a temporary
+ * file with the bytes in it (`torb_input_file`). Every descriptor made here is closed on `exec`, so a child that
+ * another thread starts at the same moment keeps none of these pipes open.
  */
 bool torb_platform_run_process(
   const char *command,
@@ -1562,127 +1596,135 @@ bool torb_platform_run_process(
   size_t *errorsCapacity,
   const char **message
 ) {
-  size_t lineCapacity = 512u;
-  size_t filled = 0u;
-  char *line = (char *)torb_raw_allocate(lineCapacity);
-  size_t index;
-  FILE *pipe;
-  int status;
-  char errorsPath[] = "/tmp/torb-errors-XXXXXX";
-  char inputPath[] = "/tmp/torb-input-XXXXXX";
+  const size_t argumentBytes = (count + 2u) * sizeof(char *);
+  char **argumentValues;
   int inputFile = -1;
-  int errorsFile;
-  /* Input of its own: the bytes in a temporary file the shell redirects the standard input from */
+  int outputPipe[2] = { -1, -1 };
+  int errorsPipe[2] = { -1, -1 };
+  int report[2] = { -1, -1 };
+  torb_collected outputs;
+  torb_collected errorOutputs;
+  pid_t child;
+  int status = 0;
+  int failed = 0;
+  ssize_t told;
+  size_t index;
   if (input != NULL) {
-    size_t written = 0u;
-    inputFile = mkstemp(inputPath);
-    while (inputFile >= 0 && written < inputLength) {
-      const ssize_t step = write(inputFile, input + written, inputLength - written);
-      if (step <= 0) {
-        break;
-      }
-      written += (size_t)step;
-    }
-    if (inputFile < 0 || written < inputLength) {
-      *message = "the input for the child process could not be written to a temporary file";
-      if (inputFile >= 0) {
-        close(inputFile);
-        unlink(inputPath);
-      }
-      torb_raw_free(line, lineCapacity);
+    inputFile = torb_input_file(input, inputLength, message);
+    if (inputFile < 0) {
       return false;
     }
-    close(inputFile);
+    (void)fcntl(inputFile, F_SETFD, FD_CLOEXEC);
   }
-  errorsFile = mkstemp(errorsPath);
-  line[0] = '\0';
-  /* The shell gives the child the memory limit back that this process lowered for itself, if it did */
-  if (torb_memory_shell_prefix[0] != '\0') {
-    filled = strlen(torb_memory_shell_prefix);
-    torb_reserve_line(filled, &line, 0u, &lineCapacity);
-    memcpy(line, torb_memory_shell_prefix, filled + 1u);
+  if (pipe(outputPipe) != 0 || pipe(errorsPipe) != 0 || pipe(report) != 0) {
+    *message = strerror(errno);
+    torb_close_descriptor(&inputFile);
+    for (index = 0u; index < 2u; index++) {
+      torb_close_descriptor(&outputPipe[index]);
+      torb_close_descriptor(&errorsPipe[index]);
+      torb_close_descriptor(&report[index]);
+    }
+    return false;
   }
-  torb_quote_argument(command, &line, &filled, &lineCapacity);
+  for (index = 0u; index < 2u; index++) {
+    (void)fcntl(outputPipe[index], F_SETFD, FD_CLOEXEC);
+    (void)fcntl(errorsPipe[index], F_SETFD, FD_CLOEXEC);
+    (void)fcntl(report[index], F_SETFD, FD_CLOEXEC);
+  }
+  argumentValues = (char **)torb_raw_allocate(argumentBytes);
+  argumentValues[0] = (char *)command;
   for (index = 0u; index < count; index++) {
-    torb_quote_argument(arguments[index], &line, &filled, &lineCapacity);
+    argumentValues[index + 1u] = (char *)arguments[index];
   }
-  if (inputFile >= 0) {
-    torb_reserve_line(2u, &line, filled, &lineCapacity);
-    memcpy(line + filled, " <", 3u);
-    filled += 2u;
-    torb_quote_argument(inputPath, &line, &filled, &lineCapacity);
+  argumentValues[count + 1u] = NULL;
+  child = fork();
+  if (child == 0) {
+    if ((inputFile < 0 || torb_child_descriptor(inputFile, 0)) && torb_child_descriptor(outputPipe[1], 1)
+        && torb_child_descriptor(errorsPipe[1], 2)) {
+      torb_memory_restore_for_child();
+      execvp(command, argumentValues);
+    }
+    failed = errno;
+    (void)!write(report[1], &failed, sizeof(failed));
+    _exit(127);
   }
-  if (errorsFile >= 0) {
-    close(errorsFile);
-    torb_reserve_line(3u, &line, filled, &lineCapacity);
-    memcpy(line + filled, " 2>", 4u);
-    filled += 3u;
-    torb_quote_argument(errorsPath, &line, &filled, &lineCapacity);
+  if (child < 0) {
+    *message = strerror(errno);
+  }
+  torb_raw_free(argumentValues, argumentBytes);
+  torb_close_descriptor(&inputFile);
+  torb_close_descriptor(&outputPipe[1]);
+  torb_close_descriptor(&errorsPipe[1]);
+  torb_close_descriptor(&report[1]);
+  if (child < 0) {
+    torb_close_descriptor(&outputPipe[0]);
+    torb_close_descriptor(&errorsPipe[0]);
+    torb_close_descriptor(&report[0]);
+    return false;
+  }
+  do {
+    told = read(report[0], &failed, sizeof(failed));
+  } while (told < 0 && errno == EINTR);
+  torb_close_descriptor(&report[0]);
+  torb_collected_start(&outputs);
+  torb_collected_start(&errorOutputs);
+  /* Both streams until both have ended; a child that could not be started has closed them already */
+  while (outputPipe[0] >= 0 || errorsPipe[0] >= 0) {
+    struct pollfd watched[2];
+    watched[0].fd = outputPipe[0];
+    watched[0].events = POLLIN;
+    watched[0].revents = 0;
+    watched[1].fd = errorsPipe[0];
+    watched[1].events = POLLIN;
+    watched[1].revents = 0;
+    if (poll(watched, 2u, -1) < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      break;
+    }
+    if (watched[0].revents != 0 && !torb_collect_some(outputPipe[0], &outputs)) {
+      torb_close_descriptor(&outputPipe[0]);
+    }
+    if (watched[1].revents != 0 && !torb_collect_some(errorsPipe[0], &errorOutputs)) {
+      torb_close_descriptor(&errorsPipe[0]);
+    }
+  }
+  torb_close_descriptor(&outputPipe[0]);
+  torb_close_descriptor(&errorsPipe[0]);
+  while (waitpid(child, &status, 0) < 0) {
+    if (errno != EINTR) {
+      *message = strerror(errno);
+      torb_raw_free(outputs.bytes, outputs.capacity);
+      torb_raw_free(errorOutputs.bytes, errorOutputs.capacity);
+      return false;
+    }
+  }
+  if (told == (ssize_t)sizeof(failed)) {
+    *message = strerror(failed);
+    torb_raw_free(outputs.bytes, outputs.capacity);
+    torb_raw_free(errorOutputs.bytes, errorOutputs.capacity);
+    return false;
+  }
+  /* The exit code is in the high byte of `wait`'s status, and a child killed by a signal has none at all */
+  if (WIFEXITED(status)) {
+    *code = (int64_t)WEXITSTATUS(status);
   } else {
-    const char *tail = " 2>&1";
-    torb_reserve_line(strlen(tail), &line, filled, &lineCapacity);
-    memcpy(line + filled, tail, strlen(tail) + 1u);
-    filled += strlen(tail);
+    *code = (int64_t)(128 + (WIFSIGNALED(status) ? WTERMSIG(status) : 0));
   }
-  pipe = popen(line, "r");
-  if (pipe == NULL) {
-    *message = strerror(errno);
-    torb_raw_free(line, lineCapacity);
-    if (errorsFile >= 0) {
-      unlink(errorsPath);
-    }
-    if (inputFile >= 0) {
-      unlink(inputPath);
-    }
-    return false;
-  }
-  torb_read_stream(pipe, output, length, capacity);
-  status = pclose(pipe);
-  if (inputFile >= 0) {
-    unlink(inputPath);
-  }
-  {
-    FILE *written = errorsFile >= 0 ? fopen(errorsPath, "rb") : NULL;
-    if (written != NULL) {
-      torb_read_stream(written, errors, errorsLength, errorsCapacity);
-      fclose(written);
-    } else {
-      *errorsCapacity = 16u;
-      *errors = (uint8_t *)torb_raw_allocate(*errorsCapacity);
-      *errorsLength = 0u;
-    }
-    if (errorsFile >= 0) {
-      unlink(errorsPath);
-    }
-  }
-  if (status != -1) {
-    /* The exit code is in the high byte of `wait`'s status, and a child killed by a signal has none at all */
-    if (WIFEXITED(status)) {
-      status = WEXITSTATUS(status);
-    } else {
-      status = 128 + (WIFSIGNALED(status) ? WTERMSIG(status) : 0);
-    }
-  }
-  torb_raw_free(line, lineCapacity);
-  if (status == -1) {
-    *message = strerror(errno);
-    torb_raw_free(*output, *capacity);
-    torb_raw_free(*errors, *errorsCapacity);
-    return false;
-  }
-  *code = (int64_t)status;
+  *output = outputs.bytes;
+  *length = outputs.length;
+  *capacity = outputs.capacity;
+  *errors = errorOutputs.bytes;
+  *errorsLength = errorOutputs.length;
+  *errorsCapacity = errorOutputs.capacity;
   return true;
 }
 
 /**
- * The same child process, run to its end with **this process's own three streams** instead of a pipe, and through
- * **no shell at all**: `fork` plus `execvp` hands the arguments over as the array they are, so nothing about them is
- * interpreted and nothing has to be quoted. That is the promise `std/process` makes and the one the collecting half
- * above still keeps only in practice.
- *
- * A program that could not be started has to be told apart from one that ran and left with 127, and after `fork` the
- * child cannot answer in a return value any more. So it answers through a pipe that is closed on a successful `exec`:
- * bytes on it mean the `exec` failed and carry its `errno`, and end of file means the program is running.
+ * The same child process, run to its end with **this process's own three streams** instead of pipes, and through
+ * no shell either. A program that could not be started is told apart from one that ran and left with 127 the same way
+ * as above: through the pipe that a successful `exec` closes.
  */
 bool torb_platform_run_inheriting(
   const char *command,

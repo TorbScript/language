@@ -280,13 +280,12 @@ file - which an OS that locks open files (Windows) would refuse if the handle we
   (`torb_text_privatize` and its siblings, `task.c`, "What crosses a worker").
 - **No small-string optimization**, on purpose: it doubles the code path of every string operation for a win the
   compiler does not need, whose strings are slices of source files.
-- **A child process goes through a shell on POSIX and through none on Windows.** `Process.run` is `CreateProcess` plus one
-  pipe on Windows - `_popen` could not work, because `cmd` re-parses the quotes of the command line by a rule that
-  depends on where the first quote stands, and `"gcc" "--version"` arrives as one command *named* `gcc" "--version`. On
-  POSIX it is still `popen`, which is `/bin/sh -c`, with every argument in single quotes so that nothing inside one is
-  interpreted. Two consequences of the difference, both on 5.14's list: a program that cannot be started at all is a
-  **failure** on Windows (what `std/process` promises) and the shell's own exit code on POSIX, and `fork` plus `execvp`
-  is what would make POSIX shell free as well - which is `Process.start`'s job at 7.3.
+- **A child process goes through no shell, on any platform.** `Process.run` is `CreateProcess` plus one pipe on
+  Windows - `_popen` could not work, because `cmd` re-parses the quotes of the command line by a rule that depends on
+  where the first quote stands, and `"gcc" "--version"` arrives as one command *named* `gcc" "--version`. On POSIX it is
+  `fork` plus `execvp` with one pipe per output stream, read with `poll`; it was `popen` (`/bin/sh -c`) until the
+  first CI run on Linux showed what that costs: a program that cannot be started at all was the shell's exit code 127
+  there and a **failure** on Windows. Now it is a failure everywhere, which is what `std/process` promises.
 - **A `String` printed to a live Windows console truncates at an embedded NUL byte.** `torb_platform_wide` is NUL
   terminated, because every other caller of it hands it a path, which never holds one; `print` reuses it rather than
   duplicating the conversion, so the rare `String` built with a NUL inside it (`U+0000` is otherwise ordinary UTF-8)

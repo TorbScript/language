@@ -97,12 +97,10 @@ TORB_TEST(a_program_that_failed_is_an_exit_code_and_not_an_error) {
 }
 
 /**
- * A command that is nowhere.
- *
- * On Windows this is a **failure** of `run` (`-1` plus a reason), because `CreateProcess` is what looks the program up
- * and it says so - which is the difference `findCompiler` reads and what the interpreter answers for the same call. On
- * POSIX `popen` starts a **shell**, which exists, and the shell reports the missing program with a code of its own; that
- * half becomes a failure too when 7.3 makes `Process.start` shell free there as well.
+ * A command that is nowhere is a **failure** of `run` (`-1` plus a reason) and not an exit code, on every platform:
+ * `CreateProcess` on Windows and `execvp` everywhere else is what looks the program up, and it says so - which is the
+ * difference `findCompiler` reads and what the interpreter answers for the same call. No shell in between turns it into
+ * a code of its own (127).
  */
 TORB_TEST(a_command_that_is_nowhere_cannot_be_started) {
   torb_text command = torb_text_from_cstring("torb-no-such-program-anywhere");
@@ -110,12 +108,8 @@ TORB_TEST(a_command_that_is_nowhere_cannot_be_started) {
   torb_text output = torb_text_empty();
   torb_text failure = torb_text_empty();
 
-#if defined(_WIN32)
   TORB_CHECK_INTEGER(torb_process_run(command, arguments, &output, &failure), -1);
   TORB_CHECK(torb_text_byte_length(failure) > 0u);
-#else
-  TORB_CHECK(torb_process_run(command, arguments, &output, &failure) != 0);
-#endif
 
   torb_text_release(output);
   torb_list_release(arguments);
@@ -210,6 +204,31 @@ TORB_TEST(the_input_a_program_is_fed_is_what_it_reads) {
   torb_text_release(failure);
 }
 
+#if !defined(_WIN32)
+/**
+ * A child that writes more than a pipe holds (64 KiB on Linux, 16 KiB on macOS) to **both** streams, standard error
+ * first, ends, and both arrive whole: they are read as they fill, so the child never waits for a reader that waits for
+ * the other stream. An argument with a single quote in it arrives as it is, because no shell reads it.
+ */
+TORB_TEST(a_program_that_writes_much_to_both_streams_ends) {
+  torb_text command = torb_text_from_cstring("/bin/sh");
+  torb_list arguments = argument_list(
+    "-c", "head -c 300000 /dev/zero | tr '\\0' e >&2; head -c 300000 /dev/zero | tr '\\0' o"
+  );
+  torb_text output = torb_text_empty();
+  torb_text failure = torb_text_empty();
+
+  TORB_CHECK_INTEGER(torb_process_run(command, arguments, &output, &failure), 0);
+  TORB_CHECK_INTEGER(torb_text_byte_length(output), 300000);
+  TORB_CHECK_INTEGER(torb_text_byte_length(failure), 300000);
+
+  torb_text_release(output);
+  torb_list_release(arguments);
+  torb_text_release(command);
+  torb_text_release(failure);
+}
+#endif
+
 void torb_register_process_tests(void) {
   TORB_ADD(a_program_that_ran_answers_its_code_and_its_output);
   TORB_ADD(the_two_streams_of_a_program_come_back_apart);
@@ -218,4 +237,7 @@ void torb_register_process_tests(void) {
   TORB_ADD(a_command_on_the_path_with_one_argument_runs);
   TORB_ADD(an_argument_with_a_space_arrives_as_one_argument);
   TORB_ADD(the_input_a_program_is_fed_is_what_it_reads);
+#if !defined(_WIN32)
+  TORB_ADD(a_program_that_writes_much_to_both_streams_ends);
+#endif
 }
