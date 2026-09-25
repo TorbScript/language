@@ -16,7 +16,9 @@
 # only built to be run once is built with `--profile dev`, which `torb test --native` and `torb run --native` do.
 #
 # Tier B: `tools/conformance.sh` (the conformance suite, and with `--vm` the same suite and `vm-only/` in the bytecode
-# VM), `tools/bootstrap.sh` (the fixpoint: seed -> torb -> torb, byte-identical C), and the C runtime's own tests.
+# VM), the programs of `tests/language/` and `examples/config-dsl` in native binaries that embed the VM
+# (`torb build --embed-vm`), `tools/bootstrap.sh` (the fixpoint: seed -> torb -> torb, byte-identical C), and the C
+# runtime's own tests.
 #
 # A run holds one of the machine-wide gate slots (`tools/gate-slot.sh`, `$TORB_GATE_SLOTS`, default 2) from its first
 # gate to its last, and says so while it waits for one: several checkouts running their gates at once once ran the
@@ -110,6 +112,60 @@ language_programs() {
   [ "$failures" -eq 0 ]
 }
 
+# The same programs in a native binary that embeds the VM (`torb build --embed-vm`, docs/design/VM.md section 11): each
+# built into `build/embed-vm/`, run, and compared with the same `.expected` - and `examples/config-dsl`, whose receiver
+# script runs in the sandbox of the embedded VM, compared with what `torb run` prints for it.
+embedded_programs() {
+  torb=$1
+  failures=0
+  mkdir -p build/embed-vm
+  for program in tests/language/*.trb; do
+    case "$program" in
+      */project.trb) continue ;;
+    esac
+    name=$(basename "$program" .trb)
+    expected="${program%.trb}.expected"
+    if ! built=$("$torb" build --embed-vm "$program" --output "build/embed-vm/$name" 2>&1); then
+      printf '%s\n' "$program did not build with --embed-vm:"
+      printf '%s\n' "$built"
+      failures=$((failures + 1))
+      continue
+    fi
+    binary=$(binary_of "build/embed-vm/$name")
+    if actual=$("$binary" 2>&1); then
+      if ! printf '%s\n' "$actual" | cmp -s - "$expected"; then
+        printf '%s\n' "$program, embedded: the output is not $expected:"
+        printf '%s\n' "$actual" | diff "$expected" - || true
+        failures=$((failures + 1))
+      fi
+    else
+      printf '%s\n' "$program, embedded, failed:"
+      printf '%s\n' "$actual"
+      failures=$((failures + 1))
+    fi
+  done
+  # A program that loads a receiver script and applies it in its sandbox, from its own directory: as `torb run` runs it
+  if built=$("$torb" build --embed-vm examples/config-dsl --output build/embed-vm/config-dsl 2>&1); then
+    binary=$(pwd)/$(binary_of build/embed-vm/config-dsl)
+    case "$torb" in
+      /* | ?:*) runner=$torb ;;
+      *) runner=$(pwd)/$torb ;;
+    esac
+    wanted=$(cd examples/config-dsl && "$runner" run . 2>&1)
+    actual=$(cd examples/config-dsl && "$binary" 2>&1)
+    if [ "$actual" != "$wanted" ]; then
+      printf '%s\n' "examples/config-dsl, embedded, is not what torb run prints:"
+      printf '%s\n' "$actual"
+      failures=$((failures + 1))
+    fi
+  else
+    printf '%s\n' "examples/config-dsl did not build with --embed-vm:"
+    printf '%s\n' "$built"
+    failures=$((failures + 1))
+  fi
+  [ "$failures" -eq 0 ]
+}
+
 tier=${1-}
 case "$tier" in
   a | A) tier=a ;;
@@ -189,6 +245,7 @@ torb=$(binary_of "$torb_path")
 
 gate "conformance suite" sh tools/conformance.sh
 gate "conformance suite in the VM" sh tools/conformance.sh --vm
+gate "tests/language and examples/config-dsl in native binaries (torb build --embed-vm)" embedded_programs "$torb"
 gate "fixpoint (seed -> torb -> torb)" sh tools/bootstrap.sh
 gate "runtime tests" sh runtime/build.sh
 

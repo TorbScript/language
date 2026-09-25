@@ -1,0 +1,580 @@
+/**
+ * A native binary that embeds the VM (docs/design/VM.md section 11): `torb build --embed-vm` encodes the program's
+ * bytecode as text ([programText]), writes it into a module of its own that calls [runEmbedded], and builds that module
+ * natively together with the interpreter. The binary decodes the program when it starts ([programOf]) and runs it as
+ * `torb run` would, on the same runtime - so a program that loads receiver scripts runs them in a sandbox although it
+ * is shipped as one native executable, without `torb` beside it.
+ *
+ * The text is one token per word, separated by spaces: a number, or a text escaped so that it holds no space and is
+ * never empty. It begins with a version, which [programOf] checks.
+ */
+
+use Process from "std/process"
+use BytecodeProgram, Chunk, ParameterEntry, Place, PlaceStep, WitnessEntry, WitnessRootEntry from "../backend/bytecode/format"
+use ConstantPart, Shape, CountedWord, CountedKind, TableEntry, ElementEntry, ElementKind from "../backend/bytecode/format"
+use Location from "../ir/ir"
+use runProgram from "./interpret"
+
+/** The first token of the text: what a binary checks before it reads a word of the program. */
+const version = "torb-bytecode-1"
+
+/**
+ * The entry of an embedded binary: the program decoded and run with the binary's own arguments; the process ends with
+ * the program's exit code, as the `main` of a native build does.
+ */
+public fn runEmbedded(text: String) {
+  const program = match programOf(text) {
+    Some(found) => found
+    None => {
+      printError "internal error: the program embedded in this binary cannot be read"
+      Process.exit 70
+    }
+  }
+  const code = runProgram program, Process.arguments()
+  if code != 0 {
+    Process.exit code
+  }
+}
+
+// --- Writing ---------------------------------------------------------------------------------------------------------
+
+/** The program as text: everything the interpreter loads and runs, and nothing only the disassembly reads. */
+public fn programText(program: BytecodeProgram): String {
+  var out: List<String> = [version]
+  number out, program.chunks.length()
+  for chunk in program.chunks {
+    writeChunk out, chunk
+  }
+  numbers out, program.entries
+  number out, program.entryFiles.length()
+  for file in program.entryFiles {
+    text out, file
+  }
+  number out, program.constants.length()
+  for part in program.constants {
+    writePart out, part
+  }
+  number out, program.constantWords
+  number out, program.shapes.length()
+  for shape in program.shapes {
+    text out, shape.name
+    number out, shape.width
+    writeCounted out, shape.counted
+    number out, shape.tag
+    number out, shape.groups.length()
+    for group in shape.groups {
+      writeCounted out, group
+    }
+    flag out, shape.isReversed
+    number out, shape.closer
+  }
+  number out, program.tables.length()
+  for table in program.tables {
+    text out, table.name
+    numbers out, table.members
+    numbers out, table.nested
+    number out, table.payload
+    number out, table.payloadWidth
+  }
+  number out, program.elements.length()
+  for element in program.elements {
+    text out, element.name
+    number out, element.words
+    match element.kind {
+      .Trivial => number out, 0
+      .TextElement => number out, 1
+      .Counted(shape) => {
+        number out, 2
+        number out, shape
+      }
+      .Narrow(code) => {
+        number out, 3
+        number out, code
+      }
+    }
+    number out, element.equals
+    number out, element.hash
+    flag out, element.comparesByWords
+  }
+  number out, program.locations.length()
+  for location in program.locations {
+    text out, location.path
+    number out, location.line
+    number out, location.column
+  }
+  flag out, program.usesTasks
+  number out, program.entryCellRelease
+  out.joined separator: " "
+}
+
+fn writeChunk(var out: List<String>, chunk: Chunk) {
+  text out, chunk.name
+  number out, chunk.parameters.length()
+  for parameter in chunk.parameters {
+    number out, parameter.offset
+    number out, parameter.width
+    flag out, parameter.isReference
+    number out, parameter.retainedThroughWitness
+    number out, parameter.valueShape
+    number out, parameter.valueWidth
+  }
+  number out, chunk.resultWidth
+  flag out, chunk.takesEnvironment
+  number out, chunk.frameWords
+  number out, chunk.location
+  number out, chunk.code.length()
+  for word in chunk.code {
+    number out, word
+  }
+  number out, chunk.places.length()
+  for place in chunk.places {
+    number out, place.base
+    flag out, place.isThroughReference
+    number out, place.steps.length()
+    for step in place.steps {
+      match step {
+        .Offset(words) => {
+          number out, 0
+          number out, words
+        }
+        .Dereference => number out, 1
+        .Element(index, missing, location) => {
+          number out, 2
+          number out, index
+          number out, missing
+          number out, location
+        }
+        .Item(index, size, width, missing, location) => {
+          number out, 3
+          number out, index
+          number out, size
+          number out, width
+          number out, missing
+          number out, location
+        }
+      }
+    }
+    number out, place.width
+    number out, place.narrow
+  }
+  number out, chunk.witnesses.length()
+  for witness in chunk.witnesses {
+    match witness.root {
+      .Table(table) => {
+        number out, 0
+        number out, table
+      }
+      .Value(place, bound) => {
+        number out, 1
+        number out, place
+        number out, bound
+      }
+    }
+    numbers out, witness.steps
+  }
+  number out, chunk.sites.length()
+  for (offset, location) in chunk.sites {
+    number out, offset
+    number out, location
+  }
+  flag out, chunk.isTask
+  number out, chunk.taskRegister
+  numbers out, chunk.resumes
+}
+
+fn writePart(var out: List<String>, part: ConstantPart) {
+  match part {
+    .Word(value) => {
+      number out, 0
+      number out, value
+    }
+    .Floating(value) => {
+      number out, 1
+      floating out, value
+    }
+    .Text(value) => {
+      number out, 2
+      text out, value
+    }
+    .Block(shape, parts) => {
+      number out, 3
+      number out, shape
+      number out, parts.length()
+      for inside in parts {
+        writePart out, inside
+      }
+    }
+    .Gap(width) => {
+      number out, 4
+      number out, width
+    }
+  }
+}
+
+fn writeCounted(var out: List<String>, words: List<CountedWord>) {
+  number out, words.length()
+  for word in words {
+    number out, word.offset
+    match word.kind {
+      .TextStorage => number out, 0
+      .ListStorage => number out, 1
+      .MapStorage => number out, 2
+      .SetStorage => number out, 3
+      .TaskObject => number out, 4
+      .ChannelObject => number out, 5
+      .FileHandle => number out, 6
+      .Block(contents) => {
+        number out, 7
+        number out, contents
+      }
+      .Environment => number out, 8
+      .Payload => number out, 9
+      .Nested(shape) => {
+        number out, 10
+        number out, shape
+      }
+    }
+  }
+}
+
+fn number(var out: List<String>, value: Int) {
+  out.append "{value}"
+}
+
+fn numbers(var out: List<String>, values: List<Int>) {
+  number out, values.length()
+  for value in values {
+    number out, value
+  }
+}
+
+fn flag(var out: List<String>, value: Bool) {
+  out.append(if value { "1" } else { "0" })
+}
+
+/** A float as the shortest text that reads back as the same number; the three that are no numbers by name. */
+fn floating(var out: List<String>, value: Float) {
+  if value.isNaN() {
+    out.append "nan"
+  } else if value == Float64.infinity {
+    out.append "infinity"
+  } else if value == Float64.negativeInfinity {
+    out.append "-infinity"
+  } else {
+    out.append "{value}"
+  }
+}
+
+/** A text as one token: a backslash, a space, the line breaks and a tab escaped, and the empty text as `\e`. */
+fn text(var out: List<String>, value: String) {
+  if value.isEmpty() {
+    out.append "\\e"
+    return
+  }
+  var escaped: List<String> = []
+  for character in value.chars() {
+    if character == '\\' {
+      escaped.append "\\\\"
+    } else if character == ' ' {
+      escaped.append "\\s"
+    } else if character == '\n' {
+      escaped.append "\\n"
+    } else if character == '\r' {
+      escaped.append "\\r"
+    } else if character == '\t' {
+      escaped.append "\\t"
+    } else {
+      escaped.append "{character}"
+    }
+  }
+  out.append escaped.joined(separator: "")
+}
+
+// --- Reading ---------------------------------------------------------------------------------------------------------
+
+/** The tokens of a program's text and how many of them were read. */
+type Reader {
+  tokens: List<String>
+  var at: Int = 0
+  var broken: Bool = false
+}
+
+/** The program [programText] wrote, or `None` for a text it did not write. */
+public fn programOf(source: String): BytecodeProgram? {
+  var reader = Reader tokens: source.split(" ").toList()
+  if (reader.tokens.get(0) ?? "") != version {
+    return None
+  }
+  reader.at = 1
+  var program = BytecodeProgram()
+  for _ in 0..readNumber(reader) {
+    program.chunks.append readChunk(reader)
+  }
+  program.entries = readNumbers reader
+  for _ in 0..readNumber(reader) {
+    program.entryFiles.append readText(reader)
+  }
+  for _ in 0..readNumber(reader) {
+    program.constants.append readPart(reader)
+  }
+  program.constantWords = readNumber reader
+  for _ in 0..readNumber(reader) {
+    const name = readText reader
+    const width = readNumber reader
+    const counted = readCounted reader
+    const tag = readNumber reader
+    var groups: List<List<CountedWord>> = []
+    for _ in 0..readNumber(reader) {
+      groups.append readCounted(reader)
+    }
+    const isReversed = readFlag reader
+    const closer = readNumber reader
+    program.shapes.append Shape(name, width, counted, tag, groups, isReversed, closer)
+  }
+  for _ in 0..readNumber(reader) {
+    const name = readText reader
+    const members = readNumbers reader
+    const nested = readNumbers reader
+    const payload = readNumber reader
+    const payloadWidth = readNumber reader
+    program.tables.append TableEntry(name, members, nested, payload, payloadWidth)
+  }
+  for _ in 0..readNumber(reader) {
+    const name = readText reader
+    const words = readNumber reader
+    const kind = match readNumber(reader) {
+      0 => ElementKind.Trivial
+      1 => ElementKind.TextElement
+      2 => ElementKind.Counted readNumber(reader)
+      _ => ElementKind.Narrow readNumber(reader)
+    }
+    const equals = readNumber reader
+    const hash = readNumber reader
+    const comparesByWords = readFlag reader
+    program.elements.append ElementEntry(name, words, kind, equals, hash, comparesByWords)
+  }
+  for _ in 0..readNumber(reader) {
+    const path = readText reader
+    const line = readNumber reader
+    const column = readNumber reader
+    program.locations.append Location(path, line, column)
+  }
+  program.usesTasks = readFlag reader
+  program.entryCellRelease = readNumber reader
+  if reader.broken || reader.at != reader.tokens.length() {
+    return None
+  }
+  Some program
+}
+
+fn readChunk(var reader: Reader): Chunk {
+  const name = readText reader
+  var parameters: List<ParameterEntry> = []
+  for _ in 0..readNumber(reader) {
+    const offset = readNumber reader
+    const width = readNumber reader
+    const isReference = readFlag reader
+    const retained = readNumber reader
+    const valueShape = readNumber reader
+    const valueWidth = readNumber reader
+    parameters.append ParameterEntry(offset, width, isReference, retained, valueShape, valueWidth)
+  }
+  const resultWidth = readNumber reader
+  const takesEnvironment = readFlag reader
+  const frameWords = readNumber reader
+  const location = readNumber reader
+  const length = readNumber reader
+  var code: ArrayList<Int> = ArrayList.withCapacity length
+  for _ in 0..length {
+    code.append readNumber(reader)
+  }
+  var places: List<Place> = []
+  for _ in 0..readNumber(reader) {
+    const base = readNumber reader
+    const isThroughReference = readFlag reader
+    var steps: List<PlaceStep> = []
+    for _ in 0..readNumber(reader) {
+      const step = match readNumber(reader) {
+        0 => PlaceStep.Offset readNumber(reader)
+        1 => PlaceStep.Dereference
+        2 => {
+          const index = readNumber reader
+          const missing = readNumber reader
+          PlaceStep.Element index, missing, readNumber(reader)
+        }
+        _ => {
+          const index = readNumber reader
+          const size = readNumber reader
+          const width = readNumber reader
+          const missing = readNumber reader
+          PlaceStep.Item index, size, width, missing, readNumber(reader)
+        }
+      }
+      steps.append step
+    }
+    const width = readNumber reader
+    const narrow = readNumber reader
+    places.append Place(base, isThroughReference, steps, width, narrow)
+  }
+  var witnesses: List<WitnessEntry> = []
+  for _ in 0..readNumber(reader) {
+    const root = match readNumber(reader) {
+      0 => WitnessRootEntry.Table readNumber(reader)
+      _ => {
+        const place = readNumber reader
+        WitnessRootEntry.Value place, readNumber(reader)
+      }
+    }
+    witnesses.append WitnessEntry(root, readNumbers(reader))
+  }
+  var sites: List<(Int, Int)> = []
+  for _ in 0..readNumber(reader) {
+    const offset = readNumber reader
+    sites.append((offset, readNumber(reader)))
+  }
+  const isTask = readFlag reader
+  const taskRegister = readNumber reader
+  const resumes = readNumbers reader
+  Chunk(
+    name: name,
+    parameters: parameters,
+    resultWidth: resultWidth,
+    takesEnvironment: takesEnvironment,
+    frameWords: frameWords,
+    location: location,
+    code: code,
+    places: places,
+    witnesses: witnesses,
+    sites: sites,
+    isTask: isTask,
+    taskRegister: taskRegister,
+    resumes: resumes,
+  )
+}
+
+fn readPart(var reader: Reader): ConstantPart {
+  match readNumber(reader) {
+    0 => ConstantPart.Word readNumber(reader)
+    1 => ConstantPart.Floating readFloating(reader)
+    2 => ConstantPart.Text readText(reader)
+    3 => {
+      const shape = readNumber reader
+      var parts: List<ConstantPart> = []
+      for _ in 0..readNumber(reader) {
+        parts.append readPart(reader)
+      }
+      ConstantPart.Block shape, parts
+    }
+    _ => ConstantPart.Gap readNumber(reader)
+  }
+}
+
+fn readCounted(var reader: Reader): List<CountedWord> {
+  var words: List<CountedWord> = []
+  for _ in 0..readNumber(reader) {
+    const offset = readNumber reader
+    const kind = match readNumber(reader) {
+      0 => CountedKind.TextStorage
+      1 => CountedKind.ListStorage
+      2 => CountedKind.MapStorage
+      3 => CountedKind.SetStorage
+      4 => CountedKind.TaskObject
+      5 => CountedKind.ChannelObject
+      6 => CountedKind.FileHandle
+      7 => CountedKind.Block readNumber(reader)
+      8 => CountedKind.Environment
+      9 => CountedKind.Payload
+      _ => CountedKind.Nested readNumber(reader)
+    }
+    words.append CountedWord(offset, kind)
+  }
+  words
+}
+
+fn next(var reader: Reader): String {
+  const token = match reader.tokens.get(reader.at) {
+    Some(found) => found
+    None => {
+      reader.broken = true
+      return "0"
+    }
+  }
+  reader.at = reader.at + 1
+  token
+}
+
+fn readNumber(var reader: Reader): Int {
+  const token = next reader
+  match Int.tryFrom(token) {
+    Ok(value) => value
+    Fail(_) => {
+      reader.broken = true
+      0
+    }
+  }
+}
+
+fn readNumbers(var reader: Reader): List<Int> {
+  var values: List<Int> = []
+  for _ in 0..readNumber(reader) {
+    values.append readNumber(reader)
+  }
+  values
+}
+
+fn readFlag(var reader: Reader): Bool {
+  readNumber(reader) != 0
+}
+
+fn readFloating(var reader: Reader): Float {
+  const token = next reader
+  if token == "nan" {
+    return Float64.nan
+  }
+  if token == "infinity" {
+    return Float64.infinity
+  }
+  if token == "-infinity" {
+    return Float64.negativeInfinity
+  }
+  match Float.tryFrom(token) {
+    Ok(value) => value
+    Fail(_) => {
+      reader.broken = true
+      0.0
+    }
+  }
+}
+
+fn readText(var reader: Reader): String {
+  const token = next reader
+  if token == "\\e" {
+    return ""
+  }
+  if !token.contains("\\") {
+    return token
+  }
+  var characters: List<Char> = []
+  var escaping = false
+  for character in token.chars() {
+    if escaping {
+      escaping = false
+      if character == 's' {
+        characters.append ' '
+      } else if character == 'n' {
+        characters.append '\n'
+      } else if character == 'r' {
+        characters.append '\r'
+      } else if character == 't' {
+        characters.append '\t'
+      } else {
+        characters.append character
+      }
+    } else if character == '\\' {
+      escaping = true
+    } else {
+      characters.append character
+    }
+  }
+  String.from characters
+}

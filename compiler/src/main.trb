@@ -22,6 +22,7 @@ use check, Checked from "./semantics/check"
 use Lowering from "./ir/lower/context"
 use lowerChecked, loweredText, loweredProblems, statisticsLines from "./ir/lower/lower"
 use BuildOptions, Profile, profileNamed, build from "./cli/build"
+use buildEmbedded from "./cli/embed"
 use problemsOfEveryTarget from "./cli/targets"
 use BuildTarget, everyTarget, targetNamed from "./project/target"
 use RunOptions, runProgram from "./cli/run"
@@ -57,6 +58,7 @@ fn printUsage() {
   printError "                         --emit-c: write the C and stop, which needs no C compiler"
   printError "                         --output <file>: where the binary goes (the C is written next to it)"
   printError "                         --target <os>-<arch>: what OperatingSystem.current answers (default: this machine)"
+  printError "                         --embed-vm: a native binary of the VM that runs the program's bytecode"
   printError "  torb run <path> [...]  Run a file or a project in the bytecode VM, which needs no C compiler"
   printError "                         everything behind the path is the program's own Process.arguments()"
   printError "                         --native: in front of the path, build it into build/run/ and run the binary"
@@ -390,6 +392,7 @@ fn buildOptionsOf(arguments: List<String>): BuildOptions? {
   const choice = profileChoiceOf(arguments, Profile.Release)?
   var paths: List<String> = []
   var onlyC = false
+  var embedsMachine = false
   var output = ""
   var wantsOutput = false
   var target: BuildTarget? = None
@@ -416,6 +419,10 @@ fn buildOptionsOf(arguments: List<String>): BuildOptions? {
       onlyC = true
       continue
     }
+    if argument == "--embed-vm" {
+      embedsMachine = true
+      continue
+    }
     if argument == "--output" {
       wantsOutput = true
       continue
@@ -431,7 +438,7 @@ fn buildOptionsOf(arguments: List<String>): BuildOptions? {
     return None
   }
   const given = if paths.isEmpty() { ["."] } else { paths }
-  Some BuildOptions(given, onlyC, output, profile: choice.profile, target: target)
+  Some BuildOptions(given, onlyC, output, profile: choice.profile, target: target, embedsMachine: embedsMachine)
 }
 
 /**
@@ -575,7 +582,7 @@ match Process.arguments() {
       Some(found) => found
       None => Process.exit 2
     }
-    const code = build(options)?
+    const code = if options.embedsMachine { buildEmbedded(options)? } else { build(options)? }
     if code != 0 {
       Process.exit code
     }

@@ -26,11 +26,12 @@ The bytecode VM interprets the same IR the C back end compiles, and the conforma
 **The core of the milestone is done:** every conformance program runs in both back ends with the same output, exit
 code, panics and leak count, `torb run` and `torb test` run in the VM by default and `torb build` stays native. Tasks,
 channels and the worker pool run in both; the streams of `File`, of the three standard streams and of `Process.start`
-are built on the blocking pool beside the IO poller of sockets; and a program the VM runs loads receiver scripts from
-paths only known while it runs. **What is left around it:** a native binary that embeds the VM (SCRIPTS.md slice 8),
-the rest of the REPL (REPL.md), the toolchain reading an evaluated manifest (SCRIPTS.md slice 5), the pool's manifest
-setting and the copy of a closure's environment and of a variant at a crossing (CONCURRENCY.md), and the poller for
-the pipes of a POSIX child.
+are built on the blocking pool beside the IO poller of sockets; a program the VM runs loads receiver scripts from
+paths only known while it runs; `torb build --embed-vm` builds a native binary that embeds the VM; and the REPL has
+every slice of REPL.md. **What is left around it:** compiled code that loads a script with the value encoded across
+(SCRIPTS.md slice 8), the toolchain reading an evaluated manifest (SCRIPTS.md slice 5), the pool's manifest setting
+and the copy of a closure's environment and of a variant at a crossing (CONCURRENCY.md), and the poller for the pipes
+of a POSIX child.
 
 - [design/VM.md](design/VM.md) section 9 - slices 4 to 8
 - [BACKEND.md](BACKEND.md) section 5 - rows 7.1 to 7.7

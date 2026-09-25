@@ -88,6 +88,20 @@ fn runModules(
   executable: String,
   requested: List<String>,
 ): Result<Int, IoError> {
+  const program = match bytecodeOf(checked, tree, modules, isTestRun) {
+    Some(found) => found
+    None => {
+      return Ok refusedCode
+    }
+  }
+  Ok runProgram(program, arguments, executable, Some(scriptLoaderOf(tree, requested)))
+}
+
+/**
+ * The entry files lowered for the VM, owned, verified and encoded as bytecode; a test run with the file of every entry.
+ * `None` where the lowering or the emitter refused the program, which is printed.
+ */
+public fn bytecodeOf(checked: Checked, tree: SourceTree, modules: List<ModuleId>, isTestRun: Bool = false): BytecodeProgram? {
   var lowering = lowerWorkspace checked.checker, pathsOfModules(checked), modules, false, hostTarget(), true
   insertOwnership lowering.program
   var refused = 0
@@ -113,7 +127,7 @@ fn runModules(
     refused = refused + 1
   }
   if refused > 0 {
-    return Ok refusedCode
+    return None
   }
   var entries: List<String> = []
   var files: List<String> = []
@@ -128,9 +142,9 @@ fn runModules(
     for what in emission.unsupported {
       printError "error: {what} is not supported by the VM yet"
     }
-    return Ok refusedCode
+    return None
   }
-  Ok runProgram(emission.program, arguments, executable, Some(scriptLoaderOf(tree, requested)))
+  Some emission.program
 }
 
 /**
@@ -269,7 +283,7 @@ fn importsOf(checked: Checked, module: ModuleId): String {
 }
 
 /** Everything the front end found, rendered the way `torb check` renders it. */
-fn reportChecked(checked: Checked): Int {
+public fn reportChecked(checked: Checked): Int {
   var problems = checked.problems.length()
   for problem in checked.problems {
     printError renderProblem(problem)

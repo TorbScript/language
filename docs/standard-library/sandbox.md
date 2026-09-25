@@ -16,7 +16,8 @@ source:
 
 > **Only the VM runs a script.** A script is always interpreted
 > ([Receiver Scripts and the Sandbox](../design/SCRIPTS.md)): `torb run` runs a program that loads one in the VM, and
-> the native back end refuses `Script.apply` until a binary can embed the VM.
+> the native back end refuses `Script.apply`; `torb build --embed-vm` builds a native binary that embeds the VM and
+> runs the program - its scripts included - in it.
 
 `std/sandbox` loads `.trb` files as sandboxed receiver closures - the mechanism behind `project.trb` and every
 configuration script. What a script may do is granted at the call site of `Sandbox.load`, never in the script or its

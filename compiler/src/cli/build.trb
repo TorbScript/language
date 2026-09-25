@@ -114,6 +114,11 @@ public type BuildOptions {
    * `--emit-c`, because the C compiler `torb` finds builds for the host.
    */
   target: BuildTarget? = None
+  /**
+   * `--embed-vm`: a native binary of the VM that runs the program's bytecode (`cli/embed.trb`, docs/design/VM.md section
+   * 11), so a program that loads receiver scripts ships as one executable.
+   */
+  embedsMachine: Bool = false
 }
 
 /** Exit codes of `torb build`. */
@@ -132,7 +137,15 @@ public const identityFileName = "program.hash"
 /** The exit code of the whole command: zero when a binary (or, with `--emit-c`, a C file) came out. */
 public fn build(options: BuildOptions): Result<Int, IoError> {
   const tree = readSourceTree(options.paths)?
-  const checked = check(tree, absolutePaths(options.paths)?, false, true)
+  buildTree(tree, absolutePaths(options.paths)?, options)
+}
+
+/**
+ * [build] of files that are read already, `requested` the absolute paths of what was named: what `--embed-vm` builds
+ * its generated entry with, a file that exists only in the tree.
+ */
+public fn buildTree(tree: SourceTree, requested: List<String>, options: BuildOptions): Result<Int, IoError> {
+  const checked = check tree, requested, false, true
   const reported = reportChecked checked
   if reported > 0 {
     printError "{counted(reported, "problem")}, nothing was built"
@@ -344,7 +357,7 @@ fn entryModuleOf(checked: Checked): ModuleId? {
  * `<project>/build/<profile>/<name>`, or whatever `--output` says. Reading `build { output "build/{target}/torb" }`
  * out of the manifest is not implemented yet; the shape of the default path already matches what it would produce.
  */
-fn outputPathOf(checked: Checked, module: ModuleId, options: BuildOptions): String {
+public fn outputPathOf(checked: Checked, module: ModuleId, options: BuildOptions): String {
   if !options.output.isEmpty() {
     return normalizePath options.output
   }

@@ -15,7 +15,8 @@ source:
 ---
 
 > **Draft.** It runs in the VM: a program `torb run` runs loads and applies a script, and so does the toolchain for a
-> `project.trb`; the native back end refuses `Script.apply` until a binary can embed the VM
+> `project.trb`; the native back end refuses `Script.apply`, and `torb build --embed-vm` builds a native binary that
+> embeds the VM
 > (Receiver Scripts and the Sandbox).
 
 A [receiver closure](receiver-closures.md) is a value passed at a call site. A
@@ -65,10 +66,11 @@ Script.apply(var value: Value): Result<Void, SandboxError>
    [top-level code](../modules-and-packages/top-level-code.md) allows, alongside an entry file, an unimported script
    and a `*.test.trb` file.
 
-5. **Only the VM runs a receiver script.** A program `torb run` runs in the VM loads and applies one; the native back
-   end refuses `Script.apply` until a binary can embed the VM. A literal path names a script the
-   checker checked with the program; a path the program computes is checked against the type argument when the program
-   loads it, by the `torb` that runs it. The toolchain runs one too: `torb manifest` evaluates a `project.trb`, while the commands that build and test still read it by parsing its
+5. **Only the VM runs a receiver script.** A program `torb run` runs in the VM loads and applies one, and so does a
+   native binary that `torb build --embed-vm` built, which embeds the VM; the native back end refuses `Script.apply`.
+   A literal path names a script the checker checked with the program; a path the program computes is checked against
+   the type argument when the program loads it, by the `torb` that runs it. The toolchain runs one too:
+   `torb manifest` evaluates a `project.trb`, while the commands that build and test still read it by parsing its
    literal top-level command calls.
 
 ## What this is not

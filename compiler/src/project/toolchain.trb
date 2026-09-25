@@ -1,9 +1,10 @@
 /**
  * [findStandardLibrary] and [findRuntime]: where the toolchain's own `std/` and `runtime/` are, for a program that does
  * not bring them along - a standalone file, or a project that is no member of a workspace with the standard library.
+ * [findCompilerSources] finds its `compiler/` the same way, which `torb build --embed-vm` builds the VM of a binary from.
  *
- * Both ask the same question in the same order. The environment variable (`TORB_STD`, `TORB_RUNTIME`) is taken as it
- * is; otherwise the walk goes up from every path of the command line, then from the working directory, then from the
+ * All three ask the same question in the same order. The environment variable (`TORB_STD`, `TORB_RUNTIME`,
+ * `TORB_COMPILER`) is taken as it is; otherwise the walk goes up from every path of the command line, then from the working directory, then from the
  * `torb` that runs, and the first directory that has the marker file answers. A checkout finds its own `std/` and
  * `runtime/` this way, whichever of its files is named, and `<checkout>/build/release/torb` finds them from anywhere.
  */
@@ -27,6 +28,15 @@ public fn findStandardLibrary(paths: List<String>): String? {
  */
 public fn findRuntime(paths: List<String>): String? {
   findToolchainPart "TORB_RUNTIME", "runtime", "include/torb.h", paths
+}
+
+/**
+ * The toolchain's own sources, which `torb build --embed-vm` builds the VM of a native binary from: `$TORB_COMPILER`,
+ * or the `compiler` of the nearest directory above a path of the command line (then above the working directory and
+ * above `torb` itself) that has `compiler/src/vm/embed.trb`.
+ */
+public fn findCompilerSources(paths: List<String>): String? {
+  findToolchainPart "TORB_COMPILER", "compiler", "src/vm/embed.trb", paths
 }
 
 /**

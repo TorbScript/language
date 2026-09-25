@@ -10,7 +10,9 @@ run by `torb run` loads and applies scripts through `std/sandbox` (`examples/con
 `tests/conformance/vm-only/sandbox-load.trb`), and **a script from a path only known while the program runs** is
 checked and lowered into the running program by the `torb` that runs it (slice 7,
 `tests/conformance/vm-only/sandbox-runtime-path.trb`). The evaluation replacing the static reader where a setting is
-computed (slice 5), the sandbox's own heap (slice 6) and a native binary that loads scripts (slice 8) are not built.
+computed (slice 5), the sandbox's own heap (slice 6) and compiled code that loads scripts (slice 8) are not built;
+`torb build --embed-vm` builds a native binary that embeds the VM and runs a whole program in it, scripts included
+(VM.md section 11).
 
 A receiver script is a `.trb` file that is the **body of a receiver closure** instead of a module: `project.trb` against
 `Project`, a `config.trb` against the `ServerConfig` of the program that loads it (CONCEPT.md, "Receiver Scripts and the
@@ -57,8 +59,9 @@ the one construct defined to run in the VM.
   and the C back end refuses a program that loads one with a finding that says a native binary does not embed the VM
   yet (slice 8), exactly as it refused `Script` before.
 - **The hosts that exist are the ones that already have a VM:** `torb` itself (it evaluates `project.trb`) and a
-  program `torb run` runs in the VM (`Sandbox.load`, slices 4 and 7). A native binary that loads scripts embeds the
-  front end and the VM (BACKEND 5.4) and is slice 8.
+  program `torb run` runs in the VM (`Sandbox.load`, slices 4 and 7) - also inside a native binary that
+  `torb build --embed-vm` built, which interprets the whole program (VM.md section 11) and loads the scripts it was
+  compiled with. Compiled code that loads scripts embeds the front end and the VM (BACKEND 5.4) and is slice 8.
 - **A path only known while the program runs (slice 7, as built).** `Sandbox.load` looks a path up in the table of the
   program's scripts first; any other path goes to the `torb` that runs the program, through the instruction
   `load.script`: the program's files are checked again with the file as one more module whose receiver is the type
@@ -278,7 +281,7 @@ public fn evaluated(script: (var self: Project) => Void): String {
 | 5 | The toolchain reads the evaluated manifest where a setting it uses is computed, and refuses a computed static setting (PROJECT.md section 12, slice 7); `build/manifest-inputs.trb` | Open, after 4 |
 | 6 | The sandbox's own heap: an exact memory limit, a teardown that frees what a stopped script held | Open |
 | 7 | A path known only at run time: the front end inside the running `torb` checks and lowers the file into the program | **Done**: section 1; `scriptReceiver`, `loadScript`, `runLoadedScript` of `std/sandbox`, the instructions `load.script` and `run.loaded`, `vm/run.trb`'s loader; `tests/conformance/vm-only/sandbox-runtime-path.trb` |
-| 8 | A native binary that loads scripts: the front end and the VM embedded, the value encoded across (section 5) | Open |
+| 8 | A native binary that loads scripts: the front end and the VM embedded, the value encoded across (section 5) | **Open** for compiled code. A whole program interpreted in a native binary loads the scripts it was compiled with: `torb build --embed-vm` (VM.md section 11) |
 
 ## 10. Open
 

@@ -28,6 +28,7 @@ torb build [path]         Compile an entry file to a native binary through C
     --emit-c                Write the C and stop, which needs no C compiler at all
     --output <file>          Where the binary goes (the C is written next to it)
     --target <os>-<arch>     What the program is built for (default: this machine), with --emit-c for another one
+    --embed-vm               A native binary of the VM that runs the program's bytecode, as torb run does
 ```
 
 ## What it does
@@ -83,6 +84,23 @@ arm of a `match` on them is compiled ([Compile-time branches](../language/execut
 of `windows-x64`, `windows-arm64`, `linux-x64`, `linux-arm64`, `macos-x64`, `macos-arm64`, `freebsd-x64`,
 `freebsd-arm64`. Without it, a build is for the machine `torb` runs on. A target that is not this machine needs
 `--emit-c`, because the C compiler `build` finds compiles for this machine; the C it writes builds on the target.
+
+### `--embed-vm`
+
+Builds a native binary that embeds the VM instead of compiling the program itself to C: the program is checked and
+encoded as bytecode as [`torb run`](torb-run.md) does, and the interpreter is compiled with that bytecode inside it. The
+binary runs the program as `torb run` would - the same output, exit code and panics - without `torb` or a C compiler
+where it runs, which is how a program that loads receiver scripts ships as one executable: they run in their sandbox
+([The sandbox](../language/configuration/the-sandbox.md)). The front end is not in the binary, so it loads a script only
+by a path the program was compiled with. The interpreter is built from the toolchain's own `compiler/`, found like
+`std/` and `runtime/` (or where `TORB_COMPILER` says), which costs a C compile of about half a minute per binary.
+`--embed-vm` takes neither `--emit-c` nor `--target` (docs/design/VM.md section 11).
+
+```console
+$ torb build --embed-vm examples/config-dsl --output build/config-dsl
+$ build/config-dsl
+Listening on 0.0.0.0:8443 (tls: true)
+```
 
 ### `--profile`
 

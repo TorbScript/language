@@ -13,7 +13,8 @@ run in the VM by default** and `--native` builds a binary instead; `torb build` 
 test suite runs natively in the gates (`torb test --native compiler/tests`): it checks and lowers whole programs
 thousands of times, which the VM interprets many times slower than the binary does, and everything else runs in both. A program the VM runs
 loads a receiver script from a path only known while it runs, which the running `torb` checks and lowers into it as a
-continuation (`docs/design/SCRIPTS.md` slice 7).
+continuation (`docs/design/SCRIPTS.md` slice 7), and `torb build --embed-vm` builds a native binary that embeds the VM
+and runs the program's bytecode (section 11).
 
 TorbScript has two back ends that read one IR. The C back end turns it into a native binary; the VM turns it into
 bytecode and runs that inside `torb`, for `torb run` and `torb test`, the sandbox (7.4), `project.trb` as a script
@@ -39,6 +40,7 @@ all of them are decided once, in the IR, and executed by both back ends as they 
 - **[8. The gate: C and the VM agree](#8-the-gate-c-and-the-vm-agree)**
 - **[9. Slices](#9-slices)**
 - **[10. Open](#10-open)**
+- **[11. A native binary that embeds the VM](#11-a-native-binary-that-embeds-the-vm)** — `torb build --embed-vm`
 
 ---
 
@@ -411,6 +413,7 @@ suite run twice, and the list of what the VM runs that grew with every slice is 
 | 11 | `torb test` in the VM: every test file an entry of one program, the report of `runtime/test.c` | **Done**: `TestFile`, `TestFinish`; the default of `torb test`, and tier A runs the test packages of `std/` and `examples/` both ways |
 | 9 | `Array<Item, Size>`, added to the language after the interpreter: inline items, a checked item step | **Done**: `ArrayNew`, the static `Items`, `PlaceStep.Item`, the counted words of every item; the eleven programs with an array |
 | 10 | Speed: register reads without `Indexed.at`, return records in the word stack (section 10) | **Done**: the image, addresses and inline `load`/`store` (section 4); six times faster (section 8) |
+| 12 | A native binary that embeds the VM: `torb build --embed-vm` (section 11) | **Done**: `cli/embed.trb`, `vm/embed.trb`; tier B runs `tests/language/` in such binaries |
 
 ## 10. Open
 
@@ -454,4 +457,32 @@ suite run twice, and the list of what the VM runs that grew with every slice is 
   header words where a per-chunk record in the image could be one; a retain or a release is a C call of the kernel even
   for a value whose shape says it is one pointer, which could be one instruction of its own; and a `Place` is a record
   of `List<PlaceStep>` read per `load`, where the steps could be words of the image as well.
+
+## 11. A native binary that embeds the VM
+
+**Decision: `torb build --embed-vm` builds the interpreter natively with the program's bytecode inside it.** The
+program is checked, lowered for the VM and encoded as bytecode exactly as `torb run` does; the bytecode is written as
+text (`vm/embed.trb`, `programText`) into a module that exists only in memory, beside the interpreter in the
+toolchain's own sources (`compiler/src/vm/embedded-program.trb`), and that module - whose top-level code decodes the
+program and runs it (`runEmbedded`) - is what `torb build` compiles through C with the interpreter and the runtime.
+
+- **What it is for.** A program that loads receiver scripts ships as one executable: the scripts it was compiled with
+  run in their sandbox, with the steps, the time, the memory and the recoverable panic of section 1 of
+  `docs/design/SCRIPTS.md`, and the binary needs neither `torb` nor a C compiler where it runs. Every other program
+  runs as it runs under `torb run` - the same output, exit code, panics, leak report and memory limit
+  (`TORB_MEMORY_LIMIT` limits the program's own blocks, as in `torb`) - which tier B checks with the programs of
+  `tests/language/`.
+- **What it is not.** The whole program is interpreted: this is no native code that calls into a VM for its scripts,
+  and nothing crosses between a native and an interpreted value. That host - compiled code that loads a script, the
+  value encoded across with `std/encoding` - is `docs/design/SCRIPTS.md`'s slice 8 and stays open. The front end is
+  not in the binary either, so a script is loaded by a path the program was compiled with; any other path is the
+  `SandboxError` of `Sandbox.load` there.
+- **Why text, and why a module of TorbScript.** The bytecode is plain data, and a string literal is the one piece of
+  data the C back end already places in a binary without a native of its own; the text is one token per word, and its
+  first token is a version the binary checks. The derived `Encode` and `Decode` do not reach every field of a
+  `Chunk` yet, and the hand-written reader is a few hundred lines. Building the interpreter from the toolchain's own
+  sources, as the compiler itself is built, needs no library of the VM kept beside the runtime; it costs a C compile of
+  the interpreter per binary, about half a minute.
+- **The sources.** `--embed-vm` finds `compiler/` the way the toolchain finds `std/` and `runtime/` (above a path of
+  the command line, the working directory or `torb` itself), or where `TORB_COMPILER` says.
 

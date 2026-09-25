@@ -1,0 +1,76 @@
+/**
+ * `torb build --embed-vm`: a native binary that embeds the VM (docs/design/VM.md section 11).
+ *
+ * The program is checked, lowered for the VM and encoded as bytecode exactly as `torb run` does, and the bytecode is
+ * written as text into a module that exists only in memory, beside the interpreter in the toolchain's own sources
+ * (`compiler/src/vm/`), whose top-level code decodes and runs it (`vm/embed.trb`). That module is what is built
+ * natively, through C, with the interpreter and the runtime: the binary needs neither `torb` nor a C compiler where it
+ * runs, and it runs the program as `torb run` does - receiver scripts in their sandbox included.
+ */
+
+use IoError from "std/fs"
+use joinPath from "../project/path"
+use readSourceTree, absolutePaths from "../project/read"
+use findCompilerSources from "../project/toolchain"
+use check from "../semantics/check"
+use programText from "../vm/embed"
+use bytecodeOf, reportChecked from "../vm/run"
+use BuildOptions, buildTree, buildFailedCode, entryModulesOf, outputPathOf from "./build"
+
+/** The exit code of `torb build --embed-vm`: `build`'s own for the binary of the VM, or why nothing was built. */
+public fn buildEmbedded(options: BuildOptions): Result<Int, IoError> {
+  if options.onlyC || options.target.isSome() {
+    printError "error: `--embed-vm` builds a binary for this machine, and takes neither `--emit-c` nor `--target`"
+    return Ok buildFailedCode
+  }
+  const tree = readSourceTree(options.paths)?
+  const checked = check(tree, absolutePaths(options.paths)?, false, true)
+  if reportChecked(checked) > 0 {
+    return Ok buildFailedCode
+  }
+  const modules = match entryModulesOf(checked, tree, options) {
+    Some(found) => found
+    None => {
+      printError "error: `torb build` needs one entry file. Name the file, or a project with a `build` input"
+      return Ok buildFailedCode
+    }
+  }
+  const program = match bytecodeOf(checked, tree, modules) {
+    Some(found) => found
+    None => {
+      return Ok buildFailedCode
+    }
+  }
+  const compiler = match findCompilerSources(options.paths) {
+    Some(found) => found
+    None => {
+      printError "error: `--embed-vm` builds the VM from the toolchain's own sources, and there is no `compiler/` beside it"
+      return Ok buildFailedCode
+    }
+  }
+  const entry = joinPath compiler, "src/vm/embedded-program.trb"
+  const source = "use runEmbedded from \"./embed\"\n\nrunEmbedded \"{literalOf(programText(program))}\"\n"
+  const sources = readSourceTree([compiler])?
+  const around = sources.withFile entry, source
+  const output = outputPathOf checked, modules[0], options
+  buildTree around, [entry], options.copy(paths: [entry], output: output, embedsMachine: false)
+}
+
+/** The text as the body of a string literal of TorbScript: a backslash, a quote and the braces escaped. */
+fn literalOf(value: String): String {
+  var escaped: List<String> = []
+  for character in value.chars() {
+    if character == '\\' {
+      escaped.append "\\\\"
+    } else if character == '"' {
+      escaped.append "\\\""
+    } else if character == '{' {
+      escaped.append "\\\{"
+    } else if character == '}' {
+      escaped.append "\\\}"
+    } else {
+      escaped.append "{character}"
+    }
+  }
+  escaped.joined separator: ""
+}
