@@ -1388,17 +1388,16 @@ fn placeOf(var emitter: Emitter, var body: Body, program: IrProgram, reference: 
         }
         pending = pending + fieldOffset(emitter, layout, position)
       }
-      .Element(item, index, missing, at, _) => {
+      .Element(item, index, at, _) => {
         pending = flushOffset steps, pending
         const register = operand emitter, body, program, index
-        const constant = constantOffset emitter, program, missing
         const location = locationIndex emitter, program, at
         // An array holds its items inline: the step is an offset of the index times the item's words, checked against
         // the size - always, where the range analysis let the C back end drop the comparison, because it cannot fail
         if const .FixedArray(_, size) = program.typeAt(current) {
-          steps.append PlaceStep.Item(register, size, emitter.tables.widthOf(item), constant, location)
+          steps.append PlaceStep.Item(register, size, emitter.tables.widthOf(item), location)
         } else {
-          steps.append PlaceStep.Element(register, constant, location)
+          steps.append PlaceStep.Element(register, location)
           // An element of a list is stored in its own width, as the runtime stores it
           narrow = narrowCodeOf program, item
         }
@@ -1456,7 +1455,7 @@ fn placeType(program: IrProgram, body: Body, reference: Reference): IrTypeId {
         const shape = program.layoutAt layout
         shape.fields[shape.variants[variant].first + index].annotation
       }
-      .Element(item, _, _, _, _) => item
+      .Element(item, _, _, _) => item
       .Contents(annotation) => annotation
     }
   }

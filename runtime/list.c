@@ -228,12 +228,19 @@ bool torb_list_privatize_with(torb_list *list, torb_privatize_with_function elem
   return true;
 }
 
+void *torb_list_element_address(torb_list *list, int64_t index, torb_location at) {
+  if (index < 0 || index >= (int64_t)list->length) {
+    torb_panic_index_out_of_bounds(index, (int64_t)list->length, at);
+  }
+  torb_list_prepare(list, 0u);
+  return torb_list_bytes(*list) + (size_t)index * (size_t)list->storage->element->size;
+}
+
 void *torb_list_element_reference(torb_list *list, int64_t index, torb_text missing, torb_location at) {
   if (index < 0 || index >= (int64_t)list->length) {
     torb_panic(missing, at);
   }
-  torb_list_prepare(list, 0u);
-  return torb_list_bytes(*list) + (size_t)index * (size_t)list->storage->element->size;
+  return torb_list_element_address(list, index, at);
 }
 
 void torb_list_add(torb_list *list, const void *value) {

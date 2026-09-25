@@ -50,6 +50,7 @@ use Dispatched, dispatchedMember, dispatchedOn, preludeType, lowerTraitValue, bo
 use lowerClosureCall, lowerLazyArgument, lazyParametersOf, lowerConstructorValue from "./closure"
 use printOperationOf, lowerPrint from "./text"
 use isAssertion, lowerAssertion from "./quote"
+use describedKeySlot from "./text"
 use lowerItemList, listBoundFor from "./collection"
 use loweredNativeOf, lowerSpawn, lowerStop, isSuspendingCall, emitSuspension from "./task"
 use channelItemOf, lowerChannelNew from "./task"
@@ -170,6 +171,12 @@ fn lowerCallable(
   // `assert` holds an `Expression<Bool>`, and what a failed one shows is one decision of the lowering
   if isAssertion(lowering, symbol) {
     return lowerAssertion lowering, builder, destination, expression, arguments
+  }
+  // `describedKey(key)` shows the key where its type has `Show`, which only the instance being lowered knows
+  if lowering.checker.wellKnown.describedKey == Some(symbol) {
+    if const Some(described) = describedKeySlot(lowering, builder, destination, expression, arguments) {
+      return described
+    }
   }
   // `spawn` needs the closure literal it is handed, not a value of it: its body becomes the resume function of the task
   if loweredNativeOf(lowering, symbol) == Some("spawn") {

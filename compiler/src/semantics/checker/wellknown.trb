@@ -104,6 +104,12 @@ public type WellKnown {
    * one of these, and a literal that does not fit the width of the one it adapts to is an error.
    */
   numerics: Map<Int, String> = [:]
+  /**
+   * `describedKey` of `std/collections`, which `map[key]` names a missing key through: a call of it is lowered as
+   * [WellKnown.describedShownKey] of the shown key where the key's type has `Show` (`ir/lower/text.trb`).
+   */
+  describedKey: SymbolId? = None
+  describedShownKey: SymbolId? = None
 
   fn symbolNamed(name: String): SymbolId? {
     names.get name
@@ -134,6 +140,7 @@ public type WellKnown {
  */
 public fn wellKnownOf(program: Program): WellKnown {
   const exports = preludeExports program
+  const collections = packageExports program, "std/collections"
   WellKnown(
     exports,
     bothNames(program, exports, "Void"),
@@ -172,6 +179,8 @@ public fn wellKnownOf(program: Program): WellKnown {
     map: exports.get("Map"),
     array: exports.get("Array"),
     numerics: numericNames(exports),
+    describedKey: collections.get("describedKey"),
+    describedShownKey: collections.get("describedShownKey"),
   )
 }
 
@@ -220,7 +229,12 @@ fn bothNames(program: Program, exports: Map<String, SymbolId>, name: String): Li
 }
 
 fn preludeExports(program: Program): Map<String, SymbolId> {
-  const package = match program.workspace.packageNamed("std/prelude") {
+  packageExports program, "std/prelude"
+}
+
+/** What the `src/lib.trb` of a package of the workspace exports, by name; empty where there is no such package. */
+fn packageExports(program: Program, name: String): Map<String, SymbolId> {
+  const package = match program.workspace.packageNamed(name) {
     Some(found) => found
     None => {
       return [:]

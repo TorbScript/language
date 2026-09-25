@@ -100,13 +100,19 @@ public trait Indexed<Key, Value> {
   /**
    * The value at the key. This is `a[key]`.
    *
+   * `List`, `Array` and `Map` answer with a message of their own - the index and the length, the key - and this
+   * default is what a type of the program gets that writes no `at`.
+   *
    * # Panics
    *
-   * When the key is not there. That is what `a[key]` promises - [Indexed.get] is the same question with an `Option`
-   * for an answer, for a caller who expects the key to be missing.
+   * When the key is not there, with `the key is not in the collection`. That is what `a[key]` promises -
+   * [Indexed.get] is the same question with an `Option` for an answer, for a caller who expects the key to be missing.
    */
   fn at(key: Key): Value {
-    get(key).expect("Key does not exist")
+    match get(key) {
+      Some(value) => value
+      None => panic "the key is not in the collection"
+    }
   }
 }
 

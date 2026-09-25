@@ -368,11 +368,11 @@ and BACKEND 2.3 says an access begins once everything the assignment needs has b
 source order, then the value, then the access. Without it `grid[row][column] = failing()` would reach `failing()` at
 two different moments depending on whether the write went through the taken-out element or through the step.
 
-**The panic is the language's.** `a[key]` out of range panics `Key does not exist` at `std/core/src/option.trb`,
-because `Indexed.at` is `get(key).expect("Key does not exist")`. So `PathStep.Element` carries a `StaticId` and a
-`LocationId`, and the pass reads both **out of the body the call would have run**: the static that `at` hands to
-`expect`, and the site of the `panic` inside `expect`. `torb_list_element_reference` takes the two and panics with
-them, and a reader whose body does not say them is not rewritten at all.
+**The panic is the language's.** `a[index]` out of range panics `index 9 is out of bounds for a length of 3`, because
+that is what the `at` of `ArrayList` and of `Array` says. So `PathStep.Element` carries a `LocationId`, which the pass
+reads **out of the body the call would have run** - the site of the one `panic` of `at` - and
+`torb_list_element_address` panics with the index and the length there. A reader whose body does not have that one
+panic is not rewritten at all.
 
 **The cost it removed.** `benchmarks/nested-write` writes 3 840 000 cells of an 800 x 800 grid. It paid
 **7 688 813 allocations and 31.7 GB copied** for it, against 803 allocations and 5.1 MB in C. Section 4 has what it
@@ -662,10 +662,10 @@ even be written down keeps its check. That is what makes a wrong answer impossib
 are computed in.
 
 **What is left.** The **bounds check** of `list[index]`, which is the other half this finding promised. It is not the
-same rewrite: `a[index]` goes through `Indexed.at`, whose body is `get(index).expect("Key does not exist")`, so the
-check is an `Option` the standard library builds and unwraps and not an `Intrinsic` with a flag on it. Removing it
-means a second path through `Indexed.at` - a `torb_list_get_unchecked` and a lowering that reaches for it where the
-range holds - and the panic message has to stay the one `std/core` decides. The ranges this file computes are what such
+same rewrite: `a[index]` goes through the `at` of `ArrayList`, whose body matches on `get(index)`, so the check is an
+`Option` the standard library builds and unwraps and not an `Intrinsic` with a flag on it. Removing it means a second
+path through `at` - a `torb_list_get_unchecked` and a lowering that reaches for it where the range holds - and the
+panic message has to stay the one `std/collections` decides. The ranges this file computes are what such
 a round would read; the round itself is not done.
 
 **The risk.** A wrong range is a missing panic, which is an observable difference between the two back ends.

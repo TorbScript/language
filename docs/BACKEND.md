@@ -1847,9 +1847,10 @@ first, plus the two findings that were hiding behind each other.
   closed type like any other and `witnessFor` names the one implementation of it, so `.Forwarded` goes dynamic only for a
   member with a receiver now. Object safety says the same thing from the other side: a static member is never in a
   table.
-- **`a[key]` is `Indexed.at`, and the panic on a missing key is the language's own.** `at` is a *default* of `std/core`
-  whose body is `get(key).expect("Key does not exist")`, so what an index out of range does is decided once and is the
-  same in every back end - `lowerIndexRead` needs no rule for it at all. The tail of `lowerCallable` - which of the five
+- **`a[key]` is `Indexed.at`, and the panic on a missing key is the language's own.** `at` is a member of `std/` -
+  the one of `ArrayList`, `Array` and the maps, which name the index and the length or the key, or the *default* of
+  `std/core` - so what an index out of range does is decided once and is the same in every back end - `lowerIndexRead`
+  needs no rule for it at all. The tail of `lowerCallable` - which of the five
   shapes a member is (`panic`, a table member, a native, a generated body, an instance of a source body) and the `Call`
   for it - became `lowerDispatched`, so an index hands its two slots to the one place that knows those five shapes;
   `lowerWitnessCall` and `lowerNativeCall` take a `Span` instead of an `Expression`, which is all they read out of one.
@@ -2052,7 +2053,7 @@ path *is*.
   **`Indexed.at`**, writes the `x` of that slot, and puts the element back through **`MutableIndexed.set`**. That is
   literally the concept's model of an index path ("take it out, change it, put it back", `var` Paths) with the two halves
   spelled as the two members `std/core` declares - so what a *missing key* does is decided in `std/` and not in a back
-  end: a `var` access panics, because `at` is `get(key).expect("Key does not exist")`, and `map[key] = value` **inserts**,
+  end: a `var` access panics, because `at` panics on a missing key, and `map[key] = value` **inserts**,
   because the assignment is `set` and nothing else.
 - **Why the two instructions could not serve.** They name a `RuntimeKind` and reach `torb_list_element_reference` /
   `torb_map_take_out`, which needs the receiver to be a *concrete* container. The container of a path in this repository
@@ -3843,8 +3844,8 @@ The pieces around them:
   type for a type-level constant, because only an argument of a type needs `ConstantValue` - `Grid<4>` and `Grid<5>` stay
   two instances.
 - **`a[key]` on an array is one `Read` through an `Element` step** (`arrayReadAt` in `ir/elements.trb`), not a call of
-  `at` that copies the whole array into `get`: the step carries the panic `Indexed.at` would have produced, read out of
-  its body, so an index out of bounds still says `Key does not exist` at `std/core/src/option.trb`
+  `at` that copies the whole array into `get`: the step carries the site of the panic `Array.at` would have produced,
+  read out of its body, so an index out of bounds says `index 3 is out of bounds for a length of 3` where `at` says it
   (`array-index-bounds.trb`). **A `var` path through an array** - `grid[row][column] = value`,
   `board.cells[row][column] = value` - is one `Element` step as well: `ir/elements.trb` rewrites the round trip of an
   array exactly as it rewrites a list's, with `Array.set` recognized by the symbol the lowering recorded in

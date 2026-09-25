@@ -21,10 +21,10 @@
 use Span from "../../syntax/source"
 use Expression, Argument from "../../syntax/ast"
 use SymbolId from "../../semantics/symbols"
-use TypeId, TypeForm, LiteralValue from "../../semantics/checker/type"
+use TypeId, TypeForm from "../../semantics/checker/type"
 use Adaptation from "../../semantics/checker/context"
 use IrTypeId, IrType, Slot, ElementId, RuntimeKind, Instruction, Reference, FunctionId from "../ir"
-use LayoutId, PathStep, Terminator, StaticContents from "../ir"
+use LayoutId, PathStep, Terminator from "../ir"
 use borrowed, referenced from "../ir"
 use FunctionBuilder, addTemporary, addLocal, addBlock, emit from "../build"
 use elementFor from "../element"
@@ -32,7 +32,7 @@ use memberOfType, traitMemberNamed from "../witness"
 use traitArgumentsOf, witnessFor, isSupertraitOfBound from "../../semantics/checker/implementation"
 use locationOf from "./context"
 use Lowering, reportUnsupported, irTypeOfClosed, substituted, voidTypeOf from "./context"
-use finishBlock, continueIn, internStatic, borrowedArguments from "./context"
+use finishBlock, continueIn, borrowedArguments from "./context"
 use isClosedType from "../instances"
 use variantLayoutOfType, variantNamed from "./match"
 use valueSlot, unsupportedSlot, abandonedSlot, integerSlot from "./expression"
@@ -107,8 +107,6 @@ fn lowerInlineArray(
     }
   }
   const integer = lowering.program.internType IrType.Integer(64, true)
-  const textType = lowering.program.internType IrType.Text
-  const missing = internStatic lowering, StaticContents.Literal(LiteralValue.Text("Key does not exist")), textType
   const location = locationOf lowering, at
   var slots: List<Slot> = []
   for written in items {
@@ -130,7 +128,7 @@ fn lowerInlineArray(
     for index in 0..count {
       const key = integerSlot lowering, builder, index, integer
       const element = addTemporary builder, item
-      emit builder, Instruction.Read(element, Reference(value, [PathStep.Element(item, key, missing, location)]))
+      emit builder, Instruction.Read(element, Reference(value, [PathStep.Element(item, key, location)]))
       slots.append element
     }
   }
@@ -647,9 +645,9 @@ fn appliedBoundOf(var lowering: Lowering, subject: TypeId, name: String, at: Spa
 /**
  * `a[key]`: the `Indexed.at` the checker resolved at the span of the whole index expression.
  *
- * **The panic on a missing key is the language's own and no rule of the back end.** `at` is a default of `Indexed` whose
- * body is `get(key).expect("Key does not exist")`, so what an index out of range does is decided in `std/core` and is the
- * same in every back end - which is exactly what design principle 5 asks for.
+ * **The panic on a missing key is the language's own and no rule of the back end.** `at` is a member of `std/` - the
+ * one of `ArrayList`, `Array` and the maps, or the default of `Indexed` - so what an index out of range does is decided
+ * in `std/` and is the same in every back end, which is exactly what design principle 5 asks for.
  *
  * The receiver is read as a **value**, because `at` takes `self`. A `var` path *through* an index
  * (`enemies[0].health = 5`) is `TakeOut`/`PutBack`, in `lowerIndexAssignment` (`ir/lower/place.trb`); this is the

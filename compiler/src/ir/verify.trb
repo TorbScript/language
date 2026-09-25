@@ -606,7 +606,7 @@ fn slotsOfArguments(arguments: List<Argument>): List<Slot> {
 public fn slotsOfReference(reference: Reference): List<Slot> {
   var used = [reference.base]
   for step in reference.steps {
-    if const .Element(_, index, _, _, _) = step {
+    if const .Element(_, index, _, _) = step {
       used.append index
     }
   }
@@ -1745,10 +1745,10 @@ fn stepOf(program: IrProgram, current: IrTypeId, step: PathStep): IrTypeId? {
       }
       Some fields[index].annotation
     }
-    .Element(item, _, missing, location, _) => {
-      // The panic of an index out of range is what the step carries instead of the call it replaced, so a step that
-      // cannot name it is no step at all (BACKEND 1.2)
-      if !program.hasStatic(missing) || !program.hasLocation(location) {
+    .Element(item, _, location, _) => {
+      // The site of the panic of an index out of range is what the step carries instead of the call it replaced, so a
+      // step that cannot name it is no step at all (BACKEND 1.2)
+      if !program.hasLocation(location) {
         return None
       }
       match program.typeAt(current) {
@@ -1780,7 +1780,7 @@ fn describeStep(program: IrProgram, step: PathStep): String {
     .Field(_, index) => "field {index}"
     .TupleField(_, index) => "tuple field {index}"
     .Variant(_, variant, index) => "field {index} of variant {variant}"
-    .Element(_, _, _, _, _) => "elements"
+    .Element(_, _, _, _) => "elements"
     .Contents(_) => "contents"
   }
 }

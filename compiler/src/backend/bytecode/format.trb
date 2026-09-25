@@ -463,7 +463,7 @@ public type KernelOperation {
   case ContainerUnique
   /** `register`: the block the reference in the register points at, made unique - copied where it is shared. */
   case BlockUnique
-  /** `register, index, missing, location`: the address of an element of the list the reference points at. */
+  /** `register, index, location`: the address of an element of the list the reference points at. */
   case ElementAddress
   /** `index, path, line, column`: one location of the program, the path a text in a register. */
   case DefineLocation
@@ -591,6 +591,8 @@ public type KernelOperation {
    * `TORB_WORKERS` and `TORB_BLOCKING` do not say otherwise; 0 for a number the manifest does not name.
    */
   case PoolDefaults
+  /** `index, length, location`: the runtime's `index <index> is out of bounds for a length of <length>` panic. */
+  case IndexOutOfBounds
 
   /** The name the disassembly writes. */
   fn spelling(): String {
@@ -658,6 +660,7 @@ public type KernelOperation {
       .Share => "share"
       .SetExecutable => "set.executable"
       .PoolDefaults => "pool.defaults"
+      .IndexOutOfBounds => "index.out.of.bounds"
     }
   }
 }
@@ -727,6 +730,7 @@ public const allKernelOperations: List<KernelOperation> = [
   KernelOperation.Share,
   KernelOperation.SetExecutable,
   KernelOperation.PoolDefaults,
+  KernelOperation.IndexOutOfBounds,
 ]
 
 /**
@@ -848,15 +852,15 @@ public type PlaceStep {
   /** The word here is the pointer to a counted block: go on at the first word of its contents. */
   case Dereference
   /**
-   * An element of the contiguous list here: `torb_list_element_reference`, which makes the storage unique and panics
-   * with the language's own message (`missing`, an offset of the constant pool) at `location` for an index out of range.
+   * An element of the contiguous list here: `torb_list_element_address`, which makes the storage unique and panics
+   * with `index <index> is out of bounds for a length of <count>` at `location` for an index out of range.
    */
-  case Element(index: Int, missing: Int, location: Int)
+  case Element(index: Int, location: Int)
   /**
    * An item of the `Array<Item, Size>` here, which holds its items inline: `index` items of `width` words further on,
-   * after the index is checked against `size` - out of range it panics with `missing` at `location`, as `a[key]` does.
+   * after the index is checked against `size` - out of range it panics as the list does, at `location`.
    */
-  case Item(index: Int, size: Int, width: Int, missing: Int, location: Int)
+  case Item(index: Int, size: Int, width: Int, location: Int)
 }
 
 /**

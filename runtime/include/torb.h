@@ -964,6 +964,12 @@ bool torb_list_get(torb_list list, int64_t index, void *out);
  * over the very static that `expect` would have been given. A runtime message of its own would make the same program
  * say two different things depending on whether the write went through a copy or through this pointer.
  */
+void *torb_list_element_address(torb_list *list, int64_t index, torb_location at);
+
+/**
+ * The same with the message of an index out of range handed in: what the C of a compiler before the `at` of `ArrayList`
+ * called, and what the seed's C still calls. It goes once the seed is past that change.
+ */
 void *torb_list_element_reference(torb_list *list, int64_t index, torb_text missing, torb_location at);
 
 /** Make the list's storage unique so a write may go through in place. */
@@ -1010,11 +1016,19 @@ void torb_list_sort(torb_list *list, torb_compare_function compare, void *contex
 
 /**
  * The index of an `Element` step into an `Array<Item, Size>`, checked against the size its type says: `index` itself,
- * or a panic with `missing` at `at` - the message the step carries, which is the language's and not the runtime's.
+ * or `index <index> is out of bounds for a length of <length>` at `at` - the panic of the `at` of `Array`.
  *
  * An array is a struct of the program with its items inline (`value.items[index]`), so the check is all the runtime
  * adds, and it is inline so that a C compiler folds it away where a comparison in front of it already decided it.
  */
+static inline int64_t torb_array_element_index(int64_t index, int64_t length, torb_location at) {
+  if (index < 0 || index >= length) {
+    torb_panic_index_out_of_bounds(index, length, at);
+  }
+  return index;
+}
+
+/** The same with the message handed in, which the seed's C still calls; it goes once the seed is past that change. */
 static inline int64_t torb_array_index(int64_t index, int64_t length, torb_text missing, torb_location at) {
   if (index < 0 || index >= length) {
     torb_panic(missing, at);

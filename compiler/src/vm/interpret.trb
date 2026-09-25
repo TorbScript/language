@@ -1037,8 +1037,8 @@ fn appendPlace(var words: ArrayList<Int>, place: Place) {
     const (kind, first, second, third, fourth, fifth) = match step {
       .Offset(count) => (offsetStep, count, 0, 0, 0, 0)
       .Dereference => (dereferenceStep, 0, 0, 0, 0, 0)
-      .Element(index, missing, location) => (elementStep, index, missing, location, 0, 0)
-      .Item(index, size, width, missing, location) => (itemStep, index, size, width, missing, location)
+      .Element(index, location) => (elementStep, index, location, 0, 0, 0)
+      .Item(index, size, width, location) => (itemStep, index, size, width, location, 0)
     }
     words.append kind
     words.append first
@@ -1563,13 +1563,9 @@ fn resolvePlace(
     } else if kind == dereferenceStep {
       address = Machine.load(address) + contentsOffset
     } else if kind == elementStep {
-      // The container's address and the missing text, out of the constant pool, go into the scratch words above the
-      // frame
-      const missing = registers.pool + 8 * Machine.load(step + 16)
+      // The container's address goes into the scratch word above the frame
       storeRegister registers, top, address
-      storeRegister(registers, top + 1, Machine.load(missing))
-      storeRegister(registers, top + 2, Machine.load(missing + 8))
-      const operands = [0, base + Machine.load(step + 8) - top, 1, Machine.load(step + 24)]
+      const operands = [0, base + Machine.load(step + 8) - top, Machine.load(step + 16)]
       address = kernelCall words, kernel, top, KernelOperation.ElementAddress, operands
       if address == stoppedWord {
         return stoppedWord
@@ -1577,11 +1573,10 @@ fn resolvePlace(
     } else {
       const at = loadRegister(registers, base + Machine.load(step + 8))
       if at < 0 || at >= Machine.load(step + 16) {
-        // The language's own message of `a[key]`, at the site the step carries
-        const missing = registers.pool + 8 * Machine.load(step + 32)
-        storeRegister registers, top, Machine.load(missing)
-        storeRegister(registers, top + 1, Machine.load(missing + 8))
-        const _ = kernelCall words, kernel, top, KernelOperation.Panic, [0, Machine.load(step + 40)]
+        // The message of the `at` of `Array`, at the site the step carries
+        storeRegister registers, top, at
+        storeRegister(registers, top + 1, Machine.load(step + 16))
+        const _ = kernelCall words, kernel, top, KernelOperation.IndexOutOfBounds, [0, 1, Machine.load(step + 32)]
         return stoppedWord
       }
       address = address + 8 * at * Machine.load(step + 24)

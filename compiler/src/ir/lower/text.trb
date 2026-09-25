@@ -35,7 +35,9 @@ use memberOfType, memberInValue, traitMemberNamed from "../witness"
 use Lowering, reportUnsupported, locationOf, internStatic, substituted from "./context"
 use borrowedArguments from "./context"
 use boundsOfTraitValue from "./generic"
-use valueSlot, unsupportedSlot, abandonedSlot, voidSlot, lowerUncoercedValue from "./expression"
+use valueSlot, unsupportedSlot, abandonedSlot, voidSlot, lowerUncoercedValue, lowerValue from "./expression"
+use witnessFor from "../../semantics/checker/implementation"
+use instanceOfSymbol from "../instances"
 
 /**
  * `"{a} and {b}"`. The parts are evaluated in source order - a part is an ordinary expression and may call anything -
@@ -211,6 +213,53 @@ public fn showSlot(
   const empty: List<WitnessSource> = []
   emit builder, Instruction.Call(Some(target), called, [borrowed(value)], empty, Some(location))
   target
+}
+
+/**
+ * `describedKey(key)` of `std/collections` - what `map[key]` names a missing key with - as
+ * `describedShownKey(key.showNested())`, where the type of the key has `Show`: `the key "Alan"`.
+ *
+ * Whether it has is a question about the type, and a generic `Key` of `std/` has no bound that answers it; the
+ * instance being lowered knows the type, so the answer is given here. `None` where the type has no `Show` - a type
+ * parameter the caller hands a dictionary for, a function type - and the call is the ordinary one, whose body says
+ * `the key` alone.
+ */
+public fn describedKeySlot(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  expression: Expression,
+  arguments: List<Argument>,
+): Slot? {
+  const written = arguments.first()?.value?
+  const found = lowering.checker.expressionType(lowering.module, written.span)?
+  const subject = substituted lowering, found
+  const bound = showBoundOf(lowering)?
+  if const .Implementation(_, _, _) = witnessFor(lowering.checker, subject, bound) {
+  } else {
+    return None
+  }
+  const describer = lowering.checker.wellKnown.describedShownKey?
+  const describe = instanceOfSymbol(lowering, describer)?
+  const at = expression.span
+  const value = lowerValue lowering, builder, written
+  if !lowering.isSupported {
+    return Some abandonedSlot(lowering, builder, destination)
+  }
+  const showNested = match memberOfType(lowering, subject, bound, "showNested", at) {
+    Some(member) => member
+    None => {
+      return Some abandonedSlot(lowering, builder, destination)
+    }
+  }
+  const text = lowering.program.internType IrType.Text
+  const location = locationOf lowering, at
+  const empty: List<WitnessSource> = []
+  const shown = addTemporary builder, text
+  emit builder, Instruction.Call(Some(shown), showNested, [borrowed(value)], empty, Some(location))
+  const target = valueSlot lowering, builder, destination, text
+  emit builder, Instruction.Call(Some(target), describe, [borrowed(shown)], empty, Some(location))
+  Some target
 }
 
 /** `Show` as a bound, which is the trait every interpolated part and every argument of `print` is resolved against. */

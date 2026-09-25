@@ -20,10 +20,10 @@
  * peephole over the IR after it, and a container that stayed boxed - two implementations meet in it, it sits in a
  * field - keeps the copy it always had.
  *
- * **The panic is the language's.** `a[key]` out of range panics `Key does not exist` at `std/core/src/option.trb`,
- * because `Indexed.at` is `get(key).expect("Key does not exist")`. The step carries that static and that site
- * ([missingKeyOf]), read out of the very body the call would have run, so the two shapes of the same program say the
- * same thing. A reader whose body does not say it is not rewritten at all.
+ * **The panic is the language's.** `a[index]` out of range panics `index 9 is out of bounds for a length of 3`, the
+ * message of the `at` of `ArrayList` and of `Array`, and the step carries the site that `at` names ([readerSiteOf]),
+ * read out of the very body the call would have run, so the two shapes of the same program say the same thing. A
+ * reader whose body does not say it is not rewritten at all.
  *
  * # Related
  *
@@ -32,7 +32,7 @@
  * - [PathStep.Element] - what it writes.
  */
 
-use IrProgram, IrFunction, IrTypeId, Slot, StaticId, LocationId, FunctionId from "./ir"
+use IrProgram, IrFunction, IrTypeId, Slot, LocationId, FunctionId from "./ir"
 use Instruction, Reference, PathStep, Argument, WitnessSource, WitnessRoot from "./ir"
 use RuntimeKind, Capture from "./ir"
 use typeOfReference, usedSlots, usedByTerminator, definedSlot from "./verify"
@@ -88,9 +88,9 @@ public fn rewriteElementPlaces(var program: IrProgram) {
  * `Indexed.at` that read it: the item is a slot of the array's own struct, so there is nothing to call, no `Option` to
  * build and no copy of the whole array to hand to `at` by value.
  *
- * The step carries the panic `at` would have produced - read out of its body, exactly as a list's round trip does - so
- * an index out of bounds still says `Key does not exist` at `std/core/src/option.trb`. A call whose reader does not
- * say it stays a call.
+ * The step carries the site of the panic `at` would have produced - read out of its body, exactly as a list's round
+ * trip does - so an index out of bounds says what the call would have said, where it would have said it. A call whose
+ * reader does not say it stays a call.
  */
 fn arrayReadAt(program: IrProgram, function: IrFunction, instruction: Instruction): Instruction? {
   const (target, callee, arguments) = match instruction {
@@ -120,8 +120,8 @@ fn arrayReadAt(program: IrProgram, function: IrFunction, instruction: Instructio
   if item != function.typeOfSlot(target) {
     return None
   }
-  const panic = missingKeyOf(program, instruction)?
-  const step = PathStep.Element item, arguments[1].slot, panic.missing, panic.at
+  const site = readerSiteOf(program, instruction)?
+  const step = PathStep.Element item, arguments[1].slot, site
   Some Instruction.Read(target, Reference(array, [step]))
 }
 
@@ -185,7 +185,7 @@ fn definesAnyOf(between: List<Instruction>, read: Instruction): Bool {
   }
   var slots: List<Slot> = [reference.base]
   for step in reference.steps {
-    if const .Element(_, index, _, _, _) = step {
+    if const .Element(_, index, _, _) = step {
       slots.append index
     }
   }
@@ -223,7 +223,7 @@ fn foldedRead(
     return None
   }
   const step = reference.steps[0]
-  if const .Element(_, index, _, _, _) = step {
+  if const .Element(_, index, _, _) = step {
     if index == whole {
       return None
     }
@@ -263,7 +263,6 @@ type ElementWrite {
   key: Slot
   element: Slot
   item: IrTypeId
-  missing: StaticId
   at: LocationId
 }
 
@@ -341,7 +340,7 @@ fn elementWriteAt(
   if item != function.typeOfSlot(element) {
     return None
   }
-  const panic = match missingKeyOf(program, instructions[take]) {
+  const site = match readerSiteOf(program, instructions[take]) {
     Some(found) => found
     None => {
       return None
@@ -354,7 +353,7 @@ fn elementWriteAt(
     return None
   }
   const hasOwnerUnique = isMakeUniqueOf instructions[at - 1], container
-  Some ElementWrite(take - 1, take, at, hasOwnerUnique, container, key, element, item, panic.missing, panic.at)
+  Some ElementWrite(take - 1, take, at, hasOwnerUnique, container, key, element, item, site)
 }
 
 /**
@@ -534,21 +533,15 @@ fn elementTypeOf(program: IrProgram, function: IrFunction, container: Reference,
   }
 }
 
-/** The message and the site an index out of range panics with. */
-type MissingKey {
-  missing: StaticId
-  at: LocationId
-}
-
 /**
- * The panic `Indexed.at` would have produced, read out of its own body: the static it hands to `Option.expect`, and
- * the site of the `panic` inside `expect`.
+ * The site the `at` of the call would have panicked at: the one `Panic` of its own body, which is the out-of-bounds
+ * panic of the `at` of `ArrayList`, `TrieList` and `Array`.
  *
- * It is read rather than written down because the message belongs to `std/core` and the back end may not decide it -
- * `tests/conformance/collection-index.trb` pins it word for word, and the two shapes of the same write have to agree
- * to the character. A body that does not have this shape answers `None`, and the round trip stays.
+ * It is read rather than written down because the message and the site belong to `std/` and the back end may not
+ * decide them - `tests/conformance/collection-index.trb` pins them, and the two shapes of the same read have to agree.
+ * A body with no panic or with more than one answers `None`, and the round trip stays.
  */
-fn missingKeyOf(program: IrProgram, instruction: Instruction): MissingKey? {
+fn readerSiteOf(program: IrProgram, instruction: Instruction): LocationId? {
   const reader = match instruction {
     .Call(_, callee, _, _, _) => callee
     _ => {
@@ -559,62 +552,10 @@ fn missingKeyOf(program: IrProgram, instruction: Instruction): MissingKey? {
     return None
   }
   const body = program.functionAt reader
-  for block in body.blocks {
-    for step in block.instructions {
-      if const .Call(_, callee, arguments, _, _) = step {
-        if arguments.length() != 2 {
-          continue
-        }
-        const missing = match staticBefore(body, arguments[1].slot) {
-          Some(found) => found
-          None => {
-            continue
-          }
-        }
-        if const Some(site) = panicSiteOf(program, callee) {
-          return Some MissingKey(missing, site)
-        }
-      }
-    }
-  }
-  None
-}
-
-/** The static a slot holds, where a `Constant` of this body is its only definition. */
-fn staticBefore(function: IrFunction, slot: Slot): StaticId? {
-  var found: StaticId? = None
-  for block in function.blocks {
-    for instruction in block.instructions {
-      if const .Constant(target, value) = instruction {
-        if target == slot {
-          if const Some(_) = found {
-            return None
-          }
-          found = Some value
-          continue
-        }
-      }
-      if definedSlot(instruction) == Some(slot) {
-        return None
-      }
-    }
-  }
-  found
-}
-
-/** Where `Option.expect` panics: the one `Panic` of its body, whose message is its own `message` parameter. */
-fn panicSiteOf(program: IrProgram, callee: FunctionId): LocationId? {
-  if !program.hasFunction(callee) {
-    return None
-  }
-  const body = program.functionAt callee
   var found: LocationId? = None
   for block in body.blocks {
-    for instruction in block.instructions {
-      if const .Panic(message, at) = instruction {
-        if message.slot != Slot(1) {
-          return None
-        }
+    for step in block.instructions {
+      if const .Panic(_, at) = step {
         if const Some(_) = found {
           return None
         }
@@ -688,7 +629,7 @@ fn isUndisturbed(
 ): Bool {
   var guarded = [container.base, key]
   for step in container.steps {
-    if const .Element(_, index, _, _, _) = step {
+    if const .Element(_, index, _, _) = step {
       guarded.append index
     }
   }
@@ -738,7 +679,7 @@ fn rewritten(
   instructions: List<Instruction>,
   found: ElementWrite,
 ): List<Instruction> {
-  const step = PathStep.Element found.item, found.key, found.missing, found.at
+  const step = PathStep.Element found.item, found.key, found.at
   var steps = found.container.steps
   steps.append step
   const prefix = Reference found.container.base, steps

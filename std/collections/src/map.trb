@@ -254,6 +254,29 @@ public type HashMapIterator<Key: Hash, Value> with Iterator<(key: Key, value: Va
 }
 
 /**
+ * `the key "Alan"`: a key as the message of a missing one names it - what `map[key]` panics with.
+ *
+ * The key is shown as it shows inside of another value (`showNested`, so a text is quoted), cut after 60 characters.
+ * Whether its type has `Show` is a question about the type and not about the value, and a generic `Key` has no
+ * bound that answers it: so **the compiler writes this call** where it knows the type of the key, as
+ * [describedShownKey] of the shown key, and the body below is what is left for a key whose type has no `Show` - the
+ * words `the key` alone.
+ */
+public fn describedKey<Key>(key: Key): String {
+  "the key"
+}
+
+/** `the key "Alan"` for the text a key shows as, with everything after its 60th character cut off as `...`. */
+public fn describedShownKey(shown: String): String {
+  const limit = 60
+  const kept = shown.prefix characters: limit
+  if kept.byteLength() == shown.byteLength() {
+    return "the key {shown}"
+  }
+  "the key {kept}..."
+}
+
+/**
  * Hash array mapped trie - the default. A write to a shared map copies one path (O(log n)), so keeping many
  * versions of a big map is cheap. Iterates in insertion order.
  *
@@ -283,8 +306,24 @@ public native type TrieMap<Key: Hash, Value>
   /** How many entries there are. */
   native fn length(): Int
 
-  /** The value for `key`, or `None` if there is none. `map[key]` panics instead; see [Indexed.at]. */
+  /** The value for `key`, or `None` if there is none. `map[key]` panics instead; see [TrieMap.at]. */
   native fn get(key: Key): Value?
+
+  /**
+   * The value for `key`. This is `map[key]`.
+   *
+   * # Panics
+   *
+   * When there is no entry for `key`, with `the key "Alan" is not in the map`: the key as it shows inside of another
+   * value, cut after 60 characters, or `the key` alone where its type has no `Show` ([describedKey]). [TrieMap.get]
+   * is the same question with an `Option` for an answer.
+   */
+  fn at(key: Key): Value {
+    match get(key) {
+      Some(value) => value
+      None => panic "{describedKey(key)} is not in the map"
+    }
+  }
 
   /** Ordinary TorbScript over `entryAfter`: see [MapIterator]. */
   fn iterate(): Iterator<(key: Key, value: Value)> {
@@ -335,6 +374,14 @@ public native type HashMap<Key: Hash, Value>
 
   /** Same as [TrieMap.get]. */
   native fn get(key: Key): Value?
+
+  /** Same as [TrieMap.at]. */
+  fn at(key: Key): Value {
+    match get(key) {
+      Some(value) => value
+      None => panic "{describedKey(key)} is not in the map"
+    }
+  }
 
   /** A cursor over the entries, in insertion order; see [HashMapIterator]. */
   fn iterate(): Iterator<(key: Key, value: Value)> {

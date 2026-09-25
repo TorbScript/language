@@ -133,8 +133,9 @@ Set.of(1, 2, 3)                          from arguments, needs Item: Hash
 
 ## What this is not
 
-**Reading `map[key]` is not the same as `map.get(key)`.** The bracket form panics on a missing key; only `get`
-answers `None`.
+**Reading `map[key]` is not the same as `map.get(key)`.** The bracket form panics on a missing key, and the message
+names it: `the key "Linus" is not in the map`, the key as it shows inside of another value and cut after 60
+characters, or `the key` alone where its type has no `Show`. Only `get` answers `None`.
 
 ```trb check
 const ages: Map<String, Int> = ["Ada": 36]
@@ -144,6 +145,7 @@ print ages.get("Linus")
 ```trb skip a missing key panics at runtime, which this documentation's gate does not execute
 const ages: Map<String, Int> = ["Ada": 36]
 print ages["Linus"]
+// panic: the key "Linus" is not in the map
 ```
 
 ## Related

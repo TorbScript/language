@@ -502,8 +502,24 @@ public native type ArrayList<Item>
   /** How many items there are. */
   native fn length(): Int
 
-  /** The item at `index`, or `None` if it is out of bounds. `list[index]` panics instead; see [Indexed.at]. */
+  /** The item at `index`, or `None` if it is out of bounds. `list[index]` panics instead; see [ArrayList.at]. */
   native fn get(index: Int): Item?
+
+  /**
+   * The item at `index`. This is `list[index]`.
+   *
+   * # Panics
+   *
+   * When `index` is out of bounds, with `index <index> is out of bounds for a length of <count>` - the message every
+   * slice, `set` and `insert` of a list answers the same mistake with. [ArrayList.get] is the same question with an
+   * `Option` for an answer.
+   */
+  fn at(index: Int): Item {
+    match get(index) {
+      Some(item) => item
+      None => panic "index {index} is out of bounds for a length of {length()}"
+    }
+  }
 
   /**
    * The O(1) slice: it shares storage with the receiver until one of the two is written. See [List.slice] for the
@@ -596,6 +612,14 @@ public native type TrieList<Item>
 
   /** Same as [ArrayList.get]. */
   native fn get(index: Int): Item?
+
+  /** Same as [ArrayList.at]. */
+  fn at(index: Int): Item {
+    match get(index) {
+      Some(item) => item
+      None => panic "index {index} is out of bounds for a length of {length()}"
+    }
+  }
 
   /** Ordinary TorbScript over `get`, exactly as [ArrayList.iterate] is: see [TrieListIterator]. */
   fn iterate(): Iterator<Item> {

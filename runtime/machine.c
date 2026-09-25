@@ -1594,7 +1594,8 @@ enum {
   TORB_OPERATION_WIDEN = 59,
   TORB_OPERATION_SHARE = 60,
   TORB_OPERATION_SET_EXECUTABLE = 61,
-  TORB_OPERATION_POOL_DEFAULTS = 62
+  TORB_OPERATION_POOL_DEFAULTS = 62,
+  TORB_OPERATION_INDEX_OUT_OF_BOUNDS = 63
 };
 
 /* A module constant's flag set with a release, so a thread that reads it set also sees the value it guards. */
@@ -1998,13 +1999,13 @@ static int64_t torb_machine_dispatch(torb_list *list, int64_t base, torb_list co
       torb_machine_block_unique(words, words[base + o[0]]);
       return 0;
     case TORB_OPERATION_ELEMENT_ADDRESS: {
-      /* the register holding the container's reference, the index, the missing text, the location */
+      /* the register holding the container's reference, the index, the location */
       torb_list *list = (torb_list *)torb_machine_address(words, words[base + o[0]]);
-      torb_text missing;
-      memcpy(&missing, words + base + o[2], sizeof missing);
-      return (int64_t)(intptr_t)torb_list_element_reference(list, words[base + o[1]], missing,
-                                                            torb_machine_location(o[3]));
+      return (int64_t)(intptr_t)torb_list_element_address(list, words[base + o[1]], torb_machine_location(o[2]));
     }
+    case TORB_OPERATION_INDEX_OUT_OF_BOUNDS:
+      /* the registers of the index and the length, the location */
+      torb_panic_index_out_of_bounds(words[base + o[0]], words[base + o[1]], torb_machine_location(o[2]));
     case TORB_OPERATION_DEFINE_LOCATION: {
       torb_text path;
       memcpy(&path, words + base + o[1], sizeof path);

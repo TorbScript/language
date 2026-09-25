@@ -12,8 +12,7 @@ use SymbolPath from "../src/ir/mangle"
 use IrProgram, IrType, IrTypeId, IrTrait, IrSignature, IrParameter, LayoutId, FunctionId from "../src/ir/ir"
 use RuntimeKind, WitnessTable, WitnessSource, WitnessRoot, Capture from "../src/ir/ir"
 use Slot, Instruction, Terminator, Reference, PathStep, borrowed from "../src/ir/ir"
-use StaticValue, StaticContents, Location from "../src/ir/ir"
-use LiteralValue from "../src/semantics/checker/type"
+use Location from "../src/ir/ir"
 use LayoutKind, FieldLayout, VariantLayout, finishProgram from "../src/ir/layout"
 use newFunction, addTemporary, emit, terminate, finishFunction from "../src/ir/build"
 use printFunction from "../src/ir/print"
@@ -68,7 +67,6 @@ group "Every operand position of every instruction" {
     const voidType = program.internType IrType.VoidType
     const items = program.internType IrType.Runtime(RuntimeKind.ListStorage, [text])
     const box = program.internType IrType.Box(text)
-    const missing = program.addStatic StaticValue("s_missing", text, StaticContents.Literal(LiteralValue.Text("Key does not exist")))
     const site = program.internLocation Location("src/option.trb", 172, 15)
     const holder = recordLayout program, "T_Holder", [FieldLayout("items", items)]
     const holderType = program.internType IrType.Record(holder)
@@ -78,7 +76,7 @@ group "Every operand position of every instruction" {
     const item = addTemporary builder, text
     const cell = addTemporary builder, box
     const place = Reference Slot(0), [PathStep.Field(holder, 0)]
-    const element = Reference Slot(0), [PathStep.Field(holder, 0), PathStep.Element(text, Slot(1), missing, site)]
+    const element = Reference Slot(0), [PathStep.Field(holder, 0), PathStep.Element(text, Slot(1), site)]
     emit builder, Instruction.Read(list, place)
     emit builder, Instruction.Read(item, element)
     emit builder, Instruction.BoxNew(cell, borrowed(item))

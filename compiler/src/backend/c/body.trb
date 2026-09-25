@@ -20,7 +20,7 @@
 use IrProgram, IrFunction, IrSignature, IrTypeId, LayoutId, FunctionId from "../../ir/ir"
 use Slot, SlotDeclaration, BlockId, Instruction, Terminator, Argument, WitnessSource from "../../ir/ir"
 use Reference, LocationId, RuntimeKind, WitnessRoot, WitnessTableId, Capture from "../../ir/ir"
-use ElementId, IrParameter, StaticId, ElementDescriptor from "../../ir/ir"
+use ElementId, IrParameter, ElementDescriptor from "../../ir/ir"
 use Intrinsic, IntrinsicOperation, NumericKind from "../../ir/ir"
 use Keeping, keepingSlotsOf from "../../ir/kept"
 use Layout, isManagedType, containsCountedType, TextPartKind, textPartKindOf from "../../ir/layout"
@@ -195,7 +195,7 @@ fn markWitness(var reads: List<Bool>, witness: WitnessSource) {
 fn markReference(var reads: List<Bool>, reference: Reference) {
   markRead reads, reference.base
   for step in reference.steps {
-    if const .Element(_, index, _, _, _) = step {
+    if const .Element(_, index, _, _) = step {
       markRead reads, index
     }
   }
@@ -2945,8 +2945,8 @@ public fn placeExpression(
         found = CExpression.Dereference found
         current = annotation
       }
-      .Element(item, index, missing, location, checked) => {
-        found = elementReferenceOf emission, program, body, found, current, item, index, missing, location, checked
+      .Element(item, index, location, checked) => {
+        found = elementReferenceOf emission, program, body, found, current, item, index, location, checked
         current = item
       }
     }
@@ -2958,10 +2958,9 @@ public fn placeExpression(
  * One `Element` step: the writable interior pointer to an element of a contiguous list, dereferenced, so that the
  * rest of the path steps on from the element itself.
  *
- * `torb_list_element_reference` makes the storage unique before it answers, which is what makes the pointer safe to
- * write through, and it panics with the message and the site the step carries - the language's own
- * `Key does not exist` at `std/core/src/option.trb` and not a message of the runtime's (docs/PERFORMANCE.md,
- * finding 3).
+ * `torb_list_element_address` makes the storage unique before it answers, which is what makes the pointer safe to
+ * write through, and it panics with `index <index> is out of bounds for a length of <count>` at the site the step
+ * carries - the message of the `at` of `ArrayList` it replaced (docs/PERFORMANCE.md, finding 3).
  *
  * # Pitfalls
  *
@@ -2977,7 +2976,6 @@ fn elementReferenceOf(
   annotation: IrTypeId,
   item: IrTypeId,
   index: Slot,
-  missing: StaticId,
   location: LocationId,
   checked: Bool,
 ): CExpression {
@@ -2987,10 +2985,9 @@ fn elementReferenceOf(
     if !checked {
       return CExpression.Index CExpression.Member(container, arrayItemsMember), slotExpression(body, index)
     }
-    const checked = CExpression.Call(CExpression.Name("torb_array_index"), [
+    const checked = CExpression.Call(CExpression.Name("torb_array_element_index"), [
       slotExpression(body, index),
       CExpression.Literal("{size}"),
-      CExpression.Name(program.staticAt(missing).name),
       locationExpression(program, location),
     ])
     return CExpression.Index CExpression.Member(container, arrayItemsMember), checked
@@ -3000,10 +2997,9 @@ fn elementReferenceOf(
     return container
   }
   const spelling = valueTypeOf program, item
-  const found = CExpression.Call(CExpression.Name("torb_list_element_reference"), [
+  const found = CExpression.Call(CExpression.Name("torb_list_element_address"), [
     CExpression.AddressOf(container),
     slotExpression(body, index),
-    CExpression.Name(program.staticAt(missing).name),
     locationExpression(program, location),
   ])
   CExpression.Dereference CExpression.Cast("{spelling} *", found)
@@ -3045,7 +3041,7 @@ public fn placeTypeOf(program: IrProgram, body: Body, reference: Reference): IrT
       .Contents(annotation) => {
         current = annotation
       }
-      .Element(item, _, _, _, _) => {
+      .Element(item, _, _, _) => {
         current = item
       }
     }

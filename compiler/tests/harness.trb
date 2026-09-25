@@ -349,10 +349,9 @@ public const preludeSource = raw"""
   }
 
   /**
-   * `get` and `at` are written out here, where `std/collections` inherits `at` from the default of `Indexed`: this
-   * prelude declares `at` as required, and the body is what matters to the tests - `a[key]` out of range panics with
-   * the message the *caller* wrote and at the site inside `expect`, which is what the `Element` path step of
-   * `ir/elements.trb` carries over when it replaces the round trip.
+   * `get` and `at` are written out here as in `std/collections`: this prelude declares `at` as required, and the body
+   * is what matters to the tests - `a[key]` out of range panics at the site of the one `panic` of `at`, which is what
+   * the `Element` path step of `ir/elements.trb` carries over when it replaces the round trip.
    */
   public native type ArrayList<Item> with List<Item>, From<Iterate<Item>> {
     native static fn from(items: Iterate<Item>): ArrayList<Item>
@@ -360,7 +359,10 @@ public const preludeSource = raw"""
     native fn length(): Int
 
     fn at(key: Int): Item {
-      get(key).expect("Key does not exist")
+      match get(key) {
+        Some(item) => item
+        None => panic "index {key} is out of bounds for a length of {length()}"
+      }
     }
 
     /** `list[from..to]`, over the native that takes two numbers, as in `std/collections`. */
@@ -381,9 +383,13 @@ public const preludeSource = raw"""
   public native type TrieList<Item> with List<Item>, From<Iterate<Item>> {
     native static fn from(items: Iterate<Item>): TrieList<Item>
     native fn get(index: Int): Item?
+    native fn length(): Int
 
     fn at(key: Int): Item {
-      get(key).expect("Key does not exist")
+      match get(key) {
+        Some(item) => item
+        None => panic "index {key} is out of bounds for a length of {length()}"
+      }
     }
   }
 
@@ -442,7 +448,10 @@ public const preludeSource = raw"""
     }
 
     fn at(key: Int): Item {
-      get(key).expect("Key does not exist")
+      if key < 0 || key >= Size {
+        panic "index {key} is out of bounds for a length of {Size}"
+      }
+      load key
     }
 
     var fn set(index: Int, value: Item) {

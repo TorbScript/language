@@ -112,8 +112,8 @@ torb repl: one entry at a time, :help lists the commands
 > :type prices
 List<Int64>
 > prices[5]
-panic: Key does not exist
-  at std/core/src/option.trb:172:15
+panic: index 5 is out of bounds for a length of 3
+  at std/collections/src/list.trb:520:15
   in <entry 5>
 >
 ```
