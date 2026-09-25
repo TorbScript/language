@@ -381,14 +381,15 @@ static void torb_unqueue_locked(torb_worker *worker, torb_task *task) {
   }
 }
 
-/*
- * Puts `task` at the back of its worker's queue, from any thread, and signals that worker where it sleeps. Nothing
- * happens where the task is queued already. The worker is read again under its lock, because a task that has not run
- * yet may have been taken by another worker in between.
- */
 static void torb_notify_blocking(void);
 
-static void torb_post(torb_task *task) {
+/*
+ * Puts `task` at the back of its worker's queue, from any thread, and signals that worker where it sleeps. Nothing
+ * happens where the task is queued already - nor, with `only_started`, where it is neither queued nor was ever taken
+ * from a queue: a task that was made and not started yet, which its start queues. The worker is read again under its
+ * lock, because a task that has not run yet may have been taken by another worker in between.
+ */
+static void torb_queue(torb_task *task, bool only_started) {
   for (;;) {
     uint32_t index = torb_atomic_load_u32(&task->worker);
     torb_worker *owner = torb_worker_at(index);
@@ -398,7 +399,7 @@ static void torb_post(torb_task *task) {
       torb_mutex_unlock(&owner->lock);
       continue;
     }
-    if (task->queued == 0u) {
+    if (task->queued == 0u && (!only_started || task->started != 0u)) {
       torb_enqueue_locked(owner, task);
       /* The inbox has no thread of its own: whichever thread of the blocking pool is idle takes it */
       if (index == TORB_BLOCKING_INBOX) {
@@ -416,6 +417,20 @@ static void torb_post(torb_task *task) {
     }
     return;
   }
+}
+
+static void torb_post(torb_task *task) {
+  torb_queue(task, false);
+}
+
+/*
+ * What a cancellation on another worker queues, so that the task's own worker takes it out of where it waits. Not a
+ * task that was made and not started yet: its handle is still only its maker's, and a worker that ran it now would
+ * complete it and let go of a reference the scheduler was never given - the maker's start would then queue a freed
+ * block. The flag is set; that start queues it, and it stops at its first check.
+ */
+static void torb_post_cancelled(torb_task *task) {
+  torb_queue(task, true);
 }
 
 /* The oldest task of the blocking pool's inbox, made the calling thread's; `NULL` where there is none. */
@@ -455,13 +470,18 @@ static void torb_notify_blocking(void) {
   }
 }
 
-/* The next task of the calling worker's own queue, or `NULL`. */
+/*
+ * The next task of the calling worker's own queue, or `NULL`. It counts as started from here on, under the lock of the
+ * queue it was taken from: a cancellation on another worker may queue it again before it first runs, and it must then
+ * land outside the steal list, or a second worker could take it and run it while this one does.
+ */
 static torb_task *torb_take_local(torb_worker *self) {
   torb_task *task;
   torb_mutex_lock(&self->lock);
   task = self->queue_first;
   if (task != NULL) {
     torb_unqueue_locked(self, task);
+    task->started = 1u;
   }
   torb_mutex_unlock(&self->lock);
   return task;
@@ -469,7 +489,8 @@ static torb_task *torb_take_local(torb_worker *self) {
 
 /*
  * The oldest unstarted task that may move from another worker's queue, made the calling worker's: the victims are
- * tried round the ring, starting at the next worker, so thieves spread over them.
+ * tried round the ring, starting at the next worker, so thieves spread over them. It counts as started before its new
+ * worker is published, as in `torb_take_local`: a waker that reads the new worker also reads that it may not move again.
  */
 static torb_task *torb_steal(torb_worker *self) {
   uint32_t count = torb_pool.count;
@@ -487,6 +508,7 @@ static torb_task *torb_steal(torb_worker *self) {
     task = victim->steal_first;
     if (task != NULL) {
       torb_unqueue_locked(victim, task);
+      task->started = 1u;
       torb_atomic_store_u32(&task->worker, self->index);
     }
     torb_mutex_unlock(&victim->lock);
@@ -634,8 +656,13 @@ static void torb_move_item(const torb_element *item, void *to, const void *from)
  * Takes a task out of the waiter list or the channel queue it waits in, where it still waits there, and answers
  * whether it did. Called on the worker the task belongs to - by a cancellation there, and by that worker when it takes
  * a task that was queued while it still waited (`torb_settle`) - so the target named by `wait_target` is alive: the
- * task's frame holds the task it awaits, and a channel wait holds its channel. Where it is `cancelling`, an item the
- * task offered is released, because the send consumed it and nobody took it.
+ * task's frame holds the task it awaits, and the frame of a channel task of the runtime its channel. Where it is
+ * `cancelling`, an item the task offered is released, because the send consumed it and nobody took it.
+ *
+ * `waiting` may be stale here: a waker on another thread may be taking the task out at this moment. So only the task's
+ * own worker writes `wait_target` - a waker leaves it as it is - and it names the target of the last wait until the
+ * task waits again, which it does only after this; the check under the target's lock then tells which of the two
+ * took it out.
  */
 static bool torb_take_out(torb_task *task, torb_outcome outcome, bool cancelling) {
   uint8_t waiting = torb_atomic_load_u8(&task->waiting);
@@ -742,6 +769,7 @@ static void torb_settle(torb_worker *self, torb_task *task) {
  * The tree lock held. The flag, and the task on its way to its stop: on this worker it is taken out of where it waits
  * at once, as the single worker always did; on another one it is queued there, and that worker takes it out when it
  * takes it (`torb_settle`) - because only the worker a task belongs to may touch its timer and read what it waits on.
+ * A task that is not started yet is left to its start (`torb_post_cancelled`).
  */
 static void torb_cancel_one(torb_worker *self, torb_task *task) {
   if (torb_atomic_load_u8(&task->status) != (uint8_t)TORB_TASK_PENDING || task->completing != 0u) {
@@ -769,7 +797,7 @@ static void torb_cancel_one(torb_worker *self, torb_task *task) {
     }
     return;
   }
-  torb_post(task);
+  torb_post_cancelled(task);
 }
 
 /* The tree lock held. The subtree in pre-order, without a stack: down to the first child, else across, else up. */
@@ -897,7 +925,6 @@ static void torb_complete(torb_worker *self, torb_task *task, bool finished) {
     }
     torb_atomic_store_u8(&waiter->waiting, (uint8_t)TORB_WAITING_NOTHING);
     waiter->outcome = (int32_t)TORB_OUTCOME_READY;
-    waiter->wait_target = NULL;
     torb_wake_taken(self, waiter);
   }
   torb_spin_unlock(&task->lock);
@@ -973,7 +1000,6 @@ static void torb_run_one(torb_worker *self, torb_task *task) {
   torb_scheduler *scheduler = &self->scheduler;
   torb_poll poll = TORB_POLL_SUSPENDED;
   torb_settle(self, task);
-  task->started = 1u;
   scheduler->current = task;
   if (task->test == 0u) {
     poll = task->resume(task);
@@ -1258,7 +1284,6 @@ void torb_task_io_done(torb_io_waiting *waiting) {
   if (waiter != NULL) {
     torb_atomic_store_u8(&waiter->waiting, (uint8_t)TORB_WAITING_NOTHING);
     waiter->outcome = (int32_t)TORB_OUTCOME_READY;
-    waiter->wait_target = NULL;
     torb_post(waiter);
   }
   torb_spin_unlock(&waiting->lock);
@@ -1573,7 +1598,6 @@ static torb_task *torb_channel_take_first(torb_task_list *list, torb_outcome out
   torb_waiters_unlink(list, task);
   torb_atomic_store_u8(&task->waiting, (uint8_t)TORB_WAITING_NOTHING);
   task->outcome = (int32_t)outcome;
-  task->wait_target = NULL;
   return task;
 }
 

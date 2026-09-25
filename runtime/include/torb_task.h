@@ -197,7 +197,8 @@ typedef struct torb_task_list {
  *
  * Who may touch what, with a pool of workers: `state`, `outcome`, `timer` and the frame belong to the worker that runs
  * the task (`worker`); `waiters` and the step of `status` to complete belong to the task's own `lock`; the links of a
- * task that waits on something (`waiting`, `wait_*`) belong to the lock of what it waits on; the queue links and
+ * task that waits on something (`waiting`, `wait_*`) belong to the lock of what it waits on, except `wait_target`,
+ * which only the worker that runs the task writes and a waker leaves as it is; the queue links and
  * `queued` belong to the lock of the worker whose queue it is in; the parent, child and live links belong to the tree
  * lock of task.c. `cancelled` and `status` are read without a lock, with an acquire.
  */
@@ -220,8 +221,9 @@ struct torb_task {
   /** In the list of its worker's queue that an idle worker takes from (unstarted and portable). */
   uint8_t stealable;
   /**
-   * Has run at least once: it never moves again - except once, to the blocking pool, where it asked for that with a
-   * turn and its frame may move (`hopping`, task.c "The blocking pool").
+   * A worker took it from a queue to run it, so it runs or has run at least once: it never moves again - except once,
+   * to the blocking pool, where it asked for that with a turn and its frame may move (`hopping`, task.c "The blocking
+   * pool"). Set under the lock of that queue.
    */
   uint8_t started;
   /** Awaits a turn to the blocking pool: its worker hands it to the pool instead of running it. Its own thread's. */
@@ -248,7 +250,10 @@ struct torb_task {
   torb_task *queue_next;
   torb_task *steal_previous;
   torb_task *steal_next;
-  /** What it waits on (a `torb_task` or a `torb_channel`) and the slot of the frame a send offers or a receive fills. */
+  /**
+   * What it waits on (a `torb_task`, a `torb_channel` or a `torb_io_waiting`), left in place by a waker, and the slot
+   * of the frame a send offers or a receive fills.
+   */
   void *wait_target;
   void *wait_slot;
   torb_task *wait_previous;
