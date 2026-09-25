@@ -157,6 +157,23 @@ TORB_TEST(a_line_to_standard_error_writes_standard_output_out_first) {
   TORB_CHECK_INTEGER(written, 6);
 }
 
+/*
+ * torb_install_interrupt_handler/torb_take_interrupt (docs/design/REPL.md section 2 - Ctrl+C for `torb repl`).
+ * Raising a real signal against this process would risk the test binary itself if anything about the harness does
+ * not expect it, so what is tested is the flag's own protocol without one: it starts clear, stays clear without an
+ * interrupt, and installing the handler more than once does not crash or otherwise misbehave.
+ */
+TORB_TEST(the_interrupt_flag_starts_and_stays_clear_without_a_signal) {
+  TORB_CHECK(!torb_take_interrupt());
+  TORB_CHECK(!torb_take_interrupt());
+}
+
+TORB_TEST(installing_the_interrupt_handler_more_than_once_is_harmless) {
+  torb_install_interrupt_handler();
+  torb_install_interrupt_handler();
+  TORB_CHECK(!torb_take_interrupt());
+}
+
 /* ============================================================================================ Windows only ===== */
 
 #if defined(_WIN32)
@@ -252,6 +269,8 @@ void torb_register_console_tests(void) {
   TORB_ADD(a_file_receives_the_raw_bytes_of_the_join);
   TORB_ADD(a_file_receives_the_raw_bytes_of_a_line);
   TORB_ADD(a_line_to_standard_error_writes_standard_output_out_first);
+  TORB_ADD(the_interrupt_flag_starts_and_stays_clear_without_a_signal);
+  TORB_ADD(installing_the_interrupt_handler_more_than_once_is_harmless);
 #if defined(_WIN32)
   TORB_ADD(a_short_text_is_one_chunk);
   TORB_ADD(a_cut_away_from_any_surrogate_is_exactly_the_limit);

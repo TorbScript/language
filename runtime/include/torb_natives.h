@@ -111,8 +111,12 @@ uint64_t torb_hash_combine(uint64_t first, uint64_t second);
 uint64_t torb_hash_i64(int64_t value);
 /* UInt16.hash, UInt32.hash, UInt64.hash, UInt8.hash */
 uint64_t torb_hash_u64(uint64_t value);
+/* installInterruptHandler */
+void torb_install_interrupt_handler(void);
 /* Float64.isNaN */
 bool torb_is_nan_f64(double value);
+/* isTerminal */
+bool torb_is_terminal(void);
 /* ArrayList.append, TrieList.append */
 void torb_list_add(torb_list *list, const void *value);
 /* ArrayList.clear, TrieList.clear */
@@ -255,6 +259,8 @@ uint64_t torb_power_u64(uint64_t base, int64_t exponent, torb_location at);
 uint8_t torb_power_u8(uint8_t base, int64_t exponent, torb_location at);
 /* printError */
 void torb_print_error_parts(const torb_text *parts, size_t count);
+/* printErrorRaw */
+void torb_print_error_raw(torb_text text);
 /* print */
 void torb_print_parts(const torb_text *parts, size_t count);
 /* Process.arguments */
@@ -305,6 +311,8 @@ double torb_sine_f64(double value);
 torb_task *torb_sleep(double seconds);
 /* Float64.squareRoot */
 double torb_square_root_f64(double value);
+/* interrupted */
+bool torb_take_interrupt(void);
 /* Float64.tangent */
 double torb_tangent_f64(double value);
 /* cancelTask */
