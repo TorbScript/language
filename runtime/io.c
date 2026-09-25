@@ -385,6 +385,11 @@ static void torb_io_resolver_submit(torb_io_operation *operation) {
   }
   torb_io_resolver.last = operation;
   if (torb_io_resolver.idle == 0u && torb_io_resolver.threads < TORB_IO_RESOLVERS) {
+    /*
+     * A resolution may come before any socket, so before the IO thread: the process is readied for a second thread here
+     * as well - the console and the clock made ready, and the counts of shared blocks atomic from now on.
+     */
+    torb_pool_prepare_thread();
     if (torb_thread_start(&torb_io_resolver.handles[torb_io_resolver.threads], torb_io_resolver_main, NULL,
                           (size_t)256u * 1024u)) {
       torb_io_resolver.threads += 1u;
