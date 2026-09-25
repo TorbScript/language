@@ -1,6 +1,6 @@
 ---
 title: std/network
-summary: IP and socket addresses as values, name resolution, and TCP - a listener, and a stream whose two directions are a Source and a Sink of Bytes.
+summary: Name resolution and TCP - a listener, and a stream whose two directions are a Source and a Sink of Bytes - over the address values of std/ip, which it re-exports.
 kind: package
 status: stable
 order: 175
@@ -16,13 +16,12 @@ keywords:
   - NetworkError
 source:
   - std/network/src/lib.trb
-  - std/network/src/address.trb
   - std/network/src/error.trb
   - std/network/src/tcp.trb
   - docs/design/NETWORK.md
 ---
 
-`std/network` is the network below HTTP: addresses as values, name resolution, and TCP. Everything that waits for the
+`std/network` is the network below HTTP: name resolution and TCP, over the address values of [std/ip](ip.md). Everything that waits for the
 network answers a `Task` and can be cancelled; a timeout is [`within`](task.md). It runs on the IO core of the runtime -
 an IO completion port on Windows, epoll on Linux, kqueue on macOS and FreeBSD - which wakes a task when its bytes
 arrive, so a thousand connections wait on one thread (see docs/design/NETWORK.md). It needs the
@@ -55,26 +54,12 @@ fn echoOnce(listener: TcpListener): Task<Result<Int, NetworkError>> {
 ### Addresses
 
 ```trb fragment
-public type Ipv4Address with Show, Equals, Hash, Compare, TryFrom<String, AddressError>
-public type Ipv6Address with Show, Equals, Hash, Compare, TryFrom<String, AddressError>
-public type IpAddress with Show, Equals, Hash, Compare, TryFrom<String, AddressError> {
-  case Version4(address: Ipv4Address)
-  case Version6(address: Ipv6Address)
-}
-public type SocketAddress with Show, Equals, Hash, TryFrom<String, AddressError> {
-  address: IpAddress
-  port: Int
-}
-public type AddressError with Show, Error
+public use AddressError, Ipv4Address, Ipv6Address, IpAddress, SocketAddress from "std/ip"
 ```
 
-Values like any other, read from text with `tryFrom` and shown as text. An IPv4 address is four decimal parts from 0 to
-255; a part with a leading zero is refused, because some systems read `010` as octal. An IPv6 address shows in the RFC
-5952 form: lower case, no leading zeros, the longest run of zero segments collapsed to `::`, and an IPv4-mapped
-address with its IPv4 part (`::ffff:192.0.2.1`). A zone (`fe80::1%eth0`) is not part of an address and is refused.
-`Ipv4Address.loopback`, `Ipv6Address.loopback`, `IpAddress.loopback` and the `unspecified` addresses are constants, and
-`isLoopback()`, `isPrivate()`, `isLinkLocal()`, `isMulticast()` answer what they say. A `SocketAddress` shows as
-`127.0.0.1:8080` or `[::1]:8080`.
+The address values are [std/ip](ip.md)'s, re-exported here: a package that only names an address imports `std/ip` and
+does not claim the network, and a program that connects imports them from here as it always did. Both names are one
+type.
 
 ### `resolve`
 
@@ -151,6 +136,7 @@ too.
 
 ## Related
 
+- [std/ip](ip.md) - the address values this package connects to.
 - [std/tls](tls.md) - TLS over a `TcpStream`.
 - [std/http](http.md) - HTTP/1.1 over these streams.
 - [std/stream](stream.md) - `Source`, `Sink` and `Bytes`.
