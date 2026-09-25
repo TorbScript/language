@@ -41,6 +41,7 @@ deliberately panics says `TORB_IGNORE_LEAKS()`, because a panic runs nothing on 
 | `io.c`                | The IO core (docs/design/NETWORK.md section 2): the handle table, operations with a count of their own, the tasks of the runtime a socket operation is, the resolver threads, and the stop of the core at the end of the program. The poller of each system is its file in `os/` |
 | `panic.c`             | `torb_panic` and friends, the per-thread stack check, exit code 101 (102 for out of memory), the test hook, one panic at a time |
 | `text.c`              | UTF-8, slices, concatenation, comparison, hashing, `Show`, float formatting, parsing       |
+| `element.c`           | The callbacks every contextual element descriptor shares: the ones the VM makes at run time, which are told which descriptor they serve |
 | `list.c`              | The one contiguous list: growth, shared slices, copy on write, a stable merge sort         |
 | `map.c`               | The one insertion-ordered hash table, and the set on top of it                             |
 | `number.c`            | The float routines, the total order of gap 5, the wrapping pair, the checked narrowings, `**`, and the `Real` members of a `Float64` (thin `<math.h>` wrappers) |

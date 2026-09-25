@@ -517,6 +517,64 @@ typedef struct torb_element {
   uint64_t (*hash)(const void *);
 } torb_element;
 
+/*
+ * A descriptor whose callbacks are told which descriptor they serve (element.c). The callbacks of `element` are
+ * `torb_contextual_retain` and its siblings, which every such descriptor shares, and they call the four below with the
+ * descriptor that `torb_element_calling` names. That is what the VM needs: it makes its descriptors at run time, one per
+ * element type of the program, and it cannot make a C function for each (machine.c, "counted elements").
+ */
+typedef struct torb_contextual_element torb_contextual_element;
+struct torb_contextual_element {
+  /** First, so that a `torb_element *` of it points at the whole. */
+  torb_element element;
+  void (*retain)(const torb_contextual_element *self, void *element);
+  void (*release)(const torb_contextual_element *self, void *element);
+  bool (*equals)(const torb_contextual_element *self, const void *first, const void *second);
+  uint64_t (*hash)(const torb_contextual_element *self, const void *value);
+};
+void torb_contextual_retain(void *element);
+void torb_contextual_release(void *element);
+bool torb_contextual_equals(const void *first, const void *second);
+uint64_t torb_contextual_hash(const void *value);
+/** The descriptor whose callback this thread is calling; set by the four functions below, for a contextual one. */
+#if defined(_MSC_VER)
+extern __declspec(thread) const torb_element *torb_element_calling;
+#else
+extern _Thread_local const torb_element *torb_element_calling;
+#endif
+
+/*
+ * A call of the runtime through a descriptor goes through these four and never straight to the function pointer, so
+ * a contextual descriptor learns which one it is. Any other descriptor costs one comparison.
+ */
+static inline void torb_element_retain(const torb_element *element, void *value) {
+  if (element->retain == torb_contextual_retain) {
+    torb_element_calling = element;
+  }
+  element->retain(value);
+}
+
+static inline void torb_element_release(const torb_element *element, void *value) {
+  if (element->release == torb_contextual_release) {
+    torb_element_calling = element;
+  }
+  element->release(value);
+}
+
+static inline bool torb_element_equals(const torb_element *element, const void *first, const void *second) {
+  if (element->equals == torb_contextual_equals) {
+    torb_element_calling = element;
+  }
+  return element->equals(first, second);
+}
+
+static inline uint64_t torb_element_hash(const torb_element *element, const void *value) {
+  if (element->hash == torb_contextual_hash) {
+    torb_element_calling = element;
+  }
+  return element->hash(value);
+}
+
 /** The descriptors the runtime needs for itself. The emitter emits one per element type, prefix `d`. */
 extern const torb_element torb_element_int64;
 extern const torb_element torb_element_text;

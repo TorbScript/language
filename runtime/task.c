@@ -620,7 +620,7 @@ static void torb_timer_remove(torb_worker *self, uint32_t index) {
 
 static void torb_release_item(const torb_element *item, void *value) {
   if (item->release != NULL) {
-    item->release(value);
+    torb_element_release(item, value);
   }
 }
 
@@ -1181,7 +1181,7 @@ bool torb_task_result(torb_task *task, void *out) {
   if (status == (uint8_t)TORB_TASK_FINISHED) {
     torb_move_item(task->result, out, torb_task_result_slot(task));
     if (task->result->retain != NULL) {
-      task->result->retain(out);
+      torb_element_retain(task->result, out);
     }
     return true;
   }

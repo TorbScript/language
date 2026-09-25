@@ -364,6 +364,11 @@ bool torb_text_privatize_place(void *place) {
   return torb_text_privatize((torb_text *)place);
 }
 
+bool torb_text_privatize_with(const void *context, void *place) {
+  (void)context;
+  return torb_text_privatize((torb_text *)place);
+}
+
 bool torb_text_equal(torb_text first, torb_text second) {
   if (first.length != second.length) {
     return false;
