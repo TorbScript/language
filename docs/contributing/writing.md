@@ -24,7 +24,7 @@ example before the prose. These rules are the mechanically enforced ones plus th
 
 The shape of a rule, in the form every reference page uses.
 
-```md
+````md
 3. **A `const` binding is deep.** Through a `const` binding nothing changes: no reassignment, no field assignment and no
    `var fn` method. `const` on a `List` therefore means the list never changes, not that the binding cannot be
    reassigned.
@@ -38,7 +38,7 @@ The shape of a rule, in the form every reference page uses.
    fixed.append 3
    // error: `append` needs a `var`. Did you mean `appended`?
    ```
-```
+````
 
 Bold claim, then the rule in one or two sentences, then the example that shows it, then the mistake it prevents with the
 diagnostic quoted exactly.

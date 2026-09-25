@@ -59,7 +59,7 @@ that does not block core work can be built now, in the order of section 10.
 | 12 | 25 lines of the manifest of natives are still planned: `Float32` and `Decimal` (milestone 8), the streams of `File`, the three standard streams, `Process.start` and `Child` (7.3), `Expression.value`/`captures` (5.11), `isSame` (5.9), and `get`/`post`/`request` of `std/http` (8) | `grep plannedRuntimeOf compiler/src/backend/c/natives.trb` |
 | 13 | Nothing in `std/` or `runtime/` computes SHA-256, reads or writes a `tar` or `gzip` archive, or speaks TLS | `grep` |
 | 14 | `docs/` has 221 pages with `status: stable`, 6 `planned` and 2 `draft`. `torb docs bundle` writes `llms.txt` and `llms-full.txt`, `torb docs skill` the Agent Skill; nothing writes HTML | `grep`, `compiler/src/documentation/command.trb` |
-| 15 | The documentation tool's Markdown reader is "deliberately not a Markdown parser" (`compiler/src/documentation/markdown.trb`); `std/markdown` is planned before milestone 8 (`docs/design/TEXT-FORMATS.md`) | the file's module comment |
+| 15 | The documentation tool reads a page through `std/markdown` (CommonMark 0.31.2 with GitHub's tables) and its front matter through `std/yaml` (`compiler/src/documentation/markdown.trb`, `docs/design/TEXT-FORMATS.md` section 3a); nothing renders HTML from it yet | the file's module comment |
 | 16 | The VS Code extension lives in `.vscode/extensions/torbscript` (publisher `torbscript`, version 0.1.0) and has no language server | `package.json`, `docs/ROADMAP.md` |
 | 17 | The repository's remote is `github.com/TorbScript/language` | `git remote -v` |
 | 18 | `OperatingSystem` has four cases (`Windows`, `Linux`, `MacOs`, `FreeBsd`) and `Architecture` two (`X64`, `Arm64`); adding a case is a breaking change of `std/core` (OS.md, "Adding an operating system") | `std/core/src/target.trb` |
@@ -724,7 +724,7 @@ beside the work on milestones 7 and 8, without touching a file that work touches
 
 | # | Slice | Needs | Launch |
 |---|---|---|---|
-| 1 | **`std/markdown`**: CommonMark with tables and front matter, the document tree as a value, HTML output; the CommonMark specification's examples are its test suite; `compiler/src/documentation/markdown.trb` is replaced by it | nothing | preview |
+| 1 | **`std/markdown`**: CommonMark with tables and front matter, the document tree as a value, HTML output; the CommonMark specification's examples are its test suite; `compiler/src/documentation/markdown.trb` is replaced by it. **Built (2026-09-25)**: all 652 examples pass, and the documentation tool reads through it | nothing | preview |
 | 2 | **`torb docs site <root> <out>`** and `--check`: pages, navigation from the indexes, highlighting from the lexer and `torb highlight`, the search index, a stylesheet, `llms.txt`; the site of `main` built by tier A | 1 | preview |
 | 3 | **CI**: `tools/gates.sh a` and `b` on every tier 1 target; the macOS and FreeBSD `executablePath`; the `runtime/os/*.c` bodies compiled on their systems for the first time (fact 4). **Built, not yet run: section 13** | nothing | preview |
 | 4 | **The archive format and its hash**: SHA-256 and a deterministic `tar` + `gzip` reader and writer, as `std` packages over thin natives; the tree hash of 7.2 | nothing | registry |

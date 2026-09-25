@@ -130,7 +130,7 @@ Hello, World!
 A test file is a script made of `test` and `group` calls, and the only assertion is `assert`. Replace the placeholder
 test `torb new` wrote in `tests/main.test.trb` with one that calls `greeting`:
 
-```trb skip it imports the `src/main.trb` of the project this page creates, which one snippet of this documentation cannot provide
+```trb skip it imports the 'src/main.trb' of the project this page creates, which one snippet of this documentation cannot provide
 use test from "std/test"
 use greeting from "../src/main"
 

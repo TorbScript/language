@@ -59,7 +59,7 @@ panic <message>
    exceptions to be caught; they are the same panic as an explicit `panic "..."` call, with a message the runtime
    supplies.
 
-   ```trb skip `numbers.length()` is zero at runtime, and this documentation's gate does not execute a panic to show it
+   ```trb skip 'numbers.length()' is zero at runtime, and this documentation's gate does not execute a panic to show it
    fn average(numbers: List<Int>): Int {
      numbers.sum() / numbers.length()
    }

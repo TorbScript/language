@@ -7,9 +7,10 @@ decided. The `Regex` literal of slice 4 is not built. The decisions below were m
 scope of `std/yaml` was widened on 2026-09-24.
 
 **Three text packages that the toolchain needs itself, in this order: `std/yaml`, then `std/regex`, then
-`std/markdown`.** The documentation tool reads the front matter of every page and the Markdown around it with a
+`std/markdown`.** The documentation tool read the front matter of every page and the Markdown around it with a
 reader of its own (`compiler/src/documentation/markdown.trb`, deliberately not a Markdown parser); these packages
-replace it, and the rest of `std`'s formats follow them in milestone 10 ([ROADMAP.md](../ROADMAP.md)).
+replace it - it now reads through `std/yaml` and `std/markdown` - and the rest of `std`'s formats follow them in
+milestone 10 ([ROADMAP.md](../ROADMAP.md)).
 
 ## 1. `std/yaml`
 
@@ -145,6 +146,12 @@ suite. It is a *document* format: its model is the tree of blocks and inlines, a
   code with a fence longer than any run in it, `-` and `1.` lists, ATX headings and setext only for a heading of several
   lines - and escapes every character of a text that could be read as markup; a line break inside a text and
   whitespace a line would lose at its start become numeric references.
+- **The documentation tool reads pages through it**: the headings of the top level, the fenced code blocks and the
+  links wherever they stand, each with its line; a heading's text is still its source, which the writing rules judge.
+  A closing fence may be indented up to three spaces, as in CommonMark and on GitHub, so a block that shows fences
+  has a longer fence around them (`docs/contributing/writing.md`), and an info string has no backtick (the reasons of
+  seven `trb skip` blocks quote with `'` now). The compiler imports `std/markdown` from this slice on, so the seed has
+  to be refreshed at the commit that adds the package, or later, first.
 
 ## 4. Slices
 

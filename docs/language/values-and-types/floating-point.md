@@ -101,7 +101,7 @@ value.isNaN()  value.isInfinite()  value.isFinite()        what the three consta
    print Float64.nan
    ```
 
-   ```trb skip a module cannot be produced inside one snippet of this documentation, which is always checked as an unimported file, where a top-level `const` is ordinary code and not a compile-time constant; the real diagnostic is: `/` produces `nan` here, which a compile-time constant cannot hold
+   ```trb skip a module cannot be produced inside one snippet of this documentation, which is always checked as an unimported file, where a top-level 'const' is ordinary code and not a compile-time constant; the real diagnostic is: '/' produces 'nan' here, which a compile-time constant cannot hold
    const broken: Float64 = 0.0 / 0.0
    ```
 

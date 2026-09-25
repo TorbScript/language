@@ -2,13 +2,13 @@
  * The reader of a documentation page: the front matter, the headings, the fenced code blocks and the links.
  *
  * The front matter between two `---` lines is read by `std/yaml`, with the subset of `docs/contributing` checked on
- * top of it. The body is deliberately not parsed as Markdown yet: a page of this documentation is a fixed shape, and
- * every construct the checker judges is recognizable line by line - an ATX heading, a fence of three backticks at the
- * start of a line, and an inline link. Everything else is prose that is carried along unchanged. A line-based reader is
- * what lets a diagnostic name a line number, which is what a writer and an agent both need.
+ * top of it, and the body by `std/markdown`: the headings, the fenced code blocks and the links come out of its
+ * tree, each with its line, which is what lets a diagnostic name a line number - what a writer and an agent both need.
+ * The prose the writing rules judge is every line of the body that is neither blank, nor a heading, nor in a fence.
  */
 
 use Yaml, YamlNode, ScalarStyle from "std/yaml"
+use Markdown, MarkdownBlock, MarkdownInline, plainText from "std/markdown"
 
 /** A value of the front matter. The subset is documented in `docs/contributing/front-matter.md`. */
 public type FieldValue {
@@ -414,59 +414,172 @@ fn isFieldKey(key: String): Bool {
   true
 }
 
-/** The headings, the fenced blocks, the links and the prose of the body. */
+/**
+ * The headings, the fenced blocks, the links and the prose of the body, read by `std/markdown`: the headings of the top
+ * level, the fenced code blocks and the links wherever they stand - in a list item, a quote, a table - and as prose
+ * every line that is neither blank, nor a heading, nor inside a fence.
+ */
 fn scanBody(path: String, lines: List<String>, from: Int): ReadPage {
+  var bodyLines: List<String> = []
+  for index in from..lines.length() {
+    bodyLines.append lines[index]
+  }
+  const body = bodyLines.joined separator: "\n"
+  const document = Markdown(frontMatter: false).parse(body)
   var headings: List<Heading> = []
-  var blocks: List<CodeBlock> = []
-  var links: List<Link> = []
-  var prose: List<(line: Int, text: String)> = []
-  var problems: List<DocumentationProblem> = []
-  var body: List<String> = []
-  var index = from
-  while index < lines.length() {
-    const line = lines[index]
-    const number = index + 1
-    body.append line
-    // A fence inside a list item carries the indentation of the item, which is the style of the page templates: the
-    // block is read there exactly as at column 0, and its content is dedented by the same amount
-    const indent = indentOf line
-    if line.slice(indent..line.byteLength()).startsWith("```") {
-      const collected = collectBlock path, lines, index, indent
-      problems.appendAll collected.problems
-      blocks.append collected.block
-      var inside = index + 1
-      while inside < collected.next {
-        body.append lines[inside]
-        inside = inside + 1
-      }
-      index = collected.next
-      continue
+  for block in document.blocks {
+    if const .Heading(level, inlines) = block.content {
+      // The text of a heading is its source, markup included, which is what the writing rules judge
+      const source = bodyLines.get(block.line - 1) ?? ""
+      const text = if source.startsWith("#") { source.sliceBytes(level, source.byteLength()).trim() } else { plainText(inlines).trim() }
+      headings.append headingOf(level, text, block.line + from)
     }
-    // A tilde fence and an indented code block name no language, so nothing could verify what is in them
-    if line.slice(indent..line.byteLength()).startsWith("~~~") {
-      problems.append DocumentationProblem(path, number, "A code block is fenced with three backticks and names its language")
+  }
+  var scanner = BodyScanner path, bodyLines, from
+  scanner.blocks document.blocks
+  var prose: List<(line: Int, text: String)> = []
+  for index in 0..bodyLines.length() {
+    const line = bodyLines[index]
+    const number = from + index + 1
+    if scanner.codeLines.contains(number) {
+      continue
     }
     if line.startsWith("#") {
-      const read = readHeading path, number, line
-      problems.appendAll read.problems
-      headings.append read.heading
-      index = index + 1
+      const hashes = fenceLengthOf line.replace("#", "`")
+      const rest = line.sliceBytes hashes, line.byteLength()
+      if !rest.isEmpty() && !rest.startsWith(" ") {
+        scanner.problems.append DocumentationProblem(path, number, "A heading has a space behind its `#`")
+      }
       continue
     }
-    links.appendAll linksOf(number, line)
     if !line.trim().isEmpty() {
       prose.append((line: number, text: line))
     }
-    index = index + 1
   }
-  ReadPage(None, from + 1, headings, blocks, links, prose, body.joined(separator: "\n"), problems)
+  ReadPage(None, from + 1, headings, scanner.codeBlocks, scanner.links, prose, body, scanner.problems)
 }
 
-type CollectedBlock {
-  block: CodeBlock
-  /** The index of the line behind the closing fence */
-  next: Int
-  problems: List<DocumentationProblem>
+/** A heading: its text, and its anchor - written as `\{#anchor\}`, or derived from the text. */
+fn headingOf(level: Int, source: String, line: Int): Heading {
+  var text = source
+  var anchor = ""
+  var isExplicit = false
+  if text.endsWith("}") {
+    if const Some(found) = text.indexOf("\{#") {
+      anchor = text.slice((found + 2)..(text.byteLength() - 1))
+      text = text.slice(0..found).trim()
+      isExplicit = true
+    }
+  }
+  if !isExplicit {
+    anchor = anchorOf text
+  }
+  Heading level, text, anchor, isExplicit, line
+}
+
+/** Walks the blocks of a page for its fenced code blocks and its links. */
+type BodyScanner {
+  path: String
+  bodyLines: List<String>
+  /** How many lines of the file stand before the body. */
+  from: Int
+  var codeBlocks: List<CodeBlock> = []
+  var links: List<Link> = []
+  var problems: List<DocumentationProblem> = []
+  /** The lines of the file inside a fenced code block, fences included. */
+  var codeLines: Set<Int> = []
+
+  var fn blocks(blocks: List<MarkdownBlock>) {
+    for block in blocks {
+      self.block block
+    }
+  }
+
+  var fn block(block: MarkdownBlock) {
+    match block.content {
+      .Paragraph(inlines) => collectLinks inlines
+      .Heading(_, inlines) => collectLinks inlines
+      .CodeBlock(info, text, fenced) => {
+        if fenced {
+          codeBlock block, info, text
+        }
+      }
+      .BlockQuote(children) => blocks children
+      .ItemList(list) => {
+        for item in list.items {
+          blocks item.blocks
+        }
+      }
+      .Table(table) => {
+        for cell in table.header {
+          collectLinks cell
+        }
+        for row in table.rows {
+          for cell in row {
+            collectLinks cell
+          }
+        }
+      }
+      _ => {}
+    }
+  }
+
+  /**
+   * One fenced block. `info` is what stands behind the fence: its first word the language, its second the marker, the
+   * rest the reason of a `skip`. A block that runs to the end of what holds it was never closed.
+   */
+  var fn codeBlock(block: MarkdownBlock, info: String, text: String) {
+    const line = block.line + from
+    const endLine = block.endLine + from
+    for number in line..(endLine + 1) {
+      codeLines.insert number
+    }
+    const opening = bodyLines.get(block.line - 1) ?? ""
+    if opening.trim().startsWith("~") {
+      problems.append DocumentationProblem(path, line, "A code block is fenced with three backticks and names its language")
+    }
+    var contentLines = 0
+    for character in text.chars() {
+      if character == '\n' {
+        contentLines = contentLines + 1
+      }
+    }
+    if endLine - line + 1 < contentLines + 2 {
+      problems.append DocumentationProblem(path, line, "This code block is never closed")
+    }
+    const parts = words info
+    const language = parts.get(0) ?? ""
+    const marker = parts.get(1) ?? ""
+    var reasonParts: List<String> = []
+    for index in 2..parts.length().max(2) {
+      reasonParts.append parts[index]
+    }
+    const content = if text.endsWith("\n") { text.sliceBytes(0, text.byteLength() - 1) } else { text }
+    codeBlocks.append CodeBlock(info, language, marker, reasonParts.joined(separator: " "), content, line, line + 1)
+  }
+
+  /** Every link and image of the inlines, with the `#anchor` of its target apart. */
+  var fn collectLinks(inlines: List<MarkdownInline>) {
+    for inline in inlines {
+      match inline {
+        .Link(destination, _, children, line) => {
+          links.append linkOf(plainText(children), destination, line + from)
+          collectLinks children
+        }
+        .Image(destination, _, children, line) => links.append linkOf(plainText(children), destination, line + from)
+        .Emphasis(children) => collectLinks children
+        .Strong(children) => collectLinks children
+        _ => {}
+      }
+    }
+  }
+}
+
+fn linkOf(text: String, destination: String, line: Int): Link {
+  match destination.indexOf("#") {
+    Some(at) => Link text, destination.slice(0..at), destination.slice((at + 1)..destination.byteLength()), line
+    None => Link text, destination, "", line
+  }
 }
 
 /** How many backticks a line starts with. A fence needs at least three. */
@@ -493,65 +606,6 @@ public fn indentOf(line: String): Int {
   length
 }
 
-/** The line with up to `indent` leading spaces taken off, which is what a block inside a list item is written with. */
-fn dedented(line: String, indent: Int): String {
-  const found = indentOf line
-  const take = if found < indent { found } else { indent }
-  line.slice(take..line.byteLength())
-}
-
-/**
- * A line that closes a fence: it stands at the indentation the fence was opened at, has at least as many backticks as
- * that fence, and holds nothing else. A run of backticks that is indented *deeper* is content, which is what lets a
- * block show a fence.
- */
-fn closesFence(line: String, opened: Int, indent: Int): Bool {
-  if indentOf(line) != indent {
-    return false
-  }
-  const rest = line.slice(indent..line.byteLength())
-  const length = fenceLengthOf rest
-  if length < opened {
-    return false
-  }
-  rest.slice(length..rest.byteLength()).trim().isEmpty()
-}
-
-fn collectBlock(path: String, lines: List<String>, at: Int, indent: Int): CollectedBlock {
-  const opening = lines[at].slice(indent..lines[at].byteLength())
-  var problems: List<DocumentationProblem> = []
-  const fence = fenceLengthOf opening
-  const info = opening.slice(fence..opening.byteLength()).trim()
-  const parts = words info
-  const language = parts.get(0) ?? ""
-  const marker = parts.get(1) ?? ""
-  var reasonParts: List<String> = []
-  var word = 2
-  while word < parts.length() {
-    reasonParts.append parts[word]
-    word = word + 1
-  }
-  const reason = reasonParts.joined separator: " "
-  var content: List<String> = []
-  var index = at + 1
-  var isClosed = false
-  while index < lines.length() {
-    const line = lines[index]
-    if closesFence(line, fence, indent) {
-      isClosed = true
-      index = index + 1
-      break
-    }
-    content.append dedented(line, indent)
-    index = index + 1
-  }
-  if !isClosed {
-    problems.append DocumentationProblem(path, at + 1, "This code block is never closed")
-  }
-  const block = CodeBlock(info, language, marker, reason, content.joined(separator: "\n"), at + 1, at + 2)
-  CollectedBlock block, index, problems
-}
-
 /** The words of a text, separated by runs of spaces. */
 public fn words(text: String): List<String> {
   var found: List<String> = []
@@ -562,43 +616,6 @@ public fn words(text: String): List<String> {
     }
   }
   found
-}
-
-type ReadHeading {
-  heading: Heading
-  problems: List<DocumentationProblem>
-}
-
-fn readHeading(path: String, number: Int, line: String): ReadHeading {
-  var level = 0
-  for character in line.chars() {
-    if character != '#' {
-      break
-    }
-    level = level + 1
-  }
-  var problems: List<DocumentationProblem> = []
-  const rest = line.slice(level..line.byteLength())
-  if !rest.startsWith(" ") && !rest.isEmpty() {
-    problems.append DocumentationProblem(path, number, "A heading has a space behind its `#`")
-  }
-  var text = rest.trim()
-  var anchor = ""
-  var isExplicit = false
-  if text.endsWith("}") {
-    match text.indexOf("\{#") {
-      Some(found) => {
-        anchor = text.slice((found + 2)..(text.byteLength() - 1))
-        text = text.slice(0..found).trim()
-        isExplicit = true
-      }
-      None => {}
-    }
-  }
-  if !isExplicit {
-    anchor = anchorOf text
-  }
-  ReadHeading Heading(level, text, anchor, isExplicit, number), problems
 }
 
 /**
@@ -626,69 +643,4 @@ public fn anchorOf(text: String): String {
     slug = slug.slice(0..(slug.byteLength() - 1))
   }
   slug
-}
-
-/**
- * Every inline link of one line. A reference link is not part of the format and is not looked for, and what stands
- * between backticks is not a link: a page about the link syntax has to be able to write it down.
- */
-fn linksOf(number: Int, line: String): List<Link> {
-  var found: List<Link> = []
-  const characters = line.chars().toList()
-  var index = 0
-  var isInsideCode = false
-  while index < characters.length() {
-    if characters[index] == '`' {
-      isInsideCode = !isInsideCode
-      index = index + 1
-      continue
-    }
-    if isInsideCode || characters[index] != '[' {
-      index = index + 1
-      continue
-    }
-    const closing = indexOfCharacter(characters, ']', index + 1)
-    const textEnd = match closing {
-      Some(position) => position
-      None => {
-        index = index + 1
-        continue
-      }
-    }
-    if textEnd + 1 >= characters.length() || characters[textEnd + 1] != '(' {
-      index = textEnd + 1
-      continue
-    }
-    const target = indexOfCharacter(characters, ')', textEnd + 2)
-    const targetEnd = match target {
-      Some(position) => position
-      None => {
-        index = textEnd + 1
-        continue
-      }
-    }
-    const label = characters.slice((index + 1)..textEnd)
-    const inside = characters.slice((textEnd + 2)..targetEnd)
-    const text = String.from label
-    const whole = String.from inside
-    const hash = whole.indexOf "#"
-    const link = match hash {
-      Some(at) => Link text, whole.slice(0..at), whole.slice((at + 1)..whole.byteLength()), number
-      None => Link text, whole, "", number
-    }
-    found.append link
-    index = targetEnd + 1
-  }
-  found
-}
-
-fn indexOfCharacter(characters: List<Char>, wanted: Char, from: Int): Int? {
-  var index = from
-  while index < characters.length() {
-    if characters[index] == wanted {
-      return Some index
-    }
-    index = index + 1
-  }
-  None
 }

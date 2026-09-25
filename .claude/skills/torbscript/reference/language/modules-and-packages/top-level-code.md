@@ -60,7 +60,7 @@ const <name> = <compile-time expression>    a module's only top-level statement
    constructor or case-constructor call whose arguments are such all qualify. A function call does not, and neither
    does a `native` call.
 
-   ```trb skip a module cannot be produced inside one snippet of this documentation, which is always checked as an unimported file; the real diagnostic is: The initializer of a top-level `const` has to be known at compile time
+   ```trb skip a module cannot be produced inside one snippet of this documentation, which is always checked as an unimported file; the real diagnostic is: The initializer of a top-level 'const' has to be known at compile time
    fn greeting(): String {
      "hello"
    }
@@ -77,7 +77,7 @@ const <name> = <compile-time expression>    a module's only top-level statement
    name ``, and, for a `public const`, `` An exported `const` binds one name ``. A name another file imports has to be
    one thing.
 
-   ```trb skip a module cannot be produced inside one snippet of this documentation, which is always checked as an unimported file; the real diagnostic is: A module's `const` binds one name
+   ```trb skip a module cannot be produced inside one snippet of this documentation, which is always checked as an unimported file; the real diagnostic is: A module's 'const' binds one name
    const (a, b) = (1, 2)
    ```
 
@@ -172,7 +172,7 @@ const text = File.readText("project.trb")?
 print text
 ```
 
-```trb skip a module's top-level statement can only be produced by a file something else imports, which this single-file gate cannot construct; the real diagnostic is: Top-level code is only allowed in entry files. `<path>` is imported
+```trb skip a module's top-level statement can only be produced by a file something else imports, which this single-file gate cannot construct; the real diagnostic is: Top-level code is only allowed in entry files. '<path>' is imported
 type Config {}
 
 print "loading"

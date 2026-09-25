@@ -193,8 +193,17 @@ group "the reader of a page" {
     assert page.problems[0].message.contains("never closed")
   }
 
-  test "an indented fence does not close the block that shows it" {
+  test "a fence indented by up to three spaces closes a block, as in CommonMark and on GitHub" {
     const source = "---\ntitle: One\n---\n\n```md\n   ```trb\n   const x = 1\n   ```\n```\n"
+    const page = readPage "docs/a.md", source
+    assert(page.blocks.length() == 2)
+    assert(page.blocks[0].language == "md")
+    assert(page.blocks[0].text == "   ```trb\n   const x = 1")
+    assert(page.problems.map({ _.message }).toList() == ["This code block is never closed"])
+  }
+
+  test "a block that shows fences has a longer fence of its own" {
+    const source = "---\ntitle: One\n---\n\n````md\n   ```trb\n   const x = 1\n   ```\n````\n"
     const page = readPage "docs/a.md", source
     assert(page.blocks.length() == 1)
     assert(page.blocks[0].language == "md")
@@ -213,8 +222,8 @@ group "the reader of a page" {
     assert(page.blocks[0].line == 7)
   }
 
-  test "a fence a list item shows inside one of its own blocks is content, because it is indented deeper" {
-    const source = "---\ntitle: One\n---\n\n1. A claim.\n\n   ```md\n      ```trb\n      const x = 1\n      ```\n   ```\n"
+  test "a fence a list item shows inside one of its own blocks is content, when the block's fence is longer" {
+    const source = "---\ntitle: One\n---\n\n1. A claim.\n\n   ````md\n      ```trb\n      const x = 1\n      ```\n   ````\n"
     const page = readPage "docs/a.md", source
     assert(page.blocks.length() == 1)
     assert(page.blocks[0].language == "md")

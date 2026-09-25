@@ -82,7 +82,7 @@ public type First {
 files naming each other; it is that a file which is imported may not hold a top-level statement at all, cyclic or
 not - see [Top-level code](top-level-code.md) for the exact diagnostic.
 
-```trb skip this needs a second file that imports it back, which one snippet of this documentation cannot provide; the diagnostic is: Top-level code is only allowed in entry files. `<path>` is imported
+```trb skip this needs a second file that imports it back, which one snippet of this documentation cannot provide; the diagnostic is: Top-level code is only allowed in entry files. '<path>' is imported
 use Second from "./second"
 
 print "loading first"

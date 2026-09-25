@@ -91,7 +91,7 @@ use File from "std/fs"
 print File.exists("project.trb")
 ```
 
-```trb skip a second, custom package cannot be added to the workspace this gate type checks a snippet in, so the real message ("The package `acme/other` is not a dependency of `acme/app`") cannot be produced here
+```trb skip a second, custom package cannot be added to the workspace this gate type checks a snippet in, so the real message ("The package 'acme/other' is not a dependency of 'acme/app'") cannot be produced here
 use Router from "acme/http/routing"
 ```
 
