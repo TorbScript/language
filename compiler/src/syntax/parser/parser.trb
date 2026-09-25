@@ -11,7 +11,7 @@
  */
 
 use Span, SourceText from "../source"
-use Diagnostic from "../diagnostic"
+use Diagnostic, DeferredDiagnostic from "../diagnostic"
 use Token, TokenKind, Keyword, DocComment from "../token"
 use Name, SourceFile from "../ast"
 use lex from "../lexer"
@@ -21,6 +21,11 @@ use parseStatementsUntil from "./statements"
 public type Parsed {
   file: SourceFile
   diagnostics: List<Diagnostic>
+  /**
+   * The problems of the `String` reading of the string literals: an escape sequence a `String` does not have, an
+   * interpolation that does not parse. The checker reports every one whose literal it did not read verbatim.
+   */
+  deferred: List<DeferredDiagnostic> = []
 }
 
 /** Lexes and parses one file, from its first token to `EndOfFile`, with the diagnostics of both in source order. */
@@ -30,7 +35,7 @@ public fn parse(source: SourceText): Parsed {
   const statements = parseStatementsUntil parser, TokenKind.EndOfFile
   var diagnostics = lexed.diagnostics.appendedAll parser.diagnostics
   diagnostics.sort({ _.span.start })
-  Parsed SourceFile(statements), diagnostics
+  Parsed SourceFile(statements), diagnostics, lexed.deferred.appendedAll(parser.deferred)
 }
 
 /**
@@ -46,6 +51,8 @@ public type Parser {
   var nextDoc: Int = 0
   var position: Int = 0
   var diagnostics: List<Diagnostic> = []
+  /** The problems of the `String` reading of the interpolations of the string literals ([Parsed.deferred]). */
+  var deferred: List<DeferredDiagnostic> = []
   /**
    * `false` in the heads of `if`/`for`/`while`/`match` and in the arguments of a command call: there a `{` that
    * follows an expression belongs to the statement, not to the expression.

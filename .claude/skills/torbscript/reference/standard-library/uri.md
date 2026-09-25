@@ -12,6 +12,9 @@ keywords:
   - Urn
   - UriTemplate
   - TemplateValue
+  - TemplateCase
+  - TemplateRoutes
+  - route
   - RFC 6570
   - IRI
   - Authority
@@ -27,6 +30,7 @@ source:
   - std/uri/src/urn.trb
   - std/uri/src/form.trb
   - std/uri/src/template.trb
+  - std/uri/src/route.trb
   - docs/design/URI.md
 ---
 
@@ -34,7 +38,8 @@ source:
 normalized on the way in - the scheme and the host lower case, escapes upper case and decoded where they name an
 unreserved character, dot segments gone, every character a URI cannot hold percent-encoded as UTF-8 - so `==`,
 `hash()` and `compare()` are over the canonical form without anybody asking for it. A text that is no URI is refused at
-the door with a `UriError` that names it. Nothing in the package opens anything: an IP literal host is an address of
+the door with a `UriError` that names it - and a literal where a `Uri` is expected, `open("https://…")`, is read by
+the compiler, so a typo in one is an error at that line. Nothing in the package opens anything: an IP literal host is an address of
 [std/ip](ip.md), and resolving a name or connecting is [std/network](network.md)'s. `Uri` and `UriError` are in the
 prelude; everything else is an import. The design, and why it reads RFC 3986 rather than the WHATWG standard, is
 docs/design/URI.md.
@@ -42,7 +47,8 @@ docs/design/URI.md.
 ## Import
 
 ```trb fragment
-use Uri, UriReference, UriError, Urn, UriTemplate, TemplateValue, Authority, Host from "std/uri"
+use Uri, UriReference, UriError, Urn, UriTemplate, TemplateValue, TemplateValues, Authority, Host from "std/uri"
+use TemplateVariable, TemplateCase, TemplateRoute, TemplateRoutes, route from "std/uri"
 use formEncoded, formDecoded, percentDecoded from "std/uri"
 ```
 
@@ -179,19 +185,28 @@ namespace-specific string, and the r-, q- and f-components. RFC 8141's equivalen
 ### UriTemplate
 
 ```trb fragment
-public type UriTemplate with Show, Equals, Hash {
+public type UriTemplate<Variables> with Show, Equals, Hash, TryFrom<String, UriError> {
+  static fn tryFrom(value: String): Result<UriTemplate<Variables>, UriError>
   fn variables(): List<String>
+  fn templateVariables(): List<TemplateVariable>
   fn level(): Int
-  fn expandedText(values: Map<String, TemplateValue>): Result<String, UriError>
-  fn expanded(values: Map<String, TemplateValue>): Result<UriReference, UriError>
+  fn expandedText(values: TemplateValues): Result<String, UriError>
+  fn expanded(values: TemplateValues): Result<UriReference, UriError>
+  fn expandedFrom(values: Variables): Result<UriReference, UriError> where Variables: Encode
   fn isMatchable(): Bool
-  fn matched(reference: UriReference): Map<String, TemplateValue>?
+  fn matched(reference: UriReference): TemplateValues?
+  fn decoded(reference: UriReference): Variables? where Variables: Decode
 }
-extend UriTemplate with TryFrom<String, UriError>
+public type TemplateValues = Map<String, TemplateValue>
 public type TemplateValue with Show, Equals, Hash {
   case Text(value: String)
   case Items(values: List<String>)
   case Pairs(values: List<(String, String)>)
+}
+public type TemplateVariable with Show, Equals, Hash {
+  name: String
+  isOptional: Bool
+  isExploded: Bool
 }
 ```
 
@@ -206,11 +221,18 @@ segment last in the path, and query parameters written `{?a,b}` or `{&c}`, which
 parameters they do not name. That is the subset routes are written in (see
 docs/design/WEB.md section 13).
 
+**`Variables` is the type whose fields the variables are.** A literal where a `UriTemplate<OrderPath>` is expected is
+read by the compiler (the [literal rule](../language/values-and-types/checked-literals.md)), verbatim - `{id}` is the
+template's variable and never an interpolation - and a variable that is no field of `OrderPath`, or a field without a
+default that is no variable, is an error at the literal. `expandedFrom` and `decoded` go through the fields, with
+`Encode` and `Decode`. A template read while the program runs is a `UriTemplate<TemplateValues>`, whose variables are
+whatever the map holds.
+
 ```trb check
-use UriTemplate, TemplateValue, UriReference from "std/uri"
+use UriTemplate, TemplateValue, TemplateValues, UriReference from "std/uri"
 
 fn orderOf(target: String): Result<String, UriError> {
-  const template = UriTemplate.tryFrom(raw"/orders/{id}{?fields}")?
+  const template = UriTemplate<TemplateValues>.tryFrom(raw"/orders/{id}{?fields}")?
   const values = template.matched(UriReference.tryFrom(target)?) ?? [:]
   match values.get("id") {
     Some(.Text(id)) => Ok id
@@ -219,6 +241,52 @@ fn orderOf(target: String): Result<String, UriError> {
 }
 
 print orderOf("/orders/7?fields=total")
+```
+
+### Routes
+
+```trb fragment
+public type TemplateCase<Value> with Show, Equals, Hash {
+  static fn named(name: String): TemplateCase<Value>
+  fn name(): String
+}
+public type TemplateRoute<Value> with Show {
+  template: UriTemplate<Value>
+  target: TemplateCase<Value>
+}
+public fn route<Value>(template: UriTemplate<Value>, to: TemplateCase<Value>): TemplateRoute<Value>
+public type TemplateRoutes<Value> with Show {
+  static fn of(routes: List<TemplateRoute<Value>>): Result<TemplateRoutes<Value>, UriError> where Value: Describe
+  fn matched(reference: UriReference): Value? where Value: Decode
+  fn link(value: Value): Result<UriReference, UriError> where Value: Encode
+}
+```
+
+Templates typed against the cases of one type: what a router is built from (docs/design/WEB.md,
+decision D5). `Route.Order` where a `TemplateCase<Route>` is expected is the case `Order`, named where it is written,
+and `route("/orders/{id}", to: Route.Order)` is checked by the compiler: every variable is a field of the case, every
+field without a default a variable, a field with a default at most a query variable, and the template one that can be
+matched backwards. `TemplateRoutes.of` checks the same when the program starts, and it is what refuses a case without a
+route; `matched` reads a reference into the case of the first route that matches it, and `link` expands the route of a
+value's case, so the two directions come from one template.
+
+```trb check
+use TemplateRoutes, route, UriReference from "std/uri"
+
+type Page {
+  case Home
+  case Order(id: Int)
+  case Search(query: String = "")
+}
+
+const routes = TemplateRoutes.of([
+  route("/", to: Page.Home),
+  route("/orders/{id}", to: Page.Order),
+  route("/search{?query}", to: Page.Search),
+])?
+print routes.matched(UriReference.tryFrom("/orders/7")?)
+print routes.matched(UriReference.tryFrom("/search?query=tea")?)
+print routes.link(Page.Order(12))
 ```
 
 ### Path and file: URIs
@@ -255,6 +323,7 @@ public type UriError with Show, Error {
   case NotAFile(uri: String, reason: String)
   case NotAUrn(uri: String, reason: String)
   case InvalidTemplate(template: String, reason: String)
+  case InvalidRoutes(reason: String)
 }
 ```
 

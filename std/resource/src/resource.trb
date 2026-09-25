@@ -1,0 +1,83 @@
+/**
+ * [Resource], [EmbeddedBytes] and [EmbeddedText]: the three types a string literal names a file of the package with
+ * (docs/design/RESOURCES.md section 4). They are capsules over the stable name the compiler resolved - the owner and
+ * name of the package, then the path inside it, always with `/` - so the only way to make one is a literal.
+ */
+
+/**
+ * A file that ships with the program and is read while it runs, found relative to the program and never to the
+ * working directory. A literal where a `Resource` is expected names a file of the package, relative to the file that
+ * writes it.
+ *
+ * # Examples
+ *
+ *     fn load(sheet: Resource): String {
+ *       sheet.name()
+ *     }
+ *
+ * # Pitfalls
+ *
+ * - A path is compared byte for byte on every platform: `./Hero.png` next to `hero.png` is an error on Windows too.
+ * - A `String` value is never a resource: a path chosen while the program runs is a `Path`, read through `std/fs`.
+ */
+public type Resource with Show, Equals, Hash {
+  /** What the file is called, project-relative and always with `/`. */
+  private nameValue: String
+
+  /** What the file is called: `acme/game/src/sheets/hero.spr`, the text a diagnostic and a log print. */
+  fn name(): String {
+    nameValue
+  }
+
+  fn show(): String {
+    nameValue
+  }
+
+  /** The value of a literal the compiler resolved to this stable name. The lowering calls this. */
+  private static fn literal(text: String): Resource {
+    Self text
+  }
+}
+
+/** A file whose bytes are in the binary. Reading them cannot fail: the compiler has the file in its hands. */
+public type EmbeddedBytes with Show, Equals, Hash {
+  /** What the file is called, project-relative. */
+  private nameValue: String
+
+  /** What the file is called: its stable name. */
+  fn name(): String {
+    nameValue
+  }
+
+  fn show(): String {
+    nameValue
+  }
+
+  /** The value of a literal the compiler resolved to this stable name. The lowering calls this. */
+  private static fn literal(text: String): EmbeddedBytes {
+    Self text
+  }
+}
+
+/**
+ * A file whose text is in the binary, so reading it cannot fail: the compiler reads the file, and checks its UTF-8,
+ * where the literal names it (slice 2 of docs/design/RESOURCES.md).
+ */
+public type EmbeddedText with Show, Equals, Hash {
+  /** What the file is called, project-relative. */
+  private nameValue: String
+
+  /** What the file is called: its stable name. */
+  fn name(): String {
+    nameValue
+  }
+
+  fn show(): String {
+    nameValue
+  }
+
+  /** The value of a literal the compiler resolved to this stable name. The lowering calls this. */
+  private static fn literal(text: String): EmbeddedText {
+    Self text
+  }
+}

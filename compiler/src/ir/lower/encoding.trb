@@ -645,7 +645,17 @@ fn defaultOf(
 
 /** The default a field is declared with: in the member of a type, or in the field list of a case. */
 fn fieldDefaultOf(var lowering: Lowering, field: SymbolId): Expression? {
-  const site = lowering.checker.siteOf(field)?
+  const site = match lowering.checker.siteOf(field) {
+    Some(found) => found
+    None => {
+      // A field of a case has no site of its own: its case has one, whose list of fields holds the default
+      if const .Field(owner) = lowering.checker.symbolAt(field).kind {
+        lowering.checker.siteOf(owner)?
+      } else {
+        return None
+      }
+    }
+  }
   if const .Owned(_, _, member) = site.kind {
     if const .Field(declared) = member.kind {
       return declared.default

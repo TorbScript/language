@@ -684,9 +684,9 @@ nothing links to.
   not UTF-8 is an error rather than a value. The cost is that such a file cannot be named; the benefit is that
   `Path`, `String` and every back end need no rule for broken text, which is the same trade `String` already made.
 - **Not `Path`/`PathBuf`.** There is one type, because a value that is never aliased needs no borrowed twin.
-- **Not a place where a literal adapts yet.** A `String` *literal* adapting to an expected `Path`, the way `1` adapts
-  to a `Float`, would remove the last `.into()` from every call site in section 4. It is a candidate for later
-  (literal traits), it is mentioned here so nobody designs around its absence, and it is not part of this design.
+- **A literal adapts, a `String` value does not.** Since 2026-09-25 a string literal where a `Path` is expected is a
+  `Path` (the literal rule of `docs/design/URI.md` section 9), which removes the last `.into()` from every call site in
+  section 4 that passes one. It cannot be interpolated, and a `String` value still converts through `Path.from`.
 
 ## 10. Open
 

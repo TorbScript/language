@@ -5,13 +5,13 @@
  */
 
 use test, group from "std/test"
-use UriTemplate, TemplateValue from "../src/template"
+use UriTemplate, TemplateValue, TemplateValues from "../src/template"
 use UriReference from "../src/uri"
 use UriError from "../src/error"
 
 /** A text every test here knows to be a template. */
-fn templateOf(text: String): UriTemplate {
-  match UriTemplate.tryFrom(text) {
+fn templateOf(text: String): UriTemplate<TemplateValues> {
+  match UriTemplate<TemplateValues>.tryFrom(text) {
     Ok(template) => template
     Fail(problem) => panic "a test's template was refused: {problem}"
   }
@@ -58,12 +58,12 @@ group "reading" {
   }
 
   test "a refusal names the template" {
-    assert(UriTemplate.tryFrom(raw"{x") == Fail(UriError.InvalidTemplate(raw"{x", "a `\{` is not closed")))
-    assert(!UriTemplate.tryFrom("a b").isOk())
-    assert(!UriTemplate.tryFrom("}").isOk())
-    assert(!UriTemplate.tryFrom(raw"{}").isOk())
-    assert(!UriTemplate.tryFrom(raw"{x{y}}").isOk())
-    assert(!UriTemplate.tryFrom("100%").isOk())
+    assert(UriTemplate<TemplateValues>.tryFrom(raw"{x") == Fail(UriError.InvalidTemplate(raw"{x", "a `\{` is not closed")))
+    assert(!UriTemplate<TemplateValues>.tryFrom("a b").isOk())
+    assert(!UriTemplate<TemplateValues>.tryFrom("}").isOk())
+    assert(!UriTemplate<TemplateValues>.tryFrom(raw"{}").isOk())
+    assert(!UriTemplate<TemplateValues>.tryFrom(raw"{x{y}}").isOk())
+    assert(!UriTemplate<TemplateValues>.tryFrom("100%").isOk())
   }
 
   test "a non-ASCII literal is written as its UTF-8, percent-encoded" {

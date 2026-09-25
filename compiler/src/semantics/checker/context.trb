@@ -366,6 +366,20 @@ public type Adaptation {
 }
 
 /**
+ * A string literal the literal rule read (docs/design/URI.md section 9): the type it became is the expression's type,
+ * and this is what the lowering builds the value from - through the `literal` member of that type, once per program.
+ */
+public type CheckedLiteral {
+  /**
+   * The text the value is built from: the `String` reading of a `Uri` or a `Path`, the verbatim reading of a `Regex`
+   * or a `UriTemplate`, the stable name of a resource, the name of the case of a `TemplateCase`.
+   */
+  text: String
+  /** Whether the literal was read verbatim, so that the problems of its `String` reading are none. */
+  isVerbatim: Bool
+}
+
+/**
  * What a collection literal turned out to be. The same three characters are three different things depending on what is
  * expected of them - `[1, 2]` is the default list, an `Array<Int, 2>` written into inline slots, or the argument of
  * `Target.from` - and *which* one is the checker's decision. So the back ends read it here instead of asking
@@ -679,6 +693,11 @@ public type Tables {
   var closureKinds: Map<Span, ClosureKind> = [:]
   /** Per collection literal span: what the literal became, which the expected type alone does not say. */
   var collectionLiterals: Map<Span, CollectionLiteral> = [:]
+  /**
+   * Per string literal span, and per case span of a `TemplateCase`: what the literal rule read there
+   * (docs/design/URI.md section 9). The type is the expression's own; this is the text the value is built from.
+   */
+  var checkedLiterals: Map<Span, CheckedLiteral> = [:]
   /**
    * Per `?.` member span: whether the member answers an `Option` of its own.
    *
@@ -1479,6 +1498,28 @@ public type Checker {
 
   fn collectionLiteralAt(module: ModuleId, at: Span): CollectionLiteral? {
     tables[module.value].collectionLiterals.get(at)
+  }
+
+  /** A literal the literal rule read: a `Uri`, a `Regex`, a resource, a `TemplateCase`. */
+  var fn recordCheckedLiteral(at: Span, found: CheckedLiteral) {
+    tables[module.value].checkedLiterals.set(at, found)
+  }
+
+  fn checkedLiteralAt(module: ModuleId, at: Span): CheckedLiteral? {
+    tables[module.value].checkedLiterals.get(at)
+  }
+
+  /**
+   * Whether a string literal of a module was read verbatim - as a `Regex` or a `UriTemplate` - or lies inside one that
+   * was: then what the lexer and the parser said about its `String` reading is no problem.
+   */
+  fn isReadVerbatim(module: ModuleId, literal: Span): Bool {
+    for (at, found) in tables[module.value].checkedLiterals {
+      if found.isVerbatim && at.start <= literal.start && literal.end <= at.end {
+        return true
+      }
+    }
+    false
   }
 
   /** `a?.m` where `m` answers an `Option` already: `flatMap` and not `map`, so the arm hands its value on. */

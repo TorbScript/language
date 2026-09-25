@@ -35,6 +35,7 @@ use checkPattern, requireReadBindings from "./pattern"
 use MatchArmPlan, armPlanOf, checkExhaustive, checkConditionPattern from "./exhaustive"
 use checkDeclaration from "./check"
 use requireCertainArithmetic, evaluateConstant from "./constant"
+use checkedKindOf, checkedTextLiteral, checkedCase, nonLiteralNote, resourceValueMessage from "./literal"
 
 /** The type of an expression in a position that expects one. Every expression that is looked at is recorded. */
 public fn checkExpression(var checker: Checker, expression: Expression, expected: Expectation): TypeId {
@@ -100,6 +101,12 @@ fn evaluateExpression(var checker: Checker, expression: Expression, expected: Ex
     .TextLiteral(segments) => textLiteralType checker, segments, annotation, expression.span
     .Name(_) | .Member(_, _, _) => {
       const target = resolveTarget checker, expression, annotation
+      // `Route.Order` where a `TemplateCase<Route>` is expected: the case, named where it is written
+      if const Some(wanted) = annotation {
+        if const Some(found) = checkedCase(checker, expression, wanted, target.resolution) {
+          return found
+        }
+      }
       checker.resolved expression.span, target.resolution
       // A function-typed parameter read as a value instead of being called may be kept by the body (`escape.trb`)
       if const .Local(binding) = target.resolution {
@@ -1097,8 +1104,23 @@ fn floatLiteralType(var checker: Checker, expected: TypeId?, at: Span): TypeId {
   adapt checker, at, fallback
 }
 
-/** A text literal is a `String`; only a literal type of the matching base makes it something else. */
+/**
+ * A text literal is a `String`; only a literal type of the matching base makes it something else, and a type of the
+ * literal rule (`literal.trb`), which reads it where it is written.
+ */
 fn textLiteralType(var checker: Checker, segments: List<TextSegment>, expected: TypeId?, at: Span): TypeId {
+  if const Some(annotation) = expected {
+    const wanted = resolveType checker, annotation
+    if const Some(kind) = checkedKindOf(checker, wanted) {
+      if kind != .TemplateCaseLiteral {
+        // A verbatim literal has no interpolations: `{id}` is the template's brace, and no name is read there
+        if !kind.isVerbatim() {
+          inferInterpolations checker, segments
+        }
+        return checkedTextLiteral checker, segments, kind, wanted, at
+      }
+    }
+  }
   var isPlain = true
   var text = ""
   for segment in segments {
@@ -1123,6 +1145,15 @@ fn textLiteralType(var checker: Checker, segments: List<TextSegment>, expected: 
     }
   }
   adapt checker, at, fallback
+}
+
+/** The interpolated parts of a literal the literal rule refuses for them: still checked, so every name in them is. */
+fn inferInterpolations(var checker: Checker, segments: List<TextSegment>) {
+  for segment in segments {
+    if const .Interpolated(inner) = segment {
+      const _ = inferExpression checker, inner
+    }
+  }
 }
 
 /**
@@ -3198,6 +3229,15 @@ public fn checkValue(var checker: Checker, found: TypeId, expected: TypeId, at: 
   const shown = checker.describe wanted
   const written = checker.describe given
   var problem = Diagnostic.error "Expected `{shown}`, found `{written}`", at
+  // A `String` value where the literal rule reads a literal: the value is only known when the program runs
+  if given == checker.stringType() {
+    if const Some(kind) = checkedKindOf(checker, wanted) {
+      if const Some(message) = resourceValueMessage(kind) {
+        problem = Diagnostic.error message, at
+      }
+      problem = problem.withNote nonLiteralNote(kind)
+    }
+  }
   if numericNameOf(checker, given).isSome() && numericNameOf(checker, wanted).isSome() {
     problem = problem.withNote "There are no implicit conversions: `{shown}.tryFrom(value)?`"
   }

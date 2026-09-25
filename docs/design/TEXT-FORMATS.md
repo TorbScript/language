@@ -1,10 +1,11 @@
 # YAML, Regular Expressions and Markdown
 
-**Status: slices 1, 2, 3 and 5 built (2026-09-25)** — `std/yaml` passes all 402 cases of the YAML test suite, and
-`torb docs check` reads front matter through it; `std/regex` passes RE2's search tests; `std/markdown` passes all 652
-examples of CommonMark 0.31.2 and GitHub's table examples. Sections 1a, 2a and 3a are what their implementations
-decided. The `Regex` literal of slice 4 is not built. The decisions below were made on 2026-09-21 and 2026-09-22, the
-scope of `std/yaml` was widened on 2026-09-24.
+**Status: all five slices built (2026-09-25)** — `std/yaml` passes all 402 cases of the YAML test suite, and
+`torb docs check` reads front matter through it; `std/regex` passes RE2's search tests, and a literal where a `Regex`
+is expected is compiled by the checker; `std/markdown` passes all 652 examples of CommonMark 0.31.2 and GitHub's table
+examples. Sections 1a, 2a and 3a are what their implementations decided. The decisions below were made on 2026-09-21
+and 2026-09-22, the scope of `std/yaml` was widened on 2026-09-24, and a pattern literal is read verbatim since
+2026-09-25.
 
 **Three text packages that the toolchain needs itself, in this order: `std/yaml`, then `std/regex`, then
 `std/markdown`.** The documentation tool read the front matter of every page and the Markdown around it with a
@@ -78,11 +79,16 @@ milestone 10 ([ROADMAP.md](../ROADMAP.md)).
 
 - **No `/.../` literal**, as JavaScript has. `/` is division, and telling the two apart takes parser heuristics that
   the lexer, the highlighter, the formatter canon and the language server would all have to repeat. The language has no
-  special literals for other values either (paths, durations and URIs are values), and raw strings (`raw"\d+"`) exist
-  for exactly this text.
+  special literals for other values either (paths, durations and URIs are values).
 - **The check at compile time comes from the literal rule** of [URI.md](URI.md) section 9: a string *literal* whose
   expected type is `Regex` is compiled by the compiler where it is written, and an invalid pattern is a compile error at
-  that line. A `String` value that becomes a `Regex` at run time answers a `Result`.
+  that line, pointing at the character it fails at. A `String` value that becomes a `Regex` at run time answers a
+  `Result`.
+- **A pattern literal is read verbatim** (owner decision 2026-09-25): where a `Regex` is expected, a literal is neither
+  interpolated nor escaped, so `const date: Regex = "(?P<year>\d{4})-(?P<month>\d{2})"` is the pattern as it stands
+  and `raw"..."` is not needed. Its backslashes and braces are RE2's; a `String` literal anywhere else keeps its escape
+  sequences and interpolations. The same holds for a `UriTemplate` literal, whose braces are RFC 6570's (URI.md
+  section 9).
 - **The engine is TorbScript, with the semantics of RE2**: linear time in the length of the input, and therefore no
   backreferences and no lookaround. It is Unicode aware, and it behaves identically in the VM and in a native binary,
   because both run the same code.
@@ -112,8 +118,9 @@ milestone 10 ([ROADMAP.md](../ROADMAP.md)).
 - **Named groups decode through `ValueDecoder`**, lenient, so a group's text is read as whatever its field asks for, and
   a group that took no part is an absent field. A `Regex` is a capsule whose conversion pair is its text, so it is
   written and read as its pattern in every format.
-- **The literal of slice 4 is not built.** It is URI.md section 9's rule, and it waits for the checker's literal
-  parameter kind, as the `Uri` literal does.
+- **The literal of slice 4 is URI.md section 9's rule**: the checker compiles the verbatim text with `Regex.tryFrom`
+  of the `std/regex` compiled into the compiler, and the lowering builds the value once per program through the
+  private `Regex.literal`, so a pattern literal in a loop is compiled once.
 
 ## 3. `std/markdown`
 
@@ -160,5 +167,5 @@ suite. It is a *document* format: its model is the tree of blocks and inlines, a
 | 1 | `std/yaml`: the reader and the writer of YAML 1.2 and 1.1, the tree, `Encode`/`Decode` - **built** | nothing |
 | 2 | `torb docs check` reads front matter through `std/yaml` - **built**; the seed has to be refreshed at slice 1's commit or later first, because the compiler imports `std/yaml` | 1, and a seed refresh, because the compiler imports it |
 | 3 | `std/regex`: the engine, `Regex.tryFrom(text)`, matches and groups - **built** | nothing |
-| 4 | A `Regex` literal is compiled by the checker (URI.md section 9's table) - waits for the checker's literal parameter kind | 3 |
+| 4 | A `Regex` literal is compiled by the checker (URI.md section 9's table), read verbatim - **built**; the compiler imports `std/regex`, so it is part of the fixpoint | 3 |
 | 5 | `std/markdown` (RELEASE.md slice 1) - **built** | 1 |

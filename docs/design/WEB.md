@@ -1032,7 +1032,11 @@ Each with the options and the recommendation. Everything technical not listed he
   parameters of the case constructor; a parameter with a default may only be an optional query variable. Both
   directions (parsing a request, producing a link) are derived from the one template, and an application refuses to
   start when a case of its `Route` type has no route. The same typed-literal mechanism is intended for named groups of
-  `Regex`.
+  `Regex`. **Built in `std/uri` (2026-09-25):** `route(template, to:)`, `TemplateCase<Value>` and `TemplateRoutes`
+  (`matched`, `link`, and the check at startup) are the API `std/web` re-exports; the checker checks a route's variables
+  against its case where it is written, and refuses a template outside the reversible subset there. Where it departs
+  from this paragraph - `Variables` is the case's type rather than a labelled tuple - is written down in URI.md section
+  9a.
 - **D6/D7: the live UI follows the Elm architecture, and its state lives in a task per session from the start**
   (placement v2 of section 6.4 becomes v1). This needs the duplex connection of NETWORK.md and `Task.first` (F5) first.
 - **D8-D12: as recommended** (parts compared by the hash of what they rendered; no web target yet, WebAssembly only for

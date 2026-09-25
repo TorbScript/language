@@ -1,10 +1,11 @@
 # Uniform Resource Identifiers
 
-**Status: slices 1 to 4 built (2026-09-25)** — `std/ip`, `std/uri` with `Uri`, `UriReference`, `Urn`, IRIs, the `file:`
-bridge and `UriTemplate`, and `std/http` on `Uri`. The owner asked for the whole URI layer before HTTP grows further:
-IRIs, URI references as a type, URI templates, every standard that touches them, and the IP address values shared with
-`std/network`. Sections 2a, 3a, 4a, 8a and 9a are that revision, and section 14's slice order replaces the old one;
-IDNA, `data:`, the literal rule and the rest are the later slices it lists.
+**Status: slices 1 to 4 and 7 built (2026-09-25)** — `std/ip`, `std/uri` with `Uri`, `UriReference`, `Urn`, IRIs, the
+`file:` bridge and `UriTemplate`, `std/http` on `Uri`, and the literal rule of section 9 with typed templates and routes
+(section 9a). The owner asked for the whole URI layer before HTTP grows further: IRIs, URI references as a type, URI
+templates, every standard that touches them, and the IP address values shared with `std/network`. Sections 2a, 3a, 4a,
+8a and 9a are that revision, and section 14's slice order replaces the old one; IDNA, `data:` and the rest are the later
+slices it lists.
 
 **A URI is a value, and a text that is not one is refused at the door.** That is the whole design of `std/uri`: one
 capsule for RFC 3986, normalized at construction, so that `==`, `hash()` and `compare()` are over the canonical form
@@ -1107,11 +1108,11 @@ one that decides it.
 | Expected type | The check at the literal | What it needs | Available |
 |---|---|---|---|
 | a literal union type (`"tcp" \| "udp"`) | membership in a structural set | nothing | it ships |
-| `Path` | **none** — `From<String>` is infallible, so this is ergonomics only | the parameter kind | with the parameter kind |
-| `Resource`, `EmbeddedBytes`, `EmbeddedText` | the file exists, against a directory listing; UTF-8 for the text one | a directory listing per directory, cached | `docs/design/RESOURCES.md` slice 1 |
-| `Uri`, `UriReference` | `tryFrom(text)` answers `Ok`; for `Uri`, a relative reference gets its own message | the checker imports `std/uri` | slice 7 of section 14 |
-| `UriTemplate` | the template is RFC 6570, and its variables match the parameters it is typed against (section 9a) | the same, and `UriTemplate<Variables>` | slice 7 of section 14 |
-| `Regex` | the pattern compiles | the checker imports `std/regex` | when `std/regex` exists |
+| `Path` | **none** — `From<String>` is infallible, so this is ergonomics only | the parameter kind | **built** |
+| `Resource`, `EmbeddedBytes`, `EmbeddedText` | the file exists, against a directory listing; UTF-8 for the text one | a directory listing per directory, cached | **built** (slice 1 of `docs/design/RESOURCES.md`; the UTF-8 check is its slice 2) |
+| `Uri`, `UriReference` | `tryFrom(text)` answers `Ok`; for `Uri`, a relative reference gets its own message | the checker imports `std/uri` | **built** |
+| `UriTemplate` | the template is RFC 6570, read verbatim, and its variables match the fields it is typed against (section 9a) | the same, and `UriTemplate<Variables>` | **built** |
+| `Regex` | the pattern compiles, read verbatim | the checker imports `std/regex` | **built** |
 | a user's own `TryFrom<String, _>` type | `Type.tryFrom(text)` answers `Ok` | **the VM**, constant evaluation, and rules 1 to 3 above answered | 7.x, if ever |
 
 **The cost, stated plainly: every type on the list joins the fixpoint.** The compiler is written in TorbScript and
@@ -1163,6 +1164,48 @@ would not have.
 Nothing. A `String` value never converts, on its own or through `into()`, and the message above is what it gets. That
 is the same answer `docs/design/RESOURCES.md` gives and the same answer literal union types give, and there is exactly one
 rule for all of them.
+
+### A template and a pattern are read verbatim — owner decision 2026-09-25
+
+**Where a `UriTemplate` or a `Regex` is expected, a literal is read without interpolation and without escape
+sequences: its braces and its backslashes are the target grammar.** `route("/orders/{id}", to: Route.Order)` and
+`const date: Regex = "(?P<year>\d{4})-(?P<month>\d{2})"` need no `raw"..."`, because `{id}` is the template's
+variable and `\d{4}` the pattern's class and repetition - what a reader of either grammar expects to see. Every other
+type of the list keeps the rule of the second message above: a `Uri`, a `UriReference`, a `Path` or a resource literal
+cannot be interpolated.
+
+The literal is the text between its quotes exactly as it was written - a multi-line one loses its indentation as its
+`String` reading does - and it ends at the quote the `String` reading ends at, so `\"` is in it (a pattern reads it as
+a `"`). One brace that is never closed on its line still ends the literal for the lexer, which does not know the
+expected type: write it `\{`, which both grammars read as a brace.
+
+### How it is built
+
+- **Two readings of every literal.** The lexer and the parser cannot know the expected type, so what is wrong with the
+  `String` reading of a literal - an escape sequence a `String` does not have (`\d`), an interpolation that does not
+  parse (`{2,4}`) - is not reported by them but kept with the span of the literal (`DeferredDiagnostic`). The checker
+  reports every one of them, except inside a literal it read verbatim. `torb parse` and the formatter canon see a file
+  with a pattern literal as clean.
+- **The check runs the type's own parser in the checker** (`semantics/checker/literal.trb`): `Uri.tryFrom`,
+  `UriReference.tryFrom`, `UriTemplate.tryFrom` and `Regex.tryFrom`, from the `std/uri` and `std/regex` compiled into
+  the compiler. A `Path` literal needs no check, and a resource literal is resolved against the listing of the tree
+  (`docs/design/RESOURCES.md` section 6). A message about a pattern points at the character it fails at where the
+  literal is one line.
+- **The recorded value.** The checker records the text the value is built from (`CheckedLiteral`): the `String` reading
+  of a `Uri`, the verbatim reading of a pattern, the stable name of a resource. The lowering builds the value once per
+  program: every distinct literal is an immortal constant cell (`FunctionKind.ConstantCell`, the shape of a module
+  `const` that is no static data) whose initializer hands the text to a `private static fn literal(text)` of the type.
+  So no failure path is in the program - the member of a `Uri` that could fail panics only if the `std/uri` the program
+  is built against refuses what the compiler's accepted - and a `Regex` literal in a loop is compiled once, not per
+  iteration. A value built from its parts as static data would need to read the private fields of a value of the
+  compiler, which nothing in the language can; the cell is the same guarantee at the cost of one parse per literal and
+  run.
+- **The list is looked up by name** in the exports of `std/path`, `std/uri`, `std/regex` and `std/resource`
+  (`checkedTypesOf` in `semantics/checker/wellknown.trb`), and the member the lowering calls is found by its name
+  `literal`. Renaming either is the two-commit change of the seed rule.
+- **A literal does not adapt through an `Option`**, exactly as `const ratio: Float? = 1` does not: `Uri?` expects an
+  `Option`, and `Some("https://…")` has no expected `Uri` inside either. A literal of the list is written where the type
+  itself is expected.
 
 ## 9a. URI templates
 
@@ -1257,12 +1300,30 @@ WEB.md's D5 is in two stages, and this record builds the first.
    direction: the case's fields encoded into a `Map<String, TemplateValue>` and `expanded` — both directions derived
    from one template, which is what D5 wanted from `assertRoutes`.
 2. **Stage 2, a type at build time (slice 7).** A string literal whose expected type is `UriTemplate<Variables>` is
-   read by the checker (section 9's closed list), and `Variables` is the labelled tuple of its variables: in
-   `route("/orders/{id}", to: Route.Order)` the literal gives the names and `Route.Order(id: Int)` the types, so the
-   literal is a `UriTemplate<(id: Int)>`, and a misspelt variable or a missing case is a build error instead of a
-   refusal to start. `UriTemplate` gains its type parameter then; a template read at run time is a
-   `UriTemplate<Map<String, TemplateValue>>`. The rename of every written `UriTemplate` to that is one mechanical edit, and it is taken knowingly: stage 2 depends on the literal rule, and
-   designing the parameter before the checker that fills it would be designing blind.
+   read by the checker (section 9's closed list), and a misspelt variable is a build error instead of a refusal to
+   start. `UriTemplate` gained its type parameter; a template read at run time is a `UriTemplate<TemplateValues>`
+   (`TemplateValues` is `Map<String, TemplateValue>`).
+
+**What was built, and where it departs from the sketch above** (2026-09-25):
+
+- **`Variables` is the type whose fields the variables are, not a labelled tuple.** A label is not part of a tuple
+  type (`docs/language/values-and-types/tuples.md`), so `UriTemplate<(id: Int)>` would be `UriTemplate<Int>`, and a
+  router at run time needs a type it can decode a match into. `const orders: UriTemplate<OrderPath> = "/orders/{id}"`
+  is checked against the fields of `OrderPath`; `expandedFrom(values: Variables)` and `decoded(reference): Variables?`
+  go through `Encode` and `Decode`, as the named groups of a `Regex` do.
+- **The case is a value of its own, `TemplateCase<Value>`.** `Route.Order` where a `TemplateCase<Route>` is expected is
+  the case `Order`, named where it is written, and not the function that constructs one - the second member of the
+  family "adapts to a checked type", recorded and lowered like a literal. A function value of the constructor could
+  not be the parameter: a function of two parameters is not a function of one tuple, and the router has to know the
+  case's name to decode into it and to link from it. `TemplateCase.named(name)` makes one at run time.
+- **`route(template, to:)` is checked where it is written**: the literal gives the names, the case the fields, and
+  `checkTemplateRoutes` holds the two arguments of the one call against each other - every variable is a field, every
+  field without a default a variable, and a field with a default at most a query variable (`{?page}`), which a request
+  may leave out. The types of the fields are not checked against the template: a field is read through `Decode` from
+  the text of its variable, which is as lenient as a named group of a `Regex` is.
+- **Stage 1 is `TemplateRoutes.of(routes)`** in `std/uri`: the same rule through `Describe` when the program starts,
+  and the one check that finds a case without a route. `matched(reference)` decodes the first matching route into its
+  case, and `link(value)` expands the route of the value's case. `std/web`'s `route` and router are these, re-exported.
 
 ## 10. Who takes a `Uri`
 
@@ -1915,7 +1976,10 @@ green, `torb test` passing, `canon --check` clean and the conformance suite comp
 **`std/uri` is type checked in every build of the compiler from slice 2**, because the prelude names `Uri`; it becomes
 part of the fixpoint proper — code the compiler runs while it compiles itself — in slice 7, where the checker imports
 it (section 9). Until then nothing in `compiler/` calls it, and no slice before 7 needs the two-commit seed rule: none
-adds a native, a syntax or a name the compiler looks up by string.
+adds a native, a syntax or a name the compiler looks up by string. Slice 7 does, because it changes what a literal
+means: its first commit teaches the checker the rule while nothing the seed compiles relies on it, the seed is refreshed
+at that commit, and only the second commit writes checked literals into code the seed compiles (`std/os` joins a `Path`
+literal) and drops `raw` from the templates and patterns of the tests and the pages.
 
 | # | Slice | Files | Depends on | State |
 |---|-------|-------|------------|-------|
@@ -1925,8 +1989,8 @@ adds a native, a syntax or a name the compiler looks up by string.
 | 4 | **`std/http` on `Uri`.** `get`, `post` and `send` take a `Uri`; a server's `Request` gains `uri`, the target URI of RFC 9112 section 3.3; `destinationOf` and `HttpError.InvalidUrl` are deleted; the examples and the conformance programs migrate | `std/http/src/*`, `examples/tour`, `tests/conformance/*` | 2 | **done** |
 | 5 | **IDNA.** `std/idna` with Punycode, UTS #46 mapping and the IDNA 2008 rules; `Uri.tryFrom` accepts a non-ASCII host and stores its A-labels, `iriText()` shows U-labels; `repaired(text)` for the WHATWG differences of section 6; gap 9 answered before `Path` into `UriReference` becomes infallible | `std/idna/*`, `std/uri/src/*`, `compiler/src/semantics/checker/derive.trb` | 2 | later |
 | 6 | **`data:`.** A `DataUri` refinement (RFC 2397): media type, parameters and the bytes | `std/uri/src/data.trb`, `std/encoding` | Base64 in `std/encoding` | later |
-| 7 | **The literal rule.** The parameter kind in the checker and the closed list of section 9 with `Path`, `Uri`, `UriReference`, `UriTemplate` and the resource types; `UriTemplate<Variables>`; the diagnostics; the recorded value in the IR; `compiler/` depends on `std/uri` | `compiler/src/semantics/checker/*`, `compiler/src/ir/*`, `compiler/tests/check.test.trb` | 2, 3; one round with `docs/design/RESOURCES.md` slice 1 | later; **highest risk**, and the slice that puts `std/uri` in the fixpoint |
-| 8 | **Routes.** `std/web`'s `route(template, to:)`, stage 1 of section 9a (a check at startup), then stage 2 on slice 7 | `std/web/*` | 3, 4, and `docs/design/WEB.md`'s slices | later |
+| 7 | **The literal rule.** The parameter kind in the checker and the closed list of section 9 with `Path`, `Uri`, `UriReference`, `UriTemplate`, `Regex` and the resource types; the verbatim reading of a template and a pattern; `UriTemplate<Variables>` and `TemplateCase<Value>`; the diagnostics; the recorded value in the IR; `compiler/` depends on `std/uri`, `std/regex` and `std/path` | `compiler/src/syntax/*`, `compiler/src/semantics/checker/literal.trb`, `compiler/src/ir/lower/literal.trb`, `compiler/tests/literals.test.trb`, `tests/conformance/checked-literals.trb` | 2, 3; one round with `docs/design/RESOURCES.md` slice 1 | **done** (2026-09-25); the slice that put `std/uri` and `std/regex` in the fixpoint |
+| 8 | **Routes.** `route(template, to:)` and `TemplateRoutes` in `std/uri` - stage 1 of section 9a (a check at startup) and stage 2 on slice 7 are built; `std/web` re-exports them with its router | `std/uri/src/route.trb`, later `std/web/*` | 3, 4, and `docs/design/WEB.md`'s slices | the typed API **done**; `std/web` later |
 | 9 | **The manifest.** `source "...", git:/archive:/path:` and `registry "...", url:` are read as `Uri`s when the manifest is evaluated; the lock records the canonical text | `compiler/src/project/*`, `docs/design/PROJECT.md` section 7 | `docs/design/PROJECT.md` slices 1 to 4 | later |
 | 10 | **The documentation tooling.** `links.trb`'s four `startsWith` tests become `UriReference.tryFrom(target)` and `resolved(against:)`, answering exactly what they answer today | `compiler/src/documentation/links.trb` | 7 (the compiler has to import `std/uri`) | later |
 | 11 | **`std/identifier`.** `Identifier`, `Uuid`, `Ulid`, `IdentifierError`, the `urn:uuid:` bridge | `std/identifier/*` | `std/random` (`docs/design/RANDOM.md`) | blocked |

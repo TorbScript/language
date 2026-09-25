@@ -1,0 +1,134 @@
+/**
+ * Templates typed against the fields they fill, and the routes of `TemplateRoutes`: expanding from a value and reading
+ * back into one, matching a reference into the case of the first route that fits it, linking a case back through its
+ * route, and the check at startup that refuses a case without a route or a route that does not fit its case.
+ */
+
+use test, group from "std/test"
+use UriTemplate, TemplateValues, TemplateVariable from "../src/template"
+use TemplateCase, TemplateRoute, TemplateRoutes, route from "../src/route"
+use UriReference from "../src/uri"
+
+type OrderPath {
+  id: Int
+  fields: List<String> = []
+}
+
+type Page {
+  case Home
+  case Order(id: Int)
+  case Search(query: String = "", page: Int = 1)
+  case File(path: List<String>)
+}
+
+/** A text every test here knows to be a URI reference. */
+fn referenceOf(text: String): UriReference {
+  match UriReference.tryFrom(text) {
+    Ok(reference) => reference
+    Fail(problem) => panic "a test's URI reference was refused: {problem}"
+  }
+}
+
+/** The routes of `Page`, which every test here knows to be complete. */
+fn pages(): TemplateRoutes<Page> {
+  const routes = [
+    route("/", to: Page.Home),
+    route("/orders/{id}", to: Page.Order),
+    route("/search{?query,page}", to: Page.Search),
+    route("/files{/path*}", to: Page.File),
+  ]
+  match TemplateRoutes.of(routes) {
+    Ok(found) => found
+    Fail(problem) => panic "the routes of `Page` were refused: {problem}"
+  }
+}
+
+group "a typed template" {
+  test "is expanded from the fields of a value" {
+    const orders: UriTemplate<OrderPath> = "/orders/{id}{?fields*}"
+    assert(orders.expandedFrom(OrderPath(7)).map({ _.text() }) == Ok("/orders/7"))
+    const both = orders.expandedFrom(OrderPath(7, ["total", "lines"])).map({ _.text() })
+    assert(both == Ok("/orders/7?fields=total&fields=lines"))
+  }
+
+  test "reads a reference back into a value" {
+    const orders: UriTemplate<OrderPath> = "/orders/{id}"
+    assert(orders.decoded(referenceOf("/orders/12")) == Some(OrderPath(12)))
+    assert(orders.decoded(referenceOf("/orders/twelve")) == None)
+    assert(orders.decoded(referenceOf("/customers/12")) == None)
+  }
+
+  test "says what kind of value each variable takes" {
+    const template: UriTemplate<TemplateValues> = "/files{/path*}{?sort}"
+    const expected = [TemplateVariable("path", false, true), TemplateVariable("sort", true, false)]
+    assert(template.templateVariables() == expected)
+  }
+
+  test "read at run time is untyped, and still expands a map" {
+    const template = UriTemplate<TemplateValues>.tryFrom(raw"/a/{b}").expect("a template")
+    var values: TemplateValues = [:]
+    values["b"] = .Text("c d")
+    assert(template.expanded(values).map({ _.text() }) == Ok("/a/c%20d"))
+  }
+}
+
+group "routes" {
+  test "match a reference into the case of the first route that fits it" {
+    const routes = pages()
+    assert(routes.matched(referenceOf("/")) == Some(Page.Home))
+    assert(routes.matched(referenceOf("/orders/9")) == Some(Page.Order(9)))
+    assert(routes.matched(referenceOf("/search?query=tea")) == Some(Page.Search("tea", 1)))
+    assert(routes.matched(referenceOf("/search?page=3&query=tea")) == Some(Page.Search("tea", 3)))
+    assert(routes.matched(referenceOf("/files/a/b.txt")) == Some(Page.File(["a", "b.txt"])))
+    assert(routes.matched(referenceOf("/nowhere")) == None)
+    assert(routes.matched(referenceOf("/orders/nine")) == None)
+  }
+
+  test "link a case back through its route" {
+    const routes = pages()
+    assert(routes.link(Page.Order(5)).map({ _.text() }) == Ok("/orders/5"))
+    assert(routes.link(Page.Search("green tea", 2)).map({ _.text() }) == Ok("/search?query=green%20tea&page=2"))
+    assert(routes.link(Page.Home).map({ _.text() }) == Ok("/"))
+  }
+
+  test "refuse to start without a route for every case" {
+    const incomplete = TemplateRoutes.of([route("/", to: Page.Home)])
+    assert(!incomplete.isOk())
+    if const Fail(.InvalidRoutes(reason)) = incomplete {
+      assert reason.contains("the case `Order` has no route")
+      assert reason.contains("the case `File` has no route")
+    }
+  }
+
+  test "made at run time are checked against their case when the program starts" {
+    const template = UriTemplate<Page>.tryFrom(raw"/orders/{number}").expect("a template")
+    const routes = [
+      route("/", to: Page.Home),
+      TemplateRoute(template, TemplateCase.named("Order")),
+      route("/search{?query,page}", to: Page.Search),
+      route("/files{/path*}", to: Page.File),
+    ]
+    const found = TemplateRoutes.of routes
+    if const Fail(.InvalidRoutes(reason)) = found {
+      assert reason.contains(raw"`number` of `/orders/{number}` is not a field of `Order`")
+      assert reason.contains(raw"`Order.id` has no default and no variable in `/orders/{number}`")
+    } else {
+      assert(found.isOk() == false)
+    }
+  }
+
+  test "name a case that the type does not have at run time" {
+    const routes = [
+      route("/", to: Page.Home),
+      route("/orders/{id}", to: Page.Order),
+      route("/search{?query,page}", to: Page.Search),
+      route("/files{/path*}", to: Page.File),
+      TemplateRoute(UriTemplate<Page>.tryFrom("/x").expect("a template"), TemplateCase.named("Missing")),
+    ]
+    if const Fail(.InvalidRoutes(reason)) = TemplateRoutes.of(routes) {
+      assert reason.contains("`Missing` is not a case of")
+    } else {
+      assert false
+    }
+  }
+}

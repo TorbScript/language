@@ -1,0 +1,209 @@
+/**
+ * [TemplateCase], [TemplateRoute] and [TemplateRoutes]: URI templates typed against the cases of one type, which is
+ * what a router of `std/web` is built from (docs/design/WEB.md, decision D5; docs/design/URI.md section 9a).
+ *
+ * The compiler checks a route where it is written: in `route("/orders/{id}", to: Route.Order)` the template literal
+ * gives the names and the case gives the fields, and a variable that is no field of the case, or a field without a
+ * default that is no variable, is an error at the literal. [TemplateRoutes.of] checks the same when the program
+ * starts, for routes made at run time, and it is what says that a case has no route.
+ */
+
+use EncodedValue, ValueDecoder, StructureCase, structureOf from "std/encoding"
+use UriError from "./error"
+use UriReference from "./uri"
+use UriTemplate, templateValuesOf, encodedFieldsOf from "./template"
+
+/**
+ * One case of `Value`, named where it is written: `Route.Order` where a `TemplateCase<Route>` is expected is the case
+ * `Order`, and not the function that constructs one (docs/design/URI.md section 9a). It is what a route pairs its
+ * template with.
+ *
+ * # Examples
+ *
+ *     const order: TemplateCase<Route> = Route.Order
+ *     print order.name()
+ */
+public type TemplateCase<Value> with Show, Equals, Hash {
+  /** The name of the case, as the type declares it. */
+  private nameValue: String
+
+  /**
+   * The case of `Value` called `name`, for a route made at run time. Nothing checks here that `Value` has such a case;
+   * [TemplateRoutes.of] does.
+   */
+  static fn named(name: String): TemplateCase<Value> {
+    Self name
+  }
+
+  /** The value of a case the compiler read where a `TemplateCase` is expected. The lowering calls this. */
+  private static fn literal(text: String): TemplateCase<Value> {
+    Self text
+  }
+
+  /** The name of the case. */
+  fn name(): String {
+    nameValue
+  }
+
+  fn show(): String {
+    nameValue
+  }
+}
+
+/** A template and the case of `Value` its variables fill: one line of a router. */
+public type TemplateRoute<Value> with Show {
+  /** The template, typed against `Value`. */
+  template: UriTemplate<Value>
+  /** The case a matched reference becomes, and the case whose values [TemplateRoutes.link] expands. */
+  target: TemplateCase<Value>
+
+  fn show(): String {
+    "{template.show()} -> {target.name()}"
+  }
+}
+
+/**
+ * The route of one case: `route("/orders/{id}", to: Route.Order)`. Written with a literal and a case, it is checked
+ * where it is written: every variable is a field of the case, every field without a default is a variable, and a field
+ * with a default is at most a query variable (`{?page}`), which a request may leave out.
+ *
+ * # Examples
+ *
+ *     const routes = TemplateRoutes.of([
+ *       route("/", to: Route.Home),
+ *       route("/orders/{id}", to: Route.Order),
+ *     ])?
+ */
+public fn route<Value>(template: UriTemplate<Value>, to: TemplateCase<Value>): TemplateRoute<Value> {
+  TemplateRoute template, to
+}
+
+/**
+ * Every route of `Value`, checked to cover each of its cases: a reference is matched against them in order and read
+ * into the case of the first that matches, and a value is linked through the route of its own case. Both directions
+ * come from the one template, so they cannot disagree.
+ *
+ * # Examples
+ *
+ *     const routes = TemplateRoutes.of([
+ *       route("/", to: Route.Home),
+ *       route("/orders/{id}", to: Route.Order),
+ *     ])?
+ *     print routes.matched(UriReference.tryFrom("/orders/7")?)
+ *     print routes.link(Route.Order(7))
+ *
+ * # Pitfalls
+ *
+ * - The order matters where two templates match one reference: the first route wins.
+ */
+public type TemplateRoutes<Value> with Show {
+  private routes: List<TemplateRoute<Value>>
+  /** The qualified name of `Value`, which a decoded case is read under. */
+  private typeName: String
+
+  /**
+   * The routes, once every case of `Value` has one and every route fits its case: its case exists, every variable is
+   * a field of it, every field without a default is a variable, and a field with a default is at most a query
+   * variable. This is the check a program makes when it starts, and the one that finds a case without a route.
+   *
+   * # Errors
+   *
+   * - [UriError.InvalidRoutes] naming every problem, one per line.
+   */
+  static fn of(routes: List<TemplateRoute<Value>>): Result<TemplateRoutes<Value>, UriError> where Value: Describe {
+    const structure = structureOf<Value>()
+    const (typeName, cases) = match structure {
+      .Variant(name, found) => (name, found)
+      other => {
+        return Fail UriError.InvalidRoutes("`{other.declaredName()}` has no cases, and a route stands for one")
+      }
+    }
+    var problems: List<String> = []
+    for found in routes {
+      if !found.template.isMatchable() {
+        problems.append "`{found.template.show()}` cannot be matched against a request, so it is no route"
+      }
+      match cases.find({ _.name == found.target.name() }) {
+        Some(declared) => problems.appendAll mismatchesOf(found, declared)
+        None => problems.append "`{found.target.name()}` is not a case of `{typeName}` ({found.template.show()})"
+      }
+    }
+    for declared in cases {
+      if !routes.any({ _.target.name() == declared.name }) {
+        problems.append "the case `{declared.name}` has no route"
+      }
+    }
+    if !problems.isEmpty() {
+      return Fail UriError.InvalidRoutes(problems.joined(separator: "\n"))
+    }
+    Ok Self(routes, typeName)
+  }
+
+  /** The case the first matching route reads `reference` into, or `None` where no route matches it. */
+  fn matched(reference: UriReference): Value? where Value: Decode {
+    for found in routes {
+      if const Some(values) = found.template.matched(reference) {
+        const encoded = EncodedValue.Variant typeName, found.target.name(), encodedFieldsOf(values)
+        var source = ValueDecoder.of encoded, lenient: true
+        if const Ok(value) = Value.decode(source) {
+          return Some value
+        }
+      }
+    }
+    None
+  }
+
+  /**
+   * The reference of `value`: the template of the first route of its case, expanded with its fields.
+   *
+   * # Errors
+   *
+   * - [UriError.InvalidRoutes] for a value that is no case, which a `Value` [TemplateRoutes.of] accepted never is.
+   * - As for [UriTemplate.expanded].
+   */
+  fn link(value: Value): Result<UriReference, UriError> where Value: Encode {
+    const encoded = EncodedValue.of value
+    const name = match encoded {
+      .Variant(_, found, _) => found
+      _ => {
+        return Fail UriError.InvalidRoutes("`{encoded.show()}` is no case, and a route stands for one")
+      }
+    }
+    for found in routes {
+      if found.target.name() == name {
+        return found.template.expanded templateValuesOf(encoded)
+      }
+    }
+    Fail UriError.InvalidRoutes("the case `{name}` has no route")
+  }
+
+  fn show(): String {
+    routes.map({ _.show() }).toList().joined(separator: "\n")
+  }
+}
+
+/** What is wrong between one route and the case it names: the same rule the compiler checks at a literal. */
+fn mismatchesOf<Value>(found: TemplateRoute<Value>, declared: StructureCase): List<String> {
+  const variables = found.template.templateVariables()
+  const shown = found.template.show()
+  var problems: List<String> = []
+  for variable in variables {
+    match declared.fields.find({ _.name() == variable.name }) {
+      Some(field) => {
+        if field.isRequired() && variable.isOptional {
+          problems.append "`{variable.name}` of `{shown}` may be left out of a query, and `{declared.name}.{variable.name}` has no default"
+        }
+        if !field.isRequired() && !variable.isOptional {
+          problems.append "`{declared.name}.{variable.name}` has a default, so it is a query variable (`\{?{variable.name}\}`) in `{shown}`"
+        }
+      }
+      None => problems.append "`{variable.name}` of `{shown}` is not a field of `{declared.name}`"
+    }
+  }
+  for field in declared.fields {
+    if field.isRequired() && !variables.any({ _.name == field.name() }) {
+      problems.append "`{declared.name}.{field.name()}` has no default and no variable in `{shown}`"
+    }
+  }
+  problems
+}

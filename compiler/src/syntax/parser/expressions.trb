@@ -5,6 +5,7 @@
  */
 
 use Span from "../source"
+use DeferredDiagnostic from "../diagnostic"
 use TokenKind, Keyword, TextPart from "../token"
 use Expression, ExpressionKind, Argument, CallStyle, Closure, ClosureParameter, MatchArm, TextSegment from "../ast"
 use InfixOperator, PrefixOperator, Name, TypeReference from "../ast"
@@ -454,7 +455,7 @@ public fn parsePrimaryExpression(var parser: Parser): Expression {
     }
     .TextLiteral(parts) => {
       parser.bump()
-      ExpressionKind.TextLiteral parseTextSegments(parser, parts)
+      ExpressionKind.TextLiteral parseTextSegments(parser, parts, start)
     }
     .Reserved(.True) => {
       parser.bump()
@@ -528,8 +529,14 @@ fn parseListOrMap(var parser: Parser): ExpressionKind {
   ExpressionKind.MapLiteral entries
 }
 
-/** The expressions inside of a string literal are source ranges. They are lexed and parsed like a file of their own. */
-fn parseTextSegments(var parser: Parser, parts: List<TextPart>): List<TextSegment> {
+/**
+ * The expressions inside of a string literal are source ranges. They are lexed and parsed like a file of their own.
+ *
+ * What goes wrong in one of them is a problem of the `String` reading of the literal only: where a `Regex` or a
+ * `UriTemplate` is expected, `{2,4}` and `{id}` are that grammar's braces and no expression at all. So it waits for the
+ * checker under the span of the whole literal, as the lexer's problems of the reading do (`DeferredDiagnostic`).
+ */
+fn parseTextSegments(var parser: Parser, parts: List<TextPart>, literal: Span): List<TextSegment> {
   var segments: List<TextSegment> = []
   for part in parts {
     match part {
@@ -541,8 +548,11 @@ fn parseTextSegments(var parser: Parser, parts: List<TextPart>): List<TextSegmen
         if !inner.isAt(TokenKind.EndOfFile) {
           inner.errorHere "Expected `\}` after the expression. A literal brace is written `\\\{`"
         }
-        parser.diagnostics.appendAll lexed.diagnostics
-        parser.diagnostics.appendAll inner.diagnostics
+        for problem in lexed.diagnostics.appendedAll(inner.diagnostics) {
+          parser.deferred.append DeferredDiagnostic(literal, problem)
+        }
+        parser.deferred.appendAll lexed.deferred
+        parser.deferred.appendAll inner.deferred
         segments.append TextSegment.Interpolated(expression)
       }
     }

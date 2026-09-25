@@ -1,0 +1,73 @@
+use Regex from "std/regex"
+use UriTemplate, TemplateRoutes, route from "std/uri"
+
+/**
+ * The literal rule (docs/design/URI.md section 9): a string literal where a `Uri`, a `Path`, a `Regex` or a
+ * `UriTemplate` is expected is read by the compiler, and the value is built once per program from the text it recorded.
+ * A pattern and a template are read verbatim, so `\d{4}` and `{id}` are theirs. A literal in a loop is one value, built
+ * the first time, and the immortal count the leak report prints has one block per literal, not per iteration.
+ */
+type Route {
+  case Home
+  case Order(id: Int)
+  case Search(query: String = "")
+}
+
+type OrderPath {
+  id: Int
+  fields: List<String> = []
+}
+
+fn hostOf(target: Uri): String {
+  target.host()?.show() ?? "none"
+}
+
+fn isYear(text: String): Bool {
+  const year: Regex = "\d{4}"
+  year.matches text
+}
+
+const base: Uri = "HTTPS://Example.TEST/guide/./a/../start.html"
+print base
+print hostOf("https://example.test:8080/x")
+const link: UriReference = "../reference/index.html#top"
+print link.resolved(against: base)
+
+const date: Regex = "(?P<year>\d{4})-(?P<month>\d{2})-(?P<day>\d{2})"
+print date.replace("due 2026-09-25", "$day.$month.$year")
+var years = 0
+for text in ["1999", "20x6", "2026", "12345"] {
+  if isYear(text) {
+    years = years + 1
+  }
+}
+print "years: {years}"
+
+const config: Path = "config/../app/project.trb"
+print config.normalized()
+
+const orders: UriTemplate<OrderPath> = "/orders/{id}{?fields*}"
+print orders.expandedFrom(OrderPath(7, ["total", "lines"]))
+// An exploded query variable cannot be read backwards, so this template is not matched
+print orders.decoded(UriReference.tryFrom("/orders/12?fields=total").expect("a reference"))
+const byId: UriTemplate<OrderPath> = "/orders/{id}"
+print byId.decoded(UriReference.tryFrom("/orders/12").expect("a reference"))
+
+match TemplateRoutes.of([
+  route("/", to: Route.Home),
+  route("/orders/{id}", to: Route.Order),
+  route("/search{?query}", to: Route.Search),
+]) {
+  Ok(routes) => {
+    print routes.matched(UriReference.tryFrom("/orders/9").expect("a reference"))
+    print routes.matched(UriReference.tryFrom("/search?query=tea&page=2").expect("a reference"))
+    print routes.matched(UriReference.tryFrom("/nowhere").expect("a reference"))
+    print routes.link(Route.Search("green tea"))
+  }
+  Fail(problem) => print "{problem}"
+}
+
+match TemplateRoutes.of([route("/", to: Route.Home)]) {
+  Ok(_) => print "complete"
+  Fail(problem) => print "{problem}"
+}

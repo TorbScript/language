@@ -215,6 +215,17 @@ public type Uri with Show, Equals, Hash, Compare {
   fn compare(other: Uri): Ordering {
     compareComponents components, other.components
   }
+
+  /**
+   * The value of a literal the compiler read where a `Uri` is expected (docs/design/URI.md section 9). The lowering
+   * calls this once per literal and program, with a text the checker already read with [Uri.tryFrom].
+   */
+  private static fn literal(text: String): Uri {
+    match Uri.tryFrom(text) {
+      Ok(uri) => uri
+      Fail(problem) => panic "The compiler read the `Uri` literal `{text}`, and this `std/uri` refuses it: {problem}"
+    }
+  }
 }
 
 /**
@@ -373,6 +384,16 @@ public type UriReference with Show, Equals, Hash, Compare {
   /** Scheme, then authority, then path, then query, then fragment, each `None` before every `Some`. */
   fn compare(other: UriReference): Ordering {
     compareComponents components, other.components
+  }
+
+  /** The value of a literal the compiler read where a `UriReference` is expected, as [Uri.literal] is for a `Uri`. */
+  private static fn literal(text: String): UriReference {
+    match UriReference.tryFrom(text) {
+      Ok(reference) => reference
+      Fail(problem) => {
+        panic "The compiler read the `UriReference` literal `{text}`, and this `std/uri` refuses it: {problem}"
+      }
+    }
   }
 }
 

@@ -9,7 +9,7 @@
  */
 
 use Span, SourceText from "./source"
-use Diagnostic from "./diagnostic"
+use Diagnostic, DeferredDiagnostic from "./diagnostic"
 use Token, TokenKind, TextPart, Keyword, DocComment from "./token"
 
 /**
@@ -19,6 +19,8 @@ public type Lexed {
   tokens: List<Token>
   docs: List<DocComment>
   diagnostics: List<Diagnostic>
+  /** The problems of the `String` reading of the string literals, which the checker reports or drops. */
+  deferred: List<DeferredDiagnostic> = []
 }
 
 /** Lexes a whole file, from its first character to its last. */
@@ -30,7 +32,19 @@ public fn lex(source: SourceText): Lexed {
 public fn lexRange(source: SourceText, range: Span): Lexed {
   var lexer = Lexer source, position: source.indexAt(range.start), end: source.indexAt(range.end)
   lexer.run()
-  Lexed removeInsignificantNewlines(lexer.tokens), lexer.docs, lexer.diagnostics
+  Lexed removeInsignificantNewlines(lexer.tokens), lexer.docs, lexer.diagnostics, lexer.deferred
+}
+
+/**
+ * The verbatim reading of the string literal at `literal`: the characters between its quotes exactly as they were
+ * written, with no escape sequence and no interpolation read. It is what a literal is where a `Regex` or a
+ * `UriTemplate` is expected, whose braces and backslashes are their own grammar (docs/design/URI.md section 9). A
+ * multi-line literal loses its indentation exactly as its `String` reading does.
+ */
+public fn writtenTextOf(source: SourceText, literal: Span): String {
+  var lexer = Lexer source, position: source.indexAt(literal.start), end: source.indexAt(literal.end)
+  lexer.readWritten()
+  String.from lexer.written
 }
 
 /** Longest first. `;` is not part of the language, but it gets a better message than "unexpected character". */
@@ -139,6 +153,14 @@ type Lexer {
   var tokens: List<Token> = []
   var docs: List<DocComment> = []
   var diagnostics: List<Diagnostic> = []
+  /** The problems of the `String` reading of every string literal, which the checker reports or drops. */
+  var deferred: List<DeferredDiagnostic> = []
+  /** Whether a string literal is being read, whose problems of its `String` reading go to [Lexer.pending]. */
+  var isReadingText: Bool = false
+  /** The problems of the `String` reading of the literal that is being read, until its span is known. */
+  var pending: List<Diagnostic> = []
+  /** The literal that is being read, character for character as it was written: its verbatim reading. */
+  var written: List<Char> = []
 
   var fn run() {
     // A byte order mark in front of the first character is how some editors on Windows save UTF-8: it is no text
@@ -384,11 +406,24 @@ type Lexer {
       '\\' | '"' | '\'' | '{' | '}' => character
       'u' if peek() == Some('{') => unicodeEscape(start)?
       _ => {
-        error "Unknown escape sequence `\\{character}`", start
+        textError "Unknown escape sequence `\\{character}`", start
         character
       }
     }
     Some result
+  }
+
+  /**
+   * A problem of the `String` reading of a string literal, which a verbatim reading does not have: it waits for the
+   * checker, which knows which reading the literal gets. Inside a character literal it is an ordinary error.
+   */
+  var fn textError(message: String, start: Int) {
+    if !isReadingText {
+      error message, start
+      return
+    }
+    const last = position.max(start + 1).min(source.characters.length())
+    pending.append Diagnostic.error(message, Span(source.offsets[start], source.offsets[last]))
   }
 
   /** `\u{1F44B}`. The position is at the `{`. `None` if the `}` is missing. */
@@ -406,7 +441,7 @@ type Lexer {
     match code {
       Some(code) => Some code
       None => {
-        error "This is not a Unicode scalar value", start
+        textError "This is not a Unicode scalar value", start
         Some '\u{FFFD}'
       }
     }
@@ -415,6 +450,11 @@ type Lexer {
   /** `"..."`, `"""..."""`, and their raw variants `raw"..."`, `raw"""..."""` (the older
    * spelling `r"..."` is an error that names this one). The position is at the first quote. */
   var fn textLiteral(start: Int, raw: Bool) {
+    // An escape sequence a `String` does not have and an interpolation that does not parse are problems of the
+    // `String` reading only, and the checker decides which reading this literal gets (`DeferredDiagnostic`)
+    isReadingText = !raw
+    pending = []
+    written = []
     const quotes = if isAt("\"\"\"") { "\"\"\"" } else { "\"" }
     const isTripleQuoted = quotes != "\""
     position = position + quotes.byteLength()
@@ -451,6 +491,9 @@ type Lexer {
         dedentLine reference
         continue
       }
+      // Whatever this character starts - an escape sequence, an interpolation - goes into the verbatim reading exactly
+      // as it was written
+      const first = position
       position = position + 1
       if character == '\\' && !raw {
         if const Some(escaped) = escape() {
@@ -478,11 +521,15 @@ type Lexer {
       } else {
         literal.append character
       }
+      for index in first..position {
+        written.append source.characters[index]
+      }
     }
     if literal.isNotEmpty() || parts.isEmpty() {
       parts.append TextPart.Literal(String.from(literal))
     }
     push TokenKind.TextLiteral(parts), start
+    finishText start, isClosed: true
   }
 
   /**
@@ -495,6 +542,38 @@ type Lexer {
       read.append TextPart.Literal(String.from(literal))
     }
     push TokenKind.TextLiteral(read), start
+    finishText start, isClosed: false
+  }
+
+  /**
+   * The end of a string literal. The problems of its `String` reading wait for the checker under the span of the whole
+   * literal; a literal that was never closed has no verbatim reading either, so they are reported at once.
+   */
+  var fn finishText(start: Int, isClosed: Bool) {
+    isReadingText = false
+    if isClosed {
+      const literal = spanFrom start
+      for problem in pending {
+        deferred.append DeferredDiagnostic(literal, problem)
+      }
+    } else {
+      diagnostics.appendAll pending
+    }
+    pending = []
+  }
+
+  /** The verbatim reading of the string literal at the position, which [writtenTextOf] asks for. */
+  var fn readWritten() {
+    const start = position
+    if isAt("raw\"") {
+      position = position + 3
+      textLiteral start, raw: true
+    } else if isAt("r\"") {
+      position = position + 1
+      textLiteral start, raw: true
+    } else {
+      textLiteral start, raw: false
+    }
   }
 
   /**

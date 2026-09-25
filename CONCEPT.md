@@ -2527,6 +2527,16 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
 
 ## Decision Log
 
+- **A string literal adapts to a closed list of checked types, and a template or a pattern is read verbatim**
+  (2026-09-25; docs/design/URI.md section 9, docs/language/values-and-types/checked-literals.md). Where a `Path`, a
+  `Uri`, a `UriReference`, a `UriTemplate`, a `Regex` or a resource type of `std/resource` is expected, a string literal
+  is read by the compiler where it is written - with the type's own parser, which the compiler imports - and one that is
+  none is an error at that line; a `String` value never converts. The list is closed and written in the compiler: a
+  user's `TryFrom<String, _>` would make the checker run the program it checks, and a trait as the trigger would act at
+  a distance. Where a `UriTemplate` or a `Regex` is expected, the literal is read without interpolation and without
+  escape sequences, because its braces and backslashes are that grammar's (`"/orders/{id}"`, `"\d{2,4}"`) and `raw` is
+  not needed; every other checked literal cannot be interpolated. A template typed against a record or a case
+  (`route("/orders/{id}", to: Route.Order)`) is checked against its fields at the literal.
 - **A panic is a broken promise of the program, never a property of its data** (2026-09-24; docs/design/PANICS.md).
   An operation panics only where its precondition is an expression the program could have written; every partial
   operation has a total twin beside it; the compiler removes the checks it proves and refuses the failures it sees;
@@ -2547,7 +2557,7 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
   `UInt64` mask, with the vocabulary of a `Set`, `bits()` and `fromBits(mask)`, and every value a power of two. Bit
   masks get no operators and no construct of their own: the two pieces serve C enums, protocol codes and database
   columns as well.
-- **A regular expression is a value of `std/regex`, and there is no literal for it** (2026-09-22; planned,
+- **A regular expression is a value of `std/regex`, and there is no literal for it** (2026-09-22;
   docs/design/TEXT-FORMATS.md). A `/.../` literal collides with division, and every tool that reads `.trb` would have
   to repeat the heuristic that tells them apart. The check at compile time comes from the rule that a string literal
   adapts to a checked type (docs/design/URI.md section 9): a literal where a `Regex` is expected is compiled where it

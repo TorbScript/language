@@ -141,14 +141,14 @@ supported, and neither is a dialect with its own name.
 | Package | What it is | Record | Waits for |
 |---|---|---|---|
 | `std/yaml` | built: YAML 1.2 and 1.1 in full, anchors, aliases, tags and comments in the tree, the target type resolves scalars, a schema is an option; all 402 cases of the YAML test suite pass | [design/TEXT-FORMATS.md](design/TEXT-FORMATS.md) section 1a | - |
-| `std/regex` | built: a `Regex` with RE2's syntax and linear time, groups by name that decode into a type, replace and split; RE2's search tests pass; next: the literal the compiler checks | [design/TEXT-FORMATS.md](design/TEXT-FORMATS.md) section 2a | the literal waits for the checker's parameter kind |
+| `std/regex` | built: a `Regex` with RE2's syntax and linear time, groups by name that decode into a type, replace and split; RE2's search tests pass; a literal where a `Regex` is expected is compiled by the checker, read verbatim | [design/TEXT-FORMATS.md](design/TEXT-FORMATS.md) section 2a | - |
 | `std/markdown` | built: CommonMark 0.31.2 with GitHub's tables and front matter, the document tree as a value with the lines of its blocks and links, HTML and a writer that round trips; all 652 examples of the specification pass | [design/TEXT-FORMATS.md](design/TEXT-FORMATS.md) section 3a, [design/RELEASE.md](design/RELEASE.md) slice 1 | - |
 | `std/random` | a seedable, splittable generator that is a value | [design/RANDOM.md](design/RANDOM.md) | nothing |
 | `std/identifier` | `Uuid`, `Ulid`, the trait `Identifier` | [design/URI.md](design/URI.md) section 12 | `std/random` |
-| `std/uri` | built: `Uri` and `UriReference` after RFC 3986, IRIs (RFC 3987), `Urn` (RFC 8141), `UriTemplate` (RFC 6570), the `file:` bridge, `std/ip`, `std/http` on `Uri`; next: IDNA, `data:` and the literal rule | [design/URI.md](design/URI.md) section 14 | nothing; the literal rule waits for the checker's parameter kind |
+| `std/uri` | built: `Uri` and `UriReference` after RFC 3986, IRIs (RFC 3987), `Urn` (RFC 8141), `UriTemplate` (RFC 6570) typed against the fields it fills, routes (`route`, `TemplateRoutes`), the `file:` bridge, `std/ip`, `std/http` on `Uri`, and the literal rule (`Path`, `Uri`, `UriReference`, `UriTemplate`, `Regex`, resources); next: IDNA and `data:` | [design/URI.md](design/URI.md) section 14 | nothing |
 | `std/cli` | commands, flags and options declared once, help and errors generated | [design/CLI.md](design/CLI.md) | nothing |
 | `std/os`, `std/path` | the rest of their slices | [design/OS.md](design/OS.md), [design/PATH.md](design/PATH.md) | - |
-| resources | files a program ships or embeds, named by a literal | [design/RESOURCES.md](design/RESOURCES.md) | `std/uri` |
+| resources | files a program ships or embeds, named by a literal; slice 1 built (`std/resource`, the literal resolved and checked by the compiler); next: embedding and shipping the bytes | [design/RESOURCES.md](design/RESOURCES.md) | - |
 
 ## Language features designed and not built
 

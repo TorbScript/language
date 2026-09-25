@@ -408,8 +408,10 @@ fn requireLoop(var checker: Checker, keyword: String, at: Span) {
 
 /** Whether the lexer or the parser reported something inside of this span of the module being checked. */
 fn hasSyntaxErrorIn(checker: Checker, at: Span): Bool {
-  const reported = checker.program.graph.at(checker.module).diagnostics
-  reported.any({ _.span.start >= at.start && _.span.start < at.end })
+  const parsed = checker.program.graph.at checker.module
+  // A problem of the `String` reading of a literal counts as well: where it is one, it is reported after the checker
+  const deferred = parsed.deferred.map({ _.diagnostic }).toList()
+  parsed.diagnostics.appendedAll(deferred).any({ _.span.start >= at.start && _.span.start < at.end })
 }
 
 /**

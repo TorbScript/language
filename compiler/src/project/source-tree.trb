@@ -32,6 +32,11 @@ public type SourceTree {
    * time something asks for its text, so a program that reaches a few packages of a large workspace reads those.
    */
   private disk: DiskFiles? = None
+  /**
+   * Every other file below what was read, by normalized path and sorted, without its text: what a resource literal is
+   * resolved against (docs/design/RESOURCES.md section 6). A tree built in memory lists its resources in `files`.
+   */
+  private otherPaths: List<String> = []
 
   static fn of(files: Map<String, String>, base: String = ".", standardLibrary: String = ""): SourceTree {
     var normalized: Map<String, String> = [:]
@@ -48,7 +53,13 @@ public type SourceTree {
    * A tree of the files `read` already holds and the files `listed` names, which are read from disk the first time
    * their text is asked for. A file that cannot be read then reads as empty.
    */
-  static fn onDisk(read: Map<String, String>, listed: List<String>, base: String, standardLibrary: String): SourceTree {
+  static fn onDisk(
+    read: Map<String, String>,
+    listed: List<String>,
+    base: String,
+    standardLibrary: String,
+    others: List<String> = [],
+  ): SourceTree {
     const tree = SourceTree.of read, base, standardLibrary
     var paths = tree.sortedPaths
     var names: Set<String> = Set.of()
@@ -60,7 +71,19 @@ public type SourceTree {
       }
     }
     paths.sort({ _ })
-    Self tree.files, paths, tree.base, tree.standardLibraryValue, [:], Some(DiskFiles(names))
+    var otherPaths = others.map(normalizePath).toList()
+    otherPaths.sort({ _ })
+    Self tree.files, paths, tree.base, tree.standardLibraryValue, [:], Some(DiskFiles(names)), otherPaths
+  }
+
+  /**
+   * Every file of the tree, its sources and the files that are no source, sorted by path: the listing a resource
+   * literal is resolved against, byte for byte.
+   */
+  fn listedPaths(): List<String> {
+    var all = sortedPaths.appendedAll otherPaths
+    all.sort({ _ })
+    all
   }
 
   /**
@@ -114,7 +137,7 @@ public type SourceTree {
     texts.set normalized, text
     var parsed = parsedFiles
     const _ = parsed.remove normalized
-    Self texts, paths, base, standardLibraryValue, parsed, disk
+    Self texts, paths, base, standardLibraryValue, parsed, disk, otherPaths
   }
 
   /** The same tree with every file parsed once, which [SourceTree.parsedAt] then answers without parsing again. */
@@ -126,7 +149,7 @@ public type SourceTree {
         parsed.set path, (source, parse(source))
       }
     }
-    Self files, sortedPaths, base, standardLibraryValue, parsed, disk
+    Self files, sortedPaths, base, standardLibraryValue, parsed, disk, otherPaths
   }
 
   /** The text of a file as the parser reads it, and what the parser made of it: kept, or parsed now. */

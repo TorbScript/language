@@ -67,6 +67,10 @@ print "escaped: \{not interpolated\}"
 5. **A raw string (`raw"..."`) never interpolates.** `{` is an ordinary character inside one; see
    [Literals](literals.md) for the two string forms.
 
+6. **A literal where a `Regex` or a `UriTemplate` is expected never interpolates either.** It is read verbatim, so
+   `{id}` is the template's variable and `{2,4}` the pattern's repetition; see
+   [Checked literals](../values-and-types/checked-literals.md).
+
 ## What this is not
 
 **A literal `{` is not written by doubling it.** Some template languages use `{{` for a literal brace; here that

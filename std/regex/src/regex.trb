@@ -182,6 +182,18 @@ public type Regex with Show, Equals, TryFrom<String, RegexError> {
     }
     pieces
   }
+
+  /**
+   * The value of a literal the compiler compiled where a `Regex` is expected (docs/design/URI.md section 9). The
+   * lowering calls this once per literal and program, with a pattern the checker already compiled with
+   * [Regex.tryFrom].
+   */
+  private static fn literal(text: String): Regex {
+    match Regex.tryFrom(text) {
+      Ok(regex) => regex
+      Fail(problem) => panic "The compiler read the `Regex` literal `{text}`, and this `std/regex` refuses it: {problem}"
+    }
+  }
 }
 
 /** A pattern is its text wherever a `Regex` is written or read: `Encode` and `Decode` go through this pair. */

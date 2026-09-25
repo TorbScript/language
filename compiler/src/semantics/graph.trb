@@ -64,7 +64,9 @@ public fn buildGraph(
       }
       const id = ModuleId modules.length()
       const entry = isEntryFile package, path
-      modules.append Module(id, index, path, source, syntax.file, syntax.diagnostics, entry, tree.display(path))
+      const shown = tree.display path
+      const deferred = syntax.deferred
+      modules.append Module(id, index, path, source, syntax.file, syntax.diagnostics, entry, shown, deferred: deferred)
     }
   }
   addReceiverScripts tree, workspace, modules, reached.isNone()
@@ -294,7 +296,8 @@ fn addScript(tree: SourceTree, var modules: List<Module>, package: Int, path: St
   const (source, parsed) = tree.parsedAt path
   const id = ModuleId modules.length()
   const shown = tree.display path
-  modules.append Module(id, package, path, source, parsed.file, parsed.diagnostics, true, shown, receiver: Some(receiver))
+  const deferred = parsed.deferred
+  modules.append Module(id, package, path, source, parsed.file, parsed.diagnostics, true, shown, Some(receiver), deferred)
 }
 
 /** What a `use "..."` path names, or why it names nothing. */

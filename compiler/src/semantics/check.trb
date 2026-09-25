@@ -74,7 +74,7 @@ public fn check(
       addPackage packages, package
     }
   }
-  const workspace = Workspace packages
+  const workspace = Workspace packages, listedFiles: tree.listedPaths()
   before.append Timing("finding the workspace", clock.taken())
   // `torb run`: the packages of the program alone, so a scratch file in a checkout does not parse the whole checkout
   const reachedFrom = if onlyReached { Some targets } else { None }
@@ -122,6 +122,12 @@ public fn check(
       continue
     }
     var diagnostics = module.diagnostics
+    // What is wrong with the `String` reading of a literal is no problem where the checker read the literal verbatim
+    for deferred in module.deferred {
+      if !checked.isReadVerbatim(module.id, deferred.literal) {
+        diagnostics.append deferred.diagnostic
+      }
+    }
     diagnostics.appendAll checkNames(resolvedProgram, module.id)
     diagnostics.appendAll unresolved[module.id.value]
     diagnostics.appendAll checked.diagnostics[module.id.value]
@@ -134,7 +140,9 @@ public fn check(
     const manifest = joinPath package.directory, "project.trb"
     if isRequested(targets, manifest) && graph.moduleAt(manifest).isNone() {
       if const Some(text) = tree.text(manifest) {
-        files.append CheckedFile(tree.display(manifest), text, parse(SourceText.of(text)).diagnostics)
+        const parsed = parse SourceText.of(text)
+        const deferred = parsed.deferred.map({ _.diagnostic }).toList()
+        files.append CheckedFile(tree.display(manifest), text, parsed.diagnostics.appendedAll(deferred))
       }
     }
   }

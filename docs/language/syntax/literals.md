@@ -118,6 +118,18 @@ raw"text"                              a raw string literal: no escapes, no inte
    print pattern
    ```
 
+10. **A string literal where a `Path`, a `Uri`, a `UriTemplate`, a `Regex` or a resource type is expected is read by
+    the compiler.** One that is not a valid value of the type is an error at the literal, and a `Regex` or a
+    `UriTemplate` literal is read verbatim - with no escape sequences and no interpolation, as a raw string is - so
+    its backslashes and braces need no `raw`. See [Checked literals](../values-and-types/checked-literals.md).
+
+    ```trb check
+    use Regex from "std/regex"
+
+    const digits: Regex = "\d+"
+    print digits.matches("2026")
+    ```
+
 ## What this is not
 
 **A number literal is not typed by its spelling alone.** `0xFF` is not "a hex number type"; it is an `Int64` like
@@ -143,4 +155,6 @@ two.
 - [String interpolation](string-interpolation.md) - what `{expression}` inside a string does.
 - [Multi-line strings](multi-line-strings.md) - the `"""` form and how it is dedented.
 - [Integers](../values-and-types/integers.md) - the eight sized types a literal can adapt to.
+- [Checked literals](../values-and-types/checked-literals.md) - the string literals the compiler reads as a `Uri`, a
+  `Regex` or a `Path`.
 - [Bindings](../values-and-types/bindings.md) - how a type annotation changes what a literal is.

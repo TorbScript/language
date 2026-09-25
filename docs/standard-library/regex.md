@@ -86,6 +86,19 @@ semantics do not have, a repetition above 1000, or a pattern that compiles to mo
 `Regex` is a capsule whose conversion pair is its text, so it is written and read as its pattern in every format, and
 a pattern in a document that does not compile is a decoding error.
 
+**A literal where a `Regex` is expected is compiled by the compiler**, where it is written (the
+[literal rule](../language/values-and-types/checked-literals.md)): a pattern that does not compile is an error at that
+line, pointing at the character it fails at, and the value is built once per program, so a literal inside a loop is
+compiled once. The literal is read verbatim - no escape sequences, no interpolation - so its backslashes and braces are
+the pattern's and `raw` is not needed:
+
+```trb check
+use Regex from "std/regex"
+
+const date: Regex = "(?P<year>\d{4})-(?P<month>\d{2})"
+print date.find("due 2026-09")?.named("month")
+```
+
 `matches` asks whether the whole text matches, `isFound` whether the pattern matches anywhere. `wholeMatch` and `find`
 answer the match with its groups; `find` takes the leftmost match, and of the matches that start there the one the
 pattern prefers - the first alternative, and a greedy or a lazy repetition as it is written (Perl's and RE2's

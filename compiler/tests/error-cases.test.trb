@@ -25,12 +25,19 @@ fn repositoryRoot(): String {
   panic "the root of the repository is not above the working directory"
 }
 
-/** `line:column` of every diagnostic of the file, in the order the parser reports them. */
+/**
+ * `line:column` of every diagnostic of the file, in the order of the source. What is wrong with the `String` reading of
+ * a literal is kept apart until the checker knows the literal's type, and none of these literals is read verbatim, so
+ * all of it counts.
+ */
 fn positionsOf(path: String): List<String> {
   const text = File.readText(joinPath(repositoryRoot(), path)).expect("the case file")
   const lines = LineIndex.of text
   var positions: List<String> = []
-  for diagnostic in parse(SourceText.of(text)).diagnostics {
+  const parsed = parse SourceText.of(text)
+  var diagnostics = parsed.diagnostics.appendedAll(parsed.deferred.map({ _.diagnostic }).toList())
+  diagnostics.sort({ _.span.start })
+  for diagnostic in diagnostics {
     const (line, column) = lines.lineAndColumn diagnostic.span.start
     positions.append "{line}:{column}"
   }

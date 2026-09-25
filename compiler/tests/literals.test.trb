@@ -1,0 +1,383 @@
+/**
+ * The literal rule (docs/design/URI.md section 9): a string literal where a `Uri`, a `UriReference`, a `UriTemplate`, a
+ * `Regex`, a `Path` or a resource type is expected is read by the compiler where it is written. The packages of `std`
+ * here are stand-ins that only declare the types: the checker knows them by the package that exports them, and what it
+ * runs on a literal is the real parser of `std/uri` and `std/regex`, compiled into the compiler.
+ */
+
+use test, group from "std/test"
+use Span from "../src/syntax/source"
+use check from "../src/semantics/check"
+use workspaceWith, problemsOf, notesOf from "./harness"
+
+const standardLibrary = [
+  "std/uri/project.trb": raw"""
+    name = "std/uri"
+    """,
+  "std/uri/src/types.trb": raw"""
+    public type Uri {
+      private text: String
+    }
+
+    public type UriReference {
+      private text: String
+    }
+
+    public type UriTemplate<Variables> {
+      private text: String
+    }
+
+    public type TemplateCase<Value> {
+      private name: String
+    }
+
+    public type TemplateRoute<Value> {
+      private name: String
+    }
+
+    public fn route<Value>(template: UriTemplate<Value>, to: TemplateCase<Value>): TemplateRoute<Value> {
+      TemplateRoute "route"
+    }
+    """,
+  "std/uri/src/lib.trb": raw"""
+    public use Uri, UriReference, UriTemplate, TemplateCase, TemplateRoute, route from "./types"
+    """,
+  "std/regex/project.trb": raw"""
+    name = "std/regex"
+    """,
+  "std/regex/src/lib.trb": raw"""
+    public type Regex {
+      private pattern: String
+    }
+    """,
+  "std/path/project.trb": raw"""
+    name = "std/path"
+    """,
+  "std/path/src/lib.trb": raw"""
+    public type Path {
+      private text: String
+    }
+    """,
+  "std/resource/project.trb": raw"""
+    name = "std/resource"
+    """,
+  "std/resource/src/lib.trb": raw"""
+    public type Resource {
+      private name: String
+    }
+
+    public type EmbeddedText {
+      private name: String
+    }
+    """,
+]
+
+/** Everything wrong with `app/src/main.trb` of the source, in the workspace with the stand-ins of `std`. */
+fn problems(source: String, extra: Map<String, String> = [:]): List<String> {
+  var files = standardLibrary
+  for (path, text) in extra {
+    files.set path, text
+  }
+  files.set "app/src/main.trb", source
+  problemsOf files
+}
+
+/** The notes of the first problem of the source. */
+fn notes(source: String): List<String> {
+  var files = standardLibrary
+  files.set "app/src/main.trb", source
+  notesOf files
+}
+
+/** Where the first problem of the source is, as the text it points at. */
+fn pointedAt(source: String): String {
+  var files = standardLibrary
+  files.set "app/src/main.trb", source
+  for file in check(workspaceWith(files), ["app"]).files {
+    if const Some(first) = file.diagnostics.first() {
+      return source.sliceBytes first.span.start, first.span.end
+    }
+  }
+  ""
+}
+
+group "A `Uri` literal" {
+  test "is read where it is written" {
+    const source = raw"""
+      use Uri from "std/uri"
+
+      fn open(target: Uri) {}
+
+      open "https://example.test/a"
+      const base: Uri = "HTTPS://Example.TEST/b/../c"
+      """
+    assert problems(source).isEmpty()
+  }
+
+  test "that is no URI is an error at the literal" {
+    const source = raw"""
+      use Uri from "std/uri"
+
+      const page: Uri = "https//example.test/x"
+      """
+    assert(problems(source) == ["`https//example.test/x` is a relative reference, and a `Uri` has a scheme"])
+  }
+
+  test "with a broken escape says what RFC 3986 wants" {
+    const source = raw"""
+      use Uri from "std/uri"
+
+      const page: Uri = "https://example.test/%zz"
+      """
+    assert(problems(source) == ["`https://example.test/%zz` is not a URI"])
+    assert notes(source)[0].startsWith("A `Uri` literal is parsed where it is written: ")
+  }
+
+  test "cannot be interpolated" {
+    const source = raw"""
+      use Uri from "std/uri"
+
+      const name = "a"
+      const page: Uri = "https://example.test/{name}"
+      """
+    assert(problems(source) == ["A `Uri` literal is parsed where it is written, so it cannot be interpolated"])
+    assert(notes(source) == ["Build one from a base: `base.joined(name)`, or read the whole text at run time with `Uri.tryFrom(text)?`"])
+  }
+
+  test "is only a literal: a `String` value is not one" {
+    const source = raw"""
+      use Uri from "std/uri"
+
+      fn open(target: Uri) {}
+
+      const address = "https://example.test/"
+      open address
+      """
+    assert(problems(source) == ["Expected `Uri`, found `String`"])
+    assert notes(source)[0].endsWith("`Uri.tryFrom(text)?` reads one and says what a bad one was")
+  }
+
+  test "of a `UriReference` may be relative" {
+    const source = raw"""
+      use UriReference from "std/uri"
+
+      const link: UriReference = "../guide/index.html#top"
+      const broken: UriReference = "1a:b"
+      """
+    assert(problems(source) == ["`1a:b` is not a URI reference"])
+  }
+}
+
+group "A `Regex` literal" {
+  test "is read verbatim: its backslashes and braces are the pattern's" {
+    const source = raw"""
+      use Regex from "std/regex"
+
+      fn matches(pattern: Regex): Bool {
+        true
+      }
+
+      const date: Regex = "(?P<year>\d{4})-(?P<month>\d{2,})"
+      print matches("\w+\s*\{")
+      """
+    assert problems(source).isEmpty()
+  }
+
+  test "is compiled where it is written, and the message points at the character" {
+    const source = raw"""
+      use Regex from "std/regex"
+
+      const broken: Regex = "ab(cd"
+      const backwards: Regex = "x{2,1}"
+      """
+    const expected = [
+      "`ab(cd` is not a regular expression: a `(` is not closed",
+      raw"`x{2,1}` is not a regular expression: a repeat count is at most 1000, and its minimum is not above its maximum",
+    ]
+    assert(problems(source) == expected)
+    // A `(` that is never closed is found where the pattern ends, which is the closing quote
+    assert(pointedAt(source) == "\"")
+  }
+
+  test "points at the character a one-line pattern fails at" {
+    const source = raw"""
+      use Regex from "std/regex"
+
+      const backwards: Regex = "x{2,1}"
+      """
+    assert(pointedAt(source) == "\{")
+  }
+
+  test "reads a backreference as the refusal RE2 gives" {
+    const source = raw"""
+      use Regex from "std/regex"
+
+      const broken: Regex = "(a)\1"
+      """
+    assert(problems(source).length() == 1)
+  }
+
+  test "leaves the same text a `String` elsewhere, with its escapes" {
+    const source = raw"""
+      use Regex from "std/regex"
+
+      const pattern: Regex = "\d+"
+      const text = "\d+"
+      """
+    assert(problems(source) == ["Unknown escape sequence `\\d`"])
+  }
+}
+
+group "A `UriTemplate` literal" {
+  test "is read verbatim, so `\{id\}` is a variable and never a name of the program" {
+    const source = raw"""
+      use UriTemplate from "std/uri"
+
+      type Everything {}
+
+      const orders: UriTemplate<Everything> = "/orders/{id}{?fields*}"
+      """
+    const expected = [
+      raw"`id` of `/orders/{id}{?fields*}` is not a field of `Everything`",
+      raw"`fields` of `/orders/{id}{?fields*}` is not a field of `Everything`",
+    ]
+    assert(problems(source) == expected)
+  }
+
+  test "that breaks RFC 6570 is an error" {
+    const source = raw"""
+      use UriTemplate from "std/uri"
+
+      type OrderPath {
+        id: Int
+      }
+
+      const orders: UriTemplate<OrderPath> = "/orders/{}"
+      """
+    assert(problems(source) == [raw"`/orders/{}` is not a URI template"])
+  }
+
+  test "typed against a record checks every variable against its fields" {
+    const source = raw"""
+      use UriTemplate from "std/uri"
+
+      type Search {
+        query: String
+        page: Int = 1
+      }
+
+      const good: UriTemplate<Search> = "/search/{query}{?page}"
+      const misspelt: UriTemplate<Search> = "/search/{qurey}{?page}"
+      const pathDefault: UriTemplate<Search> = "/search/{query}/{page}"
+      """
+    assert(
+      problems(source) == [
+        raw"`qurey` of `/search/{qurey}{?page}` is not a field of `Search`",
+        raw"`Search.query` has no default, and `/search/{qurey}{?page}` has no variable for it",
+        raw"`Search.page` has a default, so it is a query variable of `/search/{query}/{page}`",
+      ]
+    )
+  }
+}
+
+group "A route" {
+  test "checks the variables of its template against the fields of its case" {
+    const source = raw"""
+      use route from "std/uri"
+
+      type Route {
+        case Home
+        case Order(id: Int)
+        case Search(query: String = "")
+      }
+
+      const home = route("/", to: Route.Home)
+      const order = route("/orders/{id}", to: Route.Order)
+      const search = route("/search{?query}", to: Route.Search)
+      const misspelt = route("/orders/{identifier}", to: Route.Order)
+      """
+    assert(
+      problems(source) == [
+        raw"`identifier` of `/orders/{identifier}` is not a field of `Route.Order`",
+        raw"`Route.Order.id` has no default, and `/orders/{identifier}` has no variable for it",
+      ]
+    )
+  }
+}
+
+group "A `Path` literal" {
+  test "is a `Path` where one is expected" {
+    const source = raw"""
+      use Path from "std/path"
+
+      fn open(path: Path) {}
+
+      open "src/main.trb"
+      """
+    assert problems(source).isEmpty()
+  }
+
+  test "cannot be interpolated" {
+    const source = raw"""
+      use Path from "std/path"
+
+      const name = "main"
+      const path: Path = "src/{name}.trb"
+      """
+    assert(problems(source) == ["A `Path` literal is parsed where it is written, so it cannot be interpolated"])
+  }
+}
+
+group "A resource literal" {
+  test "names a file of the package, relative to the file that writes it" {
+    const source = raw"""
+      use Resource, EmbeddedText from "std/resource"
+
+      fn load(sheet: Resource) {}
+
+      load "./sheets/hero.spr"
+      const schema: EmbeddedText = "../schema.sql"
+      """
+    const extra = ["app/src/sheets/hero.spr": "", "app/schema.sql": ""]
+    assert problems(source, extra).isEmpty()
+  }
+
+  test "that is not there is an error at the line that names it" {
+    const source = raw"""
+      use Resource from "std/resource"
+
+      const sheet: Resource = "./sheets/hero.spr"
+      """
+    assert(problems(source) == ["There is no file `./sheets/hero.spr`"])
+  }
+
+  test "is compared byte for byte, on every platform" {
+    const source = raw"""
+      use Resource from "std/resource"
+
+      const sheet: Resource = "./Hero.spr"
+      """
+    assert(problems(source, ["app/src/hero.spr": ""]) == ["There is no file `./Hero.spr`"])
+  }
+
+  test "may not leave its package" {
+    const source = raw"""
+      use Resource from "std/resource"
+
+      const key: Resource = "../../secrets/key.pem"
+      """
+    assert(problems(source) == ["`../../secrets/key.pem` is outside of the package `acme/app`"])
+  }
+
+  test "is never a `String` value" {
+    const source = raw"""
+      use Resource from "std/resource"
+
+      fn load(sheet: Resource) {}
+
+      const chosen = "./hero.png"
+      load chosen
+      """
+    assert(problems(source) == ["A `Resource` is a file the compiler resolves, so it has to be written as a literal here"])
+  }
+}

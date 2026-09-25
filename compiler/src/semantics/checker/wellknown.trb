@@ -110,9 +110,22 @@ public type WellKnown {
    */
   describedKey: SymbolId? = None
   describedShownKey: SymbolId? = None
+  /**
+   * The closed list of the literal rule (docs/design/URI.md section 9): the types a string literal is read into where
+   * one of them is expected, by `SymbolId.value`, with the name they are declared under - `Path`, `Uri`, `Regex`, the
+   * resource types. A package of `std` that is not in the workspace adds nothing.
+   */
+  checked: Map<Int, String> = [:]
+  /** The same types by name, for the checker to build `UriTemplate<Value>` and `TemplateCase<Value>` with. */
+  checkedSymbols: Map<String, SymbolId> = [:]
 
   fn symbolNamed(name: String): SymbolId? {
     names.get name
+  }
+
+  /** `Uri`, `Regex`, `EmbeddedText`: the name of a type of the literal rule, if this is one. */
+  fn checkedNamed(symbol: SymbolId): String? {
+    checked.get symbol.value
   }
 
   /** `Int8`, `UInt64`, `Float32`, `Decimal`: the name a numeric type of the prelude was declared under. */
@@ -141,6 +154,11 @@ public type WellKnown {
 public fn wellKnownOf(program: Program): WellKnown {
   const exports = preludeExports program
   const collections = packageExports program, "std/collections"
+  const checked = checkedTypesOf program
+  var checkedNames: Map<Int, String> = [:]
+  for (name, symbol) in checked {
+    checkedNames.set symbol.value, name
+  }
   WellKnown(
     exports,
     bothNames(program, exports, "Void"),
@@ -181,7 +199,33 @@ public fn wellKnownOf(program: Program): WellKnown {
     numerics: numericNames(exports),
     describedKey: collections.get("describedKey"),
     describedShownKey: collections.get("describedShownKey"),
+    checked: checkedNames,
+    checkedSymbols: checked,
   )
+}
+
+/**
+ * The types of the literal rule, from the exports of the packages of `std` that declare them. The list is closed and
+ * written here on purpose (docs/design/URI.md section 9): a type joins it by a decision about the language, never by
+ * implementing a trait.
+ */
+fn checkedTypesOf(program: Program): Map<String, SymbolId> {
+  const declared = [
+    ("std/path", ["Path"]),
+    ("std/uri", ["Uri", "UriReference", "UriTemplate", "TemplateCase"]),
+    ("std/regex", ["Regex"]),
+    ("std/resource", ["Resource", "EmbeddedBytes", "EmbeddedText"]),
+  ]
+  var found: Map<String, SymbolId> = [:]
+  for (packageName, names) in declared {
+    const exported = packageExports program, packageName
+    for name in names {
+      if const Some(symbol) = exported.get(name) {
+        found.set name, symbol
+      }
+    }
+  }
+  found
 }
 
 /**

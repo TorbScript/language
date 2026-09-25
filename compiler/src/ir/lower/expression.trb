@@ -44,6 +44,7 @@ use savedFrame, restoreFrame, enterBody from "./closure"
 use lowerConstructorValue from "./closure"
 use lowerTextLiteral, showsHere from "./text"
 use entryCellRead, readEntryCell from "./cell"
+use lowerCheckedLiteral from "./literal"
 
 /** One expression, lowered into `destination` where the caller has a slot for it, or into a fresh one otherwise. */
 public fn lowerExpression(
@@ -86,6 +87,10 @@ fn lowerInnerExpression(
   destination: Slot?,
   annotation: IrTypeId,
 ): Slot {
+  // `Uri`, `Regex`, `Path` and the rest of the literal rule: the checker read it, and its value is built once
+  if const Some(found) = lowering.checker.checkedLiteralAt(lowering.module, expression.span) {
+    return lowerCheckedLiteral lowering, builder, destination, expression, found, annotation
+  }
   // Every literal, including a negated one, is static data: the checker already decided which type it adapted to
   if isLiteralExpression(expression) {
     return lowerLiteral lowering, builder, destination, expression

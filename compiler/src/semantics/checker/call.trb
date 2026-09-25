@@ -35,6 +35,7 @@ use checkConstruction, checkSharedIdentity from "./declaration"
 use taskProblemOf, taskNoteOf from "./declaration"
 use capsuleNotesOf, fieldChainNotesOf from "./derive"
 use checkCloseCall from "./close"
+use checkTemplateRoutes from "./literal"
 
 /** Which parameter every written argument fills, and what the call adds to what was written. */
 public type ArgumentPlan {
@@ -135,6 +136,8 @@ public fn checkCall(
   checker.isTaskArgument = isSpawnTarget checker, target
   checkArguments checker, inner, arguments, plan, target.resolution, calleeName, isDiscarded, call
   checker.isTaskArgument = savedTaskArgument
+  // `route("/orders/{id}", to: Route.Order)`: the template's variables against the case's fields, once both are known
+  checkTemplateRoutes checker, arguments
   // `spawn { ... }` takes no `var` binding with it, and the captures it would take are recorded by now
   requireTaskCaptures checker, target, arguments
   checkCallReads checker, callee, arguments, plan.targets, inner.parameters, isVarReceiver

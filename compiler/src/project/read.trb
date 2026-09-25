@@ -25,6 +25,7 @@ use findStandardLibrary from "./toolchain"
 public fn readSourceTree(paths: List<String>): Result<SourceTree, IoError> {
   var files: Map<String, String> = [:]
   var listed: List<String> = []
+  var others: List<String> = []
   var roots: List<String> = []
   for path in paths {
     const absolute = normalizePath(File.absolutePath(path)?)
@@ -35,13 +36,13 @@ public fn readSourceTree(paths: List<String>): Result<SourceTree, IoError> {
     roots.append(readProjectsAbove(files, directory)? ?? absolute)
   }
   for root in roots {
-    listBelow(listed, root)?
+    listBelow(listed, others, root)?
   }
   const library = findStandardLibrary(paths) ?? ""
   if !library.isEmpty() && !roots.any({ isInside library, _ }) {
-    listBelow(listed, library)?
+    listBelow(listed, others, library)?
   }
-  Ok SourceTree.onDisk(files, listed, normalizePath(File.absolutePath(".")?), library)
+  Ok SourceTree.onDisk(files, listed, normalizePath(File.absolutePath(".")?), library, others)
 }
 
 /** The paths of the command line the way the `SourceTree` spells them: absolute and normalized. */
@@ -87,10 +88,11 @@ fn isSkippedDirectory(name: String): Bool {
 }
 
 /**
- * Every `.trb` file below the path. Hidden directories are skipped, as in `torb parse`, and so is every `build`
+ * Every `.trb` file below the path, and apart from them every other file, which a resource literal may name
+ * (docs/design/RESOURCES.md section 6). Hidden directories are skipped, as in `torb parse`, and so is every `build`
  * directory: it holds what a build, a test run or a docs check wrote, and never a source.
  */
-fn listBelow(var listed: List<String>, path: String): Result<Void, IoError> {
+fn listBelow(var listed: List<String>, var others: List<String>, path: String): Result<Void, IoError> {
   if !File.isDirectory(path) {
     if path.endsWith(".trb") {
       listed.append path
@@ -101,10 +103,12 @@ fn listBelow(var listed: List<String>, path: String): Result<Void, IoError> {
     const child = joinPath path, entry
     if File.isDirectory(child) {
       if !isSkippedDirectory(entry) && entry != "build" {
-        listBelow(listed, child)?
+        listBelow(listed, others, child)?
       }
     } else if entry.endsWith(".trb") {
       listed.append child
+    } else {
+      others.append child
     }
   }
   Ok(void)

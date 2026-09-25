@@ -21,3 +21,16 @@ public type Diagnostic {
     copy notes: notes.appended(note)
   }
 }
+
+/**
+ * A problem of the `String` reading of one string literal: an escape sequence a `String` does not have (`"\d"`), or an
+ * interpolation that does not parse (`"{2,4}"`). Where the literal is read verbatim - where a `Regex` or a
+ * `UriTemplate` is expected, whose braces and backslashes are their own grammar (docs/design/URI.md section 9) - it is
+ * no problem at all. Only the checker knows which reading a literal gets, so the lexer and the parser keep these apart
+ * and the checker reports every one whose literal it did not read verbatim.
+ */
+public type DeferredDiagnostic {
+  /** The whole literal, quotes included: the span the checker records a verbatim reading at. */
+  literal: Span
+  diagnostic: Diagnostic
+}

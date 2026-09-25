@@ -1,0 +1,529 @@
+/**
+ * The literal rule (docs/design/URI.md section 9): a string literal whose expected type is one of a closed list of
+ * types of `std` is a value of that type, read by the compiler where it is written - `Path`, `Uri`, `UriReference`,
+ * `UriTemplate`, `Regex`, and the resource types of docs/design/RESOURCES.md. Anything that is not a literal is not.
+ *
+ * The check is each type's own parser, run here: the compiler imports `std/uri`, `std/regex` and `std/path` and calls
+ * `Uri.tryFrom(text)` like any other function, so the rule needs no evaluation of the program under compilation. What
+ * the checker read is recorded ([CheckedLiteral]) and the lowering builds the value from it, once per program, through
+ * the `literal` member of the type - there is no run-time parse that could fail.
+ *
+ * **Where a `UriTemplate` or a `Regex` is expected, a literal is read verbatim** (owner decision 2026-09-25): its
+ * braces and its backslashes are that grammar's (`{id}`, `\d{2,4}`), so it is neither interpolated nor escaped, and
+ * `raw` is not needed. Every other checked literal keeps the rule that it cannot be interpolated.
+ *
+ * `route("/orders/{id}", to: Route.Order)` is the one place two arguments are checked against each other: the literal
+ * gives the names of the variables and the case gives the fields ([checkTemplateRoutes]).
+ */
+
+use Span from "../../syntax/source"
+use Diagnostic from "../../syntax/diagnostic"
+use Expression, Argument, TextSegment from "../../syntax/ast"
+use writtenTextOf from "../../syntax/lexer"
+use joinPath, parentPath, relativePath, isInside, normalizePath from "../../project/path"
+use SymbolId from "../symbols"
+use TypeId, TypeForm, FieldSignature from "./type"
+use Checker, CheckedLiteral, Resolution from "./context"
+use typeSignatureOf from "./signature"
+use resolveType, unify from "./unify"
+use Uri, UriReference, UriError, UriTemplate, TemplateValues, TemplateVariable from "std/uri"
+use Regex from "std/regex"
+
+/** Which type of the closed list a literal is read into. */
+public type CheckedKind with Equals {
+  case PathLiteral
+  case UriLiteral
+  case UriReferenceLiteral
+  case UriTemplateLiteral
+  case RegexLiteral
+  /** `Route.Order` where a `TemplateCase<Route>` is expected: a case, named where it is written. */
+  case TemplateCaseLiteral
+  case ResourceLiteral
+  case EmbeddedBytesLiteral
+  case EmbeddedTextLiteral
+
+  /** Whether a literal of this type is read verbatim: its braces and backslashes are the type's own grammar. */
+  fn isVerbatim(): Bool {
+    self == .UriTemplateLiteral || self == .RegexLiteral
+  }
+
+  /** Whether the literal names a file of the package, relative to the file that writes it. */
+  fn isResource(): Bool {
+    self == .ResourceLiteral || self == .EmbeddedBytesLiteral || self == .EmbeddedTextLiteral
+  }
+}
+
+/** The type of the closed list `annotation` is, where it is one. */
+public fn checkedKindOf(checker: Checker, annotation: TypeId): CheckedKind? {
+  const symbol = match checker.types.form(annotation) {
+    .Nominal(found, _) => found
+    _ => {
+      return None
+    }
+  }
+  const name = checker.wellKnown.checkedNamed(symbol)?
+  const kind = match name {
+    "Path" => CheckedKind.PathLiteral
+    "Uri" => CheckedKind.UriLiteral
+    "UriReference" => CheckedKind.UriReferenceLiteral
+    "UriTemplate" => CheckedKind.UriTemplateLiteral
+    "Regex" => CheckedKind.RegexLiteral
+    "TemplateCase" => CheckedKind.TemplateCaseLiteral
+    "Resource" => CheckedKind.ResourceLiteral
+    "EmbeddedBytes" => CheckedKind.EmbeddedBytesLiteral
+    "EmbeddedText" => CheckedKind.EmbeddedTextLiteral
+    _ => {
+      return None
+    }
+  }
+  Some kind
+}
+
+// --- String literals --------------------------------------------------------------------------------------------------
+
+/**
+ * A string literal where a type of the closed list is expected: read, checked by the type's own parser, and recorded.
+ * It is the expected type from here on, whatever was wrong with it - the message is at the literal, and nothing after
+ * it says the same thing again as "expected `Uri`, found `String`".
+ */
+public fn checkedTextLiteral(
+  var checker: Checker,
+  segments: List<TextSegment>,
+  kind: CheckedKind,
+  annotation: TypeId,
+  at: Span,
+): TypeId {
+  if kind.isVerbatim() {
+    const source = checker.program.graph.at(checker.module).source
+    const text = writtenTextOf source, at
+    checker.recordCheckedLiteral at, CheckedLiteral(text, isVerbatim: true)
+    if kind == .RegexLiteral {
+      checkRegex checker, text, at
+    } else {
+      checkTemplate checker, text, annotation, at
+    }
+    return annotation
+  }
+  var text = ""
+  var isInterpolated = false
+  for segment in segments {
+    match segment {
+      .Literal(part) => {
+        text = text + part
+      }
+      .Interpolated(_) => {
+        isInterpolated = true
+      }
+    }
+  }
+  if isInterpolated {
+    reportInterpolated checker, kind, at
+    return annotation
+  }
+  match kind {
+    .UriLiteral => checkUri checker, text, at
+    .UriReferenceLiteral => checkUriReference checker, text, at
+    .PathLiteral => {}
+    _ => {
+      if kind.isResource() {
+        match resourceNameOf(checker, text, kind, at) {
+          Some(name) => {
+            checker.recordCheckedLiteral at, CheckedLiteral(name, isVerbatim: false)
+          }
+          None => {}
+        }
+        return annotation
+      }
+    }
+  }
+  checker.recordCheckedLiteral at, CheckedLiteral(text, isVerbatim: false)
+  annotation
+}
+
+/** The name a message gives the type of a kind: what the programmer wrote as the parameter's type. */
+fn typeNameOf(kind: CheckedKind): String {
+  match kind {
+    .PathLiteral => "Path"
+    .UriLiteral => "Uri"
+    .UriReferenceLiteral => "UriReference"
+    .UriTemplateLiteral => "UriTemplate"
+    .RegexLiteral => "Regex"
+    .TemplateCaseLiteral => "TemplateCase"
+    .ResourceLiteral => "Resource"
+    .EmbeddedBytesLiteral => "EmbeddedBytes"
+    .EmbeddedTextLiteral => "EmbeddedText"
+  }
+}
+
+/** The second message of section 9: a checked literal is read where it is written, so it has no holes. */
+fn reportInterpolated(var checker: Checker, kind: CheckedKind, at: Span) {
+  const name = typeNameOf kind
+  if kind.isResource() {
+    checker.reportHere(
+      Diagnostic.error("A `{name}` is a file the compiler resolves, so it cannot be interpolated", at)
+        .withNote("Write one literal per file, or read a path at run time with `File.readText(path)`")
+    )
+    return
+  }
+  const fix = match kind {
+    .PathLiteral => "Join the parts: `base.joined(name)`, or convert the whole text at run time with `Path.from(text)`"
+    .UriReferenceLiteral => "Read the whole text at run time with `UriReference.tryFrom(text)?`"
+    _ => "Build one from a base: `base.joined(name)`, or read the whole text at run time with `Uri.tryFrom(text)?`"
+  }
+  checker.reportHere(
+    Diagnostic.error("A `{name}` literal is parsed where it is written, so it cannot be interpolated", at)
+      .withNote(fix)
+  )
+}
+
+/**
+ * The note of the third message of section 9, where a `String` value stands for a type of the closed list: its value is
+ * only known when the program runs, so it is converted by the function that says what a bad one was.
+ */
+public fn nonLiteralNote(kind: CheckedKind): String {
+  const prefix = "A `String` is only known when the program runs, and only a literal is read where it is written"
+  match kind {
+    .PathLiteral => "{prefix}: `Path.from(text)` converts one"
+    .UriLiteral => "{prefix}: `Uri.tryFrom(text)?` reads one and says what a bad one was"
+    .UriReferenceLiteral => "{prefix}: `UriReference.tryFrom(text)?` reads one and says what a bad one was"
+    .UriTemplateLiteral => "{prefix}: `UriTemplate<TemplateValues>.tryFrom(text)?` reads one and says what a bad one was"
+    .RegexLiteral => "{prefix}: `Regex.tryFrom(text)?` compiles one and says what a bad one was"
+    .TemplateCaseLiteral => "A case is named where it is written: `Route.Order`, or `TemplateCase.named(name)` at run time"
+    _ => "A path chosen at run time is a `Path`: `File.readText(path)` reads one, and `use File from \"std/fs\"` says so"
+  }
+}
+
+/** The message a `String` value gets where a resource type is expected (docs/design/RESOURCES.md section 3). */
+public fn resourceValueMessage(kind: CheckedKind): String? {
+  if !kind.isResource() {
+    return None
+  }
+  Some "A `{typeNameOf(kind)}` is a file the compiler resolves, so it has to be written as a literal here"
+}
+
+fn checkUri(var checker: Checker, text: String, at: Span) {
+  match Uri.tryFrom(text) {
+    Ok(_) => {}
+    Fail(.Relative(_)) => {
+      checker.reportHere(
+        Diagnostic.error("`{text}` is a relative reference, and a `Uri` has a scheme", at)
+          .withNote("A relative reference is a `UriReference`, and `reference.resolved(against: base)` makes a `Uri` of it")
+      )
+    }
+    Fail(problem) => {
+      checker.reportHere(
+        Diagnostic.error("`{text}` is not a URI", at)
+          .withNote("A `Uri` literal is parsed where it is written: {problem.show()}")
+      )
+    }
+  }
+}
+
+fn checkUriReference(var checker: Checker, text: String, at: Span) {
+  if const Fail(problem) = UriReference.tryFrom(text) {
+    checker.reportHere(
+      Diagnostic.error("`{text}` is not a URI reference", at)
+        .withNote("A `UriReference` literal is parsed where it is written: {problem.show()}")
+    )
+  }
+}
+
+/** A pattern is compiled here, and a message points at the character it fails at where the literal is one line. */
+fn checkRegex(var checker: Checker, text: String, at: Span) {
+  if const Fail(problem) = Regex.tryFrom(text) {
+    const source = checker.program.graph.at(checker.module).source.text
+    const pointed = match writtenStartOf(source, at) {
+      Some(start) => {
+        const width = text.charAtByte(problem.offset).map({ _.byteLength() }) ?? 1
+        const first = (start + problem.offset).min(at.end - 1)
+        Span first, (first + width).min(at.end)
+      }
+      None => at
+    }
+    checker.reportHere(
+      Diagnostic.error("`{text}` is not a regular expression: {problem.message}", pointed)
+        .withNote("A `Regex` literal is compiled where it is written, and it is read verbatim: `\\d` and `\{2,4\}` are the pattern's")
+    )
+  }
+}
+
+/**
+ * Where the verbatim reading of a one-line literal starts in the source, so that a byte of it is a byte of the file.
+ * A multi-line literal lost its indentation, so its bytes are not the file's, and the whole literal is pointed at.
+ */
+fn writtenStartOf(source: String, at: Span): Int? {
+  const head = source.sliceBytes at.start, (at.start + 7).min(at.end)
+  if head.startsWith("\"\"\"") || head.startsWith("raw\"\"\"") {
+    return None
+  }
+  if head.startsWith("raw\"") {
+    return Some(at.start + 4)
+  }
+  if head.startsWith("r\"") {
+    return Some(at.start + 2)
+  }
+  Some(at.start + 1)
+}
+
+/**
+ * A template is read by RFC 6570, and where `Variables` is a record its variables are checked against the fields.
+ * A type with cases is checked where the case is named ([checkTemplateRoutes]), and a type the literal cannot tell
+ * anything about - `TemplateValues`, a type parameter - takes any variables.
+ */
+fn checkTemplate(var checker: Checker, text: String, annotation: TypeId, at: Span) {
+  const template = match UriTemplate<TemplateValues>.tryFrom(text) {
+    Ok(found) => found
+    Fail(problem) => {
+      checker.reportHere(
+        Diagnostic.error("`{text}` is not a URI template", at)
+          .withNote("A `UriTemplate` literal is read where it is written, and verbatim: {reasonOf(problem)}")
+      )
+      return
+    }
+  }
+  const variables = match checker.types.form(resolveType(checker, annotation)) {
+    .Nominal(_, arguments) => arguments.first()
+    _ => None
+  }
+  const target = match variables {
+    Some(found) => resolveType checker, found
+    None => {
+      return
+    }
+  }
+  const (symbol, typeArguments) = match checker.types.form(target) {
+    .Nominal(found, given) => (found, given)
+    _ => {
+      return
+    }
+  }
+  const shape = checker.typeSignature typeSignatureOf(checker, symbol)
+  if shape.isNative || !shape.cases.isEmpty() || !typeArguments.isEmpty() {
+    return
+  }
+  const owner = checker.symbolAt(symbol).name
+  checkVariables checker, template.templateVariables(), shape.fields, owner, text, at
+}
+
+/** What a template was refused for, without the template itself, which the message already shows. */
+fn reasonOf(problem: UriError): String {
+  match problem {
+    .InvalidTemplate(_, reason) => reason
+    other => other.show()
+  }
+}
+
+/**
+ * The rule of a typed template, the same one `TemplateRoutes.of` checks at run time: every variable is a field, every
+ * field without a default is a variable, a field with a default is at most a query variable (`{?page}`), and a query
+ * variable - which a request may leave out - has a field with a default.
+ */
+fn checkVariables(
+  var checker: Checker,
+  variables: List<TemplateVariable>,
+  fields: List<FieldSignature>,
+  owner: String,
+  text: String,
+  at: Span,
+) {
+  for variable in variables {
+    match fields.find({ _.name == variable.name }) {
+      Some(field) => {
+        if !field.hasDefault && variable.isOptional {
+          checker.reportHere(
+            Diagnostic.error("`{variable.name}` is a query variable of `{text}`, and `{owner}.{variable.name}` has no default", at)
+              .withNote("A request may leave a query variable out, so its field needs a default, or it is a path variable")
+          )
+        }
+        if field.hasDefault && !variable.isOptional {
+          checker.reportHere(
+            Diagnostic.error("`{owner}.{variable.name}` has a default, so it is a query variable of `{text}`", at)
+              .withNote("Write it `\{?{variable.name}\}`: a path variable is always there, and a default would never apply")
+          )
+        }
+      }
+      None => {
+        const names = fields.map({ "`{_.name}`" }).toList().joined(separator: ", ")
+        const known = if names.isEmpty() { "none" } else { names }
+        checker.reportHere(
+          Diagnostic.error("`{variable.name}` of `{text}` is not a field of `{owner}`", at)
+            .withNote("The fields of `{owner}` are {known}")
+        )
+      }
+    }
+  }
+  for field in fields {
+    if !field.hasDefault && !variables.any({ _.name == field.name }) {
+      checker.reportHere(
+        Diagnostic.error("`{owner}.{field.name}` has no default, and `{text}` has no variable for it", at)
+          .withNote("Add `\{{field.name}\}` to the template, or give the field a default")
+      )
+    }
+  }
+}
+
+// --- Cases ---------------------------------------------------------------------------------------------------------
+
+/**
+ * `Route.Order` where a `TemplateCase<Value>` is expected: the case, not the function that constructs one. `None`
+ * where the expression is no case of a type, which the ordinary path then reports.
+ */
+public fn checkedCase(var checker: Checker, expression: Expression, annotation: TypeId, resolution: Resolution): TypeId? {
+  const (owner, variant) = match resolution {
+    .CaseOf(found, symbol) => (found, symbol)
+    _ => {
+      return None
+    }
+  }
+  // Only where a `TemplateCase` itself is expected: an open variable would unify with anything, `None` included
+  if checkedKindOf(checker, resolveType(checker, annotation)) != Some(CheckedKind.TemplateCaseLiteral) {
+    return None
+  }
+  const symbol = checker.wellKnown.checkedSymbols.get("TemplateCase")?
+  const found = checker.nominal symbol, [owner]
+  if !unify(checker, found, annotation) {
+    return None
+  }
+  const name = checker.symbolAt(variant).name
+  checker.recordCheckedLiteral expression.span, CheckedLiteral(name, isVerbatim: false)
+  Some found
+}
+
+/**
+ * `route("/orders/{id}", to: Route.Order)`: a template literal and a case of the same call, of the same type, are
+ * checked against each other once both are known - the literal gives the names, the case the fields.
+ */
+public fn checkTemplateRoutes(var checker: Checker, arguments: List<Argument>) {
+  var templates: List<(Span, TypeId)> = []
+  var cases: List<(Span, TypeId)> = []
+  for argument in arguments {
+    const at = argument.value.span
+    if checker.checkedLiteralAt(checker.module, at).isNone() {
+      continue
+    }
+    const found = match checker.expressionType(checker.module, at) {
+      Some(known) => resolveType checker, known
+      None => {
+        continue
+      }
+    }
+    match checkedKindOf(checker, found) {
+      Some(.UriTemplateLiteral) => templates.append((at, found))
+      Some(.TemplateCaseLiteral) => cases.append((at, found))
+      _ => {}
+    }
+  }
+  for (templateAt, templateType) in templates {
+    for (caseAt, caseType) in cases {
+      checkRoute checker, templateAt, templateType, caseAt, caseType
+    }
+  }
+}
+
+fn checkRoute(var checker: Checker, templateAt: Span, templateType: TypeId, caseAt: Span, caseType: TypeId) {
+  const owner = match (valueTypeOf(checker, templateType), valueTypeOf(checker, caseType)) {
+    (Some(first), Some(second)) => {
+      if first != second {
+        return
+      }
+      first
+    }
+    _ => {
+      return
+    }
+  }
+  const symbol = match checker.types.form(owner) {
+    .Nominal(found, _) => found
+    _ => {
+      return
+    }
+  }
+  const text = checker.checkedLiteralAt(checker.module, templateAt)?.text ?? ""
+  const caseName = checker.checkedLiteralAt(checker.module, caseAt)?.text ?? ""
+  const template = match UriTemplate<TemplateValues>.tryFrom(text) {
+    Ok(found) => found
+    Fail(_) => {
+      return
+    }
+  }
+  const shape = checker.typeSignature typeSignatureOf(checker, symbol)
+  const declared = match shape.cases.find({ _.name == caseName }) {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  const typeName = checker.symbolAt(symbol).name
+  // A route reads a request back into its case, so its template has to be one that can be read backwards
+  if !template.isMatchable() {
+    checker.reportHere(
+      Diagnostic.error("`{text}` cannot be matched against a request, so it is no route", templateAt)
+        .withNote(
+          "A route has simple variables (`\{id\}`), path segments (`\{/id\}`, `\{/rest*\}` last) and query variables "
+            + "(`\{?page\}`), with a literal between two variables of the path"
+        )
+    )
+    return
+  }
+  checkVariables checker, template.templateVariables(), declared.fields, "{typeName}.{caseName}", text, templateAt
+}
+
+/** The `Value` of a `UriTemplate<Value>` or a `TemplateCase<Value>`. */
+fn valueTypeOf(var checker: Checker, found: TypeId): TypeId? {
+  if const .Nominal(_, arguments) = checker.types.form(found) {
+    if const Some(first) = arguments.first() {
+      return Some resolveType(checker, first)
+    }
+  }
+  None
+}
+
+// --- Resources --------------------------------------------------------------------------------------------------------
+
+/**
+ * The stable name of the file a resource literal names (docs/design/RESOURCES.md section 6): resolved against the
+ * file that writes it, inside its package, and found in the listing byte for byte - so `./Hero.png` next to
+ * `hero.png` is an error on every platform. `None` where it is none of that, which was reported.
+ */
+fn resourceNameOf(var checker: Checker, text: String, kind: CheckedKind, at: Span): String? {
+  const module = checker.program.graph.at checker.module
+  const package = checker.program.workspace.packages[module.package]
+  const path = joinPath parentPath(module.path), text
+  const name = typeNameOf kind
+  if !package.directory.isEmpty() && !isInside(path, package.directory) {
+    checker.reportHere(
+      Diagnostic.error("`{text}` is outside of the package `{package.name}`", at)
+        .withNote("A `{name}` is a file of the package that writes it, below `{package.directory}`, and it is published with it")
+    )
+    return None
+  }
+  const listed = checker.program.workspace.listedFiles
+  if !listed.contains(path) {
+    const shown = if package.directory.isEmpty() { path } else { stableNameOf package.name, package.directory, path }
+    var problem = Diagnostic.error("There is no file `{text}`", at)
+      .withNote("A resource path is relative to this file, and `{shown}` is not there")
+    const lowered = path.toLowerCase()
+    if const Some(near) = listed.find({ _.toLowerCase() == lowered }) {
+      problem = problem.withNote "There is `{pathName(near)}`: a resource path is compared byte for byte, on every platform"
+    }
+    checker.reportHere problem
+    return None
+  }
+  if package.directory.isEmpty() {
+    return Some pathName(path)
+  }
+  Some stableNameOf(package.name, package.directory, path)
+}
+
+/** `acme/game/src/sheets/hero.spr`: the owner and name of the package, then the path inside it, always with `/`. */
+fn stableNameOf(packageName: String, directory: String, path: String): String {
+  const relative = relativePath directory, path
+  if packageName.isEmpty() {
+    return relative
+  }
+  "{packageName}/{relative}"
+}
+
+fn pathName(path: String): String {
+  normalizePath(path).split("/").last() ?? path
+}

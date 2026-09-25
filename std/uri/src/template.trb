@@ -3,6 +3,7 @@
  * template allows it (docs/design/URI.md section 9a).
  */
 
+use EncodedField, EncodedValue, ValueDecoder from "std/encoding"
 use UriError from "./error"
 use UriReference from "./uri"
 use formDecoded from "./form"
@@ -98,26 +99,105 @@ type Piece with Equals, Hash {
  * label, path, parameter and query operators with several variables (`{.x,y}`, `{/x}`, `{;x}`, `{?x,y}`, `{&x}`), and
  * the prefix and explode modifiers (`{var:3}`, `{list*}`).
  *
+ * `Variables` is the type whose fields the variables are (docs/design/URI.md section 9a): a string literal where a
+ * `UriTemplate<Order>` is expected is read by the compiler, and a variable that is not a field of `Order` - or a
+ * field without a default that is no variable - is an error at the literal. [UriTemplate.expandedFrom] and
+ * [UriTemplate.decoded] go through the fields; [TemplateValues] is the type of a template read at run time, whose
+ * variables are whatever the map holds. Inside such a literal `{id}` is the template's own brace and never an
+ * interpolation, so it needs no `raw`.
+ *
  * # Examples
  *
- *     const template = UriTemplate.tryFrom("/orders/{id}{?fields}")?
- *     var values: Map<String, TemplateValue> = [:]
+ *     const template = UriTemplate<TemplateValues>.tryFrom("/orders/{id}{?fields}")?
+ *     var values: TemplateValues = [:]
  *     values["id"] = TemplateValue.Text("7")
  *     print template.expanded(values)
  *
  * # Pitfalls
  *
  * - Matching reads a template backwards only where that is unambiguous; [UriTemplate.isMatchable] says whether it is.
+ * - A typed template read at run time, `UriTemplate<Order>.tryFrom(text)`, is checked against `Order` only when it is
+ *   expanded or matched; a literal is checked where it is written.
  *
  * # Related
  *
  * - [TemplateValue] - what a variable holds.
+ * - [TemplateRoutes] - templates typed against the cases of one type, which is what a router holds.
  */
-public type UriTemplate with Show, Equals, Hash {
+public type UriTemplate<Variables> with Show, Equals, Hash, TryFrom<String, UriError> {
   /** The template as it was written. */
   private textValue: String
   /** The literal pieces and the expressions, in order. */
   private pieces: List<Piece>
+
+  /**
+   * A text read as an RFC 6570 template.
+   *
+   * # Errors
+   *
+   * - [UriError.InvalidTemplate] for an unclosed or a nested brace, an empty expression, a variable name outside
+   *   `varchar`, a prefix outside 1 to 9999, a reserved operator (`=`, `,`, `!`, `@`, `|`), and a literal character no
+   *   URI may hold.
+   */
+  static fn tryFrom(value: String): Result<UriTemplate<Variables>, UriError> {
+    Ok Self(value, piecesOf(value)?)
+  }
+
+  /**
+   * The value of a literal the compiler read where a `UriTemplate` is expected (docs/design/URI.md section 9). The
+   * lowering calls this once per literal and program, with a template the checker already read with
+   * [UriTemplate.tryFrom] and checked against `Variables`.
+   */
+  private static fn literal(text: String): UriTemplate<Variables> {
+    match piecesOf(text) {
+      Ok(pieces) => Self text, pieces
+      Fail(problem) => panic "The compiler read the template literal `{text}`, and this `std/uri` refuses it: {problem}"
+    }
+  }
+
+  /**
+   * Every variable once, in the order it first appears, with what kind of value fills it: what a value of
+   * `Variables` is checked against.
+   */
+  fn templateVariables(): List<TemplateVariable> {
+    var found: List<TemplateVariable> = []
+    var names: List<String> = []
+    for piece in pieces {
+      if const .Expression(operator, variables) = piece {
+        for variable in variables {
+          if !names.contains(variable.name) {
+            names.append variable.name
+            const isQuery = operator == .Query || operator == .Continuation
+            found.append TemplateVariable(variable.name, isOptional: isQuery, isExploded: variable.explode)
+          }
+        }
+      }
+    }
+    found
+  }
+
+  /**
+   * The template expanded with the fields of `values`: each field is the variable of its name, a list field an
+   * exploded one, and a field that is `None` an undefined variable. Fields no variable names are left out.
+   *
+   * # Errors
+   *
+   * - As for [UriTemplate.expanded].
+   */
+  fn expandedFrom(values: Variables): Result<UriReference, UriError> where Variables: Encode {
+    expanded templateValuesOf(EncodedValue.of(values))
+  }
+
+  /**
+   * The fields of `reference` read back into a `Variables`, where the reference is an expansion of this template: the
+   * text of each variable is read as whatever its field asks for, and a variable the reference leaves out is a field
+   * that is absent, so its default applies. `None` where [UriTemplate.matched] answers `None` or a field cannot be read.
+   */
+  fn decoded(reference: UriReference): Variables? where Variables: Decode {
+    const values = matched(reference)?
+    var source = ValueDecoder.of EncodedValue.Record("", encodedFieldsOf(values)), lenient: true
+    Variables.decode(source).ok()
+  }
 
   /** The names of the variables, in the order they first appear. */
   fn variables(): List<String> {
@@ -168,7 +248,7 @@ public type UriTemplate with Show, Equals, Hash {
    * - [UriError.InvalidTemplate] for a prefix modifier on a list or on pairs, which RFC 6570 section 2.4.1 does not
    *   apply to.
    */
-  fn expandedText(values: Map<String, TemplateValue>): Result<String, UriError> {
+  fn expandedText(values: TemplateValues): Result<String, UriError> {
     var out = ""
     for piece in pieces {
       match piece {
@@ -192,7 +272,7 @@ public type UriTemplate with Show, Equals, Hash {
    * - Any refusal of `UriReference.tryFrom`, where the literal parts of the template do not make a URI reference with
    *   the values in them (`{x}:y` with `x` = `1a`). A template whose literal parts are a path never fails here.
    */
-  fn expanded(values: Map<String, TemplateValue>): Result<UriReference, UriError> {
+  fn expanded(values: TemplateValues): Result<UriReference, UriError> {
     UriReference.tryFrom(expandedText(values)?)
   }
 
@@ -255,10 +335,10 @@ public type UriTemplate with Show, Equals, Hash {
    *
    * # Examples
    *
-   *     const template = UriTemplate.tryFrom("/orders/{id}{?fields}")?
+   *     const template = UriTemplate<TemplateValues>.tryFrom("/orders/{id}{?fields}")?
    *     print template.matched(UriReference.tryFrom("/orders/7?fields=total")?)
    */
-  fn matched(reference: UriReference): Map<String, TemplateValue>? {
+  fn matched(reference: UriReference): TemplateValues? {
     if !isMatchable() {
       return None
     }
@@ -327,25 +407,84 @@ public type UriTemplate with Show, Equals, Hash {
 }
 
 /**
- * A text read as an RFC 6570 template.
- *
- * # Errors
- *
- * - [UriError.InvalidTemplate] for an unclosed or a nested brace, an empty expression, a variable name outside
- *   `varchar`, a prefix outside 1 to 9999, a reserved operator (`=`, `,`, `!`, `@`, `|`), and a literal character no
- *   URI may hold.
+ * The variables of a template read at run time: whatever the map holds, by name. `UriTemplate<TemplateValues>` is
+ * the untyped template.
  */
-extend UriTemplate with TryFrom<String, UriError> {
-  static fn tryFrom(value: String): Result<UriTemplate, UriError> {
-    Ok UriTemplate(value, piecesOf(value)?)
+public type TemplateValues = Map<String, TemplateValue>
+
+/**
+ * The way back out of an untyped [UriTemplate], and with [UriTemplate.tryFrom] its conversion pair. A typed one has
+ * none: an extension cannot be generic, so `show()` is its text.
+ */
+extend String with From<UriTemplate<TemplateValues>> {
+  static fn from(value: UriTemplate<TemplateValues>): String {
+    value.show()
   }
 }
 
-/** The way back out of [UriTemplate], and with [UriTemplate.tryFrom] its conversion pair. */
-extend String with From<UriTemplate> {
-  static fn from(value: UriTemplate): String {
-    value.show()
+/** One variable of a template, as a value that fills it sees it ([UriTemplate.templateVariables]). */
+public type TemplateVariable with Show, Equals, Hash {
+  /** The name, as the template writes it. */
+  name: String
+  /** Whether it stands in a query expression (`{?a}`, `{&b}`), so that a matched reference may leave it out. */
+  isOptional: Bool
+  /** Whether it is exploded (`{/path*}`), so that its value is a list. */
+  isExploded: Bool
+}
+
+/**
+ * The fields of an encoded value as the variables of a template: a scalar as its text, a sequence as a list of its
+ * items' texts, a map as pairs, and `None` as an undefined variable. A value that is no record and no case has none.
+ */
+public fn templateValuesOf(encoded: EncodedValue): TemplateValues {
+  const fields = match encoded {
+    .Record(_, found) => found
+    .Variant(_, _, found) => found
+    _ => []
   }
+  var values: TemplateValues = [:]
+  for field in fields {
+    match field.value {
+      .Nothing => {}
+      .Sequence(items) => {
+        values[field.name] = TemplateValue.Items(items.map({ _.plain() }).toList())
+      }
+      .Mapping(entries) => {
+        var pairs: List<(String, String)> = []
+        var index = 0
+        while index + 1 < entries.length() {
+          pairs.append((entries[index].plain(), entries[index + 1].plain()))
+          index = index + 2
+        }
+        values[field.name] = TemplateValue.Pairs pairs
+      }
+      other => {
+        values[field.name] = TemplateValue.Text other.plain()
+      }
+    }
+  }
+  values
+}
+
+/** Matched values as the fields of a record: a text as a string, a list as a sequence of strings. */
+public fn encodedFieldsOf(values: TemplateValues): List<EncodedField> {
+  var fields: List<EncodedField> = []
+  for (name, value) in values {
+    const encoded = match value {
+      .Text(text) => EncodedValue.String text
+      .Items(items) => EncodedValue.Sequence(items.map({ EncodedValue.String _ }).toList())
+      .Pairs(pairs) => {
+        var entries: List<EncodedValue> = []
+        for (key, text) in pairs {
+          entries.append EncodedValue.String(key)
+          entries.append EncodedValue.String(text)
+        }
+        EncodedValue.Mapping entries
+      }
+    }
+    fields.append EncodedField(name, encoded)
+  }
+  fields
 }
 
 // --- Reading ---------------------------------------------------------------------------------------------------------

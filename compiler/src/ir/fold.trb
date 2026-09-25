@@ -102,7 +102,13 @@ fn knownValueAt(var lowering: Lowering, expression: Expression, depth: Int): Kno
     .BoolLiteral(value) => Some KnownValue.Scalar(.Boolean(value))
     .CharLiteral(value) => Some KnownValue.Scalar(.Character(value))
     .IntegerLiteral(text) => Some KnownValue.Scalar(integerLiteral(text, false)?)
-    .TextLiteral(segments) => knownText segments
+    .TextLiteral(segments) => {
+      // A literal of the literal rule is a `Uri` or a `Regex`, whose value no fold knows
+      if lowering.checker.checkedLiteralAt(lowering.module, expression.span).isSome() {
+        return None
+      }
+      knownText segments
+    }
     .Unary(operator, operand) => knownUnary lowering, operator, operand, depth
     .Binary(operator, left, right) => knownBinary lowering, operator, left, right, depth
     .TupleLiteral(items) => {

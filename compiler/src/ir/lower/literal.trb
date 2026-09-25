@@ -1,0 +1,96 @@
+/**
+ * A literal the checker read by the literal rule (docs/design/URI.md section 9): a `Uri`, a `Regex`, a `Path`, a
+ * resource, a `TemplateCase`. The checker ran the type's own parser already and recorded the text the value is built
+ * from ([CheckedLiteral]), so nothing here parses and nothing can fail: the value is the `literal` member of the type
+ * applied to that text.
+ *
+ * **Once per program.** Every distinct literal - its type and its text - is one immortal constant cell
+ * (`FunctionKind.ConstantCell`), the shape a module `const` whose value is no static data has: the first read builds
+ * the value, and every later read, a `Regex` literal in a loop included, is that value again.
+ */
+
+use Span from "../../syntax/source"
+use Expression from "../../syntax/ast"
+use ParameterId, TypeId, TypeForm from "../../semantics/checker/type"
+use CheckedLiteral from "../../semantics/checker/context"
+use typeSignatureOf from "../../semantics/checker/signature"
+use IrTypeId, IrSignature, Slot, BlockId, FunctionId, FunctionKind, Instruction, Terminator, WitnessSource, borrowed from "../ir"
+use FunctionBuilder, emit, newFunction, finishFunction, setBlockLocation from "../build"
+use mangledName from "../mangle"
+use instanceFor from "../instances"
+use Lowering, locationOf, finishBlock, irTypeOfClosed, substituted from "./context"
+use savedFrame, restoreFrame, enterBody from "./closure"
+use emitCall from "./call"
+use textSlot from "./text"
+use unsupportedSlot, valueSlot from "./expression"
+
+/** The value of a checked literal, read from the cell of its type and text. */
+public fn lowerCheckedLiteral(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  expression: Expression,
+  found: CheckedLiteral,
+  annotation: IrTypeId,
+): Slot {
+  const at = expression.span
+  const written = match lowering.checker.expressionType(lowering.module, at) {
+    Some(found) => substituted lowering, found
+    None => {
+      return unsupportedSlot lowering, builder, destination, "a checked literal without a type", at
+    }
+  }
+  const accessor = match literalCellOf(lowering, written, found.text, at) {
+    Some(function) => function
+    None => {
+      return unsupportedSlot lowering, builder, destination, "a checked literal whose type has no `literal` member", at
+    }
+  }
+  const target = valueSlot lowering, builder, destination, annotation
+  const empty: List<WitnessSource> = []
+  emit builder, Instruction.Call(Some(target), accessor, [], empty, Some(locationOf(lowering, at)))
+  target
+}
+
+/**
+ * The accessor of the cell of one literal, built the first time the literal is read anywhere in the program: an
+ * initializer that hands the text to the `literal` member of the type, and a `ConstantCell` around it.
+ */
+fn literalCellOf(var lowering: Lowering, written: TypeId, text: String, at: Span): FunctionId? {
+  const (symbol, arguments) = match lowering.checker.types.form(written) {
+    .Nominal(found, given) => (found, given)
+    _ => {
+      return None
+    }
+  }
+  const produced = irTypeOfClosed lowering, written
+  const key = "literal {produced.value} {text}"
+  if const Some(known) = lowering.constantCells.get(key) {
+    return Some known
+  }
+  const shape = lowering.checker.typeSignature typeSignatureOf(lowering.checker, symbol)
+  const member = shape.members.get("literal")?
+  var mapping: Map<ParameterId, TypeId> = [:]
+  for index in 0..shape.generics.length().min(arguments.length()) {
+    mapping.set shape.generics[index], arguments[index]
+  }
+  const literal = instanceFor(lowering, member, mapping)?
+  const accessorName = mangledName "t", ["literal", "{lowering.constantCells.length()}"], ""
+  const initializerName = mangledName "t", ["constant"], accessorName
+  var inner = newFunction initializerName, Some(member), IrSignature([], produced), "constant"
+  const saved = savedFrame lowering
+  enterBody lowering, initializerName
+  const location = locationOf lowering, at
+  setBlockLocation inner, BlockId(0), Some(location)
+  const argument = textSlot lowering, inner, text
+  const value = emitCall lowering, inner, None, literal, [argument], produced, at
+  finishBlock lowering, inner, Terminator.Return(Some(borrowed(value)))
+  restoreFrame lowering, saved
+  const initializer = finishFunction lowering.program, inner
+  var accessor = newFunction accessorName, Some(member), IrSignature([], produced), "constant"
+  const empty = accessor.function
+  accessor.function = empty.copy blocks: [], kind: FunctionKind.ConstantCell(initializer)
+  const added = finishFunction lowering.program, accessor
+  lowering.constantCells.set key, added
+  Some added
+}

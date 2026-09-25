@@ -1,6 +1,9 @@
 # Resources
 
-**Status: proposed** — no resource type exists in `std` and the build copies or embeds nothing yet.
+**Status: slice 1 built (2026-09-25)** — `std/resource` has `Resource`, `EmbeddedBytes` and `EmbeddedText`, and a
+literal where one is expected is resolved by the checker against the file that writes it, inside its package and byte
+for byte, and becomes a value that holds the stable name (the literal rule of `docs/design/URI.md` section 9). The build
+copies and embeds nothing yet: reading the bytes is slices 2 and 3, and `ResourceError` comes with them.
 
 **A file a program needs is named by a string literal, and the signature of the call says what kind of file it is.**
 `SpriteSheet.load("./hero.png")` ships the file next to the binary and reads it when the program runs;
@@ -735,7 +738,7 @@ which files belong to a package.
 
 | # | Slice | Files | Risk |
 |---|-------|-------|------|
-| 1 | **The parameter kind.** `std/resource` with `Resource`, `EmbeddedBytes`, `EmbeddedText`, `ResourceError`; the checker's literal rule and its four diagnostics; resolution against the writing file with a directory listing for case; the recorded stable name in the IR | `std/resource/*`, `compiler/src/semantics/checker/{expression,call}.trb`, `compiler/src/ir/*`, `compiler/tests/check.test.trb` | **Highest of the six.** It is a new parameter kind, which touches the machinery `lazy` and `Expression<Value>` use, and probe 1 says there is nothing there to build on |
+| 1 | **The parameter kind.** `std/resource` with `Resource`, `EmbeddedBytes`, `EmbeddedText`; the checker's literal rule and its diagnostics; resolution against the writing file with a directory listing for case; the recorded stable name in the IR | `std/resource/*`, `compiler/src/semantics/checker/literal.trb`, `compiler/src/project/{read,source-tree}.trb`, `compiler/src/ir/lower/literal.trb`, `compiler/tests/literals.test.trb` | **Done** (2026-09-25), with `docs/design/URI.md` slice 7. `ResourceError` moved to slice 3, the first slice that can fail a read |
 | 2 | **Embedding.** `EmbeddedBytes.bytes()` and `EmbeddedText.text()` as static data in the C back end; the UTF-8 check at the literal; the first conformance programs | `compiler/src/backend/c/*`, `tests/conformance/` | **Low.** Probe 2 says the emitter already writes exactly this shape for a string literal |
 | 3 | **Shipping.** `<program>.resources/`, the run time finding the program's own directory, `Resource.bytes()` as a ready `Task`, `ResourceError` | `runtime/*`, `compiler/src/cli/build.trb` | **Medium.** "Where is my own binary" is a platform call on each platform |
 | 4 | **The build's file set.** Packaging, the `resource` lines of the lock's `settings` section, `--watch`, the embedded total in the build report and in `--statistics`, the `resources { }` budget and its two levels, the move of `kilobytes`/`megabytes`/`gigabytes` from `std/sandbox` to `std/number` | `compiler/src/cli/*`, `compiler/src/project/*` | **Low**, and it is the slice that pays for slice 1 |

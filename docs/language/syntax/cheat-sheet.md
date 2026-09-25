@@ -110,6 +110,8 @@ if condition { a } else { b }                an expression
 match subject { pattern => value }           an expression, and exhaustive
 "text {expression}"                          interpolation; a literal brace is `\{`
 raw"text"                                    a raw string: no escapes, no interpolation
+const page: Uri = "https://example.test/"     a literal the compiler reads: `Path`, `Uri`, `Regex`, ...
+const digits: Regex = "\d{2,4}"               a `Regex` or `UriTemplate` literal is read verbatim
 """                                          a multi-line string, dedented by its first line
   text
   """
