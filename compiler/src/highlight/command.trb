@@ -22,7 +22,7 @@
  * - [resolveFile] - the walk that decides what every name is.
  */
 
-use File from "std/fs"
+use File, IoError from "std/fs"
 use readLine from "std/io"
 use SourceText, Span from "../syntax/source"
 use parse from "../syntax/parser/parser"
@@ -101,7 +101,7 @@ type Utf16Index {
 public fn runHighlight(path: String?) {
   const source = match path {
     Some(file) => File.readText(file).ok() ?? ""
-    None => readStandardInput()
+    None => readStandardInput().ok() ?? ""
   }
   print highlightJson(source)
 }
@@ -124,12 +124,12 @@ public fn highlightJson(source: String): String {
  * Standard input, line by line. The line breaks of the buffer are not kept, which changes no answer: every position
  * this command prints is a line and a column, and both survive a `\r\n` becoming a `\n`.
  */
-fn readStandardInput(): String {
+fn readStandardInput(): Result<String, IoError> {
   var lines: List<String> = []
-  while const Some(line) = readLine() {
+  while const Some(line) = readLine()? {
     lines.append line
   }
-  lines.joined separator: "\n"
+  Ok lines.joined(separator: "\n")
 }
 
 /**

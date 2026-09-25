@@ -570,15 +570,6 @@ static torb_line_status torb_read_line_status(torb_text *out, size_t *bad_offset
   }
 }
 
-bool torb_read_line(torb_text *out) {
-  size_t bad_offset = 0u;
-  torb_line_status status = torb_read_line_status(out, &bad_offset);
-  if (status == TORB_LINE_INVALID) {
-    torb_panic_invalid_utf8((int64_t)bad_offset, torb_location_unknown);
-  }
-  return status == TORB_LINE_READ;
-}
-
 bool torb_read_line_or_end(torb_text path, torb_text *out, torb_text *error) {
   size_t bad_offset = 0u;
   char detail[96];
@@ -702,7 +693,7 @@ void torb_install_interrupt_handler(void) {
   torb_atomic_store_u32(&torb_interrupt_installed, 1u);
   memset(&action, 0, sizeof(action));
   action.sa_handler = torb_interrupt_signal_handler;
-  /* No `SA_RESTART`: a blocking read of standard input has to return early (`EINTR`) so `torb_read_line` sees it
+  /* No `SA_RESTART`: a blocking read of standard input has to return early (`EINTR`) so `torb_read_line_or_end` sees it
      instead of only the next real line. */
   sigaction(SIGINT, &action, NULL);
 }

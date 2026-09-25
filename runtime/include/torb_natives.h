@@ -301,8 +301,6 @@ int64_t torb_process_run(torb_text command, torb_list arguments, torb_text *outp
 int64_t torb_process_run_feeding(torb_text command, torb_list arguments, torb_text input, torb_text *output, torb_text *failure);
 /* Process.runInheriting */
 int64_t torb_process_run_inheriting(torb_text command, torb_list arguments, torb_text *failure);
-/* readLine */
-bool torb_read_line(torb_text *out);
 /* readLineOrEnd */
 bool torb_read_line_or_end(torb_text path, torb_text *out, torb_text *error);
 /* Float64.round */

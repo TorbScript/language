@@ -888,7 +888,7 @@ what lets the checker and both back ends see it without evaluating anything.
 
 ```trb
 loop {
-  const line = readLine()
+  const line = readLine()? ?? ""
   if line.isEmpty() {
     break
   }

@@ -27,8 +27,11 @@ use readLine, standardInput, standardOutput, standardError from "std/io"
 ```trb check
 use readLine from "std/io"
 
-const first = readLine()
-print(first ?? "no input")
+match readLine() {
+  Ok(Some(line)) => print line
+  Ok(None) => print "no input"
+  Fail(problem) => print problem
+}
 ```
 
 ## Declarations
@@ -36,10 +39,13 @@ print(first ?? "no input")
 ### `readLine`
 
 ```trb fragment
-public native fn readLine(): String?
+public fn readLine(): Result<String?, IoError>
 ```
 
-The next line of standard input without its line break, `None` at the end of the input.
+The next line of standard input without its line break: `Ok(None)` at the end of the input, and an `IoError` for a
+line whose bytes are not UTF-8. Standard input comes from outside the program, so bytes that cannot be text are a
+property of the data and not a mistake of the program - a `Result`, never a panic, as for a file. A loop over the lines
+is `while const Some(line) = readLine()? { ... }` inside a function that answers a `Result`.
 
 ### `standardInput`, `standardOutput`, `standardError`
 

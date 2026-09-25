@@ -14,13 +14,30 @@ use ArrayList from "std/collections"
 use Source, Sink, Bytes from "std/stream"
 use lines as lineStage from "std/stream"
 
-/** The next line of standard input without its line break, `None` at the end of the input. */
-public native fn readLine(): String?
+/**
+ * The next line of standard input without its line break: `Ok(None)` at the end of the input, and an `IoError` for a
+ * line whose bytes are not UTF-8.
+ *
+ * Standard input comes from outside the program, so its bytes are a property of the data and not a promise the program
+ * made: a line that cannot be text is a `Result` and never a panic (CONCEPT.md, "Error Handling").
+ *
+ * # Examples
+ *
+ *     while const Some(line) = readLine()? {
+ *       print line.toUpperCase()
+ *     }
+ */
+public fn readLine(): Result<String?, IoError> {
+  match readLineOrEnd("standard input") {
+    Ok(line) => Ok Some(line)
+    Fail(problem) => if problem.message.isEmpty() { Ok None } else { Fail problem }
+  }
+}
 
 /**
  * The next line of standard input, or a failure whose `message` is empty at the end of the input and says which byte
- * is not UTF-8 otherwise. What `readLine` is going to be written over, once no compiler that builds this repository
- * lacks it (CLAUDE.md, "Seed and breaking changes").
+ * is not UTF-8 otherwise: the one native [readLine] is written over, because a runtime function cannot build an
+ * `Option` inside a `Result`.
  */
 native fn readLineOrEnd(path: String): Result<String, IoError>
 

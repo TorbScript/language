@@ -24,11 +24,14 @@ public type ReadEvent {
   case EndOfInput
 }
 
-/** `readLine()`, told apart from a Ctrl+C that interrupted it - both answer `None` - by [interrupted]. */
-public fn readEvent(): ReadEvent {
-  match readLine() {
-    Some(line) => ReadEvent.Line line
-    None => if interrupted() { ReadEvent.Interrupted } else { ReadEvent.EndOfInput }
+/**
+ * `readLine()`, told apart from a Ctrl+C that interrupted it - both answer `None` - by [interrupted]. A line that is not
+ * UTF-8 is the `IoError` `readLine` answers for it.
+ */
+public fn readEvent(): Result<ReadEvent, IoError> {
+  match readLine()? {
+    Some(line) => Ok ReadEvent.Line(line)
+    None => Ok(if interrupted() { ReadEvent.Interrupted } else { ReadEvent.EndOfInput })
   }
 }
 
@@ -92,7 +95,7 @@ public fn runRepl(sandboxed: Bool = false): Result<Int, IoError> {
   var idleInterrupts = 0
   loop {
     printErrorRaw promptFor(pending.isEmpty())
-    const line = match actionFor(readEvent(), pending.isEmpty(), idleInterrupts) {
+    const line = match actionFor(readEvent()?, pending.isEmpty(), idleInterrupts) {
       .Leave => {
         printError ""
         break

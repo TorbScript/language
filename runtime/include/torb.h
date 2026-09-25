@@ -1123,9 +1123,6 @@ void torb_print_error(torb_text text);
 void torb_print_parts(const torb_text *parts, size_t count);
 void torb_print_error_parts(const torb_text *parts, size_t count);
 
-/** `readLine(): String?`: false at end of input. The trailing `\n` (and a `\r` before it) is removed. */
-bool torb_read_line(torb_text *out);
-
 /** `isTerminal()`: whether standard output is a live console rather than a pipe or a file. */
 bool torb_is_terminal(void);
 
@@ -1142,8 +1139,9 @@ void torb_install_interrupt_handler(void);
 bool torb_take_interrupt(void);
 
 /**
- * `readLine` of `std/io` without a panic: `true` and the line in `out`, or `false` with an empty `error` at the end of
- * the input and with the message of an `IoError` for a line that is not UTF-8. `path` is what that error names.
+ * `readLine` of `std/io`: `true` and the line in `out`, without its `\n` and a `\r` before it, or `false` with an
+ * empty `error` at the end of the input and with the message of an `IoError` for a line that is not UTF-8. `path` is
+ * what that error names. Bytes from outside the program are data, so a line that is no text is never a panic.
  */
 bool torb_read_line_or_end(torb_text path, torb_text *out, torb_text *error);
 
