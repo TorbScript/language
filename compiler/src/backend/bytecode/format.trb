@@ -593,6 +593,17 @@ public type KernelOperation {
   case PoolDefaults
   /** `index, length, location`: the runtime's `index <index> is out of bounds for a length of <length>` panic. */
   case IndexOutOfBounds
+  /**
+   * `location`: the site a call of a function that tracks its caller hands it (`ir/sites.trb`), left pending for the
+   * callee's [KernelOperation.SitePush]. `-1` for a call without one.
+   */
+  case SitePending
+  /** The same with the site on top of the stack: what a function that tracks its caller hands on to another one. */
+  case SitePendingCurrent
+  /** The pending site onto the stack of sites: the entry of a function that tracks its caller. */
+  case SitePush
+  /** The top of the stack of sites off it again: every return of such a function. */
+  case SitePop
 
   /** The name the disassembly writes. */
   fn spelling(): String {
@@ -661,6 +672,10 @@ public type KernelOperation {
       .SetExecutable => "set.executable"
       .PoolDefaults => "pool.defaults"
       .IndexOutOfBounds => "index.out.of.bounds"
+      .SitePending => "site.pending"
+      .SitePendingCurrent => "site.pending.current"
+      .SitePush => "site.push"
+      .SitePop => "site.pop"
     }
   }
 }
@@ -731,6 +746,10 @@ public const allKernelOperations: List<KernelOperation> = [
   KernelOperation.SetExecutable,
   KernelOperation.PoolDefaults,
   KernelOperation.IndexOutOfBounds,
+  KernelOperation.SitePending,
+  KernelOperation.SitePendingCurrent,
+  KernelOperation.SitePush,
+  KernelOperation.SitePop,
 ]
 
 /**
@@ -744,6 +763,12 @@ public const stoppedWord = 0 - 9223372036854775807 - 1
  * grows by an operation moves no native's number, and a native added to the manifest moves no operation's.
  */
 public const kernelNativeBase = 1024
+
+/**
+ * The location operand of a function that tracks its caller (`ir/sites.trb`): not an index of the table but "the site
+ * on top of the kernel's stack of sites", which `torb_machine_location` resolves (`TORB_MACHINE_CALLER_SITE`).
+ */
+public const callerSiteMarker = 0 - 2
 
 /** The number a `kernel` instruction carries for an operation. */
 public fn kernelNumberOf(operation: KernelOperation): Int {

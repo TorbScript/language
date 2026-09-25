@@ -17,6 +17,7 @@ use IrProgram, Instruction from "../ir"
 use devirtualizeProgram from "../devirtualize"
 use rewriteElementPlaces from "../elements"
 use dropProvableChecks from "../ranges"
+use trackCallerSites from "../sites"
 use finishProgram, isManagedType from "../layout"
 use verifyProgram, typeOfReference from "../verify"
 use printProgram from "../print"
@@ -125,6 +126,45 @@ fn finishLowering(var lowering: Lowering) {
   // Last of the three, because a direct call is what makes a constant visible where a dispatch hid it: an overflow
   // check the ranges of a function prove cannot fire is the plain operation from here on
   dropProvableChecks lowering.program
+  // Last, because which calls are direct and which checks remain is what decides where a panic can happen
+  const standard = standardFunctionsOf lowering
+  trackCallerSites lowering.program, standard
+}
+
+/**
+ * Whether each function of the program was lowered from a library module of `std/` - a file under `src/` of a
+ * package whose name starts with `std/` - which is what may track the site of its caller (`ir/sites.trb`). A test of
+ * `std/` is the program's own code, and a generated body has no declaration to ask.
+ */
+fn standardFunctionsOf(var lowering: Lowering): List<Bool> {
+  var standard: List<Bool> = []
+  for function in lowering.program.functions {
+    standard.append isStandardOrigin(lowering, function.origin)
+  }
+  standard
+}
+
+fn isStandardOrigin(var lowering: Lowering, origin: SymbolId?): Bool {
+  const symbol = match origin {
+    Some(found) => found
+    None => {
+      return false
+    }
+  }
+  const site = match lowering.checker.siteOf(symbol) {
+    Some(found) => found
+    None => {
+      return false
+    }
+  }
+  const program = lowering.checker.program
+  const module = program.graph.modules[site.module.value]
+  const package = program.workspace.packages[module.package]
+  if !package.name.startsWith("std/") {
+    return false
+  }
+  const relative = if package.directory.isEmpty() { module.path } else { module.path.withoutPrefix("{package.directory}/") ?? module.path }
+  relative.startsWith "src/"
 }
 
 /**

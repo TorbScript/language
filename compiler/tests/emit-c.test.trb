@@ -781,7 +781,8 @@ group "Trait-typed values" {
     const text = cOf source
     assert(
       text.contains(raw"""
-        static int64_t W_acme_x2f_app_main_Small_size(void *self) {
+        static int64_t W_acme_x2f_app_main_Small_size(void *self, const torb_location *torb_site) {
+          (void)torb_site;
           const T_payload__T_acme_x2f_app_main_Small *box = (const T_payload__T_acme_x2f_app_main_Small *)self;
           return t_acme_x2f_app_main_Small_size(box->f_value);
         }""")
@@ -803,7 +804,10 @@ group "Trait-typed values" {
 
   test "a dynamic call reads the member out of the table and the payload out of the same slot" {
     const text = cOf source
-    assert text.contains("s1 = ((int64_t (*)(void *))s0_value.w0->members[0])(s0_value.data);")
+    // The site of the call goes last: a member that tracks its caller names it in a panic (`ir/sites.trb`)
+    const call = "s1 = ((int64_t (*)(void *, const torb_location *))s0_value.w0->members[0])"
+      + "(s0_value.data, &TORB_LOCATION(\"acme/app/src/main.trb\", 14, 3));"
+    assert text.contains(call)
   }
 
   /** The coercion: one allocation of the box, the payload into it, then the data pointer and the table. */

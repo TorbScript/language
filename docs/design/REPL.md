@@ -264,9 +264,11 @@ runs in a sandbox all the same, because the sandbox is also the recovery point.*
   `<entry 3>` is the third entry of the session, a `:load`ed file is named by its path, `:type` is `<type>`, and the
   line and the column are the entry's. A declaration of an earlier entry that an entry broke is rendered against that
   entry, with a note.
-- **A stop is what a native program prints**: `panic: <message>` and `  at <entry 7>:2:3`. Where the site is in code
-  the session did not write - `std` - that site follows `at`, and `  in <entry 6>:3:19` names the innermost line of an
-  entry the call came from (the entry alone where the call carries no site of its own). A `?` that fails prints
+- **A stop is what a native program prints**: `panic: <message>` and `  at <entry 7>:2:3`. A panic inside `std/` names the
+  line of the entry that called into it, as it does in a program (docs/design/PANICS.md, the caller's line). Where the
+  site is still in code the session did not write - a call through a closure - that site follows `at`, and
+  `  in <entry 6>:3:19` names the innermost line of an entry the call came from (the entry alone where the call carries
+  no site of its own). A `?` that fails prints
   `error: <the failure through Show>`, as an entry file's top level does.
 - **The notes of the session itself** - a binding that is gone, a binding that is not kept, an unfinished entry dropped
   - are `note: ...` lines on standard error.

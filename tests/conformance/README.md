@@ -255,7 +255,7 @@ checks of the C do not. There is no list of what the VM runs: it runs everything
 | `negate-overflow.trb` | ``arithmetic overflow in `-` ``: the smallest `Int64` has no positive counterpart |
 | `division-by-zero.trb` | ``division by zero in `/` `` |
 | `remainder-by-zero.trb` | ``division by zero in `%` ``: two instructions, two messages |
-| `collection-index.trb` | `a[key]` past the end is the `at` of `ArrayList`: `index 3 is out of bounds for a length of 3` |
+| `collection-index.trb` | `a[key]` past the end is the `at` of `ArrayList`: `index 3 is out of bounds for a length of 3`, at the line of the program and not of `std/` - the site a function of `std/` that can panic is handed (`compiler/src/ir/sites.trb`) |
 | `array-index-bounds.trb` | The same for an `Array`, whose `a[key]` is a direct read of an inline slot and still says what `at` says |
 | `array-set-bounds.trb` | `a[index] = value` outside an `Array` is `index -1 is out of bounds for a length of 3`, as for a `List` |
 | `slice-out-of-range.trb` | `index 9 is out of bounds for a length of 3`, with the **exclusive** end in the message |

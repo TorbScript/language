@@ -40,6 +40,7 @@ use Opcode, KernelOperation, kernelNumberOf, kernelNativeBase, headWord, largest
 use BytecodeProgram, Chunk, ParameterEntry, FrameSlot, Place, PlaceStep, WitnessEntry, WitnessRootEntry from "./format"
 use Shape, CountedWord, CountedKind, ConstantPart, TableEntry, ElementEntry, ElementKind, widthOfPart from "./format"
 use narrowCode, isSignedNarrow from "./format"
+use callerSiteMarker from "./format"
 use WordTables, LayoutWords, wordTablesOf, whyNoWords, isBlockPointer, isBoxed, layoutOfType from "./words"
 use nativeIndices from "./natives"
 use runScriptFunction, loadScriptFunction, runLoadedScriptFunction from "../c/natives"
@@ -216,7 +217,9 @@ fn emitTables(var emitter: Emitter, program: IrProgram) {
   for table in program.witnessTables {
     var members: List<Int> = []
     for member in table.members {
-      members.append(emitter.chunks.get(member.value) ?? (0 - 1))
+      // A member that has a copy tracking its caller is called as the copy, and a `CallWitness` leaves the site pending
+      const called = program.siteCopies.get(member.value) ?? member.value
+      members.append(emitter.chunks.get(called) ?? (0 - 1))
     }
     var nested: List<Int> = []
     for inner in table.nested {
@@ -675,6 +678,17 @@ fn contentParts(
   }
 }
 
+/**
+ * The location operand of something that may panic: the index of `id`, or - in a function that tracks its caller
+ * (`ir/sites.trb`) - [callerSiteMarker], which the kernel reads as the site on top of its stack of sites.
+ */
+fn siteIndex(var emitter: Emitter, body: Body, program: IrProgram, id: LocationId): Int {
+  if body.function.tracksCaller {
+    return callerSiteMarker
+  }
+  locationIndex emitter, program, id
+}
+
 /** The index of a location in the program's table, adding it on first use. */
 fn locationIndex(var emitter: Emitter, program: IrProgram, id: LocationId): Int {
   if const Some(found) = emitter.locationIndices.get(id.value) {
@@ -758,6 +772,9 @@ fn emitChunk(var emitter: Emitter, program: IrProgram, function: IrFunction): Ch
     machine: machine,
     taskRegister: taskRegister,
   )
+  if function.tracksCaller {
+    emitKernel emitter, body, kernelNumberOf(KernelOperation.SitePush), []
+  }
   if const Some(found) = machine {
     // Every resume starts with the cancellation check, the entry included
     body.resumes.append 0
@@ -1391,7 +1408,7 @@ fn placeOf(var emitter: Emitter, var body: Body, program: IrProgram, reference: 
       .Element(item, index, at, _) => {
         pending = flushOffset steps, pending
         const register = operand emitter, body, program, index
-        const location = locationIndex emitter, program, at
+        const location = siteIndex emitter, body, program, at
         // An array holds its items inline: the step is an offset of the index times the item's words, checked against
         // the size - always, where the range analysis let the C back end drop the comparison, because it cannot fail
         if const .FixedArray(_, size) = program.typeAt(current) {
@@ -1539,8 +1556,9 @@ fn emitInstruction(var emitter: Emitter, var body: Body, program: IrProgram, ins
         emitTail body, register
       }
     }
-    .CallWitness(target, witness, member, arguments) => {
+    .CallWitness(target, witness, member, arguments, at) => {
       if const .Value(_, _) = witness.root {
+        emitPendingSite emitter, body, program, at
         const source = witnessEntryOf emitter, body, program, witness
         var registers: List<Int> = []
         for argument in arguments {
@@ -1610,7 +1628,7 @@ fn emitInstruction(var emitter: Emitter, var body: Body, program: IrProgram, ins
     .PutBack(_, _, _, _) => report emitter, "a `var` path through a map"
     .Panic(message, at) => {
       const register = operand emitter, body, program, message.slot
-      const location = locationIndex emitter, program, at
+      const location = siteIndex emitter, body, program, at
       emitKernel emitter, body, kernelNumberOf(KernelOperation.Panic), [register, location]
     }
     .Suspend(state, awaited, observes) => {
@@ -1633,7 +1651,7 @@ fn emitInstruction(var emitter: Emitter, var body: Body, program: IrProgram, ins
     .ChannelNew(target, capacity, item, at) => {
       const size = operand emitter, body, program, capacity
       const register = targetOf emitter, body, target
-      const location = locationIndex emitter, program, at
+      const location = siteIndex emitter, body, program, at
       emitKernel emitter, body, kernelNumberOf(KernelOperation.ChannelNew), [register, size, emitter.elementBase + item.value, location]
     }
   }
@@ -1749,12 +1767,33 @@ fn emitCall(
   for argument in arguments {
     registers.append argumentRegister(emitter, body, program, argument)
   }
+  // The site the callee names in a panic: the one this function was handed where it tracks its own caller, the call's
+  // own otherwise - left pending in the kernel, which the callee's entry takes
+  if function.tracksCaller {
+    emitPendingSite emitter, body, program, at
+  }
   const result = resultRegister emitter, body, target
   emitHead emitter, body, Opcode.Call, result, registers.length(), flagOf(target.isSome())
   emitTail body, chunk
   for register in registers {
     emitTail body, register
   }
+}
+
+/**
+ * The site a function that tracks its caller names (`ir/sites.trb`), left pending in the kernel for its entry: the one
+ * this function was handed where it tracks its own caller, the call's own otherwise.
+ */
+fn emitPendingSite(var emitter: Emitter, var body: Body, program: IrProgram, at: LocationId?) {
+  if body.function.tracksCaller {
+    emitKernel emitter, body, kernelNumberOf(KernelOperation.SitePendingCurrent), []
+    return
+  }
+  const location = match at {
+    Some(found) => locationIndex emitter, program, found
+    None => 0 - 1
+  }
+  emitKernel emitter, body, kernelNumberOf(KernelOperation.SitePending), [location]
 }
 
 /**
@@ -1856,7 +1895,7 @@ fn emitRuntimeCall(
   if withLocation {
     match at {
       Some(found) => {
-        location = locationIndex emitter, program, found
+        location = siteIndex emitter, body, program, found
       }
       None => {
         report emitter, "`{symbol}` takes the source location of the call, and the call carries none"
@@ -1940,7 +1979,7 @@ fn emitIntrinsic(
   }
   const first = registers.get(0) ?? 0
   const second = registers.get(1) ?? 0
-  const location = locationIndex emitter, program, at
+  const location = siteIndex emitter, body, program, at
   match intrinsic.operation {
     .PrintParts => {
       var operands = [registers.length()]
@@ -2585,6 +2624,9 @@ fn emitTerminator(var emitter: Emitter, var body: Body, program: IrProgram, term
         }
         emitHead emitter, body, Opcode.Finish, body.taskRegister, register, width
         return
+      }
+      if body.function.tracksCaller {
+        emitKernel emitter, body, kernelNumberOf(KernelOperation.SitePop), []
       }
       match value {
         Some(argument) => {

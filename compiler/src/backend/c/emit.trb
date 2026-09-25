@@ -34,7 +34,7 @@ use Emission, write, reportUnsupported, emittedText, locationExpression, slotNam
 use cTypeOf, whyNoCType, hasStructDefinition, memberNameOf, variantMemberNameOf from "./type"
 use structDeclarationOf, layoutDefinitionOrder, objectDeclarationOf, arrayDeclarationOf from "./type"
 use bodyOf, bodyStatements, signatureHeadOf, valueTypeOf, emptyNicheExpression, resultTypeOf from "./body"
-use resultPointerName, keptFunctions, frameTypeName from "./body"
+use resultPointerName, keptFunctions, frameTypeName, callerSiteName from "./body"
 use dropFunctionOf, pointerTo, closureThunkNameOf, environmentLayoutOfFunction from "./body"
 use retainChildrenFunctionOf from "./body"
 use variantInitializerParts, boxedLayoutOf, countedFormOf, inlineCountedLayoutOf from "./body"
@@ -484,6 +484,9 @@ fn thunkHeadOf(
     const written = if signature.parameters[position].isReference { pointerTo spelling } else { spelling }
     parameters.append declarationOf(written, "a{position}")
   }
+  // Every thunk takes the site of the call after the arguments, which one whose member has a copy that tracks its caller
+  // hands on (`ir/sites.trb`): a call site knows the member's index and not whether it has one
+  parameters.append "const torb_location *{callerSiteName}"
   const result = resultTypeOf program, signature.result
   const written = parameters.joined separator: ", "
   const name = thunkNameOf program, table, index, names
@@ -557,7 +560,14 @@ fn emitThunk(
     }
     given.append argument
   }
-  const called = CExpression.Call CExpression.Name(function.name), given
+  var calledName = function.name
+  if const Some(copy) = program.siteCopies.get(member.value) {
+    calledName = program.functionAt(FunctionId(copy)).name
+    given.append CExpression.Name(callerSiteName)
+  } else {
+    body.insert 0, CStatement.Evaluate(CExpression.Cast("void", CExpression.Name(callerSiteName)))
+  }
+  const called = CExpression.Call CExpression.Name(calledName), given
   if isVoidResultOf(program, function.signature.result) {
     body.append CStatement.Evaluate(called)
     body.append CStatement.Return()
@@ -2175,6 +2185,12 @@ fn emitDefinitions(
       checked.appendAll statements
       statements = checked
     }
+    // The site of the caller is read where something may panic, and a body may have no such place left
+    if function.tracksCaller {
+      var sited = [CStatement.Evaluate(CExpression.Cast("void", CExpression.Name(callerSiteName)))]
+      sited.appendAll statements
+      statements = sited
+    }
     const declaration = CDeclaration.Definition(
       commentOf(program, function),
       signatureHeadOf(program, function),
@@ -2213,7 +2229,7 @@ fn callsProgramCode(program: IrProgram, function: IrFunction): Bool {
   for block in function.blocks {
     for instruction in block.instructions {
       match instruction {
-        .CallClosure(_, _, _) | .CallWitness(_, _, _, _) => {
+        .CallClosure(_, _, _) | .CallWitness(_, _, _, _, _) => {
           return true
         }
         .Call(_, callee, _, _, _) => {

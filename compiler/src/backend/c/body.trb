@@ -233,7 +233,7 @@ fn markReadSlots(program: IrProgram, function: IrFunction, var reads: List<Bool>
       markRead reads, callee
       markArguments reads, arguments
     }
-    .CallWitness(_, witness, _, arguments) => {
+    .CallWitness(_, witness, _, arguments, _) => {
       markWitness reads, witness
       markArguments reads, arguments
     }
@@ -358,6 +358,9 @@ public fn signatureHeadOf(program: IrProgram, function: IrFunction): String {
     }
     parameters.append declarationOf(spelling, name)
   }
+  if function.tracksCaller {
+    parameters.append "const torb_location *{callerSiteName}"
+  }
   const written = if parameters.isEmpty() { "void" } else { parameters.joined separator: ", " }
   const result = returnTypeOf program, function
   "{qualifiersOf(program, function)}{declarationOf(result, "{function.name}({written})")}"
@@ -397,7 +400,8 @@ public fn keptFunctions(program: IrProgram, withheld: Set<Int>): List<Bool> {
     // emitted (`emittedFunctionsOf`)
     // An access to an entry cell nothing calls is no root either: its cell may have no other access at all
     const isCell = isEntryCellAccess program.functions[index]
-    const leftOut = program.specializedFunctions.contains(index) || isReader || withheld.contains(index) || isCell
+    const isCopied = program.specializedFunctions.contains(index) || program.callerSiteFunctions.contains(index)
+    const leftOut = isCopied || isReader || withheld.contains(index) || isCell
     isLeftOut.append leftOut
     isAnyLeftOut = isAnyLeftOut || leftOut
   }
@@ -430,7 +434,10 @@ public fn keptFunctions(program: IrProgram, withheld: Set<Int>): List<Bool> {
   // A table, a descriptor and a constant cell hold a function id the emitter writes out whatever calls it
   for table in program.witnessTables {
     for member in table.members {
-      keepReached kept, pending, member
+      match program.siteCopies.get(member.value) {
+        Some(copy) => keepReached kept, pending, FunctionId(copy)
+        None => keepReached kept, pending, member
+      }
     }
   }
   for descriptor in program.elements {
@@ -1001,15 +1008,15 @@ fn instructionStatements(
         statements.append directive
       }
       const name = slotExpression body, message.slot
-      const site = locationExpression program, at
+      const site = siteExpression program, body, at
       statements.append CStatement.Evaluate(CExpression.Call(CExpression.Name("torb_panic"), [name, site]))
       statements
     }
     .CallClosure(target, callee, arguments) => {
       closureCallStatements emission, program, body, target, callee, arguments
     }
-    .CallWitness(target, witness, member, arguments) => {
-      witnessCallStatements emission, program, body, target, witness, member, arguments
+    .CallWitness(target, witness, member, arguments, at) => {
+      witnessCallStatements emission, program, body, target, witness, member, arguments, at
     }
     .Closure(target, callee, captures, _) => {
       closureStatements emission, program, body, target, callee, captures
@@ -1040,7 +1047,7 @@ fn instructionStatements(
       const made = CExpression.Call(CExpression.Name("torb_channel_new"), [
         slotExpression(body, capacity),
         descriptor,
-        locationExpression(program, at),
+        siteExpression(program, body, at),
       ])
       [CStatement.Assignment(slotExpression(body, target), made)]
     }
@@ -1592,8 +1599,40 @@ fn callStatements(
   if const .TaskResume = function.kind {
     return reported emission, "a call of a task"
   }
-  const written = argumentsOf emission, program, body, function.signature, arguments
+  var written = argumentsOf emission, program, body, function.signature, arguments
+  if function.tracksCaller {
+    written.append callerSiteArgument(program, body, at)
+  }
   callStatementOf emission, body, target, function, function.name, written, ""
+}
+
+/** The hidden parameter of a function that tracks its caller (`ir/sites.trb`): where its panics say they are. */
+public const callerSiteName = "torb_site"
+
+/**
+ * What a call of a function that tracks its caller hands it: the site this function was handed, where it tracks its
+ * own caller, and the address of the call's location otherwise - a compound literal of this frame, which outlives the
+ * call it is made for, and all the callee ever does with it is hand it on or name it in a panic.
+ */
+fn callerSiteArgument(program: IrProgram, body: Body, at: LocationId?): CExpression {
+  if body.function.tracksCaller {
+    return CExpression.Name callerSiteName
+  }
+  match at {
+    Some(found) => CExpression.AddressOf locationExpression(program, found)
+    None => CExpression.AddressOf CExpression.Name("torb_location_unknown")
+  }
+}
+
+/**
+ * The site a panic of this function names: `at`, or the site of its caller where the function tracks it - which is
+ * every site of such a function, a `panic`, an overflow, a native and an index alike.
+ */
+fn siteExpression(program: IrProgram, body: Body, at: LocationId): CExpression {
+  if body.function.tracksCaller {
+    return CExpression.Dereference CExpression.Name(callerSiteName)
+  }
+  locationExpression program, at
 }
 
 /**
@@ -1752,7 +1791,7 @@ fn runtimeCallStatements(
         }
       }
       var written = argumentsOf emission, program, body, function.signature, arguments
-      written.append locationExpression(program, site)
+      written.append siteExpression(program, body, site)
       const called = sliceSymbolOf program, body, function, symbol
       callStatementOf emission, body, target, function, called, written, ""
     }
@@ -1765,7 +1804,7 @@ fn runtimeCallStatements(
             return reported emission, "`{symbol}` takes the source location of the call, and the call carries none"
           }
         }
-        written.append locationExpression(program, site)
+        written.append siteExpression(program, body, site)
       }
       callStatementOf emission, body, target, function, symbol, written, annotation
     }
@@ -2078,6 +2117,7 @@ fn witnessCallStatements(
   witness: WitnessSource,
   member: Int,
   arguments: List<Argument>,
+  at: LocationId?,
 ): List<CStatement> {
   const receiver = match witness.root {
     .Value(place, _) => place
@@ -2099,6 +2139,9 @@ fn witnessCallStatements(
     spellings.append valueTypeOf(program, typeOfSlot(body, argument.slot))
     given.append slotExpression(body, argument.slot)
   }
+  // Every thunk takes the site of the call last (`thunkHeadOf`), for a member that tracks its caller
+  spellings.append "const torb_location *"
+  given.append callerSiteArgument(program, body, at)
   const annotation = "{result} (*)({spellings.joined(separator: ", ")})"
   const members = CExpression.PointerMember table, "members"
   const entry = CExpression.Index members, CExpression.Literal("{member}")
@@ -2385,7 +2428,7 @@ fn intrinsicExpression(
   }
   const first = operands.get(0) ?? CExpression.Literal("0")
   const second = operands.get(1) ?? CExpression.Literal("0")
-  const site = locationExpression program, at
+  const site = siteExpression program, body, at
   match intrinsic.operation {
     .BooleanNot => Some CExpression.Unary("!", first)
     .TextEqual => Some textCall("torb_text_equal", first, second)
@@ -2988,7 +3031,7 @@ fn elementReferenceOf(
     const checked = CExpression.Call(CExpression.Name("torb_array_element_index"), [
       slotExpression(body, index),
       CExpression.Literal("{size}"),
-      locationExpression(program, location),
+      siteExpression(program, body, location),
     ])
     return CExpression.Index CExpression.Member(container, arrayItemsMember), checked
   }
@@ -3000,7 +3043,7 @@ fn elementReferenceOf(
   const found = CExpression.Call(CExpression.Name("torb_list_element_address"), [
     CExpression.AddressOf(container),
     slotExpression(body, index),
-    locationExpression(program, location),
+    siteExpression(program, body, location),
   ])
   CExpression.Dereference CExpression.Cast("{spelling} *", found)
 }

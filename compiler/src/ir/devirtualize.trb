@@ -40,7 +40,7 @@
 
 use IrProgram, IrFunction, IrSignature, IrTypeId, Slot, FunctionId from "./ir"
 use Instruction, Reference, Argument, Capture from "./ir"
-use WitnessSource, WitnessTableId from "./ir"
+use WitnessSource, WitnessTableId, LocationId from "./ir"
 use borrowed, referenced from "./ir"
 use resultModeOf from "./layout"
 
@@ -626,7 +626,7 @@ fn collectInstruction(
       poison peeling, location
       poisonArguments peeling, places, index, arguments
     }
-    .CallWitness(target, witness, _, arguments) => {
+    .CallWitness(target, witness, _, arguments, _) => {
       const location = targetLocation places, index, target
       poison peeling, location
       collectWitnessReceiver peeling, places, index, witness
@@ -945,7 +945,7 @@ fn refuseUnresolvedCalls(var peeling: Peeling, places: Locations, program: IrPro
     refuseMovedResult peeling, places, program, function, index
     for block in function.blocks {
       for instruction in block.instructions {
-        if const .CallWitness(target, witness, member, arguments) = instruction {
+        if const .CallWitness(target, witness, member, arguments, _) = instruction {
           refuseCall peeling, places, program, function, index, target, witness, member, arguments
         }
       }
@@ -994,7 +994,7 @@ fn refuseCall(
   if receiver < 0 {
     return
   }
-  const direct = directCallOf peeling, places, program, function, index, target, witness, member, arguments
+  const direct = directCallOf peeling, places, program, function, index, target, witness, member, arguments, None
   if direct.isSome() {
     return
   }
@@ -1044,6 +1044,7 @@ fn directCallOf(
   witness: WitnessSource,
   member: Int,
   arguments: List<Argument>,
+  at: LocationId?,
 ): Instruction? {
   const (place, bound) = match witness.root {
     .Value(found, at) => (found, at)
@@ -1091,7 +1092,7 @@ fn directCallOf(
     given.append borrowed(place.base)
   }
   given.appendAll arguments
-  Some Instruction.Call(target, callee, given, [])
+  Some Instruction.Call(target, callee, given, [], at)
 }
 
 /** A body of the program's own, which is the one kind whose signature says everything a call site needs. */
@@ -1305,12 +1306,12 @@ fn rewrittenInstruction(
     }
     return None
   }
-  if const .CallWitness(target, witness, member, arguments) = instruction {
+  if const .CallWitness(target, witness, member, arguments, at) = instruction {
     const receiver = witnessReceiverLocation peeling, places, index, witness
     if receiver < 0 {
       return None
     }
-    return directCallOf peeling, places, program, function, index, target, witness, member, arguments
+    return directCallOf peeling, places, program, function, index, target, witness, member, arguments, at
   }
   None
 }

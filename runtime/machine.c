@@ -349,7 +349,47 @@ void torb_machine_test_group(torb_text name, const int64_t *body) {
 static torb_location *torb_machine_location_table = NULL;
 static size_t torb_machine_location_count = 0;
 
+/*
+ * The sites of the callers of the functions that track them (compiler/src/ir/sites.trb), one per such function that is
+ * running on this thread, innermost last: the VM's form of the hidden argument the C back end passes. A call of one
+ * leaves its site pending, the callee's entry pushes it and every return of the callee pops it again, and a location
+ * operand of `TORB_MACHINE_CALLER_SITE` inside such a function is the site on top. A thread of the pool runs a task's
+ * body to its next suspension, and no function that tracks its caller suspends, so the stack of one thread is the
+ * stack of the functions it runs.
+ */
+#define TORB_MACHINE_CALLER_SITE (-2)
+
+static _Thread_local int64_t *torb_machine_sites = NULL;
+static _Thread_local size_t torb_machine_site_count = 0;
+static _Thread_local size_t torb_machine_site_capacity = 0;
+static _Thread_local int64_t torb_machine_site_pending = -1;
+
+/*
+ * The stack belongs to the thread and not to the program the VM runs, like the table of locations: it is allocated with
+ * `realloc` and never counted, so the leak gate of the VM sees the program's blocks alone.
+ */
+static void torb_machine_site_push(void) {
+  if (torb_machine_site_count == torb_machine_site_capacity) {
+    size_t capacity = torb_machine_site_capacity == 0 ? 64u : torb_machine_site_capacity * 2u;
+    int64_t *grown = (int64_t *)realloc(torb_machine_sites, capacity * sizeof(int64_t));
+    if (grown == NULL) {
+      torb_panic_out_of_memory(capacity * sizeof(int64_t));
+    }
+    torb_machine_sites = grown;
+    torb_machine_site_capacity = capacity;
+  }
+  torb_machine_sites[torb_machine_site_count] = torb_machine_site_pending;
+  torb_machine_site_count += 1u;
+}
+
+static int64_t torb_machine_current_site(void) {
+  return torb_machine_site_count == 0 ? -1 : torb_machine_sites[torb_machine_site_count - 1u];
+}
+
 torb_location torb_machine_location(int64_t index) {
+  if (index == TORB_MACHINE_CALLER_SITE) {
+    index = torb_machine_current_site();
+  }
   if (index < 0 || (size_t)index >= torb_machine_location_count) {
     return torb_location_unknown;
   }
@@ -1595,7 +1635,11 @@ enum {
   TORB_OPERATION_SHARE = 60,
   TORB_OPERATION_SET_EXECUTABLE = 61,
   TORB_OPERATION_POOL_DEFAULTS = 62,
-  TORB_OPERATION_INDEX_OUT_OF_BOUNDS = 63
+  TORB_OPERATION_INDEX_OUT_OF_BOUNDS = 63,
+  TORB_OPERATION_SITE_PENDING = 64,
+  TORB_OPERATION_SITE_PENDING_CURRENT = 65,
+  TORB_OPERATION_SITE_PUSH = 66,
+  TORB_OPERATION_SITE_POP = 67
 };
 
 /* A module constant's flag set with a release, so a thread that reads it set also sees the value it guards. */
@@ -2006,6 +2050,21 @@ static int64_t torb_machine_dispatch(torb_list *list, int64_t base, torb_list co
     case TORB_OPERATION_INDEX_OUT_OF_BOUNDS:
       /* the registers of the index and the length, the location */
       torb_panic_index_out_of_bounds(words[base + o[0]], words[base + o[1]], torb_machine_location(o[2]));
+    case TORB_OPERATION_SITE_PENDING:
+      /* the location a call hands the function that tracks its caller */
+      torb_machine_site_pending = o[0];
+      return 0;
+    case TORB_OPERATION_SITE_PENDING_CURRENT:
+      torb_machine_site_pending = torb_machine_current_site();
+      return 0;
+    case TORB_OPERATION_SITE_PUSH:
+      torb_machine_site_push();
+      return 0;
+    case TORB_OPERATION_SITE_POP:
+      if (torb_machine_site_count > 0) {
+        torb_machine_site_count -= 1u;
+      }
+      return 0;
     case TORB_OPERATION_DEFINE_LOCATION: {
       torb_text path;
       memcpy(&path, words + base + o[1], sizeof path);

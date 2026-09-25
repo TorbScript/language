@@ -128,7 +128,7 @@ public fn operandsOf(program: IrProgram, facts: SlotFacts, instruction: Instruct
     }
     // Every argument of a witness call is borrowed: the member's own parameter modes are not read here, which only
     // costs a retain nothing needed and never gets the count wrong
-    .CallWitness(_, witness, _, arguments) => {
+    .CallWitness(_, witness, _, arguments, _) => {
       var found = borrowedOperands witnessSlotsOf([witness])
       found.appendAll borrowedOperands(slotsOfArguments(arguments))
       found
@@ -281,7 +281,7 @@ public fn consumedSlotsOf(instruction: Instruction): List<Slot> {
     .Move(_, source) => [source]
     .Call(_, _, arguments, _, _) => movedSlotsOf arguments
     .CallClosure(_, _, arguments) => movedSlotsOf arguments
-    .CallWitness(_, _, _, arguments) => movedSlotsOf arguments
+    .CallWitness(_, _, _, arguments, _) => movedSlotsOf arguments
     .Construct(_, _, _, fields) => movedSlotsOf fields
     .ArrayNew(_, items) => movedSlotsOf items
     .Write(_, value) => movedSlotsOf([value])
@@ -330,9 +330,9 @@ public fn withOperands(instruction: Instruction, decided: List<Argument>): Instr
       const slot = decidedAt(decided, 0).slot
       Instruction.CallClosure target, slot, takenArguments(arguments, decided, 1)
     }
-    .CallWitness(target, witness, member, arguments) => {
+    .CallWitness(target, witness, member, arguments, at) => {
       const first = witnessSlotsOf([witness]).length()
-      Instruction.CallWitness target, witness, member, takenArguments(arguments, decided, first)
+      Instruction.CallWitness target, witness, member, takenArguments(arguments, decided, first), at
     }
     .Intrinsic(target, intrinsic, arguments, at) => {
       var slots: List<Slot> = []

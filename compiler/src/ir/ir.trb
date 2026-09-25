@@ -400,6 +400,13 @@ public type IrFunction {
   var slots: List<SlotDeclaration> = []
   var blocks: List<Block> = []
   kind: FunctionKind = FunctionKind.Plain
+  /**
+   * Whether the function takes the site of its caller as a hidden argument, after its declared ones, and names it in
+   * every panic instead of a site of its own: the copy `ir/sites.trb` makes of a function of `std/` that can panic.
+   * Its slots and its signature are the original's - the argument is the back end's, a `const torb_location *` in C
+   * and an entry of the kernel's stack of sites in the VM.
+   */
+  tracksCaller: Bool = false
 
   fn typeOfSlot(slot: Slot): IrTypeId {
     slots[slot.value].annotation
@@ -649,7 +656,17 @@ public type Instruction {
   /** A closure value, a function in a field, a `lazy` force. */
   case CallClosure(target: Slot?, callee: Slot, arguments: List<Argument>)
   /** A member of a witness table: a trait-typed receiver, or a forwarded witness. */
-  case CallWitness(target: Slot?, witness: WitnessSource, member: Int, arguments: List<Argument>)
+  /**
+   * A member of a witness table: a trait-typed receiver, or a forwarded witness. `at` is where the call is written,
+   * which a direct call the devirtualization makes of it keeps (`ir/sites.trb` hands it to a function of `std/`).
+   */
+  case CallWitness(
+    target: Slot?,
+    witness: WitnessSource,
+    member: Int,
+    arguments: List<Argument>,
+    at: LocationId? = None,
+  )
   /** Arithmetic, comparisons, conversions, string building: what the C back end emits inline. */
   case Intrinsic(target: Slot?, intrinsic: Intrinsic, arguments: List<Slot>, at: LocationId)
 
@@ -785,6 +802,16 @@ public type IrProgram {
    * every index path it rewrites, and that can be the last call a copy had.
    */
   var specializedFunctions: Set<Int> = []
+  /**
+   * The functions of `std/` that `ir/sites.trb` copied into ones that track their caller, and the copies, by index: a
+   * back end leaves out each of them that nothing reaches, as it leaves out a specialized copy.
+   */
+  var callerSiteFunctions: Set<Int> = []
+  /**
+   * The copy that tracks its caller, by the index of the original: what a witness table's member is called as, so a
+   * call through a table names its caller as a direct call does (`ir/sites.trb`).
+   */
+  var siteCopies: Map<Int, Int> = [:]
   /**
    * The functions a host calls with words it holds itself - the host of a receiver script, the entry of a `torb repl`
    * session - whose signature therefore may not move: a value the host passes in or keeps was laid out by another

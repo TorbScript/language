@@ -534,16 +534,18 @@ fn elementTypeOf(program: IrProgram, function: IrFunction, container: Reference,
 }
 
 /**
- * The site the `at` of the call would have panicked at: the one `Panic` of its own body, which is the out-of-bounds
- * panic of the `at` of `ArrayList`, `TrieList` and `Array`.
+ * The site the `at` of the call would have panicked at. That `at` is a function of `std/` with one `panic` - the
+ * out-of-bounds panic of the `at` of `ArrayList`, `TrieList` and `Array` - and it names the site of its caller
+ * (`ir/sites.trb`): the site of this call, which is what the step carries.
  *
- * It is read rather than written down because the message and the site belong to `std/` and the back end may not
- * decide them - `tests/conformance/collection-index.trb` pins them, and the two shapes of the same read have to agree.
- * A body with no panic or with more than one answers `None`, and the round trip stays.
+ * The body is read rather than trusted because the message belongs to `std/` and the back end may not decide it -
+ * `tests/conformance/collection-index.trb` pins it, and the two shapes of the same read have to agree. A body with no
+ * panic or with more than one answers `None`, and the round trip stays; a call without a site keeps the one of the
+ * panic inside the body.
  */
 fn readerSiteOf(program: IrProgram, instruction: Instruction): LocationId? {
-  const reader = match instruction {
-    .Call(_, callee, _, _, _) => callee
+  const (reader, called) = match instruction {
+    .Call(_, callee, _, _, at) => (callee, at)
     _ => {
       return None
     }
@@ -562,6 +564,12 @@ fn readerSiteOf(program: IrProgram, instruction: Instruction): LocationId? {
         found = Some at
       }
     }
+  }
+  if found.isNone() {
+    return None
+  }
+  if const Some(site) = called {
+    return Some site
   }
   found
 }
@@ -751,12 +759,13 @@ fn substituted(instruction: Instruction, element: Slot, prefix: Reference): Inst
     .CallClosure(target, callee, arguments) => {
       Instruction.CallClosure target, callee, substitutedArguments(arguments, element, prefix)
     }
-    .CallWitness(target, witness, member, arguments) => {
+    .CallWitness(target, witness, member, arguments, at) => {
       Instruction.CallWitness(
         target,
         substitutedWitness(witness, element, prefix),
         member,
         substitutedArguments(arguments, element, prefix),
+        at,
       )
     }
     .Construct(target, layout, variant, fields) => {
@@ -865,7 +874,7 @@ fn writtenReferencesOf(instruction: Instruction): List<Reference> {
     .PutBack(container, _, _, _) => [container]
     .Call(_, _, arguments, _, _) => placesOfArguments arguments
     .CallClosure(_, _, arguments) => placesOfArguments arguments
-    .CallWitness(_, witness, _, arguments) => {
+    .CallWitness(_, witness, _, arguments, _) => {
       var found = placesOfArguments arguments
       found.appendAll placeOfWitness(witness)
       found
@@ -890,7 +899,7 @@ public fn referencesOf(instruction: Instruction): List<Reference> {
       found
     }
     .CallClosure(_, _, arguments) => placesOfArguments arguments
-    .CallWitness(_, witness, _, arguments) => {
+    .CallWitness(_, witness, _, arguments, _) => {
       var found = placeOfWitness witness
       found.appendAll placesOfArguments(arguments)
       found

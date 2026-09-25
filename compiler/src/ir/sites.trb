@@ -1,0 +1,208 @@
+/**
+ * The caller's line: a panic inside `std/` names the line of the program that called into it, not the line of the
+ * standard library that noticed (docs/design/PANICS.md 5.1, clause 4).
+ *
+ * `list[5]` on a list of three panics inside the `at` of `ArrayList`, and `text[3..]` on `"Grüße"` inside the runtime's
+ * slice that `String.slice` calls - and a site in `std/collections/src/list.trb` tells a program nothing about which of
+ * its many index reads it was. Rust's answer is `#[track_caller]`: the function takes the caller's location as a hidden
+ * argument and hands its own on. This is that, decided by the compiler instead of by an attribute:
+ *
+ * - A function of a library module of `std/` **tracks its caller** where it can reach a panic: a `panic` of its own, a
+ *   native it calls with a site (a slice, an insertion), an `Element` step, or a direct call of a function that tracks
+ *   its caller. A destructor, a task body and a function a host calls keep their signature and are left alone.
+ * - Such a function gets a **copy** that takes the site as a hidden argument ([IrFunction.tracksCaller]), and every
+ *   direct call of it is pointed at the copy. Inside the copy every site a panic would name - of a `panic`, of a native,
+ *   of an overflow, of an index - *is* that argument. A copy calling another copy hands its own on; any other function
+ *   hands the site of the call.
+ * - A call through a **witness table** hands the site over as well: every thunk of a table takes it after the
+ *   arguments, and the thunk of a member that has a copy calls the copy ([IrProgram.siteCopies]). `list[5]` on a
+ *   `List<Int>` parameter is such a call, and the idiomatic signature talks about the trait.
+ * - The original stays for what calls it neither way - a closure, an element descriptor - and names its own sites, as
+ *   before. Both are left out of the emitted C where nothing reaches them.
+ *
+ * **It costs nothing where nothing can panic, and a pointer where something can.** The C back end passes the address of
+ * the call's location, a compound literal of the caller's frame; the VM keeps the sites on a stack of its kernel
+ * (`runtime/machine.c`). A panic reads it, and nothing else ever does.
+ *
+ * # Related
+ *
+ * - [trackCallerSites] - the pass.
+ * - [IrFunction.tracksCaller] - what a back end reads.
+ */
+
+use IrProgram, IrFunction, FunctionId, FunctionKind, Instruction from "./ir"
+use referencesOf from "./elements"
+use nativeEntries, NativeTarget from "../backend/c/natives"
+
+/**
+ * Every function of `std/` that can reach a panic, copied into one that takes its caller's site, and every direct call
+ * of one pointed at its copy. `standard[index]` says whether the function of that index was lowered from a library
+ * module of `std/`.
+ *
+ * It runs last in `finishLowering`, once the devirtualization, the element steps and the range analysis have decided
+ * which calls are direct and which checks remain - a check the range analysis dropped cannot panic, so it does not make
+ * a function track its caller.
+ */
+public fn trackCallerSites(var program: IrProgram, standard: List<Bool>) {
+  const count = program.functions.length()
+  const located = locatedNatives()
+  var candidate: List<Bool> = []
+  for index in 0..count {
+    candidate.append isCandidate(program, standard, index)
+  }
+  // Fixpoint: a function tracks its caller where it panics itself or calls one that does
+  var tracked: List<Bool> = []
+  for index in 0..count {
+    tracked.append(candidate[index] && panicsItself(program, located, program.functions[index]))
+  }
+  var isChanged = true
+  while isChanged {
+    isChanged = false
+    for index in 0..count {
+      if tracked[index] || !candidate[index] {
+        continue
+      }
+      if callsTracked(program.functions[index], tracked) {
+        tracked.set index, true
+        isChanged = true
+      }
+    }
+  }
+  var copies: List<Int> = []
+  for _ in 0..count {
+    copies.append(-1)
+  }
+  var isAny = false
+  for index in 0..count {
+    if !tracked[index] {
+      continue
+    }
+    const original = program.functions[index]
+    program.functions.append original.copy(name: "{original.name}_x24_site", tracksCaller: true)
+    const copy = program.functions.length() - 1
+    copies.set index, copy
+    program.siteCopies.set index, copy
+    program.callerSiteFunctions.insert index
+    program.callerSiteFunctions.insert copy
+    isAny = true
+  }
+  if isAny {
+    redirectTrackedCalls program, copies
+  }
+}
+
+/** Whether a function may track its caller at all: a plain body of a library module of `std/` nobody else lays out. */
+fn isCandidate(program: IrProgram, standard: List<Bool>, index: Int): Bool {
+  if !(standard.get(index) ?? false) {
+    return false
+  }
+  const function = program.functions[index]
+  if function.blocks.isEmpty() || function.tracksCaller {
+    return false
+  }
+  if const .Plain = function.kind {
+  } else {
+    return false
+  }
+  // A destructor is called by a drop function the back end writes, and a host calls with words of its own: both need
+  // the signature they were declared with, and neither is reached by a `Call`
+  for (_, closer) in program.closeFunctions {
+    if closer.value == index {
+      return false
+    }
+  }
+  for hosted in program.hosted {
+    if hosted.value == index {
+      return false
+    }
+  }
+  true
+}
+
+/**
+ * The functions of the runtime that take the site of their call, because they may panic with it: `torb_text_slice`,
+ * `torb_list_insert`. Every other native answers what it answers and names no site.
+ */
+fn locatedNatives(): Set<String> {
+  var found: Set<String> = Set.of()
+  for entry in nativeEntries() {
+    if const .Runtime(function) = entry.target {
+      if entry.prototype.contains("torb_location") {
+        found.insert function
+      }
+    }
+  }
+  found
+}
+
+/** Whether the body names a site of its own a panic may report: a `panic`, a native with a site, an index step. */
+fn panicsItself(program: IrProgram, located: Set<String>, function: IrFunction): Bool {
+  for block in function.blocks {
+    for instruction in block.instructions {
+      match instruction {
+        .Panic(_, _) => {
+          return true
+        }
+        .Call(_, callee, _, _, Some(_)) => {
+          if program.hasFunction(callee) {
+            if const .Runtime(symbol) = program.functionAt(callee).kind {
+              if located.contains(symbol) {
+                return true
+              }
+            }
+          }
+        }
+        _ => {}
+      }
+      for reference in referencesOf(instruction) {
+        for step in reference.steps {
+          if const .Element(_, _, _, checked) = step {
+            if checked {
+              return true
+            }
+          }
+        }
+      }
+    }
+  }
+  false
+}
+
+fn callsTracked(function: IrFunction, tracked: List<Bool>): Bool {
+  for block in function.blocks {
+    for instruction in block.instructions {
+      if const .Call(_, callee, _, _, _) = instruction {
+        if tracked.get(callee.value) ?? false {
+          return true
+        }
+      }
+    }
+  }
+  false
+}
+
+/** Every direct call of a function that has a copy, pointed at the copy - the copies' own calls included. */
+fn redirectTrackedCalls(var program: IrProgram, copies: List<Int>) {
+  for index in 0..program.functions.length() {
+    const function = program.functions[index]
+    for block in 0..function.blocks.length() {
+      const instructions = function.blocks[block].instructions
+      var written: List<Instruction> = []
+      var isChanged = false
+      for instruction in instructions {
+        if const .Call(target, callee, arguments, witnesses, at) = instruction {
+          const copy = copies.get(callee.value) ?? -1
+          if copy >= 0 {
+            written.append Instruction.Call(target, FunctionId(copy), arguments, witnesses, at)
+            isChanged = true
+            continue
+          }
+        }
+        written.append instruction
+      }
+      if isChanged {
+        program.functions[index].blocks[block].instructions = written
+      }
+    }
+  }
+}

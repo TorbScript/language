@@ -652,8 +652,9 @@ fn lowerWitnessCall(
     rest.append operands[index]
   }
   const given = borrowedArguments rest
+  const location = locationOf lowering, at
   if !producesValue(lowering, annotation) {
-    emit builder, Instruction.CallWitness(None, found.source, found.member, given)
+    emit builder, Instruction.CallWitness(None, found.source, found.member, given, Some(location))
     if isNeverType(lowering, annotation) {
       finishBlock lowering, builder, Terminator.Unreachable
       return abandonedSlot lowering, builder, destination
@@ -668,7 +669,7 @@ fn lowerWitnessCall(
     }
   }
   const target = valueSlot lowering, builder, destination, annotation
-  emit builder, Instruction.CallWitness(Some(target), found.source, found.member, given)
+  emit builder, Instruction.CallWitness(Some(target), found.source, found.member, given, Some(location))
   target
 }
 
