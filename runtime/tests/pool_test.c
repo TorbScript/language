@@ -271,7 +271,8 @@ state_0:
     goto stop;
   }
   pinger_ran_on = torb_worker_index();
-  (void)work_value(1, 20000000);
+  /* Kept in the frame, because an optimizer drops a computation whose value nobody reads, and with it the spin */
+  frame->in = work_value(1, 20000000);
   frame->round = 0;
 serve:
   if (frame->round >= PING_ROUNDS) {
