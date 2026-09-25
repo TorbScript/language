@@ -67,6 +67,11 @@ static void torb_count_immortal(torb_heap *heap) {
  * what every allocation and every free pays for it is the test of a flag that does not change afterwards.
  */
 static int torb_memory_counting = 0;
+/*
+ * In a binary that hosts the VM (`TORB_HOSTS_MACHINE`): the count is of the interpreted program's blocks alone, those
+ * allocated inside a call of the VM's kernel (`torb_heap.in_machine`), against the program's limit.
+ */
+static int torb_memory_counts_machine = 0;
 static void torb_memory_count(void *block);
 static void torb_memory_uncount(void *block);
 
@@ -533,6 +538,37 @@ void torb_memory_limit_start(void) {
   const char *given = getenv("TORB_MEMORY_LIMIT");
   const char *message = NULL;
   uint64_t limit = 0u;
+#if defined(TORB_HOSTS_MACHINE)
+  /*
+   * A binary that runs programs in the VM - `torb` itself - gives `TORB_MEMORY_LIMIT` to the programs it runs: around
+   * `torb run` the variable means the program, as it means the binary `torb build` wrote, and a limit that small would
+   * stop the host while it compiles. The program's blocks are counted against it (they are the ones allocated inside a
+   * call of the kernel), with the dev default where the variable is not set, because `torb run` builds the dev profile.
+   * The host itself keeps the default of its own profile only.
+   */
+  if (given != NULL && given[0] != '\0') {
+    if (!torb_memory_size_parse(given, &limit)) {
+      fprintf(stderr,
+              "error: TORB_MEMORY_LIMIT must be a number of bytes with an optional K, M, G or T (\"512M\", \"8G\"), "
+              "or 0 or none for no limit, and it is \"%s\"\n",
+              given);
+      exit(2);
+    }
+    torb_memory_limit_given = 1;
+  } else {
+    limit = torb_memory_default_limit();
+  }
+  if (TORB_LIMITS_MEMORY_BY_DEFAULT) {
+    (void)torb_platform_limit_memory(torb_memory_default_limit(), &message);
+  }
+  if (limit != 0u) {
+    torb_memory_limit_bytes = limit;
+    torb_memory_counted = 0;
+    torb_memory_counts_machine = 1;
+    torb_memory_counting = 1;
+  }
+  return;
+#endif
   if (given != NULL && given[0] != '\0') {
     if (!torb_memory_size_parse(given, &limit)) {
       fprintf(stderr,
@@ -576,7 +612,11 @@ void torb_memory_limit_counted(uint64_t limit) {
 
 /* A block the C allocator gave out: counted, and freed again and the end of the program where it goes over the limit */
 static void torb_memory_count(void *block) {
-  const int64_t size = (int64_t)torb_platform_allocation_size(block);
+  int64_t size;
+  if (torb_memory_counts_machine != 0 && torb_heap_current()->in_machine == 0u) {
+    return;
+  }
+  size = (int64_t)torb_platform_allocation_size(block);
   const int64_t after = torb_atomic_add_i64(&torb_memory_counted, size) + size;
   if (after > 0 && (uint64_t)after > torb_memory_limit_bytes) {
     (void)torb_atomic_add_i64(&torb_memory_counted, -size);
@@ -586,6 +626,9 @@ static void torb_memory_count(void *block) {
 }
 
 static void torb_memory_uncount(void *block) {
+  if (torb_memory_counts_machine != 0 && torb_heap_current()->in_machine == 0u) {
+    return;
+  }
   (void)torb_atomic_add_i64(&torb_memory_counted, -(int64_t)torb_platform_allocation_size(block));
 }
 

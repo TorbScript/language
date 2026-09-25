@@ -212,10 +212,10 @@ const contentsOffset = 16
  * section 8). A program that ends by `Process.exit` or a panic never comes back here, exactly as its native binary
  * never returns from `main`.
  */
-public fn runProgram(program: BytecodeProgram, arguments: List<String>): Int {
+public fn runProgram(program: BytecodeProgram, arguments: List<String>, executable: String = ""): Int {
   const registers = registersFor program
   const workers = workersFor registers, program
-  const ended = run registers.words, kernelScratch(), registers, registers.image, program, arguments
+  const ended = run registers.words, kernelScratch(), registers, registers.image, program, arguments, executable
   releaseWorkers registers, workers
   ended
 }
@@ -298,6 +298,7 @@ fn run(
   image: Image,
   program: BytecodeProgram,
   arguments: List<String>,
+  executable: String,
 ): Int {
   const scratch = firstFrameOf program
   ensureRegisters(registers, scratch + 2 * arguments.length() + 4 * scratchWords)
@@ -309,6 +310,11 @@ fn run(
     texts.append(2 * index)
   }
   const _ = kernelCall words, kernel, scratch, KernelOperation.SetArguments, texts
+  // `Process.executablePath()` answers the entry file, which is what executes
+  if !executable.isEmpty() {
+    Machine.placeText words, scratch, executable
+    const _ = kernelCall words, kernel, scratch, KernelOperation.SetExecutable, [0]
+  }
   var budget = unlimitedBudget()
   var ended = 0
   // A program that ends in `Process.exit` never comes back here, so the runtime gives the cells' counts back there

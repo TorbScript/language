@@ -78,7 +78,7 @@ builds only to run it once is built with the `dev` profile.
 **Tier B is `sh tools/gates.sh b`**: `tools/conformance.sh` (the conformance suite - every program under
 `tests/conformance/`, and `binary-only/`, built and run natively and compared against its
 `.expected`/`.stderr`/`.exit`/`.leaks`, each run in a work directory of its own; `--jobs`, `--filter` and `--update`
-are its own flags), `tools/conformance.sh --vm` (the programs of `tests/conformance/vm.list` run by the bytecode VM
+are its own flags), `tools/conformance.sh --vm` (every program of the suite and of `tests/conformance/vm-only/` run by the bytecode VM
 with `torb run --vm` and compared with the same expectation files, docs/design/VM.md section 8; a program with a
 `.workers` file runs on that many workers of the pool and again on one, as natively), `torb test --vm` of the test
 packages of `std/` and `examples/` (the report of tier A's native run, from the VM), `tools/bootstrap.sh`

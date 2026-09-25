@@ -2416,6 +2416,21 @@ static bool torb_machine_privatize_value(int64_t *value, const torb_machine_shap
  */
 static torb_list torb_machine_arguments_list = { NULL, 0u, 0u };
 
+/*
+ * What `Process.executablePath()` answers inside the VM: the path of the entry file the program runs, which is the file
+ * that executes where a built program's is its binary. Unset (the length of none) outside `torb run`, where it is `torb`'s.
+ */
+static torb_text torb_machine_executable = { NULL, 0u, 0u };
+static bool torb_machine_has_executable = false;
+
+bool torb_machine_process_executable_path(torb_text *out) {
+  if (!torb_machine_has_executable) {
+    return torb_process_executable_path(out);
+  }
+  *out = torb_text_retained(torb_machine_executable);
+  return true;
+}
+
 torb_list torb_machine_process_arguments(void) {
   if (torb_machine_arguments_list.storage == NULL) {
     torb_machine_arguments_list = torb_list_new(&torb_element_text);
@@ -2501,7 +2516,8 @@ enum {
   TORB_OPERATION_NARROW_LOAD = 57,
   TORB_OPERATION_NARROW_STORE = 58,
   TORB_OPERATION_WIDEN = 59,
-  TORB_OPERATION_SHARE = 60
+  TORB_OPERATION_SHARE = 60,
+  TORB_OPERATION_SET_EXECUTABLE = 61
 };
 
 /* A module constant's flag set with a release, so a thread that reads it set also sees the value it guards. */
@@ -2872,6 +2888,17 @@ static int64_t torb_machine_dispatch(torb_list *list, int64_t base, torb_list co
     case TORB_OPERATION_SET_ARGUMENTS:
       torb_machine_set_arguments(words, base, o);
       return 0;
+    case TORB_OPERATION_SET_EXECUTABLE: {
+      /* the register of the entry file's path, immortal from here on */
+      torb_text path;
+      memcpy(&path, words + base + o[0], sizeof path);
+      torb_machine_executable = torb_text_retained(path);
+      if (torb_machine_executable.storage != NULL) {
+        torb_make_immortal(torb_machine_executable.storage);
+      }
+      torb_machine_has_executable = true;
+      return 0;
+    }
     case TORB_OPERATION_BEGIN_IMMORTAL:
       torb_begin_immortal();
       return 0;

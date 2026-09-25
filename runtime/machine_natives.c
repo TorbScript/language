@@ -1607,7 +1607,7 @@ static void torb_machine_native_127(int64_t *words, int64_t base, const int64_t 
   (void)base;
   (void)operands;
   torb_text *a0 = (torb_text *)torb_machine_address(words, words[base + operands[1]]);
-  bool r = torb_process_executable_path(a0);
+  bool r = torb_machine_process_executable_path(a0);
   if (operands[0] >= 0) words[base + operands[0]] = (int64_t)r;
 }
 

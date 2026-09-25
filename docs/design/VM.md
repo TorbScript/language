@@ -1,15 +1,14 @@
 # The Bytecode VM
 
-**Status: partly implemented** — decided on 2026-09-23 as the start of milestone 7 (`docs/BACKEND.md` section 5 and
-rows 7.1-7.2). Every slice but 8 is in (section 9): the bytecode and `torb ir --bytecode`
-(`compiler/src/backend/bytecode/`), the kernel of `std/machine` with `runtime/machine.c` and the generated table of
-thunks, and the interpreter with `torb run --vm` (`compiler/src/vm/`). `tools/conformance.sh --vm` runs the programs of
-`tests/conformance/vm.list` - 189 of the 191 of the suite (section 8 says which two are not), and two scripts of
-`vm-only/` - and compares them byte for byte with their native run, a program with a `.workers` file on that many
-workers and on one. `test`/`group`, keys compared by a program's own `equals` and tasks run through the call back of
-section 10, tasks run on every worker of the pool (section 4), `Array<Item, Size>` is inline words, the leak gate holds
-the VM to "live blocks at exit: 0" as it holds a native binary, `torb test --vm` runs a test suite with the native
-binary's report, and `fibonacci(30)` interprets in about 0.2 s (section 8).
+**Status: implemented** — decided on 2026-09-23 as the start of milestone 7 (`docs/BACKEND.md` section 5 and
+rows 7.1-7.2); every slice is in (section 9): the bytecode and `torb ir --bytecode` (`compiler/src/backend/bytecode/`),
+the kernel of `std/machine` with `runtime/machine.c` and the generated table of thunks, and the interpreter
+(`compiler/src/vm/`). `tools/conformance.sh --vm` runs every program of the suite, `binary-only/` included, and the
+programs of `vm-only/`, and compares them byte for byte with their native run - a program with a `.workers` file on
+that many workers and on one. `test`/`group`, keys compared by a program's own `equals` and tasks run through the
+call back of section 10, tasks run on every worker of the pool (section 4), `Array<Item, Size>` is inline words, the
+leak gate holds the VM to "live blocks at exit: 0" as it holds a native binary, `torb test --vm` runs a test suite
+with the native binary's report, and `fibonacci(30)` interprets in about 0.2 s (section 8).
 
 TorbScript has two back ends that read one IR. The C back end turns it into a native binary; the VM turns it into
 bytecode and runs that inside `torb`, for `torb run --vm`, the sandbox (7.4), `project.trb` as a script (7.5) and the
@@ -342,16 +341,19 @@ element of a list, a map value it replaces - and two walkers would be two orders
 
 ## 8. The gate: C and the VM agree
 
-**Decision: `tools/conformance.sh --vm` runs every program of `tests/conformance/vm.list` with `torb run --vm` and
-compares standard output, standard error (folded as for the native run) and the exit code with the same
-`.expected`/`.stderr`/`.exit` files the native run is compared with, byte for byte.**
+**Decision: `tools/conformance.sh --vm` runs every program of the suite with `torb run --vm` and compares standard
+output, standard error (folded as for the native run) and the exit code with the same `.expected`/`.stderr`/`.exit`
+files the native run is compared with, byte for byte.** 7.2's gate - C and the VM agree on every program - is the whole
+suite run twice, and the list of what the VM runs that grew with every slice is gone.
 
-- The list grows with every slice until it is every program of the suite; then the list goes away and 7.2's gate - C
-  and the VM agree on every script - is the whole suite run twice.
-- **Not in the list, and why.** `process-executable-path`, whose executable is `torb` in the VM and not the `prog`
-  the suite builds - a difference that belongs to running inside the toolchain and that the sandbox of 7.4 will answer
-  for itself - and `memory-limit`, whose `TORB_MEMORY_LIMIT` of 64 MiB is a limit of the whole process, and the
-  process of `torb run --vm` is `torb`, which needs more than that before the program's first instruction. Every
+- **The two that answered differently, and how they agree.** `Process.executablePath()` inside the VM answers the path
+  of the entry file, which is what executes, as an interpreter answers the path of its script (`SetExecutable`, the
+  substitute `torb_machine_process_executable_path`); `process-executable-path` holds both answers to the same
+  checks. **`TORB_MEMORY_LIMIT` is the program's**: a binary that hosts the VM (`TORB_HOSTS_MACHINE`, which the driver
+  defines for every program that calls the kernel - `torb`, the compiler's tests) counts the blocks the interpreted
+  program allocates inside the kernel against the variable, or against the dev default where it is not set, because
+  `torb run` means the dev profile, and ends the program with the native binary's message and exit code 102; the host
+  itself keeps the default of its own profile and compiles unlimited by the variable (`memory-limit`). Every
   program of the network is in, since the elements of a list are stored narrow (section 2), and so are `tls-loopback`
   and `https-exchange`: the driver links the TLS part of the runtime (`runtime/tls/`, mbedTLS) into every program
   that calls the VM's kernel - `torb` itself - because the table of thunks reaches every function of the runtime.
@@ -373,7 +375,7 @@ compares standard output, standard error (folded as for the native run) and the 
   what it allocates and frees while it is set once more, apart. Once a VM counted a program, `torb_report_leaks`
   reports those two counts - at the end of `torb run --vm` and at a `Process.exit` inside the program alike - so
   `TORB_REPORT_LEAKS=1` says of a run of the VM what it says of the native binary, and `tools/conformance.sh --vm`
-  holds every program of `vm.list` to "live blocks at exit: 0" with the same exemptions (`.stderr`, `.leaks`). The
+  holds every program to "live blocks at exit: 0" with the same exemptions (`.stderr`, `.leaks`, `binary-only/`). The
   registers themselves (`Reserve`) are the interpreter's and are counted as `torb`'s.
 - **What it costs, measured.** `fibonacci(30)` (about 2.7 million calls), the wall time of `torb run --vm` minus that of
   a program that prints one line (the front end, about 0.9 to 1.0 s, is the same for both) in a `torb` built with the
@@ -395,12 +397,12 @@ compares standard output, standard error (folded as for the native run) and the 
 |---|---|---|
 | 1 | The bytecode format, the frame layout, the emitter from the final IR, the disassembler, `torb ir --bytecode`, snapshots | **Done**: `compiler/src/backend/bytecode/`, `compiler/tests/bytecode.test.trb` |
 | 2 | The kernel: `std/machine` (five natives, a sixth for the call back of section 10), the manifest rows, `runtime/machine.c`, the thunk table generated by `torb natives --header` | **Done**, as the first of two commits: the seed is refreshed from it before the interpreter can call the natives |
-| 3 | The interpreter loop: calls, closures, witness calls, records, variants, text, lists, maps and sets, module constants, destructors; `torb run --vm`; `tools/conformance.sh --vm` with `vm.list` | **Done**: `compiler/src/vm/`, 120 programs of the suite |
+| 3 | The interpreter loop: calls, closures, witness calls, records, variants, text, lists, maps and sets, module constants, destructors; `torb run --vm`; `tools/conformance.sh --vm` | **Done**: `compiler/src/vm/`, 120 programs of the suite then |
 | 4 | Keys compared by a program's own `equals`: a callback from the runtime into the interpreter | **Done**: the slots of the element pool call the program's `equals` and `hash` back; `capsule`, `paths` |
-| 5 | The leak gate of the VM: the program's blocks counted apart from `torb`'s | **Done**: section 8; `tools/conformance.sh --vm` checks every program of `vm.list` |
+| 5 | The leak gate of the VM: the program's blocks counted apart from `torb`'s | **Done**: section 8; `tools/conformance.sh --vm` checks every program |
 | 6 | `test` and `group`: the runtime's recovery point around a closure of the interpreter | **Done**: `Machine.install` and the substitutes `torb_machine_test_case`/`_group`; `tests`, `test-failure`, `assert-values` |
 | 7 | Tasks: `TaskNew`, `Suspend`, `Stop`, channels, the FIFO order of `runtime/task.c` (docs/BACKEND.md 7.3's VM half) | **Done**, on every worker of the pool: section 4; the entry cells of a top-level `const` too; every program with tasks |
-| 8 | The gate of 7.2: every conformance program in both back ends; `vm.list` deleted | 189 of 191: `vm.list` stays for the two of section 8 |
+| 8 | The gate of 7.2: every conformance program in both back ends; `vm.list` deleted | **Done**: every program, `binary-only/` and `vm-only/` too (section 8); `vm.list` is deleted |
 | 11 | `torb test --vm`: every test file an entry of one program, the report of `runtime/test.c` | **Done**: `TestFile`, `TestFinish`; tier B runs the test packages of `std/` and `examples/` with it |
 | 9 | `Array<Item, Size>`, added to the language after the interpreter: inline items, a checked item step | **Done**: `ArrayNew`, the static `Items`, `PlaceStep.Item`, the counted words of every item; the eleven programs with an array |
 | 10 | Speed: register reads without `Indexed.at`, return records in the word stack (section 10) | **Done**: the image, addresses and inline `load`/`store` (section 4); six times faster (section 8) |

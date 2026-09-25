@@ -81,9 +81,9 @@ as bytecode, and run by the VM inside `torb` itself, on the same runtime a nativ
 code and its panics are the native binary's, which the conformance suite checks for every program it lists
 (`tools/conformance.sh --vm`). Its tasks run on the workers of `torb`'s own pool - as many as `TORB_WORKERS` says, the
 core count by default - under the rules of a native binary's. A program that uses what the VM does not run yet is
-refused before anything runs, with a message that names what is missing. Three things answer differently because the
-program runs inside `torb`: `Process.executablePath()` is the path of `torb`, a recursion reaches the `stack overflow`
-panic at a depth of its own, and a `TORB_MEMORY_LIMIT` limits `torb` as a whole.
+refused before anything runs, with a message that names what is missing. Two things answer differently because the
+program runs inside `torb`: `Process.executablePath()` is the path of the entry file, which is what executes, and a
+recursion reaches the `stack overflow` panic at a depth of its own.
 
 ### The memory limit
 
@@ -95,10 +95,10 @@ instead of paging the machine to a standstill. A child process the program start
 
 `TORB_MEMORY_LIMIT` sets another one - a number of bytes, or one with `K`, `M`, `G` or `T` (`512M`, `16G`) - and `0` or
 `none` sets none; a value that is neither makes the program refuse to start, with exit code `2`. With `--release` there
-is no limit unless the variable asks for one, and neither is there for `--vm`, whose program runs inside `torb`. The
-variable reaches every TorbScript program that runs with it, `torb` itself included, which also has to compile the
-program within it: `TORB_MEMORY_LIMIT=64M torb run big.trb` limits the compile as well, so a tight limit goes on the
-binary that [`torb build`](torb-build.md) wrote.
+is no limit unless the variable asks for one. Under `--vm` the program runs inside `torb`, and the limit - the same
+default, or the variable - is the program's alone: the VM's kernel counts what the program allocates and ends it with
+the same message and exit code, and `torb` compiles it unlimited by the variable. `TORB_MEMORY_LIMIT=64M torb run --vm
+big.trb` gives the program 64 MiB.
 
 ### Exit codes
 

@@ -22,12 +22,13 @@
 #   sh tools/conformance.sh --jobs 8
 #   sh tools/conformance.sh --filter closures
 #   sh tools/conformance.sh --update             # rewrite .expected/.stderr/.exit from a native run
-#   sh tools/conformance.sh --vm                 # the programs of tests/conformance/vm.list, run by the VM
+#   sh tools/conformance.sh --vm                 # the same programs, run by the VM
 #   sh tools/conformance.sh --torb build/x/torb  # another compiler than build/release/torb
 #
-# `--vm` is the second leg of docs/design/VM.md section 8: every program named in `tests/conformance/vm.list` is run
-# with `torb run --vm` and compared against the same `.expected`/`.stderr`/`.exit` as its native run, byte for byte.
-# The list grows until it is the whole suite. The leak gate applies as it does natively - the kernel counts the
+# `--vm` is the second leg of docs/design/VM.md section 8: every program of the suite, `binary-only/` included, is run
+# with `torb run --vm` and compared against the same `.expected`/`.stderr`/`.exit` as its native run, byte for byte,
+# and so is every program of `vm-only/` (one with an `.expected` file: the others are the receiver scripts it loads),
+# which only the VM runs. The leak gate applies as it does natively - the kernel counts the
 # program's blocks apart from torb's own - and so does a `.workers` file: the VM's tasks run on the pool of `torb`,
 # with as many workers as it names and again with one. The two checks of the C do not apply to it.
 
@@ -316,8 +317,17 @@ run_one_vm() {
     export TORB_WORKERS
   fi
 
+  # The variables of a `.environment` file reach the program as they reach its native binary: `torb` hands a
+  # `TORB_MEMORY_LIMIT` to the program it interprets and does not keep it for itself (runtime/memory.c)
+  environment_file="${program%.trb}.environment"
+  settings=""
+  if [ -f "$environment_file" ]; then
+    settings=$(sed 's/\r$//; s/#.*//; /^[[:space:]]*$/d' "$environment_file" | tr '\n' ' ')
+  fi
+
   set +e
-  (cd "$work/run" && "$CONFORMANCE_TORB" run --vm "$absolute" >"$work/stdout" 2>"$work/stderr")
+  # shellcheck disable=SC2086
+  (cd "$work/run" && env $settings "$CONFORMANCE_TORB" run --vm "$absolute" >"$work/stdout" 2>"$work/stderr")
   code=$?
   set -e
   fold_library_positions <"$work/stderr" >"$work/stderr.folded"
@@ -338,7 +348,8 @@ $(diff -u "$work/expected.norm" "$work/stdout" 2>&1 || true)"
 
   if [ -f "$workers_file" ] && [ "$workers" != "1" ] && [ -f "$expected_file" ]; then
     set +e
-    (cd "$work/run" && TORB_WORKERS=1 "$CONFORMANCE_TORB" run --vm "$absolute" >"$work/stdout.one" 2>"$work/stderr.one")
+    # shellcheck disable=SC2086
+    (cd "$work/run" && env $settings TORB_WORKERS=1 "$CONFORMANCE_TORB" run --vm "$absolute" >"$work/stdout.one" 2>"$work/stderr.one")
     set -e
     if ! cmp -s "$work/expected.norm" "$work/stdout.one"; then
       problems="$problems
@@ -376,7 +387,8 @@ $(cat "$work/stderr.folded")"
   esac
   if [ "$is_binary_only" -eq 0 ] && [ ! -f "$stderr_file" ] && [ ! -f "$leaks_file" ]; then
     set +e
-    (cd "$work/run" && TORB_REPORT_LEAKS=1 "$CONFORMANCE_TORB" run --vm "$absolute" >"$work/leak.stdout" 2>"$work/leak.stderr")
+    # shellcheck disable=SC2086
+    (cd "$work/run" && env $settings TORB_REPORT_LEAKS=1 "$CONFORMANCE_TORB" run --vm "$absolute" >"$work/leak.stdout" 2>"$work/leak.stderr")
     set -e
     if ! grep -q 'live blocks at exit: 0$' "$work/leak.stderr"; then
       problems="$problems
@@ -479,8 +491,12 @@ trap 'rm -f "$list"' EXIT
 
 if [ "$machine" = "1" ]; then
   [ "$update" = "0" ] || fail "--update rewrites the expectations from a native run, never from the VM"
-  [ -f "$directory/vm.list" ] || fail "no $directory/vm.list"
-  candidates=$(sed 's/\r$//; s/#.*//; /^[[:space:]]*$/d; s#^#'"$directory"'/#' "$directory/vm.list")
+  candidates=$(ls "$directory"/*.trb "$directory"/binary-only/*.trb 2>/dev/null)
+  for script in "$directory"/vm-only/*.trb; do
+    if [ -f "${script%.trb}.expected" ]; then
+      candidates="$candidates $script"
+    fi
+  done
 else
   candidates=$(ls "$directory"/*.trb "$directory"/binary-only/*.trb 2>/dev/null)
 fi

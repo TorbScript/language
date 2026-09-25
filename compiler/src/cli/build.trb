@@ -31,7 +31,7 @@ use lowerWorkspace, pathsOfModules from "../ir/lower/lower"
 use entryNameOf from "../ir/lower/function"
 use emitProgram, ProgramEntry from "../backend/c/emit"
 use emittedText from "../backend/c/emission"
-use tlsPartMacro, tlsSymbolPrefix, machineKernelSymbol from "../backend/c/natives"
+use tlsPartMacro, tlsSymbolPrefix, machineKernelSymbol, hostsMachineMacro from "../backend/c/natives"
 use Clock from "std/time"
 use renderDiagnostic, renderProblem, counted from "./render"
 
@@ -186,9 +186,10 @@ public fn build(options: BuildOptions): Result<Int, IoError> {
     }
     return Ok 0
   }
-  // A program that runs the VM runs whatever its programs call, TLS included
-  const usesTls = text.contains(tlsSymbolPrefix) || text.contains(machineKernelSymbol)
-  compile source, text.byteLength(), binary, options, usesTls
+  // A program that runs the VM runs whatever its programs call, TLS included, and limits their memory
+  const hostsMachine = text.contains machineKernelSymbol
+  const usesTls = text.contains(tlsSymbolPrefix) || hostsMachine
+  compile source, text.byteLength(), binary, options, usesTls, hostsMachine
 }
 
 // --- What was wrong with the program --------------------------------------------------------------------------------
@@ -532,7 +533,14 @@ fn objectsIn(directory: String, suffix: String): Result<List<String>, IoError> {
   Ok objects
 }
 
-fn compile(source: String, size: Int, binary: String, options: BuildOptions, usesTls: Bool): Result<Int, IoError> {
+fn compile(
+  source: String,
+  size: Int,
+  binary: String,
+  options: BuildOptions,
+  usesTls: Bool,
+  hostsMachine: Bool,
+): Result<Int, IoError> {
   const compiler = match findCompiler() {
     Some(found) => found
     None => {
@@ -554,6 +562,10 @@ fn compile(source: String, size: Int, binary: String, options: BuildOptions, use
   var sources = runtimeSourcesOf(runtime)?
   if usesTls {
     sources.appendAll(tlsArgumentsOf(runtime, compiler.command, compiler.isMicrosoft, binary)?)
+  }
+  // `TORB_MEMORY_LIMIT` of a binary that runs programs in the VM is the limit of those programs (runtime/memory.c)
+  if hostsMachine {
+    sources.append(if compiler.isMicrosoft { "/D{hostsMachineMacro}" } else { "-D{hostsMachineMacro}" })
   }
   const arguments = compilerArguments compiler, source, binary, runtime, sources, options.profile
   const output = match runCompiler(compiler, arguments, source, size, runtime) {

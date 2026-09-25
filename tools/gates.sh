@@ -15,7 +15,7 @@
 # `canon --check` with the five rules. Every binary that is only built to be run
 # once is built with `--profile dev`, which `torb test` and `torb run` do by default.
 #
-# Tier B: `tools/conformance.sh` (the conformance suite, and with `--vm` the programs of its `vm.list` in the bytecode
+# Tier B: `tools/conformance.sh` (the conformance suite, and with `--vm` the same suite and `vm-only/` in the bytecode
 # VM), `torb test --vm` of the std/example packages, `tools/bootstrap.sh` (the fixpoint: seed -> torb -> torb, byte-identical C), and the C runtime's own tests.
 #
 # A run holds one of the machine-wide gate slots (`tools/gate-slot.sh`, `$TORB_GATE_SLOTS`, default 2) from its first

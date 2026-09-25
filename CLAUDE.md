@@ -2,7 +2,7 @@
 
 Self-hosted: `compiler/` is TorbScript, emits C and links `runtime/` (C11). No Rust, no cargo. `torb run` builds
 natively; `torb run --vm` interprets bytecode of the same IR (milestone 7, `docs/design/VM.md`; tier B runs
-`tests/conformance/vm.list` in it). Load the `torbscript` skill before writing any `.trb`.
+the whole conformance suite in it). Load the `torbscript` skill before writing any `.trb`.
 Code rules, gates and repository operations: `compiler/CONTRIBUTING.md`.
 
 ## Build and gates (repository root, Git Bash on Windows)
@@ -49,8 +49,9 @@ Code rules, gates and repository operations: `compiler/CONTRIBUTING.md`.
   parallel gate runs once exhausted the machine's processes.
 - Every `dev` binary (`torb test`, `torb run`) stops at min(8 GiB, half the RAM): `panic: out of memory: the limit of
   ... was reached`, exit code 102, enforced by the OS (job object / `RLIMIT_DATA`). `TORB_MEMORY_LIMIT` (`16G`, `512M`,
-  `0`/`none`) overrides it for every TorbScript process that sees it, `torb` included - so set it on the binary, not
-  around `torb run`. Release binaries (the compiler) have no default limit. A runaway test once took the machine down.
+  `0`/`none`) overrides it for every TorbScript process that sees it - except a binary that hosts the VM (`torb`, the
+  compiler's tests): there it limits the programs the VM interprets, counted by the kernel, and the host keeps its own
+  profile's default. Release binaries have no default limit. A runaway test once took the machine down.
 - Some files are CRLF: keep each file's line endings. Bulk edits only through a script that asserts exact matches;
   never PowerShell arrays.
 - TorbScript in docs and answers: no semicolons, no squeezed one-liners, command calls where the canon says so,

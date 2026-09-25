@@ -51,6 +51,8 @@ double torb_machine_double_of(int64_t word);
 
 /** `Process.arguments()` of the program the VM runs, which the table of thunks calls instead of the runtime's. */
 torb_list torb_machine_process_arguments(void);
+/** `Process.executablePath()` of the program the VM runs: its entry file, where the run named one. */
+bool torb_machine_process_executable_path(torb_text *out);
 int64_t torb_machine_word_of_double(double value);
 
 #endif /* TORB_MACHINE_H */

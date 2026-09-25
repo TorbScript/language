@@ -11,7 +11,8 @@
  * ends by `Process.exit` or a panic ends this process with its own exit code, as its native binary would.
  */
 
-use IoError from "std/fs"
+use File, IoError from "std/fs"
+use normalizePath from "../project/path"
 use LineIndex from "../syntax/source"
 use readSourceTree, absolutePaths from "../project/read"
 use check, Checked from "../semantics/check"
@@ -47,7 +48,8 @@ public fn runInMachine(path: String, arguments: List<String>): Result<Int, IoErr
       return Ok refusedCode
     }
   }
-  runModules checked, tree, [module], arguments, false
+  const executable = normalizePath(File.absolutePath(path)?)
+  runModules checked, tree, [module], arguments, false, executable
 }
 
 /**
@@ -68,7 +70,7 @@ public fn testInMachine(paths: List<String>): Result<Int, IoError> {
       return Ok refusedCode
     }
   }
-  runModules checked, tree, modules, [], true
+  runModules checked, tree, modules, [], true, ""
 }
 
 /** The entry files lowered, owned, verified, encoded and run; a test run with the file of every entry. */
@@ -78,6 +80,7 @@ fn runModules(
   modules: List<ModuleId>,
   arguments: List<String>,
   isTestRun: Bool,
+  executable: String,
 ): Result<Int, IoError> {
   var lowering = lowerWorkspace checked.checker, pathsOfModules(checked), modules, false, hostTarget(), true
   insertOwnership lowering.program
@@ -121,7 +124,7 @@ fn runModules(
     }
     return Ok refusedCode
   }
-  Ok runProgram(emission.program, arguments)
+  Ok runProgram(emission.program, arguments, executable)
 }
 
 /** Everything the front end found, rendered the way `torb check` renders it. */
