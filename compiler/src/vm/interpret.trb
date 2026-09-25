@@ -948,7 +948,7 @@ fn appendRelocated(var into: ArrayList<Int>, code: ArrayList<Int>, start: Int): 
   var pc = 0
   while pc < code.length() {
     const head = code[pc]
-    const opcode = opcodeOf head.bitwiseAnd(255)
+    const opcode = opcodeOf(head & 255)
     const tail = tailLengthOf opcode, head
     if opcode == Opcode.RunScript {
       runsScripts = true
@@ -962,7 +962,7 @@ fn appendRelocated(var into: ArrayList<Int>, code: ArrayList<Int>, start: Int): 
         .Cancelled => true
         .Resume => true
         // A switch's tail is its pairs of value and target, then the target of `otherwise`
-        .Switch => index.bitwiseAnd(1) == 1 || index == tail - 1
+        .Switch => index & 1 == 1 || index == tail - 1
         _ => false
       }
       into.append(if isTarget { word + start } else { word })
@@ -1484,10 +1484,10 @@ fn execute(
       }
     }
     const head = Machine.load(code + 8 * pc)
-    const a = head.shiftedRight(8).bitwiseAnd(65535)
-    const b = head.shiftedRight(24).bitwiseAnd(65535)
-    const c = head.shiftedRight(40).bitwiseAnd(65535)
-    const opcode = opcodeOf head.bitwiseAnd(255)
+    const a = head >> 8 & 65535
+    const b = head >> 24 & 65535
+    const c = head >> 40 & 65535
+    const opcode = opcodeOf(head & 255)
     if tracing {
       printError "{nameOf(program, chunk)} {pc} {opcode.spelling()} base {base}"
     }

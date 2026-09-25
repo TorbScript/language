@@ -563,7 +563,7 @@ fn unaryConstant(
           return ConstantResult.NotConstant at
         }
       }
-      match wrappedToWidth(number.bitwiseNot(), width, isSigned) {
+      match wrappedToWidth(~number, width, isSigned) {
         Some(found) => ConstantResult.Value ConstantValue.Integer(found)
         None => ConstantResult.NotConstant at
       }
@@ -615,11 +615,11 @@ fn bitsConstant(
     return ConstantResult.Broken
   }
   const raw = match operator {
-    .BitwiseAnd => left.bitwiseAnd right
-    .BitwiseOr => left.bitwiseOr right
-    .BitwiseExclusiveOr => left.bitwiseExclusiveOr right
-    .ShiftLeft => left.shiftedLeft by: right
-    _ => left.shiftedRight by: right
+    .BitwiseAnd => left & right
+    .BitwiseOr => left | right
+    .BitwiseExclusiveOr => left ^ right
+    .ShiftLeft => left << right
+    _ => left >> right
   }
   match wrappedToWidth(raw, width, isSigned) {
     Some(found) => ConstantResult.Value ConstantValue.Integer(found)
@@ -667,8 +667,8 @@ fn wrappedToWidth(value: Int, width: Int, isSigned: Bool): Int? {
     }
     return Some value
   }
-  const modulus = (1).shiftedLeft(by: width)
-  const low = value.bitwiseAnd(modulus - 1)
+  const modulus = 1 << width
+  const low = value & (modulus - 1)
   if isSigned && low >= modulus / 2 {
     return Some(low - modulus)
   }

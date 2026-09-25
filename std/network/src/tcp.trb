@@ -296,7 +296,7 @@ public shared type TcpSink with Sink<Bytes, NetworkError> {
 /** The family, the high and the low half of an address, as the natives take it. */
 fn numbersOf(address: IpAddress): (Int, Int, Int) {
   match address {
-    .Version4(inside) => (4, 0, inside.value())
+    .Version4(inside) => (4, 0, inside.number())
     .Version6(inside) => (6, inside.high(), inside.low())
   }
 }
@@ -307,10 +307,10 @@ fn addressOf(family: Int, high: Int, low: Int): IpAddress {
     return IpAddress.Version6 Ipv6Address.ofHalves(high, low)
   }
   IpAddress.Version4(Ipv4Address.of(
-    UInt8.tryFrom(low.shiftedRight(by: 24).bitwiseAnd(255)).ok() ?? 0,
-    UInt8.tryFrom(low.shiftedRight(by: 16).bitwiseAnd(255)).ok() ?? 0,
-    UInt8.tryFrom(low.shiftedRight(by: 8).bitwiseAnd(255)).ok() ?? 0,
-    UInt8.tryFrom(low.bitwiseAnd(255)).ok() ?? 0,
+    UInt8.tryFrom(low >> 24 & 255).ok() ?? 0,
+    UInt8.tryFrom(low >> 16 & 255).ok() ?? 0,
+    UInt8.tryFrom(low >> 8 & 255).ok() ?? 0,
+    UInt8.tryFrom(low & 255).ok() ?? 0,
   ))
 }
 

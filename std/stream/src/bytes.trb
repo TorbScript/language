@@ -277,13 +277,13 @@ fn decodeUtf8(bytes: Bytes): Result<(String, Int), Utf8Error> {
     if at + width > bytes.length() {
       break
     }
-    var point = if width == 1 { lead } else { lead.bitwiseAnd leadMask(width) }
+    var point = if width == 1 { lead } else { lead & leadMask(width) }
     for index in 1..width {
       const continuation = Int.from bytes[at + index]
       if continuation < 0x80 || continuation >= 0xC0 {
         return Fail Utf8Error(at + index)
       }
-      point = point.shiftedLeft(6).bitwiseOr(continuation.bitwiseAnd(0x3F))
+      point = point << 6 | continuation & 0x3F
     }
     // The same character written with more bytes than it needs is not the same character: it is the classic way past
     // a filter that looked at the shortest form only

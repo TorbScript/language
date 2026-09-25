@@ -18,7 +18,7 @@ public type AddressError with Show, Error {
 
 /** An IPv4 address: four octets, held as one number from 0 to 4294967295. */
 public type Ipv4Address with Show, Equals, Hash, Compare, TryFrom<String, AddressError> {
-  private storedValue: Int
+  private value: Int
 
   /** `127.0.0.1`. */
   static loopback = Ipv4Address 2130706433
@@ -27,53 +27,49 @@ public type Ipv4Address with Show, Equals, Hash, Compare, TryFrom<String, Addres
 
   /** The address of four octets, most significant first: `Ipv4Address.of(127, 0, 0, 1)`. */
   static fn of(first: UInt8, second: UInt8, third: UInt8, fourth: UInt8): Ipv4Address {
-    const value = Int.from(first).shiftedLeft(by: 24)
-      .bitwiseOr(Int.from(second).shiftedLeft(by: 16))
-      .bitwiseOr(Int.from(third).shiftedLeft(by: 8))
-      .bitwiseOr(Int.from(fourth))
-    Ipv4Address value
+    Ipv4Address(Int.from(first) << 24 | Int.from(second) << 16 | Int.from(third) << 8 | Int.from(fourth))
   }
 
   /** The address as the number it is, from 0 to 4294967295: what the runtime is handed. */
-  fn value(): Int {
-    storedValue
+  fn number(): Int {
+    value
   }
 
   /** The four octets, most significant first. */
   fn octets(): List<Int> {
     [
-      storedValue.shiftedRight(by: 24).bitwiseAnd(255),
-      storedValue.shiftedRight(by: 16).bitwiseAnd(255),
-      storedValue.shiftedRight(by: 8).bitwiseAnd(255),
-      storedValue.bitwiseAnd(255),
+      value >> 24 & 255,
+      value >> 16 & 255,
+      value >> 8 & 255,
+      value & 255,
     ]
   }
 
   /** Inside `127.0.0.0/8`. */
   fn isLoopback(): Bool {
-    storedValue.shiftedRight(by: 24) == 127
+    value >> 24 == 127
   }
 
   /** `0.0.0.0`. */
   fn isUnspecified(): Bool {
-    storedValue == 0
+    value == 0
   }
 
   /** Inside `10.0.0.0/8`, `172.16.0.0/12` or `192.168.0.0/16` (RFC 1918). */
   fn isPrivate(): Bool {
-    const first = storedValue.shiftedRight by: 24
-    const second = storedValue.shiftedRight(by: 16).bitwiseAnd(255)
+    const first = value >> 24
+    const second = value >> 16 & 255
     first == 10 || (first == 172 && second >= 16 && second <= 31) || (first == 192 && second == 168)
   }
 
   /** Inside `169.254.0.0/16`. */
   fn isLinkLocal(): Bool {
-    storedValue.shiftedRight(by: 16) == 43518
+    value >> 16 == 43518
   }
 
   /** Inside `224.0.0.0/4`. */
   fn isMulticast(): Bool {
-    storedValue.shiftedRight(by: 28) == 14
+    value >> 28 == 14
   }
 
   /** `192.168.1.23`. */
@@ -83,7 +79,7 @@ public type Ipv4Address with Show, Equals, Hash, Compare, TryFrom<String, Addres
 
   /** In the order of their numbers. */
   fn compare(other: Ipv4Address): Ordering {
-    storedValue.compare other.storedValue
+    value.compare other.value
   }
 
   /**
@@ -98,7 +94,7 @@ public type Ipv4Address with Show, Equals, Hash, Compare, TryFrom<String, Addres
     var value = 0
     for part in parts {
       const number = decimalPart(text, part)?
-      value = value.shiftedLeft(by: 8).bitwiseOr(number)
+      value = value << 8 | number
     }
     Ok Ipv4Address(value)
   }
@@ -148,9 +144,9 @@ public type Ipv6Address with Show, Equals, Hash, Compare, TryFrom<String, Addres
     var low = 0
     for (index, segment) in segments.indexed() {
       if index < 4 {
-        high = high.shiftedLeft(by: 16).bitwiseOr(segment.bitwiseAnd(65535))
+        high = high << 16 | segment & 65535
       } else {
-        low = low.shiftedLeft(by: 16).bitwiseOr(segment.bitwiseAnd(65535))
+        low = low << 16 | segment & 65535
       }
     }
     Ok Ipv6Address(high, low)
@@ -175,10 +171,10 @@ public type Ipv6Address with Show, Equals, Hash, Compare, TryFrom<String, Addres
   fn segments(): List<Int> {
     var result: List<Int> = []
     for shift in [48, 32, 16, 0] {
-      result.append storedHigh.shiftedRight(by: shift).bitwiseAnd(65535)
+      result.append(storedHigh >> shift & 65535)
     }
     for shift in [48, 32, 16, 0] {
-      result.append storedLow.shiftedRight(by: shift).bitwiseAnd(65535)
+      result.append(storedLow >> shift & 65535)
     }
     result
   }
@@ -195,25 +191,25 @@ public type Ipv6Address with Show, Equals, Hash, Compare, TryFrom<String, Addres
 
   /** Inside `fe80::/10`. */
   fn isLinkLocal(): Bool {
-    storedHigh.shiftedRight(by: 54).bitwiseAnd(1023) == 1018
+    storedHigh >> 54 & 1023 == 1018
   }
 
   /** Inside `fc00::/7`. */
   fn isUniqueLocal(): Bool {
-    storedHigh.shiftedRight(by: 57).bitwiseAnd(127) == 126
+    storedHigh >> 57 & 127 == 126
   }
 
   /** Inside `ff00::/8`. */
   fn isMulticast(): Bool {
-    storedHigh.shiftedRight(by: 56).bitwiseAnd(255) == 255
+    storedHigh >> 56 & 255 == 255
   }
 
   /** The IPv4 address inside an IPv4-mapped one: `::ffff:192.0.2.1`. */
   fn mappedVersion4(): Ipv4Address? {
-    if storedHigh != 0 || storedLow.shiftedRight(by: 32).bitwiseAnd(4294967295) != 65535 {
+    if storedHigh != 0 || storedLow >> 32 & 4294967295 != 65535 {
       return None
     }
-    Some Ipv4Address(storedLow.bitwiseAnd(4294967295))
+    Some Ipv4Address(storedLow & 4294967295)
   }
 
   /** The RFC 5952 form: `2001:db8::1`, `::1`, `::ffff:192.0.2.1`. */
@@ -300,9 +296,9 @@ fn hexadecimal(segment: Int): String {
   var text = ""
   var rest = segment
   while rest > 0 {
-    const digit = rest.bitwiseAnd 15
+    const digit = rest & 15
     text = digits.sliceBytes(digit, digit + 1) + text
-    rest = rest.shiftedRight by: 4
+    rest = rest >> 4
   }
   text
 }
@@ -328,8 +324,8 @@ fn segmentsOf(text: String, side: String, last: Bool): Result<List<Int>, Address
   for (index, part) in parts.indexed() {
     if last && index == parts.length() - 1 && part.contains(".") {
       const inside = Ipv4Address.tryFrom(part).mapError({ _ => AddressError text, "`{part}` is not an IPv4 address" })?
-      result.append inside.value().shiftedRight(by: 16)
-      result.append inside.value().bitwiseAnd(65535)
+      result.append(inside.number() >> 16)
+      result.append(inside.number() & 65535)
       continue
     }
     result.append(hexadecimalSegment(text, part)?)

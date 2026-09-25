@@ -93,7 +93,7 @@ fn unaryConstant(
   if const .BitwiseNot = operator {
     const inner = evaluateConstant(lowering, operand)?
     const value = integerOf(inner)?
-    const found = wrappedToKind(lowering, value.bitwiseNot(), annotation)?
+    const found = wrappedToKind(lowering, ~value, annotation)?
     return Some ConstantValue(StaticContents.Literal(LiteralValue.Integer(found)), annotation)
   }
   const inner = evaluateConstant(lowering, operand)?
@@ -250,20 +250,20 @@ fn integerOperation(
       integerResult lowering, poweredChecked(first, second), annotation, "**", at
     }
     // A shift by a negative amount or by the width or more was reported by the checker; it is never folded
-    .BitwiseAnd => bitsValue lowering, first.bitwiseAnd(second), annotation
-    .BitwiseOr => bitsValue lowering, first.bitwiseOr(second), annotation
-    .BitwiseExclusiveOr => bitsValue lowering, first.bitwiseExclusiveOr(second), annotation
+    .BitwiseAnd => bitsValue(lowering, first & second, annotation)
+    .BitwiseOr => bitsValue(lowering, first | second, annotation)
+    .BitwiseExclusiveOr => bitsValue(lowering, first ^ second, annotation)
     .ShiftLeft => {
       if !isShiftAmount(lowering, second, annotation) {
         return None
       }
-      bitsValue lowering, first.shiftedLeft(by: second), annotation
+      bitsValue(lowering, first << second, annotation)
     }
     .ShiftRight => {
       if !isShiftAmount(lowering, second, annotation) {
         return None
       }
-      bitsValue lowering, first.shiftedRight(by: second), annotation
+      bitsValue(lowering, first >> second, annotation)
     }
     _ => None
   }
@@ -304,8 +304,8 @@ fn wrappedToKind(var lowering: Lowering, value: Int, annotation: IrTypeId): Int?
     }
     return Some value
   }
-  const modulus = (1).shiftedLeft(by: width)
-  const low = value.bitwiseAnd(modulus - 1)
+  const modulus = 1 << width
+  const low = value & (modulus - 1)
   if isSigned && low >= modulus / 2 {
     return Some(low - modulus)
   }
