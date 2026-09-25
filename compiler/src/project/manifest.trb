@@ -4,7 +4,7 @@
  * the way there.
  */
 
-use SourceFile, Statement, TextSegment from "../syntax/ast"
+use SourceFile, Statement, Expression, TextSegment from "../syntax/ast"
 
 /**
  * What the toolchain needs to know about a project. Names of dependencies are stored without their version
@@ -68,8 +68,12 @@ public type Setting {
 }
 
 /**
- * The manifest, read from the syntax tree instead of evaluated: top-level command calls with literal arguments
- * (`name "x"`) and the blocks the toolchain knows (`dependencies { runtime "acme/http:^1.2.3" }`).
+ * The manifest, read from the syntax tree instead of evaluated: top-level field assignments with literal values
+ * (`name = "x"`) and the blocks the toolchain knows (`dependencies { runtime "acme/http:^1.2.3" }`, whose settings
+ * are still command calls, because `runtime` is a method and not a field).
+ *
+ * A bare command call of a literal (`name "x"`) is read the same way: the language accepted only that form until
+ * 2026-09-25, so old manifests and a seed built before that date still parse.
  *
  * Everything else in the file is ignored silently - a `project.trb` is a receiver script, and the sandboxed VM will
  * evaluate it properly once it exists. Until then reading it statically is what lets the compiler find its own
@@ -135,7 +139,7 @@ fn packageNameOf(requirement: String): String {
   requirement.substringBefore(":") ?? requirement
 }
 
-/** The literal `command argument...` lines of a block, recursively. Anything else is skipped. */
+/** The literal `word = value` and `word argument...` lines of a block, recursively. Anything else is skipped. */
 public fn readSettings(statements: List<Statement>): List<Setting> {
   var settings: List<Setting> = []
   for statement in statements {
@@ -147,12 +151,15 @@ public fn readSettings(statements: List<Statement>): List<Setting> {
 }
 
 fn settingOf(statement: Statement): Setting? {
-  const expression = match statement.kind {
-    .Evaluate(expression) => expression
-    _ => {
-      return None
-    }
+  match statement.kind {
+    .Evaluate(expression) => settingOfCall(expression)
+    // `name = "x"`: a field written with `=`, read the same way a command call was until 2026-09-25
+    .Assign(target, value) => settingOfAssign(target, value)
+    _ => None
   }
+}
+
+fn settingOfCall(expression: Expression): Setting? {
   const (callee, arguments) = match expression.kind {
     .Call(callee, arguments, _) => (callee, arguments)
     _ => {
@@ -181,6 +188,23 @@ fn settingOf(statement: Statement): Setting? {
     }
   }
   Some Setting(word, texts, block)
+}
+
+/** `name = "x"`, `input = "src/main.trb"`: the field's own name is the word, its value the one text a field takes. */
+fn settingOfAssign(target: Expression, value: Expression): Setting? {
+  const word = match target.kind {
+    .Name(text) => text
+    _ => {
+      return None
+    }
+  }
+  const text = match value.kind {
+    .TextLiteral(segments) => plainText(segments)?
+    _ => {
+      return None
+    }
+  }
+  Some Setting(word, [text], [])
 }
 
 /** `None` for a string with `{...}` in it: what it means depends on evaluation. */
