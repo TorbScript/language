@@ -34,6 +34,7 @@ use noteParameterUse from "./escape"
 use checkPattern, requireReadBindings from "./pattern"
 use MatchArmPlan, armPlanOf, checkExhaustive, checkConditionPattern from "./exhaustive"
 use checkDeclaration from "./check"
+use requireCertainArithmetic, evaluateConstant from "./constant"
 
 /** The type of an expression in a position that expects one. Every expression that is looked at is recorded. */
 public fn checkExpression(var checker: Checker, expression: Expression, expected: Expectation): TypeId {
@@ -581,6 +582,7 @@ fn indexType(var checker: Checker, target: Expression, index: Expression, at: Sp
       // `Slice.slice` takes `Bounds<Int>` and not one of the three range types, so the value in the brackets becomes
       // a trait value here - which is what records the witness the back ends call `lowest`/`highest` through
       coerceToBounds checker, key, index.span
+      requireSliceInBounds checker, target, index
       recordTraitCall checker, at, receiver, slice, "slice"
       return receiver
     }
@@ -600,6 +602,7 @@ fn indexType(var checker: Checker, target: Expression, index: Expression, at: Sp
       }
       const _ = checkValue checker, key, arguments[0], index.span
       requireIndexInBounds checker, receiver, target, index
+      requireKeyPresent checker, target, index
       recordTraitCall checker, at, receiver, indexed, "at"
       arguments[1]
     }
@@ -608,6 +611,101 @@ fn indexType(var checker: Checker, target: Expression, index: Expression, at: Sp
       checker.deferredType
     }
   }
+}
+
+/**
+ * `[1, 2, 3][1..5]`: a slice of a list literal whose ends are written out is checked against the items that stand right
+ * there, as an index into it is ([requireIndexInBounds]) - a range that reaches outside them or starts after it ends is
+ * certain to panic.
+ */
+fn requireSliceInBounds(var checker: Checker, target: Expression, index: Expression) {
+  const count = match target.kind {
+    .ListLiteral(items) => {
+      if items.any({ _.isSpread }) {
+        return
+      }
+      items.length()
+    }
+    _ => {
+      return
+    }
+  }
+  const (start, end, isInclusive) = match index.kind {
+    .RangeLiteral(start, end, isInclusive) => (start, end, isInclusive)
+    _ => {
+      return
+    }
+  }
+  const lowest = match start {
+    Some(written) => constantIndexOf written
+    None => Some 0
+  }
+  const highest = match end {
+    Some(written) => constantIndexOf(written).map { if isInclusive { _ + 1 } else { _ } }
+    None => Some count
+  }
+  const (from, to) = match (lowest, highest) {
+    (Some(first), Some(last)) => (first, last)
+    _ => {
+      return
+    }
+  }
+  if from >= 0 && to <= count && from <= to {
+    return
+  }
+  const items = if count == 1 { "1 item" } else { "{count} items" }
+  const message = if from > to {
+    "The range starts after it ends, so this slice panics wherever it runs"
+  } else {
+    "The range reaches outside this literal, which has {items}"
+  }
+  checker.reportHere(
+    Diagnostic.error(message, index.span)
+      .withNote("How many items there are is known here, so a range that is written out is checked instead of panicking."
+        + " `part(...)` answers an `Option` instead")
+  )
+}
+
+/**
+ * `["a": 1]["b"]`: an index into a map literal whose keys are all known here, with a key that is known and none of them,
+ * is certain to panic - so it is a compile error, with `get` named for a key that may be missing.
+ */
+fn requireKeyPresent(var checker: Checker, target: Expression, index: Expression) {
+  const entries = match target.kind {
+    .MapLiteral(found) => found
+    _ => {
+      return
+    }
+  }
+  const module = checker.module
+  const wanted = match evaluateConstant(checker, module, index, 0) {
+    .Value(found) => found
+    _ => {
+      return
+    }
+  }
+  if const .Composite = wanted {
+    return
+  }
+  for (key, _) in entries {
+    match evaluateConstant(checker, module, key, 0) {
+      .Value(found) => {
+        if const .Composite = found {
+          return
+        }
+        if found == wanted {
+          return
+        }
+      }
+      _ => {
+        return
+      }
+    }
+  }
+  checker.reportHere(
+    Diagnostic.error("This key is not in the map literal, so `a[key]` panics wherever it runs", index.span)
+      .withNote("Every key of the literal is known here. `get(...)` answers an `Option` for a key that may be missing")
+  )
 }
 
 /**
@@ -2047,6 +2145,9 @@ fn arithmeticType(
   const inner = expectationOf checker, arguments[0]
   const _ = checkExpression checker, right, inner
   recordTraitCall checker, at, found, capability, memberOfOperator(operator), Some(bound)
+  if const Some(name) = numericNameOf(checker, arguments[1]) {
+    requireCertainArithmetic checker, checker.module, operator, left, right, at, name
+  }
   arguments[1]
 }
 

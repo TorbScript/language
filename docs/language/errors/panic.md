@@ -48,6 +48,15 @@ panic <message>
    with 101.** Both the message and the site are output, and the conformance suite between the back ends compares
    them character for character, so the format itself is part of the language rather than an implementation detail.
 
+   **The site is the program's line, not the standard library's.** `list[5]` on a list of three panics inside the `at`
+   of `ArrayList`, but the site it prints is the line of the program that wrote `list[5]`: a function of `std/` that
+   can panic takes the site of its caller as a hidden argument and names it, the way Rust's `#[track_caller]` does.
+
+   ```text
+   panic: index 5 is out of bounds for a length of 3
+     at src/main.trb:4:7
+   ```
+
 3. **Nothing runs on the way out of a panic.** There is no destructor, no `Close`, and no `using` cleanup, because a
    panic means the program already has a bug, and running more code in a broken program is how bugs get worse.
 
@@ -66,7 +75,35 @@ panic <message>
    print average([])
    ```
 
-6. **Running out of memory is a panic with an exit code of its own, 102.** It prints
+6. **A program may panic only on a promise it broke, never on a property of the data it was given.** An operation
+   panics where its precondition is something the program could have written as an ordinary expression -
+   `index < list.length()`, `divisor != 0`, `map.containsKey(key)` - and chose not to. Where the precondition is
+   invisible in the program - a byte inside of a character, the encoding of bytes from outside - there is no form that
+   can fail: `readLine()` answers a `Result`, and a text is cut with `withoutPrefix`, `splitOnce` and
+   `dropping(characters:)`. Every partial operation has a **total twin** beside it that answers an `Option`:
+
+   | Panics | Answers an `Option` instead |
+   |---|---|
+   | `list[index]`, `map[key]` | `list.get(index)`, `map.get(key)` |
+   | `list[from..to]`, `text[from..to]` | `list.part(from..to)`, `text.part(from..to)` |
+   | `a + b`, `a - b`, `a * b`, `a / b`, `a % b` | `a.addedChecked(b)`, `subtractedChecked`, `multipliedChecked`, `dividedChecked`, `remainderChecked` |
+   | `option.expect("...")` | `option ?? fallback` |
+
+   The messages say what went wrong with the values that made it go wrong: `index 5 is out of bounds for a length of
+   3`, `the key "Alan" is not in the map` (the key as it shows inside of another value, cut after 60 characters).
+
+7. **A failure the compiler can see is a compile error, not a panic.** A divisor that is known to be zero, arithmetic
+   on known operands that leaves the range of its type, an index or a range outside a collection literal and a key
+   that none of a map literal's keys is: each of them would panic wherever it runs, so none of them compiles.
+
+   ```trb error
+   fn half(value: Int): Int {
+     value / 0
+   }
+   // error: `/` by zero panics wherever it runs, and this divisor is zero
+   ```
+
+8. **Running out of memory is a panic with an exit code of its own, 102.** It prints
    `panic: out of memory: ...` the same way, naming the memory limit where one was reached (`TORB_MEMORY_LIMIT`, and
    the default a `dev` build has - see [torb run](../../tooling/torb-run.md)), so a script can tell a program that ran
    out of memory from one that failed an assertion. It has no site: an allocation happens inside the runtime.

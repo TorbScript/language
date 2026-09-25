@@ -674,6 +674,8 @@ public fn checkInitializer(
   // top-level `var`; a field default and a parameter default are evaluated wherever the value is built and are not
   checker.awaitsTasks = awaitsTasks
   checker.writesDeclarations = awaitsTasks
+  const wasInitializer = checker.isInitializer
+  checker.isInitializer = true
   checker.openScope()
   // `static zero = Pair(Scalar.zero, Scalar.zero)` inside `extend<Scalar: Numeric> Pair<Scalar>`: the parameters of the
   // declaration around a constant are names of its initializer, exactly as they are of a body
@@ -689,6 +691,7 @@ public fn checkInitializer(
   closeInference checker
   found = resolveType checker, found
   settleChanges checker
+  checker.isInitializer = wasInitializer
   checker.closeScope()
   checker.leaveBody saved
   annotation ?? found

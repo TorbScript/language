@@ -979,6 +979,82 @@ fn logicalConstant(operator: InfixOperator, a: ConstantValue, b: ConstantValue, 
   ConstantResult.Value(ConstantValue.Boolean(if isAnd { left && right } else { left || right }))
 }
 
+/**
+ * An integer operation of any body whose outcome is known while the program is compiled, and certain to panic:
+ * `value / 0`, `Int.maximum + 1`, `Int8.maximum + 1` (docs/design/PANICS.md 5.1, clause 3). The operands are folded
+ * as the initializer of a module's `const` is; an operand that is not known leaves the operation alone, except for a
+ * divisor that is known to be zero, which panics whatever it divides. `name` is the integer type of the result, which
+ * says where its range ends.
+ */
+public fn requireCertainArithmetic(
+  var checker: Checker,
+  module: ModuleId,
+  operator: InfixOperator,
+  left: Expression,
+  right: Expression,
+  at: Span,
+  name: String,
+) {
+  const (width, isSigned) = match widthOfInteger(name) {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  // The initializer of a constant is the evaluator's, which reports what it cannot fold where it is written
+  if checker.isInitializer {
+    return
+  }
+  match operator {
+    .Add | .Subtract | .Multiply | .Divide | .Remainder => {}
+    _ => {
+      return
+    }
+  }
+  const divisor = match evaluateConstant(checker, module, right, 0) {
+    .Value(.Integer(found)) => found
+    _ => {
+      return
+    }
+  }
+  const isDivision = match operator {
+    .Divide | .Remainder => true
+    _ => false
+  }
+  const dividend = match evaluateConstant(checker, module, left, 0) {
+    .Value(.Integer(found)) => found
+    _ => {
+      // Whatever it divides, a divisor that is known to be zero panics
+      if isDivision && divisor == 0 {
+        const spelling = operatorSpelling operator
+        checker.report(
+          module,
+          Diagnostic.error("`{spelling}` by zero panics wherever it runs, and this divisor is zero", at)
+            .withNote("`dividedChecked` and `remainderChecked` answer an `Option` for a divisor that may be zero")
+        )
+      }
+      return
+    }
+  }
+  // The checker folds in an `Int64`, which holds no `UInt64` above its own largest value: those are not folded
+  if name == "UInt64" {
+    return
+  }
+  const folded = match integerArithmetic(checker, module, operator, dividend, divisor, at) {
+    .Value(.Integer(found)) => found
+    _ => {
+      return
+    }
+  }
+  if width < 64 && wrappedToWidth(folded, width, isSigned) != Some(folded) {
+    checker.report(
+      module,
+      Diagnostic.error("This does not fit into an `{name}`, so it panics wherever it runs", at)
+        .withNote("Both operands are known here. `addedChecked` and its siblings answer an `Option` instead")
+    )
+  }
+}
+
 fn reportOverflow(var checker: Checker, module: ModuleId, at: Span): ConstantResult {
   checker.report(
     module,
