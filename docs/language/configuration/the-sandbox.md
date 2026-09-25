@@ -15,8 +15,8 @@ source:
   - docs/ARCHITECTURE.md
 ---
 
-> **Draft.** It runs in the VM: a program run with `torb run --vm` loads and applies a script, and so does the toolchain for
-> a `project.trb`; the native back end refuses `Script.apply` until a binary can embed the VM
+> **Draft.** It runs in the VM: a program `torb run` runs loads and applies a script, and so does the toolchain for a
+> `project.trb`; the native back end refuses `Script.apply` until a binary can embed the VM
 > ([Receiver Scripts and the Sandbox](../../design/SCRIPTS.md)).
 
 A [receiver script](receiver-scripts.md) is untrusted code from outside the program. What it can touch is not a
@@ -85,10 +85,11 @@ SandboxCapabilities.limits(steps: Int = 1_000_000, memory: Int = 64.megabytes(),
 7. **Foreign functions can never be granted to a script.** There is no capability for them in
    `SandboxCapabilities`, because a `foreign` declaration reaches outside the process the sandbox itself runs in.
 
-8. **The VM enforces all of it, and only the VM runs a script.** A program run with `torb run --vm` loads scripts
-   under these capabilities and limits, and so does the toolchain for a `project.trb` (`torb manifest`, see
-   [project.trb](../../tooling/project-trb.md)); the native back end refuses `Script.apply` until a binary can embed
-   the VM. A relative root is read against the directory the program runs in.
+8. **The VM enforces all of it, and only the VM runs a script.** A program `torb run` runs loads scripts under
+   these capabilities and limits - from a literal path or from one it computes - and so does the toolchain for a
+   `project.trb` (`torb manifest`, see [project.trb](../../tooling/project-trb.md)); the native back end refuses
+   `Script.apply` until a binary can embed the VM. A relative root is read against the directory
+   the program runs in.
 
 ## What this is not
 

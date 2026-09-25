@@ -42,7 +42,7 @@ use Shape, CountedWord, CountedKind, ConstantPart, TableEntry, ElementEntry, Ele
 use narrowCode, isSignedNarrow from "./format"
 use WordTables, LayoutWords, wordTablesOf, whyNoWords, isBlockPointer, isBoxed, layoutOfType from "./words"
 use nativeIndices from "./natives"
-use runScriptFunction from "../c/natives"
+use runScriptFunction, loadScriptFunction, runLoadedScriptFunction from "../c/natives"
 
 /** What [emitBytecode] answers: the program, and every construct it could not encode, in the order found. */
 public type BytecodeEmission {
@@ -1773,6 +1773,37 @@ fn emitRuntimeCall(
       None => 0
     }
     emitHead emitter, body, Opcode.RunScript, answer, script, receiver
+    emitTail body, grant
+    return
+  }
+  // The two operations of a script loaded from a path only known while the program runs (docs/design/SCRIPTS.md slice 7)
+  if symbol == loadScriptFunction {
+    if arguments.length() != 2 || target.isNone() {
+      report emitter, "`loadScript` with other operands than a path and a receiver"
+      return
+    }
+    const path = argumentRegister emitter, body, program, arguments[0]
+    const receiver = argumentRegister emitter, body, program, arguments[1]
+    const answer = match target {
+      Some(slot) => targetOf emitter, body, slot
+      None => 0
+    }
+    emitHead emitter, body, Opcode.LoadScript, answer, path, receiver
+    return
+  }
+  if symbol == runLoadedScriptFunction {
+    if arguments.length() != 3 || target.isNone() {
+      report emitter, "`runLoadedScript` with other operands than a chunk, a receiver and a grant"
+      return
+    }
+    const chunk = argumentRegister emitter, body, program, arguments[0]
+    const receiver = argumentRegister emitter, body, program, arguments[1]
+    const grant = argumentRegister emitter, body, program, arguments[2]
+    const answer = match target {
+      Some(slot) => targetOf emitter, body, slot
+      None => 0
+    }
+    emitHead emitter, body, Opcode.RunLoaded, answer, chunk, receiver
     emitTail body, grant
     return
   }

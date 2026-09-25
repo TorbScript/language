@@ -22,8 +22,10 @@ use substitute from "../../semantics/checker/unify"
 use Resolution, Dispatch, DefaultSource from "../../semantics/checker/context"
 use signatureOf, typeSignatureOf from "../../semantics/checker/signature"
 use fieldsOf from "../../semantics/checker/member"
-use NativeEntry, DerivedKind, ArrayOperation from "../../backend/c/natives"
+use NativeEntry, DerivedKind, ArrayOperation, loadScriptFunction from "../../backend/c/natives"
 use IrTypeId, Slot, Instruction, Terminator, FunctionId, LayoutId, Reference, PathStep, borrowed from "../ir"
+use IrType, StaticContents from "../ir"
+use LiteralValue from "../../semantics/checker/type"
 use Intrinsic, NumericKind from "../ir"
 use RuntimeKind, ElementId from "../ir"
 use CallOperands, PlacePath, TakenElement from "./place"
@@ -41,7 +43,7 @@ use elementFor from "../element"
 use Lowering, Generated, reportUnsupported, locationOf, nativeNamed, producesValue, substituted from "./context"
 use irTypeOfClosed, typeAtSpan, voidTypeOf from "./context"
 use isNeverType, finishBlock, borrowedArguments from "./context"
-use lowerValue, valueSlot, unsupportedSlot, abandonedSlot, voidSlot from "./expression"
+use lowerValue, valueSlot, unsupportedSlot, abandonedSlot, voidSlot, constantSlot from "./expression"
 use variantIndexOf from "./match"
 use emitIntrinsic, receiverSlot from "./expression"
 use Dispatched, dispatchedMember, dispatchedOn, preludeType, lowerTraitValue, boundsOfTraitValue from "./generic"
@@ -761,6 +763,13 @@ fn lowerNativeCall(
     // Running a script is the VM's alone: a native binary does not embed one (docs/design/SCRIPTS.md section 1)
     .Machine(function) => {
       if !lowering.forMachine {
+        // A native binary loads a script only by a path it was compiled with: `Sandbox.load` of any other answers why,
+        // and only running one is refused, so a program that loads and never applies still builds
+        if function == loadScriptFunction {
+          const text = lowering.program.internType IrType.Text
+          const answer = "!0\tA native binary loads no script from a path only known while it runs, which needs the VM"
+          return constantSlot lowering, builder, destination, StaticContents.Literal(LiteralValue.Text(answer)), text
+        }
         const what = "a receiver script run by `Script.apply` (only the VM runs one)"
         return unsupportedSlot lowering, builder, destination, what, at
       }

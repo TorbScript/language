@@ -18,12 +18,15 @@ use readSourceTree, absolutePaths from "../project/read"
 use check, Checked from "../semantics/check"
 use insertOwnership from "../ir/ownership"
 use verifyOwnedProgram from "../ir/ownership-verify"
-use lowerWorkspace, pathsOfModules from "../ir/lower/lower"
+use lowerWorkspace, lowerScripts, pathsOfModules from "../ir/lower/lower"
 use hostTarget from "../project/target"
 use entryNameOf from "../ir/lower/function"
 use renderDiagnostic, renderProblem from "../cli/render"
 use emitBytecode from "../backend/bytecode/emit"
-use runProgram from "./interpret"
+use BytecodeProgram from "../backend/bytecode/format"
+use RuntimeScript from "../semantics/scripts"
+use scriptReceiverOf, moduleOfImport from "../semantics/checker/receiver"
+use runProgram, ScriptLoader, LoadedScript, ScriptStop from "./interpret"
 use SourceTree from "../project/source-tree"
 use ModuleId from "../semantics/module"
 use BuildOptions, entryModulesOf from "../cli/build"
@@ -37,7 +40,8 @@ const refusedCode = 1
  */
 public fn runInMachine(path: String, arguments: List<String>): Result<Int, IoError> {
   const tree = readSourceTree([path])?
-  const checked = check(tree, absolutePaths([path])?, false, true)
+  const requested = absolutePaths([path])?
+  const checked = check tree, requested, false, true
   if reportChecked(checked) > 0 {
     return Ok refusedCode
   }
@@ -49,7 +53,7 @@ public fn runInMachine(path: String, arguments: List<String>): Result<Int, IoErr
     }
   }
   const executable = normalizePath(File.absolutePath(path)?)
-  runModules checked, tree, [module], arguments, false, executable
+  runModules checked, tree, [module], arguments, false, executable, requested
 }
 
 /**
@@ -59,7 +63,8 @@ public fn runInMachine(path: String, arguments: List<String>): Result<Int, IoErr
  */
 public fn testInMachine(paths: List<String>): Result<Int, IoError> {
   const tree = readSourceTree(paths)?
-  const checked = check(tree, absolutePaths(paths)?, false, true)
+  const requested = absolutePaths(paths)?
+  const checked = check tree, requested, false, true
   if reportChecked(checked) > 0 {
     return Ok refusedCode
   }
@@ -70,7 +75,7 @@ public fn testInMachine(paths: List<String>): Result<Int, IoError> {
       return Ok refusedCode
     }
   }
-  runModules checked, tree, modules, [], true, ""
+  runModules checked, tree, modules, [], true, "", requested
 }
 
 /** The entry files lowered, owned, verified, encoded and run; a test run with the file of every entry. */
@@ -81,6 +86,7 @@ fn runModules(
   arguments: List<String>,
   isTestRun: Bool,
   executable: String,
+  requested: List<String>,
 ): Result<Int, IoError> {
   var lowering = lowerWorkspace checked.checker, pathsOfModules(checked), modules, false, hostTarget(), true
   insertOwnership lowering.program
@@ -124,7 +130,142 @@ fn runModules(
     }
     return Ok refusedCode
   }
-  Ok runProgram(emission.program, arguments, executable)
+  Ok runProgram(emission.program, arguments, executable, Some(scriptLoaderOf(tree, requested)))
+}
+
+/**
+ * The host of the scripts a program loads from paths only known while it runs (docs/design/SCRIPTS.md slice 7): the
+ * program's files are checked again with the file as one more module, checked against the receiver the program names,
+ * the script is lowered as its `script` function, and its part is encoded as a continuation of the program that runs.
+ */
+fn scriptLoaderOf(tree: SourceTree, requested: List<String>): ScriptLoader {
+  // Every file of the program is parsed once, and a file loaded again with the same text is the script loaded before
+  const parsed = tree.parsedEverything()
+  const known = KnownScripts()
+  ScriptLoader load: { path, receiver, after => loadAtRunTime parsed, requested, known, path, receiver, after }
+}
+
+/** The scripts loaded at run time so far, by their absolute path, their receiver and their text. */
+shared type KnownScripts {
+  var loaded: Map<String, (Int, String)> = [:]
+}
+
+/** One script loaded at run time, or why it cannot be: the line of the script and the message of a `SandboxError`. */
+fn loadAtRunTime(
+  tree: SourceTree,
+  requested: List<String>,
+  known: KnownScripts,
+  path: String,
+  receiver: String,
+  after: BytecodeProgram,
+): Result<LoadedScript, ScriptStop> {
+  const absolute = match File.absolutePath(path) {
+    Ok(found) => normalizePath found
+    Fail(problem) => {
+      return Fail ScriptStop(0, "There is no script `{path}`: {problem.message}")
+    }
+  }
+  if !File.exists(absolute) || File.isDirectory(absolute) {
+    return Fail ScriptStop(0, "There is no script `{path}`")
+  }
+  const text = match File.readText(absolute) {
+    Ok(found) => found
+    Fail(problem) => {
+      return Fail ScriptStop(0, "The script `{path}` cannot be read: {problem.message}")
+    }
+  }
+  const key = "{absolute}\n{receiver}\n{text}"
+  if const Some((chunk, imports)) = known.loaded.get(key) {
+    return Ok LoadedScript(after, chunk, imports)
+  }
+  const (declaring, name) = match receiver.split("\t").toList() {
+    [module, typeName] => (module, typeName)
+    _ => {
+      return Fail ScriptStop(0, "internal error: the receiver `{receiver}` names no type")
+    }
+  }
+  const script = RuntimeScript absolute, declaring, name
+  const around = tree.withFile absolute, text
+  const checked = check around, requested, false, true, [script]
+  const shown = around.display absolute
+  for file in checked.files {
+    if file.path == shown && !file.diagnostics.isEmpty() {
+      const first = file.diagnostics[0]
+      const lines = LineIndex.of text
+      const (line, _) = lines.lineAndColumn first.span.start
+      return Fail ScriptStop(line, first.message)
+    }
+  }
+  const module = match checked.program.graph.moduleAt(absolute) {
+    Some(found) => found
+    None => {
+      return Fail ScriptStop(0, "internal error: the script `{path}` is no module of the program")
+    }
+  }
+  var checker = checked.checker
+  const typed = match scriptReceiverOf(checker, module) {
+    Some(found) => found
+    None => {
+      return Fail ScriptStop(0, "internal error: the receiver `{name}` of the script `{path}` is not found again")
+    }
+  }
+  var lowering = lowerScripts checker, pathsOfModules(checked), [(module, typed)], [], hostTarget()
+  insertOwnership lowering.program
+  var refused: List<String> = []
+  for problem in lowering.problems {
+    refused.append problem.diagnostic.message
+  }
+  for blocked in lowering.unsupported {
+    refused.append "{blocked.what} (at {blocked.at})"
+  }
+  for what in lowering.program.planned {
+    refused.append what
+  }
+  for problem in lowering.program.problems {
+    refused.append "internal error: {problem}"
+  }
+  for problem in verifyOwnedProgram(lowering.program) {
+    refused.append "internal error: {problem}"
+  }
+  if !refused.isEmpty() {
+    return Fail ScriptStop(0, refused[0])
+  }
+  const emission = emitBytecode lowering.program, [], after
+  if const Some(what) = emission.unsupported.first() {
+    return Fail ScriptStop(0, "{what} is not supported by the VM yet")
+  }
+  const function = match lowering.scriptFunctions.get(module.value) {
+    Some(found) => lowering.program.functionAt(found).name
+    None => {
+      return Fail ScriptStop(0, "internal error: the script `{path}` was not lowered")
+    }
+  }
+  for index in after.chunks.length()..emission.program.chunks.length() {
+    if emission.program.chunks[index].name == function {
+      const imports = importsOf checked, module
+      known.loaded.set key, (index, imports)
+      return Ok LoadedScript(emission.program, index, imports)
+    }
+  }
+  Fail ScriptStop(0, "internal error: the script `{path}` was not emitted")
+}
+
+/** The modules the script imports, `"std/fs\t3"` per line, as the table of a program's scripts spells them. */
+fn importsOf(checked: Checked, module: ModuleId): String {
+  const inside = checked.program.graph.at module
+  const lines = LineIndex.of inside.source.text
+  var found: List<String> = []
+  for statement in inside.file.statements {
+    if const .Declare(declaration) = statement.kind {
+      if const .Use(usage) = declaration.kind {
+        if const .Module(written) = usage.source {
+          const (line, _) = lines.lineAndColumn declaration.span.start
+          found.append "{moduleOfImport(written)}\t{line}"
+        }
+      }
+    }
+  }
+  found.joined separator: "\n"
 }
 
 /** Everything the front end found, rendered the way `torb check` renders it. */

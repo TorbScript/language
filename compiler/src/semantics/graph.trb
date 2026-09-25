@@ -7,7 +7,7 @@ use normalizePath, parentPath, joinPath from "../project/path"
 use SourceTree from "../project/source-tree"
 use Workspace, Package from "../project/workspace"
 use ModuleId, Module, ScriptReceiver from "./module"
-use scriptLoadsOf from "./scripts"
+use scriptLoadsOf, RuntimeScript from "./scripts"
 
 /** Every module of every package, and the index that turns an import path into a module. */
 public type Graph {
@@ -31,8 +31,11 @@ public type Graph {
   }
 }
 
-/** Parses every file of every package. This is the only place the syntax trees of a program come from. */
-public fn buildGraph(tree: SourceTree, workspace: Workspace): Graph {
+/**
+ * Parses every file of every package. This is the only place the syntax trees of a program come from. `scripts` are the
+ * files a running program loads from paths only known while it runs, each with its receiver.
+ */
+public fn buildGraph(tree: SourceTree, workspace: Workspace, scripts: List<RuntimeScript> = []): Graph {
   var modules: List<Module> = []
   for index in 0..workspace.packages.length() {
     const package = workspace.packages[index]
@@ -44,7 +47,44 @@ public fn buildGraph(tree: SourceTree, workspace: Workspace): Graph {
     }
   }
   addReceiverScripts tree, workspace, modules
+  addRuntimeScripts tree, modules, scripts
   Graph.of modules
+}
+
+/**
+ * The files a running program loads from paths only known while it runs (docs/design/SCRIPTS.md slice 7), after every
+ * other module: each is a script of the package of the module that declares its receiver, and a file that is a module
+ * already - a file of a package, or one a literal `Sandbox.load` named - gets the receiver it is loaded with now.
+ */
+fn addRuntimeScripts(tree: SourceTree, var modules: List<Module>, scripts: List<RuntimeScript>) {
+  for script in scripts {
+    if !tree.exists(script.path) {
+      continue
+    }
+    var declaring: Module? = None
+    for module in modules {
+      if module.path == script.module {
+        declaring = Some module
+      }
+    }
+    const owner = match declaring {
+      Some(found) => found
+      None => {
+        continue
+      }
+    }
+    const receiver = ScriptReceiver.Declared owner.id, script.name
+    var existing = false
+    for position in 0..modules.length() {
+      if modules[position].path == script.path {
+        modules[position] = modules[position].copy(receiver: Some(receiver))
+        existing = true
+      }
+    }
+    if !existing {
+      addScript tree, modules, owner.package, script.path, receiver
+    }
+  }
 }
 
 /** A script that belongs to no project is always an entry: nobody imports it. */

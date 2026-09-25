@@ -65,10 +65,10 @@ Script.apply(var value: Value): Result<Void, SandboxError>
    [top-level code](../modules-and-packages/top-level-code.md) allows, alongside an entry file, an unimported script
    and a `*.test.trb` file.
 
-5. **Only the VM runs a receiver script.** A program run with `torb run --vm` loads and applies one; the native back
-   end refuses `Script.apply` until a binary can embed the VM. The path has to be one the program was compiled with -
-   a literal of a `Sandbox.load` - because the program carries the scripts the checker checked. The toolchain runs one
-   too: `torb manifest` evaluates a `project.trb`, while the commands that build and test still read it by parsing its
+5. **Only the VM runs a receiver script.** A program `torb run` runs in the VM loads and applies one; the native back
+   end refuses `Script.apply` until a binary can embed the VM. A literal path names a script the
+   checker checked with the program; a path the program computes is checked against the type argument when the program
+   loads it, by the `torb` that runs it. The toolchain runs one too: `torb manifest` evaluates a `project.trb`, while the commands that build and test still read it by parsing its
    literal top-level command calls.
 
 ## What this is not

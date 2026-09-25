@@ -63,6 +63,17 @@ public fn scriptTableOf(
   const text = lowering.program.internType IrType.Text
   const boolean = lowering.program.internType IrType.Boolean
   const layout = variantLayoutOfType lowering, declared.result
+  // No path at all: the receiver as the running `torb` finds its declaration again (docs/design/SCRIPTS.md slice 7)
+  if const .Receiver = kind {
+    // Only the VM loads a script from such a path; the C a native binary is built from names no path of this machine
+    const written = if lowering.forMachine { receiverTextOf lowering, receiver } else { "" }
+    const described = addTemporary builder, text
+    emit builder, Instruction.Constant(described, textStatic(lowering, written, text))
+    terminate builder, Terminator.Return(Some(borrowed(described)))
+    const built = finishFunction lowering.program, builder
+    lowering.nativeWrappers.set name, built
+    return Some built
+  }
   for (module, path) in scriptsOf(lowering, receiver) {
     const written = addTemporary builder, text
     emit builder, Instruction.Constant(written, textStatic(lowering, path, text))
@@ -96,6 +107,8 @@ public fn scriptTableOf(
         emit builder, Instruction.Constant(imports, textStatic(lowering, importsOf(lowering, module), text))
         terminate builder, Terminator.Return(Some(borrowed(imports)))
       }
+      // Answered above, without a path
+      .Receiver => {}
     }
     switchTo builder, next
   }
@@ -117,10 +130,29 @@ public fn scriptTableOf(
       emit builder, Instruction.Constant(nothing, textStatic(lowering, "", text))
       terminate builder, Terminator.Return(Some(borrowed(nothing)))
     }
+    .Receiver => {}
   }
   const built = finishFunction lowering.program, builder
   lowering.nativeWrappers.set name, built
   Some built
+}
+
+/**
+ * `"<module path>\t<name>"`: where the receiver is declared, which is how the running `torb` finds the type again when
+ * the program loads a script from a path only known while it runs. Empty for a receiver that is no type of a module or
+ * that has type arguments, which the running program cannot name that way.
+ */
+fn receiverTextOf(var lowering: Lowering, receiver: TypeId): String {
+  if const .Nominal(symbol, arguments) = lowering.checker.types.form(receiver) {
+    if !arguments.isEmpty() {
+      return ""
+    }
+    const declared = lowering.checker.symbolAt symbol
+    if const Some(module) = declared.module {
+      return "{lowering.checker.program.graph.at(module).path}\t{declared.name}"
+    }
+  }
+  ""
 }
 
 /** Every script the checker checked against `receiver`, with its path below its package, in the order of the graph. */

@@ -1,0 +1,80 @@
+/**
+ * `Sandbox.load` of a path only known while the program runs (docs/design/SCRIPTS.md slice 7): the program writes its
+ * scripts itself, so no literal names them, and the `torb` that runs it reads, checks and lowers each file when the
+ * program asks for it. What goes wrong is a `SandboxError` as for a script the program was compiled with - a type error
+ * with its line, an import the grant does not name, a panic with its line, a file that is nowhere - and the program
+ * goes on. The limits are the sandbox's own and the same for both kinds of script (`sandbox-load.trb`).
+ *
+ * Every file loaded this way costs a check of the whole program, so there are few of them. Only the VM runs a receiver
+ * script, so this program is in `vm-only/` and has no native run.
+ */
+
+use Sandbox, Script, SandboxError from "std/sandbox"
+use File from "std/fs"
+
+type Settings {
+  var port: Int = 8080
+  private(var) names: List<String> = []
+
+  var fn name(value: String) {
+    names.append value
+  }
+}
+
+/** What the script configured, or where and why it failed. */
+fn configured(loading: Result<Script<Settings>, SandboxError>): String {
+  const script = match loading {
+    Ok(found) => found
+    Fail(error) => {
+      return "not loaded: {error}"
+    }
+  }
+  var settings = Settings()
+  match script.apply(settings) {
+    Ok(_) => "port {settings.port}, names {settings.names.joined(separator: " ")}"
+    Fail(error) => "stopped: {error}"
+  }
+}
+
+/** Writes a script of these lines below the working directory, and answers the path it is loaded by. */
+fn written(name: String, lines: List<String>): String {
+  if !File.isDirectory("generated") {
+    const _ = File.createDirectory "generated"
+  }
+  const path = "./generated/{name}.trb"
+  const _ = File.writeText(path, lines.joined(separator: "\n") + "\n")
+  path
+}
+
+const configures = written("configures", [
+  "port 9100",
+  "name \"run\"",
+  "for suffix in [\"x\", \"y\"] \{",
+  "  name \"time-\{suffix\}\"",
+  "\}",
+])
+print configured(Sandbox.load<Settings>(configures))
+
+// The same file loaded a second time is one more continuation of the program, and a script applies more than once
+const again = Sandbox.load<Settings>(configures)
+if const Ok(script) = again {
+  var first = Settings()
+  var second = Settings port: 1
+  const _ = script.apply first
+  const _ = script.apply second
+  print "applied twice: {first.port} {second.port}, {first.names.length()} and {second.names.length()} names"
+}
+
+print configured(Sandbox.load<Settings>(written("mistyped", ["port 1", "port \"eighty\""])))
+
+const importing = written "imports", ["use Environment from \"std/os/environment\"", "", "port 7"]
+print configured(Sandbox.load<Settings>(importing))
+
+const granted = Sandbox.load<Settings>(importing) {
+  modules "std/os/environment"
+}
+print configured(granted)
+
+print configured(Sandbox.load<Settings>(written("panics", ["port 1", "panic \"no configuration today\""])))
+print configured(Sandbox.load<Settings>("./generated/nowhere.trb"))
+print "the program goes on"

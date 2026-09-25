@@ -30,6 +30,11 @@ public fn scriptReceiverOf(var checker: Checker, module: ModuleId): TypeId? {
     .ProjectFile => projectType checker
     // The type argument of the `Sandbox.load` that names the file, in a type position of the module that loads it
     .Loaded(from, annotation) => Some typeFromReference(checker, annotation, TypeScope(from))
+    // A type without type parameters, named by the running program that loads the file (docs/design/SCRIPTS.md slice 7)
+    .Declared(declaring, name) => {
+      const symbol = checker.program.scopes[declaring.value].names.get(name)?
+      Some checker.nominal(symbol, [])
+    }
   }
 }
 

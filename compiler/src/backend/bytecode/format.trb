@@ -125,6 +125,17 @@ public type Opcode {
    * pool: an entry cell, the one value a top-level `const` of the entry file holds for every function that names it.
    */
   case EntryCell
+  /**
+   * `A` = the answer (a `String`), `B` = the path, `C` = the receiver as `scriptReceiver` of `std/sandbox` names it:
+   * `loadScript`, a file only known while the program runs checked and lowered into it by the running `torb`
+   * (docs/design/SCRIPTS.md slice 7). The answer is the chunk of its body and its imports, or why it did not load.
+   */
+  case LoadScript
+  /**
+   * `A` = the answer (a `String`), `B` = the chunk of a script [LoadScript] loaded, `C` = the reference of its receiver;
+   * `T0` = the grant: `runLoadedScript` of `std/sandbox`, which is [RunScript] for such a script.
+   */
+  case RunLoaded
 
   /** The number the head word carries. */
   fn number(): Int {
@@ -172,6 +183,8 @@ public type Opcode {
       .Resume => 40
       .Finish => 41
       .EntryCell => 42
+      .LoadScript => 43
+      .RunLoaded => 44
     }
   }
 
@@ -221,6 +234,8 @@ public type Opcode {
       .Resume => "resume"
       .Finish => "finish"
       .EntryCell => "entry.cell"
+      .LoadScript => "load.script"
+      .RunLoaded => "run.loaded"
     }
   }
 }
@@ -270,6 +285,8 @@ public const allOpcodes: List<Opcode> = [
   Opcode.Resume,
   Opcode.Finish,
   Opcode.EntryCell,
+  Opcode.LoadScript,
+  Opcode.RunLoaded,
 ]
 
 /**
@@ -320,6 +337,8 @@ public fn opcodeOf(number: Int): Opcode {
     40 => Opcode.Resume
     41 => Opcode.Finish
     42 => Opcode.EntryCell
+    43 => Opcode.LoadScript
+    44 => Opcode.RunLoaded
     _ => Opcode.Unreachable
   }
 }
@@ -381,6 +400,7 @@ public fn tailLengthOf(opcode: Opcode, head: Int): Int {
     .Cancelled => 1
     .Resume => 1
     .EntryCell => 1
+    .RunLoaded => 1
     _ => 0
   }
 }

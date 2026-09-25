@@ -15,8 +15,8 @@ source:
 ---
 
 > **Only the VM runs a script.** A script is always interpreted
-> (Receiver Scripts and the Sandbox): `torb run --vm` runs a program that loads one, and the
-> native back end refuses `Script.apply` until a binary can embed the VM.
+> (Receiver Scripts and the Sandbox): `torb run` runs a program that loads one in the VM, and
+> the native back end refuses `Script.apply` until a binary can embed the VM.
 
 `std/sandbox` loads `.trb` files as sandboxed receiver closures - the mechanism behind `project.trb` and every
 configuration script. What a script may do is granted at the call site of `Sandbox.load`, never in the script or its
@@ -59,10 +59,12 @@ Type checks `path` against `Value` and answers a `Script`, ready to run against 
 wrong with the file (syntax, types, a module the script may not import) is reported here; what goes wrong while it runs
 is reported by `Script.apply` instead. The trailing block grants capabilities beyond the defaults.
 
-The path is relative to the directory the program runs in, and it has to be one the program was compiled with: the
-checker checks every file a `Sandbox.load` names with a literal path against its type argument, and the program carries
-those scripts. A path it was not compiled with is the `SandboxError` of `load`, and so is an import of the script that the
-grant does not name, with the line of the `use`.
+The path is relative to the directory the program runs in. A literal path names a file the checker checked against the
+type argument with the program, which carries that script. Any other path - one the program computes - is read, checked
+and lowered when the program asks for it, by the `torb` that runs it, and costs a check of the program the first time;
+`Value` is then a type without type arguments. A file that is nowhere or does not check is the `SandboxError` of
+`load`, with the line of the first error, and so is an import of the script that the grant does not name, with the line
+of the `use`.
 
 ### Script
 

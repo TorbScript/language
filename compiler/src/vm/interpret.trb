@@ -75,7 +75,44 @@ public shared type Registers {
   var pool: Int = 0
   /** How far a frame may reach: beyond it a call is the runtime's `stack overflow`. */
   var limit: Int = largestStack
+  /**
+   * The host that checks and lowers a file the program loads from a path only known while it runs
+   * (docs/design/SCRIPTS.md slice 7): `torb run` has one, a host that runs scripts of its own has none.
+   */
+  var loader: ScriptLoader? = None
+  /** How often a loaded script grew the program: a loop whose image is older takes the new one. */
+  var generation: Int = 0
+  /**
+   * Where the constants of the next script loaded at run time go: the top of the registers, which the frames give up
+   * for them ([scriptWords]), because the constant pool below the frames cannot grow while they are in use. `0` until
+   * the first one.
+   */
+  var scriptPool: Int = 0
+  /** The chunks of the bodies of the scripts loaded at run time: the only ones `RunLoaded` runs. */
+  var loadedScripts: List<Int> = []
 }
+
+/**
+ * What the host answers for a file the program loads while it runs: the program with the script's part appended (a
+ * continuation, `emitBytecode` with `after`), the chunk of its body, and its imports as `scriptImports` spells them - or
+ * why it did not load, as a `SandboxError` of `Sandbox.load` says it.
+ */
+public type LoadedScript {
+  program: BytecodeProgram
+  chunk: Int
+  imports: String
+}
+
+/** The host of [Registers.loader]: the path, the receiver as `scriptReceiver` names it, and the program to continue. */
+public type ScriptLoader {
+  load: (String, String, BytecodeProgram) => Result<LoadedScript, ScriptStop>
+}
+
+/**
+ * How many words at the top of the registers the constants of scripts loaded at run time may take all together: what
+ * their constant pools hold, a few kilobytes each.
+ */
+const scriptWords = 262144
 
 /**
  * The program laid out for the loop. `code` is every chunk's code one after the other, with the jump targets, resume
@@ -212,8 +249,14 @@ const contentsOffset = 16
  * section 8). A program that ends by `Process.exit` or a panic never comes back here, exactly as its native binary
  * never returns from `main`.
  */
-public fn runProgram(program: BytecodeProgram, arguments: List<String>, executable: String = ""): Int {
+public fn runProgram(
+  program: BytecodeProgram,
+  arguments: List<String>,
+  executable: String = "",
+  loader: ScriptLoader? = None,
+): Int {
   const registers = registersFor program
+  registers.loader = loader
   const workers = workersFor registers, program
   const ended = run registers.words, kernelScratch(), registers, registers.image, program, arguments, executable
   releaseWorkers registers, workers
@@ -676,7 +719,9 @@ fn innermostLineOf(program: BytecodeProgram, frames: List<(Int, Int)>, scriptPat
  * `runScript` of `std/sandbox`, the one instruction only the VM has (docs/design/SCRIPTS.md sections 4 to 6): the grant
  * opened in the kernel, the script's closure called with the receiver's reference under a budget of its own, the
  * sandbox closed whatever happened, and the answer placed as text - `""`, or the line of the script and the message of
- * the stop with a tab between them. A stop ends the script and never the program that ran it.
+ * the stop with a tab between them. A stop ends the script and never the program that ran it. `callee` is the chunk of
+ * the script's body and `environment` the environment its closure carries; `runLoadedScript` runs the body of a script
+ * the program loaded while it ran, which has none.
  */
 fn runScriptInstruction(
   var words: ArrayList<Int>,
@@ -687,7 +732,8 @@ fn runScriptInstruction(
   base: Int,
   top: Int,
   target: Int,
-  closure: Int,
+  callee: Int,
+  environment: Int,
   receiver: Int,
   grant: Int,
 ) {
@@ -705,13 +751,12 @@ fn runScriptInstruction(
   }
   const _ = kernelCall words, kernel, base, KernelOperation.SandboxOpen, [grant]
   var budget = limitedBudget steps, milliseconds
-  const callee = loadRegister(registers, base + closure) - 1
   const chunk = program.chunks[callee]
   var finished = ensureFrame registers, scratch, image, callee
   if finished {
     var first = 0
     if chunk.takesEnvironment {
-      storeRegister(registers, scratch + chunk.parameters[0].offset, loadRegister(registers, base + closure + 1))
+      storeRegister(registers, scratch + chunk.parameters[0].offset, environment)
       first = 1
     }
     storeRegister(registers, scratch + chunk.parameters[first].offset, loadRegister(registers, base + receiver))
@@ -732,6 +777,96 @@ fn runScriptInstruction(
     answer = "{blamed.line}\t{blamed.message}"
   }
   Machine.placeText(words, base + target, answer)
+}
+
+/**
+ * `loadScript` of `std/sandbox` (docs/design/SCRIPTS.md slice 7): the file at a path only known while the program runs,
+ * checked against its receiver and lowered by the host ([Registers.loader]), and appended to the program as a
+ * continuation. The answer is text: the chunk of the script's body on the first line and its imports below it, as
+ * `scriptImports` spells them - or `!`, the line and the message of why the file did not load, a tab between the two.
+ */
+fn loadScriptInstruction(
+  var words: ArrayList<Int>,
+  var kernel: ArrayList<Int>,
+  registers: Registers,
+  base: Int,
+  top: Int,
+  target: Int,
+  path: Int,
+  receiver: Int,
+) {
+  const scratch = top + scratchWords
+  const written = textAt(words, kernel, registers, base + path, scratch)
+  const named = textAt(words, kernel, registers, base + receiver, scratch)
+  const answer = loadedAnswer words, kernel, registers, scratch, written, named
+  Machine.placeText(words, base + target, answer)
+}
+
+/**
+ * The continuation of one script loaded at run time, in place. Its constants go to the top of the registers, which the
+ * frames give up for them the first time ([scriptWords]): the constant pool below the frames cannot grow while they are
+ * in use. The image is laid out again with every old chunk where it was, and the loops that run take it up
+ * ([Registers.generation]).
+ */
+fn loadedAnswer(
+  var words: ArrayList<Int>,
+  var kernel: ArrayList<Int>,
+  registers: Registers,
+  scratch: Int,
+  written: String,
+  named: String,
+): String {
+  const loader = match registers.loader {
+    Some(found) => found
+    None => {
+      return "!0\tThere is no script `{written}` in this program: a script is loaded by a path it was compiled with"
+    }
+  }
+  if named.isEmpty() {
+    return "!0\tA script from a path only known while the program runs has a receiver without type arguments"
+  }
+  if registers.scriptPool == 0 {
+    const start = largestStack - scriptWords
+    if scratch + 16 * scratchWords >= start {
+      return "!0\tThe program is too deep in its calls to load a script"
+    }
+    registers.scriptPool = start
+    registers.limit = start - 8 * scratchWords
+  }
+  const program = registers.program
+  const loaded = match loader.load(written, named, program.copy(constantWords: registers.scriptPool)) {
+    Ok(found) => found
+    Fail(stop) => {
+      return "!{stop.line}\t{stop.message}"
+    }
+  }
+  // A file loaded before with the same text is the script it was then
+  if loaded.program.chunks.length() == program.chunks.length() {
+    return "{loaded.chunk}\n{loaded.imports}"
+  }
+  const width = loaded.program.constantWords - registers.scriptPool
+  if registers.scriptPool + width > largestStack {
+    return "!0\tThe scripts loaded while the program runs hold more constants than the VM has room for"
+  }
+  for index in 0..width {
+    storeRegister(registers, registers.scriptPool + index, 0)
+  }
+  const from = LoadedCounts(
+    program.constants.length(),
+    registers.scriptPool,
+    program.locations.length(),
+    program.elements.length(),
+    program.shapes.length(),
+  )
+  const _ = loadFrom words, kernel, registers, loaded.program, from, scratch
+  registers.scriptPool = registers.scriptPool + width
+  // The frames stay where the program laid them out: its first frame is not the top of the scripts' constants
+  const grown = loaded.program.copy constantWords: program.constantWords
+  registers.program = grown
+  registers.image = imageOf words, grown
+  registers.generation = registers.generation + 1
+  registers.loadedScripts.append loaded.chunk
+  "{loaded.chunk}\n{loaded.imports}"
 }
 
 /** The characters of the code points, which the kernel decoded from UTF-8 and are therefore valid. */
@@ -957,7 +1092,7 @@ fn appendRelocated(var into: ArrayList<Int>, code: ArrayList<Int>, start: Int): 
     const head = code[pc]
     const opcode = opcodeOf(head & 255)
     const tail = tailLengthOf opcode, head
-    if opcode == Opcode.RunScript {
+    if opcode == Opcode.RunScript || opcode == Opcode.RunLoaded {
       runsScripts = true
     }
     into.append head
@@ -1120,22 +1255,26 @@ fn loadProgram(var words: ArrayList<Int>, var kernel: ArrayList<Int>, registers:
   const _ = loadFrom words, kernel, registers, program, LoadedCounts()
 }
 
-/** What [loadProgram] does for the part of the program after `from`: the part a continuation added. */
+/**
+ * What [loadProgram] does for the part of the program after `from`: the part a continuation added. `above` is the
+ * first register it may use for itself; `-1` is the first frame, where nothing runs yet.
+ */
 fn loadFrom(
   var words: ArrayList<Int>,
   var kernel: ArrayList<Int>,
   registers: Registers,
   program: BytecodeProgram,
   from: LoadedCounts,
+  above: Int = 0 - 1,
 ): LoadedCounts {
-  ensureRegisters(registers, firstFrameOf(program) + scratchWords * 4)
+  const scratch = if above < 0 { firstFrameOf program } else { above }
+  ensureRegisters(registers, scratch + scratchWords * 4)
   var offset = from.words
   for index in from.parts..program.constants.length() {
     const part = program.constants[index]
-    placePart words, kernel, registers, part, offset, firstFrameOf(program)
+    placePart words, kernel, registers, part, offset, scratch
     offset = offset + widthOfPart(part)
   }
-  const scratch = firstFrameOf program
   for index in from.locations..program.locations.length() {
     const location = program.locations[index]
     Machine.placeText words, scratch, location.path
@@ -1460,15 +1599,21 @@ fn execute(
   var kernel: ArrayList<Int>,
   var budget: Budget,
   registers: Registers,
-  image: Image,
-  program: BytecodeProgram,
+  entryImage: Image,
+  entryProgram: BytecodeProgram,
   entry: Int,
   entryBase: Int,
   entryPc: Int,
   resultAddress: Int,
 ): Int {
   const tracing = Environment.get("TORB_VM_TRACE").isSome()
-  const code = image.codeAddress
+  // A script loaded from a path only known while the program runs appends chunks (`LoadScript`): the image grows, and
+  // a closure or a witness table of the new part reaches this loop through a value, so the loop takes the new image
+  // wherever a chunk comes out of a value. Every chunk keeps its index and its code offset in the new image.
+  var image = entryImage
+  var program = entryProgram
+  var code = image.codeAddress
+  var generation = registers.generation
   // An empty list: a call of the kernel then reads its operation at the address it is given, in the code
   const instructions: ArrayList<Int> = ArrayList.withCapacity 0
   const first = registers.address
@@ -1581,6 +1726,12 @@ fn execute(
           return haltedPoll
         }
         if queued > 0 {
+          if registers.generation != generation {
+            image = registers.image
+            program = registers.program
+            code = image.codeAddress
+            generation = registers.generation
+          }
           if !runClosers(words, kernel, budget, registers, image, program, top) {
             noteFrames budget, image, first, chunk, pc, base, depth
             return haltedPoll
@@ -1615,6 +1766,12 @@ fn execute(
         pc = header image, chunk, codeWord
       }
       .CallClosure => {
+        if registers.generation != generation {
+          image = registers.image
+          program = registers.program
+          code = image.codeAddress
+          generation = registers.generation
+        }
         const closure = frame + 8 * b
         const callee = Machine.load(closure) - 1
         const calleeBase = top + scratchWords
@@ -1646,6 +1803,12 @@ fn execute(
         pc = header image, chunk, codeWord
       }
       .CallWitness => {
+        if registers.generation != generation {
+          image = registers.image
+          program = registers.program
+          code = image.codeAddress
+          generation = registers.generation
+        }
         const witness = witnessAt(image, header(image, chunk, witnessesWord) + Machine.load(code + 8 * (pc + 1)))
         const member = Machine.load(code + 8 * (pc + 2))
         const (table, payload) = resolveWitness words, kernel, registers, image, witness, places, base, top
@@ -1882,7 +2045,26 @@ fn execute(
       }
       .RunScript => {
         const grant = Machine.load(code + 8 * (pc + 1))
-        runScriptInstruction words, kernel, registers, image, program, base, top, a, b, c, grant
+        const callee = Machine.load(frame + 8 * b) - 1
+        const environment = Machine.load(frame + 8 * (b + 1))
+        runScriptInstruction words, kernel, registers, image, program, base, top, a, callee, environment, c, grant
+        pc = pc + 2
+      }
+      .LoadScript => {
+        loadScriptInstruction words, kernel, registers, base, top, a, b, c
+        image = registers.image
+        program = registers.program
+        code = image.codeAddress
+        generation = registers.generation
+        pc = pc + 1
+      }
+      .RunLoaded => {
+        const grant = Machine.load(code + 8 * (pc + 1))
+        const callee = Machine.load(frame + 8 * b)
+        if !registers.loadedScripts.contains(callee) {
+          panicInternal "`runLoadedScript` of a chunk that is no script the program loaded"
+        }
+        runScriptInstruction words, kernel, registers, image, program, base, top, a, callee, 0, c, grant
         pc = pc + 2
       }
       .Cancelled => {

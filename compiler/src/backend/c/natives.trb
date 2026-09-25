@@ -220,14 +220,25 @@ public type NativeTarget {
   case Machine(function: String)
 }
 
-/** What the table of scripts answers for a path: the body of the script, or the modules its `use` lines name. */
+/**
+ * What the table of scripts answers for a path: the body of the script, or the modules its `use` lines name - or, with
+ * no path at all, the receiver type as the running `torb` finds its declaration again for a script loaded from a path
+ * only known while the program runs (docs/design/SCRIPTS.md slice 7).
+ */
 public type ScriptTableKind {
   case Body
   case Imports
+  case Receiver
 }
 
 /** The name a call of `runScript` of `std/sandbox` carries in the IR, which the bytecode emitter turns into its instruction. */
 public const runScriptFunction = "torb_machine_run_script"
+
+/** The name a call of `loadScript` of `std/sandbox` carries in the IR: the instruction that loads a file at run time. */
+public const loadScriptFunction = "torb_machine_load_script"
+
+/** The name a call of `runLoadedScript` of `std/sandbox` carries in the IR: `runScript` for a script loaded at run time. */
+public const runLoadedScriptFunction = "torb_machine_run_loaded_script"
 
 /**
  * The three things only the storage of an `Array<Item, Size>` can do. Each one is an instruction of the IR, so the VM
@@ -1428,6 +1439,10 @@ fn plannedPackageEntries(var entries: List<NativeEntry>) {
   entries.append NativeEntry(name: "scriptBody", target: NativeTarget.ScriptTable(ScriptTableKind.Body))
   entries.append NativeEntry(name: "scriptImports", target: NativeTarget.ScriptTable(ScriptTableKind.Imports))
   entries.append NativeEntry(name: "runScript", target: NativeTarget.Machine(runScriptFunction))
+  // A path only known while the program runs: the running `torb` checks and lowers the file into the program
+  entries.append NativeEntry(name: "scriptReceiver", target: NativeTarget.ScriptTable(ScriptTableKind.Receiver))
+  entries.append NativeEntry(name: "loadScript", target: NativeTarget.Machine(loadScriptFunction))
+  entries.append NativeEntry(name: "runLoadedScript", target: NativeTarget.Machine(runLoadedScriptFunction))
 }
 
 /**

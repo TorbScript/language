@@ -6,9 +6,11 @@ grant reaches the runtime (`runtime/sandbox.c`), a panic, `Process.exit`, a refu
 script and never the host, and each stop carries the line of the script it happened on (`compiler/src/vm/sandbox.trb`,
 `compiler/tests/sandbox.test.trb`). `torb manifest` evaluates a `project.trb` through it and `torb manifest --check`
 compares the result with the static reader on every manifest of the repository, which is a gate of tier A. A program
-run with `torb run --vm` loads and applies scripts through `std/sandbox` (`examples/config-dsl`,
-`tests/conformance/vm-only/sandbox-load.trb`). The evaluation replacing the static reader where a setting is computed
-(slice 5), a path only known at run time (slice 7) and a native binary that loads scripts (slice 8) are not built.
+run by `torb run` loads and applies scripts through `std/sandbox` (`examples/config-dsl`,
+`tests/conformance/vm-only/sandbox-load.trb`), and **a script from a path only known while the program runs** is
+checked and lowered into the running program by the `torb` that runs it (slice 7,
+`tests/conformance/vm-only/sandbox-runtime-path.trb`). The evaluation replacing the static reader where a setting is
+computed (slice 5), the sandbox's own heap (slice 6) and a native binary that loads scripts (slice 8) are not built.
 
 A receiver script is a `.trb` file that is the **body of a receiver closure** instead of a module: `project.trb` against
 `Project`, a `config.trb` against the `ServerConfig` of the program that loads it (CONCEPT.md, "Receiver Scripts and the
@@ -55,8 +57,19 @@ the one construct defined to run in the VM.
   and the C back end refuses a program that loads one with a finding that says a native binary does not embed the VM
   yet (slice 8), exactly as it refused `Script` before.
 - **The hosts that exist are the ones that already have a VM:** `torb` itself (it evaluates `project.trb`) and a
-  program run with `torb run --vm` (`Sandbox.load`, slice 4). A native binary that loads scripts embeds the front end
-  and the VM (BACKEND 5.4) and is slice 8.
+  program `torb run` runs in the VM (`Sandbox.load`, slices 4 and 7). A native binary that loads scripts embeds the
+  front end and the VM (BACKEND 5.4) and is slice 8.
+- **A path only known while the program runs (slice 7, as built).** `Sandbox.load` looks a path up in the table of the
+  program's scripts first; any other path goes to the `torb` that runs the program, through the instruction
+  `load.script`: the program's files are checked again with the file as one more module whose receiver is the type
+  `scriptReceiver<Value>` names (its module and name, `ScriptReceiver.Declared`), the script is lowered as its
+  `script` function, and its part is encoded as a continuation of the running program (`emitBytecode` with `after`),
+  as a session of `torb repl` grows. The continuation's constants go to the top of the registers, which the frames give
+  up for them, because the constant pool below the frames cannot grow while they are in use; the image is laid out again
+  with every old chunk where it was, and a loop takes the new one wherever a chunk comes out of a value (a closure, a
+  witness table, a destructor). `run.loaded` then runs the body as `run.script` runs a compiled one. A file loaded
+  again with the same text is the script loaded before; every other one costs a check of the program, a few seconds. A
+  receiver with type arguments cannot be named this way and is a `SandboxError`.
 
 ## 2. Checking
 
@@ -261,10 +274,10 @@ public fn evaluated(script: (var self: Project) => Void): String {
 | 1 | This record | **Done** |
 | 2 | The sandbox of the VM: `runtime/sandbox.c` (roots, links, patterns, the allocation budget, the stop), the kernel's recovery point around every operation while a sandbox is open, `TextOut`, the interpreter's step and time counters and the propagation of a stop, the line of a stop; a script module lowered as its `script` function; `compiler/src/vm/sandbox.trb`, the host's API; the checker's import rule for scripts | **Done**: `compiler/tests/sandbox.test.trb` pins every refusal with its exact text |
 | 3 | `project.trb` through the VM: `Project.settings()` and `evaluated` in `std/project`, `torb manifest [--check]`, the gate | **Done**: `torb manifest --check` agrees with the static reader on every manifest of the repository |
-| 4 | `Sandbox.load` in a program the VM runs: `SandboxCapabilities` and `Script` as TorbScript over the generated table of the program's scripts (`scriptBody`, `scriptImports`) and the one operation only the VM has (`runScript`, the instruction `run.script`); relative roots and the base read against the working directory | **Done**: `examples/config-dsl` under `torb run --vm`, `tests/conformance/vm-only/sandbox-load.trb` in `vm.list` |
+| 4 | `Sandbox.load` in a program the VM runs: `SandboxCapabilities` and `Script` as TorbScript over the generated table of the program's scripts (`scriptBody`, `scriptImports`) and the one operation only the VM has (`runScript`, the instruction `run.script`); relative roots and the base read against the working directory | **Done**: `examples/config-dsl` under `torb run`, `tests/conformance/vm-only/sandbox-load.trb` |
 | 5 | The toolchain reads the evaluated manifest where a setting it uses is computed, and refuses a computed static setting (PROJECT.md section 12, slice 7); `build/manifest-inputs.trb` | Open, after 4 |
 | 6 | The sandbox's own heap: an exact memory limit, a teardown that frees what a stopped script held | Open |
-| 7 | A path known only at run time: the front end inside the running `torb` checks and lowers the file into the program | Open |
+| 7 | A path known only at run time: the front end inside the running `torb` checks and lowers the file into the program | **Done**: section 1; `scriptReceiver`, `loadScript`, `runLoadedScript` of `std/sandbox`, the instructions `load.script` and `run.loaded`, `vm/run.trb`'s loader; `tests/conformance/vm-only/sandbox-runtime-path.trb` |
 | 8 | A native binary that loads scripts: the front end and the VM embedded, the value encoded across (section 5) | Open |
 
 ## 10. Open
