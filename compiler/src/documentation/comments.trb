@@ -113,7 +113,7 @@ public fn documentationBlocks(source: SourceText, lines: LineIndex, docs: List<D
   var blocks: List<DocumentationBlock> = []
   for doc in docs {
     const raw = source.text[doc.span.start..doc.span.end]
-    const inner = raw[3..(raw.byteLength() - 2)]
+    const inner = raw.dropping(characters: 3).droppingLast(characters: 2)
     const start = lineAt lines, doc.span.start
     var content: List<CommentLine> = []
     var offset = 0
@@ -132,10 +132,7 @@ fn stripMargin(line: String): String {
   if !trimmed.startsWith("*") {
     return line.trim()
   }
-  if trimmed.startsWith("* ") {
-    return trimmed[2..]
-  }
-  trimmed[1..]
+  trimmed.withoutPrefix("* ") ?? trimmed.dropping(characters: 1)
 }
 
 /** Is there nothing but whitespace in front of this offset? Then a doc comment there is the module comment. */
@@ -191,7 +188,7 @@ public fn sectionsOf(block: DocumentationBlock): Sections {
       sections.append DocumentationSection(heading, level, line, body)
     }
     level = headingLevel content.text
-    heading = content.text[level..].trim()
+    heading = content.text.dropping(characters: level).trim()
     line = content.line
     body = []
   }
@@ -229,7 +226,7 @@ public fn firstSentence(sections: Sections): String {
   }
   match sentenceEnd(words) {
     Some(stop) => words[0..stop]
-    None => if words.endsWith(".") { words[0..(words.byteLength() - 1)] } else { words }
+    None => words.withoutSuffix(".") ?? words
   }
 }
 
@@ -296,8 +293,8 @@ public fn examplesOf(section: DocumentationSection): Examples {
   var fences: List<Int> = []
   var block: List<CommentLine> = []
   for content in section.lines {
-    if content.text.startsWith("    ") {
-      block.append CommentLine(content.line, content.text[4..])
+    if const Some(code) = content.text.withoutPrefix("    ") {
+      block.append CommentLine(content.line, code)
       continue
     }
     if content.text.isBlank() {
@@ -330,8 +327,8 @@ fn addExample(block: List<CommentLine>, var examples: List<Example>) {
     examples.append Example(kept[0].line, ExampleKind.Fragment, text, "")
     return
   }
-  if marker.startsWith("// skip") {
-    const reason = marker[7..].trim()
+  if const Some(skipped) = marker.withoutPrefix("// skip") {
+    const reason = skipped.trim()
     examples.append Example(kept[0].line, ExampleKind.Skipped, text, reason)
     return
   }
@@ -560,8 +557,8 @@ fn matchesWord(word: String, expected: String, withPlural: Bool): Bool {
   if !withPlural {
     return false
   }
-  if expected.endsWith("y") {
-    return word == "{expected[0..(expected.byteLength() - 1)]}ies"
+  if const Some(stem) = expected.withoutSuffix("y") {
+    return word == "{stem}ies"
   }
   word == "{expected}s" || word == "{expected}es"
 }

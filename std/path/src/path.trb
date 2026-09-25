@@ -95,7 +95,7 @@ public type Path with Show, Equals, Hash, Compare {
   fn nameWithoutExtension(): String? {
     const found = name()?
     match extension() {
-      Some(suffix) => Some found[0..(found.byteLength() - suffix.byteLength() - 1)]
+      Some(suffix) => Some(found.withoutSuffix(".{suffix}") ?? found)
       None => Some found
     }
   }
@@ -283,9 +283,9 @@ extend Path with From<String> {
     if const Some((root, rest)) = shareRootOf(slashed) {
       return Path Some(root), rest
     }
-    if slashed.byteLength() >= 2 && slashed[1..2] == ":" {
+    if slashed.dropping(characters: 1).startsWith(":") {
       const letter = slashed.chars().first() ?? 'C'
-      return Path Some(Root.Drive(letter.toUpperCase())), componentsOf(slashed[2..])
+      return Path Some(Root.Drive(letter.toUpperCase())), componentsOf(slashed.dropping(characters: 2))
     }
     if slashed.startsWith("/") {
       return Path Some(Root.Unix), componentsOf(slashed)

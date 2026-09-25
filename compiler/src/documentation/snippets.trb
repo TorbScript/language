@@ -199,8 +199,8 @@ fn expectedMessages(text: String): List<String> {
   var found: List<String> = []
   for line in linesOf(text) {
     const trimmed = line.trim()
-    if trimmed.startsWith("// error:") {
-      found.append trimmed.slice(9..trimmed.byteLength()).trim()
+    if const Some(expected) = trimmed.withoutPrefix("// error:") {
+      found.append expected.trim()
     }
   }
   found
@@ -214,19 +214,18 @@ fn expectedMessages(text: String): List<String> {
 public fn expectedOutputOf(text: String): List<String> {
   var found: List<String> = []
   for line in linesOf(text) {
-    const at = match line.indexOf("// prints") {
-      Some(position) => position
+    const rest = match line.substringAfter("// prints") {
+      Some(found) => found
       None => {
         continue
       }
     }
-    const rest = line.slice((at + 9)..line.byteLength())
     if rest.trim().isEmpty() {
       found.append ""
       continue
     }
     if rest.startsWith(" ") {
-      found.append withoutTrailingSpaces(rest.slice(1..rest.byteLength()))
+      found.append withoutTrailingSpaces(rest.dropping(characters: 1))
     }
   }
   found
@@ -234,10 +233,9 @@ public fn expectedOutputOf(text: String): List<String> {
 
 /** The text without the spaces and carriage returns at its end, which no reader of an output line can see. */
 public fn withoutTrailingSpaces(text: String): String {
-  // Both are one byte, so cutting one byte off never lands inside a character
   var kept = text
   while kept.endsWith(" ") || kept.endsWith("\r") {
-    kept = kept.slice(0..(kept.byteLength() - 1))
+    kept = kept.droppingLast characters: 1
   }
   kept
 }

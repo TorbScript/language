@@ -218,15 +218,11 @@ fn qualifiedNameOf(var lowering: Lowering, symbol: SymbolId): String {
   const module = program.graph.modules[site.module.value]
   const package = program.workspace.packages[module.package]
   var relative = module.path
-  if !package.directory.isEmpty() && relative.startsWith("{package.directory}/") {
-    relative = relative[(package.directory.byteLength() + 1)..]
+  if !package.directory.isEmpty() {
+    relative = relative.withoutPrefix("{package.directory}/") ?? relative
   }
-  if relative.startsWith("src/") {
-    relative = relative[4..]
-  }
-  if relative.endsWith(".trb") {
-    relative = relative[..(relative.byteLength() - 4)]
-  }
+  relative = relative.withoutPrefix("src/") ?? relative
+  relative = relative.withoutSuffix(".trb") ?? relative
   var parts: List<String> = []
   if !package.name.isEmpty() {
     parts.append package.name

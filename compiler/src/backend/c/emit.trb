@@ -444,10 +444,10 @@ fn thunkKeyOf(program: IrProgram, table: WitnessTable, index: Int): String {
 fn thunkBaseNameOf(program: IrProgram, table: WitnessTable, index: Int): String {
   const member = table.members[index]
   if !program.hasFunction(member) {
-    return "W{table.name[1..table.name.byteLength()]}_{index}"
+    return "W{table.name.dropping(characters: 1)}_{index}"
   }
   const name = program.functionAt(member).name
-  "W{name[1..name.byteLength()]}"
+  "W{name.dropping(characters: 1)}"
 }
 
 /** The thunk of one member of one table. `W` is no prefix of the mangling, so nothing can collide with it. */
@@ -881,7 +881,7 @@ fn elementOrder(program: IrProgram): List<ElementId> {
 
 /** `dR_Int64`, `dD_Int64`, `dE_Int64`, `dH_Int64`: the four helpers of one descriptor, whose name is `d_Int64`. */
 fn elementHelperName(prefix: String, descriptor: ElementDescriptor): String {
-  "d{prefix}_{descriptor.name[2..descriptor.name.byteLength()]}"
+  "d{prefix}_{descriptor.name.dropping(characters: 2)}"
 }
 
 fn elementHelperHead(prefix: String, result: String, descriptor: ElementDescriptor, parameters: String): String {
@@ -1318,7 +1318,7 @@ fn emitPrivateHelpers(var emission: Emission, program: IrProgram, functions: Lis
   while index < names.length() {
     const name = names[index]
     index = index + 1
-    const found = match program.layoutNamed(name[2..]) {
+    const found = match program.layoutNamed(name.dropping(characters: 2)) {
       Some(layout) => layout
       None => {
         continue

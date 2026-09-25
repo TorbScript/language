@@ -335,13 +335,10 @@ fn keptTarget(target: String, folder: String, carried: List<String>, prefix: Str
   if isExternal || target.isEmpty() || target.startsWith("#") {
     return Some target
   }
-  const hash = target.indexOf "#"
-  const path = match hash {
-    Some(at) => target.slice(0..at)
-    None => target
-  }
-  const anchor = match hash {
-    Some(at) => target.slice(at..target.byteLength())
+  const parts = target.splitOnce "#"
+  const path = parts?.before ?? target
+  const anchor = match parts {
+    Some(found) => "#{found.after}"
     None => ""
   }
   const resolved = normalizePath joinDocumentationPath(folder, path)
@@ -430,11 +427,7 @@ fn danglingLinks(files: List<SkillFile>): List<DocumentationProblem> {
         continue
       }
       for target in linkTargetsOf(line) {
-        const hash = target.indexOf "#"
-        const path = match hash {
-          Some(at) => target.slice(0..at)
-          None => target
-        }
+        const path = target.substringBefore("#") ?? target
         const isExternal = path.startsWith("http://") || path.startsWith("https://") || path.startsWith("mailto:")
         if path.isEmpty() || isExternal {
           continue

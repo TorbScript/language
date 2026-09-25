@@ -1714,12 +1714,8 @@ public fn importPathOf(checker: Checker, module: ModuleId): String {
   const package = checker.program.workspace.packages[found.package]
   const prefix = joinPath package.directory, "src"
   var relative = found.path
-  if relative.startsWith("{prefix}/") {
-    relative = relative.slice(prefix.byteLength() + 1..relative.byteLength())
-  }
-  if relative.endsWith(".trb") {
-    relative = relative.slice(0..relative.byteLength() - 4)
-  }
+  relative = relative.withoutPrefix("{prefix}/") ?? relative
+  relative = relative.withoutSuffix(".trb") ?? relative
   if relative == "lib" || relative.isEmpty() {
     return package.name
   }
@@ -2395,8 +2391,8 @@ fn manifestRows(): Map<String, Bool> {
   for entry in nativeEntries() {
     const name = entry.name
     rows.set name, true
-    if const Some(open) = name.indexOf("(") {
-      rows.set name.slice(0..open), true
+    if const Some(bare) = name.substringBefore("(") {
+      rows.set bare, true
     }
   }
   rows

@@ -156,11 +156,7 @@ public type ReadPage {
 public fn linesOf(text: String): List<String> {
   var lines: List<String> = []
   for line in text.split("\n") {
-    if line.endsWith("\r") {
-      lines.append line.slice(0..(line.byteLength() - 1))
-    } else {
-      lines.append line
-    }
+    lines.append(line.withoutSuffix("\r") ?? line)
   }
   lines
 }
@@ -375,7 +371,7 @@ fn startsWithIndicator(text: String): Bool {
 }
 
 fn isNumber(text: String): Bool {
-  const digits = if text.startsWith("-") { text.slice(1..text.byteLength()) } else { text }
+  const digits = text.withoutPrefix("-") ?? text
   if digits.isEmpty() {
     return false
   }
@@ -384,7 +380,7 @@ fn isNumber(text: String): Bool {
 
 fn numberOf(text: String): Int {
   const isNegative = text.startsWith "-"
-  const digits = if isNegative { text.slice(1..text.byteLength()) } else { text }
+  const digits = text.withoutPrefix("-") ?? text
   var value = 0
   for character in digits.chars() {
     value = value * 10 + (Int.from(character) - Int.from('0'))
@@ -465,9 +461,9 @@ fn headingOf(level: Int, source: String, line: Int): Heading {
   var anchor = ""
   var isExplicit = false
   if text.endsWith("}") {
-    if const Some(found) = text.indexOf("\{#") {
-      anchor = text.slice((found + 2)..(text.byteLength() - 1))
-      text = text.slice(0..found).trim()
+    if const Some(parts) = text.splitOnce("\{#") {
+      anchor = parts.after.droppingLast characters: 1
+      text = parts.before.trim()
       isExplicit = true
     }
   }
@@ -576,8 +572,8 @@ type BodyScanner {
 }
 
 fn linkOf(text: String, destination: String, line: Int): Link {
-  match destination.indexOf("#") {
-    Some(at) => Link text, destination.slice(0..at), destination.slice((at + 1)..destination.byteLength()), line
+  match destination.splitOnce("#") {
+    Some(parts) => Link text, parts.before, parts.after, line
     None => Link text, destination, "", line
   }
 }
@@ -640,7 +636,7 @@ public fn anchorOf(text: String): String {
   }
   var slug = String.from characters
   while slug.endsWith("-") {
-    slug = slug.slice(0..(slug.byteLength() - 1))
+    slug = slug.droppingLast characters: 1
   }
   slug
 }

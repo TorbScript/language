@@ -107,7 +107,7 @@ fn isAsciiName(text: String): Bool {
 
 /** The text of a doc comment: without the comment markers and the star in front of every line. */
 fn docText(comment: String): String {
-  const inner = comment[3..(comment.byteLength() - 2)]
+  const inner = comment.dropping(characters: 3).droppingLast(characters: 2)
   const lines = inner.split("\n").map(stripMargin).toList()
   lines.joined(separator: "\n").trim()
 }
@@ -115,7 +115,7 @@ fn docText(comment: String): String {
 fn stripMargin(line: String): String {
   var text = line
   while text.endsWith("\r") {
-    text = text[..(text.byteLength() - 1)]
+    text = text.droppingLast characters: 1
   }
   var offset = 0
   for character in text.chars() {
@@ -128,10 +128,7 @@ fn stripMargin(line: String): String {
   if !rest.startsWith("*") {
     return text
   }
-  if rest.startsWith("* ") {
-    return rest[2..]
-  }
-  rest[1..]
+  rest.withoutPrefix("* ") ?? rest.dropping(characters: 1)
 }
 
 type Lexer {
