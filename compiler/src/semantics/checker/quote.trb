@@ -202,6 +202,10 @@ fn quoteExpression(var checker: Checker, var state: QuotationWalk, expression: E
     .ImplicitMember(_) => {}
     .Generic(target, _) => quoteExpression checker, state, target
     .TextLiteral(segments) => {
+      // A literal the literal rule read is one value: a template's `{?q}` is its own brace and no expression
+      if checker.checkedLiteralAt(checker.module, at).isSome() {
+        return
+      }
       for segment in segments {
         if const .Interpolated(inner) = segment {
           quoteExpression checker, state, inner
