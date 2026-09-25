@@ -23,12 +23,14 @@ they are listed after the milestones.
 
 **Goal: the same program runs interpreted and compiled, with the same output, and `torb run` needs no C compiler.**
 The bytecode VM interprets the same IR the C back end compiles, and the conformance suite holds both to one behaviour.
-Tasks, channels and the worker pool are done for the C back end; the VM runs 120 of the 142 conformance programs, and
-the rest waits for the callback from the runtime into the interpreter (keys compared by a program's own `equals`,
-`test` and `group`), the VM's leak gate and the VM half of tasks. The milestone ends when every conformance program
-runs in both back ends, `torb run` and `torb test` default to the VM, and `torb build` stays native. Around it: the IO
-poller of the worker pool, the natives of the streams of `File`, of the three standard streams and of `Process.start`,
-a sandbox whose paths are only known at run time, a native binary that embeds the VM, and the rest of the REPL.
+**The core of the milestone is done:** every conformance program runs in both back ends with the same output, exit
+code, panics and leak count, `torb run` and `torb test` run in the VM by default and `torb build` stays native. Tasks,
+channels and the worker pool run in both; the streams of `File`, of the three standard streams and of `Process.start`
+are built on the blocking pool beside the IO poller of sockets; and a program the VM runs loads receiver scripts from
+paths only known while it runs. **What is left around it:** a native binary that embeds the VM (SCRIPTS.md slice 8),
+the rest of the REPL (REPL.md), the toolchain reading an evaluated manifest (SCRIPTS.md slice 5), the pool's manifest
+setting and the copy of a closure's environment and of a variant at a crossing (CONCURRENCY.md), and the poller for
+the pipes of a POSIX child.
 
 - [design/VM.md](design/VM.md) section 9 - slices 4 to 8
 - [BACKEND.md](BACKEND.md) section 5 - rows 7.1 to 7.7

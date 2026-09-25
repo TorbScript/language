@@ -11,7 +11,9 @@ leak gate holds the VM to "live blocks at exit: 0" as it holds a native binary, 
 the native binary's report, and `fibonacci(30)` interprets in about 0.2 s (section 8). **`torb run` and `torb test`
 run in the VM by default** and `--native` builds a binary instead; `torb build` is always native. The compiler's own
 test suite runs natively in the gates (`torb test --native compiler/tests`): it checks and lowers whole programs
-thousands of times, which the VM interprets many times slower than the binary does, and everything else runs in both.
+thousands of times, which the VM interprets many times slower than the binary does, and everything else runs in both. A program the VM runs
+loads a receiver script from a path only known while it runs, which the running `torb` checks and lowers into it as a
+continuation (`docs/design/SCRIPTS.md` slice 7).
 
 TorbScript has two back ends that read one IR. The C back end turns it into a native binary; the VM turns it into
 bytecode and runs that inside `torb`, for `torb run` and `torb test`, the sandbox (7.4), `project.trb` as a script
