@@ -909,9 +909,15 @@ bool torb_platform_set_environment_variable(const char *name, const char *value)
 }
 
 /**
- * Linux names the executable in `/proc/self/exe`. Where that link is missing (macOS, the BSDs without procfs), the
- * answer is false rather than a guess from `argv[0]`, which names whatever the caller typed.
+ * Linux names the executable in `/proc/self/exe`, and macOS answers `_NSGetExecutablePath` (`os/macos.c`). Where
+ * neither is there (the BSDs without procfs), the answer is false rather than a guess from `argv[0]`, which names
+ * whatever the caller typed.
  */
+#  if defined(__APPLE__)
+bool torb_platform_executable_path(char **value, size_t *length) {
+  return torb_os_macos_executable_path(value, length);
+}
+#  else
 bool torb_platform_executable_path(char **value, size_t *length) {
   size_t capacity = 256u;
   for (;;) {
@@ -936,6 +942,7 @@ bool torb_platform_executable_path(char **value, size_t *length) {
     capacity *= 2u;
   }
 }
+#  endif
 
 #  if defined(TORB_MEMORY_RESOURCE)
 

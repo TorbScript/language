@@ -1416,6 +1416,8 @@ bool torb_platform_set_environment_variable(const char *name, const char *value)
  * `torb_raw_free(*value, *length + 1)`. False where the operating system does not say (and then nothing is allocated).
  */
 bool torb_platform_executable_path(char **value, size_t *length);
+/** The same on macOS (`os/macos.c`): `_NSGetExecutablePath` with every link resolved. Defined on macOS only. */
+bool torb_os_macos_executable_path(char **value, size_t *length);
 /**
  * Has the operating system hold this process to `bytes` of memory it commits, for the rest of its life; a child it
  * starts afterwards is not held to it (a TorbScript child sets its own). True where the system took the limit. False
