@@ -579,7 +579,15 @@ fn constantPartsOf(var emitter: Emitter, program: IrProgram, id: StaticId, var i
   match value.contents {
     .Literal(literal) => {
       match literal {
-        .Integer(number) => into.append ConstantPart.Word(number)
+        // An integer literal where a float is expected (`Square(2)` of a `Float` field) is the float: a register of
+        // a float holds the bits of its `double`, as C converts the literal
+        .Integer(number) => {
+          if const .Floating(_) = program.typeAt(value.annotation) {
+            into.append ConstantPart.Floating(Float64.from(number))
+          } else {
+            into.append ConstantPart.Word(number)
+          }
+        }
         .Text(text) => into.append ConstantPart.Text(text)
         .Character(character) => into.append ConstantPart.Word(Int.from(character))
         .Boolean(flag) => into.append ConstantPart.Word(if flag { 1 } else { 0 })
