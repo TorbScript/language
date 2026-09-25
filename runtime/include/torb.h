@@ -1028,6 +1028,21 @@ void torb_print_error_parts(const torb_text *parts, size_t count);
 /** `readLine(): String?`: false at end of input. The trailing `\n` (and a `\r` before it) is removed. */
 bool torb_read_line(torb_text *out);
 
+/** `isTerminal()`: whether standard output is a live console rather than a pipe or a file. */
+bool torb_is_terminal(void);
+
+/** `printErrorRaw(text: String)`: `text` to standard error exactly as given - no join, no trailing `\n`. `text` borrowed. */
+void torb_print_error_raw(torb_text text);
+
+/**
+ * `installInterruptHandler()`: from this call on, Ctrl+C sets the flag `torb_take_interrupt` answers and clears,
+ * instead of ending the process. Idempotent.
+ */
+void torb_install_interrupt_handler(void);
+
+/** `interrupted()`: whether Ctrl+C arrived since the last call to this or to `torb_install_interrupt_handler`. */
+bool torb_take_interrupt(void);
+
 /**
  * One line of raw UTF-8 bytes plus a `\n`, through the same dispatch `print` goes through: a live Windows console
  * sees the text, and a pipe or a file sees exactly these bytes. `bytes` may hold `\n` of its own.

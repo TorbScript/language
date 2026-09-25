@@ -10,3 +10,21 @@ public native fn print(...values: Show)
 
 /** The same for standard error: diagnostics, progress, everything that is not the result of the program. */
 public native fn printError(...values: Show)
+
+/** Whether standard output is a live terminal - a console, not a pipe or a file. */
+public native fn isTerminal(): Bool
+
+/**
+ * `text` to standard error exactly as given: no join with a later call, no line break. A prompt writes with this,
+ * because a prompt is not a line of its own - what is typed after it finishes the line.
+ */
+public native fn printErrorRaw(text: String)
+
+/**
+ * From this call on, Ctrl+C sets the flag [interrupted] answers and clears, instead of ending the process.
+ * Idempotent. `torb repl` is the one caller today (docs/design/REPL.md section 2).
+ */
+public native fn installInterruptHandler(): Void
+
+/** Whether Ctrl+C arrived since the last call to this or to [installInterruptHandler], which this also clears. */
+public native fn interrupted(): Bool

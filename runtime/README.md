@@ -44,7 +44,7 @@ deliberately panics says `TORB_IGNORE_LEAKS()`, because a panic runs nothing on 
 | `list.c`              | The one contiguous list: growth, shared slices, copy on write, a stable merge sort         |
 | `map.c`               | The one insertion-ordered hash table, and the set on top of it                             |
 | `number.c`            | The float routines, the total order of gap 5, the wrapping pair, the checked narrowings, `**`, and the `Real` members of a `Float64` (thin `<math.h>` wrappers) |
-| `console.c`           | `print`, `printError`, `readLine`                                                          |
+| `console.c`           | `print`, `printError`, `readLine`, `isTerminal`, `printErrorRaw` (a prompt, no line break), the Ctrl+C flag `torb repl` installs and polls |
 | `process.c`           | `Process.arguments`, `Process.exit`, `Process.executablePath`, running a child process      |
 | `file.c`              | `readText`, `writeText`, `exists`, `isDirectory`, `list` (sorted), `absolutePath`, and the open handle (`File.open`/`readAll`/`close`) |
 | `clock.c`             | `std/time`: `Clock.now` and the arithmetic of `Instant` and `Duration`                     |

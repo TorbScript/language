@@ -29,6 +29,9 @@
 #if defined(_WIN32)
 #  define WIN32_LEAN_AND_MEAN
 #  include <windows.h>
+#else
+#  include <signal.h>
+#  include <unistd.h>
 #endif
 
 /*
@@ -446,6 +449,11 @@ bool torb_read_line(torb_text *out) {
       length -= 1u;
     }
     if (!any) {
+      /* `byte == EOF` here is either the real end of the input or `fgetc` interrupted by the Ctrl+C handler below
+         (`EINTR`, once `torb_install_interrupt_handler` is installed): either way `stdin`'s error indicator is
+         cleared, so a genuine interruption does not leave every read after it failing too. `torb_take_interrupt`
+         is how the caller tells the two apart. */
+      clearerr(stdin);
       torb_raw_free(buffer, capacity);
       return false;
     }
@@ -456,4 +464,128 @@ bool torb_read_line(torb_text *out) {
     torb_raw_free(buffer, capacity);
     return true;
   }
+}
+
+/* =================================================================================== the terminal and Ctrl+C === */
+
+/**
+ * `isTerminal()`: whether standard output is a live console rather than a pipe or a file - the same question
+ * `torb_std_is_console` answers for `print` on Windows, and `isatty` everywhere else. Decided fresh every call: the
+ * answer cannot change while the process runs, but nothing above this file calls it often enough for that to matter,
+ * and `torb_std_is_console` already caches its own half of the answer.
+ */
+#if defined(_WIN32)
+bool torb_is_terminal(void) {
+  HANDLE handle;
+  return torb_std_is_console(STD_OUTPUT_HANDLE, &handle);
+}
+#else
+bool torb_is_terminal(void) {
+  return isatty(fileno(stdout)) != 0;
+}
+#endif
+
+/**
+ * `printErrorRaw(text: String)`: `text` to standard error exactly as given - no join, no trailing `\n`. The prompt of
+ * `torb repl` (docs/design/REPL.md section 2) writes with this, because a prompt is not a line of its own: the line
+ * it starts is finished by what the terminal echoes after it, not by this call. Goes through the same dispatch
+ * `print` does - a live Windows console gets `WriteConsoleW`, everything else gets the raw bytes - and flushes
+ * standard error itself, because a prompt has to be on the screen before the blocking read that follows it runs.
+ */
+void torb_print_error_raw(torb_text text) {
+  torb_console_lock();
+#if defined(_WIN32)
+  if (text.length > 0u) {
+    HANDLE handle;
+    if (torb_std_is_console(STD_ERROR_HANDLE, &handle)) {
+      char *bytes = (char *)torb_raw_allocate((size_t)text.length + 1u);
+      size_t wide_capacity = 0u;
+      wchar_t *wide;
+      memcpy(bytes, text.storage->data + text.offset, (size_t)text.length);
+      bytes[text.length] = '\0';
+      wide = torb_platform_wide(bytes, &wide_capacity);
+      torb_raw_free(bytes, (size_t)text.length + 1u);
+      if (wide != NULL) {
+        size_t wide_length = wcslen(wide);
+        size_t written = 0u;
+        while (written < wide_length) {
+          size_t chunk = torb_console_chunk_length(wide + written, wide_length - written, TORB_CONSOLE_CHUNK_LIMIT);
+          WriteConsoleW(handle, wide + written, (DWORD)chunk, NULL, NULL);
+          written += chunk;
+        }
+        torb_raw_free(wide, wide_capacity);
+        fflush(stderr);
+        torb_console_unlock();
+        return;
+      }
+    }
+  }
+#endif
+  if (text.length > 0u && text.storage != NULL) {
+    fwrite(text.storage->data + text.offset, 1u, (size_t)text.length, stderr);
+  }
+  fflush(stderr);
+  torb_console_unlock();
+}
+
+/**
+ * Set by the handler below and read and cleared by `torb_take_interrupt`: a plain flag, not a counter, because a
+ * second Ctrl+C before the first is taken answers the same question the first one did. The same atomic load/store
+ * every other cross-thread flag of the runtime uses (`torb_pool.h`), since the handler runs on its own thread on
+ * Windows and inside the signal itself on POSIX.
+ */
+static uint32_t torb_interrupt_flag = 0u;
+static uint32_t torb_interrupt_installed = 0u;
+
+#if defined(_WIN32)
+
+static BOOL WINAPI torb_interrupt_console_handler(DWORD type) {
+  if (type == CTRL_C_EVENT || type == CTRL_BREAK_EVENT) {
+    torb_atomic_store_u32(&torb_interrupt_flag, 1u);
+    return TRUE;
+  }
+  return FALSE;
+}
+
+/** `installInterruptHandler()`. Idempotent: `torb repl` is the only caller, and it may run this more than once
+ *  (`:reset`) without installing a second handler. */
+void torb_install_interrupt_handler(void) {
+  if (torb_atomic_peek_u32(&torb_interrupt_installed) != 0u) {
+    return;
+  }
+  torb_atomic_store_u32(&torb_interrupt_installed, 1u);
+  SetConsoleCtrlHandler(torb_interrupt_console_handler, TRUE);
+}
+
+#else
+
+static void torb_interrupt_signal_handler(int signal_number) {
+  (void)signal_number;
+  torb_atomic_store_u32(&torb_interrupt_flag, 1u);
+}
+
+void torb_install_interrupt_handler(void) {
+  struct sigaction action;
+  if (torb_atomic_peek_u32(&torb_interrupt_installed) != 0u) {
+    return;
+  }
+  torb_atomic_store_u32(&torb_interrupt_installed, 1u);
+  memset(&action, 0, sizeof(action));
+  action.sa_handler = torb_interrupt_signal_handler;
+  /* No `SA_RESTART`: a blocking read of standard input has to return early (`EINTR`) so `torb_read_line` sees it
+     instead of only the next real line. */
+  sigaction(SIGINT, &action, NULL);
+}
+
+#endif
+
+/** `interrupted()`: whether Ctrl+C arrived since the last call, which this also clears - the VM's budget
+ *  (`compiler/src/vm/interpret.trb`) asks on every refill, and `torb repl`'s reader asks after every blocked
+ *  read that answered nothing. */
+bool torb_take_interrupt(void) {
+  if (torb_atomic_peek_u32(&torb_interrupt_flag) == 0u) {
+    return false;
+  }
+  torb_atomic_store_u32(&torb_interrupt_flag, 0u);
+  return true;
 }
