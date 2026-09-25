@@ -1,9 +1,10 @@
 # Panics
 
-**Status: decided (2026-09-24), not implemented; the last section lists the decisions.** — this record takes stock of every way a TorbScript program that
-looks correct can end in a panic today, compares the choice with nine other languages, and proposes one principle and
-the changes that follow from it. No compiler, runtime or standard library file was changed for it. Every count and every
-message in section 2 was measured on commit `1ae963fa`, and section 2.1 says how.
+**Status: decided (2026-09-24), implemented except where the last section says otherwise.** — this record takes stock of every way a
+TorbScript program that looks correct can end in a panic, compares the choice with nine other languages, and proposes
+one principle and the changes that follow from it. Every count and every message in sections 1 to 7 was measured on
+commit `1ae963fa`, before any of it was built, and section 2.1 says how; the sections "Decided" and "Implemented" at the
+end say what became of it.
 
 **Most panics of the language are the right ones, and one is not.** An index past the end of a list, a division by zero
 and an integer overflow fail on a condition the program can state and check - `index < list.length()`,
@@ -504,3 +505,37 @@ of a panic, what becomes a compile error. These are the owner's, as questions of
 - `map[key]` keeps panicking, and its message names the key.
 - The names are adopted as proposed: `TextIndex`, `dropping(characters:)`, `prefix(characters:)`, `withoutPrefix`,
   `withoutSuffix`, `addedChecked`, `part(range)`.
+
+## Implemented
+
+Built in the order the decisions above gave, each its own commit:
+
+- **The principle** is in CONCEPT.md's error handling, and the example of section 1 is corrected (`Some(4)`, 12 bytes).
+- **The total text vocabulary** (recommendation 7): `withoutPrefix`, `withoutSuffix`, `splitOnce`,
+  `dropping(characters:)`, `droppingLast(characters:)`, `prefix(characters:)`, `suffix(characters:)`, and the affix and
+  search sites of section 4.2 in the compiler and `std/` moved to them.
+- **Messages** (recommendation 3): `list[i]` and `array[i]` say `index 9 is out of bounds for a length of 3` - the
+  `at` of `ArrayList`, `TrieList` and `Array`, and the `Element` path step, which carries no message of its own any
+  more - and `map[key]` says `the key "Alan" is not in the map` (the key through `showNested`, cut after 60 characters,
+  `the key` alone where its type has no `Show`: `describedKey` of `std/collections`, which the lowering writes as
+  `describedShownKey(key.showNested())` where the type has one).
+- **The twins** (recommendation 8): `Integer` of `std/number` with `addedChecked`, `subtractedChecked`,
+  `multipliedChecked`, `dividedChecked` and `remainderChecked`, and `part(range)` on lists and texts.
+- **`readLine()`** (recommendation 2) answers `Result<String?, IoError>`, over the native `readLineOrEnd` (two commits).
+- **The caller's line** (recommendation 4): `compiler/src/ir/sites.trb`. A function of a library module of `std/` that
+  can reach a panic gets a copy with a hidden argument for its caller's site - a `const torb_location *` in C, a stack
+  of sites in the kernel of the VM - and every direct call and every witness-table thunk calls the copy. A call through
+  a closure still names the line of `std/`; the frames of the `dev` profile are not built.
+- **Compile errors** (recommendation 5): a divisor known to be zero, arithmetic on known operands that leaves its type,
+  a range outside a list literal, a key that none of a map literal's keys is.
+- **`TextIndex`** (recommendation 9, two commits): `Slice<Index = Int>`, and `String` is a `Slice<TextIndex>`.
+  `indexOf`, `lastIndexOf`, `charAt`, `start()`, `end()`, `indexAfter`, `indexBefore`, `indexAt(byteOffset:)`,
+  `byteOffset(of:)` and `indexedChars()` are as section 4.4 names them (`index(after:)` became `indexAfter`, a label
+  cannot tell two members of one name apart); `text[3..]` is a compile error with a message of its own. The byte-level
+  forms keep their `Int`s under names that say so - `sliceBytes`, `byteOffsetOf`, `lastByteOffsetOf`, `charAtByte` -
+  and that is what the compiler's spans and the formats of `std/` (URI, YAML, Markdown, HTTP) were moved to: their
+  offsets come from a lexer, which is recommendation 9's "converted where the source is sliced". `Span` keeps `Int`.
+
+Not built: recommendation 6 (the range analysis dropping a list's bounds check), 10 (the documentation gate for
+`# Panics`) and 11 (`torb check --partial`); the messages of `charAt` inside a character, `repeat` and `absolute()`
+of recommendation 3.
