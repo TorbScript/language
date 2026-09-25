@@ -1,0 +1,163 @@
+/**
+ * [Urn]: a `urn:` URI read into the parts RFC 8141 gives it - a namespace identifier, a namespace-specific string, and
+ * the r-, q- and f-components (docs/design/URI.md section 7).
+ */
+
+use UriError from "./error"
+use Uri from "./uri"
+use byteOf, isDigit, isLetter from "./characters"
+
+/**
+ * A URN per RFC 8141: `urn:<namespace>:<specific>`, with the namespace identifier lower case and everything else as the
+ * `Uri` it was read from normalized it.
+ *
+ * `==` is over the whole URN. RFC 8141 section 3's equivalence ignores the r-, q- and f-components, and it is
+ * [Urn.assignedName] compared: `first.assignedName() == second.assignedName()`.
+ *
+ * # Examples
+ *
+ *     const name = Urn.tryFrom(Uri.tryFrom("urn:UUID:f81d4fae-7dec-11d0-a765-00a0c91e6bf6")?)?
+ *     print "{name.namespace()} {name.specific()}"
+ */
+public type Urn with Show, Equals, Hash, Compare {
+  /** The URI this name is, with the namespace identifier lower case. */
+  private uriValue: Uri
+
+  /** The URI this name is. */
+  fn uri(): Uri {
+    uriValue
+  }
+
+  /** The namespace identifier, lower case: `uuid` in `urn:uuid:…`. */
+  fn namespace(): String {
+    uriValue.path().substringBefore(":") ?? ""
+  }
+
+  /** The namespace-specific string: everything after the second `:`, up to the r-, q- or f-component. */
+  fn specific(): String {
+    uriValue.path().substringAfter(":") ?? ""
+  }
+
+  /** The r-component: what follows `?+`, a request to a resolver. */
+  fn resolution(): String? {
+    const query = uriValue.query()?
+    if !query.startsWith("+") {
+      return None
+    }
+    const body = query.sliceBytes 1, query.byteLength()
+    Some(body.substringBefore("?=") ?? body)
+  }
+
+  /** The q-component: what follows `?=`, a query for the named resource. */
+  fn query(): String? {
+    const query = uriValue.query()?
+    if query.startsWith("=") {
+      return Some query.sliceBytes(1, query.byteLength())
+    }
+    query.substringAfter "?="
+  }
+
+  /** The f-component: what follows `#`. */
+  fn fragment(): String? {
+    uriValue.fragment()
+  }
+
+  /** The URN without its r-, q- and f-components: what RFC 8141 section 3 compares. */
+  fn assignedName(): Urn {
+    match Uri.tryFrom("urn:{uriValue.path()}") {
+      Ok(found) => Urn found
+      Fail(_) => self
+    }
+  }
+
+  /** The URN as its URI shows it. */
+  fn show(): String {
+    uriValue.show()
+  }
+
+  /** In the order of the URIs. */
+  fn compare(other: Urn): Ordering {
+    uriValue.compare other.uriValue
+  }
+}
+
+/**
+ * A URI read as a URN (RFC 8141 section 2): no authority, a namespace identifier of two to thirty-two letters, digits
+ * and `-` that neither starts nor ends with a `-`, a `:`, a namespace-specific string that is not empty and does not
+ * start with `/`, and a query that is an r-component, a q-component or both.
+ *
+ * # Errors
+ *
+ * - [UriError.NotAUrn] naming the part that is not RFC 8141's.
+ */
+extend Urn with TryFrom<Uri, UriError> {
+  static fn tryFrom(value: Uri): Result<Urn, UriError> {
+    if value.scheme() != "urn" {
+      return notAUrn value, "the scheme is not `urn`"
+    }
+    if value.authority().isSome() {
+      return notAUrn value, "a URN has no authority"
+    }
+    const path = value.path()
+    const colon = path.indexOf(":") ?? -1
+    if colon < 0 {
+      return notAUrn value, "a URN is `urn:`, a namespace identifier, `:` and a namespace-specific string"
+    }
+    const namespace = path.sliceBytes 0, colon
+    if !isNamespace(namespace) {
+      return notAUrn value, "`{namespace}` is not two to thirty-two letters, digits and `-`, with no `-` at either end"
+    }
+    const specific = path.sliceBytes(colon + 1, path.byteLength())
+    if specific.isEmpty() || specific.startsWith("/") {
+      return notAUrn value, "the namespace-specific string is empty or starts with `/`"
+    }
+    if const Some(query) = value.query() {
+      if !query.startsWith("+") && !query.startsWith("=") {
+        return notAUrn value, "a URN's query is an r-component (`?+`) or a q-component (`?=`)"
+      }
+    }
+    const lowered = namespace.toLowerCase()
+    if lowered == namespace {
+      return Ok Urn(value)
+    }
+    var text = "urn:{lowered}:{specific}"
+    if const Some(query) = value.query() {
+      text = "{text}?{query}"
+    }
+    if const Some(fragment) = value.fragment() {
+      text = "{text}#{fragment}"
+    }
+    Ok Urn(Uri.tryFrom(text)?)
+  }
+}
+
+/** The URI a URN is. */
+extend Uri with From<Urn> {
+  static fn from(value: Urn): Uri {
+    value.uri()
+  }
+}
+
+/** The refusal of a URI as a URN, naming the URI by its display form. */
+fn notAUrn(value: Uri, reason: String): Result<Urn, UriError> {
+  Fail UriError.NotAUrn(value.show(), reason)
+}
+
+/** RFC 8141's `NID`: `alphanum 0*30( alphanum / "-" ) alphanum`. */
+fn isNamespace(text: String): Bool {
+  const length = text.byteLength()
+  if length < 2 || length > 32 {
+    return false
+  }
+  var index = 0
+  while index < length {
+    const byte = byteOf text, index
+    const alphanumeric = isLetter(byte) || isDigit(byte)
+    const edge = index == 0 || index == length - 1
+    if !alphanumeric && (edge || byte != 45) {
+      return false
+    }
+    index = index + 1
+  }
+  true
+}

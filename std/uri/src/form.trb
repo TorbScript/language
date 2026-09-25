@@ -1,0 +1,101 @@
+/**
+ * `application/x-www-form-urlencoded`, the convention of HTML forms for a query and for a form body, as the WHATWG URL
+ * Standard (section 5) defines it. It is not part of RFC 3986, which leaves a query opaque; that is why the URI types
+ * hold the query as text and read it through these two functions only when asked (docs/design/URI.md section 5).
+ */
+
+use byteOf, escaped, lossyText, escapeAt, runOf from "./characters"
+
+/**
+ * A form read into its pairs, in order: split at `&`, each part at its first `=`, `+` read as a space, escapes decoded,
+ * and the bytes read as UTF-8 with U+FFFD for what is not. Empty parts are skipped and a part without `=` has the
+ * value `""`. Nothing fails: this is the standard's parser, which a browser applies to whatever it is handed.
+ *
+ * # Examples
+ *
+ *     print formDecoded("name=Ada+Lovelace&tag=a&tag=b&flag")
+ */
+public fn formDecoded(text: String): List<(String, String)> {
+  var pairs: List<(String, String)> = []
+  for part in text.split("&") {
+    if part.isEmpty() {
+      continue
+    }
+    const pair = match part.indexOf("=") {
+      Some(at) => (formText(part.sliceBytes(0, at)), formText(part.sliceBytes(at + 1, part.byteLength())))
+      None => (formText(part), "")
+    }
+    pairs.append pair
+  }
+  pairs
+}
+
+/** One name or value of a form: `+` is a space, an escape is its byte, and the bytes are UTF-8 where they can be. */
+fn formText(text: String): String {
+  if !text.contains("+") && !text.contains("%") {
+    return text
+  }
+  const length = text.byteLength()
+  var bytes: Bytes = []
+  var index = 0
+  while index < length {
+    const byte = byteOf text, index
+    if byte == 43 {
+      bytes.append 32
+      index = index + 1
+      continue
+    }
+    const value = escapeAt text, index
+    if value >= 0 {
+      bytes.append(UInt8.tryFrom(value).ok() ?? 0)
+      index = index + 3
+      continue
+    }
+    if const Some(found) = text.byteAt(index) {
+      bytes.append found
+    }
+    index = index + 1
+  }
+  lossyText bytes
+}
+
+/**
+ * Pairs written as a form: every byte but ASCII letters, digits, `*`, `-`, `.` and `_` percent-encoded, a space as `+`,
+ * `=` between a name and its value and `&` between the pairs. This is the standard's serializer, so what a browser
+ * would send for the same fields is what comes out.
+ *
+ * # Examples
+ *
+ *     print formEncoded([("q", "Grüner Weg"), ("page", "2")])
+ */
+public fn formEncoded(pairs: List<(String, String)>): String {
+  var parts: List<String> = []
+  for (name, value) in pairs {
+    parts.append "{formEscaped(name)}={formEscaped(value)}"
+  }
+  parts.joined separator: "&"
+}
+
+/** One name or value of a form, escaped by the `application/x-www-form-urlencoded` percent-encode set. */
+fn formEscaped(text: String): String {
+  const length = text.byteLength()
+  var out = ""
+  var runStart = 0
+  var index = 0
+  while index < length {
+    const byte = byteOf text, index
+    const kept = (byte >= 48 && byte <= 57) || (byte >= 65 && byte <= 90) || (byte >= 97 && byte <= 122)
+      || byte == 42 || byte == 45 || byte == 46 || byte == 95
+    if kept {
+      index = index + 1
+      continue
+    }
+    out = out + runOf(text, runStart, index) + if byte == 32 { "+" } else { escaped byte }
+    index = index + 1
+    runStart = index
+  }
+  if runStart == 0 {
+    return text
+  }
+  out + text.sliceBytes(runStart, length)
+}

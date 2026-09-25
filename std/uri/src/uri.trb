@@ -1,0 +1,920 @@
+/**
+ * [Uri] and [UriReference]: RFC 3986, read and normalized at construction, with `Equals`, `Hash` and `Compare` over the
+ * normalized form (docs/design/URI.md sections 3 to 5).
+ *
+ * Both are capsules over one private record of the five parts, so the parser, the recomposition, the comparison and
+ * the resolution are written once. A `Uri` has a scheme; a `UriReference` may be relative, and resolving it against a
+ * `Uri` answers a `Uri` and cannot fail.
+ */
+
+use SocketAddress from "std/ip"
+use Path, Root from "std/path"
+use UriError from "./error"
+use Authority, Host, authorityOf from "./authority"
+use Component, byteOf, encodedComponent, isDigit, isLetter, normalizedComponent, percentDecoded from "./characters"
+use formDecoded, formEncoded from "./form"
+use iriDecoded from "./iri"
+
+/** The five parts of a URI reference, normalized. The one place the two capsules below are written over. */
+type Components with Equals, Hash {
+  /** The scheme, lower case, and `None` for a relative reference. */
+  scheme: String?
+  /** The authority, and `None` where the reference has no `//`. */
+  authority: Authority?
+  /** The path, always there. */
+  path: String
+  /** Everything after the first `?` and before the `#`. */
+  query: String?
+  /** Everything after the first `#`. */
+  fragment: String?
+}
+
+// --- Uri -------------------------------------------------------------------------------------------------------------
+
+/**
+ * A URI per RFC 3986 section 3: a scheme, and an authority, a path, a query and a fragment after it.
+ *
+ * A `Uri` is a value, read from text with [Uri.tryFrom] and normalized on the way in - the scheme and a registered name
+ * lower case, escapes upper case and decoded where they name an unreserved character, dot segments gone, every character
+ * a URI cannot hold percent-encoded as UTF-8 - so `==`, `hash()` and `compare()` are over the canonical form. What is
+ * a guess about a scheme rather than a fact about URIs, a default port, is [Uri.normalized]'s.
+ *
+ * It is a **capsule**: its field is private and has no default, so [Uri.tryFrom] is the one way in and [Uri.text] the
+ * way out, and the two are the conversion pair `Encode` and `Decode` go through - a URI in a JSON document is its text.
+ *
+ * # Examples
+ *
+ *     const uri = Uri.tryFrom("HTTPS://Example.TEST/a/./b/../c?q=1#top")?
+ *     print "{uri.scheme()} {uri.host()} {uri.path()}"
+ *
+ * # Pitfalls
+ *
+ * - `show()` hides a password (`postgres://ada:***@host/db`), and `text()` is the whole text: the one a request, a
+ *   file or an encoder needs.
+ * - `http://example.test:80/` and `http://example.test/` are two values until [Uri.normalized] drops the default port.
+ *
+ * # Related
+ *
+ * - [UriReference] - a URI or a relative reference, and [UriReference.resolved] to make a `Uri` of one.
+ * - [Urn] - a `urn:` URI read into its namespace and name.
+ */
+public type Uri with Show, Equals, Hash, Compare {
+  /** The five parts; the scheme is always there. */
+  private components: Components
+
+  /** The scheme, lower case: `https`. */
+  fn scheme(): String {
+    components.scheme ?? ""
+  }
+
+  /** The authority, where the URI has one. `None` and an empty host are different things. */
+  fn authority(): Authority? {
+    components.authority
+  }
+
+  /** The host of the authority, where there is one. */
+  fn host(): Host? {
+    components.authority?.host
+  }
+
+  /** The port that is written out. It is not the port the scheme defaults to: [Uri.defaultPort] is. */
+  fn port(): Int? {
+    components.authority?.port
+  }
+
+  /** The port the scheme defaults to, for the five schemes IANA fixes one for: `http`, `https`, `ws`, `wss`, `ftp`. */
+  fn defaultPort(): Int? {
+    defaultPortOf scheme()
+  }
+
+  /**
+   * Where to connect without a resolver: the host where it is an IP literal, with the written port or the scheme's
+   * default. `None` for a registered name, which `std/network` resolves.
+   */
+  fn socketAddress(): SocketAddress? {
+    components.authority?.socketAddress(defaultPort: defaultPort())
+  }
+
+  /** The path. Always there, and `""` where the URI has none. */
+  fn path(): String {
+    components.path
+  }
+
+  /**
+   * The path split at its `/`, still percent-encoded, without the empty segment in front of an absolute path: `/` has
+   * none, `/a/b/` has `a`, `b` and `""`.
+   */
+  fn segments(): List<String> {
+    segmentsOf components.path
+  }
+
+  /** Everything between the first `?` and the `#`, as RFC 3986 leaves it: one opaque string. */
+  fn query(): String? {
+    components.query
+  }
+
+  /** Everything after the first `#`. */
+  fn fragment(): String? {
+    components.fragment
+  }
+
+  /** Whether the URI has an authority: the question a `Url` type would have been for. */
+  fn isUrl(): Bool {
+    components.authority.isSome()
+  }
+
+  /** Whether the scheme is `urn`. `Urn.tryFrom(uri)` reads the parts of one. */
+  fn isUrn(): Bool {
+    components.scheme == Some("urn")
+  }
+
+  /** The query read as `application/x-www-form-urlencoded`: every value of every name, in order. */
+  fn queryParameters(): Map<String, List<String>> {
+    parametersOf components.query
+  }
+
+  /** The first value of a query parameter, which is what almost every caller of [Uri.queryParameters] wants. */
+  fn queryParameter(name: String): String? {
+    parameterOf components.query, name
+  }
+
+  /** The same URI with its query written from `parameters`, and with none where `parameters` is empty. */
+  fn withQueryParameters(parameters: Map<String, List<String>>): Uri {
+    Uri components.copy(query: queryOf(parameters))
+  }
+
+  /**
+   * The same URI with its fragment replaced by `fragment`, and with none where it is `None`. The text is written as it
+   * is: every character a fragment cannot hold is percent-encoded, `%` among them.
+   */
+  fn withFragment(fragment: String?): Uri {
+    Uri components.copy(fragment: fragment.map({ encodedComponent _, Component.Fragment }))
+  }
+
+  /**
+   * `relative` below this URI's path: split at `/`, each segment percent-encoded, `.` and empty segments dropped, and
+   * `..` removing only a segment `relative` itself added - so the answer is never above this URI's path, whatever
+   * `relative` is. The query and the fragment belong to the old resource and are dropped.
+   *
+   * # Examples
+   *
+   *     const base = Uri.tryFrom("https://example.test/users")?
+   *     print base.joined("Ada Lovelace/posts")
+   */
+  fn joined(relative: String): Uri {
+    Uri joinedComponents(components, relative)
+  }
+
+  /**
+   * RFC 3986 section 6.2.3, scheme-based normalization: a port that is the scheme's default is dropped and an empty
+   * path under an authority becomes `/`. It is a member and not part of construction, because the default port of a
+   * scheme is a fact about five schemes and not a fact about URIs.
+   */
+  fn normalized(): Uri {
+    var authority = components.authority
+    if const Some(found) = authority {
+      if found.port.isSome() && found.port == defaultPort() {
+        authority = Some found.copy(port: None)
+      }
+    }
+    const path = if components.path.isEmpty() && authority.isSome() { "/" } else { components.path }
+    Uri components.copy(authority: authority, path: path)
+  }
+
+  /**
+   * This URI as seen from `base`: the shortest reference that [UriReference.resolved] turns back into this one. Where
+   * the schemes differ it is the whole URI, and where the authorities differ it starts with `//`.
+   */
+  fn relativeTo(base: Uri): UriReference {
+    UriReference relativeComponents(components, base.components)
+  }
+
+  /**
+   * The canonical text: the recomposition of RFC 3986 section 5.3, with every part of it. A password in the user
+   * information is in this text, and the name is what makes that greppable.
+   */
+  fn text(): String {
+    recomposed components, redacting: false
+  }
+
+  /**
+   * The IRI this URI stands for (RFC 3987 section 3.2): every escape of a UTF-8 character outside ASCII decoded, and
+   * everything else as [Uri.text] has it, so `Uri.tryFrom(uri.iriText())` is the same URI again. It carries the
+   * password, as `text()` does.
+   */
+  fn iriText(): String {
+    iriOf components
+  }
+
+  /** The canonical text with a password in the user information replaced by `***`. [Uri.text] is the whole one. */
+  fn show(): String {
+    recomposed components, redacting: true
+  }
+
+  /** Scheme, then authority, then path, then query, then fragment, each `None` before every `Some`. */
+  fn compare(other: Uri): Ordering {
+    compareComponents components, other.components
+  }
+}
+
+/**
+ * A text read as a URI and normalized on the way in.
+ *
+ * # Examples
+ *
+ *     print Uri.tryFrom("HTTP://Example.COM:80/a/./b/../c?q=1#top")
+ *
+ * # Errors
+ *
+ * - [UriError.Relative] for a relative reference, which [UriReference.tryFrom] reads.
+ * - [UriError.InvalidScheme], [UriError.InvalidEscape], [UriError.InvalidHost], [UriError.NonAsciiHost] and
+ *   [UriError.InvalidPort] for a text that is no URI reference at all.
+ */
+extend Uri with TryFrom<String, UriError> {
+  static fn tryFrom(value: String): Result<Uri, UriError> {
+    const parsed = componentsOf(value)?
+    if parsed.scheme.isNone() {
+      return Fail UriError.Relative(value)
+    }
+    Ok Uri(parsed)
+  }
+}
+
+/**
+ * The way back out, and with [Uri.tryFrom] the one conversion pair of the capsule. It is [Uri.text] and not
+ * [Uri.show], because this is the direction `Encode` is derived through, and a configuration that round trips without
+ * its password is a configuration that stopped working.
+ */
+extend String with From<Uri> {
+  static fn from(value: Uri): String {
+    value.text()
+  }
+}
+
+// --- UriReference ----------------------------------------------------------------------------------------------------
+
+/**
+ * A URI reference per RFC 3986 section 4.1: a [Uri], or a relative reference - `../a`, `/b?c`, `//host/d`, `#top` -
+ * that means something only against a base. [UriReference.resolved] is that meaning, and it answers a `Uri`.
+ *
+ * It is normalized as a `Uri` is, except that the dot segments of a relative path (`../a`) are kept: they mean
+ * something only once a base is known.
+ *
+ * # Examples
+ *
+ *     const base = Uri.tryFrom("https://example.test/guide/start.html")?
+ *     const link = UriReference.tryFrom("../reference/index.html#top")?
+ *     print link.resolved(against: base)
+ *
+ * # Related
+ *
+ * - [Uri] - a reference with a scheme, and [Uri.relativeTo] for the way back.
+ */
+public type UriReference with Show, Equals, Hash, Compare {
+  /** The five parts; the scheme may be absent. */
+  private components: Components
+
+  /** The scheme, lower case. `None` for a relative reference. */
+  fn scheme(): String? {
+    components.scheme
+  }
+
+  /** The authority, where the reference has one. */
+  fn authority(): Authority? {
+    components.authority
+  }
+
+  /** The host of the authority, where there is one. */
+  fn host(): Host? {
+    components.authority?.host
+  }
+
+  /** The port that is written out. */
+  fn port(): Int? {
+    components.authority?.port
+  }
+
+  /** The path. Always there, and `""` where the reference has none. */
+  fn path(): String {
+    components.path
+  }
+
+  /** The path split at its `/`, still percent-encoded, without the empty segment in front of an absolute path. */
+  fn segments(): List<String> {
+    segmentsOf components.path
+  }
+
+  /** Everything between the first `?` and the `#`. */
+  fn query(): String? {
+    components.query
+  }
+
+  /** Everything after the first `#`. */
+  fn fragment(): String? {
+    components.fragment
+  }
+
+  /** Whether the reference has a scheme. Its opposite is [UriReference.isRelative]. */
+  fn isAbsolute(): Bool {
+    components.scheme.isSome()
+  }
+
+  /** Whether the reference has no scheme, so that it means something only against a base. */
+  fn isRelative(): Bool {
+    components.scheme.isNone()
+  }
+
+  /** The reference as a [Uri], where it has a scheme. */
+  fn uri(): Uri? {
+    if components.scheme.isNone() {
+      return None
+    }
+    Some Uri(components)
+  }
+
+  /**
+   * This reference resolved against `base`, per RFC 3986 section 5.2 (the strict reading: a reference with a scheme is
+   * itself). It cannot fail, because a `Uri` always has the scheme section 5.2.1 asks of a base.
+   */
+  fn resolved(against: Uri): Uri {
+    Uri resolvedComponents(components, against.components)
+  }
+
+  /** The query read as `application/x-www-form-urlencoded`: every value of every name, in order. */
+  fn queryParameters(): Map<String, List<String>> {
+    parametersOf components.query
+  }
+
+  /** The first value of a query parameter. */
+  fn queryParameter(name: String): String? {
+    parameterOf components.query, name
+  }
+
+  /** The same reference with its fragment replaced by `fragment`, written as it is, and with none where it is `None`. */
+  fn withFragment(fragment: String?): UriReference {
+    UriReference components.copy(fragment: fragment.map({ encodedComponent _, Component.Fragment }))
+  }
+
+  /** The canonical text, with every part of it. */
+  fn text(): String {
+    recomposed components, redacting: false
+  }
+
+  /** The IRI this reference stands for (RFC 3987 section 3.2). */
+  fn iriText(): String {
+    iriOf components
+  }
+
+  /** The canonical text with a password in the user information replaced by `***`. */
+  fn show(): String {
+    recomposed components, redacting: true
+  }
+
+  /** Scheme, then authority, then path, then query, then fragment, each `None` before every `Some`. */
+  fn compare(other: UriReference): Ordering {
+    compareComponents components, other.components
+  }
+}
+
+/**
+ * A text read as a URI reference - a URI or a relative reference - and normalized on the way in.
+ *
+ * # Errors
+ *
+ * - [UriError.InvalidScheme] where the first segment of a relative path holds a `:` (`1a:b`), which RFC 3986 section
+ *   4.2 refuses because it would read as a scheme.
+ * - [UriError.InvalidEscape], [UriError.InvalidHost], [UriError.NonAsciiHost] and [UriError.InvalidPort].
+ */
+extend UriReference with TryFrom<String, UriError> {
+  static fn tryFrom(value: String): Result<UriReference, UriError> {
+    Ok UriReference(componentsOf(value)?)
+  }
+}
+
+/** Every URI is a reference. The way back is [UriReference.uri], and deliberately not a `TryFrom` on `Uri`. */
+extend UriReference with From<Uri> {
+  static fn from(value: Uri): UriReference {
+    UriReference value.components
+  }
+}
+
+/** The way back out of [UriReference], and with [UriReference.tryFrom] its conversion pair. */
+extend String with From<UriReference> {
+  static fn from(value: UriReference): String {
+    value.text()
+  }
+}
+
+// --- Parsing ---------------------------------------------------------------------------------------------------------
+
+/** RFC 3986 section 4.1's `URI-reference`, split into its parts and normalized (section 6.2.2). */
+fn componentsOf(text: String): Result<Components, UriError> {
+  var rest = text
+  var scheme: String? = None
+  const schemeEnd = schemeEndOf text
+  if schemeEnd > 0 {
+    scheme = Some text.sliceBytes(0, schemeEnd).toLowerCase()
+    rest = text.sliceBytes(schemeEnd + 1, text.byteLength())
+  } else if schemeEnd == 0 {
+    return Fail UriError.InvalidScheme(text.substringBefore(":") ?? text)
+  }
+  var fragment: String? = None
+  if const Some(mark) = rest.indexOf("#") {
+    fragment = Some(normalizedComponent(rest.sliceBytes(mark + 1, rest.byteLength()), Component.Fragment, text)?)
+    rest = rest.sliceBytes 0, mark
+  }
+  var query: String? = None
+  if const Some(mark) = rest.indexOf("?") {
+    query = Some(normalizedComponent(rest.sliceBytes(mark + 1, rest.byteLength()), Component.Query, text)?)
+    rest = rest.sliceBytes 0, mark
+  }
+  var authority: Authority? = None
+  if rest.startsWith("//") {
+    const body = rest.sliceBytes 2, rest.byteLength()
+    const cut = body.indexOf("/") ?? body.byteLength()
+    authority = Some(authorityOf(body.sliceBytes(0, cut), text)?)
+    rest = body.sliceBytes cut, body.byteLength()
+  }
+  var path = normalizedComponent(rest, Component.Path, text)?
+  if scheme.isSome() || path.startsWith("/") {
+    path = withoutDotSegments path
+  }
+  Ok Components(scheme, authority, guardedPath(path, authority), query, fragment)
+}
+
+/**
+ * The offset of the `:` that ends a scheme; `-1` where the text has no scheme in front of it, and `0` where a `:` comes
+ * before the first `/`, `?` or `#` without a scheme in front of it - a relative path whose first segment holds a `:`,
+ * which RFC 3986 section 4.2 refuses.
+ */
+fn schemeEndOf(text: String): Int {
+  const length = text.byteLength()
+  var fits = length > 0 && isLetter(byteOf(text, 0))
+  var index = 0
+  while index < length {
+    const byte = byteOf text, index
+    if byte == 58 {
+      return if fits && index > 0 { index } else { 0 }
+    }
+    if byte == 47 || byte == 63 || byte == 35 {
+      return -1
+    }
+    if index > 0 && !(isLetter(byte) || isDigit(byte) || byte == 43 || byte == 45 || byte == 46) {
+      fits = false
+    }
+    index = index + 1
+  }
+  -1
+}
+
+/**
+ * A path without an authority that starts with `//` would read as an authority once written out; dot-segment removal
+ * can produce one (`x:/.//a`), and `/.` in front keeps it a path, as the WHATWG standard does for the same hole.
+ */
+fn guardedPath(path: String, authority: Authority?): String {
+  if authority.isNone() && path.startsWith("//") {
+    return "/.{path}"
+  }
+  path
+}
+
+/** RFC 3986 section 5.2.4, `remove_dot_segments`, as the specification writes it: it reads nothing and follows nothing. */
+fn withoutDotSegments(path: String): String {
+  if !path.contains(".") {
+    return path
+  }
+  var input = path
+  var output = ""
+  while !input.isEmpty() {
+    if input.startsWith("../") {
+      input = input.sliceBytes 3, input.byteLength()
+    } else if input.startsWith("./") {
+      input = input.sliceBytes 2, input.byteLength()
+    } else if input.startsWith("/./") {
+      input = input.sliceBytes 2, input.byteLength()
+    } else if input == "/." {
+      input = "/"
+    } else if input.startsWith("/../") {
+      input = input.sliceBytes 3, input.byteLength()
+      output = withoutLastSegment output
+    } else if input == "/.." {
+      input = "/"
+      output = withoutLastSegment output
+    } else if input == "." || input == ".." {
+      input = ""
+    } else {
+      const start = if input.startsWith("/") { 1 } else { 0 }
+      const next = input.sliceBytes(start, input.byteLength()).indexOf("/")
+      const end = match next {
+        Some(at) => at + start
+        None => input.byteLength()
+      }
+      output = output + input.sliceBytes(0, end)
+      input = input.sliceBytes end, input.byteLength()
+    }
+  }
+  output
+}
+
+/** The output buffer of `remove_dot_segments` with its last segment and the `/` before it removed. */
+fn withoutLastSegment(output: String): String {
+  match output.lastIndexOf("/") {
+    Some(at) => output.sliceBytes 0, at
+    None => ""
+  }
+}
+
+// --- Recomposition, comparison, resolution ---------------------------------------------------------------------------
+
+/** RFC 3986 section 5.3, the recomposition, with the password hidden where `redacting` says so. */
+fn recomposed(components: Components, redacting: Bool): String {
+  var text = match components.scheme {
+    Some(found) => "{found}:"
+    None => ""
+  }
+  if const Some(found) = components.authority {
+    text = text + "//" + if redacting { found.show() } else { found.text() }
+  }
+  text = text + components.path
+  if const Some(found) = components.query {
+    text = "{text}?{found}"
+  }
+  if const Some(found) = components.fragment {
+    text = "{text}#{found}"
+  }
+  text
+}
+
+/** The recomposition with every escape of a non-ASCII character decoded, part by part (RFC 3987 section 3.2). */
+fn iriOf(components: Components): String {
+  var text = match components.scheme {
+    Some(found) => "{found}:"
+    None => ""
+  }
+  if const Some(found) = components.authority {
+    const front = match found.userInfo {
+      Some(userInfo) => "{iriDecoded(userInfo, inQuery: false)}@"
+      None => ""
+    }
+    text = text + "//" + front + found.hostAndPort()
+  }
+  text = text + iriDecoded(components.path, inQuery: false)
+  if const Some(found) = components.query {
+    text = text + "?" + iriDecoded(found, inQuery: true)
+  }
+  if const Some(found) = components.fragment {
+    text = text + "#" + iriDecoded(found, inQuery: false)
+  }
+  text
+}
+
+/** Scheme, then authority, then path, then query, then fragment, each `None` before every `Some`. */
+fn compareComponents(first: Components, second: Components): Ordering {
+  var answer = optionCompare first.scheme, second.scheme
+  if answer != .Equal {
+    return answer
+  }
+  answer = optionCompare first.authority?.text(), second.authority?.text()
+  if answer != .Equal {
+    return answer
+  }
+  answer = first.path.compare second.path
+  if answer != .Equal {
+    return answer
+  }
+  answer = optionCompare first.query, second.query
+  if answer != .Equal {
+    return answer
+  }
+  optionCompare first.fragment, second.fragment
+}
+
+/** Two optional texts compared, with `None` before every `Some`. */
+fn optionCompare(first: String?, second: String?): Ordering {
+  match (first, second) {
+    (None, None) => .Equal
+    (None, Some(_)) => .Less
+    (Some(_), None) => .Greater
+    (Some(here), Some(there)) => here.compare there
+  }
+}
+
+/** RFC 3986 section 5.2.2, the transformation of a reference against a base that has a scheme. */
+fn resolvedComponents(reference: Components, base: Components): Components {
+  if reference.scheme.isSome() {
+    return reference.copy path: guardedPath(withoutDotSegments(reference.path), reference.authority)
+  }
+  if reference.authority.isSome() {
+    return reference.copy scheme: base.scheme, path: withoutDotSegments(reference.path)
+  }
+  if reference.path.isEmpty() {
+    const query = if reference.query.isSome() { reference.query } else { base.query }
+    return Components base.scheme, base.authority, base.path, query, reference.fragment
+  }
+  const merged = if reference.path.startsWith("/") { reference.path } else { mergedPath base, reference.path }
+  const path = guardedPath withoutDotSegments(merged), base.authority
+  Components base.scheme, base.authority, path, reference.query, reference.fragment
+}
+
+/** RFC 3986 section 5.2.3, `merge`: the reference below everything of the base's path up to its last `/`. */
+fn mergedPath(base: Components, reference: String): String {
+  if base.authority.isSome() && base.path.isEmpty() {
+    return "/{reference}"
+  }
+  match base.path.lastIndexOf("/") {
+    Some(at) => base.path.sliceBytes(0, at + 1) + reference
+    None => reference
+  }
+}
+
+/**
+ * The shortest reference that resolves against `base` into `target`. Each candidate, shortest first, is resolved and
+ * compared, and the whole URI - which always resolves into itself - is the last of them, so the answer is right by
+ * construction rather than by a case analysis of RFC 3986's corners.
+ */
+fn relativeComponents(target: Components, base: Components): Components {
+  var candidates: List<Components> = []
+  if target.scheme == base.scheme && target.authority == base.authority {
+    if target.path == base.path {
+      candidates.append Components(None, None, "", target.query, target.fragment)
+    }
+    if const Some(path) = relativePath(target.path, base.path) {
+      candidates.append Components(None, None, path, target.query, target.fragment)
+    }
+    if target.path.startsWith("/") && !target.path.startsWith("//") {
+      candidates.append Components(None, None, target.path, target.query, target.fragment)
+    }
+  }
+  if target.scheme == base.scheme && target.authority.isSome() {
+    candidates.append target.copy(scheme: None)
+  }
+  for candidate in candidates {
+    if resolvedComponents(candidate, base) == target {
+      return candidate
+    }
+  }
+  target
+}
+
+/** `target` as a relative path from the directory of `base`, where both are absolute paths. */
+fn relativePath(target: String, base: String): String? {
+  if !target.startsWith("/") || !base.startsWith("/") {
+    return None
+  }
+  const here = target.sliceBytes(1, target.byteLength()).split("/")
+  const there = base.sliceBytes(1, base.byteLength()).split("/")
+  const directories = there.length() - 1
+  var common = 0
+  while common < directories && common < here.length() - 1 && here[common] == there[common] {
+    common = common + 1
+  }
+  var parts: List<String> = []
+  for _ in common..directories {
+    parts.append ".."
+  }
+  for index in common..here.length() {
+    parts.append here[index]
+  }
+  var path = parts.joined separator: "/"
+  if path.isEmpty() {
+    path = "./"
+  } else if (parts.first() ?? "").contains(":") {
+    path = "./{path}"
+  }
+  Some path
+}
+
+// --- Members both capsules share -------------------------------------------------------------------------------------
+
+/** The segments of a path: split at `/`, the empty one in front of an absolute path dropped, and `/` alone none. */
+fn segmentsOf(path: String): List<String> {
+  if path.isEmpty() || path == "/" {
+    return []
+  }
+  const body = if path.startsWith("/") { path.sliceBytes 1, path.byteLength() } else { path }
+  body.split "/"
+}
+
+/** A query read as a form, every value of every name, in the order the names first appear. */
+fn parametersOf(query: String?): Map<String, List<String>> {
+  var table: Map<String, List<String>> = [:]
+  for (name, value) in formDecoded(query ?? "") {
+    table.update(name, [], { found => found.append value })
+  }
+  table
+}
+
+/** The first value of one query parameter. */
+fn parameterOf(query: String?, name: String): String? {
+  for (found, value) in formDecoded(query ?? "") {
+    if found == name {
+      return Some value
+    }
+  }
+  None
+}
+
+/** Parameters written as a form and normalized as a query, and `None` where there are none. */
+fn queryOf(parameters: Map<String, List<String>>): String? {
+  var pairs: List<(String, String)> = []
+  for (name, values) in parameters {
+    for value in values {
+      pairs.append((name, value))
+    }
+  }
+  if pairs.isEmpty() {
+    return None
+  }
+  const encoded = formEncoded pairs
+  // The form's encoder escapes `~`, which RFC 3986 section 6.2.2.2 writes as itself
+  Some(normalizedComponent(encoded, Component.Query, encoded).ok() ?? encoded)
+}
+
+/** `relative` below the path of `components`, never above it, with the query and the fragment dropped. */
+fn joinedComponents(components: Components, relative: String): Components {
+  var added: List<String> = []
+  for segment in relative.split("/") {
+    if segment.isEmpty() || segment == "." {
+      continue
+    }
+    if segment == ".." {
+      if !added.isEmpty() {
+        added.removeAt(added.length() - 1)
+      }
+      continue
+    }
+    added.append encodedComponent(segment, Component.Segment)
+  }
+  const tail = added.joined separator: "/"
+  var path = components.path
+  if !tail.isEmpty() {
+    path = if path.endsWith("/") {
+      path + tail
+    } else if path.isEmpty() && components.authority.isNone() {
+      tail
+    } else {
+      "{path}/{tail}"
+    }
+  }
+  Components components.scheme, components.authority, path, None, None
+}
+
+/** The port a scheme defaults to, for the five schemes IANA fixes one for. */
+fn defaultPortOf(scheme: String): Int? {
+  match scheme {
+    "http" => Some 80
+    "https" => Some 443
+    "ws" => Some 80
+    "wss" => Some 443
+    "ftp" => Some 21
+    _ => None
+  }
+}
+
+// --- Path, after RFC 8089 (docs/design/URI.md section 8) --------------------------------------------------------
+
+// Every direction is a `TryFrom` and none is a `From`, so `Path` is no conversion pair of `Uri` or `UriReference`, and
+// each keeps the one it has with `String`.
+
+/**
+ * A `Path` written as a URI reference: an absolute path as a `file:` URI - the root becomes the authority or the first
+ * segment - and a relative path as a relative reference. Every component is percent-encoded as UTF-8.
+ *
+ * # Errors
+ *
+ * - [UriError.NonAsciiHost] for a UNC share whose server name is not ASCII, which needs IDNA.
+ */
+extend UriReference with TryFrom<Path, UriError> {
+  static fn tryFrom(value: Path): Result<UriReference, UriError> {
+    UriReference.tryFrom textOfPath(value)
+  }
+}
+
+/**
+ * A `Path` written as a `file:` URI.
+ *
+ * # Errors
+ *
+ * - [UriError.Relative] for a relative path, which has no `file:` URI.
+ * - [UriError.NonAsciiHost] for a UNC share whose server name is not ASCII.
+ */
+extend Uri with TryFrom<Path, UriError> {
+  static fn tryFrom(value: Path): Result<Uri, UriError> {
+    Uri.tryFrom textOfPath(value)
+  }
+}
+
+/**
+ * A `file:` URI read as a `Path`, in every form RFC 8089 and its appendices know: `file:///x`, `file:/x`,
+ * `file://localhost/x`, `file:///C:/x`, `file:///C|/x`, `file:C:/x` and `file://server/share/x`. A fragment points into
+ * the document and is ignored.
+ *
+ * # Errors
+ *
+ * - [UriError.NotAFile] for a URI whose scheme is not `file`, for a query, for an escape that names a separator and for
+ *   a path that is not absolute.
+ * - [UriError.NotText] for escapes whose bytes are not UTF-8.
+ */
+extend Path with TryFrom<Uri, UriError> {
+  static fn tryFrom(value: Uri): Result<Path, UriError> {
+    if value.scheme() != "file" {
+      return Fail UriError.NotAFile(value.show(), "the scheme is not `file`")
+    }
+    pathOf value.show(), value.host(), value.path(), value.query().isSome(), true
+  }
+}
+
+/**
+ * A URI reference read as a `Path`: a `file:` URI as [Path.tryFrom] of a `Uri` reads it, and a relative-path reference
+ * as the relative path it spells.
+ *
+ * # Errors
+ *
+ * - [UriError.NotAFile] for another scheme, a network-path reference (`//server/x`), a query and an escape that names a
+ *   separator.
+ * - [UriError.NotText] for escapes whose bytes are not UTF-8.
+ */
+extend Path with TryFrom<UriReference, UriError> {
+  static fn tryFrom(value: UriReference): Result<Path, UriError> {
+    if const Some(uri) = value.uri() {
+      return Path.tryFrom uri
+    }
+    if value.authority().isSome() {
+      return Fail UriError.NotAFile(value.show(), "a network-path reference has no scheme to say it is a file")
+    }
+    pathOf value.show(), None, value.path(), value.query().isSome(), false
+  }
+}
+
+/** The text of the URI reference a `Path` is. */
+fn textOfPath(value: Path): String {
+  var encoded: List<String> = []
+  for component in value.components() {
+    encoded.append encodedComponent(component, Component.Segment)
+  }
+  const body = encoded.joined separator: "/"
+  match value.root() {
+    None => {
+      if body.isEmpty() {
+        return "./"
+      }
+      if (encoded.first() ?? "").contains(":") {
+        return "./{body}"
+      }
+      body
+    }
+    Some(.Unix) => "file:///{body}"
+    Some(.Drive(letter)) => "file:///{letter}:/{body}"
+    Some(.Share(server, share)) => {
+      const tail = if body.isEmpty() { "" } else { "/{body}" }
+      "file://{server}/{encodedComponent(share, Component.Segment)}{tail}"
+    }
+  }
+}
+
+/**
+ * The path a `file:` URI or a relative reference spells. `absolute` says the text came from a `file:` URI, whose path
+ * has to be absolute or start with a drive letter.
+ */
+fn pathOf(shown: String, host: Host?, path: String, hasQuery: Bool, absolute: Bool): Result<Path, UriError> {
+  if hasQuery {
+    return Fail UriError.NotAFile(shown, "a file has no query")
+  }
+  const rooted = path.startsWith "/"
+  const body = if rooted { path.sliceBytes 1, path.byteLength() } else { path }
+  var decoded: List<String> = []
+  for segment in body.split("/") {
+    const text = percentDecoded(segment)?
+    if text.contains("/") || text.contains("\\") {
+      return Fail UriError.NotAFile(shown, "the escapes of `{segment}` name a separator, which would name another file")
+    }
+    decoded.append text
+  }
+  const joined = decoded.joined separator: "/"
+  const server = match host {
+    Some(.Name(name)) => if name == "localhost" { "" } else { name }
+    Some(.Address(address)) => address.show()
+    Some(.Future(text)) => text
+    None => ""
+  }
+  if !server.isEmpty() {
+    return Ok Path.from("//{server}/{joined}")
+  }
+  if isDrive(decoded.first() ?? "") {
+    const letter = (decoded.first() ?? "C").sliceBytes(0, 1)
+    const rest = decoded[1..decoded.length()].joined separator: "/"
+    return Ok Path.from("{letter}:/{rest}")
+  }
+  if rooted {
+    return Ok Path.from("/{joined}")
+  }
+  if absolute {
+    return Fail UriError.NotAFile(shown, "the path of a `file:` URI is absolute")
+  }
+  Ok Path.from(joined)
+}
+
+/** `C:` or `C|`: a drive letter, as the first segment of a `file:` URI writes it (RFC 8089 appendix E.2). */
+fn isDrive(segment: String): Bool {
+  segment.byteLength() == 2 && isLetter(byteOf(segment, 0)) && (byteOf(segment, 1) == 58 || byteOf(segment, 1) == 124)
+}

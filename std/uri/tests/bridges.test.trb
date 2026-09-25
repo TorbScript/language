@@ -1,0 +1,193 @@
+/**
+ * What `std/uri` reads a URI as besides itself: the IRI it stands for (RFC 3987), a URN (RFC 8141), a form
+ * (`application/x-www-form-urlencoded`), and a `Path` (RFC 8089) - each with the round trip it promises.
+ */
+
+use test, group from "std/test"
+use Path from "std/path"
+use Uri, UriReference from "../src/uri"
+use Urn from "../src/urn"
+use UriError from "../src/error"
+use formDecoded, formEncoded from "../src/form"
+use percentDecoded from "../src/characters"
+
+/** A text every test here knows to be a URI. */
+fn uriOf(text: String): Uri {
+  match Uri.tryFrom(text) {
+    Ok(uri) => uri
+    Fail(problem) => panic "a test's URI was refused: {problem}"
+  }
+}
+
+/** The URN a text is, or the message it was refused with. */
+fn urnShown(text: String): String {
+  match Urn.tryFrom(uriOf(text)) {
+    Ok(name) => name.show()
+    Fail(problem) => "refused: {problem}"
+  }
+}
+
+/** The text of the `file:` URI or the relative reference a path is. */
+fn referenceText(path: String): String {
+  match UriReference.tryFrom(Path.from(path)) {
+    Ok(reference) => reference.text()
+    Fail(problem) => "refused: {problem}"
+  }
+}
+
+/** The path a URI reference spells, or the message it was refused with. */
+fn pathShown(text: String): String {
+  const reference = match UriReference.tryFrom(text) {
+    Ok(found) => found
+    Fail(problem) => {
+      return "unreadable: {problem}"
+    }
+  }
+  match Path.tryFrom(reference) {
+    Ok(path) => path.show()
+    Fail(problem) => "refused: {problem}"
+  }
+}
+
+group "IRIs" {
+  test "an IRI is read as the URI it maps to, and iriText is the IRI again" {
+    const uri = uriOf "https://example.test/straße/ä?q=ö#ü"
+    assert(uri.text() == "https://example.test/stra%C3%9Fe/%C3%A4?q=%C3%B6#%C3%BC")
+    assert(uri.iriText() == "https://example.test/straße/ä?q=ö#ü")
+  }
+
+  test "an escape the author wrote is shown as the character too" {
+    assert(uriOf("https://example.test/%c3%a4").iriText() == "https://example.test/ä")
+  }
+
+  test "what an IRI may not hold as itself stays escaped" {
+    // An ASCII delimiter, bytes that are not UTF-8, a bidirectional mark, a private-use character outside the query
+    assert(uriOf("https://example.test/a%2Fb%20c").iriText() == "https://example.test/a%2Fb%20c")
+    assert(uriOf("https://example.test/%FF%C3").iriText() == "https://example.test/%FF%C3")
+    assert(uriOf("https://example.test/%E2%80%8F").iriText() == "https://example.test/%E2%80%8F")
+    assert(uriOf("https://example.test/%EE%80%80?%EE%80%80").iriText() == "https://example.test/%EE%80%80?\u{E000}")
+  }
+
+  test "the IRI reads back as the same URI" {
+    const texts = [
+      "https://example.test/stra%C3%9Fe/%E2%80%8F/%FF?q=%F0%9F%98%80&x=%2F#%C3%BC",
+      "mailto:%C3%A4da@example.test",
+      "https://%C3%A4:pw@example.test/",
+    ]
+    for text in texts {
+      const uri = uriOf text
+      assert(Uri.tryFrom(uri.iriText()) == Ok(uri))
+    }
+  }
+}
+
+group "URNs" {
+  test "a URN has a namespace, lower case, and a namespace-specific string, as written" {
+    const name = Urn.tryFrom(uriOf("urn:UUID:F81D4FAE-7dec-11d0-a765-00a0c91e6bf6")).ok()
+    assert(name?.namespace() == Some("uuid"))
+    assert(name?.specific() == Some("F81D4FAE-7dec-11d0-a765-00a0c91e6bf6"))
+    assert(name?.show() == Some("urn:uuid:F81D4FAE-7dec-11d0-a765-00a0c91e6bf6"))
+    assert(name.map(Uri.from) == Some(uriOf("urn:uuid:F81D4FAE-7dec-11d0-a765-00a0c91e6bf6")))
+  }
+
+  test "the r-, q- and f-components are read, and the assigned name is without them" {
+    const name = Urn.tryFrom(uriOf("urn:example:weather?+CCResolve:cc=uk?=op=map&lat=39.56#top")).ok()
+    assert(name?.resolution() == Some("CCResolve:cc=uk"))
+    assert(name?.query() == Some("op=map&lat=39.56"))
+    assert(name?.fragment() == Some("top"))
+    assert(name.map({ _.assignedName().show() }) == Some("urn:example:weather"))
+    const plain = Urn.tryFrom(uriOf("urn:example:weather")).ok()
+    assert(name?.assignedName() == plain)
+    assert(name != plain)
+  }
+
+  test "a q-component alone" {
+    assert(Urn.tryFrom(uriOf("urn:example:a?=b")).ok()?.query() == Some("b"))
+    assert(Urn.tryFrom(uriOf("urn:example:a?=b")).ok()?.resolution() == None)
+  }
+
+  test "what RFC 8141 refuses" {
+    assert urnShown("urn:a:b").startsWith("refused")
+    assert urnShown("urn:-ab:b").startsWith("refused")
+    assert urnShown("urn:ab-:b").startsWith("refused")
+    assert urnShown("urn:abcdefghijklmnopqrstuvwxyz0123456:b").startsWith("refused")
+    assert urnShown("urn:example:").startsWith("refused")
+    assert urnShown("urn:example:/x").startsWith("refused")
+    assert urnShown("urn:example").startsWith("refused")
+    assert urnShown("urn:example:a?b").startsWith("refused")
+    assert urnShown("urn://example/a").startsWith("refused")
+    assert urnShown("https://example.test/").startsWith("refused")
+    assert(urnShown("urn:ex-ample:a") == "urn:ex-ample:a")
+  }
+}
+
+group "forms" {
+  test "the WHATWG parser: plus is a space, an escape is a byte, and bytes that are not UTF-8 are U+FFFD" {
+    assert(formDecoded("a=1&b=x+y&c=%C3%A4&&d") == [("a", "1"), ("b", "x y"), ("c", "ä"), ("d", "")])
+    assert(formDecoded("x=%FF") == [("x", "\u{FFFD}")])
+    assert(formDecoded("x=100%&y=%zz") == [("x", "100%"), ("y", "%zz")])
+    assert(formDecoded("=v&k=a=b") == [("", "v"), ("k", "a=b")])
+    assert(formDecoded("") == [])
+  }
+
+  test "the WHATWG serializer: a space is plus, and only letters, digits and *-._ stay" {
+    assert(formEncoded([("q", "Grüner Weg"), ("s", "a+b&c=d~")]) == "q=Gr%C3%BCner+Weg&s=a%2Bb%26c%3Dd%7E")
+    assert(formEncoded([("*-._", "")]) == "*-._=")
+    assert(formEncoded([]) == "")
+  }
+
+  test "the two are one round trip" {
+    const pairs = [("name", "Ada Lovelace"), ("note", "1 + 1 = 2 & more"), ("ü", "€")]
+    assert(formDecoded(formEncoded(pairs)) == pairs)
+  }
+
+  test "percentDecoded reads the escapes as UTF-8 and refuses what is not" {
+    assert(percentDecoded("a%20b%C3%A4") == Ok("a bä"))
+    assert(!percentDecoded("%FF").isOk())
+    assert(percentDecoded("100%") == Ok("100%"))
+  }
+}
+
+group "Path" {
+  test "a path is a file URI, and a relative path a relative reference" {
+    assert(referenceText("C:/Users/ada/notes.txt") == "file:///C:/Users/ada/notes.txt")
+    assert(referenceText("/usr/bin/torb") == "file:///usr/bin/torb")
+    assert(referenceText("src/main.trb") == "src/main.trb")
+    assert(referenceText("//server/share/x") == "file://server/share/x")
+    assert(referenceText("a b/ü.txt") == "a%20b/%C3%BC.txt")
+    assert(referenceText("ab:c/d") == "./ab:c/d")
+    assert(referenceText("a:b/c") == "file:///A:/b/c")
+    assert(referenceText("/") == "file:///")
+  }
+
+  test "every row of the round trip comes back" {
+    for text in ["C:/Users/ada/notes.txt", "/usr/bin/torb", "src/main.trb", "//server/share/x", "a b/ü.txt"] {
+      assert(pathShown(referenceText(text)) == Path.from(text).show())
+    }
+  }
+
+  test "the forms of RFC 8089 and its appendices" {
+    assert(pathShown("file:///usr/bin/torb") == "/usr/bin/torb")
+    assert(pathShown("file:/usr/bin/torb") == "/usr/bin/torb")
+    assert(pathShown("file://localhost/usr/bin/torb") == "/usr/bin/torb")
+    assert(pathShown("file:///C:/Users/ada") == "C:/Users/ada")
+    assert(pathShown("file:///C|/Users/ada") == "C:/Users/ada")
+    assert(pathShown("file:C:/Users/ada") == "C:/Users/ada")
+    assert(pathShown("file://server/share/x") == "//server/share/x")
+    assert(pathShown("file:///x#top") == "/x")
+  }
+
+  test "what is not a file path is refused" {
+    assert pathShown("https://example.test/a").startsWith("refused")
+    assert pathShown("file:///x?y").startsWith("refused")
+    assert pathShown("file:///a%2Fb").startsWith("refused")
+    assert pathShown("file:///a%FF").startsWith("refused")
+    assert pathShown("file:x").startsWith("refused")
+    assert pathShown("//server/x").startsWith("refused")
+  }
+
+  test "a Uri has no relative path" {
+    assert(Uri.tryFrom(Path.from("src/main.trb")) == Fail(UriError.Relative("src/main.trb")))
+    assert(Uri.tryFrom(Path.from("/x")).map({ _.text() }) == Ok("file:///x"))
+  }
+}

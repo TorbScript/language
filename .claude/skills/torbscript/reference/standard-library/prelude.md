@@ -70,11 +70,14 @@ public use Json, JsonValue, JsonError from "std/json"
 public use Duration, Instant from "std/time"
 public use Int64.seconds, Int64.milliseconds from "std/time"
 public use Path, PathError from "std/path"
+public use Uri, UriError from "std/uri"
 ```
 
 `Path` is in because it is a value like `Duration`: it names a file and reads nothing, so a signature can say it
 without an import, while `File` and `Directory` - which touch what a path names - stay behind `use ... from "std/fs"`.
-`Uri` and `UriError` join it once `std/uri` exists. `std/linear` stays out: a program that computes with vectors
+`Uri` and `UriError` are in for the same reason: a URI names a resource and opens nothing, and what reaches it -
+[std/http](http.md), [std/network](network.md) - stays an import, as do `UriReference`, `Urn` and the rest of
+[std/uri](uri.md). `std/linear` stays out: a program that computes with vectors
 imports it.
 
 Every re-export keeps its original name, so `use Option from "std/prelude"` and `use Option from "std/core"` name the

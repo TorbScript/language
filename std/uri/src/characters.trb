@@ -1,0 +1,361 @@
+/**
+ * The character classes of RFC 3986 and the percent-encoding every other module of `std/uri` is written over.
+ *
+ * Everything here reads bytes, not characters: every delimiter and every class the grammar has is ASCII, and a byte of
+ * 128 or more is part of a UTF-8 sequence, which a URI holds only percent-encoded (RFC 3987 section 3.1). So a scan is
+ * `byteAt` over the text, and a run of bytes that needs no change is copied with one `sliceBytes`.
+ */
+
+use textOf from "std/stream"
+use UriError from "./error"
+
+/** Where in a URI a text stands, which decides the characters it may hold as they are (RFC 3986 section 3). */
+public type Component with Equals {
+  /** `unreserved / pct-encoded / sub-delims / ":"`. */
+  case UserInformation
+  /** `unreserved / pct-encoded / sub-delims`, the registered name of a host. */
+  case RegisteredName
+  /** `pchar / "/"`. */
+  case Path
+  /** `pchar / "/" / "?"`, which the fragment shares. */
+  case Query
+  /** `pchar / "/" / "?"`, the same set as the query. */
+  case Fragment
+  /** `pchar`: one segment of a path, so a `/` is encoded. */
+  case Segment
+}
+
+/** `ALPHA`: an ASCII letter. */
+public fn isLetter(byte: Int): Bool {
+  (byte >= 65 && byte <= 90) || (byte >= 97 && byte <= 122)
+}
+
+/** `DIGIT`: an ASCII digit. */
+public fn isDigit(byte: Int): Bool {
+  byte >= 48 && byte <= 57
+}
+
+/** What a hexadecimal digit of either case is worth, and `-1` for any other byte. */
+public fn hexadecimalValue(byte: Int): Int {
+  if byte >= 48 && byte <= 57 {
+    return byte - 48
+  }
+  if byte >= 65 && byte <= 70 {
+    return byte - 55
+  }
+  if byte >= 97 && byte <= 102 {
+    return byte - 87
+  }
+  -1
+}
+
+/** `ALPHA / DIGIT / "-" / "." / "_" / "~"`, which RFC 3986 section 2.3 calls unreserved. */
+public fn isUnreserved(byte: Int): Bool {
+  isLetter(byte) || isDigit(byte) || byte == 45 || byte == 46 || byte == 95 || byte == 126
+}
+
+/** `"!" / "$" / "&" / "'" / "(" / ")" / "*" / "+" / "," / ";" / "="`, RFC 3986 section 2.2. */
+public fn isSubDelimiter(byte: Int): Bool {
+  byte == 33 || byte == 36 || (byte >= 38 && byte <= 44) || byte == 59 || byte == 61
+}
+
+/** `":" / "/" / "?" / "#" / "[" / "]" / "@"`, RFC 3986 section 2.2. */
+public fn isGeneralDelimiter(byte: Int): Bool {
+  byte == 58 || byte == 47 || byte == 63 || byte == 35 || byte == 91 || byte == 93 || byte == 64
+}
+
+/** Whether a byte may stand as itself in `component`. A `%` never does: it starts an escape. */
+public fn isAllowed(byte: Int, component: Component): Bool {
+  if isUnreserved(byte) || isSubDelimiter(byte) {
+    return true
+  }
+  match component {
+    .UserInformation => byte == 58
+    .RegisteredName => false
+    .Segment => byte == 58 || byte == 64
+    .Path => byte == 58 || byte == 64 || byte == 47
+    .Query => byte == 58 || byte == 64 || byte == 47 || byte == 63
+    .Fragment => byte == 58 || byte == 64 || byte == 47 || byte == 63
+  }
+}
+
+/** One byte as `%` and two upper-case hexadecimal digits. */
+public fn escaped(byte: Int): String {
+  const digits = "0123456789ABCDEF"
+  const high = byte.shiftedRight(by: 4).bitwiseAnd(15)
+  const low = byte.bitwiseAnd 15
+  "%" + digits.sliceBytes(high, high + 1) + digits.sliceBytes(low, low + 1)
+}
+
+/** The byte a well-formed escape at `offset` names, and `-1` where there is no `%` and two hexadecimal digits there. */
+public fn escapeAt(text: String, offset: Int): Int {
+  if offset + 2 >= text.byteLength() {
+    return -1
+  }
+  if byteOf(text, offset) != 37 {
+    return -1
+  }
+  const high = hexadecimalValue byteOf(text, offset + 1)
+  const low = hexadecimalValue byteOf(text, offset + 2)
+  if high < 0 || low < 0 {
+    return -1
+  }
+  high * 16 + low
+}
+
+/** The byte at `offset` as a number, and `-1` past the end. */
+public fn byteOf(text: String, offset: Int): Int {
+  match text.byteAt(offset) {
+    Some(byte) => Int.from byte
+    None => -1
+  }
+}
+
+/**
+ * RFC 3986 section 6.2.2 over one component: an escape is written with upper-case digits and decoded where the byte it
+ * names is unreserved, a byte the component may hold stays, and every other byte - a space, a second `#`, each byte of
+ * a non-ASCII character (RFC 3987 section 3.1) - is percent-encoded. `lowerCase` lower cases every letter that is not
+ * part of an escape, which is what a registered name is normalized with.
+ *
+ * # Errors
+ *
+ * - [UriError.InvalidEscape] for a `%` that is not followed by two hexadecimal digits; `whole` is the text it names.
+ */
+public fn normalizedComponent(
+  text: String,
+  component: Component,
+  whole: String,
+  lowerCase: Bool = false,
+): Result<String, UriError> {
+  const length = text.byteLength()
+  var out = ""
+  var runStart = 0
+  var index = 0
+  while index < length {
+    const byte = byteOf text, index
+    if byte != 37 && isAllowed(byte, component) && !(lowerCase && byte >= 65 && byte <= 90) {
+      index = index + 1
+      continue
+    }
+    out = out + runOf(text, runStart, index)
+    if byte == 37 {
+      const value = escapeAt text, index
+      if value < 0 {
+        return Fail UriError.InvalidEscape(whole)
+      }
+      out = out + if isUnreserved(value) { unreservedText value, lowerCase } else { escaped value }
+      index = index + 3
+    } else if byte >= 65 && byte <= 90 && lowerCase {
+      out = out + unreservedText(byte, true)
+      index = index + 1
+    } else {
+      out = out + escaped(byte)
+      index = index + 1
+    }
+    runStart = index
+  }
+  if runStart == 0 {
+    return Ok text
+  }
+  Ok(out + text.sliceBytes(runStart, length))
+}
+
+/**
+ * The bytes of `text` from `start` to `end`, and `""` where there are none - without asking `sliceBytes` for an empty
+ * slice, which it refuses at an offset inside a character.
+ */
+public fn runOf(text: String, start: Int, end: Int): String {
+  if end <= start {
+    return ""
+  }
+  text.sliceBytes start, end
+}
+
+/** An unreserved byte as the one-character text it is, lower cased where asked. */
+fn unreservedText(byte: Int, lowerCase: Bool): String {
+  const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"
+  var offset = 0
+  if byte >= 65 && byte <= 90 {
+    offset = if lowerCase { byte - 65 + 26 } else { byte - 65 }
+  } else if byte >= 97 && byte <= 122 {
+    offset = byte - 97 + 26
+  } else if byte >= 48 && byte <= 57 {
+    offset = byte - 48 + 52
+  } else if byte == 45 {
+    offset = 62
+  } else if byte == 46 {
+    offset = 63
+  } else if byte == 95 {
+    offset = 64
+  } else {
+    offset = 65
+  }
+  letters.sliceBytes(offset, offset + 1)
+}
+
+/**
+ * A text written into `component` as it is: every byte the component cannot hold is percent-encoded, a `%` among them,
+ * so nothing in `text` is read as an escape. Total, which [normalizedComponent] is not.
+ */
+public fn encodedComponent(text: String, component: Component): String {
+  const length = text.byteLength()
+  var out = ""
+  var runStart = 0
+  var index = 0
+  while index < length {
+    const byte = byteOf text, index
+    if byte != 37 && isAllowed(byte, component) {
+      index = index + 1
+      continue
+    }
+    out = out + runOf(text, runStart, index) + escaped(byte)
+    index = index + 1
+    runStart = index
+  }
+  if runStart == 0 {
+    return text
+  }
+  out + text.sliceBytes(runStart, length)
+}
+
+/** Every escape of a text decoded into the byte it names; a `%` that starts no escape stays a `%`. */
+public fn percentDecodedBytes(text: String): Bytes {
+  const length = text.byteLength()
+  var bytes: Bytes = []
+  var index = 0
+  while index < length {
+    const value = escapeAt text, index
+    if value >= 0 {
+      bytes.append(UInt8.tryFrom(value).ok() ?? 0)
+      index = index + 3
+      continue
+    }
+    if const Some(byte) = text.byteAt(index) {
+      bytes.append byte
+    }
+    index = index + 1
+  }
+  bytes
+}
+
+/**
+ * Every percent escape of a text decoded, and the bytes read as UTF-8: `a%20b` is `a b`, `%C3%A4` is `ä`. A `%` that
+ * starts no escape stays as it is.
+ *
+ * # Errors
+ *
+ * - [UriError.NotText] where the decoded bytes are not UTF-8, which `%FF` alone already is.
+ */
+public fn percentDecoded(text: String): Result<String, UriError> {
+  if !text.contains("%") {
+    return Ok text
+  }
+  textOf(percentDecodedBytes(text)).mapError({ problem => UriError.NotText "`{text}`: {problem}" })
+}
+
+/**
+ * Bytes read as UTF-8 the way the WHATWG Encoding Standard's decoder reads them: every sequence that is not UTF-8 becomes
+ * one U+FFFD, and nothing fails. It is what `application/x-www-form-urlencoded` asks for.
+ */
+public fn lossyText(bytes: Bytes): String {
+  if const Ok(text) = textOf(bytes) {
+    return text
+  }
+  var characters: List<Char> = []
+  var codePoint = 0
+  var needed = 0
+  var seen = 0
+  var lower = 128
+  var upper = 191
+  var index = 0
+  while index < bytes.length() {
+    const byte = Int.from bytes[index]
+    if needed == 0 {
+      if byte <= 127 {
+        characters.append characterOf(byte)
+      } else if byte >= 194 && byte <= 223 {
+        needed = 1
+        codePoint = byte.bitwiseAnd 31
+      } else if byte >= 224 && byte <= 239 {
+        if byte == 224 {
+          lower = 160
+        }
+        if byte == 237 {
+          upper = 159
+        }
+        needed = 2
+        codePoint = byte.bitwiseAnd 15
+      } else if byte >= 240 && byte <= 244 {
+        if byte == 240 {
+          lower = 144
+        }
+        if byte == 244 {
+          upper = 143
+        }
+        needed = 3
+        codePoint = byte.bitwiseAnd 7
+      } else {
+        characters.append characterOf(65533)
+      }
+      index = index + 1
+      continue
+    }
+    if byte < lower || byte > upper {
+      // The sequence is broken: one replacement for it, and the byte is read again as the start of the next one
+      codePoint = 0
+      needed = 0
+      seen = 0
+      lower = 128
+      upper = 191
+      characters.append characterOf(65533)
+      continue
+    }
+    lower = 128
+    upper = 191
+    codePoint = codePoint.shiftedLeft(by: 6).bitwiseOr(byte.bitwiseAnd(63))
+    seen = seen + 1
+    index = index + 1
+    if seen == needed {
+      characters.append characterOf(codePoint)
+      codePoint = 0
+      needed = 0
+      seen = 0
+    }
+  }
+  if needed != 0 {
+    characters.append characterOf(65533)
+  }
+  String.from characters
+}
+
+/** A code point as the character it is, and U+FFFD for a number that is none. */
+public fn characterOf(codePoint: Int): Char {
+  Char.tryFrom(codePoint).ok() ?? Char.tryFrom(65533).ok() ?? '?'
+}
+
+/** Whether a text holds a byte of 128 or more, which is a character outside ASCII. */
+public fn hasNonAscii(text: String): Bool {
+  const length = text.byteLength()
+  var index = 0
+  while index < length {
+    if byteOf(text, index) >= 128 {
+      return true
+    }
+    index = index + 1
+  }
+  false
+}
+
+/** A text with every ASCII upper-case letter lower cased and every other byte kept. */
+public fn asciiLowerCased(text: String): String {
+  const length = text.byteLength()
+  var index = 0
+  while index < length {
+    const byte = byteOf text, index
+    if byte >= 65 && byte <= 90 {
+      return text.toLowerCase()
+    }
+    index = index + 1
+  }
+  text
+}

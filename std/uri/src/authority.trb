@@ -1,0 +1,233 @@
+/**
+ * [Authority] and [Host]: the `[userInfo "@"] host [":" port]` of a URI, read and normalized (RFC 3986 section 3.2).
+ *
+ * A host is one of three things, and the first that fits decides (section 3.2.2): an IP literal in brackets, an IPv4
+ * address in dotted decimal, or a registered name. The addresses are `std/ip`'s, so a URI whose host is an IP literal
+ * answers a `SocketAddress` without a resolver - and without the network capability.
+ */
+
+use IpAddress, Ipv4Address, Ipv6Address, SocketAddress from "std/ip"
+use UriError from "./error"
+use Component, byteOf, hasNonAscii, hexadecimalValue, isAllowed, isDigit, normalizedComponent, percentDecodedBytes from "./characters"
+
+/**
+ * Where an authority points. `Name("")` is a value: `file:///x` has an authority whose host is empty.
+ *
+ * # Examples
+ *
+ *     const uri = Uri.tryFrom("http://[::1]:8080/")?
+ *     print uri.host()
+ */
+public type Host with Show, Equals, Hash {
+  /** A registered name, lower case: `example.test`. Resolving it into addresses is `std/network`'s. */
+  case Name(name: String)
+  /** An IP literal: `127.0.0.1`, or `::1` from `[::1]`, in the text form of `std/ip` (RFC 5952 for IPv6). */
+  case Address(address: IpAddress)
+  /** RFC 3986's `IPvFuture`, `v7.anything`, lower case: an IP version nobody has defined yet. */
+  case Future(text: String)
+
+  /** The host as a URI writes it: `example.test`, `127.0.0.1`, `[::1]`, `[v7.x]`. */
+  fn show(): String {
+    match self {
+      .Name(name) => name
+      .Address(address) => {
+        match address {
+          .Version4(inside) => inside.show()
+          .Version6(inside) => "[{inside}]"
+        }
+      }
+      .Future(text) => "[{text}]"
+    }
+  }
+}
+
+/**
+ * The `[userInfo "@"] host [":" port]` of a URI. Its absence is not an empty one: `mailto:ada@example.test` has no
+ * authority, and `file:///x` has one whose host is `Name("")`.
+ *
+ * Ordinary data: the fields are public, and a URI that holds one has already normalized it.
+ */
+public type Authority with Show, Equals, Hash {
+  /** Everything before the `@`, normalized. `None` where the authority has no `@`. */
+  userInfo: String?
+  /** The registered name or the IP literal. */
+  host: Host
+  /** The port, where one is written out. It is not the port a scheme defaults to. */
+  port: Int?
+
+  /** `[userInfo "@"] host [":" port]`, with every part of it: a password in the user information is in this text. */
+  fn text(): String {
+    const front = match userInfo {
+      Some(found) => "{found}@"
+      None => ""
+    }
+    "{front}{hostAndPort()}"
+  }
+
+  /** The same text with everything after the first `:` of the user information replaced by `***`. */
+  fn show(): String {
+    const front = match userInfo {
+      Some(found) => "{redacted(found)}@"
+      None => ""
+    }
+    "{front}{hostAndPort()}"
+  }
+
+  /** `host [":" port]`, which carries no secret either way. */
+  fn hostAndPort(): String {
+    match port {
+      Some(found) => "{host}:{found}"
+      None => host.show()
+    }
+  }
+
+  /**
+   * Where to connect without a resolver: the host where it is an IP literal, with the written port or `defaultPort`.
+   * `None` for a registered name, which has to be resolved first, and where neither port is known.
+   */
+  fn socketAddress(defaultPort: Int? = None): SocketAddress? {
+    const address = match host {
+      .Address(found) => found
+      _ => {
+        return None
+      }
+    }
+    const chosen = if port.isSome() { port } else { defaultPort }
+    match chosen {
+      Some(found) => Some SocketAddress(address, found)
+      None => None
+    }
+  }
+}
+
+/** `user:secret` becomes `user:***`, and a user information without a `:` is a name and stays. */
+fn redacted(userInfo: String): String {
+  match userInfo.indexOf(":") {
+    Some(at) => "{userInfo.sliceBytes(0, at)}:***"
+    None => userInfo
+  }
+}
+
+/**
+ * `[userInfo "@"] host [":" port]` read and normalized. `whole` is the reference it is part of, which a refusal of an
+ * escape names.
+ */
+public fn authorityOf(text: String, whole: String): Result<Authority, UriError> {
+  var rest = text
+  var userInfo: String? = None
+  if const Some(at) = rest.lastIndexOf("@") {
+    userInfo = Some(normalizedComponent(rest.sliceBytes(0, at), Component.UserInformation, whole)?)
+    rest = rest.sliceBytes(at + 1, rest.byteLength())
+  }
+  var hostText = rest
+  var portText = ""
+  if rest.startsWith("[") {
+    const closing = rest.indexOf("]") ?? -1
+    if closing < 0 {
+      return Fail UriError.InvalidHost(rest, "a `[` that is not closed")
+    }
+    hostText = rest.sliceBytes(0, closing + 1)
+    const after = rest.sliceBytes(closing + 1, rest.byteLength())
+    if !after.isEmpty() {
+      if !after.startsWith(":") {
+        return Fail UriError.InvalidHost(rest, "something after the `]` that is not a port")
+      }
+      portText = after.sliceBytes 1, after.byteLength()
+    }
+  } else if const Some(colon) = rest.lastIndexOf(":") {
+    hostText = rest.sliceBytes 0, colon
+    portText = rest.sliceBytes(colon + 1, rest.byteLength())
+  }
+  const host = hostOf(hostText, whole)?
+  const port = portOf(portText)?
+  Ok Authority(userInfo, host, port)
+}
+
+/** A port: decimal digits for a number from 0 to 65535, and `None` for an empty one, which RFC 3986 drops. */
+fn portOf(text: String): Result<Int?, UriError> {
+  if text.isEmpty() {
+    return Ok None
+  }
+  var value = 0
+  var index = 0
+  while index < text.byteLength() {
+    const byte = byteOf text, index
+    if !isDigit(byte) {
+      return Fail UriError.InvalidPort(text)
+    }
+    value = value * 10 + byte - 48
+    if value > 65535 {
+      return Fail UriError.InvalidPort(text)
+    }
+    index = index + 1
+  }
+  Ok Some(value)
+}
+
+/** A host, by the first rule of RFC 3986 section 3.2.2 that fits it. */
+fn hostOf(text: String, whole: String): Result<Host, UriError> {
+  if text.startsWith("[") {
+    return literalOf text
+  }
+  if hasNonAscii(text) {
+    return Fail UriError.NonAsciiHost(text)
+  }
+  var index = 0
+  while index < text.byteLength() {
+    const byte = byteOf text, index
+    if byte != 37 && !isAllowed(byte, Component.RegisteredName) {
+      return Fail UriError.InvalidHost(text, "`{text.sliceBytes(index, index + 1)}` is not part of a host name")
+    }
+    index = index + 1
+  }
+  const name = normalizedComponent(text, Component.RegisteredName, whole, lowerCase: true)?
+  if name.contains("%") && percentDecodedBytes(name).any({ Int.from(_) >= 128 }) {
+    return Fail UriError.NonAsciiHost(text)
+  }
+  if const Ok(address) = Ipv4Address.tryFrom(name) {
+    return Ok Host.Address(IpAddress.Version4(address))
+  }
+  Ok Host.Name(name)
+}
+
+/** `"[" ( IPv6address / IPvFuture ) "]"`. A zone identifier is not URI syntax since RFC 9844. */
+fn literalOf(text: String): Result<Host, UriError> {
+  const inside = text.sliceBytes(1, text.byteLength() - 1)
+  const first = byteOf inside, 0
+  if first == 118 || first == 86 {
+    return futureOf text, inside
+  }
+  if inside.contains("%") {
+    return Fail(UriError.InvalidHost(
+      text,
+      "a zone identifier is not part of a URI: RFC 9844 took it out of the grammar RFC 6874 had added it to",
+    ))
+  }
+  match Ipv6Address.tryFrom(inside) {
+    Ok(address) => Ok Host.Address(IpAddress.Version6(address))
+    Fail(problem) => Fail UriError.InvalidHost(text, problem.reason)
+  }
+}
+
+/** `"v" 1*HEXDIG "." 1*( unreserved / sub-delims / ":" )`, lower case. */
+fn futureOf(text: String, inside: String): Result<Host, UriError> {
+  const dot = inside.indexOf(".") ?? -1
+  if dot < 2 || dot == inside.byteLength() - 1 {
+    return Fail UriError.InvalidHost(text, "an `IPvFuture` literal is `v`, a hexadecimal version, `.` and an address")
+  }
+  var index = 1
+  while index < dot {
+    if hexadecimalValue(byteOf(inside, index)) < 0 {
+      return Fail UriError.InvalidHost(text, "the version of an `IPvFuture` literal is hexadecimal")
+    }
+    index = index + 1
+  }
+  index = dot + 1
+  while index < inside.byteLength() {
+    if !isAllowed(byteOf(inside, index), Component.UserInformation) {
+      return Fail UriError.InvalidHost(text, "an `IPvFuture` address holds unreserved characters, sub-delimiters and `:`")
+    }
+    index = index + 1
+  }
+  Ok Host.Future(inside.toLowerCase())
+}

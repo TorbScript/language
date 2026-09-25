@@ -1,0 +1,114 @@
+/**
+ * RFC 3987 section 3.2, the way from a URI back to the IRI it stands for: escapes of UTF-8 characters outside ASCII are
+ * decoded, and everything else stays as it is (docs/design/URI.md section 4a). The way in, section 3.1, is the
+ * percent-encoding every URI type does at construction.
+ */
+
+use byteOf, characterOf, escapeAt from "./characters"
+
+/**
+ * A normalized component with every escape sequence decoded that is the UTF-8 of a character an IRI may hold as it is:
+ * a `ucschar`, or an `iprivate` where `inQuery`. An escape of an ASCII byte, of a bidirectional formatting character
+ * (RFC 3987 section 4.1), of a character outside those ranges or of bytes that are not UTF-8 stays an escape, so reading
+ * the answer as a URI again gives back the component it came from.
+ */
+public fn iriDecoded(text: String, inQuery: Bool): String {
+  if !text.contains("%") {
+    return text
+  }
+  const length = text.byteLength()
+  var out = ""
+  var runStart = 0
+  var index = 0
+  while index < length {
+    if byteOf(text, index) != 37 {
+      index = index + 1
+      continue
+    }
+    const (codePoint, width) = sequenceAt text, index
+    if codePoint < 0 || !isIriCharacter(codePoint, inQuery) {
+      index = index + 3
+      continue
+    }
+    out = out + text.sliceBytes(runStart, index) + "{characterOf(codePoint)}"
+    index = index + width * 3
+    runStart = index
+  }
+  if runStart == 0 {
+    return text
+  }
+  out + text.sliceBytes(runStart, length)
+}
+
+/**
+ * The code point that the escapes starting at `offset` spell as UTF-8, and how many escapes that took. `-1` where they
+ * spell no complete, shortest-form UTF-8 sequence of a character outside ASCII.
+ */
+fn sequenceAt(text: String, offset: Int): (Int, Int) {
+  const first = escapeAt text, offset
+  if first < 194 || first > 244 {
+    return (-1, 0)
+  }
+  var width = 4
+  var codePoint = first.bitwiseAnd 7
+  var lower = 128
+  var upper = 191
+  if first <= 223 {
+    width = 2
+    codePoint = first.bitwiseAnd 31
+  } else if first <= 239 {
+    width = 3
+    codePoint = first.bitwiseAnd 15
+    if first == 224 {
+      lower = 160
+    }
+    if first == 237 {
+      upper = 159
+    }
+  } else {
+    if first == 240 {
+      lower = 144
+    }
+    if first == 244 {
+      upper = 143
+    }
+  }
+  var step = 1
+  while step < width {
+    const next = escapeAt(text, offset + step * 3)
+    if next < lower || next > upper {
+      return (-1, 0)
+    }
+    lower = 128
+    upper = 191
+    codePoint = codePoint.shiftedLeft(by: 6).bitwiseOr(next.bitwiseAnd(63))
+    step = step + 1
+  }
+  (codePoint, width)
+}
+
+/** `ucschar` of RFC 3987 section 2.2, or `iprivate` in a query - without the bidirectional formatting characters. */
+fn isIriCharacter(codePoint: Int, inQuery: Bool): Bool {
+  if codePoint == 8206 || codePoint == 8207 || (codePoint >= 8234 && codePoint <= 8238) {
+    return false
+  }
+  if (codePoint >= 160 && codePoint <= 55295) || (codePoint >= 63744 && codePoint <= 64975) {
+    return true
+  }
+  if codePoint >= 65008 && codePoint <= 65519 {
+    return true
+  }
+  if codePoint >= 65536 && codePoint < 917504 {
+    // Planes 1 to 13: everything but the last two code points of each
+    return codePoint.bitwiseAnd(65535) <= 65533
+  }
+  if codePoint >= 921600 && codePoint <= 983037 {
+    // Plane 14 from U+E1000
+    return true
+  }
+  if !inQuery {
+    return false
+  }
+  (codePoint >= 57344 && codePoint <= 63743) || (codePoint >= 983040 && codePoint <= 1048573)
+    || (codePoint >= 1048576 && codePoint <= 1114109)
+}

@@ -46,6 +46,7 @@ What does not belong here: the language rules that a type participates in, which
 - **[std/json](json.md)** - Json, a value with the options of the format, for encoding and decoding any Encode/Decode type, and JsonValue for the rare document whose shape is not known ahead of time.
 - **[std/time](time.md)** - Instant and Duration, the two time values, plus Clock and sleep, which read and wait on the wall clock.
 - **[std/path](path.md)** - Path, a root and a list of components, never a string, plus Root and PathError - the type behind Path.resolved.
+- **[std/uri](uri.md)** - Uri and UriReference after RFC 3986, normalized at construction, with IRIs, Urn, the file bridge to Path and the form codec of HTML - values that open nothing.
 - **[std/fs](fs.md)** - File and IoError - whole-file helpers for what fits in memory, and a File as both ends of a byte stream.
 - **[std/io](io.md)** - Standard input and the streams every process is started with - readLine for the short form, Source and Sink for the rest.
 - **[std/process](process.md)** - Process for arguments, exiting and running a program to its end as a task, Child for a running program's pipes, and ProcessOutput for what it left behind.

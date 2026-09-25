@@ -1,0 +1,392 @@
+/**
+ * `Uri` and `UriReference`: every row of docs/design/URI.md section 4's table, the refusals, RFC 3986 section 5.4's
+ * resolution examples (the normal and the abnormal ones) against the specification's own base, `relativeTo` as the way
+ * back, the hosts that are IP literals, the query as a form, and the ordering.
+ */
+
+use test, group from "std/test"
+use Uri, UriReference from "../src/uri"
+use Host from "../src/authority"
+use UriError from "../src/error"
+use IpAddress, Ipv4Address, Ipv6Address, SocketAddress from "std/ip"
+
+/** A text every test here knows to be a URI. A refusal is a bug of the test or of the parser, and says which text. */
+fn uriOf(text: String): Uri {
+  match Uri.tryFrom(text) {
+    Ok(uri) => uri
+    Fail(problem) => panic "a test's URI was refused: {problem}"
+  }
+}
+
+/** A text every test here knows to be a URI reference. */
+fn referenceOf(text: String): UriReference {
+  match UriReference.tryFrom(text) {
+    Ok(reference) => reference
+    Fail(problem) => panic "a test's URI reference was refused: {problem}"
+  }
+}
+
+/** The canonical text of a reference, or the message it was refused with. */
+fn shown(text: String): String {
+  match UriReference.tryFrom(text) {
+    Ok(reference) => reference.text()
+    Fail(problem) => "refused: {problem}"
+  }
+}
+
+/** `reference` resolved against RFC 3986 section 5.4's base, as text. */
+fn resolvedText(reference: String): String {
+  referenceOf(reference).resolved(against: uriOf("http://a/b/c/d;p?q")).text()
+}
+
+group "parsing and normalization" {
+  test "a URI with every part keeps every part" {
+    const uri = uriOf "https://example.test/a/b?q=1#top"
+    assert(uri.scheme() == "https")
+    assert(uri.host() == Some(Host.Name("example.test")))
+    assert(uri.path() == "/a/b")
+    assert(uri.query() == Some("q=1"))
+    assert(uri.fragment() == Some("top"))
+    assert(uri.text() == "https://example.test/a/b?q=1#top")
+  }
+
+  test "the scheme and the host are lower cased and the dot segments removed" {
+    assert(shown("HTTP://Example.TEST:80/a/./b/../c") == "http://example.test:80/a/c")
+  }
+
+  test "an empty port is dropped with its colon" {
+    assert(shown("http://example.test:/a") == "http://example.test/a")
+  }
+
+  test "a password is in the text and not in the display form" {
+    const uri = uriOf "https://user:secret@example.test:8443/"
+    assert(uri.text() == "https://user:secret@example.test:8443/")
+    assert(uri.show() == "https://user:***@example.test:8443/")
+    assert("{uri}" == "https://user:***@example.test:8443/")
+    assert(uri.authority()?.userInfo == Some("user:secret"))
+  }
+
+  test "a user information without a colon is a name and is shown" {
+    assert(uriOf("https://ada@example.test/a").show() == "https://ada@example.test/a")
+  }
+
+  test "the rows of section 4 that stay as they are" {
+    const unchanged = [
+      "file:///C:/Users/ada/notes.txt",
+      "file://server/share/x",
+      "mailto:ada@example.test",
+      "urn:uuid:f81d4fae-7dec-11d0-a765-00a0c91e6bf6",
+      "git+ssh://git@example.test/project/x.git",
+      "data:text/plain,hello",
+      "//example.test/a",
+      "/a/b",
+      "../a/b",
+      "a/b",
+      "",
+      "?q=1",
+      "#top",
+    ]
+    for text in unchanged {
+      assert(shown(text) == text)
+    }
+  }
+
+  test "an escape is upper cased, an unreserved one decoded, and a slash stays escaped" {
+    assert(shown("https://example.test/a%2Fb/%7euser/%c3%a4") == "https://example.test/a%2Fb/~user/%C3%A4")
+  }
+
+  test "a character no URI may hold is percent-encoded as UTF-8" {
+    assert(shown("https://example.test/path with spaces") == "https://example.test/path%20with%20spaces")
+    assert(shown("https://example.test/ä?q=ö#ü") == "https://example.test/%C3%A4?q=%C3%B6#%C3%BC")
+    assert(shown("http:\\\\example.com\\a") == "http:%5C%5Cexample.com%5Ca")
+    assert(shown("#a#b") == "#a%23b")
+  }
+
+  test "a mailto has no authority and a file URI an empty host" {
+    assert uriOf("mailto:ada@example.test").authority().isNone()
+    assert(uriOf("file:///x").host() == Some(Host.Name("")))
+  }
+
+  test "the dot segments of a relative path are kept, and those of an absolute path removed" {
+    assert(shown("../a/./b") == "../a/./b")
+    assert(shown("/a/../b/./c") == "/b/c")
+    // RFC 3986 section 5.2.4 as written: a rootless path loses its first segment to `..` and keeps the `/`
+    assert(shown("mailto:a/../b") == "mailto:/b")
+    assert(shown("mailto:../b") == "mailto:b")
+  }
+
+  test "a path without an authority never starts with two slashes" {
+    assert(shown("x:/.//a") == "x:/.//a")
+    assert(shown("x:/a/..//b") == "x:/.//b")
+  }
+
+  test "segments are the path split at its slashes, still encoded" {
+    assert(uriOf("https://example.test/").segments() == [])
+    assert(uriOf("https://example.test").segments() == [])
+    assert(uriOf("https://example.test/a%20b/c/").segments() == ["a%20b", "c", ""])
+    assert(referenceOf("a/b").segments() == ["a", "b"])
+  }
+}
+
+group "refusals" {
+  test "a non-ASCII host is refused until there is IDNA" {
+    assert(UriReference.tryFrom("https://münchen.test/a") == Fail(UriError.NonAsciiHost("münchen.test")))
+    assert(!UriReference.tryFrom("https://m%C3%BCnchen.test/").isOk())
+  }
+
+  test "a percent sign that starts no escape is refused" {
+    const text = "https://example.test/a%zz"
+    assert(UriReference.tryFrom(text) == Fail(UriError.InvalidEscape(text)))
+    assert(!UriReference.tryFrom("100%").isOk())
+  }
+
+  test "a port that is no number from 0 to 65535 is refused" {
+    assert(UriReference.tryFrom("https://example.test:http/a") == Fail(UriError.InvalidPort("http")))
+    assert(UriReference.tryFrom("https://example.test:65536/a") == Fail(UriError.InvalidPort("65536")))
+    assert(uriOf("https://example.test:08080/").port() == Some(8080))
+  }
+
+  test "a colon in the first segment of a relative path reads as a scheme that is none" {
+    assert(UriReference.tryFrom("1a:b") == Fail(UriError.InvalidScheme("1a")))
+    assert(shown("./1a:b") == "./1a:b")
+  }
+
+  test "a Uri has a scheme" {
+    assert(Uri.tryFrom("/a/b") == Fail(UriError.Relative("/a/b")))
+    assert(!Uri.tryFrom("//example.test/a").isOk())
+  }
+
+  test "a zone identifier is refused, as RFC 9844 has it" {
+    assert(!UriReference.tryFrom("http://[fe80::1%25eth0]/").isOk())
+  }
+
+  test "a host with a character no host may hold is refused" {
+    assert(!UriReference.tryFrom("http://exa mple.test/").isOk())
+    assert(!UriReference.tryFrom("http://[::1/").isOk())
+    assert(!UriReference.tryFrom("http://[1.2.3.4]/").isOk())
+  }
+}
+
+group "hosts" {
+  test "an IPv4 address is an address and not a name" {
+    const uri = uriOf "http://127.0.0.1:8080/"
+    assert(uri.host() == Some(Host.Address(IpAddress.Version4(Ipv4Address.loopback))))
+    assert(uri.socketAddress() == Some(SocketAddress(IpAddress.loopback, 8080)))
+  }
+
+  test "an IPv6 literal is written in RFC 5952's form" {
+    assert(shown("http://[2001:DB8:0:0::1]/") == "http://[2001:db8::1]/")
+    const loopback = IpAddress.Version6 Ipv6Address.loopback
+    assert(uriOf("https://[::1]/").socketAddress() == Some(SocketAddress(loopback, 443)))
+  }
+
+  test "what is not an IPv4 address by the RFC's rule is a name" {
+    assert(uriOf("http://01.2.3.4/").host() == Some(Host.Name("01.2.3.4")))
+    assert(uriOf("http://1.2.3/").host() == Some(Host.Name("1.2.3")))
+  }
+
+  test "a registered name has no socket address, and neither has an address without a known port" {
+    assert uriOf("http://example.test/").socketAddress().isNone()
+    assert uriOf("git://127.0.0.1/").socketAddress().isNone()
+  }
+
+  test "an IPvFuture literal is kept, lower case" {
+    assert(shown("http://[V7.Example:x]/") == "http://[v7.example:x]/")
+  }
+
+  test "the escapes of a registered name are normalized and its letters lower cased" {
+    assert(shown("http://%45xample.TEST/") == "http://example.test/")
+  }
+}
+
+group "resolution" {
+  test "RFC 3986 section 5.4.1, the normal examples" {
+    const cases = [
+      ("g:h", "g:h"),
+      ("g", "http://a/b/c/g"),
+      ("./g", "http://a/b/c/g"),
+      ("g/", "http://a/b/c/g/"),
+      ("/g", "http://a/g"),
+      ("//g", "http://g"),
+      ("?y", "http://a/b/c/d;p?y"),
+      ("g?y", "http://a/b/c/g?y"),
+      ("#s", "http://a/b/c/d;p?q#s"),
+      ("g#s", "http://a/b/c/g#s"),
+      ("g?y#s", "http://a/b/c/g?y#s"),
+      (";x", "http://a/b/c/;x"),
+      ("g;x", "http://a/b/c/g;x"),
+      ("g;x?y#s", "http://a/b/c/g;x?y#s"),
+      ("", "http://a/b/c/d;p?q"),
+      (".", "http://a/b/c/"),
+      ("./", "http://a/b/c/"),
+      ("..", "http://a/b/"),
+      ("../", "http://a/b/"),
+      ("../g", "http://a/b/g"),
+      ("../..", "http://a/"),
+      ("../../", "http://a/"),
+      ("../../g", "http://a/g"),
+    ]
+    for (reference, expected) in cases {
+      assert(resolvedText(reference) == expected)
+    }
+  }
+
+  test "RFC 3986 section 5.4.2, the abnormal examples" {
+    const cases = [
+      ("../../../g", "http://a/g"),
+      ("../../../../g", "http://a/g"),
+      ("/./g", "http://a/g"),
+      ("/../g", "http://a/g"),
+      ("g.", "http://a/b/c/g."),
+      (".g", "http://a/b/c/.g"),
+      ("g..", "http://a/b/c/g.."),
+      ("..g", "http://a/b/c/..g"),
+      ("./../g", "http://a/b/g"),
+      ("./g/.", "http://a/b/c/g/"),
+      ("g/./h", "http://a/b/c/g/h"),
+      ("g/../h", "http://a/b/c/h"),
+      ("g;x=1/./y", "http://a/b/c/g;x=1/y"),
+      ("g;x=1/../y", "http://a/b/c/y"),
+      ("g?y/./x", "http://a/b/c/g?y/./x"),
+      ("g?y/../x", "http://a/b/c/g?y/../x"),
+      ("g#s/./x", "http://a/b/c/g#s/./x"),
+      ("g#s/../x", "http://a/b/c/g#s/../x"),
+      ("http:g", "http:g"),
+    ]
+    for (reference, expected) in cases {
+      assert(resolvedText(reference) == expected)
+    }
+  }
+
+  test "a reference against a base with an authority and an empty path" {
+    assert(referenceOf("a").resolved(against: uriOf("http://example.test")).text() == "http://example.test/a")
+  }
+}
+
+group "relativeTo" {
+  test "every answer resolves back" {
+    const base = uriOf "http://a/b/c/d;p?q"
+    const targets = [
+      "http://a/b/c/g",
+      "http://a/b/c/g/",
+      "http://a/g",
+      "http://a/b/c/d;p?q",
+      "http://a/b/c/d;p?q#s",
+      "http://a/b/c/d;p?y",
+      "http://a/b/c/d;p",
+      "http://a/b/",
+      "http://g/x",
+      "https://a/b",
+      "http://a/b/c/g:x",
+      "mailto:ada@example.test",
+    ]
+    for text in targets {
+      const target = uriOf text
+      assert(target.relativeTo(base).resolved(against: base) == target)
+    }
+  }
+
+  test "the answers are short" {
+    const base = uriOf "http://a/b/c/d"
+    const cases = [
+      ("http://a/b/c/g", "g"),
+      ("http://a/b/g", "../g"),
+      ("http://a/b/c/d#s", "#s"),
+      ("http://a/b/c/d", ""),
+      ("http://a/b/c/", "./"),
+      ("http://other/x", "//other/x"),
+      ("https://a/b", "https://a/b"),
+      ("http://a/b/c/g:x", "./g:x"),
+    ]
+    for (text, expected) in cases {
+      assert(uriOf(text).relativeTo(base).text() == expected)
+    }
+  }
+}
+
+group "members" {
+  test "normalized drops a default port and gives an empty path under an authority a slash" {
+    assert(uriOf("http://example.test:80").normalized().text() == "http://example.test/")
+    assert(uriOf("https://example.test:80/").normalized().text() == "https://example.test:80/")
+    assert(uriOf("git://example.test:80").normalized().text() == "git://example.test:80/")
+  }
+
+  test "the default port is the scheme's, for five schemes" {
+    assert(uriOf("wss://example.test/").defaultPort() == Some(443))
+    assert uriOf("gopher://example.test/").defaultPort().isNone()
+  }
+
+  test "joined encodes its segments and never climbs above the receiver" {
+    const base = uriOf "https://example.test/users?page=2#top"
+    assert(base.joined("Ada Lovelace/posts").text() == "https://example.test/users/Ada%20Lovelace/posts")
+    assert(base.joined("../../etc/passwd").text() == "https://example.test/users/etc/passwd")
+    assert(base.joined("a/../b").text() == "https://example.test/users/b")
+    assert(base.joined("100%/x?y").text() == "https://example.test/users/100%25/x%3Fy")
+    assert(uriOf("https://example.test").joined("a").text() == "https://example.test/a")
+    assert(uriOf("https://example.test/dir/").joined("a").text() == "https://example.test/dir/a")
+  }
+
+  test "withFragment writes the text as it is" {
+    const uri = uriOf "https://example.test/a#old"
+    assert(uri.withFragment(None).text() == "https://example.test/a")
+    assert(uri.withFragment(Some("a b%")).text() == "https://example.test/a#a%20b%25")
+  }
+
+  test "a reference with a scheme is a Uri, and a Uri is a reference" {
+    const reference = referenceOf "https://example.test/a"
+    assert reference.isAbsolute()
+    assert(reference.uri() == Some(uriOf("https://example.test/a")))
+    assert referenceOf("/a").uri().isNone()
+    assert referenceOf("/a").isRelative()
+    assert(UriReference.from(uriOf("https://example.test/a")) == reference)
+  }
+
+  test "the text is the way out, with every part of it" {
+    const uri = uriOf "postgres://ada:hunter2@db.test/orders"
+    assert(uri.text() == "postgres://ada:hunter2@db.test/orders")
+    assert(Uri.tryFrom(uri.text()) == Ok(uri))
+  }
+}
+
+group "queries" {
+  test "the query is read as a form" {
+    const uri = uriOf "https://example.test/search?q=Gr%C3%BCner+Weg&tag=a&tag=b&flag&=x"
+    assert(uri.queryParameter("q") == Some("Grüner Weg"))
+    assert(uri.queryParameters().get("tag") == Some(["a", "b"]))
+    assert(uri.queryParameter("flag") == Some(""))
+    assert(uri.queryParameter("") == Some("x"))
+    assert uri.queryParameter("missing").isNone()
+  }
+
+  test "withQueryParameters writes a form in the order the map has" {
+    var parameters: Map<String, List<String>> = [:]
+    parameters["q"] = ["Grüner Weg ~"]
+    parameters["tag"] = ["a", "b"]
+    const uri = uriOf "https://example.test/search?old=1#top"
+    const expected = "https://example.test/search?q=Gr%C3%BCner+Weg+~&tag=a&tag=b#top"
+    assert(uri.withQueryParameters(parameters).text() == expected)
+    assert(uri.withQueryParameters([:]).text() == "https://example.test/search#top")
+  }
+}
+
+group "comparison" {
+  test "the normalized form is the key" {
+    var seen: Map<Uri, Int> = [:]
+    for text in ["https://example.test/a", "https://EXAMPLE.test/a", "http://example.test/a", "https://example.test/a/"] {
+      seen.update(uriOf(text), 0, { count => count = count + 1 })
+    }
+    assert(seen.length() == 3)
+  }
+
+  test "the order is by part, not by text" {
+    assert(uriOf("https://a/b/c").compare(uriOf("https://a/b?c")) == .Greater)
+    assert(referenceOf("/a").compare(referenceOf("http://a/")) == .Less)
+  }
+
+  test "two passwords, one display form, two values" {
+    const first = uriOf "postgres://ada:one@db.test/"
+    const second = uriOf "postgres://ada:two@db.test/"
+    assert(first.show() == second.show())
+    assert(first != second)
+  }
+}

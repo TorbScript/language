@@ -69,5 +69,6 @@ address with its IPv4 part (`::ffff:192.0.2.1`). A zone (`fe80::1%eth0`) is not 
 ## Related
 
 - [std/network](network.md) - resolving names into these addresses, and connecting to them.
+- [std/uri](uri.md) - a URI whose host is an IP literal holds one of these, and answers a `SocketAddress`.
 - [The standard library](index.md) - the other packages.
 

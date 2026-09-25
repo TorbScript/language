@@ -1,0 +1,45 @@
+/**
+ * `UriError`: what a text is refused for as a URI, a URI reference, a URN, a `file:` path or a URI template. Every case
+ * carries the display form of what was refused, so a password in it never reaches a message (docs/design/URI.md
+ * section 11).
+ */
+
+/** Why a text is not what it was read as. */
+public type UriError with Show, Error {
+  /** The text before the first `:` is not `ALPHA *( ALPHA / DIGIT / "+" / "-" / "." )`. */
+  case InvalidScheme(text: String)
+  /** A `%` that is not followed by two hexadecimal digits, in `text`. */
+  case InvalidEscape(text: String)
+  /** A host that is no IP literal, no IPv4 address and no registered name, and why; a zone identifier is one. */
+  case InvalidHost(host: String, reason: String)
+  /** A host that is not ASCII, which needs IDNA (docs/design/URI.md section 6). */
+  case NonAsciiHost(host: String)
+  /** The text after the `:` of an authority is not a number from 0 to 65535. */
+  case InvalidPort(text: String)
+  /** A relative reference where a `Uri` was asked for: a `Uri` has a scheme. */
+  case Relative(text: String)
+  /** The bytes a percent escape named are not UTF-8, so there is no `String` for them. */
+  case NotText(reason: String)
+  /** A `Path` was asked for from a URI that is not a `file:` URI of a path, and why. */
+  case NotAFile(uri: String, reason: String)
+  /** A `Urn` was asked for from a URI that is not one, and why. */
+  case NotAUrn(uri: String, reason: String)
+  /** A template that breaks RFC 6570, or a value the template cannot expand, and why. */
+  case InvalidTemplate(template: String, reason: String)
+
+  /** One line, naming the text that was refused. */
+  fn show(): String {
+    match self {
+      .InvalidScheme(text) => "`{text}` is not a scheme"
+      .InvalidEscape(text) => "`{text}` has a `%` that is not followed by two hexadecimal digits"
+      .InvalidHost(host, reason) => "`{host}` is not a host: {reason}"
+      .NonAsciiHost(host) => "`{host}` is not an ASCII host, and IDNA is not part of `std/uri` yet"
+      .InvalidPort(text) => "`{text}` is not a port"
+      .Relative(text) => "`{text}` is a relative reference, and a `Uri` has a scheme"
+      .NotText(reason) => "a percent escape names bytes that are not UTF-8: {reason}"
+      .NotAFile(uri, reason) => "`{uri}` is not a `file:` URI of a path: {reason}"
+      .NotAUrn(uri, reason) => "`{uri}` is not a URN: {reason}"
+      .InvalidTemplate(template, reason) => "`{template}` is not a URI template: {reason}"
+    }
+  }
+}
