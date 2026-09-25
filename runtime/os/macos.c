@@ -1,11 +1,12 @@
 /*
  * macos.c - the natives of `std/os` that only macOS has (`native type MacOs`, docs/design/OS.md section 7): the per-user
- * temporary directory now, and the Mach host statistics and `_NSGetExecutablePath` when their slices come. What macOS
- * shares with FreeBSD is in `bsd.c`, and what it shares with every POSIX system in `posix.c`.
+ * temporary directory and the path of the running executable now, and the Mach host statistics when their slice comes.
+ * What macOS shares with FreeBSD is in `bsd.c`, and what it shares with every POSIX system in `posix.c`.
  *
  * The whole file is one `#if defined(__APPLE__)`: it is compiled on every machine and is empty everywhere else, so the
  * build compiles every file of `runtime/os/` without choosing, and no function has an `#ifdef` inside it. Its
- * prototypes are in `torb_os.h` on every machine. No feature macro is defined, because `_CS_DARWIN_USER_TEMP_DIR` is
+ * prototypes are in `torb_os.h` on every machine, except the executable path's, which the platform layer calls and
+ * `torb.h` declares. No feature macro is defined, because `_CS_DARWIN_USER_TEMP_DIR` is
  * Darwin's own and strict POSIX hides it.
  */
 
@@ -14,6 +15,8 @@
 #if defined(__APPLE__)
 
 #include <errno.h>
+#include <mach-o/dyld.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -47,6 +50,40 @@ int64_t torb_os_macos_user_temporary_directory(torb_text *path, torb_text *failu
   }
   torb_raw_free(buffer, capacity);
   return result;
+}
+
+/**
+ * `Process.executablePath()` on macOS: what `_NSGetExecutablePath` answers, which is the path the program was started
+ * by and may run through a symbolic link or a `..`, with every one of them resolved by `realpath` - the same answer
+ * Linux's `/proc/self/exe` gives. Owned, freed with `torb_raw_free(*value, *length + 1)`; false and nothing allocated
+ * where either call fails.
+ */
+bool torb_os_macos_executable_path(char **value, size_t *length) {
+  uint32_t capacity = 0u;
+  size_t allocated;
+  char *given;
+  char *resolved;
+  /* Asked with no room, it answers -1 and the size it needs, terminator included */
+  (void)_NSGetExecutablePath(NULL, &capacity);
+  if (capacity == 0u) {
+    return false;
+  }
+  allocated = (size_t)capacity;
+  given = (char *)torb_raw_allocate(allocated);
+  if (_NSGetExecutablePath(given, &capacity) != 0) {
+    torb_raw_free(given, allocated);
+    return false;
+  }
+  resolved = realpath(given, NULL);
+  torb_raw_free(given, allocated);
+  if (resolved == NULL) {
+    return false;
+  }
+  *length = strlen(resolved);
+  *value = (char *)torb_raw_allocate(*length + 1u);
+  memcpy(*value, resolved, *length + 1u);
+  free(resolved);
+  return true;
 }
 
 #endif /* __APPLE__ */
