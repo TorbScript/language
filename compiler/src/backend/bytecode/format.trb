@@ -489,7 +489,9 @@ public type KernelOperation {
    * into it, and the task started. `element` describes the task's value, -1 for a `Void` task. The tests say whether
    * an idle worker may take the task (docs/design/CONCURRENCY.md section 16, "What crosses a worker"): -1 where a type
    * of the frame never crosses, otherwise how many follow, each a kind (0 a text, 1 a list, 2 a map or a set, 3 a
-   * closure's environment) and the register of the value the runtime tests.
+   * closure's environment) and the register of the value the runtime tests. Then the copy that makes the frame
+   * movable while the pool has more than one worker ("The copy at the crossing"): -1 where a value of the frame cannot
+   * be copied soundly, otherwise how many follow, each the register of a counted value and its shape.
    */
   case TaskNew
   /** `task`: answers whether the task was cancelled (`torb_task_cancelled`). */
@@ -545,6 +547,24 @@ public type KernelOperation {
   case TestFile
   /** The summary of a test run (`torb_test_finish`), answering its exit code. */
   case TestFinish
+  /**
+   * `target, address, narrow`: an element of narrow storage (a [narrowCodeOf] code) read into the register, widened -
+   * sign-extended or zero-extended - to the word a register holds.
+   */
+  case NarrowLoad
+  /** `address, source, narrow`: the register's value written into narrow storage, in the element's own width. */
+  case NarrowStore
+  /**
+   * `reference, narrow`: the word a reference points to, which a function of the runtime wrote the narrow bytes of an
+   * element into, widened in place.
+   */
+  case Widen
+  /**
+   * `register, count`, then per test a kind and a register as for `TaskNew`: the environment of a closure in the
+   * register made shared (`torb_share`) where every capture may cross without a transfer - so the closure may run on
+   * several workers at once, and a task that holds it may move.
+   */
+  case Share
 
   /** The name the disassembly writes. */
   fn spelling(): String {
@@ -606,6 +626,10 @@ public type KernelOperation {
       .ConstantUnlock => "constant.unlock"
       .TestFile => "test.file"
       .TestFinish => "test.finish"
+      .NarrowLoad => "narrow.load"
+      .NarrowStore => "narrow.store"
+      .Widen => "widen"
+      .Share => "share"
     }
   }
 }
@@ -669,6 +693,10 @@ public const allKernelOperations: List<KernelOperation> = [
   KernelOperation.ConstantUnlock,
   KernelOperation.TestFile,
   KernelOperation.TestFinish,
+  KernelOperation.NarrowLoad,
+  KernelOperation.NarrowStore,
+  KernelOperation.Widen,
+  KernelOperation.Share,
 ]
 
 /**
@@ -810,6 +838,11 @@ public type Place {
   isThroughReference: Bool
   steps: List<PlaceStep>
   width: Int
+  /**
+   * The [narrowCode] of the element the place ends in, where that is an element of a list stored narrower than a word;
+   * 0 otherwise. A load and a store of such a place read and write the element's own width.
+   */
+  narrow: Int = 0
 }
 
 /** Where a witness table comes from at one call site. */
@@ -846,6 +879,24 @@ public type ElementKind {
   case TextElement
   /** Anything else counted: the element's shape, and the chunks of the equality and the hash where it has them. */
   case Counted(shape: Int)
+  /**
+   * An integer narrower than a word, a `Bool` or a `Char`: stored in its own width, as the C back end stores it, so a
+   * function of the runtime that reads a `List<UInt8>` reads bytes. `code` is its [narrowCodeOf].
+   */
+  case Narrow(code: Int)
+}
+
+/**
+ * How a value is stored narrower than a word: its bytes times four plus its kind - 1 signed, 2 unsigned (a `Bool` and
+ * a `Char` too) - and 0 for a value stored in words. A register always holds the value widened to a word.
+ */
+public fn narrowCode(bytes: Int, isSigned: Bool): Int {
+  bytes * 4 + (if isSigned { 1 } else { 2 })
+}
+
+/** Whether a narrow code is of a signed integer, which a read of the storage has to sign-extend. */
+public fn isSignedNarrow(code: Int): Bool {
+  code % 4 == 1
 }
 
 /** One element descriptor, as the interpreter makes it. */

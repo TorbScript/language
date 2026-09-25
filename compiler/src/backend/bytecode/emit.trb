@@ -33,10 +33,13 @@ use taskMachineOf, TaskMachine from "../../ir/suspension"
 use payloadLayoutName from "../../ir/mangle"
 use emittedFunctionsOf, runtimePrototypes, usesTasks from "../c/emit"
 use environmentLayoutOfFunction from "../c/body"
+use Crossing, privateOf from "../c/crossing"
+use CExpression from "../c/writer"
 use readPrototype, matchPrototype, PrototypeMatch from "../c/prototype"
 use Opcode, KernelOperation, kernelNumberOf, kernelNativeBase, headWord, largestOperand from "./format"
 use BytecodeProgram, Chunk, ParameterEntry, FrameSlot, Place, PlaceStep, WitnessEntry, WitnessRootEntry from "./format"
 use Shape, CountedWord, CountedKind, ConstantPart, TableEntry, ElementEntry, ElementKind, widthOfPart from "./format"
+use narrowCode, isSignedNarrow from "./format"
 use WordTables, LayoutWords, wordTablesOf, whyNoWords, isBlockPointer, isBoxed, layoutOfType from "./words"
 use nativeIndices from "./natives"
 use runScriptFunction from "../c/natives"
@@ -98,6 +101,11 @@ type Body {
   var patches: List<(Int, Int)> = []
   /** Stores through a `var` parameter that the current instruction owes after it ran: (slot, scratch register). */
   var pendingStores: List<(Int, Int)> = []
+  /**
+   * Stores into a narrow element the current instruction owes after it ran: (place, scratch register). A `var` argument
+   * of such an element is a word of the frame for the call, and goes back into the element afterwards.
+   */
+  var pendingPlaceStores: List<(Int, Int)> = []
   /** The state machine of a task's body, which decides where it checks for cancellation and what each stop releases. */
   machine: TaskMachine? = None
   /** The register a task's body holds its task in, `-1` for every other function. */
@@ -274,6 +282,10 @@ fn chunkOfOptional(emitter: Emitter, function: FunctionId?): Int {
 }
 
 fn elementKindOf(var emitter: Emitter, program: IrProgram, item: IrTypeId): ElementKind {
+  const narrow = narrowCodeOf program, item
+  if narrow != 0 {
+    return ElementKind.Narrow narrow
+  }
   if !containsCountedType(program, item) {
     return ElementKind.Trivial
   }
@@ -897,12 +909,32 @@ fn emitTaskNew(
       crosses = false
     }
   }
+  // The copy at the crossing: every counted value of the frame by its shape, where each may be copied soundly
+  var copies: List<Int> = []
+  var copyable = true
+  for index in 0..arguments.length() {
+    const annotation = typeOf body, arguments[index].slot
+    if !containsCountedType(program, annotation) {
+      continue
+    }
+    if const .Never = privateOf(program, annotation, CExpression.Name("value")) {
+      copyable = false
+    }
+    copies.append placed[3 * index]
+    copies.append valueShapeIndex(emitter, program, annotation)
+  }
   const register = targetOf emitter, body, target
   var operands = [register, chunk, frameWords, element, arguments.length()]
   operands.appendAll placed
   if crosses {
     operands.append(tests.length() / 2)
     operands.appendAll tests
+  } else {
+    operands.append(0 - 1)
+  }
+  if copyable {
+    operands.append(copies.length() / 2)
+    operands.appendAll copies
   } else {
     operands.append(0 - 1)
   }
@@ -1281,6 +1313,11 @@ fn flushStores(var emitter: Emitter, var body: Body, program: IrProgram) {
     const place = placeOfSlot body, Slot(slot), width
     emitHead emitter, body, Opcode.Store, place, register, 0
   }
+  const places = body.pendingPlaceStores
+  body.pendingPlaceStores = []
+  for (place, register) in places {
+    emitHead emitter, body, Opcode.Store, place, register, 0
+  }
 }
 
 /** The place that is a `var` parameter itself: its reference, and no steps. */
@@ -1294,7 +1331,9 @@ fn placeOf(var emitter: Emitter, var body: Body, program: IrProgram, reference: 
   var steps: List<PlaceStep> = []
   var current = typeOf body, reference.base
   var pending = 0
+  var narrow = 0
   for step in reference.steps {
+    narrow = 0
     match step {
       .Field(layout, index) => {
         if isBlockPointer(program, current) {
@@ -1337,6 +1376,8 @@ fn placeOf(var emitter: Emitter, var body: Body, program: IrProgram, reference: 
           steps.append PlaceStep.Item(register, size, emitter.tables.widthOf(item), constant, location)
         } else {
           steps.append PlaceStep.Element(register, constant, location)
+          // An element of a list is stored in its own width, as the runtime stores it
+          narrow = narrowCodeOf program, item
         }
         current = item
       }
@@ -1345,8 +1386,29 @@ fn placeOf(var emitter: Emitter, var body: Body, program: IrProgram, reference: 
   }
   const _ = flushOffset steps, pending
   const width = emitter.tables.widthOf current
-  body.places.append Place(body.offsets[reference.base.value], body.references[reference.base.value], steps, width)
+  const base = body.offsets[reference.base.value]
+  body.places.append Place(base, body.references[reference.base.value], steps, width, narrow)
   body.places.length() - 1
+}
+
+/**
+ * How the runtime stores a value of this type in a container, where that is narrower than a word ([narrowCode]): an
+ * integer of fewer than 64 bits, a `Bool` and a `Char`, in the width the C back end gives them. 0 for a value stored in
+ * words - a `Float32` too, which no function of the runtime reads out of a list and which the program's own `equals`
+ * compares.
+ */
+fn narrowCodeOf(program: IrProgram, id: IrTypeId): Int {
+  match program.typeAt(id) {
+    .Integer(width, isSigned) => {
+      if width < 64 {
+        return narrowCode(width / 8, isSigned)
+      }
+      0
+    }
+    .Boolean => narrowCode 1, false
+    .Character => narrowCode 4, false
+    _ => 0
+  }
 }
 
 fn flushOffset(var steps: List<PlaceStep>, pending: Int): Int {
@@ -1383,6 +1445,16 @@ fn argumentRegister(var emitter: Emitter, var body: Body, program: IrProgram, ar
   if const Some(place) = argument.place {
     const index = placeOf emitter, body, program, place
     const register = allocateScratch body, 1
+    // A reference always points at words: a narrow element is read into a word for the call and written back after it,
+    // which exclusive access makes the same as a reference into the storage
+    if body.places[index].narrow != 0 {
+      const value = allocateScratch body, 1
+      emitHead emitter, body, Opcode.Load, value, index, 0
+      body.places.append Place(value, false, [], 1)
+      emitHead(emitter, body, Opcode.Reference, register, body.places.length() - 1, 0)
+      body.pendingPlaceStores.append((index, value))
+      return register
+    }
     emitHead emitter, body, Opcode.Reference, register, index, 0
     return register
   }
@@ -1755,6 +1827,18 @@ fn emitRuntimeCall(
     emitKernel emitter, body, kernelNumberOf(KernelOperation.ListSliceCopied), operands
   } else {
     emitKernel(emitter, body, kernelNativeBase + index, operands)
+  }
+  // An element the runtime writes through a `void *` is its narrow bytes in a zeroed word: a signed one is widened
+  for position in 0..arguments.length() {
+    if prototype.parameters.get(position) != Some("void *") {
+      continue
+    }
+    if const Some(place) = arguments[position].place {
+      const narrow = narrowCodeOf program, placeType(program, body, place)
+      if narrow != 0 && isSignedNarrow(narrow) {
+        emitKernel emitter, body, kernelNumberOf(KernelOperation.Widen), [operands[position + 1], narrow]
+      }
+    }
   }
   // The runtime answers a number of the other sign in the same width: the C cast the C back end writes around the call
   if !conversion.isEmpty() {
@@ -2329,6 +2413,20 @@ fn emitClosure(
       }
       const contents = blockShapeIndex emitter, program, layout
       emitBlockNew(emitter, body, register + 1, contents, environmentBlockKind, words.width, placed)
+      // Captures that may all cross to another worker make the environment shared, as the C back end's `torb_share`
+      // does: the closure may then run on several workers at once, and a task that holds it may move
+      var tests: List<Int> = []
+      var crosses = true
+      for index in 0..registers.length() {
+        if !crossingTestsOf(emitter, program, shape.fields[index].annotation, registers[index], tests) {
+          crosses = false
+        }
+      }
+      if crosses {
+        var operands = [register + 1, tests.length() / 2]
+        operands.appendAll tests
+        emitKernel emitter, body, kernelNumberOf(KernelOperation.Share), operands
+      }
     }
     None => {
       if !captures.isEmpty() {

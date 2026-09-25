@@ -31,7 +31,7 @@ use lowerWorkspace, pathsOfModules from "../ir/lower/lower"
 use entryNameOf from "../ir/lower/function"
 use emitProgram, ProgramEntry from "../backend/c/emit"
 use emittedText from "../backend/c/emission"
-use tlsPartMacro, tlsSymbolPrefix from "../backend/c/natives"
+use tlsPartMacro, tlsSymbolPrefix, machineKernelSymbol from "../backend/c/natives"
 use Clock from "std/time"
 use renderDiagnostic, renderProblem, counted from "./render"
 
@@ -186,7 +186,9 @@ public fn build(options: BuildOptions): Result<Int, IoError> {
     }
     return Ok 0
   }
-  compile source, text.byteLength(), binary, options, text.contains(tlsSymbolPrefix)
+  // A program that runs the VM runs whatever its programs call, TLS included
+  const usesTls = text.contains(tlsSymbolPrefix) || text.contains(machineKernelSymbol)
+  compile source, text.byteLength(), binary, options, usesTls
 }
 
 // --- What was wrong with the program --------------------------------------------------------------------------------

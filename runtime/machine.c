@@ -372,6 +372,7 @@ const torb_element *torb_machine_element(int64_t index) {
 }
 
 static const torb_element *torb_machine_counted_element(int64_t words, int64_t shape, int64_t equals, int64_t hash);
+static const torb_element *torb_machine_narrow_element(int64_t narrow);
 
 /*
  * A descriptor the VM makes: a trivial element of one word is the runtime's own `Int64` descriptor (a `Bool`, a
@@ -402,6 +403,9 @@ static void torb_machine_define_element(int64_t index, int64_t words, int64_t ki
   }
   if (kind == 1) {
     element = &torb_element_text;
+  } else if (kind == 3) {
+    /* `shape` is the narrow code of an element stored in its own width */
+    element = torb_machine_narrow_element(shape);
   } else if (kind == 2) {
     element = torb_machine_counted_element(words, shape, equals, hash);
   } else if (words == 1 && equals < 0) {
@@ -901,6 +905,16 @@ static void torb_machine_release_block(void *block) {
   torb_header *header = (torb_header *)block;
   const torb_machine_shape *shape;
   if (header == NULL || header->count == TORB_IMMORTAL_COUNT) {
+    return;
+  }
+  if ((header->count & TORB_SHARED_COUNT) != 0u) {
+    /* A shared environment, which several workers may hold: whoever takes the last count frees it */
+    if (!torb_count_down(block)) {
+      return;
+    }
+    shape = torb_machine_shape_at(torb_machine_contents(block)[0]);
+    torb_machine_release_value(torb_machine_contents(block) + 1, shape);
+    torb_free_counted(block, NULL);
     return;
   }
   if (header->count == 0) {
@@ -2086,6 +2100,256 @@ static const torb_element *torb_machine_counted_element(int64_t words, int64_t s
   return made;
 }
 
+/* -------------------------------------------------------------------------------------------- narrow storage --- */
+
+/*
+ * An integer narrower than a word, a `Bool` and a `Char` are stored in a container in their own width, as the C back
+ * end stores them (docs/design/VM.md section 2), so a function of the runtime that reads a `List<UInt8>` reads bytes.
+ * A register holds the value widened to a word. A narrow code is the element's bytes times four plus its kind: 1
+ * signed, 2 unsigned (`narrowCode` of compiler/src/backend/bytecode/format.trb).
+ */
+static int64_t torb_machine_widen(const void *from, int64_t narrow) {
+  bool isSigned = (narrow & 3) == 1;
+  switch (narrow >> 2) {
+    case 1:
+      return isSigned ? (int64_t)*(const int8_t *)from : (int64_t)*(const uint8_t *)from;
+    case 2:
+      return isSigned ? (int64_t)*(const int16_t *)from : (int64_t)*(const uint16_t *)from;
+    case 4:
+      return isSigned ? (int64_t)*(const int32_t *)from : (int64_t)*(const uint32_t *)from;
+    default:
+      return *(const int64_t *)from;
+  }
+}
+
+static void torb_machine_narrow(void *to, int64_t value, int64_t narrow) {
+  switch (narrow >> 2) {
+    case 1:
+      *(uint8_t *)to = (uint8_t)value;
+      return;
+    case 2:
+      *(uint16_t *)to = (uint16_t)value;
+      return;
+    case 4:
+      *(uint32_t *)to = (uint32_t)value;
+      return;
+    default:
+      *(int64_t *)to = value;
+      return;
+  }
+}
+
+/*
+ * The descriptors of narrow elements: equal by their bytes, and hashed as the word a register holds of them, which is
+ * what a word-sized element of the same values hashed to before.
+ */
+#define TORB_MACHINE_NARROW_ELEMENT(NAME, TYPE)                                                                        \
+  static bool torb_machine_equal_##NAME(const void *first, const void *second) {                                       \
+    return *(const TYPE *)first == *(const TYPE *)second;                                                              \
+  }                                                                                                                    \
+  static uint64_t torb_machine_hash_##NAME(const void *value) {                                                        \
+    int64_t word = (int64_t)*(const TYPE *)value;                                                                      \
+    return torb_element_int64.hash(&word);                                                                             \
+  }                                                                                                                    \
+  static const torb_element torb_machine_element_##NAME = { (uint32_t)sizeof(TYPE), (uint32_t)TORB_ALIGN_OF(TYPE),     \
+                                                            NULL, NULL, torb_machine_equal_##NAME,                     \
+                                                            torb_machine_hash_##NAME };
+
+TORB_MACHINE_NARROW_ELEMENT(i8, int8_t)
+TORB_MACHINE_NARROW_ELEMENT(u8, uint8_t)
+TORB_MACHINE_NARROW_ELEMENT(i16, int16_t)
+TORB_MACHINE_NARROW_ELEMENT(u16, uint16_t)
+TORB_MACHINE_NARROW_ELEMENT(i32, int32_t)
+TORB_MACHINE_NARROW_ELEMENT(u32, uint32_t)
+
+static const torb_element *torb_machine_narrow_element(int64_t narrow) {
+  bool isSigned = (narrow & 3) == 1;
+  switch (narrow >> 2) {
+    case 1:
+      return isSigned ? &torb_machine_element_i8 : &torb_machine_element_u8;
+    case 2:
+      return isSigned ? &torb_machine_element_i16 : &torb_machine_element_u16;
+    case 4:
+      return isSigned ? &torb_machine_element_i32 : &torb_machine_element_u32;
+    default:
+      return &torb_element_int64;
+  }
+}
+
+/* ---------------------------------------------------------------------------------------- the copy at a crossing --- */
+
+/*
+ * The frame of a task made private before an idle worker may take it, while the pool has more than one worker
+ * (docs/design/CONCURRENCY.md section 16, "The copy at the crossing"): every counted value of the frame replaced in
+ * place by an equal one that shares no counted block with anything else, by the shape of its words. The emitter only
+ * asks for it where the C back end's `privateOf` answers that every value may be copied soundly, so what is walked
+ * here is texts, containers, and what crosses as it is: a task or a channel of plain values, a shared environment.
+ */
+static bool torb_machine_privatize_value(int64_t *value, const torb_machine_shape *shape);
+
+static bool torb_machine_privatize_element_of(size_t slot, void *element) {
+  return torb_machine_privatize_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[slot]));
+}
+
+#define TORB_MACHINE_PRIVATIZER(N)                                                                                     \
+  static bool torb_machine_privatize_element_##N(void *element) {                                                      \
+    return torb_machine_privatize_element_of(N, element);                                                              \
+  }
+
+TORB_MACHINE_PRIVATIZER(0)
+TORB_MACHINE_PRIVATIZER(1)
+TORB_MACHINE_PRIVATIZER(2)
+TORB_MACHINE_PRIVATIZER(3)
+TORB_MACHINE_PRIVATIZER(4)
+TORB_MACHINE_PRIVATIZER(5)
+TORB_MACHINE_PRIVATIZER(6)
+TORB_MACHINE_PRIVATIZER(7)
+TORB_MACHINE_PRIVATIZER(8)
+TORB_MACHINE_PRIVATIZER(9)
+TORB_MACHINE_PRIVATIZER(10)
+TORB_MACHINE_PRIVATIZER(11)
+TORB_MACHINE_PRIVATIZER(12)
+TORB_MACHINE_PRIVATIZER(13)
+TORB_MACHINE_PRIVATIZER(14)
+TORB_MACHINE_PRIVATIZER(15)
+TORB_MACHINE_PRIVATIZER(16)
+TORB_MACHINE_PRIVATIZER(17)
+TORB_MACHINE_PRIVATIZER(18)
+TORB_MACHINE_PRIVATIZER(19)
+TORB_MACHINE_PRIVATIZER(20)
+TORB_MACHINE_PRIVATIZER(21)
+TORB_MACHINE_PRIVATIZER(22)
+TORB_MACHINE_PRIVATIZER(23)
+TORB_MACHINE_PRIVATIZER(24)
+TORB_MACHINE_PRIVATIZER(25)
+TORB_MACHINE_PRIVATIZER(26)
+TORB_MACHINE_PRIVATIZER(27)
+TORB_MACHINE_PRIVATIZER(28)
+TORB_MACHINE_PRIVATIZER(29)
+TORB_MACHINE_PRIVATIZER(30)
+TORB_MACHINE_PRIVATIZER(31)
+TORB_MACHINE_PRIVATIZER(32)
+TORB_MACHINE_PRIVATIZER(33)
+TORB_MACHINE_PRIVATIZER(34)
+TORB_MACHINE_PRIVATIZER(35)
+TORB_MACHINE_PRIVATIZER(36)
+TORB_MACHINE_PRIVATIZER(37)
+TORB_MACHINE_PRIVATIZER(38)
+TORB_MACHINE_PRIVATIZER(39)
+TORB_MACHINE_PRIVATIZER(40)
+TORB_MACHINE_PRIVATIZER(41)
+TORB_MACHINE_PRIVATIZER(42)
+TORB_MACHINE_PRIVATIZER(43)
+TORB_MACHINE_PRIVATIZER(44)
+TORB_MACHINE_PRIVATIZER(45)
+TORB_MACHINE_PRIVATIZER(46)
+TORB_MACHINE_PRIVATIZER(47)
+TORB_MACHINE_PRIVATIZER(48)
+TORB_MACHINE_PRIVATIZER(49)
+TORB_MACHINE_PRIVATIZER(50)
+TORB_MACHINE_PRIVATIZER(51)
+TORB_MACHINE_PRIVATIZER(52)
+TORB_MACHINE_PRIVATIZER(53)
+TORB_MACHINE_PRIVATIZER(54)
+TORB_MACHINE_PRIVATIZER(55)
+TORB_MACHINE_PRIVATIZER(56)
+TORB_MACHINE_PRIVATIZER(57)
+TORB_MACHINE_PRIVATIZER(58)
+TORB_MACHINE_PRIVATIZER(59)
+TORB_MACHINE_PRIVATIZER(60)
+TORB_MACHINE_PRIVATIZER(61)
+TORB_MACHINE_PRIVATIZER(62)
+TORB_MACHINE_PRIVATIZER(63)
+
+static const torb_privatize_function torb_machine_privatizers[TORB_MACHINE_ELEMENT_SLOTS] = {
+  torb_machine_privatize_element_0, torb_machine_privatize_element_1, torb_machine_privatize_element_2, torb_machine_privatize_element_3,
+  torb_machine_privatize_element_4, torb_machine_privatize_element_5, torb_machine_privatize_element_6, torb_machine_privatize_element_7,
+  torb_machine_privatize_element_8, torb_machine_privatize_element_9, torb_machine_privatize_element_10, torb_machine_privatize_element_11,
+  torb_machine_privatize_element_12, torb_machine_privatize_element_13, torb_machine_privatize_element_14, torb_machine_privatize_element_15,
+  torb_machine_privatize_element_16, torb_machine_privatize_element_17, torb_machine_privatize_element_18, torb_machine_privatize_element_19,
+  torb_machine_privatize_element_20, torb_machine_privatize_element_21, torb_machine_privatize_element_22, torb_machine_privatize_element_23,
+  torb_machine_privatize_element_24, torb_machine_privatize_element_25, torb_machine_privatize_element_26, torb_machine_privatize_element_27,
+  torb_machine_privatize_element_28, torb_machine_privatize_element_29, torb_machine_privatize_element_30, torb_machine_privatize_element_31,
+  torb_machine_privatize_element_32, torb_machine_privatize_element_33, torb_machine_privatize_element_34, torb_machine_privatize_element_35,
+  torb_machine_privatize_element_36, torb_machine_privatize_element_37, torb_machine_privatize_element_38, torb_machine_privatize_element_39,
+  torb_machine_privatize_element_40, torb_machine_privatize_element_41, torb_machine_privatize_element_42, torb_machine_privatize_element_43,
+  torb_machine_privatize_element_44, torb_machine_privatize_element_45, torb_machine_privatize_element_46, torb_machine_privatize_element_47,
+  torb_machine_privatize_element_48, torb_machine_privatize_element_49, torb_machine_privatize_element_50, torb_machine_privatize_element_51,
+  torb_machine_privatize_element_52, torb_machine_privatize_element_53, torb_machine_privatize_element_54, torb_machine_privatize_element_55,
+  torb_machine_privatize_element_56, torb_machine_privatize_element_57, torb_machine_privatize_element_58, torb_machine_privatize_element_59,
+  torb_machine_privatize_element_60, torb_machine_privatize_element_61, torb_machine_privatize_element_62, torb_machine_privatize_element_63,
+};
+
+/* What makes one element of a container private: nothing for a plain one, the runtime's for a text, a slot's walk. */
+static bool torb_machine_privatizer_of(const torb_element *element, torb_privatize_function *found) {
+  if (element == &torb_element_text) {
+    *found = torb_text_privatize_place;
+    return true;
+  }
+  if (element->retain == NULL) {
+    *found = NULL;
+    return true;
+  }
+  for (size_t slot = 0; slot < torb_machine_element_slots; slot++) {
+    if (torb_machine_element_made[slot] == element) {
+      *found = torb_machine_privatizers[slot];
+      return true;
+    }
+  }
+  return false;
+}
+
+static bool torb_machine_privatize_word(int64_t *value, const torb_machine_word *word) {
+  int64_t *place = value + word->offset;
+  switch (word->kind) {
+    case TORB_COUNTED_TEXT:
+      return torb_text_privatize((torb_text *)place);
+    case TORB_COUNTED_LIST: {
+      torb_list *list = (torb_list *)place;
+      torb_privatize_function element;
+      if (list->storage == NULL) {
+        return true;
+      }
+      return torb_machine_privatizer_of(list->storage->element, &element) && torb_list_privatize(list, element);
+    }
+    case TORB_COUNTED_MAP:
+    case TORB_COUNTED_SET: {
+      torb_map *map = (torb_map *)place;
+      torb_privatize_function key;
+      torb_privatize_function item;
+      if (map->storage == NULL) {
+        return true;
+      }
+      return torb_machine_privatizer_of(map->storage->key, &key) &&
+             torb_machine_privatizer_of(map->storage->value, &item) && torb_map_privatize(map, key, item);
+    }
+    case TORB_COUNTED_TASK:
+    case TORB_COUNTED_CHANNEL:
+      /* Shared blocks that hand out plain values alone, or the emitter would not have asked */
+      return true;
+    case TORB_COUNTED_ENVIRONMENT:
+      /* An environment is never copied: the closure crosses where it is shared */
+      return torb_closure_may_move((torb_environment *)(intptr_t)place[0]);
+    case TORB_COUNTED_NESTED:
+      return torb_machine_privatize_value(place, torb_machine_shape_at(word->shape));
+    default:
+      return false;
+  }
+}
+
+static bool torb_machine_privatize_value(int64_t *value, const torb_machine_shape *shape) {
+  /* A variant would need its case to be copied: it stays where it is, as in the C back end */
+  if (shape->tag >= 0) {
+    return false;
+  }
+  for (size_t index = 0; index < shape->common.count; index++) {
+    if (!torb_machine_privatize_word(value, &shape->common.words[index])) {
+      return false;
+    }
+  }
+  return true;
+}
+
 /* ---------------------------------------------------------------------------------------- the program's own --- */
 
 /*
@@ -2175,7 +2439,11 @@ enum {
   TORB_OPERATION_CONSTANT_LOCK = 53,
   TORB_OPERATION_CONSTANT_UNLOCK = 54,
   TORB_OPERATION_TEST_FILE = 55,
-  TORB_OPERATION_TEST_FINISH = 56
+  TORB_OPERATION_TEST_FINISH = 56,
+  TORB_OPERATION_NARROW_LOAD = 57,
+  TORB_OPERATION_NARROW_STORE = 58,
+  TORB_OPERATION_WIDEN = 59,
+  TORB_OPERATION_SHARE = 60
 };
 
 /* A module constant's flag set with a release, so a thread that reads it set also sees the value it guards. */
@@ -2196,13 +2464,13 @@ enum {
 };
 
 /*
- * Whether the frame of a task may move to another worker (docs/design/CONCURRENCY.md section 16, "What crosses a
- * worker"): `tests` is the word the emitter wrote after the arguments - -1 where a type of the frame never crosses,
- * otherwise how many tests follow, each a kind and the register the value is in. The values are read before they move
- * into the frame, which holds the same bytes.
+ * Whether values may cross to another worker (docs/design/CONCURRENCY.md section 16, "What crosses a worker"): `tests`
+ * is what the emitter wrote - -1 where a type never crosses, otherwise how many tests follow, each a kind and the
+ * register the value is in. With `transfer` the values are given up (the frame of a task that has not run), so a block
+ * only they hold crosses too; without it (the captures of a closure) only what nobody counts.
  */
-static bool torb_machine_frame_may_move(const int64_t *words, int64_t base, const int64_t *tests) {
-  if (!torb_machine_portable || tests[0] < 0) {
+static bool torb_machine_tests_pass(const int64_t *words, int64_t base, const int64_t *tests, bool transfer) {
+  if (tests[0] < 0) {
     return false;
   }
   for (int64_t index = 0; index < tests[0]; index++) {
@@ -2212,7 +2480,7 @@ static bool torb_machine_frame_may_move(const int64_t *words, int64_t base, cons
       case TORB_CROSSING_TEXT: {
         torb_text text;
         memcpy(&text, value, sizeof text);
-        if (!torb_text_may_move(text, true)) {
+        if (!torb_text_may_move(text, transfer)) {
           return false;
         }
         break;
@@ -2220,7 +2488,7 @@ static bool torb_machine_frame_may_move(const int64_t *words, int64_t base, cons
       case TORB_CROSSING_LIST: {
         torb_list list;
         memcpy(&list, value, sizeof list);
-        if (!torb_list_may_move(list, true)) {
+        if (!torb_list_may_move(list, transfer)) {
           return false;
         }
         break;
@@ -2228,7 +2496,7 @@ static bool torb_machine_frame_may_move(const int64_t *words, int64_t base, cons
       case TORB_CROSSING_MAP: {
         torb_map map;
         memcpy(&map, value, sizeof map);
-        if (!torb_map_may_move(map, true)) {
+        if (!torb_map_may_move(map, transfer)) {
           return false;
         }
         break;
@@ -2564,9 +2832,23 @@ static int64_t torb_machine_dispatch(torb_list *list, int64_t base, torb_list co
       return 0;
     }
     case TORB_OPERATION_TASK_NEW: {
-      /* target, chunk, frame words, element, count, then (register, offset, width) per argument, then the tests */
+      /* target, chunk, frame words, element, count, then (register, offset, width) per argument, the tests, the copy */
       const torb_element *result = o[3] < 0 ? &torb_element_void : torb_machine_element(o[3]);
-      bool portable = torb_machine_frame_may_move(words, base, o + 5 + 3 * o[4]);
+      const int64_t *tests = o + 5 + 3 * o[4];
+      const int64_t *copies = tests + (tests[0] < 0 ? 1 : 1 + 2 * tests[0]);
+      bool portable = false;
+      if (torb_machine_portable) {
+        /* `(torb_task_copies() ? <copy> : <test>) ? portable : pinned`, as the C back end writes it */
+        if (copies[0] >= 0 && torb_task_copies()) {
+          portable = true;
+          for (int64_t index = 0; index < copies[0] && portable; index++) {
+            const int64_t *copied = copies + 1 + 2 * index;
+            portable = torb_machine_privatize_value(words + base + copied[0], torb_machine_shape_at(copied[1]));
+          }
+        } else {
+          portable = torb_machine_tests_pass(words, base, tests, true);
+        }
+      }
       torb_task *task = torb_machine_task_new(o[1], o[2], result);
       int64_t *frame = (int64_t *)torb_task_frame(task) + 2;
       for (int64_t argument = 0; argument < o[4]; argument++) {
@@ -2602,7 +2884,12 @@ static int64_t torb_machine_dispatch(torb_list *list, int64_t base, torb_list co
     case TORB_OPERATION_TASK_FINISH: {
       torb_task *task = (torb_task *)(intptr_t)words[base + o[0]];
       if (o[2] > 0) {
-        memcpy(torb_task_result_slot(task), words + base + o[1], 8u * (size_t)o[2]);
+        /* A narrow value is the low bytes of its word, on the little-endian machines the toolchain targets */
+        size_t size = 8u * (size_t)o[2];
+        if (task->result != NULL && task->result->size < size) {
+          size = task->result->size;
+        }
+        memcpy(torb_task_result_slot(task), words + base + o[1], size);
       }
       return 0;
     }
@@ -2664,6 +2951,26 @@ static int64_t torb_machine_dispatch(torb_list *list, int64_t base, torb_list co
     }
     case TORB_OPERATION_TEST_FINISH:
       return (int64_t)torb_test_finish();
+    case TORB_OPERATION_NARROW_LOAD:
+      /* target, the element's address, its narrow code */
+      words[base + o[0]] = torb_machine_widen((const void *)(intptr_t)o[1], o[2]);
+      return 0;
+    case TORB_OPERATION_NARROW_STORE:
+      /* the element's address, the register, its narrow code */
+      torb_machine_narrow((void *)(intptr_t)o[0], words[base + o[1]], o[2]);
+      return 0;
+    case TORB_OPERATION_WIDEN: {
+      /* the register of a reference to a word the runtime wrote an element's narrow bytes into, the narrow code */
+      int64_t *word = (int64_t *)torb_machine_address(words, words[base + o[0]]);
+      *word = torb_machine_widen(word, o[1]);
+      return 0;
+    }
+    case TORB_OPERATION_SHARE:
+      /* the register of the environment, then the tests of its captures */
+      if (torb_machine_tests_pass(words, base, o + 1, false)) {
+        torb_share((void *)(intptr_t)words[base + o[0]]);
+      }
+      return 0;
     case TORB_OPERATION_STOP_IN_CALL_BACK:
       /* The script stopped inside the call back that is answering: the call back passes the stop on (see there) */
       torb_machine_stopped_in_call_back = true;

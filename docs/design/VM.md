@@ -4,7 +4,7 @@
 rows 7.1-7.2). Every slice but 8 is in (section 9): the bytecode and `torb ir --bytecode`
 (`compiler/src/backend/bytecode/`), the kernel of `std/machine` with `runtime/machine.c` and the generated table of
 thunks, and the interpreter with `torb run --vm` (`compiler/src/vm/`). `tools/conformance.sh --vm` runs the programs of
-`tests/conformance/vm.list` - 179 of the 184 of the suite (section 8 says which five are not), and two scripts of
+`tests/conformance/vm.list` - 185 of the 187 of the suite (section 8 says which two are not), and two scripts of
 `vm-only/` - and compares them byte for byte with their native run, a program with a `.workers` file on that many
 workers and on one. `test`/`group`, keys compared by a program's own `equals` and tasks run through the call back of
 section 10, tasks run on every worker of the pool (section 4), `Array<Item, Size>` is inline words, the leak gate holds
@@ -97,9 +97,20 @@ needs.** There are no tags: the IR gives every slot a type, so the emitter choos
   there is no `sizeof`, no offset and no reflection in the language, so a record of two `Int32` fields is two words in
   the VM and eight bytes in C, and nobody can tell. The *representation class* - inline, boxed or niche - is the IR's,
   because it decides where a count is.
-- **Sub-word values are widened to a word everywhere the VM stores them itself** - a register, a field of a block, and
-  the element descriptors the VM creates for its lists (a `List<Bool>` of the VM has elements of eight bytes). A value
-  the *runtime* stores keeps the runtime's size (`torb_element_text` is sixteen bytes, two words).
+- **Sub-word values are widened to a word everywhere the VM stores them itself** - a register, a field of a block. A
+  value the *runtime* stores keeps the runtime's size (`torb_element_text` is sixteen bytes, two words).
+- **An element of a container is stored in the C back end's width - decided, since the network: an integer narrower
+  than a word, a `Bool` and a `Char` are a byte, two or four in a list, a map, a set, a task's value or a channel.**
+  A function of the runtime reads the bytes of a `List<UInt8>` (`torb_network_send` refuses any other element
+  size), so a list the VM makes has to be the list the runtime expects. The element descriptor is a narrow one of the
+  kernel's (`ElementKind.Narrow`, equal by its bytes, hashed as the widened word); the conversions are where bytes move
+  between a register and the storage: a place that ends in such an element loads and stores through the kernel
+  (`NarrowLoad`, `NarrowStore`) in the element's width, sign- or zero-extending; a value handed to the runtime by
+  address is its word, whose low bytes are the narrow value; an element the runtime writes through a `void *` lands in
+  a zeroed word and a signed one is widened (`Widen`); a task's value goes into its slot in its own width; and a `var`
+  argument that is such an element is read into a word for the call and written back after it, which exclusive
+  access makes the same as a reference into the storage - a reference always points at words. A `Float32` element
+  stays a word: no function of the runtime reads one out of a list, and its `equals` is the program's.
 
 **A counted block of the VM** is `torb_allocate(8 + 8 + 8 * words, kind)`: the `torb_header` of `runtime/torb.h`, one
 word naming the block's **shape** (which of its words are counted, and how), then the words of the value. The shape
@@ -207,7 +218,15 @@ many calls it made, so its bottom frame's `return` ends it.
   CONCURRENCY.md section 2). The kernel keeps one interpreter and one queue of destructors per thread. A task is
   started portable where the C back end's test says its frame may cross: `TaskNew` carries the runtime's tests of
   the frame's texts, lists, maps and closures, written from the IR types as `crossing.trb` writes them, and a type
-  that never crosses pins it (nothing is copied at the crossing yet: such a frame stays on its worker). A module
+  that never crosses pins it. **The copy at the crossing** is the C back end's too: where `privateOf` says every
+  value of the frame may be copied soundly, `TaskNew` carries each counted value's register and shape, and while
+  the pool has more than one worker the kernel makes them private by walking the shape - a text by
+  `torb_text_privatize`, a list, a map or a set by the runtime's with what makes one element private (nothing for a
+  plain one, the runtime's for a text, the walk of the slot's shape for a record of the program), a task or a channel
+  of plain values and a shared environment as they are - and starts the task portable. **A closure's environment is
+  shared** (`Share`, `torb_share`) where every capture may cross without a transfer, as the C back end shares it, so
+  a closure in a task's frame no longer pins it; the kernel releases a shared block with the runtime's atomic count. A
+  module
   constant is built under the runtime's lock of constants and published with a release, as the C accessor does
   (`ConstantLock`, `ConstantUnlock`). A thread of the pool that runs a task of the program counts what its scheduler
   frees as the program's, so the leak gate stays exact whichever worker ran what. A program that runs scripts keeps
@@ -327,10 +346,11 @@ compares standard output, standard error (folded as for the native run) and the 
 - **Not in the list, and why.** `process-executable-path`, whose executable is `torb` in the VM and not the `prog`
   the suite builds - a difference that belongs to running inside the toolchain and that the sandbox of 7.4 will answer
   for itself - and `memory-limit`, whose `TORB_MEMORY_LIMIT` of 64 MiB is a limit of the whole process, and the
-  process of `torb run --vm` is `torb`, which needs more than that before the program's first instruction. And three
-  programs of the network, `network-echo`, `http-exchange` and `http-wire`, which hand a `List<UInt8>` to a native:
-  every element of a list of the VM is at least a word, where the runtime reads a byte per element, so what they send is
-  not what they meant. `network-addresses` and `network-refused` are in.
+  process of `torb run --vm` is `torb`, which needs more than that before the program's first instruction. Every
+  program of the network is in, since the elements of a list are stored narrow (section 2), and so are `tls-loopback`
+  and `https-exchange`: the driver links the TLS part of the runtime (`runtime/tls/`, mbedTLS) into every program
+  that calls the VM's kernel - `torb` itself - because the table of thunks reaches every function of the runtime.
+  `narrow-elements` holds every narrow width to it, the negative ones and a `var` argument that is an element too.
 - **Workers.** A program with a `.workers` file runs on that many workers of `torb`'s pool (`TORB_WORKERS`) and again
   on one, and has to print the same bytes both times, as its native binary does; every other program runs on one.
   `task-workers-callbacks` holds the per-thread parts to it: a map whose key is compared by the program's `equals`
@@ -375,7 +395,7 @@ compares standard output, standard error (folded as for the native run) and the 
 | 5 | The leak gate of the VM: the program's blocks counted apart from `torb`'s | **Done**: section 8; `tools/conformance.sh --vm` checks every program of `vm.list` |
 | 6 | `test` and `group`: the runtime's recovery point around a closure of the interpreter | **Done**: `Machine.install` and the substitutes `torb_machine_test_case`/`_group`; `tests`, `test-failure`, `assert-values` |
 | 7 | Tasks: `TaskNew`, `Suspend`, `Stop`, channels, the FIFO order of `runtime/task.c` (docs/BACKEND.md 7.3's VM half) | **Done**, on every worker of the pool: section 4; the entry cells of a top-level `const` too; every program with tasks |
-| 8 | The gate of 7.2: every conformance program in both back ends; `vm.list` deleted | 179 of 184: `vm.list` stays for the five of section 8 |
+| 8 | The gate of 7.2: every conformance program in both back ends; `vm.list` deleted | 185 of 187: `vm.list` stays for the two of section 8 |
 | 11 | `torb test --vm`: every test file an entry of one program, the report of `runtime/test.c` | **Done**: `TestFile`, `TestFinish`; tier B runs the test packages of `std/` and `examples/` with it |
 | 9 | `Array<Item, Size>`, added to the language after the interpreter: inline items, a checked item step | **Done**: `ArrayNew`, the static `Items`, `PlaceStep.Item`, the counted words of every item; the eleven programs with an array |
 | 10 | Speed: register reads without `Indexed.at`, return records in the word stack (section 10) | **Done**: the image, addresses and inline `load`/`store` (section 4); six times faster (section 8) |
@@ -407,10 +427,9 @@ compares standard output, standard error (folded as for the native run) and the 
 - **Where the tasks' scheduler runs - decided: in the runtime.** The runtime's own FIFO scheduler drives a VM task
   through one resume function of `runtime/machine.c` that calls the interpreter back (section 4), so the process has
   one scheduler and the order of `runtime/task.c` is the VM's by construction, on every worker of the pool (section 4).
-  **Open:** the copy at the crossing, which the C back end makes of a frame whose texts or lists somebody else holds
-  too, and `torb_share` of a closure's environment, without which a closure pins the task that holds it; a destructor
-  queued by a release in a worker's own scheduler (a result nobody awaits) runs with that thread's next call back
-  rather than at once; and a task of the program that a script's test scope resumes runs under the script's grant.
+  **Open:** a destructor queued by a release in a worker's own scheduler (a result nobody awaits) runs with that
+  thread's next call back rather than at once; and a task of the program that a script's test scope resumes runs
+  under the script's grant.
 - **Calling compiled code from bytecode.** BACKEND 5.2 promised that a compiled function can be called from bytecode
   and back. With the VM's own inline layouts that is a marshalling step at the boundary for any record of the program.
   docs/design/SCRIPTS.md section 5 decided it for the sandbox: only text crosses between `torb` and the VM (the kernel

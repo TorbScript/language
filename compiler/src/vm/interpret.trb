@@ -877,14 +877,15 @@ const itemStep = 3
 const stepWords = 6
 
 /**
- * A place as words: its base register, whether that register holds a reference, its width, how many steps, then
- * [stepWords] words per step - the kind and its operands.
+ * A place as words: its base register, whether that register holds a reference, its width, how many steps, the narrow
+ * code of the element it ends in (0 for words), then [stepWords] words per step - the kind and its operands.
  */
 fn appendPlace(var words: ArrayList<Int>, place: Place) {
   words.append place.base
   words.append(if place.isThroughReference { 1 } else { 0 })
   words.append place.width
   words.append place.steps.length()
+  words.append place.narrow
   for step in place.steps {
     const (kind, first, second, third, fourth, fifth) = match step {
       .Offset(count) => (offsetStep, count, 0, 0, 0, 0)
@@ -1133,6 +1134,7 @@ fn loadFrom(
       .Trivial => (0, 0 - 1)
       .TextElement => (1, 0 - 1)
       .Counted(found) => (2, canonicalShapeOf(canonical, program, found))
+      .Narrow(code) => (3, code)
     }
     // An element whose words are not its identity is compared and hashed by the program's own `equals` and `hash`
     const (equals, hash) = if element.comparesByWords { (0 - 1, 0 - 1) } else { (element.equals, element.hash) }
@@ -1396,7 +1398,7 @@ fn resolvePlace(
   var address = if Machine.load(place + 8) != 0 { Machine.load register } else { register }
   const steps = Machine.load(place + 24)
   for position in 0..steps {
-    const step = place + 32 + 8 * stepWords * position
+    const step = place + 40 + 8 * stepWords * position
     const kind = Machine.load step
     if kind == offsetStep {
       address = address + 8 * Machine.load(step + 8)
@@ -1513,8 +1515,17 @@ fn execute(
           noteFrames budget, image, first, chunk, pc, base, depth
           return haltedPoll
         }
-        for offset in 0..Machine.load(place + 16) {
-          Machine.store(frame + 8 * (a + offset), Machine.load(address + 8 * offset))
+        const narrow = Machine.load(place + 32)
+        if narrow != 0 {
+          // An element of a list stored in its own width: the kernel reads exactly its bytes
+          if kernelCall(words, kernel, base, KernelOperation.NarrowLoad, [a, address, narrow]) == stoppedWord {
+            noteFrames budget, image, first, chunk, pc, base, depth
+            return haltedPoll
+          }
+        } else {
+          for offset in 0..Machine.load(place + 16) {
+            Machine.store(frame + 8 * (a + offset), Machine.load(address + 8 * offset))
+          }
         }
         pc = pc + 1
       }
@@ -1525,8 +1536,16 @@ fn execute(
           noteFrames budget, image, first, chunk, pc, base, depth
           return haltedPoll
         }
-        for offset in 0..Machine.load(place + 16) {
-          Machine.store(address + 8 * offset, Machine.load(frame + 8 * (b + offset)))
+        const narrow = Machine.load(place + 32)
+        if narrow != 0 {
+          if kernelCall(words, kernel, base, KernelOperation.NarrowStore, [address, b, narrow]) == stoppedWord {
+            noteFrames budget, image, first, chunk, pc, base, depth
+            return haltedPoll
+          }
+        } else {
+          for offset in 0..Machine.load(place + 16) {
+            Machine.store(address + 8 * offset, Machine.load(frame + 8 * (b + offset)))
+          }
         }
         pc = pc + 1
       }
