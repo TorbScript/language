@@ -1,0 +1,807 @@
+/**
+ * [UriTemplate]: RFC 6570, all four levels - read once, expanded into a URI reference, and matched backwards where the
+ * template allows it (docs/design/URI.md section 9a).
+ */
+
+use UriError from "./error"
+use UriReference from "./uri"
+use formDecoded from "./form"
+use byteOf, escapeAt, escaped, isAllowed, isDigit, isLetter, isUnreserved, isGeneralDelimiter, isSubDelimiter, normalizedComponent, percentDecoded, runOf, Component from "./characters"
+
+/**
+ * What a variable of a template holds: RFC 6570 section 2.3's three kinds of value. A variable that is not in the map
+ * handed to [UriTemplate.expanded] is undefined, and so is an empty list or an empty list of pairs.
+ */
+public type TemplateValue with Show, Equals, Hash {
+  /** A string: `{name}` with `Text("Ada")` is `Ada`. */
+  case Text(value: String)
+  /** A list: `{/path*}` with `Items(["a", "b"])` is `/a/b`. */
+  case Items(values: List<String>)
+  /** An associative array, in order: `{?keys*}` with `Pairs([("a", "1")])` is `?a=1`. */
+  case Pairs(values: List<(String, String)>)
+}
+
+/** RFC 6570 section 2.2's operators, each with the behaviour of section 3.2.1's table. */
+type Operator with Equals, Hash {
+  case Simple
+  case Reserved
+  case Fragment
+  case Label
+  case PathSegment
+  case Parameter
+  case Query
+  case Continuation
+
+  /** What comes before the first defined variable. */
+  fn first(): String {
+    match self {
+      .Simple => ""
+      .Reserved => ""
+      .Fragment => "#"
+      .Label => "."
+      .PathSegment => "/"
+      .Parameter => ";"
+      .Query => "?"
+      .Continuation => "&"
+    }
+  }
+
+  /** What comes between two defined variables, and between the items of an exploded one. */
+  fn separator(): String {
+    match self {
+      .Simple => ","
+      .Reserved => ","
+      .Fragment => ","
+      .Label => "."
+      .PathSegment => "/"
+      .Parameter => ";"
+      .Query => "&"
+      .Continuation => "&"
+    }
+  }
+
+  /** Whether a variable is written as `name=value`. */
+  fn isNamed(): Bool {
+    self == .Parameter || self == .Query || self == .Continuation
+  }
+
+  /** What follows the name of a variable whose value is empty. */
+  fn ifEmpty(): String {
+    if self == .Query || self == .Continuation { "=" } else { "" }
+  }
+
+  /** Whether reserved characters and escapes pass through unencoded (`U+R`), rather than only unreserved ones. */
+  fn allowsReserved(): Bool {
+    self == .Reserved || self == .Fragment
+  }
+}
+
+/** One `varspec`: a name, and a prefix length or an explode modifier. */
+type Variable with Equals, Hash {
+  name: String
+  prefix: Int?
+  explode: Bool
+}
+
+/** A piece of a template: literal text, already encoded as the expansion writes it, or an expression. */
+type Piece with Equals, Hash {
+  case Literal(text: String)
+  case Expression(operator: Operator, variables: List<Variable>)
+}
+
+/**
+ * An RFC 6570 URI template: literal text and `{…}` expressions, read once with [UriTemplate.tryFrom] and expanded with
+ * variables into a URI reference - `"/orders/{id}{?fields*}"` with `id` = `7` and `fields` = `["a", "b"]` is
+ * `/orders/7?fields=a&fields=b`.
+ *
+ * The four levels are all there: simple strings (`{var}`), reserved and fragment expansion (`{+var}`, `{#var}`), the
+ * label, path, parameter and query operators with several variables (`{.x,y}`, `{/x}`, `{;x}`, `{?x,y}`, `{&x}`), and
+ * the prefix and explode modifiers (`{var:3}`, `{list*}`).
+ *
+ * # Examples
+ *
+ *     const template = UriTemplate.tryFrom("/orders/{id}{?fields}")?
+ *     var values: Map<String, TemplateValue> = [:]
+ *     values["id"] = TemplateValue.Text("7")
+ *     print template.expanded(values)
+ *
+ * # Pitfalls
+ *
+ * - Matching reads a template backwards only where that is unambiguous; [UriTemplate.isMatchable] says whether it is.
+ *
+ * # Related
+ *
+ * - [TemplateValue] - what a variable holds.
+ */
+public type UriTemplate with Show, Equals, Hash {
+  /** The template as it was written. */
+  private textValue: String
+  /** The literal pieces and the expressions, in order. */
+  private pieces: List<Piece>
+
+  /** The names of the variables, in the order they first appear. */
+  fn variables(): List<String> {
+    var names: List<String> = []
+    for piece in pieces {
+      if const .Expression(_, variables) = piece {
+        for variable in variables {
+          if !names.contains(variable.name) {
+            names.append variable.name
+          }
+        }
+      }
+    }
+    names
+  }
+
+  /** The lowest of RFC 6570's four levels that has every expression of this template. */
+  fn level(): Int {
+    var level = 1
+    for piece in pieces {
+      if const .Expression(operator, variables) = piece {
+        var here = 1
+        if operator == .Reserved || operator == .Fragment {
+          here = 2
+        } else if operator != .Simple {
+          here = 3
+        }
+        if variables.length() > 1 && here < 3 {
+          here = 3
+        }
+        if variables.any({ _.prefix.isSome() || _.explode }) {
+          here = 4
+        }
+        if here > level {
+          level = here
+        }
+      }
+    }
+    level
+  }
+
+  /**
+   * The template expanded with `values`, as RFC 6570 section 3 writes it. A variable that is not in `values` is
+   * undefined and expands to nothing.
+   *
+   * # Errors
+   *
+   * - [UriError.InvalidTemplate] for a prefix modifier on a list or on pairs, which RFC 6570 section 2.4.1 does not
+   *   apply to.
+   */
+  fn expandedText(values: Map<String, TemplateValue>): Result<String, UriError> {
+    var out = ""
+    for piece in pieces {
+      match piece {
+        .Literal(text) => {
+          out = out + text
+        }
+        .Expression(operator, variables) => {
+          out = out + expression(textValue, operator, variables, values)?
+        }
+      }
+    }
+    Ok out
+  }
+
+  /**
+   * The template expanded with `values` and read as the URI reference it is.
+   *
+   * # Errors
+   *
+   * - [UriError.InvalidTemplate] as for [UriTemplate.expandedText].
+   * - Any refusal of `UriReference.tryFrom`, where the literal parts of the template do not make a URI reference with
+   *   the values in them (`{x}:y` with `x` = `1a`). A template whose literal parts are a path never fails here.
+   */
+  fn expanded(values: Map<String, TemplateValue>): Result<UriReference, UriError> {
+    UriReference.tryFrom(expandedText(values)?)
+  }
+
+  /**
+   * Whether [UriTemplate.matched] can read this template backwards: its expressions are simple ones (`{name}`,
+   * `{a,b}`), path segments (`{/name}`, `{/name*}` last in the path) and query parameters (`{?a,b}`, `{&c}`), no
+   * prefix is used, and no two expressions of the path stand side by side without a literal between them.
+   */
+  fn isMatchable(): Bool {
+    var inQuery = false
+    var previousSimple = false
+    var index = 0
+    while index < pieces.length() {
+      match pieces[index] {
+        .Literal(text) => {
+          if text.contains("#") {
+            return false
+          }
+          if text.contains("?") {
+            inQuery = true
+          }
+          previousSimple = false
+        }
+        .Expression(operator, variables) => {
+          if variables.any({ _.prefix.isSome() }) {
+            return false
+          }
+          const exploded = variables.any({ _.explode })
+          if operator == .Query || operator == .Continuation {
+            if exploded {
+              return false
+            }
+            inQuery = true
+          } else if inQuery {
+            return false
+          } else if operator == .Simple {
+            if exploded || previousSimple {
+              return false
+            }
+          } else if operator == .PathSegment {
+            if exploded && (variables.length() > 1 || !isLastOfPath(pieces, index)) {
+              return false
+            }
+          } else {
+            return false
+          }
+          previousSimple = operator == .Simple
+        }
+      }
+      index = index + 1
+    }
+    true
+  }
+
+  /**
+   * The values that expand this template into `reference`, decoded: a simple or path variable as `Text`, an exploded
+   * path variable as `Items`, a query variable as `Text` where the query has it. `None` where the reference is not an
+   * expansion of the template, and for every template that is not [UriTemplate.isMatchable]. Query parameters the
+   * template does not name are ignored, and a name that appears twice takes its first value.
+   *
+   * # Examples
+   *
+   *     const template = UriTemplate.tryFrom("/orders/{id}{?fields}")?
+   *     print template.matched(UriReference.tryFrom("/orders/7?fields=total")?)
+   */
+  fn matched(reference: UriReference): Map<String, TemplateValue>? {
+    if !isMatchable() {
+      return None
+    }
+    var pathPieces: List<Piece> = []
+    var queryLiteral = ""
+    var queryNames: List<String> = []
+    var inQuery = false
+    for piece in pieces {
+      match piece {
+        .Literal(text) => {
+          if inQuery {
+            queryLiteral = queryLiteral + text
+          } else if const Some(mark) = text.indexOf("?") {
+            pathPieces.append Piece.Literal(normalizedLiteral(text.sliceBytes(0, mark)))
+            queryLiteral = text.sliceBytes(mark + 1, text.byteLength())
+            inQuery = true
+          } else {
+            pathPieces.append Piece.Literal(normalizedLiteral(text))
+          }
+        }
+        .Expression(operator, variables) => {
+          if operator == .Query || operator == .Continuation {
+            inQuery = true
+            for variable in variables {
+              queryNames.append variable.name
+            }
+          } else {
+            pathPieces.append piece
+          }
+        }
+      }
+    }
+    const full = reference.text()
+    var cut = full.byteLength()
+    for mark in ["?", "#"] {
+      if const Some(at) = full.indexOf(mark) {
+        if at < cut {
+          cut = at
+        }
+      }
+    }
+    const target = full.sliceBytes 0, cut
+    var values = matchedPath(pathPieces, 0, target, 0)?
+    const parameters = formDecoded(reference.query() ?? "")
+    for pair in formDecoded(queryLiteral) {
+      if !parameters.contains(pair) {
+        return None
+      }
+    }
+    for name in queryNames {
+      for (found, value) in parameters {
+        if found == name {
+          if values.get(name).isNone() {
+            values[name] = TemplateValue.Text value
+          }
+        }
+      }
+    }
+    Some values
+  }
+
+  /** The template as it was written. */
+  fn show(): String {
+    textValue
+  }
+}
+
+/**
+ * A text read as an RFC 6570 template.
+ *
+ * # Errors
+ *
+ * - [UriError.InvalidTemplate] for an unclosed or a nested brace, an empty expression, a variable name outside
+ *   `varchar`, a prefix outside 1 to 9999, a reserved operator (`=`, `,`, `!`, `@`, `|`), and a literal character no
+ *   URI may hold.
+ */
+extend UriTemplate with TryFrom<String, UriError> {
+  static fn tryFrom(value: String): Result<UriTemplate, UriError> {
+    Ok UriTemplate(value, piecesOf(value)?)
+  }
+}
+
+/** The way back out of [UriTemplate], and with [UriTemplate.tryFrom] its conversion pair. */
+extend String with From<UriTemplate> {
+  static fn from(value: UriTemplate): String {
+    value.show()
+  }
+}
+
+// --- Reading ---------------------------------------------------------------------------------------------------------
+
+/** A template split into its literal pieces and its expressions. */
+fn piecesOf(text: String): Result<List<Piece>, UriError> {
+  const length = text.byteLength()
+  var pieces: List<Piece> = []
+  var literal = ""
+  var runStart = 0
+  var index = 0
+  while index < length {
+    const byte = byteOf text, index
+    if byte == 123 {
+      literal = literal + runOf(text, runStart, index)
+      if !literal.isEmpty() {
+        pieces.append Piece.Literal(literal)
+        literal = ""
+      }
+      const closing = match text.sliceBytes(index + 1, length).indexOf("}") {
+        Some(at) => index + 1 + at
+        None => {
+          return Fail UriError.InvalidTemplate(text, "a `\{` is not closed")
+        }
+      }
+      pieces.append(expressionOf(text, text.sliceBytes(index + 1, closing))?)
+      index = closing + 1
+      runStart = index
+      continue
+    }
+    if byte == 37 {
+      if escapeAt(text, index) < 0 {
+        return Fail UriError.InvalidTemplate(text, "a `%` that is not followed by two hexadecimal digits")
+      }
+      index = index + 3
+      continue
+    }
+    if byte >= 128 {
+      // A character outside ASCII is written as its UTF-8, percent-encoded (RFC 6570 section 3.1)
+      literal = literal + runOf(text, runStart, index) + escaped(byte)
+      index = index + 1
+      runStart = index
+      continue
+    }
+    if !isLiteralByte(byte) {
+      const shown = text.sliceBytes(index, index + 1)
+      return Fail UriError.InvalidTemplate(text, "`{shown}` is not a literal character of a template")
+    }
+    index = index + 1
+  }
+  literal = literal + runOf(text, runStart, length)
+  if !literal.isEmpty() {
+    pieces.append Piece.Literal(literal)
+  }
+  Ok pieces
+}
+
+/** Whether an ASCII byte may stand in the literal text of a template (RFC 6570 section 2.1). */
+fn isLiteralByte(byte: Int): Bool {
+  if byte <= 32 || byte == 127 {
+    return false
+  }
+  !(byte == 34 || byte == 60 || byte == 62 || byte == 92 || byte == 94 || byte == 96 || byte == 123
+    || byte == 124 || byte == 125)
+}
+
+/** The inside of one `{…}`: an operator, then variable specifications separated by `,`. */
+fn expressionOf(template: String, inside: String): Result<Piece, UriError> {
+  if inside.isEmpty() {
+    return Fail UriError.InvalidTemplate(template, "an expression names no variable")
+  }
+  if inside.contains("\{") {
+    return Fail UriError.InvalidTemplate(template, "an expression cannot hold a `\{`")
+  }
+  const first = byteOf inside, 0
+  var operator = Operator.Simple
+  var body = inside
+  var found = true
+  match first {
+    43 => {
+      operator = .Reserved
+    }
+    35 => {
+      operator = .Fragment
+    }
+    46 => {
+      operator = .Label
+    }
+    47 => {
+      operator = .PathSegment
+    }
+    59 => {
+      operator = .Parameter
+    }
+    63 => {
+      operator = .Query
+    }
+    38 => {
+      operator = .Continuation
+    }
+    _ => {
+      found = false
+    }
+  }
+  if found {
+    body = inside.sliceBytes 1, inside.byteLength()
+  } else if first == 61 || first == 44 || first == 33 || first == 64 || first == 124 {
+    const shown = inside.sliceBytes 0, 1
+    return Fail UriError.InvalidTemplate(template, "`{shown}` is an operator RFC 6570 reserves for later")
+  }
+  var variables: List<Variable> = []
+  for specification in body.split(",") {
+    variables.append(variableOf(template, specification)?)
+  }
+  Ok Piece.Expression(operator, variables)
+}
+
+/** One `varspec`: `varname [ ":" max-length / "*" ]`. */
+fn variableOf(template: String, specification: String): Result<Variable, UriError> {
+  var name = specification
+  var prefix: Int? = None
+  var explode = false
+  if specification.endsWith("*") {
+    explode = true
+    name = specification.sliceBytes(0, specification.byteLength() - 1)
+  } else if const Some(colon) = specification.indexOf(":") {
+    name = specification.sliceBytes 0, colon
+    const digits = specification.sliceBytes(colon + 1, specification.byteLength())
+    prefix = Some(prefixOf(template, digits)?)
+  }
+  if !isVariableName(name) {
+    return Fail UriError.InvalidTemplate(template, "`{specification}` is not a variable name, a prefix or an explode")
+  }
+  Ok Variable(name, prefix, explode)
+}
+
+/** `max-length`: one to four digits, the first not `0`, so 1 to 9999. */
+fn prefixOf(template: String, digits: String): Result<Int, UriError> {
+  const length = digits.byteLength()
+  if length == 0 || length > 4 || byteOf(digits, 0) == 48 {
+    return Fail UriError.InvalidTemplate(template, "a prefix is a length from 1 to 9999, not `{digits}`")
+  }
+  var value = 0
+  var index = 0
+  while index < length {
+    const byte = byteOf digits, index
+    if !isDigit(byte) {
+      return Fail UriError.InvalidTemplate(template, "a prefix is a length from 1 to 9999, not `{digits}`")
+    }
+    value = value * 10 + byte - 48
+    index = index + 1
+  }
+  Ok value
+}
+
+/** `varname = varchar *( ["."] varchar )`, where `varchar` is a letter, a digit, `_` or an escape. */
+fn isVariableName(name: String): Bool {
+  const length = name.byteLength()
+  if length == 0 || name.startsWith(".") || name.endsWith(".") || name.contains("..") {
+    return false
+  }
+  var index = 0
+  while index < length {
+    const byte = byteOf name, index
+    if byte == 37 {
+      if escapeAt(name, index) < 0 {
+        return false
+      }
+      index = index + 3
+      continue
+    }
+    if !(isLetter(byte) || isDigit(byte) || byte == 95 || byte == 46) {
+      return false
+    }
+    index = index + 1
+  }
+  true
+}
+
+// --- Expansion -------------------------------------------------------------------------------------------------------
+
+/** One expression expanded, per RFC 6570 section 3.2.1 and appendix A. */
+fn expression(
+  template: String,
+  operator: Operator,
+  variables: List<Variable>,
+  values: Map<String, TemplateValue>,
+): Result<String, UriError> {
+  var out = ""
+  var any = false
+  for variable in variables {
+    const value = match values.get(variable.name) {
+      Some(found) => found
+      None => {
+        continue
+      }
+    }
+    if !isDefined(value) {
+      continue
+    }
+    out = out + if any { operator.separator() } else { operator.first() }
+    any = true
+    out = out + expandedVariable(template, operator, variable, value)?
+  }
+  Ok out
+}
+
+/** Whether a value counts as defined: an empty list and an empty list of pairs do not (RFC 6570 section 2.3). */
+fn isDefined(value: TemplateValue): Bool {
+  match value {
+    .Text(_) => true
+    .Items(items) => !items.isEmpty()
+    .Pairs(pairs) => !pairs.isEmpty()
+  }
+}
+
+/** One defined variable of an expression. */
+fn expandedVariable(
+  template: String,
+  operator: Operator,
+  variable: Variable,
+  value: TemplateValue,
+): Result<String, UriError> {
+  const reserved = operator.allowsReserved()
+  const named = operator.isNamed()
+  match value {
+    .Text(text) => {
+      var kept = text
+      if const Some(length) = variable.prefix {
+        kept = String.from text.chars().take(length)
+      }
+      var out = ""
+      if named {
+        out = variable.name + if text.isEmpty() { operator.ifEmpty() } else { "=" }
+      }
+      Ok(out + templateEncoded(kept, reserved))
+    }
+    .Items(items) => {
+      if variable.prefix.isSome() {
+        return Fail UriError.InvalidTemplate(template, "a prefix applies to a string, and `{variable.name}` is a list")
+      }
+      var parts: List<String> = []
+      if !variable.explode {
+        for item in items {
+          parts.append templateEncoded(item, reserved)
+        }
+        const joined = parts.joined separator: ","
+        return Ok(if named { "{variable.name}={joined}" } else { joined })
+      }
+      for item in items {
+        if named {
+          const tail = if item.isEmpty() { operator.ifEmpty() } else { "=" + templateEncoded(item, reserved) }
+          parts.append(variable.name + tail)
+        } else {
+          parts.append templateEncoded(item, reserved)
+        }
+      }
+      Ok parts.joined(separator: operator.separator())
+    }
+    .Pairs(pairs) => {
+      if variable.prefix.isSome() {
+        return Fail UriError.InvalidTemplate(template, "a prefix applies to a string, and `{variable.name}` is pairs")
+      }
+      var parts: List<String> = []
+      if !variable.explode {
+        for (key, item) in pairs {
+          parts.append(templateEncoded(key, reserved) + "," + templateEncoded(item, reserved))
+        }
+        const joined = parts.joined separator: ","
+        return Ok(if named { "{variable.name}={joined}" } else { joined })
+      }
+      for (key, item) in pairs {
+        const name = templateEncoded key, reserved
+        if named && item.isEmpty() {
+          parts.append(name + operator.ifEmpty())
+        } else {
+          parts.append(name + "=" + templateEncoded(item, reserved))
+        }
+      }
+      Ok parts.joined(separator: operator.separator())
+    }
+  }
+}
+
+/**
+ * A value as RFC 6570 section 3.2.1 writes it: every byte percent-encoded but the unreserved ones, and where `reserved`
+ * also the reserved characters and escapes that are already there.
+ */
+fn templateEncoded(text: String, reserved: Bool): String {
+  const length = text.byteLength()
+  var out = ""
+  var runStart = 0
+  var index = 0
+  while index < length {
+    const byte = byteOf text, index
+    if isUnreserved(byte) || (reserved && (isGeneralDelimiter(byte) || isSubDelimiter(byte))) {
+      index = index + 1
+      continue
+    }
+    if reserved && byte == 37 && escapeAt(text, index) >= 0 {
+      index = index + 3
+      continue
+    }
+    out = out + runOf(text, runStart, index) + escaped(byte)
+    index = index + 1
+    runStart = index
+  }
+  if runStart == 0 {
+    return text
+  }
+  out + runOf(text, runStart, length)
+}
+
+// --- Matching --------------------------------------------------------------------------------------------------------
+
+/** Whether the piece at `index` is the last one before the query part of the template. */
+fn isLastOfPath(pieces: List<Piece>, index: Int): Bool {
+  if index + 1 >= pieces.length() {
+    return true
+  }
+  match pieces[index + 1] {
+    .Literal(text) => text.startsWith "?"
+    .Expression(operator, _) => operator == .Query || operator == .Continuation
+  }
+}
+
+/** A literal of a template normalized as a path is, so that it compares with a normalized reference. */
+fn normalizedLiteral(text: String): String {
+  normalizedComponent(text, Component.Path, text).ok() ?? text
+}
+
+/**
+ * The values that make `pieces` from `index` on match `target` from `position` to its end, trying the longest value of
+ * each expression first and backing off where the rest does not match.
+ */
+fn matchedPath(pieces: List<Piece>, index: Int, target: String, position: Int): Map<String, TemplateValue>? {
+  if index == pieces.length() {
+    if position == target.byteLength() {
+      const empty: Map<String, TemplateValue> = [:]
+      return Some empty
+    }
+    return None
+  }
+  match pieces[index] {
+    .Literal(text) => {
+      if !target.sliceBytes(position, target.byteLength()).startsWith(text) {
+        return None
+      }
+      matchedPath(pieces, index + 1, target, position + text.byteLength())
+    }
+    .Expression(operator, variables) => {
+      if operator == .Simple {
+        return matchedSimple pieces, index, variables, target, position
+      }
+      matchedSegments pieces, index, variables, target, position
+    }
+  }
+}
+
+/** `{a,b}`: one run of segment characters, split at its unencoded commas into one value per name. */
+fn matchedSimple(
+  pieces: List<Piece>,
+  index: Int,
+  variables: List<Variable>,
+  target: String,
+  position: Int,
+): Map<String, TemplateValue>? {
+  var end = segmentEnd target, position
+  while end > position {
+    const run = target.sliceBytes position, end
+    const parts = if variables.length() == 1 { [run] } else { run.split "," }
+    if parts.length() == variables.length() && !parts.any({ _.isEmpty() }) {
+      if const Some(found) = matchedPath(pieces, index + 1, target, end) {
+        var rest = found
+        var decodedAll = true
+        for (offset, variable) in variables.indexed() {
+          match percentDecoded(parts[offset]) {
+            Ok(decoded) => {
+              rest[variable.name] = TemplateValue.Text decoded
+            }
+            Fail(_) => {
+              decodedAll = false
+            }
+          }
+        }
+        if decodedAll {
+          return Some rest
+        }
+      }
+    }
+    end = end - 1
+  }
+  None
+}
+
+/** `{/a,b}` and `{/list*}`: a `/` and a segment per name, or as many as there are for an exploded one. */
+fn matchedSegments(
+  pieces: List<Piece>,
+  index: Int,
+  variables: List<Variable>,
+  target: String,
+  position: Int,
+): Map<String, TemplateValue>? {
+  // Every `/` and segment from `position` on, as far as they go
+  var starts: List<Int> = []
+  var ends: List<Int> = []
+  var cursor = position
+  while byteOf(target, cursor) == 47 {
+    const end = segmentEnd(target, cursor + 1)
+    starts.append(cursor + 1)
+    ends.append end
+    cursor = end
+  }
+  const exploded = variables.length() == 1 && variables[0].explode
+  var count = if exploded { starts.length() } else { minimum variables.length(), starts.length() }
+  while count >= 0 {
+    const after = if count == 0 { position } else { ends[count - 1] }
+    if const Some(found) = matchedPath(pieces, index + 1, target, after) {
+      var rest = found
+      var decoded: List<String> = []
+      for step in 0..count {
+        match percentDecoded(target.sliceBytes(starts[step], ends[step])) {
+          Ok(text) => decoded.append text
+          Fail(_) => {
+            return None
+          }
+        }
+      }
+      if exploded {
+        rest[variables[0].name] = TemplateValue.Items decoded
+      } else {
+        for step in 0..count {
+          rest[variables[step].name] = TemplateValue.Text decoded[step]
+        }
+      }
+      return Some rest
+    }
+    count = count - 1
+  }
+  None
+}
+
+/** Where the run of segment characters from `position` ends: at the next `/`, or at the end of the text. */
+fn segmentEnd(target: String, position: Int): Int {
+  var index = position
+  while index < target.byteLength() {
+    const byte = byteOf target, index
+    if byte == 47 || !(isAllowed(byte, Component.Segment) || byte == 37) {
+      return index
+    }
+    index = index + 1
+  }
+  index
+}
+
+/** The smaller of two numbers. */
+fn minimum(first: Int, second: Int): Int {
+  if first < second { first } else { second }
+}

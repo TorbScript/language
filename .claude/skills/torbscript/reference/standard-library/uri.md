@@ -1,6 +1,6 @@
 ---
 title: std/uri
-summary: Uri and UriReference after RFC 3986, normalized at construction, with IRIs, Urn, the file bridge to Path and the form codec of HTML - values that open nothing.
+summary: Uri and UriReference after RFC 3986, normalized at construction, with IRIs, Urn, UriTemplate, the file bridge to Path and the form codec of HTML - values that open nothing.
 kind: package
 status: stable
 order: 129
@@ -10,6 +10,9 @@ keywords:
   - UriReference
   - UriError
   - Urn
+  - UriTemplate
+  - TemplateValue
+  - RFC 6570
   - IRI
   - Authority
   - Host
@@ -23,6 +26,7 @@ source:
   - std/uri/src/authority.trb
   - std/uri/src/urn.trb
   - std/uri/src/form.trb
+  - std/uri/src/template.trb
   - docs/design/URI.md
 ---
 
@@ -38,7 +42,8 @@ docs/design/URI.md.
 ## Import
 
 ```trb fragment
-use Uri, UriReference, UriError, Urn, Authority, Host, formEncoded, formDecoded, percentDecoded from "std/uri"
+use Uri, UriReference, UriError, Urn, UriTemplate, TemplateValue, Authority, Host from "std/uri"
+use formEncoded, formDecoded, percentDecoded from "std/uri"
 ```
 
 ```trb check
@@ -170,6 +175,51 @@ extend Urn with TryFrom<Uri, UriError>
 A `urn:` URI read after RFC 8141: the namespace identifier (lower case, two to thirty-two letters, digits and `-`), the
 namespace-specific string, and the r-, q- and f-components. RFC 8141's equivalence ignores the last three, and it is
 `first.assignedName() == second.assignedName()`; `==` compares the whole URN.
+
+### UriTemplate
+
+```trb fragment
+public type UriTemplate with Show, Equals, Hash {
+  fn variables(): List<String>
+  fn level(): Int
+  fn expandedText(values: Map<String, TemplateValue>): Result<String, UriError>
+  fn expanded(values: Map<String, TemplateValue>): Result<UriReference, UriError>
+  fn isMatchable(): Bool
+  fn matched(reference: UriReference): Map<String, TemplateValue>?
+}
+extend UriTemplate with TryFrom<String, UriError>
+public type TemplateValue with Show, Equals, Hash {
+  case Text(value: String)
+  case Items(values: List<String>)
+  case Pairs(values: List<(String, String)>)
+}
+```
+
+An RFC 6570 template, all four levels: `{var}`, `{+var}` and `{#var}`, the operators `.`, `/`, `;`, `?` and `&` with
+several variables, and the prefix and explode modifiers (`{var:3}`, `{list*}`). `expanded` answers the URI reference
+the template makes with the values in it; a variable that is not in the map is undefined and expands to nothing, as the
+RFC says. The tests are the RFC's examples and the whole `uritemplate-test` suite.
+
+`matched` reads a template backwards: the values that expand it into a reference, decoded. It is defined for the
+templates `isMatchable()` accepts - simple variables and path segments with a literal between them, an exploded path
+segment last in the path, and query parameters written `{?a,b}` or `{&c}`, which match in any order and ignore the
+parameters they do not name. That is the subset routes are written in (see
+docs/design/WEB.md section 13).
+
+```trb check
+use UriTemplate, TemplateValue, UriReference from "std/uri"
+
+fn orderOf(target: String): Result<String, UriError> {
+  const template = UriTemplate.tryFrom(raw"/orders/{id}{?fields}")?
+  const values = template.matched(UriReference.tryFrom(target)?) ?? [:]
+  match values.get("id") {
+    Some(.Text(id)) => Ok id
+    _ => Ok "no order"
+  }
+}
+
+print orderOf("/orders/7?fields=total")
+```
 
 ### Path and file: URIs
 

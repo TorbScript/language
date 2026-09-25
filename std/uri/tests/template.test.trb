@@ -1,0 +1,158 @@
+/**
+ * `UriTemplate` beyond the suite: what a template is refused for, the level it reports, expansion into a
+ * `UriReference`, and matching - the reversible subset WEB.md's routes use, read backwards into the values that expand
+ * into a reference.
+ */
+
+use test, group from "std/test"
+use UriTemplate, TemplateValue from "../src/template"
+use UriReference from "../src/uri"
+use UriError from "../src/error"
+
+/** A text every test here knows to be a template. */
+fn templateOf(text: String): UriTemplate {
+  match UriTemplate.tryFrom(text) {
+    Ok(template) => template
+    Fail(problem) => panic "a test's template was refused: {problem}"
+  }
+}
+
+/** A text every test here knows to be a URI reference. */
+fn referenceOf(text: String): UriReference {
+  match UriReference.tryFrom(text) {
+    Ok(reference) => reference
+    Fail(problem) => panic "a test's URI reference was refused: {problem}"
+  }
+}
+
+/** The values `template` reads out of `reference`, as `name=value` texts in the order of the template's variables. */
+fn matchedText(template: String, reference: String): String? {
+  const parsed = templateOf template
+  const values = parsed.matched(referenceOf(reference))?
+  var parts: List<String> = []
+  for name in parsed.variables() {
+    match values.get(name) {
+      Some(.Text(value)) => parts.append "{name}={value}"
+      Some(.Items(items)) => parts.append "{name}={items}"
+      Some(.Pairs(pairs)) => parts.append "{name}={pairs}"
+      None => {}
+    }
+  }
+  Some parts.joined(separator: " ")
+}
+
+group "reading" {
+  test "the variables in the order they first appear" {
+    assert(templateOf(raw"/a/{x}{/y,x}{?z*}").variables() == ["x", "y", "z"])
+    assert(templateOf("/static").variables() == [])
+  }
+
+  test "the level is the lowest that has every expression" {
+    assert(templateOf(raw"/{var}").level() == 1)
+    assert(templateOf(raw"/{+var}").level() == 2)
+    assert(templateOf(raw"{#var}").level() == 2)
+    assert(templateOf(raw"{x,y}").level() == 3)
+    assert(templateOf(raw"{?x}").level() == 3)
+    assert(templateOf(raw"{var:3}").level() == 4)
+    assert(templateOf(raw"{/list*}").level() == 4)
+  }
+
+  test "a refusal names the template" {
+    assert(UriTemplate.tryFrom(raw"{x") == Fail(UriError.InvalidTemplate(raw"{x", "a `\{` is not closed")))
+    assert(!UriTemplate.tryFrom("a b").isOk())
+    assert(!UriTemplate.tryFrom("}").isOk())
+    assert(!UriTemplate.tryFrom(raw"{}").isOk())
+    assert(!UriTemplate.tryFrom(raw"{x{y}}").isOk())
+    assert(!UriTemplate.tryFrom("100%").isOk())
+  }
+
+  test "a non-ASCII literal is written as its UTF-8, percent-encoded" {
+    var values: Map<String, TemplateValue> = [:]
+    values["x"] = TemplateValue.Text "ü"
+    assert(templateOf(raw"/straße/{x}").expandedText(values) == Ok("/stra%C3%9Fe/%C3%BC"))
+  }
+
+  test "the template shows as it was written, and is its own text" {
+    const template = templateOf raw"/orders/{id}{?fields}"
+    assert(template.show() == raw"/orders/{id}{?fields}")
+    assert(String.from(template) == template.show())
+  }
+}
+
+group "expansion" {
+  test "expanded reads the text as a reference" {
+    var values: Map<String, TemplateValue> = [:]
+    values["id"] = TemplateValue.Text "7"
+    values["fields"] = TemplateValue.Items(["total", "items"])
+    const reference = templateOf(raw"/orders/{id}{?fields*}").expanded(values)
+    assert(reference.map({ _.text() }) == Ok("/orders/7?fields=total&fields=items"))
+  }
+
+  test "a value that makes no reference with the literal parts is refused" {
+    var values: Map<String, TemplateValue> = [:]
+    values["x"] = TemplateValue.Text "1a"
+    assert(templateOf(raw"{x}:y").expandedText(values) == Ok("1a:y"))
+    assert(!templateOf(raw"{x}:y").expanded(values).isOk())
+  }
+
+  test "an undefined variable expands to nothing" {
+    const empty: Map<String, TemplateValue> = [:]
+    assert(templateOf(raw"/a{/b}{?c,d}").expandedText(empty) == Ok("/a"))
+  }
+}
+
+group "matching" {
+  test "a simple variable is one segment, decoded" {
+    assert(matchedText(raw"/orders/{id}", "/orders/7") == Some("id=7"))
+    assert(matchedText(raw"/users/{name}", "/users/Ada%20Lovelace") == Some("name=Ada Lovelace"))
+    assert matchedText(raw"/orders/{id}", "/orders/7/items").isNone()
+    assert matchedText(raw"/orders/{id}", "/orders/").isNone()
+    assert matchedText(raw"/orders/{id}", "/invoices/7").isNone()
+  }
+
+  test "a literal after a variable is found by backing off" {
+    assert(matchedText(raw"/files/{name}.json", "/files/report.v2.json") == Some("name=report.v2"))
+  }
+
+  test "several simple variables split at their unencoded commas" {
+    assert(matchedText(raw"/map/{x,y}", "/map/1024,768") == Some("x=1024 y=768"))
+    assert matchedText(raw"/map/{x,y}", "/map/1024").isNone()
+  }
+
+  test "path segments, one per name, and an exploded one as a list" {
+    assert(matchedText(raw"/repos{/owner,name}", "/repos/torb/script") == Some("owner=torb name=script"))
+    assert(matchedText(raw"/repos{/owner,name}", "/repos/torb") == Some("owner=torb"))
+    assert(matchedText(raw"/files{/path*}", "/files/a/b%20c/d") == Some("path=[\"a\", \"b c\", \"d\"]"))
+    assert(matchedText(raw"/files{/path*}", "/files") == Some("path=[]"))
+  }
+
+  test "query parameters in any order, each optional, the others ignored" {
+    const template = raw"/search{?q,page}"
+    assert(matchedText(template, "/search?page=2&q=uri+templates&utm=x") == Some("q=uri templates page=2"))
+    assert(matchedText(template, "/search") == Some(""))
+    assert(matchedText(raw"/search?kind=all{&q}", "/search?q=x&kind=all") == Some("q=x"))
+    assert matchedText(raw"/search?kind=all{&q}", "/search?q=x").isNone()
+  }
+
+  test "expansion and matching are one round trip" {
+    const template = templateOf raw"/orders/{id}{/items*}{?fields,sort}"
+    var values: Map<String, TemplateValue> = [:]
+    values["id"] = TemplateValue.Text "a b/c"
+    values["items"] = TemplateValue.Items(["x", "y z"])
+    values["fields"] = TemplateValue.Text "total,items"
+    const reference = template.expanded(values).ok()
+    assert(reference.flatMap({ template.matched _ }) == Some(values))
+  }
+
+  test "what cannot be read backwards is not matchable" {
+    assert(!templateOf(raw"/{+path}").isMatchable())
+    assert(!templateOf(raw"/{x}{y}").isMatchable())
+    assert(!templateOf(raw"/{var:3}").isMatchable())
+    assert(!templateOf(raw"/a{#frag}").isMatchable())
+    assert(!templateOf(raw"/a{?list*}").isMatchable())
+    assert(!templateOf(raw"{/list*}/tail").isMatchable())
+    assert templateOf(raw"/orders/{id}{/rest*}{?q}").isMatchable()
+    assert templateOf(raw"/orders/{id}").matched(referenceOf("/orders/1")).isSome()
+    assert templateOf(raw"/{+path}").matched(referenceOf("/a")).isNone()
+  }
+}

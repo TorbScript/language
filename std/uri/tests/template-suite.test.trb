@@ -1,0 +1,765 @@
+/**
+ * RFC 6570 expansion against the `uritemplate-test` suite (https://github.com/uri-templates/uritemplate-test, Apache
+ * License 2.0, copyright 2011- The Authors): the specification's examples of each level and of each operator, the
+ * extended tests and the negative tests, one assert per case. Generated from the suite's JSON; where it accepts several
+ * expansions (an object's pairs have no order in JSON, and `Pairs` keeps the order they are written in), any of them
+ * passes. A negative case passes when the template is refused or its expansion fails.
+ */
+
+use test, group from "std/test"
+use UriTemplate, TemplateValue from "../src/template"
+
+/** Whether `template` reads and expands with `values` into one of `accepted`. */
+fn expandsTo(template: String, values: Map<String, TemplateValue>, accepted: List<String>): Bool {
+  match UriTemplate.tryFrom(template) {
+    Ok(parsed) => {
+      match parsed.expandedText(values) {
+        Ok(text) => accepted.contains text
+        Fail(_) => false
+      }
+    }
+    Fail(_) => false
+  }
+}
+
+/** Whether `template` is refused, or its expansion with `values` fails. */
+fn refused(template: String, values: Map<String, TemplateValue>): Bool {
+  match UriTemplate.tryFrom(template) {
+    Ok(parsed) => !parsed.expandedText(values).isOk()
+    Fail(_) => true
+  }
+}
+
+/** The variables of "Level 1 Examples" in `spec-examples.json`. */
+fn specExamplesLevel1ExamplesValues(): Map<String, TemplateValue> {
+  var values: Map<String, TemplateValue> = [:]
+  values["var"] = TemplateValue.Text "value"
+  values["hello"] = TemplateValue.Text "Hello World!"
+  values
+}
+
+/** The variables of "Level 2 Examples" in `spec-examples.json`. */
+fn specExamplesLevel2ExamplesValues(): Map<String, TemplateValue> {
+  var values: Map<String, TemplateValue> = [:]
+  values["var"] = TemplateValue.Text "value"
+  values["hello"] = TemplateValue.Text "Hello World!"
+  values["path"] = TemplateValue.Text "/foo/bar"
+  values
+}
+
+/** The variables of "Level 3 Examples" in `spec-examples.json`. */
+fn specExamplesLevel3ExamplesValues(): Map<String, TemplateValue> {
+  var values: Map<String, TemplateValue> = [:]
+  values["var"] = TemplateValue.Text "value"
+  values["hello"] = TemplateValue.Text "Hello World!"
+  values["empty"] = TemplateValue.Text ""
+  values["path"] = TemplateValue.Text "/foo/bar"
+  values["x"] = TemplateValue.Text "1024"
+  values["y"] = TemplateValue.Text "768"
+  values
+}
+
+/** The variables of "Level 4 Examples" in `spec-examples.json`. */
+fn specExamplesLevel4ExamplesValues(): Map<String, TemplateValue> {
+  var values: Map<String, TemplateValue> = [:]
+  values["var"] = TemplateValue.Text "value"
+  values["hello"] = TemplateValue.Text "Hello World!"
+  values["path"] = TemplateValue.Text "/foo/bar"
+  values["list"] = TemplateValue.Items(["red", "green", "blue"])
+  values["keys"] = TemplateValue.Pairs([("semi", ";"), ("dot", "."), ("comma", ",")])
+  values
+}
+
+/** The variables of "2.1 Literals" in `spec-examples-by-section.json`. */
+fn specExamplesBySection21LiteralsValues(): Map<String, TemplateValue> {
+  var values: Map<String, TemplateValue> = [:]
+  values["count"] = TemplateValue.Items(["one", "two", "three"])
+  values
+}
+
+/** The variables of "3.2.1 Variable Expansion" in `spec-examples-by-section.json`. */
+fn specExamplesBySection321VariableExpansionValues(): Map<String, TemplateValue> {
+  var values: Map<String, TemplateValue> = [:]
+  values["count"] = TemplateValue.Items(["one", "two", "three"])
+  values["dom"] = TemplateValue.Items(["example", "com"])
+  values["dub"] = TemplateValue.Text "me/too"
+  values["hello"] = TemplateValue.Text "Hello World!"
+  values["half"] = TemplateValue.Text "50%"
+  values["var"] = TemplateValue.Text "value"
+  values["who"] = TemplateValue.Text "fred"
+  values["base"] = TemplateValue.Text "http://example.com/home/"
+  values["path"] = TemplateValue.Text "/foo/bar"
+  values["list"] = TemplateValue.Items(["red", "green", "blue"])
+  values["keys"] = TemplateValue.Pairs([("semi", ";"), ("dot", "."), ("comma", ",")])
+  values["v"] = TemplateValue.Text "6"
+  values["x"] = TemplateValue.Text "1024"
+  values["y"] = TemplateValue.Text "768"
+  values["empty"] = TemplateValue.Text ""
+  values["empty_keys"] = TemplateValue.Pairs([])
+  values
+}
+
+/** The variables of "3.2.2 Simple String Expansion" in `spec-examples-by-section.json`. */
+fn specExamplesBySection322SimpleStringExpansionValues(): Map<String, TemplateValue> {
+  var values: Map<String, TemplateValue> = [:]
+  values["count"] = TemplateValue.Items(["one", "two", "three"])
+  values["dom"] = TemplateValue.Items(["example", "com"])
+  values["dub"] = TemplateValue.Text "me/too"
+  values["hello"] = TemplateValue.Text "Hello World!"
+  values["half"] = TemplateValue.Text "50%"
+  values["var"] = TemplateValue.Text "value"
+  values["who"] = TemplateValue.Text "fred"
+  values["base"] = TemplateValue.Text "http://example.com/home/"
+  values["path"] = TemplateValue.Text "/foo/bar"
+  values["list"] = TemplateValue.Items(["red", "green", "blue"])
+  values["keys"] = TemplateValue.Pairs([("semi", ";"), ("dot", "."), ("comma", ",")])
+  values["v"] = TemplateValue.Text "6"
+  values["x"] = TemplateValue.Text "1024"
+  values["y"] = TemplateValue.Text "768"
+  values["empty"] = TemplateValue.Text ""
+  values["empty_keys"] = TemplateValue.Pairs([])
+  values
+}
+
+/** The variables of "3.2.3 Reserved Expansion" in `spec-examples-by-section.json`. */
+fn specExamplesBySection323ReservedExpansionValues(): Map<String, TemplateValue> {
+  var values: Map<String, TemplateValue> = [:]
+  values["count"] = TemplateValue.Items(["one", "two", "three"])
+  values["dom"] = TemplateValue.Items(["example", "com"])
+  values["dub"] = TemplateValue.Text "me/too"
+  values["hello"] = TemplateValue.Text "Hello World!"
+  values["half"] = TemplateValue.Text "50%"
+  values["var"] = TemplateValue.Text "value"
+  values["who"] = TemplateValue.Text "fred"
+  values["base"] = TemplateValue.Text "http://example.com/home/"
+  values["path"] = TemplateValue.Text "/foo/bar"
+  values["list"] = TemplateValue.Items(["red", "green", "blue"])
+  values["keys"] = TemplateValue.Pairs([("semi", ";"), ("dot", "."), ("comma", ",")])
+  values["v"] = TemplateValue.Text "6"
+  values["x"] = TemplateValue.Text "1024"
+  values["y"] = TemplateValue.Text "768"
+  values["empty"] = TemplateValue.Text ""
+  values["empty_keys"] = TemplateValue.Pairs([])
+  values
+}
+
+/** The variables of "3.2.4 Fragment Expansion" in `spec-examples-by-section.json`. */
+fn specExamplesBySection324FragmentExpansionValues(): Map<String, TemplateValue> {
+  var values: Map<String, TemplateValue> = [:]
+  values["count"] = TemplateValue.Items(["one", "two", "three"])
+  values["dom"] = TemplateValue.Items(["example", "com"])
+  values["dub"] = TemplateValue.Text "me/too"
+  values["hello"] = TemplateValue.Text "Hello World!"
+  values["half"] = TemplateValue.Text "50%"
+  values["var"] = TemplateValue.Text "value"
+  values["who"] = TemplateValue.Text "fred"
+  values["base"] = TemplateValue.Text "http://example.com/home/"
+  values["path"] = TemplateValue.Text "/foo/bar"
+  values["list"] = TemplateValue.Items(["red", "green", "blue"])
+  values["keys"] = TemplateValue.Pairs([("semi", ";"), ("dot", "."), ("comma", ",")])
+  values["v"] = TemplateValue.Text "6"
+  values["x"] = TemplateValue.Text "1024"
+  values["y"] = TemplateValue.Text "768"
+  values["empty"] = TemplateValue.Text ""
+  values["empty_keys"] = TemplateValue.Pairs([])
+  values
+}
+
+/** The variables of "3.2.5 Label Expansion with Dot-Prefix" in `spec-examples-by-section.json`. */
+fn specExamplesBySection325LabelExpansionWithDotPrefixValues(): Map<String, TemplateValue> {
+  var values: Map<String, TemplateValue> = [:]
+  values["count"] = TemplateValue.Items(["one", "two", "three"])
+  values["dom"] = TemplateValue.Items(["example", "com"])
+  values["dub"] = TemplateValue.Text "me/too"
+  values["hello"] = TemplateValue.Text "Hello World!"
+  values["half"] = TemplateValue.Text "50%"
+  values["var"] = TemplateValue.Text "value"
+  values["who"] = TemplateValue.Text "fred"
+  values["base"] = TemplateValue.Text "http://example.com/home/"
+  values["path"] = TemplateValue.Text "/foo/bar"
+  values["list"] = TemplateValue.Items(["red", "green", "blue"])
+  values["keys"] = TemplateValue.Pairs([("semi", ";"), ("dot", "."), ("comma", ",")])
+  values["v"] = TemplateValue.Text "6"
+  values["x"] = TemplateValue.Text "1024"
+  values["y"] = TemplateValue.Text "768"
+  values["empty"] = TemplateValue.Text ""
+  values["empty_keys"] = TemplateValue.Pairs([])
+  values
+}
+
+/** The variables of "3.2.6 Path Segment Expansion" in `spec-examples-by-section.json`. */
+fn specExamplesBySection326PathSegmentExpansionValues(): Map<String, TemplateValue> {
+  var values: Map<String, TemplateValue> = [:]
+  values["count"] = TemplateValue.Items(["one", "two", "three"])
+  values["dom"] = TemplateValue.Items(["example", "com"])
+  values["dub"] = TemplateValue.Text "me/too"
+  values["hello"] = TemplateValue.Text "Hello World!"
+  values["half"] = TemplateValue.Text "50%"
+  values["var"] = TemplateValue.Text "value"
+  values["who"] = TemplateValue.Text "fred"
+  values["base"] = TemplateValue.Text "http://example.com/home/"
+  values["path"] = TemplateValue.Text "/foo/bar"
+  values["list"] = TemplateValue.Items(["red", "green", "blue"])
+  values["keys"] = TemplateValue.Pairs([("semi", ";"), ("dot", "."), ("comma", ",")])
+  values["v"] = TemplateValue.Text "6"
+  values["x"] = TemplateValue.Text "1024"
+  values["y"] = TemplateValue.Text "768"
+  values["empty"] = TemplateValue.Text ""
+  values["empty_keys"] = TemplateValue.Pairs([])
+  values
+}
+
+/** The variables of "3.2.7 Path-Style Parameter Expansion" in `spec-examples-by-section.json`. */
+fn specExamplesBySection327PathStyleParameterExpansionValues(): Map<String, TemplateValue> {
+  var values: Map<String, TemplateValue> = [:]
+  values["count"] = TemplateValue.Items(["one", "two", "three"])
+  values["dom"] = TemplateValue.Items(["example", "com"])
+  values["dub"] = TemplateValue.Text "me/too"
+  values["hello"] = TemplateValue.Text "Hello World!"
+  values["half"] = TemplateValue.Text "50%"
+  values["var"] = TemplateValue.Text "value"
+  values["who"] = TemplateValue.Text "fred"
+  values["base"] = TemplateValue.Text "http://example.com/home/"
+  values["path"] = TemplateValue.Text "/foo/bar"
+  values["list"] = TemplateValue.Items(["red", "green", "blue"])
+  values["keys"] = TemplateValue.Pairs([("semi", ";"), ("dot", "."), ("comma", ",")])
+  values["v"] = TemplateValue.Text "6"
+  values["x"] = TemplateValue.Text "1024"
+  values["y"] = TemplateValue.Text "768"
+  values["empty"] = TemplateValue.Text ""
+  values["empty_keys"] = TemplateValue.Pairs([])
+  values
+}
+
+/** The variables of "3.2.8 Form-Style Query Expansion" in `spec-examples-by-section.json`. */
+fn specExamplesBySection328FormStyleQueryExpansionValues(): Map<String, TemplateValue> {
+  var values: Map<String, TemplateValue> = [:]
+  values["count"] = TemplateValue.Items(["one", "two", "three"])
+  values["dom"] = TemplateValue.Items(["example", "com"])
+  values["dub"] = TemplateValue.Text "me/too"
+  values["hello"] = TemplateValue.Text "Hello World!"
+  values["half"] = TemplateValue.Text "50%"
+  values["var"] = TemplateValue.Text "value"
+  values["who"] = TemplateValue.Text "fred"
+  values["base"] = TemplateValue.Text "http://example.com/home/"
+  values["path"] = TemplateValue.Text "/foo/bar"
+  values["list"] = TemplateValue.Items(["red", "green", "blue"])
+  values["keys"] = TemplateValue.Pairs([("semi", ";"), ("dot", "."), ("comma", ",")])
+  values["v"] = TemplateValue.Text "6"
+  values["x"] = TemplateValue.Text "1024"
+  values["y"] = TemplateValue.Text "768"
+  values["empty"] = TemplateValue.Text ""
+  values["empty_keys"] = TemplateValue.Pairs([])
+  values
+}
+
+/** The variables of "3.2.9 Form-Style Query Continuation" in `spec-examples-by-section.json`. */
+fn specExamplesBySection329FormStyleQueryContinuationValues(): Map<String, TemplateValue> {
+  var values: Map<String, TemplateValue> = [:]
+  values["count"] = TemplateValue.Items(["one", "two", "three"])
+  values["dom"] = TemplateValue.Items(["example", "com"])
+  values["dub"] = TemplateValue.Text "me/too"
+  values["hello"] = TemplateValue.Text "Hello World!"
+  values["half"] = TemplateValue.Text "50%"
+  values["var"] = TemplateValue.Text "value"
+  values["who"] = TemplateValue.Text "fred"
+  values["base"] = TemplateValue.Text "http://example.com/home/"
+  values["path"] = TemplateValue.Text "/foo/bar"
+  values["list"] = TemplateValue.Items(["red", "green", "blue"])
+  values["keys"] = TemplateValue.Pairs([("semi", ";"), ("dot", "."), ("comma", ",")])
+  values["v"] = TemplateValue.Text "6"
+  values["x"] = TemplateValue.Text "1024"
+  values["y"] = TemplateValue.Text "768"
+  values["empty"] = TemplateValue.Text ""
+  values["empty_keys"] = TemplateValue.Pairs([])
+  values
+}
+
+/** The variables of "Additional Examples 1" in `extended-tests.json`. */
+fn extendedTestsAdditionalExamples1Values(): Map<String, TemplateValue> {
+  var values: Map<String, TemplateValue> = [:]
+  values["id"] = TemplateValue.Text "person"
+  values["token"] = TemplateValue.Text "12345"
+  values["fields"] = TemplateValue.Items(["id", "name", "picture"])
+  values["format"] = TemplateValue.Text "json"
+  values["q"] = TemplateValue.Text "URI Templates"
+  values["page"] = TemplateValue.Text "5"
+  values["lang"] = TemplateValue.Text "en"
+  values["geocode"] = TemplateValue.Items(["37.76", "-122.427"])
+  values["first_name"] = TemplateValue.Text "John"
+  values["last.name"] = TemplateValue.Text "Doe"
+  values["Some%20Thing"] = TemplateValue.Text "foo"
+  values["number"] = TemplateValue.Text "6"
+  values["long"] = TemplateValue.Text "37.76"
+  values["lat"] = TemplateValue.Text "-122.427"
+  values["group_id"] = TemplateValue.Text "12345"
+  values["query"] = TemplateValue.Text "PREFIX dc: <http://purl.org/dc/elements/1.1/> SELECT ?book ?who WHERE \{ ?book dc:creator ?who \}"
+  values["uri"] = TemplateValue.Text "http://example.org/?uri=http%3A%2F%2Fexample.org%2F"
+  values["word"] = TemplateValue.Text "drücken"
+  values["Stra%C3%9Fe"] = TemplateValue.Text "Grüner Weg"
+  values["random"] = TemplateValue.Text "šöäŸœñê€£¥‡ÑÒÓÔÕÖ×ØÙÚàáâãäåæçÿ"
+  values["assoc_special_chars"] = TemplateValue.Pairs([("šöäŸœñê€£¥‡ÑÒÓÔÕ", "Ö×ØÙÚàáâãäåæçÿ")])
+  values
+}
+
+/** The variables of "Additional Examples 2" in `extended-tests.json`. */
+fn extendedTestsAdditionalExamples2Values(): Map<String, TemplateValue> {
+  var values: Map<String, TemplateValue> = [:]
+  values["id"] = TemplateValue.Items(["person", "albums"])
+  values["token"] = TemplateValue.Text "12345"
+  values["fields"] = TemplateValue.Items(["id", "name", "picture"])
+  values["format"] = TemplateValue.Text "atom"
+  values["q"] = TemplateValue.Text "URI Templates"
+  values["page"] = TemplateValue.Text "10"
+  values["start"] = TemplateValue.Text "5"
+  values["lang"] = TemplateValue.Text "en"
+  values["geocode"] = TemplateValue.Items(["37.76", "-122.427"])
+  values
+}
+
+/** The variables of "Additional Examples 3: Empty Variables" in `extended-tests.json`. */
+fn extendedTestsAdditionalExamples3EmptyVariablesValues(): Map<String, TemplateValue> {
+  var values: Map<String, TemplateValue> = [:]
+  values["empty_list"] = TemplateValue.Items([])
+  values["empty_assoc"] = TemplateValue.Pairs([])
+  values
+}
+
+/** The variables of "Additional Examples 4: Numeric Keys" in `extended-tests.json`. */
+fn extendedTestsAdditionalExamples4NumericKeysValues(): Map<String, TemplateValue> {
+  var values: Map<String, TemplateValue> = [:]
+  values["42"] = TemplateValue.Text "The Answer to the Ultimate Question of Life, the Universe, and Everything"
+  values["1337"] = TemplateValue.Items(["leet", "as", "it", "can", "be"])
+  values["german"] = TemplateValue.Pairs([("11", "elf"), ("12", "zwölf")])
+  values
+}
+
+/** The variables of "Additional Examples 5: Explode Combinations" in `extended-tests.json`. */
+fn extendedTestsAdditionalExamples5ExplodeCombinationsValues(): Map<String, TemplateValue> {
+  var values: Map<String, TemplateValue> = [:]
+  values["id"] = TemplateValue.Text "admin"
+  values["token"] = TemplateValue.Text "12345"
+  values["tab"] = TemplateValue.Text "overview"
+  values["keys"] = TemplateValue.Pairs([("key1", "val1"), ("key2", "val2")])
+  values
+}
+
+/** The variables of "Additional Examples 6: Reserved Expansion" in `extended-tests.json`. */
+fn extendedTestsAdditionalExamples6ReservedExpansionValues(): Map<String, TemplateValue> {
+  var values: Map<String, TemplateValue> = [:]
+  values["id"] = TemplateValue.Text "admin%2F"
+  values["not_pct"] = TemplateValue.Text "%foo"
+  values["list"] = TemplateValue.Items(["red%25", "%2Fgreen", "blue "])
+  values["keys"] = TemplateValue.Pairs([("key1", "val1%2F"), ("key2", "val2%2F")])
+  values
+}
+
+/** The variables of "Additional Examples 7: Prefix Modifiers with Multibyte Characters" in `extended-tests.json`. */
+fn extendedTestsAdditionalExamples7PrefixModifiersWithMultibyteCharactersValues(): Map<String, TemplateValue> {
+  var values: Map<String, TemplateValue> = [:]
+  values["var"] = TemplateValue.Text "value"
+  values["greek"] = TemplateValue.Text "αβγδε"
+  values["currency"] = TemplateValue.Text "€uro"
+  values["clef"] = TemplateValue.Text "𝄞stave"
+  values
+}
+
+/** The variables of "Additional Examples 8: Literal Encoding" in `extended-tests.json`. */
+fn extendedTestsAdditionalExamples8LiteralEncodingValues(): Map<String, TemplateValue> {
+  var values: Map<String, TemplateValue> = [:]
+  values["var"] = TemplateValue.Text "value"
+  values
+}
+
+/** The variables of "Failure Tests" in `negative-tests.json`. */
+fn negativeTestsFailureTestsValues(): Map<String, TemplateValue> {
+  var values: Map<String, TemplateValue> = [:]
+  values["id"] = TemplateValue.Text "thing"
+  values["var"] = TemplateValue.Text "value"
+  values["hello"] = TemplateValue.Text "Hello World!"
+  values["with space"] = TemplateValue.Text "fail"
+  values[" leading_space"] = TemplateValue.Text "Hi!"
+  values["trailing_space "] = TemplateValue.Text "Bye!"
+  values["empty"] = TemplateValue.Text ""
+  values["path"] = TemplateValue.Text "/foo/bar"
+  values["x"] = TemplateValue.Text "1024"
+  values["y"] = TemplateValue.Text "768"
+  values["list"] = TemplateValue.Items(["red", "green", "blue"])
+  values["keys"] = TemplateValue.Pairs([("semi", ";"), ("dot", "."), ("comma", ",")])
+  values["example"] = TemplateValue.Text "red"
+  values["searchTerms"] = TemplateValue.Text "uri templates"
+  values["~thing"] = TemplateValue.Text "some-user"
+  values["default-graph-uri"] = TemplateValue.Items(["http://www.example/book/", "http://www.example/papers/"])
+  values["query"] = TemplateValue.Text "PREFIX dc: <http://purl.org/dc/elements/1.1/> SELECT ?book ?who WHERE \{ ?book dc:creator ?who \}"
+  values
+}
+
+group "RFC 6570 section 1.2, the examples of each level" {
+  test "Level 1 Examples" {
+    const values = specExamplesLevel1ExamplesValues()
+    assert expandsTo("\{var\}", values, ["value"])
+    assert expandsTo("'\{var\}'", values, ["'value'"])
+    assert expandsTo("\{hello\}", values, ["Hello%20World%21"])
+  }
+
+  test "Level 2 Examples" {
+    const values = specExamplesLevel2ExamplesValues()
+    assert expandsTo("\{+var\}", values, ["value"])
+    assert expandsTo("\{+hello\}", values, ["Hello%20World!"])
+    assert expandsTo("\{+path\}/here", values, ["/foo/bar/here"])
+    assert expandsTo("here?ref=\{+path\}", values, ["here?ref=/foo/bar"])
+  }
+
+  test "Level 3 Examples" {
+    const values = specExamplesLevel3ExamplesValues()
+    assert expandsTo("map?\{x,y\}", values, ["map?1024,768"])
+    assert expandsTo("\{x,hello,y\}", values, ["1024,Hello%20World%21,768"])
+    assert expandsTo("\{+x,hello,y\}", values, ["1024,Hello%20World!,768"])
+    assert expandsTo("\{+path,x\}/here", values, ["/foo/bar,1024/here"])
+    assert expandsTo("\{#x,hello,y\}", values, ["#1024,Hello%20World!,768"])
+    assert expandsTo("\{#path,x\}/here", values, ["#/foo/bar,1024/here"])
+    assert expandsTo("X\{.var\}", values, ["X.value"])
+    assert expandsTo("X\{.x,y\}", values, ["X.1024.768"])
+    assert expandsTo("\{/var\}", values, ["/value"])
+    assert expandsTo("\{/var,x\}/here", values, ["/value/1024/here"])
+    assert expandsTo("\{;x,y\}", values, [";x=1024;y=768"])
+    assert expandsTo("\{;x,y,empty\}", values, [";x=1024;y=768;empty"])
+    assert expandsTo("\{?x,y\}", values, ["?x=1024&y=768"])
+    assert expandsTo("\{?x,y,empty\}", values, ["?x=1024&y=768&empty="])
+    assert expandsTo("?fixed=yes\{&x\}", values, ["?fixed=yes&x=1024"])
+    assert expandsTo("\{&x,y,empty\}", values, ["&x=1024&y=768&empty="])
+  }
+
+  test "Level 4 Examples" {
+    const values = specExamplesLevel4ExamplesValues()
+    assert expandsTo("\{var:3\}", values, ["val"])
+    assert expandsTo("\{var:30\}", values, ["value"])
+    assert expandsTo("\{list\}", values, ["red,green,blue"])
+    assert expandsTo("\{list*\}", values, ["red,green,blue"])
+    assert expandsTo("\{keys\}", values, ["comma,%2C,dot,.,semi,%3B", "comma,%2C,semi,%3B,dot,.", "dot,.,comma,%2C,semi,%3B", "dot,.,semi,%3B,comma,%2C", "semi,%3B,comma,%2C,dot,.", "semi,%3B,dot,.,comma,%2C"])
+    assert expandsTo("\{keys*\}", values, ["comma=%2C,dot=.,semi=%3B", "comma=%2C,semi=%3B,dot=.", "dot=.,comma=%2C,semi=%3B", "dot=.,semi=%3B,comma=%2C", "semi=%3B,comma=%2C,dot=.", "semi=%3B,dot=.,comma=%2C"])
+    assert expandsTo("\{+path:6\}/here", values, ["/foo/b/here"])
+    assert expandsTo("\{+list\}", values, ["red,green,blue"])
+    assert expandsTo("\{+list*\}", values, ["red,green,blue"])
+    assert expandsTo("\{+keys\}", values, ["comma,,,dot,.,semi,;", "comma,,,semi,;,dot,.", "dot,.,comma,,,semi,;", "dot,.,semi,;,comma,,", "semi,;,comma,,,dot,.", "semi,;,dot,.,comma,,"])
+    assert expandsTo("\{+keys*\}", values, ["comma=,,dot=.,semi=;", "comma=,,semi=;,dot=.", "dot=.,comma=,,semi=;", "dot=.,semi=;,comma=,", "semi=;,comma=,,dot=.", "semi=;,dot=.,comma=,"])
+    assert expandsTo("\{#path:6\}/here", values, ["#/foo/b/here"])
+    assert expandsTo("\{#list\}", values, ["#red,green,blue"])
+    assert expandsTo("\{#list*\}", values, ["#red,green,blue"])
+    assert expandsTo("\{#keys\}", values, ["#comma,,,dot,.,semi,;", "#comma,,,semi,;,dot,.", "#dot,.,comma,,,semi,;", "#dot,.,semi,;,comma,,", "#semi,;,comma,,,dot,.", "#semi,;,dot,.,comma,,"])
+    assert expandsTo("\{#keys*\}", values, ["#comma=,,dot=.,semi=;", "#comma=,,semi=;,dot=.", "#dot=.,comma=,,semi=;", "#dot=.,semi=;,comma=,", "#semi=;,comma=,,dot=.", "#semi=;,dot=.,comma=,"])
+    assert expandsTo("X\{.var:3\}", values, ["X.val"])
+    assert expandsTo("X\{.list\}", values, ["X.red,green,blue"])
+    assert expandsTo("X\{.list*\}", values, ["X.red.green.blue"])
+    assert expandsTo("X\{.keys\}", values, ["X.comma,%2C,dot,.,semi,%3B", "X.comma,%2C,semi,%3B,dot,.", "X.dot,.,comma,%2C,semi,%3B", "X.dot,.,semi,%3B,comma,%2C", "X.semi,%3B,comma,%2C,dot,.", "X.semi,%3B,dot,.,comma,%2C"])
+    assert expandsTo("\{/var:1,var\}", values, ["/v/value"])
+    assert expandsTo("\{/list\}", values, ["/red,green,blue"])
+    assert expandsTo("\{/list*\}", values, ["/red/green/blue"])
+    assert expandsTo("\{/list*,path:4\}", values, ["/red/green/blue/%2Ffoo"])
+    assert expandsTo("\{/keys\}", values, ["/comma,%2C,dot,.,semi,%3B", "/comma,%2C,semi,%3B,dot,.", "/dot,.,comma,%2C,semi,%3B", "/dot,.,semi,%3B,comma,%2C", "/semi,%3B,comma,%2C,dot,.", "/semi,%3B,dot,.,comma,%2C"])
+    assert expandsTo("\{/keys*\}", values, ["/comma=%2C/dot=./semi=%3B", "/comma=%2C/semi=%3B/dot=.", "/dot=./comma=%2C/semi=%3B", "/dot=./semi=%3B/comma=%2C", "/semi=%3B/comma=%2C/dot=.", "/semi=%3B/dot=./comma=%2C"])
+    assert expandsTo("\{;hello:5\}", values, [";hello=Hello"])
+    assert expandsTo("\{;list\}", values, [";list=red,green,blue"])
+    assert expandsTo("\{;list*\}", values, [";list=red;list=green;list=blue"])
+    assert expandsTo("\{;keys\}", values, [";keys=comma,%2C,dot,.,semi,%3B", ";keys=comma,%2C,semi,%3B,dot,.", ";keys=dot,.,comma,%2C,semi,%3B", ";keys=dot,.,semi,%3B,comma,%2C", ";keys=semi,%3B,comma,%2C,dot,.", ";keys=semi,%3B,dot,.,comma,%2C"])
+    assert expandsTo("\{;keys*\}", values, [";comma=%2C;dot=.;semi=%3B", ";comma=%2C;semi=%3B;dot=.", ";dot=.;comma=%2C;semi=%3B", ";dot=.;semi=%3B;comma=%2C", ";semi=%3B;comma=%2C;dot=.", ";semi=%3B;dot=.;comma=%2C"])
+    assert expandsTo("\{?var:3\}", values, ["?var=val"])
+    assert expandsTo("\{?list\}", values, ["?list=red,green,blue"])
+    assert expandsTo("\{?list*\}", values, ["?list=red&list=green&list=blue"])
+    assert expandsTo("\{?keys\}", values, ["?keys=comma,%2C,dot,.,semi,%3B", "?keys=comma,%2C,semi,%3B,dot,.", "?keys=dot,.,comma,%2C,semi,%3B", "?keys=dot,.,semi,%3B,comma,%2C", "?keys=semi,%3B,comma,%2C,dot,.", "?keys=semi,%3B,dot,.,comma,%2C"])
+    assert expandsTo("\{?keys*\}", values, ["?comma=%2C&dot=.&semi=%3B", "?comma=%2C&semi=%3B&dot=.", "?dot=.&comma=%2C&semi=%3B", "?dot=.&semi=%3B&comma=%2C", "?semi=%3B&comma=%2C&dot=.", "?semi=%3B&dot=.&comma=%2C"])
+    assert expandsTo("\{&var:3\}", values, ["&var=val"])
+    assert expandsTo("\{&list\}", values, ["&list=red,green,blue"])
+    assert expandsTo("\{&list*\}", values, ["&list=red&list=green&list=blue"])
+    assert expandsTo("\{&keys\}", values, ["&keys=comma,%2C,dot,.,semi,%3B", "&keys=comma,%2C,semi,%3B,dot,.", "&keys=dot,.,comma,%2C,semi,%3B", "&keys=dot,.,semi,%3B,comma,%2C", "&keys=semi,%3B,comma,%2C,dot,.", "&keys=semi,%3B,dot,.,comma,%2C"])
+    assert expandsTo("\{&keys*\}", values, ["&comma=%2C&dot=.&semi=%3B", "&comma=%2C&semi=%3B&dot=.", "&dot=.&comma=%2C&semi=%3B", "&dot=.&semi=%3B&comma=%2C", "&semi=%3B&comma=%2C&dot=.", "&semi=%3B&dot=.&comma=%2C"])
+  }
+}
+
+group "RFC 6570 section 3, the examples of each operator" {
+  test "2.1 Literals" {
+    const values = specExamplesBySection21LiteralsValues()
+    assert expandsTo("'\{count\}'", values, ["'one,two,three'"])
+  }
+
+  test "3.2.1 Variable Expansion" {
+    const values = specExamplesBySection321VariableExpansionValues()
+    assert expandsTo("\{count\}", values, ["one,two,three"])
+    assert expandsTo("\{count*\}", values, ["one,two,three"])
+    assert expandsTo("\{/count\}", values, ["/one,two,three"])
+    assert expandsTo("\{/count*\}", values, ["/one/two/three"])
+    assert expandsTo("\{;count\}", values, [";count=one,two,three"])
+    assert expandsTo("\{;count*\}", values, [";count=one;count=two;count=three"])
+    assert expandsTo("\{?count\}", values, ["?count=one,two,three"])
+    assert expandsTo("\{?count*\}", values, ["?count=one&count=two&count=three"])
+    assert expandsTo("\{&count*\}", values, ["&count=one&count=two&count=three"])
+  }
+
+  test "3.2.2 Simple String Expansion" {
+    const values = specExamplesBySection322SimpleStringExpansionValues()
+    assert expandsTo("\{var\}", values, ["value"])
+    assert expandsTo("\{hello\}", values, ["Hello%20World%21"])
+    assert expandsTo("\{half\}", values, ["50%25"])
+    assert expandsTo("O\{empty\}X", values, ["OX"])
+    assert expandsTo("O\{undef\}X", values, ["OX"])
+    assert expandsTo("\{x,y\}", values, ["1024,768"])
+    assert expandsTo("\{x,hello,y\}", values, ["1024,Hello%20World%21,768"])
+    assert expandsTo("?\{x,empty\}", values, ["?1024,"])
+    assert expandsTo("?\{x,undef\}", values, ["?1024"])
+    assert expandsTo("?\{undef,y\}", values, ["?768"])
+    assert expandsTo("\{var:3\}", values, ["val"])
+    assert expandsTo("\{var:30\}", values, ["value"])
+    assert expandsTo("\{list\}", values, ["red,green,blue"])
+    assert expandsTo("\{list*\}", values, ["red,green,blue"])
+    assert expandsTo("\{keys\}", values, ["comma,%2C,dot,.,semi,%3B", "comma,%2C,semi,%3B,dot,.", "dot,.,comma,%2C,semi,%3B", "dot,.,semi,%3B,comma,%2C", "semi,%3B,comma,%2C,dot,.", "semi,%3B,dot,.,comma,%2C"])
+    assert expandsTo("\{keys*\}", values, ["comma=%2C,dot=.,semi=%3B", "comma=%2C,semi=%3B,dot=.", "dot=.,comma=%2C,semi=%3B", "dot=.,semi=%3B,comma=%2C", "semi=%3B,comma=%2C,dot=.", "semi=%3B,dot=.,comma=%2C"])
+  }
+
+  test "3.2.3 Reserved Expansion" {
+    const values = specExamplesBySection323ReservedExpansionValues()
+    assert expandsTo("\{+var\}", values, ["value"])
+    assert expandsTo("\{/var,empty\}", values, ["/value/"])
+    assert expandsTo("\{/var,undef\}", values, ["/value"])
+    assert expandsTo("\{+hello\}", values, ["Hello%20World!"])
+    assert expandsTo("\{+half\}", values, ["50%25"])
+    assert expandsTo("\{base\}index", values, ["http%3A%2F%2Fexample.com%2Fhome%2Findex"])
+    assert expandsTo("\{+base\}index", values, ["http://example.com/home/index"])
+    assert expandsTo("O\{+empty\}X", values, ["OX"])
+    assert expandsTo("O\{+undef\}X", values, ["OX"])
+    assert expandsTo("\{+path\}/here", values, ["/foo/bar/here"])
+    assert expandsTo("\{+path:6\}/here", values, ["/foo/b/here"])
+    assert expandsTo("here?ref=\{+path\}", values, ["here?ref=/foo/bar"])
+    assert expandsTo("up\{+path\}\{var\}/here", values, ["up/foo/barvalue/here"])
+    assert expandsTo("\{+x,hello,y\}", values, ["1024,Hello%20World!,768"])
+    assert expandsTo("\{+path,x\}/here", values, ["/foo/bar,1024/here"])
+    assert expandsTo("\{+list\}", values, ["red,green,blue"])
+    assert expandsTo("\{+list*\}", values, ["red,green,blue"])
+    assert expandsTo("\{+keys\}", values, ["comma,,,dot,.,semi,;", "comma,,,semi,;,dot,.", "dot,.,comma,,,semi,;", "dot,.,semi,;,comma,,", "semi,;,comma,,,dot,.", "semi,;,dot,.,comma,,"])
+    assert expandsTo("\{+keys*\}", values, ["comma=,,dot=.,semi=;", "comma=,,semi=;,dot=.", "dot=.,comma=,,semi=;", "dot=.,semi=;,comma=,", "semi=;,comma=,,dot=.", "semi=;,dot=.,comma=,"])
+  }
+
+  test "3.2.4 Fragment Expansion" {
+    const values = specExamplesBySection324FragmentExpansionValues()
+    assert expandsTo("\{#var\}", values, ["#value"])
+    assert expandsTo("\{#hello\}", values, ["#Hello%20World!"])
+    assert expandsTo("\{#half\}", values, ["#50%25"])
+    assert expandsTo("foo\{#empty\}", values, ["foo#"])
+    assert expandsTo("foo\{#undef\}", values, ["foo"])
+    assert expandsTo("\{#x,hello,y\}", values, ["#1024,Hello%20World!,768"])
+    assert expandsTo("\{#path,x\}/here", values, ["#/foo/bar,1024/here"])
+    assert expandsTo("\{#path:6\}/here", values, ["#/foo/b/here"])
+    assert expandsTo("\{#list\}", values, ["#red,green,blue"])
+    assert expandsTo("\{#list*\}", values, ["#red,green,blue"])
+    assert expandsTo("\{#keys\}", values, ["#comma,,,dot,.,semi,;", "#comma,,,semi,;,dot,.", "#dot,.,comma,,,semi,;", "#dot,.,semi,;,comma,,", "#semi,;,comma,,,dot,.", "#semi,;,dot,.,comma,,"])
+  }
+
+  test "3.2.5 Label Expansion with Dot-Prefix" {
+    const values = specExamplesBySection325LabelExpansionWithDotPrefixValues()
+    assert expandsTo("\{.who\}", values, [".fred"])
+    assert expandsTo("\{.who,who\}", values, [".fred.fred"])
+    assert expandsTo("\{.half,who\}", values, [".50%25.fred"])
+    assert expandsTo("www\{.dom*\}", values, ["www.example.com"])
+    assert expandsTo("X\{.var\}", values, ["X.value"])
+    assert expandsTo("X\{.var:3\}", values, ["X.val"])
+    assert expandsTo("X\{.empty\}", values, ["X."])
+    assert expandsTo("X\{.undef\}", values, ["X"])
+    assert expandsTo("X\{.list\}", values, ["X.red,green,blue"])
+    assert expandsTo("X\{.list*\}", values, ["X.red.green.blue"])
+    assert expandsTo("\{#keys\}", values, ["#comma,,,dot,.,semi,;", "#comma,,,semi,;,dot,.", "#dot,.,comma,,,semi,;", "#dot,.,semi,;,comma,,", "#semi,;,comma,,,dot,.", "#semi,;,dot,.,comma,,"])
+    assert expandsTo("\{#keys*\}", values, ["#comma=,,dot=.,semi=;", "#comma=,,semi=;,dot=.", "#dot=.,comma=,,semi=;", "#dot=.,semi=;,comma=,", "#semi=;,comma=,,dot=.", "#semi=;,dot=.,comma=,"])
+    assert expandsTo("X\{.empty_keys\}", values, ["X"])
+    assert expandsTo("X\{.empty_keys*\}", values, ["X"])
+  }
+
+  test "3.2.6 Path Segment Expansion" {
+    const values = specExamplesBySection326PathSegmentExpansionValues()
+    assert expandsTo("\{/who\}", values, ["/fred"])
+    assert expandsTo("\{/who,who\}", values, ["/fred/fred"])
+    assert expandsTo("\{/half,who\}", values, ["/50%25/fred"])
+    assert expandsTo("\{/who,dub\}", values, ["/fred/me%2Ftoo"])
+    assert expandsTo("\{/var\}", values, ["/value"])
+    assert expandsTo("\{/var,empty\}", values, ["/value/"])
+    assert expandsTo("\{/var,undef\}", values, ["/value"])
+    assert expandsTo("\{/var,x\}/here", values, ["/value/1024/here"])
+    assert expandsTo("\{/var:1,var\}", values, ["/v/value"])
+    assert expandsTo("\{/list\}", values, ["/red,green,blue"])
+    assert expandsTo("\{/list*\}", values, ["/red/green/blue"])
+    assert expandsTo("\{/list*,path:4\}", values, ["/red/green/blue/%2Ffoo"])
+    assert expandsTo("\{/keys\}", values, ["/comma,%2C,dot,.,semi,%3B", "/comma,%2C,semi,%3B,dot,.", "/dot,.,comma,%2C,semi,%3B", "/dot,.,semi,%3B,comma,%2C", "/semi,%3B,comma,%2C,dot,.", "/semi,%3B,dot,.,comma,%2C"])
+    assert expandsTo("\{/keys*\}", values, ["/comma=%2C/dot=./semi=%3B", "/comma=%2C/semi=%3B/dot=.", "/dot=./comma=%2C/semi=%3B", "/dot=./semi=%3B/comma=%2C", "/semi=%3B/comma=%2C/dot=.", "/semi=%3B/dot=./comma=%2C"])
+  }
+
+  test "3.2.7 Path-Style Parameter Expansion" {
+    const values = specExamplesBySection327PathStyleParameterExpansionValues()
+    assert expandsTo("\{;who\}", values, [";who=fred"])
+    assert expandsTo("\{;half\}", values, [";half=50%25"])
+    assert expandsTo("\{;empty\}", values, [";empty"])
+    assert expandsTo("\{;hello:5\}", values, [";hello=Hello"])
+    assert expandsTo("\{;v,empty,who\}", values, [";v=6;empty;who=fred"])
+    assert expandsTo("\{;v,bar,who\}", values, [";v=6;who=fred"])
+    assert expandsTo("\{;x,y\}", values, [";x=1024;y=768"])
+    assert expandsTo("\{;x,y,empty\}", values, [";x=1024;y=768;empty"])
+    assert expandsTo("\{;x,y,undef\}", values, [";x=1024;y=768"])
+    assert expandsTo("\{;list\}", values, [";list=red,green,blue"])
+    assert expandsTo("\{;list*\}", values, [";list=red;list=green;list=blue"])
+    assert expandsTo("\{;keys\}", values, [";keys=comma,%2C,dot,.,semi,%3B", ";keys=comma,%2C,semi,%3B,dot,.", ";keys=dot,.,comma,%2C,semi,%3B", ";keys=dot,.,semi,%3B,comma,%2C", ";keys=semi,%3B,comma,%2C,dot,.", ";keys=semi,%3B,dot,.,comma,%2C"])
+    assert expandsTo("\{;keys*\}", values, [";comma=%2C;dot=.;semi=%3B", ";comma=%2C;semi=%3B;dot=.", ";dot=.;comma=%2C;semi=%3B", ";dot=.;semi=%3B;comma=%2C", ";semi=%3B;comma=%2C;dot=.", ";semi=%3B;dot=.;comma=%2C"])
+  }
+
+  test "3.2.8 Form-Style Query Expansion" {
+    const values = specExamplesBySection328FormStyleQueryExpansionValues()
+    assert expandsTo("\{?who\}", values, ["?who=fred"])
+    assert expandsTo("\{?half\}", values, ["?half=50%25"])
+    assert expandsTo("\{?x,y\}", values, ["?x=1024&y=768"])
+    assert expandsTo("\{?x,y,empty\}", values, ["?x=1024&y=768&empty="])
+    assert expandsTo("\{?x,y,undef\}", values, ["?x=1024&y=768"])
+    assert expandsTo("\{?var:3\}", values, ["?var=val"])
+    assert expandsTo("\{?list\}", values, ["?list=red,green,blue"])
+    assert expandsTo("\{?list*\}", values, ["?list=red&list=green&list=blue"])
+    assert expandsTo("\{?keys\}", values, ["?keys=comma,%2C,dot,.,semi,%3B", "?keys=comma,%2C,semi,%3B,dot,.", "?keys=dot,.,comma,%2C,semi,%3B", "?keys=dot,.,semi,%3B,comma,%2C", "?keys=semi,%3B,comma,%2C,dot,.", "?keys=semi,%3B,dot,.,comma,%2C"])
+    assert expandsTo("\{?keys*\}", values, ["?comma=%2C&dot=.&semi=%3B", "?comma=%2C&semi=%3B&dot=.", "?dot=.&comma=%2C&semi=%3B", "?dot=.&semi=%3B&comma=%2C", "?semi=%3B&comma=%2C&dot=.", "?semi=%3B&dot=.&comma=%2C"])
+  }
+
+  test "3.2.9 Form-Style Query Continuation" {
+    const values = specExamplesBySection329FormStyleQueryContinuationValues()
+    assert expandsTo("\{&who\}", values, ["&who=fred"])
+    assert expandsTo("\{&half\}", values, ["&half=50%25"])
+    assert expandsTo("?fixed=yes\{&x\}", values, ["?fixed=yes&x=1024"])
+    assert expandsTo("\{&var:3\}", values, ["&var=val"])
+    assert expandsTo("\{&x,y,empty\}", values, ["&x=1024&y=768&empty="])
+    assert expandsTo("\{&x,y,undef\}", values, ["&x=1024&y=768"])
+    assert expandsTo("\{&list\}", values, ["&list=red,green,blue"])
+    assert expandsTo("\{&list*\}", values, ["&list=red&list=green&list=blue"])
+    assert expandsTo("\{&keys\}", values, ["&keys=comma,%2C,dot,.,semi,%3B", "&keys=comma,%2C,semi,%3B,dot,.", "&keys=dot,.,comma,%2C,semi,%3B", "&keys=dot,.,semi,%3B,comma,%2C", "&keys=semi,%3B,comma,%2C,dot,.", "&keys=semi,%3B,dot,.,comma,%2C"])
+    assert expandsTo("\{&keys*\}", values, ["&comma=%2C&dot=.&semi=%3B", "&comma=%2C&semi=%3B&dot=.", "&dot=.&comma=%2C&semi=%3B", "&dot=.&semi=%3B&comma=%2C", "&semi=%3B&comma=%2C&dot=.", "&semi=%3B&dot=.&comma=%2C"])
+  }
+}
+
+group "the extended tests" {
+  test "Additional Examples 1" {
+    const values = extendedTestsAdditionalExamples1Values()
+    assert expandsTo("\{/id*\}", values, ["/person"])
+    assert expandsTo("\{/id*\}\{?fields,first_name,last.name,token\}", values, ["/person?fields=id,name,picture&first_name=John&last.name=Doe&token=12345"])
+    assert expandsTo("/search.\{format\}\{?q,geocode,lang,locale,page,result_type\}", values, ["/search.json?q=URI%20Templates&geocode=37.76,-122.427&lang=en&page=5"])
+    assert expandsTo("/test\{/Some%20Thing\}", values, ["/test/foo"])
+    assert expandsTo("/set\{?number\}", values, ["/set?number=6"])
+    assert expandsTo("/loc\{?long,lat\}", values, ["/loc?long=37.76&lat=-122.427"])
+    assert expandsTo("/base\{/group_id,first_name\}/pages\{/page,lang\}\{?format,q\}", values, ["/base/12345/John/pages/5/en?format=json&q=URI%20Templates"])
+    assert expandsTo("/sparql\{?query\}", values, ["/sparql?query=PREFIX%20dc%3A%20%3Chttp%3A%2F%2Fpurl.org%2Fdc%2Felements%2F1.1%2F%3E%20SELECT%20%3Fbook%20%3Fwho%20WHERE%20%7B%20%3Fbook%20dc%3Acreator%20%3Fwho%20%7D"])
+    assert expandsTo("/go\{?uri\}", values, ["/go?uri=http%3A%2F%2Fexample.org%2F%3Furi%3Dhttp%253A%252F%252Fexample.org%252F"])
+    assert expandsTo("/service\{?word\}", values, ["/service?word=dr%C3%BCcken"])
+    assert expandsTo("/lookup\{?Stra%C3%9Fe\}", values, ["/lookup?Stra%C3%9Fe=Gr%C3%BCner%20Weg"])
+    assert expandsTo("\{random\}", values, ["%C5%A1%C3%B6%C3%A4%C5%B8%C5%93%C3%B1%C3%AA%E2%82%AC%C2%A3%C2%A5%E2%80%A1%C3%91%C3%92%C3%93%C3%94%C3%95%C3%96%C3%97%C3%98%C3%99%C3%9A%C3%A0%C3%A1%C3%A2%C3%A3%C3%A4%C3%A5%C3%A6%C3%A7%C3%BF"])
+    assert expandsTo("\{?assoc_special_chars*\}", values, ["?%C5%A1%C3%B6%C3%A4%C5%B8%C5%93%C3%B1%C3%AA%E2%82%AC%C2%A3%C2%A5%E2%80%A1%C3%91%C3%92%C3%93%C3%94%C3%95=%C3%96%C3%97%C3%98%C3%99%C3%9A%C3%A0%C3%A1%C3%A2%C3%A3%C3%A4%C3%A5%C3%A6%C3%A7%C3%BF"])
+  }
+
+  test "Additional Examples 2" {
+    const values = extendedTestsAdditionalExamples2Values()
+    assert expandsTo("\{/id*\}", values, ["/person/albums"])
+    assert expandsTo("\{/id*\}\{?fields,token\}", values, ["/person/albums?fields=id,name,picture&token=12345"])
+  }
+
+  test "Additional Examples 3: Empty Variables" {
+    const values = extendedTestsAdditionalExamples3EmptyVariablesValues()
+    assert expandsTo("\{/empty_list\}", values, [""])
+    assert expandsTo("\{/empty_list*\}", values, [""])
+    assert expandsTo("\{?empty_list\}", values, [""])
+    assert expandsTo("\{?empty_list*\}", values, [""])
+    assert expandsTo("\{?empty_assoc\}", values, [""])
+    assert expandsTo("\{?empty_assoc*\}", values, [""])
+  }
+
+  test "Additional Examples 4: Numeric Keys" {
+    const values = extendedTestsAdditionalExamples4NumericKeysValues()
+    assert expandsTo("\{42\}", values, ["The%20Answer%20to%20the%20Ultimate%20Question%20of%20Life%2C%20the%20Universe%2C%20and%20Everything"])
+    assert expandsTo("\{?42\}", values, ["?42=The%20Answer%20to%20the%20Ultimate%20Question%20of%20Life%2C%20the%20Universe%2C%20and%20Everything"])
+    assert expandsTo("\{1337\}", values, ["leet,as,it,can,be"])
+    assert expandsTo("\{?1337*\}", values, ["?1337=leet&1337=as&1337=it&1337=can&1337=be"])
+    assert expandsTo("\{?german*\}", values, ["?11=elf&12=zw%C3%B6lf", "?12=zw%C3%B6lf&11=elf"])
+  }
+
+  test "Additional Examples 5: Explode Combinations" {
+    const values = extendedTestsAdditionalExamples5ExplodeCombinationsValues()
+    assert expandsTo("\{?id,token,keys*\}", values, ["?id=admin&token=12345&key1=val1&key2=val2", "?id=admin&token=12345&key2=val2&key1=val1"])
+    assert expandsTo("\{/id\}\{?token,keys*\}", values, ["/admin?token=12345&key1=val1&key2=val2", "/admin?token=12345&key2=val2&key1=val1"])
+    assert expandsTo("\{?id,token\}\{&keys*\}", values, ["?id=admin&token=12345&key1=val1&key2=val2", "?id=admin&token=12345&key2=val2&key1=val1"])
+    assert expandsTo("/user\{/id\}\{?token,tab\}\{&keys*\}", values, ["/user/admin?token=12345&tab=overview&key1=val1&key2=val2", "/user/admin?token=12345&tab=overview&key2=val2&key1=val1"])
+  }
+
+  test "Additional Examples 6: Reserved Expansion" {
+    const values = extendedTestsAdditionalExamples6ReservedExpansionValues()
+    assert expandsTo("\{+id\}", values, ["admin%2F"])
+    assert expandsTo("\{#id\}", values, ["#admin%2F"])
+    assert expandsTo("\{id\}", values, ["admin%252F"])
+    assert expandsTo("\{+not_pct\}", values, ["%25foo"])
+    assert expandsTo("\{#not_pct\}", values, ["#%25foo"])
+    assert expandsTo("\{not_pct\}", values, ["%25foo"])
+    assert expandsTo("\{+list\}", values, ["red%25,%2Fgreen,blue%20"])
+    assert expandsTo("\{#list\}", values, ["#red%25,%2Fgreen,blue%20"])
+    assert expandsTo("\{list\}", values, ["red%2525,%252Fgreen,blue%20"])
+    assert expandsTo("\{+keys\}", values, ["key1,val1%2F,key2,val2%2F"])
+    assert expandsTo("\{#keys\}", values, ["#key1,val1%2F,key2,val2%2F"])
+    assert expandsTo("\{keys\}", values, ["key1,val1%252F,key2,val2%252F"])
+  }
+
+  test "Additional Examples 7: Prefix Modifiers with Multibyte Characters" {
+    const values = extendedTestsAdditionalExamples7PrefixModifiersWithMultibyteCharactersValues()
+    assert expandsTo("\{greek:1\}", values, ["%CE%B1"])
+    assert expandsTo("\{greek:2\}", values, ["%CE%B1%CE%B2"])
+    assert expandsTo("\{+greek:2\}", values, ["%CE%B1%CE%B2"])
+    assert expandsTo("\{greek:30\}", values, ["%CE%B1%CE%B2%CE%B3%CE%B4%CE%B5"])
+    assert expandsTo("\{currency:1\}", values, ["%E2%82%AC"])
+    assert expandsTo("\{?currency:1\}", values, ["?currency=%E2%82%AC"])
+    assert expandsTo("\{clef:1\}", values, ["%F0%9D%84%9E"])
+    assert expandsTo("\{var:9999\}", values, ["value"])
+  }
+
+  test "Additional Examples 8: Literal Encoding" {
+    const values = extendedTestsAdditionalExamples8LiteralEncodingValues()
+    assert expandsTo("café/\{var\}", values, ["caf%C3%A9/value"])
+    assert expandsTo("x%20y/\{var\}", values, ["x%20y/value"])
+    assert expandsTo("x%20y\{var\}z%20w", values, ["x%20yvaluez%20w"])
+  }
+}
+
+group "the negative tests" {
+  test "Failure Tests" {
+    const values = negativeTestsFailureTestsValues()
+    assert refused("\{/id*", values)
+    assert refused("/id*\}", values)
+    assert refused("\{/?id\}", values)
+    assert refused("\{var:prefix\}", values)
+    assert refused("\{hello:2*\}", values)
+    assert refused("\{??hello\}", values)
+    assert refused("\{!hello\}", values)
+    assert refused("\{with space\}", values)
+    assert refused("\{ leading_space\}", values)
+    assert refused("\{trailing_space \}", values)
+    assert refused("\{=path\}", values)
+    assert refused("\{$var\}", values)
+    assert refused("\{|var*\}", values)
+    assert refused("\{*keys?\}", values)
+    assert refused("\{?empty=default,var\}", values)
+    assert refused("\{var\}\{-prefix|/-/|var\}", values)
+    assert refused("?q=\{searchTerms\}&amp;c=\{example:color?\}", values)
+    assert refused("x\{?empty|foo=none\}", values)
+    assert refused("/h\{#hello+\}", values)
+    assert refused("/h#\{hello+\}", values)
+    assert refused("\{keys:1\}", values)
+    assert refused("\{+keys:1\}", values)
+    assert refused("\{;keys:1*\}", values)
+    assert refused("?\{-join|&|var,list\}", values)
+    assert refused("/people/\{~thing\}", values)
+    assert refused("/\{default-graph-uri\}", values)
+    assert refused("/sparql\{?query,default-graph-uri\}", values)
+    assert refused("/sparql\{?query)\{&default-graph-uri*\}", values)
+    assert refused("/resolution\{?x, y\}", values)
+    assert refused("\{var:0\}", values)
+    assert refused("\{var:01\}", values)
+    assert refused("\{var:10000\}", values)
+    assert refused("\{var:\}", values)
+    assert refused("\{x.\}", values)
+    assert refused("\{x..y\}", values)
+    assert refused("\{%2x\}", values)
+  }
+}

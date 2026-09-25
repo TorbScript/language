@@ -300,7 +300,7 @@ that answers the question. A page marked (planned) describes a feature that does
 - `standard-library/text.md` - **std/text** (package): Char, a Unicode scalar value, and String, always-valid UTF-8 text with no length() and no indexing by character.
 - `standard-library/time.md` - **std/time** (package): Instant and Duration, the two time values, plus Clock and sleep, which read and wait on the wall clock.
 - `standard-library/tls.md` - **std/tls** (package): TLS 1.2 and 1.3 over a TcpStream - a client that checks the server's certificate the way the platform does, a server with an identity, and a stream like the TCP one.
-- `standard-library/uri.md` - **std/uri** (package): Uri and UriReference after RFC 3986, normalized at construction, with IRIs, Urn, the file bridge to Path and the form codec of HTML - values that open nothing.
+- `standard-library/uri.md` - **std/uri** (package): Uri and UriReference after RFC 3986, normalized at construction, with IRIs, Urn, UriTemplate, the file bridge to Path and the form codec of HTML - values that open nothing.
 
 ## tooling
 

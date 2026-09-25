@@ -1206,8 +1206,9 @@ public type TemplateValue with Show, Equals, Hash {
 **Reading refuses what RFC 6570 section 2 refuses**: an unclosed or a nested brace, an empty expression, a variable
 name outside `varchar` (letters, digits, `_`, percent escapes, and `.` between them), a prefix outside `1` to `9999`,
 a prefix and an explode on one variable, the operators RFC 6570 reserves (`=`, `,`, `!`, `@`, `|`), and a literal
-character no URI may hold (a space, `"`, `'`, `<`, `>`, `\`, `^`, `` ` ``, `|`, `}`). Each is
-`UriError.InvalidTemplate(template, reason)`.
+character no URI may hold (a space, `"`, `<`, `>`, `\`, `^`, `` ` ``, `|`, `}`). Each is
+`UriError.InvalidTemplate(template, reason)`. RFC 6570's `literals` rule leaves out `'` while the RFC's own examples
+write `'{var}'`; `'` is a sub-delimiter every URI may hold, and the suite expects it, so it is read.
 
 **Expansion is RFC 6570 section 3, and total except for one case**: a prefix modifier on a list or on pairs, which
 section 2.4.1 says does not apply and the test suite expects to fail. Everything else — an undefined variable, an empty
