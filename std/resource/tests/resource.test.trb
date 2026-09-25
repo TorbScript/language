@@ -1,0 +1,26 @@
+/**
+ * A resource literal names a file of the package relative to the file that writes it, and the value holds its stable
+ * name: the owner and name of the package, then the path inside it. This file names itself and its package's manifest.
+ */
+
+use test, group from "std/test"
+use Resource, EmbeddedText from "../src/lib"
+
+fn nameOf(resource: Resource): String {
+  resource.name()
+}
+
+group "a resource literal" {
+  test "is the stable name of the file it names" {
+    assert(nameOf("./resource.test.trb") == "std/resource/tests/resource.test.trb")
+    const manifest: EmbeddedText = "../project.trb"
+    assert(manifest.name() == "std/resource/project.trb")
+  }
+
+  test "names one file however it is written" {
+    const direct: Resource = "../src/lib.trb"
+    const around: Resource = "../tests/../src/lib.trb"
+    assert(direct == around)
+    assert(direct.show() == "std/resource/src/lib.trb")
+  }
+}
