@@ -1,22 +1,29 @@
 # Uniform Resource Identifiers
 
-**Status: proposed** — there is no `std/uri` yet; the probes of this document were run against the checker only.
+**Status: accepted, revised on 2026-09-25** — the owner asked for the whole URI layer before HTTP grows further: IRIs,
+URI references as a type, URI templates, every standard that touches them, and the IP address values shared with
+`std/network`. Sections 2a, 3a, 4a, 8a and 9a are that revision, and section 14's slice order replaces the old one.
+Which slices exist is said there.
 
 **A URI is a value, and a text that is not one is refused at the door.** That is the whole design of `std/uri`: one
 capsule for RFC 3986, normalized at construction, so that `==`, `hash()` and `compare()` are over the canonical form
 without anybody asking for it — and so that a signature that takes a `Uri` cannot be handed a typo.
 
 ```text
-                       ┌── scheme()      ─────  "https", lower case. None for a relative reference
-                       ├── authority()   ─────  userInfo?, host (lower case), port?
-       Uri ────────────┼── path()        ─────  always there, dot segments gone where it is absolute
-   (a capsule:         ├── query()       ─────  one opaque string, RFC 3986 section 3.4
-    six private        └── fragment()    ─────  everything after the first #
-    fields)
+                       ┌── scheme()      ─────  "https", lower case, and always there
+                       ├── authority()   ─────  userInfo?, host (a name, lower case, or an IpAddress), port?
+       Uri ────────────┼── path()        ─────  always there, dot segments gone
+   (a capsule)         ├── query()       ─────  one opaque string, RFC 3986 section 3.4
+                       └── fragment()    ─────  everything after the first #
 
-  a String LITERAL ──→ parsed by the compiler ──→ a Uri, or a build error at the literal
+   UriReference ────── the same five parts with the scheme optional: `../a`, `/b?c`, `#top`
+                └─→ resolved(against: uri) ──→ a Uri, and it cannot fail
+
+  a String LITERAL ──→ parsed by the compiler ──→ a Uri, or a build error at the literal (slice 7)
   a String VALUE   ──→ Uri.tryFrom(text)?     ──→ a Uri, or a UriError that names the text
-  a Path           ──→ Uri.tryFrom(path)?     ──→ a file: URI, and Path.tryFrom(uri)? is the way back
+  an IRI           ──→ Uri.tryFrom(text)?     ──→ the URI it stands for (RFC 3987); iriText() is the way back
+  a Path           ──→ Uri.tryFrom(path)?     ──→ a file: URI (RFC 8089), and Path.tryFrom(uri)? is the way back
+  a UriTemplate    ──→ expanded(values)?      ──→ a UriReference (RFC 6570), and matched(reference) is the way back
 
   a Uri ──→ show() ──→ the display form: postgres://user:***@host/db
         └─→ text() ──→ all of it:        postgres://user:secret@host/db, and Encode writes this one
@@ -24,26 +31,31 @@ without anybody asking for it — and so that a signature that takes a `Uri` can
 
 - **[1. What the probes proved](#1-what-the-probes-proved)** — eight of them, checked and built in the worktree that wrote this
 - **[2. What other systems do](#2-what-other-systems-do)** — nine of them, and what is taken from each
-- **[3. The type](#3-the-type)** — the capsule, and why the scheme is an `Option`
+- **[2a. The standards](#2a-the-standards)** — eleven of them, what `std/uri` does with each, and in which slice
+- **[3. The types](#3-the-types)** — the two capsules, `Authority` and `Host`
+- **[3a. A URI and a URI reference](#3a-a-uri-and-a-uri-reference)** — two types, and why resolution is total
 - **[4. Parsing and normalization](#4-parsing-and-normalization)** — what construction decides and what `normalized()` adds
+- **[4a. IRIs](#4a-iris)** — no `Iri` type: an IRI is read as the URI it stands for, and `iriText()` shows it back
 - **[5. The members](#5-the-members)** — every signature, and `UriError`
-- **[6. RFC 3986, not WHATWG](#6-rfc-3986-not-whatwg)** — nine differences, and what a program does about each
-- **[7. `Url` and `Urn`](#7-url-and-urn)** — one type, one question and one refinement
-- **[8. `Path` and `Uri`](#8-path-and-uri)** — two conversions that are deliberately not a pair
+- **[6. RFC 3986, not WHATWG](#6-rfc-3986-not-whatwg)** — twelve inputs, and what a program does about each
+- **[7. `Url` and `Urn`](#7-url-and-urn)** — one question and one refinement
+- **[8. `Path` and `Uri`](#8-path-and-uri)** — conversions that are deliberately not a pair, and RFC 8089
+- **[8a. Addresses](#8a-addresses)** — `std/ip`, the address values without the network capability
 - **[9. A literal adapts to a checked type](#9-a-literal-adapts-to-a-checked-type)** — the language rule, and who is on the list
+- **[9a. URI templates](#9a-uri-templates)** — RFC 6570 as `UriTemplate`, and how WEB.md's routes use it
 - **[10. Who takes a `Uri`](#10-who-takes-a-uri)** — every signature, today and proposed
 - **[11. Schemes choose drivers](#11-schemes-choose-drivers)** — one trait per capability, a registry that is a value, and where a secret lives
 - **[12. `std/identifier`](#12-stdidentifier)** — `Uuid`, `Ulid`, the `Identifier` trait, and where a value comes from
 - **[13. What the language must provide](#13-what-the-language-must-provide)** — thirteen gaps, smallest fix each
-- **[14. Migration](#14-migration)** — eight slices
+- **[14. Migration](#14-migration)** — twelve slices
 - **[15. What this is not](#15-what-this-is-not)**
 - **[16. Open](#16-open)**
 
-`std/uri` replaces no code, because there is none: the repository has three hand-written URI readers
-(`compiler/src/documentation/links.trb:38` classifies a link target with `startsWith("http://")`,
-`std/http`'s `HttpError.InvalidUrl` reports a text the native side could not take apart, and `docs/design/PROJECT.md`'s
-`source "...", git: "..."` is a bare string). It is a package of its own and not part of `std/http`, because nothing in
-it touches a network.
+`std/uri` replaces three hand-written URI readers: `compiler/src/documentation/links.trb:38` classifies a link target
+with `startsWith("http://")`, `std/http`'s client took a URL apart by hand in `destinationOf` and reported what it could
+not read as `HttpError.InvalidUrl`, and `docs/design/PROJECT.md`'s `source "...", git: "..."` is a bare string. It is a
+package of its own and not part of `std/http`, because nothing in it touches a network — and it takes its IP addresses
+from `std/ip` rather than from `std/network` for the same reason (section 8a).
 
 ---
 
@@ -293,26 +305,64 @@ written-out form when its source type is `String`, and the accessor is what a ca
 - **Rust's absolute-only `Url`.** It makes `docs check`'s job — resolve `../guide/x.md` against the page that wrote
   it — impossible in the type, so every consumer keeps a string beside the `Url`.
 
-## 3. The type
+## 2a. The standards
+
+Every specification a URI touches, what `std/uri` does with it, and the slice of section 14 that does it. Scheme
+specifications (`mailto:`, `tel:`, `geo:`, …) are not on the list: section 15 rules out a scheme registry, and a
+package that cares about one scheme reads `uri.scheme()` and the parts. `file:`, `urn:` and `data:` are on it because
+the standard library itself converts between them and a type of its own.
+
+| Standard | What it is | What `std/uri` does with it | Slice |
+|---|---|---|---|
+| **RFC 3986** | the generic syntax | the grammar `Uri` and `UriReference` are read with; section 6.2.2 normalization at construction and 6.2.3 in `normalized()` (section 4); section 5's resolution as `resolved(against:)` and section 5.3's recomposition as `text()` | 2 |
+| **RFC 3987** | IRIs | an IRI reference is read wherever a URI reference is, as the URI reference it maps to (section 3.1); `iriText()` is section 3.2's way back. There is no `Iri` type (section 4a) | 2; hosts in 5 |
+| **RFC 6570** | URI templates | `UriTemplate`: all four levels expanded into a `UriReference`, the reversible subset matched (section 9a) | 3 |
+| **RFC 8141** | URNs | `Urn`: the namespace identifier checked and lower cased, the r-, q- and f-components read, and `assignedName()` as the equivalence of section 3 (section 7) | 2 |
+| **RFC 5952** | IPv6 text | an IPv6 literal host is an `Ipv6Address` and is written in RFC 5952's form, so `[2001:DB8:0::1]` and `[2001:db8::1]` are one value | 1, 2 |
+| **RFC 6874**, obsoleted by **RFC 9844** | IPv6 zone identifiers in URIs | RFC 6874 (2013) added `[fe80::1%25eth0]` to the grammar; RFC 9844 (August 2025) obsoleted it and reverted the URI grammar to RFC 3986's, because no browser ever implemented it. A zone in a host is refused (`InvalidHost`): a zone names an interface of *this* machine, which is a property of a socket and not of an identifier | 2 |
+| **IDNA 2008** (RFC 5890 to 5893), **UTS #46**, **RFC 3492** (Punycode) | non-ASCII host names | `std/idna`: `Uri.tryFrom` maps a non-ASCII host to its A-labels with UTS #46 non-transitional processing and the IDNA 2008 validity rules, and `iriText()` shows the U-labels. Until then a non-ASCII host is refused (the owner, 2026-09-23) | 5 |
+| **WHATWG URL**, section 5: `application/x-www-form-urlencoded` | HTML's convention for queries and form bodies | `formDecoded` and `formEncoded`, byte for byte as the standard's parser and serializer (`+` for a space, U+FFFD for bytes that are not UTF-8), and `queryParameters` over them | 2 |
+| **WHATWG URL**, the URL parser | what a browser's address bar does | not the parser (section 6). `repaired(text)` makes the repairs a browser makes before it parses, as a function a caller calls where a reader sees it | 5 |
+| **RFC 8089** | the `file:` scheme | the `Path` bridge (section 8): `file:///C:/x`, `file://server/share/x`, `file:/x`, `file://localhost/x` and the DOS forms of appendix E are read, `file:///…` is written | 2 |
+| **RFC 2397** | `data:` | read as any URI, with an opaque path. A `DataUri` refinement that answers the media type and the bytes, the way `Urn` refines, waits for Base64 in `std/encoding` | 6 |
+
+## 3. The types
 
 ```trb
+/** Where an authority points: a registered name, or an IP literal. */
+public type Host with Show, Equals, Hash {
+  /** A registered name, lower case. `""` is a value: `file:///x` has an empty host. */
+  case Name(name: String)
+  /** An IP literal: `127.0.0.1`, or `::1` from `[::1]`. */
+  case Address(address: IpAddress)
+  /** RFC 3986's `IPvFuture`, `[v7.anything]`, lower case: an IP version nobody has defined yet. */
+  case Future(text: String)
+}
+
 /** The `[userInfo "@"] host [":" port]` of a URI. */
 public type Authority with Show, Equals, Hash {
   /** Everything before the `@`, normalized. `None` where the authority has no `@`. */
   userInfo: String?
-  /** The registered name or IP literal, lower case. `""` is a value: `file:///x` has an empty host. */
-  host: String
+  /** The registered name or the IP literal. */
+  host: Host
   /** The port, where one is written out. It is not the port a scheme defaults to. */
   port: Int?
 }
 
-/** A URI reference per RFC 3986: what it names, and where. */
+/** A URI per RFC 3986 section 3: it has a scheme. */
 public type Uri with Show, Equals, Hash, Compare {
-  private schemeValue: String?
-  private authorityValue: Authority?
-  private pathValue: String
-  private queryValue: String?
-  private fragmentValue: String?
+  private components: Components
+
+  fn scheme(): String
+  fn authority(): Authority?
+  fn path(): String
+  fn query(): String?
+  fn fragment(): String?
+}
+
+/** A URI reference per RFC 3986 section 4.1: a URI, or a relative reference that means something against one. */
+public type UriReference with Show, Equals, Hash, Compare {
+  private components: Components
 
   fn scheme(): String?
   fn authority(): Authority?
@@ -322,29 +372,35 @@ public type Uri with Show, Equals, Hash, Compare {
 }
 ```
 
-**`Uri` holds a URI *reference*, and whether it has a scheme is a question a member answers.** RFC 3986 calls a
-reference with a scheme a URI and one without a relative reference, and both are what a program meets: `docs check`
-resolves `../guide/x.md`, an HTML page carries `/a/b`, a manifest carries `https://…`. So the scheme is a `String?`
-and `isAbsolute()` is `scheme().isSome()` — which is `Path.root(): Root?` and `Path.isAbsolute()` letter for letter,
-and for the same reason: **every member stays total.** .NET's `UriKind` is the alternative, and it is why `Uri.Host`
-throws there.
+**Two capsules over one private record.** `Components` holds the five parts - the scheme an `Option` - and is the one
+place the parser, the recomposition, the comparison and the resolution are written; `Uri` is `Components` with the
+invariant that the scheme is there, and `UriReference` is `Components` with none. Section 3a is why there are two.
 
 **`Authority` is a type and not three fields of `Uri`**, because its absence is different from an empty one:
-`mailto:ada@example.test` has **no** authority and `file:///x` has one whose host is `""`. Two `Option`s cannot say
-that; `Option<Authority>` says it once. `Authority` is ordinary data — its three fields are public, it has no
-invariant of its own beyond what `Uri.tryFrom` already checked, and a caller that builds one by hand reaches it only
-through `Uri`, which is normalized anyway.
+`mailto:ada@example.test` has **no** authority and `file:///x` has one whose host is `Name("")`. Two `Option`s cannot
+say that; `Option<Authority>` says it once. `Authority` is ordinary data — its three fields are public, it has no
+invariant of its own beyond what `Uri.tryFrom` already checked, and a caller that builds one by hand reaches a URI only
+through `Uri.tryFrom`, which is normalized anyway.
 
-**`Uri` is a capsule, so `Uri.tryFrom(text)` is the one way in.** Every field is private and without a default
-(`docs/language/types/data-or-capsule.md` rule 1), so nothing outside `std/uri` can hand in a scheme with a slash in
-it or a host in upper case. The way out is `text()`, and the two are the conversion pair `Encode` and `Decode` are
-derived through — so a URI in a JSON document is its text, which is what every reader of such a document expects.
-Probe 2 is the measurement that three conversions still leave exactly one pair.
+**`Host` is a type with cases and not a `String`, because an IP literal is an address.** RFC 3986 section 3.2.2 has
+three kinds of host and says the first rule that matches decides: an IP literal in brackets, an IPv4 address in dotted
+decimal, a registered name. So `127.0.0.1` is `Address(Version4(…))`, `[::1]` is `Address(Version6(…))`, and
+`example.test` is `Name("example.test")` — and `Authority.socketAddress()` can answer a `SocketAddress` for the first
+two without a resolver, while a name stays a name that `std/network` resolves. The address types are `std/ip`'s
+(section 8a). `01.2.3.4` and `1.2.3` are *names*, exactly as the RFC's first-match rule says, because `std/ip`
+refuses a leading zero and three parts.
+
+**`Uri` and `UriReference` are capsules, so `tryFrom(text)` is the one way in.** Every field is private and without a
+default (`docs/language/types/data-or-capsule.md` rule 1), so nothing outside `std/uri` can hand in a scheme with a
+slash in it or a host in upper case. The way out is `text()`, and the two are the conversion pair `Encode` and `Decode`
+are derived through — so a URI in a JSON document is its text, which is what every reader of such a document expects.
+Probe 2 is the measurement that several conversions still leave exactly one pair; section 3a says which conversion
+between the two types is not written, so that it stays one.
 
 **The way out and the way it is shown are two members, because a URI can carry a password.** `text()` is the
 recomposition with every part of it and `show()` replaces everything after the first `:` of the user information with
-`***`; section 11 is the argument, and the consequence for this section is that `compare` is written over `text()`
-and not over the display form.
+`***`; section 11 is the argument, and the consequence for this section is that `compare` is written over the parts and
+not over the display form.
 
 **`Equals`, `Hash` and `Compare` are over what the value holds, which is the normalized form.** There is no
 `equalsIgnoringPort`, no case-insensitive mode and no flag: normalization happens once, at the door, and everything
@@ -356,18 +412,66 @@ sentence `Path` writes for "whether two paths name the same file is a question f
 is hand written, because comparing `text()` would order `https://a/b?c` before `https://a/b/c` — a text order is not a
 URI order.
 
+## 3a. A URI and a URI reference
+
+**Decided: two types.** `Uri` is RFC 3986's `URI` — it has a scheme — and `UriReference` is its `URI-reference`, a URI
+or a relative reference. The first version of this record had one type whose scheme was an `Option`; the owner asked
+for the question to be weighed again, and three arguments decide it the other way.
+
+1. **Resolution becomes total.** RFC 3986 section 5.2.1 requires the base of a resolution to be a URI. With one type,
+   `resolved(against:)` answered a `Result` whose one failure was "the base had no scheme" (`UriError.NoBase`) — a
+   failure a type can rule out. With two, `reference.resolved(against: base)` takes a `UriReference` and a `Uri` and
+   answers a `Uri`, and cannot fail: whatever the reference is, the answer has the base's scheme or its own.
+2. **Everything that reaches something needs a scheme.** `std/http`, the storage drivers, a connection string and the
+   manifest's sources each begin with "which scheme is this", and with one type each of them had a branch for "none".
+   `Uri.scheme()` answers a `String`, and `Uri.defaultPort()`, `Uri.socketAddress()` and `Path.tryFrom(uri)` are
+   defined for every value they are called on.
+3. **The literal rule gets a message instead of a run-time failure.** `http.get("/users")` is a relative reference
+   where a `Uri` is expected, and under section 9 that is a build error at the literal — with one type it was a value
+   the request failed on.
+
+**What it costs, and why section 7's argument against `Url` does not carry over.** Every reading member exists twice,
+once per type, as a one-line delegation to `Components`. Section 7 refuses a `Url` type because "has an authority" is a
+*question* one `?` already answers (`uri.host()?`): a `Url` would restate seventeen members and make nothing total that
+was partial before. Absolute against relative is different in kind — it decides which operations are *defined*
+(resolution, a default port, a socket address, a `file:` path), so the split removes a failure case from a signature
+instead of restating a condition. And it is not .NET's `UriKind`, which section 2 rejects: that is one type whose
+invariant depends on a constructor argument, so half its members throw for half its values. Two types are the other
+answer to the same observation.
+
+**The conversions, and the one that is not written.** `UriReference` has an infallible `From<Uri>` — every URI is a
+reference. The way back is the member `reference.uri(): Uri?`, and **not** `TryFrom<UriReference>` on `Uri`: with both
+written, `UriReference` would be a second conversion pair of `Uri` beside `String` (`derive.trb`,
+`conversionSourcesOf`: a pair is a way in plus an infallible `From<Uri>` on the source), and `Uri` would lose `Decode`
+— gap 9, met at the design stage rather than after it.
+
+**Which one a signature takes.** `Uri` wherever something is reached or named once and for all: `std/http`'s client,
+the storage and connection drivers of section 11, the manifest, `Urn`, a `file:` URI of an absolute path. `UriReference`
+where a document carries links that mean something against the document: `docs check`, an HTML `href`, a `Location`
+header (RFC 9110 section 10.2.2 allows a relative one), and what a `UriTemplate` expands into. A server's request
+carries both: the request target as it was sent, and the target URI RFC 9112 section 3.3 reconstructs from it, which
+is a `Uri`. The prelude exports `Uri` and `UriError` (the owner, 2026-09-23); `UriReference` is an import.
+
+**RFC 3986 section 4.3's `absolute-URI` — a URI without a fragment — is not a third type.** Resolution ignores the
+base's fragment, which is all section 5.2.1 asks of it, and `uri.withFragment(None)` is the one call that makes one.
+
 ## 4. Parsing and normalization
 
 ```trb
 extend Uri with TryFrom<String, UriError> {
   static fn tryFrom(value: String): Result<Uri, UriError>
 }
+
+extend UriReference with TryFrom<String, UriError> {
+  static fn tryFrom(value: String): Result<UriReference, UriError>
+}
 ```
 
-**`TryFrom` and not `From`**, which is the one place this type differs from `Path`. `Path.from` is infallible because
+**`TryFrom` and not `From`**, which is the one place these types differ from `Path`. `Path.from` is infallible because
 no file system is guaranteed to reject any text; RFC 3986 *does* reject text, and a `Uri` that could hold
 `https//example.test` would make every member a lie. The cost is a `?` where a `String` value crosses the boundary,
-and section 9 removes it for the case that matters, which is a literal.
+and section 9 removes it for the case that matters, which is a literal. `Uri.tryFrom` is `UriReference.tryFrom` plus
+one refusal: a text without a scheme is `UriError.Relative`.
 
 **Construction does RFC 3986 section 6.2.2, syntax-based normalization, and nothing else.** The rule is
 `docs/design/PATH.md`'s rule, applied again: **normalize what is a fact, and never guess.**
@@ -375,14 +479,18 @@ and section 9 removes it for the case that matters, which is a literal.
 | What | Fact or guess | Where it happens |
 |---|---|---|
 | the scheme lower cased | a fact — RFC 3986 section 3.1 says a scheme is case-insensitive | construction |
-| the host lower cased | a fact — section 3.2.2 | construction |
+| a registered name lower cased | a fact — section 3.2.2 | construction |
+| an IPv6 literal written in RFC 5952's form | a fact — it is one address, and `[2001:DB8::0:1]` and `[2001:db8::1]` name it | construction |
+| an empty port and its `:` dropped | a fact — section 3.2.3: "URI producers and normalizers should omit" it | construction |
 | `%7e` becoming `%7E` | a fact — section 6.2.2.1 | construction |
 | `%7E` becoming `~` | a fact — section 6.2.2.2, `~` is unreserved | construction |
 | `%2F` staying `%2F` | a fact — `/` is a delimiter and the escape is not the same character | construction |
-| dot segments in an **absolute** path | a fact — section 5.2.4 is textual, and a URI has no symbolic links | construction |
-| dot segments at the front of a **relative** reference | a guess — they mean something only once a base is known | never; `resolved(against:)` does it |
-| a non-ASCII character in a path, query or fragment | a fact — RFC 3987 section 3.1 encodes it as UTF-8 | construction |
-| a non-ASCII **host** | neither — it needs IDNA, and percent-encoding it is *wrong* | refused (section 6) |
+| dot segments in a path that starts with `/`, and in every path of a reference with a scheme | a fact — section 5.2 removes them from exactly these whatever the base is, and a URI has no symbolic links | construction |
+| dot segments in a relative-path reference (`../a`) | a guess — they mean something only once a base is known | never; `resolved(against:)` does it |
+| a non-ASCII character in the user information, path, query or fragment | a fact — RFC 3987 section 3.1 maps it to its UTF-8 bytes, percent-encoded (section 4a) | construction |
+| an ASCII character no URI may hold in that component — a space, `"`, `<`, `\`, a second `#` | the same mapping — RFC 3987 section 3.1 names these characters too, and the percent-encoded form is the only URI that can stand for the text | construction |
+| a non-ASCII **host** | neither — it needs IDNA, and percent-encoding it is *wrong* | refused until slice 5 (section 6) |
+| a zone identifier, `[fe80::1%25eth0]` | not URI syntax — RFC 9844 reverted RFC 6874 | refused |
 | the port `80` under `http` | a guess about five schemes, not a fact about URIs | `normalized()` |
 | an empty path under an authority becoming `/` | the same | `normalized()` |
 
@@ -391,13 +499,26 @@ surprises; putting a scheme-to-port table inside a construction would mean `std/
 default port, and a construction that guesses is the one thing `docs/design/PATH.md` forbade. `normalized()` is one call,
 and the five schemes it knows (`http` 80, `https` 443, `ws` 80, `wss` 443, `ftp` 21) are the ones IANA fixes.
 
-**The table, copied from the probe.** `scheme | authority | path | query | fragment`, with `-` for what is absent.
+**A `%` is an escape or an error.** A `%` that is not followed by two hexadecimal digits is refused
+(`InvalidEscape`) rather than encoded as `%25`: `100%` in a path is either a typo or a text somebody forgot to encode,
+and encoding it would turn a typo into a different resource. That is the one place construction refuses where it could
+have encoded, and it is the place where encoding would guess.
+
+**A path without an authority never starts with `//`.** Dot-segment removal can produce one (`x:/.//a`), and
+`x://a` would then read `a` as a host; construction writes `/.` in front of such a path instead, as the WHATWG
+standard does for the same hole in RFC 3986's algorithm.
+
+**The table.** `scheme | authority | path | query | fragment`, with `-` for what is absent. A row whose scheme is `-` is
+a `UriReference`; `Uri.tryFrom` refuses it with `Relative`.
 
 | Input | Parts | Shows as |
 |---|---|---|
 | `https://example.test/a/b?q=1#top` | `https` \| `example.test` \| `/a/b` \| `q=1` \| `top` | `https://example.test/a/b?q=1#top` |
 | `HTTP://Example.TEST:80/a/./b/../c` | `http` \| `example.test:80` \| `/a/c` \| `-` \| `-` | `http://example.test:80/a/c` |
+| `http://example.test:/a` | `http` \| `example.test` \| `/a` \| `-` \| `-` | `http://example.test/a` |
 | `https://user:secret@example.test:8443/` | `https` \| `user:***@example.test:8443` \| `/` \| `-` \| `-` | `https://user:***@example.test:8443/`; `text()` has the password |
+| `http://127.0.0.1:8080/` | `http` \| `Address(127.0.0.1)`, port `8080` \| `/` \| `-` \| `-` | unchanged |
+| `http://[2001:DB8:0:0::1]/` | `http` \| `Address(2001:db8::1)` \| `/` \| `-` \| `-` | `http://[2001:db8::1]/` |
 | `file:///C:/Users/ada/notes.txt` | `file` \| `""` \| `/C:/Users/ada/notes.txt` \| `-` \| `-` | unchanged |
 | `file://server/share/x` | `file` \| `server` \| `/share/x` \| `-` \| `-` | unchanged |
 | `mailto:ada@example.test` | `mailto` \| `-` \| `ada@example.test` \| `-` \| `-` | unchanged |
@@ -411,16 +532,19 @@ and the five schemes it knows (`http` 80, `https` 443, `ws` 80, `wss` 443, `ftp`
 | `#top` | `-` \| `-` \| `""` \| `-` \| `top` | `#top` |
 | `https://example.test/a%2Fb/%7euser/%c3%a4` | `https` \| `example.test` \| `/a%2Fb/~user/%C3%A4` \| `-` \| `-` | the normalized text |
 | `https://example.test/path with spaces` | `https` \| `example.test` \| `/path%20with%20spaces` \| `-` \| `-` | the encoded text |
+| `https://example.test/ä?q=ö#ü` | `https` \| `example.test` \| `/%C3%A4` \| `q=%C3%B6` \| `%C3%BC` | the encoded text; `iriText()` is the input |
 | `https://münchen.test/a` | refused | `` `münchen.test` is not an ASCII host `` |
+| `http://[fe80::1%25eth0]/` | refused | a zone identifier is not part of a URI (RFC 9844) |
 | `https://example.test/a%zz` | refused | a `%` not followed by two hexadecimal digits |
 | `https://example.test:http/a` | refused | `` `http` is not a port `` |
+| `1a:b` | refused | `1a` is not a scheme, and a relative path's first segment may not hold a `:` |
 
 Two rows deserve a sentence. `../a/b` keeps its `..`, because a relative reference is resolved and not read. And
 `""` is a value — the empty reference, which RFC 3986 section 5.4 resolves to the base itself, and which is what a
 bare `#top` on a page means.
 
-**Reference resolution is RFC 3986 section 5.3, byte for byte.** The probe runs the specification's own normal
-examples against its own base:
+**Reference resolution is RFC 3986 section 5.2, byte for byte**, and the tests run every example of section 5.4 —
+the normal ones and the abnormal ones — against the specification's own base:
 
 | Reference | Against `http://a/b/c/d;p?q` |
 |---|---|
@@ -436,28 +560,90 @@ examples against its own base:
 | `../g` | `http://a/b/g` |
 | `../../g` | `http://a/g` |
 | `../../../g` | `http://a/g` |
+| `/./g` | `http://a/g` |
+| `g;x=1/../y` | `http://a/b/c/y` |
+| `g#s/../x` | `http://a/b/c/g#s/../x` |
+| `http:g` | `http:g` (the strict reading of section 5.2.2) |
 | `""` | `http://a/b/c/d;p?q` |
+
+## 4a. IRIs
+
+**Decided: no `Iri` type.** `Uri.tryFrom` and `UriReference.tryFrom` read an IRI reference (RFC 3987) as the URI
+reference it maps to, and `iriText()` is the IRI again. The owner asked for IRIs to be planned rather than excluded,
+and the question is whether that needs a type.
+
+**For a type of its own**, honestly:
+
+1. **An IRI's identity can be its characters.** RDF, XML namespaces and JSON-LD compare IRIs by simple string
+   comparison (RFC 3987 section 5.3.1), and there `http://example.test/ä` and `http://example.test/%C3%A4` are two
+   identifiers. One type collapses them, because both read as the same URI.
+2. **The author's form survives.** An `Iri` shows what was written; a `Uri` shows it after a round trip through
+   percent escapes, which `iriText()` undoes but cannot tell from an escape the author wrote on purpose.
+3. **A signature could say "Unicode welcome".**
+
+**Against it**, and deciding:
+
+1. **It doubles the types a second time.** With section 3a there are `Uri` and `UriReference`; an IRI type means `Iri`
+   and `IriReference` beside them — four capsules, every reading member four times, conversions between all four that
+   have to be kept out of each other's conversion pairs, and a question at every signature which of the four it takes.
+   That is the record's original argument ("doubling every signature to buy a display form"), and section 3a makes it
+   heavier, not lighter.
+2. **Nothing that reaches anything takes an IRI.** An HTTP request target, a DNS query, a TLS server name and a file
+   system take the mapped form; RFC 3987 section 3.1 is written as the step *before* retrieval. An IRI is an authoring
+   and a display form, and every consumer in section 10 would convert it first.
+3. **RFC 3987's own normalization ladder agrees with one type.** Section 5.3.2.3 treats a percent-encoded UTF-8
+   sequence of an unreserved IRI character as equivalent to the character — the syntax-based rung, which is the rung
+   `Uri` normalizes at (section 4). Argument 1 for the type is the rung *below* it, simple string comparison, which
+   this record already declined for URIs (`%7e` and `~` are one `Uri`).
+4. **The display form is a member.** `iriText()` answers the IRI, and a user interface that wants Unicode calls it.
+
+**What is lost, recorded rather than solved:** the simple-string identity of argument 1. A program that needs it — an
+RDF store — keeps the IRI's text as a `String` beside the `Uri`, which is what it does for every identifier it compares
+by characters.
+
+**The two mappings.**
+
+- **In, RFC 3987 section 3.1.** Every character a component may not hold — every non-ASCII character among them — is
+  written as the percent-encoded bytes of its UTF-8 in the user information, the path, the query and the fragment. A
+  non-ASCII host is refused until slice 5, which maps it with IDNA instead (section 2a); percent-encoding a host is
+  legal RFC 3986 and useless, because no resolver reads it.
+- **Out, RFC 3987 section 3.2.** `iriText()` is `text()` with every percent-encoded UTF-8 sequence decoded where it
+  stands for a `ucschar` (or an `iprivate` in the query), and left encoded where it stands for an ASCII character, a
+  bidirectional formatting character (section 4.1: U+200E, U+200F, U+202A to U+202E), a character outside those ranges,
+  or bytes that are not UTF-8. So `Uri.tryFrom(uri.iriText()) == Ok(uri)` for every `uri`, and a test holds that. From
+  slice 5 on the host's A-labels are shown as U-labels too.
+
+**`show()` stays ASCII.** A display form in a log is pasted into a terminal and compared by eye, and a Unicode host is
+where homographs live (`аpple.test` with a Cyrillic `а`): browsers show a U-label only under a policy of their own, and
+a value type has no policy to apply. `iriText()` is the member a user interface calls when it has one. It carries the
+password like `text()` does, because it is a text form and not a display form.
 
 ## 5. The members
 
 ```trb
 public type Uri with Show, Equals, Hash, Compare {
-  /** The scheme, lower case. `None` for a relative reference. */
-  fn scheme(): String?
+  /** The scheme, lower case. */
+  fn scheme(): String
 
-  /** The authority, where the reference has one. `None` and an empty host are different things. */
+  /** The authority, where the URI has one. `None` and an empty host are different things. */
   fn authority(): Authority?
 
   /** The host of the authority, where there is one. */
-  fn host(): String?
+  fn host(): Host?
 
-  /** The port that is written out. It is not the port the scheme defaults to: `normalized()` decides that. */
+  /** The port that is written out. It is not the port the scheme defaults to: [Uri.defaultPort] is. */
   fn port(): Int?
 
-  /** The path. Always there, and `""` where the reference has none. */
+  /** The port the scheme defaults to, for the five schemes IANA fixes one for: `http`, `https`, `ws`, `wss`, `ftp`. */
+  fn defaultPort(): Int?
+
+  /** Where to connect without a resolver: an IP literal host and the written or the default port. */
+  fn socketAddress(): SocketAddress?
+
+  /** The path. Always there, and `""` where the URI has none. */
   fn path(): String
 
-  /** The path split at its separators, with the empty leading segment of an absolute path dropped. */
+  /** The path split at its `/`, still percent-encoded, without the empty segment in front of an absolute path. */
   fn segments(): List<String>
 
   /** Everything between the first `?` and the `#`, as RFC 3986 leaves it: one opaque string. */
@@ -466,13 +652,7 @@ public type Uri with Show, Equals, Hash, Compare {
   /** Everything after the first `#`. */
   fn fragment(): String?
 
-  /** Whether the reference has a scheme. Its opposite is [Uri.isRelative]. */
-  fn isAbsolute(): Bool
-
-  /** Whether the reference has no scheme, so that it means something only against a base. */
-  fn isRelative(): Bool
-
-  /** Whether the reference has a scheme and an authority: the question `Url` would have been a type for. */
+  /** Whether the URI has an authority: the question `Url` would have been a type for (section 7). */
   fn isUrl(): Bool
 
   /** Whether the scheme is `urn`. [Urn] is what answers the two parts of one. */
@@ -484,75 +664,148 @@ public type Uri with Show, Equals, Hash, Compare {
   /** The first value of a query parameter, which is what almost every caller of [Uri.queryParameters] wants. */
   fn queryParameter(name: String): String?
 
-  /** The same reference with a different query, built from parameters. */
+  /** The same URI with its query written from parameters, and with none where `parameters` is empty. */
   fn withQueryParameters(parameters: Map<String, List<String>>): Uri
 
-  /** The same reference with its fragment replaced, and with none where `fragment` is `None`. */
+  /** The same URI with its fragment replaced by `fragment`, encoded as needed, and with none where it is `None`. */
   fn withFragment(fragment: String?): Uri
 
-  /** `relative` below this reference's path, the way `Path.joined` works: the root of `relative` is dropped. */
+  /** `relative` below this URI's path, its segments percent-encoded, and never above that path. */
   fn joined(relative: String): Uri
 
   /** RFC 3986 section 6.2.3: a default port dropped, an empty path under an authority becoming `/`. */
   fn normalized(): Uri
 
-  /** This reference resolved against `base`, per RFC 3986 section 5.3. */
-  fn resolved(against: Uri): Result<Uri, UriError>
-
   /** This URI as seen from `base`: the shortest reference `resolved` turns back into this one. */
-  fn relativeTo(base: Uri): Uri?
+  fn relativeTo(base: Uri): UriReference
 
   /** The canonical text: the recomposition of RFC 3986 section 5.3, with every part of it (section 11). */
   fn text(): String
 
-  /** The same text with a password in the user information replaced by `***`. The display form (section 11). */
+  /** The IRI this URI stands for: RFC 3987 section 3.2 (section 4a). */
+  fn iriText(): String
+
+  /** The canonical text with a password in the user information replaced by `***`. The display form (section 11). */
   fn show(): String
 
-  /** Scheme, then authority, then path, then query, then fragment, over [Uri.text]. */
+  /** Scheme, then authority, then path, then query, then fragment. */
   fn compare(other: Uri): Ordering
 }
 
-/** What a text is refused for, and what a resolution refuses. */
+public type UriReference with Show, Equals, Hash, Compare {
+  /** The scheme, lower case. `None` for a relative reference. */
+  fn scheme(): String?
+
+  fn authority(): Authority?
+  fn host(): Host?
+  fn port(): Int?
+  fn path(): String
+  fn segments(): List<String>
+  fn query(): String?
+  fn fragment(): String?
+
+  /** Whether the reference has a scheme. Its opposite is [UriReference.isRelative]. */
+  fn isAbsolute(): Bool
+
+  /** Whether the reference has no scheme, so that it means something only against a base. */
+  fn isRelative(): Bool
+
+  /** The reference as a [Uri], where it has a scheme. */
+  fn uri(): Uri?
+
+  /** This reference resolved against `base`, per RFC 3986 section 5.2. Total: a base always has a scheme. */
+  fn resolved(against: Uri): Uri
+
+  fn queryParameters(): Map<String, List<String>>
+  fn queryParameter(name: String): String?
+  fn withFragment(fragment: String?): UriReference
+  fn text(): String
+  fn iriText(): String
+  fn show(): String
+  fn compare(other: UriReference): Ordering
+}
+
+extend UriReference with From<Uri>
+
+public type Authority with Show, Equals, Hash {
+  /** `[userInfo "@"] host [":" port]`, with the password. */
+  fn text(): String
+
+  /** The same with everything after the first `:` of the user information replaced by `***`. */
+  fn show(): String
+
+  /** The host as a socket address, where it is an IP literal and a port is written or `defaultPort` is given. */
+  fn socketAddress(defaultPort: Int? = None): SocketAddress?
+}
+
+/** `application/x-www-form-urlencoded`, read: the WHATWG URL Standard's parser, section 5.1. */
+public fn formDecoded(text: String): List<(String, String)>
+
+/** `application/x-www-form-urlencoded`, written: the WHATWG URL Standard's serializer, section 5.2. */
+public fn formEncoded(pairs: List<(String, String)>): String
+
+/** Every percent escape of a text decoded, and the bytes read as UTF-8. */
+public fn percentDecoded(text: String): Result<String, UriError>
+
+/** What a text is refused for. */
 public type UriError with Show, Error {
   /** The text before the first `:` is not `ALPHA *( ALPHA / DIGIT / "+" / "-" / "." )`. */
   case InvalidScheme(text: String)
   /** A `%` that is not followed by two hexadecimal digits. */
   case InvalidEscape(text: String)
+  /** A host that is no IP literal, no IPv4 address and no registered name; a zone identifier is one. */
+  case InvalidHost(host: String, reason: String)
   /** A host that is not ASCII, which needs IDNA (section 6). */
   case NonAsciiHost(host: String)
-  /** The text after the `:` of an authority is not a number. */
+  /** The text after the `:` of an authority is not a number from 0 to 65535. */
   case InvalidPort(text: String)
+  /** A relative reference where a [Uri] was asked for, which has a scheme (section 3a). */
+  case Relative(text: String)
   /** The bytes a percent escape named are not UTF-8, so there is no `String` for them. */
   case NotText(reason: String)
-  /** [Uri.resolved] was given a base with no scheme, which RFC 3986 section 5.2.1 requires. */
-  case NoBase(base: String)
-  /** A `Path` was asked for from a URI whose scheme is not `file` (section 8). */
-  case NotAFile(uri: String)
+  /** A `Path` was asked for from a URI that is not a `file:` URI of a path (section 8). */
+  case NotAFile(uri: String, reason: String)
   /** A [Urn] was asked for from a URI that is not one (section 7). */
-  case NotAUrn(uri: String)
+  case NotAUrn(uri: String, reason: String)
+  /** A template that breaks RFC 6570, or a value it cannot expand (section 9a). */
+  case InvalidTemplate(template: String, reason: String)
 }
 ```
 
 **`resolved(against:)` takes the base as its argument and not as its receiver**, so that it reads as
 `reference.resolved(against: base)` — the same shape, the same word and the same argument position as
 `path.resolved(inside: base)`. `base.resolve(reference)` is the other order and is what most libraries write; one
-word for one thing across two packages is worth more than matching a habit.
+word for one thing across two packages is worth more than matching a habit (the owner, 2026-09-23).
 
 **No member panics.** What can be absent answers an `Option`, what can be refused answers a
-`Result<_, UriError>`, and everything else is total.
+`Result<_, UriError>`, and everything else is total — and since section 3a, `resolved(against:)` and `relativeTo` are
+in the last group. `relativeTo` answers the whole URI as a reference where the schemes differ and a network-path
+reference (`//host/…`) where the authorities do, which `resolved` turns back just the same.
 
 | Answers | Members |
 |---|---|
-| a value | `path`, `segments`, `isAbsolute`, `isRelative`, `isUrl`, `isUrn`, `queryParameters`, `withQueryParameters`, `withFragment`, `joined`, `normalized`, `text`, `show`, `compare` |
-| `Option` | `scheme`, `authority`, `host`, `port`, `query`, `fragment`, `queryParameter`, `relativeTo` |
-| `Result` | `resolved(against:)` |
+| a value | `scheme` (of a `Uri`), `path`, `segments`, `isAbsolute`, `isRelative`, `isUrl`, `isUrn`, `queryParameters`, `withQueryParameters`, `withFragment`, `joined`, `normalized`, `resolved`, `relativeTo`, `text`, `iriText`, `show`, `compare`, `formDecoded`, `formEncoded` |
+| `Option` | `scheme` (of a `UriReference`), `authority`, `host`, `port`, `defaultPort`, `socketAddress`, `query`, `fragment`, `queryParameter`, `uri` |
+| `Result` | `tryFrom`, `percentDecoded` |
+
+**`segments()` is still encoded**, because decoding it would be a `Result` (`%FF` is no text) and would make `a%2Fb` and
+`a/b` the same list. `segments().map(percentDecoded)` decodes each; `UriTemplate.matched` (section 9a) does that for a
+router. The empty segment in front of an absolute path is dropped and every other is kept: `/` has no segments, `/a/`
+has `a` and `""`, because a trailing slash is a different resource.
+
+**`joined` never climbs above its receiver.** `relative` is split at `/`, `.` and empty segments are dropped, each
+segment is percent-encoded, and `..` removes the segment before it only among the joined ones. So
+`base.joined(userInput)` stays below `base` — the property `Path.resolved(inside:)` checks for paths, given to URIs by
+construction. The query and the fragment of the receiver belong to the old resource and are dropped.
 
 **`query()` is one opaque string and `queryParameters()` is a reading of it.** RFC 3986 section 3.4 says a query is
 an opaque sequence of characters; `a=1&b=2` is `application/x-www-form-urlencoded`, which is an HTML form convention
 that `data:`, `git+ssh:` and half the APIs in the world do not follow. So the raw text is what the type holds and what
 `text()` reproduces byte for byte, and the `Map<String, List<String>>` is a member a caller asks for. `List<String>`
 and not `String` as the value, because `?tag=a&tag=b` is legal and every API that flattened it has a bug report about
-it; `queryParameter(name)` is the first value, which is the ninety-percent call.
+it; `queryParameter(name)` is the first value, which is the ninety-percent call. A map keeps its insertion order, so
+`withQueryParameters` writes the parameters in the order they were put in. `formDecoded` and `formEncoded` are the
+codec under both, public because a form body (`std/web`) is the same format.
 
 ## 6. RFC 3986, not WHATWG
 
@@ -584,11 +837,12 @@ Three reasons, in order of weight.
 | `http://example.com/a b` | the space is encoded as `%20` | the same | nothing |
 | `http://example.com/a\u0000b` | the NUL is encoded as `%00` | removed silently | gets a value where a browser drops a byte |
 | `  http://example.com  ` | the spaces are part of the reference and are encoded | trimmed | trims it itself, or writes a literal |
-| `http://münchen.de` | **refused** (`NonAsciiHost`) | `xn--mnchen-3ya.de` | section 13 gap 1: `std/idna` |
+| `http://münchen.de` | **refused** (`NonAsciiHost`) until slice 5, then `xn--mnchen-3ya.de` | `xn--mnchen-3ya.de` | waits for `std/idna` (section 2a) |
+| `http://[fe80::1%25eth0]/` | refused: RFC 9844 took zones out of the grammar | refused: the host parser has no zones | nothing; they agree |
 | `file:///C:/x` | path `/C:/x`, host `""` | the same, with drive-letter special cases | nothing |
 | `HTTP://A/b` | `http://a/b` | `http://a/b` | nothing |
 
-**Seven of eleven rows agree.** The four that differ are a backslash, a control character, surrounding whitespace and
+**Eight of twelve rows agree.** The four that differ are a backslash, a control character, surrounding whitespace and
 a non-ASCII host — and in three of them the WHATWG answer is a *repair*, which means the program that wanted it can
 ask for one and the program that did not is not surprised.
 
@@ -601,39 +855,38 @@ can do before parsing:
 public fn repaired(text: String): String
 ```
 
-`Uri.tryFrom(repaired(userInput))?` is the address-bar case, written where a reader can see it. It is **not part of
-the first version** — nothing in the repository reads an address bar — and it is named here so that nobody designs
-around its absence.
+`Uri.tryFrom(repaired(userInput))?` is the address-bar case, written where a reader can see it. It lands in slice 5
+with `std/idna`, because a browser's host parser *is* UTS #46 processing and a `repaired` without it would repair
+everything but the host — nothing in the repository reads an address bar before then, and it is named here so that
+nobody designs around its absence.
 
 ## 7. `Url` and `Urn`
 
-**Decided: `Uri` is the one type. `Url` is a question. `Urn` is a refinement, because it has two members a `Uri`
-cannot have.**
+**Decided: `Url` is a question. `Urn` is a refinement, because it has members a `Uri` cannot have.** (Absolute against
+relative is a type of its own; section 3a is why that is a different kind of split.)
 
-**`Url` is `isUrl()`**, which answers whether the reference has a scheme and an authority. It is not a type, for the
-reason `docs/design/PATH.md` section 4 gave for `RelativePath`: a `Url` capsule wrapping a `Uri` would have to carry
+**`Url` is `isUrl()`**, which answers whether the URI has an authority. It is not a type, for the reason
+`docs/design/PATH.md` section 4 gave for `RelativePath`: a `Url` capsule wrapping a `Uri` would have to carry
 `scheme`, `authority`, `host`, `port`, `path`, `segments`, `query`, `queryParameters`, `fragment`, `joined`,
-`normalized`, `resolved`, `relativeTo`, `show`, `compare`, `Encode` and `Decode` again, or a shared trait to carry
-them — seventeen members restated to express a condition that one sentence expresses. And what it would buy is
-already there: `uri.host()` answers an `Option`, and a function that needs a host reads it and says what it does when
-there is none. **The refinement the type would guarantee is a guarantee one `?` already gives.**
+`normalized`, `relativeTo`, `text`, `show`, `compare`, `Encode` and `Decode` again, or a shared trait to carry them —
+seventeen members restated to express a condition that one sentence expresses. And what it would buy is already there:
+`uri.host()` answers an `Option`, and a function that needs a host reads it and says what it does when there is none.
+**The refinement the type would guarantee is a guarantee one `?` already gives.**
 
 The contrast worth naming is Java, where the split went the other way and produced the language's most quoted bug:
 `URL` carries a protocol handler, so `URL.equals` resolves the host through DNS — two URLs are equal when their names
 happen to point at one address, and a `HashSet<URL>` makes network calls. Every guarantee `Url` was supposed to add
 came with a capability nobody asked for.
 
-**`Urn` is a type**, and it is the one refinement that earns one. A URN's two parts — the namespace identifier and
-the namespace-specific string — are not components RFC 3986 has any member for; on a `Uri` they would be
-`urnNamespace(): String?` and `urnSpecific(): String?`, two members that answer `None` for every URI that is not a
-URN, which is the .NET mistake at a smaller scale.
+**`Urn` is a type**, and it is the one refinement that earns one. A URN's parts — the namespace identifier, the
+namespace-specific string and the r- and q-components of RFC 8141 — are not components RFC 3986 has any member for; on
+a `Uri` they would be four members that answer `None` for every URI that is not a URN, which is the .NET mistake at a
+smaller scale.
 
 ```trb
 /** `urn:<namespace>:<specific>` per RFC 8141, with the namespace identifier lower case. */
 public type Urn with Show, Equals, Hash, Compare {
   private uriValue: Uri
-  private namespaceValue: String
-  private specificValue: String
 
   /** The URI this name is. */
   fn uri(): Uri
@@ -641,13 +894,42 @@ public type Urn with Show, Equals, Hash, Compare {
   /** The namespace identifier, lower case: `uuid` in `urn:uuid:…`. */
   fn namespace(): String
 
-  /** The namespace-specific string: everything after the second `:`. */
+  /** The namespace-specific string: everything after the second `:`, up to the `?+`, `?=` or `#`. */
   fn specific(): String
+
+  /** The r-component: what follows `?+`, a request to a resolver. */
+  fn resolution(): String?
+
+  /** The q-component: what follows `?=`, a query for the named resource. */
+  fn query(): String?
+
+  /** The f-component: what follows `#`. */
+  fn fragment(): String?
+
+  /** The URN without its r-, q- and f-components: what RFC 8141 section 3 compares. */
+  fn assignedName(): Urn
 }
 
 extend Urn with TryFrom<Uri, UriError>
 extend Uri with From<Urn>
 ```
+
+**What `Urn.tryFrom` checks is RFC 8141 section 2.** The URI has no authority; its path is a namespace identifier of
+two to thirty-two characters (letters, digits and `-`, neither first nor last a `-`), a `:`, and a non-empty
+namespace-specific string that does not start with `/`; and its query, if there is one, is an r-component, a
+q-component or both in that order (`?+r?=q` reads as RFC 3986's query `+r?=q`). Anything else is
+`NotAUrn(uri, reason)`, with the reason saying which part.
+
+**The namespace identifier is lower cased and nothing else is.** RFC 8141 section 3.1 makes the identifier
+case-insensitive and the namespace-specific string case-sensitive, so `urn:UUID:X` and `urn:uuid:X` are one `Urn`
+and `urn:uuid:X` and `urn:uuid:x` are two. `Urn.uri()` answers the lower-cased form, so `Uri.from(urn)` and the
+`Urn` agree about what they are.
+
+**`Equals` is over the whole URN, and `assignedName()` is RFC 8141's equivalence.** Section 3 says the r-, q- and
+f-components take no part in whether two URNs are equivalent, so `urn:example:a?+x` and `urn:example:a` name one thing.
+A generated `==` that ignored two thirds of what the value holds would be the one place in the standard library where
+`==` and "the same value" disagree, so the equivalence is a member a caller calls:
+`first.assignedName() == second.assignedName()`.
 
 **`Urn` holds the `Uri` it was read from**, so the way back is total and the shape is the asymmetric one of section 8:
 `Uri` has an infallible `From<Urn>` and `Urn` has a fallible `TryFrom<Uri, UriError>`. That is one conversion pair
@@ -660,7 +942,7 @@ gets URNs.
 
 ## 8. `Path` and `Uri`
 
-**Decided: `Path` stays its own type, and the two are joined by two fallible conversions that are deliberately not a
+**Decided: `Path` stays its own type, and the two are joined by fallible conversions that are deliberately not a
 pair.**
 
 `Path` is platform-dependent by construction — it has a `Root` with a drive letter and a UNC share in it, it splits on
@@ -671,36 +953,111 @@ different texts and every Swift program has a bug where the wrong one was used.
 
 ```trb
 extend Uri with TryFrom<Path, UriError>
+extend UriReference with TryFrom<Path, UriError>
 extend Path with TryFrom<Uri, UriError>
+extend Path with TryFrom<UriReference, UriError>
 ```
 
-**Both directions are `TryFrom`, and the asymmetry is the point.**
+**Every direction is `TryFrom`, and the asymmetry is the point.**
 
-- `Path` into `Uri` fails for exactly one input: a UNC share whose server name is not ASCII, which is the same gap
-  IDNA closes (section 6). Everything else is total — a drive root becomes the first segment of an absolute path, a
-  share root becomes the authority, and every component is percent-encoded as UTF-8.
-- `Uri` into `Path` fails for every URI whose scheme is not `file`, for a percent escape whose bytes are not UTF-8,
-  and for nothing else. A relative reference becomes a relative path.
+- `Path` into `UriReference` fails for exactly one input: a UNC share whose server name is not ASCII, which is the same
+  gap IDNA closes (section 6). Everything else is total — a drive root becomes the first segment of an absolute path, a
+  share root becomes the authority, every component is percent-encoded as UTF-8, and a relative path becomes a
+  relative reference (with `./` in front where its first component holds a `:`, which RFC 3986 section 4.2 requires).
+- `Path` into `Uri` fails for that input and for a relative path, which has no `file:` URI (`Relative`).
+- `Uri` into `Path` fails for every URI whose scheme is not `file`, for a query (a file has none), for a segment whose
+  escapes decode to a `/` or a `\` (it would name another file), and for a percent escape whose bytes are not UTF-8. A
+  fragment is ignored: it points into the document and is not part of the file's name.
+- `UriReference` into `Path` is `Uri` into `Path` for a reference with a scheme, and a relative path for a
+  relative-path reference.
 
-**And because neither is a `From`, `Path` is not a second conversion pair of `Uri`.** The capsule rule needs the
-source to carry an infallible `From<Self>` (`docs/design/ENCODING.md` section 3a), so two `TryFrom`s make no pair at all and
-`Uri`'s `Decode` stays with `String`. Probe 2 measured it. This is a good outcome reached by a thin margin, and
-section 13 gap 9 is the part that should be fixed rather than relied on: once `std/idna` lands, `Path` into `Uri`
-becomes infallible, `Path` becomes a real pair, and `Uri` **silently loses `Decode`**. A rule where adding a total
-conversion is a breaking change needs a way to say which pair is the `Decode` pair.
+**And because none is a `From`, `Path` is not a second conversion pair of `Uri`.** The capsule rule needs the
+source to carry an infallible `From<Self>` (`docs/design/ENCODING.md` section 3a), so `TryFrom`s in both directions make
+no pair at all and `Uri`'s `Decode` stays with `String`. Probe 2 measured it. This is a good outcome reached by a thin
+margin, and section 13 gap 9 is the part that should be fixed rather than relied on: once `std/idna` lands, `Path` into
+`UriReference` can become infallible — and then `UriReference` has `From<Path>` while `Path` has
+`TryFrom<UriReference>`, which is a second conversion pair **of `Path`** beside `String`, and `Path` **silently loses
+`Decode`** (the first version of this record said `Uri` would; the checker's rule says it is the capsule whose `TryFrom`
+meets the other side's `From`). A rule where adding a total conversion is a breaking change needs a way to say which
+pair is the `Decode` pair, and slice 5 answers it before it makes the conversion total.
 
-**The round trip, from the probe:**
+**What RFC 8089 lets a `file:` URI be, and what `Path.tryFrom` reads.** RFC 8089 is the 2017 specification of the
+scheme, and its appendices collect the forms that are in use without being in its grammar. The bridge reads all of them
+and writes one:
 
-| `Path` | `Uri` | back |
+| `file:` URI | Reading | `Path` |
+|---|---|---|
+| `file:///usr/bin/torb` | the canonical form: an empty authority | `/usr/bin/torb` |
+| `file:/usr/bin/torb` | no authority at all (section 2) | `/usr/bin/torb` |
+| `file://localhost/usr/bin/torb` | `localhost` is this machine (section 2) | `/usr/bin/torb` |
+| `file:///C:/Users/ada` | a drive letter as the first segment (appendix E.2) | `C:/Users/ada` |
+| `file:///C|/Users/ada` | the old `|` for `:` (appendix E.2.2) | `C:/Users/ada` |
+| `file:C:/Users/ada` | a drive letter with no authority (appendix E.2) | `C:/Users/ada` |
+| `file://server/share/x` | a UNC share as the authority (appendix E.3.1) | `//server/share/x` |
+| `file:///x#top` | a fragment, ignored | `/x` |
+| `file:///x?y` | refused: a file has no query | — |
+| `file:///a%2Fb` | refused: the escape names a separator | — |
+
+**The round trip:**
+
+| `Path` | `UriReference` | back |
 |---|---|---|
 | `C:/Users/ada/notes.txt` | `file:///C:/Users/ada/notes.txt` | `C:/Users/ada/notes.txt` |
 | `/usr/bin/torb` | `file:///usr/bin/torb` | `/usr/bin/torb` |
-| `src/main.trb` | `src/main.trb` (a relative reference, no scheme) | `src/main.trb` |
+| `src/main.trb` | `src/main.trb` (a relative reference, no scheme; `Uri.tryFrom` refuses it) | `src/main.trb` |
 | `//server/share/x` | `file://server/share/x` | `//server/share/x` |
 | `a b/ü.txt` | `a%20b/%C3%BC.txt` | `a b/ü.txt` |
 | — | `https://example.test/a` | `` Fail(`https://example.test/a` is not a `file:` URI) `` |
 
-All five round trip exactly. The last row is the signature doing its job.
+All five round trip exactly, and the tests hold them. The last row is the signature doing its job.
+
+## 8a. Addresses
+
+**Decided: the IP address values move out of `std/network` into a package of their own, `std/ip`, which has no
+natives and no capability, and which `std/uri` and `std/network` both use.** `std/network` re-exports them, so every
+`use SocketAddress from "std/network"` keeps compiling.
+
+```text
+   std/ip        AddressError, Ipv4Address, Ipv6Address, IpAddress, SocketAddress     pure values, no natives
+     ▲    ▲
+     │    └──── std/uri       Host.Address(IpAddress), Authority.socketAddress()        pure values, no natives
+     │
+   std/network   resolve, TcpListener, TcpStream, NetworkError — and `public use` of std/ip's five names
+```
+
+**Why a package and not a module of `std/network`.** An import is a capability statement: NETWORK.md section 10
+computes a package's capability summary from the modules of `std` it reaches, and the sandbox's grants name packages
+(`moduleOfImport` in `checker/receiver.trb`: `"std/network/address"` is granted as `std/network`). So a `std/uri` that
+imported its address types from `std/network`, even from a module of it that opens nothing, would put the network into
+the capability summary of every package that reads a URI — a JSON library with a `Uri` field would "open sockets" in
+the registry. A package of its own is the one boundary both rules see.
+
+**Why `std/ip`.** The package holds the addresses of the Internet Protocol and the socket address that is one of them
+plus a port — nothing else, and nothing that is not IP. Of the names the naming rule allows:
+
+- `std/address` is ambiguous: an e-mail address, a postal address and a memory address are all addresses, and
+  `std/address` reads as the first to anybody who has written a web form.
+- `std/internet` promises the network, which is the one thing the package must not suggest.
+- `std/ip` names the protocol the values belong to. `IP` is a proper term in the sense the naming rule makes room
+  for (like `URI`, `IRI`, `URN`, `TCP`), the types are already called `IpAddress` and `Ipv4Address`, and
+  `use IpAddress from "std/ip"` reads as what it is.
+
+**What moves, unchanged.** `AddressError`, `Ipv4Address`, `Ipv6Address`, `IpAddress` (either version, a type with two
+cases) and `SocketAddress` with their parsers, RFC 5952's text form, the classification questions and the order; the
+tests move with them. Nothing is renamed and no member changes, so the move is invisible to a user of `std/network`.
+
+**How `std/uri` uses them.**
+
+- A host that is an IP literal is an `IpAddress`: `127.0.0.1` is `Host.Address(Version4(…))`, `[::1]` is
+  `Host.Address(Version6(…))`. RFC 3986's grammar for an IPv6 literal is RFC 4291's, which is what
+  `Ipv6Address.tryFrom` reads, and its `IPv4address` is dotted decimal without leading zeros, which is what
+  `Ipv4Address.tryFrom` reads — so `std/uri` has no address parser of its own.
+- A zone is refused twice over: `Ipv6Address.tryFrom` refuses `%`, and RFC 9844 took zones out of the URI grammar
+  (section 2a).
+- `Authority.socketAddress(defaultPort:)` answers a `SocketAddress` where the host is an IP literal and a port is
+  written or given; `Uri.socketAddress()` gives the scheme's default port. A registered name answers `None`, because
+  turning a name into addresses is a resolution, which is `std/network`'s and needs its capability. `std/http` connects
+  to the socket address where there is one and resolves the name where there is not.
 
 ## 9. A literal adapts to a checked type
 
@@ -750,14 +1107,17 @@ one that decides it.
 | a literal union type (`"tcp" \| "udp"`) | membership in a structural set | nothing | it ships |
 | `Path` | **none** — `From<String>` is infallible, so this is ergonomics only | the parameter kind | with the parameter kind |
 | `Resource`, `EmbeddedBytes`, `EmbeddedText` | the file exists, against a directory listing; UTF-8 for the text one | a directory listing per directory, cached | `docs/design/RESOURCES.md` slice 1 |
-| `Uri` | `Uri.tryFrom(text)` answers `Ok` | the checker imports `std/uri` | with slice 2 of section 14 |
+| `Uri`, `UriReference` | `tryFrom(text)` answers `Ok`; for `Uri`, a relative reference gets its own message | the checker imports `std/uri` | slice 7 of section 14 |
+| `UriTemplate` | the template is RFC 6570, and its variables match the parameters it is typed against (section 9a) | the same, and `UriTemplate<Variables>` | slice 7 of section 14 |
 | `Regex` | the pattern compiles | the checker imports `std/regex` | when `std/regex` exists |
 | a user's own `TryFrom<String, _>` type | `Type.tryFrom(text)` answers `Ok` | **the VM**, constant evaluation, and rules 1 to 3 above answered | 7.x, if ever |
 
 **The cost, stated plainly: every type on the list joins the fixpoint.** The compiler is written in TorbScript and
 compiles itself, so `std/uri` is code stage 1 type checks, the C back end emits, and the resulting binary runs while
 it compiles the next one — exactly what `docs/design/PATH.md` section 8 says about `std/path`. It has to be supported by both
-back ends before the literal rule lands, and probe 1 is the evidence that it is.
+back ends before the literal rule lands, and probe 1 is the evidence that it is. Because the prelude names `Uri` (section
+16, question 2), `std/uri` is *type checked* in every build of the compiler from slice 2 on; it is *emitted* into the
+compiler, and so part of the fixpoint proper, only once the checker calls it in slice 7.
 
 ### The diagnostics
 
@@ -802,14 +1162,113 @@ Nothing. A `String` value never converts, on its own or through `into()`, and th
 is the same answer `docs/design/RESOURCES.md` gives and the same answer literal union types give, and there is exactly one
 rule for all of them.
 
+## 9a. URI templates
+
+**Decided: RFC 6570 is `UriTemplate` in `std/uri`, all four levels.** The first version of this record said "not a URI
+template"; WEB.md's decision D5 (section 13 there) made templates the way routes are written, so the template language
+is part of the URI layer and not a package on the side.
+
+```trb
+/** An RFC 6570 template: literal text and `{…}` expressions, read once and expanded or matched many times. */
+public type UriTemplate with Show, Equals, Hash {
+  /** The names of the variables, in the order they first appear. */
+  fn variables(): List<String>
+
+  /** The lowest of RFC 6570's four levels that has every expression of this template. */
+  fn level(): Int
+
+  /** The template expanded with `values`, as RFC 6570 section 3 writes it: a text. */
+  fn expandedText(values: Map<String, TemplateValue>): Result<String, UriError>
+
+  /** The same, read as the URI reference it is. */
+  fn expanded(values: Map<String, TemplateValue>): Result<UriReference, UriError>
+
+  /** Whether [UriTemplate.matched] can read this template backwards (below). */
+  fn isMatchable(): Bool
+
+  /** The values that expand this template into `reference`, where there are any. */
+  fn matched(reference: UriReference): Map<String, TemplateValue>?
+
+  /** The template as it was written. */
+  fn show(): String
+}
+
+extend UriTemplate with TryFrom<String, UriError>
+
+/** What a variable holds: RFC 6570 section 2.3's three kinds of value. An absent key is an undefined variable. */
+public type TemplateValue with Show, Equals, Hash {
+  case Text(value: String)
+  case Items(values: List<String>)
+  case Pairs(values: List<(String, String)>)
+}
+```
+
+**Reading refuses what RFC 6570 section 2 refuses**: an unclosed or a nested brace, an empty expression, a variable
+name outside `varchar` (letters, digits, `_`, percent escapes, and `.` between them), a prefix outside `1` to `9999`,
+a prefix and an explode on one variable, the operators RFC 6570 reserves (`=`, `,`, `!`, `@`, `|`), and a literal
+character no URI may hold (a space, `"`, `'`, `<`, `>`, `\`, `^`, `` ` ``, `|`, `}`). Each is
+`UriError.InvalidTemplate(template, reason)`.
+
+**Expansion is RFC 6570 section 3, and total except for one case**: a prefix modifier on a list or on pairs, which
+section 2.4.1 says does not apply and the test suite expects to fail. Everything else — an undefined variable, an empty
+list, a value with any characters in it — expands. `expanded` reads the text as a `UriReference` and fails where the
+literal parts of the template do not make one (`{x}:{y}` with `x` = `1a` expands to a scheme that is no scheme); a
+template whose literals are a path cannot fail there, which is why a route never does.
+
+**The tests are RFC 6570's own examples and the `uritemplate-test` suite** (the specification examples, the
+specification examples by section, the extended tests and the negative tests), converted into `torb test` cases. Where
+the suite lists several acceptable expansions (pairs are unordered in its JSON, ordered here), the first is the one
+`TemplateValue.Pairs` produces.
+
+### Matching, and what is matchable
+
+**Expansion is not reversible in general** — `{+path}` swallows slashes, `{x}{y}` has no border between its two
+values, `{var:3}` throws characters away — so matching is defined for the subset WEB.md's D5 names, and
+`isMatchable()` says whether a template is inside it:
+
+| Expression | Matches | Answers |
+|---|---|---|
+| `{name}`, `{a,b}` | one or more characters of a segment (unreserved characters and escapes), `,` between the names | `Text` per name, decoded |
+| `{/name}`, `{/a,b}` | a `/` and a segment per name | `Text` per name, decoded |
+| `{/name*}` | zero or more `/` and segment, last in the path | `Items`, decoded |
+| `{?a,b}`, `{&c}` | the named query parameters, in any order, each optional | `Text` per name that is there, decoded as a form |
+| literal text, including a literal query (`/search?kind=all{&q}`) | itself, after the same normalization as the reference; a literal query pair has to be there | nothing |
+
+A template is outside the subset when it has `+`, `#`, `.` or `;` as an operator, a prefix, an explode anywhere but
+on a path expression, two expressions with no literal between them in the path, or an exploded path expression that is
+not last in the path. Query parameters the template does not name are ignored — a route that answers `/search?q=x`
+answers `/search?q=x&utm_source=y` too — and a name that appears twice takes its first value. A simple variable matches
+at least one character, because a route with an empty segment is no route. The query is decoded as a form (`+` is a
+space), which is safe because RFC 6570 never leaves a `+` unencoded in a query value, and it is what an HTML form's
+`GET` sends.
+
+### How WEB.md's routes use it
+
+WEB.md's D5 is in two stages, and this record builds the first.
+
+1. **Stage 1, a value at run time (slice 3 and WEB.md's router).** `route(template, to: Route.Order)` in `std/web`
+   takes a `UriTemplate` and a case constructor. When the application starts, it compares `template.variables()`
+   against the constructor's parameters through `Describe` (their names, and whether each has a default, which only an
+   optional query variable may have), refuses to start when a case of the `Route` type has no route, and routes a
+   request by `matched` over the request's target URI and a decode of the answered `Map` into the case. A link is the other
+   direction: the case's fields encoded into a `Map<String, TemplateValue>` and `expanded` — both directions derived
+   from one template, which is what D5 wanted from `assertRoutes`.
+2. **Stage 2, a type at build time (slice 7).** A string literal whose expected type is `UriTemplate<Variables>` is
+   read by the checker (section 9's closed list), and `Variables` is the labelled tuple of its variables: in
+   `route("/orders/{id}", to: Route.Order)` the literal gives the names and `Route.Order(id: Int)` the types, so the
+   literal is a `UriTemplate<(id: Int)>`, and a misspelt variable or a missing case is a build error instead of a
+   refusal to start. `UriTemplate` gains its type parameter then; a template read at run time is a
+   `UriTemplate<Map<String, TemplateValue>>`. The rename of every written `UriTemplate` to that is one mechanical edit, and it is taken knowingly: stage 2 depends on the literal rule, and
+   designing the parameter before the checker that fills it would be designing blind.
+
 ## 10. Who takes a `Uri`
 
 | Where | Today | Proposed | A `String` overload? |
 |---|---|---|---|
-| `http.get(url)` | `url: String` | `url: Uri` | **no** |
-| `http.post(url, body, headers)` | `url: String` | `url: Uri` | **no** |
-| `Request.url` | `String` | `Uri` | — |
-| `HttpError.InvalidUrl(message)` | a case of the error type | **deleted** | — |
+| `http.get(url)`, `http.post(url, body)`, `http.send(method, url)` | `url: String` | `url: Uri` (slice 4) | **no** |
+| a server's `Request` | `target: String` | `target: String` as sent, and `uri: Uri`, the target URI of RFC 9112 section 3.3 (slice 4) | — |
+| `HttpError.InvalidUrl(message)` | a case of the error type | **deleted** (slice 4) | — |
+| `std/web`'s `route(template, to:)` | there is no such package | `template: UriTemplate` (section 9a) | **no** |
 | `File.open/create/readText/writeText/list/…` | `path: String` | `path: Path` (`docs/design/PATH.md` slice 2) | **no** |
 | `Sandbox.embedded/load/read` | `path: String` | `EmbeddedText` / `Resource` / `Path` (`docs/design/RESOURCES.md` section 5) | **no** |
 | `Storage.read/write/list/delete/exists` | there is no such package | `uri: Uri`, and the scheme picks the driver (section 11) | **no** |
@@ -837,9 +1296,18 @@ const address = Environment.get("SERVICE_URL") ?? "https://example.test"
 var other = http.get(Uri.tryFrom(address)?).await()?
 ```
 
-**`HttpError.InvalidUrl` disappears, and that is the measurable win.** `std/http` has an error case whose only job is
-to report a text the native side could not take apart; with a `Uri` parameter there is no such text, so the case has
-no producer. One case fewer in an error type every caller matches on is worth more than the `?` it costs.
+**`HttpError.InvalidUrl` disappears, and that is the measurable win.** `std/http` had an error case whose job was to
+report a text its own reader could not take apart; with a `Uri` parameter there is no such text, so the case has no
+producer. What is left is what RFC 9110 section 4.2 asks of an `http` URI beyond its syntax — the scheme is `http` or
+`https`, the host is not empty, there is no user information — and a URI that breaks it is a feature the client does
+not have, so it is `HttpError.unsupported(…)`, an existing kind. One case fewer in an error type every caller matches
+on is worth more than the `?` it costs.
+
+**A server's request carries both forms.** RFC 9112 section 3.2 gives a request target four forms (`/a?b`,
+`http://host/a`, `host:443` for `CONNECT`, `*` for `OPTIONS`), so `target` stays the text as it was sent, and
+section 3.3 says how the target URI is rebuilt from it, the connection's scheme and the `Host` field — that is
+`Request.uri`, a `Uri`, and a target from which no URI can be rebuilt is a `400`. `path()`, `query()` and `segments()`
+read the URI, so a router sees a path whose dot segments are gone.
 
 **`std/fs` keeps `Path` and does not take a `Uri`.** A signature says what a call can do, and `File.open(uri)` would
 type check for `https://example.test/x` and fail when the program runs — which is a compile error turned into a
@@ -1364,8 +1832,8 @@ Gaps 1 to 9 are the type; gaps 10 to 13 are the driver layer of section 11.
 
 1. **`std/idna` does not exist, so a non-ASCII host is refused.** `Uri.tryFrom("https://münchen.test/a")` answers
    `NonAsciiHost`. *Smallest fix:* a package with Punycode (RFC 3492) and UTS #46 mapping, about three hundred lines
-   plus a table. It is a slice of its own (section 14, slice 7) and it is what makes `Path` into `Uri` infallible,
-   which is gap 9's trigger.
+   plus a table. It is a slice of its own (section 14, slice 5) and it is what can make `Path` into `UriReference`
+   infallible, which is gap 9's trigger.
 2. **A string literal adapts to nothing.** Probe 3. *Smallest fix:* the parameter kind of `docs/design/RESOURCES.md`
    slice 1, with the closed list of section 9 instead of three resource types.
 3. **`Into<Uri>` as a parameter type type checks and does not build.** Probe 4, with two internal errors in the
@@ -1390,7 +1858,8 @@ Gaps 1 to 9 are the type; gaps 10 to 13 are the driver layer of section 11.
 6. **`Char` has no ASCII predicate.** `isLetter()` and `isDigit()` are Unicode-wide, so `'ä'.isLetter()` is `true` —
    which is wrong for a scheme, for `unreserved` and for a hexadecimal digit. Every such test in the probe is written
    as a code-point range. *Smallest fix:* `isAscii()`, `isAsciiLetter()`, `isAsciiDigit()` and `hexadecimalValue()`
-   on `Char` in `std/text`.
+   on `Char` in `std/text`. `std/uri` does not wait for it: its parser reads bytes (`byteAt`), and every delimiter and
+   every character class of RFC 3986 is ASCII, so it compares byte values.
 7. **A `fn main()` in a package's entry module is not emitted.** Writing the probe's top-level code as
    `fn main() { … }` builds C that calls a function the emitter never wrote: *"implicit declaration of function
    `t_…_main`"*, and the build fails inside the C compiler rather than with a diagnostic. No example in the
@@ -1401,8 +1870,8 @@ Gaps 1 to 9 are the type; gaps 10 to 13 are the driver layer of section 11.
    proposed — the design avoids it by fixing the failure type — but it is worth recording, because it is what decides
    the shape of every trait that carries a `TryFrom`.
 9. **A capsule cannot say which of its conversion pairs is the `Decode` pair.** Section 8: the design has exactly one
-   pair by a margin, and closing gap 1 makes `Path` into `Uri` infallible and so makes `Path` a second pair — at
-   which point `Uri` **silently** loses `Decode`, with a message at whoever asked for it and nothing at the line that
+   pair by a margin, and closing gap 1 can make `Path` into `UriReference` infallible and so make `UriReference` a
+   second pair of `Path` — at which point `Path` **silently** loses `Decode`, with a message at whoever asked for it and nothing at the line that
    caused it. *Smallest fix:* a rule that the pair with `String` wins where there are several (cheap, and it is right
    in every case in the repository), or a way to name the pair.
 10. **A writing member that answers a `Task` forces a `shared trait`, and a user-written `shared type` does not
@@ -1435,29 +1904,37 @@ Gaps 1 to 9 are the type; gaps 10 to 13 are the driver layer of section 11.
 
 ## 14. Migration
 
-Eight slices. Each one lands with the repository checking green, `torb test` passing, `canon --check` clean and the
-conformance suite comparing the two implementations. Slices 1, 3 and 7 need nothing that does not exist, and slice 8
-is the only one that waits on another document.
+Twelve slices, in this order since the revision of 2026-09-25: the owner decided that `std/uri` is finished before
+`std/http` grows, so the address package, the URI types, templates and `std/http` on `Uri` come first, and everything
+that needs the checker, another package or another document comes after. Each slice lands with the repository checking
+green, `torb test` passing, `canon --check` clean and the conformance suite comparing the two implementations.
 
-**`std/uri` is part of the fixpoint from slice 2**, because that is where the checker imports it (section 9). Until
-then it is an ordinary package nothing in `compiler/` depends on.
+**`std/uri` is type checked in every build of the compiler from slice 2**, because the prelude names `Uri`; it becomes
+part of the fixpoint proper — code the compiler runs while it compiles itself — in slice 7, where the checker imports
+it (section 9). Until then nothing in `compiler/` calls it, and no slice before 7 needs the two-commit seed rule: none
+adds a native, a syntax or a name the compiler looks up by string.
 
-| # | Slice | Files | Risk |
-|---|-------|-------|------|
-| 1 | **The package.** `Uri`, `Authority`, `UriError`, `Urn`, the parser, normalization, `resolved`/`relativeTo`, `Show`/`Equals`/`Hash`/`Compare`, `queryParameters`; the `Path` bridge; `std/text` gains the ASCII predicates of gap 6 and `std/number` the narrowing conversions of gap 5 | `std/uri/*`, `std/text/src/*`, `std/number/src/*`, `std/prelude/src/lib.trb` | **Low.** Probe 1 is this package, written out and built. `Decode` waits for gap 4, which is the encoding redesign, and nothing else in the slice does |
-| 2 | **The literal rule.** The parameter kind in the checker, the closed list with `Path`, `Uri` and the resource types, the three diagnostics, the recorded value in the IR; `compiler/` depends on `std/uri` | `compiler/src/semantics/checker/{expression,call}.trb`, `compiler/src/ir/*`, `compiler/project.trb`, `compiler/tests/check.test.trb` | **Highest of the eight.** It is a new parameter kind, probe 3 says there is nothing to build on, and it is the slice that puts `std/uri` in the fixpoint. It is the same work as `docs/design/RESOURCES.md` slice 1 and should be one round with it |
-| 3 | **`std/http`.** `get`, `post`, `request` and `Request.url` take a `Uri`; `HttpError.InvalidUrl` is deleted; the native side receives the canonical text | `std/http/src/lib.trb`, `compiler/src/backend/c/natives.trb`, `runtime/*` | **Low.** Three signatures and one error case, and every call site in the repository passes a literal |
-| 4 | **The manifest.** `source "...", git:/archive:/path:` and `registry "...", url:` are read as `Uri`s when the manifest is evaluated, so a typo is a manifest error and not a fetch failure; the lock records the canonical text | `compiler/src/project/*`, `docs/design/PROJECT.md` section 7 | **Low**, and it depends on `docs/design/PROJECT.md` slices 1 to 4 having landed |
-| 5 | **The documentation tooling.** `links.trb`'s four `startsWith` tests become `Uri.tryFrom(target)` and `resolved(against:)`, so an anchor, a relative link and an external link are told apart by the type | `compiler/src/documentation/links.trb` | **Medium.** The documentation gates compare generated text, so a changed classification changes output; the four cases have to answer exactly what they answer today |
-| 6 | **`std/identifier`.** `Identifier`, `Uuid`, `Ulid`, `IdentifierError`, the `urn:uuid:` bridge | `std/identifier/*`, and `std/random`, which has to exist first | **Blocked** on `std/random` (`docs/design/RANDOM.md`). Everything else in it is probe 6, which builds |
-| 7 | **IDNA.** `std/idna` with Punycode and UTS #46; `Uri.tryFrom` accepts a non-ASCII host and stores its ASCII form; `repaired(text)` for the WHATWG differences of section 6; gap 9 is answered before `Path` into `Uri` becomes infallible | `std/idna/*`, `std/uri/src/*`, `compiler/src/semantics/checker/derive.trb` | **Medium.** The tables are the work, and gap 9 has to be closed in the same slice or `Uri` loses `Decode` without a diagnostic |
-| 8 | **The driver layer.** `Schemes` in `std/uri`; `std/storage` with `Storage`, `StorageFailure`, `Storage.registry`, `FileStorage` over `std/fs` and `MemoryStorage`; `Uri.text` beside `Uri.show` and `compare` over `text` (that half belongs to slice 1 and is written there) | `std/uri/src/*`, `std/storage/*`, `std/fs/src/lib.trb` for gap 13's `remove` | **Blocked** on gap 10 and on `docs/design/CONCURRENCY.md`'s cancellation slice. Probe 7 builds the synchronous form; landing it before the trait is asynchronous would change every driver's signature afterwards, which is the one change an ecosystem cannot absorb |
+| # | Slice | Files | Depends on | State |
+|---|-------|-------|------------|-------|
+| 1 | **`std/ip`.** `AddressError`, `Ipv4Address`, `Ipv6Address`, `IpAddress`, `SocketAddress` move out of `std/network` unchanged, with their tests; `std/network` re-exports them (section 8a) | `std/ip/*`, `std/network/src/*` | nothing | this round |
+| 2 | **`std/uri`.** `Uri`, `UriReference`, `Authority`, `Host`, `UriError`, `Urn`; the parser with RFC 3987's mapping in, normalization, resolution with RFC 3986 section 5.4's examples as tests, `relativeTo`, `iriText`, `Show`/`Equals`/`Hash`/`Compare`, `formDecoded`/`formEncoded` and the query parameters; the `Path` bridge of RFC 8089; the prelude exports `Uri` and `UriError` | `std/uri/*`, `std/prelude/src/lib.trb` | 1 | this round |
+| 3 | **`UriTemplate`.** RFC 6570 levels 1 to 4 expanded, the RFC's examples and the `uritemplate-test` suite as tests, matching of the reversible subset (section 9a) | `std/uri/src/template.trb`, `std/uri/tests/*` | 2 | this round |
+| 4 | **`std/http` on `Uri`.** `get`, `post` and `send` take a `Uri`; a server's `Request` gains `uri`, the target URI of RFC 9112 section 3.3; `destinationOf` and `HttpError.InvalidUrl` are deleted; the examples and the conformance programs migrate | `std/http/src/*`, `examples/tour`, `tests/conformance/*` | 2 | this round |
+| 5 | **IDNA.** `std/idna` with Punycode, UTS #46 mapping and the IDNA 2008 rules; `Uri.tryFrom` accepts a non-ASCII host and stores its A-labels, `iriText()` shows U-labels; `repaired(text)` for the WHATWG differences of section 6; gap 9 answered before `Path` into `UriReference` becomes infallible | `std/idna/*`, `std/uri/src/*`, `compiler/src/semantics/checker/derive.trb` | 2 | later |
+| 6 | **`data:`.** A `DataUri` refinement (RFC 2397): media type, parameters and the bytes | `std/uri/src/data.trb`, `std/encoding` | Base64 in `std/encoding` | later |
+| 7 | **The literal rule.** The parameter kind in the checker and the closed list of section 9 with `Path`, `Uri`, `UriReference`, `UriTemplate` and the resource types; `UriTemplate<Variables>`; the diagnostics; the recorded value in the IR; `compiler/` depends on `std/uri` | `compiler/src/semantics/checker/*`, `compiler/src/ir/*`, `compiler/tests/check.test.trb` | 2, 3; one round with `docs/design/RESOURCES.md` slice 1 | later; **highest risk**, and the slice that puts `std/uri` in the fixpoint |
+| 8 | **Routes.** `std/web`'s `route(template, to:)`, stage 1 of section 9a (a check at startup), then stage 2 on slice 7 | `std/web/*` | 3, 4, and `docs/design/WEB.md`'s slices | later |
+| 9 | **The manifest.** `source "...", git:/archive:/path:` and `registry "...", url:` are read as `Uri`s when the manifest is evaluated; the lock records the canonical text | `compiler/src/project/*`, `docs/design/PROJECT.md` section 7 | `docs/design/PROJECT.md` slices 1 to 4 | later |
+| 10 | **The documentation tooling.** `links.trb`'s four `startsWith` tests become `UriReference.tryFrom(target)` and `resolved(against:)`, answering exactly what they answer today | `compiler/src/documentation/links.trb` | 7 (the compiler has to import `std/uri`) | later |
+| 11 | **`std/identifier`.** `Identifier`, `Uuid`, `Ulid`, `IdentifierError`, the `urn:uuid:` bridge | `std/identifier/*` | `std/random` (`docs/design/RANDOM.md`) | blocked |
+| 12 | **The driver layer.** `Schemes` in `std/uri`; `std/storage` with `Storage`, `StorageFailure`, `Storage.registry`, `FileStorage` over `std/fs` and `MemoryStorage` | `std/uri/src/*`, `std/storage/*`, `std/fs/src/lib.trb` for gap 13's `remove` | gap 10 and `docs/design/CONCURRENCY.md`'s cancellation slice | blocked |
 
-**The prose.** A new `docs/standard-library/uri.md`, `docs/standard-library/identifier.md` and
-`docs/standard-library/storage.md`; `docs/design/PATH.md`'s "Not a URL" paragraph points here; `docs/design/RESOURCES.md`'s
-section 6 gains one sentence and its `Sandbox` section gains gap 13's; `docs/design/PROJECT.md` section 7's source table
-says the values are `Uri`s and that the fetchers stay a closed list; CONCEPT's decision log gains one entry for the
-literal rule and one for "a registry is a value"; `docs/internals/index.md` lists this document, which is done.
+**The prose.** `docs/standard-library/uri.md` and `docs/standard-library/ip.md` with slices 1 to 3,
+`docs/standard-library/http.md` and `network.md` with slice 4; later `docs/standard-library/identifier.md` and
+`storage.md`; `docs/design/PATH.md`'s "Not a URL" paragraph points here; `docs/design/RESOURCES.md`'s section 6 gains one
+sentence and its `Sandbox` section gains gap 13's; `docs/design/PROJECT.md` section 7's source table says the values are
+`Uri`s and that the fetchers stay a closed list; CONCEPT's decision log gains one entry for the literal rule and one
+for "a registry is a value".
 
 ## 15. What this is not
 
@@ -1471,15 +1948,13 @@ literal rule and one for "a registry is a value"; `docs/internals/index.md` list
   browser's repairs calls `repaired(text)` before parsing, where a reader can see it.
 - **Not a `Url` type and not a `Uri`/`Url` split.** Section 7. Java's split is the most expensive mistake in this
   design space, and what `Url` would guarantee is what one `?` already gives.
-- **Not an IRI type.** There is one type. Non-ASCII in a path, a query or a fragment is percent-encoded as UTF-8 at
-  construction, which is what RFC 3987 section 3.1 says a URI for an IRI is; a non-ASCII **host** is refused until
-  `std/idna` exists, because percent-encoding one is wrong rather than unsupported. A separate `Iri` type that keeps
-  the Unicode form would double every signature to buy a display form, and a display form is `Show`'s job.
-- **Not a URI template.** RFC 6570 (`https://example.test/users/{id}`) is a different language with its own grammar,
-  and the literal rule of section 9 deliberately refuses an interpolated literal. If it is ever wanted it is a package
-  of its own whose `expand` answers a `Uri`.
-- **Not a scheme registry.** `std/uri` knows five default ports and the word `urn`, and nothing else. It does not know
-  that `https` needs a host, that `mailto` has no authority or that `data` is base64 — those are the schemes'
+- **Not an IRI type.** An IRI is read as the URI it stands for and shown back by `iriText()` (section 4a). Four
+  capsules — `Iri` and `IriReference` beside `Uri` and `UriReference` — would double every signature again to keep a
+  character sequence that nothing which reaches a resource reads.
+- **Not a template engine.** `UriTemplate` is RFC 6570 and nothing more (section 9a): no conditionals, no defaults,
+  no custom operators, and matching only where the template can be read backwards.
+- **Not a scheme registry.** `std/uri` knows five default ports, the words `urn` and `file`, and nothing else. It does
+  not know that `https` needs a host, that `mailto` has no authority or that `data` is base64 — those are the schemes'
   business, and a program that cares asks `uri.scheme()`. The registry of section 11 is a value in `std/storage` that
   a program builds out of drivers it named, and no part of it is global, discovered or implicit.
 - **Not a universal opener.** Section 11 answers "read this, wherever it is" with a capability trait of five members
@@ -1525,7 +2000,7 @@ Everything technical above is decided. These are taste or direction, and only th
    **Answered by the owner (2026-09-23):** `reference.resolved(against: base)`.
 6. **Is refusing a non-ASCII host acceptable until `std/idna` exists?** The alternative is percent-encoding it, which
    produces a host no resolver accepts — a wrong value rather than an unsupported one. The document refuses, and
-   slice 7 is the answer.
+   slice 5 is the answer.
    **Answered by the owner (2026-09-23):** refuse a non-ASCII host until `std/idna` exists.
 7. **Is a redacting `show()` the right default?** Section 11 makes `print uri` lossy for the one URI in a thousand
    that carries a password, so a value that is printed no longer round trips through its own display form — which is

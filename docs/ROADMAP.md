@@ -92,8 +92,10 @@ the natives that exist.** In this order, because each part stands on the one bef
    scheme of a URI - local files, memory for tests, then S3 and WebDAV as packages of their own - and `std/fs` gains
    `remove` and `rename` ([design/URI.md](design/URI.md) sections 11 and 14, [design/PATH.md](design/PATH.md)).
    Connections to databases and caches are URIs whose scheme chooses the driver in the same way.
-2. **The network.** `std/net` (sockets), then `std/http` (client and server, TLS through the platform), then gRPC and
-   OpenAPI on top of it. The web layer above HTTP - handlers, routes, HTML and a live UI - is
+2. **The network.** `std/network` (sockets), then `std/http` (client and server, TLS through the platform), then gRPC
+   and OpenAPI on top of it. `std/uri` is finished before `std/http` grows further (the owner, 2026-09-25): the URI
+   types, IRIs, URNs, templates and the pure address package `std/ip` come first
+   ([design/URI.md](design/URI.md) section 14). The web layer above HTTP - handlers, routes, HTML and a live UI - is
    [design/WEB.md](design/WEB.md).
 3. **Formats**, as packages on `Encode` and `Decode` ([design/ENCODING.md](design/ENCODING.md) section 9): `json`
    exists, then `toml`, `xml` and `html` (the document formats, each with its tree), JSON Schema and JSON Patch, in the
@@ -141,7 +143,7 @@ supported, and neither is a dialect with its own name.
 | `std/markdown` | CommonMark, the document tree as a value | [design/RELEASE.md](design/RELEASE.md) slice 1 | `std/yaml` |
 | `std/random` | a seedable, splittable generator that is a value | [design/RANDOM.md](design/RANDOM.md) | nothing |
 | `std/identifier` | `Uuid`, `Ulid`, the trait `Identifier` | [design/URI.md](design/URI.md) section 12 | `std/random` |
-| `std/uri` | `Uri` after RFC 3986, and its literal rule | [design/URI.md](design/URI.md) | nothing |
+| `std/uri` | `Uri` and `UriReference` after RFC 3986, IRIs (RFC 3987), `Urn` (RFC 8141), `UriTemplate` (RFC 6570), the `file:` bridge; then IDNA and the literal rule | [design/URI.md](design/URI.md) | nothing; the literal rule waits for the checker's parameter kind |
 | `std/cli` | commands, flags and options declared once, help and errors generated | [design/CLI.md](design/CLI.md) | nothing |
 | `std/os`, `std/path` | the rest of their slices | [design/OS.md](design/OS.md), [design/PATH.md](design/PATH.md) | - |
 | resources | files a program ships or embeds, named by a literal | [design/RESOURCES.md](design/RESOURCES.md) | `std/uri` |
