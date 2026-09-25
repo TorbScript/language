@@ -1142,6 +1142,12 @@ void torb_install_interrupt_handler(void);
 bool torb_take_interrupt(void);
 
 /**
+ * `readLine` of `std/io` without a panic: `true` and the line in `out`, or `false` with an empty `error` at the end of
+ * the input and with the message of an `IoError` for a line that is not UTF-8. `path` is what that error names.
+ */
+bool torb_read_line_or_end(torb_text path, torb_text *out, torb_text *error);
+
+/**
  * One line of raw UTF-8 bytes plus a `\n`, through the same dispatch `print` goes through: a live Windows console
  * sees the text, and a pipe or a file sees exactly these bytes. `bytes` may hold `\n` of its own.
  *

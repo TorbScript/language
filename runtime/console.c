@@ -504,12 +504,19 @@ bool torb_write_standard_bytes(bool error, const uint8_t *bytes, size_t length) 
   return written;
 }
 
-bool torb_read_line(torb_text *out) {
+/* What reading one line of standard input came to. */
+typedef enum torb_line_status { TORB_LINE_END, TORB_LINE_READ, TORB_LINE_INVALID } torb_line_status;
+
+/*
+ * One line of standard input without its line break: `TORB_LINE_READ` with the text in `out`, `TORB_LINE_END` at the end
+ * of the input, and `TORB_LINE_INVALID` with the offset of the first byte that is not UTF-8 in `bad_offset`.
+ */
+static torb_line_status torb_read_line_status(torb_text *out, size_t *bad_offset) {
 #if defined(_WIN32)
   {
     HANDLE handle;
     if (torb_std_is_console(STD_INPUT_HANDLE, &handle)) {
-      return torb_read_line_console(handle, out);
+      return torb_read_line_console(handle, out) ? TORB_LINE_READ : TORB_LINE_END;
     }
   }
 #endif
@@ -518,7 +525,6 @@ bool torb_read_line(torb_text *out) {
     size_t length = 0u;
     uint8_t *buffer = (uint8_t *)torb_raw_allocate(capacity);
     bool any = false;
-    size_t bad_offset = 0u;
     for (;;) {
       int byte = fgetc(stdin);
       if (byte == EOF) {
@@ -553,14 +559,40 @@ bool torb_read_line(torb_text *out) {
          is how the caller tells the two apart. */
       clearerr(stdin);
       torb_raw_free(buffer, capacity);
-      return false;
+      return TORB_LINE_END;
     }
-    if (!torb_text_try_from_bytes(buffer, length, out, &bad_offset)) {
+    if (!torb_text_try_from_bytes(buffer, length, out, bad_offset)) {
       torb_raw_free(buffer, capacity);
-      torb_panic_invalid_utf8((int64_t)bad_offset, torb_location_unknown);
+      return TORB_LINE_INVALID;
     }
     torb_raw_free(buffer, capacity);
-    return true;
+    return TORB_LINE_READ;
+  }
+}
+
+bool torb_read_line(torb_text *out) {
+  size_t bad_offset = 0u;
+  torb_line_status status = torb_read_line_status(out, &bad_offset);
+  if (status == TORB_LINE_INVALID) {
+    torb_panic_invalid_utf8((int64_t)bad_offset, torb_location_unknown);
+  }
+  return status == TORB_LINE_READ;
+}
+
+bool torb_read_line_or_end(torb_text path, torb_text *out, torb_text *error) {
+  size_t bad_offset = 0u;
+  char detail[96];
+  (void)path;
+  switch (torb_read_line_status(out, &bad_offset)) {
+    case TORB_LINE_READ:
+      return true;
+    case TORB_LINE_END:
+      *error = torb_text_from_cstring("");
+      return false;
+    default:
+      snprintf(detail, sizeof detail, "the byte at offset %lu is not valid UTF-8", (unsigned long)bad_offset);
+      *error = torb_text_from_cstring(detail);
+      return false;
   }
 }
 

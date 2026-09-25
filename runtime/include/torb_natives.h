@@ -303,6 +303,8 @@ int64_t torb_process_run_feeding(torb_text command, torb_list arguments, torb_te
 int64_t torb_process_run_inheriting(torb_text command, torb_list arguments, torb_text *failure);
 /* readLine */
 bool torb_read_line(torb_text *out);
+/* readLineOrEnd */
+bool torb_read_line_or_end(torb_text path, torb_text *out, torb_text *error);
 /* Float64.round */
 double torb_round_f64(double value);
 /* HashSet.insert, TrieSet.insert */
