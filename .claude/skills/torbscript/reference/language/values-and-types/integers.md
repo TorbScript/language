@@ -105,7 +105,23 @@ Type.minimum  Type.maximum                the smallest and largest value of a ty
    // prints 15 252 240
    ```
 
-10. **`UInt64` alone has `addedWrapping` and `multipliedWrapping`, the only arithmetic that does not panic on
+10. **Every operator that can panic has a checked twin that answers an `Option`.** `addedChecked`,
+    `subtractedChecked`, `multipliedChecked`, `dividedChecked` and `remainderChecked` belong to every integer type,
+    through the trait `Integer`, and answer `None` exactly where `+`, `-`, `*`, `/` and `%` panic - an overflow, a
+    zero divisor, the smallest value of a signed type divided by `-1`. The operator says "this fits"; the twin is for a
+    value that comes from outside and may not.
+
+    ```trb run
+    const stock: Int8 = 100
+    print stock.addedChecked(27)
+    print stock.addedChecked(28)
+    print 7.dividedChecked(0)
+    // prints Some(127)
+    // prints None
+    // prints None
+    ```
+
+11. **`UInt64` alone has `addedWrapping` and `multipliedWrapping`, the only arithmetic that does not panic on
     overflow.** They exist for hash functions, which need the wrap; every other numeric type panics on overflow the
     way `+` always does.
 

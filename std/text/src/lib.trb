@@ -131,6 +131,28 @@ public native type String
     sliceBytes(from, to)
   }
 
+  /**
+   * The text the range covers, or `None` where an offset is past the end, the start is after the end or an offset is
+   * inside of a character: the total twin of `text[from..to]`, which panics there instead.
+   *
+   * # Examples
+   *
+   *     print "Grüße".part(0..3)
+   *     print "Grüße".part(0..4)
+   */
+  fn part(range: Bounds<Int>): String? {
+    const from = range.lowest() ?? 0
+    const written = range.highest() ?? byteLength()
+    if range.includesHighest() && written >= byteLength() {
+      return None
+    }
+    const to = if range.includesHighest() { written + 1 } else { written }
+    if from < 0 || to > byteLength() || from > to || !isBoundary(self, from) || !isBoundary(self, to) {
+      return None
+    }
+    Some sliceBytes(from, to)
+  }
+
   /** The bytes from one offset to another. The one form the runtime has, and what `slice` decides its offsets for. */
   native fn sliceBytes(from: Int, to: Int): String
 
@@ -357,6 +379,14 @@ fn offsetBefore(text: String, count: Int): Int {
     remaining = remaining - 1
   }
   offset
+}
+
+/** Whether a character begins at `offset`, or it is the end of the text: where a text may be cut. */
+fn isBoundary(text: String, offset: Int): Bool {
+  match text.byteAt(offset) {
+    Some(byte) => !isContinuation(byte)
+    None => offset == text.byteLength()
+  }
 }
 
 fn isContinuation(byte: UInt8): Bool {

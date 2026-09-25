@@ -113,7 +113,7 @@ torb repl: one entry at a time, :help lists the commands
 List<Int64>
 > prices[5]
 panic: index 5 is out of bounds for a length of 3
-  at std/collections/src/list.trb:520:15
+  at std/collections/src/list.trb:552:15
   in <entry 5>
 >
 ```

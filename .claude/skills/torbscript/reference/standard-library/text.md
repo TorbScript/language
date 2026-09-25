@@ -61,6 +61,7 @@ public native type String
   fn byteLength(): Int
   fn isEmpty(): Bool
   fn slice(range: Bounds<Int>): String
+  fn part(range: Bounds<Int>): String?
   fn sliceBytes(from: Int, to: Int): String
   fn contains(part: String): Bool
   fn startsWith(prefix: String): Bool
@@ -100,6 +101,7 @@ quotes with escapes; `show()` (from `Show`) is the text unquoted. `String.from(c
 - a byte is never inside anything, so it never panics. `slice(range)` is `text[from..to]` with byte offsets and is
 ordinary TorbScript over `sliceBytes(from, to)`, the one native the runtime has for it; an offset on a UTF-8
 continuation byte, past `byteLength()`, or a start past the end each panic with the offset and the length named.
+`part(range)` is its total twin: the same text where `slice` would answer one, and `None` where it would panic.
 
 **The total vocabulary** cuts a text without an offset, and none of it can panic. `withoutPrefix(part)` and
 `withoutSuffix(part)` answer the rest, or `None` where the text does not start or end with `part`. `splitOnce(separator)`

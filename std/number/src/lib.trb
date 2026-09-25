@@ -217,6 +217,111 @@ public trait Bits {
   fn shiftedRight(by: Int64): Self
 }
 
+/**
+ * [Numeric] of a whole number, with its range: [Integer.minimum], [Integer.maximum], and the arithmetic that answers
+ * `None` exactly where the operator would panic.
+ *
+ * `a + b` panics on overflow in every profile, because a wrong number is worse than a stop. The members here are its
+ * total twins (CONCEPT.md, "Error Handling"): `a.addedChecked(b)` is `a + b` where that fits the type and `None`
+ * where it does not, and so on for `-`, `*`, `/` and `%` - the division and the remainder also answer `None` for a
+ * zero divisor and for the smallest value of a signed type divided by `-1`. They cost a comparison or two in front of
+ * the operation, which cannot overflow any more then.
+ *
+ * # Examples
+ *
+ *     const total: Int8 = 100
+ *     print total.addedChecked(27)
+ *     print total.addedChecked(28)
+ *     print(Int.maximum.multipliedChecked(2) ?? 0)
+ *
+ * # Related
+ *
+ * - [UInt64.addedWrapping] - the arithmetic that wraps around, for the one case that needs it: hashing.
+ */
+public trait Integer with Numeric {
+  /** The smallest value of the type. */
+  static minimum: Self
+  /** The largest value of the type. */
+  static maximum: Self
+
+  /** `self + other`, or `None` where the sum does not fit the type. */
+  fn addedChecked(other: Self): Self? {
+    if other > Self.zero {
+      if self > Self.maximum - other {
+        return None
+      }
+    } else if self < Self.minimum - other {
+      return None
+    }
+    Some(self + other)
+  }
+
+  /** `self - other`, or `None` where the difference does not fit the type. */
+  fn subtractedChecked(other: Self): Self? {
+    if other > Self.zero {
+      if self < Self.minimum + other {
+        return None
+      }
+    } else if self > Self.maximum + other {
+      return None
+    }
+    Some(self - other)
+  }
+
+  /** `self * other`, or `None` where the product does not fit the type. */
+  fn multipliedChecked(other: Self): Self? {
+    const zero = Self.zero
+    if self == zero || other == zero {
+      return Some zero
+    }
+    // Each bound is divided by a number that is not zero, and none of the four divisions can overflow itself
+    const fits = if self > zero {
+      if other > zero { self <= Self.maximum / other } else { other >= Self.minimum / self }
+    } else {
+      if other > zero { self >= Self.minimum / other } else { other >= Self.maximum / self }
+    }
+    if !fits {
+      return None
+    }
+    Some(self * other)
+  }
+
+  /** `self / other`, or `None` for a zero divisor and for the smallest value of a signed type divided by `-1`. */
+  fn dividedChecked(other: Self): Self? {
+    if isUndivisible(other) {
+      return None
+    }
+    Some(self / other)
+  }
+
+  /** `self % other`, or `None` where `self / other` would be `None` as well. */
+  fn remainderChecked(other: Self): Self? {
+    if isUndivisible(other) {
+      return None
+    }
+    Some(self % other)
+  }
+
+  /** Whether `/` and `%` by `other` panic: a divisor of zero, or `-1` under the smallest value of a signed type. */
+  private fn isUndivisible(other: Self): Bool {
+    if other == Self.zero {
+      return true
+    }
+    // An unsigned divisor is never below zero, so `zero - one` is only reached where it exists
+    self == Self.minimum && other < Self.zero && other == Self.zero - Self.one
+  }
+}
+
+// Every integer type is an `Integer`: its `minimum` and `maximum` are the constants of its own `extend` below
+extend Int8 with Integer {}
+extend Int16 with Integer {}
+extend Int32 with Integer {}
+extend Int64 with Integer {}
+extend UInt8 with Integer {}
+extend UInt16 with Integer {}
+extend UInt32 with Integer {}
+extend UInt64 with Integer {}
+
 /** What `Int.tryFrom(text)` fails with: the text is not a valid number. */
 public type NumberParseError with Error {
   /**

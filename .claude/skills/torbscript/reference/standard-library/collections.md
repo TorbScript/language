@@ -75,6 +75,7 @@ public trait List<Item>
   fn first(): Item?
   fn last(): Item?
   fn indexOf(value: Item): Int? where Item: Equals
+  fn part(range: Bounds<Int>): Self?
 }
 ```
 
@@ -85,6 +86,9 @@ changed copy (`appended`, `inserted`, `removed`, `reversed`, ...). `sorted` is o
 beyond its length. `ArrayList` is the default implementation, a contiguous growable buffer shared between copies and
 slices until one of them is written to; `TrieList` is a bit-partitioned trie for a list kept in many versions at once,
 and is a documented alias of `ArrayList` until the trie exists.
+
+`list[index]` panics with `index 9 is out of bounds for a length of 3` where `get(index)` answers `None`, and
+`list[from..to]` panics where `part(from..to)` answers `None`: every partial read has its total twin beside it.
 
 `ArrayList.withCapacity(capacity)` builds an empty list with room for `capacity` items before it has to grow again -
 what to reach for ahead of a loop of `append`s whose count is already known, instead of the default empty list that
@@ -111,6 +115,9 @@ public trait Map<Key, Value>
   fn mapValues<Output>(transform: Transform<Value, Output>): Map<Key, Output> where Key: Hash
 }
 ```
+
+`map[key]` of a missing key panics with `the key "Alan" is not in the map` - the key as it shows inside of another
+value, cut after 60 characters, or `the key` alone where its type has no `Show` - and `get(key)` answers `None`.
 
 Mapping from keys to values, iterated as `(key, value)` tuples. Its verb is `set` (`map[key] = value`), whose
 participle is `updated`. The trait asks nothing of `Key`; what a key has to be able to do is a matter of the

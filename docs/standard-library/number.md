@@ -16,7 +16,7 @@ source:
   - std/number/src/lib.trb
 ---
 
-`std/number` declares every numeric type, the traits their operators go through (`Numeric`, `Signed`, `Bits`, `Real`),
+`std/number` declares every numeric type, the traits their operators go through (`Numeric`, `Signed`, `Integer`, `Bits`, `Real`),
 and the two error types a numeric conversion fails with. Every name below is already in scope through the prelude.
 
 ## Import
@@ -110,6 +110,34 @@ could not write the digits. `epsilon` is the gap between one and the next value 
 of a `Float64`, one part of a `Fixed`. The one such a body needs is `Scalar.one`, which every `Numeric` has, and
 `halved` and `doubled` are the two pieces of arithmetic it would otherwise write with a literal.
 
+### Integer
+
+```trb fragment
+public trait Integer with Numeric {
+  static minimum: Self
+  static maximum: Self
+
+  fn addedChecked(other: Self): Self?
+  fn subtractedChecked(other: Self): Self?
+  fn multipliedChecked(other: Self): Self?
+  fn dividedChecked(other: Self): Self?
+  fn remainderChecked(other: Self): Self?
+}
+```
+
+Every integer type, `Int8` to `UInt64`, is an `Integer`: a `Numeric` with a range, and the total twins of its
+operators. `a.addedChecked(b)` is `a + b` where the sum fits the type and `None` where `+` would panic, and the same
+for `-`, `*`, `/` and `%` - the division and the remainder answer `None` for a zero divisor and for the smallest value
+of a signed type divided by `-1` as well. All five are defaults of the trait, written over the operators with a
+comparison in front, so a body that is generic over `Value: Integer` has them too.
+
+```trb run
+print Int.maximum.multipliedChecked(2)
+print(100.subtractedChecked(1) ?? 0)
+// prints None
+// prints 99
+```
+
 ### NumberParseError, NumberRangeError
 
 ```trb fragment
@@ -146,8 +174,8 @@ public type UInt = UInt64
 public type Float = Float64
 ```
 
-Every type carries its width in its name. `Int8` through `UInt64` are `Hash` and each has a `minimum` and a `maximum`
-constant of its own type. `Int64` is the type of an integer literal and additionally has `parseDigits(text, radix:)` for
+Every type carries its width in its name. `Int8` through `UInt64` are `Hash` and `Integer`, and each has a `minimum` and
+a `maximum` constant of its own type. `Int64` is the type of an integer literal and additionally has `parseDigits(text, radix:)` for
 reading digits in another base (`Int.parseDigits("ff", radix: 16)`, no sign, no prefix, `_` allowed between digits) and
 `addedWrapping`/`multipliedWrapping` on `UInt64`, the only arithmetic in the language that does not panic on overflow -
 it exists for hash functions that need the wrap. `Float64` is the type of a decimal literal and additionally has `pi`,

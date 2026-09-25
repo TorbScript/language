@@ -246,6 +246,21 @@ public trait List<Item>
   }
 
   /**
+   * The items the range covers, as a list of the same kind, or `None` where the range reaches outside the list or
+   * starts after it ends: the total twin of `numbers[1..3]`, which panics there instead.
+   *
+   * # Examples
+   *
+   *     const numbers = [1, 2, 3]
+   *     print numbers.part(1..3)
+   *     print numbers.part(2..5)
+   */
+  fn part(range: Bounds<Int>): Self? {
+    const (start, end) = windowInside(range, length())?
+    Some self[start..end]
+  }
+
+  /**
    * `numbers[1..3] = values`: the items of that part replaced by `values`, in place. The two need not be the same
    * length, so the list grows or shrinks by the difference.
    *
@@ -422,6 +437,9 @@ extend<Item: Hash> List<Item> with Hash {
  * after it ends, with `the range <from>..<to> starts after it ends`.
  */
 fn windowOf(range: Bounds<Int>, count: Int): (start: Int, end: Int) {
+  if const Some(inside) = windowInside(range, count) {
+    return inside
+  }
   const from = range.lowest() ?? 0
   const written = range.highest() ?? count
   const to = if range.includesHighest() { written + 1 } else { written }
@@ -433,6 +451,20 @@ fn windowOf(range: Bounds<Int>, count: Int): (start: Int, end: Int) {
     panic "the range {from}..{to} starts after it ends"
   }
   (from, to)
+}
+
+/** The two ends of [windowOf], or `None` where it would panic: what [List.part] answers from. */
+fn windowInside(range: Bounds<Int>, count: Int): (start: Int, end: Int)? {
+  const from = range.lowest() ?? 0
+  const written = range.highest() ?? count
+  if range.includesHighest() && written >= count {
+    return None
+  }
+  const to = if range.includesHighest() { written + 1 } else { written }
+  if from < 0 || to > count || from > to {
+    return None
+  }
+  Some((from, to))
 }
 
 // --- Implementations -----------------------------------------------------------------------------------
