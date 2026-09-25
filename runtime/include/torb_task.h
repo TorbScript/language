@@ -692,4 +692,17 @@ bool torb_list_privatize(torb_list *list, torb_privatize_function element);
 /** A map or a set: a table of its own, with `key` and `value` run on every entry; `NULL` for a plain side. */
 bool torb_map_privatize(torb_map *map, torb_privatize_function key, torb_privatize_function value);
 
+/**
+ * An element function that is handed a context beside the place: the VM's, whose one function serves every element type
+ * it made and is told which by the context. The two below are the list and the map above with it.
+ */
+typedef bool (*torb_privatize_with_function)(const void *context, void *place);
+bool torb_list_privatize_with(torb_list *list, torb_privatize_with_function element, const void *context);
+bool torb_map_privatize_with(torb_map *map, torb_privatize_with_function key, const void *keyContext,
+                             torb_privatize_with_function value, const void *valueContext);
+/** A `torb_privatize_function` as one of those: `context` points at the function. */
+bool torb_privatize_plain(const void *context, void *place);
+/** `torb_text_privatize_place` as one of those; the context is not read. */
+bool torb_text_privatize_with(const void *context, void *place);
+
 #endif /* TORB_TASK_H */

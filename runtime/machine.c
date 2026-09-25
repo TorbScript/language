@@ -408,7 +408,7 @@ static const torb_element *torb_machine_narrow_element(int64_t narrow);
  * `Char` and every integer are one widened word in the VM), a `String` is the runtime's text descriptor, a trivial
  * element of several words gets a descriptor of its own with no callbacks, and a counted element of the program's own
  * types (kind 2) gets callbacks that walk its shape. `equals` and `hash` are the chunks of the program's own, -1 where
- * the words decide: an element that has them gets a slot of the pool whatever else it is, because a float or a record
+ * the words decide: an element that has them gets a descriptor of its own whatever else it is, because a float or a record
  * that holds a `String` is equal to another one its words differ from.
  */
 static void torb_machine_define_element(int64_t index, int64_t words, int64_t kind, int64_t shape, int64_t equals,
@@ -1144,17 +1144,35 @@ static void torb_machine_block_unique(int64_t *words, int64_t reference) {
 /* -------------------------------------------------------------------------------------- counted elements --- */
 
 /*
- * A counted element of a container is released and retained by the runtime, through the callbacks of its descriptor -
- * which receive the element and nothing else. So every counted element type of the program gets a slot of this pool:
- * the slot's two callbacks walk the shape the slot was given. A program with more counted element types than slots is
- * refused with an internal error rather than miscounted.
+ * A counted element of a container is released and retained by the runtime through the callbacks of its descriptor,
+ * which receive the element and nothing else. So a descriptor the VM makes is a contextual one (torb.h, element.c),
+ * whose callbacks are handed the descriptor, and it is the first member of a `torb_machine_descriptor` that says what
+ * its elements are. A program has as many counted element types as it needs: the VM had 64 slots of callbacks written
+ * out by hand before, and the one program `torb test --vm` makes of every test package of std/ outgrew them.
  */
-#define TORB_MACHINE_ELEMENT_SLOTS 64
+typedef struct torb_machine_descriptor {
+  /** First, so that the `torb_element *` the runtime holds points at the whole. */
+  torb_contextual_element contextual;
+  /** The shape the callbacks walk, -1 for an element with nothing counted in it. */
+  int64_t shape;
+  int64_t words;
+  /**
+   * The chunks of the program's own `equals` and `hash` the elements are compared and hashed by; -1 where the words
+   * are the answer (`comparesByWords` of the bytecode: integers, `Bool`s and `Char`s).
+   */
+  int64_t equals;
+  int64_t hash;
+  /** The descriptor made before this one. */
+  struct torb_machine_descriptor *next;
+} torb_machine_descriptor;
 
-static int64_t torb_machine_element_shapes[TORB_MACHINE_ELEMENT_SLOTS];
-static size_t torb_machine_element_slots = 0;
-
-static int64_t torb_machine_element_words[TORB_MACHINE_ELEMENT_SLOTS];
+/*
+ * Every descriptor made so far, the newest first. It is shared by every element type of the same words, shape, `equals`
+ * and `hash`: the descriptors would be the same, and a session of `torb repl` loads one continuation of the program per
+ * entry, each with its own element table (the interpreter names the first of equal shapes, so a `List<Point>` of every
+ * entry gets one descriptor). They live as long as the process.
+ */
+static torb_machine_descriptor *torb_machine_descriptors = NULL;
 
 static bool torb_machine_equal_words(const void *first, const void *second, int64_t words) {
   return memcmp(first, second, 8u * (size_t)words) == 0;
@@ -1170,992 +1188,82 @@ static uint64_t torb_machine_hash_words(const void *value, int64_t words) {
   return hash;
 }
 
-/*
- * The `equals` and the `hash` of the program's own a slot's elements are compared and hashed by, as chunks of the
- * bytecode; -1 where the words are the answer (`comparesByWords` of the bytecode: integers, `Bool`s and `Char`s).
- */
-static int64_t torb_machine_element_equals[TORB_MACHINE_ELEMENT_SLOTS];
-static int64_t torb_machine_element_hashes[TORB_MACHINE_ELEMENT_SLOTS];
+static void torb_machine_element_retain(const torb_contextual_element *contextual, void *element) {
+  const torb_machine_descriptor *self = (const torb_machine_descriptor *)contextual;
+  torb_machine_retain_value((int64_t *)element, torb_machine_shape_at(self->shape));
+}
 
-/* Two elements of a slot: by their words, or by the program's `equals`, which the interpreter runs. */
-static bool torb_machine_equal_slot(size_t slot, const void *first, const void *second) {
+static void torb_machine_element_release(const torb_contextual_element *contextual, void *element) {
+  const torb_machine_descriptor *self = (const torb_machine_descriptor *)contextual;
+  torb_machine_release_value((int64_t *)element, torb_machine_shape_at(self->shape));
+}
+
+/* Two elements: by their words, or by the program's `equals`, which the interpreter runs. */
+static bool torb_machine_element_equals(const torb_contextual_element *contextual, const void *first,
+                                        const void *second) {
+  const torb_machine_descriptor *self = (const torb_machine_descriptor *)contextual;
   torb_machine_request request;
-  if (torb_machine_element_equals[slot] < 0) {
-    return torb_machine_equal_words(first, second, torb_machine_element_words[slot]);
+  if (self->equals < 0) {
+    return torb_machine_equal_words(first, second, self->words);
   }
   request.kind = TORB_REQUEST_EQUALS;
-  request.chunk = torb_machine_element_equals[slot];
+  request.chunk = self->equals;
   request.first = (int64_t)(intptr_t)first;
   request.second = (int64_t)(intptr_t)second;
-  request.words = torb_machine_element_words[slot];
+  request.words = self->words;
   return torb_machine_call_back((int64_t)(intptr_t)&request) != 0;
 }
 
-/* The hash of an element of a slot: of its words, or the program's `hash`, which the interpreter runs. */
-static uint64_t torb_machine_hash_slot(size_t slot, const void *value) {
+/* The hash of an element: of its words, or the program's `hash`, which the interpreter runs. */
+static uint64_t torb_machine_element_hash(const torb_contextual_element *contextual, const void *value) {
+  const torb_machine_descriptor *self = (const torb_machine_descriptor *)contextual;
   torb_machine_request request;
-  if (torb_machine_element_hashes[slot] < 0) {
-    return torb_machine_hash_words(value, torb_machine_element_words[slot]);
+  if (self->hash < 0) {
+    return torb_machine_hash_words(value, self->words);
   }
   request.kind = TORB_REQUEST_HASH;
-  request.chunk = torb_machine_element_hashes[slot];
+  request.chunk = self->hash;
   request.first = (int64_t)(intptr_t)value;
   request.second = 0;
-  request.words = torb_machine_element_words[slot];
+  request.words = self->words;
   return (uint64_t)torb_machine_call_back((int64_t)(intptr_t)&request);
 }
 
-/* Four callbacks per slot; the slot is the index of the shape they walk and of the words they compare. */
-static void torb_machine_retain_element_0(void *element) {
-  torb_machine_retain_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[0]));
-}
-static void torb_machine_release_element_0(void *element) {
-  torb_machine_release_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[0]));
-}
-static bool torb_machine_equal_element_0(const void *first, const void *second) {
-  return torb_machine_equal_slot(0, first, second);
-}
-static uint64_t torb_machine_hash_element_0(const void *value) {
-  return torb_machine_hash_slot(0, value);
-}
-static void torb_machine_retain_element_1(void *element) {
-  torb_machine_retain_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[1]));
-}
-static void torb_machine_release_element_1(void *element) {
-  torb_machine_release_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[1]));
-}
-static bool torb_machine_equal_element_1(const void *first, const void *second) {
-  return torb_machine_equal_slot(1, first, second);
-}
-static uint64_t torb_machine_hash_element_1(const void *value) {
-  return torb_machine_hash_slot(1, value);
-}
-static void torb_machine_retain_element_2(void *element) {
-  torb_machine_retain_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[2]));
-}
-static void torb_machine_release_element_2(void *element) {
-  torb_machine_release_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[2]));
-}
-static bool torb_machine_equal_element_2(const void *first, const void *second) {
-  return torb_machine_equal_slot(2, first, second);
-}
-static uint64_t torb_machine_hash_element_2(const void *value) {
-  return torb_machine_hash_slot(2, value);
-}
-static void torb_machine_retain_element_3(void *element) {
-  torb_machine_retain_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[3]));
-}
-static void torb_machine_release_element_3(void *element) {
-  torb_machine_release_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[3]));
-}
-static bool torb_machine_equal_element_3(const void *first, const void *second) {
-  return torb_machine_equal_slot(3, first, second);
-}
-static uint64_t torb_machine_hash_element_3(const void *value) {
-  return torb_machine_hash_slot(3, value);
-}
-static void torb_machine_retain_element_4(void *element) {
-  torb_machine_retain_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[4]));
-}
-static void torb_machine_release_element_4(void *element) {
-  torb_machine_release_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[4]));
-}
-static bool torb_machine_equal_element_4(const void *first, const void *second) {
-  return torb_machine_equal_slot(4, first, second);
-}
-static uint64_t torb_machine_hash_element_4(const void *value) {
-  return torb_machine_hash_slot(4, value);
-}
-static void torb_machine_retain_element_5(void *element) {
-  torb_machine_retain_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[5]));
-}
-static void torb_machine_release_element_5(void *element) {
-  torb_machine_release_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[5]));
-}
-static bool torb_machine_equal_element_5(const void *first, const void *second) {
-  return torb_machine_equal_slot(5, first, second);
-}
-static uint64_t torb_machine_hash_element_5(const void *value) {
-  return torb_machine_hash_slot(5, value);
-}
-static void torb_machine_retain_element_6(void *element) {
-  torb_machine_retain_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[6]));
-}
-static void torb_machine_release_element_6(void *element) {
-  torb_machine_release_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[6]));
-}
-static bool torb_machine_equal_element_6(const void *first, const void *second) {
-  return torb_machine_equal_slot(6, first, second);
-}
-static uint64_t torb_machine_hash_element_6(const void *value) {
-  return torb_machine_hash_slot(6, value);
-}
-static void torb_machine_retain_element_7(void *element) {
-  torb_machine_retain_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[7]));
-}
-static void torb_machine_release_element_7(void *element) {
-  torb_machine_release_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[7]));
-}
-static bool torb_machine_equal_element_7(const void *first, const void *second) {
-  return torb_machine_equal_slot(7, first, second);
-}
-static uint64_t torb_machine_hash_element_7(const void *value) {
-  return torb_machine_hash_slot(7, value);
-}
-static void torb_machine_retain_element_8(void *element) {
-  torb_machine_retain_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[8]));
-}
-static void torb_machine_release_element_8(void *element) {
-  torb_machine_release_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[8]));
-}
-static bool torb_machine_equal_element_8(const void *first, const void *second) {
-  return torb_machine_equal_slot(8, first, second);
-}
-static uint64_t torb_machine_hash_element_8(const void *value) {
-  return torb_machine_hash_slot(8, value);
-}
-static void torb_machine_retain_element_9(void *element) {
-  torb_machine_retain_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[9]));
-}
-static void torb_machine_release_element_9(void *element) {
-  torb_machine_release_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[9]));
-}
-static bool torb_machine_equal_element_9(const void *first, const void *second) {
-  return torb_machine_equal_slot(9, first, second);
-}
-static uint64_t torb_machine_hash_element_9(const void *value) {
-  return torb_machine_hash_slot(9, value);
-}
-static void torb_machine_retain_element_10(void *element) {
-  torb_machine_retain_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[10]));
-}
-static void torb_machine_release_element_10(void *element) {
-  torb_machine_release_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[10]));
-}
-static bool torb_machine_equal_element_10(const void *first, const void *second) {
-  return torb_machine_equal_slot(10, first, second);
-}
-static uint64_t torb_machine_hash_element_10(const void *value) {
-  return torb_machine_hash_slot(10, value);
-}
-static void torb_machine_retain_element_11(void *element) {
-  torb_machine_retain_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[11]));
-}
-static void torb_machine_release_element_11(void *element) {
-  torb_machine_release_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[11]));
-}
-static bool torb_machine_equal_element_11(const void *first, const void *second) {
-  return torb_machine_equal_slot(11, first, second);
-}
-static uint64_t torb_machine_hash_element_11(const void *value) {
-  return torb_machine_hash_slot(11, value);
-}
-static void torb_machine_retain_element_12(void *element) {
-  torb_machine_retain_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[12]));
-}
-static void torb_machine_release_element_12(void *element) {
-  torb_machine_release_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[12]));
-}
-static bool torb_machine_equal_element_12(const void *first, const void *second) {
-  return torb_machine_equal_slot(12, first, second);
-}
-static uint64_t torb_machine_hash_element_12(const void *value) {
-  return torb_machine_hash_slot(12, value);
-}
-static void torb_machine_retain_element_13(void *element) {
-  torb_machine_retain_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[13]));
-}
-static void torb_machine_release_element_13(void *element) {
-  torb_machine_release_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[13]));
-}
-static bool torb_machine_equal_element_13(const void *first, const void *second) {
-  return torb_machine_equal_slot(13, first, second);
-}
-static uint64_t torb_machine_hash_element_13(const void *value) {
-  return torb_machine_hash_slot(13, value);
-}
-static void torb_machine_retain_element_14(void *element) {
-  torb_machine_retain_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[14]));
-}
-static void torb_machine_release_element_14(void *element) {
-  torb_machine_release_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[14]));
-}
-static bool torb_machine_equal_element_14(const void *first, const void *second) {
-  return torb_machine_equal_slot(14, first, second);
-}
-static uint64_t torb_machine_hash_element_14(const void *value) {
-  return torb_machine_hash_slot(14, value);
-}
-static void torb_machine_retain_element_15(void *element) {
-  torb_machine_retain_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[15]));
-}
-static void torb_machine_release_element_15(void *element) {
-  torb_machine_release_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[15]));
-}
-static bool torb_machine_equal_element_15(const void *first, const void *second) {
-  return torb_machine_equal_slot(15, first, second);
-}
-static uint64_t torb_machine_hash_element_15(const void *value) {
-  return torb_machine_hash_slot(15, value);
-}
-static void torb_machine_retain_element_16(void *element) {
-  torb_machine_retain_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[16]));
-}
-static void torb_machine_release_element_16(void *element) {
-  torb_machine_release_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[16]));
-}
-static bool torb_machine_equal_element_16(const void *first, const void *second) {
-  return torb_machine_equal_slot(16, first, second);
-}
-static uint64_t torb_machine_hash_element_16(const void *value) {
-  return torb_machine_hash_slot(16, value);
-}
-static void torb_machine_retain_element_17(void *element) {
-  torb_machine_retain_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[17]));
-}
-static void torb_machine_release_element_17(void *element) {
-  torb_machine_release_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[17]));
-}
-static bool torb_machine_equal_element_17(const void *first, const void *second) {
-  return torb_machine_equal_slot(17, first, second);
-}
-static uint64_t torb_machine_hash_element_17(const void *value) {
-  return torb_machine_hash_slot(17, value);
-}
-static void torb_machine_retain_element_18(void *element) {
-  torb_machine_retain_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[18]));
-}
-static void torb_machine_release_element_18(void *element) {
-  torb_machine_release_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[18]));
-}
-static bool torb_machine_equal_element_18(const void *first, const void *second) {
-  return torb_machine_equal_slot(18, first, second);
-}
-static uint64_t torb_machine_hash_element_18(const void *value) {
-  return torb_machine_hash_slot(18, value);
-}
-static void torb_machine_retain_element_19(void *element) {
-  torb_machine_retain_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[19]));
-}
-static void torb_machine_release_element_19(void *element) {
-  torb_machine_release_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[19]));
-}
-static bool torb_machine_equal_element_19(const void *first, const void *second) {
-  return torb_machine_equal_slot(19, first, second);
-}
-static uint64_t torb_machine_hash_element_19(const void *value) {
-  return torb_machine_hash_slot(19, value);
-}
-static void torb_machine_retain_element_20(void *element) {
-  torb_machine_retain_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[20]));
-}
-static void torb_machine_release_element_20(void *element) {
-  torb_machine_release_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[20]));
-}
-static bool torb_machine_equal_element_20(const void *first, const void *second) {
-  return torb_machine_equal_slot(20, first, second);
-}
-static uint64_t torb_machine_hash_element_20(const void *value) {
-  return torb_machine_hash_slot(20, value);
-}
-static void torb_machine_retain_element_21(void *element) {
-  torb_machine_retain_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[21]));
-}
-static void torb_machine_release_element_21(void *element) {
-  torb_machine_release_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[21]));
-}
-static bool torb_machine_equal_element_21(const void *first, const void *second) {
-  return torb_machine_equal_slot(21, first, second);
-}
-static uint64_t torb_machine_hash_element_21(const void *value) {
-  return torb_machine_hash_slot(21, value);
-}
-static void torb_machine_retain_element_22(void *element) {
-  torb_machine_retain_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[22]));
-}
-static void torb_machine_release_element_22(void *element) {
-  torb_machine_release_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[22]));
-}
-static bool torb_machine_equal_element_22(const void *first, const void *second) {
-  return torb_machine_equal_slot(22, first, second);
-}
-static uint64_t torb_machine_hash_element_22(const void *value) {
-  return torb_machine_hash_slot(22, value);
-}
-static void torb_machine_retain_element_23(void *element) {
-  torb_machine_retain_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[23]));
-}
-static void torb_machine_release_element_23(void *element) {
-  torb_machine_release_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[23]));
-}
-static bool torb_machine_equal_element_23(const void *first, const void *second) {
-  return torb_machine_equal_slot(23, first, second);
-}
-static uint64_t torb_machine_hash_element_23(const void *value) {
-  return torb_machine_hash_slot(23, value);
-}
-static void torb_machine_retain_element_24(void *element) {
-  torb_machine_retain_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[24]));
-}
-static void torb_machine_release_element_24(void *element) {
-  torb_machine_release_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[24]));
-}
-static bool torb_machine_equal_element_24(const void *first, const void *second) {
-  return torb_machine_equal_slot(24, first, second);
-}
-static uint64_t torb_machine_hash_element_24(const void *value) {
-  return torb_machine_hash_slot(24, value);
-}
-static void torb_machine_retain_element_25(void *element) {
-  torb_machine_retain_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[25]));
-}
-static void torb_machine_release_element_25(void *element) {
-  torb_machine_release_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[25]));
-}
-static bool torb_machine_equal_element_25(const void *first, const void *second) {
-  return torb_machine_equal_slot(25, first, second);
-}
-static uint64_t torb_machine_hash_element_25(const void *value) {
-  return torb_machine_hash_slot(25, value);
-}
-static void torb_machine_retain_element_26(void *element) {
-  torb_machine_retain_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[26]));
-}
-static void torb_machine_release_element_26(void *element) {
-  torb_machine_release_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[26]));
-}
-static bool torb_machine_equal_element_26(const void *first, const void *second) {
-  return torb_machine_equal_slot(26, first, second);
-}
-static uint64_t torb_machine_hash_element_26(const void *value) {
-  return torb_machine_hash_slot(26, value);
-}
-static void torb_machine_retain_element_27(void *element) {
-  torb_machine_retain_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[27]));
-}
-static void torb_machine_release_element_27(void *element) {
-  torb_machine_release_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[27]));
-}
-static bool torb_machine_equal_element_27(const void *first, const void *second) {
-  return torb_machine_equal_slot(27, first, second);
-}
-static uint64_t torb_machine_hash_element_27(const void *value) {
-  return torb_machine_hash_slot(27, value);
-}
-static void torb_machine_retain_element_28(void *element) {
-  torb_machine_retain_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[28]));
-}
-static void torb_machine_release_element_28(void *element) {
-  torb_machine_release_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[28]));
-}
-static bool torb_machine_equal_element_28(const void *first, const void *second) {
-  return torb_machine_equal_slot(28, first, second);
-}
-static uint64_t torb_machine_hash_element_28(const void *value) {
-  return torb_machine_hash_slot(28, value);
-}
-static void torb_machine_retain_element_29(void *element) {
-  torb_machine_retain_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[29]));
-}
-static void torb_machine_release_element_29(void *element) {
-  torb_machine_release_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[29]));
-}
-static bool torb_machine_equal_element_29(const void *first, const void *second) {
-  return torb_machine_equal_slot(29, first, second);
-}
-static uint64_t torb_machine_hash_element_29(const void *value) {
-  return torb_machine_hash_slot(29, value);
-}
-static void torb_machine_retain_element_30(void *element) {
-  torb_machine_retain_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[30]));
-}
-static void torb_machine_release_element_30(void *element) {
-  torb_machine_release_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[30]));
-}
-static bool torb_machine_equal_element_30(const void *first, const void *second) {
-  return torb_machine_equal_slot(30, first, second);
-}
-static uint64_t torb_machine_hash_element_30(const void *value) {
-  return torb_machine_hash_slot(30, value);
-}
-static void torb_machine_retain_element_31(void *element) {
-  torb_machine_retain_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[31]));
-}
-static void torb_machine_release_element_31(void *element) {
-  torb_machine_release_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[31]));
-}
-static bool torb_machine_equal_element_31(const void *first, const void *second) {
-  return torb_machine_equal_slot(31, first, second);
-}
-static uint64_t torb_machine_hash_element_31(const void *value) {
-  return torb_machine_hash_slot(31, value);
-}
-static void torb_machine_retain_element_32(void *element) {
-  torb_machine_retain_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[32]));
-}
-static void torb_machine_release_element_32(void *element) {
-  torb_machine_release_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[32]));
-}
-static bool torb_machine_equal_element_32(const void *first, const void *second) {
-  return torb_machine_equal_slot(32, first, second);
-}
-static uint64_t torb_machine_hash_element_32(const void *value) {
-  return torb_machine_hash_slot(32, value);
-}
-static void torb_machine_retain_element_33(void *element) {
-  torb_machine_retain_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[33]));
-}
-static void torb_machine_release_element_33(void *element) {
-  torb_machine_release_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[33]));
-}
-static bool torb_machine_equal_element_33(const void *first, const void *second) {
-  return torb_machine_equal_slot(33, first, second);
-}
-static uint64_t torb_machine_hash_element_33(const void *value) {
-  return torb_machine_hash_slot(33, value);
-}
-static void torb_machine_retain_element_34(void *element) {
-  torb_machine_retain_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[34]));
-}
-static void torb_machine_release_element_34(void *element) {
-  torb_machine_release_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[34]));
-}
-static bool torb_machine_equal_element_34(const void *first, const void *second) {
-  return torb_machine_equal_slot(34, first, second);
-}
-static uint64_t torb_machine_hash_element_34(const void *value) {
-  return torb_machine_hash_slot(34, value);
-}
-static void torb_machine_retain_element_35(void *element) {
-  torb_machine_retain_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[35]));
-}
-static void torb_machine_release_element_35(void *element) {
-  torb_machine_release_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[35]));
-}
-static bool torb_machine_equal_element_35(const void *first, const void *second) {
-  return torb_machine_equal_slot(35, first, second);
-}
-static uint64_t torb_machine_hash_element_35(const void *value) {
-  return torb_machine_hash_slot(35, value);
-}
-static void torb_machine_retain_element_36(void *element) {
-  torb_machine_retain_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[36]));
-}
-static void torb_machine_release_element_36(void *element) {
-  torb_machine_release_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[36]));
-}
-static bool torb_machine_equal_element_36(const void *first, const void *second) {
-  return torb_machine_equal_slot(36, first, second);
-}
-static uint64_t torb_machine_hash_element_36(const void *value) {
-  return torb_machine_hash_slot(36, value);
-}
-static void torb_machine_retain_element_37(void *element) {
-  torb_machine_retain_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[37]));
-}
-static void torb_machine_release_element_37(void *element) {
-  torb_machine_release_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[37]));
-}
-static bool torb_machine_equal_element_37(const void *first, const void *second) {
-  return torb_machine_equal_slot(37, first, second);
-}
-static uint64_t torb_machine_hash_element_37(const void *value) {
-  return torb_machine_hash_slot(37, value);
-}
-static void torb_machine_retain_element_38(void *element) {
-  torb_machine_retain_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[38]));
-}
-static void torb_machine_release_element_38(void *element) {
-  torb_machine_release_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[38]));
-}
-static bool torb_machine_equal_element_38(const void *first, const void *second) {
-  return torb_machine_equal_slot(38, first, second);
-}
-static uint64_t torb_machine_hash_element_38(const void *value) {
-  return torb_machine_hash_slot(38, value);
-}
-static void torb_machine_retain_element_39(void *element) {
-  torb_machine_retain_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[39]));
-}
-static void torb_machine_release_element_39(void *element) {
-  torb_machine_release_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[39]));
-}
-static bool torb_machine_equal_element_39(const void *first, const void *second) {
-  return torb_machine_equal_slot(39, first, second);
-}
-static uint64_t torb_machine_hash_element_39(const void *value) {
-  return torb_machine_hash_slot(39, value);
-}
-static void torb_machine_retain_element_40(void *element) {
-  torb_machine_retain_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[40]));
-}
-static void torb_machine_release_element_40(void *element) {
-  torb_machine_release_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[40]));
-}
-static bool torb_machine_equal_element_40(const void *first, const void *second) {
-  return torb_machine_equal_slot(40, first, second);
-}
-static uint64_t torb_machine_hash_element_40(const void *value) {
-  return torb_machine_hash_slot(40, value);
-}
-static void torb_machine_retain_element_41(void *element) {
-  torb_machine_retain_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[41]));
-}
-static void torb_machine_release_element_41(void *element) {
-  torb_machine_release_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[41]));
-}
-static bool torb_machine_equal_element_41(const void *first, const void *second) {
-  return torb_machine_equal_slot(41, first, second);
-}
-static uint64_t torb_machine_hash_element_41(const void *value) {
-  return torb_machine_hash_slot(41, value);
-}
-static void torb_machine_retain_element_42(void *element) {
-  torb_machine_retain_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[42]));
-}
-static void torb_machine_release_element_42(void *element) {
-  torb_machine_release_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[42]));
-}
-static bool torb_machine_equal_element_42(const void *first, const void *second) {
-  return torb_machine_equal_slot(42, first, second);
-}
-static uint64_t torb_machine_hash_element_42(const void *value) {
-  return torb_machine_hash_slot(42, value);
-}
-static void torb_machine_retain_element_43(void *element) {
-  torb_machine_retain_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[43]));
-}
-static void torb_machine_release_element_43(void *element) {
-  torb_machine_release_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[43]));
-}
-static bool torb_machine_equal_element_43(const void *first, const void *second) {
-  return torb_machine_equal_slot(43, first, second);
-}
-static uint64_t torb_machine_hash_element_43(const void *value) {
-  return torb_machine_hash_slot(43, value);
-}
-static void torb_machine_retain_element_44(void *element) {
-  torb_machine_retain_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[44]));
-}
-static void torb_machine_release_element_44(void *element) {
-  torb_machine_release_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[44]));
-}
-static bool torb_machine_equal_element_44(const void *first, const void *second) {
-  return torb_machine_equal_slot(44, first, second);
-}
-static uint64_t torb_machine_hash_element_44(const void *value) {
-  return torb_machine_hash_slot(44, value);
-}
-static void torb_machine_retain_element_45(void *element) {
-  torb_machine_retain_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[45]));
-}
-static void torb_machine_release_element_45(void *element) {
-  torb_machine_release_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[45]));
-}
-static bool torb_machine_equal_element_45(const void *first, const void *second) {
-  return torb_machine_equal_slot(45, first, second);
-}
-static uint64_t torb_machine_hash_element_45(const void *value) {
-  return torb_machine_hash_slot(45, value);
-}
-static void torb_machine_retain_element_46(void *element) {
-  torb_machine_retain_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[46]));
-}
-static void torb_machine_release_element_46(void *element) {
-  torb_machine_release_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[46]));
-}
-static bool torb_machine_equal_element_46(const void *first, const void *second) {
-  return torb_machine_equal_slot(46, first, second);
-}
-static uint64_t torb_machine_hash_element_46(const void *value) {
-  return torb_machine_hash_slot(46, value);
-}
-static void torb_machine_retain_element_47(void *element) {
-  torb_machine_retain_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[47]));
-}
-static void torb_machine_release_element_47(void *element) {
-  torb_machine_release_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[47]));
-}
-static bool torb_machine_equal_element_47(const void *first, const void *second) {
-  return torb_machine_equal_slot(47, first, second);
-}
-static uint64_t torb_machine_hash_element_47(const void *value) {
-  return torb_machine_hash_slot(47, value);
-}
-static void torb_machine_retain_element_48(void *element) {
-  torb_machine_retain_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[48]));
-}
-static void torb_machine_release_element_48(void *element) {
-  torb_machine_release_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[48]));
-}
-static bool torb_machine_equal_element_48(const void *first, const void *second) {
-  return torb_machine_equal_slot(48, first, second);
-}
-static uint64_t torb_machine_hash_element_48(const void *value) {
-  return torb_machine_hash_slot(48, value);
-}
-static void torb_machine_retain_element_49(void *element) {
-  torb_machine_retain_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[49]));
-}
-static void torb_machine_release_element_49(void *element) {
-  torb_machine_release_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[49]));
-}
-static bool torb_machine_equal_element_49(const void *first, const void *second) {
-  return torb_machine_equal_slot(49, first, second);
-}
-static uint64_t torb_machine_hash_element_49(const void *value) {
-  return torb_machine_hash_slot(49, value);
-}
-static void torb_machine_retain_element_50(void *element) {
-  torb_machine_retain_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[50]));
-}
-static void torb_machine_release_element_50(void *element) {
-  torb_machine_release_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[50]));
-}
-static bool torb_machine_equal_element_50(const void *first, const void *second) {
-  return torb_machine_equal_slot(50, first, second);
-}
-static uint64_t torb_machine_hash_element_50(const void *value) {
-  return torb_machine_hash_slot(50, value);
-}
-static void torb_machine_retain_element_51(void *element) {
-  torb_machine_retain_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[51]));
-}
-static void torb_machine_release_element_51(void *element) {
-  torb_machine_release_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[51]));
-}
-static bool torb_machine_equal_element_51(const void *first, const void *second) {
-  return torb_machine_equal_slot(51, first, second);
-}
-static uint64_t torb_machine_hash_element_51(const void *value) {
-  return torb_machine_hash_slot(51, value);
-}
-static void torb_machine_retain_element_52(void *element) {
-  torb_machine_retain_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[52]));
-}
-static void torb_machine_release_element_52(void *element) {
-  torb_machine_release_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[52]));
-}
-static bool torb_machine_equal_element_52(const void *first, const void *second) {
-  return torb_machine_equal_slot(52, first, second);
-}
-static uint64_t torb_machine_hash_element_52(const void *value) {
-  return torb_machine_hash_slot(52, value);
-}
-static void torb_machine_retain_element_53(void *element) {
-  torb_machine_retain_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[53]));
-}
-static void torb_machine_release_element_53(void *element) {
-  torb_machine_release_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[53]));
-}
-static bool torb_machine_equal_element_53(const void *first, const void *second) {
-  return torb_machine_equal_slot(53, first, second);
-}
-static uint64_t torb_machine_hash_element_53(const void *value) {
-  return torb_machine_hash_slot(53, value);
-}
-static void torb_machine_retain_element_54(void *element) {
-  torb_machine_retain_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[54]));
-}
-static void torb_machine_release_element_54(void *element) {
-  torb_machine_release_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[54]));
-}
-static bool torb_machine_equal_element_54(const void *first, const void *second) {
-  return torb_machine_equal_slot(54, first, second);
-}
-static uint64_t torb_machine_hash_element_54(const void *value) {
-  return torb_machine_hash_slot(54, value);
-}
-static void torb_machine_retain_element_55(void *element) {
-  torb_machine_retain_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[55]));
-}
-static void torb_machine_release_element_55(void *element) {
-  torb_machine_release_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[55]));
-}
-static bool torb_machine_equal_element_55(const void *first, const void *second) {
-  return torb_machine_equal_slot(55, first, second);
-}
-static uint64_t torb_machine_hash_element_55(const void *value) {
-  return torb_machine_hash_slot(55, value);
-}
-static void torb_machine_retain_element_56(void *element) {
-  torb_machine_retain_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[56]));
-}
-static void torb_machine_release_element_56(void *element) {
-  torb_machine_release_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[56]));
-}
-static bool torb_machine_equal_element_56(const void *first, const void *second) {
-  return torb_machine_equal_slot(56, first, second);
-}
-static uint64_t torb_machine_hash_element_56(const void *value) {
-  return torb_machine_hash_slot(56, value);
-}
-static void torb_machine_retain_element_57(void *element) {
-  torb_machine_retain_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[57]));
-}
-static void torb_machine_release_element_57(void *element) {
-  torb_machine_release_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[57]));
-}
-static bool torb_machine_equal_element_57(const void *first, const void *second) {
-  return torb_machine_equal_slot(57, first, second);
-}
-static uint64_t torb_machine_hash_element_57(const void *value) {
-  return torb_machine_hash_slot(57, value);
-}
-static void torb_machine_retain_element_58(void *element) {
-  torb_machine_retain_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[58]));
-}
-static void torb_machine_release_element_58(void *element) {
-  torb_machine_release_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[58]));
-}
-static bool torb_machine_equal_element_58(const void *first, const void *second) {
-  return torb_machine_equal_slot(58, first, second);
-}
-static uint64_t torb_machine_hash_element_58(const void *value) {
-  return torb_machine_hash_slot(58, value);
-}
-static void torb_machine_retain_element_59(void *element) {
-  torb_machine_retain_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[59]));
-}
-static void torb_machine_release_element_59(void *element) {
-  torb_machine_release_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[59]));
-}
-static bool torb_machine_equal_element_59(const void *first, const void *second) {
-  return torb_machine_equal_slot(59, first, second);
-}
-static uint64_t torb_machine_hash_element_59(const void *value) {
-  return torb_machine_hash_slot(59, value);
-}
-static void torb_machine_retain_element_60(void *element) {
-  torb_machine_retain_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[60]));
-}
-static void torb_machine_release_element_60(void *element) {
-  torb_machine_release_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[60]));
-}
-static bool torb_machine_equal_element_60(const void *first, const void *second) {
-  return torb_machine_equal_slot(60, first, second);
-}
-static uint64_t torb_machine_hash_element_60(const void *value) {
-  return torb_machine_hash_slot(60, value);
-}
-static void torb_machine_retain_element_61(void *element) {
-  torb_machine_retain_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[61]));
-}
-static void torb_machine_release_element_61(void *element) {
-  torb_machine_release_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[61]));
-}
-static bool torb_machine_equal_element_61(const void *first, const void *second) {
-  return torb_machine_equal_slot(61, first, second);
-}
-static uint64_t torb_machine_hash_element_61(const void *value) {
-  return torb_machine_hash_slot(61, value);
-}
-static void torb_machine_retain_element_62(void *element) {
-  torb_machine_retain_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[62]));
-}
-static void torb_machine_release_element_62(void *element) {
-  torb_machine_release_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[62]));
-}
-static bool torb_machine_equal_element_62(const void *first, const void *second) {
-  return torb_machine_equal_slot(62, first, second);
-}
-static uint64_t torb_machine_hash_element_62(const void *value) {
-  return torb_machine_hash_slot(62, value);
-}
-static void torb_machine_retain_element_63(void *element) {
-  torb_machine_retain_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[63]));
-}
-static void torb_machine_release_element_63(void *element) {
-  torb_machine_release_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[63]));
-}
-static bool torb_machine_equal_element_63(const void *first, const void *second) {
-  return torb_machine_equal_slot(63, first, second);
-}
-static uint64_t torb_machine_hash_element_63(const void *value) {
-  return torb_machine_hash_slot(63, value);
-}
-
-typedef struct torb_machine_element_callbacks {
-  void (*retain)(void *);
-  void (*release)(void *);
-  bool (*equals)(const void *, const void *);
-  uint64_t (*hash)(const void *);
-} torb_machine_element_callbacks;
-
-static const torb_machine_element_callbacks torb_machine_element_pool[TORB_MACHINE_ELEMENT_SLOTS] = {
-  { torb_machine_retain_element_0, torb_machine_release_element_0, torb_machine_equal_element_0,
-    torb_machine_hash_element_0 },
-  { torb_machine_retain_element_1, torb_machine_release_element_1, torb_machine_equal_element_1,
-    torb_machine_hash_element_1 },
-  { torb_machine_retain_element_2, torb_machine_release_element_2, torb_machine_equal_element_2,
-    torb_machine_hash_element_2 },
-  { torb_machine_retain_element_3, torb_machine_release_element_3, torb_machine_equal_element_3,
-    torb_machine_hash_element_3 },
-  { torb_machine_retain_element_4, torb_machine_release_element_4, torb_machine_equal_element_4,
-    torb_machine_hash_element_4 },
-  { torb_machine_retain_element_5, torb_machine_release_element_5, torb_machine_equal_element_5,
-    torb_machine_hash_element_5 },
-  { torb_machine_retain_element_6, torb_machine_release_element_6, torb_machine_equal_element_6,
-    torb_machine_hash_element_6 },
-  { torb_machine_retain_element_7, torb_machine_release_element_7, torb_machine_equal_element_7,
-    torb_machine_hash_element_7 },
-  { torb_machine_retain_element_8, torb_machine_release_element_8, torb_machine_equal_element_8,
-    torb_machine_hash_element_8 },
-  { torb_machine_retain_element_9, torb_machine_release_element_9, torb_machine_equal_element_9,
-    torb_machine_hash_element_9 },
-  { torb_machine_retain_element_10, torb_machine_release_element_10, torb_machine_equal_element_10,
-    torb_machine_hash_element_10 },
-  { torb_machine_retain_element_11, torb_machine_release_element_11, torb_machine_equal_element_11,
-    torb_machine_hash_element_11 },
-  { torb_machine_retain_element_12, torb_machine_release_element_12, torb_machine_equal_element_12,
-    torb_machine_hash_element_12 },
-  { torb_machine_retain_element_13, torb_machine_release_element_13, torb_machine_equal_element_13,
-    torb_machine_hash_element_13 },
-  { torb_machine_retain_element_14, torb_machine_release_element_14, torb_machine_equal_element_14,
-    torb_machine_hash_element_14 },
-  { torb_machine_retain_element_15, torb_machine_release_element_15, torb_machine_equal_element_15,
-    torb_machine_hash_element_15 },
-  { torb_machine_retain_element_16, torb_machine_release_element_16, torb_machine_equal_element_16,
-    torb_machine_hash_element_16 },
-  { torb_machine_retain_element_17, torb_machine_release_element_17, torb_machine_equal_element_17,
-    torb_machine_hash_element_17 },
-  { torb_machine_retain_element_18, torb_machine_release_element_18, torb_machine_equal_element_18,
-    torb_machine_hash_element_18 },
-  { torb_machine_retain_element_19, torb_machine_release_element_19, torb_machine_equal_element_19,
-    torb_machine_hash_element_19 },
-  { torb_machine_retain_element_20, torb_machine_release_element_20, torb_machine_equal_element_20,
-    torb_machine_hash_element_20 },
-  { torb_machine_retain_element_21, torb_machine_release_element_21, torb_machine_equal_element_21,
-    torb_machine_hash_element_21 },
-  { torb_machine_retain_element_22, torb_machine_release_element_22, torb_machine_equal_element_22,
-    torb_machine_hash_element_22 },
-  { torb_machine_retain_element_23, torb_machine_release_element_23, torb_machine_equal_element_23,
-    torb_machine_hash_element_23 },
-  { torb_machine_retain_element_24, torb_machine_release_element_24, torb_machine_equal_element_24,
-    torb_machine_hash_element_24 },
-  { torb_machine_retain_element_25, torb_machine_release_element_25, torb_machine_equal_element_25,
-    torb_machine_hash_element_25 },
-  { torb_machine_retain_element_26, torb_machine_release_element_26, torb_machine_equal_element_26,
-    torb_machine_hash_element_26 },
-  { torb_machine_retain_element_27, torb_machine_release_element_27, torb_machine_equal_element_27,
-    torb_machine_hash_element_27 },
-  { torb_machine_retain_element_28, torb_machine_release_element_28, torb_machine_equal_element_28,
-    torb_machine_hash_element_28 },
-  { torb_machine_retain_element_29, torb_machine_release_element_29, torb_machine_equal_element_29,
-    torb_machine_hash_element_29 },
-  { torb_machine_retain_element_30, torb_machine_release_element_30, torb_machine_equal_element_30,
-    torb_machine_hash_element_30 },
-  { torb_machine_retain_element_31, torb_machine_release_element_31, torb_machine_equal_element_31,
-    torb_machine_hash_element_31 },
-  { torb_machine_retain_element_32, torb_machine_release_element_32, torb_machine_equal_element_32,
-    torb_machine_hash_element_32 },
-  { torb_machine_retain_element_33, torb_machine_release_element_33, torb_machine_equal_element_33,
-    torb_machine_hash_element_33 },
-  { torb_machine_retain_element_34, torb_machine_release_element_34, torb_machine_equal_element_34,
-    torb_machine_hash_element_34 },
-  { torb_machine_retain_element_35, torb_machine_release_element_35, torb_machine_equal_element_35,
-    torb_machine_hash_element_35 },
-  { torb_machine_retain_element_36, torb_machine_release_element_36, torb_machine_equal_element_36,
-    torb_machine_hash_element_36 },
-  { torb_machine_retain_element_37, torb_machine_release_element_37, torb_machine_equal_element_37,
-    torb_machine_hash_element_37 },
-  { torb_machine_retain_element_38, torb_machine_release_element_38, torb_machine_equal_element_38,
-    torb_machine_hash_element_38 },
-  { torb_machine_retain_element_39, torb_machine_release_element_39, torb_machine_equal_element_39,
-    torb_machine_hash_element_39 },
-  { torb_machine_retain_element_40, torb_machine_release_element_40, torb_machine_equal_element_40,
-    torb_machine_hash_element_40 },
-  { torb_machine_retain_element_41, torb_machine_release_element_41, torb_machine_equal_element_41,
-    torb_machine_hash_element_41 },
-  { torb_machine_retain_element_42, torb_machine_release_element_42, torb_machine_equal_element_42,
-    torb_machine_hash_element_42 },
-  { torb_machine_retain_element_43, torb_machine_release_element_43, torb_machine_equal_element_43,
-    torb_machine_hash_element_43 },
-  { torb_machine_retain_element_44, torb_machine_release_element_44, torb_machine_equal_element_44,
-    torb_machine_hash_element_44 },
-  { torb_machine_retain_element_45, torb_machine_release_element_45, torb_machine_equal_element_45,
-    torb_machine_hash_element_45 },
-  { torb_machine_retain_element_46, torb_machine_release_element_46, torb_machine_equal_element_46,
-    torb_machine_hash_element_46 },
-  { torb_machine_retain_element_47, torb_machine_release_element_47, torb_machine_equal_element_47,
-    torb_machine_hash_element_47 },
-  { torb_machine_retain_element_48, torb_machine_release_element_48, torb_machine_equal_element_48,
-    torb_machine_hash_element_48 },
-  { torb_machine_retain_element_49, torb_machine_release_element_49, torb_machine_equal_element_49,
-    torb_machine_hash_element_49 },
-  { torb_machine_retain_element_50, torb_machine_release_element_50, torb_machine_equal_element_50,
-    torb_machine_hash_element_50 },
-  { torb_machine_retain_element_51, torb_machine_release_element_51, torb_machine_equal_element_51,
-    torb_machine_hash_element_51 },
-  { torb_machine_retain_element_52, torb_machine_release_element_52, torb_machine_equal_element_52,
-    torb_machine_hash_element_52 },
-  { torb_machine_retain_element_53, torb_machine_release_element_53, torb_machine_equal_element_53,
-    torb_machine_hash_element_53 },
-  { torb_machine_retain_element_54, torb_machine_release_element_54, torb_machine_equal_element_54,
-    torb_machine_hash_element_54 },
-  { torb_machine_retain_element_55, torb_machine_release_element_55, torb_machine_equal_element_55,
-    torb_machine_hash_element_55 },
-  { torb_machine_retain_element_56, torb_machine_release_element_56, torb_machine_equal_element_56,
-    torb_machine_hash_element_56 },
-  { torb_machine_retain_element_57, torb_machine_release_element_57, torb_machine_equal_element_57,
-    torb_machine_hash_element_57 },
-  { torb_machine_retain_element_58, torb_machine_release_element_58, torb_machine_equal_element_58,
-    torb_machine_hash_element_58 },
-  { torb_machine_retain_element_59, torb_machine_release_element_59, torb_machine_equal_element_59,
-    torb_machine_hash_element_59 },
-  { torb_machine_retain_element_60, torb_machine_release_element_60, torb_machine_equal_element_60,
-    torb_machine_hash_element_60 },
-  { torb_machine_retain_element_61, torb_machine_release_element_61, torb_machine_equal_element_61,
-    torb_machine_hash_element_61 },
-  { torb_machine_retain_element_62, torb_machine_release_element_62, torb_machine_equal_element_62,
-    torb_machine_hash_element_62 },
-  { torb_machine_retain_element_63, torb_machine_release_element_63, torb_machine_equal_element_63,
-    torb_machine_hash_element_63 },
-};
-
 /*
- * A descriptor of one slot of the pool: counted by `shape` (-1 for a trivial element), and compared and hashed by the
- * program's own `equals` and `hash` where it has them, word by word where it does not - which is exact for integers,
- * `Bool`s and `Char`s, the one kind of element the bytecode hands over without them.
- *
- * A slot is shared by every element type of the same words, shape, `equals` and `hash`: the descriptors would be the
- * same, and a session of `torb repl` loads one continuation of the program per entry, each with its own element table
- * (the interpreter names the first of equal shapes, so a `List<Point>` of every entry lands in one slot).
+ * The descriptor of an element of `words` words: counted by `shape` (-1 for a trivial element), and compared and
+ * hashed by the program's own `equals` and `hash` where it has them, word by word where it does not - which is exact
+ * for integers, `Bool`s and `Char`s, the one kind of element the bytecode hands over without them.
  */
-static const torb_element *torb_machine_element_made[TORB_MACHINE_ELEMENT_SLOTS];
-
 static const torb_element *torb_machine_counted_element(int64_t words, int64_t shape, int64_t equals, int64_t hash) {
-  torb_element *made;
-  size_t slot = torb_machine_element_slots;
-  for (size_t known = 0; known < torb_machine_element_slots; known++) {
-    if (torb_machine_element_shapes[known] == shape && torb_machine_element_words[known] == words &&
-        torb_machine_element_equals[known] == equals && torb_machine_element_hashes[known] == hash) {
-      return torb_machine_element_made[known];
+  torb_machine_descriptor *made;
+  for (made = torb_machine_descriptors; made != NULL; made = made->next) {
+    if (made->shape == shape && made->words == words && made->equals == equals && made->hash == hash) {
+      return &made->contextual.element;
     }
   }
-  if (slot >= TORB_MACHINE_ELEMENT_SLOTS) {
-    torb_panic_text("internal error: the VM ran out of slots for the counted element types of the program",
-                    torb_location_unknown);
-  }
-  torb_machine_element_slots += 1;
-  torb_machine_element_shapes[slot] = shape;
-  torb_machine_element_words[slot] = words;
-  torb_machine_element_equals[slot] = equals;
-  torb_machine_element_hashes[slot] = hash;
-  made = (torb_element *)calloc(1, sizeof(torb_element));
+  made = (torb_machine_descriptor *)calloc(1, sizeof(torb_machine_descriptor));
   if (made == NULL) {
-    torb_panic_out_of_memory(sizeof(torb_element));
+    torb_panic_out_of_memory(sizeof(torb_machine_descriptor));
   }
-  made->size = (uint32_t)(words * 8);
-  made->align = 8u;
+  made->contextual.element.size = (uint32_t)(words * 8);
+  made->contextual.element.align = 8u;
   if (shape >= 0) {
-    made->retain = torb_machine_element_pool[slot].retain;
-    made->release = torb_machine_element_pool[slot].release;
+    made->contextual.element.retain = torb_contextual_retain;
+    made->contextual.element.release = torb_contextual_release;
   }
-  made->equals = torb_machine_element_pool[slot].equals;
-  made->hash = torb_machine_element_pool[slot].hash;
-  torb_machine_element_made[slot] = made;
-  return made;
+  made->contextual.element.equals = torb_contextual_equals;
+  made->contextual.element.hash = torb_contextual_hash;
+  made->contextual.retain = torb_machine_element_retain;
+  made->contextual.release = torb_machine_element_release;
+  made->contextual.equals = torb_machine_element_equals;
+  made->contextual.hash = torb_machine_element_hash;
+  made->shape = shape;
+  made->words = words;
+  made->equals = equals;
+  made->hash = hash;
+  made->next = torb_machine_descriptors;
+  torb_machine_descriptors = made;
+  return &made->contextual.element;
 }
 
 /* -------------------------------------------------------------------------------------------- narrow storage --- */
@@ -2245,114 +1353,30 @@ static const torb_element *torb_machine_narrow_element(int64_t narrow) {
  */
 static bool torb_machine_privatize_value(int64_t *value, const torb_machine_shape *shape);
 
-static bool torb_machine_privatize_element_of(size_t slot, void *element) {
-  return torb_machine_privatize_value((int64_t *)element, torb_machine_shape_at(torb_machine_element_shapes[slot]));
+static bool torb_machine_privatize_element(const void *context, void *element) {
+  const torb_machine_descriptor *self = (const torb_machine_descriptor *)context;
+  return torb_machine_privatize_value((int64_t *)element, torb_machine_shape_at(self->shape));
 }
 
-#define TORB_MACHINE_PRIVATIZER(N)                                                                                     \
-  static bool torb_machine_privatize_element_##N(void *element) {                                                      \
-    return torb_machine_privatize_element_of(N, element);                                                              \
-  }
-
-TORB_MACHINE_PRIVATIZER(0)
-TORB_MACHINE_PRIVATIZER(1)
-TORB_MACHINE_PRIVATIZER(2)
-TORB_MACHINE_PRIVATIZER(3)
-TORB_MACHINE_PRIVATIZER(4)
-TORB_MACHINE_PRIVATIZER(5)
-TORB_MACHINE_PRIVATIZER(6)
-TORB_MACHINE_PRIVATIZER(7)
-TORB_MACHINE_PRIVATIZER(8)
-TORB_MACHINE_PRIVATIZER(9)
-TORB_MACHINE_PRIVATIZER(10)
-TORB_MACHINE_PRIVATIZER(11)
-TORB_MACHINE_PRIVATIZER(12)
-TORB_MACHINE_PRIVATIZER(13)
-TORB_MACHINE_PRIVATIZER(14)
-TORB_MACHINE_PRIVATIZER(15)
-TORB_MACHINE_PRIVATIZER(16)
-TORB_MACHINE_PRIVATIZER(17)
-TORB_MACHINE_PRIVATIZER(18)
-TORB_MACHINE_PRIVATIZER(19)
-TORB_MACHINE_PRIVATIZER(20)
-TORB_MACHINE_PRIVATIZER(21)
-TORB_MACHINE_PRIVATIZER(22)
-TORB_MACHINE_PRIVATIZER(23)
-TORB_MACHINE_PRIVATIZER(24)
-TORB_MACHINE_PRIVATIZER(25)
-TORB_MACHINE_PRIVATIZER(26)
-TORB_MACHINE_PRIVATIZER(27)
-TORB_MACHINE_PRIVATIZER(28)
-TORB_MACHINE_PRIVATIZER(29)
-TORB_MACHINE_PRIVATIZER(30)
-TORB_MACHINE_PRIVATIZER(31)
-TORB_MACHINE_PRIVATIZER(32)
-TORB_MACHINE_PRIVATIZER(33)
-TORB_MACHINE_PRIVATIZER(34)
-TORB_MACHINE_PRIVATIZER(35)
-TORB_MACHINE_PRIVATIZER(36)
-TORB_MACHINE_PRIVATIZER(37)
-TORB_MACHINE_PRIVATIZER(38)
-TORB_MACHINE_PRIVATIZER(39)
-TORB_MACHINE_PRIVATIZER(40)
-TORB_MACHINE_PRIVATIZER(41)
-TORB_MACHINE_PRIVATIZER(42)
-TORB_MACHINE_PRIVATIZER(43)
-TORB_MACHINE_PRIVATIZER(44)
-TORB_MACHINE_PRIVATIZER(45)
-TORB_MACHINE_PRIVATIZER(46)
-TORB_MACHINE_PRIVATIZER(47)
-TORB_MACHINE_PRIVATIZER(48)
-TORB_MACHINE_PRIVATIZER(49)
-TORB_MACHINE_PRIVATIZER(50)
-TORB_MACHINE_PRIVATIZER(51)
-TORB_MACHINE_PRIVATIZER(52)
-TORB_MACHINE_PRIVATIZER(53)
-TORB_MACHINE_PRIVATIZER(54)
-TORB_MACHINE_PRIVATIZER(55)
-TORB_MACHINE_PRIVATIZER(56)
-TORB_MACHINE_PRIVATIZER(57)
-TORB_MACHINE_PRIVATIZER(58)
-TORB_MACHINE_PRIVATIZER(59)
-TORB_MACHINE_PRIVATIZER(60)
-TORB_MACHINE_PRIVATIZER(61)
-TORB_MACHINE_PRIVATIZER(62)
-TORB_MACHINE_PRIVATIZER(63)
-
-static const torb_privatize_function torb_machine_privatizers[TORB_MACHINE_ELEMENT_SLOTS] = {
-  torb_machine_privatize_element_0, torb_machine_privatize_element_1, torb_machine_privatize_element_2, torb_machine_privatize_element_3,
-  torb_machine_privatize_element_4, torb_machine_privatize_element_5, torb_machine_privatize_element_6, torb_machine_privatize_element_7,
-  torb_machine_privatize_element_8, torb_machine_privatize_element_9, torb_machine_privatize_element_10, torb_machine_privatize_element_11,
-  torb_machine_privatize_element_12, torb_machine_privatize_element_13, torb_machine_privatize_element_14, torb_machine_privatize_element_15,
-  torb_machine_privatize_element_16, torb_machine_privatize_element_17, torb_machine_privatize_element_18, torb_machine_privatize_element_19,
-  torb_machine_privatize_element_20, torb_machine_privatize_element_21, torb_machine_privatize_element_22, torb_machine_privatize_element_23,
-  torb_machine_privatize_element_24, torb_machine_privatize_element_25, torb_machine_privatize_element_26, torb_machine_privatize_element_27,
-  torb_machine_privatize_element_28, torb_machine_privatize_element_29, torb_machine_privatize_element_30, torb_machine_privatize_element_31,
-  torb_machine_privatize_element_32, torb_machine_privatize_element_33, torb_machine_privatize_element_34, torb_machine_privatize_element_35,
-  torb_machine_privatize_element_36, torb_machine_privatize_element_37, torb_machine_privatize_element_38, torb_machine_privatize_element_39,
-  torb_machine_privatize_element_40, torb_machine_privatize_element_41, torb_machine_privatize_element_42, torb_machine_privatize_element_43,
-  torb_machine_privatize_element_44, torb_machine_privatize_element_45, torb_machine_privatize_element_46, torb_machine_privatize_element_47,
-  torb_machine_privatize_element_48, torb_machine_privatize_element_49, torb_machine_privatize_element_50, torb_machine_privatize_element_51,
-  torb_machine_privatize_element_52, torb_machine_privatize_element_53, torb_machine_privatize_element_54, torb_machine_privatize_element_55,
-  torb_machine_privatize_element_56, torb_machine_privatize_element_57, torb_machine_privatize_element_58, torb_machine_privatize_element_59,
-  torb_machine_privatize_element_60, torb_machine_privatize_element_61, torb_machine_privatize_element_62, torb_machine_privatize_element_63,
-};
-
-/* What makes one element of a container private: nothing for a plain one, the runtime's for a text, a slot's walk. */
-static bool torb_machine_privatizer_of(const torb_element *element, torb_privatize_function *found) {
+/*
+ * What makes one element of a container private, and what it is given beside the element: nothing for a plain one,
+ * the runtime's for a text, and for a descriptor the VM made, the walk of its shape with the descriptor.
+ */
+static bool torb_machine_privatizer_of(const torb_element *element, torb_privatize_with_function *found,
+                                       const void **context) {
+  *context = element;
   if (element == &torb_element_text) {
-    *found = torb_text_privatize_place;
+    *found = torb_text_privatize_with;
     return true;
   }
   if (element->retain == NULL) {
     *found = NULL;
     return true;
   }
-  for (size_t slot = 0; slot < torb_machine_element_slots; slot++) {
-    if (torb_machine_element_made[slot] == element) {
-      *found = torb_machine_privatizers[slot];
-      return true;
-    }
+  if (element->retain == torb_contextual_retain &&
+      ((const torb_contextual_element *)(const void *)element)->retain == torb_machine_element_retain) {
+    *found = torb_machine_privatize_element;
+    return true;
   }
   return false;
 }
@@ -2364,22 +1388,27 @@ static bool torb_machine_privatize_word(int64_t *value, const torb_machine_word 
       return torb_text_privatize((torb_text *)place);
     case TORB_COUNTED_LIST: {
       torb_list *list = (torb_list *)place;
-      torb_privatize_function element;
+      torb_privatize_with_function element;
+      const void *context;
       if (list->storage == NULL) {
         return true;
       }
-      return torb_machine_privatizer_of(list->storage->element, &element) && torb_list_privatize(list, element);
+      return torb_machine_privatizer_of(list->storage->element, &element, &context) &&
+             torb_list_privatize_with(list, element, context);
     }
     case TORB_COUNTED_MAP:
     case TORB_COUNTED_SET: {
       torb_map *map = (torb_map *)place;
-      torb_privatize_function key;
-      torb_privatize_function item;
+      torb_privatize_with_function key;
+      torb_privatize_with_function item;
+      const void *keyContext;
+      const void *itemContext;
       if (map->storage == NULL) {
         return true;
       }
-      return torb_machine_privatizer_of(map->storage->key, &key) &&
-             torb_machine_privatizer_of(map->storage->value, &item) && torb_map_privatize(map, key, item);
+      return torb_machine_privatizer_of(map->storage->key, &key, &keyContext) &&
+             torb_machine_privatizer_of(map->storage->value, &item, &itemContext) &&
+             torb_map_privatize_with(map, key, keyContext, item, itemContext);
     }
     case TORB_COUNTED_TASK:
     case TORB_COUNTED_CHANNEL:

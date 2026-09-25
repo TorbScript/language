@@ -80,10 +80,10 @@ static void torb_map_storage_drop(void *block) {
       continue;
     }
     if (storage->value->release != NULL) {
-      storage->value->release(torb_entry_value(storage, index - 1u));
+      torb_element_release(storage->value, torb_entry_value(storage, index - 1u));
     }
     if (storage->key->release != NULL) {
-      storage->key->release(torb_entry_key(storage, index - 1u));
+      torb_element_release(storage->key, torb_entry_key(storage, index - 1u));
     }
   }
   torb_raw_free(storage->buckets, (size_t)storage->bucket_count * sizeof(int32_t));
@@ -209,7 +209,7 @@ static int32_t torb_map_lookup(const torb_map_storage *storage, const void *key,
         have_free = true;
       }
     } else if (torb_entry_hash(storage, (uint32_t)entry) == hash
-               && storage->key->equals(torb_entry_key(storage, (uint32_t)entry), key)) {
+               && torb_element_equals(storage->key, torb_entry_key(storage, (uint32_t)entry), key)) {
       return entry;
     }
     bucket = (bucket + 1u) & mask;
@@ -236,10 +236,10 @@ static void torb_map_prepare(torb_map *map) {
     target = torb_entry_at(copy, copy->entry_count);
     memcpy(target, torb_entry_at(storage, index), (size_t)storage->entry_stride);
     if (copy->key->retain != NULL) {
-      copy->key->retain(target + copy->key_offset);
+      torb_element_retain(copy->key, target + copy->key_offset);
     }
     if (copy->value->retain != NULL) {
-      copy->value->retain(target + copy->value_offset);
+      torb_element_retain(copy->value, target + copy->value_offset);
     }
     copy->entry_count += 1u;
     copy->live_count += 1u;
@@ -285,7 +285,7 @@ int64_t torb_map_length(torb_map map) {
 
 const void *torb_map_at(torb_map map, const void *key) {
   uint32_t free_bucket = 0u;
-  int32_t entry = torb_map_lookup(map.storage, key, map.storage->key->hash(key), &free_bucket);
+  int32_t entry = torb_map_lookup(map.storage, key, torb_element_hash(map.storage->key, key), &free_bucket);
   if (entry < 0) {
     return NULL;
   }
@@ -294,7 +294,7 @@ const void *torb_map_at(torb_map map, const void *key) {
 
 bool torb_map_contains(torb_map map, const void *key) {
   uint32_t free_bucket = 0u;
-  return torb_map_lookup(map.storage, key, map.storage->key->hash(key), &free_bucket) >= 0;
+  return torb_map_lookup(map.storage, key, torb_element_hash(map.storage->key, key), &free_bucket) >= 0;
 }
 
 bool torb_map_get(torb_map map, const void *key, void *out) {
@@ -306,7 +306,7 @@ bool torb_map_get(torb_map map, const void *key, void *out) {
     memcpy(out, found, (size_t)map.storage->value->size);
   }
   if (map.storage->value->retain != NULL) {
-    map.storage->value->retain(out);
+    torb_element_retain(map.storage->value, out);
   }
   return true;
 }
@@ -318,16 +318,16 @@ void torb_map_set(torb_map *map, const void *key, const void *value) {
   int32_t entry;
   torb_map_prepare(map);
   storage = map->storage;
-  hash = storage->key->hash(key);
+  hash = torb_element_hash(storage->key, key);
   entry = torb_map_lookup(storage, key, hash, &free_bucket);
   if (entry >= 0) {
     /* The key keeps its place in the insertion order and its stored spelling; only the value changes. */
     uint8_t *stored = torb_entry_value(storage, (uint32_t)entry);
     if (storage->key->release != NULL) {
-      storage->key->release((void *)key);
+      torb_element_release(storage->key, (void *)key);
     }
     if (storage->value->release != NULL) {
-      storage->value->release(stored);
+      torb_element_release(storage->value, stored);
     }
     if (storage->value->size > 0u) {
       memcpy(stored, value, (size_t)storage->value->size);
@@ -336,7 +336,7 @@ void torb_map_set(torb_map *map, const void *key, const void *value) {
   }
   if (storage->entry_count == storage->entry_capacity) {
     torb_map_reserve(storage, storage->live_count + 1u);
-    hash = storage->key->hash(key);
+    hash = torb_element_hash(storage->key, key);
     entry = torb_map_lookup(storage, key, hash, &free_bucket);
     (void)entry;
   }
@@ -361,7 +361,7 @@ bool torb_map_remove(torb_map *map, const void *key, void *out) {
   int32_t entry;
   torb_map_prepare(map);
   storage = map->storage;
-  entry = torb_map_lookup(storage, key, storage->key->hash(key), &free_bucket);
+  entry = torb_map_lookup(storage, key, torb_element_hash(storage->key, key), &free_bucket);
   if (entry < 0) {
     return false;
   }
@@ -369,7 +369,7 @@ bool torb_map_remove(torb_map *map, const void *key, void *out) {
     memcpy(out, torb_entry_value(storage, (uint32_t)entry), (size_t)storage->value->size);
   }
   if (storage->key->release != NULL) {
-    storage->key->release(torb_entry_key(storage, (uint32_t)entry));
+    torb_element_release(storage->key, torb_entry_key(storage, (uint32_t)entry));
   }
   torb_entry_set_alive(storage, (uint32_t)entry, false);
   storage->live_count -= 1u;
@@ -396,6 +396,12 @@ void torb_map_make_unique(torb_map *map) {
  * is equal to it, so its hash and its bucket stay what they are.
  */
 bool torb_map_privatize(torb_map *map, torb_privatize_function key, torb_privatize_function value) {
+  return torb_map_privatize_with(map, key == NULL ? NULL : torb_privatize_plain, &key,
+                                 value == NULL ? NULL : torb_privatize_plain, &value);
+}
+
+bool torb_map_privatize_with(torb_map *map, torb_privatize_with_function key, const void *keyContext,
+                             torb_privatize_with_function value, const void *valueContext) {
   torb_map_storage *storage = map->storage;
   uint32_t index;
   if (storage == NULL || storage->header.count == TORB_IMMORTAL_COUNT) {
@@ -413,10 +419,10 @@ bool torb_map_privatize(torb_map *map, torb_privatize_function key, torb_privati
     if (!torb_entry_alive(storage, index)) {
       continue;
     }
-    if (key != NULL && !key(torb_entry_key(storage, index))) {
+    if (key != NULL && !key(keyContext, torb_entry_key(storage, index))) {
       return false;
     }
-    if (value != NULL && !value(torb_entry_value(storage, index))) {
+    if (value != NULL && !value(valueContext, torb_entry_value(storage, index))) {
       return false;
     }
   }
@@ -429,7 +435,7 @@ bool torb_map_take_out(torb_map *map, const void *key, void *out) {
   int32_t entry;
   torb_map_prepare(map);
   storage = map->storage;
-  entry = torb_map_lookup(storage, key, storage->key->hash(key), &free_bucket);
+  entry = torb_map_lookup(storage, key, torb_element_hash(storage->key, key), &free_bucket);
   if (entry < 0) {
     return false;
   }
@@ -446,7 +452,7 @@ bool torb_map_take_out(torb_map *map, const void *key, void *out) {
 void torb_map_put_back(torb_map *map, const void *key, const void *value) {
   torb_map_storage *storage = map->storage;
   uint32_t free_bucket = 0u;
-  int32_t entry = torb_map_lookup(storage, key, storage->key->hash(key), &free_bucket);
+  int32_t entry = torb_map_lookup(storage, key, torb_element_hash(storage->key, key), &free_bucket);
   if (entry < 0) {
     torb_panic_text("internal error: `put back` without a matching `take out`", torb_location_unknown);
   }
@@ -472,12 +478,12 @@ bool torb_map_entry_after(torb_map map, int64_t *cursor, void *key, void *value)
       memcpy(key, torb_entry_key(storage, index), (size_t)storage->key->size);
     }
     if (storage->key->retain != NULL) {
-      storage->key->retain(key);
+      torb_element_retain(storage->key, key);
     }
     if (storage->value->size > 0u) {
       memcpy(value, torb_entry_value(storage, index), (size_t)storage->value->size);
       if (storage->value->retain != NULL) {
-        storage->value->retain(value);
+        torb_element_retain(storage->value, value);
       }
     }
     return true;

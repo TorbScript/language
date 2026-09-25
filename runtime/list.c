@@ -39,7 +39,7 @@ static void torb_retain_elements(const torb_element *element, uint8_t *data, uin
     return;
   }
   for (index = 0u; index < count; index += 1u) {
-    element->retain(data + (size_t)index * (size_t)element->size);
+    torb_element_retain(element, data + (size_t)index * (size_t)element->size);
   }
 }
 
@@ -53,7 +53,7 @@ static void torb_release_elements(const torb_element *element, uint8_t *data, ui
     return;
   }
   for (index = count; index > 0u; index -= 1u) {
-    element->release(data + (size_t)(index - 1u) * (size_t)element->size);
+    torb_element_release(element, data + (size_t)(index - 1u) * (size_t)element->size);
   }
 }
 
@@ -179,7 +179,7 @@ bool torb_list_get(torb_list list, int64_t index, void *out) {
   }
   memcpy(out, torb_list_bytes(list) + (size_t)index * (size_t)element->size, (size_t)element->size);
   if (element->retain != NULL) {
-    element->retain(out);
+    torb_element_retain(element, out);
   }
   return true;
 }
@@ -193,7 +193,15 @@ void torb_list_make_unique(torb_list *list) {
  * the elements outside the slice would be released wherever the storage is - is copied first, which retains the
  * elements; then every element of the storage that is now this list's alone is made private in its place.
  */
+bool torb_privatize_plain(const void *context, void *place) {
+  return (*(const torb_privatize_function *)context)(place);
+}
+
 bool torb_list_privatize(torb_list *list, torb_privatize_function element) {
+  return torb_list_privatize_with(list, element == NULL ? NULL : torb_privatize_plain, &element);
+}
+
+bool torb_list_privatize_with(torb_list *list, torb_privatize_with_function element, const void *context) {
   torb_list_storage *storage = list->storage;
   uint8_t *data;
   uint32_t index;
@@ -213,7 +221,7 @@ bool torb_list_privatize(torb_list *list, torb_privatize_function element) {
   storage = list->storage;
   data = (uint8_t *)torb_list_storage_data(storage);
   for (index = 0u; index < storage->length; index += 1u) {
-    if (!element(data + (size_t)index * (size_t)storage->element->size)) {
+    if (!element(context, data + (size_t)index * (size_t)storage->element->size)) {
       return false;
     }
   }
@@ -273,7 +281,7 @@ void torb_list_set(torb_list *list, int64_t index, const void *value, torb_locat
   torb_list_prepare(list, 0u);
   target = torb_list_bytes(*list) + (size_t)index * (size_t)element->size;
   if (element->release != NULL) {
-    element->release(target);
+    torb_element_release(element, target);
   }
   memcpy(target, value, (size_t)element->size);
 }
