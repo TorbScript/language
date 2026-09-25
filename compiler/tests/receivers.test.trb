@@ -28,11 +28,11 @@ fn inHtml(body: String): String {
 
 group "A receiver closure" {
   test "the closure has the type that was expected of it, receiver and all" {
-    const source = inHtml "    tag \"html\""
+    const source = inHtml "    tag = \"html\""
     assert problems(source).isEmpty()
     const probed = probe source
-    assert(probed.typeOf("\{\n    tag \"html\"\n  \}") == "(var self: Element) => Void")
-    assert(probed.receiverOf("\{\n    tag \"html\"\n  \}") == "implicit var self: Element")
+    assert(probed.typeOf("\{\n    tag = \"html\"\n  \}") == "(var self: Element) => Void")
+    assert(probed.receiverOf("\{\n    tag = \"html\"\n  \}") == "implicit var self: Element")
   }
 
   test "a bare name resolves against the receiver, exactly as in a method" {
@@ -80,9 +80,9 @@ group "A receiver closure" {
    * straight as an argument and may therefore hold it, and nothing further in may carry it off.
    */
   test "the closure stands as an argument, so it is local and may hold its receiver" {
-    const source = inHtml "    tag \"html\""
+    const source = inHtml "    tag = \"html\""
     const probed = probe source
-    assert(probed.closureKindOf("\{\n    tag \"html\"\n  \}") == "local")
+    assert(probed.closureKindOf("\{\n    tag = \"html\"\n  \}") == "local")
   }
 
   test "a closure inside it that escapes may not carry the receiver off (BACKEND gap 14)" {
@@ -102,7 +102,7 @@ group "Only the innermost receiver is implicit (gap 4)" {
   }
 
   test "a member of an outer receiver is not reachable without naming it" {
-    const source = "fn probe() \{\n  const page = html \{\n    child \{\n      poolSize 20\n    \}\n  \}\n\}\n"
+    const source = "fn probe() \{\n  const page = html \{\n    child \{\n      poolSize = 20\n    \}\n  \}\n\}\n"
       + "\ntype Inner \{\n  var poolSize: Int = 1\n\}\n"
       + "\ntype Element \{\n  var poolSize: Int = 1\n\n"
       + "  var fn child(build: (var self: Inner) => Void) \{\n"
@@ -112,7 +112,7 @@ group "Only the innermost receiver is implicit (gap 4)" {
     assert problems(source).isEmpty()
     const probed = probe source
     // The *inner* receiver has the field as well, so this one resolves - against `Inner`, not against `Element`
-    assert(probed.resolutionOf("poolSize 20") == "assign Inner.poolSize")
+    assert(probed.resolutionOf("poolSize") == "field Inner.poolSize")
   }
 
   test "naming the parameter makes nothing implicit, which is how an outer receiver is reached" {
@@ -130,31 +130,31 @@ group "Only the innermost receiver is implicit (gap 4)" {
 
   test "a method of the type around the closure is not implicit inside it either" {
     const source = "\ntype Page \{\n  var title: String = \"\"\n\n"
-      + "  fn build(): Element \{\n    html \{\n      tag title\n    \}\n  \}\n\}\n{element}"
+      + "  fn build(): Element \{\n    html \{\n      tag = title\n    \}\n  \}\n\}\n{element}"
     assert(problems(source) == ["Cannot find `title` here"])
   }
 
   test "the named receiver reaches into a nested block, which is what CONCEPT's own example does" {
-    // The block of a `.Configure` property command is applied to the field *in place*, so it cannot outlive the command
-    // any more than the trailing closure of an ordinary call can, and a nested block that names its outer receiver is
-    // not reported as escaping either - `server { s => s.database { url "{s.host}/db" } }` is the concept's own way to
+    // The block of a property command is applied to the field *in place*, so it cannot outlive the command any more
+    // than the trailing closure of an ordinary call can, and a nested block that names its outer receiver is not
+    // reported as escaping either - `server { s => s.database { url = "{s.host}/db" } }` is the concept's own way to
     // reach an outer one
     const source = "type Database \{\n  var url: String = \"\"\n\}\n\n"
       + "type Server \{\n  var host: String = \"localhost\"\n  var database: Database = Database()\n\}\n\n"
       + "fn server(configure: (var self: Server) => Void): Server \{\n"
       + "  var created = Server()\n  configure created\n  created\n\}\n\n"
       + "fn probe(): String \{\n  const built = server \{ s =>\n"
-      + "    s.database \{\n      url \"\{s.host\}/db\"\n    \}\n  \}\n  built.database.url\n\}"
+      + "    s.database \{\n      url = \"\{s.host\}/db\"\n    \}\n  \}\n  built.database.url\n\}"
     assert problems(source).isEmpty()
     const probed = probe source
-    assert(probed.closureKindOf("\{\n      url \"\{s.host\}/db\"\n    \}") == "local")
+    assert(probed.closureKindOf("\{\n      url = \"\{s.host\}/db\"\n    \}") == "local")
   }
 
-  test "a block that is *stored* in a field still escapes, because the field keeps it" {
+  test "a closure that is *stored* in a field still escapes, because the field keeps it" {
     const source = "type Options \{\n  var onStart: () => Int = \{ 0 \}\n\}\n\n"
       + "fn options(configure: (var self: Options) => Void): Options \{\n"
       + "  var made = Options()\n  configure made\n  made\n\}\n\n"
-      + "fn probe(var total: Int): Options \{\n  options \{ o =>\n    o.onStart \{ total \}\n  \}\n\}"
+      + "fn probe(var total: Int): Options \{\n  options \{ o =>\n    o.onStart = \{ total \}\n  \}\n\}"
     assert(problems(source) == ["This closure captures the `var` parameter `total` and may outlive the call"])
   }
 }
@@ -190,7 +190,7 @@ const projectSource = "public type Build \{\n  var target: String = \"dev\"\n  v
 
 fn scriptTree(files: Map<String, String>): SourceTree {
   var all = workspace
-  all.set "std/project/project.trb", "name \"std/project\""
+  all.set "std/project/project.trb", "name = \"std/project\""
   all.set "std/project/src/lib.trb", projectSource
   for (path, text) in files {
     all.set path, text
@@ -223,7 +223,7 @@ const fileSource = "public type File \{\}\n"
 fn osFiles(manifest: String): Map<String, String> {
   [
     "app/project.trb": manifest,
-    "std/os/project.trb": "name \"std/os\"",
+    "std/os/project.trb": "name = \"std/os\"",
     "std/os/src/environment.trb": "public type Environment \{\}\n",
     "std/os/src/system.trb": "public type System \{\}\n",
   ]
@@ -235,18 +235,18 @@ const loader = "type Sandbox \{\n  static fn load<Value>(path: String): Int \{\n
 
 group "project.trb is a receiver script against `Project`" {
   test "a setting writes a field of the receiver" {
-    const manifest = "name \"acme/app\"\nbuild \{\n  target \"release\"\n\}\n"
+    const manifest = "name = \"acme/app\"\nbuild \{\n  target = \"release\"\n\}\n"
     assert scriptProblems(["app/project.trb": manifest]).isEmpty()
     const probed = probeScript(["app/project.trb": manifest], "app/project.trb")
-    assert(probed.resolutionOf("name \"acme/app\"") == "assign Project.name")
-    assert(probed.resolutionOf("build \{\n  target \"release\"\n\}") == "configure Project.build")
-    assert(probed.resolutionOf("target \"release\"") == "assign Build.target")
+    assert(probed.resolutionOf("name") == "field Project.name")
+    assert(probed.resolutionOf("build \{\n  target = \"release\"\n\}") == "configure Project.build")
+    assert(probed.resolutionOf("target") == "field Build.target")
     // The file *is* the closure, so its receiver is recorded at the span the whole body has
     assert(probed.receiverOf("") == "implicit var self: Project")
   }
 
   test "a `const` of a script is a local of the body: it may read the receiver and what came before it" {
-    const manifest = "name \"acme/app\"\nconst binary = name\nbuild \{\n  output \"build/\{target\}/\{binary\}\"\n\}\n"
+    const manifest = "name = \"acme/app\"\nconst binary = name\nbuild \{\n  output = \"build/\{target\}/\{binary\}\"\n\}\n"
     assert scriptProblems(["app/project.trb": manifest]).isEmpty()
     const probed = probeScript(["app/project.trb": manifest], "app/project.trb")
     assert(probed.patternTypeOf("binary") == "String")
@@ -255,18 +255,25 @@ group "project.trb is a receiver script against `Project`" {
 
   test "a mistake in a project file is reported with its position, like any other file" {
     assert(
-      scriptProblems(["app/project.trb": "name 7\n"]) == ["Expected `String`, found `Int64`"]
+      scriptProblems(["app/project.trb": "name = 7\n"]) == ["Expected `String`, found `Int64`"]
     )
-    assert(scriptProblems(["app/project.trb": "nmae \"acme/app\"\n"]) == ["Cannot find `nmae` here"])
+    assert(scriptProblems(["app/project.trb": "nmae = \"acme/app\"\n"]) == ["Cannot find `nmae` here"])
+  }
+
+  test "a field is written only with `=`: the command form is an error with the fix" {
+    assert(
+      scriptProblems(["app/project.trb": "name \"acme/app\"\n"])
+        == ["`name` is a field: write `name = \"acme/app\"`"]
+    )
   }
 
   test "a project file may import what the toolchain grants it: its files, their text, and the environment" {
-    const manifest = "use File from \"std/fs\"\nname \"acme/app\"\n"
-    assert scriptProblems(["app/project.trb": manifest, "std/fs/project.trb": "name \"std/fs\"", "std/fs/src/lib.trb": fileSource]).isEmpty()
+    const manifest = "use File from \"std/fs\"\nname = \"acme/app\"\n"
+    assert scriptProblems(["app/project.trb": manifest, "std/fs/project.trb": "name = \"std/fs\"", "std/fs/src/lib.trb": fileSource]).isEmpty()
   }
 
   test "and nothing else, whatever it is" {
-    const manifest = "use Thing from \"./src/thing\"\nname \"acme/app\"\n"
+    const manifest = "use Thing from \"./src/thing\"\nname = \"acme/app\"\n"
     assert(
       scriptProblems(["app/project.trb": manifest, "app/src/thing.trb": "public type Thing \{\}\n"])
         == ["A project file may import `std/fs`, `std/text` and `std/os/environment`, and not `./src/thing`"]
@@ -274,8 +281,8 @@ group "project.trb is a receiver script against `Project`" {
   }
 
   test "the environment is one module of std/os, and the rest of the package is not granted" {
-    const environment = "use Environment from \"std/os/environment\"\nname \"acme/app\"\n"
-    const system = "use System from \"std/os/system\"\nname \"acme/app\"\n"
+    const environment = "use Environment from \"std/os/environment\"\nname = \"acme/app\"\n"
+    const system = "use System from \"std/os/system\"\nname = \"acme/app\"\n"
     assert scriptProblems(osFiles(environment)).isEmpty()
     assert(
       scriptProblems(osFiles(system))
@@ -286,23 +293,23 @@ group "project.trb is a receiver script against `Project`" {
 
 group "Sandbox.load makes a file part of the project" {
   test "a literal path is checked as the body of `(var self: Value) => Void`" {
-    const files = ["app/src/main.trb": loader, "app/config.trb": "port 9000\nhost \"0.0.0.0\"\n"]
+    const files = ["app/src/main.trb": loader, "app/config.trb": "port = 9000\nhost = \"0.0.0.0\"\n"]
     assert scriptProblems(files).isEmpty()
     const probed = probeScript files, "app/config.trb"
     assert(probed.receiverOf("") == "implicit var self: Config")
-    assert(probed.resolutionOf("port 9000") == "assign Config.port")
+    assert(probed.resolutionOf("port") == "field Config.port")
     assert(probed.statistics().deferred == 0)
   }
 
   test "the file is checked against the type argument, so a mistake in it is reported" {
-    const files = ["app/src/main.trb": loader, "app/config.trb": "port \"9000\"\n"]
+    const files = ["app/src/main.trb": loader, "app/config.trb": "port = \"9000\"\n"]
     assert(scriptProblems(files) == ["Expected `Int64`, found `String`"])
   }
 
   test "a script is not a module anybody can import" {
     const files = [
       "app/src/main.trb": "use * as other from \"../config\"\n{loader}",
-      "app/config.trb": "port 9000\n",
+      "app/config.trb": "port = 9000\n",
     ]
     assert scriptProblems(files).contains("There is no module `../config`")
   }
@@ -310,7 +317,7 @@ group "Sandbox.load makes a file part of the project" {
   test "a loaded script may import a module: its grant is held against the import when it is loaded" {
     const files = [
       "app/src/main.trb": loader,
-      "app/config.trb": "use Thing from \"./src/thing\"\nport 9000\n",
+      "app/config.trb": "use Thing from \"./src/thing\"\nport = 9000\n",
       "app/src/thing.trb": "public type Thing \{\}\n",
     ]
     assert scriptProblems(files).isEmpty()
@@ -318,7 +325,7 @@ group "Sandbox.load makes a file part of the project" {
 
   test "a file the test directory sweeps in is a script all the same where a program loads it" {
     const main = loader.replace "./config.trb", "./tests/config.trb"
-    const files = ["app/src/main.trb": main, "app/tests/config.trb": "port 9000\n"]
+    const files = ["app/src/main.trb": main, "app/tests/config.trb": "port = 9000\n"]
     assert scriptProblems(files).isEmpty()
     const probed = probeScript files, "app/tests/config.trb"
     assert(probed.receiverOf("") == "implicit var self: Config")
@@ -327,8 +334,8 @@ group "Sandbox.load makes a file part of the project" {
   test "no grant gives a script the kernel of the VM, or scripts of its own" {
     const files = [
       "app/src/main.trb": loader,
-      "app/config.trb": "use Machine from \"std/machine\"\nport 9000\n",
-      "std/machine/project.trb": "name \"std/machine\"",
+      "app/config.trb": "use Machine from \"std/machine\"\nport = 9000\n",
+      "std/machine/project.trb": "name = \"std/machine\"",
       "std/machine/src/lib.trb": "public type Machine \{\}\n",
     ]
     assert(scriptProblems(files) == ["A receiver script cannot import `std/machine`"])
@@ -337,8 +344,8 @@ group "Sandbox.load makes a file part of the project" {
   test "no grant gives a script the natives of one operating system" {
     const files = [
       "app/src/main.trb": loader,
-      "app/config.trb": "use Windows from \"std/os/windows/native\"\nport 9000\n",
-      "std/os/project.trb": "name \"std/os\"",
+      "app/config.trb": "use Windows from \"std/os/windows/native\"\nport = 9000\n",
+      "std/os/project.trb": "name = \"std/os\"",
       "std/os/src/windows/native.trb": "public type Windows \{\}\n",
     ]
     assert(scriptProblems(files) == ["A receiver script cannot import `std/os/windows`"])

@@ -139,7 +139,7 @@ const closures = raw"""
   }
   """
 
-/** The three kinds of property command in one body: `.Assign`, `.Configure` and `.AssignClosure`. */
+/** A plain assignment, a property command that configures a field, and a closure assigned to a field, in one body. */
 const commands = raw"""
   type Limits {
     var maximum: Int = 0
@@ -153,11 +153,11 @@ const commands = raw"""
     }
 
     var fn apply() {
-      port 1
+      port = 1
       limits {
-        maximum 2
+        maximum = 2
       }
-      onStart {
+      onStart = {
         3
       }
     }
@@ -168,15 +168,15 @@ const commandsIr = raw"""
   fn t_acme_x2f_app_main_Options_apply(var self: Record(T_acme_x2f_app_main_Options) borrowed) -> Void {
     slot %0 parameter self: Record(T_acme_x2f_app_main_Options)
     slot %1 temporary: Int64
-    slot %2 temporary: Void
-    slot %3 temporary: Closure((var Record(T_acme_x2f_app_main_Limits)) -> Void)
+    slot %2 temporary: Closure((var Record(T_acme_x2f_app_main_Limits)) -> Void)
+    slot %3 temporary: Void
     slot %4 temporary: Closure(() -> Int64)
   b0: # acme/app/src/main.trb:12 body
     %1 = constant s_literal__Int64_1
     write %0.port = %1 borrowed
-    %3 = closure t_closure__t_acme_x2f_app_main_Options_apply_0 captures() local
-    callClosure %3(&%0.limits borrowed)
-    release %3
+    %2 = closure t_closure__t_acme_x2f_app_main_Options_apply_0 captures() local
+    callClosure %2(&%0.limits borrowed)
+    release %2
     %4 = closure t_closure__t_acme_x2f_app_main_Options_apply_1 captures() escaping
     write %0.onStart = %4 owned last
     return

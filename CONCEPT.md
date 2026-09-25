@@ -745,8 +745,7 @@ list.length()               // No arguments, so parentheses
 assert(sum == 3)            // An operator at the top level of an argument: `assert sum == 3` reads as `(assert sum) == 3`
 print(count + 1)
 if ready(now) { }           // The head of an `if`, `for`, `while` or `match` is not command position
-port 8080                   // A command on a field writes it - that is what it means, not how it is written
-onStart(event)              // ...so calling a function held in a field always needs parentheses
+onStart(event)              // A field is written with `=`, so calling what it holds always needs parentheses
 ```
 
 **A multi-line `"""` or `raw"""` string is indented.** The opening quotes stay where they are, the content is two
@@ -1303,32 +1302,34 @@ const area = p.area            // Without a call: the function value, bound to `
   and does not need to be.
 - Because there is one namespace, a field and a method cannot share a name.
 
-**Property commands.** A _command_ on a field never calls it, it writes it. This is what gives the configuration DSL
-its Groovy look without a single hand-written setter:
+**Property commands.** A field is written only with `=`, everywhere, including inside a receiver closure - the one
+command call left is a trailing block on a field whose value is a *record* type, never a function, which configures
+that value in place. This is what gives the configuration DSL its Groovy look without a single hand-written setter:
 
 ```trb
-port 8080                      // Field `var port: Int`:                port = 8080
-onStart { print "started" }    // Field `var onStart: () => Void`:      onStart = { print "started" }
+port = 8080                    // Field `var port: Int`: an ordinary assignment
+onStart = { print "started" }  // Field `var onStart: () => Void`: an ordinary assignment, too
 database {                     // Field `var database: DatabaseConfig`: the receiver closure is applied to the
-  url "postgres://..."         //   field's value, which is configured in place
+  url = "postgres://..."       //   field's value, which is configured in place
 }
 print "Listening on {port}"    // Reading is just the name
 onStart()                      // Calling a function in a field always needs parentheses
-port = 8080                    // `=` works, too
 ```
 
-There is no case where the same line could mean two things: command on a method - call, command on a field - write
-(a closure is assigned if the field holds a function, and configures the value in place otherwise).
+`port 8080` and `onStart { print "started" }` are errors now: "`port` is a field: write `port = 8080`" and "`onStart`
+is a field: write `onStart = { print \"started\" }`", the fix reconstructed from what was written. Only the trailing
+block on a record field is not an assignment - `database { ... }` stays exactly as it was, because a receiver closure
+configuring a value in place is not the same thing as replacing that value.
 
-Both forms need a `var` path to the field. Calling a function in a field always takes parentheses (`onClick()`,
-`onClick(event)`); `onClick { ... }` sets it.
+Both a plain field and the field a block configures need a `var` path. Calling a function in a field always takes
+parentheses (`onClick()`, `onClick(event)`); `onClick { ... }` no longer sets it, `onClick = { ... }` does.
 
-**Only the command form writes; parentheses always call.** `tls true` writes the field, and `tls(true)` calls it - an
+**Only the block on a record field is still a command call; parentheses always call.** `tls(true)` calls it - an
 error, because a `Bool` field has nothing to call; `onClick({ ... })` hands the closure to the function the field holds
-instead of storing it. A value the command form cannot take - an operator at the top level of it, which puts the call
-in parentheses (Formatter Canon), or a first token `(`, `[`, `-`, `!` or `.` - is written with `=`:
-`tls = port == 8443`, `level = .Debug`. (Decision 2026-09-22: a property command is the command form only, so no line
-means two things and a parenthesized call never writes.)
+instead of storing it. (Decision 2026-09-22: a property command is the command form only, so no line means two things
+and a parenthesized call never writes. Decision 2026-09-25: a field is written only with `=`, everywhere - the
+command-form write of a plain or function-typed field is removed, and the block that configures a record field in
+place is what is left of the mechanism.)
 
 ## Algebraic Data Types and Pattern Matching
 
@@ -2223,11 +2224,11 @@ fn server(configure: (var self: ServerConfig) => Void): ServerConfig {
 }
 
 const config = server {
-  host "0.0.0.0"                           // Property command: host = "0.0.0.0"
-  port 8080
+  host = "0.0.0.0"                         // A field is written with `=`
+  port = 8080
   database {                               // Property command: configures the field in place
-    url "postgres://localhost:5432/mydb"
-    poolSize 20
+    url = "postgres://localhost:5432/mydb"
+    poolSize = 20
   }
   route "/health", to: "health"            // Method call
 }
@@ -2235,7 +2236,7 @@ const config = server {
 
 Name resolution order inside of closures and methods: local scope, then the _innermost_ receiver, then the module.
 **Exactly one receiver is implicit,** in a method as in a receiver closure. To reach an outer receiver, name
-the parameter (`server { s => s.database { url "{s.host}/db" } }`). This prevents the scope leaking that Kotlin
+the parameter (`server { s => s.database { url = "{s.host}/db" } }`). This prevents the scope leaking that Kotlin
 needs `@DslMarker` for.
 
 ### Receiver Scripts and the Sandbox
@@ -2244,10 +2245,10 @@ A `.trb` file can be loaded as the body of a receiver closure. That makes TorbSc
 
 ```trb
 // config.trb
-host "0.0.0.0"
-port 8080
+host = "0.0.0.0"
+port = 8080
 database {
-  url "postgres://localhost:5432/mydb"
+  url = "postgres://localhost:5432/mydb"
 }
 for name in ["users", "orders"] {
   route "/api/{name}", to: name
@@ -2878,8 +2879,11 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
 - One member namespace. A method is structurally a constant of the type that holds a receiver closure, `fn` is its
   declaration form. Not a per-instance field: methods cost no memory per instance, cannot be swapped at runtime, and
   value types stay plain data. (Rejected: separate namespaces for fields and methods, Java style.)
-- Property commands make the DSL work with one namespace: a command call on a non-callable field writes it
-  (`port 8080`) or configures it in place (`database { ... }`). No hand-written setters or section methods.
+- Property commands make the DSL work with one namespace: a field is written with `=` (`port = 8080`), and the one
+  command call left on a field configures it in place (`database { ... }`). No hand-written setters or section
+  methods. (Decision 2026-09-25: a field is written only with `=`, everywhere - was: a command call on a field wrote
+  it, `port 8080`. Removed because a receiver closure writing every field by looking like a fresh declaration was the
+  one place the language read differently from every other block of statements.)
 - Only the innermost receiver is implicit (instead of an annotation like `@DslMarker`)
 - `await()` is a postfix method (composes with `?` and chaining)
 - No AST macros, no annotations (for now)

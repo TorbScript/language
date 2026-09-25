@@ -187,7 +187,7 @@ does, and a `break` never carries a value. `while true` is an error that names i
 ### Entry file
 
 The one file `torb run` interprets or `torb build` compiles - named directly, or reached as `src/main.trb` of a
-project directory, or as the project's own `build { input "..." }`. See [torb build](tooling/torb-build.md).
+project directory, or as the project's own `build { input = "..." }`. See [torb build](tooling/torb-build.md).
 
 ### Error trait
 
@@ -365,8 +365,9 @@ by default. It holds the pure part of the standard library; what a program can t
 
 ### Property command
 
-A [command call](#command-call) on a field, which writes the field rather than calling it. `port 8080` is `port = 8080`,
-and `database { ... }` configures the field's value in place.
+A trailing block on a field whose value is a record type, which configures that value in place rather than replacing
+it: `database { url = "..." }`. A field itself is written only with `=` - `port 8080` is a compile error, write
+`port = 8080`. See [Property commands](language/types/property-commands.md).
 
 ### Question mark operator
 

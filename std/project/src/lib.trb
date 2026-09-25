@@ -1,7 +1,7 @@
 /**
  * The vocabulary of `project.trb`: [Project], [Dependencies], [Build], [Test], [Workspace] and [Registry]. A project
  * file is a receiver script against [Project], so everything a project can say about itself is a `var` field or a
- * method of the types here - and nothing else is needed to write one, because a setting is written `name "acme/shop"`
+ * method of the types here - and nothing else is needed to write one, because a setting is written `name = "acme/shop"`
  * and a section `build { ... }`.
  *
  * The types are ordinary data, not `native`: a project file is deterministic and has no IO, so evaluating it is
@@ -71,8 +71,8 @@ public type Workspace {
 }
 
 /**
- * The receiver of `project.trb`. A setting is a `var` field (`name "acme/shop"` writes it), a section is a field that
- * is configured in place (`build { ... }`), and only what is more than that is a method (`authors`, `registry`).
+ * The receiver of `project.trb`. A setting is a `var` field (`name = "acme/shop"` writes it), a section is a field
+ * that is configured in place (`build { ... }`), and only what is more than that is a method (`authors`, `registry`).
  *
  * The fields are readable, which is what lets a project file compute from what it has already said:
  * `const binary = name.substringAfter("/") ?? name`.
@@ -108,21 +108,24 @@ public type Project {
   }
 
   /**
-   * The settings as the literal command calls that would produce them, one per line, in the order of this type: the
+   * The settings as the literal statements that would produce them, one per line, in the order of this type: the
    * `settings` block of the locked manifest (docs/design/PROJECT.md section 8), and the text the toolchain reads back
    * from an evaluated `project.trb` (docs/design/SCRIPTS.md section 7). A setting at its default is left out, because
    * the reader has defaults of its own: a workspace without a `test` section has no test directory.
+   *
+   * A field is printed back with `=` (`name = "acme/shop"`); a method - `runtime`, `development`, `members`,
+   * `authors`, `registry` - is printed back as the command call that reaches it.
    */
   fn settings(): String {
     var lines: List<String> = []
     if !name.isEmpty() {
-      lines.append "name {quoted(name)}"
+      lines.append "name = {quoted(name)}"
     }
     if !version.isEmpty() {
-      lines.append "version {quoted(version)}"
+      lines.append "version = {quoted(version)}"
     }
     if prelude != "std/prelude" {
-      lines.append "prelude {quoted(prelude)}"
+      lines.append "prelude = {quoted(prelude)}"
     }
     var needs: List<String> = []
     if !dependencies.runtimeRequirements.isEmpty() {
@@ -134,21 +137,21 @@ public type Project {
     appendSection lines, "dependencies", needs
     var builds: List<String> = []
     if build.target != "dev" {
-      builds.append "  target {quoted(build.target)}"
+      builds.append "  target = {quoted(build.target)}"
     }
     if build.input != "src/main.trb" {
-      builds.append "  input {quoted(build.input)}"
+      builds.append "  input = {quoted(build.input)}"
     }
     if !build.output.isEmpty() {
-      builds.append "  output {quoted(build.output)}"
+      builds.append "  output = {quoted(build.output)}"
     }
     appendSection lines, "build", builds
     var tests: List<String> = []
     if test.input != "tests" {
-      tests.append "  input {quoted(test.input)}"
+      tests.append "  input = {quoted(test.input)}"
     }
     if test.coverageThreshold != 0 {
-      tests.append "  coverageThreshold {test.coverageThreshold}"
+      tests.append "  coverageThreshold = {test.coverageThreshold}"
     }
     appendSection lines, "test", tests
     if !workspace.memberPatterns.isEmpty() {

@@ -33,8 +33,8 @@ fn serve(configure: (var self: ServerOptions) => Void): ServerOptions {
 }
 
 const options = serve {
-  host "0.0.0.0"
-  port 8443
+  host = "0.0.0.0"
+  port = 8443
 }
 
 print options
@@ -52,13 +52,14 @@ fn <builder>(configure: (var self: <Receiver>) => Void): <Receiver> {
 
 ## Rules
 
-1. **A builder is three lines: create, configure, return.** Everything a configuration block can do - property
-   commands, nested builders, method calls, ordinary control flow - comes from what `<Receiver>` declares, not from
+1. **A builder is three lines: create, configure, return.** Everything a configuration block can do - fields written
+   with `=`, nested builders, method calls, ordinary control flow - comes from what `<Receiver>` declares, not from
    the builder function itself.
 
-2. **A property command inside the block writes a field of the receiver; a call without a receiving field calls a
-   method.** `host "0.0.0.0"` is `self.host = "0.0.0.0"`; a section such as `database { ... }` both reads the field
-   and configures the value it already holds, in place - see [Property commands](../types/property-commands.md).
+2. **A field inside the block is written with `=`; a call without a receiving field calls a method.**
+   `host = "0.0.0.0"` writes `self.host`; a section such as `database { ... }` both reads the field and configures the
+   value it already holds, in place - the one command call a field still takes, and not an assignment - see
+   [Property commands](../types/property-commands.md).
 
 3. **A field that is itself built by a nested block needs no field of function type.** `var database: DatabaseConfig
    = DatabaseConfig()` is enough; the nested `database { ... }` block is exactly this page's mechanism applied one
@@ -117,7 +118,7 @@ fn configured(configure: (var self: Options) => Void): Options {
   options
 }
 
-const options = configured { retries 5 }
+const options = configured { retries = 5 }
 print options
 ```
 
@@ -132,13 +133,14 @@ fn configured(configure: (var self: Options) => Void): Options {
   options
 }
 
-const options = configured { retryCount 5 }
+const options = configured { retryCount = 5 }
 // error: Cannot find `retryCount` here
 ```
 
 ## Related
 
 - [Receiver closures](receiver-closures.md) - the closure form a builder's parameter takes.
-- [Property commands](../types/property-commands.md) - what a command call does to a field inside the block.
+- [Property commands](../types/property-commands.md) - how a field inside the block is written, and the one command
+  call left on it.
 - [Receiver scripts](receiver-scripts.md) - the same mechanism with a whole file as the closure body.
 

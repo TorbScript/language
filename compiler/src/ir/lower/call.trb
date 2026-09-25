@@ -97,8 +97,9 @@ public fn lowerCall(
     .Local(_) | .Field(_, _) | .Constant(_, _) => {
       lowerClosureCall lowering, builder, destination, expression, callee, arguments, annotation
     }
-    // `port 8080`: a call of a member that is not callable writes it, which is an assignment written another way
-    .PropertyWrite(_, _, kind) => {
+    // `database { url = "..." }`: the one property command left, a trailing block on a record field, configures the
+    // field's value in place
+    .PropertyWrite(_, _) => {
       const written = match arguments.first() {
         Some(found) => found.value
         None => {
@@ -106,7 +107,7 @@ public fn lowerCall(
           return unsupportedSlot lowering, builder, destination, what, expression.span
         }
       }
-      lowerPropertyWrite lowering, builder, destination, callee, written, kind
+      lowerPropertyWrite lowering, builder, destination, callee, written
     }
     .TypeOf(_) => unsupportedSlot lowering, builder, destination, "a call of a type", expression.span
     _ => unsupportedSlot lowering, builder, destination, "a call the checker left open", expression.span

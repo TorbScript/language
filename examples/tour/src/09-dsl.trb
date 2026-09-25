@@ -79,8 +79,9 @@ const page = html {
 print page.render()
 
 // --- Property commands ----------------------------------------------------------------
-// A command on a field never calls it, it writes it: `port 8080` is `port = 8080`, `onStart { ... }` assigns the
-// closure, and `limits { ... }` applies the receiver closure to the field's value. No setters, no section methods.
+// A field is written only with `=`: `port = 8080`, `onStart = { ... }`. The one property command left is a trailing
+// block on a field whose value is a record - `limits { ... }` applies the receiver closure to the field's value,
+// configuring it in place. No setters, no section methods.
 
 /** The `limits { }` section of a [ServerOptions]. */
 type Limits {
@@ -88,7 +89,7 @@ type Limits {
   var timeoutSeconds: Int = 30
 }
 
-/** The receiver `serve` configures: every field is set by a command, never by an assignment. */
+/** The receiver `serve` configures: every field is set with `=`, and a record field's block configures it in place. */
 type ServerOptions {
   var host: String = "localhost"
   var port: Int = 8080
@@ -105,13 +106,13 @@ fn serve(configure: (var self: ServerOptions) => Void): ServerOptions {
 }
 
 const options = serve {
-  host "0.0.0.0"
-  port 8443
-  tls = port == 8443                     // Fields are readable, too. With an operator in the value, write the `=`
+  host = "0.0.0.0"
+  port = 8443
+  tls = port == 8443                     // Fields are readable, too
   limits {
-    maxConnections 500
+    maxConnections = 500
   }
-  onStart { print "started" }            // Assigns the closure. Calling a function in a field needs `()`.
+  onStart = { print "started" }          // Calling a function in a field still needs `()`
 }
 options.onStart()
 

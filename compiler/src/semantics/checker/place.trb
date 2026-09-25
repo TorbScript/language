@@ -32,7 +32,7 @@ use isInsideType, isSharedType from "./declaration"
 public type Mutation {
   /** `place = value` */
   case Write
-  /** `port 8080`, `database { ... }`: a property command writes the field it names. */
+  /** `database { ... }`: a trailing block on a record field configures it in place. */
   case Command(member: String)
   /** `list.append(1)`: the member that is a `var fn`. */
   case Receiver(member: String)
@@ -509,9 +509,9 @@ fn reportProblem(var checker: Checker, problem: MutationProblem, at: Span, cause
     .TemporaryRoot => reportTemporary checker, at, cause
     .ConstantField(field) => {
       const name = checker.symbolAt(field).name
-      // A command is the one way of writing a field that reads like a declaration, so the fix names the syntax
+      // A trailing block is the one property command left, so the fix names that syntax
       const note = if const .Command(_) = cause {
-        "`{name} value` writes the field, and only a `var` field can be written"
+        "`{name} \{ ... \}` configures the field in place, and only a `var` field can be configured"
       } else {
         "A field is `const` unless it is declared `var`, and a value is its data"
       }
@@ -577,7 +577,7 @@ fn reportTemporary(var checker: Checker, at: Span, cause: Mutation) {
     .Argument(parameter, callee) => "`{callee}` changes `{parameter}`"
     .Subject => "`if var` binds paths into its subject"
     .Write => "an assignment writes it"
-    .Command(member) => "a command writes its field `{member}`"
+    .Command(member) => "a command configures its field `{member}`"
   }
   checker.reportHere(
     Diagnostic.error("This is a temporary, and {what}: the change would be thrown away", at)
@@ -642,10 +642,9 @@ public fn noteAssignment(var checker: Checker, place: Place) {
 }
 
 /**
- * `port 8080`, `database { ... }`: a property command writes a field, so it is an assignment written another way and
- * asks the very same question - is the path to the field one a change may go through, `private(var)` and a `const` root
- * included. Only the message says which of the two the author wrote. The change itself is noted by [noteAssignment]
- * once the value has been read, exactly as for `=`.
+ * `database { ... }`: a trailing block on a record field configures it in place, which asks the same question an
+ * assignment does - is the path to the field one a change may go through, `private(var)` and a `const` root included.
+ * The change itself is noted by [noteAssignment] once the value has been read, exactly as for `=`.
  */
 public fn checkPropertyWrite(var checker: Checker, callee: Expression, member: String): Place {
   const place = placeOf checker, callee

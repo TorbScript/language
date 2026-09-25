@@ -702,8 +702,8 @@ every item below is.
 
   ```trb
   resources {
-    embeddedWarningAbove 4.megabytes()
-    embeddedErrorAbove 64.megabytes()
+    embeddedWarningAbove = 4.megabytes()
+    embeddedErrorAbove = 64.megabytes()
   }
   ```
 

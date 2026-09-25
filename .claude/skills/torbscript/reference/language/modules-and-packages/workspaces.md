@@ -18,8 +18,8 @@ A project can consist of several projects. A [workspace](../../glossary.md#works
 ## Example
 
 ```trb
-name "acme/shop"
-version "1.4.0"
+name = "acme/shop"
+version = "1.4.0"
 
 workspace {
   members "packages/*", "tools/importer"
@@ -31,8 +31,8 @@ workspace {
 ```text
 shop/
 ├ packages/
-├─ core/            // name "acme/shop-core"
-├─ api/              // name "acme/shop-api", dependencies { runtime "acme/shop-core" }
+├─ core/            // name = "acme/shop-core"
+├─ api/              // name = "acme/shop-api", dependencies { runtime "acme/shop-core" }
 ├ tools/
 ├─ importer/
 ├ project.trb        // the workspace
@@ -71,7 +71,7 @@ own `dependencies { runtime ... }`; what the workspace changes is where that dep
 whether it has to be named.
 
 ```trb
-name "acme/shop-api"
+name = "acme/shop-api"
 
 dependencies {
   runtime "acme/shop-core"
@@ -79,7 +79,7 @@ dependencies {
 ```
 
 ```trb skip a workspace of several projects cannot be built inside one snippet, so the real diagnostic for an unnamed member dependency cannot be produced here
-name "acme/shop-api"
+name = "acme/shop-api"
 
 // No `dependencies` block, but the source still imports `acme/shop-core`
 ```

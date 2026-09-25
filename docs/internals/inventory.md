@@ -142,7 +142,7 @@ The learning path, in order, mirroring `examples/tour/src/*.trb`. Every page has
 | `language/types/exclusivity.md` | Exclusivity | reference | Which two accesses may not overlap | `CONCEPT.md#var-paths-and-var-parameters` |
 | `language/types/shared-types.md` | Shared types | reference | When a value has an identity instead | `CONCEPT.md#identity-shared-type` |
 | `language/types/conversions.md` | Conversions | reference | `From`, `Into`, `TryFrom`, `TryInto`, and the four coercions | `CONCEPT.md#conversions` |
-| `language/types/property-commands.md` | Property commands | reference | Why `port 8080` writes a field | `CONCEPT.md#members-a-method-is-a-constant-that-holds-a-closure` |
+| `language/types/property-commands.md` | Property commands | reference | Why a field is written only with `=`, and what a trailing block on a record field still does | `CONCEPT.md#members-a-method-is-a-constant-that-holds-a-closure` |
 
 ### Package 5: traits and generics
 

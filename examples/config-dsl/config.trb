@@ -2,9 +2,9 @@
  * A configuration script for `ServerConfig`, loaded and run by `main.trb` through `Sandbox.load`.
  *
  * Its body is a closure of type `(var self: ServerConfig) => Void`: it is type checked against `ServerConfig` (try
- * `prot 8080` or `port "8080"`), it can reach nothing but what `ServerConfig` exposes - no IO, no network, no clock -
- * and it is still real code: bindings, loops, conditions, functions all work. `server-config.trb` declares the
- * vocabulary it writes in (`host`, `port`, `database { }`, `route`, `logging { }`).
+ * `prot = 8080` or `port = "8080"`), it can reach nothing but what `ServerConfig` exposes - no IO, no network, no
+ * clock - and it is still real code: bindings, loops, conditions, functions all work. `server-config.trb` declares
+ * the vocabulary it writes in (`host`, `port`, `database { }`, `route`, `logging { }`).
  */
 
 const apiVersion = "v1"
@@ -16,15 +16,15 @@ const secure = true
 // `database { }`, because only the innermost receiver is implicit.
 const databasePassword = secret "DB_PASSWORD"
 
-host "0.0.0.0"
-port if secure { 8443 } else { 8080 }
-tls secure
+host = "0.0.0.0"
+port = if secure { 8443 } else { 8080 }
+tls = secure
 
 database {
-  url "postgres://localhost:5432/mydb"
-  username "myuser"
-  password databasePassword              // Read above: inside this block the receiver is the DatabaseConfig
-  poolSize 20
+  url = "postgres://localhost:5432/mydb"
+  username = "myuser"
+  password = databasePassword            // Read above: inside this block the receiver is the DatabaseConfig
+  poolSize = 20
 }
 
 route "/health", to: "health"
@@ -34,7 +34,7 @@ for resource in resources {
 }
 
 logging {
-  level = .Debug                         // A case keeps its dot, and a command argument cannot start with one
+  level = .Debug                         // A field is written with `=`, and a case keeps its dot
   if secure {                            // `tls` is not visible here: only the innermost receiver is implicit
     redact "password", "token"
   }

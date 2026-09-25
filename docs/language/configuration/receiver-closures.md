@@ -71,7 +71,7 @@ print counter.value
    to what a bare name can mean inside the inner one.
 
 4. **Naming a receiver closure's parameter is what reaches it from inside a nested receiver closure**, the way
-   `server { s => s.database { url "{s.host}/db" } }` reads `s.host` from inside the nested `database` block. Naming
+   `server { s => s.database { url = "{s.host}/db" } }` reads `s.host` from inside the nested `database` block. Naming
    the parameter makes it an ordinary `var` parameter, and a nested closure that only reads it and runs immediately -
    never escaping the call it was passed to - does not capture it past that call.
 
@@ -92,7 +92,7 @@ print counter.value
    }
 
    const config = server { s =>
-     s.database { url "{s.host}/db" }
+     s.database { url = "{s.host}/db" }
    }
 
    print config.database.url
@@ -115,7 +115,7 @@ print counter.value
    }
 
    const config = server { s =>
-     s.onStart { print s.host }
+     s.onStart = { print s.host }
    }
    // error: This closure captures the `var` parameter `s` and may outlive the call
    ```

@@ -21,8 +21,8 @@ a `src/`. What it may be imported by is never a guess, because a project has to 
 ## Example
 
 ```trb
-name "acme/greeter"
-version "0.1.0"
+name = "acme/greeter"
+version = "0.1.0"
 
 dependencies {
   runtime "acme/greeting-words:^1.0.0"

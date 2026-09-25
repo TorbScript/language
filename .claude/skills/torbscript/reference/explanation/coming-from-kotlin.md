@@ -171,7 +171,7 @@ print counter.value
 ```
 
 CONCEPT.md's design lets a nested receiver closure reach an outer one by naming its parameter
-(`server { s => s.database { url "{s.host}/db" } }`), which is the one annotation-free way in; today's checker
+(`server { s => s.database { url = "{s.host}/db" } }`), which is the one annotation-free way in; today's checker
 rejects that shape as a closure that might outlive the call, a gap tracked on
 [Receiver closures](../language/configuration/receiver-closures.md#rules). What both agree on already is that
 `extend` never lets a function pick a bare, untyped receiver the way `fun Int.double()` does - the type comes first,

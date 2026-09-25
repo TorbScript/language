@@ -325,7 +325,7 @@ underscore is written when it would create one).
 | `"{a} and {b}"`              | `Show.show`/`showNested` per part, then one `Intrinsic.TextConcat(parts)` - never repeated `String.add`      |
 | defaults                     | `Adaptation.DefaultArgument`: the default expression is lowered **at the call site**, after the written arguments |
 | variadics / `...e`           | Build a list at the call site; `Spread` calls `addAll` through the recorded `Iterate` witness                |
-| `port 8080`, `db { ... }`    | `Resolution.PropertyWrite`: `.Assign` a `Write`, `.AssignClosure` a `Closure` then a `Write`, `.Configure` a `Reference` to the field passed to the closure |
+| `database { ... }`           | `Resolution.PropertyWrite`: a `Reference` to the field passed to the closure |
 | `p.copy(y: 30)`              | `Construct` from the old fields plus the overrides; when the source is at its last use and `Boxed`, `MakeUnique` plus `Write` instead - this is how `p = p.copy(y: 30)` stays in place |
 | `with Show` derived          | A generated body per instance (section 1.4)                                                                 |
 | top-level code of `main.trb` | One `IrFunction` `t_main`, statements in source order; `Process.arguments()` is a runtime call               |
@@ -754,7 +754,7 @@ torb ir <path>                          The IR of a file or project, in the text
   `<workspace>/.torb/cache/<profile>/<key>/program` and runs it, forwarding the arguments, the three standard
   streams and the exit code. It prints nothing extra on a cache hit. After 7.2 the VM becomes the default and this
   path stays as `torb run --native`.
-- **Output paths.** From `project.trb`: `build { input "src/main.trb", output "build/{target}/torb" }`. The static
+- **Output paths.** From `project.trb`: `build { input = "src/main.trb", output = "build/{target}/torb" }`. The static
   manifest reader (`compiler/src/project/manifest.trb`) gains `buildOutput` and `buildTarget`, and keeps the
   interpolation as literal text; the driver substitutes `{target}` (the profile) and `{binary}` (the part of `name`
   after the `/`). `--out` overrides. A workspace root builds its members in dependency order.

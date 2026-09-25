@@ -249,7 +249,7 @@ public fn evaluated(script: (var self: Project) => Void): String {
   dependencies are resolved (PROJECT.md section 7).
 - **`settings()` prints what differs from the vocabulary's defaults**, in the order of the vocabulary, every argument a
   literal. A default is not printed because the static reader has defaults of its own - a workspace without a `test`
-  section has no test directory, which a printed `test { input "tests" }` would contradict.
+  section has no test directory, which a printed `test { input = "tests" }` would contradict.
 - **One front end run evaluates every manifest below a path.** `torb manifest --check .` checks the workspace once,
   lowers every manifest's script function next to `evaluated` into one program, and runs each in its own sandbox. That
   is what makes the comparison with the static reader cheap enough to be a gate of tier A: the two must agree on every

@@ -25,8 +25,8 @@ be there in source, and the workspace is what makes that legal.
    ```text
    shop/
    ├ packages/
-   ├─ core/            project.trb: name "acme/shop-core"
-   ├─ api/              project.trb: name "acme/shop-api"
+   ├─ core/            project.trb: name = "acme/shop-core"
+   ├─ api/              project.trb: name = "acme/shop-api"
    ├ tools/
    ├─ importer/
    ├ project.trb
@@ -73,8 +73,8 @@ be there in source, and the workspace is what makes that legal.
 ## Full example
 
 ```trb
-name "acme/shop"
-version "1.4.0"
+name = "acme/shop"
+version = "1.4.0"
 
 workspace {
   members "packages/*", "tools/importer"
@@ -84,8 +84,8 @@ workspace {
 The `project.trb` of one member, depending on a sibling from source:
 
 ```trb
-name "acme/shop-api"
-version "1.4.0"
+name = "acme/shop-api"
+version = "1.4.0"
 
 dependencies {
   runtime "acme/shop-core"

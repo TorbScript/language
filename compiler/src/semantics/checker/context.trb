@@ -146,10 +146,10 @@ public type Resolution {
   /** The type itself, as the target of a static member or of a constructor: `Point` in `Point.origin`. */
   case TypeOf(owner: TypeId)
   /**
-   * `port 8080`, `onStart { ... }`, `database { ... }`: a call of a member that is not callable writes it.
-   * The kind says which of the three the lowering has to emit.
+   * `database { url = "..." }`: a field is written only with `=` (2026-09-25), so the one property command left is a
+   * trailing block on a record field, which configures the value it already holds in place.
    */
-  case PropertyWrite(owner: TypeId, field: SymbolId, kind: PropertyWriteKind)
+  case PropertyWrite(owner: TypeId, field: SymbolId)
   /** A construct that could not be resolved because a message was already given about it. */
   case Deferred
 }
@@ -165,19 +165,6 @@ public type DefaultSource {
   case Declared(symbol: SymbolId)
   /** Two declarations mint the same function type, so a value of it says nothing about which defaults are meant. */
   case Ambiguous
-}
-
-/**
- * Which of the three forms a property command is. There is no case where a line could mean two of them: a command on
- * a field writes it, and a trailing closure on one configures its value in place unless the field holds a function.
- */
-public type PropertyWriteKind {
-  /** `port 8080`, `tls(port == 8443)`: the argument is the new value of the field. */
-  case Assign
-  /** `onStart { print "started" }`: the field holds a function, and the closure becomes its value. */
-  case AssignClosure
-  /** `database { url "..." }`: the receiver closure is applied to the field's value, which changes in place. */
-  case Configure
 }
 
 /**

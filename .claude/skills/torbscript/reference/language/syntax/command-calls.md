@@ -113,13 +113,14 @@ Then the rest of the rules:
    print numbers.map({ _ * 2 }).toList()
    ```
 
-10. **A command on a field writes the field; it never calls it.** `port 8080` is `port = 8080`, and `database { ... }`
-    configures the field's value in place. So calling a function held in a field always needs parentheses: `onStart()`
-    calls it, `onStart { ... }` assigns it.
+10. **A field is written only with `=`, never with a command.** `port 8080` is a compile error, and the fix is
+    `port = 8080` - this holds everywhere, including inside a receiver closure. The one property command left is a
+    trailing block on a field whose value is a *record* type, never a function: `database { ... }` applies the block
+    to the value the field already holds, configuring it in place rather than replacing it. Calling a function held in
+    a field always needs parentheses: `onStart()` calls it, `onStart = { ... }` assigns it.
 
-11. **Only the command form writes a field; parentheses always call.** `tls true` writes the field and `tls(true)` is an
-    error, because a `Bool` field has nothing to call. A value the command form cannot take - an operator at the top
-    level of it, or a first token `(`, `[`, `-`, `!` or `.` - is written with `=`: `tls = port == 8443`.
+11. **Parentheses always call, and never write a field.** `tls(true)` is an error, because a `Bool` field has nothing
+    to call - the fix is `tls = true`.
 
     ```trb error
     type Options {
@@ -172,7 +173,8 @@ The second form parses and means the same thing. It is still wrong, because `tor
 until it is rewritten.
 
 **A command is not a new call syntax with different semantics.** `f a, b` and `f(a, b)` produce the same syntax tree apart
-from a style flag. The only place where the parentheses change the meaning is a call on a field, which is rule 10.
+from a style flag. The only place where the parentheses change the meaning is a trailing block on a record field, which
+is rule 10.
 
 **Whitespace never decides anything.** The rules above are about tokens, not about spaces. `f -1` is subtraction because
 `-` cannot start a command argument, not because of where the space is.

@@ -11,9 +11,9 @@ Its input is the syntax tree ([`compiler/src/syntax/ast.trb`](../compiler/src/sy
 produced: packages, modules with ids, symbols, file scopes, exports, and a side table that resolves every name in a
 _type position_. Its output is a set of side tables that milestone 5 lowers to the typed IR.
 
-**Names in expressions are part of this pass, not of milestone 3.** What `port` means in `server { port 8080 }`
-depends on the type of the parameter the closure is passed to, so resolving and checking cannot be separated
-(design principle 1). Everything the checker resolves it also records.
+**Names in expressions are part of this pass, not of milestone 3.** What `database` means in
+`server { database { url = "..." } }` depends on the type of the parameter the closure is passed to, so resolving and
+checking cannot be separated (design principle 1). Everything the checker resolves it also records.
 
 ## 0. What the pass has to guarantee
 
@@ -25,7 +25,7 @@ depends on the type of the parameter the closure is passed to, so resolving and 
 | What `?`, `??`, `?.`, `into()`, interpolation mean    | The resolved `From`/`OrElse`/`map`/`show` implementation                  |
 | Implicit `self`, `_`, named closure parameters        | `Adaptation.ImplicitSelf`, `.ImplicitParameter`                           |
 | Default arguments, argument order, spread, `lazy`     | `Adaptation.DefaultArgument`, `.Reorder`, `.Spread`, `.Lazy`              |
-| `port 8080`, `database { ... }`                      | `Resolution.PropertyWrite` with the kind of write                        |
+| `database { ... }`                                    | `Resolution.PropertyWrite`                                                |
 | `with Show` on a type that has no `show`             | `DerivedImplementation` with the members to generate                     |
 | Which arm of a `match` can match                     | `MatchPlan`: the decision order and the reachable arms                   |
 | Where a copy is a move, where a path is a reference  | `Place` per assignment and per `var` argument                            |
@@ -259,8 +259,8 @@ public type Resolution {
   case Construct(owner: TypeId)
   case CopyOf(owner: TypeId)
   case CaseOf(owner: TypeId, variant: SymbolId)
-  /** `port 8080`, `database { ... }`, `onStart { ... }`. The kind is `.Assign`, `.AssignClosure` or `.Configure`. */
-  case PropertyWrite(owner: TypeId, field: SymbolId, kind: PropertyWriteKind)
+  /** `database { url = "..." }`: a trailing block on a record field, configuring the value it already holds in place. */
+  case PropertyWrite(owner: TypeId, field: SymbolId)
   case Namespace(module: ModuleId)
 }
 
@@ -459,7 +459,7 @@ In order, first hit wins:
 6. Error.
 
 **Only one receiver is implicit.** Outer receivers and the `self` of an enclosing method are _not_ searched; to reach
-one, name the parameter (`server { s => s.database { url "{s.host}/db" } }`). This is the rule the concept's own
+one, name the parameter (`server { s => s.database { url = "{s.host}/db" } }`). This is the rule the concept's own
 `project.trb` example relies on, and it is what makes `@DslMarker` unnecessary. (CONCEPT.md said two things here;
 gap 4 decided it.)
 
@@ -484,20 +484,21 @@ whether it has to build a closure.
 
 ### 3.3 Command calls and property commands
 
-The parser already decided what is a command call (`CallStyle.Command`). The checker decides what it means:
+**A field is written only with `=`** (2026-09-25), everywhere, including inside a receiver closure. The parser
+already decided what is a command call (`CallStyle.Command`); the checker decides what it means:
 
 | The callee resolves to                       | Meaning                                     | Needs               |
 |----------------------------------------------|---------------------------------------------|---------------------|
 | a function, method or a field holding a function, **called with `()`** | An ordinary call     | -                   |
 | a function or method, command style          | An ordinary call                            | -                   |
-| a field whose type is a function type        | `field = argument` (`onStart { ... }`)       | a `var` path        |
-| a field, one argument                        | `field = argument` (`port 8080`)             | a `var` path        |
-| a field, one trailing closure, field type is a `type` | the receiver closure is applied to the field in place (`database { ... }`) | a `var` path |
-| a field, anything else                       | error: "`port` is a field. `port 8080` writes it" | -             |
+| a field, one trailing closure, field type is a record type (not a function) | the receiver closure is applied to the field in place (`database { ... }`) | a `var` path |
+| a field, any other command form              | error: "`{name}` is a field: write `{name} = value`" (`port 8080`, `onStart { ... }`) | -             |
 
-`PropertyWriteKind` is `.Assign`, `.AssignClosure` or `.Configure`. A property command is only possible through the
-innermost receiver or an explicit target (`build.target "dev"`); a local binding is written with `=`.
-"Calling a function in a field always needs parentheses" stays: `onStart()` calls, `onStart { ... }` assigns.
+There is no `PropertyWriteKind` any more: the one property command left is a trailing block on a record field, and
+`Resolution.PropertyWrite(owner, field)` carries no kind. A property command is only possible through the innermost
+receiver or an explicit target (`build.target = "dev"`); a field is otherwise written with `=`, and so is a local
+binding. "Calling a function in a field always needs parentheses" stays: `onStart()` calls, `onStart = { ... }`
+assigns.
 
 ### 3.4 Arguments, labels, trailing closures
 
@@ -766,7 +767,7 @@ html { root =>
 ```
 
 `swap(a, a)` and `swap(items[i], items[j])` are errors (the second with the note "use `items.swapAt(i, j)`").
-Different fields are fine (`project.build { output "{project.name}" }`), because `Field` steps with different symbols
+Different fields are fine (`project.build { output = "{project.name}" }`), because `Field` steps with different symbols
 never conflict. A closure that captures a `var` binding counts as an access to that binding for every call that may
 run it. A quotation is not a closure here: it is never run at the call site. The check is conservative and static;
 correct programs it rejects go into the Open Questions of CONCEPT.md.
@@ -939,7 +940,7 @@ The catalogue (the ~40 that matter):
 | `?` in the wrong function | ``` `?` needs a function that returns an `Option` or a `Result` ``` |
 | Arguments | ``` `connect` takes 2 arguments, 3 were given ``` / ``` `connect` has no parameter `timout`. Did you mean `timeout`? ``` / ``` `host` already has an argument ``` |
 | Trailing closure | ``` The trailing closure fills `transform`, which was already given by name ``` |
-| Property command | ``` `port` is a field: `port 8080` writes it. Only a function can be called ``` / ``` `onStart` holds a function: `onStart { ... }` assigns it, `onStart()` calls it ``` |
+| Property command | ``` `port` is a field: write `port = value`. Only a function can be called ``` / ``` `onStart` holds a function: `onStart = { ... }` assigns it, `onStart()` calls it ``` |
 | Top-level code | ``` Top-level code is only allowed in entry files. `./syntax/lexer.trb` is imported ``` |
 | Constant not evaluable | ``` The initializer of a top-level `const` has to be known at compile time ``` |
 | Const arithmetic | ``` There is no arithmetic in types. `Array<Float, Size + 1>` needs its own const parameter ``` |
@@ -965,7 +966,7 @@ compiler/src/semantics/checker/
 ├ derive.trb          Derived implementations: Equals, Hash, Show, copy, Encode, Decode, From, literal types
 ├ member.trb          Member lookup on every form of type
 ├ name.trb            Names in expressions: the lookup order, receivers, the messages about a name
-├ command.trb         Property commands: `port 8080`, `onStart { ... }`, `database { ... }`
+├ command.trb         Property commands: a field is written only with `=`; `database { ... }` still configures in place
 ├ receiver.trb        Receiver scripts: `project.trb` and what `Sandbox.load` names
 ├ call.trb            Arguments, labels, defaults, variadics, spread, trailing closures, lazy
 ├ expression.trb      check/infer for every ExpressionKind, operators, interpolation, `?`, `??`, `?.`

@@ -46,8 +46,9 @@ ln -s "$PWD/.vscode/extensions/torbscript" ~/.vscode/extensions/torbscript
 - Types (uppercase names), primitives, `Self`, `Some`/`Ok`/`Fail`/`None`
 - Calls, generic calls (`load<Config>(path)`), trailing closures (`.map { }`), labels (`to: "x"`), implicit parameters (`_`, `_2`)
 - Command calls at the start of a statement (`route "/health", to: "health"`, `database {`) and on member paths
-  (`expect(x).toBe 3`). This is a heuristic: a TextMate grammar has no types, so it cannot know that `port 8080` is a
-  property command and not a call. Both are colored as calls.
+  (`expect(x).toBe 3`). This is a heuristic: a TextMate grammar has no types, so it cannot know that `database { ... }`
+  configures a field in place rather than calling a method - a field itself is written with `=`, which colors as an
+  ordinary assignment. Both `database { ... }` and an actual call are colored as calls.
 
 The grammar follows `CONCEPT.md`. When the syntax changes, change `trb.tmLanguage.json` and the keyword lists in
 `extension.js` - both are derived from `compiler/src/syntax/token.trb`'s `TokenKind`, so that is

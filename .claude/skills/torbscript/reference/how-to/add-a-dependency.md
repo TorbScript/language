@@ -77,8 +77,8 @@ The whole of `project.trb` for a project with one runtime and one development de
 needs because it is not the default one.
 
 ```trb
-name "acme/shop"
-version "1.0.0"
+name = "acme/shop"
+version = "1.0.0"
 
 registry "acme", url: "https://packages.acme.test"
 

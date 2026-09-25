@@ -60,9 +60,10 @@ lets it. If commands did not exist, every control structure the standard library
 need its own keyword, which is the opposite of [Control structures are functions](../language/extensibility/control-structures.md).
 
 **Because a configuration file gets its look from the same rule that makes `print "hello"` read naturally, not from a
-second syntax.** `port 8080` inside a receiver closure is an ordinary command call on a field - see
-[Property commands](../language/types/property-commands.md) - so a `project.trb` or any other DSL is legal TorbScript
-end to end, checked by the same compiler that checks a function body, instead of a template language layered on top.
+second syntax.** `route "/health", to: "health"` inside a receiver closure is an ordinary command call on a method -
+see [Property commands](../language/types/property-commands.md) - so a `project.trb` or any other DSL is legal
+TorbScript end to end, checked by the same compiler that checks a function body, instead of a template language
+layered on top.
 
 **Because deciding it once removes a decision from every call site.** Leaving the choice to the author, as most
 languages that allow both do, means a codebase mixes `print(x)` and `print x` for no reason a reader can find, and a

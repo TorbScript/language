@@ -194,8 +194,9 @@ The language has value semantics; identity is the marked exception (`shared type
    name in a type position resolved to). It looked at `std/` and the examples for the first time beyond their
    syntax and found `Range`, `NumberParseError` and `NumberRangeError` missing from the prelude.
 4. Type checker: inference, traits, generics, exhaustiveness, `var` paths, exclusivity, dead changes - and the names
-   in _expressions_. They cannot be resolved earlier: what `port` means in `server { port 8080 }` depends on the type
-   of the parameter the closure is passed to (design principle 1), so resolving names and checking types is one pass.
+   in _expressions_. They cannot be resolved earlier: what `route` means in `server { route "/health", to: "health" }`
+   depends on the type of the parameter the closure is passed to (design principle 1), so resolving names and checking
+   types is one pass.
    From here on the compiler checks itself. The plan and the state of its ten steps are in
    [docs/TYPECHECKER.md](TYPECHECKER.md); **4.1 to 4.4 are done**: every type position of the repository becomes a
    type, every declaration a signature, and every expression a type - traits and their implementations included, so the

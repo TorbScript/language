@@ -136,7 +136,7 @@ print([10, 20].collect(salaryStatistics))
 ```trb error
 const salaryStatistics = summing { value: Int => value }
 print(salaryStatistics())
-// error: The checker did not work out the type of this expression
+// error: `salaryStatistics` is a `Accumulator<Int64, Int64>`, not a function
 ```
 
 The one thing the merged type does not say is whether what it was handed is fresh: an accumulator that has already

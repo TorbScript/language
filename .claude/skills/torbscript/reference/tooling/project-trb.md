@@ -17,14 +17,14 @@ source:
 ---
 
 Every project has one `project.trb` at its root. It is a [receiver script](../language/configuration/receiver-scripts.md)
-against [`Project`](../standard-library/project.md), so a setting is a field written as a command
-(`name "acme/shop"`) and a section is a field configured in place (`dependencies { ... }`).
+against [`Project`](../standard-library/project.md), so a setting is a field written with `=`
+(`name = "acme/shop"`) and a section is a field configured in place (`dependencies { ... }`).
 
 ## Synopsis
 
 ```trb fragment
-name "owner/name"
-version "1.0.0"
+name = "owner/name"
+version = "1.0.0"
 
 dependencies {
   runtime "acme/http:^1.2.3"
@@ -36,11 +36,11 @@ workspace {
 }
 
 build {
-  input "src/main.trb"
+  input = "src/main.trb"
 }
 
 test {
-  input "tests"
+  input = "tests"
 }
 ```
 
@@ -62,12 +62,12 @@ each as a literal string argument:
 | `dependencies { runtime "..." }` | What a package may import at all |
 | `dependencies { development "..." }` | The same, for a project's own tests and tools |
 | `workspace { members "..." }` | Which directories are the projects of a workspace |
-| `build { input "..." }` | The entry file [`torb build`](torb-build.md) compiles when a directory is given |
-| `test { input "..." }` | The directory [`torb test`](torb-test.md) defaults to (`test` itself still has to be told the path) |
+| `build { input = "..." }` | The entry file [`torb build`](torb-build.md) compiles when a directory is given |
+| `test { input = "..." }` | The directory [`torb test`](torb-test.md) defaults to (`test` itself still has to be told the path) |
 
 `authors`, `registry`, `build { target, output }` and `test { coverageThreshold }` are part of `Project`'s vocabulary
 and type check, because the whole file is also checked as an ordinary program against `Project` - but no command
-reads them yet. A computed setting, such as `build { output "build/{target}/{binary}" }`
+reads them yet. A computed setting, such as `build { output = "build/{target}/{binary}" }`
 (see `CONCEPT.md`), type checks the same way and is silently not read either: only a
 literal string argument with no `{...}` in it is.
 
@@ -83,7 +83,7 @@ $ torb manifest shop
 error: The script may not read `../VERSION`: it is not inside `C:/work/shop`
  --> shop/project.trb:4
   |
-4 | version File.readText("../VERSION").ok() ?? "0.0.0"
+4 | version = File.readText("../VERSION").ok() ?? "0.0.0"
 ```
 
 ### Workspaces
@@ -94,8 +94,8 @@ workspace root all work on every member this way, which is how the toolchain fin
 that only names a dependency on it.
 
 ```trb
-name "acme/shop"
-version "1.4.0"
+name = "acme/shop"
+version = "1.4.0"
 
 workspace {
   members "packages/*"
@@ -108,20 +108,20 @@ workspace {
 `build { target, output }` and `test { coverageThreshold }` type check and are not.
 
 ```trb fragment
-name "torbscript/example-game-engine"
-version "0.1.0"
+name = "torbscript/example-game-engine"
+version = "0.1.0"
 authors "Torben Köhn"
 
 const binary = name.substringAfter("/") ?? name   // Read before `build { }`: only the innermost receiver is implicit
 
 build {
-  target "release"
-  input "src/main.trb"
-  output "build/{target}/{binary}"
+  target = "release"
+  input = "src/main.trb"
+  output = "build/{target}/{binary}"
 }
 test {
-  input "tests"
-  coverageThreshold 80
+  input = "tests"
+  coverageThreshold = 80
 }
 ```
 

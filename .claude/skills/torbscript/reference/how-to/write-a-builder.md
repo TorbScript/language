@@ -38,13 +38,13 @@ the builder reads like a small language of its own - checked like ordinary code,
    }
    ```
 
-3. **Call it with a trailing closure.** A property command inside writes a field; nothing else has to change for
-   `host "0.0.0.0"` to mean `self.host = "0.0.0.0"`.
+3. **Call it with a trailing closure.** A field inside is written with `=`; nothing else has to change for
+   `host = "0.0.0.0"` to mean `self.host = "0.0.0.0"`.
 
    ```trb fragment
    const options = serve {
-     host "0.0.0.0"
-     port 8443
+     host = "0.0.0.0"
+     port = 8443
    }
    ```
 
@@ -74,8 +74,8 @@ the builder reads like a small language of its own - checked like ordinary code,
   not the outer one - reaching the outer receiver needs its parameter named, which is a design `CONCEPT.md`
   describes and today's checker does not yet accept for a closure that reads it (see
   [Receiver closures](../language/configuration/receiver-closures.md)).
-- **A command on a field writes it; calling it always needs parentheses.** `onStart { ... }` assigns the closure,
-  `onStart()` calls what is in it - the same line never means both.
+- **A field is written only with `=`, even a function-typed one; calling it always needs parentheses.**
+  `onStart = { ... }` assigns the closure, `onStart()` calls what is in it - the same line never means both.
 - **A name the receiver does not have is a compile error at that line**, with the receiver's own members offered.
   There is no silent fallback the way an unknown key in a map or a string-keyed configuration format would have.
 - **A field the block sets has to be `var`.** A `const` field is fixed after construction, so the builder's caller
@@ -112,11 +112,11 @@ fn serve(configure: (var self: ServerOptions) => Void): ServerOptions {
 }
 
 const options = serve {
-  host "0.0.0.0"
-  port 8443
+  host = "0.0.0.0"
+  port = 8443
   database {
-    url "postgres://localhost:5432/app"
-    poolSize 20
+    url = "postgres://localhost:5432/app"
+    poolSize = 20
   }
   route "/health", to: "health"
 }

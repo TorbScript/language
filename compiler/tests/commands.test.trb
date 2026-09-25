@@ -1,9 +1,12 @@
 /**
- * Command calls and property commands. A command on a function is an ordinary call; the command form on a member that
- * is not callable **writes** it, and that is the whole configuration DSL. Parentheses always call.
+ * Command calls and property commands. A command on a function is an ordinary call. **A field is written only with
+ * `=`** (2026-09-25), everywhere, including inside a receiver closure: a command call that used to write a field
+ * (`port 8080`, `onStart { ... }`) is now an error whose fix is reconstructed from what was written. The one command
+ * call that still reaches a field is a trailing block on a field whose value is a record, never a function
+ * (`database { url = "..." }`): it configures the field's value in place. Parentheses always call.
  *
- * What a property command records is `Resolution.PropertyWrite(owner, field, kind)` at the span of the command, which
- * is what the lowering reads instead of looking at a name a second time - so every test here asserts the kind.
+ * What the surviving property command records is `Resolution.PropertyWrite(owner, field)` at the span of the
+ * command, which is what the lowering reads instead of looking at a name a second time.
  *
  * The declaration comes *after* the body in these sources, because `spanOf` finds the first occurrence of a text.
  */
@@ -15,8 +18,8 @@ use probe, problems, notes, problemsOf, notesOf from "./harness"
 const options = "\ntype Limits \{\n  var maxConnections: Int = 100\n\}\n\n"
   + "type Level \{\n  case Debug\n  case Info\n\}\n\n"
   + "type Options \{\n  var host: String = \"\"\n  var port: Int = 8080\n  var tls: Bool = false\n"
-  + "  var limits: Limits = Limits()\n  var level: Level = .Info\n  var onStart: () => Void = \{\}\n"
-  + "  label: String = \"\"\n\n"
+  + "  var limits: Limits = Limits()\n  limits2: Limits = Limits()\n  var level: Level = .Info\n"
+  + "  var onStart: () => Void = \{\}\n  label: String = \"\"\n\n"
   + "  var fn route(path: String, to: String) \{\}\n\n"
   + "  var fn tags(...names: String) \{\}\n\}\n\n"
   + "fn serve(configure: (var self: Options) => Void): Options \{\n"
@@ -45,114 +48,127 @@ group "A command call of a function" {
     assert(probed.adaptationsOf("tags \"one\", \"two\"") == ["variadic String from 0"])
   }
 
-  test "a function in a field is called with parentheses and assigned with a block" {
+  test "a function in a field is called with parentheses and assigned with `=`" {
     const source = inServe "    onStart()"
     assert problems(source).isEmpty()
     const probed = probe source
     assert(probed.typeOf("onStart()") == "Void")
   }
-}
 
-group "Property commands" {
-  test "`port 8080` writes the field" {
-    const source = inServe "    port 9000"
+  test "an `if` may start a command argument, so a value can be computed" {
+    const source = inServe "    tags if tls \{ \"secure\" \} else \{ \"open\" \}"
     assert problems(source).isEmpty()
     const probed = probe source
-    assert(probed.resolutionOf("port 9000") == "assign Options.port")
-    assert(probed.resolutionOf("port") == "field Options.port")
-    assert(probed.typeOf("9000") == "Int64")
-    assert(probed.typeOf("port 9000") == "Void")
+    assert(probed.resolutionOf("tags if tls \{ \"secure\" \} else \{ \"open\" \}") == "call tags")
+  }
+}
+
+group "A field is written only with `=`" {
+  test "`port 8080` is an error: the fix is the assignment it used to mean" {
+    const source = inServe "    port 9000"
+    assert(problems(source) == ["`port` is a field: write `port = 9000`"])
   }
 
-  test "the argument is checked against the type of the field" {
-    assert(problems(inServe("    port \"9000\"")) == ["Expected `Int64`, found `String`"])
+  test "the fix quotes the value exactly as it was written, whatever its type" {
+    assert(
+      problems(inServe("    port \"9000\""))
+        == ["`port` is a field: write `port = \"9000\"`"]
+    )
+  }
+
+  test "`onStart \{ ... \}` is an error: the fix is `onStart = \{ ... \}`" {
+    const source = inServe "    onStart \{ \}"
+    assert(problems(source) == ["`onStart` is a field: write `onStart = \{ \}`"])
   }
 
   test "a misspelled field is an unknown name, not a command" {
     assert(problems(inServe("    prot 9000")) == ["Cannot find `prot` here"])
   }
 
-  test "parentheses call, so a field that holds no function is not written by them" {
-    const source = inServe "    tls(port == 8443)"
-    assert(problems(source) == ["`tls` is a field, and parentheses call a function"])
-    assert(notes(source) == ["The command form writes a field: `tls value`, the same as `tls = value`"])
-    // The value is still read as the field's: one message, and the argument has its type
-    const probed = probe source
-    assert(probed.typeOf("port == 8443") == "Bool")
-    // A value the command form cannot take - an operator at its top level - is written with `=`
-    assert problems(inServe("    tls = port == 8443")).isEmpty()
+  test "a field with more than one argument still names the whole write" {
+    assert(
+      problems(inServe("    port 1, 2"))
+        == ["`port` is a field: write `port = 1, 2`"]
+    )
   }
 
-  test "a closure in parentheses is handed to the function the field holds, which takes none" {
-    const source = inServe "    onStart(\{ \})"
-    assert(problems(source) == ["`onStart` holds a function: `onStart \{ ... \}` assigns it, `onStart()` calls it"])
-    assert problems(inServe("    onStart()")).isEmpty()
+  test "a field that holds a function is written the same way as any other" {
+    assert(
+      problems(inServe("    onStart 1, 2"))
+        == ["`onStart` is a field: write `onStart = 1, 2`"]
+    )
+  }
+
+  test "a field that is not a `var` is still the removed-write error, not a mutability one" {
+    // The write form is gone regardless of whether the field could have been written at all: one root cause
+    assert(problems(inServe("    label \"a\"")) == ["`label` is a field: write `label = \"a\"`"])
+  }
+
+  test "with `=` the write reaches the field, and a `const` one is rejected the way an assignment is" {
+    assert problems(inServe("    port = 9000")).isEmpty()
+    assert(problems(inServe("    label = \"a\"")) == ["`label` never changes after construction"])
+  }
+}
+
+group "Property commands: the block that is left" {
+  test "a block on a field whose type is a function is an error, not an assignment" {
+    const source = inServe "    onStart \{ print \"started\" \}"
+    assert(problems(source) == ["`onStart` is a field: write `onStart = \{ print \"started\" \}`"])
   }
 
   test "a field is readable where it is written" {
-    const source = inServe "    host \"\{port\}\""
+    const source = inServe "    host = \"\{port\}\""
     assert problems(source).isEmpty()
     const probed = probe source
     assert(probed.resolutionOf("port") == "field Options.port")
   }
 
-  test "a block on a field whose type is a function assigns the closure" {
-    const source = inServe "    onStart \{ \}"
+  test "a block on a field whose type is a record configures it in place" {
+    const source = inServe "    limits \{\n      maxConnections = 500\n    \}"
     assert problems(source).isEmpty()
     const probed = probe source
-    assert(probed.resolutionOf("onStart \{ \}") == "assign closure Options.onStart")
-    assert(probed.typeOf("\{ \}") == "() => Void")
-  }
-
-  test "a closure that does not fit the field is reported against the field's type" {
-    assert(
-      problems(inServe("    onStart \{ value => value \}"))
-        == ["This closure takes 0 parameters, 1 was written"]
-    )
-  }
-
-  test "a block on a field whose type is a type configures it in place" {
-    const source = inServe "    limits \{\n      maxConnections 500\n    \}"
-    assert problems(source).isEmpty()
-    const probed = probe source
-    assert(probed.resolutionOf("limits \{\n      maxConnections 500\n    \}") == "configure Options.limits")
-    assert(probed.typeOf("\{\n      maxConnections 500\n    \}") == "(var self: Limits) => Void")
-    assert(probed.resolutionOf("maxConnections 500") == "assign Limits.maxConnections")
+    assert(probed.resolutionOf("limits \{\n      maxConnections = 500\n    \}") == "configure Options.limits")
+    assert(probed.typeOf("\{\n      maxConnections = 500\n    \}") == "(var self: Limits) => Void")
+    assert(probed.resolutionOf("maxConnections") == "field Limits.maxConnections")
   }
 
   test "a command through a target instead of the receiver" {
     // `made` is read afterwards: a command is a change, and a change nobody reads is a mistake of its own (design 5.3)
-    const source = "fn probe() \{\n  var made = Options()\n  made.port 9000\n  print made.port\n\}\n{options}"
+    const source = "fn probe() \{\n  var made = Options()\n  made.limits \{ maxConnections = 500 \}\n  print made.limits\n\}\n{options}"
     assert problems(source).isEmpty()
     const probed = probe source
-    assert(probed.resolutionOf("made.port 9000") == "assign Options.port")
-    assert(probed.adaptationsOf("port") == [])
+    assert(probed.resolutionOf("made.limits \{ maxConnections = 500 \}") == "configure Options.limits")
+    assert(probed.adaptationsOf("limits") == [])
+  }
+
+  test "a closure that does not fit the field's configuration is reported against it" {
+    assert(
+      problems(inServe("    limits \{ a, b => a \}"))
+        == ["This closure takes 1 parameter, 2 were written"]
+    )
   }
 }
 
 group "What a property command is not" {
-  test "a field that is not a `var` never changes" {
-    assert(problems(inServe("    label \"a\"")) == ["`label` never changes after construction"])
-    assert(
-      notes(inServe("    label \"a\""))
-        == ["`label value` writes the field, and only a `var` field can be written"]
-    )
-  }
-
-  test "a field without an argument, and with more than one" {
+  test "a field without an argument, and parentheses" {
     assert(problems(inServe("    port()")) == ["`port` is a field, and parentheses call a function"])
     assert(notes(inServe("    port()")) == ["A field is read without them: `port`"])
-    assert(
-      problems(inServe("    port 1, 2"))
-        == ["`port` is a field: `port value` writes it. Only a function can be called"]
-    )
   }
 
-  test "a field that holds a function says which of the two forms is meant" {
-    assert(
-      problems(inServe("    onStart 1, 2"))
-        == ["`onStart` holds a function: `onStart \{ ... \}` assigns it, `onStart()` calls it"]
-    )
+  test "parentheses call, so a field that holds no function is not written by them" {
+    const source = inServe "    tls(port == 8443)"
+    assert(problems(source) == ["`tls` is a field, and parentheses call a function"])
+    assert(notes(source) == ["A field is written with `=`: `tls = port == 8443`"])
+    // The value is still read as the field's: one message, and the argument has its type
+    const probed = probe source
+    assert(probed.typeOf("port == 8443") == "Bool")
+    assert problems(inServe("    tls = port == 8443")).isEmpty()
+  }
+
+  test "a closure in parentheses is handed to the function the field holds, which takes none" {
+    const source = inServe "    onStart(\{ \})"
+    assert(problems(source) == ["`onStart` holds a function: `onStart = \{ ... \}` assigns it, `onStart()` calls it"])
+    assert problems(inServe("    onStart()")).isEmpty()
   }
 
   test "a block on a field that has no configuration" {
@@ -162,7 +178,7 @@ group "What a property command is not" {
     )
     assert(
       notes(inServe("    port \{ \}"))
-        == ["A block on a field applies a receiver closure to its value. Write `port value` to set it"]
+        == ["A block on a field applies a receiver closure to its value. Write `port = value` to set it"]
     )
   }
 
@@ -173,43 +189,74 @@ group "What a property command is not" {
     )
   }
 
-  test "a local binding is changed with `=`, not with a command" {
-    const source = "fn probe() \{\n  var count = 0\n  count 1\n\}"
-    assert(problems(source) == ["`count` is a `Int64`, and only a function can be called"])
+  test "a property command still needs a `var` path: a `const` record field cannot be configured" {
     assert(
-      notes(source)
-        == ["A binding is changed with `=`: `count = value`. A command writes a field of a receiver"]
+      problems(inServe("    limits2 \{ maxConnections = 500 \}"))
+        == ["`limits2` never changes after construction"]
     )
+    assert(
+      notes(inServe("    limits2 \{ maxConnections = 500 \}"))
+        == ["`limits2 \{ ... \}` configures the field in place, and only a `var` field can be configured"]
+    )
+  }
+
+  test "a local `var` called like a function names its type and offers the fix" {
+    const source = "fn probe() \{\n  var count = 0\n  count 1\n\}"
+    assert(problems(source) == ["`count` is a `Int64`, not a function"])
+    assert(notes(source) == ["Did you mean `count = 1`?"])
+  }
+
+  test "a local `const` called like a function names its type, without a fix" {
+    const source = "fn probe() \{\n  const count = 0\n  count 1\n\}"
+    assert(problems(source) == ["`count` is a `Int64`, not a function"])
+    assert notes(source).isEmpty()
+  }
+
+  test "a top-level `var` called like a function names its type and offers the fix" {
+    const source = "var x = 10\nx 15\nprint x\n"
+    assert(problems(source) == ["`x` is a `Int64`, not a function"])
+    assert(notes(source) == ["Did you mean `x = 15`?"])
+  }
+
+  test "a top-level `const` called like a function names its type, without a fix" {
+    const source = "const x = 10\nx 15\nprint x\n"
+    assert(problems(source) == ["`x` is a `Int64`, not a function"])
+    assert notes(source).isEmpty()
+  }
+
+  test "the fix is only offered for exactly one argument" {
+    const source = "fn probe() \{\n  var count = 0\n  count 1, 2\n\}"
+    assert(problems(source) == ["`count` is a `Int64`, not a function"])
+    assert notes(source).isEmpty()
   }
 }
 
 /**
- * A command writes a field, so it asks `place.trb` the very same question an assignment does: the path has to be one
- * a change may go through, the place is recorded for the lowering, and the change counts for the dead-change rule.
- * Only the message says which of the two the author wrote.
+ * A property command asks `place.trb` the very same question an assignment does: the path has to be one a change may
+ * go through, the place is recorded for the lowering, and the change counts for the dead-change rule.
  */
 group "A property command is a place that is written" {
   const account = "\npublic type Account \{\n  private(var) balance: Int = 0\n\n"
-    + "  var fn deposit(amount: Int) \{\n    balance balance + amount\n  \}\n\}\n"
+    + "  var fn deposit(amount: Int) \{\n    balance = balance + amount\n  \}\n\}\n"
 
   test "the place the command writes is recorded under the span of the field" {
-    const source = "fn probe() \{\n  var made = Options()\n  made.port 9000\n  print made.port\n\}\n{options}"
+    const source = "fn probe() \{\n  var made = Options()\n  made.limits \{ maxConnections = 500 \}\n  print made.limits\n\}\n{options}"
     assert problems(source).isEmpty()
     const probed = probe source
-    assert(probed.placeOf("made.port") == "local made.port")
+    assert(probed.placeOf("made.limits") == "local made.limits")
   }
 
   test "a command through a `const` binding changes nothing" {
-    const source = "fn probe() \{\n  const made = Options()\n  made.port 9000\n  print made.port\n\}\n{options}"
+    const source = "fn probe() \{\n  const made = Options()\n  made.limits \{ maxConnections = 500 \}\n  print made.limits\n\}\n{options}"
     assert(problems(source) == ["`made` is a `const`. Only a `var` binding can be changed"])
   }
 
-  test "a `private(var)` field is written by a command of its own type and by nobody else" {
+  test "a `private(var)` field is written by `=` of its own type and by nobody else" {
     assert problems("{account}fn probe() \{\n  var held = Account()\n  held.deposit(1)\n  print held.balance\n\}").isEmpty()
     // `private` reaches as far as the file that declares it, so "outside" is a second file
     const outside = [
       "app/src/account.trb": account,
-      "app/src/main.trb": "use Account from \"./account\"\n\nfn probe(var held: Account) \{\n  held.balance 10\n\}",
+      "app/src/main.trb": "use Account from \"./account\"\n\nfn probe(var held: Account) \{\n  held.balance = 10\n\}",
     ]
     assert(problemsOf(outside) == ["`balance` can only be written by `Account`"])
     assert(
@@ -218,7 +265,7 @@ group "A property command is a place that is written" {
   }
 
   test "a command nothing reads afterwards is a dead change like any other" {
-    const source = "fn probe() \{\n  var made = Options()\n  made.port 9000\n\}\n{options}"
+    const source = "fn probe() \{\n  var made = Options()\n  made.limits \{ maxConnections = 500 \}\n\}\n{options}"
     assert(problems(source) == ["This change has no effect: `made` is never read again"])
   }
 }
@@ -270,12 +317,5 @@ group "The first argument of a command" {
     const indexed = "fn probe(var items: List<List<Int>>) \{\n  items.append [1]\n\}"
     assert(problems(indexed) == ["`items.append` is a function, and `[...]` right after it indexes it"])
     assert(notes(indexed) == ["The first argument of a command may not start with `[`: write `items.append([...])`"])
-  }
-
-  test "an `if` may start a command argument, so a setting can be computed" {
-    const source = inServe "    port if tls \{ 8443 \} else \{ 8080 \}"
-    assert problems(source).isEmpty()
-    const probed = probe source
-    assert(probed.resolutionOf("port if tls \{ 8443 \} else \{ 8080 \}") == "assign Options.port")
   }
 }

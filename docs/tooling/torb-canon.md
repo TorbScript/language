@@ -68,8 +68,10 @@ assert(sum == 3)              // an operator at the top level of the argument
 if ready(now) { }              // the head of an if
 ```
 
-A call on a field is a [property command](../glossary.md#property-command) instead - `port 8080` writes the field,
-it does not call it - which is a fact about what the call means and not a choice of how to write it.
+A field is written only with `=`, not by a [property command](../glossary.md#property-command) - `port 8080` is a
+compile error, and `port = 8080` is the fix. The one property command left is a trailing block on a field whose value
+is a record type: `database { ... }` configures the value in place, which is a fact about what the call means and not
+a choice of how to write it.
 
 ### A multi-line string is indented
 

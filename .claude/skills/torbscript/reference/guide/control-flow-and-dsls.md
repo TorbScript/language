@@ -129,17 +129,16 @@ fn serve(configure: (var self: ServerOptions) => Void): ServerOptions {
 }
 
 const options = serve {
-  host "0.0.0.0"
-  port 8443
+  host = "0.0.0.0"
+  port = 8443
 }
 
 print options
 ```
 
-`host "0.0.0.0"` is not a call on a method named `host` - `host` is a field, so this is a
-[property command](../language/types/property-commands.md): it writes the field. Together, command calls, trailing
-closures and property commands are what makes `serve { ... }` above read like a piece of built-in syntax while being
-nothing but a function call. See [Builders and DSLs](../language/configuration/builders.md).
+`host = "0.0.0.0"` is not a call on a method named `host` - `host` is a field, and a field is written only with `=`.
+Together, command calls, trailing closures and this rule are what makes `serve { ... }` above read like a piece of
+built-in syntax while being nothing but a function call. See [Builders and DSLs](../language/configuration/builders.md).
 
 ## Next
 

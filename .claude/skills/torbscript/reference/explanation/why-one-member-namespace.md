@@ -1,6 +1,6 @@
 ---
 title: Why a method is a constant
-summary: A method is structurally a constant of the type that holds a receiver closure, so a field and a method live in one namespace and cannot share a name, which is what lets a command call on a field write it instead of needing a second rule.
+summary: A method is structurally a constant of the type that holds a receiver closure, so a field and a method live in one namespace and cannot share a name, which is what lets a trailing block configure a record field in place.
 kind: explanation
 status: stable
 order: 150
@@ -55,12 +55,12 @@ enforces. Collapsing the two into one namespace turns "can these share a name?" 
 convention into "no" - a compile error, checked mechanically, for every type without exception.
 
 **Because a property command needs there to be exactly one meaning per line, and two namespaces would give it two.**
-`port 8080` on a field writes it; `configure 8080` on a method calls it - see
-[Property commands](../language/types/property-commands.md). With two namespaces, `port 8080` could mean "call the
-method `port`" or "write the field `port`" depending on which namespace the reader has in mind, and a single type
-could even declare both a field and a method under one name for the parser to choose between. With one namespace,
-there is exactly one `port` to resolve, and what it is - field or method - is a fixed fact of the declaration, not a
-guess made at the call site.
+`database { ... }` on a record field configures it in place; the same trailing closure on a method calls it - see
+[Property commands](../language/types/property-commands.md). With two namespaces, `database { ... }` could mean "call
+the method `database` with a trailing closure" or "configure the field `database` in place" depending on which
+namespace the reader has in mind, and a single type could even declare both a field and a method under one name for
+the parser to choose between. With one namespace, there is exactly one `database` to resolve, and what it is - field
+or method - is a fixed fact of the declaration, not a guess made at the call site.
 
 **Because methods costing no memory per instance falls out for free.** A method is a constant of the *type*, not a
 per-instance field, so it never occupies storage in a value the way a field does. This is also what keeps a `type`
@@ -92,21 +92,27 @@ both.** CONCEPT.md states this as a consequence of the one-namespace rule: a `ty
 twice in the same namespace. Today's checker accepts this declaration without reporting a problem - a gap between the design and the
 checker rather than a second namespace appearing through the back door.
 
-**A property command's meaning is fixed by what the name refers to and by whether the call has parentheses.** `tls
-true` writes the field, `tls(true)` calls it and is refused because a `Bool` has nothing to call; a command on a method
-always calls it, with or without an argument list that reads like data.
+**A property command's meaning is fixed by what the name refers to.** `database { ... }` on a record field configures
+it in place; the same trailing block on a method calls it. A field is otherwise written only with `=` - `port = 9090`
+assigns it, and `port(9090)` is refused because an `Int` has nothing to call.
 
 ```trb check
+type Database {
+  var url: String = ""
+}
+
 type Server {
   var port: Int = 8080
+  var database: Database = Database()
 
   fn describe(): String {
-    "listening on {port}"
+    "listening on {port}, {database.url}"
   }
 }
 
 var server = Server()
-server.port 9090
+server.port = 9090
+server.database { url = "postgres://localhost" }
 print server.describe()
 ```
 
@@ -119,7 +125,7 @@ pipeline stage exactly as it would pass a free function.
 - [Methods and `static fn`s](../language/types/methods.md) - `static` and `var`, the two words a member says, in
   full.
 - [Property commands](../language/types/property-commands.md) - the one rule this namespace makes possible: a
-  command on a field writes it.
+  trailing block on a record field configures it in place.
 - [Declaring a type](../language/types/declaring-a-type.md) - fields and methods declared together, in one body.
 - [Why there are no properties](why-no-getters.md) - the other consequence of fields and methods sharing one rule for
   visibility.

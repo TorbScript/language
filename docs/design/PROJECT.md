@@ -40,7 +40,7 @@ second time, in a weaker language, and they go.
 This design replaces four things that exist today: `Build { target, input, output }` and `Test { input }` in
 `std/project/src/lib.trb`, the `buildInput`/`testInput` fields of `compiler/src/project/manifest.trb` and the two
 places that read them (`compiler/src/cli/build.trb`, `compiler/src/semantics/graph.trb`), the thirty-two
-`build { input "src/lib.trb" }` blocks that the standard library writes to say "this is a library", and the sentence
+`build { input = "src/lib.trb" }` blocks that the standard library writes to say "this is a library", and the sentence
 in `docs/tooling/project-trb.md` that lists which settings are read. It adds three things the language does not have:
 a grammar for the text after `from`, a `program` setting, and a toolchain that is the *caller* of the receiver script
 it reads.
@@ -66,21 +66,21 @@ and built with the self-hosted compiler on stage 0
 | 1 | `src/main.trb` and `src/other.trb`, both with top-level code | `3 files, no problems` |
 | 2 | `src/main.trb` plus `src/server/main.trb`, both with top-level code | `3 files, no problems` |
 | 3 | `src/main.trb` and `src/lib.trb` in one package | `3 files, no problems` |
-| 4 | `build { input "src/other.trb" }` next to a `src/main.trb` | `3 files, no problems`; the build emits `#line 1 "probe/other-input/src/other.trb"` |
-| 5 | `build { input "src/server/main.trb" }` | the build emits `#line 1 "probe/second-program/src/server/main.trb"` |
+| 4 | `build { input = "src/other.trb" }` next to a `src/main.trb` | `3 files, no problems`; the build emits `#line 1 "probe/other-input/src/other.trb"` |
+| 5 | `build { input = "src/server/main.trb" }` | the build emits `#line 1 "probe/second-program/src/server/main.trb"` |
 | 6 | no `build { }` at all, one `src/main.trb` | `2 files, no problems`; the build writes `build/release/program.c` |
 | 7 | only `src/lib.trb`, no `build { }` | check passes; build: ``error: `torb build` needs one entry file. Name the file, or a project with a `build` input`` |
 | 8 | `use File from "std/fs"` with an empty `dependencies` | `2 files, no problems` |
 | 9 | `use greet from "probe/lib"` where `probe/lib` is a workspace member and not a dependency | ``error: The package `probe/lib` is not a dependency of `probe/app` `` |
 | 10 | the same with `dependencies { runtime "probe/lib" }` | `5 files, no problems` |
 | 11 | `dependencies { runtime "acme/http:^1.2.3" }` for a package that exists nowhere, never imported | `2 files, no problems` |
-| 12 | `name "probe-bare"` — no owner | `2 files, no problems` |
+| 12 | `name = "probe-bare"` — no owner | `2 files, no problems` |
 | 13 | `use X from "https://example.test/x"` | ``error: There is no package `https:/` `` |
 | 14 | `use X from "github.com/project/x"` | ``error: There is no package `github.com/project` `` |
 | 15 | `use logo from "./logo.png"` next to a real `logo.png` | ``error: There is no module `./logo.png` `` |
 | 16 | `use logo from "./logo.png"` next to a file named `logo.png.trb` | `3 files, no problems` — it resolves |
 | 17 | `use marker from "probe/lib/main"` — another package's `src/main.trb`, which has top-level code | `6 files, no problems` — it resolves |
-| 18 | `build { input "src/lib.trb" }` on a library whose `src/lib.trb` has top-level code | `5 files, no problems`; without the `build` line the same file is ``error: Top-level code is only allowed in entry files`` |
+| 18 | `build { input = "src/lib.trb" }` on a library whose `src/lib.trb` has top-level code | `5 files, no problems`; without the `build` line the same file is ``error: Top-level code is only allowed in entry files`` |
 | 19 | a parameter of a user type, called with a string literal | ``error: Expected `Resource`, found `String` `` — a literal adapts to nothing today |
 | 20 | `Sandbox.load<ServerConfig>("./nowhere/at/all.trb")`, and the same with a `String` variable | `2 files, no problems` — the checker reads the path not at all |
 | 21 | the same program on stage 0 and through the native back end | stage 0: ``error: Unknown name `Sandbox` ``; native: ``error: the type `Script` is not supported by the native back end yet`` |
@@ -128,7 +128,7 @@ today and nothing else**, which is why section 8's slice is a 7.x slice.
 1. **"Nothing outside a package can name its `src/main.trb`."** `docs/language/modules-and-packages/packages.md`
    rule 2. Probe 17 imports one. Worse, that `src/main.trb` is an entry file by the manifest's own rule, so it may
    hold top-level code *and* be imported — the one combination the language forbids, reachable without a diagnostic.
-2. **"Top-level code is only allowed in entry files."** Probe 18: `build { input "src/lib.trb" }` — which is what
+2. **"Top-level code is only allowed in entry files."** Probe 18: `build { input = "src/lib.trb" }` — which is what
    thirty-two of the repository's thirty-five `project.trb` files write — makes `src/lib.trb` an entry file and
    switches the rule off for the one file it exists to protect. The two rules are written in two places that do not
    agree: `isEntryFile` asks the manifest, `isLibraryModule` hardcodes `src/lib.trb`, and `isEntryFile` is asked
@@ -137,7 +137,7 @@ today and nothing else**, which is why section 8's slice is a 7.x slice.
    accepted everywhere, and the static reader has no validation of any kind.
 4. **`build { target, output }` and `test { input }`.** `torb build` hardcodes the profile name `"release"` and the
    path `<project>/build/<profile>/<name>`; `torb test` hardcodes the directory `tests`. `output` is read by nobody —
-   `compiler/project.trb` writes `output "build/{target}/torb"` and the binary is not called `torb`. An interpolated
+   `compiler/project.trb` writes `output = "build/{target}/torb"` and the binary is not called `torb`. An interpolated
    string is not a literal, so the static reader cannot read it at all, and it ignores it silently.
 
 Every one of the four is a consequence of the same thing: a manifest setting that says what a file name already says,
@@ -244,7 +244,7 @@ builds one, and no `program` line names one.
 
 **`build { input }` and `test { input }` disappear.** Nothing is left for them to say. What they do say today is
 wrong in three of the four ways section 1 lists, and their one real use — `tests/conformance/project.trb`'s
-`test { input "." }`, which pulls flat `.trb` files into the package — is served better by widening what belongs to a
+`test { input = "." }`, which pulls flat `.trb` files into the package — is served better by widening what belongs to a
 package:
 
 **A package's files are every `.trb` file below its directory that is not inside a nested package**, skipping hidden
@@ -377,7 +377,7 @@ Every one of the thirty-two libraries that writes
 
 ```trb
 build {
-  input "src/lib.trb"
+  input = "src/lib.trb"
 }
 ```
 
@@ -388,14 +388,14 @@ code rule off for the one file it exists to protect.
 `compiler/project.trb` becomes three lines and one of them is new:
 
 ```trb
-name "torbscript/compiler"
-version "0.1.0"
+name = "torbscript/compiler"
+version = "0.1.0"
 
 program "torb"
 ```
 
-`tests/conformance/project.trb` and `examples/tour/project.trb` lose `test { input "." }` and `build { }`
-respectively, and gain nothing: section 3's "a package is its whole directory" covers what `test { input "." }` was
+`tests/conformance/project.trb` and `examples/tour/project.trb` lose `test { input = "." }` and `build { }`
+respectively, and gain nothing: section 3's "a package is its whole directory" covers what `test { input = "." }` was
 for.
 
 **This is the decision that removes a whole slice from the migration.** The previous round's recommendation — a
@@ -405,7 +405,7 @@ configured program costs one line in one manifest and moves no file.
 
 ## 5. Profiles and targets
 
-`build { target "release" }` puts two different things under one word. They separate:
+`build { target = "release" }` puts two different things under one word. They separate:
 
 - A **profile** is how the same program is built: optimisation, debug information, whether a panic prints frames,
   whether integer overflow checks are elided (they are not — overflow panics in every profile, that is a rule of the
@@ -423,9 +423,9 @@ torb build --target linux-x64       cross-compile; the default is the host
 
 ```trb
 profile "release" {
-  optimize 2
-  debugInformation false
-  panicFrames false
+  optimize = 2
+  debugInformation = false
+  panicFrames = false
 }
 ```
 
@@ -445,7 +445,7 @@ each other and the common path must stay short. A `program` line's `output` repl
 program and is taken **literally**, relative to the project directory: `output: "dist/migrate"` is `dist/migrate`
 under every profile and every target. `--output <file>` overrides even that, for one program and one invocation.
 
-**`output` on a program is literal, and `build { output }` is deleted.** Today's `output "build/{target}/torb"` is a
+**`output` on a program is literal, and `build { output }` is deleted.** Today's `output = "build/{target}/torb"` is a
 TorbScript string interpolated eagerly against the receiver, so it is evaluated once, when the file runs, with
 whatever `target` was at that moment — which means it cannot express "per profile" at all without the file being
 evaluated once per profile. The static reader cannot read it either: an interpolated string is not a literal, and
@@ -599,8 +599,8 @@ else.** No network, no writing, no clock, no processes, no foreign functions.
 use File from "std/fs"
 use Environment from "std/os/environment"
 
-name "acme/shop"
-version Environment.get("CI_COMMIT_TAG") ?? File.readText("VERSION").ok()?.trim() ?? "0.0.0"
+name = "acme/shop"
+version = Environment.get("CI_COMMIT_TAG") ?? File.readText("VERSION").ok()?.trim() ?? "0.0.0"
 ```
 
 The toolchain is the **caller** of this receiver script, and a caller grants capabilities at the call site — which is
@@ -647,7 +647,7 @@ anyway, so they are written down as pitfalls rather than as a prohibition. Both 
 
 1. **Whatever flows from the environment into a setting is published with the package.** `version` ends up in the
    locked manifest below, which is the file a registry, a consumer and an editor read. A manifest that writes
-   `description Environment.get("NPM_TOKEN") ?? ""` publishes the token, and no mechanism can tell a token from a tag.
+   `description = Environment.get("NPM_TOKEN") ?? ""` publishes the token, and no mechanism can tell a token from a tag.
    What the design can do is make it visible at the moment it matters: the locked manifest records **which** variables
    were read (by name), and `torb publish` prints that list before it uploads. It asks for no flag and no
    confirmation: reading a variable is the most ordinary thing a configuration file written in TorbScript does - more
@@ -682,14 +682,14 @@ of two `project.trb` files you are holding.
 ```trb
 // project.lock.trb - written by `torb add`, `torb update`, `torb lock` and `torb publish`. Do not edit.
 
-language "0.3.0"
+language = "0.3.0"
 
 settings "acme/shop" {
-  version "1.4.2"
-  description "A shop"
-  license "MIT"
+  version = "1.4.2"
+  description = "A shop"
+  license = "MIT"
   authors "Ada Lovelace"
-  prelude "std/prelude"
+  prelude = "std/prelude"
   program "shop", entry: "src/main.trb"
   program "migrate", entry: "tools/migrate.trb"
   dependencies {
@@ -882,8 +882,8 @@ specifier grammar have to say about it.
 
   ```trb
   resources {
-    embeddedWarningAbove 4.megabytes()
-    embeddedErrorAbove 64.megabytes()
+    embeddedWarningAbove = 4.megabytes()
+    embeddedErrorAbove = 64.megabytes()
   }
   ```
 
@@ -929,31 +929,31 @@ running anything, and what the checker needs before it checks a file.
 
 | Setting | Type | Default | Static | Error |
 |---|---|---|---|---|
-| `language "0.3.0"` | `String` | none | **yes** | an older toolchain refuses the project, and says so before reading anything else |
-| `name "owner/name"` | `String` | none | **yes** | missing, not `owner/name`, or not a plain string |
-| `prelude "std/prelude"` | `String` | `"std/prelude"` | **yes** | not a package specifier; the package must exist |
+| `language = "0.3.0"` | `String` | none | **yes** | an older toolchain refuses the project, and says so before reading anything else |
+| `name = "owner/name"` | `String` | none | **yes** | missing, not `owner/name`, or not a plain string |
+| `prelude = "std/prelude"` | `String` | `"std/prelude"` | **yes** | not a package specifier; the package must exist |
 | `dependencies { runtime "..." }` | variadic | none | **yes** | not `owner/name[:requirement]` |
 | `dependencies { development "..." }` | variadic | none | **yes** | the same |
 | `source "owner/name", git:/path:/archive:` | method | the owner's registry | **yes** | two `source` lines for one package; `git:` without `revision:`; `archive:` without `hash:` |
 | `registry "owner", url: "..."` | method | none | **yes** | two registries for one owner |
 | `workspace { members "..." }` | variadic | none | **yes** | a pattern that matches no project; a member without a `project.trb` |
 | `program "name", entry:, output:` | method | `src/main.trb` is the one program | **yes** | section 4's table |
-| `version "1.4.0"` | `String` | the workspace root's | no | not a version; required to publish |
+| `version = "1.4.0"` | `String` | the workspace root's | no | not a version; required to publish |
 | `authors "..."` | variadic | the workspace root's | no | — |
-| `description "..."` | `String` | `""` | no | required to publish |
-| `license "MIT"` | `String` | `""` | no | required to publish |
-| `repository "https://..."` | `String` | the workspace root's | no | — |
+| `description = "..."` | `String` | `""` | no | required to publish |
+| `license = "MIT"` | `String` | `""` | no | required to publish |
+| `repository = "https://..."` | `String` | the workspace root's | no | — |
 | `profile "release" { ... }` | method | the built-in profiles | no | an unknown profile name |
-| `test { coverageThreshold 80 }` | `Int` | `0` | no | outside `0..100` |
+| `test { coverageThreshold = 80 }` | `Int` | `0` | no | outside `0..100` |
 | `resources { embeddedWarningAbove }` | `Int64` | `4.megabytes()` | no | negative, or above `embeddedErrorAbove` |
 | `resources { embeddedErrorAbove }` | `Int64` | `64.megabytes()` | no | negative |
 
-The first nine are **static**, and that is a promise with teeth: they are top-level command calls whose arguments are
-plain string literals. Everything below them may be computed, because nothing is read before the file can be
+The first nine are **static**, and that is a promise with teeth: they are top-level statements - a field assignment or
+a command call - whose arguments are plain string literals. Everything below them may be computed, because nothing is read before the file can be
 evaluated.
 
 **`version` moved.** The previous round listed it among the static settings. Section 8's whole point is that
-`version Environment.get("CI_COMMIT_TAG") ?? File.readText("VERSION").ok()?.trim()` is the motivating example, so `version`
+`version = Environment.get("CI_COMMIT_TAG") ?? File.readText("VERSION").ok()?.trim()` is the motivating example, so `version`
 is exactly the setting that must be allowed to compute. What a registry and a consumer need is the version of a
 *published* package, and that comes from the `settings` section of its `project.lock.trb`, where it is a literal
 again. A tool that wants the version of a project it is not building reads that lock; a tool that wants the version of
@@ -962,7 +962,7 @@ a project it *is* building evaluates the manifest. There is no third answer and 
 ### `language`, the minimum-version setting
 
 ```trb
-language "0.3.0"
+language = "0.3.0"
 ```
 
 **The setting versions one thing, which is why it is one number, and that thing is the language.** The standard
@@ -984,10 +984,10 @@ will ever say about the project:
 
 ```text
 error: This project needs language 0.3.0, this is 0.2.1
- --> project.trb:1:10
+ --> project.trb:1:12
   |
-1 | language "0.3.0"
-  |          ^^^^^^^
+1 | language = "0.3.0"
+  |            ^^^^^^^
   = Nothing else in this file was read. Install a newer toolchain
 ```
 
@@ -1004,19 +1004,19 @@ problem that the toolchain never got far enough to find.
 
 Dart is the closest match, because its SDK is the same bundle ours is. Swift is the instructive one: the version lives
 in a *comment*, on the first line, because `Package.swift` is a program and the version has to be readable before the
-program can be parsed. A `project.trb` needs no such hack — the setting is a static command call (section 8), read
+program can be parsed. A `project.trb` needs no such hack — the setting is a static field assignment (section 8), read
 from the syntax tree before anything is evaluated, so it can be an ordinary line like every other setting.
 
 **What was considered**, with `language` first:
 
 | Candidate | For | Against |
 |---|---|---|
-| **`language "0.3.0"`** — decided | names what is actually versioned, once `std` is understood as part of the language; a full word that needs no gloss; nothing in the sentence "this project needs language 0.3.0" has to be looked up | it is not the name of the thing you install, so a user who has to *act* on the message installs "torb" — which the note in the diagnostic says |
-| `torb "0.3.0"` | the tool's own name is the thing you installed | it versions the tool rather than what the tool implements, and a reader might briefly expect it to *configure* `torb`, with `program "torb"` three lines away in one repository |
-| `toolchain "0.3.0"` | what Rust calls it and what this document still calls the program in prose | "toolchain" is a word a user has to learn maps to "the thing you installed", and it names the packaging rather than the contract |
-| `torbscript "0.3.0"` | the language's name, spelled out | the language's name in a file of that language is noise, and it reads like a dependency on a package called `torbscript` |
-| `minimumVersion "0.3.0"` | precise about the comparison | silent about the minimum version *of what*, which is the only interesting part |
-| `requires "0.3.0"` | short | reads like a dependency, and dependencies are two lines below |
+| **`language = "0.3.0"`** — decided | names what is actually versioned, once `std` is understood as part of the language; a full word that needs no gloss; nothing in the sentence "this project needs language 0.3.0" has to be looked up | it is not the name of the thing you install, so a user who has to *act* on the message installs "torb" — which the note in the diagnostic says |
+| `torb = "0.3.0"` | the tool's own name is the thing you installed | it versions the tool rather than what the tool implements, and a reader might briefly expect it to *configure* `torb`, with `program "torb"` three lines away in one repository |
+| `toolchain = "0.3.0"` | what Rust calls it and what this document still calls the program in prose | "toolchain" is a word a user has to learn maps to "the thing you installed", and it names the packaging rather than the contract |
+| `torbscript = "0.3.0"` | the language's name, spelled out | the language's name in a file of that language is noise, and it reads like a dependency on a package called `torbscript` |
+| `minimumVersion = "0.3.0"` | precise about the comparison | silent about the minimum version *of what*, which is the only interesting part |
+| `requires = "0.3.0"` | short | reads like a dependency, and dependencies are two lines below |
 
 The prose in this document and in the toolchain's own messages still says **toolchain** for the program that reads the
 file, and that is not a contradiction: the toolchain is what you install, the language is what it implements, and the
@@ -1040,13 +1040,13 @@ So a project file may do this —
 use File from "std/fs"
 use Environment from "std/os/environment"
 
-name "acme/shop"
-version Environment.get("CI_COMMIT_TAG") ?? File.readText("VERSION").ok()?.trim() ?? "0.0.0"
+name = "acme/shop"
+version = Environment.get("CI_COMMIT_TAG") ?? File.readText("VERSION").ok()?.trim() ?? "0.0.0"
 
 const threshold = if version.startsWith("0.") { 50 } else { 80 }
 
 test {
-  coverageThreshold threshold
+  coverageThreshold = threshold
 }
 ```
 
@@ -1055,17 +1055,17 @@ test {
 ```trb
 const suffix = "shop"
 
-name "acme/{suffix}"
+name = "acme/{suffix}"
 ```
 
 Today that second file is accepted and `name` is silently empty (there is a test asserting it). It becomes an error:
 
 ```text
 error: `name` has to be a plain string
- --> project.trb:3:6
+ --> project.trb:3:8
   |
-3 | name "acme/{suffix}"
-  |      ^^^^^^^^^^^^^^^
+3 | name = "acme/{suffix}"
+  |        ^^^^^^^^^^^^^^^
   = The toolchain reads `name` before it can run anything, so it cannot be computed
 ```
 
@@ -1144,7 +1144,7 @@ every `.trb` file and nothing should be rebased across it.
 
 | # | Slice | Files | Risk |
 |---|-------|-------|------|
-| 1 | **The names decide.** `isEntryFile` stops reading `buildInput` and reads the file name; `isLibraryModule` and it stop disagreeing; `packageAt` takes the whole package directory instead of `src/` plus `testInput`; `torb build` picks its entry from the programs; `torb test` collects `*.test.trb` below the package. `Manifest` loses `buildInput` and `testInput` | `compiler/src/project/{manifest,workspace}.trb`, `compiler/src/semantics/graph.trb`, `compiler/src/semantics/checker/declaration.trb`, `compiler/src/cli/{build,test}.trb`, `compiler/tests/project.test.trb` | **Medium.** Probe 18 says the thirty-two `build { input "src/lib.trb" }` blocks are currently switching a rule off; removing them turns that rule back on, so every `src/lib.trb` in the repository is checked for top-level code for the first time |
+| 1 | **The names decide.** `isEntryFile` stops reading `buildInput` and reads the file name; `isLibraryModule` and it stop disagreeing; `packageAt` takes the whole package directory instead of `src/` plus `testInput`; `torb build` picks its entry from the programs; `torb test` collects `*.test.trb` below the package. `Manifest` loses `buildInput` and `testInput` | `compiler/src/project/{manifest,workspace}.trb`, `compiler/src/semantics/graph.trb`, `compiler/src/semantics/checker/declaration.trb`, `compiler/src/cli/{build,test}.trb`, `compiler/tests/project.test.trb` | **Medium.** Probe 18 says the thirty-two `build { input = "src/lib.trb" }` blocks are currently switching a rule off; removing them turns that rule back on, so every `src/lib.trb` in the repository is checked for top-level code for the first time |
 | 2 | **The manifests.** The `build { }` and `test { input }` blocks go out of all thirty-five `project.trb` files; `Build` is deleted from `std/project` and `Test` keeps only `coverageThreshold` | `std/project/src/lib.trb`, every `project.trb`, `docs/standard-library/project.md` | **Low**, and it is the slice that proves slice 1, because nothing may change behaviour |
 | 3 | **Programs.** `Program` and `Project.program` in `std/project`; the static reader reads `program` lines; `torb run <name>`, `torb build <name>`, the "name one" diagnostic, the library-only "nothing to build"; the ten diagnostics of section 4; `"owner/name/main"` and an imported `entry` become errors; `compiler/project.trb` writes `program "torb"` | `std/project/src/lib.trb`, `compiler/src/project/manifest.trb`, `compiler/src/cli/{build,run,test}.trb`, `compiler/src/semantics/graph.trb`, `compiler/project.trb` | **Low.** No file moves and no import changes. The one thing to watch is the hardcoded `src/main.trb` for a directory argument in the driver, which has to learn the `program` lines so that `torb run <dir>` of a renamed default still finds it |
 | 4 | **Profiles and targets.** `--profile`, `--release`, `--target`, with `dev` as the default; `build/<profile>/<program>`; the `profile` block in the vocabulary and in the static reader; `output` on a `program` taken literally | `compiler/src/cli/build.trb`, `std/project/src/lib.trb`, `compiler/src/project/manifest.trb` | **Low.** `buildTarget = "release"` is one constant today, and the layout already has the shape |

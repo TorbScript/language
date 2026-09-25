@@ -15,7 +15,7 @@ source:
 
 `std/project` is the vocabulary of `project.trb`. A project file is a receiver script against `Project`, so everything
 a project can say about itself is a `var` field or a method of the types here, and nothing else is needed to write one:
-a setting is written `name "acme/shop"` and a section `build { ... }`. The types are ordinary data, not `native` -
+a setting is written `name = "acme/shop"` and a section `build { ... }`. The types are ordinary data, not `native` -
 a project file is deterministic and has no IO, so evaluating it is nothing but running these members.
 
 ## Import
@@ -54,7 +54,7 @@ public type Project {
 }
 ```
 
-The receiver of `project.trb`. A setting is a `var` field (`name "acme/shop"` writes it), a section is a field
+The receiver of `project.trb`. A setting is a `var` field (`name = "acme/shop"` writes it), a section is a field
 configured in place (`build { ... }`), and only what is more than that is a method (`authors`, `registry`). `name` is
 `owner/name` - owners are verified namespaces of a registry, so a bare name is not publishable. The fields are
 readable, which is what lets a project file compute from what it already said:

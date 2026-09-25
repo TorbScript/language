@@ -1,33 +1,37 @@
 /**
- * Property commands. A command call of a *function* is an ordinary call and needs nothing here; the **command form** of
- * a call of a field - no parentheses, or a trailing closure alone - **writes** it, which is what gives the configuration
- * DSL its look without a single hand-written setter. Parentheses always call.
+ * Property commands. A command call of a *function* is an ordinary call and needs nothing here. **A field is written
+ * only with `=`** (2026-09-25), everywhere, including inside a receiver closure - `port 8080` is an error, and so is
+ * `onStart { ... }` where `onStart` holds a function. The one command call that still reaches a field is a trailing
+ * block on a field whose value is a *record*, never a function: `database { url = "..." }` applies the block as a
+ * receiver closure to the value the field already holds, configuring it in place rather than replacing it.
  *
- * There is no line that could mean two things:
- *
- * | Written                    | The field holds      | Means                                          |
- * |----------------------------|----------------------|------------------------------------------------|
- * | `port 8080`                | anything but a function | `port = 8080`               (`.Assign`)     |
- * | `onStart { ... }`          | a function           | `onStart = { ... }`         (`.AssignClosure`) |
- * | `database { ... }`         | a type               | the receiver closure configures it in place (`.Configure`) |
- * | `onStart()`, `onStart(e)`  | a function           | a call - "calling a function in a field always needs parentheses" |
+ * | Written                    | The field holds         | Means                                                     |
+ * |----------------------------|--------------------------|------------------------------------------------------------|
+ * | `port 8080`                | anything                 | an error: `\`port\` is a field: write \`port = 8080\``     |
+ * | `onStart { ... }`          | a function               | an error: the fix is `onStart = { ... }`                  |
+ * | `database { ... }`         | a record type            | kept: the receiver closure configures it in place          |
+ * | `onStart()`, `onStart(e)`  | a function               | a call - "calling a function in a field always needs parentheses" |
  * | `port(8080)`, `onStart({ })` | no function, or one that takes no closure | an error: parentheses call, and nothing fits |
  *
- * The lowering reads `Resolution.PropertyWrite(owner, field, kind)` at the span of the whole command, and the field
+ * This file also reports a command call of a local or a top-level binding that is not a function
+ * (`var x = 10  x 15`): the target is not a field, and only a function can be called.
+ *
+ * The lowering reads `Resolution.PropertyWrite(owner, field)` at the span of the whole command, and the field
  * itself at the span of the callee.
  */
 
+use Span from "../../syntax/source"
 use Diagnostic from "../../syntax/diagnostic"
 use Expression, Argument, CallStyle from "../../syntax/ast"
 use SymbolId from "../symbols"
 use TypeId, FunctionForm, ParameterForm, ParameterMode from "./type"
-use Checker, Resolution, PropertyWriteKind, ArgumentSite from "./context"
+use Checker, Resolution, ArgumentSite from "./context"
 use Target from "./name"
 use checkExpression, inferExpression, expectationOf from "./expression"
 use typeSignatureOf from "./signature"
 use resolveType from "./unify"
 use trailingClosureAt from "./call"
-use checkPropertyWrite, noteAssignment from "./place"
+use checkPropertyWrite, noteAssignment, isDeclaredVar from "./place"
 use noteArgumentClosures from "./mutation"
 
 /** `None` where the call is an ordinary call and `checkCall` has to go on with it. */
@@ -41,9 +45,10 @@ public fn propertyWrite(
 ): TypeId? {
   const (owner, field) = match target.resolution {
     .Field(found, symbol) => (found, symbol)
-    // A property command reaches a field, through the innermost receiver or through a target. A local is not one
-    .Local(_) => {
-      return reportLocal checker, target, arguments, expression
+    // `count 1`, `x 15`: a local or a top-level binding is not a field. It is either a call of the function it
+    // holds, or a value that was called by mistake - never a property command
+    .Local(_) | .Constant(_, _) => {
+      return reportNotAFunction checker, target, arguments, expression
     }
     _ => {
       return None
@@ -54,12 +59,14 @@ public fn propertyWrite(
   const isOnlyClosure = trailing == 0 && arguments.length() == 1
   const held = functionFormOf checker, annotation
   const holdsFunction = held.isSome()
-  // Only the command form writes: `port 8080`, `onStart { }`. Parentheses always call - `onStart()` and
-  // `onStart(event)` run what the field holds, and `port(8080)` calls a field that holds no function
+  // The one property command left: a trailing block on a record field configures its value in place
+  if isOnlyClosure && !holdsFunction {
+    return Some writeField(checker, expression, callee, target, arguments, owner, field, annotation)
+  }
   const isCommandForm = isOnlyClosure || isCommandStyle(style)
   if !isCommandForm {
     if const Some(form) = held {
-      // `onStart({ ... })` is the closure a command would have stored, handed to a function that takes none
+      // `onStart({ ... })` is the closure an assignment would have stored, handed to a function that takes none
       if arguments.length() == 1 && form.parameters.length() != 1 {
         if const .Closure(_) = arguments[0].value.kind {
           checker.resolved callee.span, target.resolution
@@ -72,7 +79,7 @@ public fn propertyWrite(
     }
     checker.resolved callee.span, target.resolution
     const _ = checker.typed callee.span, annotation
-    reportParenthesizedWrite checker, target.name, arguments.isEmpty(), expression
+    reportParenthesizedWrite checker, target.name, arguments, expression
     // The value is still read as the field's, so `level(.Debug)` has one message and not a second one about the case
     if arguments.length() == 1 {
       const _ = checkExpression checker, arguments[0].value, expectationOf(checker, annotation)
@@ -80,14 +87,15 @@ public fn propertyWrite(
     }
     return Some inferRest(checker, arguments)
   }
-  const kind = if isOnlyClosure {
-    if holdsFunction { PropertyWriteKind.AssignClosure } else { PropertyWriteKind.Configure }
-  } else {
-    PropertyWriteKind.Assign
-  }
-  Some writeField(checker, expression, callee, target, arguments, owner, field, annotation, kind, holdsFunction)
+  // Every other command form on a field used to write it (`port 8080`, `onStart { ... }`); a field is written only
+  // with `=` now, so this is always an error
+  checker.resolved callee.span, target.resolution
+  const _ = checker.typed callee.span, annotation
+  reportFieldWrite checker, target.name, arguments, expression
+  Some inferRest(checker, arguments)
 }
 
+/** `database { url = "..." }`: the block is applied to the field's own value, in place. */
 fn writeField(
   var checker: Checker,
   expression: Expression,
@@ -97,33 +105,24 @@ fn writeField(
   owner: TypeId,
   field: SymbolId,
   annotation: TypeId,
-  kind: PropertyWriteKind,
-  holdsFunction: Bool,
 ): TypeId {
   checker.resolved callee.span, target.resolution
   const _ = checker.typed callee.span, annotation
-  // Anything but exactly one value is not a write, and a field is not callable: one root cause, one message
+  // A block takes exactly the field's own value: anything else here is unreachable through this call's shape, and
+  // still gets every argument a type if it somehow is not
   if arguments.length() != 1 {
-    reportNotCallable checker, target.name, holdsFunction, expression
+    reportNotCallable checker, target.name, false, expression
     return inferRest checker, arguments
   }
-  // A command writes a field, so the path it is written through is a place like the target of an `=`
   const named = target.name
   const place = checkPropertyWrite checker, callee, named
-  // `database { url "..." }`: the block is applied to the field *in place* and stands straight as the argument of the
-  // command, so it cannot outlive it any more than the trailing closure of an ordinary call can.
-  // Without this every nested block of a DSL counted as escaping and CONCEPT's own
-  // `server { s => s.database { url "{s.host}/db" } }` was "This closure captures the `var` parameter `s` and may
-  // outlive the call". `onStart { ... }` is the other half and really does escape: it is *stored* in the field
-  if const .Configure = kind {
-    noteArgumentClosures checker, arguments
-    checker.closureSites.set arguments[0].value.span, ArgumentSite.Applied
-  }
-  const inner = match kind {
-    .Configure => configurationOf checker, annotation, target.name, expression
-    _ => Some annotation
-  }
-  const wanted = match inner {
+  // The block is applied to the field *in place* and stands straight as the argument of the command, so it cannot
+  // outlive it any more than the trailing closure of an ordinary call can. Without this every nested block of a DSL
+  // counted as escaping and CONCEPT's own `server { s => s.database { url = "{s.host}/db" } }` was "This closure
+  // captures the `var` parameter `s` and may outlive the call"
+  noteArgumentClosures checker, arguments
+  checker.closureSites.set arguments[0].value.span, ArgumentSite.Applied
+  const wanted = match configurationOf(checker, annotation, target.name, expression) {
     Some(found) => found
     // A field whose value has no configuration: `port { ... }` is not a section
     None => {
@@ -132,30 +131,41 @@ fn writeField(
   }
   const inside = expectationOf checker, wanted
   const _ = checkExpression checker, arguments[0].value, inside
-  // The change counts once its value has been read, so that `port port + 1` does not read itself dead (design 5.3)
+  // The change counts once its value has been read, so that `database database` does not read itself dead (design 5.3)
   noteAssignment checker, place
-  checker.resolved expression.span, Resolution.PropertyWrite(owner, field, kind)
+  checker.resolved expression.span, Resolution.PropertyWrite(owner, field)
   checker.voidType
 }
 
 /**
- * `count 1` where `count` is a binding of the body: a value that is not a function was called, and the fix is the
- * assignment. `None` where the binding does hold a function, which is an ordinary call.
+ * `count 1` where `count` is a local, `x 15` where `x` is a top-level `var` or `const`: a value that is not a
+ * function was called. `None` where the target does hold a function, which is an ordinary call.
  */
-fn reportLocal(var checker: Checker, target: Target, arguments: List<Argument>, expression: Expression): TypeId? {
+fn reportNotAFunction(var checker: Checker, target: Target, arguments: List<Argument>, expression: Expression): TypeId? {
   const annotation = resolveType checker, target.annotation
   if checker.absorbs(annotation) || functionFormOf(checker, annotation).isSome() {
     return None
   }
   const shown = checker.describe annotation
-  checker.reportHere(
-    Diagnostic.error("`{target.name}` is a `{shown}`, and only a function can be called", expression.span)
-      .withNote("A binding is changed with `=`: `{target.name} = value`. A command writes a field of a receiver")
-  )
+  var problem = Diagnostic.error "`{target.name}` is a `{shown}`, not a function", expression.span
+  if isVarTarget(checker, target.resolution) && arguments.length() == 1 {
+    const value = writtenText checker, arguments[0].value.span
+    problem = problem.withNote "Did you mean `{target.name} = {value}`?"
+  }
+  checker.reportHere problem
   Some inferRest(checker, arguments)
 }
 
-/** `database { url "..." }`: the block is the body of `(var self: DatabaseConfig) => Void`, applied to the field. */
+/** Whether the target that was called instead of assigned is a `var`, which is what earns the `did you mean` note. */
+fn isVarTarget(checker: Checker, resolution: Resolution): Bool {
+  match resolution {
+    .Local(binding) => checker.binding(binding).isVar
+    .Constant(symbol, _) => isDeclaredVar checker, symbol
+    _ => false
+  }
+}
+
+/** `database { url = "..." }`: the field's value has no configuration, or the block does not shape one. */
 fn configurationOf(var checker: Checker, annotation: TypeId, name: String, expression: Expression): TypeId? {
   if checker.absorbs(annotation) {
     return Some annotation
@@ -164,7 +174,7 @@ fn configurationOf(var checker: Checker, annotation: TypeId, name: String, expre
     const shown = checker.describe annotation
     checker.reportHere(
       Diagnostic.error("`{name}` is a `{shown}`, which has no configuration a block could fill", expression.span)
-        .withNote("A block on a field applies a receiver closure to its value. Write `{name} value` to set it")
+        .withNote("A block on a field applies a receiver closure to its value. Write `{name} = value` to set it")
     )
     return None
   }
@@ -211,19 +221,45 @@ fn isCommandStyle(style: CallStyle): Bool {
   }
 }
 
+/** The text of the value a command call would have written, reconstructed from the source: `port 8080` gives `8080`. */
+fn writtenText(checker: Checker, span: Span): String {
+  const text = checker.program.graph.at(checker.module).source.text
+  text[span.start..span.end]
+}
+
+/** The span from the first argument to the last, for a fix that quotes everything a multi-argument command wrote. */
+fn argumentsSpan(arguments: List<Argument>): Span {
+  const first = arguments[0]
+  const start = match first.label {
+    Some(label) => label.span.start
+    None => first.value.span.start
+  }
+  const last = arguments[arguments.length() - 1]
+  Span start, last.value.span.end
+}
+
+/** `port 8080`, `onStart { ... }`: a field is written only with `=`. Reconstructs the fix from the source. */
+fn reportFieldWrite(var checker: Checker, name: String, arguments: List<Argument>, expression: Expression) {
+  const value = writtenText checker, argumentsSpan(arguments)
+  checker.reportHere(
+    Diagnostic.error("`{name}` is a field: write `{name} = {value}`", expression.span)
+  )
+}
+
 /** `config.port(8080)`: parentheses call, and a field that holds no function has nothing to call. */
-fn reportParenthesizedWrite(var checker: Checker, name: String, isEmpty: Bool, expression: Expression) {
+fn reportParenthesizedWrite(var checker: Checker, name: String, arguments: List<Argument>, expression: Expression) {
   // `condition.tree()`: nothing to write, so the reader wanted the value
-  if isEmpty {
+  if arguments.isEmpty() {
     checker.reportHere(
       Diagnostic.error("`{name}` is a field, and parentheses call a function", expression.span)
         .withNote("A field is read without them: `{name}`")
     )
     return
   }
+  const value = writtenText checker, argumentsSpan(arguments)
   checker.reportHere(
     Diagnostic.error("`{name}` is a field, and parentheses call a function", expression.span)
-      .withNote("The command form writes a field: `{name} value`, the same as `{name} = value`")
+      .withNote("A field is written with `=`: `{name} = {value}`")
   )
 }
 
@@ -231,13 +267,13 @@ fn reportNotCallable(var checker: Checker, name: String, holdsFunction: Bool, ex
   if holdsFunction {
     checker.reportHere(
       Diagnostic.error(
-        "`{name}` holds a function: `{name} \{ ... \}` assigns it, `{name}()` calls it",
+        "`{name}` holds a function: `{name} = \{ ... \}` assigns it, `{name}()` calls it",
         expression.span,
       )
     )
     return
   }
   checker.reportHere(
-    Diagnostic.error("`{name}` is a field: `{name} value` writes it. Only a function can be called", expression.span)
+    Diagnostic.error("`{name}` is a field: write `{name} = value`. Only a function can be called", expression.span)
   )
 }

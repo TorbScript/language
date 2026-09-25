@@ -578,11 +578,11 @@ public const preludeSource = raw"""
 
 public const workspace = [
   "project.trb": raw"""
-    name "acme/all"
+    name = "acme/all"
     workspace { members "std/*", "app" }
     """,
   "std/prelude/project.trb": raw"""
-    name "std/prelude"
+    name = "std/prelude"
     """,
   "std/prelude/src/types.trb": preludeSource,
   "std/prelude/src/lib.trb": raw"""
@@ -602,7 +602,7 @@ public const workspace = [
     public use Result.Ok, Result.Fail from "./types"
     """,
   "app/project.trb": raw"""
-    name "acme/app"
+    name = "acme/app"
     """,
 ]
 
@@ -1050,14 +1050,7 @@ public fn describeResolution(checker: Checker, resolution: Resolution): String {
     .TupleField(_, index) => "tuple {index}"
     .Namespace(_) => "namespace"
     .TypeOf(owner) => "type {checker.describe(owner)}"
-    .PropertyWrite(owner, field, kind) => {
-      const how = match kind {
-        .Assign => "assign"
-        .AssignClosure => "assign closure"
-        .Configure => "configure"
-      }
-      "{how} {checker.describe(owner)}.{checker.symbolAt(field).name}"
-    }
+    .PropertyWrite(owner, field) => "configure {checker.describe(owner)}.{checker.symbolAt(field).name}"
     .Deferred => "deferred"
   }
 }

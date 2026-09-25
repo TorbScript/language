@@ -33,7 +33,7 @@ when it runs.
    }
    ```
 
-2. **Add a method for anything that is more than "set a field".** A field is set by a command on its name, and a nested
+2. **Add a method for anything that is more than "set a field".** A field is set with `=` on its name, and a nested
    field is configured in place by a command with a block. Only a real operation needs a method.
 
    ```trb fragment
@@ -43,13 +43,13 @@ when it runs.
    ```
 
 3. **Write the configuration file against that type.** Names inside it resolve against the receiver, so no prefix is
-   needed. A command on a field writes the field; a command with a block configures the field's value in place.
+   needed. A field is written with `=`; a command with a block configures the field's value in place.
 
    ```trb skip this file is the body of a receiver closure, so its names come from the receiver and not from the file
-   host "0.0.0.0"
-   port 8080
+   host = "0.0.0.0"
+   port = 8080
    database {
-     url "postgres://localhost:5432/app"
+     url = "postgres://localhost:5432/app"
    }
    for name in ["users", "orders"] {
      route "/api/{name}", to: name
@@ -81,20 +81,21 @@ when it runs.
    ```
 
 6. **Use the same mechanism for a project manifest.** `project.trb` is exactly this with the receiver `Project`, which is
-   why `name "acme/shop"` works and why reading the metadata of a package is safe.
+   why `name = "acme/shop"` works and why reading the metadata of a package is safe.
 
 ## Pitfalls
 
 - **Only the innermost receiver is implicit.** Inside `database { ... }` the names resolve against `DatabaseConfig` and not
-  against `ServerConfig`. To reach the outer one, name the parameter: `server { s => s.database { url "{s.host}/db" } }`.
-- **A command on a field writes it and never calls it.** `onStart { ... }` assigns the closure to the field; `onStart()`
-  calls what is in it. That is the whole rule, and it has no exception.
+  against `ServerConfig`. To reach the outer one, name the parameter: `server { s => s.database { url = "{s.host}/db" } }`.
+- **A field is written only with `=`, and calling it never writes it.** `onStart = { ... }` assigns the closure to the
+  field; `onStart()` calls what is in it. That is the whole rule, and it has no exception.
 - **A field the file sets has to be `var`.** A `const` field is fixed after construction, so a configuration file cannot
   write it.
 - **`Sandbox.load` resolves its path against the project directory**, not against the file that calls it. An import
   (`use Name from "./x"`) is the other way round, because that is a question about the source tree.
-- **A field with an operator in its value is written with `=`.** `tls = port == 8443`: an operator at the top level of an
-  argument puts a call in parentheses, and parentheses call - `tls(port == 8443)` is an error.
+- **A field's value is an ordinary expression after `=`, so an operator needs no extra parentheses.** `tls = port == 8443`
+  is assignment, not a command call, so the command-call rule about an operator at the top level of an argument does not
+  apply to it.
 
 ## Full example
 
@@ -132,11 +133,11 @@ fn server(configure: (var self: ServerConfig) => Void): ServerConfig {
 }
 
 const config = server {
-  host "0.0.0.0"
-  port 9000
+  host = "0.0.0.0"
+  port = 9000
   database {
-    url "postgres://localhost:5432/app"
-    poolSize 20
+    url = "postgres://localhost:5432/app"
+    poolSize = 20
   }
   route "/health", to: "health"
 }
@@ -146,7 +147,7 @@ print "{config.host}:{config.port} {config.database.url} {config.routes.length()
 
 ## Related
 
-- [Command calls](../language/syntax/command-calls.md) - why `port 9000` is written without parentheses.
+- [Command calls](../language/syntax/command-calls.md) - why `route "/health", to: "health"` is written without parentheses.
 - [Declaring a type](../language/types/declaring-a-type.md) - `var` fields, `private(var)` and methods.
 - [Read a file](read-a-file.md) - the plain way to read text when no receiver is involved.
 - [Run your first program](../guide/installing-and-running.md) - the `project.trb` of a new project.

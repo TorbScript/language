@@ -26,7 +26,7 @@ use Expression from "../../syntax/ast"
 use Signature, TypeId, ParameterId from "../../semantics/checker/type"
 use substitute from "../../semantics/checker/unify"
 use traitArgumentsOf from "../../semantics/checker/implementation"
-use Place, PlaceRoot, PlaceStep, PropertyWriteKind, BindingId from "../../semantics/checker/context"
+use Place, PlaceRoot, PlaceStep, BindingId from "../../semantics/checker/context"
 use IrProgram, IrType, IrTypeId, Slot, LayoutId, Reference, PathStep, Instruction, borrowed from "../ir"
 use FunctionBuilder, addTemporary, emit from "../build"
 use layoutOfType, typeOfReference from "../verify"
@@ -947,48 +947,14 @@ fn writtenPlace(var lowering: Lowering, var builder: FunctionBuilder, path: Plac
 }
 
 /**
- * `port 8080`, `onStart { ... }`, `database { ... }`: a property command writes the field it names (docs/TYPECHECKER.md,
- * Property commands with parentheses), so it is an assignment written another way and the checker recorded the very
- * same place for it - the path to the *field*, under the span of the callee.
- *
- * `.Assign` and `.AssignClosure` are therefore **one** lowering: whether the value is `8080` or a closure changes what is
- * evaluated and nothing about the write. `.Configure` is the other one: the closure is a *receiver* closure and the
- * field's own place is what it is applied to, so the field is configured where it already is and never copied.
+ * `database { url = "..." }`: a field is written only with `=` (2026-09-25) - the one property command left is a
+ * trailing block on a record field, which configures the value the field already holds *in place* rather than
+ * replacing it. The closure is a *receiver* closure over the field, so the field's own place is its `var self`
+ * argument and the value is changed where it lies. Nothing is copied out and back in, which is what makes the
+ * configuration DSL cost what an assignment costs. The checker recorded the field's own place under the span of the
+ * callee.
  */
 public fn lowerPropertyWrite(
-  var lowering: Lowering,
-  var builder: FunctionBuilder,
-  destination: Slot?,
-  callee: Expression,
-  value: Expression,
-  kind: PropertyWriteKind,
-): Slot {
-  if const .Configure = kind {
-    return lowerConfigureCommand lowering, builder, destination, callee, value
-  }
-  const path = match referenceAt(lowering, builder, callee, "a property command") {
-    Some(found) => found
-    None => {
-      return abandonedSlot lowering, builder, destination
-    }
-  }
-  writtenPlace lowering, builder, path, value
-  if !lowering.isSupported {
-    return abandonedSlot lowering, builder, destination
-  }
-  // A command is a statement and produces `Void`, which somebody may still be taking as the value of a block
-  match destination {
-    Some(_) => voidSlot lowering, builder, destination
-    None => abandonedSlot lowering, builder, destination
-  }
-}
-
-/**
- * `database { url "..." }`: the closure is a receiver closure over the field, so the field's own place is its `var self`
- * argument and the value is changed where it lies. Nothing is copied out and back in, which is what makes the
- * configuration DSL cost what an assignment costs.
- */
-fn lowerConfigureCommand(
   var lowering: Lowering,
   var builder: FunctionBuilder,
   destination: Slot?,

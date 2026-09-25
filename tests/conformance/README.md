@@ -144,7 +144,7 @@ checks of the C do not. There is no list of what the VM runs: it runs everything
 | `closure-frame.trb` | A closure a callee only calls, made in a loop, beside one the callee keeps and calls later |
 | `curried-call.trb` | `adder(4)(1)`: the callee of a call is a call, a field and a conditional |
 | `counted-closures.trb` | The leak gate of everything a closure can hold that carries a count |
-| `dsl.trb` | Receiver closures and the three property commands |
+| `dsl.trb` | Receiver closures and the one property command left, alongside field assignment with `=` |
 
 **Numbers**
 

@@ -59,7 +59,8 @@ see, and it cannot generate any code back into the program - only read what is a
 
 **Because control structures and DSLs already reach where most macro systems are reached for, without a second
 language inside the language.** `unless`, `retry` and `test` all look like keywords and are ordinary functions with
-closure parameters; `port 8080` inside a configuration file is an ordinary command call on a field. Rust's
+closure parameters; `route "/health", to: "health"` inside a configuration file is an ordinary command call on a
+method. Rust's
 `macro_rules!` and procedural macros exist largely to build exactly these two things - a custom control structure and
 a small DSL - and TorbScript reaches both through [command calls](why-commands.md) and
 [receiver closures](../language/configuration/receiver-closures.md) instead.
