@@ -46,6 +46,21 @@
 #  define TORB_HAS_INT128 0
 #endif
 
+/*
+ * gcc 16 and later: no `-Warray-bounds`. What it reports in the generated C is a path gcc wrote itself.
+ * `-fspeculatively-call-stored-functions` (new in 16, on at -O2) sees that a closure's `code` is stored in one place of
+ * the program as a function it can name, and turns *every* call through a `torb_closure` into "if the code is that
+ * function, run its inlined body, else call the code". The guessed function has another type than the one the call
+ * site converts the code back to - a `bool` result read as the call's `torb_text` or record - so the guessed branch
+ * reads past a `_Bool`, and gcc reports it ("array subscript 'torb_text[0]' is partly outside array bounds of
+ * '_Bool[1]'"). The branch is never taken: a closure's type says what its code is, and a call site only ever holds
+ * closures of its own type. So the warning is a false positive about gcc's own speculation, and it is off for gcc 16
+ * and later rather than for every compiler; a real out-of-bounds access still has clang and gcc 13 to find it.
+ */
+#if defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 16
+#  pragma GCC diagnostic ignored "-Warray-bounds"
+#endif
+
 #if defined(_MSC_VER)
 #  define TORB_UNREACHABLE() __assume(0)
 #elif defined(__GNUC__) || defined(__clang__)
