@@ -266,6 +266,6 @@ so a password never reaches a message.
 
 - [std/ip](ip.md) - the addresses an IP literal host is.
 - [std/path](path.md) - `Path`, and why it is not a URI.
-- [std/http](http.md) - HTTP, one level up.
+- [std/http](http.md) - a client that takes a `Uri`, and a server whose requests carry one.
 - [The standard library](index.md) - the other packages.
 

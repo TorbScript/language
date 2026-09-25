@@ -143,7 +143,7 @@ supported, and neither is a dialect with its own name.
 | `std/markdown` | CommonMark, the document tree as a value | [design/RELEASE.md](design/RELEASE.md) slice 1 | `std/yaml` |
 | `std/random` | a seedable, splittable generator that is a value | [design/RANDOM.md](design/RANDOM.md) | nothing |
 | `std/identifier` | `Uuid`, `Ulid`, the trait `Identifier` | [design/URI.md](design/URI.md) section 12 | `std/random` |
-| `std/uri` | `Uri` and `UriReference` after RFC 3986, IRIs (RFC 3987), `Urn` (RFC 8141), `UriTemplate` (RFC 6570), the `file:` bridge; then IDNA and the literal rule | [design/URI.md](design/URI.md) | nothing; the literal rule waits for the checker's parameter kind |
+| `std/uri` | built: `Uri` and `UriReference` after RFC 3986, IRIs (RFC 3987), `Urn` (RFC 8141), `UriTemplate` (RFC 6570), the `file:` bridge, `std/ip`, `std/http` on `Uri`; next: IDNA, `data:` and the literal rule | [design/URI.md](design/URI.md) section 14 | nothing; the literal rule waits for the checker's parameter kind |
 | `std/cli` | commands, flags and options declared once, help and errors generated | [design/CLI.md](design/CLI.md) | nothing |
 | `std/os`, `std/path` | the rest of their slices | [design/OS.md](design/OS.md), [design/PATH.md](design/PATH.md) | - |
 | resources | files a program ships or embeds, named by a literal | [design/RESOURCES.md](design/RESOURCES.md) | `std/uri` |

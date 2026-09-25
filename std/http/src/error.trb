@@ -35,11 +35,6 @@ public type HttpError with Show, Error {
     Self kind: .Status(code, message)
   }
 
-  /** `url` could not be parsed as a request at all. */
-  static fn invalidUrl(message: String): HttpError {
-    Self kind: .InvalidUrl(message)
-  }
-
   /** `Response.json` failed: the body was not the JSON `Value` expected. */
   static fn decodeFailed(cause: JsonError): HttpError {
     Self kind: .Decode(cause)
@@ -65,7 +60,10 @@ public type HttpError with Show, Error {
     Self kind: .HeadTooLarge(limit)
   }
 
-  /** A feature of HTTP this implementation does not have, such as a transfer coding: `501 Not Implemented`. */
+  /**
+   * A feature of HTTP this implementation does not have, such as a transfer coding: `501 Not Implemented`. The client
+   * answers it for a URI it does not reach, too: another scheme, an empty host, user information.
+   */
   static fn unsupported(message: String): HttpError {
     Self kind: .Unsupported(message)
   }
@@ -136,7 +134,6 @@ public type HttpError with Show, Error {
       .ConnectionFailed(message) => "connection failed: {message}"
       .Network(cause) => "{cause}"
       .Status(code, message) => "{code}: {message}"
-      .InvalidUrl(message) => "invalid URL: {message}"
       .Decode(cause) => "{cause}"
       .TooLarge(limit) => "the body is longer than {limit} bytes"
       .InvalidText(cause) => "{cause}"
@@ -164,7 +161,6 @@ type HttpErrorKind {
   case ConnectionFailed(message: String)
   case Network(cause: NetworkError)
   case Status(code: Int, message: String)
-  case InvalidUrl(message: String)
   case Decode(cause: JsonError)
   case TooLarge(limit: Int)
   case InvalidText(cause: Utf8Error)

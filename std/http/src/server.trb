@@ -273,7 +273,7 @@ fn serveConnection(
         return Ok void
       }
     }
-    const request = match requestOf(head, connection, remote, limits) {
+    const request = match requestOf(head, connection, remote, limits, identity.isSome()) {
       Ok(read) => read
       Fail(problem) => {
         refuse(connection, problem).await()?
@@ -302,6 +302,7 @@ fn requestOf(
   connection: Connection,
   remote: SocketAddress?,
   limits: ServerLimits,
+  secure: Bool,
 ): Result<Request, HttpError> {
   const lines = headLines(head)?
   const line = requestLineOf(lines[0])?
@@ -315,7 +316,38 @@ fn requestOf(
     .Empty => Body.empty()
     .UntilEnd => Body.empty()
   }
-  Ok Request(line.method, line.target, headers, body, remote: remote, version: line.version)
+  const uri = targetUriOf(line.target, headers.get("Host") ?? "", secure)?
+  Ok Request(line.method, line.target, uri, headers, body, remote: remote, version: line.version)
+}
+
+/**
+ * RFC 9112 section 3.3, the target URI: the scheme of the connection, then the authority of an absolute-form or
+ * authority-form target or else the `Host` field, then the path and query of an origin-form target. A target and a host
+ * that make no URI are a malformed request, which the server answers with `400`.
+ */
+fn targetUriOf(target: String, host: String, secure: Bool): Result<Uri, HttpError> {
+  const scheme = if secure { "https" } else { "http" }
+  for mark in ["/", "?", "#", "@"] {
+    if host.contains(mark) {
+      return Fail HttpError.malformed("`{host}` is not a host and a port (RFC 9110 section 7.2)")
+    }
+  }
+  var text = "{scheme}://{host}"
+  if target.startsWith("/") {
+    text = text + target
+  } else if target != "*" {
+    // The absolute form names its own authority, and the authority form of `CONNECT` is nothing but one
+    text = if target.contains("://") { target } else { "{scheme}://{target}" }
+  }
+  match Uri.tryFrom(text) {
+    Ok(uri) => {
+      if uri.scheme() != "http" && uri.scheme() != "https" {
+        return Fail HttpError.malformed("the target `{target}` is not an HTTP URI")
+      }
+      Ok uri
+    }
+    Fail(problem) => Fail HttpError.malformed("the target `{target}` and the host `{host}` make no URI: {problem}")
+  }
 }
 
 /**

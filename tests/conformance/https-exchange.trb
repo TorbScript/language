@@ -65,6 +65,14 @@ const otherRoot = """
   -----END CERTIFICATE-----
   """
 
+/** A URI this program writes itself, so a refusal would be a bug of the program. */
+fn uriOf(text: String): Uri {
+  match Uri.tryFrom(text) {
+    Ok(uri) => uri
+    Fail(problem) => panic "{problem}"
+  }
+}
+
 /** Answers with what it was asked and whether the connection was encrypted end to end. */
 fn answer(request: Request): Task<Result<Response, HttpError>> {
   const text = request.body.text().await()?
@@ -76,9 +84,9 @@ match ServerIdentity.of(serverCertificate, serverKey) {
     match Server.listen(SocketAddress(IpAddress.loopback, 0), answer, tls: Some(identity)) {
       Ok(server) => {
         var serving = server.serve()
-        const base = "https://localhost:{server.localAddress().port}"
+        const base = uriOf "https://localhost:{server.localAddress().port}"
         const trusting = TlsSettings trusted: [testRoot]
-        var first = http.send(Method.Get, "{base}/hello", tls: trusting).await()
+        var first = http.send(Method.Get, base.joined("hello"), tls: trusting).await()
         match first {
           Ok(response) => {
             var reading = response
@@ -86,7 +94,7 @@ match ServerIdentity.of(serverCertificate, serverKey) {
           }
           Fail(problem) => print "failed: {problem}"
         }
-        var second = http.send(Method.Post, "{base}/echo", body: http.Body.from("sealed"), tls: trusting).await()
+        var second = http.send(Method.Post, base.joined("echo"), body: http.Body.from("sealed"), tls: trusting).await()
         match second {
           Ok(response) => {
             var reading = response
@@ -94,7 +102,7 @@ match ServerIdentity.of(serverCertificate, serverKey) {
           }
           Fail(problem) => print "failed: {problem}"
         }
-        match http.get("{base}/hello").await() {
+        match http.get(base.joined("hello")).await() {
           Ok(_) => print "the platform trusted the test root"
           Fail(problem) => print "refused without the test root: {problem.cause().isSome()}"
         }

@@ -2,6 +2,7 @@ use * as http from "std/http"
 use Server, Request, Response, Status, Body, HttpError, Method, Headers from "std/http"
 use SocketAddress, IpAddress from "std/network"
 use Source, Bytes from "std/stream"
+use UriReference from "std/uri"
 
 /**
  * An HTTP/1.1 server and its client over loopback, end to end: a handler is a function from a request to a task of a
@@ -34,13 +35,31 @@ fn handle(request: Request): Task<Result<Response, HttpError>> {
       Ok Response(Status.ok, Headers(), Body.of(Source.from(parts)))
     }
     "/fail" => Fail HttpError.connectionFailed("a secret the client must not see")
+    "/target" => {
+      const uri = request.uri
+      Ok Response.text("{uri.scheme()} {uri.host()} {request.path()} {request.segments()} {request.query()}")
+    }
     _ => Ok Response.text("nothing at {request.path()}", status: Status.notFound)
   }
 }
 
-/** A request of `method` to `path`, answered as its status, its framing and its text. */
-fn fetch(base: String, method: Method, path: String, body: Body): Task<Result<String, HttpError>> {
-  var response = http.send(method, "{base}{path}", body: body).await()?
+/** A URI this program writes itself, so a refusal would be a bug of the program. */
+fn uriOf(text: String): Uri {
+  match Uri.tryFrom(text) {
+    Ok(uri) => uri
+    Fail(problem) => panic "{problem}"
+  }
+}
+
+/** A request of `method` to `path` below `base`, answered as its status, its framing and its text. */
+fn fetch(base: Uri, method: Method, path: String, body: Body): Task<Result<String, HttpError>> {
+  const target = match UriReference.tryFrom(path) {
+    Ok(reference) => reference.resolved against: base
+    Fail(problem) => {
+      return Fail HttpError.unsupported("{problem}")
+    }
+  }
+  var response = http.send(method, target, body: body).await()?
   const framing = if response.headers.contains("Transfer-Encoding") { "chunked" } else { "length" }
   const text = response.body.text().await()?
   Ok "{method} {path} -> {response.status} ({framing}): {text}"
@@ -48,7 +67,7 @@ fn fetch(base: String, method: Method, path: String, body: Body): Task<Result<St
 
 match Server.listen(SocketAddress(IpAddress.loopback, 0), handle) {
   Ok(server) => {
-    const base = "http://127.0.0.1:{server.localAddress().port}"
+    const base = uriOf "http://{server.localAddress()}"
     var serving = server.serve()
     print fetch(base, Method.Get, "/hello?name=ada", Body.empty()).await()
     print fetch(base, Method.Post, "/echo", Body.from("a body of known length")).await()
@@ -58,7 +77,8 @@ match Server.listen(SocketAddress(IpAddress.loopback, 0), handle) {
     print fetch(base, Method.Get, "/stream", Body.empty()).await()
     print fetch(base, Method.Get, "/nowhere", Body.empty()).await()
     print fetch(base, Method.Get, "/fail", Body.empty()).await()
-    var head = http.send(Method.Head, "{base}/hello").await()
+    print fetch(base, Method.Get, "/target/../target?who=%7eada", Body.empty()).await()
+    var head = http.send(Method.Head, base.joined("hello")).await()
     print "HEAD /hello -> {head.map({ _.status })}, length {head.map({ _.headers.get("Content-Length") })}"
     serving.cancel()
     print "server: {serving.result()}"

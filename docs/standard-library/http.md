@@ -26,6 +26,7 @@ source:
   - std/http/src/connection.trb
   - std/http/src/transport.trb
   - docs/design/NETWORK.md
+  - docs/design/URI.md
 ---
 
 `std/http` is HTTP/1.1 in TorbScript over [std/network](network.md), and HTTPS over [std/tls](tls.md): a client, a
@@ -51,8 +52,8 @@ type User {
   name: String
 }
 
-fn fetchUser(id: Int): Task<Result<User, HttpError>> {
-  var response = http.get("http://example.test/users/{id}").await()?
+fn fetchUser(api: Uri, id: Int): Task<Result<User, HttpError>> {
+  var response = http.get(api.joined("users/{id}")).await()?
   response.json<User>().await()
 }
 
@@ -74,22 +75,27 @@ fn serveForever(): Task<Result<Void, HttpError>> {
 ### `get`, `post`, `send`
 
 ```trb fragment
-public fn get(url: String, headers: Headers = Headers()): Task<Result<Response, HttpError>>
-public fn post(url: String, body: Body, headers: Headers = Headers()): Task<Result<Response, HttpError>>
+public fn get(url: Uri, headers: Headers = Headers()): Task<Result<Response, HttpError>>
+public fn post(url: Uri, body: Body, headers: Headers = Headers()): Task<Result<Response, HttpError>>
 public fn send(
   method: Method,
-  url: String,
+  url: Uri,
   headers: Headers = Headers(),
   body: Body = Body.empty(),
   tls: TlsSettings = TlsSettings(),
 ): Task<Result<Response, HttpError>>
 ```
 
-The client. A request opens a connection to the host of the URL, writes the request - with `Content-Length` where the
+The client. What it reaches is a [`Uri`](uri.md), read from text once where the text enters the program
+(`Uri.tryFrom(text)?`) or built from one (`api.joined("users/{id}")`, which encodes each segment and never climbs above
+`api`) - there is no URL string to get wrong at the call. A request opens a connection to the host of the URI - straight
+to an IP literal, through the resolver for a name - writes the request - with `Content-Length` where the
 body's length is known, in chunks where it is not - and answers once the head of the response arrived; its body is read
 from the connection as the program pulls it, and the connection closes with the response. A status that is not a
 success is a `Response` too, and no redirect is followed. A timeout is `within`: `http.get(url).within(10.seconds())`.
-An `https` URL is the same request over [TLS](tls.md), on port 443 unless the URL names another: the server's
+A URI this client does not reach - a scheme other than `http` and `https`, an empty host, user information (RFC 9110
+section 4.2) - is an `HttpError` that is `unsupported`; the fragment is never sent. An `https` URI is the same request
+over [TLS](tls.md), on port 443 unless the URI names another: the server's
 certificate is checked for the host the way the platform checks it, or against the roots of `tls` where `send` names
 some, and a certificate that is refused is an `HttpError` whose `cause()` is the `NetworkError` that
 `isCertificateRejected()`.
@@ -142,11 +148,13 @@ connection is closed. The parser refuses everything request smuggling lives on: 
 public shared type Request {
   method: Method
   target: String
+  uri: Uri
   headers: Headers = Headers()
   var body: Body
   remote: SocketAddress? = None
   version: String = "HTTP/1.1"
   fn path(): String
+  fn segments(): List<String>
   fn query(): String?
 }
 
@@ -162,7 +170,10 @@ public shared type Response {
 ```
 
 Both are `shared type`s, because each owns its body, a stream that is read once. A request's `target` is what was sent
-(`/users/7?details=true`); `path()` and `query()` take it apart.
+(`/users/7?details=true`, `*`, or `host:443` for `CONNECT`), and `uri` is the target URI RFC 9112 section 3.3 rebuilds
+from it, the `Host` field and whether the connection is TLS (`https://example.test/users/7?details=true`); a request
+whose target and host make no URI is answered `400`. `path()`, `segments()` and `query()` read the URI, so a router sees
+a normalized path whose dot segments are gone.
 
 ### Method, Status, Headers
 

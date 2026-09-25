@@ -1,11 +1,13 @@
 /**
  * The HTTP/1.1 client: `get`, `post` and `send` answer a task of a `Response` whose `Body` is a stream
  * (docs/design/NETWORK.md section 7), over TCP for `http` and over TLS for `https`. One connection per request, closed
- * with its response; a pool is a later slice.
+ * with its response; a pool is a later slice. What to reach is a `Uri` (docs/design/URI.md section 10): the text was
+ * read once, where it entered the program, and nothing here takes a URL apart by hand.
  */
 
-use TcpStream from "std/network"
+use SocketAddress, TcpStream from "std/network"
 use TlsStream, TlsSettings from "std/tls"
+use Authority from "std/uri"
 use Transport from "./transport"
 use Body, Headers, Method, Response, Status from "./message"
 use Connection, FixedReader, ChunkedReader, UntilEndReader from "./connection"
@@ -13,123 +15,97 @@ use Framing, headLines, statusLineOf, fieldsOf, responseFraming from "./parse"
 use fieldLines, writeBody from "./write"
 use HttpError from "./error"
 
-/** Where a URL points: the host and the port to connect to, the target to ask for, and the `Host` to name. */
+/** Where a request goes: the connection, the target to ask for, and the `Host` to name. */
 type Destination {
   /** `https`: the connection is TLS, and the certificate has to be the host's. */
   secure: Bool
-  host: String
+  authority: Authority
   port: Int
+  /** The origin form of RFC 9112 section 3.2.1: the path, `/` where it is empty, and the query. */
   target: String
-  authority: String
 }
 
 /**
- * `http://host[:port][/path][?query]` or `https://...`, read as far as a request needs it. `std/uri` replaces this one function once it
- * exists (docs/design/URI.md); every signature that takes a URL keeps its `String` until then.
+ * What RFC 9110 section 4.2 asks of an `http` or `https` URI beyond its syntax: the scheme, a host that is not empty
+ * and no user information. A URI that breaks it names something this client does not reach.
  */
-fn destinationOf(url: String): Result<Destination, HttpError> {
-  const separator = url.indexOf("://") ?? -1
-  if separator < 0 {
-    return Fail HttpError.invalidUrl("`{url}` has no scheme")
-  }
-  const scheme = url.sliceBytes(0, separator).toLowerCase()
-  if scheme != "http" && scheme != "https" {
-    return Fail HttpError.invalidUrl("`{scheme}` is not a scheme of HTTP")
-  }
-  const rest = url.sliceBytes(separator + 3, url.byteLength())
-  var end = rest.byteLength()
-  for mark in ["/", "?", "#"] {
-    if const Some(at) = rest.indexOf(mark) {
-      if at < end {
-        end = at
-      }
+fn destinationOf(url: Uri): Result<Destination, HttpError> {
+  const secure = match url.scheme() {
+    "http" => false
+    "https" => true
+    other => {
+      return Fail HttpError.unsupported("`{other}` is not a scheme of HTTP: `{url}`")
     }
   }
-  const authority = rest.sliceBytes 0, end
-  var target = rest.sliceBytes end, rest.byteLength()
-  if const Some(fragment) = target.indexOf("#") {
-    target = target.sliceBytes 0, fragment
-  }
-  if target.isEmpty() || target.startsWith("?") {
-    target = "/{target}"
-  }
-  if authority.contains("@") {
-    return Fail HttpError.invalidUrl("a URL with credentials is not sent: `{url}`")
-  }
-  var host = authority
-  var portText = ""
-  if authority.startsWith("[") {
-    const closing = authority.indexOf("]") ?? -1
-    if closing < 0 {
-      return Fail HttpError.invalidUrl("`{authority}` opens a bracket and does not close it")
+  const authority = match url.authority() {
+    Some(found) => found
+    None => {
+      return Fail HttpError.unsupported("`{url}` has no host to connect to")
     }
-    host = authority.sliceBytes(0, closing + 1)
-    const after = authority.sliceBytes(closing + 1, authority.byteLength())
-    if !after.isEmpty() {
-      if !after.startsWith(":") {
-        return Fail HttpError.invalidUrl("`{authority}` has something after its address that is no port")
-      }
-      portText = after.sliceBytes 1, after.byteLength()
-    }
-  } else if const Some(colon) = authority.lastIndexOf(":") {
-    host = authority.sliceBytes 0, colon
-    portText = authority.sliceBytes(colon + 1, authority.byteLength())
   }
-  if host.isEmpty() {
-    return Fail HttpError.invalidUrl("`{url}` has no host")
+  if authority.host.show().isEmpty() {
+    return Fail HttpError.unsupported("an `{url.scheme()}` URI with an empty host names nothing (RFC 9110 section 4.2.1)")
   }
-  const secure = scheme == "https"
-  var port = if secure { 443 } else { 80 }
-  if !portText.isEmpty() {
-    const number = Int.tryFrom(portText).ok() ?? -1
-    if number < 1 || number > 65535 || portText.chars().any({ !_.isDigit() }) {
-      return Fail HttpError.invalidUrl("`{portText}` is not a port")
-    }
-    port = number
+  if authority.userInfo.isSome() {
+    return Fail HttpError.unsupported("a URI with user information is not sent (RFC 9110 section 4.2.4): `{url}`")
   }
-  Ok Destination(secure, host, port, target, authority)
+  const port = authority.port ?? if secure { 443 } else { 80 }
+  const path = if url.path().isEmpty() { "/" } else { url.path() }
+  const target = match url.query() {
+    Some(query) => "{path}?{query}"
+    None => path
+  }
+  Ok Destination(secure, authority, port, target)
 }
 
 /**
  * `http.get(url).await()?`: a `GET` of `url`. A status that is not a success is a `Response` too - `status` says what
  * it is - and no redirect is followed.
  */
-public fn get(url: String, headers: Headers = Headers()): Task<Result<Response, HttpError>> {
+public fn get(url: Uri, headers: Headers = Headers()): Task<Result<Response, HttpError>> {
   send(Method.Get, url, headers: headers).await()
 }
 
 /** `http.post(url, Body.from(text)).await()?` - the body may be a stream, so an upload is not held in memory. */
-public fn post(url: String, body: Body, headers: Headers = Headers()): Task<Result<Response, HttpError>> {
+public fn post(url: Uri, body: Body, headers: Headers = Headers()): Task<Result<Response, HttpError>> {
   send(Method.Post, url, headers: headers, body: body).await()
 }
 
 /**
- * A request of any method: connects to the host of `url`, writes the request - with `Content-Length` where the body's
- * length is known, in chunks where it is not - and answers the response once its head arrived. The body of the
- * response is read from the connection as the program pulls it, and the connection closes with the response.
+ * A request of any method: connects to the host of `url` - straight to an IP literal, through the resolver for a
+ * name - writes the request - with `Content-Length` where the body's length is known, in chunks where it is not - and
+ * answers the response once its head arrived. The body of the response is read from the connection as the program
+ * pulls it, and the connection closes with the response. The fragment of `url` is not sent.
  *
  * # Errors
  *
- * - [HttpError] for a URL that is not `http` or `https`, a connection that fails, a certificate that is not the
- *   host's (its `cause()` is the `NetworkError` that `isCertificateRejected()`), and a response that breaks HTTP/1.1.
+ * - [HttpError] that is `unsupported` for a URI this client does not reach (a scheme other than `http` and `https`, an
+ *   empty host, user information), and for a connection that fails, a certificate that is not the host's (its
+ *   `cause()` is the `NetworkError` that `isCertificateRejected()`), and a response that breaks HTTP/1.1.
  */
 public fn send(
   method: Method,
-  url: String,
+  url: Uri,
   headers: Headers = Headers(),
   body: Body = Body.empty(),
   tls: TlsSettings = TlsSettings(),
 ): Task<Result<Response, HttpError>> {
   const destination = destinationOf(url)?
-  const host = if destination.host.startsWith("[") {
-    destination.host.sliceBytes(1, destination.host.byteLength() - 1)
-  } else {
-    destination.host
+  const stream = match destination.authority.host {
+    .Address(address) => TcpStream.connect(SocketAddress(address, destination.port)).await()?
+    .Name(name) => TcpStream.connectTo(name, destination.port).await()?
+    .Future(text) => {
+      return Fail HttpError.unsupported("`[{text}]` is an IP version this client cannot connect to")
+    }
   }
-  const stream = TcpStream.connectTo(host, destination.port).await()?
   var transport = Transport.plain stream
   if destination.secure {
-    const session = TlsStream.connect(stream, host, tls).await()?
+    const serverName = match destination.authority.host {
+      .Address(address) => address.show()
+      .Name(name) => name
+      .Future(text) => text
+    }
+    const session = TlsStream.connect(stream, serverName, tls).await()?
     transport = Transport.encrypted stream, session
   }
   var connection = Connection.of transport
@@ -137,7 +113,7 @@ public fn send(
   // A body of no bytes on a method that means none is not announced at all (RFC 9110 section 8.6)
   const announced = length != Some(0) || method == Method.Post || method == Method.Put || method == Method.Patch
   const chunked = length.isNone()
-  var head = "{method} {destination.target} HTTP/1.1\r\nHost: {destination.authority}\r\n"
+  var head = "{method} {destination.target} HTTP/1.1\r\nHost: {destination.authority.hostAndPort()}\r\n"
   head = head + fieldLines(headers)
   if !headers.contains("User-Agent") {
     head = head + "User-Agent: torbscript\r\n"

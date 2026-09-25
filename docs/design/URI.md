@@ -1,9 +1,10 @@
 # Uniform Resource Identifiers
 
-**Status: accepted, revised on 2026-09-25** — the owner asked for the whole URI layer before HTTP grows further: IRIs,
-URI references as a type, URI templates, every standard that touches them, and the IP address values shared with
-`std/network`. Sections 2a, 3a, 4a, 8a and 9a are that revision, and section 14's slice order replaces the old one.
-Which slices exist is said there.
+**Status: slices 1 to 4 built (2026-09-25)** — `std/ip`, `std/uri` with `Uri`, `UriReference`, `Urn`, IRIs, the `file:`
+bridge and `UriTemplate`, and `std/http` on `Uri`. The owner asked for the whole URI layer before HTTP grows further:
+IRIs, URI references as a type, URI templates, every standard that touches them, and the IP address values shared with
+`std/network`. Sections 2a, 3a, 4a, 8a and 9a are that revision, and section 14's slice order replaces the old one;
+IDNA, `data:`, the literal rule and the rest are the later slices it lists.
 
 **A URI is a value, and a text that is not one is refused at the door.** That is the whole design of `std/uri`: one
 capsule for RFC 3986, normalized at construction, so that `==`, `hash()` and `compare()` are over the canonical form
@@ -1917,10 +1918,10 @@ adds a native, a syntax or a name the compiler looks up by string.
 
 | # | Slice | Files | Depends on | State |
 |---|-------|-------|------------|-------|
-| 1 | **`std/ip`.** `AddressError`, `Ipv4Address`, `Ipv6Address`, `IpAddress`, `SocketAddress` move out of `std/network` unchanged, with their tests; `std/network` re-exports them (section 8a) | `std/ip/*`, `std/network/src/*` | nothing | this round |
-| 2 | **`std/uri`.** `Uri`, `UriReference`, `Authority`, `Host`, `UriError`, `Urn`; the parser with RFC 3987's mapping in, normalization, resolution with RFC 3986 section 5.4's examples as tests, `relativeTo`, `iriText`, `Show`/`Equals`/`Hash`/`Compare`, `formDecoded`/`formEncoded` and the query parameters; the `Path` bridge of RFC 8089; the prelude exports `Uri` and `UriError` | `std/uri/*`, `std/prelude/src/lib.trb` | 1 | this round |
-| 3 | **`UriTemplate`.** RFC 6570 levels 1 to 4 expanded, the RFC's examples and the `uritemplate-test` suite as tests, matching of the reversible subset (section 9a) | `std/uri/src/template.trb`, `std/uri/tests/*` | 2 | this round |
-| 4 | **`std/http` on `Uri`.** `get`, `post` and `send` take a `Uri`; a server's `Request` gains `uri`, the target URI of RFC 9112 section 3.3; `destinationOf` and `HttpError.InvalidUrl` are deleted; the examples and the conformance programs migrate | `std/http/src/*`, `examples/tour`, `tests/conformance/*` | 2 | this round |
+| 1 | **`std/ip`.** `AddressError`, `Ipv4Address`, `Ipv6Address`, `IpAddress`, `SocketAddress` move out of `std/network` unchanged, with their tests; `std/network` re-exports them (section 8a) | `std/ip/*`, `std/network/src/*` | nothing | **done** |
+| 2 | **`std/uri`.** `Uri`, `UriReference`, `Authority`, `Host`, `UriError`, `Urn`; the parser with RFC 3987's mapping in, normalization, resolution with RFC 3986 section 5.4's examples as tests, `relativeTo`, `iriText`, `Show`/`Equals`/`Hash`/`Compare`, `formDecoded`/`formEncoded` and the query parameters; the `Path` bridge of RFC 8089; the prelude exports `Uri` and `UriError` | `std/uri/*`, `std/prelude/src/lib.trb` | 1 | **done** |
+| 3 | **`UriTemplate`.** RFC 6570 levels 1 to 4 expanded, the RFC's examples and the `uritemplate-test` suite as tests, matching of the reversible subset (section 9a) | `std/uri/src/template.trb`, `std/uri/tests/*` | 2 | **done** |
+| 4 | **`std/http` on `Uri`.** `get`, `post` and `send` take a `Uri`; a server's `Request` gains `uri`, the target URI of RFC 9112 section 3.3; `destinationOf` and `HttpError.InvalidUrl` are deleted; the examples and the conformance programs migrate | `std/http/src/*`, `examples/tour`, `tests/conformance/*` | 2 | **done** |
 | 5 | **IDNA.** `std/idna` with Punycode, UTS #46 mapping and the IDNA 2008 rules; `Uri.tryFrom` accepts a non-ASCII host and stores its A-labels, `iriText()` shows U-labels; `repaired(text)` for the WHATWG differences of section 6; gap 9 answered before `Path` into `UriReference` becomes infallible | `std/idna/*`, `std/uri/src/*`, `compiler/src/semantics/checker/derive.trb` | 2 | later |
 | 6 | **`data:`.** A `DataUri` refinement (RFC 2397): media type, parameters and the bytes | `std/uri/src/data.trb`, `std/encoding` | Base64 in `std/encoding` | later |
 | 7 | **The literal rule.** The parameter kind in the checker and the closed list of section 9 with `Path`, `Uri`, `UriReference`, `UriTemplate` and the resource types; `UriTemplate<Variables>`; the diagnostics; the recorded value in the IR; `compiler/` depends on `std/uri` | `compiler/src/semantics/checker/*`, `compiler/src/ir/*`, `compiler/tests/check.test.trb` | 2, 3; one round with `docs/design/RESOURCES.md` slice 1 | later; **highest risk**, and the slice that puts `std/uri` in the fixpoint |

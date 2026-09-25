@@ -464,8 +464,13 @@ extend Body with From<Bytes> {
  */
 public shared type Request {
   method: Method
-  /** The request target as it was sent: `/users/7?details=true`. */
+  /** The request target as it was sent: `/users/7?details=true`, or `*`, or `host:443` for `CONNECT`. */
   target: String
+  /**
+   * The target URI RFC 9112 section 3.3 rebuilds from the target, the `Host` field and whether the connection is TLS:
+   * `https://example.test/users/7?details=true`. Normalized, so a router sees a path whose dot segments are gone.
+   */
+  uri: Uri
   headers: Headers = Headers()
   /** `var`, because reading a body changes it: whoever reads one needs a `var` path to it. */
   var body: Body
@@ -474,14 +479,19 @@ public shared type Request {
   /** `HTTP/1.1` or `HTTP/1.0`. */
   version: String = "HTTP/1.1"
 
-  /** The target without its query: `/users/7`. */
+  /** The path of the target URI: `/users/7`. */
   fn path(): String {
-    target.substringBefore("?") ?? target
+    uri.path()
   }
 
-  /** What follows the first `?` of the target, or `None`. */
+  /** The path of the target URI split at its `/`, still percent-encoded: `["users", "7"]`. */
+  fn segments(): List<String> {
+    uri.segments()
+  }
+
+  /** The query of the target URI, or `None`. */
   fn query(): String? {
-    target.substringAfter "?"
+    uri.query()
   }
 }
 

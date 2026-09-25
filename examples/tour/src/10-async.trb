@@ -37,21 +37,22 @@ fn api(request: Request): Task<Result<Response, HttpError>> {
 // `await()` is a method on Task and answers the value. A cancellation is passed on, not answered: a task that awaits
 // a cancelled task is cancelled itself, right there. `result()` is the one wait that answers `Fail(Cancelled)` instead.
 /** Fetches a user by id. `await()` answers the task's own `Result`, which composes with `?` like any fallible step. */
-fn fetchUser(base: String, id: Int): Task<Result<User, HttpError>> {
+fn fetchUser(base: Uri, id: Int): Task<Result<User, HttpError>> {
   // A `Response` owns one end of a stream and is read once, so it is a shared object in a `var` binding
-  var response = http.get("{base}/users/{id}").await()?
+  // `joined` encodes each segment it adds and never climbs above `base`: a URI is built, not interpolated
+  var response = http.get(base.joined("users/{id}")).await()?
   response.json<User>().await()
 }
 
 /** Fetches a user's posts by their id. */
-fn fetchPosts(base: String, userId: Int): Task<Result<List<Post>, HttpError>> {
-  var response = http.get("{base}/users/{userId}/posts").await()?
+fn fetchPosts(base: Uri, userId: Int): Task<Result<List<Post>, HttpError>> {
+  var response = http.get(base.joined("users/{userId}/posts")).await()?
   response.json<List<Post>>().await()
 }
 
 // Sequential
 /** Fetches a user and their posts one after the other. */
-fn loadProfile(base: String, id: Int): Task<Result<String, HttpError>> {
+fn loadProfile(base: Uri, id: Int): Task<Result<String, HttpError>> {
   const user = fetchUser(base, id).await()?
   const posts = fetchPosts(base, user.id).await()?
   Ok "{user.name} wrote {posts.length()} posts"
@@ -59,7 +60,7 @@ fn loadProfile(base: String, id: Int): Task<Result<String, HttpError>> {
 
 // Concurrent: start both tasks, then wait for both
 /** The same result as [loadProfile], but starts both fetches before waiting for either one. */
-fn loadProfileFast(base: String, id: Int): Task<Result<String, HttpError>> {
+fn loadProfileFast(base: Uri, id: Int): Task<Result<String, HttpError>> {
   const (userResult, postsResult) = both(fetchUser(base, id), fetchPosts(base, id)).await()
   const user = userResult?
   const posts = postsResult?
@@ -98,7 +99,8 @@ print "sum: {total}, consumed: {consumer.await().orElse(0)}, sent: {producer.awa
 // The server listens on a port the system chooses, and serves until its task is cancelled
 const server = Server.listen(SocketAddress(IpAddress.loopback, 0), api)?
 var serving = server.serve()
-const base = "http://127.0.0.1:{server.localAddress().port}"
+// A text becomes a `Uri` once, where it enters the program, and a typo is a failure right there
+const base = Uri.tryFrom("http://{server.localAddress()}")?
 
 match loadProfile(base, 1).await() {
   Ok(profile) => print profile

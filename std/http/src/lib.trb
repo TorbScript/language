@@ -1,14 +1,14 @@
 /**
  * HTTP/1.1, client and server, in TorbScript over `std/network` (docs/design/NETWORK.md sections 6 to 9).
  *
- * The client: [get], [post] and [send] answer a task of a [Response], whose [Body] is a stream - a response of any
+ * The client: [get], [post] and [send] take the `Uri` to reach and answer a task of a [Response], whose [Body] is a stream - a response of any
  * size can be piped into a file or read chunk by chunk, and the convenience that covers nine cases out of ten sits on
  * top of it (`body.text()`, `body.json<User>()`, each with a limit).
  *
  * The server: [Server.listen] with a [Handler], a function from a [Request] to a task of a [Response]; every connection
  * is a task, and the parser is strict about everything request smuggling lives on.
  *
- * Needs the network capability inside a sandboxed script. `https` waits for TLS (docs/design/NETWORK.md section 5).
+ * Needs the network capability inside a sandboxed script; `https` is TLS over `std/tls`.
  *
  * # Examples
  *
@@ -19,8 +19,8 @@
  *       name: String
  *     }
  *
- *     fn fetchUser(id: Int): Task<Result<User, HttpError>> {
- *       var response = http.get("http://example.test/users/{id}").await()?
+ *     fn fetchUser(api: Uri, id: Int): Task<Result<User, HttpError>> {
+ *       var response = http.get(api.joined("users/{id}")).await()?
  *       response.json<User>().await()
  *     }
  */
