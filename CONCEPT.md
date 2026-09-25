@@ -398,16 +398,19 @@ two of them are slow:
 ```trb
 const text = "Grüße 👋"
 text.chars().count()               // 7  - `chars()` is an Iterate<Char> (Unicode scalar values)
-text.byteLength()                  // 13 - O(1)
+text.byteLength()                  // 12 - O(1): G, r, e and the space are one byte, ü and ß two, 👋 four
 text.isEmpty()
 
-const at = text.indexOf("ß")       // Some(3): positions come from searching and are byte offsets
-const tail = text[3..]             // Slicing with offsets is O(1). An offset inside of a character panics.
+const at = text.indexOf("ß")       // Some(4): positions come from searching and are byte offsets
+const tail = text[4..]             // "ße 👋" - slicing at an offset a search answered is O(1)
 text.substringAfter("ü")           // Some("ße 👋") - most code never sees an offset
 ```
 
 - **Every offset is checked.** An offset greater than `byteLength()`, a start greater than the end, and an offset on a
-  UTF-8 continuation byte each panic, with the offset and the length in the message.
+  UTF-8 continuation byte each panic, with the offset and the length in the message. `text[3..]` on the text above
+  is the third of them: byte 3 is the second byte of `ü`. Nobody counts UTF-8 bytes by eye, which is why an offset
+  should come from the text and not from the program (see [Error Handling](#error-handling), and
+  [docs/design/PANICS.md](docs/design/PANICS.md) section 4).
 - **A `String` is therefore always valid UTF-8.** The only ways in are literals, slices at character boundaries,
   `String.from(Iterate<Char>)` and runtime functions that validate - so reading a file whose bytes are not UTF-8 is an
   `IoError`, never a replacement character, and neither `chars()` nor a back end needs a rule for broken text.
@@ -1733,6 +1736,27 @@ panic "unreachable"                                      // Bugs. Not catchable,
 ```
 
 - `collection.get(i)` returns `Item?`, `collection[i]` panics when out of bounds.
+- **Where a program may panic, and where it answers a `Result` or an `Option` instead** - the rule every API is
+  judged against ([docs/design/PANICS.md](docs/design/PANICS.md)):
+  1. **A panic is a broken promise of the program, never a property of the data it was given.** An operation may
+     panic only where its precondition is something the program can state as an ordinary expression -
+     `index < list.length()`, `divisor != 0`, `map.contains(key)` - and chose not to. Where the precondition is
+     invisible - a byte inside a character, the encoding of bytes from outside - the operation does not exist in a
+     form that can fail: a type makes it unwritable, or it answers a `Result`. So `readLine()` answers a `Result` for
+     bytes that are not UTF-8, and a text is cut with `withoutPrefix`, `splitOnce` and `dropping(characters:)`
+     rather than with a number counted by eye.
+  2. **Every partial operation has a total twin, in the same vocabulary:** `list[i]` and `list.get(i)`,
+     `list[a..b]` and `list.part(a..b)`, `a + b` and `a.addedChecked(b)`, `wholeOf` and `tryFrom`, `expect` and `??`.
+     The twin stands next to the partial one, and it answers an `Option` or a `Result`.
+  3. **The compiler takes back what it can prove, and nothing it cannot.** A check it proves cannot fire is not
+     emitted; a failure it proves certain - `10 / 0`, `[1, 2, 3][5]`, `"abc"[5..]`, `Int.maximum + 1` - is a
+     compile error. Neither changes what a program means.
+  4. **A panic names the line of the program that broke the promise,** not the line of the standard library that
+     noticed it: `map[key]` that finds no key says which key, and where the program asked for it.
+
+  The short forms keep their meaning: `list[i]` says "I know `i` is inside", as in Rust and Swift, because that
+  precondition is visible. What stays a panic besides them is the machine (stack, memory, the size limits, a deadlock)
+  and what the program asserted itself (`expect`, `assert`, `panic`).
 - **`?.` is `Option.map`, and `Option.flatMap` when the member's result is itself an `Option`.** So `?.` never
   produces a nested Option: `first()?.position()` is a `Vector2?`, whatever `position()` returns. It is not
   defined on `Result`.
@@ -2499,6 +2523,13 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
 
 ## Decision Log
 
+- **A panic is a broken promise of the program, never a property of its data** (2026-09-24; docs/design/PANICS.md).
+  An operation panics only where its precondition is an expression the program could have written; every partial
+  operation has a total twin beside it; the compiler removes the checks it proves and refuses the failures it sees;
+  and a panic names the program's line. `list[i]` stays partial as in Rust and Swift, `map[key]` keeps panicking and
+  names the key, text is sliced at a `TextIndex` that only a text hands out, and `readLine()` answers a `Result`.
+  Variants weighed and refused: `[]` answering an `Option`, partiality marked in signatures, wrapping or
+  profile-dependent overflow.
 - **`a ** b` is the power, and `^` is no operator** (2026-09-23; docs/language/traits/operators.md). `**` binds tighter
   than `*` and groups to the right, goes through `Power<Exponent, Output>`, and a `-` or `!` directly on its base is
   an error that shows both readings, as JavaScript does. `^` is read as a power by half of the readers and as exclusive
