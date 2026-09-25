@@ -43,8 +43,9 @@ source:
 
 ## Syntax
 
-The front matter is a **subset** of YAML, not YAML. It is written down here in full, because the toolchain reads it
-without a YAML library and a 200-line reader and a full library have to agree on every page.
+The front matter is a **subset** of YAML, not all of it. It is written down here in full: the toolchain reads it with
+[std/yaml](../standard-library/yaml.md) and checks the subset on top, so that every other tool - a static site
+generator, an editor, GitHub - reads each page the same way.
 
 ```text
 front-matter ::= "---" newline field* "---" newline
@@ -76,7 +77,7 @@ The indicator characters that a plain scalar may not start with are the ones YAM
 5. **A value that starts with an indicator character or contains `: ` is written in double quotes.** Inside quotes only
    `\"` and `\\` are escapes.
 6. **There are no tabs, no comments, no nested maps, no anchors, no aliases and no multi-line scalars.** The YAML 1.2
-   specification forbids tabs for indentation; the rest is left out so that the subset stays readable by both parsers.
+   specification forbids tabs for indentation; the rest is left out so that the subset stays readable by every parser.
 7. **A scalar field may be read as a one-item list.** `source: CONCEPT.md` and a block list with one item mean the same
    thing.
 8. **An unknown key is an error.** A typo has to fail, because a field nobody reads is silence.

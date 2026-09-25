@@ -1,7 +1,8 @@
 # YAML, Regular Expressions and Markdown
 
-**Status: slice 1 built (2026-09-25)** — `std/yaml` exists and passes all 402 cases of the YAML test suite; section
-1a is what its implementation decided. `std/regex` and `std/markdown` do not exist yet. The decisions below were made on
+**Status: slices 1 and 2 built (2026-09-25)** — `std/yaml` exists and passes all 402 cases of the YAML test suite, and
+`torb docs check` reads front matter through it; section 1a is what its implementation decided. `std/regex` and
+`std/markdown` do not exist yet. The decisions below were made on
 2026-09-21 and 2026-09-22, the scope of `std/yaml` was widened on 2026-09-24.
 
 **Three text packages that the toolchain needs itself, in this order: `std/yaml`, then `std/regex`, then
@@ -99,7 +100,7 @@ suite. It is a *document* format: its model is the tree of blocks and inlines, a
 | # | Slice | Needs |
 |---|---|---|
 | 1 | `std/yaml`: the reader and the writer of YAML 1.2 and 1.1, the tree, `Encode`/`Decode` - **built** | nothing |
-| 2 | `torb docs check` reads front matter through `std/yaml` | 1, and a seed refresh, because the compiler imports it |
+| 2 | `torb docs check` reads front matter through `std/yaml` - **built**; the seed has to be refreshed at slice 1's commit or later first, because the compiler imports `std/yaml` | 1, and a seed refresh, because the compiler imports it |
 | 3 | `std/regex`: the engine, `Regex.tryFrom(text)`, matches and groups | nothing |
 | 4 | A `Regex` literal is compiled by the checker (URI.md section 9's table) | 3 |
 | 5 | `std/markdown` (RELEASE.md slice 1) | 1 |

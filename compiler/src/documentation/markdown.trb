@@ -1,12 +1,14 @@
 /**
  * The reader of a documentation page: the front matter, the headings, the fenced code blocks and the links.
  *
- * It is deliberately not a Markdown parser. A page of this documentation is a fixed shape (`docs/contributing`), and
- * every construct the checker judges is recognizable line by line: the front matter between two `---` lines, an ATX
- * heading, a fence of exactly three backticks at the start of a line, and an inline link. Everything else is prose
- * that is carried along unchanged. A line-based reader is what lets a diagnostic name a line number, which is what a
- * writer and an agent both need.
+ * The front matter between two `---` lines is read by `std/yaml`, with the subset of `docs/contributing` checked on
+ * top of it. The body is deliberately not parsed as Markdown yet: a page of this documentation is a fixed shape, and
+ * every construct the checker judges is recognizable line by line - an ATX heading, a fence of three backticks at the
+ * start of a line, and an inline link. Everything else is prose that is carried along unchanged. A line-based reader is
+ * what lets a diagnostic name a line number, which is what a writer and an agent both need.
  */
+
+use Yaml, YamlNode, ScalarStyle from "std/yaml"
 
 /** A value of the front matter. The subset is documented in `docs/contributing/front-matter.md`. */
 public type FieldValue {
@@ -208,156 +210,162 @@ type ReadFields {
 }
 
 /**
- * The front matter, between the two `---` lines. The subset: one `key: value` per line, a scalar or a list, and a
- * block list whose items are indented by two spaces and start with `- `. Anything else is a problem that names the
- * line, because a front matter that is read differently by two tools is worse than one that is rejected.
+ * The front matter, between the two `---` lines, read by `std/yaml`. The subset of `docs/contributing/front-matter.md`
+ * holds on top of YAML: one `key: value` per line, a value that is a plain or double-quoted scalar or a list of them, a
+ * block list whose items are indented by two spaces and start with `- `, and no comment, tab, anchor, alias, tag or
+ * value of several lines. What breaks it is a problem that names the line, because a front matter that is read
+ * differently by two tools is worse than one that is rejected.
  */
 fn readFrontMatter(path: String, lines: List<String>, from: Int, to: Int): ReadFields {
+  var problems = lineProblems path, lines, from, to
+  var text: List<String> = []
+  for index in from..to {
+    text.append lines[index]
+  }
+  const document = match Yaml().parse(text.joined(separator: "\n") + "\n") {
+    Ok(found) => found
+    Fail(problem) => {
+      // A line rule has said what is wrong already where YAML cannot read the line
+      if problems.isEmpty() {
+        problems.append DocumentationProblem(path, problem.line() + from, "The front matter is not YAML: {problem.message()}")
+      }
+      return ReadFields FrontMatter([]), problems
+    }
+  }
+  const root = document.root
+  if root.text() == Some("") {
+    return ReadFields FrontMatter([]), problems
+  }
   var fields: List<Field> = []
-  var problems: List<DocumentationProblem> = []
-  var index = from
-  while index < to {
-    const line = lines[index]
-    const number = index + 1
-    if line.trim().isEmpty() {
-      index = index + 1
-      continue
-    }
-    if line.startsWith(" ") || line.startsWith("\t") {
-      problems.append DocumentationProblem(path, number, "An indented line in the front matter belongs to a list item and has to start with `- `")
-      index = index + 1
-      continue
-    }
-    const colon = line.indexOf ":"
-    const at = match colon {
-      Some(found) => found
-      None => {
-        problems.append DocumentationProblem(path, number, "A line of the front matter is `key: value`. There is no colon on this one")
-        index = index + 1
+  for entry in root.entries() {
+    const number = entry.key.line + from
+    const key = match entry.key.content {
+      .Scalar(found, ScalarStyle.Plain) => found
+      _ => {
+        problems.append DocumentationProblem(path, number, "A key of the front matter is a plain field name")
         continue
       }
     }
-    const key = line.slice(0..at)
     if !isFieldKey(key) {
       problems.append DocumentationProblem(path, number, "`{key}` is not a field name. A field name is lowercase letters and hyphens")
-      index = index + 1
       continue
     }
     if fields.any({ _.key == key }) {
       problems.append DocumentationProblem(path, number, "The field `{key}` is written twice")
-      index = index + 1
       continue
     }
-    const rest = line.slice((at + 1)..line.byteLength()).trim()
-    if rest.isEmpty() {
-      const collected = collectItems(path, lines, index + 1, to)
-      if collected.items.isEmpty() {
-        problems.append DocumentationProblem(path, number, "`{key}` has no value. A block list needs at least one `- ` item below it")
-      }
-      problems.appendAll collected.problems
-      fields.append Field(key, FieldValue.Items(collected.items), number)
-      index = collected.next
-      continue
+    match fieldValue(path, key, entry.value, from) {
+      Ok(value) => fields.append Field(key, value, number)
+      Fail(problem) => problems.append problem
     }
-    const read = readScalarOrList path, number, rest
-    problems.appendAll read.problems
-    fields.append Field(key, read.value, number)
-    index = index + 1
   }
   ReadFields FrontMatter(fields), problems
 }
 
-type CollectedItems {
-  items: List<String>
-  /** The index of the first line that is not an item any more */
-  next: Int
-  problems: List<DocumentationProblem>
-}
-
-/** The items of a block list: `  - value`, two spaces deep. */
-fn collectItems(path: String, lines: List<String>, from: Int, to: Int): CollectedItems {
-  var items: List<String> = []
-  var problems: List<DocumentationProblem> = []
-  var index = from
-  while index < to {
-    const line = lines[index]
-    if line.trim().isEmpty() {
-      index = index + 1
-      continue
-    }
-    if !line.startsWith("  - ") {
-      break
-    }
-    const value = line.slice(4..line.byteLength()).trim()
-    const read = readScalar(path, index + 1, value)
-    problems.appendAll read.problems
-    items.append read.value
-    index = index + 1
+/** The value of one field: a scalar, a number, or a list of scalars. */
+fn fieldValue(path: String, key: String, node: YamlNode, from: Int): Result<FieldValue, DocumentationProblem> {
+  const number = node.line + from
+  if node.anchor.isSome() || node.tag.isSome() {
+    return Fail DocumentationProblem(path, number, "`{key}` has an anchor or a tag, which the front matter does not have")
   }
-  CollectedItems items, index, problems
-}
-
-type ReadValue {
-  value: FieldValue
-  problems: List<DocumentationProblem>
-}
-
-/** A scalar, an inline list `[a, b]`, or a number. */
-fn readScalarOrList(path: String, line: Int, text: String): ReadValue {
-  if text.startsWith("[") {
-    if !text.endsWith("]") {
-      return ReadValue FieldValue.Items([]), [DocumentationProblem(path, line, "An inline list ends with `]` on the same line")]
+  match node.content {
+    .Scalar(text, style) => {
+      if style == ScalarStyle.Plain && text.isEmpty() {
+        return Fail DocumentationProblem(path, number, "`{key}` has no value. A block list needs at least one `- ` item below it")
+      }
+      if style != ScalarStyle.Plain && style != ScalarStyle.DoubleQuoted {
+        return Fail DocumentationProblem(path, number, "`{key}` is a value on one line, plain or in double quotes")
+      }
+      if style == ScalarStyle.Plain && isNumber(text) {
+        return Ok FieldValue.Number(numberOf(text))
+      }
+      Ok FieldValue.Text(text)
     }
-    const inside = text.slice(1..(text.byteLength() - 1)).trim()
-    if inside.isEmpty() {
-      return ReadValue FieldValue.Items([]), []
+    .Sequence(items, _) => {
+      var values: List<String> = []
+      for item in items {
+        match item.content {
+          .Scalar(text, ScalarStyle.Plain) => values.append text
+          .Scalar(text, ScalarStyle.DoubleQuoted) => values.append text
+          _ => {
+            return Fail DocumentationProblem(path, item.line + from, "An item of `{key}` is a value on one line, plain or in double quotes")
+          }
+        }
+      }
+      Ok FieldValue.Items(values)
     }
-    var items: List<String> = []
-    var problems: List<DocumentationProblem> = []
-    for part in inside.split(",") {
-      const read = readScalar path, line, part.trim()
-      problems.appendAll read.problems
-      items.append read.value
-    }
-    return ReadValue FieldValue.Items(items), problems
+    .Mapping(_, _) => Fail DocumentationProblem(path, number, "`{key}` holds a mapping. A value of the front matter is a scalar or a list")
+    .Alias(_) => Fail DocumentationProblem(path, number, "`{key}` is an alias, which the front matter does not have")
   }
-  if isNumber(text) {
-    return ReadValue FieldValue.Number(numberOf(text)), []
-  }
-  const read = readScalar path, line, text
-  ReadValue FieldValue.Text(read.value), read.problems
-}
-
-type ReadText {
-  value: String
-  problems: List<DocumentationProblem>
 }
 
 /**
- * One scalar. Either in double quotes - then `\"` and `\\` are the only escapes - or bare, and then it must not
- * start with a character that YAML gives a meaning to and must not contain `: `, which ends a plain scalar there.
- * That is the whole rule, so a simple reader and a YAML library read the same value.
+ * The rules of the subset that are rules about lines: a line at the start of the front matter is `key: value`, an
+ * indented one a list item, a value that contains `: ` or starts with a character YAML reserves is in double quotes,
+ * and there is no tab and no comment.
  */
-fn readScalar(path: String, line: Int, text: String): ReadText {
-  if text.startsWith("\"") {
-    if !text.endsWith("\"") || text.byteLength() < 2 {
-      return ReadText text, [DocumentationProblem(path, line, "A quoted value ends with `\"` on the same line")]
+fn lineProblems(path: String, lines: List<String>, from: Int, to: Int): List<DocumentationProblem> {
+  var problems: List<DocumentationProblem> = []
+  for index in from..to {
+    const line = lines[index]
+    const number = index + 1
+    if line.trim().isEmpty() {
+      continue
     }
-    return ReadText unescaped(text.slice(1..(text.byteLength() - 1))), []
+    if line.contains("\t") {
+      problems.append DocumentationProblem(path, number, "A tab is not part of the front matter: YAML indents with spaces")
+      continue
+    }
+    if line.trim().startsWith("#") {
+      problems.append DocumentationProblem(path, number, "A comment is not part of the front matter")
+      continue
+    }
+    if line.startsWith(" ") {
+      if !line.startsWith("  - ") {
+        problems.append DocumentationProblem(path, number, "An indented line in the front matter belongs to a list item and has to start with `- `")
+        continue
+      }
+      if const Some(problem) = scalarProblem(path, number, line.sliceBytes(4, line.byteLength()).trim()) {
+        problems.append problem
+      }
+      continue
+    }
+    const colon = match line.indexOf(":") {
+      Some(found) => found
+      None => {
+        problems.append DocumentationProblem(path, number, "A line of the front matter is `key: value`. There is no colon on this one")
+        continue
+      }
+    }
+    const rest = line.sliceBytes(colon + 1, line.byteLength()).trim()
+    if rest.isEmpty() || rest.startsWith("[") {
+      continue
+    }
+    if const Some(problem) = scalarProblem(path, number, rest) {
+      problems.append problem
+    }
   }
-  if text.contains(": ") {
-    const note = "`{text}` contains `: ` and has to be written in double quotes"
-    return ReadText text, [DocumentationProblem(path, line, note)]
-  }
-  if startsWithIndicator(text) {
-    const note = "`{text}` starts with a character YAML reserves and has to be written in double quotes"
-    return ReadText text, [DocumentationProblem(path, line, note)]
-  }
-  ReadText text, []
+  problems
 }
 
-fn unescaped(text: String): String {
-  text.replace("\\\"", "\"").replace("\\\\", "\\")
+/**
+ * The rule of one scalar. Either in double quotes, or bare, and then it must not start with a character that YAML
+ * gives a meaning to and must not contain `: `, which ends a plain scalar there.
+ */
+fn scalarProblem(path: String, line: Int, text: String): DocumentationProblem? {
+  if text.startsWith("\"") {
+    if !text.endsWith("\"") || text.byteLength() < 2 {
+      return Some DocumentationProblem(path, line, "A quoted value ends with `\"` on the same line")
+    }
+    return None
+  }
+  if text.contains(": ") {
+    return Some DocumentationProblem(path, line, "`{text}` contains `: ` and has to be written in double quotes")
+  }
+  if startsWithIndicator(text) {
+    return Some DocumentationProblem(path, line, "`{text}` starts with a character YAML reserves and has to be written in double quotes")
+  }
+  None
 }
 
 /** The indicator characters of YAML that cannot start a plain scalar. */
