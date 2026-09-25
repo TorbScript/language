@@ -985,6 +985,8 @@ const resumeRequest = 3
 
 const callRequest = 4
 
+const closeRequest = 5
+
 const requestChunk = 8
 
 const requestFirst = 16
@@ -1009,7 +1011,12 @@ fn answer(registers: Registers, request: Int): Int {
   var budget = unlimitedBudget()
   var poll = finishedPoll
   var answered = 0
-  if kind == callRequest {
+  if kind == closeRequest {
+    // The destructors a release queued outside every operation of the loop, run where it happened
+    if !runClosers(registers.words, kernelScratch(), budget, registers, image, program, saved) {
+      poll = haltedPoll
+    }
+  } else if kind == callRequest {
     // A chunk without parameters: the release of the entry cells when the program ends in `Process.exit`
     const function = Machine.load(request + requestChunk)
     if ensureFrame(registers, base, image, function) {

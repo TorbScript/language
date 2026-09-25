@@ -119,6 +119,9 @@ static size_t torb_machine_slot(void) {
   return TORB_MACHINE_SLOTS;
 }
 
+/* How many operations of the loop the calling thread is inside (see `torb_machine_queue_closer`). */
+static uint32_t *torb_machine_operating_here(void);
+
 void torb_machine_install(torb_closure interpreter) {
   size_t slot = torb_machine_install_slot;
   torb_closure previous = torb_machine_interpreters[slot];
@@ -219,7 +222,9 @@ enum {
   /* Resume the body of a task at the state it recorded, and answer its `torb_poll`. */
   TORB_REQUEST_RESUME = 3,
   /* Run a chunk without parameters and answer nothing: the release of the entry cells at a `Process.exit`. */
-  TORB_REQUEST_CALL = 4
+  TORB_REQUEST_CALL = 4,
+  /* Run the destructors this thread queued, now: a release outside every operation of the loop (below). */
+  TORB_REQUEST_CLOSE = 5
 };
 
 /* The chunk that releases the entry cells, which `torb_process_exit` runs through the interpreter; -1 for none. */
@@ -260,6 +265,23 @@ static torb_poll torb_machine_resume(torb_task *task) {
   request.first = (int64_t)(intptr_t)task;
   request.second = (int64_t)(intptr_t)(frame + 2);
   request.words = (int64_t)task->state;
+  if (frame[1] == 0 && torb_machine_sandbox_open != 0) {
+    /*
+     * A task of the program that the scheduler of a script resumes - the script's test waits for its own tasks and runs
+     * whatever is queued meanwhile - runs under the program's rules and not the script's grant: the sandbox is set
+     * aside for it, what it starts is the program's, and a panic of it is the program's and no stop of the script.
+     */
+    int active = torb_sandbox_active;
+    int64_t open = torb_machine_sandbox_open;
+    torb_recovery *point = torb_begin_recovery(NULL);
+    torb_sandbox_active = 0;
+    torb_machine_sandbox_open = 0;
+    answer = torb_machine_call_interpreter((int64_t)(intptr_t)&request);
+    torb_machine_sandbox_open = open;
+    torb_sandbox_active = active;
+    torb_end_recovery(point);
+    return (torb_poll)answer;
+  }
   answer = torb_machine_call_interpreter((int64_t)(intptr_t)&request);
   if (torb_machine_stopped_in_call_back) {
     /* The script stopped inside the task: the task stops, and the operation that ran the scheduler passes it on */
@@ -305,14 +327,21 @@ void torb_machine_test_case(torb_text name, const int64_t *body) {
   torb_closure closure = { (void (*)(void))torb_machine_run_request, (torb_environment *)(void *)&request };
   /* A failing body jumps back here past the call back, which then never puts the counting back itself */
   unsigned inside = torb_count_in_machine(1u);
+  /* ... nor the operations it was inside; and the wait for the test's tasks runs the scheduler, outside every one */
+  uint32_t operating = *torb_machine_operating_here();
+  *torb_machine_operating_here() = 0u;
   torb_test_case(name, closure);
+  *torb_machine_operating_here() = operating;
   (void)torb_count_in_machine(inside);
 }
 
 void torb_machine_test_group(torb_text name, const int64_t *body) {
   torb_machine_request request = { TORB_REQUEST_RUN, body[0], body[1], 0, 0 };
   torb_closure closure = { (void (*)(void))torb_machine_run_request, (torb_environment *)(void *)&request };
+  uint32_t operating = *torb_machine_operating_here();
+  *torb_machine_operating_here() = 0u;
   torb_test_group(name, closure);
+  *torb_machine_operating_here() = operating;
 }
 
 /* ------------------------------------------------------------------------------------------------- locations --- */
@@ -880,6 +909,32 @@ static torb_machine_closers *torb_machine_closers_here(void) {
   return &torb_machine_closer_queues[torb_machine_slot()];
 }
 
+/*
+ * How many operations of the loop the thread is inside, by slot. A destructor queued inside one runs when the loop
+ * looks at the queue after it, before its next instruction. One queued outside every one - by the scheduler of a worker
+ * that releases the value of a task nobody waits for, or while an operation runs the scheduler, which counts as outside
+ * - runs at once, through a call back, as the C back end's drop function runs inside the release that dropped the last
+ * count (docs/design/VM.md section 7).
+ */
+static uint32_t torb_machine_operating[TORB_MACHINE_SLOTS + 1u];
+
+/* The count of the calling thread's slot. */
+static uint32_t *torb_machine_operating_here(void) {
+  return &torb_machine_operating[torb_machine_slot()];
+}
+
+static void torb_machine_close_now(void) {
+  size_t slot = torb_machine_slot();
+  torb_machine_request request = { TORB_REQUEST_CLOSE, 0, 0, 0, 0 };
+  /* Only on a thread with an interpreter of its own: another one's registers are not this thread's to use */
+  if (slot >= TORB_MACHINE_SLOTS || torb_machine_interpreters[slot].code == NULL) {
+    return;
+  }
+  torb_machine_operating[slot] += 1u;
+  (void)torb_machine_call_back((int64_t)(intptr_t)&request);
+  torb_machine_operating[slot] -= 1u;
+}
+
 static void torb_machine_queue_closer(void *block) {
   torb_machine_closers *queue = torb_machine_closers_here();
   if (queue->count == queue->capacity) {
@@ -893,6 +948,9 @@ static void torb_machine_queue_closer(void *block) {
   }
   queue->blocks[queue->count] = block;
   queue->count += 1;
+  if (*torb_machine_operating_here() == 0u) {
+    torb_machine_close_now();
+  }
 }
 
 static void torb_machine_release_value(int64_t *value, const torb_machine_shape *shape);
@@ -2626,13 +2684,16 @@ static int64_t torb_machine_guarded(torb_list *list, int64_t base, torb_list cod
  */
 int64_t torb_machine_operate(torb_list *list, int64_t base, torb_list code, int64_t at) {
   unsigned outside = torb_count_in_machine(1u);
+  uint32_t *operating = torb_machine_operating_here();
   int64_t answer;
+  *operating += 1u;
   /* Closing is the host's, never the script's: it must not be stopped by the budget the script used up */
   if (torb_sandbox_active != 0 && torb_machine_operands(code, at)[0] != TORB_OPERATION_SANDBOX_CLOSE) {
     answer = torb_machine_guarded(list, base, code, at);
   } else {
     answer = torb_machine_dispatch(list, base, code, at);
   }
+  *operating -= 1u;
   (void)torb_count_in_machine(outside);
   return answer;
 }
@@ -2895,18 +2956,30 @@ static int64_t torb_machine_dispatch(torb_list *list, int64_t base, torb_list co
     }
     case TORB_OPERATION_RUN_MAIN: {
       torb_task *task = torb_machine_task_new(o[0], o[1], &torb_element_void);
+      uint32_t operating = *torb_machine_operating_here();
       torb_task_start(task);
+      /* The scheduler runs outside every operation: what it releases is closed at once */
+      *torb_machine_operating_here() = 0u;
       torb_scheduler_run(task);
+      *torb_machine_operating_here() = operating;
       /* 0, or TORB_EXIT_CANCELLED where the main task ended cancelled: the exit code of the run, as main's */
       words[base + o[2]] = (int64_t)torb_task_end_main(task);
       return torb_machine_queued();
     }
-    case TORB_OPERATION_SCHEDULER_RUN:
+    case TORB_OPERATION_SCHEDULER_RUN: {
+      uint32_t operating = *torb_machine_operating_here();
+      *torb_machine_operating_here() = 0u;
       torb_scheduler_run(NULL);
+      *torb_machine_operating_here() = operating;
       return torb_machine_queued();
-    case TORB_OPERATION_SCHEDULER_FINISH:
+    }
+    case TORB_OPERATION_SCHEDULER_FINISH: {
+      uint32_t operating = *torb_machine_operating_here();
+      *torb_machine_operating_here() = 0u;
       torb_scheduler_finish();
+      *torb_machine_operating_here() = operating;
       return torb_machine_queued();
+    }
     case TORB_OPERATION_LIST_ADDRESS:
       /* The list this operation is read from: the interpreter's code, which it reads by address from then on */
       return (int64_t)(intptr_t)((const int64_t *)torb_list_storage_data(code.storage) + code.offset);

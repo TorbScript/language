@@ -1,0 +1,27 @@
+use sleep from "std/time"
+
+/**
+ * The value of a task nobody waits for is released when the task completes, by the scheduler that ran it, and its
+ * `close()` runs right there - before the program goes on, on whichever worker the task ran. The program runs with four
+ * workers and again with one (`destructor-unawaited-result.workers`), and prints the same bytes both times.
+ */
+
+shared type Probe with Close {
+  name: String
+
+  var fn close() {
+    print "close {name}"
+  }
+}
+
+/** Makes a probe on whichever worker takes it; its frame holds nothing, so an idle worker may. */
+fn made(index: Int): Task<Probe> {
+  Probe "the result of task {index}"
+}
+
+const _ = made 1
+sleep(0.25).await()
+print "after the first"
+const _ = made 2
+sleep(0.25).await()
+print "after the second"

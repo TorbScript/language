@@ -8,10 +8,16 @@
  * with that panic's line and message, and the program goes on and waits for a task of its own, which a scheduler left
  * in the middle of a resume could not run.
  *
+ * The other way round, a task of the program runs under the program's rules wherever it is resumed: `reader` is queued
+ * before the second script runs, the script's test runs the scheduler while it waits for its own task, and so the
+ * program's task runs inside the script's sandbox - where it reads a file no grant of the script names, as the
+ * program may.
+ *
  * Only the VM runs a receiver script, so this program is named in `vm.list` and has no native run.
  */
 
 use Sandbox, Script, SandboxError from "std/sandbox"
+use File from "std/fs"
 use sleep from "std/time"
 
 type Settings {
@@ -33,10 +39,21 @@ fn configured(loading: Result<Script<Settings>, SandboxError>): String {
   }
 }
 
+/** A task of the program that reads a file: what the program may, and the scripts' grants do not name. */
+fn reader(): Task<String> {
+  match File.readText("probe.txt") {
+    Ok(text) => "read {text.lines().count()} lines"
+    Fail(problem) => "could not read: {problem}"
+  }
+}
+
 print configured(Sandbox.load<Settings>("./vm-only/leaves-a-task.trb"))
+const _ = File.writeText "probe.txt", "one\ntwo\nthree\n"
+const reading = reader()
 const testing = Sandbox.load<Settings>("./vm-only/tests-a-task.trb") {
   modules "std/test"
 }
 print configured(testing)
 sleep(0.01).await()
+print "the program's task: {reading.await()}"
 print "the program goes on"

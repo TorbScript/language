@@ -4,7 +4,7 @@
 rows 7.1-7.2). Every slice but 8 is in (section 9): the bytecode and `torb ir --bytecode`
 (`compiler/src/backend/bytecode/`), the kernel of `std/machine` with `runtime/machine.c` and the generated table of
 thunks, and the interpreter with `torb run --vm` (`compiler/src/vm/`). `tools/conformance.sh --vm` runs the programs of
-`tests/conformance/vm.list` - 185 of the 187 of the suite (section 8 says which two are not), and two scripts of
+`tests/conformance/vm.list` - 189 of the 191 of the suite (section 8 says which two are not), and two scripts of
 `vm-only/` - and compares them byte for byte with their native run, a program with a `.workers` file on that many
 workers and on one. `test`/`group`, keys compared by a program's own `equals` and tasks run through the call back of
 section 10, tasks run on every worker of the pool (section 4), `Array<Item, Size>` is inline words, the leak gate holds
@@ -103,7 +103,8 @@ needs.** There are no tags: the IR gives every slot a type, so the emitter choos
   than a word, a `Bool` and a `Char` are a byte, two or four in a list, a map, a set, a task's value or a channel.**
   A function of the runtime reads the bytes of a `List<UInt8>` (`torb_network_send` refuses any other element
   size), so a list the VM makes has to be the list the runtime expects. The element descriptor is a narrow one of the
-  kernel's (`ElementKind.Narrow`, equal by its bytes, hashed as the widened word); the conversions are where bytes move
+  kernel's (`ElementKind.Narrow`, equal by its bytes, hashed as the language hashes the number, `torb_hash_u64` of the
+  widened word - `element-hashes` prints the hashes of such containers in both back ends); the conversions are where bytes move
   between a register and the storage: a place that ends in such an element loads and stores through the kernel
   (`NarrowLoad`, `NarrowStore`) in the element's width, sign- or zero-extending; a value handed to the runtime by
   address is its word, whose low bytes are the narrow value; an element the runtime writes through a `void *` lands in
@@ -331,7 +332,11 @@ element of a list, a map value it replaces - and two walkers would be two orders
   on top of the words in use, takes the count back (`torb_closing_end`), and releases its fields - and what that
   release queues runs before the next block of the batch. That is the depth-first order of nested C drop functions,
   and nothing but a destructor can tell that it ran after the kernel call instead of inside it, because the runtime
-  writes no output of its own.
+  writes no output of its own. **A release outside every operation of the loop closes at once:** the scheduler of a
+  worker that frees the value of a task nobody waits for, or the scheduler an operation runs (`RunMain`,
+  `SchedulerRun`, the wait of a test), releases where no loop will look at the queue before the program goes on, so
+  the kernel counts per thread how many operations it is inside and, at zero, runs the queue there through a call back
+  (`TORB_REQUEST_CLOSE`) - where the C back end's drop function would run (`destructor-unawaited-result`).
 - A panic runs nothing on the way out, in the VM as in C (gap 9): the kernel calls the runtime's panic function, which
   prints and leaves with 101.
 
@@ -395,7 +400,7 @@ compares standard output, standard error (folded as for the native run) and the 
 | 5 | The leak gate of the VM: the program's blocks counted apart from `torb`'s | **Done**: section 8; `tools/conformance.sh --vm` checks every program of `vm.list` |
 | 6 | `test` and `group`: the runtime's recovery point around a closure of the interpreter | **Done**: `Machine.install` and the substitutes `torb_machine_test_case`/`_group`; `tests`, `test-failure`, `assert-values` |
 | 7 | Tasks: `TaskNew`, `Suspend`, `Stop`, channels, the FIFO order of `runtime/task.c` (docs/BACKEND.md 7.3's VM half) | **Done**, on every worker of the pool: section 4; the entry cells of a top-level `const` too; every program with tasks |
-| 8 | The gate of 7.2: every conformance program in both back ends; `vm.list` deleted | 185 of 187: `vm.list` stays for the two of section 8 |
+| 8 | The gate of 7.2: every conformance program in both back ends; `vm.list` deleted | 189 of 191: `vm.list` stays for the two of section 8 |
 | 11 | `torb test --vm`: every test file an entry of one program, the report of `runtime/test.c` | **Done**: `TestFile`, `TestFinish`; tier B runs the test packages of `std/` and `examples/` with it |
 | 9 | `Array<Item, Size>`, added to the language after the interpreter: inline items, a checked item step | **Done**: `ArrayNew`, the static `Items`, `PlaceStep.Item`, the counted words of every item; the eleven programs with an array |
 | 10 | Speed: register reads without `Indexed.at`, return records in the word stack (section 10) | **Done**: the image, addresses and inline `load`/`store` (section 4); six times faster (section 8) |
@@ -427,9 +432,9 @@ compares standard output, standard error (folded as for the native run) and the 
 - **Where the tasks' scheduler runs - decided: in the runtime.** The runtime's own FIFO scheduler drives a VM task
   through one resume function of `runtime/machine.c` that calls the interpreter back (section 4), so the process has
   one scheduler and the order of `runtime/task.c` is the VM's by construction, on every worker of the pool (section 4).
-  **Open:** a destructor queued by a release in a worker's own scheduler (a result nobody awaits) runs with that
-  thread's next call back rather than at once; and a task of the program that a script's test scope resumes runs
-  under the script's grant.
+  A task of the program that the scheduler resumes while a script's sandbox is open - the script's test waits for its
+  own tasks and runs whatever is queued - runs with the sandbox set aside and no recovery point of the script's, so it
+  reads what the program may and a panic of it is the program's (`vm-only/sandbox-tasks.trb`).
 - **Calling compiled code from bytecode.** BACKEND 5.2 promised that a compiled function can be called from bytecode
   and back. With the VM's own inline layouts that is a marshalling step at the boundary for any record of the program.
   docs/design/SCRIPTS.md section 5 decided it for the sandbox: only text crosses between `torb` and the VM (the kernel
