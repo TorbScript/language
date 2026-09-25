@@ -139,7 +139,7 @@ supported, and neither is a dialect with its own name.
 | Package | What it is | Record | Waits for |
 |---|---|---|---|
 | `std/yaml` | built: YAML 1.2 and 1.1 in full, anchors, aliases, tags and comments in the tree, the target type resolves scalars, a schema is an option; all 402 cases of the YAML test suite pass | [design/TEXT-FORMATS.md](design/TEXT-FORMATS.md) section 1a | - |
-| `std/regex` | a `Regex` whose literal is checked by the compiler; RE2 semantics | [design/TEXT-FORMATS.md](design/TEXT-FORMATS.md) | nothing |
+| `std/regex` | built: a `Regex` with RE2's syntax and linear time, groups by name that decode into a type, replace and split; RE2's search tests pass; next: the literal the compiler checks | [design/TEXT-FORMATS.md](design/TEXT-FORMATS.md) section 2a | the literal waits for the checker's parameter kind |
 | `std/markdown` | CommonMark, the document tree as a value | [design/RELEASE.md](design/RELEASE.md) slice 1 | `std/yaml` |
 | `std/random` | a seedable, splittable generator that is a value | [design/RANDOM.md](design/RANDOM.md) | nothing |
 | `std/identifier` | `Uuid`, `Ulid`, the trait `Identifier` | [design/URI.md](design/URI.md) section 12 | `std/random` |

@@ -1,9 +1,9 @@
 # YAML, Regular Expressions and Markdown
 
-**Status: slices 1 and 2 built (2026-09-25)** — `std/yaml` exists and passes all 402 cases of the YAML test suite, and
-`torb docs check` reads front matter through it; section 1a is what its implementation decided. `std/regex` and
-`std/markdown` do not exist yet. The decisions below were made on
-2026-09-21 and 2026-09-22, the scope of `std/yaml` was widened on 2026-09-24.
+**Status: slices 1, 2 and 3 built (2026-09-25)** — `std/yaml` exists and passes all 402 cases of the YAML test suite,
+and `torb docs check` reads front matter through it; `std/regex` exists and passes RE2's search tests. Sections 1a and
+2a are what their implementations decided. The `Regex` literal of slice 4 and `std/markdown` are not built yet. The
+decisions below were made on 2026-09-21 and 2026-09-22, the scope of `std/yaml` was widened on 2026-09-24.
 
 **Three text packages that the toolchain needs itself, in this order: `std/yaml`, then `std/regex`, then
 `std/markdown`.** The documentation tool reads the front matter of every page and the Markdown around it with a
@@ -87,6 +87,32 @@ replace it, and the rest of `std`'s formats follow them in milestone 10 ([ROADMA
 - **Named groups decode into a type** through `Decode`, so a match with the groups `year`, `month` and `day` becomes a
   value of a type with those three fields.
 
+## 2a. What the implementation of `std/regex` decided
+
+- **A Pike VM over characters.** A pattern is parsed into a tree, compiled into split, jump, save and assertion
+  instructions, and run by advancing every thread one character at a time; a thread that reaches an instruction another
+  thread reached at the same place is dropped. The work is the length of the text times the number of instructions,
+  and threads are kept in the order of preference, which gives RE2's and Perl's leftmost-first match. Every position is
+  a byte offset of the text; `\C`, which matches one byte, is refused.
+- **RE2's search tests are the tests.** `std/regex/tests/search-cases.trb` vendors `re2-search.txt` (BSD 3-Clause, with
+  RE2's notice), in the copy the Go distribution keeps. For each pattern and text the first match of the whole text and
+  the first match anywhere, with every group's offsets: 1808 of 1808 checks pass. The 80 checks whose pattern uses
+  `\C` are left out, as Go leaves them out, and the longest-match columns are not read.
+- **`x*` of an `x` that can match nothing is compiled as `(x+)?`**, as Go does since golang.org/issue/46123: otherwise
+  the empty iteration comes back to the loop, is dropped there and loses the preference it has.
+- **Unicode as far as the tables reach.** `\d`, `\w`, `\s` and `\b` are ASCII, as in RE2. `(?i)` folds ASCII, Latin-1,
+  Latin Extended-A, Greek and Cyrillic, with the Kelvin sign, the long s, the Ångström sign, the micro sign and the final
+  sigma. `\p{...}` knows `Any`, `L`, `Lu`, `Ll`, `N`, `Nd`, `Z`, `Zs`, `Latin`, `Greek` and `Cyrillic` from tables in
+  TorbScript, and refuses any other name; the full tables are the Unicode natives of milestone 8.
+- **`findAll`, `replace` and `split` follow Go's regexp**: an empty match right after the previous match does not count,
+  a replacement names groups as `$1`, `${1}`, `$name`, `${name}` and `$$`, and a split makes no empty first piece of an
+  empty match at the start.
+- **Named groups decode through `ValueDecoder`**, lenient, so a group's text is read as whatever its field asks for, and
+  a group that took no part is an absent field. A `Regex` is a capsule whose conversion pair is its text, so it is
+  written and read as its pattern in every format.
+- **The literal of slice 4 is not built.** It is URI.md section 9's rule, and it waits for the checker's literal
+  parameter kind, as the `Uri` literal does.
+
 ## 3. `std/markdown`
 
 Slice 1 of [RELEASE.md](RELEASE.md) section 10 specifies it: CommonMark with tables and front matter, the document tree
@@ -101,6 +127,6 @@ suite. It is a *document* format: its model is the tree of blocks and inlines, a
 |---|---|---|
 | 1 | `std/yaml`: the reader and the writer of YAML 1.2 and 1.1, the tree, `Encode`/`Decode` - **built** | nothing |
 | 2 | `torb docs check` reads front matter through `std/yaml` - **built**; the seed has to be refreshed at slice 1's commit or later first, because the compiler imports `std/yaml` | 1, and a seed refresh, because the compiler imports it |
-| 3 | `std/regex`: the engine, `Regex.tryFrom(text)`, matches and groups | nothing |
-| 4 | A `Regex` literal is compiled by the checker (URI.md section 9's table) | 3 |
+| 3 | `std/regex`: the engine, `Regex.tryFrom(text)`, matches and groups - **built** | nothing |
+| 4 | A `Regex` literal is compiled by the checker (URI.md section 9's table) - waits for the checker's literal parameter kind | 3 |
 | 5 | `std/markdown` (RELEASE.md slice 1) | 1 |

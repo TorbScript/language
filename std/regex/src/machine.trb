@@ -1,0 +1,331 @@
+/**
+ * The engine: a pattern's tree compiled into the instructions of a Pike VM, and the VM that runs them.
+ *
+ * The VM advances every thread one character at a time, and a thread that reaches an instruction another thread has
+ * reached at the same place is dropped, so the work is bounded by the length of the text times the number of
+ * instructions - the linear time of RE2, with no backtracking. Threads are kept in the order of preference, which gives
+ * the leftmost-first match of Perl and RE2, and each thread carries the positions of the groups it has passed.
+ */
+
+use RegexNode, AssertionKind from "./syntax"
+use CharacterSet, isWordCharacter from "./characters"
+
+/** One instruction of the VM. */
+public type Instruction {
+  case Character(value: Char)
+  case Set(characters: CharacterSet)
+  case AnyCharacter(newline: Bool)
+  /** Continue at both, `first` preferred. */
+  case Split(first: Int, second: Int)
+  case Jump(target: Int)
+  /** Record the current position in a group slot: `2 * group` for its start, `2 * group + 1` for its end. */
+  case Save(slot: Int)
+  case Assert(kind: AssertionKind)
+  case Match
+}
+
+/** A compiled pattern: its instructions, and how many groups (the whole match included) it has slots for. */
+public type Program {
+  instructions: List<Instruction>
+  groups: Int
+}
+
+/** The most instructions a pattern may compile to, so that a counted repetition cannot make a program without end. */
+public const maximumInstructions = 100000
+
+/** The program of a pattern's tree; `None` where it is larger than [maximumInstructions]. */
+public fn compiled(root: RegexNode, groups: Int): Program? {
+  var compiler = Compiler()
+  compiler.instructions.append Instruction.Save(0)
+  compiler.emit root
+  compiler.instructions.append Instruction.Save(1)
+  compiler.instructions.append Instruction.Match
+  if compiler.instructions.length() > maximumInstructions {
+    return None
+  }
+  Some Program(compiler.instructions, groups)
+}
+
+type Compiler {
+  var instructions: List<Instruction> = []
+
+  fn next(): Int {
+    instructions.length()
+  }
+
+  var fn emit(node: RegexNode) {
+    if instructions.length() > maximumInstructions {
+      return
+    }
+    match node {
+      .Empty => {}
+      .Literal(character) => instructions.append Instruction.Character(character)
+      .Set(characters) => instructions.append Instruction.Set(characters)
+      .AnyCharacter(newline) => instructions.append Instruction.AnyCharacter(newline)
+      .Assertion(kind) => instructions.append Instruction.Assert(kind)
+      .Group(index, body) => {
+        instructions.append Instruction.Save(2 * index)
+        emit body[0]
+        instructions.append Instruction.Save(2 * index + 1)
+      }
+      .Concatenation(items) => {
+        for item in items {
+          emit item
+        }
+      }
+      .Alternation(items) => alternation items
+      .Repetition(body, minimum, maximum, greedy) => repetition body[0], minimum, maximum, greedy
+    }
+  }
+
+  /** `a|b|c`: a split before each branch but the last, and a jump to the end after each but the last. */
+  var fn alternation(items: List<RegexNode>) {
+    var jumps: List<Int> = []
+    for index in 0..items.length() {
+      if index < items.length() - 1 {
+        const split = next()
+        instructions.append Instruction.Split(split + 1, 0)
+        emit items[index]
+        jumps.append next()
+        instructions.append Instruction.Jump(0)
+        instructions[split] = Instruction.Split(split + 1, next())
+      } else {
+        emit items[index]
+      }
+    }
+    const end = next()
+    for jump in jumps {
+      instructions[jump] = Instruction.Jump end
+    }
+  }
+
+  var fn repetition(body: RegexNode, minimum: Int, maximum: Int, greedy: Bool) {
+    for _ in 0..minimum {
+      emit body
+    }
+    if maximum < 0 && canBeEmpty(body) {
+      // x* of an x that can match nothing is (x+)?: otherwise an empty x would come back to the loop, be dropped there,
+      // and lose the preference it has over a longer match (golang.org/issue/46123)
+      const quest = next()
+      instructions.append Instruction.Split(0, 0)
+      const loopStart = next()
+      emit body
+      instructions.append Instruction.Split(0, 0)
+      const loopEnd = next() - 1
+      setSplit loopEnd, loopStart, next(), greedy
+      setSplit(quest, quest + 1, next(), greedy)
+      return
+    }
+    if maximum < 0 {
+      // x*: a split that either runs the body and comes back, or leaves
+      const loopStart = next()
+      instructions.append Instruction.Split(0, 0)
+      emit body
+      instructions.append Instruction.Jump(loopStart)
+      setSplit(loopStart, loopStart + 1, next(), greedy)
+      return
+    }
+    // x? nested once for every optional repetition: x(x(x)?)?
+    var splits: List<Int> = []
+    for _ in minimum..maximum {
+      splits.append next()
+      instructions.append Instruction.Split(0, 0)
+      emit body
+    }
+    const end = next()
+    for split in splits {
+      setSplit(split, split + 1, end, greedy)
+    }
+  }
+
+  /** A split whose preferred branch is `body` when greedy and `leave` otherwise. */
+  var fn setSplit(at: Int, body: Int, leave: Int, greedy: Bool) {
+    instructions[at] = if greedy { Instruction.Split body, leave } else { Instruction.Split leave, body }
+  }
+}
+
+/** Whether a node can match the empty text. */
+fn canBeEmpty(node: RegexNode): Bool {
+  match node {
+    .Empty => true
+    .Literal(_) => false
+    .Set(_) => false
+    .AnyCharacter(_) => false
+    .Assertion(_) => true
+    .Group(_, body) => canBeEmpty body[0]
+    .Concatenation(items) => items.all({ canBeEmpty _ })
+    .Alternation(items) => items.any({ canBeEmpty _ })
+    .Repetition(body, minimum, _, _) => minimum == 0 || canBeEmpty(body[0])
+  }
+}
+
+// --- The VM --------------------------------------------------------------------------------------------------------
+
+/** One thread: where it is in the program, and the group positions it has recorded. */
+type Thread {
+  pc: Int
+  slots: List<Int>
+}
+
+/**
+ * The slots of the first match that starts at `from` or later - or, `anchored`, exactly at `from` - and, with
+ * `wholeText`, ends at the end of the text. `None` where there is none.
+ */
+public fn run(program: Program, text: String, from: Int, anchored: Bool, wholeText: Bool): List<Int>? {
+  var machine = Machine program, text, text.byteLength()
+  machine.search(from, anchored, wholeText)
+}
+
+type Machine {
+  program: Program
+  text: String
+  end: Int
+  /** For each instruction, the step it was last added in: a thread reaching it again in that step is dropped. */
+  var marks: List<Int> = []
+  var step: Int = 0
+
+  var fn search(from: Int, anchored: Bool, wholeText: Bool): List<Int>? {
+    marks = List.filled(program.instructions.length(), -1)
+    const empty = List.filled(2 * program.groups, -1)
+    var current: List<Thread> = []
+    var matched: List<Int>? = None
+    var position = from
+    loop {
+      if matched.isNone() && (!anchored || position == from) {
+        addThread current, 0, empty, position
+      }
+      const character = text.charAt position
+      if current.isEmpty() {
+        // No thread is alive: a search that may still start later moves on, anything else is over
+        if matched.isSome() || anchored || character.isNone() {
+          break
+        }
+        step = step + 1
+        position = position + (character.map({ _.byteLength() }) ?? 1)
+        continue
+      }
+      step = step + 1
+      var next: List<Thread> = []
+      const width = match character {
+        Some(found) => found.byteLength()
+        None => 0
+      }
+      for thread in current {
+        const instruction = program.instructions[thread.pc]
+        match instruction {
+          .Match => {
+            if wholeText && position != end {
+              continue
+            }
+            matched = Some thread.slots
+            // Every thread after this one is less preferred: they are cut
+            break
+          }
+          .Character(value) => {
+            if character == Some(value) {
+              addThread(next, thread.pc + 1, thread.slots, position + width)
+            }
+          }
+          .Set(characters) => {
+            if const Some(found) = character {
+              if characters.contains(found) {
+                addThread(next, thread.pc + 1, thread.slots, position + width)
+              }
+            }
+          }
+          .AnyCharacter(newline) => {
+            if const Some(found) = character {
+              if newline || found != '\n' {
+                addThread(next, thread.pc + 1, thread.slots, position + width)
+              }
+            }
+          }
+          _ => {}
+        }
+      }
+      if character.isNone() {
+        break
+      }
+      current = next
+      position = position + width
+    }
+    matched
+  }
+
+  /**
+   * Adds the thread at `pc`, and follows every instruction that consumes nothing - splits, jumps, group slots and
+   * assertions - so that the list holds only threads that wait for a character or have matched.
+   */
+  var fn addThread(var list: List<Thread>, pc: Int, slots: List<Int>, position: Int) {
+    if marks[pc] == step {
+      return
+    }
+    marks[pc] = step
+    match program.instructions[pc] {
+      .Jump(target) => addThread list, target, slots, position
+      .Split(first, second) => {
+        addThread list, first, slots, position
+        addThread list, second, slots, position
+      }
+      .Save(slot) => {
+        var recorded = slots
+        recorded[slot] = position
+        addThread(list, pc + 1, recorded, position)
+      }
+      .Assert(kind) => {
+        if holds(kind, position) {
+          addThread(list, pc + 1, slots, position)
+        }
+      }
+      _ => list.append Thread(pc, slots)
+    }
+  }
+
+  /** Whether an assertion holds at `position`. */
+  fn holds(kind: AssertionKind, position: Int): Bool {
+    match kind {
+      .TextStart => position == 0
+      .TextEnd => position == end
+      .LineStart => position == 0 || previous(position) == Some('\n')
+      .LineEnd => position == end || text.charAt(position) == Some('\n')
+      .WordBoundary => isWordAt(position - 1) != isWordAt(position)
+      .NotWordBoundary => isWordAt(position - 1) == isWordAt(position)
+    }
+  }
+
+  /** The character that ends right before `position`. */
+  fn previous(position: Int): Char? {
+    if position <= 0 {
+      return None
+    }
+    var start = position - 1
+    // Step back over the continuation bytes of UTF-8 to the start of the character
+    while start > 0 && isContinuation(text.byteAt(start)) {
+      start = start - 1
+    }
+    text.charAt start
+  }
+
+  /** Whether the character at `position` - or, for `position - 1`, the one before it - is a word character. */
+  fn isWordAt(position: Int): Bool {
+    if position < 0 {
+      return false
+    }
+    const found = if position < end && !isContinuation(text.byteAt(position)) {
+      text.charAt position
+    } else {
+      previous(position + 1)
+    }
+    match found {
+      Some(character) => isWordCharacter character
+      None => false
+    }
+  }
+}
+
+fn isContinuation(byte: UInt8?): Bool {
+  match byte {
+    Some(value) => value >= 128 && value < 192
+    None => false
+  }
+}

@@ -1,0 +1,322 @@
+/**
+ * Sets of characters: a sorted list of code point ranges, and the classes a pattern names - `\d`, `\w`, `\s`, the
+ * POSIX classes, the Unicode classes this package knows, and the orbits of case folding.
+ */
+
+/** The code points from `low` to `high`, both included. */
+public type CodeRange {
+  low: Int
+  high: Int
+}
+
+/** The largest Unicode code point. */
+public const maximumCode = 1114111
+
+/** A set of code points, as sorted ranges that neither overlap nor touch. */
+public type CharacterSet {
+  ranges: List<CodeRange> = []
+
+  /** Whether `character` is in the set: a binary search over the ranges. */
+  fn contains(character: Char): Bool {
+    const code = Int64.from character
+    var low = 0
+    var high = ranges.length() - 1
+    while low <= high {
+      const middle = (low + high) / 2
+      const range = ranges[middle]
+      if code < range.low {
+        high = middle - 1
+      } else if code > range.high {
+        low = middle + 1
+      } else {
+        return true
+      }
+    }
+    false
+  }
+
+  /** The set and `other` together. */
+  fn united(other: CharacterSet): CharacterSet {
+    normalized ranges.appendedAll(other.ranges)
+  }
+
+  /** Every code point that is not in the set. */
+  fn negated(): CharacterSet {
+    var result: List<CodeRange> = []
+    var next = 0
+    for range in ranges {
+      if range.low > next {
+        result.append CodeRange(next, range.low - 1)
+      }
+      next = range.high + 1
+    }
+    if next <= maximumCode {
+      result.append CodeRange(next, maximumCode)
+    }
+    CharacterSet result
+  }
+
+  /** The set with every character's case partners added: what `(?i)` makes of a class. */
+  fn folded(): CharacterSet {
+    var added: List<CodeRange> = []
+    for range in ranges {
+      // Folding only reaches the scripts `foldOrbit` covers, so a range beyond them adds nothing
+      const high = range.high.min foldLimit
+      var code = range.low
+      while code <= high {
+        if const Ok(character) = Char.tryFrom(code) {
+          for partner in foldOrbit(character) {
+            const partnerCode = Int64.from partner
+            added.append CodeRange(partnerCode, partnerCode)
+          }
+        }
+        code = code + 1
+      }
+    }
+    normalized ranges.appendedAll(added)
+  }
+
+  static fn of(low: Char, high: Char): CharacterSet {
+    CharacterSet([CodeRange(Int64.from(low), Int64.from(high))])
+  }
+
+  static fn single(character: Char): CharacterSet {
+    CharacterSet.of character, character
+  }
+}
+
+/** Ranges sorted, with the ones that overlap or touch merged. */
+public fn normalized(ranges: List<CodeRange>): CharacterSet {
+  if ranges.length() < 2 {
+    return CharacterSet ranges
+  }
+  const sorted = ranges.sorted { _.low }
+  var result: List<CodeRange> = []
+  for range in sorted {
+    if !result.isEmpty() {
+      const last = result.length() - 1
+      if range.low <= result[last].high + 1 {
+        if range.high > result[last].high {
+          result[last] = CodeRange result[last].low, range.high
+        }
+        continue
+      }
+    }
+    result.append range
+  }
+  CharacterSet result
+}
+
+/** A set of the pairs of a flat list: `[a, b, c, d]` is `a-b` and `c-d`. */
+fn setOf(bounds: List<Int>): CharacterSet {
+  var ranges: List<CodeRange> = []
+  var index = 0
+  while index + 1 < bounds.length() {
+    ranges.append CodeRange(bounds[index], bounds[index + 1])
+    index = index + 2
+  }
+  normalized ranges
+}
+
+// --- The classes a pattern names -----------------------------------------------------------------------------------
+
+/** `\d`: the ASCII digits, as RE2 has it. */
+public fn digitSet(): CharacterSet {
+  setOf([48, 57])
+}
+
+/** `\s`: `\t`, `\n`, `\f`, `\r` and the space. */
+public fn spaceSet(): CharacterSet {
+  setOf([9, 10, 12, 13, 32, 32])
+}
+
+/** `\w`: ASCII letters, digits and `_`. */
+public fn wordSet(): CharacterSet {
+  setOf([48, 57, 65, 90, 95, 95, 97, 122])
+}
+
+/** Whether a character is a word character of `\b`: ASCII letters, digits and `_`. */
+public fn isWordCharacter(character: Char): Bool {
+  (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') || character.isDigit()
+    || character == '_'
+}
+
+/** A POSIX class by its name inside `[[:name:]]`, or `None` for a name it does not have. */
+public fn posixSet(name: String): CharacterSet? {
+  match name {
+    "alnum" => Some setOf([48, 57, 65, 90, 97, 122])
+    "alpha" => Some setOf([65, 90, 97, 122])
+    "ascii" => Some setOf([0, 127])
+    "blank" => Some setOf([9, 9, 32, 32])
+    "cntrl" => Some setOf([0, 31, 127, 127])
+    "digit" => Some setOf([48, 57])
+    "graph" => Some setOf([33, 126])
+    "lower" => Some setOf([97, 122])
+    "print" => Some setOf([32, 126])
+    "punct" => Some setOf([33, 47, 58, 64, 91, 96, 123, 126])
+    "space" => Some setOf([9, 13, 32, 32])
+    "upper" => Some setOf([65, 90])
+    "word" => Some setOf([48, 57, 65, 90, 95, 95, 97, 122])
+    "xdigit" => Some setOf([48, 57, 65, 70, 97, 102])
+    _ => None
+  }
+}
+
+/**
+ * A Unicode class by its name after `\p`, or `None` for one this package does not know yet: `Any`, the letters `L`,
+ * `Lu` and `Ll`, the numbers `N` and `Nd`, the separators `Z` and `Zs`, and the scripts `Latin`, `Greek` and `Cyrillic`.
+ * The full tables of Unicode are a native of milestone 8.
+ */
+public fn unicodeSet(name: String): CharacterSet? {
+  match name {
+    "Any" => Some setOf([0, maximumCode])
+    "L" => Some letterSet()
+    "Lu" => Some upperSet()
+    "Ll" => Some lowerSet()
+    "N" => Some numberSet()
+    "Nd" => Some decimalSet()
+    "Z" | "Zs" => Some setOf([32, 32, 160, 160, 5760, 5760, 8192, 8202, 8239, 8239, 8287, 8287, 12288, 12288])
+    "Latin" => Some setOf([65, 90, 97, 122, 170, 170, 186, 186, 192, 214, 216, 246, 248, 696, 7424, 7461, 7680, 7935])
+    "Greek" => Some greekSet()
+    "Cyrillic" => Some setOf([1024, 1156, 1159, 1327, 7296, 7304, 7467, 7467, 7544, 7544, 11744, 11775, 42560, 42655])
+    _ => None
+  }
+}
+
+fn letterSet(): CharacterSet {
+  const bounds = [
+    65, 90, 97, 122, 170, 170, 181, 181, 186, 186, 192, 214, 216, 246, 248, 705, 880, 884, 886, 887, 890, 893, 895, 895,
+    902, 902, 904, 906, 908, 908, 910, 929, 931, 1013, 1015, 1153, 1162, 1327, 1329, 1366, 1377, 1415, 1488, 1514,
+    1568, 1610, 2308, 2361, 3585, 3632, 4256, 4293, 4304, 4346, 7680, 8188, 12353, 12438, 12449, 12538, 19968, 40959,
+    44032, 55203,
+  ]
+  setOf bounds
+}
+
+fn upperSet(): CharacterSet {
+  var bounds = [65, 90, 192, 214, 216, 222, 913, 929, 931, 939, 1024, 1071]
+  // Latin Extended-A alternates upper and lower case: the even code points are the capitals
+  var code = 256
+  while code < 384 {
+    bounds.append code
+    bounds.append code
+    code = code + 2
+  }
+  setOf bounds
+}
+
+fn lowerSet(): CharacterSet {
+  var bounds = [97, 122, 181, 181, 223, 246, 248, 255, 940, 974, 1072, 1119]
+  var code = 257
+  while code < 384 {
+    bounds.append code
+    bounds.append code
+    code = code + 2
+  }
+  setOf bounds
+}
+
+/** `\p{Nd}`: the decimal digits of every script. */
+fn decimalSet(): CharacterSet {
+  const starts = [
+    48, 1632, 1776, 1984, 2406, 2534, 2662, 2790, 2918, 3046, 3174, 3302, 3430, 3558, 3664, 3792, 3872, 4160, 4240, 6112,
+    6160, 6470, 6608, 6784, 6800, 6992, 7088, 7232, 7248, 42528, 43216, 43264, 43472, 43504, 43600, 44016, 65296, 66720,
+    68912, 69734, 69872, 69942, 70096, 70384, 70736, 70864, 71248, 71360, 71472, 71904, 72016, 72784, 73040, 73120,
+    92768, 92864, 93008, 123200, 123632, 125264, 130032,
+  ]
+  var bounds: List<Int> = []
+  for start in starts {
+    bounds.append start
+    bounds.append(start + 9)
+  }
+  // The mathematical digits are five runs of ten in a row
+  bounds.append 120782
+  bounds.append 120831
+  setOf bounds
+}
+
+/** `\p{N}`: the decimal digits, the letter numbers and the other numbers - superscripts, fractions, subscripts. */
+fn numberSet(): CharacterSet {
+  const others = setOf([
+    178, 179, 185, 185, 188, 190, 2548, 2553, 3056, 3058, 8304, 8304, 8308, 8313, 8320, 8329, 8528, 8584, 9312, 9371,
+    9450, 9471, 10102, 10131, 12295, 12295, 12321, 12329, 12344, 12346,
+  ])
+  decimalSet().united(others)
+}
+
+fn greekSet(): CharacterSet {
+  setOf([
+    880, 883, 885, 887, 890, 893, 895, 895, 900, 900, 902, 902, 904, 906, 908, 908, 910, 929, 931, 993, 1008, 1023,
+    7462, 7466, 7517, 7521, 7526, 7530, 7615, 7615, 7936, 7957, 7960, 7965, 7968, 8005, 8008, 8013, 8016, 8023, 8025,
+    8025, 8027, 8027, 8029, 8029, 8031, 8061, 8064, 8116, 8118, 8132, 8134, 8147, 8150, 8155, 8157, 8175, 8178, 8180,
+    8182, 8190, 8486, 8486, 43877, 43877, 65856, 65934, 65952, 65952, 119296, 119365,
+  ])
+}
+
+// --- Case folding ---------------------------------------------------------------------------------------------------
+
+/** The highest code point `foldOrbit` knows a partner for. */
+const foldLimit = 8491
+
+/**
+ * The characters that are the same letter as `character` in another case, itself included: ASCII, Latin-1, Latin
+ * Extended-A, Greek and Cyrillic, and the partners outside of them - the Kelvin sign of `k`, the long s of `s`, the
+ * Ångström sign of `å`, the micro sign of `μ` and the final sigma of `σ`.
+ */
+public fn foldOrbit(character: Char): List<Char> {
+  const code = Int64.from character
+  var codes = [code]
+  if code >= 65 && code <= 90 {
+    codes.append(code + 32)
+  } else if code >= 97 && code <= 122 {
+    codes.append(code - 32)
+  } else if code >= 192 && code <= 222 && code != 215 {
+    codes.append(code + 32)
+  } else if code >= 224 && code <= 254 && code != 247 {
+    codes.append(code - 32)
+  } else if code == 255 {
+    codes.append 376
+  } else if code == 376 {
+    codes.append 255
+  } else if code >= 256 && code < 384 && code != 304 && code != 305 && code != 312 && code != 329 {
+    // Latin Extended-A pairs a capital with the small letter after it; from Ĺ to Ň the capital is the odd one
+    const oddCapitals = (code >= 313 && code <= 328) || (code >= 377 && code <= 382)
+    const isCapital = if oddCapitals { code % 2 == 1 } else { code % 2 == 0 }
+    codes.append(if isCapital { code + 1 } else { code - 1 })
+  } else if code >= 913 && code <= 937 && code != 930 {
+    codes.append(code + 32)
+  } else if code >= 945 && code <= 969 && code != 962 {
+    codes.append(code - 32)
+  } else if code >= 1040 && code <= 1071 {
+    codes.append(code + 32)
+  } else if code >= 1072 && code <= 1103 {
+    codes.append(code - 32)
+  } else if code >= 1024 && code <= 1039 {
+    codes.append(code + 80)
+  } else if code >= 1104 && code <= 1119 {
+    codes.append(code - 80)
+  }
+  // The partners outside of the blocks above
+  match code {
+    75 | 107 => codes.append 8490
+    8490 => codes.appendAll([75, 107])
+    83 | 115 => codes.append 383
+    383 => codes.appendAll([83, 115])
+    197 | 229 => codes.append 8491
+    8491 => codes.appendAll([197, 229])
+    181 => codes.appendAll([924, 956])
+    924 | 956 => codes.append 181
+    931 | 963 => codes.append 962
+    962 => codes.appendAll([931, 963])
+    _ => {}
+  }
+  var result: List<Char> = []
+  for found in codes {
+    if const Ok(partner) = Char.tryFrom(found) {
+      if !result.contains(partner) {
+        result.append partner
+      }
+    }
+  }
+  result
+}

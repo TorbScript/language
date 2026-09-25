@@ -1,0 +1,737 @@
+/**
+ * The syntax of a pattern: RE2's, read into a tree of [RegexNode]s. What RE2 does not have - backreferences and
+ * lookaround - is refused with a message that says so, because a regular expression here runs in time linear in its
+ * input.
+ */
+
+use CharacterSet, CodeRange, digitSet, spaceSet, wordSet, posixSet, unicodeSet, foldOrbit, normalized from "./characters"
+
+/** Why a text is not a regular expression: what is wrong, and the byte offset in the pattern where it was found. */
+public type RegexError with Show, Error {
+  pattern: String
+  offset: Int
+  message: String
+
+  fn show(): String {
+    "`{pattern}` is not a regular expression: {message} (at byte {offset})"
+  }
+}
+
+/** What an empty-width assertion asks of the place it stands. */
+public type AssertionKind {
+  /** `^` with `(?m)`: the start of the text or of a line. */
+  case LineStart
+  /** `$` with `(?m)`: the end of the text or of a line. */
+  case LineEnd
+  /** `\A`, and `^` without `(?m)`. */
+  case TextStart
+  /** `\z`, and `$` without `(?m)`. */
+  case TextEnd
+  /** `\b` */
+  case WordBoundary
+  /** `\B` */
+  case NotWordBoundary
+}
+
+/**
+ * The tree of a pattern. A group and a repetition hold their one child in a list of one, which is how a type holds
+ * another value of itself.
+ */
+public type RegexNode {
+  case Empty
+  case Literal(character: Char)
+  case Set(characters: CharacterSet)
+  case AnyCharacter(newline: Bool)
+  case Assertion(kind: AssertionKind)
+  case Group(index: Int, body: List<RegexNode>)
+  case Concatenation(items: List<RegexNode>)
+  case Alternation(items: List<RegexNode>)
+  /** `maximum` is -1 where the repetition has no upper bound. */
+  case Repetition(body: List<RegexNode>, minimum: Int, maximum: Int, greedy: Bool)
+}
+
+/** A parsed pattern: its tree, and the name of every capturing group, by its index (the whole match is 0). */
+public type ParsedPattern {
+  root: RegexNode
+  names: List<String?>
+}
+
+/** The flags a pattern can set with `(?imsU)`. */
+type Flags {
+  caseInsensitive: Bool = false
+  multiLine: Bool = false
+  dotAll: Bool = false
+  ungreedy: Bool = false
+}
+
+/** The most a counted repetition may say, as in RE2. */
+const maximumRepeat = 1000
+
+/** Reads `pattern` into its tree. */
+public fn parsedPattern(pattern: String): Result<ParsedPattern, RegexError> {
+  var parser = Parser pattern, pattern.chars().toList()
+  const root = parser.alternation(Flags())?
+  if parser.position < parser.characters.length() {
+    return Fail parser.failure("a `)` has no `(` to close")
+  }
+  Ok ParsedPattern(root, parser.names)
+}
+
+type Parser {
+  pattern: String
+  characters: List<Char>
+  var position: Int = 0
+  var names: List<String?> = [None]
+
+  fn atEnd(): Bool {
+    position >= characters.length()
+  }
+
+  fn peek(): Char {
+    if position < characters.length() {
+      return characters[position]
+    }
+    '\u{0}'
+  }
+
+  fn peekAt(offset: Int): Char {
+    if position + offset < characters.length() {
+      return characters[position + offset]
+    }
+    '\u{0}'
+  }
+
+  /** The byte offset of the current character, for a message. */
+  fn byteOffset(): Int {
+    var offset = 0
+    for index in 0..position.min(characters.length()) {
+      offset = offset + characters[index].byteLength()
+    }
+    offset
+  }
+
+  fn failure(message: String): RegexError {
+    RegexError pattern, byteOffset(), message
+  }
+
+  /** `a|b|c` - or a single concatenation. The flags a `(?i)` sets inside reach to the end of the group. */
+  var fn alternation(flags: Flags): Result<RegexNode, RegexError> {
+    var current = flags
+    var branches: List<RegexNode> = []
+    loop {
+      const branch = concatenation(current)?
+      branches.append branch.node
+      current = branch.flags
+      if peek() == '|' && !atEnd() {
+        position = position + 1
+        continue
+      }
+      break
+    }
+    if branches.length() == 1 {
+      return Ok branches[0]
+    }
+    Ok RegexNode.Alternation(branches)
+  }
+
+  var fn concatenation(flags: Flags): Result<Branch, RegexError> {
+    var current = flags
+    var items: List<RegexNode> = []
+    while !atEnd() && peek() != '|' && peek() != ')' {
+      if peek() == '(' && peekAt(1) == '?' && isFlagGroup() {
+        current = flagGroup(current)?
+        continue
+      }
+      const atom = atom(current)?
+      items.append(repeated(atom, current)?)
+    }
+    const node = match items.length() {
+      0 => RegexNode.Empty
+      1 => items[0]
+      _ => RegexNode.Concatenation items
+    }
+    Ok Branch(node, current)
+  }
+
+  /** Whether the `(?` here only sets flags, `(?i)`, as opposed to opening a group. */
+  fn isFlagGroup(): Bool {
+    var at = position + 2
+    while at < characters.length() {
+      const character = characters[at]
+      if character == ')' {
+        return true
+      }
+      if character != 'i' && character != 'm' && character != 's' && character != 'U' && character != '-' {
+        return false
+      }
+      at = at + 1
+    }
+    false
+  }
+
+  /** `(?imsU-imsU)`: the flags for the rest of the enclosing group. */
+  var fn flagGroup(flags: Flags): Result<Flags, RegexError> {
+    position = position + 2
+    const changed = flagsUntil(flags, ')')?
+    position = position + 1
+    Ok changed
+  }
+
+  /** Reads flag letters up to `end`, with a `-` switching the ones after it off. */
+  var fn flagsUntil(flags: Flags, end: Char): Result<Flags, RegexError> {
+    var result = flags
+    var negated = false
+    var any = false
+    while !atEnd() && peek() != end {
+      const character = peek()
+      match character {
+        'i' => {
+          result = result.copy(caseInsensitive: !negated)
+        }
+        'm' => {
+          result = result.copy(multiLine: !negated)
+        }
+        's' => {
+          result = result.copy(dotAll: !negated)
+        }
+        'U' => {
+          result = result.copy(ungreedy: !negated)
+        }
+        '-' => {
+          if negated {
+            return Fail failure("a flag group has one `-`")
+          }
+          negated = true
+          position = position + 1
+          continue
+        }
+        other => {
+          return Fail failure("`{other}` is not a flag: the flags are `i`, `m`, `s` and `U`")
+        }
+      }
+      any = true
+      position = position + 1
+    }
+    if atEnd() {
+      return Fail failure("a flag group is not closed")
+    }
+    if negated && !any {
+      return Fail failure("a flag group has flags after its `-`")
+    }
+    Ok result
+  }
+
+  var fn atom(flags: Flags): Result<RegexNode, RegexError> {
+    const character = peek()
+    if character == '(' {
+      return group flags
+    }
+    if character == '[' {
+      return characterClass flags
+    }
+    position = position + 1
+    match character {
+      '.' => Ok RegexNode.AnyCharacter(flags.dotAll)
+      '^' => Ok RegexNode.Assertion(if flags.multiLine { AssertionKind.LineStart } else { AssertionKind.TextStart })
+      '$' => Ok RegexNode.Assertion(if flags.multiLine { AssertionKind.LineEnd } else { AssertionKind.TextEnd })
+      '\\' => escape flags
+      '*' | '+' | '?' => {
+        position = position - 1
+        Fail failure("`{character}` repeats nothing")
+      }
+      '{' => {
+        position = position - 1
+        if const Some(_repeat) = repeatCount() {
+          return Fail failure("`\{` repeats nothing")
+        }
+        position = position + 1
+        Ok literal(character, flags)
+      }
+      _ => Ok literal(character, flags)
+    }
+  }
+
+  var fn group(flags: Flags): Result<RegexNode, RegexError> {
+    position = position + 1
+    var capturing = true
+    var name: String? = None
+    var inner = flags
+    if peek() == '?' {
+      const next = peekAt 1
+      if next == 'P' && peekAt(2) == '<' {
+        position = position + 3
+        name = Some(groupName()?)
+      } else if next == '<' && peekAt(2) != '=' && peekAt(2) != '!' {
+        position = position + 2
+        name = Some(groupName()?)
+      } else if next == 'P' && peekAt(2) == '=' {
+        return Fail failure("a backreference `(?P=name)` is not supported: a Regex matches in time linear in its input")
+      } else if next == '=' || next == '!' || (next == '<' && (peekAt(2) == '=' || peekAt(2) == '!')) {
+        return Fail failure("lookaround is not supported: a Regex matches in time linear in its input")
+      } else {
+        position = position + 1
+        inner = flagsUntil(flags, ':')?
+        position = position + 1
+        capturing = false
+      }
+    }
+    var index = 0
+    if capturing {
+      index = names.length()
+      names.append name
+    }
+    const body = alternation(inner)?
+    if peek() != ')' || atEnd() {
+      return Fail failure("a `(` is not closed")
+    }
+    position = position + 1
+    if !capturing {
+      return Ok body
+    }
+    Ok RegexNode.Group(index, [body])
+  }
+
+  /** The name of `(?P<name>...)` up to its `>`: letters, digits and `_`, not starting with a digit. */
+  var fn groupName(): Result<String, RegexError> {
+    const start = position
+    while !atEnd() && peek() != '>' {
+      const character = peek()
+      const isWord = (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z')
+        || character.isDigit() || character == '_'
+      if !isWord {
+        return Fail failure("a group name is letters, digits and `_`")
+      }
+      position = position + 1
+    }
+    if atEnd() || position == start {
+      return Fail failure("a group name is closed with `>` and is not empty")
+    }
+    const name = String.from characters.slice(start..position)
+    if characters[start].isDigit() {
+      return Fail failure("a group name does not start with a digit")
+    }
+    if names.contains(Some(name)) {
+      return Fail failure("the group name `{name}` is used twice")
+    }
+    position = position + 1
+    Ok name
+  }
+
+  /** The repetition operators after an atom, if any: `*`, `+`, `?`, `\{n\}`, `\{n,\}`, `\{n,m\}`, each lazy with `?`. */
+  var fn repeated(atom: RegexNode, flags: Flags): Result<RegexNode, RegexError> {
+    var minimum = 0
+    var maximum = -1
+    const operator = peek()
+    if atEnd() {
+      return Ok atom
+    }
+    if operator == '*' {
+      position = position + 1
+    } else if operator == '+' {
+      minimum = 1
+      position = position + 1
+    } else if operator == '?' {
+      maximum = 1
+      position = position + 1
+    } else if operator == '{' {
+      const start = position
+      match repeatCount() {
+        Some(count) => {
+          minimum = count.minimum
+          maximum = count.maximum
+          if minimum > maximumRepeat || maximum > maximumRepeat || (maximum >= 0 && maximum < minimum) {
+            position = start
+            return Fail failure("a repeat count is at most 1000, and its minimum is not above its maximum")
+          }
+        }
+        None => {
+          return Ok atom
+        }
+      }
+    } else {
+      return Ok atom
+    }
+    var greedy = !flags.ungreedy
+    if peek() == '?' && !atEnd() {
+      greedy = !greedy
+      position = position + 1
+    }
+    if !atEnd() && (peek() == '*' || peek() == '+' || peek() == '?') {
+      return Fail failure("a repetition cannot be repeated: `{operator}{peek()}`")
+    }
+    if const RegexNode.Empty = atom {
+      return Fail failure("`{operator}` repeats nothing")
+    }
+    if const RegexNode.Assertion(_) = atom {
+      // RE2 allows a repeated assertion; it matches the same place once or not at all
+      return Ok RegexNode.Repetition([atom], minimum.min(1), if maximum == 0 { 0 } else { 1 }, greedy)
+    }
+    Ok RegexNode.Repetition([atom], minimum, maximum, greedy)
+  }
+
+  /** `\{n\}`, `\{n,\}` or `\{n,m\}` here, read and passed; `None`, and nothing read, where it is not one. */
+  var fn repeatCount(): RepeatCount? {
+    const start = position
+    position = position + 1
+    const minimum = number()
+    if minimum.isNone() {
+      position = start
+      return None
+    }
+    var maximum = minimum ?? 0
+    if peek() == ',' {
+      position = position + 1
+      maximum = number() ?? -1
+    }
+    if peek() != '}' || atEnd() {
+      position = start
+      return None
+    }
+    position = position + 1
+    Some RepeatCount(minimum ?? 0, maximum)
+  }
+
+  var fn number(): Int? {
+    const start = position
+    var value = 0
+    while !atEnd() && peek().isDigit() {
+      if value < 100000 {
+        value = value * 10 + (Int64.from(peek()) - 48)
+      }
+      position = position + 1
+    }
+    if position == start {
+      return None
+    }
+    Some value
+  }
+
+  /** A character, or the set of its case partners under `(?i)`. */
+  fn literal(character: Char, flags: Flags): RegexNode {
+    if flags.caseInsensitive {
+      const orbit = foldOrbit character
+      if orbit.length() > 1 {
+        var ranges: List<CodeRange> = []
+        for partner in orbit {
+          const code = Int64.from partner
+          ranges.append CodeRange(code, code)
+        }
+        return RegexNode.Set normalized(ranges)
+      }
+    }
+    RegexNode.Literal character
+  }
+
+  /** What follows a `\`, outside of a class. */
+  var fn escape(flags: Flags): Result<RegexNode, RegexError> {
+    if atEnd() {
+      return Fail failure("the pattern ends in a `\\`")
+    }
+    const character = peek()
+    match character {
+      'A' => {
+        position = position + 1
+        return Ok RegexNode.Assertion(AssertionKind.TextStart)
+      }
+      'z' => {
+        position = position + 1
+        return Ok RegexNode.Assertion(AssertionKind.TextEnd)
+      }
+      'b' => {
+        position = position + 1
+        return Ok RegexNode.Assertion(AssertionKind.WordBoundary)
+      }
+      'B' => {
+        position = position + 1
+        return Ok RegexNode.Assertion(AssertionKind.NotWordBoundary)
+      }
+      'Q' => {
+        position = position + 1
+        return quoted flags
+      }
+      'C' => {
+        return Fail failure("`\\C` matches a byte, and a Regex matches characters")
+      }
+      'Z' => {
+        return Fail failure("`\\Z` is not supported: `\\z` is the end of the text")
+      }
+      _ => {}
+    }
+    match classEscape()? {
+      Some(set) => Ok RegexNode.Set(if flags.caseInsensitive { set.folded() } else { set })
+      None => Ok literal(escapedCharacter()?, flags)
+    }
+  }
+
+  /** `\Q...\E`: everything up to `\E`, or to the end, as literal characters. */
+  var fn quoted(flags: Flags): Result<RegexNode, RegexError> {
+    var items: List<RegexNode> = []
+    while !atEnd() {
+      if peek() == '\\' && peekAt(1) == 'E' {
+        position = position + 2
+        break
+      }
+      items.append literal(peek(), flags)
+      position = position + 1
+    }
+    const node = match items.length() {
+      0 => RegexNode.Empty
+      1 => items[0]
+      _ => RegexNode.Concatenation items
+    }
+    Ok node
+  }
+
+  /** `\d`, `\D`, `\s`, `\S`, `\w`, `\W`, `\pN`, `\p\{Greek\}`, `\PN`: a set, or `None` for another escape. */
+  var fn classEscape(): Result<CharacterSet?, RegexError> {
+    const character = peek()
+    match character {
+      'd' | 'D' | 's' | 'S' | 'w' | 'W' => {
+        position = position + 1
+        const set = match character {
+          'd' | 'D' => digitSet()
+          's' | 'S' => spaceSet()
+          _ => wordSet()
+        }
+        const isUpper = character == 'D' || character == 'S' || character == 'W'
+        Ok Some(if isUpper { set.negated() } else { set })
+      }
+      'p' | 'P' => {
+        position = position + 1
+        var negated = character == 'P'
+        var name = ""
+        if peek() == '{' {
+          position = position + 1
+          const start = position
+          while !atEnd() && peek() != '}' {
+            position = position + 1
+          }
+          if atEnd() {
+            return Fail failure("a `\\p\{` is not closed")
+          }
+          name = String.from characters.slice(start..position)
+          position = position + 1
+        } else {
+          if atEnd() {
+            return Fail failure("`\\p` names a class")
+          }
+          name = peek().show()
+          position = position + 1
+        }
+        if name.startsWith("^") {
+          negated = !negated
+          name = name.sliceBytes 1, name.byteLength()
+        }
+        match unicodeSet(name) {
+          Some(set) => Ok Some(if negated { set.negated() } else { set })
+          None => Fail failure("the Unicode class `{name}` is not known")
+        }
+      }
+      _ => Ok None
+    }
+  }
+
+  /** The one character an escape stands for: `\n`, `\x\{263a\}`, `\x41`, `\101`, or an escaped punctuation character. */
+  var fn escapedCharacter(): Result<Char, RegexError> {
+    const character = peek()
+    position = position + 1
+    match character {
+      'a' => Ok '\u{7}'
+      'f' => Ok '\u{c}'
+      't' => Ok '\t'
+      'n' => Ok '\n'
+      'r' => Ok '\r'
+      'v' => Ok '\u{b}'
+      'x' => hexEscape()
+      '0' | '1' | '2' | '3' | '4' | '5' | '6' | '7' => {
+        // RE2 has octal escapes, and `\1` to `\9` would be backreferences, which it does not have
+        if character != '0' && !(peekAt(0) >= '0' && peekAt(0) <= '7') {
+          position = position - 1
+          return Fail failure("a backreference `\\{character}` is not supported: a Regex matches in time linear in its input")
+        }
+        var value = Int64.from(character) - 48
+        var count = 1
+        while count < 3 && peek() >= '0' && peek() <= '7' && !atEnd() {
+          value = value * 8 + Int64.from(peek()) - 48
+          position = position + 1
+          count = count + 1
+        }
+        characterOf value
+      }
+      _ => {
+        const code = Int64.from character
+        const isPunctuation = code < 128 && !character.isLetter() && !character.isDigit() && character != '_'
+        if isPunctuation {
+          return Ok character
+        }
+        position = position - 1
+        Fail failure("`\\{character}` is not an escape of RE2")
+      }
+    }
+  }
+
+  var fn hexEscape(): Result<Char, RegexError> {
+    var value = 0
+    if peek() == '{' {
+      position = position + 1
+      const start = position
+      while !atEnd() && peek() != '}' {
+        const digit = hexValue peek()
+        if digit < 0 || position - start >= 8 {
+          return Fail failure("`\\x\{...\}` holds hexadecimal digits")
+        }
+        value = value * 16 + digit
+        position = position + 1
+      }
+      if atEnd() || position == start {
+        return Fail failure("`\\x\{` is closed with `\}` after at least one digit")
+      }
+      position = position + 1
+      return characterOf value
+    }
+    for _ in 0..2 {
+      const digit = hexValue peek()
+      if digit < 0 || atEnd() {
+        return Fail failure("`\\x` is followed by two hexadecimal digits")
+      }
+      value = value * 16 + digit
+      position = position + 1
+    }
+    characterOf value
+  }
+
+  fn characterOf(value: Int): Result<Char, RegexError> {
+    match Char.tryFrom(value) {
+      Ok(character) => Ok character
+      Fail(_) => Fail failure("`{value}` is not a character")
+    }
+  }
+
+  /** `[...]`, with ranges, escapes, POSIX classes and `^`. */
+  var fn characterClass(flags: Flags): Result<RegexNode, RegexError> {
+    const start = position
+    position = position + 1
+    var negated = false
+    if peek() == '^' {
+      negated = true
+      position = position + 1
+    }
+    var set = CharacterSet()
+    var first = true
+    loop {
+      if atEnd() {
+        position = start
+        return Fail failure("a `[` is not closed")
+      }
+      const character = peek()
+      if character == ']' && !first {
+        position = position + 1
+        break
+      }
+      first = false
+      if character == '[' && peekAt(1) == ':' {
+        if const Some(posix) = posixClass()? {
+          set = set.united posix
+          continue
+        }
+      }
+      if character == '\\' {
+        position = position + 1
+        if atEnd() {
+          return Fail failure("the pattern ends in a `\\`")
+        }
+        if const Some(escaped) = classEscape()? {
+          set = set.united escaped
+          continue
+        }
+        position = position - 1
+      }
+      const low = classCharacter()?
+      if peek() == '-' && peekAt(1) != ']' && position + 1 < characters.length() {
+        position = position + 1
+        const high = classCharacter()?
+        if high < low {
+          return Fail failure("the range `{low}-{high}` runs backwards")
+        }
+        set = set.united CharacterSet.of(low, high)
+        continue
+      }
+      set = set.united CharacterSet.single(low)
+    }
+    if flags.caseInsensitive {
+      set = set.folded()
+    }
+    Ok RegexNode.Set(if negated { set.negated() } else { set })
+  }
+
+  /** One character of a class: itself, or what its escape stands for. */
+  var fn classCharacter(): Result<Char, RegexError> {
+    const character = peek()
+    if character == '\\' {
+      position = position + 1
+      if atEnd() {
+        return Fail failure("the pattern ends in a `\\`")
+      }
+      if peek() == 'b' {
+        position = position + 1
+        return Ok '\u{8}'
+      }
+      return escapedCharacter()
+    }
+    position = position + 1
+    Ok character
+  }
+
+  /** `[:alpha:]` or `[:^alpha:]` inside a class; `None`, and nothing read, where it is not one. */
+  var fn posixClass(): Result<CharacterSet?, RegexError> {
+    const start = position
+    position = position + 2
+    var negated = false
+    if peek() == '^' {
+      negated = true
+      position = position + 1
+    }
+    const nameStart = position
+    while !atEnd() && peek() != ':' {
+      position = position + 1
+    }
+    if atEnd() || peekAt(1) != ']' {
+      position = start
+      return Ok None
+    }
+    const name = String.from characters.slice(nameStart..position)
+    position = position + 2
+    match posixSet(name) {
+      Some(set) => Ok Some(if negated { set.negated() } else { set })
+      None => {
+        position = start
+        Fail failure("`[:{name}:]` is not a POSIX class")
+      }
+    }
+  }
+}
+
+/** A branch of an alternation, and the flags that are in force after it. */
+type Branch {
+  node: RegexNode
+  flags: Flags
+}
+
+type RepeatCount {
+  minimum: Int
+  maximum: Int
+}
+
+fn hexValue(character: Char): Int {
+  const code = Int64.from character
+  if code >= 48 && code <= 57 {
+    return code - 48
+  }
+  if code >= 97 && code <= 102 {
+    return code - 87
+  }
+  if code >= 65 && code <= 70 {
+    return code - 55
+  }
+  -1
+}

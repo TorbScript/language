@@ -1,0 +1,169 @@
+/**
+ * `Regex` beyond RE2's search tests: what a pattern is refused for, groups by name, replacing, splitting, every match,
+ * named groups read into a type, Unicode, positions in text of several bytes per character, and the linear time that
+ * makes a pathological pattern harmless.
+ */
+
+use test, group from "std/test"
+use Regex, RegexMatch, RegexError from "../src/lib"
+
+type Date {
+  year: Int
+  month: Int
+  day: Int
+  note: String = ""
+}
+
+type Rule {
+  name: String
+  pattern: Regex
+}
+
+/** A pattern every test here knows to be valid. */
+fn regexOf(pattern: String): Regex {
+  match Regex.tryFrom(pattern) {
+    Ok(regex) => regex
+    Fail(problem) => panic "a test's pattern was refused: {problem}"
+  }
+}
+
+fn refusal(pattern: String): String {
+  match Regex.tryFrom(pattern) {
+    Ok(_) => "accepted"
+    Fail(problem) => problem.message
+  }
+}
+
+group "compiling" {
+  test "a backreference and lookaround are refused with the reason" {
+    assert refusal(raw"(a)\1").contains("backreference")
+    assert refusal(raw"(?P<x>a)(?P=x)").contains("backreference")
+    assert refusal("a(?=b)").contains("lookaround")
+    assert refusal("(?<!a)b").contains("lookaround")
+  }
+
+  test "a syntax error names what is wrong, and where" {
+    assert(refusal("(ab") == "a `(` is not closed")
+    assert(refusal("ab)") == "a `)` has no `(` to close")
+    assert(refusal("[a-") == "a `[` is not closed")
+    assert(refusal("*a") == "`*` repeats nothing")
+    assert(refusal("a**") == "a repetition cannot be repeated: `**`")
+    assert refusal("a\{1001\}").contains("at most 1000")
+    assert(refusal("[z-a]") == "the range `z-a` runs backwards")
+    assert(Regex.tryFrom("ab)").map({ _.text() }) == Fail(RegexError("ab)", 2, "a `)` has no `(` to close")))
+  }
+
+  test "a repeat count that is no repeat count is a literal brace" {
+    assert regexOf("a\{,2\}").matches("a\{,2\}")
+    assert regexOf("a\{2\}").matches("aa")
+  }
+
+  test "a pattern shows as it was written, and two of the same text are equal" {
+    assert(regexOf(raw"\d+").show() == raw"\d+")
+    assert(regexOf("a|b") == regexOf("a|b"))
+  }
+}
+
+group "matching" {
+  test "matches is the whole text, find anywhere" {
+    const digits = regexOf raw"\d+"
+    assert digits.matches("2026")
+    assert(!digits.matches("2026a"))
+    assert digits.isFound("in 2026")
+    assert(digits.find("in 2026 and 2027").map({ _.text() }) == Some("2026"))
+  }
+
+  test "groups by index and by name, and a group that took no part" {
+    const found = regexOf(raw"(?P<key>\w+)=(?P<value>\w+)?").find("x size=").expect("a match")
+    assert(found.named("key") == Some("size"))
+    assert(found.named("value") == None)
+    assert(found.group(0) == Some("size="))
+    assert(found.groups() == [Some("size="), Some("size"), None])
+    assert(found.start() == 2 && found.end() == 7)
+  }
+
+  test "the first alternative wins where both match at the same place" {
+    assert(regexOf("a|ab").find("ab").map({ _.text() }) == Some("a"))
+    assert(regexOf("a+?").find("aaa").map({ _.text() }) == Some("a"))
+  }
+
+  test "findAll finds every match, and an empty match next to the last one does not count" {
+    const words = regexOf(raw"\w+").findAll("one two  three").map({ _.text() }).toList()
+    assert(words == ["one", "two", "three"])
+    const empties = regexOf("a*").findAll("baaac").map({ "{_.start()}-{_.end()}" }).toList()
+    assert(empties == ["0-0", "1-4", "5-5"])
+  }
+
+  test "positions are byte offsets in text of several bytes per character" {
+    const found = regexOf("é+").find("café é").expect("a match")
+    assert(found.start() == 3 && found.end() == 5)
+    assert(regexOf(".").findAll("aé😀").length() == 3)
+  }
+
+  test "multi-line, dot-all and case-insensitive flags" {
+    assert(regexOf("(?m)^b$").find("a\nb\nc").map({ _.start() }) == Some(2))
+    assert(!regexOf("^b$").isFound("a\nb\nc"))
+    assert regexOf("(?s)a.b").matches("a\nb")
+    assert(!regexOf("a.b").matches("a\nb"))
+    assert regexOf("(?i)straße").matches("STRAßE")
+    assert regexOf("(?i)σ").matches("ς")
+    assert regexOf("(?i:a)b").matches("Ab")
+    assert(!regexOf("(?i:a)b").matches("AB"))
+  }
+
+  test "Unicode classes and the classes of RE2" {
+    assert regexOf(raw"\p{Greek}+").matches("αβγ")
+    assert regexOf(raw"\pL+").matches("Grüße")
+    assert regexOf(raw"[[:alpha:]]+").matches("abc")
+    assert(!regexOf(raw"\d").isFound("٣"))
+    assert regexOf(raw"\p{Nd}").matches("٣")
+    assert regexOf(raw"\x{1F600}").matches("😀")
+    assert(refusal(raw"\p{Klingon}") == "the Unicode class `Klingon` is not known")
+  }
+
+  test "a pathological pattern stays linear" {
+    const long = "a".repeat(5000)
+    assert(!regexOf("(a*)*b").isFound(long))
+    assert(!regexOf("(a|aa)+$").isFound(long + "b"))
+  }
+}
+
+group "replacing and splitting" {
+  test "replace expands groups by number and by name, and $$ is a dollar" {
+    const date = regexOf raw"(?P<year>\d{4})-(?P<month>\d{2})-(?P<day>\d{2})"
+    assert(date.replace("on 2026-09-25.", "$day.$month.$year") == "on 25.09.2026.")
+    assert(date.replace("2026-09-25", "$\{1\}y $$3") == "2026y $3")
+    assert(regexOf("a").replaceFirst("banana", "o") == "bonana")
+    assert(regexOf("a").replace("banana", "o") == "bonono")
+  }
+
+  test "replaceWith hands every match to a function" {
+    const doubled = regexOf(raw"\d+").replaceWith("1 and 21", { found => "{(Int.tryFrom(found.text()) ?? 0) * 2}" })
+    assert(doubled == "2 and 42")
+  }
+
+  test "split cuts at every match, as RE2's split does" {
+    assert(regexOf(raw",\s*").split("a, b,c") == ["a", "b", "c"])
+    assert(regexOf("x*").split("axbxc") == ["a", "b", "c"])
+    assert(regexOf(",").split("") == [""])
+    assert(regexOf(",").split("a,") == ["a", ""])
+  }
+}
+
+group "reading and writing" {
+  test "named groups decode into a type, each text read as its field's type" {
+    const date = regexOf raw"(?P<year>\d{4})-(?P<month>\d{2})-(?P<day>\d{2})(?: \((?P<note>\w+)\))?"
+    const plain = date.find("due 2026-09-25").expect("a match").decoded<Date>()
+    assert(plain.ok() == Some(Date(2026, 9, 25)))
+    const noted = date.find("2026-10-01 (release)").expect("a match").decoded<Date>()
+    assert(noted.ok() == Some(Date(2026, 10, 1, "release")))
+  }
+
+  test "a Regex is written and read as its pattern" {
+    const rule = Rule "digits", regexOf(raw"\d+")
+    const text = Json().encode(rule)
+    assert(text == raw"{" + "\"name\":\"digits\",\"pattern\":\"\\\\d+\"" + raw"}")
+    assert(Json().decode<Rule>(text).ok() == Some(rule))
+    assert(!Json().decode<Rule>("\{\"name\":\"x\",\"pattern\":\"(\"\}").isOk())
+  }
+}

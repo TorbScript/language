@@ -1,0 +1,363 @@
+/**
+ * [Regex] and [RegexMatch]: a compiled pattern as a value, and what one match found.
+ */
+
+use EncodedField, ValueDecoder from "std/encoding"
+use RegexError, parsedPattern from "./syntax"
+use Program, compiled, run from "./machine"
+
+/**
+ * A regular expression with the syntax and the semantics of RE2: it matches in time linear in the length of the text,
+ * so it has no backreferences and no lookaround. It works on characters, not bytes, and every position it answers is
+ * a byte offset into the text, as every position of a `String` is.
+ *
+ * # Examples
+ *
+ *     const date = Regex.tryFrom(raw"(?P<year>\d{4})-(?P<month>\d{2})-(?P<day>\d{2})")?
+ *     print date.matches("2026-09-25")
+ *     print date.find("due 2026-10-01")?.named("month")
+ *     print date.replace("2026-09-25", "$day.$month.$year")
+ */
+public type Regex with Show, Equals, TryFrom<String, RegexError> {
+  private pattern: String
+  private program: Program
+  private names: List<String?>
+
+  /**
+   * The pattern `text`, compiled.
+   *
+   * # Errors
+   *
+   * A [RegexError] with the byte offset of what is wrong: a syntax error, a backreference or a lookaround, a
+   * repetition above 1000, or a pattern that compiles to more than 100000 instructions.
+   */
+  static fn tryFrom(text: String): Result<Regex, RegexError> {
+    const parsed = parsedPattern(text)?
+    match compiled(parsed.root, parsed.names.length()) {
+      Some(program) => Ok Regex(text, program, parsed.names)
+      None => Fail RegexError(text, 0, "the pattern is too large")
+    }
+  }
+
+  /** The pattern as it was written. */
+  fn text(): String {
+    pattern
+  }
+
+  fn show(): String {
+    pattern
+  }
+
+  fn equals(other: Regex): Bool {
+    pattern == other.pattern
+  }
+
+  /** How many capturing groups the pattern has, without the whole match. */
+  fn groupCount(): Int {
+    names.length() - 1
+  }
+
+  /** The names of the groups, by their index; the whole match (0) and an unnamed group have none. */
+  fn groupNames(): List<String?> {
+    names
+  }
+
+  /** Whether the whole text matches. */
+  fn matches(text: String): Bool {
+    wholeMatch(text).isSome()
+  }
+
+  /** Whether the pattern matches anywhere in the text. */
+  fn isFound(text: String): Bool {
+    find(text).isSome()
+  }
+
+  /** The match of the whole text, with its groups. */
+  fn wholeMatch(text: String): RegexMatch? {
+    const slots = run(program, text, 0, true, true)?
+    Some RegexMatch(text, slots, names)
+  }
+
+  /** The first match in the text: the leftmost one, and of those the one the pattern prefers. */
+  fn find(text: String): RegexMatch? {
+    findFrom text, 0
+  }
+
+  /** The first match that starts at byte `from` or after it. `^` and `\b` still see the text before it. */
+  fn findFrom(text: String, from: Int): RegexMatch? {
+    const slots = run(program, text, from, false, false)?
+    Some RegexMatch(text, slots, names)
+  }
+
+  /** Every match, left to right, none overlapping. An empty match right behind the previous one does not count. */
+  fn findAll(text: String): List<RegexMatch> {
+    var found: List<RegexMatch> = []
+    var position = 0
+    var previousEnd = -1
+    const length = text.byteLength()
+    while position <= length {
+      const next = match findFrom(text, position) {
+        Some(candidate) => candidate
+        None => {
+          break
+        }
+      }
+      const start = next.start()
+      const end = next.end()
+      if end == start && start == previousEnd {
+        // An empty match where the last one ended: move on by one character
+        if start >= length {
+          break
+        }
+        position = start + widthAt(text, start)
+        continue
+      }
+      found.append next
+      previousEnd = end
+      if end == start {
+        if end >= length {
+          break
+        }
+        position = end + widthAt(text, end)
+      } else {
+        position = end
+      }
+    }
+    found
+  }
+
+  /**
+   * The text with every match replaced by `replacement`, in which `$1` and `$\{1\}` stand for a group by its index,
+   * `$name` and `$\{name\}` for a group by its name, and `$$` for a `$`. A group that did not take part is empty.
+   */
+  fn replace(text: String, replacement: String): String {
+    replaceWith text, { found => found.expanded replacement }
+  }
+
+  /** The text with the first match replaced, as [Regex.replace] does it. */
+  fn replaceFirst(text: String, replacement: String): String {
+    match find(text) {
+      Some(found) => {
+        const before = text.sliceBytes 0, found.start()
+        const after = text.sliceBytes found.end(), text.byteLength()
+        before + found.expanded(replacement) + after
+      }
+      None => text
+    }
+  }
+
+  /** The text with every match replaced by what `transform` makes of it. */
+  fn replaceWith(text: String, transform: (found: RegexMatch) => String): String {
+    var pieces: List<String> = []
+    var last = 0
+    for found in findAll(text) {
+      pieces.append text.sliceBytes(last, found.start())
+      pieces.append transform(found)
+      last = found.end()
+    }
+    pieces.append text.sliceBytes(last, text.byteLength())
+    pieces.joined separator: ""
+  }
+
+  /**
+   * The text cut apart at every match, which is dropped: `,\s*` splits `"a, b,c"` into `a`, `b` and `c`. An empty match
+   * at the start does not make an empty first piece, and the rest of the text after the last match is the last piece.
+   */
+  fn split(text: String): List<String> {
+    if text.isEmpty() {
+      return [""]
+    }
+    var pieces: List<String> = []
+    var start = 0
+    var end = 0
+    for found in findAll(text) {
+      end = found.start()
+      if found.end() != 0 {
+        pieces.append text.sliceBytes(start, end)
+      }
+      start = found.end()
+    }
+    if end != text.byteLength() {
+      pieces.append text.sliceBytes(start, text.byteLength())
+    }
+    pieces
+  }
+}
+
+/** A pattern is its text wherever a `Regex` is written or read: `Encode` and `Decode` go through this pair. */
+extend String with From<Regex> {
+  static fn from(value: Regex): String {
+    value.text()
+  }
+}
+
+/** The number of bytes of the character at `offset`, or 1 at the end, so that a search moves on. */
+fn widthAt(text: String, offset: Int): Int {
+  match text.charAt(offset) {
+    Some(character) => character.byteLength()
+    None => 1
+  }
+}
+
+/**
+ * One match: where it is in the text, and what each group found. Every position is a byte offset into the text.
+ *
+ * # Examples
+ *
+ *     const found = Regex.tryFrom(raw"(\w+)@(\w+)")?.find("mail ada@example")?
+ *     print "{found.text()} {found.group(1)} {found.start}"
+ */
+public type RegexMatch {
+  private subject: String
+  private slots: List<Int>
+  private names: List<String?>
+
+  /** Where the match starts. */
+  fn start(): Int {
+    slots[0]
+  }
+
+  /** Where the match ends: the offset right after it. */
+  fn end(): Int {
+    slots[1]
+  }
+
+  /** The text of the whole match. */
+  fn text(): String {
+    subject.sliceBytes slots[0], slots[1]
+  }
+
+  /** The text a group found, by its index - 0 is the whole match - or `None` where it took no part. */
+  fn group(index: Int): String? {
+    const range = groupRange(index)?
+    Some subject.sliceBytes(range.start, range.end)
+  }
+
+  /** The text a named group found, or `None` where it took no part or the pattern has no group of that name. */
+  fn named(name: String): String? {
+    const index = names.indexOf(Some(name))?
+    group index
+  }
+
+  /** Where a group is, by its index, or `None` where it took no part. */
+  fn groupRange(index: Int): GroupRange? {
+    if index < 0 || 2 * index + 1 >= slots.length() {
+      return None
+    }
+    const start = slots[2 * index]
+    const end = slots[2 * index + 1]
+    if start < 0 || end < 0 {
+      return None
+    }
+    Some GroupRange(start, end)
+  }
+
+  /** What every group found, the whole match first. */
+  fn groups(): List<String?> {
+    var found: List<String?> = []
+    for index in 0..(slots.length() / 2) {
+      found.append group(index)
+    }
+    found
+  }
+
+  /** The named groups that took part, by name. */
+  fn namedGroups(): Map<String, String> {
+    var found: Map<String, String> = [:]
+    for index in 0..names.length() {
+      if const Some(name) = names[index] {
+        if const Some(text) = group(index) {
+          found[name] = text
+        }
+      }
+    }
+    found
+  }
+
+  /**
+   * The named groups read as a `Value` whose fields have their names: `(?P<year>\d+)-(?P<month>\d+)` becomes a type with
+   * the fields `year` and `month`. The texts are read as what each field asks for, and a group that took no part is a
+   * field that is absent, so its default applies.
+   */
+  fn decoded<Value: Decode>(): Result<Value, DecodeError> {
+    var fields: List<EncodedField> = []
+    for index in 0..names.length() {
+      if const Some(name) = names[index] {
+        if const Some(text) = group(index) {
+          fields.append EncodedField(name, EncodedValue.String(text))
+        }
+      }
+    }
+    var source = ValueDecoder.of EncodedValue.Record("", fields), lenient: true
+    Value.decode source
+  }
+
+  /** `replacement` with its `$` references replaced by the groups of this match. */
+  fn expanded(replacement: String): String {
+    var pieces: List<String> = []
+    const characters = replacement.chars().toList()
+    var index = 0
+    while index < characters.length() {
+      const character = characters[index]
+      if character != '$' || index + 1 >= characters.length() {
+        pieces.append character.show()
+        index = index + 1
+        continue
+      }
+      if characters[index + 1] == '$' {
+        pieces.append "$"
+        index = index + 2
+        continue
+      }
+      var name = ""
+      var next = index + 1
+      if characters[next] == '{' {
+        var close = next + 1
+        while close < characters.length() && characters[close] != '}' {
+          close = close + 1
+        }
+        if close >= characters.length() {
+          pieces.append character.show()
+          index = index + 1
+          continue
+        }
+        name = String.from characters.slice((next + 1)..close)
+        next = close + 1
+      } else {
+        var stop = next
+        while stop < characters.length() && isNameCharacter(characters[stop]) {
+          stop = stop + 1
+        }
+        name = String.from characters.slice(next..stop)
+        next = stop
+      }
+      if name.isEmpty() {
+        pieces.append character.show()
+        index = index + 1
+        continue
+      }
+      pieces.append(referenced(name) ?? "")
+      index = next
+    }
+    pieces.joined separator: ""
+  }
+
+  /** A group by its number or its name, as a replacement names it. */
+  private fn referenced(name: String): String? {
+    if name.chars().all({ _.isDigit() }) {
+      return group(Int64.tryFrom(name) ?? -1)
+    }
+    named name
+  }
+}
+
+/** Where a group of a match is: from `start` to right before `end`, as byte offsets. */
+public type GroupRange {
+  start: Int
+  end: Int
+}
+
+fn isNameCharacter(character: Char): Bool {
+  (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') || character.isDigit()
+    || character == '_'
+}

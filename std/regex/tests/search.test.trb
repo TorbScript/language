@@ -1,0 +1,44 @@
+/**
+ * `Regex` against RE2's own search tests (`search-cases.trb`, with RE2's notice): for every pattern and text, the first
+ * match of the whole text and the first match anywhere, with the byte offsets of every group, as RE2 answers them.
+ */
+
+use test, group from "std/test"
+use searchCases, SearchCase from "./search-cases"
+use Regex, RegexMatch from "../src/lib"
+
+/** A match as the file writes it: `-`, or `start-end` of the match and of each group, `-` for one that took no part. */
+fn shown(found: RegexMatch?, groups: Int): String {
+  match found {
+    Some(value) => {
+      var parts: List<String> = []
+      for index in 0..(groups + 1) {
+        match value.groupRange(index) {
+          Some(range) => parts.append "{range.start}-{range.end}"
+          None => parts.append "-"
+        }
+      }
+      parts.joined separator: " "
+    }
+    None => "-"
+  }
+}
+
+fn answersAsRe2(searchCase: SearchCase): Bool {
+  match Regex.tryFrom(searchCase.pattern) {
+    Ok(pattern) => {
+      const whole = shown pattern.wholeMatch(searchCase.text), pattern.groupCount()
+      const first = shown pattern.find(searchCase.text), pattern.groupCount()
+      whole == searchCase.whole && first == searchCase.first
+    }
+    Fail(_) => false
+  }
+}
+
+group "RE2's search tests: the first match of the whole text and anywhere in it" {
+  for searchCase in searchCases() {
+    test "{searchCase.pattern.showNested()} in {searchCase.text.showNested()}" {
+      assert answersAsRe2(searchCase)
+    }
+  }
+}
