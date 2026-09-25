@@ -61,6 +61,7 @@
 #  include <fcntl.h>
 #  include <sys/resource.h>
 #  include <sys/stat.h>
+#  include <signal.h>
 #  include <sys/wait.h>
 #  include <time.h>
 #  include <unistd.h>
@@ -1484,6 +1485,170 @@ bool torb_platform_run_inheriting(
   return true;
 }
 
+/* ------------------------------------------------------------------------------ a child with three pipes --- */
+
+/*
+ * `Process.start` (runtime/stream.c): a child process whose three streams are pipes this process holds the other ends
+ * of, started through no shell. The child's ends are inheritable and ours are not, and ours are closed in the child's
+ * place only once it has its own copies, so the end of a pipe is the end of what the child wrote.
+ */
+bool torb_platform_child_start(
+  const char *command,
+  const char **arguments,
+  size_t count,
+  void **process,
+  void **input,
+  void **output,
+  void **errors,
+  const char **message
+) {
+  size_t lineCapacity = 512u;
+  size_t filled = 0u;
+  char *line = (char *)torb_raw_allocate(lineCapacity);
+  size_t wideCapacity = 0u;
+  wchar_t *wideLine;
+  size_t index;
+  SECURITY_ATTRIBUTES inheritable;
+  STARTUPINFOW startup;
+  PROCESS_INFORMATION child;
+  HANDLE childInput = NULL;
+  HANDLE ourInput = NULL;
+  HANDLE ourOutput = NULL;
+  HANDLE childOutput = NULL;
+  HANDLE ourErrors = NULL;
+  HANDLE childErrors = NULL;
+  size_t nameCapacity = 0u;
+  char *name = torb_windows_command(command, &nameCapacity);
+  line[0] = '\0';
+  torb_append_windows_argument(name, &line, &filled, &lineCapacity);
+  torb_raw_free(name, nameCapacity);
+  for (index = 0u; index < count; index++) {
+    torb_append_windows_argument(arguments[index], &line, &filled, &lineCapacity);
+  }
+  wideLine = torb_platform_wide(line, &wideCapacity);
+  torb_raw_free(line, lineCapacity);
+  if (wideLine == NULL) {
+    *message = "the program could not be started";
+    return false;
+  }
+  inheritable.nLength = (DWORD)sizeof(inheritable);
+  inheritable.lpSecurityDescriptor = NULL;
+  inheritable.bInheritHandle = TRUE;
+  if (!CreatePipe(&childInput, &ourInput, &inheritable, 0u)) {
+    *message = "the pipes of the child process could not be created";
+    torb_raw_free(wideLine, wideCapacity);
+    return false;
+  }
+  if (!CreatePipe(&ourOutput, &childOutput, &inheritable, 0u)) {
+    *message = "the pipes of the child process could not be created";
+    CloseHandle(childInput);
+    CloseHandle(ourInput);
+    torb_raw_free(wideLine, wideCapacity);
+    return false;
+  }
+  if (!CreatePipe(&ourErrors, &childErrors, &inheritable, 0u)) {
+    *message = "the pipes of the child process could not be created";
+    CloseHandle(childInput);
+    CloseHandle(ourInput);
+    CloseHandle(ourOutput);
+    CloseHandle(childOutput);
+    torb_raw_free(wideLine, wideCapacity);
+    return false;
+  }
+  SetHandleInformation(ourInput, HANDLE_FLAG_INHERIT, 0u);
+  SetHandleInformation(ourOutput, HANDLE_FLAG_INHERIT, 0u);
+  SetHandleInformation(ourErrors, HANDLE_FLAG_INHERIT, 0u);
+  memset(&startup, 0, sizeof(startup));
+  memset(&child, 0, sizeof(child));
+  startup.cb = (DWORD)sizeof(startup);
+  startup.dwFlags = STARTF_USESTDHANDLES;
+  startup.hStdInput = childInput;
+  startup.hStdOutput = childOutput;
+  startup.hStdError = childErrors;
+  /* No application name, so Windows searches PATH and appends `.exe` to a name without an extension */
+  if (!CreateProcessW(NULL, wideLine, NULL, NULL, TRUE, 0u, NULL, NULL, &startup, &child)) {
+    *message = "the program could not be started";
+    CloseHandle(childInput);
+    CloseHandle(ourInput);
+    CloseHandle(ourOutput);
+    CloseHandle(childOutput);
+    CloseHandle(ourErrors);
+    CloseHandle(childErrors);
+    torb_raw_free(wideLine, wideCapacity);
+    return false;
+  }
+  torb_raw_free(wideLine, wideCapacity);
+  CloseHandle(childInput);
+  CloseHandle(childOutput);
+  CloseHandle(childErrors);
+  CloseHandle(child.hThread);
+  *process = (void *)child.hProcess;
+  *input = (void *)ourInput;
+  *output = (void *)ourOutput;
+  *errors = (void *)ourErrors;
+  return true;
+}
+
+int64_t torb_platform_pipe_read(void *pipe, uint8_t *buffer, size_t maximum) {
+  DWORD read = 0u;
+  if (!ReadFile((HANDLE)pipe, buffer, (DWORD)(maximum > 0x7FFFFFFFu ? 0x7FFFFFFFu : maximum), &read, NULL)) {
+    const DWORD failure = GetLastError();
+    /* The other end closed: the end of the stream, which is no failure */
+    if (failure == ERROR_BROKEN_PIPE || failure == ERROR_HANDLE_EOF) {
+      return 0;
+    }
+    return -(int64_t)failure;
+  }
+  return (int64_t)read;
+}
+
+int64_t torb_platform_pipe_write(void *pipe, const uint8_t *bytes, size_t length) {
+  size_t done = 0u;
+  while (done < length) {
+    DWORD written = 0u;
+    const size_t step = length - done > 0x7FFFFFFFu ? 0x7FFFFFFFu : length - done;
+    if (!WriteFile((HANDLE)pipe, bytes + done, (DWORD)step, &written, NULL)) {
+      return -(int64_t)GetLastError();
+    }
+    done += (size_t)written;
+  }
+  return (int64_t)done;
+}
+
+void torb_platform_pipe_close(void *pipe) {
+  CloseHandle((HANDLE)pipe);
+}
+
+bool torb_platform_child_wait(void *process, int64_t *code, int64_t *failure) {
+  DWORD status = 0u;
+  if (WaitForSingleObject((HANDLE)process, INFINITE) != WAIT_OBJECT_0 || !GetExitCodeProcess((HANDLE)process, &status)) {
+    *failure = (int64_t)GetLastError();
+    return false;
+  }
+  *code = (int64_t)(int32_t)status;
+  return true;
+}
+
+void torb_platform_child_forget(void *process) {
+  CloseHandle((HANDLE)process);
+}
+
+torb_text torb_platform_failure_text(int64_t code) {
+  char buffer[512];
+  DWORD length = FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, NULL, (DWORD)code, 0u,
+                                buffer, (DWORD)sizeof buffer, NULL);
+  /* The system's message ends in a line break and often a full stop, which the message of an `IoError` has not */
+  while (length > 0u && (buffer[length - 1u] == '\n' || buffer[length - 1u] == '\r' || buffer[length - 1u] == '.')) {
+    length -= 1u;
+  }
+  if (length == 0u) {
+    snprintf(buffer, sizeof buffer, "the operation failed with the system's code %lld", (long long)code);
+    return torb_text_from_cstring(buffer);
+  }
+  buffer[length] = '\0';
+  return torb_text_from_cstring(buffer);
+}
+
 #else
 
 /**
@@ -1749,6 +1914,194 @@ bool torb_platform_run_inheriting(
     *code = (int64_t)(128 + (WIFSIGNALED(status) ? WTERMSIG(status) : 0));
   }
   return true;
+}
+
+/* ------------------------------------------------------------------------------ a child with three pipes --- */
+
+/* A descriptor as the pointer the stream layer keeps: one more than the descriptor, so descriptor 0 is no `NULL`. */
+static void *torb_descriptor_pointer(int descriptor) {
+  return (void *)(intptr_t)(descriptor + 1);
+}
+
+static int torb_pointer_descriptor(void *pipe) {
+  return (int)((intptr_t)pipe - 1);
+}
+
+/*
+ * `Process.start` (runtime/stream.c): a child process whose three streams are pipes this process holds the other ends
+ * of, through `fork` and `execvp` and no shell. A program that could not be started answers through a pipe that is
+ * closed on a successful `exec`, as `torb_platform_run_inheriting` does. A write into the input of a child that is gone
+ * must fail and not end this process, so `SIGPIPE` is ignored from the first child on.
+ */
+bool torb_platform_child_start(
+  const char *command,
+  const char **arguments,
+  size_t count,
+  void **process,
+  void **input,
+  void **output,
+  void **errors,
+  const char **message
+) {
+  const size_t argumentBytes = (count + 2u) * sizeof(char *);
+  char **argumentValues = (char **)torb_raw_allocate(argumentBytes);
+  int toChild[2];
+  int fromChild[2];
+  int errorsOfChild[2];
+  int report[2];
+  pid_t child;
+  int failed = 0;
+  ssize_t told;
+  size_t index;
+  argumentValues[0] = (char *)command;
+  for (index = 0u; index < count; index++) {
+    argumentValues[index + 1u] = (char *)arguments[index];
+  }
+  argumentValues[count + 1u] = NULL;
+  (void)signal(SIGPIPE, SIG_IGN);
+  if (pipe(toChild) != 0) {
+    *message = strerror(errno);
+    torb_raw_free(argumentValues, argumentBytes);
+    return false;
+  }
+  if (pipe(fromChild) != 0) {
+    *message = strerror(errno);
+    close(toChild[0]);
+    close(toChild[1]);
+    torb_raw_free(argumentValues, argumentBytes);
+    return false;
+  }
+  if (pipe(errorsOfChild) != 0) {
+    *message = strerror(errno);
+    close(toChild[0]);
+    close(toChild[1]);
+    close(fromChild[0]);
+    close(fromChild[1]);
+    torb_raw_free(argumentValues, argumentBytes);
+    return false;
+  }
+  if (pipe(report) != 0) {
+    *message = strerror(errno);
+    close(toChild[0]);
+    close(toChild[1]);
+    close(fromChild[0]);
+    close(fromChild[1]);
+    close(errorsOfChild[0]);
+    close(errorsOfChild[1]);
+    torb_raw_free(argumentValues, argumentBytes);
+    return false;
+  }
+  (void)fcntl(toChild[1], F_SETFD, FD_CLOEXEC);
+  (void)fcntl(fromChild[0], F_SETFD, FD_CLOEXEC);
+  (void)fcntl(errorsOfChild[0], F_SETFD, FD_CLOEXEC);
+  (void)fcntl(report[1], F_SETFD, FD_CLOEXEC);
+  child = fork();
+  if (child < 0) {
+    *message = strerror(errno);
+    close(toChild[0]);
+    close(toChild[1]);
+    close(fromChild[0]);
+    close(fromChild[1]);
+    close(errorsOfChild[0]);
+    close(errorsOfChild[1]);
+    close(report[0]);
+    close(report[1]);
+    torb_raw_free(argumentValues, argumentBytes);
+    return false;
+  }
+  if (child == 0) {
+    close(report[0]);
+    (void)dup2(toChild[0], 0);
+    (void)dup2(fromChild[1], 1);
+    (void)dup2(errorsOfChild[1], 2);
+    close(toChild[0]);
+    close(fromChild[1]);
+    close(errorsOfChild[1]);
+    (void)signal(SIGPIPE, SIG_DFL);
+    torb_memory_restore_for_child();
+    execvp(command, argumentValues);
+    failed = errno;
+    (void)!write(report[1], &failed, sizeof(failed));
+    _exit(127);
+  }
+  close(report[1]);
+  close(toChild[0]);
+  close(fromChild[1]);
+  close(errorsOfChild[1]);
+  torb_raw_free(argumentValues, argumentBytes);
+  do {
+    told = read(report[0], &failed, sizeof(failed));
+  } while (told < 0 && errno == EINTR);
+  close(report[0]);
+  if (told == (ssize_t)sizeof(failed)) {
+    int status = 0;
+    *message = strerror(failed);
+    close(toChild[1]);
+    close(fromChild[0]);
+    close(errorsOfChild[0]);
+    while (waitpid(child, &status, 0) < 0 && errno == EINTR) {
+    }
+    return false;
+  }
+  *process = (void *)(intptr_t)child;
+  *input = torb_descriptor_pointer(toChild[1]);
+  *output = torb_descriptor_pointer(fromChild[0]);
+  *errors = torb_descriptor_pointer(errorsOfChild[0]);
+  return true;
+}
+
+int64_t torb_platform_pipe_read(void *pipe, uint8_t *buffer, size_t maximum) {
+  ssize_t got;
+  do {
+    got = read(torb_pointer_descriptor(pipe), buffer, maximum);
+  } while (got < 0 && errno == EINTR);
+  return got < 0 ? -(int64_t)errno : (int64_t)got;
+}
+
+int64_t torb_platform_pipe_write(void *pipe, const uint8_t *bytes, size_t length) {
+  size_t done = 0u;
+  while (done < length) {
+    const ssize_t written = write(torb_pointer_descriptor(pipe), bytes + done, length - done);
+    if (written < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      return -(int64_t)errno;
+    }
+    done += (size_t)written;
+  }
+  return (int64_t)done;
+}
+
+void torb_platform_pipe_close(void *pipe) {
+  close(torb_pointer_descriptor(pipe));
+}
+
+bool torb_platform_child_wait(void *process, int64_t *code, int64_t *failure) {
+  int status = 0;
+  while (waitpid((pid_t)(intptr_t)process, &status, 0) < 0) {
+    if (errno != EINTR) {
+      *failure = (int64_t)errno;
+      return false;
+    }
+  }
+  /* The exit code is in the high byte of `wait`'s status, and a child killed by a signal has none at all */
+  if (WIFEXITED(status)) {
+    *code = (int64_t)WEXITSTATUS(status);
+  } else {
+    *code = (int64_t)(128 + (WIFSIGNALED(status) ? WTERMSIG(status) : 0));
+  }
+  return true;
+}
+
+/* A child nobody waited for is collected whenever it ends, so it never stays a zombie of this process for long. */
+void torb_platform_child_forget(void *process) {
+  int status = 0;
+  (void)waitpid((pid_t)(intptr_t)process, &status, WNOHANG);
+}
+
+torb_text torb_platform_failure_text(int64_t code) {
+  return torb_text_from_cstring(strerror((int)code));
 }
 
 #endif

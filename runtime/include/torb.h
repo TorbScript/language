@@ -1178,6 +1178,8 @@ typedef struct torb_file {
   torb_header header;
   torb_text path;
   void *handle;
+  /** What a read of `chunks()` got and its reader has not taken yet (stream.c), `NULL` before the first read. */
+  void *pending;
 } torb_file;
 
 /** `path` borrowed. Opens for reading. Result owned (a fresh block of count 1); `*error` owned on failure. */
@@ -1281,6 +1283,42 @@ bool torb_platform_run_inheriting(
   int64_t *code,
   const char **message
 );
+/**
+ * A child process with three pipes (runtime/stream.c, `Process.start`), through no shell: the child's handle and the
+ * three ends this process holds, as the pointers the stream layer keeps. False where it could not be started, with a
+ * message in `*message` (borrowed, static).
+ */
+bool torb_platform_child_start(
+  const char *command,
+  const char **arguments,
+  size_t count,
+  void **process,
+  void **input,
+  void **output,
+  void **errors,
+  const char **message
+);
+/** At most `maximum` bytes as soon as any arrived: their number, 0 at the end, or minus the system's code. */
+int64_t torb_platform_pipe_read(void *pipe, uint8_t *buffer, size_t maximum);
+/** All of `bytes`: their number, or minus the system's code. */
+int64_t torb_platform_pipe_write(void *pipe, const uint8_t *bytes, size_t length);
+void torb_platform_pipe_close(void *pipe);
+/** Waits for the child to end: its exit code, or false and the system's code in `*failure`. */
+bool torb_platform_child_wait(void *process, int64_t *code, int64_t *failure);
+/** Lets go of the child's handle without waiting for it; the child runs on. */
+void torb_platform_child_forget(void *process);
+/** A code of the system (`errno` on POSIX, `GetLastError` on Windows) in its own words. Owned. */
+torb_text torb_platform_failure_text(int64_t code);
+/**
+ * Standard input, bytes as they come (console.c): their number, 0 at the end, or minus the system's code. A console
+ * on Windows is read as text and handed on as its UTF-8.
+ */
+int64_t torb_read_standard_bytes(uint8_t *buffer, size_t maximum);
+/** Bytes to standard output or, with `error`, standard error, through the dispatch `print` takes. */
+bool torb_write_standard_bytes(bool error, const uint8_t *bytes, size_t length);
+/** The buffer a file's reads keep what they got in, given back when the file goes (stream.c). */
+void torb_file_forget_pending(torb_file *file);
+
 /** A monotonic clock reading, in nanoseconds, from an unspecified origin. Never goes backwards within one process. */
 int64_t torb_platform_monotonic_nanoseconds(void);
 /**

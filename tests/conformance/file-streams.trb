@@ -1,0 +1,35 @@
+/**
+ * **A file is both ends of a stream.** `File.create` answers a file that is a `Sink<Bytes, IoError>`, whose `add`
+ * writes into it and whose `end` flushes it; `File.open` answers one whose `chunks()` is a `Source<Bytes, IoError>`
+ * and whose `lines()` is the line stage over it. Every read and write runs on a thread of the blocking pool
+ * (runtime/stream.c), so the worker goes on meanwhile, and every block is freed afterwards.
+ */
+use File, IoError from "std/fs"
+use textOf from "std/stream"
+
+/** Writes three lines into the file, and reads them back in chunks of five bytes and as lines. */
+fn roundTrip(path: String): Task<Result<Void, IoError>> {
+  using written = File.create(path)?
+  written.add("first line\n".bytes().toList()).await()?
+  written.add("second line\nthird\n".bytes().toList()).await()?
+  written.end().await()?
+  using opened = File.open(path)?
+  var chunks = opened.chunks 5
+  var count = 0
+  var bytes: List<UInt8> = []
+  while const Some(chunk) = chunks.next().await()? {
+    count = count + 1
+    bytes.appendAll chunk
+  }
+  print "{count} chunks of at most five bytes, {bytes.length()} bytes"
+  print(textOf(bytes).ok() ?? "not UTF-8")
+  using again = File.open(path)?
+  const lines = again.lines().toList().await()?
+  print "lines: {lines}"
+  Ok void
+}
+
+match roundTrip("streamed.txt").await() {
+  Ok(_) => print "round trip done"
+  Fail(problem) => print "error: {problem}"
+}

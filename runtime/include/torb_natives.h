@@ -47,6 +47,20 @@ torb_char torb_char_to_lower_case(torb_char character);
 torb_char torb_char_to_upper_case(torb_char character);
 /* Char.tryFrom(Int64) */
 bool torb_char_try_from_i64(int64_t value, torb_char *out, torb_text *message);
+/* childClose */
+void torb_child_close(int64_t child);
+/* childEndInput */
+int64_t torb_child_end_input(int64_t child);
+/* childRead */
+torb_task *torb_child_read(int64_t child, int64_t which, int64_t maximum);
+/* childStart */
+int64_t torb_child_start(torb_text command, torb_list arguments, torb_text *failure);
+/* childTakeRead */
+void torb_child_take_read(int64_t child, int64_t which, torb_list *into);
+/* childWait */
+torb_task *torb_child_wait(int64_t child);
+/* childWrite */
+torb_task *torb_child_write(int64_t child, torb_list bytes, int64_t from);
 /* Clock.milliseconds */
 int64_t torb_clock_milliseconds(void);
 /* monotonicNanoseconds */
@@ -83,20 +97,32 @@ double torb_exponential_f64(double value);
 bool torb_file_absolute_path(torb_text path, torb_text *out, torb_text *error);
 /* File.close */
 void torb_file_close(torb_file **self);
+/* File.create */
+bool torb_file_create(torb_text path, torb_file **out, torb_text *error);
 /* File.createDirectory */
 bool torb_file_create_directory(torb_text path, torb_text *error);
 /* File.exists */
 bool torb_file_exists(torb_text path);
+/* fileFlush */
+torb_task *torb_file_flush(torb_file *file);
 /* File.isDirectory */
 bool torb_file_is_directory(torb_text path);
 /* File.list */
 bool torb_file_list(torb_text path, torb_list *out, torb_text *error);
 /* File.open */
 bool torb_file_open(torb_text path, torb_file **out, torb_text *error);
+/* filePath */
+torb_text torb_file_path(torb_file *file);
+/* fileRead */
+torb_task *torb_file_read(torb_file *file, int64_t maximum);
 /* File.readAll */
 bool torb_file_read_all(torb_file **self, torb_text *out, torb_text *path, torb_text *error);
 /* File.readText */
 bool torb_file_read_text(torb_text path, torb_text *out, torb_text *error);
+/* fileTakeRead */
+void torb_file_take_read(torb_file *file, torb_list *into);
+/* fileWrite */
+torb_task *torb_file_write(torb_file *file, torb_list bytes, int64_t from);
 /* File.writeText */
 bool torb_file_write_text(torb_text path, torb_text text, torb_text *error);
 /* Float64.floor */
@@ -311,6 +337,14 @@ double torb_sine_f64(double value);
 torb_task *torb_sleep(double seconds);
 /* Float64.squareRoot */
 double torb_square_root_f64(double value);
+/* standardRead */
+torb_task *torb_standard_read(int64_t maximum);
+/* standardTakeRead */
+void torb_standard_take_read(torb_list *into);
+/* standardWrite */
+torb_task *torb_standard_write(int64_t stream, torb_list bytes, int64_t from);
+/* fileFailureText, ioFailureText, processFailureText */
+torb_text torb_stream_failure_text(int64_t failure);
 /* interrupted */
 bool torb_take_interrupt(void);
 /* Float64.tangent */

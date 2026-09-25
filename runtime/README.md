@@ -46,7 +46,8 @@ deliberately panics says `TORB_IGNORE_LEAKS()`, because a panic runs nothing on 
 | `number.c`            | The float routines, the total order of gap 5, the wrapping pair, the checked narrowings, `**`, and the `Real` members of a `Float64` (thin `<math.h>` wrappers) |
 | `console.c`           | `print`, `printError`, `readLine`, `isTerminal`, `printErrorRaw` (a prompt, no line break), the Ctrl+C flag `torb repl` installs and polls |
 | `process.c`           | `Process.arguments`, `Process.exit`, `Process.executablePath`, running a child process      |
-| `file.c`              | `readText`, `writeText`, `exists`, `isDirectory`, `list` (sorted), `absolutePath`, and the open handle (`File.open`/`readAll`/`close`) |
+| `file.c`              | `readText`, `writeText`, `exists`, `isDirectory`, `list` (sorted), `absolutePath`, and the open handle (`File.open`/`create`/`readAll`/`close`) |
+| `stream.c`            | The byte streams of a file, of the three standard streams and of a child process (docs/design/STREAMS.md section 14): every read, write, flush and wait a task of the runtime that makes its one call of the operating system on the blocking pool, the buffers a read fills until its reader takes them, and the table of the children `Process.start` started |
 | `clock.c`             | `std/time`: `Clock.now` and the arithmetic of `Instant` and `Duration`                     |
 | `environment.c`       | `Environment` of `std/os`: `Environment.get` and `Environment.entries`                     |
 | `platform.c`          | **The runtime's own portability layer, and the only file with an `#ifdef _WIN32` between its functions**: path kind, working directory, directory listing, opening and removing a file, whole-file read and write, running a child process, a monotonic clock reading, sleeping until a timer is due, the program's own arguments, reading an environment variable and setting one (for `runtime/tests` only), the memory limit of the process (a job object, `RLIMIT_DATA`, `RLIMIT_AS`), the physical memory and the size of a `malloc`ed block. Everything crosses it as UTF-8; the Windows half converts to UTF-16 and calls the wide API, because the narrow one is the code page of the machine |
@@ -57,12 +58,10 @@ deliberately panics says `TORB_IGNORE_LEAKS()`, because a panic runs nothing on 
 | `vendor/mbedtls/`     | mbedTLS 3.6 (`VERSION`), vendored whole and unchanged under its Apache-2.0 `LICENSE`; compiled once per checkout and C compiler into `build/vendor/` by the driver, into `build/runtime/mbedtls/` by `build.sh`, without `-Werror` |
 | `tests/`              | `harness.h`/`harness.c` plus one `*_test.c` per area, one executable                       |
 
-Not here yet, by design: the streams over files and pipes (`standardInput`, `Process.start`, `File.chunks`), which
-`io.c` serves for sockets only so far (docs/design/NETWORK.md; the blocking pool `offload` runs on is in `task.c`). There is no `collect.c` and there will be none: the language has no
-cycle collector (`docs/design/DESTRUCTORS.md` section 9). `File.lines` is also still
-`.Planned`, for 5.7 rather than 5.12: it answers `Result<Iterable<String>, IoError>`, and `Iterable` is a trait-typed
-value over an iterator type - the ABI 5.7 defines. Reading the whole file to fake a streaming iterator now would mean
-inventing that ABI early and probably wrong, so it waits. The manifest records every one of these as `.Planned` with
+`io.c` serves sockets only (docs/design/NETWORK.md): the streams over files, the standard streams and pipes are
+`stream.c`'s and wait on the blocking pool of `task.c`, because no poller of any platform takes all three (STREAMS.md
+section 14). There is no `collect.c` and there will be none: the language has no cycle collector
+(`docs/design/DESTRUCTORS.md` section 9). The manifest records every native that is not written yet as `.Planned` with
 its milestone, so using one is a compile error naming the milestone and never a link error.
 
 ## The ABI in one page

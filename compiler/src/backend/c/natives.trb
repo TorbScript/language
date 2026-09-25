@@ -1030,16 +1030,50 @@ fn fileEntries(var entries: List<NativeEntry>) {
   // The stream side of a file (docs/design/STREAMS.md). `chunks` answers a `Source<Bytes, IoError>` and `add`/`end` are the
   // `Sink` a `File` is, so all three are shared objects the runtime owns; `file.lines()` is TorbScript over `chunks`
   // and needs no native of its own.
-  entries.append plannedRuntimeOf("File.create", "torb_file_create", "7.3")
-  entries.append plannedRuntimeOf("File.chunks", "torb_file_chunks", "7.3")
-  entries.append plannedRuntimeOf("File.add", "torb_file_add", "7.3")
-  entries.append plannedRuntimeOf("File.end", "torb_file_end", "7.3")
+  entries.append(fallibleRuntimeOf(
+    "File.create",
+    "torb_file_create",
+    "bool torb_file_create(torb_text path, torb_file **out, torb_text *error);",
+  ))
+  // `chunks`, `add` and `end` are TorbScript over these, which answer tasks that turn to the blocking pool
+  // (runtime/stream.c), and a failure as a number `fileFailureText` puts into words
+  entries.append runtimeOf("fileRead", "torb_file_read", "torb_task *torb_file_read(torb_file *file, int64_t maximum);")
+  entries.append(runtimeOf(
+    "fileTakeRead",
+    "torb_file_take_read",
+    "void torb_file_take_read(torb_file *file, torb_list *into);",
+  ))
+  entries.append(runtimeOf(
+    "fileWrite",
+    "torb_file_write",
+    "torb_task *torb_file_write(torb_file *file, torb_list bytes, int64_t from);",
+  ))
+  entries.append runtimeOf("fileFlush", "torb_file_flush", "torb_task *torb_file_flush(torb_file *file);")
+  entries.append runtimeOf("filePath", "torb_file_path", "torb_text torb_file_path(torb_file *file);")
+  entries.append(runtimeOf(
+    "fileFailureText",
+    "torb_stream_failure_text",
+    "torb_text torb_stream_failure_text(int64_t failure);",
+  ))
 
   entries.append optionalRuntimeOf("readLine", "torb_read_line", "bool torb_read_line(torb_text *out);")
-  // The three streams a process is started with, as `Source`/`Sink` objects
-  entries.append plannedRuntimeOf("standardInput", "torb_standard_input", "7.3")
-  entries.append plannedRuntimeOf("standardOutput", "torb_standard_output", "7.3")
-  entries.append plannedRuntimeOf("standardError", "torb_standard_error", "7.3")
+  // The three streams a process is started with: `Source`/`Sink` objects of TorbScript over these (runtime/stream.c)
+  entries.append runtimeOf("standardRead", "torb_standard_read", "torb_task *torb_standard_read(int64_t maximum);")
+  entries.append(runtimeOf(
+    "standardTakeRead",
+    "torb_standard_take_read",
+    "void torb_standard_take_read(torb_list *into);",
+  ))
+  entries.append(runtimeOf(
+    "standardWrite",
+    "torb_standard_write",
+    "torb_task *torb_standard_write(int64_t stream, torb_list bytes, int64_t from);",
+  ))
+  entries.append(runtimeOf(
+    "ioFailureText",
+    "torb_stream_failure_text",
+    "torb_text torb_stream_failure_text(int64_t failure);",
+  ))
 
   // `mkdir -p`: `torb build` has to create the directory it writes the C and the binary into, and "it is already
   // there" is success - so a caller that only wants a place to write never has to ask first
@@ -1087,13 +1121,36 @@ fn fileEntries(var entries: List<NativeEntry>) {
     "torb_process_run_inheriting",
     "int64_t torb_process_run_inheriting(torb_text command, torb_list arguments, torb_text *failure);",
   ))
-  // A child process whose pipes are read and written while it runs: the same `Source`/`Sink` objects a file has
-  entries.append plannedRuntimeOf("Process.start", "torb_process_start", "7.3")
-  entries.append plannedRuntimeOf("Child.input", "torb_child_input", "7.3")
-  entries.append plannedRuntimeOf("Child.output", "torb_child_output", "7.3")
-  entries.append plannedRuntimeOf("Child.errors", "torb_child_errors", "7.3")
-  entries.append plannedRuntimeOf("Child.wait", "torb_child_wait", "7.3")
-  entries.append plannedRuntimeOf("Child.close", "torb_child_close", "7.3")
+  // A child process whose pipes are read and written while it runs: `Process.start` and `Child` are TorbScript over
+  // these, which keep the child in a table of the runtime and answer tasks that turn to the blocking pool
+  entries.append(runtimeOf(
+    "childStart",
+    "torb_child_start",
+    "int64_t torb_child_start(torb_text command, torb_list arguments, torb_text *failure);",
+  ))
+  entries.append(runtimeOf(
+    "childRead",
+    "torb_child_read",
+    "torb_task *torb_child_read(int64_t child, int64_t which, int64_t maximum);",
+  ))
+  entries.append(runtimeOf(
+    "childTakeRead",
+    "torb_child_take_read",
+    "void torb_child_take_read(int64_t child, int64_t which, torb_list *into);",
+  ))
+  entries.append(runtimeOf(
+    "childWrite",
+    "torb_child_write",
+    "torb_task *torb_child_write(int64_t child, torb_list bytes, int64_t from);",
+  ))
+  entries.append runtimeOf("childEndInput", "torb_child_end_input", "int64_t torb_child_end_input(int64_t child);")
+  entries.append runtimeOf("childWait", "torb_child_wait", "torb_task *torb_child_wait(int64_t child);")
+  entries.append runtimeOf("childClose", "torb_child_close", "void torb_child_close(int64_t child);")
+  entries.append(runtimeOf(
+    "processFailureText",
+    "torb_stream_failure_text",
+    "torb_text torb_stream_failure_text(int64_t failure);",
+  ))
 }
 
 /**

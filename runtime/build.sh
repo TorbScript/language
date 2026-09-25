@@ -29,7 +29,7 @@ case "$(uname -s 2>/dev/null)" in
   MINGW* | MSYS* | CYGWIN* | Windows*) ;;
   *) threads="-pthread" ;;
 esac
-sources="memory.c panic.c test.c text.c list.c map.c number.c console.c process.c platform.c file.c clock.c environment.c sandbox.c task.c io.c os/windows.c os/linux.c os/macos.c os/freebsd.c os/posix.c os/bsd.c os/iocp.c os/posix_io.c os/epoll.c os/kqueue.c"
+sources="memory.c panic.c test.c text.c list.c map.c number.c console.c process.c platform.c file.c stream.c clock.c environment.c sandbox.c task.c io.c os/windows.c os/linux.c os/macos.c os/freebsd.c os/posix.c os/bsd.c os/iocp.c os/posix_io.c os/epoll.c os/kqueue.c"
 tests="tests/harness.c tests/memory_test.c tests/number_test.c tests/text_test.c tests/list_test.c tests/map_test.c tests/file_test.c tests/clock_test.c tests/environment_test.c tests/process_test.c tests/platform_test.c tests/console_test.c tests/task_test.c tests/pool_test.c tests/sandbox_test.c tests/io_test.c tests/tls_test.c"
 # The TLS part (docs/design/NETWORK.md section 5): the glue of tls/ with the runtime's warnings, and the mbedTLS of
 # vendor/ with its own - compiled once into build/runtime/mbedtls and kept there, because it is a library of somebody

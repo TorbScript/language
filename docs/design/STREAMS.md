@@ -1,7 +1,9 @@
 # Streams
 
-**Status: partly implemented** — `std/stream` declares the whole vocabulary and it type checks; nothing asynchronous
-runs before tasks arrive in milestone 7.3, and `Stage` does not compile natively yet (section 14, point 6).
+**Status: implemented for milestone 7** — `std/stream` declares the whole vocabulary and runs in both back ends:
+tasks, the channel's source and sink, `Stage` through the witness slots of a generic member, and the streams of a
+`File`, of the three standard streams and of `Process.start` over `runtime/stream.c` (section 14). What is ahead is
+milestone 10's breadth and point 7's refactoring of `std/iteration`.
 
 One flow, in one direction, with two ends. This is the specification of `std/stream` and of the `Stage` that
 `std/iteration` carries, of the contracts both ends promise, and of what HTTP, the file system, the standard streams, a
@@ -619,11 +621,25 @@ _Decision:_ no read-ahead in v1. Milestone 7 may add it natively where the platf
 1. `Task`, `spawn`, `await()`, the state-machine transformation — as planned in BACKEND 7.3. Everything here rides on it.
 2. `Channel.source()` and `Channel.sink()` as native shared objects over the existing ring buffer plus waiter queues,
    including `ChannelClosed` when the reading end is closed, and capacity `0` as a real rendezvous.
-3. The `File` natives of the stream side: `create`, `chunks`, `add`, `end`.
-4. `standardInput`, `standardOutput`, `standardError`.
-5. `Process.start` and the four `Child` members.
+3. The `File` natives of the stream side: `create`, `chunks`, `add`, `end`. **Done**: `chunks`, `add` and `end` are
+   TorbScript over the tasks of `runtime/stream.c` (`tests/conformance/file-streams.trb`).
+4. `standardInput`, `standardOutput`, `standardError`. **Done**, the same way (`tests/conformance/standard-streams.trb`).
+5. `Process.start` and the four `Child` members. **Done**: the child is started with three pipes of its own, and
+   `Child` is a `shared type` of TorbScript over its handle (`tests/conformance/process-start.trb`).
+
+   **As built, for all three:** every operation that may wait - a read, a write, a flush, the wait for a child - is a
+   task of the runtime that turns to the **blocking pool** first (CONCURRENCY.md section 16) and makes the one call of
+   the operating system there, so the worker that awaits it runs its other tasks meanwhile. None goes through the IO
+   poller of `runtime/io.c`, because no platform lets one for all three: a regular file is always ready to epoll and
+   kqueue (epoll refuses it outright), a console is no handle IOCP takes, and the pipes of a child on Windows are
+   anonymous pipes without overlapped IO. The pipes of a POSIX child could go to the poller; that is the one place a
+   second code path would pay, and it waits until it is measured. A task answers one `Int64` - a count, 0 at the end, a
+   negative failure the natives render in the platform's own words - and the bytes a read got wait in a buffer of the
+   stream until the reader takes them, so no block of the program is touched on a thread of the pool. A task that is
+   cancelled before its call ran stops without it; one whose call runs finishes it (section 7 of CONCURRENCY.md).
 6. **The back-end item of section 4:** a generic member reached through a trait-typed value (`Stage.onto<Final>`) needs a
-   witness/vtable entry that the C back end does not have yet. `Decoder.sequence<Output>`, `Decoder.record<Output>` and
+   witness/vtable entry that the C back end does not have yet. **Done**: one slot of the table per list of arguments
+   the program calls it with (`tests/conformance/generic-trait-members.trb`). `Decoder.sequence<Output>`, `Decoder.record<Output>` and
    `Decoder.map<Output>` need the same one, so it is not a cost of this design. Until it is there, `Stage` type checks
    and does not compile.
 7. **The scheduled refactoring:** `std/iteration/stages.trb`'s per-stage iterators (`Mapped`, `Filtered`, `Taken`, …)

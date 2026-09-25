@@ -95,7 +95,7 @@ what it was asked (`exitCode == 0`).
 ### Child
 
 ```trb fragment
-public native shared type Child with Close {
+public shared type Child with Close {
   fn input(): Sink<Bytes, IoError>
   fn output(): Source<Bytes, IoError>
   fn errors(): Source<Bytes, IoError>
@@ -107,9 +107,33 @@ public native shared type Child with Close {
 A child process that is still running, started with `Process.start`. `input().end()` closes its standard input,
 which is how most filters learn that they are done. `close()` releases the pipes and stops waiting for the child; it
 does not kill it, because ending somebody else's program is a decision and not a cleanup. `wait()` and every use of a
-`Child`'s pipes need `.await()`, so `Process.start` and `Child` wait on the same milestone as [std/task](task.md),
-which is `status: planned`. Every line over a pipe is `.await()?` - the `?` is the `IoError`, and a cancellation
-stops the task at the `await()` it meets, closing what its `using`s hold.
+`Child`'s pipes need `.await()` (see [std/task](task.md)): each read, write and wait runs on a thread of the blocking
+pool, so the worker goes on meanwhile, and a pipe that is still being read when `close()` comes is closed once the read
+is back. Every line over a pipe is `.await()?` - the `?` is the `IoError`, and a cancellation stops the task at the
+`await()` it meets, closing what its `using`s hold. `Process.start` answers a failure, not a child, for a program that
+cannot be started at all.
+
+```trb check
+use Process from "std/process"
+use IoError from "std/fs"
+
+fn sorted(words: List<String>): Task<Result<Int, IoError>> {
+  using child = Process.start("sort", [])?
+  var input = child.input()
+  for word in words {
+    input.add("{word}\n".bytes().toList()).await()?
+  }
+  input.end().await()?
+  var output = child.output()
+  var received = 0
+  while const Some(chunk) = output.next().await()? {
+    received = received + chunk.length()
+  }
+  const code = child.wait().await()?
+  print "sort left with {code}"
+  Ok received
+}
+```
 
 ## Related
 

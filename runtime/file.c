@@ -310,9 +310,36 @@ bool torb_file_open(torb_text path, torb_file **out, torb_text *error) {
     torb_file *file = (torb_file *)torb_allocate(sizeof(torb_file), TORB_BLOCK_SHARED);
     file->path = torb_text_retained(path);
     file->handle = handle;
+    file->pending = NULL;
     *out = file;
   }
   return true;
+}
+
+/* Creates or empties the file for writing, the counterpart of `torb_file_open` that `add` and `end` write through. */
+bool torb_file_create(torb_text path, torb_file **out, torb_text *error) {
+  size_t capacity = 0u;
+  char *name = torb_path_bytes(path, true, &capacity);
+  const char *message = NULL;
+  FILE *handle = (FILE *)torb_platform_open_file(name, true, &message);
+  torb_raw_free(name, capacity);
+  if (handle == NULL) {
+    *error = torb_io_message(message);
+    return false;
+  }
+  {
+    torb_file *file = (torb_file *)torb_allocate(sizeof(torb_file), TORB_BLOCK_SHARED);
+    file->path = torb_text_retained(path);
+    file->handle = handle;
+    file->pending = NULL;
+    *out = file;
+  }
+  return true;
+}
+
+/* The path a stream's `IoError` names. Owned. */
+torb_text torb_file_path(torb_file *file) {
+  return torb_text_retained(file->path);
 }
 
 bool torb_file_read_all(torb_file **self, torb_text *out, torb_text *path, torb_text *error) {
@@ -377,5 +404,6 @@ void torb_file_close(torb_file **self) {
 void torb_file_drop(void *block) {
   torb_file *file = (torb_file *)block;
   torb_file_close_handle(file);
+  torb_file_forget_pending(file);
   torb_text_release(file->path);
 }

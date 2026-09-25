@@ -8,9 +8,10 @@ real threads, a heap and a scheduler per worker, the stealing of unstarted tasks
 across workers, `Workers.count`, and `parallel()` in the prelude running its chunks on the pool - slices E and H, and
 the environment half of D, the copy of a value that cannot move as it is ("The copy at the crossing"), and the blocking
 pool with `offload` and `Workers.blocking` ("The blocking pool, as built"). The manifest setting, `Merge`, borrowing
-(`Plain`, `Window`, `windows`) and IO for files and processes are not built (section 14). **The IO poller is built for
-sockets** (slice G, `docs/design/NETWORK.md` section 2): `runtime/io.c` with IOCP, epoll and kqueue, one IO thread of the
-process rather than a poller per worker, for the reasons that record gives. **Since 2026-09-23 `await()` answers
+(`Plain`, `Window`, `windows`) are not built (section 14). **The IO poller is built for sockets** (slice G,
+`docs/design/NETWORK.md` section 2): `runtime/io.c` with IOCP, epoll and kqueue, one IO thread of the process rather
+than a poller per worker, for the reasons that record gives. **Files, the standard streams and child processes wait on
+the blocking pool** (`runtime/stream.c`, STREAMS.md section 14): no platform's poller takes all three. **Since 2026-09-23 `await()` answers
 the `Value` and passes a cancellation on to the waiter** (section 8, "The cascade"; section 15, decision 12), which
 replaced `await(): Result<Value, Cancelled>` and deleted `outcome()`.
 
@@ -1222,7 +1223,8 @@ real timer rather than only its type - driven by hand-written state machines in 
   the poller are built for sockets and name resolution, with the cancellation of a wait on each mechanism
   (`docs/design/NETWORK.md` sections 2 and 3, `runtime/tests/io_test.c`): one IO thread instead of a poller per worker,
   and the kernel's buffer owned by the operation instead of the frame, so a cancelled wait frees its frame at once.
-  Files, pipes and the eight-file gate are not.*
+  Files, the standard streams and pipes are built on the blocking pool instead (`runtime/stream.c`, STREAMS.md section
+  14); the eight-file gate is not written.*
 - **Slice H — the inbox and stealing** (gap 9), with the measurements of section 9. Gate: the skewed-cost benchmark
   within its stated factor, and the fraction of stolen tasks reported. The parent link of gap 14 travels in the same
   message, so this slice re-runs slice A2's parent tests with the inbox in place.
@@ -1498,7 +1500,7 @@ and no longer one the VM can be held to.) A
 | `Channel(capacity:)` | - | `Instruction.ChannelNew` over `torb_channel_new` and the element descriptor of `Item` |
 | `Channel.source`, `Channel.sink` | `.Planned` | TorbScript: `ChannelSource`/`ChannelSink` over `received` (`torb_channel_received`), `offered` (`torb_channel_offered`), `endWriting` (`torb_channel_end`) and `closeReading` (`torb_channel_close`) |
 | `Task.map`, `Task.flatMap`, `Task.all`, `both` | `.Planned` natives | TorbScript over `await()`, `result()` and `stopAsCancelled()` |
-| `standardInput`/`Output`/`Error`, `Process.start`, `Child.*`, `File.create`/`chunks`/`add`/`finish` | `.Planned` 7.3 | stay planned, for slice G: they are `Source`/`Sink` objects over real IO, which needs `runtime/io.c` and its poller |
+| `standardInput`/`Output`/`Error`, `Process.start`, `Child.*`, `File.create`/`chunks`/`add`/`end` | `.Planned` 7.3 | **built**: TorbScript `Source`/`Sink` objects over the tasks of `runtime/stream.c`, each of which makes its one call of the operating system on the blocking pool (STREAMS.md section 14) |
 
 ### The pool, as built (7.7)
 
@@ -1685,14 +1687,16 @@ which is why the design's `native fn offload` became TorbScript), and nothing is
   the threads, as one that never starts a portable task never has a second worker.
 
 **Not built here, and why:** `runtime/io.c` and the poller (slice G), and with them the cancellation of a read that
-waits (gap 15), because there is no read that waits yet - every file and process call of `std/fs` and `std/process` is
-still synchronous, and `offload` is what a program wraps one in. The `blocking` line of the manifest waits with
+waits (gap 15), because there was no read that waits then - the streams of files and child processes came later, on
+this pool (`runtime/stream.c`), and a read of theirs that runs is not interrupted either. The `blocking` line of the manifest waits with
 `workers` for the project model's `tasks`.
 
 **Not built, and why each waits:**
 
-- **IO for files and processes** (slice G): `runtime/io.c` and its poller exist for sockets (`docs/design/NETWORK.md`),
-  but a file or process call still blocks the worker that makes it unless the program wraps it in `offload`.
+- **The poller for the pipes of a POSIX child** (slice G): the streams of files, of the standard streams and of child
+  processes wait on the blocking pool (STREAMS.md section 14), which every platform allows; a pipe of a POSIX child is
+  the one of them epoll and kqueue could take, and the second code path waits until it is measured. The whole-file
+  calls of `std/fs` stay synchronous, and `offload` is what a program wraps one in, as `Process.run` does.
 - **The manifest setting `tasks { workers, blocking }`** and the sandbox limit (slice D): the project model has no
   `tasks`, and there is no sandbox yet.
 - **`Merge`, `collect` and `minBy`** on `Parallel` (slice B), and **`Plain`, `Window`, `windows`** (slice F).

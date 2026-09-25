@@ -76,9 +76,28 @@ A file that is open has an identity - the handle of the operating system - so it
 into a file (see [std/stream](stream.md)). Most code needs neither: `readText`, `writeText`, `exists`, `isDirectory`,
 `createDirectory` and `list` work on a path directly, without opening a handle. `absolutePath` is text arithmetic
 against the working directory (`.` and `..` resolved) and does not require the path to exist, so it does not follow
-links either. `chunks`, `lines`, `add`, `end` and `write` answer a `Task` and need `.await()`; see
-[std/task](task.md), which is `status: planned` because no back end gives a `Task` a value yet. `open`, `readAll`,
-`close`, `readText`, `writeText`, `exists`, `isDirectory`, `createDirectory` and `list` do not touch `Task` at all.
+links either. `chunks`, `lines`, `add`, `end` and `write` answer a `Task` and need `.await()` (see
+[std/task](task.md)): every read and every write runs on a thread of the blocking pool, so the worker that awaits it
+goes on with its other tasks meanwhile. `add` writes through the file's buffer and `end` flushes it; `close` flushes
+what `end` did not. `open`, `readAll`, `close`, `readText`, `writeText`, `exists`, `isDirectory`, `createDirectory`
+and `list` do not touch `Task` at all.
+
+```trb check
+use File, IoError from "std/fs"
+
+fn copyLines(from: String, into: String): Task<Result<Int, IoError>> {
+  using source = File.open(from)?
+  using target = File.create(into)?
+  var count = 0
+  var lines = source.lines()
+  while const Some(line) = lines.next().await()? {
+    target.add("{line}\n".bytes().toList()).await()?
+    count = count + 1
+  }
+  target.end().await()?
+  Ok count
+}
+```
 
 ## Related
 

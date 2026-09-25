@@ -1,0 +1,54 @@
+/**
+ * **`Process.start` hands back a running child and its three pipes**: `input()` is a `Sink` whose `end()` is the end of
+ * what the child reads, `output()` and `errors()` are `Source`s read while it runs, and `wait()` answers its exit code.
+ * The child is `sort`, which every machine has: it reads three words and writes them in order, and given a file that
+ * is nowhere it complains on its standard error and fails. A program that is nowhere cannot be started at all, which
+ * is a failure and not an exit code. What the Windows `sort` writes ends its lines in `\r\n`, so the carriage returns
+ * are taken out before anything is printed.
+ */
+use Process from "std/process"
+use IoError from "std/fs"
+use Source, Bytes, textOf from "std/stream"
+
+/** Everything a source delivers, as text. */
+fn textFrom(var source: Source<Bytes, IoError>): Task<Result<String, IoError>> {
+  var bytes: List<UInt8> = []
+  while const Some(chunk) = source.next().await()? {
+    bytes.appendAll chunk
+  }
+  Ok(textOf(bytes).ok() ?? "not UTF-8")
+}
+
+fn sorted(): Task<Result<Void, IoError>> {
+  using child = Process.start("sort", [])?
+  var input = child.input()
+  input.addLine("cherry").await()?
+  input.addLine("banana").await()?
+  input.addLine("apple").await()?
+  input.end().await()?
+  const output = textFrom(child.output()).await()?
+  const code = child.wait().await()?
+  print output.replace("\r", "").trim().replace("\n", " ")
+  print "sort left with {code}"
+  Ok void
+}
+
+fn complaining(): Task<Result<Void, IoError>> {
+  using child = Process.start("sort", ["torb-no-such-file-anywhere.txt"])?
+  const complaint = textFrom(child.errors()).await()?
+  const output = textFrom(child.output()).await()?
+  const code = child.wait().await()?
+  print "a complaint on standard error: {!complaint.trim().isEmpty()}, nothing on standard output: {output.isEmpty()}"
+  print "it failed: {code != 0}"
+  Ok void
+}
+
+match sorted().await() {
+  Ok(_) => print "sorted"
+  Fail(problem) => print "error: {problem}"
+}
+match complaining().await() {
+  Ok(_) => print "complained"
+  Fail(problem) => print "error: {problem}"
+}
+print "a program that is nowhere starts: {Process.start("torb-no-such-program-anywhere", []).isOk()}"

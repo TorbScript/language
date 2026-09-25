@@ -23,7 +23,9 @@
 #include "torb.h"
 #include "torb_pool.h"
 
+#include <errno.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #if defined(_WIN32)
@@ -404,6 +406,102 @@ void torb_print_error_parts(const torb_text *parts, size_t count) {
   fflush(stdout);
   torb_print_to(stderr, parts, count);
   fflush(stderr);
+}
+
+/*
+ * The byte streams of std/io (runtime/stream.c), which a thread of the blocking pool reads and writes. Standard input
+ * as bytes as they come: a console on Windows is read as UTF-16 and handed on as its UTF-8, as `readLine` reads it,
+ * everything else through the system's own read, which answers what arrived without waiting for more.
+ */
+int64_t torb_read_standard_bytes(uint8_t *buffer, size_t maximum) {
+#if defined(_WIN32)
+  HANDLE handle;
+  if (torb_std_is_console(STD_INPUT_HANDLE, &handle)) {
+    wchar_t wide[1024];
+    DWORD read = 0u;
+    size_t wanted = maximum / 3u;
+    int bytes;
+    if (wanted > 1024u) {
+      wanted = 1024u;
+    }
+    if (wanted == 0u) {
+      wanted = 1u;
+    }
+    if (!ReadConsoleW(handle, wide, (DWORD)wanted, &read, NULL)) {
+      return -(int64_t)GetLastError();
+    }
+    /* Ctrl+Z at the start of a line is the console's end of the input */
+    if (read == 0u || wide[0] == 0x1A) {
+      return 0;
+    }
+    bytes = WideCharToMultiByte(CP_UTF8, 0u, wide, (int)read, (char *)buffer, (int)maximum, NULL, NULL);
+    return bytes <= 0 ? 0 : (int64_t)bytes;
+  }
+  {
+    DWORD read = 0u;
+    if (handle == NULL || handle == INVALID_HANDLE_VALUE) {
+      return 0;
+    }
+    if (!ReadFile(handle, buffer, (DWORD)(maximum > 0x7FFFFFFFu ? 0x7FFFFFFFu : maximum), &read, NULL)) {
+      const DWORD failure = GetLastError();
+      if (failure == ERROR_BROKEN_PIPE || failure == ERROR_HANDLE_EOF) {
+        return 0;
+      }
+      return -(int64_t)failure;
+    }
+    return (int64_t)read;
+  }
+#else
+  ssize_t got;
+  do {
+    got = read(STDIN_FILENO, buffer, maximum);
+  } while (got < 0 && errno == EINTR);
+  return got < 0 ? -(int64_t)errno : (int64_t)got;
+#endif
+}
+
+/*
+ * Bytes to standard output or standard error, under the lock of every line and through the dispatch `print` takes: a
+ * live Windows console gets them as UTF-16 where they are valid UTF-8, everything else the bytes themselves, flushed at
+ * once, because a stream of std/io is not buffered - `buffered(capacity:)` says where it is.
+ */
+bool torb_write_standard_bytes(bool error, const uint8_t *bytes, size_t length) {
+  FILE *stream = error ? stderr : stdout;
+  bool written = true;
+  torb_console_lock();
+#if defined(_WIN32)
+  {
+    HANDLE handle;
+    if (length > 0u && torb_std_is_console(error ? STD_ERROR_HANDLE : STD_OUTPUT_HANDLE, &handle)) {
+      int units;
+      fflush(stream);
+      units = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, (const char *)bytes, (int)length, NULL, 0);
+      if (units > 0) {
+        wchar_t *wide = (wchar_t *)malloc((size_t)units * sizeof(wchar_t));
+        if (wide != NULL) {
+          size_t done = 0u;
+          (void)MultiByteToWideChar(CP_UTF8, 0u, (const char *)bytes, (int)length, wide, units);
+          while (done < (size_t)units) {
+            size_t chunk = torb_console_chunk_length(wide + done, (size_t)units - done, TORB_CONSOLE_CHUNK_LIMIT);
+            WriteConsoleW(handle, wide + done, (DWORD)chunk, NULL, NULL);
+            done += chunk;
+          }
+          free(wide);
+          torb_console_unlock();
+          return true;
+        }
+      }
+    }
+  }
+#endif
+  if (length > 0u && fwrite(bytes, 1u, length, stream) < length) {
+    written = false;
+  }
+  if (fflush(stream) != 0) {
+    written = false;
+  }
+  torb_console_unlock();
+  return written;
 }
 
 bool torb_read_line(torb_text *out) {

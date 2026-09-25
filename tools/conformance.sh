@@ -4,8 +4,9 @@
 # Every program under `tests/conformance/` (and `binary-only/`) is built with `build/release/torb build`, run,
 # and compared against its expectation files - `.expected` (standard output), `.stderr` (standard error, folded so a
 # line of `std/` reads `path:_:_` instead of its real position), `.exit` (the exit code) and `.leaks` (why the leak
-# gate does not apply); `.environment` (`NAME=value` lines) is set for every run of the binary. A file that is missing means "nothing to check" for `.expected`/`.exit`, and "must be empty"
-# for `.stderr`. `tests/conformance/README.md` is the contract.
+# gate does not apply); `.environment` (`NAME=value` lines) is set for every run of the binary, and `.input` is its
+# standard input (otherwise it reads an empty one). A file that is missing means "nothing to check" for
+# `.expected`/`.exit`, and "must be empty" for `.stderr`. `tests/conformance/README.md` is the contract.
 #
 # Two more things are asserted per program:
 #   - the generated C names no absolute path of this machine
@@ -139,13 +140,14 @@ run_one() {
   if [ -f "$environment_file" ]; then
     settings=$(sed 's/\r$//; s/#.*//; /^[[:space:]]*$/d' "$environment_file" | tr '\n' ' ')
   fi
+  input=$(input_of "$program")
 
   # The program runs in its own work directory, so a program that writes files (`build/native-*`) writes them there and
   # never into the checkout, and two programs never share one
   mkdir -p "$work/run"
   set +e
   # shellcheck disable=SC2086
-  (cd "$work/run" && env $settings "$binary" >"$work/stdout" 2>"$work/stderr")
+  (cd "$work/run" && env $settings "$binary" <"$input" >"$work/stdout" 2>"$work/stderr")
   code=$?
   set -e
   fold_library_positions <"$work/stderr" >"$work/stderr.folded"
@@ -188,7 +190,7 @@ $(diff -u "$work/expected.norm" "$work/stdout" 2>&1 || true)"
   if [ -f "$workers_file" ] && [ "$workers" != "1" ] && [ -f "$expected_file" ]; then
     set +e
     # shellcheck disable=SC2086
-    (cd "$work/run" && env $settings TORB_WORKERS=1 "$binary" >"$work/stdout.one" 2>"$work/stderr.one")
+    (cd "$work/run" && env $settings TORB_WORKERS=1 "$binary" <"$input" >"$work/stdout.one" 2>"$work/stderr.one")
     set -e
     if ! cmp -s "$work/expected.norm" "$work/stdout.one"; then
       problems="$problems
@@ -229,7 +231,7 @@ $(cat "$work/stderr.folded")"
   if [ "$is_binary_only" -eq 0 ] && [ ! -f "$stderr_file" ] && [ ! -f "$leaks_file" ]; then
     set +e
     # shellcheck disable=SC2086
-    (cd "$work/run" && env $settings TORB_REPORT_LEAKS=1 "$binary" >"$work/leak.stdout" 2>"$work/leak.stderr")
+    (cd "$work/run" && env $settings TORB_REPORT_LEAKS=1 "$binary" <"$input" >"$work/leak.stdout" 2>"$work/leak.stderr")
     set -e
     if ! grep -q 'live blocks at exit: 0$' "$work/leak.stderr"; then
       problems="$problems
@@ -291,6 +293,16 @@ fold_library_positions() {
 
 # ----------------------------------------------------------------------------- one program in the VM ----------------
 #
+# The standard input of a program's runs: its `.input` file, as an absolute path because the runs go into a work
+# directory, or an empty input - never the terminal or the pipe the suite itself was started with.
+input_of() {
+  if [ -f "${1%.trb}.input" ]; then
+    printf '%s\n' "$CONFORMANCE_ROOT/${1%.trb}.input"
+  else
+    printf '%s\n' /dev/null
+  fi
+}
+
 # The same comparison for `--vm`: the program is run by `torb run --vm` in a work directory of its own, and its three
 # outputs are compared with the expectation files of its native run. Nothing is built, so there is no C to check.
 run_one_vm() {
@@ -324,10 +336,11 @@ run_one_vm() {
   if [ -f "$environment_file" ]; then
     settings=$(sed 's/\r$//; s/#.*//; /^[[:space:]]*$/d' "$environment_file" | tr '\n' ' ')
   fi
+  input=$(input_of "$program")
 
   set +e
   # shellcheck disable=SC2086
-  (cd "$work/run" && env $settings "$CONFORMANCE_TORB" run --vm "$absolute" >"$work/stdout" 2>"$work/stderr")
+  (cd "$work/run" && env $settings "$CONFORMANCE_TORB" run --vm "$absolute" <"$input" >"$work/stdout" 2>"$work/stderr")
   code=$?
   set -e
   fold_library_positions <"$work/stderr" >"$work/stderr.folded"
@@ -349,7 +362,7 @@ $(diff -u "$work/expected.norm" "$work/stdout" 2>&1 || true)"
   if [ -f "$workers_file" ] && [ "$workers" != "1" ] && [ -f "$expected_file" ]; then
     set +e
     # shellcheck disable=SC2086
-    (cd "$work/run" && env $settings TORB_WORKERS=1 "$CONFORMANCE_TORB" run --vm "$absolute" >"$work/stdout.one" 2>"$work/stderr.one")
+    (cd "$work/run" && env $settings TORB_WORKERS=1 "$CONFORMANCE_TORB" run --vm "$absolute" <"$input" >"$work/stdout.one" 2>"$work/stderr.one")
     set -e
     if ! cmp -s "$work/expected.norm" "$work/stdout.one"; then
       problems="$problems
@@ -388,7 +401,7 @@ $(cat "$work/stderr.folded")"
   if [ "$is_binary_only" -eq 0 ] && [ ! -f "$stderr_file" ] && [ ! -f "$leaks_file" ]; then
     set +e
     # shellcheck disable=SC2086
-    (cd "$work/run" && env $settings TORB_REPORT_LEAKS=1 "$CONFORMANCE_TORB" run --vm "$absolute" >"$work/leak.stdout" 2>"$work/leak.stderr")
+    (cd "$work/run" && env $settings TORB_REPORT_LEAKS=1 "$CONFORMANCE_TORB" run --vm "$absolute" <"$input" >"$work/leak.stdout" 2>"$work/leak.stderr")
     set -e
     if ! grep -q 'live blocks at exit: 0$' "$work/leak.stderr"; then
       problems="$problems

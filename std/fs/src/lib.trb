@@ -5,6 +5,7 @@
  */
 
 use Source, Sink, Bytes, Utf8Error from "std/stream"
+use ArrayList from "std/collections"
 use lines as streamLines from "std/stream"
 
 /** What went wrong with which path. */
@@ -61,10 +62,12 @@ public native shared type File with Close, Sink<Bytes, IoError> {
   native var fn close()
 
   /**
-   * The file as a stream of byte chunks of at most `size`. The one native of the reading side: everything above it
-   * (`lines`, framing, decoding) is a `Stage` and therefore ordinary TorbScript.
+   * The file as a stream of byte chunks of at most `size`, each read on a thread of the blocking pool so the worker goes
+   * on meanwhile. Everything above it (`lines`, framing, decoding) is a `Stage` and therefore ordinary TorbScript.
    */
-  native var fn chunks(size: Int = 65536): Source<Bytes, IoError>
+  var fn chunks(size: Int = 65536): Source<Bytes, IoError> {
+    FileChunks.of self, size
+  }
 
   /**
    * The lines of the file, as a stream. A read failure ends the stream and the reader sees it, because it is in the
@@ -75,10 +78,27 @@ public native shared type File with Close, Sink<Bytes, IoError> {
   }
 
   /** The writing end. A `File` is a `Sink<Bytes, IoError>`, so `addText`, `addLine` and `fill` are all there. */
-  native var fn add(item: Bytes): Task<Result<Void, IoError>>
+  var fn add(item: Bytes): Task<Result<Void, IoError>> {
+    const buffer: ArrayList<UInt8> = ArrayList.from item
+    var from = 0
+    while from < buffer.length() {
+      const written = fileWrite(self, buffer, from).await()
+      if written < 0 {
+        return Fail IoError(filePath(self), fileFailureText(written))
+      }
+      from = from + written
+    }
+    Ok void
+  }
 
   /** Flushes to the operating system and reports what a buffered write could only report now. */
-  native var fn end(): Task<Result<Void, IoError>>
+  var fn end(): Task<Result<Void, IoError>> {
+    const flushed = fileFlush(self).await()
+    if flushed < 0 {
+      return Fail IoError(filePath(self), fileFailureText(flushed))
+    }
+    Ok void
+  }
 
   /** A `String` is always valid UTF-8, so bytes that are not are an `IoError` and never a replacement character. */
   native static fn readText(path: String): Result<String, IoError>
@@ -123,3 +143,50 @@ public native shared type File with Close, Sink<Bytes, IoError> {
    */
   native static fn list(path: String): Result<List<String>, IoError>
 }
+
+/** The reading direction of a [File]: a `Source<Bytes, IoError>` of chunks of at most `size` bytes. */
+shared type FileChunks with Source<Bytes, IoError> {
+  private file: File
+  private size: Int
+
+  /** The chunks of `file`: what [File.chunks] answers. */
+  static fn of(file: File, size: Int): FileChunks {
+    FileChunks file, size
+  }
+
+  var fn next(): Task<Result<Bytes?, IoError>> {
+    const count = fileRead(file, size).await()
+    if count < 0 {
+      return Fail IoError(filePath(file), fileFailureText(count))
+    }
+    if count == 0 {
+      return Ok None
+    }
+    var bytes: ArrayList<UInt8> = ArrayList.withCapacity count
+    fileTakeRead file, bytes
+    Ok Some(bytes)
+  }
+
+  /** Nothing of its own: the file closes once its last holder is gone. */
+  var fn close() {}
+}
+
+// --- the natives of runtime/stream.c ---------------------------------------------------------------------------------
+
+/** At most `maximum` bytes of the file on a thread of the blocking pool: how many (0 at the end), or a failure. */
+native fn fileRead(file: File, maximum: Int): Task<Int>
+
+/** What the last [fileRead] got, appended to `into`. */
+native fn fileTakeRead(file: File, var into: ArrayList<UInt8>)
+
+/** The bytes of `bytes` from `from` on, written on a thread of the blocking pool: how many, or a failure. */
+native fn fileWrite(file: File, bytes: ArrayList<UInt8>, from: Int): Task<Int>
+
+/** Flushes the file on a thread of the blocking pool: 0, or a failure. */
+native fn fileFlush(file: File): Task<Int>
+
+/** The path the file was opened or created with, for the `IoError` of a stream. */
+native fn filePath(file: File): String
+
+/** A failure a native answered, in the operating system's own words. */
+native fn fileFailureText(failure: Int): String

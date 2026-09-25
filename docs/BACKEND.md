@@ -949,8 +949,8 @@ deleted).
   in `number.c` all exist and are `.Ready` in the manifest, with `runtime/tests` for each (see `runtime/README.md`
   for the representations chosen - `Instant`/`Duration` as records of the program over nanoseconds, of which the
   runtime only reads the clock, and the `torb_file` `shared type`). The stream side of
-  a file (`File.create`/`chunks`/`add`/`end`) stays `.Planned` for 7.3 with the rest of `std/stream`
-  (`docs/design/STREAMS.md` section 14), and `file.lines()` needs no native of its own any more. The tour itself still
+  a file (`File.create`/`chunks`/`add`/`end`) came with the rest of `std/stream` in milestone 7, over
+  `runtime/stream.c` (`docs/design/STREAMS.md` section 14), and `file.lines()` needs no native of its own. The tour itself still
   cannot run natively until the lowering this milestone does not touch (5.3's emitter, and whichever of 5.4-5.11 a
   module's constructs need) exists to call these symbols.
 

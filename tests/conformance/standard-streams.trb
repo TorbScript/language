@@ -1,0 +1,29 @@
+/**
+ * **The three standard streams are a `Source` and two `Sink`s.** What `standardOutput()` takes appears in order with
+ * what `print` writes, because both go through one lock and a sink of std/io is not buffered; `standardInput()` - here
+ * through `lines()`, the line stage over it - reads what the program was given (`standard-streams.input`) to its end,
+ * chunk by chunk as it arrives, on a thread of the blocking pool.
+ */
+use standardOutput, lines from "std/io"
+use IoError from "std/fs"
+
+fn run(): Task<Result<Int, IoError>> {
+  print "a line of print"
+  var out = standardOutput()
+  out.addLine("a line of standardOutput").await()?
+  out.addText("two parts, ").await()?
+  out.addLine("one line").await()?
+  print "print again, after it"
+  var total = 0
+  var input = lines()
+  while const Some(line) = input.next().await()? {
+    total = total + 1
+    print "read: {line}"
+  }
+  Ok total
+}
+
+match run().await() {
+  Ok(total) => print "{total} lines of standard input"
+  Fail(problem) => print "error: {problem}"
+}
