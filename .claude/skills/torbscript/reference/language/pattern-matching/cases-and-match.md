@@ -30,7 +30,7 @@ type Shape {
 
   fn area(): Float {
     match self {
-      .Circle(radius) => math.pi * radius * radius
+      .Circle(radius) => Float.pi * radius ** 2
       .Rectangle(width, height) => width * height
       .Empty => 0.0
     }

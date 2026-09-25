@@ -136,5 +136,5 @@ out of floating point, and `show` writes the exact decimal the value is - so `Fi
 
 - [std/geometry](geometry.md) - the shapes built out of these vectors.
 - [std/number](number.md) - `Numeric`, `Signed` and `Real`, the three bounds this package layers along.
-- [std/math](math.md) - the functions on `Float` that `Float64`'s `Real` is written over.
+- [std/number](number.md) - `Real`, the bound every angle and root of this package is written under.
 - [Bounds](../language/generics/bounds.md) - the conditional `extend` that decides which member exists for which scalar.

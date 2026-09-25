@@ -161,6 +161,46 @@ group "Fixed" {
     }
   }
 
+  group "powers and logarithms" {
+    test "a whole power is repeated multiplication, and a negative one its inverse" {
+      assert(read("1.5") ** 2 == read("2.25"))
+      assert(read("2.0") ** 10 == Fixed.from(1024))
+      assert(read("-2.0") ** 3 == read("-8.0"))
+      assert(read("2.0") ** 0 == Fixed.one)
+      assert(read("2.0") ** -2 == read("0.25"))
+    }
+
+    test "the exponential of nothing is one, and of one is e" {
+      assert(Fixed.zero.exponential() == Fixed.one)
+      assert Fixed.one.exponential().isCloseTo(Fixed.e, tolerance: Fixed(2))
+      assert read("-1.0").exponential().isCloseTo(read("0.36787944"), tolerance: Fixed(2))
+      assert Fixed.from(10).exponential().isCloseTo(read("22026.46579"), tolerance: Fixed(4096))
+    }
+
+    test "far below zero the exponential is the nearest part, zero" {
+      assert(Fixed.from(-40).exponential() == Fixed.zero)
+    }
+
+    test "the natural logarithm undoes the exponential" {
+      assert(Fixed.one.naturalLogarithm() == Fixed.zero)
+      assert Fixed.e.naturalLogarithm().isCloseTo(Fixed.one, tolerance: Fixed(2))
+      assert Fixed.from(1024).naturalLogarithm().isCloseTo(read("6.93147181"), tolerance: Fixed(2))
+      // Sixty-six parts, the nearest a Fixed comes to a thousandth
+      assert Fixed(66).naturalLogarithm().isCloseTo(read("-6.90070015"), tolerance: Fixed(4))
+    }
+
+    test "a logarithm to another base is the quotient of two" {
+      assert Fixed.from(8).logarithm(base: Fixed.from(2)).isCloseTo(Fixed.from(3), tolerance: Fixed(4))
+    }
+
+    test "a power by a fraction goes through the logarithm" {
+      assert((Fixed.from(2) ** read("0.5")).isCloseTo(read("1.41421356"), tolerance: Fixed(4)))
+      assert((Fixed.from(27) ** read("0.33333333")).isCloseTo(Fixed.from(3), tolerance: Fixed(8)))
+      assert(Fixed.from(3) ** Fixed.from(2) == Fixed.from(9))
+      assert(Fixed.zero ** read("0.5") == Fixed.zero)
+    }
+  }
+
   group "conversions" {
     test "a whole number is exact" {
       assert(Fixed.from(7).parts == 7 * 65536)

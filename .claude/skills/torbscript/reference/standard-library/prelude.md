@@ -65,7 +65,6 @@ public use Parallel from "std/parallel"
 public use List.parallel from "std/parallel"
 public use Source, Sink, Bytes from "std/stream"
 public use print, printError from "std/console"
-public use * as math from "std/math"
 public use Json, JsonValue, JsonError from "std/json"
 public use Duration, Instant from "std/time"
 public use Int64.seconds, Int64.milliseconds from "std/time"
@@ -81,8 +80,8 @@ without an import, while `File` and `Directory` - which touch what a path names 
 imports it.
 
 Every re-export keeps its original name, so `use Option from "std/prelude"` and `use Option from "std/core"` name the
-same type. `math` keeps its namespace even in the prelude - `math.power(a, 2.0)` reads as a function of a value, and
-the bare name `power` would say nothing. `Result.Ok`, `Result.Fail`, `Option.Some` and `Option.None` are the one reason
+same type. There is no `math` namespace: the power is `**`, and the constants and functions are `Real`'s members
+(`Float.pi`, `angle.sine()`, `value.naturalLogarithm()`). `Result.Ok`, `Result.Fail`, `Option.Some` and `Option.None` are the one reason
 these two types can be matched and constructed without their type name, in a pattern (`None =>`) as well as in an
 expression (`Ok value`). `Predicate`, `Action` and `Transform` are here so that a signature taking a closure reads
 the same in every file: `predicate: Predicate<Item>` rather than `predicate: (value: Item) => Bool` (see

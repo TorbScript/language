@@ -75,7 +75,7 @@ private(var) field: Int = 0                  read by everyone, written by the ty
 use Name from "std/core"                     an import
 use Type.Case from "./module"                a case, by its path
 use Type.member from "acme/text"             a member another package's `extend` adds
-use * as math from "std/math"                a namespace import
+use * as console from "std/console"          a namespace import
 use Name as Other from "./module"            an import under a local name
 public use Name from "./module"              a re-export
 ```

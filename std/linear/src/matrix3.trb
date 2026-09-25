@@ -7,7 +7,7 @@
  */
 
 use Numeric, Signed, Real from "std/number"
-use Add, Subtract, Multiply, Negate from "std/core"
+use Add, Subtract, Multiply, Power, Negate from "std/core"
 use Angle from "./angle"
 use Vector2 from "./vector2"
 use Vector3 from "./vector3"
@@ -221,3 +221,33 @@ extend<Scalar: Real> Matrix3<Scalar> {
   }
 }
 
+
+/** A whole power: the transformation applied that many times over. */
+extend<Scalar: Numeric> Matrix3<Scalar> with Power<Int64> {
+  /**
+   * `turn ** 3` is `turn * turn * turn`, by squaring, and `matrix ** 0` is the identity.
+   *
+   * # Panics
+   *
+   * On a negative exponent, which is a power of the inverse: a matrix has one only over a `Real` scalar and only where
+   * its determinant is not zero, so the caller asks for `inverse()` and raises that.
+   */
+  fn power(exponent: Int64): Matrix3<Scalar> {
+    if exponent < 0 {
+      panic "a matrix to the power of {exponent} is a power of its inverse: raise `inverse()` instead"
+    }
+    var result = Matrix3<Scalar>.identity
+    var factor = self
+    var left = exponent
+    while left > 0 {
+      if left % 2 == 1 {
+        result = result * factor
+      }
+      left = left / 2
+      if left > 0 {
+        factor = factor * factor
+      }
+    }
+    result
+  }
+}

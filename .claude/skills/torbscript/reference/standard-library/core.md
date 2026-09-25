@@ -121,8 +121,10 @@ literal type answers.
 
 ### The operator traits
 
-`Add`, `Subtract`, `Multiply`, `Divide`, `Remainder`, `Negate`, `OrElse`, `Indexed`, `MutableIndexed`, `Slice`,
-`MutableSlice`. Each one has a type parameter list with defaults, which is why `with Add` means `Add<Self, Self>`. `a[i]`
+`Add`, `Subtract`, `Multiply`, `Divide`, `Remainder`, `Power`, `Negate`, `OrElse`, `Indexed`, `MutableIndexed`,
+`Slice`, `MutableSlice`. Each one has a type parameter list with defaults, which is why `with Add` means
+`Add<Self, Self>`. `a ** b` is `Power.power`, whose first parameter is the `Exponent` (an integer is raised by an
+`Int`, a float by a float or by an `Int`). `a[i]`
 is `Indexed.at`, `a[i] = v` is `MutableIndexed.set`, `a[from..to]` is `Slice.slice`, `a[from..to] = v` is
 `MutableSlice.replace`, and `a ?? b` is `OrElse.orElse`, whose `fallback` is `lazy` so that it is only evaluated where
 there is nothing to give back.

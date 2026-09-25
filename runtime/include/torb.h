@@ -1380,28 +1380,6 @@ bool torb_environment_get(torb_text name, torb_text *out);
  */
 void torb_environment_entries(torb_list *names, torb_list *values);
 
-/* ---------------------------------------------------------------------------------------------------- math --- */
-
-/**
- * Thin wrappers over `<math.h>`. A domain error (`naturalLog` of a non-positive number, `arcSine` outside
- * `[-1, 1]`, ...) answers `nan`, exactly like the float methods already do (`Float64.squareRoot`); none of these ever
- * panics. Results are bit-identical across platforms only where libm itself guarantees it - the runtime does not try
- * to improve on libm.
- */
-double torb_math_power(double base, double exponent);
-double torb_math_exponential(double value);
-double torb_math_natural_log(double value);
-/** `logarithm(value, base)`: `naturalLog(value) / naturalLog(base)`. */
-double torb_math_logarithm(double value, double base);
-double torb_math_sine(double value);
-double torb_math_cosine(double value);
-double torb_math_tangent(double value);
-double torb_math_arc_sine(double value);
-double torb_math_arc_cosine(double value);
-double torb_math_arc_tangent(double value);
-/** `arcTangent(y / x)`, using the sign of both to pick the correct quadrant (`atan2`). */
-double torb_math_arc_tangent2(double y, double x);
-
 /* ---------------------------------------------------------------------------------------------------- hashing --- */
 
 /** FNV-1a-64 with the standard offset basis. The seed is fixed, so a hash is the same in every run. */

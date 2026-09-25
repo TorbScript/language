@@ -159,28 +159,6 @@ int64_t torb_map_length(torb_map map);
 bool torb_map_remove(torb_map *map, const void *key, void *out);
 /* HashMap.set, TrieMap.set */
 void torb_map_set(torb_map *map, const void *key, const void *value);
-/* arcCosine */
-double torb_math_arc_cosine(double value);
-/* arcSine */
-double torb_math_arc_sine(double value);
-/* arcTangent */
-double torb_math_arc_tangent(double value);
-/* arcTangent2 */
-double torb_math_arc_tangent2(double y, double x);
-/* cosine */
-double torb_math_cosine(double value);
-/* exponential */
-double torb_math_exponential(double value);
-/* logarithm */
-double torb_math_logarithm(double value, double base);
-/* naturalLog */
-double torb_math_natural_log(double value);
-/* power */
-double torb_math_power(double base, double exponent);
-/* sine */
-double torb_math_sine(double value);
-/* tangent */
-double torb_math_tangent(double value);
 /* UInt64.multipliedWrapping */
 uint64_t torb_multiplied_wrapping_u64(uint64_t first, uint64_t second);
 /* Float64.naturalLogarithm */

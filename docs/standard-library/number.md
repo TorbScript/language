@@ -62,9 +62,10 @@ shift of an unsigned type is logical, and a shift by a negative amount or by the
 every other operation that leaves its range.
 
 ```trb fragment
-public trait Real with Signed {
+public trait Real with Signed, Power, Power<Int64> {
   static pi: Self
   static tau: Self
+  static e: Self
   static epsilon: Self
   fn squareRoot(): Self
   fn sine(): Self
@@ -74,6 +75,9 @@ public trait Real with Signed {
   fn arcCosine(): Self
   fn arcTangent(): Self
   fn arcTangentDivided(by: Self): Self
+  fn exponential(): Self
+  fn naturalLogarithm(): Self
+  fn logarithm(base: Self): Self
   fn floor(): Self
   fn ceiling(): Self
   fn round(): Self
@@ -94,8 +98,13 @@ Two implementors. `Float64` is the fast one and answers whatever the platform's 
 the same bits on every machine. `Fixed` (`std/linear`) is the deterministic one: every operation on it, the square root
 and the trigonometry included, is integer arithmetic, so a lockstep simulation and a replay run on it.
 
-`pi`, `tau` and `epsilon` are required constants: every implementor carries them under those names (`Float64.pi`,
-`Fixed.tau`), and a body that is generic over its scalar reads them through its parameter - `Scalar.pi` - where it
+`Real` is also the scalar that has a power by a value of its own kind and by an `Int` (`x ** 0.5`, `x ** 3`), an
+`exponential()`, a `naturalLogarithm()` and a `logarithm(base:)` - so a body that is generic over its scalar writes
+`(Scalar.e ** exponent)` or `value.logarithm(base: two)` exactly as a `Float64` body does, and a `Fixed` answers the
+same bits on every machine.
+
+`pi`, `tau`, `e` and `epsilon` are required constants: every implementor carries them under those names (`Float64.pi`,
+`Fixed.tau`, `Float.e`), and a body that is generic over its scalar reads them through its parameter - `Scalar.pi` - where it
 could not write the digits. `epsilon` is the gap between one and the next value the scalar holds: the machine epsilon
 of a `Float64`, one part of a `Fixed`. The one such a body needs is `Scalar.one`, which every `Numeric` has, and
 `halved` and `doubled` are the two pieces of arithmetic it would otherwise write with a literal.
@@ -118,15 +127,15 @@ value does not fit the target width.
 ### The integer and floating-point types
 
 ```trb fragment
-public native type Int8 with Signed, Hash, Bits {}
-public native type Int16 with Signed, Hash, Bits {}
-public native type Int32 with Signed, Hash, Bits {}
-public native type Int64 with Signed, Hash, Bits {}
+public native type Int8 with Signed, Hash, Bits, Power<Int64> {}
+public native type Int16 with Signed, Hash, Bits, Power<Int64> {}
+public native type Int32 with Signed, Hash, Bits, Power<Int64> {}
+public native type Int64 with Signed, Hash, Bits, Power<Int64> {}
 
-public native type UInt8 with Numeric, Hash, Bits {}
-public native type UInt16 with Numeric, Hash, Bits {}
-public native type UInt32 with Numeric, Hash, Bits {}
-public native type UInt64 with Numeric, Hash, Bits {}
+public native type UInt8 with Numeric, Hash, Bits, Power<Int64> {}
+public native type UInt16 with Numeric, Hash, Bits, Power<Int64> {}
+public native type UInt32 with Numeric, Hash, Bits, Power<Int64> {}
+public native type UInt64 with Numeric, Hash, Bits, Power<Int64> {}
 
 public native type Float32 with Signed {}
 public native type Float64 with Signed {}
@@ -155,6 +164,35 @@ that expression ([Floating-point numbers](../language/values-and-types/floating-
 each of them already says. An infinity has no such exception to make - it is an ordinary IEEE-754 value like any
 other, which is why `1.0 / 0.0` needs none to be a constant.
 
+Every integer type is raised by an `Int`: `2 ** 10` is exact, a power that leaves the range of the type panics the way
+`*` does (`arithmetic overflow in \`**\``), and so does a negative exponent, because its result is no whole number. A
+`Float64` is raised by a `Float64` (C's `pow`) or by an `Int` (the same `pow`, which rounds once where repeated
+squaring would round at every step), and never panics.
+
+`Float32` is not a `Real` yet: it has no arithmetic that a compiled program runs - every operator of it is a planned
+row of the manifest of natives - and no conversion down from a `Float64`, so no body could be run for it. `<math.h>`
+has the `float` functions, and once `Float32` has arithmetic, `Real` is one `extend` over them.
+
+```trb run
+print(2 ** 10)
+print(2.0 ** 0.5)
+print Float.e.naturalLogarithm()
+print((8.0).logarithm(base: 2.0))
+// prints 1024
+// prints 1.4142135623730951
+// prints 1.0
+// prints 3.0
+```
+
+### There is no std/math {#no-math}
+
+`std/math` held `pi`, `e`, `power`, `exponential`, `naturalLog`, `logarithm` and the trigonometry as free functions
+of `Float64`. It is gone, because every one of them was a second way to write something the number already has: the
+trigonometry is `Real`'s (`angle.sine()`, `y.arcTangentDivided(by: x)` for the old `arcTangent2(y, x)`), `pi` and `e`
+are `Float.pi` and `Float.e`, the power is the operator `**`, and `exponential()`, `naturalLogarithm()` and
+`logarithm(base:)` became members of `Real`. As members they are generic: a body over `Scalar: Real` computes with a
+`Fixed` exactly as with a `Float`, which free functions of `Float64` never allowed.
+
 ### Decimal {#decimal}
 
 ```trb fragment
@@ -179,3 +217,4 @@ is `std/text`'s `Char.tryFrom`.
   floats are not `Hash`.
 - [Decimal](../language/values-and-types/decimal.md) - exact base-ten arithmetic, and that it is planned.
 - [std/core](core.md) - `Add`, `Subtract`, `Negate` and the other operator traits `Numeric` and `Signed` build on.
+- [Operators are traits](../language/traits/operators.md) - `**`, its precedence, and why `^` is no operator.

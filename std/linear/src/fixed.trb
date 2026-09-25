@@ -10,7 +10,7 @@
  */
 
 use Numeric, Signed, Real, NumberParseError from "std/number"
-use Add, Subtract, Multiply, Divide, Remainder, Negate from "std/core"
+use Add, Subtract, Multiply, Divide, Remainder, Power, Negate from "std/core"
 use Equals, Compare, Ordering, Hash, From, TryFrom, Show from "std/core"
 
 /**
@@ -47,7 +47,7 @@ use Equals, Compare, Ordering, Hash, From, TryFrom, Show from "std/core"
  * - [Real] - the trait that makes this and `Float64` interchangeable.
  * - [Fixed.parts] - the raw count, for a checksum or a wire format.
  */
-public type Fixed with Signed, Real, Hash, Show, TryFrom<String, NumberParseError> {
+public type Fixed with Signed, Real, Power, Hash, Show, TryFrom<String, NumberParseError> {
   /** The value counted in `1/65536` parts. `Fixed(65536)` is one, and `Fixed(1)` is the smallest step. */
   parts: Int64
 
@@ -77,6 +77,9 @@ public type Fixed with Signed, Real, Hash, Show, TryFrom<String, NumberParseErro
 
   /** One part, the same value as [Fixed.step]: the [Real.epsilon] of a fixed-point number. */
   static epsilon: Fixed = Fixed 1
+
+  /** The base of the natural logarithm, to the nearest part: the [Real.e] of a fixed-point number. */
+  static e: Fixed = Fixed 178145
 
   /**
    * The value a `Float64` is closest to, rounded to the nearest part.
@@ -285,6 +288,68 @@ public type Fixed with Signed, Real, Hash, Show, TryFrom<String, NumberParseErro
     Fixed direction(by.parts, parts)
   }
 
+  /**
+   * `e` raised to this value, to within a part or two of the true value.
+   *
+   * # Panics
+   *
+   * Above about `33.5`, where the result no longer fits a `Fixed`. Far below zero the answer is zero, because that is
+   * the nearest part.
+   */
+  fn exponential(): Fixed {
+    Fixed exponentialOfWide(parts * widePartsPerPart)
+  }
+
+  /**
+   * The logarithm to the base `e`, to within a part or two of the true value.
+   *
+   * # Panics
+   *
+   * At zero and below, where there is no logarithm. `Float64.naturalLogarithm` answers an infinity or `nan` there,
+   * because that is what the platform's mathematics library answers.
+   */
+  fn naturalLogarithm(): Fixed {
+    if parts <= 0 {
+      panic "the logarithm of {show()} does not exist: only a positive number has one"
+    }
+    Fixed scaledDown(logarithmWide(parts), widePartsPerPart)
+  }
+
+  /**
+   * This value raised to a `Fixed` power: `e ** (exponent * ln self)`, computed with fourteen more bits than a `Fixed`
+   * holds so that the logarithm does not lose them before the exponential needs them.
+   *
+   * # Panics
+   *
+   * - Where the base is negative and the exponent is not whole: there is no real power then. A whole exponent of a
+   *   negative base is `Power<Int64>`'s answer with its sign.
+   * - Where the base is zero and the exponent negative, which is a division by zero.
+   * - Where the result does not fit a `Fixed`.
+   */
+  fn power(exponent: Fixed): Fixed {
+    if exponent.parts % partsPerWhole == 0 {
+      return self ** (exponent.parts / partsPerWhole)
+    }
+    if parts < 0 {
+      panic "{show()} ** {exponent.show()} is not a real number: a negative base has only whole powers"
+    }
+    if parts == 0 {
+      if exponent.parts < 0 {
+        panic "0.0 ** {exponent.show()} divides by zero"
+      }
+      return Fixed 0
+    }
+    const logarithm = logarithmWide parts
+    // Far enough out that the result overflows or is zero whatever the exact product is
+    if logarithm != 0 && exponent.parts.absolute() > Int64.maximum / logarithm.absolute() {
+      if (logarithm > 0) == (exponent.parts > 0) {
+        panic "{show()} ** {exponent.show()} does not fit a Fixed"
+      }
+      return Fixed 0
+    }
+    Fixed exponentialOfWide(scaledDown(logarithm * exponent.parts, partsPerWhole))
+  }
+
   /** The value rounded towards negative infinity. */
   fn floor(): Fixed {
     const left = parts % partsPerWhole
@@ -330,6 +395,39 @@ public type Fixed with Signed, Real, Hash, Show, TryFrom<String, NumberParseErro
   /** Whether the two values are within `tolerance` of each other. The default is about `0.001`. */
   fn isCloseTo(other: Fixed, tolerance: Fixed = Fixed(66)): Bool {
     (parts - other.parts).absolute() <= tolerance.parts
+  }
+}
+
+/**
+ * A whole power, by squaring: every step is a multiplication of `Fixed` values, so the result is the same bits
+ * everywhere, and a negative exponent is one over the positive power.
+ *
+ * # Panics
+ *
+ * Where a step leaves the range a multiplication of two `Fixed` values has, and at zero to a negative power, which is a
+ * division by zero.
+ */
+extend Fixed with Power<Int64> {
+  fn power(exponent: Int64): Fixed {
+    if exponent < 0 {
+      if exponent == Int64.minimum {
+        panic "{show()} ** {exponent} does not fit a Fixed"
+      }
+      return Fixed.one / self ** -exponent
+    }
+    var result = Fixed.one
+    var factor = self
+    var left = exponent
+    while left > 0 {
+      if left % 2 == 1 {
+        result = result * factor
+      }
+      left = left / 2
+      if left > 0 {
+        factor = factor * factor
+      }
+    }
+    result
   }
 }
 
@@ -393,10 +491,9 @@ fn scaledDown(value: Int64, divisor: Int64): Int64 {
   if value >= 0 { (value + half) / divisor } else { (value - half) / divisor }
 }
 
-/** `2^index` for the sixteen steps of the rotation, as a divisor: a shift written as the division it is. */
+/** `2 ** index` for the sixteen steps of the rotation, as a divisor: a shift written as the division it is. */
 fn halvings(index: Int): Int64 {
-  const powers = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768]
-  powers[index]
+  2 ** index
 }
 
 /** `arcTangent(2^-index)` in parts, the angle one rotation step turns by. */
@@ -499,4 +596,94 @@ fn direction(horizontal: Int64, vertical: Int64): Int64 {
     return turned
   }
   if vertical >= 0 { turned + halfTurn } else { turned - halfTurn }
+}
+
+/**
+ * How many parts of the wide scale one part of a `Fixed` is: the exponential and the logarithm compute with fourteen
+ * bits more than a `Fixed` holds (Q30), so that the rounding of every step stays below the last part of the result.
+ */
+const widePartsPerPart: Int64 = 16384
+
+/** One whole on the wide scale: `2^30`. */
+const wideWhole: Int64 = 1073741824
+
+/** The natural logarithm of two on the wide scale, to the nearest wide part. */
+const wideLogarithmOfTwo: Int64 = 744261118
+
+/**
+ * `e` raised to a value on the wide scale, as the parts of a `Fixed`. The value is split into a multiple of `ln 2` and a
+ * rest below half of it; the rest is a Taylor series that ends where its terms are below one wide part, and the
+ * multiple is a shift. Every step is integer arithmetic, so the answer is the same bits everywhere.
+ */
+fn exponentialOfWide(value: Int64): Int64 {
+  if value > 33 * wideWhole {
+    panic "the exponential of {Float64.from(value) / 1073741824.0} does not fit a Fixed"
+  }
+  if value < -20 * wideWhole {
+    return 0
+  }
+  const multiple = scaledDown value, wideLogarithmOfTwo
+  const rest = value - multiple * wideLogarithmOfTwo
+  var sum = wideWhole
+  var term = wideWhole
+  var index: Int64 = 1
+  loop {
+    term = term * rest / wideWhole / index
+    if term == 0 {
+      break
+    }
+    sum = sum + term
+    index = index + 1
+  }
+  // `sum` is `e ** rest` on the wide scale, between about 0.7 and 1.4; the parts are it times `2 ** multiple`
+  const shift = multiple - 14
+  if shift >= 0 {
+    if sum > Int64.maximum / 2 ** shift {
+      panic "the exponential of {Float64.from(value) / 1073741824.0} does not fit a Fixed"
+    }
+    return sum * 2 ** shift
+  }
+  if shift < -62 {
+    return 0
+  }
+  scaledDown(sum, 2 ** -shift)
+}
+
+/**
+ * The natural logarithm of a positive count of parts, on the wide scale. The value is brought into `[1, 2)` by halving
+ * or doubling, which counts `ln 2`s; the logarithm of what is left is `2 * atanh((y - 1) / (y + 1))`, a series in odd
+ * powers of a number below a third that ends where its terms are below one wide part.
+ */
+fn logarithmWide(parts: Int64): Int64 {
+  var halvings: Int64 = 0
+  var count = parts
+  // Past `2^48` the multiplication onto the wide scale would overflow; the bits dropped here are far below a part
+  while count >= 281474976710656 {
+    count = count / 2
+    halvings = halvings + 1
+  }
+  var mantissa = count * widePartsPerPart
+  while mantissa >= 2 * wideWhole {
+    mantissa = scaledDown mantissa, 2
+    halvings = halvings + 1
+  }
+  while mantissa < wideWhole {
+    mantissa = mantissa * 2
+    halvings = halvings - 1
+  }
+  const ratio = (mantissa - wideWhole) * wideWhole / (mantissa + wideWhole)
+  const square = ratio * ratio / wideWhole
+  var power = ratio
+  var sum = ratio
+  var divisor: Int64 = 3
+  loop {
+    power = power * square / wideWhole
+    const term = power / divisor
+    if term == 0 {
+      break
+    }
+    sum = sum + term
+    divisor = divisor + 2
+  }
+  2 * sum + halvings * wideLogarithmOfTwo
 }

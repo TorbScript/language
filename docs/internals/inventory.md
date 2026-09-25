@@ -243,7 +243,6 @@ markers so that milestone 8's `torb doc` can fill it.
 | `standard-library/expression.md` | std/expression | Quotations, `assert`, `nameOf` | `std/expression` |
 | `standard-library/task.md` | std/task | Tasks and channels | `std/task` |
 | `standard-library/console.md` | std/console | `print` and `printError` | `std/console` |
-| `standard-library/math.md` | std/math | The mathematical functions | `std/math` |
 | `standard-library/json.md` | std/json | `Json`, `JsonValue` | `std/json` |
 | `standard-library/time.md` | std/time | `Duration`, `Instant`, `Clock` | `std/time` |
 | `standard-library/fs.md` | std/fs | `File` and `IoError` | `std/fs` |

@@ -2120,7 +2120,7 @@ from Rust, C#, Swift, Scala, Java, Node, Web Streams and Bun and what was not - 
 use File from "std/fs"                               // Package import: "<owner>/<name>"
 use Router from "acme/http/routing"                  // A public module of a package: "<owner>/<name>/<path>"
 use Vector2 from "./math/vector2"                    // Relative import, no file extension
-use * as math from "std/math"                        // Namespace import
+use * as console from "std/console"                  // Namespace import
 use IoError as FileProblem, File from "std/fs"           // Any name of the list may get a local name of its own
 use Option, Option.Some, Option.None from "./option"     // A case of a type, by its path
 use String.shout as yell from "acme/text"                // A member another package attaches to a type, renamed
@@ -2147,7 +2147,7 @@ public use Stack, ArrayStack from "./collections/stack"      // Re-export
   there on the local name is the only one the file has: it is what shadows, what collides with a second import, and
   what a "did you mean" note offers. Nothing else changes - an alias is a name in one file, not a second export.
 - **The standard library is a set of packages of the owner `std`:** `std/core`, `std/text`, `std/number`,
-  `std/collections`, `std/iteration`, `std/encoding`, `std/expression`, `std/task`, `std/console`, `std/math`,
+  `std/collections`, `std/iteration`, `std/encoding`, `std/expression`, `std/task`, `std/console`,
   `std/json`, `std/time`, `std/fs`, `std/io`, `std/process`, `std/test`, `std/http`, `std/sandbox`, ... They come with
   the toolchain and have its version, so they need no entry in `dependencies`. What a program can touch is still
   visible from its imports: no `std/fs`, no files.
@@ -2164,7 +2164,7 @@ public use Stack, ArrayStack from "./collections/stack"      // Re-export
   A project can name another one (a teaching subset, the vocabulary of an embedded DSL); a sandbox gives its scripts
   the prelude of the host plus the receiver.
 - **The prelude is the pure part of the standard library, and capabilities are not in it.** Values, text, numbers,
-  collections, pipelines, encoding, quotations, tasks, printing, `std/math`, `std/json` and the time *values*
+  collections, pipelines, encoding, quotations, tasks, printing, `std/json` and the time *values*
   (`Duration`, `Instant`) are in scope everywhere, because unused names cost nothing and these are needed everywhere.
   `std/fs`, `std/os`, `std/process`, `std/io`, `std/http`, `std/sandbox` and `Clock` are **not**, and that is
   not about size: (1) `use File from "std/fs"` at the top of a file is the statement "this file touches files", for a
@@ -2497,6 +2497,13 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
 
 ## Decision Log
 
+- **`a ** b` is the power, and `^` is no operator** (2026-09-23; docs/language/traits/operators.md). `**` binds tighter
+  than `*` and groups to the right, goes through `Power<Exponent, Output>`, and a `-` or `!` directly on its base is
+  an error that shows both readings, as JavaScript does. `^` is read as a power by half of the readers and as exclusive
+  or by the other half, so it stays unused and its message names `**` and `bitwiseExclusiveOr`. With the operator
+  and `Real.exponential`, `naturalLogarithm`, `logarithm(base:)` and `Real.e`, **`std/math` is gone**: every function
+  of it was a second spelling of a member of the number, and a free function of `Float64` could not be generic over
+  `Real` (docs/standard-library/number.md).
 - **A case may stand for a fixed number, and a set of such cases is `Flags<Case>`** (2026-09-19; planned,
   docs/design/FLAGS.md). A type whose cases have no fields may give all of them a constant (`case Read = 1`), and gets
   `rawValue()` and `fromRawValue(value)`; `Flags<Case>` in `std/collections` is a set of such cases stored as one

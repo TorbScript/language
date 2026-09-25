@@ -27,7 +27,7 @@ deliberately panics says `TORB_IGNORE_LEAKS()`, because a panic runs nothing on 
 
 | File                  | Contains                                                                                  |
 |-----------------------|-------------------------------------------------------------------------------------------|
-| `include/torb.h`      | The public ABI: the header, `torb_text`, `torb_list`, `torb_map`, the closure and object shapes, panics, allocation, element descriptors, console, process, files, `torb_file`, `Instant`/`Duration`, `std/math` |
+| `include/torb.h`      | The public ABI: the header, `torb_text`, `torb_list`, `torb_map`, the closure and object shapes, panics, allocation, element descriptors, console, process, files, `torb_file`, `Instant`/`Duration` |
 | `include/torb_number.h` | The checked arithmetic of all eight integer widths as `static inline`, plus the conversions |
 | `include/torb_natives.h` | Generated from the manifest by `torb natives --header`. Do not edit                      |
 | `include/torb_task.h` | The task ABI of 7.3: the task block, the resume function a `Task` function is lowered to, the suspension primitives, `sleep`/`pause`/`cancel`/`within`, channels, the scheduler and the worker pool, the tests of what may cross a worker (`docs/design/CONCURRENCY.md` section 16) |
@@ -43,7 +43,7 @@ deliberately panics says `TORB_IGNORE_LEAKS()`, because a panic runs nothing on 
 | `text.c`              | UTF-8, slices, concatenation, comparison, hashing, `Show`, float formatting, parsing       |
 | `list.c`              | The one contiguous list: growth, shared slices, copy on write, a stable merge sort         |
 | `map.c`               | The one insertion-ordered hash table, and the set on top of it                             |
-| `number.c`            | The float routines, the total order of gap 5, the wrapping pair, the checked narrowings, and `std/math` (thin `<math.h>` wrappers) |
+| `number.c`            | The float routines, the total order of gap 5, the wrapping pair, the checked narrowings, `**`, and the `Real` members of a `Float64` (thin `<math.h>` wrappers) |
 | `console.c`           | `print`, `printError`, `readLine`                                                          |
 | `process.c`           | `Process.arguments`, `Process.exit`, `Process.executablePath`, running a child process      |
 | `file.c`              | `readText`, `writeText`, `exists`, `isDirectory`, `list` (sorted), `absolutePath`, and the open handle (`File.open`/`readAll`/`close`) |
@@ -247,7 +247,8 @@ overflows, which a monotonic clock within one process never approaches, and the 
 rather than wraps in that never-reached case. `torb_instant` and `torb_duration` stay the runtime's names for the
 deadlines and limits of `task.c`, and a `Duration` crosses into it as its number of nanoseconds.
 
-**`std/math` is thin wrappers over `<math.h>`, nothing more.** A domain error (`naturalLog(-1.0)`, `arcSine(2.0)`)
+**`Real` of a `Float64` is thin wrappers over `<math.h>`, nothing more.** A domain error (`naturalLogarithm()` of `-1.0`,
+`arcSine()` of `2.0`)
 answers `nan` the way libm already does, never a panic - the same rule `Float64.squareRoot` follows. Bit-identical
 results across platforms hold only where libm itself guarantees them; the runtime does not add a portable
 implementation on top to fix that, which is a real (if narrow) gap in the conformance suite's cross-platform promise.

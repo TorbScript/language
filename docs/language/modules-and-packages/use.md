@@ -21,13 +21,13 @@ one declaration per statement, and where they come from is always written next t
 
 ```trb check
 use File as Files from "std/fs"
-use * as math from "std/math"
+use * as console from "std/console"
 
 fn areaOfCircle(radius: Float64): Float64 {
-  math.pi * math.power(radius, 2.0)
+  Float.pi * radius ** 2
 }
 
-print areaOfCircle(2.0)
+console.print areaOfCircle(2.0)
 print Files.exists("project.trb")
 ```
 

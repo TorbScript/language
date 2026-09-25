@@ -280,34 +280,18 @@ TORB_TEST(the_real_members_of_a_float_match_known_values) {
   TORB_CHECK(torb_is_nan_f64(torb_arc_sine_f64(2.0)));
 }
 
-TORB_TEST(math_functions_match_known_values) {
-  TORB_CHECK(torb_math_power(2.0, 10.0) == 1024.0);
-  TORB_CHECK(torb_math_exponential(0.0) == 1.0);
-  TORB_CHECK(torb_math_natural_log(1.0) == 0.0);
-  TORB_CHECK(close_enough(torb_math_logarithm(8.0, 2.0), 3.0));
-  TORB_CHECK(torb_math_sine(0.0) == 0.0);
-  TORB_CHECK(torb_math_cosine(0.0) == 1.0);
-  TORB_CHECK(torb_math_tangent(0.0) == 0.0);
-  TORB_CHECK(torb_math_arc_sine(0.0) == 0.0);
-  TORB_CHECK(torb_math_arc_cosine(1.0) == 0.0);
-  TORB_CHECK(torb_math_arc_tangent(0.0) == 0.0);
-  TORB_CHECK(close_enough(torb_math_arc_tangent2(1.0, 1.0), 0.7853981633974483));
-  /* `arcTangent2` picks the quadrant from the sign of both arguments, which a plain `arcTangent(y / x)` cannot. */
-  TORB_CHECK(close_enough(torb_math_arc_tangent2(1.0, -1.0), 2.356194490192345));
-}
-
-TORB_TEST(math_domain_errors_answer_nan_and_never_panic) {
-  TORB_CHECK(torb_is_nan_f64(torb_math_natural_log(-1.0)));
-  TORB_CHECK(torb_is_nan_f64(torb_math_arc_sine(2.0)));
-  TORB_CHECK(torb_is_nan_f64(torb_math_arc_sine(-2.0)));
-  TORB_CHECK(torb_is_nan_f64(torb_math_arc_cosine(2.0)));
-  TORB_CHECK(torb_is_nan_f64(torb_math_power(-1.0, 0.5)));
+TORB_TEST(float_domain_errors_answer_nan_and_never_panic) {
+  TORB_CHECK(torb_is_nan_f64(torb_natural_logarithm_f64(-1.0)));
+  TORB_CHECK(torb_is_nan_f64(torb_arc_sine_f64(2.0)));
+  TORB_CHECK(torb_is_nan_f64(torb_arc_sine_f64(-2.0)));
+  TORB_CHECK(torb_is_nan_f64(torb_arc_cosine_f64(2.0)));
+  TORB_CHECK(torb_is_nan_f64(torb_power_f64(-1.0, 0.5)));
   /* A pole, not a domain error: `log(0)` is `-infinity`, which is still not a panic. */
   {
     double zero = 0.0;
     double negative_infinity = -1.0 / zero;
-    TORB_CHECK(torb_math_natural_log(0.0) == negative_infinity);
-    TORB_CHECK(!torb_is_nan_f64(torb_math_natural_log(0.0)));
+    TORB_CHECK(torb_natural_logarithm_f64(0.0) == negative_infinity);
+    TORB_CHECK(!torb_is_nan_f64(torb_natural_logarithm_f64(0.0)));
   }
 }
 
@@ -330,6 +314,5 @@ void torb_register_number_tests(void) {
   TORB_ADD(an_integer_power_panics_on_overflow_and_on_a_negative_exponent);
   TORB_ADD(a_float_power_is_pow);
   TORB_ADD(the_real_members_of_a_float_match_known_values);
-  TORB_ADD(math_functions_match_known_values);
-  TORB_ADD(math_domain_errors_answer_nan_and_never_panic);
+  TORB_ADD(float_domain_errors_answer_nan_and_never_panic);
 }

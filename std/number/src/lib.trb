@@ -9,8 +9,7 @@
 use Equals, Compare, Hash from "std/core"
 use From, TryFrom, Show from "std/core"
 use Error from "std/core"
-use Add, Subtract, Multiply, Divide, Remainder, Negate from "std/core"
-use * as math from "std/math"
+use Add, Subtract, Multiply, Divide, Remainder, Power, Negate from "std/core"
 
 /**
  * The arithmetic and comparison every number has: `+`, `-`, `*`, `/`, `%`, `==`, `<`, reading one from text, and its
@@ -82,17 +81,17 @@ public trait Signed
  *
  * # Open
  *
- * - `Float32` cannot carry it. `Float32` has no `squareRoot` and no arithmetic that a compiled program runs, and there
- *   is no conversion from a `Float64` back down to one, so no body can be written for it at all.
- * - A real-valued power (`pow`) is not a member. `Float` has `math.power`, and an exact integer algorithm for a
- *   fixed-point scalar needs an exponential and a logarithm that do not exist yet.
+ * - `Float32` cannot carry it yet. `Float32` has no arithmetic that a compiled program runs - every one of its
+ *   operators is a planned row of the manifest of natives - and there is no conversion from a `Float64` back down to
+ *   one, so no body could be run for it. `<math.h>` has the `float` functions (`sinf`, `powf`, ...), so once its
+ *   arithmetic exists, `Real` is one `extend` over them.
  *
  * # Related
  *
  * - [Signed] - what a `Real` is on top of.
  * - [Numeric] - the bound the arithmetic half of a vector library lives under.
  */
-public trait Real with Signed {
+public trait Real with Signed, Power, Power<Int64> {
   /**
    * Half a turn in radians - the ratio of a circle's circumference to its diameter - in this scalar's type:
    * `Scalar.pi` in a body that is generic over it, whose literals could not write the digits.
@@ -101,6 +100,9 @@ public trait Real with Signed {
 
   /** A whole turn in radians, twice [Real.pi], rounded once in this scalar's type rather than doubled. */
   static tau: Self
+
+  /** The base of the natural logarithm, in this scalar's type: `Scalar.e`, named like [Real.pi]. */
+  static e: Self
 
   /**
    * The gap between one and the next value this scalar can hold: the resolution a tolerance cannot go below. It is
@@ -135,6 +137,20 @@ public trait Real with Signed {
    * `y.arcTangentDivided(by: x)` says which of the two is which, where a bare pair of arguments does not.
    */
   fn arcTangentDivided(by: Self): Self
+
+  /** [Real.e] raised to this value: `Scalar.e ** value`, without a logarithm of `e` in between. */
+  fn exponential(): Self
+
+  /** The logarithm to the base [Real.e]. Zero and a negative value answer what the implementor documents. */
+  fn naturalLogarithm(): Self
+
+  /**
+   * The logarithm to another base: `(8.0).logarithm(base: 2.0)` is `3.0`. It is the natural logarithm of the value
+   * over the one of the base, so an implementor that has a faster way overrides it.
+   */
+  fn logarithm(base: Self): Self {
+    naturalLogarithm() / base.naturalLogarithm()
+  }
 
   /** Rounded towards negative infinity. */
   fn floor(): Self
@@ -217,22 +233,22 @@ public type NumberRangeError with Error {
 // The types always carry their width. This file uses the sized names only, because here the width is the point.
 
 /** An 8-bit signed integer, from [Int8.minimum] to [Int8.maximum]. */
-public native type Int8 with Signed, Hash, Bits {}
+public native type Int8 with Signed, Hash, Bits, Power<Int64> {}
 /** A 16-bit signed integer, from [Int16.minimum] to [Int16.maximum]. */
-public native type Int16 with Signed, Hash, Bits {}
+public native type Int16 with Signed, Hash, Bits, Power<Int64> {}
 /** A 32-bit signed integer, from [Int32.minimum] to [Int32.maximum]. */
-public native type Int32 with Signed, Hash, Bits {}
+public native type Int32 with Signed, Hash, Bits, Power<Int64> {}
 /** A 64-bit signed integer, and the type of an integer literal. */
-public native type Int64 with Signed, Hash, Bits {}
+public native type Int64 with Signed, Hash, Bits, Power<Int64> {}
 
 /** An 8-bit unsigned integer, from `0` to [UInt8.maximum]. */
-public native type UInt8 with Numeric, Hash, Bits {}
+public native type UInt8 with Numeric, Hash, Bits, Power<Int64> {}
 /** A 16-bit unsigned integer, from `0` to [UInt16.maximum]. */
-public native type UInt16 with Numeric, Hash, Bits {}
+public native type UInt16 with Numeric, Hash, Bits, Power<Int64> {}
 /** A 32-bit unsigned integer, from `0` to [UInt32.maximum]. */
-public native type UInt32 with Numeric, Hash, Bits {}
+public native type UInt32 with Numeric, Hash, Bits, Power<Int64> {}
 /** A 64-bit unsigned integer, from `0` to [UInt64.maximum]. */
-public native type UInt64 with Numeric, Hash, Bits {}
+public native type UInt64 with Numeric, Hash, Bits, Power<Int64> {}
 
 /** The range of an `Int8`, and its zero and one. */
 extend Int8 {
@@ -470,8 +486,8 @@ extend Float64 {
 }
 
 /**
- * `Float64` is the fast [Real]: the square root, the rounding and `isCloseTo` are its own methods already, and the eight
- * trigonometric ones are the free functions of `std/math` behind the trait's names.
+ * `Float64` is the fast [Real]: the square root, the rounding and `isCloseTo` are its own methods already, and the
+ * trigonometry, the exponential and the logarithm are the runtime's thin wrappers over `<math.h>`.
  *
  * # Pitfalls
  *
@@ -479,33 +495,24 @@ extend Float64 {
  *   `Fixed` (`std/linear`) is the implementor that does not.
  */
 extend Float64 with Real {
-  fn sine(): Float64 {
-    math.sine self
-  }
-
-  fn cosine(): Float64 {
-    math.cosine self
-  }
-
-  fn tangent(): Float64 {
-    math.tangent self
-  }
-
-  fn arcSine(): Float64 {
-    math.arcSine self
-  }
-
-  fn arcCosine(): Float64 {
-    math.arcCosine self
-  }
-
-  fn arcTangent(): Float64 {
-    math.arcTangent self
-  }
-
-  fn arcTangentDivided(by: Float64): Float64 {
-    math.arcTangent2 self, by
-  }
+  /** The sine of an angle in radians. */
+  native fn sine(): Float64
+  /** The cosine of an angle in radians. */
+  native fn cosine(): Float64
+  /** The tangent of an angle in radians. */
+  native fn tangent(): Float64
+  /** In radians, in `[-pi/2, pi/2]`; `nan` outside `[-1, 1]`. */
+  native fn arcSine(): Float64
+  /** In radians, in `[0, pi]`; `nan` outside `[-1, 1]`. */
+  native fn arcCosine(): Float64
+  /** In radians, in `(-pi/2, pi/2)`. */
+  native fn arcTangent(): Float64
+  /** The angle of the point `(by, self)`, which is C's `atan2(self, by)`. */
+  native fn arcTangentDivided(by: Float64): Float64
+  /** `e` raised to this value. An infinity where it does not fit, and never a panic. */
+  native fn exponential(): Float64
+  /** The logarithm to the base `e`: `-infinity` at zero, `nan` below it, and never a panic. */
+  native fn naturalLogarithm(): Float64
 
   fn halved(): Float64 {
     self / 2.0
@@ -517,6 +524,35 @@ extend Float64 with Real {
 
   fn degreesOfRadians(): Float64 {
     self * 57.29577951308232
+  }
+}
+
+/**
+ * `x ** y`: C's `pow`, so IEEE-754 through and through - `(-8.0) ** (1.0 / 3.0)` is `nan`, and nothing panics.
+ *
+ * It is a declared member and not a runtime row behind the `with` list of `Float64`, because the power by an `Int` below
+ * is a member of the same name: the two implementations of `Power` are told apart by their members.
+ */
+extend Float64 with Power {
+  native fn power(exponent: Float64): Float64
+}
+
+/**
+ * `x ** n` for a whole exponent: `2.0 ** 10` and `10.0 ** -3`. It is `pow` with the exponent as a `Float64` rather
+ * than repeated squaring, because `pow` rounds once where squaring rounds at every step, and because squaring towards a
+ * negative power overflows to an infinity before it divides.
+ *
+ * # Pitfalls
+ *
+ * - An exponent beyond `2 ** 53` in magnitude has no exact `Float64`, and every `Float64` that large is even. The sign
+ *   an odd exponent gives a negative base is therefore put back by hand; the magnitude of such a power is an infinity,
+ *   a zero or one anyway.
+ */
+extend Float64 with Power<Int64> {
+  fn power(exponent: Int64): Float64 {
+    const result = self ** Float64.from(exponent)
+    const isInexact = exponent > 9007199254740992 || exponent < -9007199254740992
+    if isInexact && exponent % 2 != 0 && self < 0.0 { -result } else { result }
   }
 }
 
