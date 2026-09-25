@@ -11,6 +11,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#if defined(_WIN32)
+#  include <direct.h>
+#endif
+
 /** The temporary directory, with forward slashes and without a trailing separator. Result owned. */
 static torb_text temporary_directory(void) {
   const char *names[3] = { "TMPDIR", "TEMP", "TMP" };
@@ -55,7 +59,12 @@ static void remove_path(torb_text path) {
   }
   memcpy(buffer, path.storage->data + path.offset, (size_t)path.length);
   buffer[path.length] = '\0';
-  remove(buffer);
+  /* `remove` of the C library on Windows removes files only: a directory the test made needs `_rmdir` */
+  if (remove(buffer) != 0) {
+#if defined(_WIN32)
+    (void)_rmdir(buffer);
+#endif
+  }
 }
 
 TORB_TEST(writing_reading_and_listing_a_directory) {

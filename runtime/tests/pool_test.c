@@ -369,17 +369,15 @@ stop:
   return TORB_POLL_STOPPED;
 }
 
-/**
- * Two thousand rounds of ping and pong over two rendezvous channels of `Int64`, the two players taken by two different
- * workers: every item crosses a worker, every answer is the successor of its question, and the counts of the two channel
- * blocks - changed atomically from both threads - come out at zero.
+/*
+ * One game of two thousand rounds: answers whether every answer was right, and the ponger's count of rounds. Which
+ * workers took the two players is the machine's: `pinger_ran_on` and `ponger_ran_on` say it afterwards.
  */
-TORB_TEST(a_channel_carries_items_between_two_workers) {
+static bool play_ping_pong(int64_t *rounds) {
   torb_channel *ping;
   torb_channel *pong;
   torb_task *pinger;
   torb_task *ponger;
-  pool_begin();
   pinger_mistakes = 0;
   ping = torb_channel_new(0, &torb_element_int64, torb_location_unknown);
   pong = torb_channel_new(0, &torb_element_int64, torb_location_unknown);
@@ -395,12 +393,35 @@ TORB_TEST(a_channel_carries_items_between_two_workers) {
   torb_task_start_portable(ponger);
   torb_scheduler_run(ponger);
   torb_scheduler_run(pinger);
-  TORB_CHECK_INTEGER(result_of(ponger), PING_ROUNDS);
-  TORB_CHECK_INTEGER(pinger_mistakes, 0);
-  TORB_CHECK(pinger_ran_on != ponger_ran_on);
+  *rounds = result_of(ponger);
   torb_task_release(pinger);
   torb_task_release(ponger);
+  return pinger_mistakes == 0;
+}
+
+/**
+ * Two thousand rounds of ping and pong over two rendezvous channels of `Int64`, the two players taken by two different
+ * workers: every item crosses a worker, every answer is the successor of its question, and the counts of the two channel
+ * blocks - changed atomically from both threads - come out at zero. Idle workers take the players, so on a machine
+ * that is busy with something else both may land on one; the game is played again until they do not, and every game
+ * has to be right either way.
+ */
+TORB_TEST(a_channel_carries_items_between_two_workers) {
+  int64_t attempt;
+  bool crossed = false;
+  pool_begin();
+  for (attempt = 0; attempt < 50 && !crossed; attempt += 1) {
+    int64_t rounds = -1;
+    bool right = play_ping_pong(&rounds);
+    if (!right || rounds != PING_ROUNDS) {
+      pool_end();
+      TORB_CHECK(right);
+      TORB_CHECK_INTEGER(rounds, PING_ROUNDS);
+    }
+    crossed = pinger_ran_on != ponger_ran_on;
+  }
   pool_end();
+  TORB_CHECK(crossed);
 }
 
 /* -------------------------------------------------------------------------- cancelling across workers --- */
