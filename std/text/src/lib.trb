@@ -165,12 +165,128 @@ public native type String
 
   /** Everything before the first occurrence of `part`, or `None` if it does not occur. */
   fn substringBefore(part: String): String? {
-    indexOf(part).map { self[0.._] }
+    indexOf(part).map { sliceBytes 0, _ }
   }
 
   /** Everything after the first occurrence of `part`, or `None` if it does not occur. */
   fn substringAfter(part: String): String? {
-    indexOf(part).map { self[(_ + part.byteLength())..] }
+    indexOf(part).map { sliceBytes(_ + part.byteLength(), byteLength()) }
+  }
+
+  /**
+   * The text without `part` at its start, or `None` where it does not start with it. It cannot panic: what it cuts off
+   * is a whole text, so the cut is at a character boundary whatever the text holds.
+   *
+   * # Examples
+   *
+   *     print "--verbose".withoutPrefix("--") ?? "not an option"
+   *
+   * # Related
+   *
+   * - [String.withoutSuffix] - the same at the end.
+   * - [String.dropping] - a number of characters instead of a text.
+   */
+  fn withoutPrefix(part: String): String? {
+    if !startsWith(part) {
+      return None
+    }
+    Some sliceBytes(part.byteLength(), byteLength())
+  }
+
+  /**
+   * The text without `part` at its end, or `None` where it does not end with it.
+   *
+   * # Examples
+   *
+   *     print "main.trb".withoutSuffix(".trb") ?? "main"
+   */
+  fn withoutSuffix(part: String): String? {
+    if !endsWith(part) {
+      return None
+    }
+    Some sliceBytes(0, byteLength() - part.byteLength())
+  }
+
+  /**
+   * The text before and after the first occurrence of `separator`, which is dropped, or `None` where it does not
+   * occur. One search, and no offset to get wrong - Go's `strings.Cut`.
+   *
+   * # Examples
+   *
+   *     match "name: Ada".splitOnce(": ") {
+   *       Some(parts) => print "{parts.before} is {parts.after}"
+   *       None => print "no field"
+   *     }
+   *
+   * # Related
+   *
+   * - [String.split] - at every occurrence.
+   * - [String.substringBefore], [String.substringAfter] - one of the two halves.
+   */
+  fn splitOnce(separator: String): (before: String, after: String)? {
+    const at = indexOf(separator)?
+    const before = sliceBytes 0, at
+    const after = sliceBytes(at + separator.byteLength(), byteLength())
+    Some((before, after))
+  }
+
+  /**
+   * The text without its first `characters` characters. Total: a text with fewer characters answers the empty text,
+   * and a count of zero or less the whole one, as `skip` of an `Iterate` does. O(n) in the count, not in the text.
+   *
+   * A character is a Unicode scalar value, a [Char] of `chars()`.
+   *
+   * # Examples
+   *
+   *     print "Grüße".dropping(characters: 3)
+   *
+   * # Related
+   *
+   * - [String.prefix] - the characters this drops.
+   * - [String.droppingLast] - the same at the end.
+   */
+  fn dropping(characters: Int): String {
+    sliceBytes offsetAfter(self, characters), byteLength()
+  }
+
+  /**
+   * The text without its last `characters` characters: the empty text where it has fewer, the whole one for a count of
+   * zero or less. O(n) in the count.
+   *
+   * # Examples
+   *
+   *     print "Grüße".droppingLast(characters: 2)
+   */
+  fn droppingLast(characters: Int): String {
+    sliceBytes 0, offsetBefore(self, characters)
+  }
+
+  /**
+   * The first `characters` characters of the text: the whole text where it has fewer, the empty one for a count of zero
+   * or less, as `take` of an `Iterate` does. O(n) in the count.
+   *
+   * # Examples
+   *
+   *     print "Grüße".prefix(characters: 3)
+   *
+   * # Related
+   *
+   * - [String.suffix] - the last ones.
+   */
+  fn prefix(characters: Int): String {
+    sliceBytes 0, offsetAfter(self, characters)
+  }
+
+  /**
+   * The last `characters` characters of the text: the whole text where it has fewer, the empty one for a count of zero
+   * or less. O(n) in the count.
+   *
+   * # Examples
+   *
+   *     print "Grüße".suffix(characters: 2)
+   */
+  fn suffix(characters: Int): String {
+    sliceBytes offsetBefore(self, characters), byteLength()
   }
 
   /** The text with leading and trailing whitespace removed. */
@@ -208,6 +324,43 @@ public native type String
   fn lines(): List<String> {
     split "\n"
   }
+}
+
+/** The byte offset after the first `count` characters of `text`, or its end where it has fewer. */
+fn offsetAfter(text: String, count: Int): Int {
+  var offset = 0
+  var remaining = count
+  while remaining > 0 {
+    const found = text.charAt offset
+    if const Some(character) = found {
+      offset = offset + character.byteLength()
+    } else {
+      return offset
+    }
+    remaining = remaining - 1
+  }
+  offset
+}
+
+/**
+ * The byte offset before the last `count` characters of `text`, or `0` where it has fewer. A character begins at the
+ * first byte walking backwards that is not a continuation byte (`10xxxxxx`, 128 to 191), which a valid text always has.
+ */
+fn offsetBefore(text: String, count: Int): Int {
+  var offset = text.byteLength()
+  var remaining = count
+  while remaining > 0 && offset > 0 {
+    offset = offset - 1
+    while offset > 0 && isContinuation(text.byteAt(offset) ?? 0) {
+      offset = offset - 1
+    }
+    remaining = remaining - 1
+  }
+  offset
+}
+
+fn isContinuation(byte: UInt8): Bool {
+  byte >= 128 && byte < 192
 }
 
 /**

@@ -69,6 +69,13 @@ public native type String
   fn lastIndexOf(part: String): Int?
   fn substringBefore(part: String): String?
   fn substringAfter(part: String): String?
+  fn withoutPrefix(part: String): String?
+  fn withoutSuffix(part: String): String?
+  fn splitOnce(separator: String): (before: String, after: String)?
+  fn dropping(characters: Int): String
+  fn droppingLast(characters: Int): String
+  fn prefix(characters: Int): String
+  fn suffix(characters: Int): String
   fn trim(): String
   fn toUpperCase(): String
   fn toLowerCase(): String
@@ -93,6 +100,20 @@ quotes with escapes; `show()` (from `Show`) is the text unquoted. `String.from(c
 - a byte is never inside anything, so it never panics. `slice(range)` is `text[from..to]` with byte offsets and is
 ordinary TorbScript over `sliceBytes(from, to)`, the one native the runtime has for it; an offset on a UTF-8
 continuation byte, past `byteLength()`, or a start past the end each panic with the offset and the length named.
+
+**The total vocabulary** cuts a text without an offset, and none of it can panic. `withoutPrefix(part)` and
+`withoutSuffix(part)` answer the rest, or `None` where the text does not start or end with `part`. `splitOnce(separator)`
+answers `(before:, after:)` around the first occurrence, or `None` - one search, Go's `strings.Cut`.
+`dropping(characters: n)`, `droppingLast(characters: n)`, `prefix(characters: n)` and `suffix(characters: n)` count
+Unicode scalar values and are total like `skip` and `take` of an `Iterate`: fewer characters than asked answers the
+empty or the whole text, and a count of zero or less drops or takes nothing. They walk the count, not the text.
+
+```trb run
+const file = "main.trb"
+print(file.withoutSuffix(".trb") ?? file)         // prints main
+print "Grüße".dropping(characters: 2)             // prints üße
+print("key=value".splitOnce("=")?.after ?? "")    // prints value
+```
 
 ## Related
 
