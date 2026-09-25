@@ -284,6 +284,7 @@ that answers the question. A page marked (planned) describes a feature that does
 - `standard-library/iteration.md` - **std/iteration** (package): Iterate and Iterator, the lazy stages between them, and the collectors a pipeline ends in.
 - `standard-library/json.md` - **std/json** (package): Json, a value with the options of the format, for encoding and decoding any Encode/Decode type, and JsonValue for the rare document whose shape is not known ahead of time.
 - `standard-library/linear.md` - **std/linear** (package): Vectors, matrices, quaternions and angles over one generic scalar, plus Fixed, the fixed-point scalar whose answers are the same bits everywhere.
+- `standard-library/markdown.md` - **std/markdown** (package): Markdown reads CommonMark with GitHub's tables and front matter into a document tree that is a value, with the lines of every block and link; HTML and Markdown are written from the tree.
 - `standard-library/network.md` - **std/network** (package): Name resolution and TCP - a listener, and a stream whose two directions are a Source and a Sink of Bytes - over the address values of std/ip, which it re-exports.
 - `standard-library/number.md` - **std/number** (package): Every numeric type of the language, the traits their arithmetic and bit operations go through, and Real.
 - `standard-library/os.md` - **std/os** (package, draft): Environment, System and Directories - the environment a program was started with, which system and version it runs on, and where the user's files belong - with OsError and the three target constants.

@@ -1,0 +1,208 @@
+/**
+ * HTML output, as its own step over the tree: the HTML the CommonMark specification's examples expect, which is
+ * commonmark.js's and cmark's, and GitHub's for tables.
+ */
+
+use MarkdownDocument, MarkdownBlock, BlockContent, MarkdownInline, ColumnAlignment, plainText from "./tree"
+use escapedHtml, normalizedUri from "./text"
+
+/** A document as HTML. */
+public fn htmlOf(document: MarkdownDocument): String {
+  var renderer = HtmlRenderer()
+  renderer.blocks document.blocks, false
+  renderer.pieces.joined separator: ""
+}
+
+extend MarkdownDocument {
+  /** The document as HTML: the front matter is not part of it. */
+  fn html(): String {
+    htmlOf self
+  }
+}
+
+type HtmlRenderer {
+  var pieces: List<String> = []
+  var last: String = "\n"
+
+  var fn write(text: String) {
+    if text.isEmpty() {
+      return
+    }
+    pieces.append text
+    last = text
+  }
+
+  /** A line break, unless the output already ends in one. */
+  var fn newline() {
+    if !last.endsWith("\n") {
+      write "\n"
+    }
+  }
+
+  var fn blocks(blocks: List<MarkdownBlock>, tight: Bool) {
+    for block in blocks {
+      self.block block, tight
+    }
+  }
+
+  var fn block(block: MarkdownBlock, tight: Bool) {
+    match block.content {
+      .Paragraph(inlines) => {
+        if tight {
+          self.inlines inlines
+          return
+        }
+        newline()
+        write "<p>"
+        self.inlines inlines
+        write "</p>"
+        newline()
+      }
+      .Heading(level, inlines) => {
+        newline()
+        write "<h{level}>"
+        self.inlines inlines
+        write "</h{level}>"
+        newline()
+      }
+      .ThematicBreak => {
+        newline()
+        write "<hr />"
+        newline()
+      }
+      .CodeBlock(info, text, _) => {
+        newline()
+        const language = info.split(" ").first() ?? ""
+        const firstWord = (language.split("\t").first() ?? "")
+        if firstWord.isEmpty() {
+          write "<pre><code>"
+        } else {
+          write "<pre><code class=\"language-{escapedHtml(firstWord)}\">"
+        }
+        write escapedHtml(text)
+        write "</code></pre>"
+        newline()
+      }
+      .HtmlBlock(html) => {
+        newline()
+        write html
+        newline()
+      }
+      .BlockQuote(children) => {
+        newline()
+        write "<blockquote>"
+        newline()
+        blocks children, false
+        newline()
+        write "</blockquote>"
+        newline()
+      }
+      .ItemList(list) => {
+        newline()
+        const name = if list.ordered { "ol" } else { "ul" }
+        if list.ordered && list.start != 1 {
+          write "<ol start=\"{list.start}\">"
+        } else {
+          write "<{name}>"
+        }
+        newline()
+        for item in list.items {
+          write "<li>"
+          blocks item.blocks, list.tight
+          write "</li>"
+          newline()
+        }
+        write "</{name}>"
+        newline()
+      }
+      .Table(table) => {
+        newline()
+        write "<table>"
+        newline()
+        write "<thead>"
+        newline()
+        write "<tr>"
+        newline()
+        for column in 0..table.header.length() {
+          cell("th", table.alignments.get(column) ?? ColumnAlignment.Unspecified, table.header[column])
+        }
+        write "</tr>"
+        newline()
+        write "</thead>"
+        newline()
+        if !table.rows.isEmpty() {
+          write "<tbody>"
+          newline()
+          for row in table.rows {
+            write "<tr>"
+            newline()
+            for column in 0..row.length() {
+              cell("td", table.alignments.get(column) ?? ColumnAlignment.Unspecified, row[column])
+            }
+            write "</tr>"
+            newline()
+          }
+          write "</tbody>"
+          newline()
+        }
+        write "</table>"
+        newline()
+      }
+    }
+  }
+
+  var fn cell(name: String, alignment: ColumnAlignment, inlines: List<MarkdownInline>) {
+    const attribute = match alignment {
+      .Unspecified => ""
+      .Left => " align=\"left\""
+      .Center => " align=\"center\""
+      .Right => " align=\"right\""
+    }
+    write "<{name}{attribute}>"
+    self.inlines inlines
+    write "</{name}>"
+    newline()
+  }
+
+  var fn inlines(inlines: List<MarkdownInline>) {
+    for inline in inlines {
+      self.inline inline
+    }
+  }
+
+  var fn inline(inline: MarkdownInline) {
+    match inline {
+      .Text(text) => write escapedHtml(text)
+      .Code(text) => write "<code>{escapedHtml(text)}</code>"
+      .Emphasis(children) => {
+        write "<em>"
+        inlines children
+        write "</em>"
+      }
+      .Strong(children) => {
+        write "<strong>"
+        inlines children
+        write "</strong>"
+      }
+      .Link(destination, title, children, _) => {
+        write "<a href=\"{escapedHtml(normalizedUri(destination))}\""
+        if !title.isEmpty() {
+          write " title=\"{escapedHtml(title)}\""
+        }
+        write ">"
+        inlines children
+        write "</a>"
+      }
+      .Image(destination, title, children, _) => {
+        write "<img src=\"{escapedHtml(normalizedUri(destination))}\" alt=\"{escapedHtml(plainText(children).replace("\n", " "))}\""
+        if !title.isEmpty() {
+          write " title=\"{escapedHtml(title)}\""
+        }
+        write " />"
+      }
+      .Html(html) => write html
+      .SoftBreak => write "\n"
+      .HardBreak => write "<br />\n"
+    }
+  }
+}

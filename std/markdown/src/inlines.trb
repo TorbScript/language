@@ -1,0 +1,866 @@
+/**
+ * The inline parser: the text of a paragraph, a heading or a table cell to [MarkdownInline]s, after the algorithm of
+ * the CommonMark specification's appendix - a delimiter stack for emphasis, a bracket stack for links and images - as
+ * commonmark.js implements it.
+ *
+ * The nodes live in one list and link to each other by index while the algorithm moves them around; the tree is built
+ * from them at the end.
+ */
+
+use MarkdownInline from "./tree"
+use isAsciiPunctuation, isPunctuation, isUnicodeWhitespace, referenceAt, unescaped, normalizedLabel, htmlTagLength from "./text"
+use isAlphanumeric, isAsciiLetter from "./text"
+
+/** A link reference definition: where `[label]` goes. */
+public type LinkReference {
+  destination: String
+  title: String
+}
+
+/** The inlines of `text`, whose first line is line `line` of the document. */
+public fn parsedInlines(text: String, line: Int, references: Map<String, LinkReference>): List<MarkdownInline> {
+  var parser = InlineParser text.chars().toList(), references, line
+  parser.parse()
+  parser.childrenOf 0
+}
+
+type InlineKind {
+  case Root
+  case Text
+  case Code
+  case Emphasis
+  case Strong
+  case Link
+  case Image
+  case Html
+  case SoftBreak
+  case HardBreak
+}
+
+type InlineNode {
+  var kind: InlineKind
+  var text: String = ""
+  var destination: String = ""
+  var title: String = ""
+  var line: Int = 0
+  var parent: Int = -1
+  var previous: Int = -1
+  var next: Int = -1
+  var firstChild: Int = -1
+  var lastChild: Int = -1
+}
+
+type Delimiter {
+  character: Char
+  var count: Int
+  originalCount: Int
+  node: Int
+  var previous: Int = -1
+  var next: Int = -1
+  canOpen: Bool
+  canClose: Bool
+}
+
+type Bracket {
+  node: Int
+  previous: Int
+  previousDelimiter: Int
+  /** Where the text after the `[` starts. */
+  index: Int
+  image: Bool
+  var active: Bool = true
+  var bracketAfter: Bool = false
+}
+
+type InlineParser {
+  subject: List<Char>
+  references: Map<String, LinkReference>
+  firstLine: Int
+  var position: Int = 0
+  var nodes: List<InlineNode> = [InlineNode(InlineKind.Root)]
+  var delimiters: List<Delimiter> = []
+  /** The last delimiter of the stack, -1 for an empty one. */
+  var lastDelimiter: Int = -1
+  var brackets: List<Bracket> = []
+  var lastBracket: Int = -1
+
+  fn peek(): Char? {
+    if position < subject.length() {
+      return Some subject[position]
+    }
+    None
+  }
+
+  fn at(index: Int): Char? {
+    if index >= 0 && index < subject.length() {
+      return Some subject[index]
+    }
+    None
+  }
+
+  /** The line of the document the current position is on. */
+  fn currentLine(): Int {
+    var line = firstLine
+    for index in 0..position.min(subject.length()) {
+      if subject[index] == '\n' {
+        line = line + 1
+      }
+    }
+    line
+  }
+
+  var fn parse() {
+    // Leading and trailing whitespace of the whole text is not content
+    var start = 0
+    var end = subject.length()
+    while start < end && isTrimmed(subject[start]) {
+      start = start + 1
+    }
+    while end > start && isTrimmed(subject[end - 1]) {
+      end = end - 1
+    }
+    position = start
+    const limit = end
+    while position < limit {
+      parseInline limit
+    }
+    processEmphasis(-1)
+  }
+
+  // --- The node list ------------------------------------------------------------------------------------------------
+
+  var fn newNode(kind: InlineKind, text: String): Int {
+    nodes.append InlineNode(kind, text: text)
+    nodes.length() - 1
+  }
+
+  var fn appendChild(parent: Int, child: Int) {
+    const last = nodes[parent].lastChild
+    nodes[child].parent = parent
+    nodes[child].previous = last
+    nodes[child].next = -1
+    if last >= 0 {
+      nodes[last].next = child
+    } else {
+      nodes[parent].firstChild = child
+    }
+    nodes[parent].lastChild = child
+  }
+
+  var fn appendText(text: String) {
+    const node = newNode InlineKind.Text, text
+    appendChild 0, node
+  }
+
+  var fn unlink(node: Int) {
+    const previous = nodes[node].previous
+    const next = nodes[node].next
+    const parent = nodes[node].parent
+    if previous >= 0 {
+      nodes[previous].next = next
+    } else if parent >= 0 {
+      nodes[parent].firstChild = next
+    }
+    if next >= 0 {
+      nodes[next].previous = previous
+    } else if parent >= 0 {
+      nodes[parent].lastChild = previous
+    }
+    nodes[node].parent = -1
+    nodes[node].previous = -1
+    nodes[node].next = -1
+  }
+
+  var fn insertAfter(node: Int, sibling: Int) {
+    const next = nodes[node].next
+    const parent = nodes[node].parent
+    nodes[sibling].parent = parent
+    nodes[sibling].previous = node
+    nodes[sibling].next = next
+    nodes[node].next = sibling
+    if next >= 0 {
+      nodes[next].previous = sibling
+    } else if parent >= 0 {
+      nodes[parent].lastChild = sibling
+    }
+  }
+
+  /** The tree below a node, with neighbouring texts joined. */
+  fn childrenOf(parent: Int): List<MarkdownInline> {
+    var result: List<MarkdownInline> = []
+    var pendingText: List<String> = []
+    var child = nodes[parent].firstChild
+    while child >= 0 {
+      const node = nodes[child]
+      if node.kind == InlineKind.Text {
+        pendingText.append node.text
+        child = node.next
+        continue
+      }
+      if !pendingText.isEmpty() {
+        result.append MarkdownInline.Text(pendingText.joined(separator: ""))
+        pendingText = []
+      }
+      const inline = match node.kind {
+        .Code => MarkdownInline.Code node.text
+        .Emphasis => MarkdownInline.Emphasis childrenOf(child)
+        .Strong => MarkdownInline.Strong childrenOf(child)
+        .Link => MarkdownInline.Link node.destination, node.title, childrenOf(child), node.line
+        .Image => MarkdownInline.Image node.destination, node.title, childrenOf(child), node.line
+        .Html => MarkdownInline.Html node.text
+        .SoftBreak => MarkdownInline.SoftBreak
+        .HardBreak => MarkdownInline.HardBreak
+        _ => MarkdownInline.Text node.text
+      }
+      result.append inline
+      child = node.next
+    }
+    if !pendingText.isEmpty() {
+      const joined = pendingText.joined separator: ""
+      if !joined.isEmpty() {
+        result.append MarkdownInline.Text(joined)
+      }
+    }
+    result.filter({ _ != MarkdownInline.Text("") }).toList()
+  }
+
+  // --- One inline ---------------------------------------------------------------------------------------------------
+
+  var fn parseInline(limit: Int) {
+    const character = subject[position]
+    const handled = match character {
+      '\n' => parseNewline()
+      '\\' => parseBackslash limit
+      '`' => parseBackticks limit
+      '*' | '_' => handleDelimiter character, limit
+      '[' => parseOpenBracket()
+      '!' => parseBang limit
+      ']' => parseCloseBracket limit
+      '<' => parseAutolink(limit) || parseHtml(limit)
+      '&' => parseEntity limit
+      _ => parseString limit
+    }
+    if !handled {
+      position = position + 1
+      appendText character.show()
+    }
+  }
+
+  var fn parseNewline(): Bool {
+    position = position + 1
+    const last = nodes[0].lastChild
+    if last >= 0 && nodes[last].kind == InlineKind.Text && nodes[last].text.endsWith(" ") {
+      const text = nodes[last].text
+      const isHard = text.endsWith "  "
+      var end = text.byteLength()
+      while end > 0 && text.sliceBytes(end - 1, end) == " " {
+        end = end - 1
+      }
+      nodes[last].text = text.sliceBytes 0, end
+      appendChild 0, newNode(if isHard { InlineKind.HardBreak } else { InlineKind.SoftBreak }, "")
+    } else {
+      appendChild 0, newNode(InlineKind.SoftBreak, "")
+    }
+    // The spaces at the start of the next line are not content
+    while position < subject.length() && subject[position] == ' ' {
+      position = position + 1
+    }
+    true
+  }
+
+  var fn parseBackslash(limit: Int): Bool {
+    position = position + 1
+    if position < limit && subject[position] == '\n' {
+      position = position + 1
+      appendChild 0, newNode(InlineKind.HardBreak, "")
+      // As after any line break, the spaces at the start of the next line are not content
+      while position < subject.length() && subject[position] == ' ' {
+        position = position + 1
+      }
+      return true
+    }
+    if position < limit && isAsciiPunctuation(subject[position]) {
+      appendText subject[position].show()
+      position = position + 1
+      return true
+    }
+    appendText "\\"
+    true
+  }
+
+  var fn parseBackticks(limit: Int): Bool {
+    const start = position
+    while position < limit && subject[position] == '`' {
+      position = position + 1
+    }
+    const count = position - start
+    const afterOpening = position
+    var search = position
+    while search < limit {
+      if subject[search] != '`' {
+        search = search + 1
+        continue
+      }
+      const runStart = search
+      while search < limit && subject[search] == '`' {
+        search = search + 1
+      }
+      if search - runStart == count {
+        var contents = String.from(subject.slice(afterOpening..runStart)).replace("\n", " ")
+        const hasNonSpace = contents.chars().any({ _ != ' ' })
+        if hasNonSpace && contents.startsWith(" ") && contents.endsWith(" ") && contents.byteLength() >= 2 {
+          contents = contents.sliceBytes(1, contents.byteLength() - 1)
+        }
+        appendChild 0, newNode(InlineKind.Code, contents)
+        position = search
+        return true
+      }
+    }
+    // No closing run of the same length: the backticks are text
+    position = afterOpening
+    appendText String.from(subject.slice(start..afterOpening))
+    true
+  }
+
+  var fn handleDelimiter(character: Char, limit: Int): Bool {
+    const start = position
+    while position < limit && subject[position] == character {
+      position = position + 1
+    }
+    const count = position - start
+    const before = if start == 0 { '\n' } else { subject[start - 1] }
+    const after = if position >= limit { '\n' } else { subject[position] }
+    const afterIsWhitespace = isUnicodeWhitespace after
+    const afterIsPunctuation = isPunctuation after
+    const beforeIsWhitespace = isUnicodeWhitespace before
+    const beforeIsPunctuation = isPunctuation before
+    const leftFlanking = !afterIsWhitespace && (!afterIsPunctuation || beforeIsWhitespace || beforeIsPunctuation)
+    const rightFlanking = !beforeIsWhitespace && (!beforeIsPunctuation || afterIsWhitespace || afterIsPunctuation)
+    var canOpen = leftFlanking
+    var canClose = rightFlanking
+    if character == '_' {
+      canOpen = leftFlanking && (!rightFlanking || beforeIsPunctuation)
+      canClose = rightFlanking && (!leftFlanking || afterIsPunctuation)
+    }
+    const node = newNode InlineKind.Text, String.from(subject.slice(start..position))
+    appendChild 0, node
+    if canOpen || canClose {
+      delimiters.append Delimiter(character, count, count, node, previous: lastDelimiter, canOpen: canOpen, canClose: canClose)
+      const index = delimiters.length() - 1
+      if lastDelimiter >= 0 {
+        delimiters[lastDelimiter].next = index
+      }
+      lastDelimiter = index
+    }
+    true
+  }
+
+  var fn removeDelimiter(index: Int) {
+    const previous = delimiters[index].previous
+    const next = delimiters[index].next
+    if previous >= 0 {
+      delimiters[previous].next = next
+    }
+    if next >= 0 {
+      delimiters[next].previous = previous
+    } else {
+      lastDelimiter = previous
+    }
+    delimiters[index].previous = -1
+    delimiters[index].next = -1
+  }
+
+  /** The emphasis of the delimiters above `bottom`, after the specification's "process emphasis". */
+  var fn processEmphasis(bottom: Int) {
+    var openersBottom: List<Int> = List.filled 14, bottom
+    var closer = lastDelimiter
+    while closer >= 0 && delimiters[closer].previous != bottom {
+      closer = delimiters[closer].previous
+    }
+    while closer >= 0 {
+      const closing = delimiters[closer]
+      if !closing.canClose {
+        closer = closing.next
+        continue
+      }
+      const bottomIndex = (if closing.character == '_' { 2 } else { 8 }) + (if closing.canOpen { 3 } else { 0 })
+        + closing.originalCount % 3
+      var opener = closing.previous
+      var found = false
+      while opener >= 0 && opener != bottom && opener != openersBottom[bottomIndex] {
+        const opening = delimiters[opener]
+        const oddMatch = (closing.canOpen || opening.canClose) && closing.originalCount % 3 != 0
+          && (opening.originalCount + closing.originalCount) % 3 == 0
+        if opening.character == closing.character && opening.canOpen && !oddMatch {
+          found = true
+          break
+        }
+        opener = opening.previous
+      }
+      const oldCloser = closer
+      if found {
+        const used = if closing.count >= 2 && delimiters[opener].count >= 2 { 2 } else { 1 }
+        const openerNode = delimiters[opener].node
+        const closerNode = closing.node
+        delimiters[opener].count = delimiters[opener].count - used
+        delimiters[closer].count = delimiters[closer].count - used
+        nodes[openerNode].text = nodes[openerNode].text.sliceBytes(0, nodes[openerNode].text.byteLength() - used)
+        nodes[closerNode].text = nodes[closerNode].text.sliceBytes(0, nodes[closerNode].text.byteLength() - used)
+        const emphasis = newNode(if used == 1 { InlineKind.Emphasis } else { InlineKind.Strong }, "")
+        var child = nodes[openerNode].next
+        while child >= 0 && child != closerNode {
+          const next = nodes[child].next
+          unlink child
+          appendChild emphasis, child
+          child = next
+        }
+        insertAfter openerNode, emphasis
+        // The delimiters between the two are used up
+        var between = delimiters[opener].next
+        while between >= 0 && between != closer {
+          const next = delimiters[between].next
+          removeDelimiter between
+          between = next
+        }
+        if delimiters[opener].count == 0 {
+          unlink openerNode
+          removeDelimiter opener
+        }
+        if delimiters[closer].count == 0 {
+          unlink closerNode
+          const next = delimiters[closer].next
+          removeDelimiter closer
+          closer = next
+        }
+      } else {
+        closer = closing.next
+        openersBottom[bottomIndex] = delimiters[oldCloser].previous
+        if !delimiters[oldCloser].canOpen {
+          removeDelimiter oldCloser
+        }
+      }
+    }
+    while lastDelimiter >= 0 && lastDelimiter != bottom {
+      removeDelimiter lastDelimiter
+    }
+  }
+
+  // --- Links and images ---------------------------------------------------------------------------------------------
+
+  var fn addBracket(node: Int, index: Int, image: Bool) {
+    if lastBracket >= 0 {
+      brackets[lastBracket].bracketAfter = true
+    }
+    brackets.append Bracket(node, lastBracket, lastDelimiter, index, image)
+    lastBracket = brackets.length() - 1
+  }
+
+  var fn removeBracket() {
+    lastBracket = brackets[lastBracket].previous
+  }
+
+  var fn parseOpenBracket(): Bool {
+    const start = position
+    position = position + 1
+    const node = newNode InlineKind.Text, "["
+    appendChild 0, node
+    addBracket(node, start + 1, false)
+    true
+  }
+
+  var fn parseBang(limit: Int): Bool {
+    const start = position
+    position = position + 1
+    if position < limit && subject[position] == '[' {
+      position = position + 1
+      const node = newNode InlineKind.Text, "!["
+      appendChild 0, node
+      addBracket(node, start + 2, true)
+      return true
+    }
+    appendText "!"
+    true
+  }
+
+  var fn parseCloseBracket(limit: Int): Bool {
+    position = position + 1
+    const start = position
+    if lastBracket < 0 {
+      appendText "]"
+      return true
+    }
+    const opener = brackets[lastBracket]
+    if !opener.active {
+      appendText "]"
+      removeBracket()
+      return true
+    }
+    const line = lineOf opener.index
+    var destination = ""
+    var title = ""
+    var matched = false
+    const saved = position
+    // An inline link: `(destination "title")`
+    if position < limit && subject[position] == '(' {
+      position = position + 1
+      skipSpacesAndNewline limit
+      if const Some(found) = inlineDestination(limit) {
+        destination = found
+        const beforeSpace = position
+        skipSpacesAndNewline limit
+        if position > beforeSpace {
+          if const Some(foundTitle) = inlineTitle(limit) {
+            title = foundTitle
+          }
+        }
+        skipSpacesAndNewline limit
+        if position < limit && subject[position] == ')' {
+          position = position + 1
+          matched = true
+        }
+      }
+      if !matched {
+        position = saved
+        destination = ""
+        title = ""
+      }
+    }
+    if !matched {
+      // A reference: `[text][label]`, `[text][]` or `[text]`
+      const beforeLabel = position
+      const length = labelLength limit
+      var label = ""
+      var hasLabel = false
+      if length > 2 {
+        label = String.from subject.slice(beforeLabel..(beforeLabel + length))
+        hasLabel = true
+        position = beforeLabel + length
+      } else if !opener.bracketAfter {
+        label = String.from subject.slice(opener.index..(start - 1))
+        hasLabel = true
+        if length == 2 {
+          position = beforeLabel + length
+        }
+      }
+      if length == 0 {
+        position = saved
+      }
+      if hasLabel {
+        if const Some(reference) = references.get(normalizedLabel(trimmedBrackets(label, length > 2))) {
+          destination = reference.destination
+          title = reference.title
+          matched = true
+        }
+      }
+      if !matched {
+        position = saved
+      }
+    }
+    if !matched {
+      removeBracket()
+      position = start
+      appendText "]"
+      return true
+    }
+    const node = newNode(if opener.image { InlineKind.Image } else { InlineKind.Link }, "")
+    nodes[node].destination = destination
+    nodes[node].title = title
+    nodes[node].line = line
+    var child = nodes[opener.node].next
+    while child >= 0 {
+      const next = nodes[child].next
+      unlink child
+      appendChild node, child
+      child = next
+    }
+    appendChild 0, node
+    processEmphasis opener.previousDelimiter
+    removeBracket()
+    unlink opener.node
+    // No link inside of a link: every earlier opener of a link is deactivated
+    if !opener.image {
+      var earlier = lastBracket
+      while earlier >= 0 {
+        if !brackets[earlier].image {
+          brackets[earlier].active = false
+        }
+        earlier = brackets[earlier].previous
+      }
+    }
+    true
+  }
+
+  /** The line of the document an index of the subject is on. */
+  fn lineOf(index: Int): Int {
+    var line = firstLine
+    for at in 0..index.min(subject.length()) {
+      if subject[at] == '\n' {
+        line = line + 1
+      }
+    }
+    line
+  }
+
+  /** Spaces, at most one line break, and spaces. */
+  var fn skipSpacesAndNewline(limit: Int) {
+    while position < limit && (subject[position] == ' ' || subject[position] == '\t') {
+      position = position + 1
+    }
+    if position < limit && subject[position] == '\n' {
+      position = position + 1
+      while position < limit && (subject[position] == ' ' || subject[position] == '\t') {
+        position = position + 1
+      }
+    }
+  }
+
+  /** The destination of an inline link, unescaped; an empty one where `)` follows directly. */
+  var fn inlineDestination(limit: Int): String? {
+    if position < limit && subject[position] == '<' {
+      var at = position + 1
+      while at < limit {
+        const character = subject[at]
+        if character == '>' {
+          const text = String.from subject.slice((position + 1)..at)
+          position = at + 1
+          return Some unescaped(text)
+        }
+        if character == '<' || character == '\n' {
+          return None
+        }
+        if character == '\\' && at + 1 < limit {
+          at = at + 2
+          continue
+        }
+        at = at + 1
+      }
+      return None
+    }
+    const start = position
+    var depth = 0
+    while position < limit {
+      const character = subject[position]
+      if character == '\\' && position + 1 < limit && isAsciiPunctuation(subject[position + 1]) {
+        position = position + 2
+        continue
+      }
+      if character == '(' {
+        depth = depth + 1
+      } else if character == ')' {
+        if depth < 1 {
+          break
+        }
+        depth = depth - 1
+      } else if Int64.from(character) <= 32 {
+        break
+      }
+      position = position + 1
+    }
+    if position == start && (position >= limit || subject[position] != ')') {
+      return None
+    }
+    if depth != 0 {
+      position = start
+      return None
+    }
+    Some unescaped(String.from(subject.slice(start..position)))
+  }
+
+  var fn inlineTitle(limit: Int): String? {
+    if position >= limit {
+      return None
+    }
+    const opening = subject[position]
+    const closing = match opening {
+      '"' => '"'
+      '\'' => '\''
+      '(' => ')'
+      _ => {
+        return None
+      }
+    }
+    var at = position + 1
+    while at < limit {
+      const character = subject[at]
+      if character == '\\' && at + 1 < limit {
+        at = at + 2
+        continue
+      }
+      if character == closing {
+        const text = String.from subject.slice((position + 1)..at)
+        position = at + 1
+        return Some unescaped(text)
+      }
+      if opening == '(' && character == '(' {
+        return None
+      }
+      at = at + 1
+    }
+    None
+  }
+
+  /** The length of a link label `[...]` at the position, with its brackets, or 0 where there is none. */
+  fn labelLength(limit: Int): Int {
+    if position >= limit || subject[position] != '[' {
+      return 0
+    }
+    var at = position + 1
+    while at < limit && at - position <= 1001 {
+      const character = subject[at]
+      if character == '\\' && at + 1 < limit {
+        at = at + 2
+        continue
+      }
+      if character == '[' {
+        return 0
+      }
+      if character == ']' {
+        if at + 1 - position > 1001 {
+          return 0
+        }
+        return at + 1 - position
+      }
+      at = at + 1
+    }
+    0
+  }
+
+  // --- Autolinks, HTML, entities, text ------------------------------------------------------------------------------
+
+  var fn parseAutolink(limit: Int): Bool {
+    var at = position + 1
+    // A URI: a scheme of 2 to 32 characters, `:`, and no whitespace, `<` or `>`
+    if at < limit && isAsciiLetter(subject[at]) {
+      var schemeEnd = at + 1
+      while schemeEnd < limit && (isAlphanumeric(subject[schemeEnd]) || subject[schemeEnd] == '+'
+        || subject[schemeEnd] == '.' || subject[schemeEnd] == '-') {
+        schemeEnd = schemeEnd + 1
+      }
+      const schemeLength = schemeEnd - at
+      if schemeLength >= 2 && schemeLength <= 32 && schemeEnd < limit && subject[schemeEnd] == ':' {
+        var end = schemeEnd + 1
+        while end < limit {
+          const character = subject[end]
+          if character == '>' || character == '<' || Int64.from(character) <= 32 {
+            break
+          }
+          end = end + 1
+        }
+        if end < limit && subject[end] == '>' {
+          const uri = String.from subject.slice(at..end)
+          appendAutolink uri, uri
+          position = end + 1
+          return true
+        }
+      }
+    }
+    // An email address
+    var end = at
+    while end < limit && isEmailLocalCharacter(subject[end]) {
+      end = end + 1
+    }
+    if end == at || end >= limit || subject[end] != '@' {
+      return false
+    }
+    end = end + 1
+    var labelStart = end
+    loop {
+      var labelEnd = labelStart
+      while labelEnd < limit && (isAlphanumeric(subject[labelEnd]) || subject[labelEnd] == '-') {
+        labelEnd = labelEnd + 1
+      }
+      const length = labelEnd - labelStart
+      if length == 0 || length > 63 || subject[labelStart] == '-' || subject[labelEnd - 1] == '-' {
+        return false
+      }
+      if labelEnd < limit && subject[labelEnd] == '.' {
+        labelStart = labelEnd + 1
+        continue
+      }
+      if labelEnd < limit && subject[labelEnd] == '>' {
+        const address = String.from subject.slice(at..labelEnd)
+        appendAutolink("mailto:" + address, address)
+        position = labelEnd + 1
+        return true
+      }
+      return false
+    }
+  }
+
+  var fn appendAutolink(destination: String, text: String) {
+    const node = newNode InlineKind.Link, ""
+    nodes[node].destination = destination
+    nodes[node].line = currentLine()
+    appendChild node, newNode(InlineKind.Text, text)
+    appendChild 0, node
+  }
+
+  var fn parseHtml(limit: Int): Bool {
+    const length = htmlTagLength subject.slice(0..limit), position
+    match length {
+      Some(count) => {
+        appendChild 0, newNode(InlineKind.Html, String.from(subject.slice(position..(position + count))))
+        position = position + count
+        true
+      }
+      None => false
+    }
+  }
+
+  var fn parseEntity(limit: Int): Bool {
+    // A named reference starts with a letter; `referenceAt` decides the rest
+    if position + 1 < limit && subject[position + 1] != '#' && !isAsciiLetter(subject[position + 1]) {
+      return false
+    }
+    match referenceAt(subject.slice(0..limit), position) {
+      Some(reference) => {
+        appendText reference.text
+        position = position + reference.length
+        true
+      }
+      None => false
+    }
+  }
+
+  var fn parseString(limit: Int): Bool {
+    const start = position
+    while position < limit && !isSpecial(subject[position]) {
+      position = position + 1
+    }
+    if position == start {
+      return false
+    }
+    appendText String.from(subject.slice(start..position))
+    true
+  }
+}
+
+/** The characters that begin something other than text. */
+fn isSpecial(character: Char): Bool {
+  match character {
+    '\n' | '`' | '[' | ']' | '\\' | '!' | '<' | '&' | '*' | '_' => true
+    _ => false
+  }
+}
+
+fn isTrimmed(character: Char): Bool {
+  character == ' ' || character == '\t' || character == '\n' || character == '\r'
+}
+
+fn isEmailLocalCharacter(character: Char): Bool {
+  if isAlphanumeric(character) {
+    return true
+  }
+  match character {
+    '.' | '!' | '#' | '$' | '%' | '&' | '\'' | '*' | '+' | '/' | '=' | '?' | '^' | '_' | '`' | '{' | '|' | '}' | '~' | '-' => true
+    _ => false
+  }
+}
+
+/** A label written `[label]` without its brackets; one taken from the text before `]` has none. */
+fn trimmedBrackets(label: String, bracketed: Bool): String {
+  if bracketed {
+    return label.sliceBytes(1, label.byteLength() - 1)
+  }
+  label
+}

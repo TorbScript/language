@@ -1,9 +1,10 @@
 # YAML, Regular Expressions and Markdown
 
-**Status: slices 1, 2 and 3 built (2026-09-25)** — `std/yaml` exists and passes all 402 cases of the YAML test suite,
-and `torb docs check` reads front matter through it; `std/regex` exists and passes RE2's search tests. Sections 1a and
-2a are what their implementations decided. The `Regex` literal of slice 4 and `std/markdown` are not built yet. The
-decisions below were made on 2026-09-21 and 2026-09-22, the scope of `std/yaml` was widened on 2026-09-24.
+**Status: slices 1, 2, 3 and 5 built (2026-09-25)** — `std/yaml` passes all 402 cases of the YAML test suite, and
+`torb docs check` reads front matter through it; `std/regex` passes RE2's search tests; `std/markdown` passes all 652
+examples of CommonMark 0.31.2 and GitHub's table examples. Sections 1a, 2a and 3a are what their implementations
+decided. The `Regex` literal of slice 4 is not built. The decisions below were made on 2026-09-21 and 2026-09-22, the
+scope of `std/yaml` was widened on 2026-09-24.
 
 **Three text packages that the toolchain needs itself, in this order: `std/yaml`, then `std/regex`, then
 `std/markdown`.** The documentation tool reads the front matter of every page and the Markdown around it with a
@@ -121,6 +122,30 @@ suite. It is a *document* format: its model is the tree of blocks and inlines, a
 ("Types, Values and Reflection"), and no format gets a trait of its own. It can be read block by block from a
 `Source`.
 
+## 3a. What the implementation of `std/markdown` decided
+
+- **The algorithms of the specification's appendix, as commonmark.js implements them**: a block parser that continues
+  the open blocks line by line, then tries the starts of new ones, then continues a paragraph lazily; an inline parser
+  with a delimiter stack for emphasis and a bracket stack for links. Both keep their nodes in a list and link them by
+  index while they move them around; the tree of values is built at the end.
+- **The specification is the test suite.** `std/markdown/tests/spec-examples.trb` vendors the 652 examples of CommonMark
+  0.31.2 and the 8 examples of GitHub's table extension (CC BY-SA 4.0, with the notice). All 652 render as specified
+  with tables off and with them on, all 8 table examples pass, and all 652 written back by the writer and read again
+  render as the same HTML.
+- **Tables after GitHub**: the last line of a paragraph is the header row when the next line is a delimiter row with a
+  `|` and as many cells; a row is every following line up to a blank one or the start of another block; a row has as
+  many cells as the header, and `\|` is a pipe in a cell, in a code span too.
+- **Front matter** is a first line `---` up to the next line `---` or `...`. It stays text in the tree, and
+  `FrontMatter.document()` reads it through `std/yaml` with the lines of the whole file.
+- **Positions**: every block has its first and last line and every link and image its line, counted in the file.
+- **The named references are the WHATWG's table**, all 2125 names that end in `;`, generated into
+  `std/markdown/src/entities.trb`. Unicode punctuation (the categories P and S) and the case folding of link labels
+  are TorbScript tables over the blocks the examples reach, until the Unicode natives of milestone 8.
+- **The writer writes one form for each construct** - `*` and `**` (`_` for emphasis right inside emphasis), fenced
+  code with a fence longer than any run in it, `-` and `1.` lists, ATX headings and setext only for a heading of several
+  lines - and escapes every character of a text that could be read as markup; a line break inside a text and
+  whitespace a line would lose at its start become numeric references.
+
 ## 4. Slices
 
 | # | Slice | Needs |
@@ -129,4 +154,4 @@ suite. It is a *document* format: its model is the tree of blocks and inlines, a
 | 2 | `torb docs check` reads front matter through `std/yaml` - **built**; the seed has to be refreshed at slice 1's commit or later first, because the compiler imports `std/yaml` | 1, and a seed refresh, because the compiler imports it |
 | 3 | `std/regex`: the engine, `Regex.tryFrom(text)`, matches and groups - **built** | nothing |
 | 4 | A `Regex` literal is compiled by the checker (URI.md section 9's table) - waits for the checker's literal parameter kind | 3 |
-| 5 | `std/markdown` (RELEASE.md slice 1) | 1 |
+| 5 | `std/markdown` (RELEASE.md slice 1) - **built** | 1 |

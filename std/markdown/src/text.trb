@@ -1,0 +1,562 @@
+/**
+ * The character classes of CommonMark and the scanners both parsers share: punctuation and whitespace as the spec
+ * defines them, backslash escapes, entity and numeric references, link labels, link destinations and titles, and the
+ * raw HTML an inline or a block may be.
+ */
+
+use entityText from "./entities"
+
+/** `!"#$%&'()*+,-./:;<=>?@[\]^_`{|}~`: the characters a backslash escapes. */
+public fn isAsciiPunctuation(character: Char): Bool {
+  const code = Int64.from character
+  (code >= 33 && code <= 47) || (code >= 58 && code <= 64) || (code >= 91 && code <= 96) || (code >= 123 && code <= 126)
+}
+
+/**
+ * A Unicode punctuation character of the spec: the general categories P and S. This is the ASCII punctuation and the
+ * blocks of punctuation and symbols below U+10000, and the symbols and pictographs above it.
+ */
+public fn isPunctuation(character: Char): Bool {
+  const code = Int64.from character
+  if code < 128 {
+    return isAsciiPunctuation character
+  }
+  if code >= 161 && code <= 191 {
+    return code != 170 && code != 178 && code != 179 && code != 181 && code != 185 && code != 186 && code != 188
+      && code != 189 && code != 190
+  }
+  code == 215 || code == 247 || (code >= 706 && code <= 709) || (code >= 722 && code <= 735) || code == 894
+    || code == 903 || (code >= 1370 && code <= 1375) || code == 1417 || code == 1418 || code == 1470 || code == 1472
+    || code == 1475 || code == 1478 || code == 1523 || code == 1524 || (code >= 1545 && code <= 1549) || code == 1563
+    || code == 1566 || code == 1567 || (code >= 1642 && code <= 1645) || code == 1748 || code == 2404 || code == 2405
+    || code == 2416 || code == 3647 || code == 3663 || code == 3674 || code == 3675 || (code >= 8208 && code <= 8231)
+    || (code >= 8240 && code <= 8286) || (code >= 8314 && code <= 8318) || (code >= 8330 && code <= 8334)
+    || (code >= 8352 && code <= 8384) || (code >= 8448 && code <= 8527 && isSymbolOfLetterlike(code))
+    || (code >= 8592 && code <= 9215) || (code >= 9216 && code <= 9311) || (code >= 9372 && code <= 9449)
+    || (code >= 9472 && code <= 10101) || (code >= 10132 && code <= 11263) || (code >= 11776 && code <= 11903)
+    || (code >= 12289 && code <= 12292) || (code >= 12296 && code <= 12320) || code == 12336 || code == 12349
+    || (code >= 65040 && code <= 65049) || (code >= 65072 && code <= 65131) || (code >= 65281 && code <= 65295)
+    || (code >= 65306 && code <= 65312) || (code >= 65339 && code <= 65344) || (code >= 65371 && code <= 65381)
+    || (code >= 65504 && code <= 65518) || (code >= 126976 && code <= 129791)
+}
+
+/** The block of letterlike symbols holds letters too: these are its symbols. */
+fn isSymbolOfLetterlike(code: Int): Bool {
+  const letters = [8450, 8455, 8458, 8459, 8460, 8461, 8462, 8463, 8464, 8465, 8466, 8467, 8469, 8473, 8474, 8475,
+    8476, 8477, 8484, 8486, 8488, 8490, 8491, 8492, 8493, 8495, 8496, 8497, 8498, 8499, 8500, 8501, 8502, 8503, 8504,
+    8505, 8508, 8509, 8510, 8511, 8517, 8518, 8519, 8520, 8521, 8526]
+  !letters.contains(code)
+}
+
+/** Unicode whitespace of the spec: the space separators, tab, line feed, form feed and carriage return. */
+public fn isUnicodeWhitespace(character: Char): Bool {
+  const code = Int64.from character
+  code == 9 || code == 10 || code == 12 || code == 13 || code == 32 || code == 160 || code == 5760
+    || (code >= 8192 && code <= 8202) || code == 8239 || code == 8287 || code == 12288
+}
+
+/** A space or a tab. */
+public fn isSpaceOrTab(character: Char): Bool {
+  character == ' ' || character == '\t'
+}
+
+/** Whether a text has nothing but spaces, tabs and line breaks. */
+public fn isBlankText(text: String): Bool {
+  text.chars().all { _ == ' ' || _ == '\t' || _ == '\n' || _ == '\r' }
+}
+
+// --- Escapes and references ------------------------------------------------------------------------------------------
+
+/** A text with its backslash escapes and its entity and numeric references replaced: what a destination, a title and an info string are. */
+public fn unescaped(text: String): String {
+  if !text.contains("\\") && !text.contains("&") {
+    return text
+  }
+  const characters = text.chars().toList()
+  var pieces: List<String> = []
+  var index = 0
+  while index < characters.length() {
+    const character = characters[index]
+    if character == '\\' && index + 1 < characters.length() && isAsciiPunctuation(characters[index + 1]) {
+      pieces.append characters[index + 1].show()
+      index = index + 2
+      continue
+    }
+    if character == '&' {
+      if const Some(reference) = referenceAt(characters, index) {
+        pieces.append reference.text
+        index = index + reference.length
+        continue
+      }
+    }
+    pieces.append character.show()
+    index = index + 1
+  }
+  pieces.joined separator: ""
+}
+
+/** A reference and how many characters it takes. */
+public type Reference {
+  text: String
+  length: Int
+}
+
+/** The entity or numeric reference that starts at `index` with its `&`, if one does. */
+public fn referenceAt(characters: List<Char>, index: Int): Reference? {
+  var at = index + 1
+  if at < characters.length() && characters[at] == '#' {
+    at = at + 1
+    var hex = false
+    if at < characters.length() && (characters[at] == 'x' || characters[at] == 'X') {
+      hex = true
+      at = at + 1
+    }
+    const start = at
+    var value = 0
+    while at < characters.length() && at - start < 8 {
+      const digit = digitValue characters[at], hex
+      if digit < 0 {
+        break
+      }
+      value = value * (if hex { 16 } else { 10 }) + digit
+      at = at + 1
+    }
+    const count = at - start
+    if count == 0 || (!hex && count > 7) || (hex && count > 6) || at >= characters.length() || characters[at] != ';' {
+      return None
+    }
+    // U+0000 and what is no character become the replacement character
+    const character = if value == 0 { '\u{fffd}' } else { Char.tryFrom(value) ?? '\u{fffd}' }
+    return Some Reference(character.show(), at + 1 - index)
+  }
+  const start = at
+  while at < characters.length() && at - start < 32 && isAlphanumeric(characters[at]) {
+    at = at + 1
+  }
+  if at == start || at >= characters.length() || characters[at] != ';' {
+    return None
+  }
+  const name = String.from characters.slice(start..at)
+  const text = entityText(name)?
+  Some Reference(text, at + 1 - index)
+}
+
+fn digitValue(character: Char, hex: Bool): Int {
+  const code = Int64.from character
+  if code >= 48 && code <= 57 {
+    return code - 48
+  }
+  if !hex {
+    return -1
+  }
+  if code >= 97 && code <= 102 {
+    return code - 87
+  }
+  if code >= 65 && code <= 70 {
+    return code - 55
+  }
+  -1
+}
+
+public fn isAlphanumeric(character: Char): Bool {
+  (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') || character.isDigit()
+}
+
+public fn isAsciiLetter(character: Char): Bool {
+  (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z')
+}
+
+// --- Link labels -----------------------------------------------------------------------------------------------------
+
+/**
+ * A link label as references are matched by it: whitespace collapsed into one space, trimmed, and case folded - `ẞ`
+ * and `ß` fold to `ss`, and Greek and Cyrillic capitals to their small letters.
+ */
+public fn normalizedLabel(label: String): String {
+  var pieces: List<String> = []
+  var space = false
+  for character in label.trim().chars() {
+    if character == ' ' || character == '\t' || character == '\n' || character == '\r' {
+      space = true
+      continue
+    }
+    if space {
+      pieces.append " "
+      space = false
+    }
+    pieces.append folded(character)
+  }
+  pieces.joined separator: ""
+}
+
+/** The case folding of one character, over the scripts CommonMark's examples reach. */
+fn folded(character: Char): String {
+  const code = Int64.from character
+  if code == 7838 || code == 223 {
+    return "ss"
+  }
+  if code == 962 {
+    return "σ"
+  }
+  if (code >= 913 && code <= 937) || (code >= 1040 && code <= 1071) {
+    return (Char.tryFrom(code + 32) ?? character).show()
+  }
+  if code >= 1024 && code <= 1039 {
+    return (Char.tryFrom(code + 80) ?? character).show()
+  }
+  character.toLowerCase().show()
+}
+
+// --- HTML ------------------------------------------------------------------------------------------------------------
+
+/** A text as HTML text and attribute values need it: `&`, `<`, `>` and `"` escaped. */
+public fn escapedHtml(text: String): String {
+  if !text.contains("&") && !text.contains("<") && !text.contains(">") && !text.contains("\"") {
+    return text
+  }
+  text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
+}
+
+/**
+ * A destination as an `href` writes it: every character a URL cannot hold percent-encoded as UTF-8, and an escape
+ * that is already there kept.
+ */
+public fn normalizedUri(uri: String): String {
+  var pieces: List<String> = []
+  const characters = uri.chars().toList()
+  var index = 0
+  while index < characters.length() {
+    const character = characters[index]
+    if character == '%' && index + 2 < characters.length() && digitValue(characters[index + 1], true) >= 0
+      && digitValue(characters[index + 2], true) >= 0 {
+      pieces.append "%"
+      index = index + 1
+      continue
+    }
+    if isUriCharacter(character) {
+      pieces.append character.show()
+    } else {
+      for byte in character.show().bytes() {
+        const value = Int64.from byte
+        pieces.append("%" + hexDigits.sliceBytes(value / 16, value / 16 + 1) + hexDigits.sliceBytes(value % 16, value % 16 + 1))
+      }
+    }
+    index = index + 1
+  }
+  pieces.joined separator: ""
+}
+
+const hexDigits = "0123456789ABCDEF"
+
+fn isUriCharacter(character: Char): Bool {
+  if isAlphanumeric(character) {
+    return true
+  }
+  match character {
+    ';' | '/' | '?' | ':' | '@' | '&' | '=' | '+' | '$' | ',' | '-' | '_' | '.' | '!' | '~' | '*' | '\'' | '(' | ')' | '#' => true
+    _ => false
+  }
+}
+
+/**
+ * The raw HTML of the spec that starts at `index` - an open tag, a closing tag, a comment, a processing instruction, a
+ * declaration or a CDATA section - and how many characters it takes.
+ */
+public fn htmlTagLength(characters: List<Char>, index: Int): Int? {
+  if index >= characters.length() || characters[index] != '<' {
+    return None
+  }
+  const next = index + 1
+  if next >= characters.length() {
+    return None
+  }
+  const character = characters[next]
+  if isAsciiLetter(character) {
+    return openTagLength characters, index
+  }
+  if character == '/' {
+    return closingTagLength characters, index
+  }
+  if character == '?' {
+    // A processing instruction: up to `?>`
+    return lengthUntil(characters, index + 2, "?>", index)
+  }
+  if character == '!' {
+    if startsWithText(characters, index, "<!--") {
+      // `<!-->` and `<!--->` are comments too
+      if startsWithText(characters, index, "<!-->") {
+        return Some 5
+      }
+      if startsWithText(characters, index, "<!--->") {
+        return Some 6
+      }
+      return lengthUntil(characters, index + 4, "-->", index)
+    }
+    if startsWithText(characters, index, "<![CDATA[") {
+      return lengthUntil(characters, index + 9, "]]>", index)
+    }
+    if index + 2 < characters.length() && isAsciiLetter(characters[index + 2]) {
+      return lengthUntil(characters, index + 2, ">", index)
+    }
+  }
+  None
+}
+
+/** Whether the characters at `index` spell `text`. */
+public fn startsWithText(characters: List<Char>, index: Int, text: String): Bool {
+  var at = index
+  for character in text.chars() {
+    if at >= characters.length() || characters[at] != character {
+      return false
+    }
+    at = at + 1
+  }
+  true
+}
+
+/** The length from `start` up to and including the first `end` after `from`. */
+fn lengthUntil(characters: List<Char>, from: Int, end: String, start: Int): Int? {
+  var at = from
+  while at < characters.length() {
+    if startsWithText(characters, at, end) {
+      return Some(at + end.byteLength() - start)
+    }
+    at = at + 1
+  }
+  None
+}
+
+/** `<name attribute="value" ...>` or `<name ... />`. */
+fn openTagLength(characters: List<Char>, start: Int): Int? {
+  var at = start + 1
+  at = tagNameEnd(characters, at)?
+  loop {
+    // An attribute needs whitespace in front of it
+    const afterSpace = skipWhitespace characters, at
+    if afterSpace < characters.length() && (characters[afterSpace] == '>' || characters[afterSpace] == '/') {
+      at = afterSpace
+      break
+    }
+    if afterSpace == at {
+      return None
+    }
+    at = attributeEnd(characters, afterSpace)?
+  }
+  if characters[at] == '/' {
+    at = at + 1
+  }
+  if at < characters.length() && characters[at] == '>' {
+    return Some(at + 1 - start)
+  }
+  None
+}
+
+/** `</name >`. */
+fn closingTagLength(characters: List<Char>, start: Int): Int? {
+  var at = tagNameEnd(characters, start + 2)?
+  at = skipWhitespace characters, at
+  if at < characters.length() && characters[at] == '>' {
+    return Some(at + 1 - start)
+  }
+  None
+}
+
+/** A tag name: an ASCII letter, then letters, digits and `-`. */
+fn tagNameEnd(characters: List<Char>, from: Int): Int? {
+  if from >= characters.length() || !isAsciiLetter(characters[from]) {
+    return None
+  }
+  var at = from + 1
+  while at < characters.length() && (isAlphanumeric(characters[at]) || characters[at] == '-') {
+    at = at + 1
+  }
+  Some at
+}
+
+/** An attribute: its name, and optionally `=` and a value. */
+fn attributeEnd(characters: List<Char>, from: Int): Int? {
+  if from >= characters.length() {
+    return None
+  }
+  const first = characters[from]
+  if !isAsciiLetter(first) && first != '_' && first != ':' {
+    return None
+  }
+  var at = from + 1
+  while at < characters.length() {
+    const character = characters[at]
+    if isAlphanumeric(character) || character == '_' || character == '.' || character == ':' || character == '-' {
+      at = at + 1
+    } else {
+      break
+    }
+  }
+  const beforeValue = skipWhitespace characters, at
+  if beforeValue >= characters.length() || characters[beforeValue] != '=' {
+    return Some at
+  }
+  var value = skipWhitespace(characters, beforeValue + 1)
+  if value >= characters.length() {
+    return None
+  }
+  const quote = characters[value]
+  if quote == '"' || quote == '\'' {
+    value = value + 1
+    while value < characters.length() && characters[value] != quote {
+      value = value + 1
+    }
+    if value >= characters.length() {
+      return None
+    }
+    return Some(value + 1)
+  }
+  // An unquoted value: no whitespace, no quotes, no `=`, `<`, `>` or backtick
+  const unquoted = value
+  while value < characters.length() {
+    const character = characters[value]
+    const stops = character == ' ' || character == '\t' || character == '\n' || character == '\r' || character == '"'
+      || character == '\'' || character == '=' || character == '<' || character == '>' || character == '`'
+    if stops {
+      break
+    }
+    value = value + 1
+  }
+  if value == unquoted {
+    return None
+  }
+  Some value
+}
+
+/** Past spaces, tabs and up to one line break - the whitespace a tag may hold. */
+fn skipWhitespace(characters: List<Char>, from: Int): Int {
+  var at = from
+  while at < characters.length() {
+    const character = characters[at]
+    if character == ' ' || character == '\t' || character == '\n' || character == '\r' || character == '\u{c}' {
+      at = at + 1
+    } else {
+      break
+    }
+  }
+  at
+}
+
+// --- Link destinations and titles ------------------------------------------------------------------------------------
+
+/** A scanned part of a link, and the index after it. */
+public type Scanned {
+  text: String
+  end: Int
+}
+
+/** A link destination at `from`: `<...>`, or a run without spaces and control characters whose parentheses balance. */
+public fn linkDestination(characters: List<Char>, from: Int): Scanned? {
+  if from < characters.length() && characters[from] == '<' {
+    var at = from + 1
+    while at < characters.length() {
+      const character = characters[at]
+      if character == '>' {
+        return Some Scanned(unescaped(String.from(characters.slice((from + 1)..at))), at + 1)
+      }
+      if character == '<' || character == '\n' || character == '\r' {
+        return None
+      }
+      if character == '\\' && at + 1 < characters.length() && isAsciiPunctuation(characters[at + 1]) {
+        at = at + 2
+        continue
+      }
+      at = at + 1
+    }
+    return None
+  }
+  var at = from
+  var depth = 0
+  while at < characters.length() {
+    const character = characters[at]
+    if character == '\\' && at + 1 < characters.length() && isAsciiPunctuation(characters[at + 1]) {
+      at = at + 2
+      continue
+    }
+    if character == '(' {
+      depth = depth + 1
+      if depth > 32 {
+        return None
+      }
+    } else if character == ')' {
+      if depth == 0 {
+        break
+      }
+      depth = depth - 1
+    } else if Int64.from(character) <= 32 || Int64.from(character) == 127 {
+      break
+    }
+    at = at + 1
+  }
+  if at == from || depth != 0 {
+    return None
+  }
+  Some Scanned(unescaped(String.from(characters.slice(from..at))), at)
+}
+
+/** A link title at `from`: in `"..."`, `'...'` or `(...)`, with escapes. */
+public fn linkTitle(characters: List<Char>, from: Int): Scanned? {
+  if from >= characters.length() {
+    return None
+  }
+  const opening = characters[from]
+  const closing = match opening {
+    '"' => '"'
+    '\'' => '\''
+    '(' => ')'
+    _ => {
+      return None
+    }
+  }
+  var at = from + 1
+  while at < characters.length() {
+    const character = characters[at]
+    if character == '\\' && at + 1 < characters.length() && isAsciiPunctuation(characters[at + 1]) {
+      at = at + 2
+      continue
+    }
+    if character == closing {
+      return Some Scanned(unescaped(String.from(characters.slice((from + 1)..at))), at + 1)
+    }
+    if opening == '(' && character == '(' {
+      return None
+    }
+    at = at + 1
+  }
+  None
+}
+
+/** A link label at `from`: `[...]` of at most 999 characters without an unescaped bracket; its text without the brackets. */
+public fn linkLabel(characters: List<Char>, from: Int): Scanned? {
+  if from >= characters.length() || characters[from] != '[' {
+    return None
+  }
+  var at = from + 1
+  var hasContent = false
+  while at < characters.length() && at - from <= 1000 {
+    const character = characters[at]
+    if character == '\\' && at + 1 < characters.length() && isAsciiPunctuation(characters[at + 1]) {
+      at = at + 2
+      hasContent = true
+      continue
+    }
+    if character == '[' {
+      return None
+    }
+    if character == ']' {
+      if !hasContent || at - from > 1000 {
+        return None
+      }
+      return Some Scanned(String.from(characters.slice((from + 1)..at)), at + 1)
+    }
+    if !isSpaceOrTab(character) && character != '\n' && character != '\r' {
+      hasContent = true
+    }
+    at = at + 1
+  }
+  None
+}

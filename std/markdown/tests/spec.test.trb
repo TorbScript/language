@@ -1,0 +1,54 @@
+/**
+ * `std/markdown` against the examples of the CommonMark specification 0.31.2 and of the table extension of GitHub
+ * Flavored Markdown (`spec-examples.trb`, with the specifications' notice): every example renders as the HTML the
+ * specification gives, with tables off and with them on, and every example written back by the writer and read again
+ * renders as the same HTML.
+ */
+
+use test, group from "std/test"
+use commonMarkExamples, tableExamples, SpecExample from "./spec-examples"
+use Markdown from "../src/lib"
+
+const commonMark = Markdown frontMatter: false, tables: false
+const withTables = Markdown frontMatter: false
+
+fn rendersAsSpecified(example: SpecExample, markdown: Markdown): Bool {
+  markdown.html(example.markdown) == example.html
+}
+
+fn writesBack(example: SpecExample): Bool {
+  const document = commonMark.parse example.markdown
+  commonMark.parse(document.markdown()).html() == document.html()
+}
+
+group "CommonMark 0.31.2: every example renders as specified" {
+  for example in commonMarkExamples() {
+    test "{example.number} {example.section}" {
+      assert rendersAsSpecified(example, commonMark)
+    }
+  }
+}
+
+group "CommonMark 0.31.2 with tables on: nothing changes for a text without a table" {
+  for example in commonMarkExamples() {
+    test "{example.number} {example.section}" {
+      assert rendersAsSpecified(example, withTables)
+    }
+  }
+}
+
+group "GitHub Flavored Markdown: the examples of the table extension" {
+  for example in tableExamples() {
+    test "table {example.number}" {
+      assert rendersAsSpecified(example, withTables)
+    }
+  }
+}
+
+group "writing: every example written back reads as the same document" {
+  for example in commonMarkExamples() {
+    test "{example.number} {example.section}" {
+      assert writesBack(example)
+    }
+  }
+}

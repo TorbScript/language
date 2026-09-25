@@ -1,0 +1,123 @@
+/**
+ * The document tree of Markdown: blocks, which hold blocks or inlines, and inlines, which hold text. It is a value -
+ * built by the parser, read by the HTML renderer and the writer, and changed by a program like any other value.
+ */
+
+use YamlDocument, YamlError, Yaml from "std/yaml"
+
+/** A parsed Markdown document: its blocks, and the front matter it starts with, if any. */
+public type MarkdownDocument {
+  blocks: List<MarkdownBlock>
+  frontMatter: FrontMatter? = None
+}
+
+/**
+ * The front matter of a document: the text between a first line `---` and the next line `---` or `...`, which is
+ * YAML. `line` is the line of its first line of text, counted from 1.
+ */
+public type FrontMatter {
+  text: String
+  line: Int
+
+  /** The front matter as a YAML document, whose lines count in the Markdown document. */
+  fn document(): Result<YamlDocument, YamlError> {
+    const padding = "\n".repeat(line - 1)
+    Yaml().parse(padding + text)
+  }
+}
+
+/** One block, and the lines it spans, counted from 1. */
+public type MarkdownBlock {
+  content: BlockContent
+  line: Int = 0
+  endLine: Int = 0
+}
+
+/** What a block is. */
+public type BlockContent {
+  case Paragraph(inlines: List<MarkdownInline>)
+  /** `# Title` or a line underlined with `=` or `-`; `level` is 1 to 6. */
+  case Heading(level: Int, inlines: List<MarkdownInline>)
+  case ThematicBreak
+  /** A fenced block with its info string, or an indented one, whose info string is empty. */
+  case CodeBlock(info: String, text: String, fenced: Bool)
+  case HtmlBlock(html: String)
+  case BlockQuote(blocks: List<MarkdownBlock>)
+  case ItemList(list: MarkdownList)
+  /** A table of GitHub Flavored Markdown. */
+  case Table(table: MarkdownTable)
+}
+
+/**
+ * A bullet list or an ordered list. `marker` is the bullet (`-`, `+`, `*`) or the delimiter after the number (`.`,
+ * `)`); `start` is the first number of an ordered list. A list is tight when no blank line separates its items or the
+ * blocks inside them, and a tight list's paragraphs are written without `<p>`.
+ */
+public type MarkdownList {
+  ordered: Bool
+  marker: String
+  start: Int
+  tight: Bool
+  items: List<ListItem>
+}
+
+/** One item of a list: the blocks it holds, and the line of its marker. */
+public type ListItem {
+  blocks: List<MarkdownBlock>
+  line: Int = 0
+}
+
+/** How a column of a table is aligned, as its delimiter row says. */
+public type ColumnAlignment {
+  case Unspecified
+  case Left
+  case Center
+  case Right
+}
+
+/** A table: the alignment of each column, the cells of its header row, and the cells of each row after it. */
+public type MarkdownTable {
+  alignments: List<ColumnAlignment>
+  header: List<List<MarkdownInline>>
+  rows: List<List<List<MarkdownInline>>>
+}
+
+/** What a paragraph, a heading or a cell holds. `line` of a link or an image is the line it starts on. */
+public type MarkdownInline {
+  case Text(text: String)
+  /** `` `code` ``: the text between the backticks. */
+  case Code(text: String)
+  case Emphasis(children: List<MarkdownInline>)
+  case Strong(children: List<MarkdownInline>)
+  case Link(destination: String, title: String, children: List<MarkdownInline>, line: Int)
+  case Image(destination: String, title: String, children: List<MarkdownInline>, line: Int)
+  /** Raw HTML, written through as it is. */
+  case Html(html: String)
+  /** A line break that is only a break of the source: rendered as a line break of the output, or a space. */
+  case SoftBreak
+  /** A line break that is one: two spaces or a `\` at the end of the line. */
+  case HardBreak
+}
+
+/** The text of inlines without their markup: what an image's `alt` is, and what a heading's anchor is made of. */
+public fn plainText(inlines: List<MarkdownInline>): String {
+  var pieces: List<String> = []
+  appendPlain pieces, inlines
+  pieces.joined separator: ""
+}
+
+fn appendPlain(var pieces: List<String>, inlines: List<MarkdownInline>) {
+  for inline in inlines {
+    match inline {
+      .Text(text) => pieces.append text
+      .Code(text) => pieces.append text
+      .Emphasis(children) => appendPlain pieces, children
+      .Strong(children) => appendPlain pieces, children
+      .Link(_, _, children, _) => appendPlain pieces, children
+      .Image(_, _, children, _) => appendPlain pieces, children
+      .Html(_) => {}
+      .SoftBreak => pieces.append "\n"
+      .HardBreak => pieces.append "\n"
+    }
+  }
+}

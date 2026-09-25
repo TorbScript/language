@@ -1,0 +1,139 @@
+/**
+ * The tree beyond the specification's HTML: the lines of blocks and links, front matter read through `std/yaml`,
+ * lists, tables and headings as values, and the writer.
+ */
+
+use test, group from "std/test"
+use Markdown, MarkdownDocument, MarkdownBlock, BlockContent, MarkdownInline, ColumnAlignment, plainText from "../src/lib"
+
+const page = """
+  ---
+  title: Bindings
+  keywords: [const, var]
+  ---
+
+  # Values
+
+  A [link](target.md#anchor) and
+  a second [one][ref].
+
+  - one
+  - two
+
+  | name | kind |
+  | :--- | ---: |
+  | x | `Int` |
+
+  [ref]: other.md
+  """
+
+fn headings(document: MarkdownDocument): List<String> {
+  var found: List<String> = []
+  for block in document.blocks {
+    if const .Heading(level, inlines) = block.content {
+      found.append "{level} {plainText(inlines)} {block.line}"
+    }
+  }
+  found
+}
+
+/** Every link of a list of inlines, as `destination@line`. */
+fn linksOf(inlines: List<MarkdownInline>): List<String> {
+  var found: List<String> = []
+  for inline in inlines {
+    match inline {
+      .Link(destination, _, children, line) => {
+        found.append "{destination}@{line}"
+        found.appendAll linksOf(children)
+      }
+      .Emphasis(children) => found.appendAll linksOf(children)
+      .Strong(children) => found.appendAll linksOf(children)
+      _ => {}
+    }
+  }
+  found
+}
+
+group "the tree" {
+  test "front matter is read, and the lines of the body count in the whole file" {
+    const document = Markdown().parse(page)
+    assert(document.frontMatter.map({ _.line }) == Some(2))
+    const yaml = document.frontMatter.expect("front matter").document().expect("YAML")
+    assert(yaml.root.at("title").flatMap({ _.text() }) == Some("Bindings"))
+    assert(yaml.root.at("keywords").map({ _.line }) == Some(3))
+    assert(headings(document) == ["1 Values 6"])
+  }
+
+  test "every link knows its line, a reference link too" {
+    const document = Markdown().parse(page)
+    const paragraph = document.blocks[1]
+    assert(paragraph.line == 8 && paragraph.endLine == 9)
+    match paragraph.content {
+      .Paragraph(inlines) => {
+        assert(linksOf(inlines) == ["target.md#anchor@8", "other.md@9"])
+      }
+      _ => assert false
+    }
+  }
+
+  test "a list is tight or loose, and knows its items' lines" {
+    const document = Markdown().parse(page)
+    match document.blocks[2].content {
+      .ItemList(list) => {
+        assert(list.tight && !list.ordered && list.marker == "-")
+        assert(list.items.map({ _.line }).toList() == [11, 12])
+      }
+      _ => assert false
+    }
+    match Markdown().parse("1) a\n\n2) b\n").blocks[0].content {
+      .ItemList(list) => {
+        assert(!list.tight && list.ordered && list.marker == ")" && list.start == 1)
+      }
+      _ => assert false
+    }
+  }
+
+  test "a table is its alignments and its cells" {
+    const document = Markdown().parse(page)
+    match document.blocks[3].content {
+      .Table(table) => {
+        assert(table.alignments == [ColumnAlignment.Left, ColumnAlignment.Right])
+        assert(table.header.map({ plainText _ }).toList() == ["name", "kind"])
+        assert(table.rows[0][1] == [MarkdownInline.Code("Int")])
+      }
+      _ => assert false
+    }
+  }
+
+  test "without front matter and tables the reader is CommonMark" {
+    const document = Markdown(frontMatter: false, tables: false).parse("---\na | b\n- | -\n")
+    assert(document.frontMatter == None)
+    assert(document.html() == "<hr />\n<p>a | b</p>\n<ul>\n<li>| -</li>\n</ul>\n")
+  }
+
+  test "a code block keeps its info string, and an unclosed one runs to the end" {
+    const document = Markdown().parse("```trb check\nconst x = 1\n")
+    assert(document.blocks[0].content == BlockContent.CodeBlock("trb check", "const x = 1\n", true))
+    assert(document.blocks[0].line == 1 && document.blocks[0].endLine == 2)
+  }
+}
+
+group "writing" {
+  test "a document writes back as Markdown that reads as the same tree" {
+    const document = Markdown().parse(page)
+    const written = document.markdown()
+    assert(Markdown().parse(written).html() == document.html())
+    assert written.startsWith("---\ntitle: Bindings\n")
+  }
+
+  test "text that looks like markup is escaped" {
+    const document = MarkdownDocument([MarkdownBlock(BlockContent.Paragraph([MarkdownInline.Text("1. *not* <b>")]))])
+    assert(document.markdown() == "1\\. \\*not\\* \\<b\\>\n")
+    assert(Markdown().parse(document.markdown()).html() == "<p>1. *not* &lt;b&gt;</p>\n")
+  }
+
+  test "HTML is its own step over the tree" {
+    const document = MarkdownDocument([MarkdownBlock(BlockContent.Heading(2, [MarkdownInline.Emphasis([MarkdownInline.Text("Hi")])]))])
+    assert(document.html() == "<h2><em>Hi</em></h2>\n")
+  }
+}

@@ -1,0 +1,1234 @@
+/**
+ * The block parser: Markdown text to the tree of blocks, line by line, after the strategy of the CommonMark
+ * specification's appendix as commonmark.js implements it. Each line first continues the open blocks it can, then
+ * may start new ones, and what is left of it is added to the innermost block that takes lines - or continues a
+ * paragraph lazily.
+ *
+ * The blocks live in one list and point at each other by index while they are open; when the last line is read, the
+ * tree of [MarkdownBlock]s is built from them and the inlines of every paragraph, heading and cell are parsed.
+ */
+
+use MarkdownDocument, MarkdownBlock, BlockContent, MarkdownList, ListItem, MarkdownTable, ColumnAlignment, FrontMatter from "./tree"
+use MarkdownInline from "./tree"
+use LinkReference, parsedInlines from "./inlines"
+use isSpaceOrTab, isBlankText, unescaped, normalizedLabel, linkLabel, linkDestination, linkTitle, isAsciiLetter from "./text"
+use isAlphanumeric, htmlTagLength from "./text"
+
+/** How the parser reads: whether a document may start with front matter, and whether tables are recognized. */
+public type ParseOptions {
+  frontMatter: Bool = true
+  tables: Bool = true
+}
+
+/** A whole document. */
+public fn parsedDocument(text: String, options: ParseOptions): MarkdownDocument {
+  var lines = linesOf text
+  var firstLine = 1
+  var frontMatter: FrontMatter? = None
+  if options.frontMatter && !lines.isEmpty() && lines[0].trim() == "---" {
+    var end = 1
+    while end < lines.length() && lines[end].trim() != "---" && lines[end].trim() != "..." {
+      end = end + 1
+    }
+    if end < lines.length() {
+      var inner: List<String> = []
+      for index in 1..end {
+        inner.append lines[index]
+      }
+      const innerText = if inner.isEmpty() { "" } else { inner.joined(separator: "\n") + "\n" }
+      frontMatter = Some FrontMatter(innerText, 2)
+      lines = lines.slice((end + 1)..lines.length())
+      firstLine = end + 2
+    }
+  }
+  var parser = BlockParser(tables: options.tables, lineOffset: firstLine - 1)
+  for line in lines {
+    parser.incorporateLine line
+  }
+  parser.finishAll()
+  MarkdownDocument parser.blocksOf(0), frontMatter
+}
+
+/** The lines of a text, without their line breaks; a line break at the end ends the last line and starts none. */
+fn linesOf(text: String): List<String> {
+  var lines: List<String> = []
+  var current: List<Char> = []
+  var previousReturn = false
+  for character in text.chars() {
+    if character == '\n' {
+      if !previousReturn {
+        lines.append String.from(current)
+      }
+      current = []
+      previousReturn = false
+      continue
+    }
+    if character == '\r' {
+      lines.append String.from(current)
+      current = []
+      previousReturn = true
+      continue
+    }
+    previousReturn = false
+    // U+0000 is replaced, as the spec says, for safety
+    current.append(if character == '\u{0}' { '\u{fffd}' } else { character })
+  }
+  if !current.isEmpty() {
+    lines.append String.from(current)
+  }
+  lines
+}
+
+type Kind {
+  case Document
+  case BlockQuote
+  case ItemList
+  case Item
+  case Heading
+  case ThematicBreak
+  case CodeBlock
+  case HtmlBlock
+  case Paragraph
+  case Table
+}
+
+type ListData {
+  ordered: Bool = false
+  bullet: Char = '-'
+  delimiter: Char = '.'
+  start: Int = 1
+  padding: Int = 0
+  markerOffset: Int = 0
+}
+
+type Node {
+  var kind: Kind
+  parent: Int
+  var children: List<Int> = []
+  var open: Bool = true
+  /** The lines the block has taken, each ending in a line break: a paragraph's text, a code block's lines. */
+  var lines: List<String> = []
+  startLine: Int
+  var endLine: Int = 0
+  var level: Int = 0
+  var fenced: Bool = false
+  var fenceCharacter: Char = '`'
+  var fenceLength: Int = 0
+  var fenceOffset: Int = 0
+  var htmlType: Int = 0
+  var listData: ListData = ListData()
+  var tight: Bool = true
+  var alignments: List<ColumnAlignment> = []
+  /** Lines the finished paragraph lost to link reference definitions in front of it. */
+  var skippedLines: Int = 0
+}
+
+type BlockParser {
+  tables: Bool
+  lineOffset: Int
+  var nodes: List<Node> = [Node(Kind.Document, -1, startLine: 1)]
+  var tip: Int = 0
+  var oldTip: Int = 0
+  var lastMatched: Int = 0
+  var allClosed: Bool = true
+  var line: List<Char> = []
+  var lineNumber: Int = 0
+  var offset: Int = 0
+  var column: Int = 0
+  var nextNonspace: Int = 0
+  var nextNonspaceColumn: Int = 0
+  var indent: Int = 0
+  var indented: Bool = false
+  var blank: Bool = false
+  var partiallyConsumedTab: Bool = false
+  var references: Map<String, LinkReference> = [:]
+
+  // --- The line -----------------------------------------------------------------------------------------------------
+
+  fn characterAt(index: Int): Char? {
+    if index >= 0 && index < line.length() {
+      return Some line[index]
+    }
+    None
+  }
+
+  fn restFrom(index: Int): List<Char> {
+    if index >= line.length() {
+      return []
+    }
+    line.slice(index..line.length())
+  }
+
+  var fn findNextNonspace() {
+    var index = offset
+    var columns = column
+    while index < line.length() {
+      const character = line[index]
+      if character == ' ' {
+        index = index + 1
+        columns = columns + 1
+      } else if character == '\t' {
+        index = index + 1
+        columns = columns + 4 - columns % 4
+      } else {
+        break
+      }
+    }
+    blank = index >= line.length()
+    nextNonspace = index
+    nextNonspaceColumn = columns
+    indent = nextNonspaceColumn - column
+    indented = indent >= 4
+  }
+
+  var fn advanceNextNonspace() {
+    offset = nextNonspace
+    column = nextNonspaceColumn
+    partiallyConsumedTab = false
+  }
+
+  /** Moves on by `count` characters, or by `count` columns where a tab counts as the columns up to its tab stop. */
+  var fn advanceOffset(count: Int, columns: Bool) {
+    var remaining = count
+    while remaining > 0 && offset < line.length() {
+      const character = line[offset]
+      if character == '\t' {
+        const toTab = 4 - column % 4
+        if columns {
+          partiallyConsumedTab = toTab > remaining
+          const advance = if toTab > remaining { remaining } else { toTab }
+          column = column + advance
+          if !partiallyConsumedTab {
+            offset = offset + 1
+          }
+          remaining = remaining - advance
+        } else {
+          partiallyConsumedTab = false
+          column = column + toTab
+          offset = offset + 1
+          remaining = remaining - 1
+        }
+      } else {
+        partiallyConsumedTab = false
+        offset = offset + 1
+        column = column + 1
+        remaining = remaining - 1
+      }
+    }
+  }
+
+  var fn addLine() {
+    var text = ""
+    if partiallyConsumedTab {
+      offset = offset + 1
+      const toTab = 4 - column % 4
+      text = " ".repeat(toTab)
+    }
+    nodes[tip].lines.append(text + String.from(restFrom(offset)) + "\n")
+  }
+
+  // --- The tree -----------------------------------------------------------------------------------------------------
+
+  fn lastChild(index: Int): Int? {
+    nodes[index].children.last()
+  }
+
+  var fn addChild(kind: Kind): Int {
+    while !canContain(nodes[tip].kind, kind) {
+      finalize(tip, lineNumber - 1)
+    }
+    nodes.append Node(kind, tip, startLine: lineNumber)
+    const index = nodes.length() - 1
+    nodes[tip].children.append index
+    tip = index
+    index
+  }
+
+  var fn removeFromParent(index: Int) {
+    const parent = nodes[index].parent
+    nodes[parent].children = nodes[parent].children.filter({ _ != index }).toList()
+  }
+
+  var fn closeUnmatchedBlocks() {
+    if !allClosed {
+      while oldTip != lastMatched {
+        const parent = nodes[oldTip].parent
+        finalize(oldTip, lineNumber - 1)
+        oldTip = parent
+      }
+      allClosed = true
+    }
+  }
+
+  var fn finalize(index: Int, endLine: Int) {
+    const above = nodes[index].parent
+    nodes[index].open = false
+    nodes[index].endLine = endLine
+    match nodes[index].kind {
+      .Paragraph => finalizeParagraph index
+      .ItemList => finalizeList index
+      .Item => {
+        if const Some(last) = lastChild(index) {
+          nodes[index].endLine = nodes[last].endLine
+        } else {
+          nodes[index].endLine = nodes[index].startLine
+        }
+      }
+      _ => {}
+    }
+    tip = above
+  }
+
+  var fn finalizeParagraph(index: Int) {
+    var content = nodes[index].lines.joined separator: ""
+    var removed = false
+    while content.startsWith("[") {
+      const consumed = parseReference content
+      if consumed == 0 {
+        break
+      }
+      nodes[index].skippedLines = nodes[index].skippedLines + countLines(content.sliceBytes(0, consumed))
+      content = content.sliceBytes consumed, content.byteLength()
+      removed = true
+    }
+    nodes[index].lines = [content]
+    if removed && isBlankText(content) {
+      removeFromParent index
+    }
+  }
+
+  var fn finalizeList(index: Int) {
+    var tight = true
+    const items = nodes[index].children
+    for position in 0..items.length() {
+      const item = items[position]
+      if position + 1 < items.length() && endsWithBlankLine(item, items[position + 1]) {
+        tight = false
+        break
+      }
+      const children = nodes[item].children
+      for childPosition in 0..children.length() {
+        if childPosition + 1 < children.length() && endsWithBlankLine(children[childPosition], children[childPosition + 1]) {
+          tight = false
+        }
+      }
+      if !tight {
+        break
+      }
+    }
+    nodes[index].tight = tight
+    if const Some(last) = lastChild(index) {
+      nodes[index].endLine = nodes[last].endLine
+    }
+  }
+
+  /** Whether a blank line stands between a block and the one after it. */
+  fn endsWithBlankLine(block: Int, next: Int): Bool {
+    nodes[block].endLine != nodes[next].startLine - 1
+  }
+
+  var fn finishAll() {
+    while tip >= 0 {
+      finalize tip, lineNumber
+    }
+  }
+
+  // --- A line -------------------------------------------------------------------------------------------------------
+
+  var fn incorporateLine(text: String) {
+    var container = 0
+    oldTip = tip
+    offset = 0
+    column = 0
+    blank = false
+    partiallyConsumedTab = false
+    lineNumber = lineNumber + 1
+    line = text.chars().toList()
+    while const Some(child) = lastChild(container) {
+      if !nodes[child].open {
+        break
+      }
+      container = child
+      findNextNonspace()
+      const result = continues container
+      if result == 2 {
+        return
+      }
+      if result == 1 {
+        container = nodes[container].parent
+        break
+      }
+    }
+    allClosed = container == oldTip
+    lastMatched = container
+    // A paragraph and a table end where another block starts, so the starts are tried in them too
+    const containerKind = nodes[container].kind
+    var matchedLeaf = containerKind != Kind.Paragraph && containerKind != Kind.Table && acceptsLines(containerKind)
+    while !matchedLeaf {
+      findNextNonspace()
+      if !indented && !maybeSpecial(nextNonspace) {
+        advanceNextNonspace()
+        break
+      }
+      const result = startBlock container
+      if result == 1 {
+        container = tip
+        continue
+      }
+      if result == 2 {
+        container = tip
+        matchedLeaf = true
+        break
+      }
+      advanceNextNonspace()
+      break
+    }
+    if !allClosed && !blank && nodes[tip].kind == Kind.Paragraph {
+      // A lazy continuation of the paragraph
+      addLine()
+      return
+    }
+    closeUnmatchedBlocks()
+    const kind = nodes[container].kind
+    if acceptsLines(kind) {
+      addLine()
+      if kind == Kind.HtmlBlock && nodes[container].htmlType >= 1 && nodes[container].htmlType <= 5
+        && closesHtmlBlock(nodes[container].htmlType, restFrom(offset)) {
+        finalize container, lineNumber
+      }
+    } else if offset < line.length() && !blank {
+      const _paragraph = addChild Kind.Paragraph
+      advanceNextNonspace()
+      addLine()
+    }
+  }
+
+  /** Whether the text at `index` could start a block at all: a cheap test before trying every kind. */
+  fn maybeSpecial(index: Int): Bool {
+    match characterAt(index) {
+      Some(character) => {
+        match character {
+          '#' | '`' | '~' | '*' | '+' | '_' | '=' | '<' | '>' | '-' | '|' | ':' => true
+          other => other.isDigit() || (tables && nodes[tip].kind == Kind.Paragraph)
+        }
+      }
+      None => false
+    }
+  }
+
+  /** Whether an open block continues on this line: 0 it does, 1 it does not, 2 it ends and took the line. */
+  var fn continues(container: Int): Int {
+    match nodes[container].kind {
+      .Document => 0
+      .ItemList => 0
+      .BlockQuote => {
+        if !indented && characterAt(nextNonspace) == Some('>') {
+          advanceNextNonspace()
+          advanceOffset 1, false
+          if characterAt(offset).map({ isSpaceOrTab _ }) == Some(true) {
+            advanceOffset 1, true
+          }
+          return 0
+        }
+        1
+      }
+      .Item => {
+        const data = nodes[container].listData
+        if blank {
+          if nodes[container].children.isEmpty() {
+            // A blank line after an empty list item ends it
+            return 1
+          }
+          advanceNextNonspace()
+          return 0
+        }
+        if indent >= data.markerOffset + data.padding {
+          advanceOffset(data.markerOffset + data.padding, true)
+          return 0
+        }
+        1
+      }
+      .Heading => 1
+      .ThematicBreak => 1
+      .CodeBlock => {
+        if nodes[container].fenced {
+          const fenceCharacter = nodes[container].fenceCharacter
+          if indent <= 3 && characterAt(nextNonspace) == Some(fenceCharacter) {
+            const length = closingFenceLength nextNonspace, fenceCharacter
+            if length >= nodes[container].fenceLength {
+              finalize container, lineNumber
+              return 2
+            }
+          }
+          var remaining = nodes[container].fenceOffset
+          while remaining > 0 && characterAt(offset).map({ isSpaceOrTab _ }) == Some(true) {
+            advanceOffset 1, true
+            remaining = remaining - 1
+          }
+          return 0
+        }
+        if indent >= 4 {
+          advanceOffset 4, true
+          return 0
+        }
+        if blank {
+          advanceNextNonspace()
+          return 0
+        }
+        1
+      }
+      .HtmlBlock => {
+        const htmlKind = nodes[container].htmlType
+        if blank && (htmlKind == 6 || htmlKind == 7) {
+          return 1
+        }
+        0
+      }
+      .Paragraph => if blank { 1 } else { 0 }
+      .Table => if blank { 1 } else { 0 }
+    }
+  }
+
+  /** The length of a closing fence of `character` at `index`, or 0 where the line is none: only spaces may follow it. */
+  fn closingFenceLength(index: Int, character: Char): Int {
+    var at = index
+    while at < line.length() && line[at] == character {
+      at = at + 1
+    }
+    const length = at - index
+    if length < 3 {
+      return 0
+    }
+    while at < line.length() && isSpaceOrTab(line[at]) {
+      at = at + 1
+    }
+    if at < line.length() {
+      return 0
+    }
+    length
+  }
+
+  // --- New blocks ---------------------------------------------------------------------------------------------------
+
+  /** Tries every kind of block that can start here: 0 none did, 1 a container did, 2 a leaf did. */
+  var fn startBlock(container: Int): Int {
+    var result = startBlockQuote()
+    if result == 0 {
+      result = startAtxHeading()
+    }
+    if result == 0 {
+      result = startFencedCode()
+    }
+    if result == 0 {
+      result = startHtmlBlock container
+    }
+    if result == 0 {
+      result = startSetextHeading container
+    }
+    if result == 0 {
+      result = startTable container
+    }
+    if result == 0 {
+      result = startThematicBreak()
+    }
+    if result == 0 {
+      result = startListItem container
+    }
+    if result == 0 {
+      result = startIndentedCode()
+    }
+    result
+  }
+
+  var fn startBlockQuote(): Int {
+    if indented || characterAt(nextNonspace) != Some('>') {
+      return 0
+    }
+    advanceNextNonspace()
+    advanceOffset 1, false
+    if characterAt(offset).map({ isSpaceOrTab _ }) == Some(true) {
+      advanceOffset 1, true
+    }
+    closeUnmatchedBlocks()
+    const _block = addChild Kind.BlockQuote
+    1
+  }
+
+  var fn startAtxHeading(): Int {
+    if indented || characterAt(nextNonspace) != Some('#') {
+      return 0
+    }
+    var at = nextNonspace
+    while at < line.length() && line[at] == '#' {
+      at = at + 1
+    }
+    const level = at - nextNonspace
+    if level > 6 || (at < line.length() && !isSpaceOrTab(line[at])) {
+      return 0
+    }
+    advanceNextNonspace()
+    advanceOffset level, false
+    closeUnmatchedBlocks()
+    const heading = addChild Kind.Heading
+    nodes[heading].level = level
+    nodes[heading].lines = [headingText(restFrom(offset))]
+    advanceOffset(line.length() - offset, false)
+    2
+  }
+
+  var fn startFencedCode(): Int {
+    if indented {
+      return 0
+    }
+    const fence = characterAt nextNonspace
+    if fence != Some('`') && fence != Some('~') {
+      return 0
+    }
+    const character = fence ?? '`'
+    var at = nextNonspace
+    while at < line.length() && line[at] == character {
+      at = at + 1
+    }
+    const length = at - nextNonspace
+    if length < 3 {
+      return 0
+    }
+    // The info string of a backtick fence has no backtick
+    if character == '`' && restFrom(at).contains('`') {
+      return 0
+    }
+    closeUnmatchedBlocks()
+    const block = addChild Kind.CodeBlock
+    nodes[block].fenced = true
+    nodes[block].fenceLength = length
+    nodes[block].fenceCharacter = character
+    nodes[block].fenceOffset = indent
+    advanceNextNonspace()
+    advanceOffset length, false
+    2
+  }
+
+  var fn startHtmlBlock(container: Int): Int {
+    if indented || characterAt(nextNonspace) != Some('<') {
+      return 0
+    }
+    const rest = restFrom nextNonspace
+    for htmlKind in 1..8 {
+      if opensHtmlBlock(htmlKind, rest) {
+        // Only the first six kinds interrupt a paragraph
+        if htmlKind == 7 && (nodes[container].kind == Kind.Paragraph || (!allClosed && !blank && nodes[tip].kind == Kind.Paragraph)) {
+          return 0
+        }
+        closeUnmatchedBlocks()
+        const block = addChild Kind.HtmlBlock
+        nodes[block].htmlType = htmlKind
+        return 2
+      }
+    }
+    0
+  }
+
+  var fn startSetextHeading(container: Int): Int {
+    if indented || nodes[container].kind != Kind.Paragraph {
+      return 0
+    }
+    const rest = restFrom nextNonspace
+    const level = setextLevel rest
+    if level == 0 {
+      return 0
+    }
+    closeUnmatchedBlocks()
+    // Link reference definitions at the start of the paragraph are not its text
+    var content = nodes[container].lines.joined separator: ""
+    var skipped = 0
+    while content.startsWith("[") {
+      const consumed = parseReference content
+      if consumed == 0 {
+        break
+      }
+      skipped = skipped + countLines(content.sliceBytes(0, consumed))
+      content = content.sliceBytes consumed, content.byteLength()
+    }
+    if content.isEmpty() {
+      return 0
+    }
+    nodes[container].kind = Kind.Heading
+    nodes[container].level = level
+    nodes[container].lines = [content]
+    nodes[container].skippedLines = skipped
+    tip = container
+    advanceOffset(line.length() - offset, false)
+    2
+  }
+
+  var fn startThematicBreak(): Int {
+    if indented || !isThematicBreak(restFrom(nextNonspace)) {
+      return 0
+    }
+    closeUnmatchedBlocks()
+    const _block = addChild Kind.ThematicBreak
+    advanceOffset(line.length() - offset, false)
+    2
+  }
+
+  var fn startListItem(container: Int): Int {
+    if indented && nodes[container].kind != Kind.ItemList {
+      return 0
+    }
+    const found = parseListMarker container
+    const data = match found {
+      Some(value) => value
+      None => {
+        return 0
+      }
+    }
+    closeUnmatchedBlocks()
+    // A list item joins the list before it where that list has the same kind of marker, and opens a list otherwise
+    if nodes[tip].kind != Kind.ItemList || !listsMatch(nodes[tip].listData, data) {
+      const list = addChild Kind.ItemList
+      nodes[list].listData = data
+    }
+    const item = addChild Kind.Item
+    nodes[item].listData = data
+    1
+  }
+
+  var fn startIndentedCode(): Int {
+    if !indented || nodes[tip].kind == Kind.Paragraph || blank {
+      return 0
+    }
+    advanceOffset 4, true
+    closeUnmatchedBlocks()
+    const _block = addChild Kind.CodeBlock
+    2
+  }
+
+  /** A table: the paragraph's last line is its header row, and this line its delimiter row. */
+  var fn startTable(container: Int): Int {
+    if !tables || indented || nodes[container].kind != Kind.Paragraph {
+      return 0
+    }
+    const rest = String.from restFrom(nextNonspace)
+    const alignments = match delimiterRow(rest) {
+      Some(found) => found
+      None => {
+        return 0
+      }
+    }
+    var paragraphLines: List<String> = []
+    for piece in nodes[container].lines {
+      paragraphLines.appendAll linesOf(piece)
+    }
+    if paragraphLines.isEmpty() {
+      return 0
+    }
+    const header = paragraphLines[paragraphLines.length() - 1]
+    if cellsOf(header).length() != alignments.length() {
+      return 0
+    }
+    closeUnmatchedBlocks()
+    var table = container
+    if paragraphLines.length() > 1 {
+      // The lines before the header row stay a paragraph of their own
+      var before: List<String> = []
+      for index in 0..(paragraphLines.length() - 1) {
+        before.append(paragraphLines[index] + "\n")
+      }
+      nodes[container].lines = before
+      finalize(container, lineNumber - 2)
+      table = addChild Kind.Table
+      nodes[table].lines = [header + "\n"]
+    } else {
+      nodes[container].kind = Kind.Table
+      nodes[container].lines = [header + "\n"]
+      tip = container
+    }
+    nodes[table].alignments = alignments
+    advanceOffset(line.length() - offset, false)
+    2
+  }
+
+  /** The list marker at the position, which moves past it and the spaces after it; `None` where there is none. */
+  var fn parseListMarker(container: Int): ListData? {
+    if indent >= 4 {
+      return None
+    }
+    const rest = restFrom nextNonspace
+    if rest.isEmpty() {
+      return None
+    }
+    var data = ListData markerOffset: indent
+    var markerLength = 0
+    const first = rest[0]
+    if first == '-' || first == '+' || first == '*' {
+      data = data.copy bullet: first
+      markerLength = 1
+    } else {
+      var digits = 0
+      var value = 0
+      while digits < rest.length() && digits < 10 && rest[digits].isDigit() {
+        value = value * 10 + Int64.from(rest[digits]) - 48
+        digits = digits + 1
+      }
+      if digits == 0 || digits > 9 || digits >= rest.length() || (rest[digits] != '.' && rest[digits] != ')') {
+        return None
+      }
+      // An ordered list interrupts a paragraph only when it starts with 1
+      if nodes[container].kind == Kind.Paragraph && value != 1 {
+        return None
+      }
+      data = data.copy ordered: true, start: value, delimiter: rest[digits]
+      markerLength = digits + 1
+    }
+    const after = characterAt(nextNonspace + markerLength)
+    if after.isSome() && after != Some(' ') && after != Some('\t') {
+      return None
+    }
+    // A list item that interrupts a paragraph is not empty
+    if nodes[container].kind == Kind.Paragraph && isBlankText(String.from(restFrom(nextNonspace + markerLength))) {
+      return None
+    }
+    advanceNextNonspace()
+    advanceOffset markerLength, true
+    const spacesStartColumn = column
+    const spacesStartOffset = offset
+    loop {
+      advanceOffset 1, true
+      const next = characterAt offset
+      if column - spacesStartColumn >= 5 || next.map({ isSpaceOrTab _ }) != Some(true) {
+        break
+      }
+    }
+    const isBlankItem = characterAt(offset).isNone()
+    const spacesAfterMarker = column - spacesStartColumn
+    if spacesAfterMarker >= 5 || spacesAfterMarker < 1 || isBlankItem {
+      data = data.copy(padding: markerLength + 1)
+      column = spacesStartColumn
+      offset = spacesStartOffset
+      if characterAt(offset).map({ isSpaceOrTab _ }) == Some(true) {
+        advanceOffset 1, true
+      }
+    } else {
+      data = data.copy(padding: markerLength + spacesAfterMarker)
+    }
+    Some data
+  }
+
+  // --- Link reference definitions -----------------------------------------------------------------------------------
+
+  /**
+   * Reads a link reference definition at the start of `text` into the references, and answers how many bytes it
+   * took; 0 where the text does not start with one.
+   */
+  var fn parseReference(text: String): Int {
+    const characters = text.chars().toList()
+    const label = match linkLabel(characters, 0) {
+      Some(found) => found
+      None => {
+        return 0
+      }
+    }
+    if label.end >= characters.length() || characters[label.end] != ':' {
+      return 0
+    }
+    var at = skipSpaceAndNewline(characters, label.end + 1)
+    const destination = match linkDestination(characters, at) {
+      Some(found) => found
+      None => {
+        return 0
+      }
+    }
+    if destination.end == at && !(at < characters.length() && characters[at] == '<') {
+      return 0
+    }
+    at = destination.end
+    const beforeTitle = at
+    at = skipSpaceAndNewline characters, at
+    var title = ""
+    var end = beforeTitle
+    var hasTitle = false
+    if at != beforeTitle {
+      if const Some(found) = linkTitle(characters, at) {
+        // The title is followed by nothing but spaces on its line
+        const afterTitle = skipSpaces characters, found.end
+        if afterTitle >= characters.length() || characters[afterTitle] == '\n' {
+          title = found.text
+          end = afterTitle
+          hasTitle = true
+        }
+      }
+    }
+    if !hasTitle {
+      // Without a title, the destination is followed by nothing but spaces on its line
+      const afterDestination = skipSpaces characters, beforeTitle
+      if afterDestination < characters.length() && characters[afterDestination] != '\n' {
+        return 0
+      }
+      end = afterDestination
+    }
+    if end < characters.length() && characters[end] == '\n' {
+      end = end + 1
+    }
+    const normalized = normalizedLabel label.text
+    if normalized.isEmpty() {
+      return 0
+    }
+    // The first definition of a label wins
+    if !references.containsKey(normalized) {
+      references[normalized] = LinkReference destination.text, title
+    }
+    var bytes = 0
+    for index in 0..end {
+      bytes = bytes + characters[index].byteLength()
+    }
+    bytes
+  }
+
+  // --- The finished tree --------------------------------------------------------------------------------------------
+
+  fn blocksOf(index: Int): List<MarkdownBlock> {
+    var blocks: List<MarkdownBlock> = []
+    for child in nodes[index].children {
+      if const Some(block) = blockOf(child) {
+        blocks.append block
+      }
+    }
+    blocks
+  }
+
+  fn blockOf(index: Int): MarkdownBlock? {
+    const node = nodes[index]
+    const firstLine = node.startLine + lineOffset
+    const content = match node.kind {
+      .Paragraph => {
+        const text = node.lines.joined separator: ""
+        BlockContent.Paragraph parsedInlines(text, firstLine + node.skippedLines, references)
+      }
+      .Heading => {
+        const text = node.lines.joined separator: ""
+        BlockContent.Heading node.level, parsedInlines(text, firstLine + node.skippedLines, references)
+      }
+      .ThematicBreak => BlockContent.ThematicBreak
+      .CodeBlock => codeBlockOf node
+      .HtmlBlock => {
+        var html = node.lines.joined separator: ""
+        if html.endsWith("\n") {
+          html = html.sliceBytes(0, html.byteLength() - 1)
+        }
+        BlockContent.HtmlBlock html
+      }
+      .BlockQuote => BlockContent.BlockQuote blocksOf(index)
+      .ItemList => {
+        var items: List<ListItem> = []
+        for item in node.children {
+          items.append ListItem(blocksOf(item), nodes[item].startLine + lineOffset)
+        }
+        const data = node.listData
+        const marker = if data.ordered { data.delimiter.show() } else { data.bullet.show() }
+        BlockContent.ItemList MarkdownList(data.ordered, marker, data.start, node.tight, items)
+      }
+      .Table => tableOf node, firstLine
+      _ => {
+        return None
+      }
+    }
+    Some MarkdownBlock(content, firstLine, node.endLine + lineOffset)
+  }
+
+  fn codeBlockOf(node: Node): BlockContent {
+    const content = node.lines.joined separator: ""
+    if node.fenced {
+      const firstBreak = content.indexOf("\n") ?? content.byteLength()
+      const info = unescaped content.sliceBytes(0, firstBreak).trim()
+      const rest = if firstBreak < content.byteLength() { content.sliceBytes(firstBreak + 1, content.byteLength()) } else { "" }
+      return BlockContent.CodeBlock info, rest, true
+    }
+    // An indented block loses its blank lines at the end
+    var lines = content.split "\n"
+    while !lines.isEmpty() && isBlankText(lines[lines.length() - 1]) {
+      lines = lines.removedAt(lines.length() - 1)
+    }
+    const text = if lines.isEmpty() { "" } else { lines.joined(separator: "\n") + "\n" }
+    BlockContent.CodeBlock "", text, false
+  }
+
+  fn tableOf(node: Node, firstLine: Int): BlockContent {
+    const content = node.lines.joined separator: ""
+    const rows = linesOf content
+    const columns = node.alignments.length()
+    var header: List<List<MarkdownInline>> = []
+    var body: List<List<List<MarkdownInline>>> = []
+    for rowIndex in 0..rows.length() {
+      // The header row is the table's first line, and the delimiter row its second, which holds no cells
+      if rowIndex == 1 {
+        continue
+      }
+      const cells = cellsOf rows[rowIndex]
+      const rowLine = firstLine + rowIndex
+      var parsed: List<List<MarkdownInline>> = []
+      for column in 0..columns {
+        const cell = cells.get(column) ?? ""
+        parsed.append parsedInlines(cell, rowLine, references)
+      }
+      if rowIndex == 0 {
+        header = parsed
+      } else {
+        body.append parsed
+      }
+    }
+    BlockContent.Table MarkdownTable(node.alignments, header, body)
+  }
+}
+
+fn canContain(parent: Kind, child: Kind): Bool {
+  match parent {
+    .Document => child != Kind.Item
+    .ItemList => child == Kind.Item
+    .BlockQuote => child != Kind.Item
+    .Item => child != Kind.Item
+    _ => false
+  }
+}
+
+fn acceptsLines(kind: Kind): Bool {
+  kind == Kind.CodeBlock || kind == Kind.HtmlBlock || kind == Kind.Paragraph || kind == Kind.Table
+}
+
+fn listsMatch(list: ListData, item: ListData): Bool {
+  list.ordered == item.ordered && list.delimiter == item.delimiter && list.bullet == item.bullet
+}
+
+fn countLines(text: String): Int {
+  var count = 0
+  for character in text.chars() {
+    if character == '\n' {
+      count = count + 1
+    }
+  }
+  count
+}
+
+fn skipSpaces(characters: List<Char>, from: Int): Int {
+  var at = from
+  while at < characters.length() && isSpaceOrTab(characters[at]) {
+    at = at + 1
+  }
+  at
+}
+
+fn skipSpaceAndNewline(characters: List<Char>, from: Int): Int {
+  var at = skipSpaces characters, from
+  if at < characters.length() && characters[at] == '\n' {
+    at = skipSpaces(characters, at + 1)
+  }
+  at
+}
+
+/** The text of an ATX heading: without the closing run of `#` and the spaces around the text. */
+fn headingText(rest: List<Char>): String {
+  var end = rest.length()
+  while end > 0 && isSpaceOrTab(rest[end - 1]) {
+    end = end - 1
+  }
+  var hashes = end
+  while hashes > 0 && rest[hashes - 1] == '#' {
+    hashes = hashes - 1
+  }
+  // A closing sequence stands after a space, or is the whole text
+  if hashes < end && (hashes == 0 || isSpaceOrTab(rest[hashes - 1])) {
+    end = hashes
+    while end > 0 && isSpaceOrTab(rest[end - 1]) {
+      end = end - 1
+    }
+  }
+  var start = 0
+  while start < end && isSpaceOrTab(rest[start]) {
+    start = start + 1
+  }
+  String.from rest.slice(start..end)
+}
+
+/** 1 for a line of `=`, 2 for a line of `-`, each maybe followed by spaces; 0 for any other line. */
+fn setextLevel(rest: List<Char>): Int {
+  if rest.isEmpty() || (rest[0] != '=' && rest[0] != '-') {
+    return 0
+  }
+  const character = rest[0]
+  var at = 0
+  while at < rest.length() && rest[at] == character {
+    at = at + 1
+  }
+  while at < rest.length() && isSpaceOrTab(rest[at]) {
+    at = at + 1
+  }
+  if at < rest.length() {
+    return 0
+  }
+  if character == '=' { 1 } else { 2 }
+}
+
+/** Three or more `*`, `-` or `_` of one kind, with nothing but spaces and tabs between them. */
+fn isThematicBreak(rest: List<Char>): Bool {
+  if rest.isEmpty() {
+    return false
+  }
+  const character = rest[0]
+  if character != '*' && character != '-' && character != '_' {
+    return false
+  }
+  var count = 0
+  for found in rest {
+    if found == character {
+      count = count + 1
+    } else if !isSpaceOrTab(found) {
+      return false
+    }
+  }
+  count >= 3
+}
+
+// --- HTML blocks -----------------------------------------------------------------------------------------------------
+
+/** The names of the sixth kind of HTML block. */
+const blockTagNames = [
+  "address", "article", "aside", "base", "basefont", "blockquote", "body", "caption", "center", "col", "colgroup", "dd",
+  "details", "dialog", "dir", "div", "dl", "dt", "fieldset", "figcaption", "figure", "footer", "form", "frame",
+  "frameset", "h1", "h2", "h3", "h4", "h5", "h6", "head", "header", "hr", "html", "iframe", "legend", "li", "link",
+  "main", "menu", "menuitem", "nav", "noframes", "ol", "optgroup", "option", "p", "param", "search", "section",
+  "summary", "table", "tbody", "td", "tfoot", "th", "thead", "title", "tr", "track", "ul",
+]
+
+/** Whether the rest of a line opens an HTML block of the given kind, 1 to 7. */
+fn opensHtmlBlock(htmlKind: Int, rest: List<Char>): Bool {
+  const text = String.from(rest).toLowerCase()
+  match htmlKind {
+    1 => {
+      for name in ["script", "pre", "textarea", "style"] {
+        if text.startsWith("<" + name) {
+          const after = rest.get(name.byteLength() + 1)
+          if after.isNone() || after == Some(' ') || after == Some('\t') || after == Some('>') {
+            return true
+          }
+        }
+      }
+      false
+    }
+    2 => text.startsWith "<!--"
+    3 => text.startsWith "<?"
+    4 => rest.length() > 2 && rest[1] == '!' && isAsciiLetter(rest[2])
+    5 => text.startsWith "<![cdata["
+    6 => {
+      var at = 1
+      if rest.get(1) == Some('/') {
+        at = 2
+      }
+      var end = at
+      while end < rest.length() && isAlphanumeric(rest[end]) {
+        end = end + 1
+      }
+      const name = String.from(rest.slice(at..end)).toLowerCase()
+      if !blockTagNames.contains(name) {
+        return false
+      }
+      const after = rest.get end
+      after.isNone() || after == Some(' ') || after == Some('\t') || after == Some('>')
+        || (after == Some('/') && rest.get(end + 1) == Some('>'))
+    }
+    7 => {
+      // A complete open or closing tag, and nothing but whitespace after it on the line
+      match htmlTagLength(rest, 0) {
+        Some(length) => {
+          const isTag = rest.length() > 1 && (isAsciiLetter(rest[1]) || rest[1] == '/')
+          isTag && isBlankText(String.from(rest.slice(length..rest.length())))
+        }
+        None => false
+      }
+    }
+    _ => false
+  }
+}
+
+/** Whether a line holds the end of an HTML block of the first five kinds. */
+fn closesHtmlBlock(htmlKind: Int, rest: List<Char>): Bool {
+  const text = String.from(rest).toLowerCase()
+  match htmlKind {
+    1 => text.contains("</script>") || text.contains("</pre>") || text.contains("</textarea>") || text.contains("</style>")
+    2 => text.contains "-->"
+    3 => text.contains "?>"
+    4 => text.contains ">"
+    5 => text.contains "]]>"
+    _ => false
+  }
+}
+
+// --- Tables ----------------------------------------------------------------------------------------------------------
+
+/** The alignments of a delimiter row, or `None` where the line is none: it has a `|` and every cell is `:?-+:?`. */
+fn delimiterRow(text: String): List<ColumnAlignment>? {
+  if !text.contains("|") {
+    return None
+  }
+  var alignments: List<ColumnAlignment> = []
+  for cell in cellsOf(text) {
+    const trimmed = cell.trim()
+    const left = trimmed.startsWith ":"
+    const right = trimmed.endsWith ":"
+    var inner = trimmed
+    if left {
+      inner = inner.sliceBytes 1, inner.byteLength()
+    }
+    if right && !inner.isEmpty() {
+      inner = inner.sliceBytes(0, inner.byteLength() - 1)
+    }
+    if inner.isEmpty() || !inner.chars().all({ _ == '-' }) {
+      return None
+    }
+    const alignment = if left && right {
+      ColumnAlignment.Center
+    } else if left {
+      ColumnAlignment.Left
+    } else if right {
+      ColumnAlignment.Right
+    } else {
+      ColumnAlignment.Unspecified
+    }
+    alignments.append alignment
+  }
+  if alignments.isEmpty() {
+    return None
+  }
+  Some alignments
+}
+
+/** The cells of a table row: split at every `|` that no backslash escapes, a leading and a trailing one dropped. */
+fn cellsOf(row: String): List<String> {
+  const characters = row.trim().chars().toList()
+  var cells: List<String> = []
+  var current: List<Char> = []
+  var index = 0
+  if !characters.isEmpty() && characters[0] == '|' {
+    index = 1
+  }
+  var endsWithPipe = false
+  while index < characters.length() {
+    const character = characters[index]
+    if character == '\\' && index + 1 < characters.length() && characters[index + 1] == '|' {
+      current.append '|'
+      index = index + 2
+      continue
+    }
+    if character == '|' {
+      cells.append String.from(current).trim()
+      current = []
+      endsWithPipe = index == characters.length() - 1
+      index = index + 1
+      continue
+    }
+    current.append character
+    index = index + 1
+  }
+  if !endsWithPipe || !current.isEmpty() {
+    cells.append String.from(current).trim()
+  }
+  cells
+}

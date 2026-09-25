@@ -1,0 +1,34 @@
+/**
+ * [Markdown], the format: a value with the options of the reader.
+ */
+
+use MarkdownDocument from "./tree"
+use ParseOptions, parsedDocument from "./blocks"
+use htmlOf from "./html"
+
+/**
+ * CommonMark, with the tables of GitHub Flavored Markdown and front matter. The default reads both; without them the
+ * reader is CommonMark as the specification has it.
+ *
+ * # Examples
+ *
+ *     const markdown = Markdown()
+ *     const document = markdown.parse("# Title\n\nSome *text*.\n")
+ *     print document.html()
+ */
+public type Markdown {
+  /** Whether a first line `---` opens front matter, closed by the next `---` or `...`. */
+  frontMatter: Bool = true
+  /** Whether a paragraph line followed by a delimiter row (`| --- | :-: |`) is the header of a table. */
+  tables: Bool = true
+
+  /** The document tree of `text`. Every text is a Markdown document, so this never fails. */
+  fn parse(text: String): MarkdownDocument {
+    parsedDocument text, ParseOptions(frontMatter, tables)
+  }
+
+  /** `text` as HTML. */
+  fn html(text: String): String {
+    htmlOf parse(text)
+  }
+}

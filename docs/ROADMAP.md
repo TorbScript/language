@@ -140,7 +140,7 @@ supported, and neither is a dialect with its own name.
 |---|---|---|---|
 | `std/yaml` | built: YAML 1.2 and 1.1 in full, anchors, aliases, tags and comments in the tree, the target type resolves scalars, a schema is an option; all 402 cases of the YAML test suite pass | [design/TEXT-FORMATS.md](design/TEXT-FORMATS.md) section 1a | - |
 | `std/regex` | built: a `Regex` with RE2's syntax and linear time, groups by name that decode into a type, replace and split; RE2's search tests pass; next: the literal the compiler checks | [design/TEXT-FORMATS.md](design/TEXT-FORMATS.md) section 2a | the literal waits for the checker's parameter kind |
-| `std/markdown` | CommonMark, the document tree as a value | [design/RELEASE.md](design/RELEASE.md) slice 1 | `std/yaml` |
+| `std/markdown` | built: CommonMark 0.31.2 with GitHub's tables and front matter, the document tree as a value with the lines of its blocks and links, HTML and a writer that round trips; all 652 examples of the specification pass | [design/TEXT-FORMATS.md](design/TEXT-FORMATS.md) section 3a, [design/RELEASE.md](design/RELEASE.md) slice 1 | - |
 | `std/random` | a seedable, splittable generator that is a value | [design/RANDOM.md](design/RANDOM.md) | nothing |
 | `std/identifier` | `Uuid`, `Ulid`, the trait `Identifier` | [design/URI.md](design/URI.md) section 12 | `std/random` |
 | `std/uri` | built: `Uri` and `UriReference` after RFC 3986, IRIs (RFC 3987), `Urn` (RFC 8141), `UriTemplate` (RFC 6570), the `file:` bridge, `std/ip`, `std/http` on `Uri`; next: IDNA, `data:` and the literal rule | [design/URI.md](design/URI.md) section 14 | nothing; the literal rule waits for the checker's parameter kind |
