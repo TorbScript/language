@@ -578,10 +578,12 @@ fn indexType(var checker: Checker, target: Expression, index: Expression, at: Sp
         return checker.deferredType
       }
     }
-    if traitArgumentsOf(checker, receiver, slice).isSome() {
-      // `Slice.slice` takes `Bounds<Int>` and not one of the three range types, so the value in the brackets becomes
-      // a trait value here - which is what records the witness the back ends call `lowest`/`highest` through
-      coerceToBounds checker, key, index.span
+    if const Some(arguments) = traitArgumentsOf(checker, receiver, slice) {
+      // `Slice.slice` takes `Bounds<Index>` and not one of the three range types, so the value in the brackets becomes
+      // a trait value here - which is what records the witness the back ends call `lowest`/`highest` through. `Index`
+      // is the receiver's: an `Int` for a list, a `TextIndex` for a text
+      const position = arguments.first() ?? checker.integerType()
+      coerceToBounds checker, key, position, index.span
       requireSliceInBounds checker, target, index
       recordTraitCall checker, at, receiver, slice, "slice"
       return receiver
@@ -856,17 +858,18 @@ fn reportMissingOperator(var checker: Checker, receiver: TypeId, capability: Str
 }
 
 /**
- * `items[1..3]`, `text[2..]`: the range becomes a `Bounds<Int>` where it is written, because that is what
- * `Slice.slice` declares. A range of something other than `Int` is reported here, at the brackets.
+ * `items[1..3]`, `text[at..]`: the range becomes a `Bounds<Index>` where it is written, because that is what
+ * `Slice.slice` declares - `Index` is `Int` for a list and `TextIndex` for a text. A range of anything else is
+ * reported here, at the brackets.
  */
-fn coerceToBounds(var checker: Checker, key: TypeId, at: Span) {
+fn coerceToBounds(var checker: Checker, key: TypeId, position: TypeId, at: Span) {
   const bounds = match checker.wellKnown.bounds {
     Some(found) => found
     None => {
       return
     }
   }
-  const applied = checker.nominal bounds, [checker.integerType()]
+  const applied = checker.nominal bounds, [position]
   const wanted = checker.types.intern TypeForm.Traits([applied])
   const _ = checkValue checker, key, wanted, at
 }

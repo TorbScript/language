@@ -1,0 +1,28 @@
+/**
+ * **`Slice` takes the position type of its receiver** (`Slice<Index = Int>`): `a[from..to]` is a range of the `Index` the
+ * type slices by, so a type of the program that is sliced at positions of its own - as a text is at a `TextIndex` - is
+ * written like a list that is sliced at an `Int` (docs/design/PANICS.md section 4).
+ */
+
+type Position with Compare {
+  value: Int
+
+  fn compare(other: Position): Ordering {
+    value.compare other.value
+  }
+}
+
+type Word with Slice<Position> {
+  text: String
+
+  fn slice(range: Bounds<Position>): Word {
+    const from = range.lowest()?.value ?? 0
+    const to = range.highest()?.value ?? text.byteLength()
+    Word text.sliceBytes(from, to)
+  }
+}
+
+const word = Word "hello"
+print word[Position(1)..Position(3)]
+print word[Position(2)..]
+print([1, 2, 3][1..])

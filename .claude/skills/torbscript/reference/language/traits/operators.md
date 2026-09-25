@@ -209,6 +209,8 @@ a ?? b       OrElse.orElse(a, b)         "{a}"   Show.show(a)
    copy.
 
 9. **`a[from..to]` is `Slice.slice` and shares the storage of `a`, starting at index `0` again.**
+   `Slice<Index = Int>` says what a position of the value is: an `Int` for a list, and a type of its own for a value
+   whose positions only it can hand out - the range in the brackets is a range of that `Index`.
    `a[from..to] = v` needs `MutableSlice`, a supertrait of `Slice`, and also makes the range a `var` path:
    `samples[0..100].sort { _ }` works on that part of `samples` in place.
 
