@@ -19,12 +19,12 @@ type Rule {
   pattern: Regex
 }
 
-/** A pattern every test here knows to be valid. */
-fn regexOf(pattern: String): Regex {
-  match Regex.tryFrom(pattern) {
-    Ok(regex) => regex
-    Fail(problem) => panic "a test's pattern was refused: {problem}"
-  }
+/**
+ * A pattern the compiler compiled where the test wrote it: a literal where a `Regex` is expected, read verbatim, so
+ * `\d` and `{2}` are the pattern's and a pattern of these tests that does not compile is a compile error.
+ */
+fn regexOf(pattern: Regex): Regex {
+  pattern
 }
 
 fn refusal(pattern: String): String {
@@ -54,19 +54,19 @@ group "compiling" {
   }
 
   test "a repeat count that is no repeat count is a literal brace" {
-    assert regexOf("a\{,2\}").matches("a\{,2\}")
-    assert regexOf("a\{2\}").matches("aa")
+    assert regexOf("a{,2}").matches("a\{,2\}")
+    assert regexOf("a{2}").matches("aa")
   }
 
   test "a pattern shows as it was written, and two of the same text are equal" {
-    assert(regexOf(raw"\d+").show() == raw"\d+")
+    assert(regexOf("\d+").show() == raw"\d+")
     assert(regexOf("a|b") == regexOf("a|b"))
   }
 }
 
 group "matching" {
   test "matches is the whole text, find anywhere" {
-    const digits = regexOf raw"\d+"
+    const digits = regexOf "\d+"
     assert digits.matches("2026")
     assert(!digits.matches("2026a"))
     assert digits.isFound("in 2026")
@@ -74,7 +74,7 @@ group "matching" {
   }
 
   test "groups by index and by name, and a group that took no part" {
-    const found = regexOf(raw"(?P<key>\w+)=(?P<value>\w+)?").find("x size=").expect("a match")
+    const found = regexOf("(?P<key>\w+)=(?P<value>\w+)?").find("x size=").expect("a match")
     assert(found.named("key") == Some("size"))
     assert(found.named("value") == None)
     assert(found.group(0) == Some("size="))
@@ -88,7 +88,7 @@ group "matching" {
   }
 
   test "findAll finds every match, and an empty match next to the last one does not count" {
-    const words = regexOf(raw"\w+").findAll("one two  three").map({ _.text() }).toList()
+    const words = regexOf("\w+").findAll("one two  three").map({ _.text() }).toList()
     assert(words == ["one", "two", "three"])
     const empties = regexOf("a*").findAll("baaac").map({ "{_.start()}-{_.end()}" }).toList()
     assert(empties == ["0-0", "1-4", "5-5"])
@@ -112,12 +112,12 @@ group "matching" {
   }
 
   test "Unicode classes and the classes of RE2" {
-    assert regexOf(raw"\p{Greek}+").matches("αβγ")
-    assert regexOf(raw"\pL+").matches("Grüße")
-    assert regexOf(raw"[[:alpha:]]+").matches("abc")
-    assert(!regexOf(raw"\d").isFound("٣"))
-    assert regexOf(raw"\p{Nd}").matches("٣")
-    assert regexOf(raw"\x{1F600}").matches("😀")
+    assert regexOf("\p{Greek}+").matches("αβγ")
+    assert regexOf("\pL+").matches("Grüße")
+    assert regexOf("[[:alpha:]]+").matches("abc")
+    assert(!regexOf("\d").isFound("٣"))
+    assert regexOf("\p{Nd}").matches("٣")
+    assert regexOf("\x{1F600}").matches("😀")
     assert(refusal(raw"\p{Klingon}") == "the Unicode class `Klingon` is not known")
   }
 
@@ -130,7 +130,7 @@ group "matching" {
 
 group "replacing and splitting" {
   test "replace expands groups by number and by name, and $$ is a dollar" {
-    const date = regexOf raw"(?P<year>\d{4})-(?P<month>\d{2})-(?P<day>\d{2})"
+    const date = regexOf "(?P<year>\d{4})-(?P<month>\d{2})-(?P<day>\d{2})"
     assert(date.replace("on 2026-09-25.", "$day.$month.$year") == "on 25.09.2026.")
     assert(date.replace("2026-09-25", "$\{1\}y $$3") == "2026y $3")
     assert(regexOf("a").replaceFirst("banana", "o") == "bonana")
@@ -138,12 +138,12 @@ group "replacing and splitting" {
   }
 
   test "replaceWith hands every match to a function" {
-    const doubled = regexOf(raw"\d+").replaceWith("1 and 21", { found => "{(Int.tryFrom(found.text()) ?? 0) * 2}" })
+    const doubled = regexOf("\d+").replaceWith("1 and 21", { found => "{(Int.tryFrom(found.text()) ?? 0) * 2}" })
     assert(doubled == "2 and 42")
   }
 
   test "split cuts at every match, as RE2's split does" {
-    assert(regexOf(raw",\s*").split("a, b,c") == ["a", "b", "c"])
+    assert(regexOf(",\s*").split("a, b,c") == ["a", "b", "c"])
     assert(regexOf("x*").split("axbxc") == ["a", "b", "c"])
     assert(regexOf(",").split("") == [""])
     assert(regexOf(",").split("a,") == ["a", ""])
@@ -152,7 +152,7 @@ group "replacing and splitting" {
 
 group "reading and writing" {
   test "named groups decode into a type, each text read as its field's type" {
-    const date = regexOf raw"(?P<year>\d{4})-(?P<month>\d{2})-(?P<day>\d{2})(?: \((?P<note>\w+)\))?"
+    const date = regexOf "(?P<year>\d{4})-(?P<month>\d{2})-(?P<day>\d{2})(?: \((?P<note>\w+)\))?"
     const plain = date.find("due 2026-09-25").expect("a match").decoded<Date>()
     assert(plain.ok() == Some(Date(2026, 9, 25)))
     const noted = date.find("2026-10-01 (release)").expect("a match").decoded<Date>()
@@ -160,7 +160,7 @@ group "reading and writing" {
   }
 
   test "a Regex is written and read as its pattern" {
-    const rule = Rule "digits", regexOf(raw"\d+")
+    const rule = Rule "digits", regexOf("\d+")
     const text = Json().encode(rule)
     assert(text == raw"{" + "\"name\":\"digits\",\"pattern\":\"\\\\d+\"" + raw"}")
     assert(Json().decode<Rule>(text).ok() == Some(rule))

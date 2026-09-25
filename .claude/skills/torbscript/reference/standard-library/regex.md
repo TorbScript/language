@@ -44,17 +44,21 @@ type Date {
   day: Int
 }
 
-match Regex.tryFrom(raw"(?P<year>\d{4})-(?P<month>\d{2})-(?P<day>\d{2})") {
-  Ok(pattern) => {
-    print pattern.matches("2026-09-25")
-    print pattern.replace("due 2026-09-25", "$day.$month.$year")
-    if const Some(found) = pattern.find("released 2026-10-01") {
-      print found.decoded<Date>()
-    }
-  }
+const pattern: Regex = "(?P<year>\d{4})-(?P<month>\d{2})-(?P<day>\d{2})"
+print pattern.matches("2026-09-25")
+print pattern.replace("due 2026-09-25", "$day.$month.$year")
+if const Some(found) = pattern.find("released 2026-10-01") {
+  print found.decoded<Date>()
+}
+
+match Regex.tryFrom("(?P<year>") {
+  Ok(_) => print "compiled"
   Fail(problem) => print "{problem}"
 }
 ```
+
+A literal is compiled by the compiler; a pattern that is only known while the program runs is compiled by
+`Regex.tryFrom(text)`, which answers what is wrong with it.
 
 ## Declarations
 

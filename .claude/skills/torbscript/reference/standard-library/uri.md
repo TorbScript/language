@@ -232,7 +232,7 @@ whatever the map holds.
 use UriTemplate, TemplateValue, TemplateValues, UriReference from "std/uri"
 
 fn orderOf(target: String): Result<String, UriError> {
-  const template = UriTemplate<TemplateValues>.tryFrom(raw"/orders/{id}{?fields}")?
+  const template: UriTemplate<TemplateValues> = "/orders/{id}{?fields}"
   const values = template.matched(UriReference.tryFrom(target)?) ?? [:]
   match values.get("id") {
     Some(.Text(id)) => Ok id
