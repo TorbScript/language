@@ -49,7 +49,7 @@ that does not block core work can be built now, in the order of section 10.
 | 2 | `std/` is 121 `.trb` files and 886 KB, `runtime/` 972 KB with its tests, `docs/` 3.6 MB | `find`, `du` |
 | 3 | There is **no CI**: no `.github/`, no other pipeline. The gates run on the maintainer's Windows machine | `ls -a` |
 | 4 | `runtime/os/linux.c`, `posix.c`, `macos.c` and `freebsd.c` are compiled on their own system only, and no gate has built them (`docs/design/OS.md`, "Every arm, on every machine") | OS.md, fact 3 |
-| 5 | `Process.executablePath()` answers `None` on macOS and the BSDs, and it is how `torb` finds the `std/` and `runtime/` beside itself (`compiler/src/project/toolchain.trb`). A macOS `torb` today needs `$TORB_STD` and `$TORB_RUNTIME` | OS.md section 1, `toolchain.trb` line 54 |
+| 5 | `Process.executablePath()` answers `None` on the BSDs (on macOS since the first CI runs, section 13), and it is how `torb` finds the `std/` and `runtime/` beside itself (`compiler/src/project/toolchain.trb`). A FreeBSD `torb` today needs `$TORB_STD` and `$TORB_RUNTIME` | OS.md section 1, `toolchain.trb` line 54 |
 | 6 | `torb build` needs a C compiler (`$TORB_CC`, `clang`, `gcc`, `cc`, `cl`) and answers exit code 3 without one; every build compiles every `runtime/*.c` and `runtime/os/*.c` together with the program | `docs/tooling/torb-build.md`, `compiler/src/cli/build.trb` |
 | 7 | `torb run` and `torb test` build natively too; the VM is `torb run --vm` and runs 120 of the 142 conformance programs | `docs/design/VM.md` |
 | 8 | There is **no license**: no `LICENSE` file, and no `project.trb` of the repository has a `license` line | `ls`, `grep` |
@@ -1009,6 +1009,34 @@ with `fail-fast: false`, so one target's failure never hides another's.
 9. **The network on POSIX**: `io_test.c` and the network programs of the conformance suite open sockets on the
    loopback; a hosted runner allows that, but the epoll and kqueue pollers, the non-blocking `connect` and the resolver
    thread have only been reasoned about, never run.
+
+### What the first runs reported
+
+The first runs on the four targets (September 2026) failed on three of the items above and on three things nobody had
+expected; all of them are fixed:
+
+- **Item 7**: `files` and `process-run-input` printed `true` on Linux and macOS where Windows prints `false`. The
+  POSIX half of `Process.run` is `fork` plus `execvp` now, with no shell, so a program that is nowhere is a failure on
+  every target.
+- **Item 3**: `Process.executablePath()` answers on macOS, through `_NSGetExecutablePath` and `realpath`
+  (`runtime/os/macos.c`); FreeBSD still answers `None`.
+- **Item 6**: MSYS2's gcc 16 refused the generated C with `-Warray-bounds` ("array subscript 'torb_text[0]' is partly
+  outside array bounds of '_Bool[1]'"). It is a false positive about gcc's own speculation:
+  `-fspeculatively-call-stored-functions`, new in gcc 16, guesses one function for every call through a
+  `torb_closure`, and the guessed branch, which is never taken, reads a `bool` result as the call's own type. `torb.h`
+  turns the warning off for gcc 16 and later.
+- **Not expected**: tier B's `torb test --vm` of the std packages ran out of the VM's 64 slots for counted element
+  types once the text formats had joined. A descriptor the VM makes is told which one it is now
+  (`torb_contextual_element`, `runtime/element.c`), so the VM makes as many as a program needs.
+- **Not expected**: the tests of the worker pool (`runtime/tests/pool_test.c`) failed now and then on Linux (6 of 40
+  runs with clang 19), which the Windows machine had never shown: three races of `runtime/task.c` let a task run on two
+  workers at once or be freed while its start still queued it. After the fix, 0 of 100 runs with clang 19 and gcc 16.
+- **Not expected**: the Windows runner's Git checks files out with CRLF (`core.autocrlf`), which put `\r` into every
+  multi-line string literal: `interpolation` printed it, and the compiler's own C differed from the other targets' in
+  the `agree` job. `.gitattributes` turns the conversion off (`* -text`).
+
+Items 2, 4, 5 and 9 did not come up: macOS builds with the feature macros as they are, clang and the unsigned `char` of
+arm64 add no warning to the generated C, and the network programs pass on every target.
 
 ### What the owner sets up on GitHub
 
