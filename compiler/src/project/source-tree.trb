@@ -3,6 +3,7 @@
  * there on.
  */
 
+use File from "std/fs"
 use normalizePath, isInside, relativePath from "./path"
 use SourceText from "../syntax/source"
 use Parsed, parse from "../syntax/parser/parser"
@@ -26,6 +27,11 @@ public type SourceTree {
    * `torb repl` - parses everything else once ([SourceTree.parsedEverything]). Empty otherwise.
    */
   private parsedFiles: Map<String, (SourceText, Parsed)> = [:]
+  /**
+   * The files of a tree read from disk that were listed and not read yet ([SourceTree.onDisk]): each is read the first
+   * time something asks for its text, so a program that reaches a few packages of a large workspace reads those.
+   */
+  private disk: DiskFiles? = None
 
   static fn of(files: Map<String, String>, base: String = ".", standardLibrary: String = ""): SourceTree {
     var normalized: Map<String, String> = [:]
@@ -39,6 +45,25 @@ public type SourceTree {
   }
 
   /**
+   * A tree of the files `read` already holds and the files `listed` names, which are read from disk the first time
+   * their text is asked for. A file that cannot be read then reads as empty.
+   */
+  static fn onDisk(read: Map<String, String>, listed: List<String>, base: String, standardLibrary: String): SourceTree {
+    const tree = SourceTree.of read, base, standardLibrary
+    var paths = tree.sortedPaths
+    var names: Set<String> = Set.of()
+    for path in listed {
+      const normalized = normalizePath path
+      if !tree.files.containsKey(normalized) && !names.contains(normalized) {
+        names.insert normalized
+        paths.append normalized
+      }
+    }
+    paths.sort({ _ })
+    Self tree.files, paths, tree.base, tree.standardLibraryValue, [:], Some(DiskFiles(names))
+  }
+
+  /**
    * The `std` directory of the toolchain, for a workspace that has no standard library of its own: a standalone file,
    * or a project nobody lists as a member. Its packages join such a workspace (`findWorkspace`). Empty for a tree
    * built in memory, which brings its own prelude or none.
@@ -49,11 +74,16 @@ public type SourceTree {
 
   /** `None` if the file is not part of the tree. */
   fn text(path: String): String? {
-    files.get normalizePath(path)
+    const normalized = normalizePath path
+    if const Some(found) = files.get(normalized) {
+      return Some found
+    }
+    disk?.read(normalized)
   }
 
   fn exists(path: String): Bool {
-    files.containsKey normalizePath(path)
+    const normalized = normalizePath path
+    files.containsKey(normalized) || (disk?.lists(normalized) ?? false)
   }
 
   /** Every file of the tree, sorted by path. */
@@ -77,26 +107,26 @@ public type SourceTree {
     const normalized = normalizePath path
     var texts = files
     var paths = sortedPaths
-    if !texts.containsKey(normalized) {
+    if !texts.containsKey(normalized) && !(disk?.lists(normalized) ?? false) {
       paths.append normalized
       paths.sort({ _ })
     }
     texts.set normalized, text
     var parsed = parsedFiles
     const _ = parsed.remove normalized
-    Self texts, paths, base, standardLibraryValue, parsed
+    Self texts, paths, base, standardLibraryValue, parsed, disk
   }
 
   /** The same tree with every file parsed once, which [SourceTree.parsedAt] then answers without parsing again. */
   fn parsedEverything(): SourceTree {
     var parsed = parsedFiles
-    for (path, text) in files {
+    for path in sortedPaths {
       if !parsed.containsKey(path) {
-        const source = SourceText.of text
+        const source = SourceText.of(text(path) ?? "")
         parsed.set path, (source, parse(source))
       }
     }
-    Self files, sortedPaths, base, standardLibraryValue, parsed
+    Self files, sortedPaths, base, standardLibraryValue, parsed, disk
   }
 
   /** The text of a file as the parser reads it, and what the parser made of it: kept, or parsed now. */
@@ -105,7 +135,30 @@ public type SourceTree {
     if const Some(found) = parsedFiles.get(normalized) {
       return found
     }
-    const source = SourceText.of(files.get(normalized) ?? "")
+    const source = SourceText.of(text(normalized) ?? "")
     (source, parse(source))
+  }
+}
+
+/** The files of a tree that are read the first time they are asked for, and what was read of them since. */
+shared type DiskFiles {
+  listed: Set<String>
+  var texts: Map<String, String> = [:]
+
+  fn lists(path: String): Bool {
+    listed.contains path
+  }
+
+  /** The text of a listed file, read once; `None` for a file that is not listed. */
+  fn read(path: String): String? {
+    if !listed.contains(path) {
+      return None
+    }
+    if const Some(found) = texts.get(path) {
+      return Some found
+    }
+    const text = File.readText(path).ok() ?? ""
+    texts.set path, text
+    Some text
   }
 }

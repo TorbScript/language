@@ -22,7 +22,7 @@ use moduleComponentOf, instantiateSignature from "../instantiate"
 use mangledName from "../mangle"
 use instanceOfSymbol, instanceKeyOf, functionDeclarationOf, isMonomorphic from "../instances"
 use Lowering, reportUnsupported, locationOf, isVoidType, isNeverType, isTaskType, typeAtSpan from "./context"
-use finishBlock, continueIn, voidTypeOf from "./context"
+use finishBlock, continueIn, voidTypeOf, enterModule from "./context"
 use lowerBlockInto, lowerBlockValue, lowerStatement from "./statement"
 use capturedVariablesOf, capturedVariablesIn, savedFrame, restoreFrame, enterBody from "./closure"
 use staticOfConstant from "../constant"
@@ -142,7 +142,7 @@ fn lowerTaskInstance(
 
 /** What every function starts from: no slots, no loops, nothing diverged, and the module its body is written in. */
 public fn beginFunction(var lowering: Lowering, module: ModuleId) {
-  lowering.module = module
+  enterModule lowering, module
   lowering.slots = [:]
   lowering.entryLocals = [:]
   lowering.hole = None
@@ -409,7 +409,7 @@ public fn lowerScriptFunction(var lowering: Lowering, module: ModuleId, receiver
   const savedSupport = lowering.isSupported
   const savedDivergence = lowering.isDiverged
   enterBody lowering, name
-  lowering.module = module
+  enterModule lowering, module
   lowering.substitution = [:]
   lowering.isSupported = true
   lowering.capturedVariables = capturedVariablesIn lowering, statements
@@ -622,7 +622,7 @@ fn hasBody(var lowering: Lowering, symbol: SymbolId): Bool {
 fn countUnbuildable(var lowering: Lowering, symbol: SymbolId, what: String) {
   const declared = lowering.checker.symbolAt symbol
   if const Some(module) = declared.module {
-    lowering.module = module
+    enterModule lowering, module
   }
   lowering.isSupported = true
   reportUnsupported lowering, what, declared.span

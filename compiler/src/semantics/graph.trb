@@ -3,7 +3,10 @@
  * turns a written path into an [Import], which is the module it names or the reason it names none.
  */
 
-use normalizePath, parentPath, joinPath from "../project/path"
+use normalizePath, parentPath, joinPath, isInside from "../project/path"
+use SourceText from "../syntax/source"
+use Parsed from "../syntax/parser/parser"
+use SourceFile from "../syntax/ast"
 use SourceTree from "../project/source-tree"
 use Workspace, Package from "../project/workspace"
 use ModuleId, Module, ScriptReceiver from "./module"
@@ -35,20 +38,164 @@ public type Graph {
  * Parses every file of every package. This is the only place the syntax trees of a program come from. `scripts` are the
  * files a running program loads from paths only known while it runs, each with its receiver.
  */
-public fn buildGraph(tree: SourceTree, workspace: Workspace, scripts: List<RuntimeScript> = []): Graph {
+public fn buildGraph(
+  tree: SourceTree,
+  workspace: Workspace,
+  scripts: List<RuntimeScript> = [],
+  reachedFrom: List<String>? = None,
+): Graph {
+  const reached = match reachedFrom {
+    Some(roots) => Some reachedFilesOf(tree, workspace, roots, scripts)
+    None => None
+  }
   var modules: List<Module> = []
   for index in 0..workspace.packages.length() {
     const package = workspace.packages[index]
     for path in package.files {
-      const (source, parsed) = tree.parsedAt path
+      const kept = match reached {
+        Some(found) => found.get path
+        None => Some tree.parsedAt(path)
+      }
+      const (source, syntax) = match kept {
+        Some(found) => found
+        None => {
+          continue
+        }
+      }
       const id = ModuleId modules.length()
       const entry = isEntryFile package, path
-      modules.append Module(id, index, path, source, parsed.file, parsed.diagnostics, entry, tree.display(path))
+      modules.append Module(id, index, path, source, syntax.file, syntax.diagnostics, entry, tree.display(path))
     }
   }
-  addReceiverScripts tree, workspace, modules
+  addReceiverScripts tree, workspace, modules, reached.isNone()
   addRuntimeScripts tree, modules, scripts
   Graph.of modules
+}
+
+/**
+ * The files of the **program** of `roots` - the packages `programPackagesOf` closes the world over, reached here before
+ * a module exists - each parsed once: every file below a root, every file of the package of one (its `tests/` only
+ * where a root is inside them), every file of a package that one of them imports, depends on or names as its prelude,
+ * and a file a relative `use` names. What no import reaches is neither parsed nor checked: a program that prints one
+ * line in a checkout parses the packages of `std` its prelude reaches and not the compiler next to it.
+ */
+fn reachedFilesOf(
+  tree: SourceTree,
+  workspace: Workspace,
+  roots: List<String>,
+  scripts: List<RuntimeScript>,
+): Map<String, (SourceText, Parsed)> {
+  var files: Map<String, (SourceText, Parsed)> = [:]
+  var reachedPackages: Map<Int, Bool> = [:]
+  var pending: List<String> = []
+  var packages: List<Int> = []
+  for index in 0..workspace.packages.length() {
+    const package = workspace.packages[index]
+    for path in package.files {
+      if roots.any({ path == _ || isInside(path, _) }) {
+        pending.append path
+        packages.append index
+      }
+    }
+  }
+  // A script loaded while the program runs imports what it imports, and its receiver is a type of the program's
+  for script in scripts {
+    packages.append packageIndexOfPath(workspace, script.module)
+    if tree.exists(script.path) {
+      const (_, syntax) = tree.parsedAt script.path
+      noteImports workspace, script.path, syntax.file, pending, packages
+    }
+  }
+  var at = 0
+  loop {
+    // A package reached: every file of it that is no test, what it depends on, and its prelude
+    while !packages.isEmpty() {
+      const index = packages.removeAt(packages.length() - 1) ?? (0 - 1)
+      if index < 0 || reachedPackages.containsKey(index) {
+        continue
+      }
+      reachedPackages.set index, true
+      const package = workspace.packages[index]
+      const tests = joinPath package.directory, "tests"
+      for path in package.files {
+        if package.directory.isEmpty() || !isInside(path, tests) {
+          pending.append path
+        }
+      }
+      var names = package.manifest.runtimeDependencies
+      names.appendAll package.manifest.developmentDependencies
+      names.append package.manifest.prelude
+      for name in names {
+        packages.append packageIndexNamed(workspace, name)
+      }
+    }
+    if at >= pending.length() {
+      break
+    }
+    const path = pending[at]
+    at = at + 1
+    if files.containsKey(path) {
+      continue
+    }
+    const parsed = tree.parsedAt path
+    files.set path, parsed
+    const (_, syntax) = parsed
+    noteImports workspace, path, syntax.file, pending, packages
+    // A script the file loads by a literal path is a module of the program, and what it imports is reached as well
+    const directory = match workspace.packages.get(packageIndexOfPath(workspace, path)) {
+      Some(package) => package.directory
+      None => parentPath path
+    }
+    for load in scriptLoadsOf(syntax.file) {
+      const script = joinPath directory, load.path
+      if tree.exists(script) {
+        const (_, loaded) = tree.parsedAt script
+        var nothing: List<String> = []
+        noteImports workspace, script, loaded.file, nothing, packages
+      }
+    }
+  }
+  files
+}
+
+/** What the `use` declarations of a file reach: a file next to it, or a package by its name. */
+fn noteImports(
+  workspace: Workspace,
+  path: String,
+  file: SourceFile,
+  var pending: List<String>,
+  var packages: List<Int>,
+) {
+  for statement in file.statements {
+    if const .Declare(declaration) = statement.kind {
+      if const .Use(usage) = declaration.kind {
+        if const .Module(written) = usage.source {
+          if written.startsWith("./") || written.startsWith("../") {
+            pending.append "{joinPath(parentPath(path), written)}.trb"
+          } else {
+            const segments = written.split("/").toList()
+            if segments.length() >= 2 {
+              packages.append packageIndexNamed(workspace, "{segments[0]}/{segments[1]}")
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+/** The package whose directory holds the file, the innermost one; -1 for none. */
+fn packageIndexOfPath(workspace: Workspace, path: String): Int {
+  var found = 0 - 1
+  var depth = 0 - 1
+  for index in 0..workspace.packages.length() {
+    const directory = workspace.packages[index].directory
+    if !directory.isEmpty() && isInside(path, directory) && directory.byteLength() > depth {
+      found = index
+      depth = directory.byteLength()
+    }
+  }
+  found
 }
 
 /**
@@ -101,13 +248,13 @@ fn isEntryFile(package: Package, path: String): Bool {
  * A `project.trb` is only one of them where the workspace has `std/project`: without the package that declares
  * `Project` there is no type to check it against, and reading it statically (`project/manifest.trb`) keeps working.
  */
-fn addReceiverScripts(tree: SourceTree, workspace: Workspace, var modules: List<Module>) {
+fn addReceiverScripts(tree: SourceTree, workspace: Workspace, var modules: List<Module>, withManifests: Bool) {
   const ordinary = modules.length()
   var known: Set<String> = Set.of()
   for module in modules {
     known.insert module.path
   }
-  if workspace.packageNamed("std/project").isSome() {
+  if withManifests && workspace.packageNamed("std/project").isSome() {
     for index in 0..workspace.packages.length() {
       const path = joinPath workspace.packages[index].directory, "project.trb"
       if !tree.exists(path) || known.contains(path) {

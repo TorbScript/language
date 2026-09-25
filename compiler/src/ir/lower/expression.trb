@@ -32,7 +32,7 @@ use knownConditionOf from "../fold"
 use functionName, mangledName from "../mangle"
 use symbolPathOf from "../instantiate"
 use Lowering, reportUnsupported, locationOf, typeAtSpan, voidTypeOf from "./context"
-use internStatic, isNeverType, isVoidType, finishBlock, continueIn, irTypeOfClosed, substituted from "./context"
+use internStatic, isNeverType, isVoidType, finishBlock, continueIn, irTypeOfClosed, substituted, enterModule from "./context"
 use lowerCall, lowerOperator, lowerConstruct, lowerCaseValue, lowerConversionCall from "./call"
 use objectTypeOf, lowerTraitValue, closedBounds from "./generic"
 use lowerBlockInto from "./statement"
@@ -840,7 +840,7 @@ fn loweredConstantInitializer(var lowering: Lowering, constant: LoweredConstant)
   var inner = newFunction constant.name, Some(symbol), IrSignature([], constant.declared), "constant"
   const saved = savedFrame lowering
   enterBody lowering, constant.name
-  lowering.module = constant.module
+  enterModule lowering, constant.module
   lowering.substitution = constant.instance.mapping
   lowering.capturedVariables = [:]
   lowering.inlinedConstants.set constant.instance.key, true

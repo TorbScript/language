@@ -385,8 +385,8 @@ suite run twice, and the list of what the VM runs that grew with every slice is 
   holds every program to "live blocks at exit: 0" with the same exemptions (`.stderr`, `.leaks`, `binary-only/`). The
   registers themselves (`Reserve`) are the interpreter's and are counted as `torb`'s.
 - **What it costs, measured.** `fibonacci(30)` (about 2.7 million calls), the wall time of `torb run --vm` minus that of
-  a program that prints one line (the front end, about 0.9 to 1.0 s, is the same for both) in a `torb` built with the
-  `release` profile, on one machine, the best of five runs:
+  a program that prints one line (the front end, the same for both) in a `torb` built with the `release` profile, on
+  one machine, the best of five runs:
 
   | | `fibonacci(30)` | `fibonacci(32)` |
   |---|---|---|
@@ -397,6 +397,22 @@ suite run twice, and the list of what the VM runs that grew with every slice is 
   The first number was 2.0 s in a `dev` build. Six times faster is what the reads alone buy; the rest - about seventy
   nanoseconds a call - is the loop's own checked arithmetic on addresses, the header words a call reads, and one C call
   per count, which section 10 lists.
+- **The start, measured** (`torb run --timings`). Once the VM was the default, the front end was the whole wait for a
+  short program: 1.7 s for one that prints one line, of which 0.7 s parsed every file of the workspace, 0.7 s checked
+  every body of every package of the program, and 0.6 s parsed everything a second time for a script the program might
+  load. Three changes took it to about 0.25 s (0.23 s until the first instruction, 0.26 s wall time):
+  - **Only what the program reaches is read and parsed.** `readSourceTree` lists the files and reads a file the first
+    time its text is asked for (`SourceTree.onDisk`), and the graph of a run holds the packages of the program alone -
+    the files below the entry and of its package, of every package one of them imports, depends on or names as its
+    prelude (`reachedFilesOf` of `semantics/graph.trb`), which is the closed world `programPackagesOf` names anyway.
+  - **Bodies are checked on demand.** The checker checks the bodies of the entry; the lowering checks the bodies of a
+    module the first time it enters it (`enterModule`, `checkBodiesOf`, [Checker.checksOnDemand]). A program that
+    prints one line checks the bodies of one module of `std`. Where the lowering refuses the program, every body of
+    the program is checked and it is lowered again, so the refusal is the one a native build gives.
+  - **The loader of scripts parses the program's files at the first script it loads**, and not before the run.
+
+  What is left is parsing the packages the prelude reaches (about 0.15 s) and starting the process. `torb build` and
+  `torb check` keep reading, parsing and checking the whole program as before.
 
 ## 9. Slices
 

@@ -37,7 +37,7 @@ use caseNamed from "../semantics/checker/member"
 use allowsTopLevelCode from "../semantics/checker/declaration"
 use resolveTrait, isGenerated, memberOfImplementation from "../semantics/checker/implementation"
 use targetCaseName from "../backend/c/natives"
-use Lowering, nativeNamed from "./lower/context"
+use Lowering, nativeNamed, enterModule from "./lower/context"
 use addedChecked, subtractedChecked, multipliedChecked from "./constant"
 
 /** A value the compiler knows while it lowers: enough of one to decide a pattern, and never emitted. */
@@ -285,7 +285,7 @@ fn knownConstant(var lowering: Lowering, symbol: SymbolId, depth: Int): KnownVal
   }
   if const .Binding(_) = binding.pattern.kind {
     const outer = lowering.module
-    lowering.module = site.module
+    enterModule lowering, site.module
     const found = knownValueAt(lowering, binding.value, depth + 1)
     lowering.module = outer
     return found

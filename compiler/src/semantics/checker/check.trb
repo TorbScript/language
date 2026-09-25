@@ -69,6 +69,7 @@ public fn checkTypes(
   const requirements = clock.taken()
   checker.timings.append Timing("trait requirements", requirements)
   for module in modules {
+    checker.checkedModules.set module.value, true
     checkModule checker, module
   }
   // Whether a closure argument may capture a `var` binding is a fact of its callee's body, which is known only now
@@ -78,6 +79,28 @@ public fn checkTypes(
   checker.timings.append Timing("bodies", bodies - shape)
   checker.timings.append Timing("program shape and constant folding", shape)
   checker
+}
+
+/**
+ * The bodies of more modules, checked after [checkTypes]: its implementations against their traits, every body, and
+ * the facts about closures that its bodies add. A lowering that reaches a module whose bodies were not checked asks
+ * for this (`torb run` checks the bodies of the entry and lets the lowering pull in the rest, docs/design/VM.md section
+ * 8); a module that is checked already is left alone.
+ */
+public fn checkBodiesOf(var checker: Checker, modules: List<ModuleId>) {
+  var isChecked = false
+  for module in modules {
+    if checker.checkedModules.containsKey(module.value) {
+      continue
+    }
+    checker.checkedModules.set module.value, true
+    checkImplementations checker, module
+    checkModule checker, module
+    isChecked = true
+  }
+  if isChecked {
+    settleEscapes checker
+  }
 }
 
 /**

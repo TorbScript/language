@@ -50,7 +50,8 @@ public type Checked {
  * This is a pure function of the `SourceTree`, so a test builds a project in memory and checks it.
  *
  * `scripts` are files a program run by the VM loads from paths only known while it runs, each checked against the
- * receiver it names and reported as a requested file (docs/design/SCRIPTS.md slice 7).
+ * receiver it names and reported as a requested file (docs/design/SCRIPTS.md slice 7). `onlyReached` parses the packages
+ * the program of the paths reaches and nothing else (`buildGraph`), which is what a run needs.
  */
 public fn check(
   tree: SourceTree,
@@ -58,6 +59,7 @@ public fn check(
   withTimings: Bool = false,
   checksEveryBody: Bool = false,
   scripts: List<RuntimeScript> = [],
+  onlyReached: Bool = false,
 ): Checked {
   var clock = Stopwatch withTimings
   clock.start()
@@ -74,7 +76,9 @@ public fn check(
   }
   const workspace = Workspace packages
   before.append Timing("finding the workspace", clock.taken())
-  const graph = buildGraph tree, workspace, scripts
+  // `torb run`: the packages of the program alone, so a scratch file in a checkout does not parse the whole checkout
+  const reachedFrom = if onlyReached { Some targets } else { None }
+  const graph = buildGraph tree, workspace, scripts, reachedFrom
   before.append Timing("lexing, parsing and the module graph", clock.taken())
   const program = resolveNames graph, workspace
   problems.appendAll program.problems
@@ -205,7 +209,7 @@ fn withRelativeImports(graph: Graph, workspace: Workspace, requested: List<Modul
 }
 
 /** Every module of the packages the program of `roots` is made of. */
-fn modulesOfProgram(graph: Graph, workspace: Workspace, roots: List<ModuleId>): List<ModuleId> {
+public fn modulesOfProgram(graph: Graph, workspace: Workspace, roots: List<ModuleId>): List<ModuleId> {
   const packages = programPackagesOf graph, workspace, roots
   var found: List<ModuleId> = []
   for module in graph.modules {

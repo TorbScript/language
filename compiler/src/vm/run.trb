@@ -12,10 +12,13 @@
  */
 
 use File, IoError from "std/fs"
+use Clock from "std/time"
 use normalizePath from "../project/path"
 use LineIndex from "../syntax/source"
 use readSourceTree, absolutePaths from "../project/read"
-use check, Checked from "../semantics/check"
+use check, Checked, modulesOfProgram from "../semantics/check"
+use checkBodiesOf from "../semantics/checker/check"
+use Lowering from "../ir/lower/context"
 use insertOwnership from "../ir/ownership"
 use verifyOwnedProgram from "../ir/ownership-verify"
 use lowerWorkspace, lowerScripts, pathsOfModules from "../ir/lower/lower"
@@ -38,10 +41,17 @@ const refusedCode = 1
  * Runs the program at `path` in the VM. Answers the exit code when the program ends by running off the end of its
  * top-level code; `Process.exit` and a panic end the process directly.
  */
-public fn runInMachine(path: String, arguments: List<String>): Result<Int, IoError> {
+public fn runInMachine(path: String, arguments: List<String>, withTimings: Bool = false): Result<Int, IoError> {
+  const clock = RunClock(isOn: withTimings, last: if withTimings { Clock.milliseconds() } else { 0 })
   const tree = readSourceTree([path])?
+  clock.lap "reading the files"
   const requested = absolutePaths([path])?
-  const checked = check tree, requested, false, true
+  // The bodies of the entry: the lowering checks those of every module it reaches when it gets there
+  const checked = check tree, requested, withTimings, false, [], true
+  for timing in checked.checker.timings {
+    clock.note "  {timing.pass}", timing.milliseconds
+  }
+  clock.lap "checking"
   if reportChecked(checked) > 0 {
     return Ok refusedCode
   }
@@ -53,7 +63,42 @@ public fn runInMachine(path: String, arguments: List<String>): Result<Int, IoErr
     }
   }
   const executable = normalizePath(File.absolutePath(path)?)
-  runModules checked, tree, [module], arguments, false, executable, requested
+  runModules checked, tree, [module], arguments, false, executable, requested, clock
+}
+
+/**
+ * `torb run --timings`: the wall time of every step up to the program's first instruction, on standard error, as
+ * `torb check --timings` prints the passes of the checker. Off, it reads no clock at all.
+ */
+public shared type RunClock {
+  isOn: Bool
+  var last: Int
+  var total: Int = 0
+
+  /** The time since the last lap, as the step `what`. */
+  fn lap(what: String) {
+    if !isOn {
+      return
+    }
+    const now = Clock.milliseconds()
+    note(what, now - last)
+    total = total + now - last
+    last = now
+  }
+
+  /** A time measured elsewhere, printed as it is and not added up: the passes of the checker. */
+  fn note(what: String, milliseconds: Int) {
+    if isOn {
+      printError "{what}: {milliseconds} ms"
+    }
+  }
+
+  /** What every step took together, printed once the program is ready to run. */
+  fn finish() {
+    if isOn {
+      printError "until the first instruction: {total} ms"
+    }
+  }
 }
 
 /**
@@ -64,7 +109,7 @@ public fn runInMachine(path: String, arguments: List<String>): Result<Int, IoErr
 public fn testInMachine(paths: List<String>): Result<Int, IoError> {
   const tree = readSourceTree(paths)?
   const requested = absolutePaths(paths)?
-  const checked = check tree, requested, false, true
+  const checked = check tree, requested, false, false, [], true
   if reportChecked(checked) > 0 {
     return Ok refusedCode
   }
@@ -75,7 +120,7 @@ public fn testInMachine(paths: List<String>): Result<Int, IoError> {
       return Ok refusedCode
     }
   }
-  runModules checked, tree, modules, [], true, "", requested
+  runModules checked, tree, modules, [], true, "", requested, RunClock(isOn: false, last: 0)
 }
 
 /** The entry files lowered, owned, verified, encoded and run; a test run with the file of every entry. */
@@ -87,23 +132,44 @@ fn runModules(
   isTestRun: Bool,
   executable: String,
   requested: List<String>,
+  clock: RunClock,
 ): Result<Int, IoError> {
-  const program = match bytecodeOf(checked, tree, modules, isTestRun) {
+  const program = match bytecodeOf(checked, tree, modules, isTestRun, clock, true) {
     Some(found) => found
     None => {
       return Ok refusedCode
     }
   }
-  Ok runProgram(program, arguments, executable, Some(scriptLoaderOf(tree, requested)))
+  const loader = scriptLoaderOf tree, requested
+  clock.lap "the loader of scripts"
+  clock.finish()
+  Ok runProgram(program, arguments, executable, Some(loader))
 }
 
 /**
  * The entry files lowered for the VM, owned, verified and encoded as bytecode; a test run with the file of every entry.
  * `None` where the lowering or the emitter refused the program, which is printed.
  */
-public fn bytecodeOf(checked: Checked, tree: SourceTree, modules: List<ModuleId>, isTestRun: Bool = false): BytecodeProgram? {
-  var lowering = lowerWorkspace checked.checker, pathsOfModules(checked), modules, false, hostTarget(), true
+public fn bytecodeOf(
+  checked: Checked,
+  tree: SourceTree,
+  modules: List<ModuleId>,
+  isTestRun: Bool = false,
+  clock: RunClock = RunClock(isOn: false, last: 0),
+  onDemand: Bool = false,
+): BytecodeProgram? {
+  var checker = checked.checker
+  checker.checksOnDemand = onDemand
+  var lowering = lowerWorkspace checker, pathsOfModules(checked), modules, false, hostTarget(), true
+  if onDemand && !isLowered(lowering) {
+    // A refusal is about the program as a native build sees it: every body of the program checked, and lowered again
+    var every = checked.checker
+    checkBodiesOf every, modulesOfProgram(checked.program.graph, checked.program.workspace, checked.requested)
+    lowering = lowerWorkspace every, pathsOfModules(checked), modules, false, hostTarget(), true
+  }
+  clock.lap "lowering"
   insertOwnership lowering.program
+  clock.lap "ownership"
   var refused = 0
   for problem in lowering.problems {
     const inside = checked.program.graph.at problem.module
@@ -126,6 +192,7 @@ public fn bytecodeOf(checked: Checked, tree: SourceTree, modules: List<ModuleId>
     printError "internal error: {problem}"
     refused = refused + 1
   }
+  clock.lap "verifying"
   if refused > 0 {
     return None
   }
@@ -144,7 +211,14 @@ public fn bytecodeOf(checked: Checked, tree: SourceTree, modules: List<ModuleId>
     }
     return None
   }
+  clock.lap "the bytecode"
   Some emission.program
+}
+
+/** Whether the lowering found nothing to refuse. */
+fn isLowered(lowering: Lowering): Bool {
+  lowering.problems.isEmpty() && lowering.unsupported.isEmpty() && lowering.program.planned.isEmpty()
+    && lowering.program.problems.isEmpty()
 }
 
 /**
@@ -153,22 +227,34 @@ public fn bytecodeOf(checked: Checked, tree: SourceTree, modules: List<ModuleId>
  * the script is lowered as its `script` function, and its part is encoded as a continuation of the program that runs.
  */
 fn scriptLoaderOf(tree: SourceTree, requested: List<String>): ScriptLoader {
-  // Every file of the program is parsed once, and a file loaded again with the same text is the script loaded before
-  const parsed = tree.parsedEverything()
-  const known = KnownScripts()
-  ScriptLoader load: { path, receiver, after => loadAtRunTime parsed, requested, known, path, receiver, after }
+  const known = KnownScripts tree: tree
+  ScriptLoader load: { path, receiver, after => loadAtRunTime known, requested, path, receiver, after }
 }
 
-/** The scripts loaded at run time so far, by their absolute path, their receiver and their text. */
+/**
+ * The scripts loaded at run time so far, by their absolute path, their receiver and their text, and the program's files:
+ * parsed once, at the first script - a program that loads none never parses them twice - and a file loaded again with
+ * the same text is the script loaded before.
+ */
 shared type KnownScripts {
+  var tree: SourceTree
+  var isParsed: Bool = false
   var loaded: Map<String, (Int, String)> = [:]
+
+  /** The program's files, parsed the first time they are asked for. */
+  fn parsedTree(): SourceTree {
+    if !isParsed {
+      tree = tree.parsedEverything()
+      isParsed = true
+    }
+    tree
+  }
 }
 
 /** One script loaded at run time, or why it cannot be: the line of the script and the message of a `SandboxError`. */
 fn loadAtRunTime(
-  tree: SourceTree,
-  requested: List<String>,
   known: KnownScripts,
+  requested: List<String>,
   path: String,
   receiver: String,
   after: BytecodeProgram,
@@ -199,8 +285,9 @@ fn loadAtRunTime(
     }
   }
   const script = RuntimeScript absolute, declaring, name
-  const around = tree.withFile absolute, text
-  const checked = check around, requested, false, true, [script]
+  const parsed = known.parsedTree()
+  const around = parsed.withFile absolute, text
+  const checked = check around, requested, false, false, [script], true
   const shown = around.display absolute
   for file in checked.files {
     if file.path == shown && !file.diagnostics.isEmpty() {
@@ -223,7 +310,13 @@ fn loadAtRunTime(
       return Fail ScriptStop(0, "internal error: the receiver `{name}` of the script `{path}` is not found again")
     }
   }
+  checker.checksOnDemand = true
   var lowering = lowerScripts checker, pathsOfModules(checked), [(module, typed)], [], hostTarget()
+  if !isLowered(lowering) {
+    var every = checked.checker
+    checkBodiesOf every, modulesOfProgram(checked.program.graph, checked.program.workspace, checked.requested)
+    lowering = lowerScripts every, pathsOfModules(checked), [(module, typed)], [], hostTarget()
+  }
   insertOwnership lowering.program
   var refused: List<String> = []
   for problem in lowering.problems {

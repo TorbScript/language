@@ -17,6 +17,7 @@ use ModuleId from "../../semantics/module"
 use SymbolId from "../../semantics/symbols"
 use TypeId, ParameterId, Signature, ImplementationId from "../../semantics/checker/type"
 use Checker from "../../semantics/checker/context"
+use checkBodiesOf from "../../semantics/checker/check"
 use NativeEntry, nativeEntries, ArrayOperation from "../../backend/c/natives"
 use BuildTarget from "../../project/target"
 use IrProgram, IrTypeId, IrType, Slot, BlockId, StaticId, StaticValue, StaticContents from "../ir"
@@ -413,6 +414,18 @@ public type EntryCellReads {
 }
 
 /** A lowering for one checked program. `paths` holds one path per module, in the order of `program.graph.modules`. */
+/**
+ * The lowering reads the tables of `module` from here on. Where the checker checked only what was asked for and leaves
+ * the rest to the lowering (`torb run`, [Checker.checksOnDemand]), the module's bodies are checked the first time the
+ * lowering enters it: a program that prints one line checks the one module of `std` it reaches, not all of them.
+ */
+public fn enterModule(var lowering: Lowering, module: ModuleId) {
+  lowering.module = module
+  if lowering.checker.checksOnDemand && !lowering.checker.checkedModules.containsKey(module.value) {
+    checkBodiesOf lowering.checker, [module]
+  }
+}
+
 public fn newLowering(checker: Checker, paths: List<String>, target: BuildTarget): Lowering {
   const instantiation = newInstantiation checker
   const entries = nativeEntries()

@@ -26,7 +26,7 @@ use integerLiteral from "../semantics/checker/lowering"
 use IrTypeId, LayoutId, StaticId, StaticContents, Instance from "./ir"
 use instanceKeyOf, isClosedType from "./instances"
 use Lowering, irTypeOf, typeAtSpan, internStatic, namedStatic, reportProblem from "./lower/context"
-use irTypeOfClosed, substituted from "./lower/context"
+use irTypeOfClosed, substituted, enterModule from "./lower/context"
 use numericKindOf, layoutOfType from "./verify"
 use isStaticLayout from "./layout"
 use describeIrType from "./print"
@@ -875,7 +875,7 @@ public fn staticOfConstant(var lowering: Lowering, written: SymbolId, writtenOwn
   const outer = lowering.module
   const around = lowering.substitution
   const allowedNaNBefore = lowering.nanConstantAllowed
-  lowering.module = site.module
+  enterModule lowering, site.module
   lowering.substitution = instance.mapping
   lowering.nanConstantAllowed = isNamedNaNConstant path
   const value = evaluateConstant lowering, binding.value

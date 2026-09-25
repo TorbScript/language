@@ -40,6 +40,8 @@ public type RunOptions {
    * or a profile builds it instead.
    */
   usesMachine: Bool = true
+  /** `--timings`: what every step up to the program's first instruction took, on standard error (the VM only). */
+  withTimings: Bool = false
 }
 
 /** The exit code of the whole command: the program's own, or what went wrong before it started. */
@@ -49,7 +51,7 @@ public fn runProgram(options: RunOptions): Result<Int, IoError> {
     return Ok buildFailedCode
   }
   if options.usesMachine {
-    return runInMachine options.path, options.arguments
+    return runInMachine options.path, options.arguments, options.withTimings
   }
   const entry = normalizePath(File.absolutePath(options.path)?)
   const tree = readSourceTree([options.path])?

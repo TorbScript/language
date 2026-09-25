@@ -64,6 +64,7 @@ fn printUsage() {
   printError "                         everything behind the path is the program's own Process.arguments()"
   printError "                         --native: in front of the path, build it into build/run/ and run the binary"
   printError "                         --profile dev|release, --release: build it natively with that profile"
+  printError "                         --timings: what every step up to the first instruction took (the VM)"
   printError "  torb test [path]...    Run every *.test.trb below the paths as one program in the bytecode VM"
   printError "                         --native: build them into one binary and run it instead"
   printError "                         --profile dev|release, --release: build them natively with that profile"
@@ -490,9 +491,15 @@ fn testOptionsOf(arguments: List<String>): TestOptions? {
 fn runOptionsOf(arguments: List<String>): RunOptions? {
   var profile = Profile.Dev
   var usesMachine = true
+  var withTimings = false
   var index = 0
   while index < arguments.length() {
     const argument = arguments[index]
+    if argument == "--timings" {
+      withTimings = true
+      index = index + 1
+      continue
+    }
     if argument == "--vm" {
       usesMachine = true
       index = index + 1
@@ -519,7 +526,7 @@ fn runOptionsOf(arguments: List<String>): RunOptions? {
     index = index + 2
   }
   const path = arguments.get(index)?
-  Some RunOptions(path, arguments.skip(index + 1).toList(), profile, usesMachine)
+  Some RunOptions(path, arguments.skip(index + 1).toList(), profile, usesMachine, withTimings)
 }
 
 /**

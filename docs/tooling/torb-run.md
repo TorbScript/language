@@ -32,6 +32,7 @@ torb run [--native] [--profile dev|release] <path> [arguments]   Run a file, or 
     --profile dev|release   In front of the path: build it natively, this hard does the C compiler optimize
     --release               The same as --profile release
     --vm                    The default, accepted: run it in the bytecode VM
+    --timings               In front of the path: what every step up to the first instruction took, on standard error
 ```
 
 ## What it does
@@ -87,6 +88,13 @@ core count by default - under the rules of a native binary's. A program that use
 refused before anything runs, with a message that names what is missing. Two things answer differently because the
 program runs inside `torb`: `Process.executablePath()` is the path of the entry file, which is what executes, and a
 recursion reaches the `stack overflow` panic at a depth of its own.
+
+**It starts at once**, because it does only what the program needs: the files of the workspace are listed and only the
+ones the program reaches are read and parsed - the packages its entry imports, depends on and names as its prelude -
+and the bodies of the entry are checked, while the bodies of a module of `std` are checked when the lowering first
+reaches that module. A program that prints one line is running about a quarter of a second after the command was
+typed; `--timings` prints where that time went, step by step, on standard error. A program the lowering refuses is
+checked in full before the refusal is printed, so the message is the one `torb build` gives.
 
 ### The memory limit
 

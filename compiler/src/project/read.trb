@@ -14,8 +14,9 @@ use findStandardLibrary from "./toolchain"
  * the `project.trb` of every directory above the given paths (that is where the workspace is), and every `.trb` file
  * below the outermost of those directories (that is where the standard library is, as a member of the workspace).
  *
- * Reading more than necessary is deliberate: a repository of this size is a few hundred kilobytes, and in exchange
- * the module graph, the symbols and the whole name resolution are pure functions over a `SourceTree`.
+ * Listing more than necessary is deliberate: in exchange the module graph, the symbols and the whole name resolution
+ * are pure functions over a `SourceTree`. The manifests are read at once; a source file is only listed, and read the
+ * first time its text is asked for ([SourceTree.onDisk]), so a run that reaches a few packages reads those.
  *
  * The toolchain's own `std/` ([findStandardLibrary]) is read as well where it lies outside of what was read so far, so
  * that a standalone file or a project that is nobody's member still has a prelude: the tree carries where it is, and
@@ -23,6 +24,7 @@ use findStandardLibrary from "./toolchain"
  */
 public fn readSourceTree(paths: List<String>): Result<SourceTree, IoError> {
   var files: Map<String, String> = [:]
+  var listed: List<String> = []
   var roots: List<String> = []
   for path in paths {
     const absolute = normalizePath(File.absolutePath(path)?)
@@ -33,13 +35,13 @@ public fn readSourceTree(paths: List<String>): Result<SourceTree, IoError> {
     roots.append(readProjectsAbove(files, directory)? ?? absolute)
   }
   for root in roots {
-    readBelow(files, root)?
+    listBelow(listed, root)?
   }
   const library = findStandardLibrary(paths) ?? ""
   if !library.isEmpty() && !roots.any({ isInside library, _ }) {
-    readBelow(files, library)?
+    listBelow(listed, library)?
   }
-  Ok SourceTree.of(files, normalizePath(File.absolutePath(".")?), library)
+  Ok SourceTree.onDisk(files, listed, normalizePath(File.absolutePath(".")?), library)
 }
 
 /** The paths of the command line the way the `SourceTree` spells them: absolute and normalized. */
@@ -88,10 +90,10 @@ fn isSkippedDirectory(name: String): Bool {
  * Every `.trb` file below the path. Hidden directories are skipped, as in `torb parse`, and so is every `build`
  * directory: it holds what a build, a test run or a docs check wrote, and never a source.
  */
-fn readBelow(var files: Map<String, String>, path: String): Result<Void, IoError> {
+fn listBelow(var listed: List<String>, path: String): Result<Void, IoError> {
   if !File.isDirectory(path) {
-    if path.endsWith(".trb") && !files.containsKey(path) {
-      files.set(path, File.readText(path)?)
+    if path.endsWith(".trb") {
+      listed.append path
     }
     return Ok(void)
   }
@@ -99,10 +101,10 @@ fn readBelow(var files: Map<String, String>, path: String): Result<Void, IoError
     const child = joinPath path, entry
     if File.isDirectory(child) {
       if !isSkippedDirectory(entry) && entry != "build" {
-        readBelow(files, child)?
+        listBelow(listed, child)?
       }
-    } else if entry.endsWith(".trb") && !files.containsKey(child) {
-      files.set(child, File.readText(child)?)
+    } else if entry.endsWith(".trb") {
+      listed.append child
     }
   }
   Ok(void)
