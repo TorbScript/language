@@ -306,6 +306,7 @@ esac
 if [ -d "$destination" ]; then
   mv "$destination" "$destination.old-$$"
 fi
+mkdir -p "$(dirname "$destination")"
 mv "$unpacked" "$destination"
 rm -rf "$destination.old-$$" 2>/dev/null || true
 installed=$(binary_of "$destination/torb")
