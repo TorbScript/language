@@ -92,15 +92,17 @@ Type.minimum  Type.maximum                the smallest and largest value of a ty
    }
    ```
 
-9. **There are no bit operators; the integer types come `with Bits` instead.** `bitwiseAnd`, `bitwiseOr`,
-   `bitwiseExclusiveOr`, `bitwiseNot`, `shiftedLeft(by:)` and `shiftedRight(by:)` replace `&`, `|`, `^`, `<<` and `>>`.
-   A shift by a negative amount or by the width of the type or more panics.
+9. **`&`, `|`, `^`, `~`, `<<` and `>>` are the bit operators of every integer type, and the members of `Bits`.**
+   `&` binds like `*`, `|` and `^` like `+`, a shift between `*` and `**`, so `flags & 1 == 0` is
+   `(flags & 1) == 0`. A shift of a signed type is arithmetic and one of an unsigned type logical, the bits that leave
+   the width are dropped, and a shift by a negative amount or by the width of the type or more panics.
 
-   ```trb check
+   ```trb run
    const flags: UInt8 = 0xFF
-   const masked = flags.bitwiseAnd 0x0F
-   const shifted = flags.shiftedLeft by: 2
-   print "{masked} {shifted}"
+   const masked = flags & 0x0F
+   const shifted = flags << 2
+   print "{masked} {shifted} {~masked}"
+   // prints 15 252 240
    ```
 
 10. **`UInt64` alone has `addedWrapping` and `multipliedWrapping`, the only arithmetic that does not panic on
@@ -109,28 +111,20 @@ Type.minimum  Type.maximum                the smallest and largest value of a ty
 
 ## What this is not
 
-**`&` is not bitwise AND on an integer.** `&` combines traits (`Show & Encode`) and appears nowhere in an expression
-on numbers; writing it there is not a different operator, it is not an operator at all in that position.
+**There is no C trap.** In C, `x & 1 == 0` is `x & (1 == 0)`; here `&` binds like `*`, so it is the test it looks like.
 
-```trb check
-const flags: UInt8 = 0b1010
-const masked = flags.bitwiseAnd 0b0110
-print masked
+```trb run
+const flags = 0b1010
+print(flags & 1 == 0)
+// prints true
 ```
 
-```trb error
-const flags: UInt8 = 0b1010
-const masked = flags & 0b0110
-// error: Expected the end of the statement, found `&`
-```
-
-**`^` is not written for exclusive-or, and not for a power either.** Half of the readers of `a ^ b` take it for the
-one and half for the other, so it is no operator of the language at all: a power is `**`, and exclusive or is
-`bitwiseExclusiveOr`. The message says both.
+**`^` is exclusive or, not a power.** A power is `**`, and a float, which has no bits to combine, says so:
 
 ```trb error
-const flipped = 0b1010 ^ 0b0110
-// error: There is no `^` operator. A power is written `**`, and `^` is not exclusive or either: bit operations are the methods of `Bits` (`bitwiseExclusiveOr`)
+const wrong = 2.0 ^ 2.0
+print wrong
+// error: `Float64` has no `^`: it is the exclusive or of two integers
 ```
 
 ## Related

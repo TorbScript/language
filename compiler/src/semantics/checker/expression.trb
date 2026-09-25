@@ -1743,7 +1743,79 @@ fn unaryType(
       reportMissingOperator checker, found, "Negate", "-a", at
       checker.deferredType
     }
+    .BitwiseNot => {
+      const inner = literalExpectation checker, expected, operand
+      const found = checkExpression checker, operand, inner
+      if checker.absorbs(found) {
+        return checker.deferredType
+      }
+      if const Some(bits) = bitsCapability(checker, found, "~a", at) {
+        recordTraitCall checker, at, found, bits, "bitwiseNot"
+        return found
+      }
+      checker.deferredType
+    }
   }
+}
+
+/**
+ * The `Bits` of an operand, or `None` after the message that it has none. A float hears where a power is, because
+ * `^` for a power is what a reader from mathematics or a spreadsheet writes.
+ */
+fn bitsCapability(var checker: Checker, found: TypeId, written: String, at: Span): SymbolId? {
+  const bits = checker.wellKnown.symbolNamed("Bits")?
+  if traitArgumentsOf(checker, found, bits).isSome() {
+    return Some bits
+  }
+  const isFloat = match numericNameOf(checker, found) {
+    Some(name) => name.startsWith "Float"
+    None => false
+  }
+  if isFloat && written == "a ^ b" {
+    const shown = checker.describe found
+    checker.reportHere(
+      Diagnostic.error("`{shown}` has no `^`: it is the exclusive or of two integers", at)
+        .withNote("A power is written `**`: `x ** 2`")
+    )
+    return None
+  }
+  reportMissingOperator checker, found, "Bits", written, at
+  None
+}
+
+/**
+ * `&`, `|`, `^`, `<<` and `>>`: the members of `Bits`, which has no parameters - the other operand of `&`, `|` and `^`
+ * is the same type, the amount of a shift an `Int`, and the result the type of the left operand.
+ */
+fn bitsType(
+  var checker: Checker,
+  operator: InfixOperator,
+  left: Expression,
+  right: Expression,
+  at: Span,
+  expected: TypeId?,
+): TypeId {
+  const outer = literalExpectation checker, expected, left
+  const found = checkExpression checker, left, outer
+  if checker.absorbs(found) {
+    deferExpression checker, right
+    return checker.deferredType
+  }
+  const bits = match bitsCapability(checker, found, operatorOf(operator), at) {
+    Some(capability) => capability
+    None => {
+      deferExpression checker, right
+      return checker.deferredType
+    }
+  }
+  const isShift = match operator {
+    .ShiftLeft | .ShiftRight => true
+    _ => false
+  }
+  const other = if isShift { checker.integerType() } else { found }
+  const _ = checkExpression checker, right, Expectation.Type(other)
+  recordTraitCall checker, at, found, bits, memberOfOperator(operator)
+  found
 }
 
 /**
@@ -1776,6 +1848,9 @@ fn binaryType(
     }
     // `a ?? b` is `orElse` on an `Option` and on a `Result` alike, and `b` is `lazy`
     .Coalesce => coalesceType checker, left, right, at
+    .BitwiseAnd | .BitwiseOr | .BitwiseExclusiveOr | .ShiftLeft | .ShiftRight => {
+      bitsType checker, operator, left, right, at, expected
+    }
     _ => arithmeticType checker, operator, left, right, at, expected
   }
 }
@@ -1817,6 +1892,7 @@ fn isLiteralArithmetic(operand: Expression): Bool {
 fn isArithmetic(operator: InfixOperator): Bool {
   match operator {
     .Add | .Subtract | .Multiply | .Divide | .Remainder | .Power => true
+    .BitwiseAnd | .BitwiseOr | .BitwiseExclusiveOr | .ShiftLeft | .ShiftRight => true
     _ => false
   }
 }
@@ -2146,6 +2222,11 @@ fn operatorOf(operator: InfixOperator): String {
     .Divide => "a / b"
     .Remainder => "a % b"
     .Power => "a ** b"
+    .BitwiseAnd => "a & b"
+    .BitwiseOr => "a | b"
+    .BitwiseExclusiveOr => "a ^ b"
+    .ShiftLeft => "a << b"
+    .ShiftRight => "a >> b"
     _ => ""
   }
 }
@@ -2158,6 +2239,11 @@ fn memberOfOperator(operator: InfixOperator): String {
     .Divide => "divide"
     .Remainder => "remainder"
     .Power => "power"
+    .BitwiseAnd => "bitwiseAnd"
+    .BitwiseOr => "bitwiseOr"
+    .BitwiseExclusiveOr => "bitwiseExclusiveOr"
+    .ShiftLeft => "shiftedLeft"
+    .ShiftRight => "shiftedRight"
     _ => ""
   }
 }

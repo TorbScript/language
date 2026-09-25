@@ -295,7 +295,7 @@ means something else.
 | `explanation/why-no-higher-kinded-types.md` | Why there are no higher-kinded types | One vocabulary, and what it costs | Decision Log |
 | `explanation/why-no-macros.md` | Why there are no macros | Name resolution needs types, and quotations instead | `CONCEPT.md#extensibility` |
 | `explanation/why-no-reflection.md` | Why there is no reflection | Two back ends, and the generated pair instead | Decision Log |
-| `explanation/why-no-bit-operators.md` | Why there are no bit operators | `Bits`, `\|` for literal types, and wrapping arithmetic | Decision Log |
+| `explanation/why-bit-operators-bind-like-arithmetic.md` | Why the bit operators bind like arithmetic | `Bits`, the precedence of Go and Swift, and wrapping arithmetic | Decision Log |
 | `explanation/why-traits-instead-of-inheritance.md` | Why traits instead of inheritance | Composition, delegation, and no base classes | Decision Log |
 | `explanation/why-one-member-namespace.md` | Why a method is a constant | One namespace, and what property commands need | Decision Log |
 | `explanation/why-exhaustive-matches.md` | Why every match is exhaustive | A public ADT as a promise, and how to stay free to add | Decision Log |

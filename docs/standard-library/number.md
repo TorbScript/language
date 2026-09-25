@@ -54,8 +54,9 @@ public trait Bits {
 }
 ```
 
-`Numeric` is the arithmetic and comparison every number has; `Signed` adds `absolute()` and the unary `-`. The language
-has no bit operators - `|` is the union of literal types, and a method needs no precedence rule and no new token - so
+`Numeric` is the arithmetic and comparison every number has; `Signed` adds `absolute()` and the unary `-`. The bit
+operators `&`, `|`, `^`, `~`, `<<` and `>>` are the members of `Bits` - `&` binds like `*`, `|` and `^` like `+`, a shift
+between `*` and `**` - and the members stay the named form, so
 masking and shifting are named methods on `Bits` instead: `value.bitwiseAnd(0xFF)`,
 `seed.bitwiseExclusiveOr(byte).shiftedLeft(by: 5)`. The shift of a signed type is arithmetic (it keeps the sign), the
 shift of an unsigned type is logical, and a shift by a negative amount or by the width of the type or more panics, like

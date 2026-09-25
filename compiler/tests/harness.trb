@@ -140,10 +140,10 @@ public const preludeSource = raw"""
 
   public trait Signed with Numeric, Negate {}
 
-  public native type Int8 with Signed, Hash, Encode, Power<Int64> {}
-  public native type Int32 with Signed, Hash, Encode, Power<Int64> {}
-  public native type Int64 with Signed, Hash, Encode, Power<Int64> {}
-  public native type UInt8 with Numeric, Hash, Encode, Power<Int64> {}
+  public native type Int8 with Signed, Hash, Encode, Power<Int64>, Bits {}
+  public native type Int32 with Signed, Hash, Encode, Power<Int64>, Bits {}
+  public native type Int64 with Signed, Hash, Encode, Power<Int64>, Bits {}
+  public native type UInt8 with Numeric, Hash, Encode, Power<Int64>, Bits {}
   public native type Float32 with Signed, Encode {}
   public native type Float64 with Signed, Encode, Power {}
   public native type Bool with Equals, Hash, Show, Encode {}
@@ -564,6 +564,16 @@ public const preludeSource = raw"""
       self
     }
   }
+
+  /** `&`, `|`, `^`, `~`, `<<` and `>>`. */
+  public trait Bits {
+    fn bitwiseAnd(other: Self): Self
+    fn bitwiseOr(other: Self): Self
+    fn bitwiseExclusiveOr(other: Self): Self
+    fn bitwiseNot(): Self
+    fn shiftedLeft(by: Int64): Self
+    fn shiftedRight(by: Int64): Self
+  }
   """
 
 public const workspace = [
@@ -577,7 +587,7 @@ public const workspace = [
   "std/prelude/src/types.trb": preludeSource,
   "std/prelude/src/lib.trb": raw"""
     public use Show, Equals, Compare, Hash, Negate, Iterate, Iterator from "./types"
-    public use Add, Subtract, Multiply, Divide, Remainder, Power, Indexed, Slice from "./types"
+    public use Add, Subtract, Multiply, Divide, Remainder, Power, Bits, Indexed, Slice from "./types"
     public use MutableIndexed, MutableSlice, OrElse from "./types"
     public use Numeric, Signed, Int8, Int32, Int64, UInt8, Float32, Float64 from "./types"
     public use Bool, Char, String, Int, Float, Option, Result, List, ArrayList, Map, Array from "./types"

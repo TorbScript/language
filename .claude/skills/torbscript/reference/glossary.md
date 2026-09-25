@@ -37,8 +37,8 @@ holds can be changed. See [Bindings](language/values-and-types/bindings.md).
 
 ### Bits
 
-The trait the integer types come with instead of bit operators: `bitwiseAnd`, `bitwiseOr`, `bitwiseExclusiveOr`,
-`bitwiseNot`, `shiftedLeft(by:)`, `shiftedRight(by:)`. `UInt64` alone adds `addedWrapping` and `multipliedWrapping`,
+The trait the integer types come with, and the bit operators are its members: `bitwiseAnd` (`&`), `bitwiseOr` (`|`),
+`bitwiseExclusiveOr` (`^`), `bitwiseNot` (`~`), `shiftedLeft(by:)` (`<<`), `shiftedRight(by:)` (`>>`). `UInt64` alone adds `addedWrapping` and `multipliedWrapping`,
 the only arithmetic that does not panic on overflow. See [Integers](language/values-and-types/integers.md).
 
 ### Bound

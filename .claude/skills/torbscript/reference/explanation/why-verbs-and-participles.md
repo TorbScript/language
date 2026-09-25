@@ -72,7 +72,7 @@ nobody writes the copy-and-call-through logic twice.
   reads as an intensity marker rather than a different operation; `sort`/`sorted` needs no footnote to explain what the
   mark means.
 - **Scala's symbolic operators** for the copy-returning side. Rejected for the same reason bit operators were
-  (see [Why there are no bit operators](why-no-bit-operators.md)): a symbol needs a legend, a word does not.
+  (see [Why the bit operators bind like arithmetic](why-bit-operators-bind-like-arithmetic.md)): a symbol needs a legend, a word does not.
 
 ## Consequences
 

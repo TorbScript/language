@@ -99,6 +99,9 @@ value.member                                 a method reference, bound to `value
 Type.member                                  the member itself: `(self: Type) => ...`
 value?                                       unwrap an `Ok` or a `Some`, or return early
 value ?? fallback                            `OrElse.orElse`: the value, or a lazy fallback
+a ** b                                       `Power.power`: tighter than `*`, to the right; `-x ** 2` is an error
+a & b   a | b   a ^ b   ~a                   the bit operators of `Bits`: `&` binds like `*`, `|` and `^` like `+`
+a << n   a >> n                              shifts, between `*` and `**`; arithmetic on a signed type
 value?.member                                `Option.map`, or `flatMap` for an optional member
 value.into()                                 a conversion chosen by the expected type
 value.to<Target>()                           a conversion with the target written out

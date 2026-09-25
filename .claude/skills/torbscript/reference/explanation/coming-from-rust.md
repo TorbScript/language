@@ -41,7 +41,7 @@ produce TorbScript that parses and does not compile, or compiles and means somet
 | `#[derive(Clone, PartialEq, Hash, Debug)]` | nothing to write | `Equals`, `Hash`, `Show` and `copy` are generated |
 | `Vec<T>`, `HashMap<K, V>` | `List<Item>`, `Map<Key, Value>` | the type is a trait, the implementation is a name |
 | `T`, `K`, `V`, `E` | `Item`, `Key`, `Value`, `Failure` | type parameters are written out |
-| `a & b`, `a << 2` | `a.bitwiseAnd(b)`, `a.shiftedLeft(by: 2)` | there are no bit operators |
+| `1 << (n + 1)` | `1 << (n + 1)` | a shift binds tighter than `*` here, as in Go and Swift: `1 << n + 1` is `(1 << n) + 1` |
 | `x as i64` | `Int64.from(x)` | there are no casts |
 | `s.len()` | `text.byteLength()` or `text.chars().count()` | a `String` has no `length()` |
 | `expr;` | `expr` | there are no semicolons |
@@ -254,10 +254,10 @@ comparison.
   builders, traits for operators, and `Expression<Value>` for code that has to be *read* instead of run.
 - **`#[derive(...)]` and attributes in general.** There are no annotations. `Equals`, `Hash`, `Show`, `copy`, `Encode` and
   `Decode` are generated when they can be, and everything else is written.
-- **Bit operators.** `&`, `|`, `^`, `<<`, `>>` are not operators. The integer types come `with Bits`, whose methods are
-  `bitwiseAnd`, `bitwiseOr`, `bitwiseExclusiveOr`, `bitwiseNot`, `shiftedLeft(by:)` and `shiftedRight(by:)`. `UInt64`
-  additionally has `addedWrapping` and `multipliedWrapping`, which are the only arithmetic in the language that does not
-  panic on overflow.
+- **Wrapping arithmetic on every integer type.** `UInt64` alone has `addedWrapping` and `multipliedWrapping`, the only
+  arithmetic in the language that does not panic on overflow; every other `+` panics where Rust's wraps in release.
+  The bit operators are Rust's, on Go's levels: a shift binds tighter than `*`, `&` like `*`, and `|` and `^` like
+  `+`.
 - **`impl Trait` in argument position and `dyn Trait`.** A trait is a type. Whether a call is dispatched statically or
   dynamically is the implementation's business and is not observable; object safety is checked per call, not per type, so
   `List<Show & Hash>` stays a legal type.

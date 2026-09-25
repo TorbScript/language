@@ -244,6 +244,25 @@ group "Overflow and a division by zero are caught where they are written (BACKEN
     assert(problemsOf(files) == ["This raises an integer to a negative power, which is not a whole number"])
   }
 
+  test "the bit operators fold, in the width of their type" {
+    const files = withHelper(raw"""
+      const bit = 1 << 4
+      const mask = 0xFF & 0x0F | 0x30
+      const flipped = 5 ^ 3
+      const all: UInt8 = ~0
+      const high: Int8 = 1 << 7
+      const back = -16 >> 2
+      """)
+    assert problemsOf(files).isEmpty()
+  }
+
+  test "a shift by the width or more" {
+    const files = withHelper(raw"""
+      const broken = 1 << 64
+      """)
+    assert(problemsOf(files) == ["This shifts by 64, which is not between 0 and 63"])
+  }
+
   test "a power of a float is no compile-time constant: its last bit is the C library's" {
     const files = withHelper(raw"""
       const root = 2.0 ** 0.5

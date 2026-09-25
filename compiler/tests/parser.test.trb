@@ -176,9 +176,69 @@ group "Operators" {
     assert(messages("const x = !flag ** 2") == ["A `!` directly in front of the base of `**` is ambiguous"])
   }
 
-  test "`^` is no operator, and the message names `**` and `Bits`" {
-    const caret = "There is no `^` operator. A power is written `**`, and `^` is not exclusive or either: bit operations are the methods of `Bits` (`bitwiseExclusiveOr`)"
-    assert(messages("const x = a ^ b") == [caret])
+  test "`&` binds like `*`, `|` and `^` like `+`, so a mask compares without parentheses" {
+    const masked = "x & 1 == 0"
+    match expression(masked) {
+      .Binary(InfixOperator.Equal, left, _) => assert(source(masked, left) == "x & 1")
+      other => panic "Unexpected tree: {other}"
+    }
+    const mixed = "a | b & c"
+    match expression(mixed) {
+      .Binary(InfixOperator.BitwiseOr, _, right) => assert(source(mixed, right) == "b & c")
+      other => panic "Unexpected tree: {other}"
+    }
+    const exclusive = "a ^ b + c"
+    match expression(exclusive) {
+      .Binary(InfixOperator.Add, left, _) => assert(source(exclusive, left) == "a ^ b")
+      other => panic "Unexpected tree: {other}"
+    }
+  }
+
+  test "a shift binds tighter than `*` and looser than `**`" {
+    const scaled = "1 << 2 * 3"
+    match expression(scaled) {
+      .Binary(InfixOperator.Multiply, left, _) => assert(source(scaled, left) == "1 << 2")
+      other => panic "Unexpected tree: {other}"
+    }
+    const raised = "1 << 2 ** 3"
+    match expression(raised) {
+      .Binary(InfixOperator.ShiftLeft, _, right) => assert(source(raised, right) == "2 ** 3")
+      other => panic "Unexpected tree: {other}"
+    }
+    const right = "a >> 4 & 15"
+    match expression(right) {
+      .Binary(InfixOperator.BitwiseAnd, left, _) => assert(source(right, left) == "a >> 4")
+      other => panic "Unexpected tree: {other}"
+    }
+  }
+
+  test "`>>` is two `>` with nothing between them, and `> >` is a comparison that does not chain" {
+    match expression("a >> b") {
+      .Binary(InfixOperator.ShiftRight, _, _) => {}
+      other => panic "Unexpected tree: {other}"
+    }
+    assert(messages("const x = a > > b") != [])
+    assert(messages("const x = a < b >> c") == [])
+  }
+
+  test "a prefix binds tighter than every binary operator, and `~` on the base of `**` is ambiguous" {
+    const complement = "~a & b"
+    match expression(complement) {
+      .Binary(InfixOperator.BitwiseAnd, left, _) => assert(source(complement, left) == "~a")
+      other => panic "Unexpected tree: {other}"
+    }
+    assert(messages("const x = -a << 2") == [])
+    assert(messages("const x = ~a ** 2") == ["A `~` directly in front of the base of `**` is ambiguous"])
+  }
+
+  test "`&` and `|` keep their meaning in a type" {
+    assert(messages("fn show(value: Show & Hash): String \{\n  value.show()\n\}") == [])
+    assert(messages("const protocol: \"tcp\" | \"udp\" = \"tcp\"") == [])
+    assert(messages("const nested: List<List<Int>> = []") == [])
+    match bound("const both = mask & flags | extra") {
+      .Binary(InfixOperator.BitwiseOr, _, _) => {}
+      other => panic "Unexpected tree: {other}"
+    }
   }
 }
 

@@ -14,12 +14,31 @@ use parseBlock, parseBlockAfterBrace, parseCondition, parseHeadExpression from "
 use parseType, isNameOrKeyword from "./types"
 use parsePattern from "./patterns"
 
-// Binding power of the infix operators, higher binds tighter. Comparisons and ranges do not chain.
+// Binding power of the infix operators, higher binds tighter. Comparisons and ranges do not chain. The bit operators
+// sit on the levels Go and Swift give them, so there is no C trap: `&` binds like `*`, `|` and `^` like `+`, and
+// `x & 1 == 0` is `(x & 1) == 0`.
 const comparisonPower = 3
 const coalescePower = 4
 const rangePower = 5
-/** `**` binds tighter than `*` and groups to the right: `2 ** 3 ** 2` is `2 ** 9`. */
-const exponentPower = 8
+const additivePower = 6
+const multiplicativePower = 7
+/** `<<` and `>>` bind tighter than `*` and looser than `**`: `1 << 2 * 3` is `(1 << 2) * 3`. */
+const shiftPower = 8
+/** `**` binds tighter than every other binary operator and groups to the right: `2 ** 3 ** 2` is `2 ** 9`. */
+const exponentPower = 9
+
+/**
+ * The infix operator the parser stands at: its binding power, what it is, and how many tokens it spans. `>>` is the
+ * one of two tokens - two `>` with nothing between them - because a closing `>>` of `List<List<Int>>` has to stay
+ * two brackets for the type parser.
+ */
+fn infixOperatorAt(parser: Parser): (Int, InfixOperator, Int)? {
+  if parser.isAt(TokenKind.Greater) && parser.kindAt(1) == TokenKind.Greater && parser.span().end == parser.spanAt(1).start {
+    return Some((shiftPower, InfixOperator.ShiftRight, 2))
+  }
+  const (power, operator) = infixOperator(parser.kind())?
+  Some((power, operator, 1))
+}
 
 fn infixOperator(kind: TokenKind): (Int, InfixOperator)? {
   const found = match kind {
@@ -32,11 +51,15 @@ fn infixOperator(kind: TokenKind): (Int, InfixOperator)? {
     .Greater => (comparisonPower, InfixOperator.Greater)
     .GreaterEqual => (comparisonPower, InfixOperator.GreaterOrEqual)
     .QuestionQuestion => (coalescePower, InfixOperator.Coalesce)
-    .Plus => (6, InfixOperator.Add)
-    .Minus => (6, InfixOperator.Subtract)
-    .Star => (7, InfixOperator.Multiply)
-    .Slash => (7, InfixOperator.Divide)
-    .Percent => (7, InfixOperator.Remainder)
+    .Plus => (additivePower, InfixOperator.Add)
+    .Minus => (additivePower, InfixOperator.Subtract)
+    .Pipe => (additivePower, InfixOperator.BitwiseOr)
+    .Caret => (additivePower, InfixOperator.BitwiseExclusiveOr)
+    .Star => (multiplicativePower, InfixOperator.Multiply)
+    .Slash => (multiplicativePower, InfixOperator.Divide)
+    .Percent => (multiplicativePower, InfixOperator.Remainder)
+    .Ampersand => (multiplicativePower, InfixOperator.BitwiseAnd)
+    .LessLess => (shiftPower, InfixOperator.ShiftLeft)
     .StarStar => (exponentPower, InfixOperator.Power)
     _ => {
       return None
@@ -45,9 +68,10 @@ fn infixOperator(kind: TokenKind): (Int, InfixOperator)? {
   Some found
 }
 
-fn isComparison(kind: TokenKind): Bool {
-  match infixOperator(kind) {
-    Some((power, _)) => power == comparisonPower
+/** Whether the parser stands at a comparison - and not at the `>>` whose first half looks like one. */
+fn isComparison(parser: Parser): Bool {
+  match infixOperatorAt(parser) {
+    Some((power, _, _)) => power == comparisonPower
     None => false
   }
 }
@@ -197,7 +221,7 @@ fn isAtRange(parser: Parser, minimum: Int): Bool {
 fn parseBinary(var parser: Parser, minimum: Int): Expression {
   const start = parser.span()
   // Whether `left` is still a prefix operator as it was written, without parentheses around it: `-x ** 2`
-  var isBarePrefix = parser.isAtAny([TokenKind.Minus, TokenKind.Bang])
+  var isBarePrefix = parser.isAtAny([TokenKind.Minus, TokenKind.Bang, TokenKind.Tilde])
   // `..end`: a range without a start
   var left = if isAtRange(parser, minimum) { parseRange parser, start, None } else { parseUnary parser }
   loop {
@@ -206,13 +230,16 @@ fn parseBinary(var parser: Parser, minimum: Int): Expression {
       isBarePrefix = false
       continue
     }
-    const (power, operator) = match infixOperator(parser.kind()) {
-      Some((power, operator)) if power >= minimum => (power, operator)
+    const (power, operator, width) = match infixOperatorAt(parser) {
+      Some((power, operator, width)) if power >= minimum => (power, operator, width)
       _ => {
         break
       }
     }
     parser.bump()
+    if width == 2 {
+      parser.bump()
+    }
     // `??` and `**` group to the right, everything else to the left
     const groupsRight = power == coalescePower || power == exponentPower
     const right = parseBinary(parser, minimum: if groupsRight { power } else { power + 1 })
@@ -221,11 +248,11 @@ fn parseBinary(var parser: Parser, minimum: Int): Expression {
     }
     isBarePrefix = false
     left = Expression ExpressionKind.Binary(operator, left, right), start.to(parser.previousSpan())
-    if power == comparisonPower && isComparison(parser.kind()) {
+    if power == comparisonPower && isComparison(parser) {
       parser.errorHere "Comparisons do not chain. Use `&&`: `a < b && b < c`"
       // The rest of the chain is read and dropped: `(a < b) > c` would only add messages about a `Bool` that nobody
       // wrote, and one root cause gets one message
-      while isComparison(parser.kind()) {
+      while isComparison(parser) {
         parser.bump()
         const _ = parseBinary(parser, minimum: comparisonPower + 1)
       }
@@ -251,6 +278,10 @@ fn reportPrefixedBase(var parser: Parser, base: Expression, exponent: Expression
     .Unary(.Not, inner) => {
       const written = parser.text inner.span
       ("A `!` directly in front of the base of `**` is ambiguous", "Write `!({written} ** {power})` or `(!{written}) ** {power}`")
+    }
+    .Unary(.BitwiseNot, inner) => {
+      const written = parser.text inner.span
+      ("A `~` directly in front of the base of `**` is ambiguous", "Write `~({written} ** {power})` or `(~{written}) ** {power}`")
     }
     _ => {
       return
@@ -281,6 +312,7 @@ fn parseUnary(var parser: Parser): Expression {
   const operator = match parser.kind() {
     .Minus => PrefixOperator.Negate
     .Bang => PrefixOperator.Not
+    .Tilde => PrefixOperator.BitwiseNot
     _ => {
       return parsePostfix parser
     }

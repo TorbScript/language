@@ -23,7 +23,7 @@ right line first and the wrong one after it.
 
 Read this list before writing TorbScript, and check your work against it afterwards. Twenty mistakes cover nearly
 everything: the call form, a bare case, `Err` instead of `Fail`, semicolons, `let`, taking a copy out of a collection,
-string length, bit operators, casts, an implicit `Some`, a trait name ending in `-able`, a `match` with a `default`, a
+string length, `^` for a power, casts, an implicit `Some`, a trait name ending in `-able`, a `match` with a `default`, a
 `MAX_SIZE` constant, a name that is not ASCII, an arm binding nothing reads, a `use` without names, `while true`, an
 extension member the file never names, an overload, and `Type.parse(text)`.
 
@@ -197,24 +197,23 @@ print text.length()
 them are slow, so the names say what is counted. Positions come from searching (`indexOf`) and are byte offsets;
 `text[3..]` slices at an offset and panics if the offset is inside a character.
 
-### 8. There are no bit operators
+### 8. `^` is exclusive or, and a power is `**`
 
 ```trb fragment
-const masked = value.bitwiseAnd(0xFF)
-const shifted = value.shiftedLeft(by: 2)
+const area = side ** 2
+const mixed = hash ^ byte
 ```
 
 ```trb error
-fn masked(value: Int): Int {
-  value & 0xFF
+fn area(side: Float): Float {
+  side ^ 2.0
 }
-// error: Expected the end of the statement, found `&`
+// error: `Float64` has no `^`: it is the exclusive or of two integers
 ```
 
-`&`, `|`, `^`, `<<` and `>>` are not operators of the language: `&` intersects traits and `|` unions literal types. The
-integer types come `with Bits`, whose methods are `bitwiseAnd`, `bitwiseOr`, `bitwiseExclusiveOr`, `bitwiseNot`,
-`shiftedLeft(by:)` and `shiftedRight(by:)`. `UInt64` additionally has `addedWrapping` and `multipliedWrapping`, the only
-arithmetic that does not panic on overflow.
+`^` is the exclusive or of two integers, as in every language with bit operators, and a power is `**`, which binds
+tighter than `*` and groups to the right. The bit operators sit on Go's levels - `&` like `*`, `|` and `^` like `+` - so
+`x & 1 == 0` needs no parentheses. `-x ** 2` is an error that asks for `-(x ** 2)` or `(-x) ** 2`.
 
 ### 9. There are no casts and no implicit numeric conversions
 

@@ -1161,7 +1161,11 @@ fn lowerUnary(
   const inner = builder.typeOfSlot slot
   if const Some(kind) = numericKindOf(lowering.program, inner) {
     const at = expression.span
-    return intrinsicSlot lowering, builder, destination, IntrinsicOperation.Negate, Some(kind), [slot], annotation, at
+    const operation = match operator {
+      .BitwiseNot => IntrinsicOperation.BitwiseNot
+      _ => IntrinsicOperation.Negate
+    }
+    return intrinsicSlot lowering, builder, destination, operation, Some(kind), [slot], annotation, at
   }
   const written = lowering.checker.expressionType lowering.module, operand.span
   lowerOperator lowering, builder, destination, expression.span, [slot], annotation, written
@@ -1436,7 +1440,8 @@ fn lowerTextComparison(
 }
 
 /**
- * `+`, `-`, `*`, `/`, `%` on the built-in numbers, and `+` on two strings. Everything else is a call of `Add.add` -
+ * `+`, `-`, `*`, `/`, `%` and the bit operators on the built-in numbers - the same intrinsics `Bits`' members are -
+ * and `+` on two strings. Everything else is a call of `Add.add` or of the member of `Bits` -
  * `**` included, which is no instruction of any machine: on the numbers it is `Power.power` of the runtime.
  */
 fn lowerArithmetic(
@@ -1473,6 +1478,11 @@ fn arithmeticOperation(operator: InfixOperator): IntrinsicOperation {
     .Subtract => IntrinsicOperation.Subtract
     .Multiply => IntrinsicOperation.Multiply
     .Divide => IntrinsicOperation.Divide
+    .BitwiseAnd => IntrinsicOperation.BitwiseAnd
+    .BitwiseOr => IntrinsicOperation.BitwiseOr
+    .BitwiseExclusiveOr => IntrinsicOperation.BitwiseExclusiveOr
+    .ShiftLeft => IntrinsicOperation.ShiftedLeft
+    .ShiftRight => IntrinsicOperation.ShiftedRight
     _ => IntrinsicOperation.Remainder
   }
 }

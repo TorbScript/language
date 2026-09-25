@@ -350,12 +350,13 @@ const emptyMap: Map<String, Int> = [:]
 - **Integer division truncates toward zero, and the remainder takes the sign of the dividend:** `-7 / 2` is `-3`,
   `-7 % 2` is `-1`. `x / 0` and `x % 0` panic, and so does dividing the smallest value of a signed type by `-1`
   (an overflow like any other).
-- **There are no bit operators.** `&`, `|`, `^`, `<<` and `>>` are not operators of the language (`|` already means a
-  literal-type union); the integer types come `with Bits` instead, whose methods are native: `bitwiseAnd`, `bitwiseOr`,
-  `bitwiseExclusiveOr`, `bitwiseNot`, `shiftedLeft(by:)` and `shiftedRight(by:)` (an arithmetic shift on the signed
-  types; a shift by a negative amount or by the width of the type or more panics). `UInt64` additionally has
+- **The bit operators are the members of `Bits`, on the levels of Go and Swift.** `a & b` is `bitwiseAnd`, `a | b`
+  `bitwiseOr`, `a ^ b` `bitwiseExclusiveOr`, `~a` `bitwiseNot`, `a << n` `shiftedLeft(by:)` and `a >> n`
+  `shiftedRight(by:)` (an arithmetic shift on the signed types; a shift by a negative amount or by the width of the type
+  or more panics). `&` binds like `*`, `|` and `^` like `+`, a shift between `*` and `**`, so `x & 1 == 0` is
+  `(x & 1) == 0`. In a type, `&` and `|` keep their meaning (intersection, literal-type union). `UInt64` additionally has
   `addedWrapping` and `multipliedWrapping`, the only arithmetic in the language that does not panic on overflow -
-  a hash function cannot be written without it. Methods need no precedence rules and no new tokens, and keeping the
+  a hash function cannot be written without it. Keeping the
   wrapping pair off the signed types keeps "overflow panics" true everywhere a `+` is written.
 - **On a `Float`, the operators are IEEE-754 and `compare` is a total order.** `==`, `<`, `<=`, `>` and `>=` are the
   hardware's: `nan != nan`, every comparison with a `nan` on either side is `false`, and `0.0 == -0.0`. `compare` puts
@@ -1608,8 +1609,8 @@ extend<Item> List<Item> with Show where Item: Show { ... }   // Type parameters 
   can be opened later without a break.
 - `&&`, `||` and `!` are the exception: they are built in on `Bool`, they short-circuit, and they cannot be
   overloaded. A trait method evaluates its argument, so a trait would mean something else.
-- There are no bit operators and therefore no traits for them: shifting and masking are native methods of the integer
-  types (see [Built-in Types](#built-in-types)).
+- The bit operators go through `Bits` (`&` is `bitwiseAnd`, `<<` is `shiftedLeft(by:)`, ...), whose members are
+  native on the integer types (see [Built-in Types](#built-in-types)).
 
 ## Types, Values and Reflection
 
@@ -2929,11 +2930,12 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
 - Integer division truncates toward zero and the remainder takes the sign of the dividend, division and remainder by
   zero panic, and so does the smallest signed value divided by `-1`. C11 and Rust agree on exactly this, so every back
   end gets it for one instruction instead of a correction.
-- No bit operators, but a `Bits` trait the integer types come `with` (`bitwiseAnd`, `shiftedLeft(by:)`, ...) plus
-  `addedWrapping`/`multipliedWrapping` on `UInt64`. Operators would need precedence rules and a token that `|`
-  already spends on literal types; without the methods, `Hash` for a user type, UTF-8 decoding, the bytecode encoding
-  and the build cache's hash cannot be written in TorbScript at all. Keeping the wrapping pair off the signed types
-  keeps "overflow panics" true wherever a `+` is written.
+- Bit operators `&`, `|`, `^`, `~`, `<<`, `>>` on the levels of Go and Swift (`&` like `*`, `|` and `^` like `+`, a shift
+  between `*` and `**`), desugared to the `Bits` trait the integer types come `with`, plus
+  `addedWrapping`/`multipliedWrapping` on `UInt64` (2026-09-25; replaced "no bit operators, only methods"). C's
+  precedence is refused for its trap (`x & 1 == 0`); `&` and `|` keep their meaning in a type, which the parser reads
+  apart from an expression. Keeping the wrapping pair off the signed types keeps "overflow panics" true wherever a `+`
+  is written.
 - `Show` of a `Float` is the shortest decimal that parses back to the same value, with `.0` appended when it has
   neither `.` nor `e`. Two implementations are compared through `Show`, and `printf("%.17g")` is neither shortest nor
   the same across libcs, so the runtime carries its own conversion.

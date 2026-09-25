@@ -187,27 +187,33 @@ public trait Real with Signed, Power, Power<Int64> {
 }
 
 /**
- * The bit operations of an integer. The language has no bit operators - `|` is the union of literal types, and a
- * method needs no precedence rule and no new token - so masking and shifting are named:
+ * The bit operations of an integer, and the operators that are them: `a & b` is `bitwiseAnd`, `a | b` `bitwiseOr`,
+ * `a ^ b` `bitwiseExclusiveOr`, `~a` `bitwiseNot`, `a << n` `shiftedLeft(by:)` and `a >> n` `shiftedRight(by:)`.
  *
- *     const low = value.bitwiseAnd(0xFF)
- *     const mixed = seed.bitwiseExclusiveOr(byte).shiftedLeft(by: 5)
+ *     const value = 0x1234
+ *     const low = value & 0xFF
+ *     const mixed = (value ^ low) << 5
+ *     print "{low} {mixed}"
  *
- * The shift of a signed type is arithmetic (it keeps the sign), the shift of an unsigned type is logical. A shift by
- * a negative amount or by the width of the type or more panics, like every other operation that leaves its range.
+ * The operators sit where Go and Swift put them, so there is no C trap: `&` binds like `*`, `|` and `^` like `+`, a
+ * shift between `*` and `**` - and `flags & 1 == 0` is `(flags & 1) == 0`.
+ *
+ * The shift of a signed type is arithmetic (it keeps the sign), the shift of an unsigned type is logical, and the bits
+ * that leave the width are dropped. A shift by a negative amount or by the width of the type or more panics, like every
+ * other operation that leaves its range.
  */
 public trait Bits {
-  /** Bit-for-bit `and`. */
+  /** Bit-for-bit `and`. This is `&`. */
   fn bitwiseAnd(other: Self): Self
-  /** Bit-for-bit `or`. */
+  /** Bit-for-bit `or`. This is `|`. */
   fn bitwiseOr(other: Self): Self
-  /** Bit-for-bit `xor`. */
+  /** Bit-for-bit exclusive or. This is `^`. */
   fn bitwiseExclusiveOr(other: Self): Self
-  /** Every bit flipped. */
+  /** Every bit flipped. This is the prefix `~`. */
   fn bitwiseNot(): Self
-  /** Shifted towards the high bits. Arithmetic for a signed type, logical for an unsigned one. */
+  /** Shifted towards the high bits. This is `<<`. */
   fn shiftedLeft(by: Int64): Self
-  /** Shifted towards the low bits. Arithmetic for a signed type, logical for an unsigned one. */
+  /** Shifted towards the low bits: arithmetic for a signed type, logical for an unsigned one. This is `>>`. */
   fn shiftedRight(by: Int64): Self
 }
 

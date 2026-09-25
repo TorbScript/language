@@ -90,6 +90,12 @@ fn unaryConstant(
     const inner = evaluateConstant(lowering, operand)?
     return negatedConstant lowering, inner, annotation, at
   }
+  if const .BitwiseNot = operator {
+    const inner = evaluateConstant(lowering, operand)?
+    const value = integerOf(inner)?
+    const found = wrappedToKind(lowering, value.bitwiseNot(), annotation)?
+    return Some ConstantValue(StaticContents.Literal(LiteralValue.Integer(found)), annotation)
+  }
   const inner = evaluateConstant(lowering, operand)?
   const value = booleanOf(inner)?
   Some ConstantValue(StaticContents.Literal(LiteralValue.Boolean(!value)), annotation)
@@ -243,8 +249,67 @@ fn integerOperation(
       }
       integerResult lowering, poweredChecked(first, second), annotation, "**", at
     }
+    // A shift by a negative amount or by the width or more was reported by the checker; it is never folded
+    .BitwiseAnd => bitsValue lowering, first.bitwiseAnd(second), annotation
+    .BitwiseOr => bitsValue lowering, first.bitwiseOr(second), annotation
+    .BitwiseExclusiveOr => bitsValue lowering, first.bitwiseExclusiveOr(second), annotation
+    .ShiftLeft => {
+      if !isShiftAmount(lowering, second, annotation) {
+        return None
+      }
+      bitsValue lowering, first.shiftedLeft(by: second), annotation
+    }
+    .ShiftRight => {
+      if !isShiftAmount(lowering, second, annotation) {
+        return None
+      }
+      bitsValue lowering, first.shiftedRight(by: second), annotation
+    }
     _ => None
   }
+}
+
+fn bitsValue(var lowering: Lowering, value: Int, annotation: IrTypeId): ConstantValue? {
+  const found = wrappedToKind(lowering, value, annotation)?
+  Some ConstantValue(StaticContents.Literal(LiteralValue.Integer(found)), annotation)
+}
+
+/** Whether a shift amount is inside the width of the type the shift answers. */
+fn isShiftAmount(var lowering: Lowering, amount: Int, annotation: IrTypeId): Bool {
+  const width = match numericKindOf(lowering.program, annotation) {
+    Some(.Signed(bits)) => bits
+    Some(.Unsigned(bits)) => bits
+    _ => {
+      return false
+    }
+  }
+  amount >= 0 && amount < width
+}
+
+/**
+ * A bit pattern brought into the width of the type: the bits above it dropped, the highest one left extended for a
+ * signed type. A `UInt64` above the largest `Int64` is no `Int` of the compiler, so it is not folded.
+ */
+fn wrappedToKind(var lowering: Lowering, value: Int, annotation: IrTypeId): Int? {
+  const (width, isSigned) = match numericKindOf(lowering.program, annotation) {
+    Some(.Signed(bits)) => (bits, true)
+    Some(.Unsigned(bits)) => (bits, false)
+    _ => {
+      return None
+    }
+  }
+  if width >= 64 {
+    if !isSigned && value < 0 {
+      return None
+    }
+    return Some value
+  }
+  const modulus = (1).shiftedLeft(by: width)
+  const low = value.bitwiseAnd(modulus - 1)
+  if isSigned && low >= modulus / 2 {
+    return Some(low - modulus)
+  }
+  Some low
 }
 
 /** `base ** exponent` by squaring, or `None` where it overflows. The factor is squared only while it is still needed. */

@@ -163,6 +163,11 @@ fn operatorSpelling(operator: InfixOperator): String {
     .Divide => "/"
     .Remainder => "%"
     .Power => "**"
+    .BitwiseAnd => "&"
+    .BitwiseOr => "|"
+    .BitwiseExclusiveOr => "^"
+    .ShiftLeft => "<<"
+    .ShiftRight => ">>"
     .Equal => "=="
     .NotEqual => "!="
     .Less => "<"
@@ -544,7 +549,130 @@ fn unaryConstant(
         _ => ConstantResult.NotConstant at
       }
     }
+    // `~0` is `-1` in an `Int8` and `255` in a `UInt8`: the answer is the width's, so the width is asked for
+    .BitwiseNot => {
+      const number = match value {
+        .Integer(found) => found
+        _ => {
+          return ConstantResult.NotConstant at
+        }
+      }
+      const (width, isSigned) = match integerWidthAt(checker, module, at) {
+        Some(found) => found
+        None => {
+          return ConstantResult.NotConstant at
+        }
+      }
+      match wrappedToWidth(number.bitwiseNot(), width, isSigned) {
+        Some(found) => ConstantResult.Value ConstantValue.Integer(found)
+        None => ConstantResult.NotConstant at
+      }
+    }
   }
+}
+
+/**
+ * `&`, `|` and `^` of two integers, and the two shifts. The shifts drop what leaves the width of the type, exactly as
+ * the runtime does, and a shift by a negative amount or by the width or more is a compile error, where the runtime
+ * panics.
+ */
+fn bitsConstant(
+  var checker: Checker,
+  module: ModuleId,
+  operator: InfixOperator,
+  a: ConstantValue,
+  b: ConstantValue,
+  at: Span,
+): ConstantResult {
+  const left = match a {
+    .Integer(found) => found
+    _ => {
+      return ConstantResult.NotConstant at
+    }
+  }
+  const right = match b {
+    .Integer(found) => found
+    _ => {
+      return ConstantResult.NotConstant at
+    }
+  }
+  const (width, isSigned) = match integerWidthAt(checker, module, at) {
+    Some(found) => found
+    None => {
+      return ConstantResult.NotConstant at
+    }
+  }
+  const isShift = match operator {
+    .ShiftLeft | .ShiftRight => true
+    _ => false
+  }
+  if isShift && (right < 0 || right >= width) {
+    checker.report(
+      module,
+      Diagnostic.error("This shifts by {right}, which is not between 0 and {width - 1}", at)
+        .withNote("A compile-time constant is evaluated while the program is compiled, so a program that cannot start does not compile")
+    )
+    return ConstantResult.Broken
+  }
+  const raw = match operator {
+    .BitwiseAnd => left.bitwiseAnd right
+    .BitwiseOr => left.bitwiseOr right
+    .BitwiseExclusiveOr => left.bitwiseExclusiveOr right
+    .ShiftLeft => left.shiftedLeft by: right
+    _ => left.shiftedRight by: right
+  }
+  match wrappedToWidth(raw, width, isSigned) {
+    Some(found) => ConstantResult.Value ConstantValue.Integer(found)
+    None => ConstantResult.NotConstant at
+  }
+}
+
+/**
+ * The width and the signedness of the integer type the checker gave the expression at `at`: what `~` and the shifts
+ * need to know, and nothing else of the evaluator does.
+ */
+fn integerWidthAt(checker: Checker, module: ModuleId, at: Span): (Int, Bool)? {
+  const found = checker.expressionType(module, at)?
+  if const .Nominal(symbol, arguments) = checker.types.form(found) {
+    if arguments.isEmpty() {
+      return widthOfInteger(checker.wellKnown.numericNamed(symbol)?)
+    }
+  }
+  None
+}
+
+fn widthOfInteger(name: String): (Int, Bool)? {
+  match name {
+    "Int8" => Some((8, true))
+    "Int16" => Some((16, true))
+    "Int32" => Some((32, true))
+    "Int64" => Some((64, true))
+    "UInt8" => Some((8, false))
+    "UInt16" => Some((16, false))
+    "UInt32" => Some((32, false))
+    "UInt64" => Some((64, false))
+    _ => None
+  }
+}
+
+/**
+ * A value brought into a width: the bits above it dropped, and for a signed type the highest one that is left
+ * extended. A `UInt64` above the largest `Int64` has no value of the checker's own integers, so it is `None` - such a
+ * constant is not folded here.
+ */
+fn wrappedToWidth(value: Int, width: Int, isSigned: Bool): Int? {
+  if width == 64 {
+    if !isSigned && value < 0 {
+      return None
+    }
+    return Some value
+  }
+  const modulus = (1).shiftedLeft(by: width)
+  const low = value.bitwiseAnd(modulus - 1)
+  if isSigned && low >= modulus / 2 {
+    return Some(low - modulus)
+  }
+  Some low
 }
 
 fn binaryConstant(
@@ -572,6 +700,9 @@ fn binaryConstant(
   }
   match operator {
     .Add | .Subtract | .Multiply | .Divide | .Remainder | .Power => arithmeticConstant checker, module, operator, a, b, at
+    .BitwiseAnd | .BitwiseOr | .BitwiseExclusiveOr | .ShiftLeft | .ShiftRight => {
+      bitsConstant checker, module, operator, a, b, at
+    }
     .Equal | .NotEqual => equalityConstant operator, a, b, at
     .Less | .LessOrEqual | .Greater | .GreaterOrEqual => orderConstant operator, a, b, at
     .And | .Or => logicalConstant operator, a, b, at

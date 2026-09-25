@@ -67,10 +67,19 @@ public type TokenKind {
   case GreaterEqual
   case AndAnd
   case OrOr
-  /** Only in patterns and literal types: `1 | 2 | 3` */
+  /** A literal-type union and an or-pattern (`1 | 2 | 3`), and in an expression the bitwise or of two integers. */
   case Pipe
-  /** An intersection of traits: `Compare & Show`. There are no bit operators, so this is free. */
+  /** An intersection of traits (`Compare & Show`), and in an expression the bitwise and of two integers. */
   case Ampersand
+  /** The bitwise exclusive or of two integers, `a ^ b`. */
+  case Caret
+  /** The bitwise not of an integer, `~a`: a prefix operator. */
+  case Tilde
+  /**
+   * The shift towards the high bits, `a << b`. Its mirror `>>` is no token: it is two `>` with nothing between them,
+   * which the expression parser reads as one operator, so that `List<List<Int>>` stays two closing brackets.
+   */
+  case LessLess
   case Plus
   case Minus
   case Star
@@ -88,7 +97,7 @@ public type TokenKind {
     match self {
       .Comma | .Colon | .Dot | .QuestionDot | .Arrow | .Equal | .EqualEqual | .BangEqual | .Less | .LessEqual | .GreaterEqual => true
       .AndAnd | .OrOr | .QuestionQuestion | .Plus | .Ampersand | .Minus | .Star | .Slash | .Percent | .ParenOpen | .BracketOpen => true
-      .StarStar => true
+      .StarStar | .Caret | .Pipe | .LessLess => true
       _ => false
     }
   }
@@ -97,7 +106,7 @@ public type TokenKind {
   fn continuesLineBefore(): Bool {
     match self {
       .Dot | .QuestionDot | .AndAnd | .OrOr | .QuestionQuestion | .Plus | .Ampersand | .Star | .Slash | .Percent => true
-      .StarStar => true
+      .StarStar | .Caret | .LessLess => true
       .EqualEqual | .BangEqual | .LessEqual | .GreaterEqual | .Equal => true
       .Reserved(Keyword.With) | .Reserved(Keyword.Where) | .Reserved(Keyword.Else) => true
       _ => false
@@ -140,6 +149,9 @@ public type TokenKind {
       .OrOr => "`||`"
       .Pipe => "`|`"
       .Ampersand => "`&`"
+      .Caret => "`^`"
+      .Tilde => "`~`"
+      .LessLess => "`<<`"
       .Plus => "`+`"
       .Minus => "`-`"
       .Star => "`*`"

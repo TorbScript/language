@@ -578,6 +578,48 @@ group "`**` through `Power`" {
   }
 }
 
+group "The bit operators through `Bits`" {
+  test "a mask compares without parentheses, and the operator is the member of `Bits`" {
+    const source = inBody "  const flags = 6\n  const isEven = flags & 1 == 0\n  print isEven"
+    assert problems(source).isEmpty()
+    const found = probe source
+    assert(found.typeOf("flags & 1 == 0") == "Bool")
+    assert(found.typeOf("flags & 1") == "Int64")
+    assert(found.dispatchOf("flags & 1") == "implementation Int64: Bits")
+  }
+
+  test "a shift keeps the type of its left operand and takes an `Int`" {
+    const source = inBody "  const small: Int8 = 3\n  const shifted = small << 2\n  const back = shifted >> 1\n  print back"
+    assert problems(source).isEmpty()
+    const found = probe source
+    assert(found.typeOf("small << 2") == "Int8")
+    assert(found.typeOf("shifted >> 1") == "Int8")
+  }
+
+  test "the other operand of `&`, `|` and `^` is the same type" {
+    const source = inBody "  const small: Int8 = 3\n  const wide = 300\n  print(small | wide)"
+    assert(problems(source) == ["Expected `Int8`, found `Int64`"])
+  }
+
+  test "`~` is the member `bitwiseNot`, and a literal takes the expected width" {
+    const source = inBody "  const all: UInt8 = ~0\n  const flipped = ~all\n  print flipped"
+    assert problems(source).isEmpty()
+    const found = probe source
+    assert(found.typeOf("~all") == "UInt8")
+  }
+
+  test "a float has no `^`, and hears that a power is `**`" {
+    const source = inBody "  const wrong = 2.0 ^ 3.0\n  print wrong"
+    assert(problems(source) == ["`Float64` has no `^`: it is the exclusive or of two integers"])
+    assert(notes(source) == ["A power is written `**`: `x ** 2`"])
+  }
+
+  test "a type without `Bits` is told so" {
+    const source = inBody "  const wrong = \"a\" & \"b\"\n  print wrong"
+    assert(problems(source) == ["`String` does not implement `Bits`, so `a & b` has no meaning for it"])
+  }
+}
+
 group "Interpolation and iteration" {
   test "every interpolated part records the `Show` implementation that renders it" {
     const source = "type Amount with Show \{\n  fn show(): String \{\n    \"a\"\n  \}\n\}\n\n"
