@@ -1,0 +1,28 @@
+/**
+ * YAML 1.2 and 1.1 as a format, written in TorbScript: [Yaml] reads and writes any `Encode`/`Decode` type, and
+ * [YamlNode] is the tree of a document as it was written - anchors, aliases, tags, styles and comments included - for a
+ * tool that changes one value of a file and writes the rest back as it was.
+ *
+ *     const yaml = Yaml()
+ *     const config = yaml.decode<Config>(text)?
+ *     print yaml.encode(config)
+ *
+ * **The target type resolves a scalar.** `no` is the text `"no"` in a `String` field and an error in a `Bool` field,
+ * so the surprises YAML is known for need no schema to be avoided. A document read without a type is resolved by a
+ * [YamlSchema] - failsafe, JSON, core or YAML 1.1's types. A document that says `%YAML 1.1` is read by 1.1's rules; the
+ * merge key `<<` is applied in every document. The writer writes YAML 1.2 and quotes every string a 1.1 reader would
+ * read as something else, so what it writes reads the same under both versions.
+ *
+ * Aliases are counted: expanding them stops at [Yaml.aliasLimit] nodes, so a document of nested aliases is an error
+ * and not an exhausted memory. A local tag such as `!point` means a type only through [YamlTag], because a program has
+ * no reflection to find one by.
+ */
+
+public use Yaml, YamlVersion from "./yaml"
+public use YamlNode, YamlContent, YamlEntry, YamlDocument, YamlTagDirective, YamlComments from "./node"
+public use ScalarStyle, CollectionStyle from "./node"
+public use YamlError from "./error"
+public use YamlSchema from "./schema"
+public use YamlTag from "./resolve"
+public use YamlDecoder from "./decoder"
+public use YamlEncoder from "./encoder"

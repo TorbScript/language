@@ -1,0 +1,589 @@
+/**
+ * The writer: YAML trees to text. A block collection is written one entry per line and indented by two spaces, a flow
+ * collection on one line, and every node keeps its anchor, its tag, its style and its comments - so a document that is
+ * read and written back reads the same, and looks as it did wherever the tree was not changed.
+ *
+ * A style the text cannot be written in is replaced by one it can: a plain scalar that would read as something else in
+ * its place is quoted, a block scalar inside a flow collection is double-quoted, and an empty collection is written as
+ * `[]` or `\{\}`.
+ */
+
+use YamlNode, YamlContent, YamlEntry, YamlDocument, YamlTagDirective, ScalarStyle, CollectionStyle from "./node"
+use coreTagPrefix from "./parser"
+use isPlainSafe, isPrintable from "./encoder"
+
+/** Every document of a stream as text. */
+public fn writtenStream(documents: List<YamlDocument>): String {
+  var writer = Writer()
+  for index in 0..documents.length() {
+    const document = documents[index]
+    const next = documents.get(index + 1)
+    const nextHasDirectives = match next {
+      Some(following) => following.version.isSome() || !following.tagDirectives.isEmpty()
+      None => false
+    }
+    writer.document(document, index > 0, nextHasDirectives)
+  }
+  writer.text()
+}
+
+type Writer {
+  var pieces: List<String> = []
+  var directives: List<YamlTagDirective> = []
+
+  fn text(): String {
+    pieces.joined separator: ""
+  }
+
+  /** One line: the text, the comment behind it, the line break. Nothing where both are empty. */
+  var fn line(text: String, comment: String?) {
+    match comment {
+      Some(found) => {
+        if text.isEmpty() {
+          pieces.append "#{found}\n"
+        } else {
+          pieces.append "{text} #{found}\n"
+        }
+      }
+      None => {
+        if !text.isEmpty() {
+          pieces.append "{text}\n"
+        }
+      }
+    }
+  }
+
+  var fn comments(texts: List<String>, indent: Int) {
+    for text in texts {
+      pieces.append "{spaces(indent)}#{text}\n"
+    }
+  }
+
+  var fn document(document: YamlDocument, afterAnother: Bool, closeExplicitly: Bool) {
+    directives = document.tagDirectives
+    comments document.leadingComments, 0
+    const hasDirectives = document.version.isSome() || !document.tagDirectives.isEmpty()
+    if const Some(version) = document.version {
+      pieces.append "%YAML {version}\n"
+    }
+    for directive in document.tagDirectives {
+      pieces.append "%TAG {directive.handle} {directive.prefix}\n"
+    }
+    const start = if document.explicitStart || hasDirectives || afterAnother || needsStart(document.root) {
+      "---"
+    } else {
+      ""
+    }
+    comments document.root.comments.leading, 0
+    blockNode document.root, start, 0, false
+    comments document.endComments, 0
+    if document.explicitEnd || closeExplicitly {
+      pieces.append "...\n"
+    }
+  }
+
+  /**
+   * A node in a block. `prefix` is what stands on the current line in front of it - `key:`, `-`, `?`, `---` or
+   * nothing - and `indent` is the column of the node's own lines. `compact` lets a collection start on the prefix's line.
+   */
+  var fn blockNode(node: YamlNode, prefix: String, indent: Int, compact: Bool) {
+    const properties = propertiesOf node
+    const trailing = node.comments.trailing
+    match node.content {
+      .Alias(name) => line joined(prefix, "*{name}"), trailing
+      .Scalar(text, style) => scalar text, style, prefix, properties, indent, trailing
+      .Sequence(items, style) => {
+        if style == CollectionStyle.Flow || items.isEmpty() {
+          line joined(prefix, flowText(node)), trailing
+          return
+        }
+        var first = compact && properties.isEmpty() && trailing.isNone() && items[0].comments.leading.isEmpty()
+        if !first {
+          line joined(prefix, properties), trailing
+        }
+        for item in items {
+          const itemPrefix = if first { joined prefix, "-" } else { spaces(indent) + "-" }
+          if !first {
+            comments item.comments.leading, indent
+          }
+          first = false
+          blockNode(item, itemPrefix, indent + 2, true)
+        }
+      }
+      .Mapping(entries, style) => {
+        if style == CollectionStyle.Flow || entries.isEmpty() {
+          line joined(prefix, flowText(node)), trailing
+          return
+        }
+        var first = compact && properties.isEmpty() && trailing.isNone() && entries[0].key.comments.leading.isEmpty()
+        if !first {
+          line joined(prefix, properties), trailing
+        }
+        for entry in entries {
+          const entryPrefix = if first { prefix + " " } else { spaces indent }
+          if !first {
+            comments entry.key.comments.leading, indent
+          }
+          first = false
+          blockEntry entry, entryPrefix, indent
+        }
+      }
+    }
+  }
+
+  /** One entry of a block mapping, whose key starts after `prefix`. */
+  var fn blockEntry(entry: YamlEntry, prefix: String, indent: Int) {
+    const key = entry.key
+    if const Some(simple) = simpleKey(key) {
+      const keyLine = prefix + simple + ":"
+      if const Some(comment) = key.comments.trailing {
+        // A comment behind the key: the value starts on the next line
+        line keyLine, Some(comment)
+        if isEmptyPlain(entry.value) && entry.value.comments.isEmpty() {
+          return
+        }
+        if isBlockCollection(entry.value) && propertiesOf(entry.value).isEmpty() {
+          blockNode(entry.value, "", indent + 2, false)
+        } else {
+          blockNode(entry.value, spaces(indent + 2), indent + 2, false)
+        }
+        return
+      }
+      blockNode(entry.value, keyLine, indent + 2, false)
+      return
+    }
+    blockNode(key, prefix + "?", indent + 2, true)
+    blockNode(entry.value, spaces(indent) + ":", indent + 2, true)
+  }
+
+  var fn scalar(text: String, style: ScalarStyle, prefix: String, properties: String, indent: Int, trailing: String?) {
+    const bodyIndent = if indent < 2 { 2 } else { indent }
+    if style == ScalarStyle.Literal || style == ScalarStyle.Folded {
+      if isBlockWritable(text) {
+        blockScalar text, style, prefix, properties, bodyIndent, trailing
+        return
+      }
+    }
+    if style == ScalarStyle.Plain && text.contains("\n") {
+      if const Some(lines) = plainLines(text) {
+        line joined(prefix, properties, lines[0]), None
+        for index in 1..lines.length() {
+          if lines[index].isEmpty() {
+            pieces.append "\n"
+          } else if index == lines.length() - 1 {
+            line(spaces(bodyIndent) + lines[index], trailing)
+          } else {
+            pieces.append "{spaces(bodyIndent)}{lines[index]}\n"
+          }
+        }
+        return
+      }
+    }
+    line joined(prefix, properties, inlineScalar(text, style, false)), trailing
+  }
+
+  /** A literal or folded block scalar: its header on the prefix's line, its lines below it at `indent`. */
+  var fn blockScalar(text: String, style: ScalarStyle, prefix: String, properties: String, indent: Int, trailing: String?) {
+    var body = text
+    var chomping = ""
+    if !text.endsWith("\n") {
+      chomping = "-"
+    } else if text.endsWith("\n\n") || !hasContent(text) {
+      // Only `+` keeps line breaks that follow no line of content
+      chomping = "+"
+    }
+    if chomping != "-" {
+      body = body.sliceBytes(0, body.byteLength() - 1)
+    }
+    var lines = body.split "\n"
+    if style == ScalarStyle.Folded {
+      lines = foldedLines body
+    }
+    // Where the first line that is not empty starts with a space, the indentation cannot be detected: say it
+    var indicator = ""
+    for candidate in lines {
+      if !candidate.isEmpty() {
+        if candidate.startsWith(" ") || candidate.startsWith("\t") {
+          indicator = "2"
+        }
+        break
+      }
+    }
+    const header = (if style == ScalarStyle.Literal { "|" } else { ">" }) + indicator + chomping
+    line joined(prefix, properties, header), trailing
+    for content in lines {
+      if content.isEmpty() {
+        pieces.append "\n"
+      } else {
+        pieces.append "{spaces(indent)}{content}\n"
+      }
+    }
+  }
+
+  /** A node of a flow collection, on one line. */
+  fn flowText(node: YamlNode): String {
+    const properties = propertiesOf node
+    const content = match node.content {
+      .Alias(name) => "*{name}"
+      .Scalar(text, style) => {
+        // An empty plain scalar with properties is its properties alone: `!!str` in `\{foo: !!str\}`
+        if text.isEmpty() && style == ScalarStyle.Plain && !properties.isEmpty() {
+          ""
+        } else {
+          inlineScalar text, style, true
+        }
+      }
+      .Sequence(items, _) => {
+        const parts = items.map({ flowText _ }).toList()
+        "[" + parts.joined(separator: ", ") + "]"
+      }
+      .Mapping(entries, _) => {
+        var parts: List<String> = []
+        for entry in entries {
+          // An empty key is nothing in front of the `:`, and an alias needs a space before it
+          const key = match entry.key.content {
+            .Alias(name) => "*{name} "
+            .Scalar(text, style) => {
+              if isEmptyPlain(entry.key) {
+                ""
+              } else if entry.key.anchor.isNone() && entry.key.tag.isNone() {
+                keyScalar text, style, true
+              } else if text.isEmpty() && style == ScalarStyle.Plain {
+                // Properties alone, and a space so that the `:` does not become part of a tag or an anchor
+                flowText(entry.key) + " "
+              } else {
+                flowText entry.key
+              }
+            }
+            _ => flowText entry.key
+          }
+          if isEmptyPlain(entry.value) {
+            parts.append "{key}:"
+          } else {
+            parts.append "{key}: {flowText(entry.value)}"
+          }
+        }
+        "\{" + parts.joined(separator: ", ") + "\}"
+      }
+    }
+    joined properties, content
+  }
+
+  /** `&anchor !tag`, or nothing. */
+  fn propertiesOf(node: YamlNode): String {
+    var parts: List<String> = []
+    if const Some(anchor) = node.anchor {
+      parts.append "&{anchor}"
+    }
+    if const Some(tag) = node.tag {
+      parts.append tagText(tag)
+    }
+    parts.joined separator: " "
+  }
+
+  /** A tag as it is written: `!!str` for the core schema's, a `%TAG` handle where one fits, `!<...>` otherwise. */
+  fn tagText(tag: String): String {
+    for directive in directives {
+      if tag.startsWith(directive.prefix) && tag.byteLength() > directive.prefix.byteLength() {
+        const suffix = tag.sliceBytes directive.prefix.byteLength(), tag.byteLength()
+        if isShorthandSuffix(suffix) {
+          return directive.handle + suffix
+        }
+      }
+    }
+    if tag.startsWith(coreTagPrefix) {
+      const suffix = tag.sliceBytes coreTagPrefix.byteLength(), tag.byteLength()
+      if isShorthandSuffix(suffix) {
+        return "!!" + suffix
+      }
+    }
+    if tag == "!" {
+      return "!"
+    }
+    if tag.startsWith("!") && isShorthandSuffix(tag.sliceBytes(1, tag.byteLength())) {
+      return tag
+    }
+    "!<{tag}>"
+  }
+
+  /** The key of a block mapping written on one line with its `:`, or `None` where it needs `? `. */
+  fn simpleKey(key: YamlNode): String? {
+    const properties = propertiesOf key
+    const written = match key.content {
+      .Alias(name) => "*{name} "
+      .Scalar(text, style) => {
+        if style == ScalarStyle.Literal || style == ScalarStyle.Folded || text.contains("\n") {
+          return None
+        }
+        if text.isEmpty() && style == ScalarStyle.Plain {
+          if properties.isEmpty() {
+            return None
+          }
+          return Some(properties + " ")
+        }
+        joined properties, keyScalar(text, style, false)
+      }
+      .Sequence(_, style) => {
+        if style == CollectionStyle.Block && !key.items().isEmpty() {
+          return None
+        }
+        flowText key
+      }
+      .Mapping(_, style) => {
+        if style == CollectionStyle.Block && !key.entries().isEmpty() {
+          return None
+        }
+        flowText key
+      }
+    }
+    // An implicit key ends where its line does, and after 1024 characters
+    if written.byteLength() > 1000 || key.comments.trailing.isSome() {
+      return None
+    }
+    Some written
+  }
+}
+
+/** Whether a root node needs `---` in front of it: a document that starts with `%` or with a marker otherwise. */
+fn needsStart(root: YamlNode): Bool {
+  match root.content {
+    .Scalar(text, style) => style == ScalarStyle.Plain && text.startsWith("%")
+    _ => false
+  }
+}
+
+fn isBlockCollection(node: YamlNode): Bool {
+  match node.content {
+    .Sequence(items, style) => style == CollectionStyle.Block && !items.isEmpty()
+    .Mapping(entries, style) => style == CollectionStyle.Block && !entries.isEmpty()
+    _ => false
+  }
+}
+
+fn isEmptyPlain(node: YamlNode): Bool {
+  node.anchor.isNone() && node.tag.isNone() && node.content == YamlContent.Scalar("", ScalarStyle.Plain)
+}
+
+/** A key on one line: the same as a value, except that a plain key may end with `:`, as its own `:` follows it. */
+fn keyScalar(text: String, style: ScalarStyle, flow: Bool): String {
+  if style == ScalarStyle.Plain && isPlainSafe(text, flow, true) {
+    return text
+  }
+  inlineScalar text, style, flow
+}
+
+/** A scalar on one line, in its style where the text allows that, and in double quotes where it does not. */
+public fn inlineScalar(text: String, style: ScalarStyle, flow: Bool): String {
+  match style {
+    .Plain => {
+      if text.isEmpty() && !flow {
+        return ""
+      }
+      if isPlainSafe(text, flow, false) {
+        return text
+      }
+      doubleQuoted text
+    }
+    .SingleQuoted => {
+      if text.chars().all({ isPrintable(_) && _ != '\n' }) {
+        return "'" + text.replace("'", "''") + "'"
+      }
+      doubleQuoted text
+    }
+    _ => doubleQuoted text
+  }
+}
+
+/** A text in double quotes, with every character escaped that cannot stand in them as it is. */
+public fn doubleQuoted(text: String): String {
+  var pieces: List<String> = ["\""]
+  for character in text.chars() {
+    const piece = match character {
+      '"' => "\\\""
+      '\\' => "\\\\"
+      '\n' => "\\n"
+      '\t' => "\\t"
+      '\r' => "\\r"
+      '\0' => "\\0"
+      other => {
+        if isPrintable(other) {
+          other.show()
+        } else {
+          escapeOf other
+        }
+      }
+    }
+    pieces.append piece
+  }
+  pieces.append "\""
+  pieces.joined separator: ""
+}
+
+fn escapeOf(character: Char): String {
+  const code = Int64.from character
+  if code == 7 {
+    return "\\a"
+  }
+  if code == 8 {
+    return "\\b"
+  }
+  if code == 11 {
+    return "\\v"
+  }
+  if code == 12 {
+    return "\\f"
+  }
+  if code == 27 {
+    return "\\e"
+  }
+  if code == 133 {
+    return "\\N"
+  }
+  if code == 160 {
+    return "\\_"
+  }
+  if code == 8232 {
+    return "\\L"
+  }
+  if code == 8233 {
+    return "\\P"
+  }
+  if code < 256 {
+    return "\\x" + hex(code, 2)
+  }
+  if code < 65536 {
+    return "\\u" + hex(code, 4)
+  }
+  "\\U" + hex(code, 8)
+}
+
+fn hex(value: Int, width: Int): String {
+  const digits = "0123456789ABCDEF"
+  var pieces: List<String> = []
+  var rest = value
+  for _ in 0..width {
+    pieces.insert 0, digits.sliceBytes(rest % 16, rest % 16 + 1)
+    rest = rest / 16
+  }
+  pieces.joined separator: ""
+}
+
+/** Whether a text can be written as a block scalar: every character printable, and no carriage return. */
+fn isBlockWritable(text: String): Bool {
+  text.chars().all { _ != '\r' && isPrintable(_) }
+}
+
+/** Whether a text holds anything but line breaks. */
+fn hasContent(text: String): Bool {
+  text.chars().any { _ != '\n' }
+}
+
+/**
+ * The lines of a folded block scalar that reads back as `text`. Between two lines that start with no whitespace a
+ * line break is folded into a space, so each of the text's line breaks there is written as one more empty line; next
+ * to a *more indented* line nothing is folded, and the line breaks are written as they are.
+ */
+fn foldedLines(text: String): List<String> {
+  var lines: List<String> = []
+  var previous: String? = None
+  var empty = 0
+  for part in text.split("\n") {
+    if part.isEmpty() {
+      empty = empty + 1
+      continue
+    }
+    var count = empty
+    if const Some(before) = previous {
+      if isFoldedLine(before) && isFoldedLine(part) {
+        count = count + 1
+      }
+    }
+    for _ in 0..count {
+      lines.append ""
+    }
+    lines.append part
+    previous = Some part
+    empty = 0
+  }
+  for _ in 0..empty {
+    lines.append ""
+  }
+  lines
+}
+
+/** A line of a folded scalar that folding joins: one that does not start with whitespace. */
+fn isFoldedLine(line: String): Bool {
+  !line.startsWith(" ") && !line.startsWith("\t")
+}
+
+/**
+ * The lines of a plain scalar of several lines, where one can say the text: every line break is written as an empty
+ * line, which is what a line break of a plain scalar folds back into, and every line has to be plain on its own.
+ */
+fn plainLines(text: String): List<String>? {
+  if text.startsWith("\n") || text.endsWith("\n") {
+    return None
+  }
+  var lines: List<String> = []
+  var empty = 0
+  var first = true
+  for part in text.split("\n") {
+    if part.isEmpty() {
+      empty = empty + 1
+      continue
+    }
+    if !isPlainSafe(part, false, false) || isAmbiguousStart(part) {
+      return None
+    }
+    if !first {
+      for _ in 0..(empty + 1) {
+        lines.append ""
+      }
+    }
+    lines.append part
+    empty = 0
+    first = false
+  }
+  Some lines
+}
+
+/** A line that would begin something else when it starts a continuation line: a comment or a document marker. */
+fn isAmbiguousStart(line: String): Bool {
+  line.startsWith("#") || line.startsWith("---") || line.startsWith("...")
+}
+
+/** Whether a tag's suffix can be written behind a handle without escapes. */
+fn isShorthandSuffix(suffix: String): Bool {
+  if suffix.isEmpty() {
+    return false
+  }
+  suffix.chars().all({ isTagCharacter _ })
+}
+
+fn isTagCharacter(character: Char): Bool {
+  if (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') || character.isDigit() {
+    return true
+  }
+  match character {
+    '-' | '#' | ';' | '/' | '?' | ':' | '@' | '&' | '=' | '+' | '$' | '_' | '.' | '~' | '*' | '\'' | '(' | ')' => true
+    _ => false
+  }
+}
+
+/** The parts that are not empty, with a space between each two. */
+fn joined(...parts: String): String {
+  var kept: List<String> = []
+  for part in parts {
+    if !part.isEmpty() {
+      kept.append part
+    }
+  }
+  kept.joined separator: " "
+}
+
+fn spaces(count: Int): String {
+  if count <= 0 {
+    return ""
+  }
+  " ".repeat(count)
+}

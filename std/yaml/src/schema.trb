@@ -1,0 +1,488 @@
+/**
+ * What a scalar is: the schemas of the specification, which say what a plain scalar without a tag resolves to, and
+ * the readers of the texts every schema shares - null, truth values, whole numbers, floating point numbers, base64.
+ *
+ * A typed decode does not need a schema: the field's type says what it wants, and the text is read as that. The schema
+ * is for a document read without a type.
+ */
+
+/**
+ * How a plain scalar without a tag is read where no type says what it is.
+ *
+ * # Examples
+ *
+ *     const yaml = Yaml(schema: Some(YamlSchema.Json))
+ *     print yaml.value("[1, true, null]")
+ */
+public type YamlSchema {
+  /** Every scalar is a text. */
+  case Failsafe
+  /** `null`, `true`, `false` and JSON's numbers; any other plain scalar is an error. */
+  case Json
+  /**
+   * YAML 1.2's schema, and the default: `null`, `Null`, `NULL`, `~` and the empty scalar are null, `true` and `false`
+   * in three spellings are truth values, decimal, `0o` octal and `0x` hexadecimal whole numbers, floating point numbers
+   * with `.inf` and `.nan`, and everything else is a text.
+   */
+  case Core
+  /**
+   * YAML 1.1's types, for a document that says `%YAML 1.1`: `yes`, `no`, `on`, `off`, `y` and `n` are truth values
+   * too, `0b` binary and `0` octal numbers and `_` between digits, base 60 (`1:30:00`), and timestamps, which stay texts.
+   */
+  case Yaml11
+}
+
+/** What a scalar resolved to. */
+public type ResolvedScalar {
+  case Null
+  case Bool(value: Bool)
+  case Int(value: Int64)
+  case Unsigned(value: UInt64)
+  case Float(value: Float64)
+  case String(value: String)
+}
+
+/** A plain scalar without a tag, read by `schema`. `None` where the JSON schema refuses it. */
+public fn resolvedPlain(text: String, schema: YamlSchema): ResolvedScalar? {
+  match schema {
+    .Failsafe => Some ResolvedScalar.String(text)
+    .Json => {
+      if text == "null" {
+        return Some ResolvedScalar.Null
+      }
+      if text == "true" || text == "false" {
+        return Some ResolvedScalar.Bool(text == "true")
+      }
+      if isJsonInteger(text) {
+        if const Some(whole) = wholeOf(text, schema) {
+          return Some whole
+        }
+      }
+      if isJsonFloat(text) {
+        if const Some(number) = floatOf(text, schema) {
+          return Some ResolvedScalar.Float(number)
+        }
+      }
+      None
+    }
+    _ => {
+      if isNullText(text, schema) {
+        return Some ResolvedScalar.Null
+      }
+      if const Some(truth) = boolOf(text, schema) {
+        return Some ResolvedScalar.Bool(truth)
+      }
+      if const Some(whole) = wholeOf(text, schema) {
+        return Some whole
+      }
+      if const Some(number) = floatOf(text, schema) {
+        return Some ResolvedScalar.Float(number)
+      }
+      Some ResolvedScalar.String(text)
+    }
+  }
+}
+
+/** Whether a plain text is null under `schema`. */
+public fn isNullText(text: String, schema: YamlSchema): Bool {
+  match schema {
+    .Failsafe => false
+    .Json => text == "null"
+    _ => text.isEmpty() || text == "~" || text == "null" || text == "Null" || text == "NULL"
+  }
+}
+
+/** A truth value written as `schema` spells one. */
+public fn boolOf(text: String, schema: YamlSchema): Bool? {
+  match text {
+    "true" | "True" | "TRUE" => Some true
+    "false" | "False" | "FALSE" => Some false
+    _ => {
+      if schema != YamlSchema.Yaml11 {
+        return None
+      }
+      match text {
+        "y" | "Y" | "yes" | "Yes" | "YES" | "on" | "On" | "ON" => Some true
+        "n" | "N" | "no" | "No" | "NO" | "off" | "Off" | "OFF" => Some false
+        _ => None
+      }
+    }
+  }
+}
+
+/** A whole number written as `schema` spells one: an `Int`, or an `Unsigned` beyond `Int64`. */
+public fn wholeOf(text: String, schema: YamlSchema): ResolvedScalar? {
+  if text.isEmpty() || schema == YamlSchema.Failsafe {
+    return None
+  }
+  if schema == YamlSchema.Json && !isJsonInteger(text) {
+    return None
+  }
+  var digits = text
+  var negative = false
+  if digits.startsWith("-") || digits.startsWith("+") {
+    negative = digits.startsWith "-"
+    digits = digits.sliceBytes 1, digits.byteLength()
+  }
+  if digits.isEmpty() {
+    return None
+  }
+  const isVersion11 = schema == YamlSchema.Yaml11
+  var magnitude: UInt64? = None
+  if digits.startsWith("0x") {
+    magnitude = digitsValue digits.sliceBytes(2, digits.byteLength()), 16, isVersion11
+  } else if digits.startsWith("0o") && !isVersion11 {
+    magnitude = digitsValue digits.sliceBytes(2, digits.byteLength()), 8, false
+  } else if digits.startsWith("0b") && isVersion11 {
+    magnitude = digitsValue digits.sliceBytes(2, digits.byteLength()), 2, true
+  } else if isVersion11 && digits.contains(":") {
+    magnitude = sexagesimalValue digits
+  } else if isVersion11 && digits.startsWith("0") && digits.byteLength() > 1 {
+    magnitude = digitsValue digits.sliceBytes(1, digits.byteLength()), 8, true
+  } else {
+    magnitude = digitsValue digits, 10, isVersion11
+  }
+  const found = magnitude?
+  if !negative {
+    return match Int64.tryFrom(found) {
+      Ok(value) => Some ResolvedScalar.Int(value)
+      Fail(_) => Some ResolvedScalar.Unsigned(found)
+    }
+  }
+  // The magnitude of `Int64.minimum` is one more than `Int64.maximum`
+  const largest: UInt64 = UInt64.tryFrom(Int64.maximum) ?? 0
+  if found > largest + 1 {
+    return None
+  }
+  if found == largest + 1 {
+    return Some ResolvedScalar.Int(Int64.minimum)
+  }
+  match Int64.tryFrom(found) {
+    Ok(value) => Some ResolvedScalar.Int(-value)
+    Fail(_) => None
+  }
+}
+
+/** The value of `digits` in `base`, with `_` between digits where YAML 1.1 allows it; `None` on anything else. */
+fn digitsValue(digits: String, base: Int, underscores: Bool): UInt64? {
+  if digits.isEmpty() {
+    return None
+  }
+  const wide: UInt64 = UInt64.tryFrom(base) ?? 10
+  const maximum = UInt64.maximum
+  var value: UInt64 = 0
+  var any = false
+  for character in digits.chars() {
+    if character == '_' && underscores {
+      continue
+    }
+    const digit = digitOf character
+    if digit < 0 || digit >= base {
+      return None
+    }
+    const step: UInt64 = UInt64.tryFrom(digit) ?? 0
+    if value > (maximum - step) / wide {
+      return None
+    }
+    value = value * wide + step
+    any = true
+  }
+  if !any {
+    return None
+  }
+  Some value
+}
+
+/** YAML 1.1's base 60: `190:20:30` is 190 * 3600 + 20 * 60 + 30. */
+fn sexagesimalValue(digits: String): UInt64? {
+  const parts = digits.split ":"
+  if parts.isEmpty() || parts[0].isEmpty() || parts[0].startsWith("0") {
+    return None
+  }
+  var value: UInt64 = 0
+  var first = true
+  for part in parts {
+    const piece = digitsValue(part, 10, first)?
+    if !first && (piece >= 60 || part.byteLength() > 2) {
+      return None
+    }
+    value = value * 60 + piece
+    first = false
+  }
+  Some value
+}
+
+fn digitOf(character: Char): Int {
+  const code = Int64.from character
+  if code >= 48 && code <= 57 {
+    return code - 48
+  }
+  if code >= 97 && code <= 122 {
+    return code - 87
+  }
+  if code >= 65 && code <= 90 {
+    return code - 55
+  }
+  -1
+}
+
+/** A floating point number written as `schema` spells one, whole numbers included. */
+public fn floatOf(text: String, schema: YamlSchema): Float64? {
+  match text {
+    ".inf" | ".Inf" | ".INF" | "+.inf" | "+.Inf" | "+.INF" => {
+      return if schema == YamlSchema.Json { None } else { Some Float64.infinity }
+    }
+    "-.inf" | "-.Inf" | "-.INF" => {
+      return if schema == YamlSchema.Json { None } else { Some Float64.negativeInfinity }
+    }
+    ".nan" | ".NaN" | ".NAN" => {
+      return if schema == YamlSchema.Json { None } else { Some Float64.nan }
+    }
+    _ => {}
+  }
+  if schema == YamlSchema.Failsafe {
+    return None
+  }
+  if schema == YamlSchema.Json && !isJsonFloat(text) && !isJsonInteger(text) {
+    return None
+  }
+  if const Some(whole) = wholeOf(text, schema) {
+    return match whole {
+      .Int(value) => Some Float64.from(value)
+      .Unsigned(value) => Float64.tryFrom("{value}").ok()
+      _ => None
+    }
+  }
+  const isVersion11 = schema == YamlSchema.Yaml11
+  if isVersion11 && text.contains(":") {
+    return sexagesimalFloat text
+  }
+  const cleaned = if isVersion11 { text.replace "_", "" } else { text }
+  if !isDecimalFloat(cleaned) {
+    return None
+  }
+  var normalized = if cleaned.startsWith("+") { cleaned.sliceBytes 1, cleaned.byteLength() } else { cleaned }
+  // `.5` and `5.` are numbers of YAML, and the runtime reads `0.5` and `5.0`
+  normalized = normalized.replace "-.", "-0."
+  if normalized.startsWith(".") {
+    normalized = "0" + normalized
+  }
+  normalized = normalized.replace(".e", ".0e").replace(".E", ".0E")
+  if normalized.endsWith(".") {
+    normalized = normalized + "0"
+  }
+  Float64.tryFrom(normalized).ok()
+}
+
+/** `190:20:30.15`, YAML 1.1's floating point number in base 60. */
+fn sexagesimalFloat(text: String): Float64? {
+  var digits = text.replace "_", ""
+  var negative = false
+  if digits.startsWith("-") || digits.startsWith("+") {
+    negative = digits.startsWith "-"
+    digits = digits.sliceBytes 1, digits.byteLength()
+  }
+  const parts = digits.split ":"
+  var value = 0.0
+  for part in parts {
+    const piece = floatOf(part, YamlSchema.Core)?
+    value = value * 60.0 + piece
+  }
+  Some(if negative { -value } else { value })
+}
+
+/** `[-+]?(\.[0-9]+|[0-9]+(\.[0-9]*)?)([eE][-+]?[0-9]+)?`: the floating point numbers of the core schema. */
+fn isDecimalFloat(text: String): Bool {
+  const characters = text.chars().toList()
+  var at = 0
+  if at < characters.length() && (characters[at] == '+' || characters[at] == '-') {
+    at = at + 1
+  }
+  var digitsBefore = 0
+  while at < characters.length() && characters[at].isDigit() {
+    at = at + 1
+    digitsBefore = digitsBefore + 1
+  }
+  var digitsAfter = 0
+  if at < characters.length() && characters[at] == '.' {
+    at = at + 1
+    while at < characters.length() && characters[at].isDigit() {
+      at = at + 1
+      digitsAfter = digitsAfter + 1
+    }
+  }
+  if digitsBefore == 0 && digitsAfter == 0 {
+    return false
+  }
+  if at < characters.length() && (characters[at] == 'e' || characters[at] == 'E') {
+    at = at + 1
+    if at < characters.length() && (characters[at] == '+' || characters[at] == '-') {
+      at = at + 1
+    }
+    var exponentDigits = 0
+    while at < characters.length() && characters[at].isDigit() {
+      at = at + 1
+      exponentDigits = exponentDigits + 1
+    }
+    if exponentDigits == 0 {
+      return false
+    }
+  }
+  at == characters.length()
+}
+
+/** `-?(0|[1-9][0-9]*)`. */
+fn isJsonInteger(text: String): Bool {
+  const digits = if text.startsWith("-") { text.sliceBytes 1, text.byteLength() } else { text }
+  if digits.isEmpty() || !digits.chars().all({ _.isDigit() }) {
+    return false
+  }
+  digits == "0" || !digits.startsWith("0")
+}
+
+/** `-?(0|[1-9][0-9]*)(\.[0-9]*)?([eE][-+]?[0-9]+)?`. */
+fn isJsonFloat(text: String): Bool {
+  if !isDecimalFloat(text) || text.startsWith("+") || text.startsWith(".") || text.startsWith("-.") {
+    return false
+  }
+  const digits = if text.startsWith("-") { text.sliceBytes 1, text.byteLength() } else { text }
+  !(digits.startsWith("0") && digits.byteLength() > 1 && digits.charAt(1).map({ _.isDigit() }) == Some(true))
+}
+
+/** Whether YAML 1.1 reads a plain text as a timestamp: `2001-12-14`, `2001-12-14t21:59:43.10-05:00`. */
+public fn isTimestamp(text: String): Bool {
+  const characters = text.chars().toList()
+  if characters.length() < 8 {
+    return false
+  }
+  var at = 0
+  var count = 0
+  while at < characters.length() && characters[at].isDigit() {
+    at = at + 1
+    count = count + 1
+  }
+  if count != 4 || at >= characters.length() || characters[at] != '-' {
+    return false
+  }
+  at = at + 1
+  count = 0
+  while at < characters.length() && characters[at].isDigit() {
+    at = at + 1
+    count = count + 1
+  }
+  if count < 1 || count > 2 || at >= characters.length() || characters[at] != '-' {
+    return false
+  }
+  at = at + 1
+  count = 0
+  while at < characters.length() && characters[at].isDigit() {
+    at = at + 1
+    count = count + 1
+  }
+  if count < 1 || count > 2 {
+    return false
+  }
+  // A date alone, or a date followed by a time: what follows it is not checked in more detail
+  at == characters.length() || characters[at] == 'T' || characters[at] == 't' || characters[at] == ' '
+    || characters[at] == '\t'
+}
+
+/**
+ * Whether a string written as a plain scalar would be read back as something else - by YAML 1.2's core schema or by
+ * YAML 1.1's types: `no`, `on`, `0777`, `1_000`, `12:30`, `2024-01-01`, `~`, `<<`. The writer quotes such a string, so
+ * its output reads the same under both versions.
+ */
+public fn isAmbiguousText(text: String): Bool {
+  if isNullText(text, YamlSchema.Core) || boolOf(text, YamlSchema.Yaml11).isSome() {
+    return true
+  }
+  if wholeOf(text, YamlSchema.Core).isSome() || wholeOf(text, YamlSchema.Yaml11).isSome() {
+    return true
+  }
+  if floatOf(text, YamlSchema.Core).isSome() || floatOf(text, YamlSchema.Yaml11).isSome() {
+    return true
+  }
+  text == "<<" || text == "=" || isTimestamp(text)
+}
+
+// --- Base64, for `!!binary` -----------------------------------------------------------------------------------------
+
+/** The bytes of a base64 text; whitespace and line breaks inside it are skipped. */
+public fn base64Decoded(text: String): List<UInt8>? {
+  var bytes: List<UInt8> = []
+  var buffer = 0
+  var bits = 0
+  var padding = 0
+  for character in text.chars() {
+    if character == ' ' || character == '\n' || character == '\r' || character == '\t' {
+      continue
+    }
+    if character == '=' {
+      padding = padding + 1
+      continue
+    }
+    if padding > 0 {
+      return None
+    }
+    const value = base64Value character
+    if value < 0 {
+      return None
+    }
+    buffer = buffer * 64 + value
+    bits = bits + 6
+    if bits >= 8 {
+      bits = bits - 8
+      const byte = buffer / (1 << bits)
+      buffer = buffer % (1 << bits)
+      bytes.append(UInt8.tryFrom(byte) ?? 0)
+    }
+  }
+  Some bytes
+}
+
+/** The bytes as base64 text, with padding. */
+public fn base64Encoded(bytes: List<UInt8>): String {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+  var pieces: List<String> = []
+  var index = 0
+  while index < bytes.length() {
+    const first = Int64.from bytes[index]
+    const second = if index + 1 < bytes.length() { Int64.from bytes[index + 1] } else { 0 }
+    const third = if index + 2 < bytes.length() { Int64.from bytes[index + 2] } else { 0 }
+    const combined = first * 65536 + second * 256 + third
+    pieces.append alphabet.sliceBytes(combined / 262144, combined / 262144 + 1)
+    pieces.append alphabet.sliceBytes(combined / 4096 % 64, combined / 4096 % 64 + 1)
+    if index + 1 < bytes.length() {
+      pieces.append alphabet.sliceBytes(combined / 64 % 64, combined / 64 % 64 + 1)
+    } else {
+      pieces.append "="
+    }
+    if index + 2 < bytes.length() {
+      pieces.append alphabet.sliceBytes(combined % 64, combined % 64 + 1)
+    } else {
+      pieces.append "="
+    }
+    index = index + 3
+  }
+  pieces.joined separator: ""
+}
+
+fn base64Value(character: Char): Int {
+  const code = Int64.from character
+  if code >= 65 && code <= 90 {
+    return code - 65
+  }
+  if code >= 97 && code <= 122 {
+    return code - 71
+  }
+  if code >= 48 && code <= 57 {
+    return code + 4
+  }
+  if character == '+' {
+    return 62
+  }
+  if character == '/' {
+    return 63
+  }
+  -1
+}

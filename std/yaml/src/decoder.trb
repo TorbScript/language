@@ -1,0 +1,489 @@
+/**
+ * [YamlDecoder]: a `Decoder` over an expanded YAML tree, in which the target type resolves each scalar.
+ *
+ * `no` is the text `"no"` where a `String` is read and an error where a `Bool` is - unless the document says
+ * `%YAML 1.1`, whose truth values `yes`, `no`, `on` and `off` are. A quoted scalar is always a text, and an explicit tag
+ * of the core schema (`!!int "5"`) is honoured.
+ */
+
+use Decoder, DecodeError, Naming from "std/encoding"
+use YamlNode, YamlContent, YamlEntry, ScalarStyle from "./node"
+use YamlSchema, ResolvedScalar, boolOf, wholeOf, floatOf, isNullText, base64Decoded from "./schema"
+use YamlTag, coreTag, isUntagged, isLocalTag, kindOf from "./resolve"
+
+/**
+ * A `Decoder` over a YAML node whose aliases and merge keys are resolved already. `schema` is the one of the
+ * document's version - `Core`, or `Yaml11` for `%YAML 1.1` - and says how null, truth values and numbers are spelled.
+ */
+public type YamlDecoder with Decoder {
+  private var root: YamlNode? = None
+  private var frames: List<YamlCursor> = []
+  private schema: YamlSchema = YamlSchema.Core
+  private naming: Naming = Naming.Unchanged
+  private strict: Bool = false
+  private tags: List<YamlTag> = []
+  /** Whether the node that was taken last was the key of a map. */
+  private var tookKey: Bool = false
+  /** The line of the node that was taken last: where a failure points. */
+  private(var) line: Int = 0
+
+  /** A decoder that reads `node`, with the options of the format. */
+  static fn of(
+    node: YamlNode,
+    schema: YamlSchema = YamlSchema.Core,
+    naming: Naming = Naming.Unchanged,
+    strict: Bool = false,
+    tags: List<YamlTag> = [],
+  ): YamlDecoder {
+    Self root: Some(node), schema: schema, naming: naming, strict: strict, tags: tags
+  }
+
+  var fn nothing(): Bool {
+    if const Some(node) = peek() {
+      if isNull(node) {
+        const _taken = take()
+        return true
+      }
+    }
+    false
+  }
+
+  var fn bool(): Result<Bool, DecodeError> {
+    const node = take()?
+    const text = scalarText(node, "a truth value")?
+    if isReadAsValue(node, "bool") {
+      if const Some(truth) = boolOf(text, schema) {
+        return Ok truth
+      }
+    }
+    Fail DecodeError("a truth value is needed, not {shown(node)}")
+  }
+
+  var fn int(): Result<Int64, DecodeError> {
+    const node = take()?
+    const text = scalarText(node, "a whole number")?
+    if isReadAsValue(node, "int") || node.tag == Some(coreTag("float")) {
+      match wholeOf(text, schema) {
+        Some(.Int(value)) => {
+          return Ok value
+        }
+        Some(.Unsigned(value)) => {
+          return Fail DecodeError("{value} does not fit into an Int64")
+        }
+        _ => {}
+      }
+      if const Some(number) = floatOf(text, schema) {
+        match Int64.tryFrom(number) {
+          Ok(whole) => {
+            if Float64.from(whole) == number {
+              return Ok whole
+            }
+          }
+          Fail(_) => {}
+        }
+      }
+    }
+    Fail DecodeError("a whole number is needed, not {shown(node)}")
+  }
+
+  var fn unsigned(): Result<UInt64, DecodeError> {
+    const node = take()?
+    const text = scalarText(node, "a count")?
+    if isReadAsValue(node, "int") {
+      match wholeOf(text, schema) {
+        Some(.Unsigned(value)) => {
+          return Ok value
+        }
+        Some(.Int(value)) => {
+          return UInt64.tryFrom(value).mapError { _ => DecodeError "{value} is not a count" }
+        }
+        _ => {}
+      }
+    }
+    Fail DecodeError("a count is needed, not {shown(node)}")
+  }
+
+  var fn float(): Result<Float64, DecodeError> {
+    const node = take()?
+    const text = scalarText(node, "a number")?
+    if isReadAsValue(node, "float") || node.tag == Some(coreTag("int")) {
+      if const Some(number) = floatOf(text, schema) {
+        return Ok number
+      }
+    }
+    Fail DecodeError("a number is needed, not {shown(node)}")
+  }
+
+  var fn decimal(): Result<Decimal, DecodeError> {
+    const node = take()?
+    const text = scalarText(node, "an exact number")?
+    if isReadAsValue(node, "float") || node.tag == Some(coreTag("int")) {
+      match Decimal.tryFrom(text) {
+        Ok(value) => {
+          return Ok value
+        }
+        Fail(_) => {}
+      }
+    }
+    Fail DecodeError("an exact number is needed, not {shown(node)}")
+  }
+
+  /** Any scalar is a text where a text is read: the target type decides. */
+  var fn string(): Result<String, DecodeError> {
+    const node = take()?
+    scalarText node, "a text"
+  }
+
+  /** A `!!binary` scalar or a base64 text, or a sequence of numbers that each fit into a byte. */
+  var fn bytes(): Result<List<UInt8>, DecodeError> {
+    const node = take()?
+    match node.content {
+      .Scalar(text, _) => {
+        match base64Decoded(text) {
+          Some(bytes) => Ok bytes
+          None => Fail DecodeError("bytes are needed, and {shown(node)} is not base64")
+        }
+      }
+      .Sequence(items, _) => {
+        var found: List<UInt8> = []
+        for item in items {
+          const value = match item.content {
+            .Scalar(text, ScalarStyle.Plain) => wholeOf text, schema
+            _ => None
+          }
+          const byte = match value {
+            Some(.Int(number)) => UInt8.tryFrom(number).mapError({ _ => DecodeError "{number} is not a byte" })?
+            _ => {
+              return Fail DecodeError("a byte is needed, not {shown(item)}")
+            }
+          }
+          found.append byte
+        }
+        Ok found
+      }
+      _ => Fail DecodeError("bytes are needed, not {shown(node)}")
+    }
+  }
+
+  /**
+   * A sequence, the keys of a `!!set`, the bytes of a `!!binary` scalar as a sequence of numbers - which is what a
+   * `List<UInt8>` reads - or nothing at all, which is an empty sequence.
+   */
+  var fn sequence(): Result<Int?, DecodeError> {
+    const node = take()?
+    if node.tag == Some(coreTag("binary")) {
+      const bytes = match base64Decoded(node.text() ?? "") {
+        Some(found) => found
+        None => {
+          return Fail DecodeError("the `!!binary` scalar is not base64")
+        }
+      }
+      const items = bytes.map({ YamlNode.scalar("{_}").copy(line: node.line) }).toList()
+      frames.append YamlCursor(CursorKind.Items, items: items)
+      return Ok Some(items.length())
+    }
+    match node.content {
+      .Sequence(items, _) => {
+        frames.append YamlCursor(CursorKind.Items, items: items)
+        Ok Some(items.length())
+      }
+      .Mapping(entries, _) => {
+        if node.tag != Some(coreTag("set")) {
+          return Fail DecodeError("a sequence is needed, not {shown(node)}")
+        }
+        const keys = entries.map({ _.key }).toList()
+        frames.append YamlCursor(CursorKind.Items, items: keys)
+        Ok Some(keys.length())
+      }
+      _ => {
+        if !isNull(node) {
+          return Fail DecodeError("a sequence is needed, not {shown(node)}")
+        }
+        frames.append YamlCursor(CursorKind.Items)
+        Ok Some(0)
+      }
+    }
+  }
+
+  /** A mapping, or nothing at all, which is an empty map. Its keys are nodes, read as the key type asks. */
+  var fn map(): Result<Int?, DecodeError> {
+    const node = take()?
+    match node.content {
+      .Mapping(entries, _) => {
+        var items: List<YamlNode> = []
+        for entry in entries {
+          items.append entry.key
+          items.append entry.value
+        }
+        frames.append YamlCursor(CursorKind.Keys, items: items)
+        Ok Some(entries.length())
+      }
+      _ => {
+        if !isNull(node) {
+          return Fail DecodeError("a map is needed, not {shown(node)}")
+        }
+        frames.append YamlCursor(CursorKind.Keys)
+        Ok Some(0)
+      }
+    }
+  }
+
+  var fn hasNext(): Result<Bool, DecodeError> {
+    if frames.isEmpty() {
+      return Ok false
+    }
+    const frame = frames[frames.length() - 1]
+    Ok(frame.index < frame.items.length())
+  }
+
+  /**
+   * A mapping's entries are the record's fields. Nothing at all is a record of defaults, and any other node a
+   * **wrapper**: the one value the record holds. A local tag has to stand for this type.
+   */
+  var fn record(typeName: String): Result<Void, DecodeError> {
+    const node = take()?
+    checkLocalTag(node, typeName, None)?
+    match node.content {
+      .Mapping(entries, _) => {
+        frames.append YamlCursor(CursorKind.Fields, fields: entries)
+        Ok void
+      }
+      _ => {
+        if isNull(node) && node.tag.isNone() {
+          frames.append YamlCursor(CursorKind.Fields)
+          return Ok void
+        }
+        frames.append YamlCursor(CursorKind.Items, items: [node])
+        Ok void
+      }
+    }
+  }
+
+  /**
+   * A case: a local tag that `tags` names for one (`!circle \{radius: 2\}`), a plain scalar that is the case's name,
+   * or a mapping of one entry whose key is the name and whose value holds the fields (`Circle: \{radius: 2\}`).
+   */
+  var fn variant(typeName: String): Result<String, DecodeError> {
+    const node = take()?
+    if const Some(tag) = node.tag {
+      if isLocalTag(tag) {
+        const found = tags.find({ _.tag == tag && _.typeName == typeName && _.caseName.isSome() })
+        if const Some(mapping) = found {
+          match node.content {
+            .Mapping(entries, _) => frames.append YamlCursor(CursorKind.Fields, fields: entries)
+            _ => frames.append YamlCursor(CursorKind.Fields)
+          }
+          return Ok(mapping.caseName ?? "")
+        }
+        return Fail unknownTag(tag, typeName)
+      }
+    }
+    match node.content {
+      .Scalar(text, _) => {
+        frames.append YamlCursor(CursorKind.Fields)
+        Ok text
+      }
+      .Mapping(entries, _) => {
+        if entries.length() != 1 {
+          return Fail DecodeError("a case is one entry named after it, and this mapping has {entries.length()}")
+        }
+        const only = entries[0]
+        const name = match only.key.text() {
+          Some(text) => text
+          None => {
+            return Fail DecodeError("a case is named by a scalar, not {shown(only.key)}")
+          }
+        }
+        match only.value.content {
+          .Mapping(fields, _) => frames.append YamlCursor(CursorKind.Fields, fields: fields)
+          _ => frames.append YamlCursor(CursorKind.Fields)
+        }
+        Ok name
+      }
+      _ => Fail DecodeError("a case is needed, not {shown(node)}")
+    }
+  }
+
+  var fn field(name: String): Result<Bool, DecodeError> {
+    if frames.isEmpty() {
+      return Fail DecodeError("no record is open")
+    }
+    const last = frames.length() - 1
+    if frames[last].kind == CursorKind.Items {
+      const found = match frames[last].items.first() {
+        Some(node) => shown node
+        None => "nothing"
+      }
+      return Fail DecodeError("a record is needed, not {found}")
+    }
+    const spelled = naming.applied name
+    for index in 0..frames[last].fields.length() {
+      const entry = frames[last].fields[index]
+      if entry.key.text() == Some(spelled) {
+        frames[last].selected = Some entry.value
+        frames[last].read.append spelled
+        return Ok true
+      }
+    }
+    Ok false
+  }
+
+  var fn finish(): Result<Void, DecodeError> {
+    if frames.isEmpty() {
+      return Fail DecodeError("nothing is open")
+    }
+    const last = frames.length() - 1
+    const frame = frames[last]
+    frames = frames.removedAt last
+    if strict {
+      for entry in frame.fields {
+        const name = entry.key.text() ?? ""
+        if !frame.read.contains(name) {
+          line = entry.key.line
+          return Fail DecodeError("the document has a field `{name}` and nothing read it")
+        }
+      }
+    }
+    Ok void
+  }
+
+  // --- Scalars --------------------------------------------------------------------------------------------------------
+
+  /** Whether a node is null: a plain scalar the schema spells as null, or one tagged `!!null`. */
+  private fn isNull(node: YamlNode): Bool {
+    match node.content {
+      .Scalar(text, style) => {
+        if node.tag == Some(coreTag("null")) {
+          return true
+        }
+        node.tag.isNone() && style == ScalarStyle.Plain && isNullText(text, schema)
+      }
+      _ => false
+    }
+  }
+
+  /**
+   * Whether a scalar may be read as a value of the core tag `name`: it has that tag, or it is a plain scalar without
+   * one. A quoted scalar is a text - except as the key of a map, where JSON quotes every key.
+   */
+  private fn isReadAsValue(node: YamlNode, name: String): Bool {
+    if node.tag == Some(coreTag(name)) {
+      return true
+    }
+    if !isUntagged(node.tag) {
+      return false
+    }
+    match node.content {
+      .Scalar(_, style) => style == ScalarStyle.Plain || tookKey
+      _ => false
+    }
+  }
+
+  /** The text of a scalar, and an error that names what was wanted for anything else. */
+  private fn scalarText(node: YamlNode, wanted: String): Result<String, DecodeError> {
+    match node.content {
+      .Scalar(text, _) => Ok text
+      _ => Fail DecodeError("{wanted} is needed, not {shown(node)}")
+    }
+  }
+
+  private fn checkLocalTag(node: YamlNode, typeName: String, caseName: String?): Result<Void, DecodeError> {
+    const tag = match node.tag {
+      Some(found) => found
+      None => {
+        return Ok void
+      }
+    }
+    if !isLocalTag(tag) {
+      return Ok void
+    }
+    if tags.any({ _.tag == tag && _.typeName == typeName && _.caseName == caseName }) {
+      return Ok void
+    }
+    Fail unknownTag(tag, typeName)
+  }
+
+  private fn unknownTag(tag: String, typeName: String): DecodeError {
+    match tags.find({ _.tag == tag }) {
+      Some(other) => DecodeError "the tag `{tag}` stands for `{other.typeName}`, and a `{typeName}` is read here"
+      None => DecodeError "the tag `{tag}` is not known: `Yaml(tags: ...)` names the type of a local tag"
+    }
+  }
+
+  /** The value the next read takes, without taking it. */
+  private fn peek(): YamlNode? {
+    if frames.isEmpty() {
+      return root
+    }
+    const frame = frames[frames.length() - 1]
+    if const Some(selected) = frame.selected {
+      return Some selected
+    }
+    if frame.index < frame.items.length() {
+      return Some frame.items[frame.index]
+    }
+    None
+  }
+
+  private var fn take(): Result<YamlNode, DecodeError> {
+    tookKey = false
+    if frames.isEmpty() {
+      const found = match root {
+        Some(node) => node
+        None => {
+          return Fail DecodeError("there is nothing left to read")
+        }
+      }
+      root = None
+      line = found.line
+      return Ok found
+    }
+    const last = frames.length() - 1
+    if const Some(selected) = frames[last].selected {
+      frames[last].selected = None
+      line = selected.line
+      return Ok selected
+    }
+    const index = frames[last].index
+    if index >= frames[last].items.length() {
+      return Fail DecodeError("there is nothing left to read")
+    }
+    frames[last].index = index + 1
+    if frames[last].kind == CursorKind.Keys {
+      tookKey = index % 2 == 0
+    }
+    const found = frames[last].items[index]
+    line = found.line
+    Ok found
+  }
+}
+
+/** A node as a message names it: a scalar by its text, a collection by its kind. */
+fn shown(node: YamlNode): String {
+  match node.content {
+    .Scalar(text, style) => {
+      if style == ScalarStyle.Plain && isUntagged(node.tag) {
+        return "`{text}`"
+      }
+      "the text {text.showNested()}"
+    }
+    _ => "a {kindOf(node)}"
+  }
+}
+
+/** One open sequence, map, record or case of [YamlDecoder], with the position the next read comes from. */
+type YamlCursor {
+  kind: CursorKind
+  items: List<YamlNode> = []
+  fields: List<YamlEntry> = []
+  var index: Int = 0
+  var selected: YamlNode? = None
+  var read: List<String> = []
+}
+
+/** How a `YamlCursor` is read: by position, by position with keys, or by name. */
+type CursorKind {
+  case Items
+  case Keys
+  case Fields
+}

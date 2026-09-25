@@ -1,0 +1,286 @@
+/**
+ * [YamlEncoder]: an `Encoder` that builds the YAML tree of a value, which the writer then writes.
+ *
+ * A value has no identity, so it is written without anchors and aliases. Every string is written so that YAML 1.2 and
+ * YAML 1.1 read it back as the same string: plain where that is safe, in double quotes where a reader would take it for
+ * something else (`no`, `on`, `0777`, `1_000`, `12:30`, `~`), and as a literal block where it has several lines.
+ */
+
+use Encoder, Naming from "std/encoding"
+use YamlNode, YamlContent, YamlEntry, ScalarStyle, CollectionStyle from "./node"
+use isAmbiguousText, base64Encoded from "./schema"
+use YamlTag, tagFor, coreTag from "./resolve"
+
+/** An `Encoder` that builds a [YamlNode]. A record is a mapping, and a record that announces no field its one value. */
+public type YamlEncoder with Encoder {
+  naming: Naming = Naming.Unchanged
+  tags: List<YamlTag> = []
+  private var frames: List<EncoderFrame> = []
+  private var finished: YamlNode? = None
+
+  /** What was written. The null scalar when nothing was. */
+  fn result(): YamlNode {
+    finished ?? YamlNode.scalar("null")
+  }
+
+  var fn nothing() {
+    complete YamlNode.scalar("null")
+  }
+
+  var fn bool(value: Bool) {
+    complete YamlNode.scalar("{value}")
+  }
+
+  var fn int(value: Int64) {
+    complete YamlNode.scalar("{value}")
+  }
+
+  var fn unsigned(value: UInt64) {
+    complete YamlNode.scalar("{value}")
+  }
+
+  var fn float(value: Float64) {
+    complete YamlNode.scalar(floatText(value))
+  }
+
+  var fn decimal(value: Decimal) {
+    complete YamlNode.scalar("{value}")
+  }
+
+  var fn string(value: String) {
+    complete YamlNode.scalar(value, styleOf(value))
+  }
+
+  /** Bytes are a `!!binary` scalar of base64. */
+  var fn bytes(value: List<UInt8>) {
+    complete YamlNode(YamlContent.Scalar(base64Encoded(value), ScalarStyle.Plain), tag: Some(coreTag("binary")))
+  }
+
+  var fn sequence(length: Int?) {
+    const _length = length
+    frames.append EncoderFrame(EncoderFrameKind.Sequence)
+  }
+
+  var fn map(length: Int?) {
+    const _length = length
+    frames.append EncoderFrame(EncoderFrameKind.Mapping)
+  }
+
+  var fn record(typeName: String) {
+    frames.append EncoderFrame(EncoderFrameKind.Record(typeName))
+  }
+
+  var fn variant(typeName: String, name: String) {
+    frames.append EncoderFrame(EncoderFrameKind.Variant(typeName, name))
+  }
+
+  var fn field(name: String) {
+    if frames.isEmpty() {
+      return
+    }
+    const last = frames.length() - 1
+    frames[last].pending = Some naming.applied(name)
+  }
+
+  var fn finish() {
+    if frames.isEmpty() {
+      return
+    }
+    const last = frames.length() - 1
+    const frame = frames[last]
+    frames = frames.removedAt last
+    const node = match frame.kind {
+      .Sequence => YamlNode.sequence frame.children
+      .Mapping => {
+        var entries: List<YamlEntry> = []
+        var index = 0
+        while index + 1 < frame.children.length() {
+          entries.append YamlEntry(frame.children[index], frame.children[index + 1])
+          index = index + 2
+        }
+        YamlNode.mapping entries
+      }
+      .Record(typeName) => recordNode typeName, frame
+      .Variant(typeName, name) => variantNode typeName, name, frame
+    }
+    complete node
+  }
+
+  /** A record that announced no field and holds one value is a wrapper, and a wrapper is its value. */
+  private fn recordNode(typeName: String, frame: EncoderFrame): YamlNode {
+    if frame.fields.isEmpty() && frame.children.length() == 1 {
+      return frame.children[0]
+    }
+    const mapping = YamlNode.mapping frame.fields
+    match tagFor(tags, typeName, None) {
+      Some(tag) => mapping.copy tag: Some(tag.tag)
+      None => mapping
+    }
+  }
+
+  /**
+   * A case with a tag of its own is its tagged fields. Without one, a case without fields is its name, and one with
+   * fields a mapping of one entry, the name, whose value holds the fields.
+   */
+  private fn variantNode(typeName: String, name: String, frame: EncoderFrame): YamlNode {
+    if const Some(tag) = tagFor(tags, typeName, Some(name)) {
+      if frame.fields.isEmpty() {
+        return YamlNode YamlContent.Scalar("", ScalarStyle.Plain), tag: Some(tag.tag)
+      }
+      return YamlNode.mapping(frame.fields).copy(tag: Some(tag.tag))
+    }
+    if frame.fields.isEmpty() {
+      return YamlNode.scalar name, styleOf(name)
+    }
+    YamlNode.mapping([YamlEntry(YamlNode.scalar(name, styleOf(name)), YamlNode.mapping(frame.fields))])
+  }
+
+  private var fn complete(node: YamlNode) {
+    if frames.isEmpty() {
+      finished = Some node
+      return
+    }
+    const last = frames.length() - 1
+    match frames[last].pending {
+      Some(name) => {
+        frames[last].fields.append(YamlEntry(YamlNode.scalar(name, styleOf(name)), node))
+        frames[last].pending = None
+      }
+      None => frames[last].children.append(node)
+    }
+  }
+}
+
+/** One open sequence, map, record or case of [YamlEncoder], with what has been written into it. */
+type EncoderFrame {
+  kind: EncoderFrameKind
+  var children: List<YamlNode> = []
+  var fields: List<YamlEntry> = []
+  var pending: String? = None
+}
+
+type EncoderFrameKind {
+  case Sequence
+  case Mapping
+  case Record(typeName: String)
+  case Variant(typeName: String, name: String)
+}
+
+/** A floating point number as YAML writes it: `.inf`, `-.inf` and `.nan` for the three that are no decimals. */
+public fn floatText(value: Float64): String {
+  if value != value {
+    return ".nan"
+  }
+  if value == Float64.infinity {
+    return ".inf"
+  }
+  if value == Float64.negativeInfinity {
+    return "-.inf"
+  }
+  "{value}"
+}
+
+/**
+ * The style a string is written in so that both YAML versions read it back as that string: a literal block for text of
+ * several lines, plain where plain is safe, and double quotes everywhere else.
+ */
+public fn styleOf(text: String): ScalarStyle {
+  if text.contains("\n") && isBlockText(text) {
+    return ScalarStyle.Literal
+  }
+  if isPlainSafe(text, false, false) && !isAmbiguousText(text) {
+    return ScalarStyle.Plain
+  }
+  ScalarStyle.DoubleQuoted
+}
+
+/**
+ * Whether a text can stand as a plain scalar in a block (or, with `flow`, in a flow collection) and be read back as
+ * exactly this text: no leading or trailing whitespace, no line break, no indicator at the start, no `: ` and no ` #`.
+ * A `key` may end with `:`, because its own `:` follows it.
+ */
+public fn isPlainSafe(text: String, flow: Bool, key: Bool): Bool {
+  if text.isEmpty() {
+    return false
+  }
+  const characters = text.chars().toList()
+  const first = characters[0]
+  const last = characters[characters.length() - 1]
+  if first == ' ' || first == '\t' || last == ' ' || last == '\t' || (last == ':' && !key) {
+    return false
+  }
+  // A document marker at the start of a line: `---` or `...` followed by whitespace, or alone
+  if characters.length() >= 3 && (text.startsWith("---") || text.startsWith("...")) {
+    if characters.length() == 3 || characters[3] == ' ' || characters[3] == '\t' {
+      return false
+    }
+  }
+  match first {
+    ',' | '[' | ']' | '{' | '}' | '#' | '&' | '*' | '!' | '|' | '>' | '\'' | '"' | '%' | '@' | '`' => {
+      return false
+    }
+    '-' | '?' | ':' => {
+      if characters.length() < 2 {
+        return false
+      }
+      const next = characters[1]
+      if next == ' ' || next == '\t' || (flow && isFlowIndicator(next)) {
+        return false
+      }
+    }
+    _ => {}
+  }
+  for index in 0..characters.length() {
+    const character = characters[index]
+    if !isPrintable(character) || character == '\n' || character == '\r' {
+      return false
+    }
+    if flow && isFlowIndicator(character) {
+      return false
+    }
+    if character == ':' && index + 1 < characters.length() {
+      const next = characters[index + 1]
+      if next == ' ' || next == '\t' || (flow && isFlowIndicator(next)) {
+        return false
+      }
+    }
+    if character == '#' && index > 0 && (characters[index - 1] == ' ' || characters[index - 1] == '\t') {
+      return false
+    }
+  }
+  true
+}
+
+/** Whether a text can be written as a block scalar: printable, and more than line breaks. */
+public fn isBlockText(text: String): Bool {
+  var hasContent = false
+  for character in text.chars() {
+    if character == '\n' {
+      continue
+    }
+    if character == '\r' || !isPrintable(character) {
+      return false
+    }
+    hasContent = true
+  }
+  hasContent
+}
+
+/** A character YAML allows in its text without an escape. Tabs are; the line breaks of YAML 1.1 are not. */
+public fn isPrintable(character: Char): Bool {
+  const code = Int64.from character
+  if code == 9 || code == 10 {
+    return true
+  }
+  if code < 32 || code == 127 {
+    return false
+  }
+  if code >= 128 && code < 160 {
+    return false
+  }
+  code != 8232 && code != 8233 && code != 65279 && code != 65534 && code != 65535
+}
+
+fn isFlowIndicator(character: Char): Bool {
+  character == ',' || character == '[' || character == ']' || character == '{' || character == '}'
+}

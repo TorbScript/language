@@ -1,0 +1,102 @@
+/**
+ * `YamlError`: what went wrong reading or writing YAML - text that is not YAML, a document whose content cannot be
+ * resolved (an unknown alias, an unknown tag, too many nodes behind its aliases), a document that does not fit the
+ * type it is decoded into, or bytes that are not UTF-8.
+ */
+
+use Utf8Error from "std/stream"
+
+/**
+ * What went wrong turning YAML text into a tree or a value.
+ *
+ * # Examples
+ *
+ *     match Yaml().parse("key: [unclosed") {
+ *       Ok(_) => print "read"
+ *       Fail(problem) => print "line {problem.line()}: {problem}"
+ *     }
+ */
+public type YamlError with Show, Error {
+  private kind: YamlErrorKind
+
+  /** The text is not YAML: `line` and `column` count from 1. */
+  static fn syntax(line: Int, column: Int, message: String): YamlError {
+    Self kind: .Syntax(line, column, message)
+  }
+
+  /** The text is YAML, and its content cannot be resolved: an unknown alias or tag, a schema that refuses a scalar. */
+  static fn content(line: Int, message: String): YamlError {
+    Self kind: .Content(line, message)
+  }
+
+  /** The document is YAML, and `Decode` rejected it at `line`, or at no line in particular where that is 0. */
+  static fn decodeFailed(cause: DecodeError, line: Int = 0): YamlError {
+    Self kind: .Decode(cause, line)
+  }
+
+  /** YAML is text, and the bytes that arrived are not UTF-8. */
+  static fn invalidText(cause: Utf8Error): YamlError {
+    Self kind: .Text(cause)
+  }
+
+  /** `true` for text that is not YAML, as opposed to a document that could not be resolved or decoded. */
+  fn isSyntaxError(): Bool {
+    match kind {
+      .Syntax(_, _, _) => true
+      _ => false
+    }
+  }
+
+  /** The line the problem was found on, counted from 1, and 0 where it belongs to no line. */
+  fn line(): Int {
+    match kind {
+      .Syntax(line, _, _) => line
+      .Content(line, _) => line
+      .Decode(_, line) => line
+      .Text(_) => 0
+    }
+  }
+
+  /** What is wrong, without the line. */
+  fn message(): String {
+    match kind {
+      .Syntax(_, _, message) => message
+      .Content(_, message) => message
+      .Decode(cause, _) => "{cause}"
+      .Text(cause) => "{cause}"
+    }
+  }
+
+  fn show(): String {
+    match kind {
+      .Syntax(line, column, message) => "line {line}, column {column}: {message}"
+      .Content(line, message) => if line > 0 { "line {line}: {message}" } else { message }
+      .Decode(cause, line) => if line > 0 { "line {line}: {cause}" } else { "{cause}" }
+      .Text(cause) => "{cause}"
+    }
+  }
+
+  /** The `DecodeError` or `Utf8Error` a document failed on, so a report can unwind the chain down to the field. */
+  fn cause(): Error? {
+    match kind {
+      .Decode(problem, _) => Some problem
+      .Text(problem) => Some problem
+      _ => None
+    }
+  }
+}
+
+/** What `checked()` needs to lift a broken byte sequence into the failure of a YAML stream. */
+extend YamlError with From<Utf8Error> {
+  static fn from(value: Utf8Error): YamlError {
+    YamlError.invalidText value
+  }
+}
+
+/** Which of the four failures a [YamlError] is. */
+type YamlErrorKind {
+  case Syntax(line: Int, column: Int, message: String)
+  case Content(line: Int, message: String)
+  case Decode(cause: DecodeError, line: Int)
+  case Text(cause: Utf8Error)
+}

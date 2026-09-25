@@ -1,0 +1,530 @@
+/**
+ * The parser: the scanner's tokens to documents of [YamlNode]s, after the grammar of YAML 1.2, with the comments the
+ * scanner collected hung on the nodes they belong to.
+ *
+ * A comment on a line of its own belongs to the node that starts below it - the key of an entry, an item of a
+ * sequence - and one at the end of a line to the last node that ends on that line: `key: value # note` is the value's.
+ * A comment that no node follows belongs to the end of its document.
+ */
+
+use YamlNode, YamlContent, YamlEntry, YamlDocument, YamlTagDirective, YamlComments, ScalarStyle, CollectionStyle from "./node"
+use YamlError from "./error"
+use Token, TokenKind, Mark, ScannedComment, scanned from "./scanner"
+
+/** Every document of a YAML stream. */
+public fn parsedStream(text: String): Result<List<YamlDocument>, YamlError> {
+  const scan = scanned(text)?
+  var parser = Parser scan.tokens, scan.comments
+  parser.stream()
+}
+
+/** The prefix `!!` stands for where no `%TAG` directive says otherwise. */
+public const coreTagPrefix = "tag:yaml.org,2002:"
+
+type Parser {
+  tokens: List<Token>
+  comments: List<ScannedComment>
+  var position: Int = 0
+  var nextComment: Int = 0
+  var tagDirectives: List<YamlTagDirective> = []
+  var anchors: Set<String> = []
+
+  fn peek(): Token {
+    tokens[position.min(tokens.length() - 1)]
+  }
+
+  fn peekKind(): TokenKind {
+    peek().kind
+  }
+
+  fn isAt(kind: TokenKind): Bool {
+    peekKind() == kind
+  }
+
+  var fn advance(): Token {
+    const token = peek()
+    if position < tokens.length() - 1 {
+      position = position + 1
+    }
+    token
+  }
+
+  fn failure(at: Mark, message: String): YamlError {
+    YamlError.syntax(at.line + 1, at.column + 1, message)
+  }
+
+  // --- Comments -------------------------------------------------------------------------------------------------------
+
+  /** Every comment not yet taken that stands above `line`, counted from 0. */
+  var fn takeLeading(line: Int): List<String> {
+    var found: List<String> = []
+    while nextComment < comments.length() && comments[nextComment].line < line {
+      found.append comments[nextComment].text
+      nextComment = nextComment + 1
+    }
+    found
+  }
+
+  /** The comment at the end of `line`, if it is the next one. */
+  var fn takeTrailing(line: Int): String? {
+    if nextComment < comments.length() && comments[nextComment].trailing && comments[nextComment].line == line {
+      const text = comments[nextComment].text
+      nextComment = nextComment + 1
+      return Some text
+    }
+    None
+  }
+
+  /** The line the last token of content that was consumed ends on. */
+  fn lastEndLine(): Int {
+    var at = position - 1
+    while at > 0 {
+      const kind = tokens[at].kind
+      if kind != TokenKind.BlockEnd && kind != TokenKind.BlockMappingStart && kind != TokenKind.BlockSequenceStart
+        && kind != TokenKind.Key {
+        return tokens[at].end.line
+      }
+      at = at - 1
+    }
+    0
+  }
+
+  /**
+   * The trailing comment of a node that has just ended: the one on its last line, where nothing else follows on that
+   * line - otherwise a later node of the same line takes it.
+   */
+  var fn trailingOfCompleted(): String? {
+    const line = lastEndLine()
+    const next = peek()
+    if next.kind != TokenKind.StreamEnd && next.start.line == line {
+      return None
+    }
+    takeTrailing line
+  }
+
+  // --- Documents ------------------------------------------------------------------------------------------------------
+
+  var fn stream(): Result<List<YamlDocument>, YamlError> {
+    const _start = advance()
+    var documents: List<YamlDocument> = []
+    var previousEnded = true
+    loop {
+      // A `...` without a document before it ends nothing
+      while isAt(TokenKind.DocumentEnd) {
+        const _end = advance()
+        previousEnded = true
+      }
+      if isAt(TokenKind.StreamEnd) {
+        break
+      }
+      var document = document(previousEnded)?
+      previousEnded = document.explicitEnd
+      const next = peekKind()
+      // After `...` a bare document may follow; after anything else only `---`, a directive or the end
+      if !document.explicitEnd && next != TokenKind.StreamEnd && next != TokenKind.DocumentStart
+        && next != TokenKind.DocumentEnd
+        && next != TokenKind.VersionDirective && next != TokenKind.TagDirective
+        && next != TokenKind.ReservedDirective {
+        return Fail failure(peek().start, "{describe(peek())} cannot stand here: the document ends before it")
+      }
+      // The comments up to the next document's first token are this one's
+      const endComments = takeLeading peek().start.line
+      documents.append document.copy(endComments: document.endComments.appendedAll(endComments))
+    }
+    Ok documents
+  }
+
+  var fn document(previousEnded: Bool): Result<YamlDocument, YamlError> {
+    tagDirectives = []
+    anchors = []
+    var version: String? = None
+    var explicitStart = false
+    var hasDirectives = false
+    const first = peek()
+    const leading = takeLeading first.start.line
+    while isAt(TokenKind.VersionDirective) || isAt(TokenKind.TagDirective) || isAt(TokenKind.ReservedDirective) {
+      const directive = advance()
+      hasDirectives = true
+      match directive.kind {
+        .VersionDirective => {
+          if version.isSome() {
+            return Fail failure(directive.start, "a document has one `%YAML` directive")
+          }
+          version = Some directive.text
+        }
+        .TagDirective => {
+          if tagDirectives.any({ _.handle == directive.handle }) {
+            return Fail failure(directive.start, "the handle `{directive.handle}` is declared twice")
+          }
+          tagDirectives.append YamlTagDirective(directive.handle, directive.text)
+        }
+        _ => {}
+      }
+    }
+    if hasDirectives && !previousEnded {
+      return Fail failure(first.start, "a directive belongs after `...`: the document before it is not closed")
+    }
+    var root = YamlNode.empty()
+    if isAt(TokenKind.DocumentStart) {
+      const start = advance()
+      explicitStart = true
+      if startsNode() {
+        root = node(true, false)?
+      } else {
+        root = emptyAt(start.end).copy(comments: YamlComments(trailing: takeTrailing(start.end.line)))
+      }
+    } else {
+      if hasDirectives {
+        return Fail failure(peek().start, "directives are followed by `---`")
+      }
+      root = node(true, false)?
+    }
+    var explicitEnd = false
+    var endComments: List<String> = []
+    if isAt(TokenKind.DocumentEnd) {
+      endComments = takeLeading peek().start.line
+      const end = advance()
+      explicitEnd = true
+      if const Some(text) = takeTrailing(end.start.line) {
+        endComments.append text
+      }
+    }
+    Ok YamlDocument(root, version, tagDirectives, explicitStart, explicitEnd, leading, endComments)
+  }
+
+  /** Whether the next token begins a node, as opposed to ending the document. */
+  fn startsNode(): Bool {
+    match peekKind() {
+      .VersionDirective | .TagDirective | .ReservedDirective | .DocumentStart | .DocumentEnd | .StreamEnd => false
+      _ => true
+    }
+  }
+
+  fn emptyAt(at: Mark): YamlNode {
+    YamlNode(YamlContent.Scalar("", ScalarStyle.Plain), line: at.line + 1, column: at.column + 1)
+  }
+
+  // --- Nodes ----------------------------------------------------------------------------------------------------------
+
+  /** One node: its properties, then its content. `indentless` allows a sequence at its mapping's own indentation. */
+  var fn node(block: Bool, indentless: Bool): Result<YamlNode, YamlError> {
+    const start = peek()
+    const line = start.start.line + 1
+    const column = start.start.column + 1
+    if start.kind == TokenKind.Alias {
+      const leading = takeLeading start.start.line
+      const _alias = advance()
+      if !anchors.contains(start.text) {
+        return Fail failure(start.start, "the alias `*{start.text}` names no anchor before it")
+      }
+      const trailing = trailingOfCompleted()
+      return Ok YamlNode(YamlContent.Alias(start.text), comments: YamlComments(leading, trailing), line: line, column: column)
+    }
+    var anchor: String? = None
+    var tag: String? = None
+    loop {
+      if isAt(TokenKind.Anchor) {
+        const token = advance()
+        if anchor.isSome() {
+          return Fail failure(token.start, "a node has one anchor")
+        }
+        anchor = Some token.text
+        continue
+      }
+      if isAt(TokenKind.Tag) {
+        const token = advance()
+        if tag.isSome() {
+          return Fail failure(token.start, "a node has one tag")
+        }
+        tag = Some(resolvedTag(token)?)
+        continue
+      }
+      break
+    }
+    if const Some(name) = anchor {
+      anchors.insert name
+    }
+    const next = peek()
+    const hasProperties = anchor.isSome() || tag.isSome()
+    const isBlockCollection = next.kind == TokenKind.BlockSequenceStart || next.kind == TokenKind.BlockMappingStart
+      || (indentless && next.kind == TokenKind.BlockEntry)
+    // A block collection's comments above it belong to its first entry, unless properties stand above that entry
+    const leading = if isBlockCollection && !hasProperties { [] } else { takeLeading start.start.line }
+    var propertiesTrailing: String? = None
+    if hasProperties && next.start.line > start.start.line {
+      propertiesTrailing = takeTrailing start.start.line
+    }
+    var content = YamlContent.Scalar "", ScalarStyle.Plain
+    if next.kind == TokenKind.Alias {
+      return Fail failure(next.start, "an alias has no anchor and no tag of its own")
+    }
+    if indentless && next.kind == TokenKind.BlockEntry {
+      content = indentlessSequence()?
+    } else if next.kind == TokenKind.Scalar {
+      const scalar = advance()
+      content = YamlContent.Scalar scalar.text, scalar.style
+      if scalar.style == ScalarStyle.Literal || scalar.style == ScalarStyle.Folded {
+        // The comment on the header line of a block scalar is the block scalar's
+        if const Some(text) = takeTrailing(scalar.start.line) {
+          propertiesTrailing = Some text
+        }
+      }
+    } else if next.kind == TokenKind.FlowSequenceStart {
+      content = flowSequence()?
+    } else if next.kind == TokenKind.FlowMappingStart {
+      content = flowMapping()?
+    } else if block && next.kind == TokenKind.BlockSequenceStart {
+      content = blockSequence()?
+    } else if block && next.kind == TokenKind.BlockMappingStart {
+      content = blockMapping()?
+    } else if !hasProperties {
+      return Fail failure(next.start, "{describe(next)} cannot stand here: a node was expected")
+    }
+    var trailing = propertiesTrailing
+    if trailing.isNone() {
+      trailing = trailingOfCompleted()
+    }
+    Ok YamlNode(content, tag: tag, anchor: anchor, comments: YamlComments(leading, trailing), line: line, column: column)
+  }
+
+  /** The tag a token names, with its handle replaced by the prefix it stands for. */
+  fn resolvedTag(token: Token): Result<String, YamlError> {
+    if token.handle.isEmpty() {
+      return Ok token.text
+    }
+    for directive in tagDirectives {
+      if directive.handle == token.handle {
+        return Ok(directive.prefix + token.text)
+      }
+    }
+    if token.handle == "!!" {
+      return Ok(coreTagPrefix + token.text)
+    }
+    if token.handle == "!" {
+      return Ok("!" + token.text)
+    }
+    Fail failure(token.start, "the tag handle `{token.handle}` is not declared by a `%TAG` directive")
+  }
+
+  var fn blockSequence(): Result<YamlContent, YamlError> {
+    const _start = advance()
+    var items: List<YamlNode> = []
+    loop {
+      if isAt(TokenKind.BlockEntry) {
+        const entry = advance()
+        if isAt(TokenKind.BlockEntry) || isAt(TokenKind.BlockEnd) {
+          items.append emptyEntry(entry)
+        } else {
+          items.append(node(true, false)?)
+        }
+        continue
+      }
+      if isAt(TokenKind.BlockEnd) {
+        const _end = advance()
+        break
+      }
+      return Fail failure(peek().start, "{describe(peek())} cannot stand here: a `- ` item was expected")
+    }
+    Ok YamlContent.Sequence(items, CollectionStyle.Block)
+  }
+
+  /** The empty item of a `-` with nothing after it, which takes the comment of its line. */
+  var fn emptyEntry(entry: Token): YamlNode {
+    const leading = takeLeading entry.start.line
+    const trailing = takeTrailing entry.start.line
+    emptyAt(entry.end).copy(comments: YamlComments(leading, trailing))
+  }
+
+  var fn indentlessSequence(): Result<YamlContent, YamlError> {
+    var items: List<YamlNode> = []
+    while isAt(TokenKind.BlockEntry) {
+      const entry = advance()
+      const kind = peekKind()
+      if kind == TokenKind.BlockEntry || kind == TokenKind.Key || kind == TokenKind.Value || kind == TokenKind.BlockEnd {
+        items.append emptyEntry(entry)
+      } else {
+        items.append(node(true, false)?)
+      }
+    }
+    Ok YamlContent.Sequence(items, CollectionStyle.Block)
+  }
+
+  var fn blockMapping(): Result<YamlContent, YamlError> {
+    const _start = advance()
+    var entries: List<YamlEntry> = []
+    loop {
+      if isAt(TokenKind.Key) {
+        const keyToken = advance()
+        const kind = peekKind()
+        var key = emptyAt keyToken.end
+        if kind == TokenKind.Key || kind == TokenKind.Value || kind == TokenKind.BlockEnd {
+          key = key.copy comments: YamlComments(takeLeading(keyToken.start.line))
+        } else {
+          key = node(true, true)?
+        }
+        const value = blockMappingValue(keyToken.end)?
+        entries.append entryOf(key, value)
+        continue
+      }
+      if isAt(TokenKind.Value) {
+        const key = emptyAt(peek().start).copy(comments: YamlComments(takeLeading(peek().start.line)))
+        const value = blockMappingValue(peek().start)?
+        entries.append entryOf(key, value)
+        continue
+      }
+      if isAt(TokenKind.BlockEnd) {
+        const _end = advance()
+        break
+      }
+      return Fail failure(peek().start, "{describe(peek())} cannot stand here: a key of this mapping was expected")
+    }
+    Ok YamlContent.Mapping(entries, CollectionStyle.Block)
+  }
+
+  /** The value of a block mapping's entry, and the comment behind its `:` where the value starts on a later line. */
+  var fn blockMappingValue(after: Mark): Result<MappingValue, YamlError> {
+    if !isAt(TokenKind.Value) {
+      return Ok MappingValue(emptyAt(after))
+    }
+    const valueToken = advance()
+    const kind = peekKind()
+    if kind == TokenKind.Key || kind == TokenKind.Value || kind == TokenKind.BlockEnd {
+      const trailing = takeTrailing valueToken.start.line
+      return Ok MappingValue(emptyAt(valueToken.end).copy(comments: YamlComments(trailing: trailing)))
+    }
+    var keyComment: String? = None
+    if peek().start.line > valueToken.start.line {
+      keyComment = takeTrailing valueToken.start.line
+    }
+    const value = node(true, true)?
+    Ok MappingValue(value, keyComment)
+  }
+
+  var fn flowSequence(): Result<YamlContent, YamlError> {
+    const _start = advance()
+    var items: List<YamlNode> = []
+    var first = true
+    loop {
+      if isAt(TokenKind.FlowSequenceEnd) {
+        const _end = advance()
+        break
+      }
+      if !first {
+        if !isAt(TokenKind.FlowEntry) {
+          return Fail failure(peek().start, "{describe(peek())} cannot stand here: a `,` or a `]` was expected")
+        }
+        const _entry = advance()
+        if isAt(TokenKind.FlowSequenceEnd) {
+          const _end = advance()
+          break
+        }
+      }
+      first = false
+      if isAt(TokenKind.Key) || isAt(TokenKind.Value) {
+        const pairStart = peek()
+        var key = emptyAt pairStart.start
+        if isAt(TokenKind.Key) {
+          const _key = advance()
+          if !isAt(TokenKind.Value) && !isAt(TokenKind.FlowEntry) && !isAt(TokenKind.FlowSequenceEnd) {
+            key = node(false, false)?
+          }
+        }
+        const value = flowValue(TokenKind.FlowSequenceEnd)?
+        const pair = YamlContent.Mapping([YamlEntry(key, value)], CollectionStyle.Flow)
+        items.append YamlNode(pair, line: pairStart.start.line + 1, column: pairStart.start.column + 1)
+        continue
+      }
+      items.append(node(false, false)?)
+    }
+    Ok YamlContent.Sequence(items, CollectionStyle.Flow)
+  }
+
+  var fn flowMapping(): Result<YamlContent, YamlError> {
+    const _start = advance()
+    var entries: List<YamlEntry> = []
+    var first = true
+    loop {
+      if isAt(TokenKind.FlowMappingEnd) {
+        const _end = advance()
+        break
+      }
+      if !first {
+        if !isAt(TokenKind.FlowEntry) {
+          return Fail failure(peek().start, "{describe(peek())} cannot stand here: a `,` or a `\}` was expected")
+        }
+        const _entry = advance()
+        if isAt(TokenKind.FlowMappingEnd) {
+          const _end = advance()
+          break
+        }
+      }
+      first = false
+      var key = emptyAt peek().start
+      if isAt(TokenKind.Key) {
+        const _key = advance()
+        if !isAt(TokenKind.Value) && !isAt(TokenKind.FlowEntry) && !isAt(TokenKind.FlowMappingEnd) {
+          key = node(false, false)?
+        }
+      } else if !isAt(TokenKind.Value) {
+        key = node(false, false)?
+      }
+      const value = flowValue(TokenKind.FlowMappingEnd)?
+      entries.append YamlEntry(key, value)
+    }
+    Ok YamlContent.Mapping(entries, CollectionStyle.Flow)
+  }
+
+  /** The value after a key of a flow collection: after its `:`, or empty where there is none. */
+  var fn flowValue(closing: TokenKind): Result<YamlNode, YamlError> {
+    if !isAt(TokenKind.Value) {
+      return Ok emptyAt(peek().start)
+    }
+    const valueToken = advance()
+    if isAt(TokenKind.FlowEntry) || isAt(closing) {
+      return Ok emptyAt(valueToken.end)
+    }
+    node false, false
+  }
+}
+
+/** An entry, with the comment behind its `:` on its key. */
+/** The value of a block mapping's entry, and the comment behind its `:` where the value starts on a later line. */
+type MappingValue {
+  value: YamlNode
+  keyComment: String? = None
+}
+
+fn entryOf(key: YamlNode, value: MappingValue): YamlEntry {
+  match value.keyComment {
+    Some(text) => YamlEntry key.copy(comments: key.comments.copy(trailing: Some(text))), value.value
+    None => YamlEntry key, value.value
+  }
+}
+
+/** A token as a message names it. */
+fn describe(token: Token): String {
+  match token.kind {
+    .StreamStart => "the start of the text"
+    .StreamEnd => "the end of the text"
+    .VersionDirective => "a `%YAML` directive"
+    .TagDirective => "a `%TAG` directive"
+    .ReservedDirective => "a directive"
+    .DocumentStart => "`---`"
+    .DocumentEnd => "`...`"
+    .BlockSequenceStart => "a `- ` item"
+    .BlockMappingStart => "a mapping"
+    .BlockEnd => "less indentation"
+    .FlowSequenceStart => "`[`"
+    .FlowSequenceEnd => "`]`"
+    .FlowMappingStart => "`\{`"
+    .FlowMappingEnd => "`\}`"
+    .BlockEntry => "`- `"
+    .FlowEntry => "`,`"
+    .Key => "a key"
+    .Value => "`:`"
+    .Alias => "an alias"
+    .Anchor => "an anchor"
+    .Tag => "a tag"
+    .Scalar => "a scalar"
+  }
+}

@@ -1,0 +1,306 @@
+/**
+ * [Yaml], the format: a value with the options of YAML, which reads and writes typed values through `Encode` and
+ * `Decode`, reads documents into the tree of [YamlNode]s and writes that tree back, and frames a stream of documents
+ * for `std/stream`.
+ */
+
+use Stage, Accumulator, mapping from "std/iteration"
+use Bytes, textOf from "std/stream"
+use Naming from "std/encoding"
+use YamlNode, YamlDocument from "./node"
+use YamlError from "./error"
+use parsedStream from "./parser"
+use YamlSchema from "./schema"
+use YamlTag, expanded, valueOf from "./resolve"
+use YamlDecoder from "./decoder"
+use YamlEncoder from "./encoder"
+use writtenStream from "./writer"
+
+/** The version of YAML a document without a `%YAML` directive is read as. */
+public type YamlVersion {
+  /** YAML 1.2, the current version, and the default. */
+  case Yaml12
+  /** YAML 1.1: `yes`, `no`, `on` and `off` are truth values, and `0777` is an octal number. */
+  case Yaml11
+}
+
+/**
+ * YAML, with its options. The default reads YAML 1.2 - and YAML 1.1 where a document says `%YAML 1.1` - applies the
+ * merge key `<<`, writes every field under the name the type declares, ignores a field no type asked for, and stops a
+ * document whose aliases expand to more than 100000 nodes.
+ *
+ * A typed decode resolves each scalar by the type it is read as: `no` is the text `"no"` in a `String` field and an
+ * error in a `Bool` field, so YAML's surprises need no schema to be avoided.
+ *
+ * # Examples
+ *
+ *     type Service {
+ *       name: String
+ *       replicas: Int = 1
+ *       ports: List<Int> = []
+ *     }
+ *
+ *     const yaml = Yaml()
+ *     const service = yaml.decode<Service>("name: web\nports: [80, 443]\n")?
+ *     print yaml.encode(service)
+ *
+ * # Related
+ *
+ * - [YamlNode] - the tree of a document, with its comments, for a tool that changes a file and keeps the rest.
+ * - [YamlError] - what a failed `decode` or `parse` says.
+ */
+public type Yaml {
+  /** How the field names are written and read: `Naming.SnakeCase` writes `logLabel` as `log_label`. */
+  naming: Naming = Naming.Unchanged
+  /** Whether a field of the document that no type asked for is an error, instead of being ignored. */
+  strict: Bool = false
+  /**
+   * How [Yaml.resolved] reads a plain scalar where no type says what it is. `None` reads a document by its version:
+   * the core schema, or YAML 1.1's types for a document that says `%YAML 1.1`.
+   */
+  schema: YamlSchema? = None
+  /** The version of a document that has no `%YAML` directive. */
+  version: YamlVersion = YamlVersion.Yaml12
+  /** The local tags a typed decode accepts and a typed encode writes, each with the type it stands for. */
+  tags: List<YamlTag> = []
+  /** How many nodes the aliases of one document may add before reading it fails. */
+  aliasLimit: Int = 100000
+  /** Whether the merge key `<<` merges the mappings it names into the one it stands in. */
+  mergeKeys: Bool = true
+
+  /** `value` as YAML text: one document, without `---`. */
+  fn encode<Value: Encode>(value: Value): String {
+    writtenStream([YamlDocument(self.value(value))])
+  }
+
+  /**
+   * Reads `text`, which holds one document, as a `Value`. A text without a document reads as null, which an optional
+   * value reads as `None` and a record as its defaults.
+   *
+   * # Errors
+   *
+   * A [YamlError] for text that is not YAML, for a document that holds several, and for one that does not fit
+   * `Value` - with the line and the field chain it went wrong in.
+   */
+  fn decode<Value: Decode>(text: String): Result<Value, YamlError> {
+    const documents = parsedStream(text)?
+    if documents.length() > 1 {
+      const message = "the text holds {documents.length()} documents: `decodeDocuments` reads a stream"
+      return Fail YamlError.content(documents[1].root.line, message)
+    }
+    const document = documents.first() ?? YamlDocument(YamlNode.empty())
+    decodeDocument<Value>(document)
+  }
+
+  /** Every document of `text`, each read as a `Value`. */
+  fn decodeDocuments<Value: Decode>(text: String): Result<List<Value>, YamlError> {
+    const documents = parsedStream(text)?
+    var values: List<Value> = []
+    for document in documents {
+      values.append(decodeDocument<Value>(document)?)
+    }
+    Ok values
+  }
+
+  /** A document that was parsed already, read as a `Value`: its aliases expanded, its merge keys applied. */
+  fn decodeDocument<Value: Decode>(document: YamlDocument): Result<Value, YamlError> {
+    const root = expanded(document, aliasLimit, mergeKeys)?
+    var source = YamlDecoder.of root, schema: typesOf(document), naming: naming, strict: strict, tags: tags
+    match Value.decode(source) {
+      Ok(value) => Ok value
+      Fail(problem) => Fail YamlError.decodeFailed(problem, source.line)
+    }
+  }
+
+  /**
+   * Parses `text`, which holds one document, into its tree: every node as it was written, with its tag, its anchor,
+   * its style, its comments and its line.
+   *
+   * # Errors
+   *
+   * A syntax error with its line and column, or an error for a text that holds several documents.
+   */
+  fn parse(text: String): Result<YamlDocument, YamlError> {
+    const documents = parsedStream(text)?
+    if documents.length() > 1 {
+      const message = "the text holds {documents.length()} documents: `parseAll` reads a stream"
+      return Fail YamlError.content(documents[1].root.line, message)
+    }
+    Ok(documents.first() ?? YamlDocument(YamlNode.empty()))
+  }
+
+  /** Every document of a stream, as trees. */
+  fn parseAll(text: String): Result<List<YamlDocument>, YamlError> {
+    parsedStream text
+  }
+
+  /**
+   * A document without a type, as an `EncodedValue`: its aliases expanded, its merge keys applied, and its plain
+   * scalars resolved by [Yaml.schema] - or by the document's version where no schema is given.
+   */
+  fn resolved(document: YamlDocument): Result<EncodedValue, YamlError> {
+    const root = expanded(document, aliasLimit, mergeKeys)?
+    const chosen = schema ?? typesOf(document)
+    valueOf root, chosen, tags
+  }
+
+  /** Any `Encode` value as the tree this format writes it as. */
+  fn value<Value: Encode>(value: Value): YamlNode {
+    var target = YamlEncoder naming: naming, tags: tags
+    value.encode target
+    target.result()
+  }
+
+  /** A document as text, with its anchors, tags, styles and comments. */
+  fn write(document: YamlDocument): String {
+    writtenStream([document])
+  }
+
+  /** A stream of documents as text; each document after the first starts with `---`. */
+  fn writeAll(documents: List<YamlDocument>): String {
+    writtenStream documents
+  }
+
+  /** The types a document's scalars are read by: YAML 1.1's for a 1.1 document, the core schema's otherwise. */
+  private fn typesOf(document: YamlDocument): YamlSchema {
+    match document.version {
+      Some(written) => if written == "1.1" { YamlSchema.Yaml11 } else { YamlSchema.Core }
+      None => if version == YamlVersion.Yaml11 { YamlSchema.Yaml11 } else { YamlSchema.Core }
+    }
+  }
+}
+
+// --- YAML as a `Format`: the streaming side -------------------------------------------------------------------------
+
+/**
+ * Everything a stream needs: a framer that finds where one document ends, and the ordinary `Decode` for the document
+ * itself. The static members use the default options, `Yaml()`.
+ */
+extend Yaml with Format<YamlError> {
+  static fn encodeAll<Value: Encode>(value: Value): Bytes {
+    Yaml().encode(value).bytes().toList()
+  }
+
+  static fn decodeAll<Value: Decode>(bytes: Bytes): Result<Value, YamlError> {
+    const text = textOf(bytes).mapError(YamlError.invalidText)?
+    Yaml().decode<Value>(text)
+  }
+
+  /**
+   * Byte chunks to items: every document of the stream is one item. A document ends where a line starts with `---`
+   * or `...`, which YAML allows nowhere else at the start of a line, so the framer needs no parser.
+   */
+  static fn items<Item: Decode>(): Stage<Bytes, Result<Item, YamlError>> {
+    YamlItems<Item>()
+  }
+
+  /** Items to bytes, each one a document that starts with `---`. */
+  static fn encoded<Item: Encode>(): Stage<Item, Bytes> {
+    mapping { "---\n{Yaml().encode(_)}".bytes().toList() }
+  }
+}
+
+type YamlItems<Item: Decode> with Stage<Bytes, Result<Item, YamlError>> {
+  fn onto<Final>(downstream: Accumulator<Result<Item, YamlError>, Final>): Accumulator<Bytes, Final> {
+    YamlFramer downstream
+  }
+}
+
+/**
+ * The framer: the bytes of the document that is being read, and where its current line starts. A line that starts with
+ * `---` begins the next document, and one that starts with `...` ends this one.
+ */
+type YamlFramer<Item: Decode, Final> with Accumulator<Bytes, Final> {
+  var downstream: Accumulator<Result<Item, YamlError>, Final>
+  var document: Bytes = []
+  var lineStart: Int = 0
+
+  var fn add(value: Bytes) {
+    for byte in value {
+      if downstream.isDone() {
+        return
+      }
+      document.append byte
+      if byte == 10 {
+        endLine()
+      }
+    }
+  }
+
+  fn finish(): Final {
+    var tail = self
+    const _carried = tail.emit tail.document
+    var below = tail.downstream
+    below.finish()
+  }
+
+  fn isDone(): Bool {
+    downstream.isDone()
+  }
+
+  private var fn endLine() {
+    const start = lineStart
+    lineStart = document.length()
+    if isMarker(document, start, 45) {
+      // `---`: what came before this line is a document, and this line begins the next one
+      const before = document[0..start]
+      const rest = document[start..document.length()]
+      const carried = emit before
+      document = carried.appendedAll rest
+      lineStart = document.length()
+      return
+    }
+    if isMarker(document, start, 46) {
+      document = emit document
+      lineStart = document.length()
+    }
+  }
+
+  /**
+   * Decodes a document's bytes and hands the result on - unless they hold nothing but comments and directives, which
+   * belong to the document that follows them and are answered to be carried over.
+   */
+  private var fn emit(bytes: Bytes): Bytes {
+    const text = match textOf(bytes) {
+      Ok(found) => found
+      Fail(problem) => {
+        downstream.add Fail(YamlError.invalidText(problem))
+        return []
+      }
+    }
+    if !hasContent(text) {
+      if text.lines().any({ _.startsWith "%" }) {
+        return bytes
+      }
+      return []
+    }
+    downstream.add Yaml().decode<Item>(text)
+    []
+  }
+}
+
+/** Whether the line at `start` starts with three of `byte` and then whitespace or its end. */
+fn isMarker(bytes: Bytes, start: Int, byte: UInt8): Bool {
+  if start + 3 > bytes.length() {
+    return false
+  }
+  if bytes[start] != byte || bytes[start + 1] != byte || bytes[start + 2] != byte {
+    return false
+  }
+  if start + 3 == bytes.length() {
+    return true
+  }
+  const next = bytes[start + 3]
+  next == 32 || next == 9 || next == 10 || next == 13
+}
+
+/** Whether a text holds anything but blank lines, comments and directives. */
+fn hasContent(text: String): Bool {
+  for line in text.lines() {
+    const trimmed = line.trim()
+    if !trimmed.isEmpty() && !trimmed.startsWith("#") && !line.startsWith("%") {
+      return true
+    }
+  }
+  false
+}

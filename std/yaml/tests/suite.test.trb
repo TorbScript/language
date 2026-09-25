@@ -1,0 +1,123 @@
+/**
+ * `std/yaml` against the YAML test suite (https://github.com/yaml/yaml-test-suite, MIT License; the cases are in
+ * `suite-cases.trb` with the suite's notice). Three measures, each case its own test:
+ *
+ * - **Parsing**: all 402 cases. The events of the tree equal the suite's `test.event`, and a case the suite marks as an
+ *   error is refused.
+ * - **Writing**: every case that parses, written back and parsed again, gives the same events - apart from `---` and
+ *   `...`, which the writer adds where a stream needs them, and from four scalars whose style no writer can keep
+ *   (`multiLineQuoted` below): a single-quoted scalar of several lines is written in double quotes, and `:` alone as a
+ *   key in quotes. Their values are the same.
+ * - **Loading**: every single-document case with an `in.json` resolves by the core schema to that JSON - apart from
+ *   the 13 of `resolvedByDesign`, whose tags this reader resolves on purpose: a local or foreign tag nobody named is an
+ *   error, `!!set` is a sequence of its keys, `!!omap` an ordered mapping, and `!!binary` bytes.
+ */
+
+use test, group from "std/test"
+use Json from "std/json"
+use suiteCases, SuiteCase from "./suite-cases"
+use eventsOf from "./events"
+use parsedStream from "../src/parser"
+use writtenStream from "../src/writer"
+use Yaml from "../src/yaml"
+
+/** The cases whose scalars are written in another style than they were read in, and why. */
+const multiLineQuoted = ["NAT4", "PRH3", "T4YY", "UKK6/01"]
+
+/** The cases whose tags are resolved differently from the suite's `in.json`, on purpose. */
+const resolvedByDesign = [
+  "2XXW", "565N", "6CK3", "7FWL", "C4HZ", "CC74", "CUP7", "J7PZ", "M5C3", "P76L", "UGM3", "Z67P", "Z9M4",
+]
+
+fn withoutMarkers(events: String): String {
+  events.replace("+DOC ---", "+DOC").replace("-DOC ...", "-DOC")
+}
+
+/** The events with every scalar's style indicator taken off: what stays the same when only a style changes. */
+fn withoutStyles(events: String): String {
+  var lines: List<String> = []
+  for line in withoutMarkers(events).split("\n") {
+    if line.startsWith("=VAL") {
+      const at = line.indexOf(" :") ?? line.indexOf(" '") ?? line.indexOf(" \"") ?? line.indexOf(" |")
+        ?? line.indexOf(" >") ?? line.byteLength()
+      lines.append(line.sliceBytes(0, at) + " " + line.sliceBytes((at + 2).min(line.byteLength()), line.byteLength()))
+    } else {
+      lines.append line
+    }
+  }
+  lines.joined separator: "\n"
+}
+
+fn parsesAsTheSuiteSays(suiteCase: SuiteCase): Bool {
+  match parsedStream(suiteCase.yaml) {
+    Ok(documents) => !suiteCase.isError && eventsOf(documents) == suiteCase.events
+    Fail(_) => suiteCase.isError
+  }
+}
+
+fn writesBack(suiteCase: SuiteCase): Bool {
+  const documents = match parsedStream(suiteCase.yaml) {
+    Ok(found) => found
+    Fail(_) => {
+      return false
+    }
+  }
+  const events = eventsOf documents
+  match parsedStream(writtenStream(documents)) {
+    Ok(again) => {
+      if multiLineQuoted.contains(suiteCase.name) {
+        return withoutStyles(eventsOf(again)) == withoutStyles(events)
+      }
+      withoutMarkers(eventsOf(again)) == withoutMarkers(events)
+    }
+    Fail(_) => false
+  }
+}
+
+fn loadsAsJson(suiteCase: SuiteCase): Bool {
+  const documents = match parsedStream(suiteCase.yaml) {
+    Ok(found) => found
+    Fail(_) => {
+      return false
+    }
+  }
+  match Yaml().resolved(documents[0]) {
+    Ok(value) => {
+      const expected = Json().parse(suiteCase.json)
+      expected.isOk() && expected == Json().parse(Json().encode(value))
+    }
+    Fail(_) => false
+  }
+}
+
+const cases = suiteCases()
+
+group "parsing: the events of every case, and every error refused" {
+  for suiteCase in cases {
+    test "{suiteCase.name} {suiteCase.title}" {
+      assert parsesAsTheSuiteSays(suiteCase)
+    }
+  }
+}
+
+group "writing: what is written reads back as the same events" {
+  for suiteCase in cases {
+    if !suiteCase.isError {
+      test "{suiteCase.name} {suiteCase.title}" {
+        assert writesBack(suiteCase)
+      }
+    }
+  }
+}
+
+group "loading: a document resolves by the core schema to the suite's JSON" {
+  for suiteCase in cases {
+    if !suiteCase.isError && !suiteCase.json.isEmpty() && !resolvedByDesign.contains(suiteCase.name) {
+      if parsedStream(suiteCase.yaml).map({ _.length() }) == Ok(1) {
+        test "{suiteCase.name} {suiteCase.title}" {
+          assert loadsAsJson(suiteCase)
+        }
+      }
+    }
+  }
+}

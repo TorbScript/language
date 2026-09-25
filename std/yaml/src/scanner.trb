@@ -1,0 +1,1259 @@
+/**
+ * The scanner: YAML text to tokens, after the model of libyaml's scanner and with the rules of YAML 1.2.
+ *
+ * Indentation becomes `BlockSequenceStart`, `BlockMappingStart` and `BlockEnd` tokens, and a key without a `?` - a
+ * *simple key* - is found when its `:` arrives: every token that could begin one is remembered, and the `:` inserts a
+ * `Key` token in front of it. Comments are not tokens; they are collected beside them with their lines, so the parser
+ * can hang them on the nodes they belong to.
+ */
+
+use ScalarStyle from "./node"
+use YamlError from "./error"
+use textOf from "std/stream"
+
+/** What a token is. The payload of a scalar, an alias, an anchor, a tag or a directive is in the [Token]'s fields. */
+public type TokenKind {
+  case StreamStart
+  case StreamEnd
+  case VersionDirective
+  case TagDirective
+  case ReservedDirective
+  case DocumentStart
+  case DocumentEnd
+  case BlockSequenceStart
+  case BlockMappingStart
+  case BlockEnd
+  case FlowSequenceStart
+  case FlowSequenceEnd
+  case FlowMappingStart
+  case FlowMappingEnd
+  case BlockEntry
+  case FlowEntry
+  case Key
+  case Value
+  case Alias
+  case Anchor
+  case Tag
+  case Scalar
+}
+
+/** A position in the text: the offset into its characters, the line and the column, all counted from 0. */
+public type Mark {
+  index: Int
+  line: Int
+  column: Int
+}
+
+/** One token, with where it starts and ends. */
+public type Token {
+  kind: TokenKind
+  start: Mark
+  end: Mark
+  /** The text of a scalar, the name of an alias or anchor, the suffix of a tag, the version or prefix of a directive. */
+  text: String = ""
+  /** The handle of a tag or of a `%TAG` directive: `!`, `!!`, `!e!`, or empty for a verbatim tag. */
+  handle: String = ""
+  style: ScalarStyle = ScalarStyle.Plain
+}
+
+/** A comment as the scanner found it: the text after `#`, and whether content stands before it on its line. */
+public type ScannedComment {
+  text: String
+  /** Counted from 0. */
+  line: Int
+  trailing: Bool
+}
+
+/** What scanning a whole stream found. */
+public type Scanned {
+  tokens: List<Token>
+  comments: List<ScannedComment>
+}
+
+/** Scans a whole stream. The first problem stops it. */
+public fn scanned(text: String): Result<Scanned, YamlError> {
+  var scanner = Scanner text.chars().toList()
+  scanner.run()?
+  Ok Scanned(scanner.tokens, scanner.comments)
+}
+
+/** The empty lines in front of a line of a block scalar, and the indentation of its content. */
+type BlockBreaks {
+  indent: Int
+  breaks: Int
+}
+
+/** A place a simple key may start at, one per flow level. */
+type SimpleKey {
+  var possible: Bool = false
+  var required: Bool = false
+  var tokenNumber: Int = 0
+  var mark: Mark = Mark 0, 0, 0
+  /** Whether a tab stands in front of the key on its line, which a key that opens a block mapping may not have. */
+  var tabbed: Bool = false
+}
+
+/** The state of the scanner. */
+type Scanner {
+  characters: List<Char>
+  var index: Int = 0
+  var line: Int = 0
+  var column: Int = 0
+  var tokens: List<Token> = []
+  var comments: List<ScannedComment> = []
+  var streamEndProduced: Bool = false
+  /** The column of the innermost block collection, -1 outside of every one. */
+  var indent: Int = -1
+  var indents: List<Int> = []
+  var simpleKeyAllowed: Bool = false
+  var simpleKeys: List<SimpleKey> = []
+  var flowLevel: Int = 0
+  /**
+   * Whether the last token was a quoted scalar or a closing bracket: in a flow collection a `:` after such a key is a
+   * value even without a space behind it (`\{"key":value\}`).
+   */
+  var afterJsonNode: Bool = false
+  /** The line the last token of content ended on, which tells a trailing comment from one on a line of its own. */
+  var lastContentLine: Int = -1
+
+  var fn run(): Result<Void, YamlError> {
+    indent = -1
+    simpleKeys.append SimpleKey()
+    simpleKeyAllowed = true
+    if ahead(0) == byteOrderMark {
+      index = index + 1
+    }
+    tokens.append Token(TokenKind.StreamStart, mark(), mark())
+    while !streamEndProduced {
+      fetchNextToken()?
+    }
+    Ok void
+  }
+
+  // --- Characters ----------------------------------------------------------------------------------------------------
+
+  /** The character `offset` places ahead, or U+0000 past the end: YAML text never holds that character. */
+  fn ahead(offset: Int): Char {
+    const at = index + offset
+    if at < characters.length() {
+      return characters[at]
+    }
+    '\u{0}'
+  }
+
+  fn atEnd(): Bool {
+    index >= characters.length()
+  }
+
+  fn mark(): Mark {
+    Mark index, line, column
+  }
+
+  fn isBlankAt(offset: Int): Bool {
+    isBlank ahead(offset)
+  }
+
+  fn isBreakAt(offset: Int): Bool {
+    isBreak ahead(offset)
+  }
+
+  /** A blank, a line break, or the end of the text. */
+  fn isSeparatorAt(offset: Int): Bool {
+    const character = ahead offset
+    isBlank(character) || isBreak(character) || index + offset >= characters.length()
+  }
+
+  /** `---` or `...` at the start of a line, followed by whitespace or the end. */
+  fn isDocumentIndicator(): Bool {
+    if column != 0 {
+      return false
+    }
+    const first = ahead 0
+    if first != '-' && first != '.' {
+      return false
+    }
+    ahead(1) == first && ahead(2) == first && isSeparatorAt(3)
+  }
+
+  var fn skip() {
+    index = index + 1
+    column = column + 1
+  }
+
+  /** Skips one line break: `\r\n`, `\r` or `\n`. */
+  var fn skipBreak() {
+    if ahead(0) == '\r' && ahead(1) == '\n' {
+      index = index + 2
+    } else {
+      index = index + 1
+    }
+    line = line + 1
+    column = 0
+  }
+
+  fn failure(at: Mark, message: String): YamlError {
+    YamlError.syntax(at.line + 1, at.column + 1, message)
+  }
+
+  fn failureHere(message: String): YamlError {
+    failure mark(), message
+  }
+
+  var fn emit(token: Token) {
+    tokens.append token
+    lastContentLine = token.end.line
+    afterJsonNode = false
+  }
+
+  // --- Between tokens -------------------------------------------------------------------------------------------------
+
+  /** Skips whitespace, comments and line breaks up to the next token, and records the comments on the way. */
+  var fn scanToNextToken(): Result<Void, YamlError> {
+    loop {
+      if column == 0 && ahead(0) == byteOrderMark {
+        index = index + 1
+      }
+      while ahead(0) == ' ' || ahead(0) == '\t' {
+        skip()
+      }
+      if ahead(0) == '#' {
+        if index > 0 && !isBlank(characters[index - 1]) && !isBreak(characters[index - 1]) {
+          return Fail failureHere("a comment is separated from what stands before it by a space")
+        }
+        recordComment()
+      }
+      if isBreakAt(0) {
+        skipBreak()
+        if flowLevel == 0 {
+          simpleKeyAllowed = true
+        }
+        continue
+      }
+      break
+    }
+    Ok void
+  }
+
+  /** Reads a comment from its `#` to the end of the line. */
+  var fn recordComment() {
+    const commentLine = line
+    skip()
+    const start = index
+    while !atEnd() && !isBreakAt(0) {
+      skip()
+    }
+    const text = String.from characters.slice(start..index)
+    comments.append ScannedComment(text, commentLine, lastContentLine == commentLine)
+  }
+
+  /** Every simple key that can no longer be one: its line has ended, or it is too long. */
+  var fn staleSimpleKeys(): Result<Void, YamlError> {
+    for level in 0..simpleKeys.length() {
+      const key = simpleKeys[level]
+      if key.possible && (key.mark.line < line || index - key.mark.index > 1024) {
+        if key.required {
+          return Fail failure(key.mark, "a `:` is missing after this key: an implicit key ends at the end of its line")
+        }
+        simpleKeys[level].possible = false
+      }
+    }
+    Ok void
+  }
+
+  var fn saveSimpleKey(): Result<Void, YamlError> {
+    const required = flowLevel == 0 && indent == column
+    if simpleKeyAllowed {
+      removeSimpleKey()?
+      const last = simpleKeys.length() - 1
+      simpleKeys[last] = SimpleKey true, required, tokens.length(), mark(), isTabBefore()
+    }
+    Ok void
+  }
+
+  var fn removeSimpleKey(): Result<Void, YamlError> {
+    const last = simpleKeys.length() - 1
+    const key = simpleKeys[last]
+    if key.possible && key.required {
+      return Fail failure(key.mark, "a `:` is missing after this key")
+    }
+    simpleKeys[last].possible = false
+    Ok void
+  }
+
+  var fn increaseFlowLevel() {
+    simpleKeys.append SimpleKey()
+    flowLevel = flowLevel + 1
+  }
+
+  var fn decreaseFlowLevel() {
+    if flowLevel > 0 {
+      flowLevel = flowLevel - 1
+      const _removed = simpleKeys.removeAt(simpleKeys.length() - 1)
+    }
+  }
+
+  /** Opens a block collection at `at.column` where it is deeper than the innermost one. */
+  var fn rollIndent(at: Mark, number: Int, kind: TokenKind) {
+    if flowLevel > 0 {
+      return
+    }
+    if indent < at.column {
+      indents.append indent
+      indent = at.column
+      const token = Token kind, at, at
+      if number < 0 {
+        tokens.append token
+      } else {
+        tokens.insert number, token
+      }
+    }
+  }
+
+  /** Closes every block collection deeper than `to`. */
+  var fn unrollIndent(to: Int) {
+    if flowLevel > 0 {
+      return
+    }
+    while indent > to {
+      tokens.append Token(TokenKind.BlockEnd, mark(), mark())
+      indent = indents.removeAt(indents.length() - 1) ?? -1
+    }
+  }
+
+  // --- The next token -------------------------------------------------------------------------------------------------
+
+  var fn fetchNextToken(): Result<Void, YamlError> {
+    scanToNextToken()?
+    staleSimpleKeys()?
+    unrollIndent column
+    if atEnd() {
+      return fetchStreamEnd()
+    }
+    const character = ahead 0
+    const isFirst = lastContentLine != line
+    const tabBefore = isTabBefore()
+    if isFirst && !isDocumentIndicator() {
+      const spaces = lineIndentation()
+      if flowLevel > 0 && spaces <= indent {
+        return Fail failureHere("a line inside of a flow collection is indented less than the block it stands in")
+      }
+      if flowLevel == 0 && tabBefore && spaces < indent + 1 {
+        return Fail failureHere("a tab is not indentation: YAML indents with spaces")
+      }
+    }
+    if flowLevel == 0 && tabBefore {
+      const isIndicator = (character == '-' && isSeparatorAt(1))
+        || (isFirst && (character == '?' || character == ':') && isSeparatorAt(1))
+      if isIndicator {
+        return Fail failureHere("a tab is not indentation: YAML indents with spaces")
+      }
+    }
+    if column == 0 && character == '%' {
+      return fetchDirective()
+    }
+    if isDocumentIndicator() {
+      if character == '-' {
+        return fetchDocumentIndicator TokenKind.DocumentStart
+      }
+      return fetchDocumentIndicator TokenKind.DocumentEnd
+    }
+    if character == '[' {
+      return fetchFlowCollectionStart TokenKind.FlowSequenceStart
+    }
+    if character == '{' {
+      return fetchFlowCollectionStart TokenKind.FlowMappingStart
+    }
+    if character == ']' {
+      return fetchFlowCollectionEnd TokenKind.FlowSequenceEnd
+    }
+    if character == '}' {
+      return fetchFlowCollectionEnd TokenKind.FlowMappingEnd
+    }
+    if character == ',' {
+      return fetchFlowEntry()
+    }
+    if character == '-' && isSeparatorAt(1) {
+      return fetchBlockEntry()
+    }
+    if character == '?' && isSeparatorAt(1) {
+      return fetchKey()
+    }
+    if character == ':' && isValueIndicator() {
+      return fetchValue()
+    }
+    if character == '*' {
+      return fetchAnchorOrAlias TokenKind.Alias
+    }
+    if character == '&' {
+      return fetchAnchorOrAlias TokenKind.Anchor
+    }
+    if character == '!' {
+      return fetchTag()
+    }
+    if character == '|' && flowLevel == 0 {
+      return fetchBlockScalar true
+    }
+    if character == '>' && flowLevel == 0 {
+      return fetchBlockScalar false
+    }
+    if character == '\'' {
+      return fetchFlowScalar true
+    }
+    if character == '"' {
+      return fetchFlowScalar false
+    }
+    if canStartPlainScalar() {
+      return fetchPlainScalar()
+    }
+    Fail failureHere("{character.showNested()} cannot start anything here")
+  }
+
+  /** A `:` followed by whitespace, or in a flow collection by a bracket, a comma, or right after a quoted key. */
+  fn isValueIndicator(): Bool {
+    if isSeparatorAt(1) {
+      return true
+    }
+    flowLevel > 0 && (isFlowIndicator(ahead(1)) || afterJsonNode)
+  }
+
+  /** How many spaces the current line starts with. */
+  fn lineIndentation(): Int {
+    var at = index - column
+    var count = 0
+    while at < characters.length() && characters[at] == ' ' {
+      at = at + 1
+      count = count + 1
+    }
+    count
+  }
+
+  /** Whether the whitespace right in front of the current position holds a tab. */
+  fn isTabBefore(): Bool {
+    var at = index - 1
+    while at >= 0 && isBlank(characters[at]) {
+      if characters[at] == '\t' {
+        return true
+      }
+      at = at - 1
+    }
+    false
+  }
+
+  fn canStartPlainScalar(): Bool {
+    const character = ahead 0
+    if isBlank(character) || isBreak(character) {
+      return false
+    }
+    if !isIndicator(character) {
+      return true
+    }
+    if character == '-' || character == '?' || character == ':' {
+      const next = ahead 1
+      return !isSeparatorAt(1) && (flowLevel == 0 || !isFlowIndicator(next))
+    }
+    false
+  }
+
+  var fn fetchStreamEnd(): Result<Void, YamlError> {
+    if column != 0 {
+      column = 0
+      line = line + 1
+    }
+    unrollIndent(-1)
+    removeSimpleKey()?
+    simpleKeyAllowed = false
+    tokens.append Token(TokenKind.StreamEnd, mark(), mark())
+    streamEndProduced = true
+    Ok void
+  }
+
+  var fn fetchDirective(): Result<Void, YamlError> {
+    unrollIndent(-1)
+    removeSimpleKey()?
+    simpleKeyAllowed = false
+    const start = mark()
+    skip()
+    const nameStart = index
+    while !isSeparatorAt(0) {
+      skip()
+    }
+    const name = String.from characters.slice(nameStart..index)
+    if name.isEmpty() {
+      return Fail failure(start, "a directive has a name after its `%`")
+    }
+    skipBlanks()
+    var token = Token TokenKind.ReservedDirective, start, mark(), text: name
+    if name == "YAML" {
+      const version = scanVersion()?
+      token = Token TokenKind.VersionDirective, start, mark(), text: version
+    } else if name == "TAG" {
+      const handleStart = mark()
+      if ahead(0) != '!' {
+        return Fail failureHere("a `%TAG` directive names a handle that starts with `!`")
+      }
+      const handle = scanHandleWord()
+      if !handle.endsWith("!") {
+        return Fail failure(handleStart, "the handle of a `%TAG` directive is `!`, `!!` or `!name!`")
+      }
+      if !isBlankAt(0) {
+        return Fail failureHere("a space separates the handle of a `%TAG` directive from its prefix")
+      }
+      skipBlanks()
+      const prefixStart = index
+      while !isSeparatorAt(0) {
+        skip()
+      }
+      const written = String.from characters.slice(prefixStart..index)
+      if written.isEmpty() {
+        return Fail failureHere("a `%TAG` directive has a prefix after its handle")
+      }
+      const prefix = percentDecoded(written, mark())?
+      token = Token TokenKind.TagDirective, start, mark(), text: prefix, handle: handle
+    } else {
+      // A reserved directive: its parameters are read and ignored, as the specification says
+      while !atEnd() && !isBreakAt(0) && ahead(0) != '#' {
+        skip()
+      }
+    }
+    skipBlanks()
+    if ahead(0) == '#' {
+      if !isBlank(characters[index - 1]) {
+        return Fail failureHere("a comment is separated from what stands before it by a space")
+      }
+      recordComment()
+    }
+    if !atEnd() && !isBreakAt(0) {
+      return Fail failureHere("a directive ends at the end of its line")
+    }
+    emit token
+    Ok void
+  }
+
+  /** `1.2` of `%YAML 1.2`. */
+  var fn scanVersion(): Result<String, YamlError> {
+    const start = index
+    while ahead(0).isDigit() {
+      skip()
+    }
+    if index == start || ahead(0) != '.' {
+      return Fail failureHere("a `%YAML` directive names a version such as `1.2`")
+    }
+    skip()
+    const minorStart = index
+    while ahead(0).isDigit() {
+      skip()
+    }
+    if index == minorStart || !isSeparatorAt(0) {
+      return Fail failureHere("a `%YAML` directive names a version such as `1.2`")
+    }
+    const version = String.from characters.slice(start..index)
+    if !version.startsWith("1.") {
+      return Fail failureHere("YAML {version} is not supported: this reader reads YAML 1.2 and 1.1")
+    }
+    Ok version
+  }
+
+  var fn skipBlanks() {
+    while isBlankAt(0) {
+      skip()
+    }
+  }
+
+  var fn fetchDocumentIndicator(kind: TokenKind): Result<Void, YamlError> {
+    unrollIndent(-1)
+    removeSimpleKey()?
+    simpleKeyAllowed = false
+    const start = mark()
+    skip()
+    skip()
+    skip()
+    emit Token(kind, start, mark())
+    if kind == TokenKind.DocumentEnd {
+      skipBlanks()
+      if !atEnd() && !isBreakAt(0) && ahead(0) != '#' {
+        return Fail failureHere("only a comment may follow `...` on its line")
+      }
+    }
+    Ok void
+  }
+
+  var fn fetchFlowCollectionStart(kind: TokenKind): Result<Void, YamlError> {
+    saveSimpleKey()?
+    increaseFlowLevel()
+    simpleKeyAllowed = true
+    const start = mark()
+    skip()
+    emit Token(kind, start, mark())
+    Ok void
+  }
+
+  var fn fetchFlowCollectionEnd(kind: TokenKind): Result<Void, YamlError> {
+    removeSimpleKey()?
+    decreaseFlowLevel()
+    simpleKeyAllowed = false
+    const start = mark()
+    skip()
+    emit Token(kind, start, mark())
+    afterJsonNode = true
+    Ok void
+  }
+
+  var fn fetchFlowEntry(): Result<Void, YamlError> {
+    removeSimpleKey()?
+    simpleKeyAllowed = true
+    const start = mark()
+    skip()
+    emit Token(TokenKind.FlowEntry, start, mark())
+    Ok void
+  }
+
+  var fn fetchBlockEntry(): Result<Void, YamlError> {
+    if flowLevel == 0 {
+      if !simpleKeyAllowed {
+        return Fail failureHere("a `- ` item cannot start here")
+      }
+      rollIndent(mark(), -1, TokenKind.BlockSequenceStart)
+    } else {
+      return Fail failureHere("a `- ` item belongs to a block sequence, not to a flow collection")
+    }
+    removeSimpleKey()?
+    simpleKeyAllowed = true
+    const start = mark()
+    skip()
+    emit Token(TokenKind.BlockEntry, start, mark())
+    Ok void
+  }
+
+  var fn fetchKey(): Result<Void, YamlError> {
+    if flowLevel == 0 {
+      if !simpleKeyAllowed {
+        return Fail failureHere("a `? ` key cannot start here")
+      }
+      rollIndent(mark(), -1, TokenKind.BlockMappingStart)
+    }
+    removeSimpleKey()?
+    simpleKeyAllowed = flowLevel == 0
+    const start = mark()
+    skip()
+    emit Token(TokenKind.Key, start, mark())
+    Ok void
+  }
+
+  var fn fetchValue(): Result<Void, YamlError> {
+    const last = simpleKeys.length() - 1
+    const key = simpleKeys[last]
+    if key.possible {
+      if flowLevel == 0 && key.tabbed && indent < key.mark.column {
+        return Fail failure(key.mark, "a tab is not indentation: YAML indents with spaces")
+      }
+      tokens.insert key.tokenNumber, Token(TokenKind.Key, key.mark, key.mark)
+      rollIndent key.mark, key.tokenNumber, TokenKind.BlockMappingStart
+      simpleKeys[last].possible = false
+      simpleKeyAllowed = false
+    } else {
+      if flowLevel == 0 {
+        if !simpleKeyAllowed {
+          return Fail failureHere("a `:` cannot start here: a mapping's value does not stand on its own")
+        }
+        rollIndent(mark(), -1, TokenKind.BlockMappingStart)
+      }
+      simpleKeyAllowed = flowLevel == 0
+    }
+    const start = mark()
+    skip()
+    emit Token(TokenKind.Value, start, mark())
+    Ok void
+  }
+
+  var fn fetchAnchorOrAlias(kind: TokenKind): Result<Void, YamlError> {
+    saveSimpleKey()?
+    simpleKeyAllowed = false
+    const start = mark()
+    skip()
+    const nameStart = index
+    while !isSeparatorAt(0) && !isFlowIndicator(ahead(0)) {
+      skip()
+    }
+    if index == nameStart {
+      const what = if kind == TokenKind.Alias { "an alias" } else { "an anchor" }
+      return Fail failure(start, "{what} has a name after its indicator")
+    }
+    const name = String.from characters.slice(nameStart..index)
+    emit Token(kind, start, mark(), text: name)
+    Ok void
+  }
+
+  var fn fetchTag(): Result<Void, YamlError> {
+    saveSimpleKey()?
+    simpleKeyAllowed = false
+    const start = mark()
+    var handle = ""
+    var suffix = ""
+    if ahead(1) == '<' {
+      skip()
+      skip()
+      const suffixStart = index
+      while !isSeparatorAt(0) && ahead(0) != '>' {
+        skip()
+      }
+      if ahead(0) != '>' {
+        return Fail failureHere("a verbatim tag `!<...>` ends with `>`")
+      }
+      const written = String.from characters.slice(suffixStart..index)
+      skip()
+      if written.isEmpty() {
+        return Fail failure(start, "a verbatim tag `!<...>` is not empty")
+      }
+      suffix = percentDecoded(written, start)?
+    } else {
+      const word = scanHandleWord()
+      if word.endsWith("!") && word.byteLength() > 1 {
+        handle = word
+        suffix = scanTagSuffix(start)?
+        if suffix.isEmpty() {
+          return Fail failure(start, "the tag `{handle}` has a suffix after its handle")
+        }
+      } else {
+        handle = "!"
+        suffix = word.sliceBytes(1, word.byteLength()) + scanTagSuffix(start)?
+        if suffix.isEmpty() {
+          handle = ""
+          suffix = "!"
+        }
+      }
+    }
+    if !isSeparatorAt(0) && !(flowLevel > 0 && ahead(0) == ',') {
+      return Fail failureHere("a tag is followed by a space")
+    }
+    emit Token(TokenKind.Tag, start, mark(), text: suffix, handle: handle)
+    Ok void
+  }
+
+  /** `!`, `!!`, `!name!` - or `!name` where no second `!` follows, which is the primary handle and a suffix. */
+  var fn scanHandleWord(): String {
+    const start = index
+    skip()
+    while isWordCharacter(ahead(0)) {
+      skip()
+    }
+    if ahead(0) == '!' {
+      skip()
+    }
+    String.from characters.slice(start..index)
+  }
+
+  /** The suffix of a shorthand tag, with its `%XX` escapes decoded. */
+  var fn scanTagSuffix(start: Mark): Result<String, YamlError> {
+    const suffixStart = index
+    while isTagCharacter(ahead(0)) {
+      skip()
+    }
+    percentDecoded String.from(characters.slice(suffixStart..index)), start
+  }
+
+  fn percentDecoded(text: String, at: Mark): Result<String, YamlError> {
+    if !text.contains("%") {
+      return Ok text
+    }
+    var bytes: List<UInt8> = []
+    const written = text.bytes().toList()
+    var position = 0
+    while position < written.length() {
+      const byte = written[position]
+      if byte == 37 {
+        if position + 2 >= written.length() {
+          return Fail failure(at, "`%` in a tag is followed by two hexadecimal digits")
+        }
+        const high = hexValue Int64.from(written[position + 1])
+        const low = hexValue Int64.from(written[position + 2])
+        if high < 0 || low < 0 {
+          return Fail failure(at, "`%` in a tag is followed by two hexadecimal digits")
+        }
+        bytes.append(UInt8.tryFrom(high * 16 + low) ?? 0)
+        position = position + 3
+        continue
+      }
+      bytes.append byte
+      position = position + 1
+    }
+    textOf(bytes).mapError { _ => failure at, "the escapes of a tag are not UTF-8" }
+  }
+
+  // --- Scalars --------------------------------------------------------------------------------------------------------
+
+  var fn fetchBlockScalar(literal: Bool): Result<Void, YamlError> {
+    removeSimpleKey()?
+    simpleKeyAllowed = true
+    scanBlockScalar literal
+  }
+
+  var fn fetchFlowScalar(single: Bool): Result<Void, YamlError> {
+    saveSimpleKey()?
+    simpleKeyAllowed = false
+    scanFlowScalar(single)?
+    afterJsonNode = true
+    Ok void
+  }
+
+  var fn fetchPlainScalar(): Result<Void, YamlError> {
+    saveSimpleKey()?
+    simpleKeyAllowed = false
+    scanPlainScalar()
+  }
+
+  var fn scanBlockScalar(literal: Bool): Result<Void, YamlError> {
+    const start = mark()
+    skip()
+    var chomping = 0
+    var increment = 0
+    if ahead(0) == '+' || ahead(0) == '-' {
+      chomping = if ahead(0) == '+' { 1 } else { -1 }
+      skip()
+      if ahead(0).isDigit() {
+        increment = digitValue ahead(0)
+        if increment == 0 {
+          return Fail failureHere("an indentation indicator is a digit from 1 to 9")
+        }
+        skip()
+      }
+    } else if ahead(0).isDigit() {
+      increment = digitValue ahead(0)
+      if increment == 0 {
+        return Fail failureHere("an indentation indicator is a digit from 1 to 9")
+      }
+      skip()
+      if ahead(0) == '+' || ahead(0) == '-' {
+        chomping = if ahead(0) == '+' { 1 } else { -1 }
+        skip()
+      }
+    }
+    const headerEnd = mark()
+    const hadBlank = isBlankAt 0
+    skipBlanks()
+    if ahead(0) == '#' {
+      if !hadBlank {
+        return Fail failureHere("a comment is separated from what stands before it by a space")
+      }
+      lastContentLine = line
+      recordComment()
+    }
+    if !atEnd() && !isBreakAt(0) {
+      return Fail failureHere("only a comment may follow the header of a block scalar on its line")
+    }
+    if isBreakAt(0) {
+      skipBreak()
+    }
+    var textIndent = -1
+    if increment > 0 {
+      textIndent = if indent >= 0 { indent + increment } else { increment }
+    }
+    var text: List<Char> = []
+    var leadingBreak = false
+    var leadingBlank = false
+    const first = scanBlockScalarBreaks(textIndent, true)?
+    textIndent = first.indent
+    var trailingBreaks = first.breaks
+    var end = headerEnd
+    while column == textIndent && !atEnd() && !isDocumentIndicator() {
+      const trailingBlank = isBlankAt 0
+      if !literal && leadingBreak && !leadingBlank && !trailingBlank {
+        if trailingBreaks == 0 {
+          text.append ' '
+        }
+        leadingBreak = false
+      } else {
+        if leadingBreak {
+          text.append '\n'
+        }
+        leadingBreak = false
+      }
+      for _ in 0..trailingBreaks {
+        text.append '\n'
+      }
+      trailingBreaks = 0
+      leadingBlank = isBlankAt 0
+      while !atEnd() && !isBreakAt(0) {
+        text.append ahead(0)
+        skip()
+      }
+      end = mark()
+      if atEnd() {
+        // The end of the text ends the last line as a line break would
+        leadingBreak = true
+        break
+      }
+      skipBreak()
+      leadingBreak = true
+      const next = scanBlockScalarBreaks(textIndent, false)?
+      trailingBreaks = next.breaks
+    }
+    if chomping != -1 && leadingBreak {
+      text.append '\n'
+    }
+    if chomping == 1 {
+      for _ in 0..trailingBreaks {
+        text.append '\n'
+      }
+    }
+    const style = if literal { ScalarStyle.Literal } else { ScalarStyle.Folded }
+    emit Token(TokenKind.Scalar, start, end, text: String.from(text), style: style)
+    Ok void
+  }
+
+  /**
+   * The empty lines of a block scalar up to its next line of content, and - where no indentation indicator gave it -
+   * the indentation of its content, which its first line of content decides.
+   */
+  var fn scanBlockScalarBreaks(textIndent: Int, isFirst: Bool): Result<BlockBreaks, YamlError> {
+    var breaks = 0
+    var longestEmpty = 0
+    const minimum = indent + 1
+    loop {
+      const lineStart = index
+      while (textIndent < 0 || column < textIndent) && ahead(0) == ' ' {
+        skip()
+      }
+      if ahead(0) == '\t' && (textIndent < 0 || column < textIndent) {
+        if textIndent < 0 {
+          // Spaces, then a tab: the spaces are the indentation, and the tab is the first character of the content
+          if column >= minimum {
+            break
+          }
+          return Fail failureHere("a tab is not indentation: YAML indents with spaces")
+        }
+        if !isRestOfLineBlank() {
+          // A line indented less than the content: the block scalar ends before it
+          break
+        }
+        skipBlanks()
+      }
+      // The last line of the text is an empty line of the scalar too, even without a line break behind it
+      if atEnd() && index > lineStart {
+        if column > longestEmpty {
+          longestEmpty = column
+        }
+        breaks = breaks + 1
+        break
+      }
+      if !isBreakAt(0) {
+        break
+      }
+      if column > longestEmpty {
+        longestEmpty = column
+      }
+      skipBreak()
+      breaks = breaks + 1
+    }
+    if textIndent >= 0 {
+      return Ok BlockBreaks(textIndent, breaks)
+    }
+    const detected = column
+    if atEnd() || isDocumentIndicator() || detected < minimum {
+      const found = if longestEmpty > minimum { longestEmpty } else { minimum }
+      return Ok BlockBreaks(found, breaks)
+    }
+    if isFirst && longestEmpty > detected {
+      return Fail failureHere("an empty line at the start of a block scalar has more spaces than its first line")
+    }
+    Ok BlockBreaks(detected, breaks)
+  }
+
+  var fn scanFlowScalar(single: Bool): Result<Void, YamlError> {
+    const start = mark()
+    const quote = if single { '\'' } else { '"' }
+    skip()
+    var text: List<Char> = []
+    loop {
+      if isDocumentIndicator() {
+        return Fail failureHere("a document marker cannot stand inside of a quoted scalar")
+      }
+      if atEnd() {
+        return Fail failure(start, "this quoted scalar is not closed")
+      }
+      var leadingBlanks = false
+      while !isSeparatorAt(0) {
+        const character = ahead 0
+        if single && character == '\'' && ahead(1) == '\'' {
+          text.append '\''
+          skip()
+          skip()
+          continue
+        }
+        if character == quote {
+          break
+        }
+        if !single && character == '\\' && isBreakAt(1) {
+          skip()
+          skipBreak()
+          leadingBlanks = true
+          break
+        }
+        if !single && character == '\\' {
+          const escaped = scanEscape()?
+          text.append escaped
+          continue
+        }
+        text.append character
+        skip()
+      }
+      if atEnd() {
+        return Fail failure(start, "this quoted scalar is not closed")
+      }
+      if ahead(0) == quote {
+        break
+      }
+      var whitespace: List<Char> = []
+      var leadingBreak = false
+      var trailingBreaks = 0
+      while isBlankAt(0) || isBreakAt(0) {
+        if isBlankAt(0) {
+          if !leadingBlanks {
+            whitespace.append ahead(0)
+          }
+          skip()
+        } else {
+          if !leadingBlanks {
+            whitespace = []
+            leadingBreak = true
+            leadingBlanks = true
+          } else {
+            trailingBreaks = trailingBreaks + 1
+          }
+          skipBreak()
+          if leadingSpaces() <= indent && !isRestOfLineBlank() {
+            return Fail failureHere("a line of a quoted scalar is indented less than the block it stands in")
+          }
+        }
+      }
+      if leadingBlanks {
+        if leadingBreak && trailingBreaks == 0 {
+          text.append ' '
+        }
+        for _ in 0..trailingBreaks {
+          text.append '\n'
+        }
+      } else {
+        text.appendAll whitespace
+      }
+    }
+    skip()
+    const style = if single { ScalarStyle.SingleQuoted } else { ScalarStyle.DoubleQuoted }
+    emit Token(TokenKind.Scalar, start, mark(), text: String.from(text), style: style)
+    Ok void
+  }
+
+  /** Whether nothing but blanks stands between the current position and the end of its line. */
+  fn isRestOfLineBlank(): Bool {
+    var at = index
+    while at < characters.length() && isBlank(characters[at]) {
+      at = at + 1
+    }
+    at >= characters.length() || isBreak(characters[at])
+  }
+
+  /** The number of spaces at the current position, before anything else. */
+  fn leadingSpaces(): Int {
+    var count = 0
+    while ahead(count) == ' ' {
+      count = count + 1
+    }
+    count
+  }
+
+  /** One escape of a double-quoted scalar, from its `\`. */
+  var fn scanEscape(): Result<Char, YamlError> {
+    const start = mark()
+    skip()
+    const code = ahead 0
+    skip()
+    const digits = match code {
+      'x' => 2
+      'u' => 4
+      'U' => 8
+      _ => 0
+    }
+    if digits > 0 {
+      var value = 0
+      for _ in 0..digits {
+        const digit = hexValue Int64.from(ahead(0))
+        if digit < 0 {
+          return Fail failure(start, "`\\{code}` is followed by {digits} hexadecimal digits")
+        }
+        value = value * 16 + digit
+        skip()
+      }
+      match Char.tryFrom(value) {
+        Ok(character) => {
+          return Ok character
+        }
+        Fail(_) => {
+          return Fail failure(start, "`{value}` is not a character")
+        }
+      }
+    }
+    match code {
+      '0' => Ok '\u{0}'
+      'a' => Ok '\u{7}'
+      'b' => Ok '\u{8}'
+      't' => Ok '\t'
+      '\t' => Ok '\t'
+      'n' => Ok '\n'
+      'v' => Ok '\u{b}'
+      'f' => Ok '\u{c}'
+      'r' => Ok '\r'
+      'e' => Ok '\u{1b}'
+      ' ' => Ok ' '
+      '"' => Ok '"'
+      '/' => Ok '/'
+      '\\' => Ok '\\'
+      'N' => Ok '\u{85}'
+      '_' => Ok '\u{a0}'
+      'L' => Ok '\u{2028}'
+      'P' => Ok '\u{2029}'
+      other => Fail failure(start, "`\\{other}` is not an escape of YAML")
+    }
+  }
+
+  var fn scanPlainScalar(): Result<Void, YamlError> {
+    const start = mark()
+    var end = mark()
+    var text: List<Char> = []
+    var whitespace: List<Char> = []
+    var leadingBreak = false
+    var trailingBreaks = 0
+    var leadingBlanks = false
+    const minimumIndent = indent + 1
+    loop {
+      if isDocumentIndicator() {
+        break
+      }
+      if ahead(0) == '#' {
+        break
+      }
+      while !isSeparatorAt(0) {
+        const character = ahead 0
+        if character == ':' && (isSeparatorAt(1) || (flowLevel > 0 && isFlowIndicator(ahead(1)))) {
+          break
+        }
+        if flowLevel > 0 && isFlowIndicator(character) {
+          break
+        }
+        if leadingBlanks {
+          if leadingBreak && trailingBreaks == 0 {
+            text.append ' '
+          }
+          for _ in 0..trailingBreaks {
+            text.append '\n'
+          }
+          leadingBreak = false
+          trailingBreaks = 0
+          leadingBlanks = false
+        } else if !whitespace.isEmpty() {
+          text.appendAll whitespace
+          whitespace = []
+        }
+        text.append character
+        skip()
+        end = mark()
+      }
+      if !(isBlankAt(0) || isBreakAt(0)) {
+        break
+      }
+      while isBlankAt(0) || isBreakAt(0) {
+        if isBlankAt(0) {
+          if leadingBlanks && column < minimumIndent && ahead(0) == '\t' && flowLevel == 0 {
+            // A tab where the continuation line's indentation belongs: fine on an empty line only
+            var probe = index
+            while probe < characters.length() && isBlank(characters[probe]) {
+              probe = probe + 1
+            }
+            if probe < characters.length() && !isBreak(characters[probe]) {
+              return Fail failureHere("a tab is not indentation: YAML indents with spaces")
+            }
+          }
+          if !leadingBlanks {
+            whitespace.append ahead(0)
+          }
+          skip()
+        } else {
+          if !leadingBlanks {
+            whitespace = []
+            leadingBreak = true
+            leadingBlanks = true
+          } else {
+            trailingBreaks = trailingBreaks + 1
+          }
+          skipBreak()
+          if flowLevel > 0 && leadingSpaces() <= indent && !isRestOfLineBlank() && !isDocumentIndicator() {
+            return Fail failureHere("a line inside of a flow collection is indented less than the block it stands in")
+          }
+        }
+      }
+      if flowLevel == 0 && column < minimumIndent {
+        break
+      }
+    }
+    emit Token(TokenKind.Scalar, start, end, text: String.from(text), style: ScalarStyle.Plain)
+    if leadingBlanks {
+      simpleKeyAllowed = true
+    }
+    Ok void
+  }
+}
+
+const byteOrderMark = '\u{feff}'
+
+fn isBlank(character: Char): Bool {
+  character == ' ' || character == '\t'
+}
+
+fn isBreak(character: Char): Bool {
+  character == '\n' || character == '\r'
+}
+
+fn isFlowIndicator(character: Char): Bool {
+  character == ',' || character == '[' || character == ']' || character == '{' || character == '}'
+}
+
+/** The characters that cannot start a plain scalar, or only followed by something that is no space. */
+fn isIndicator(character: Char): Bool {
+  match character {
+    '-' | '?' | ':' | ',' | '[' | ']' | '{' | '}' | '#' | '&' | '*' | '!' | '|' | '>' | '\'' | '"' | '%' | '@' | '`' => true
+    _ => false
+  }
+}
+
+/** A letter, a digit or `-` of ASCII: what a tag handle is made of. */
+fn isWordCharacter(character: Char): Bool {
+  (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') || character.isDigit()
+    || character == '-'
+}
+
+/** A character of a shorthand tag's suffix: a URI character, without `!` and the flow indicators. */
+fn isTagCharacter(character: Char): Bool {
+  if isWordCharacter(character) {
+    return true
+  }
+  match character {
+    '%' | '#' | ';' | '/' | '?' | ':' | '@' | '&' | '=' | '+' | '$' | '_' | '.' | '~' | '*' | '\'' | '(' | ')' => true
+    _ => false
+  }
+}
+
+fn digitValue(character: Char): Int {
+  Int64.from(character) - Int64.from('0')
+}
+
+/** The value of one hexadecimal digit, or -1 for a byte that is none. */
+fn hexValue(code: Int): Int {
+  if code >= 48 && code <= 57 {
+    return code - 48
+  }
+  if code >= 97 && code <= 102 {
+    return code - 87
+  }
+  if code >= 65 && code <= 70 {
+    return code - 55
+  }
+  -1
+}

@@ -1,0 +1,364 @@
+/**
+ * From the tree as it was written to what it means: aliases replaced by the nodes their anchors stand on, counted
+ * against a limit; merge keys applied; and a document without a type read into an `EncodedValue` by a schema.
+ */
+
+use YamlNode, YamlContent, YamlEntry, YamlDocument, ScalarStyle, CollectionStyle from "./node"
+use YamlError from "./error"
+use YamlSchema, ResolvedScalar, resolvedPlain, boolOf, wholeOf, floatOf, isNullText, base64Decoded from "./schema"
+use coreTagPrefix from "./parser"
+use EncodedField from "std/encoding"
+
+/**
+ * A local tag and the type it stands for. A typed decode checks a node's tag against the type it reads, and a typed
+ * encode writes the tag; `caseName` makes the tag choose a case of a type with cases (`!circle` for `Shape.Circle`).
+ *
+ * `typeName` is the qualified name a type announces to a format: the package, the module path inside it, and the
+ * type - `"app/geometry/Point"`.
+ *
+ * # Examples
+ *
+ *     const yaml = Yaml(tags: [YamlTag("!point", "app/Point")])
+ */
+public type YamlTag {
+  /** The tag as written, `!point`. */
+  tag: String
+  typeName: String
+  caseName: String? = None
+}
+
+/** The tag of `tags` that stands for a type, and a case of it. */
+public fn tagFor(tags: List<YamlTag>, typeName: String, caseName: String?): YamlTag? {
+  tags.find { _.typeName == typeName && _.caseName == caseName }
+}
+
+/** The tags of the core schema, as `tag:yaml.org,2002:` names them. */
+public fn coreTag(name: String): String {
+  coreTagPrefix + name
+}
+
+/** Whether a tag says nothing about the node: none, or the non-specific `!`. */
+public fn isUntagged(tag: String?): Bool {
+  tag.isNone() || tag == Some("!")
+}
+
+/** Whether a tag is a local one, `!name`, as opposed to a tag of the core schema or a global one. */
+public fn isLocalTag(tag: String): Bool {
+  tag.startsWith("!") && tag != "!"
+}
+
+// --- Aliases and merge keys -----------------------------------------------------------------------------------------
+
+/**
+ * The root of a document with every alias replaced by the node its anchor stands on, and every merge key `<<`
+ * applied. Every node an alias adds counts against `limit`, so a document of nested aliases fails instead of filling
+ * the memory.
+ */
+public fn expanded(document: YamlDocument, limit: Int, merge: Bool): Result<YamlNode, YamlError> {
+  var expander = Expander limit, merge
+  expander.expand document.root
+}
+
+type Anchored {
+  node: YamlNode
+  size: Int
+}
+
+type Expander {
+  limit: Int
+  merge: Bool
+  var anchors: Map<String, Anchored> = [:]
+  var produced: Int = 0
+
+  var fn expand(node: YamlNode): Result<YamlNode, YamlError> {
+    var result = node
+    match node.content {
+      .Alias(name) => {
+        const anchored = match anchors.get(name) {
+          Some(found) => found
+          None => {
+            return Fail YamlError.content(node.line, "the alias `*{name}` stands inside of the node its anchor names")
+          }
+        }
+        produced = produced + anchored.size
+        if produced > limit {
+          const message = "the aliases of this document expand to more than {limit} nodes: raise `aliasLimit` for a document that is trusted"
+          return Fail YamlError.content(node.line, message)
+        }
+        return Ok anchored.node
+      }
+      .Scalar(_, _) => {}
+      .Sequence(items, style) => {
+        var expandedItems: List<YamlNode> = []
+        for item in items {
+          expandedItems.append(expand(item)?)
+        }
+        result = node.copy content: YamlContent.Sequence(expandedItems, style)
+      }
+      .Mapping(entries, style) => {
+        var expandedEntries: List<YamlEntry> = []
+        for entry in entries {
+          const key = expand(entry.key)?
+          const value = expand(entry.value)?
+          expandedEntries.append YamlEntry(key, value)
+        }
+        if merge {
+          expandedEntries = merged(expandedEntries)?
+        }
+        result = node.copy content: YamlContent.Mapping(expandedEntries, style)
+      }
+    }
+    if const Some(anchor) = node.anchor {
+      anchors[anchor] = Anchored result, sizeOf(result)
+    }
+    Ok result
+  }
+}
+
+/** How many nodes a tree holds. */
+fn sizeOf(node: YamlNode): Int {
+  match node.content {
+    .Sequence(items, _) => {
+      var size = 1
+      for item in items {
+        size = size + sizeOf(item)
+      }
+      size
+    }
+    .Mapping(entries, _) => {
+      var size = 1
+      for entry in entries {
+        size = size + sizeOf(entry.key) + sizeOf(entry.value)
+      }
+      size
+    }
+    _ => 1
+  }
+}
+
+/** Whether a key is the merge key: a plain `<<` without a tag, or one tagged `!!merge`. */
+public fn isMergeKey(key: YamlNode): Bool {
+  match key.content {
+    .Scalar(text, style) => {
+      if key.tag == Some(coreTag("merge")) {
+        return true
+      }
+      text == "<<" && style == ScalarStyle.Plain && key.tag.isNone()
+    }
+    _ => false
+  }
+}
+
+/**
+ * The entries of a mapping with its merge keys applied: every entry of the merged mappings whose key the mapping does
+ * not have itself takes the place of the `<<`, and of several merged mappings the first one to name a key wins.
+ */
+fn merged(entries: List<YamlEntry>): Result<List<YamlEntry>, YamlError> {
+  if !entries.any({ isMergeKey _.key }) {
+    return Ok entries
+  }
+  var seen: Set<String> = []
+  for entry in entries {
+    if !isMergeKey(entry.key) {
+      if const Some(text) = entry.key.text() {
+        seen.insert text
+      }
+    }
+  }
+  var result: List<YamlEntry> = []
+  for entry in entries {
+    if !isMergeKey(entry.key) {
+      result.append entry
+      continue
+    }
+    const sources = match entry.value.content {
+      .Mapping(_, _) => [entry.value]
+      .Sequence(items, _) => items
+      _ => {
+        return Fail YamlError.content(entry.value.line, "the merge key `<<` takes a mapping or a list of mappings")
+      }
+    }
+    for source in sources {
+      const sourceEntries = match source.content {
+        .Mapping(found, _) => found
+        _ => {
+          return Fail YamlError.content(source.line, "the merge key `<<` takes a mapping or a list of mappings")
+        }
+      }
+      for merging in sourceEntries {
+        match merging.key.text() {
+          Some(text) => {
+            if !seen.contains(text) {
+              seen.insert text
+              result.append merging
+            }
+          }
+          None => result.append merging
+        }
+      }
+    }
+  }
+  Ok result
+}
+
+// --- A document without a type ----------------------------------------------------------------------------------------
+
+/**
+ * An expanded node as an `EncodedValue`, its plain scalars resolved by `schema`. A mapping is a `Mapping`, a mapping
+ * with a local tag that `tags` knows a `Record` of that type, `!!set` a `Sequence` of its keys, and `!!omap` and
+ * `!!pairs` a `Mapping` in their order.
+ */
+public fn valueOf(node: YamlNode, schema: YamlSchema, tags: List<YamlTag>): Result<EncodedValue, YamlError> {
+  const known = knownLocalTag(node, tags)?
+  match node.content {
+    .Alias(name) => Fail YamlError.content(node.line, "the alias `*{name}` was not expanded")
+    .Scalar(text, style) => scalarValue node, text, style, schema, known
+    .Sequence(items, _) => {
+      if node.tag == Some(coreTag("omap")) || node.tag == Some(coreTag("pairs")) {
+        var entries: List<EncodedValue> = []
+        for item in items {
+          for entry in item.entries() {
+            entries.append(valueOf(entry.key, schema, tags)?)
+            entries.append(valueOf(entry.value, schema, tags)?)
+          }
+        }
+        return Ok EncodedValue.Mapping(entries)
+      }
+      checkTag(node, known, ["seq"])?
+      var values: List<EncodedValue> = []
+      for item in items {
+        values.append(valueOf(item, schema, tags)?)
+      }
+      Ok EncodedValue.Sequence(values)
+    }
+    .Mapping(entries, _) => {
+      if node.tag == Some(coreTag("set")) {
+        var keys: List<EncodedValue> = []
+        for entry in entries {
+          keys.append(valueOf(entry.key, schema, tags)?)
+        }
+        return Ok EncodedValue.Sequence(keys)
+      }
+      if const Some(tag) = known {
+        var fields: List<EncodedField> = []
+        for entry in entries {
+          const name = entry.key.text() ?? ""
+          fields.append EncodedField(name, valueOf(entry.value, schema, tags)?)
+        }
+        return Ok EncodedValue.Record(tag.typeName, fields)
+      }
+      checkTag(node, known, ["map"])?
+      var flat: List<EncodedValue> = []
+      for entry in entries {
+        flat.append(valueOf(entry.key, schema, tags)?)
+        flat.append(valueOf(entry.value, schema, tags)?)
+      }
+      Ok EncodedValue.Mapping(flat)
+    }
+  }
+}
+
+/** The mapping entry of a node's local tag, and an error for a local tag nobody named. */
+fn knownLocalTag(node: YamlNode, tags: List<YamlTag>): Result<YamlTag?, YamlError> {
+  match node.tag {
+    Some(tag) => {
+      if !isLocalTag(tag) {
+        return Ok None
+      }
+      match tags.find({ _.tag == tag }) {
+        Some(found) => Ok Some(found)
+        None => Fail YamlError.content(node.line, "the tag `{tag}` is not known: `Yaml(tags: ...)` names the type of a local tag")
+      }
+    }
+    None => Ok None
+  }
+}
+
+/** A collection's tag has to be one of the core schema's for its kind, a known local one, or none. */
+fn checkTag(node: YamlNode, known: YamlTag?, allowed: List<String>): Result<Void, YamlError> {
+  if isUntagged(node.tag) || known.isSome() {
+    return Ok void
+  }
+  const tag = node.tag ?? ""
+  for name in allowed {
+    if tag == coreTag(name) {
+      return Ok void
+    }
+  }
+  Fail YamlError.content(node.line, "the tag `{tag}` does not fit a {kindOf(node)}")
+}
+
+/** What a node is, as a message names it. */
+public fn kindOf(node: YamlNode): String {
+  match node.content {
+    .Scalar(_, _) => "scalar"
+    .Sequence(_, _) => "sequence"
+    .Mapping(_, _) => "mapping"
+    .Alias(_) => "alias"
+  }
+}
+
+fn scalarValue(
+  node: YamlNode,
+  text: String,
+  style: ScalarStyle,
+  schema: YamlSchema,
+  known: YamlTag?,
+): Result<EncodedValue, YamlError> {
+  if isUntagged(node.tag) || known.isSome() {
+    if style != ScalarStyle.Plain || node.tag == Some("!") {
+      return Ok EncodedValue.String(text)
+    }
+    return match resolvedPlain(text, schema) {
+      Some(resolved) => Ok encodedOf(resolved)
+      None => Fail YamlError.content(node.line, "`{text}` is no value of the JSON schema: a text is written in quotes")
+    }
+  }
+  const tag = node.tag ?? ""
+  const typed = if schema == YamlSchema.Yaml11 { YamlSchema.Yaml11 } else { YamlSchema.Core }
+  if tag == coreTag("str") || tag == coreTag("timestamp") || tag == coreTag("value") || tag == coreTag("merge") {
+    return Ok EncodedValue.String(text)
+  }
+  if tag == coreTag("null") {
+    if isNullText(text, YamlSchema.Core) {
+      return Ok EncodedValue.Nothing
+    }
+    return Fail YamlError.content(node.line, "`{text}` is not null")
+  }
+  if tag == coreTag("bool") {
+    return match boolOf(text, typed) {
+      Some(truth) => Ok EncodedValue.Bool(truth)
+      None => Fail YamlError.content(node.line, "`{text}` is not a truth value")
+    }
+  }
+  if tag == coreTag("int") {
+    return match wholeOf(text, typed) {
+      Some(whole) => Ok encodedOf(whole)
+      None => Fail YamlError.content(node.line, "`{text}` is not a whole number")
+    }
+  }
+  if tag == coreTag("float") {
+    return match floatOf(text, typed) {
+      Some(number) => Ok EncodedValue.Float(number)
+      None => Fail YamlError.content(node.line, "`{text}` is not a number")
+    }
+  }
+  if tag == coreTag("binary") {
+    return match base64Decoded(text) {
+      Some(bytes) => Ok EncodedValue.Bytes(bytes)
+      None => Fail YamlError.content(node.line, "the `!!binary` scalar is not base64")
+    }
+  }
+  Fail YamlError.content(node.line, "the tag `{tag}` does not fit a scalar")
+}
+
+fn encodedOf(resolved: ResolvedScalar): EncodedValue {
+  match resolved {
+    .Null => EncodedValue.Nothing
+    .Bool(value) => EncodedValue.Bool value
+    .Int(value) => EncodedValue.Int value
+    .Unsigned(value) => EncodedValue.Unsigned value
+    .Float(value) => EncodedValue.Float value
+    .String(value) => EncodedValue.String value
+  }
+}

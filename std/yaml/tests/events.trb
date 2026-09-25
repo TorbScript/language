@@ -1,0 +1,76 @@
+/**
+ * A stream of documents as the event lines of the YAML test suite (`+STR`, `+DOC ---`, `=VAL :text`, ...): what a
+ * parser has to produce for each case, so the tree is compared with the suite's `test.event` line by line.
+ */
+
+use YamlDocument, YamlNode, ScalarStyle, CollectionStyle from "../src/node"
+
+/** The events of a whole stream, one per line, with a line break after the last. */
+public fn eventsOf(documents: List<YamlDocument>): String {
+  var lines: List<String> = ["+STR"]
+  for document in documents {
+    lines.append(if document.explicitStart { "+DOC ---" } else { "+DOC" })
+    appendNode lines, document.root
+    lines.append(if document.explicitEnd { "-DOC ..." } else { "-DOC" })
+  }
+  lines.append "-STR"
+  lines.joined(separator: "\n") + "\n"
+}
+
+fn appendNode(var lines: List<String>, node: YamlNode) {
+  var properties = ""
+  if const Some(anchor) = node.anchor {
+    properties = properties + " &" + anchor
+  }
+  if const Some(tag) = node.tag {
+    properties = properties + " <" + tag + ">"
+  }
+  match node.content {
+    .Scalar(text, style) => lines.append("=VAL" + properties + " " + indicatorOf(style) + escaped(text))
+    .Alias(name) => lines.append("=ALI *" + name)
+    .Sequence(items, style) => {
+      const flow = if style == CollectionStyle.Flow { " []" } else { "" }
+      lines.append("+SEQ" + flow + properties)
+      for item in items {
+        appendNode lines, item
+      }
+      lines.append "-SEQ"
+    }
+    .Mapping(entries, style) => {
+      const flow = if style == CollectionStyle.Flow { " \{\}" } else { "" }
+      lines.append("+MAP" + flow + properties)
+      for entry in entries {
+        appendNode lines, entry.key
+        appendNode lines, entry.value
+      }
+      lines.append "-MAP"
+    }
+  }
+}
+
+fn indicatorOf(style: ScalarStyle): String {
+  match style {
+    .Plain => ":"
+    .SingleQuoted => "'"
+    .DoubleQuoted => "\""
+    .Literal => "|"
+    .Folded => ">"
+  }
+}
+
+fn escaped(text: String): String {
+  var pieces: List<String> = []
+  for character in text.chars() {
+    const piece = match character {
+      '\\' => "\\\\"
+      '\n' => "\\n"
+      '\t' => "\\t"
+      '\r' => "\\r"
+      '\u{8}' => "\\b"
+      '\0' => "\\0"
+      other => other.show()
+    }
+    pieces.append piece
+  }
+  pieces.joined separator: ""
+}

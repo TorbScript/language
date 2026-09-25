@@ -1,0 +1,201 @@
+/**
+ * The tree of a YAML document: every node with its tag, its anchor, its style, its comments and the position it starts
+ * at. It is what `Yaml().parse` answers and what the writer writes back, so a tool can change one value of a
+ * configuration file and keep everything else as it was written.
+ *
+ * A scalar keeps its text: `yes` is the text `"yes"` until a schema or a target type says what it is.
+ */
+
+/** How a scalar was written. Only a plain scalar is resolved by a schema; every other style is a text. */
+public type ScalarStyle {
+  /** `value`, without quotes. */
+  case Plain
+  /** `'value'`: no escapes, `''` is one quote. */
+  case SingleQuoted
+  /** `"value"`, with escapes. */
+  case DoubleQuoted
+  /** `|`: a block whose line breaks are kept. */
+  case Literal
+  /** `>`: a block whose line breaks are folded into spaces. */
+  case Folded
+}
+
+/** How a sequence or a mapping was written: indented lines, or brackets and braces. */
+public type CollectionStyle {
+  /** One item or one entry per line, nested by indentation. */
+  case Block
+  /** `[a, b]` and `{a: 1}`. */
+  case Flow
+}
+
+/** The comments that belong to a node. Each is the text after its `#`, as written. */
+public type YamlComments {
+  /** The comment lines directly above the node. */
+  leading: List<String> = []
+  /** The comment at the end of the node's last line. */
+  trailing: String? = None
+
+  /** Whether there is no comment at all. */
+  fn isEmpty(): Bool {
+    leading.isEmpty() && trailing.isNone()
+  }
+}
+
+/** What a node holds. */
+public type YamlContent {
+  /** A scalar: its text after quotes, escapes and folding are applied, and how it was written. */
+  case Scalar(text: String, style: ScalarStyle)
+  /** A sequence of nodes. */
+  case Sequence(items: List<YamlNode>, style: CollectionStyle)
+  /** A mapping, with its entries in the order they were written. */
+  case Mapping(entries: List<YamlEntry>, style: CollectionStyle)
+  /** `*name`: the node the anchor `&name` stands on, once more. */
+  case Alias(name: String)
+}
+
+/** One `key: value` of a mapping. A key is a node like any other and may be a collection. */
+public type YamlEntry {
+  key: YamlNode
+  value: YamlNode
+}
+
+/**
+ * One node of a YAML document, as it was written.
+ *
+ * `tag` is the resolved tag: `tag:yaml.org,2002:str` for `!!str`, `!Point` for a local one, `!` for the non-specific
+ * tag of a quoted scalar written `! 'text'`, and `None` where the node has none. `line` and `column` are where the node
+ * starts, counted from 1, and 0 for a node a program built.
+ *
+ * # Examples
+ *
+ *     const document = Yaml().parse("name: Ada\nlanguages: [en, de]\n")?
+ *     print document.root.at("name")?.text()
+ */
+public type YamlNode {
+  content: YamlContent
+  tag: String? = None
+  anchor: String? = None
+  comments: YamlComments = YamlComments()
+  line: Int = 0
+  column: Int = 0
+
+  /** A scalar node, plain unless a style is given. */
+  static fn scalar(text: String, style: ScalarStyle = ScalarStyle.Plain): YamlNode {
+    YamlNode YamlContent.Scalar(text, style)
+  }
+
+  /** A sequence node, in block style unless a style is given. */
+  static fn sequence(items: List<YamlNode>, style: CollectionStyle = CollectionStyle.Block): YamlNode {
+    YamlNode YamlContent.Sequence(items, style)
+  }
+
+  /** A mapping node, in block style unless a style is given. */
+  static fn mapping(entries: List<YamlEntry>, style: CollectionStyle = CollectionStyle.Block): YamlNode {
+    YamlNode YamlContent.Mapping(entries, style)
+  }
+
+  /** `*name`. */
+  static fn alias(name: String): YamlNode {
+    YamlNode YamlContent.Alias(name)
+  }
+
+  /** The empty plain scalar, which every schema but the failsafe one reads as null. */
+  static fn empty(): YamlNode {
+    YamlNode.scalar ""
+  }
+
+  /** The text of a scalar, or `None` for a collection and an alias. */
+  fn text(): String? {
+    match content {
+      .Scalar(text, _) => Some text
+      _ => None
+    }
+  }
+
+  /** The items of a sequence; empty for everything else. */
+  fn items(): List<YamlNode> {
+    match content {
+      .Sequence(items, _) => items
+      _ => []
+    }
+  }
+
+  /** The entries of a mapping; empty for everything else. */
+  fn entries(): List<YamlEntry> {
+    match content {
+      .Mapping(entries, _) => entries
+      _ => []
+    }
+  }
+
+  /** Whether the node is a scalar. */
+  fn isScalar(): Bool {
+    match content {
+      .Scalar(_, _) => true
+      _ => false
+    }
+  }
+
+  /** The value of the first entry whose key is a scalar with the text `key`. */
+  fn at(key: String): YamlNode? {
+    for entry in entries() {
+      if entry.key.text() == Some(key) {
+        return Some entry.value
+      }
+    }
+    None
+  }
+
+  /**
+   * The node with the value of `key` replaced by `value`, or with a new entry at the end where there is none. The
+   * entry keeps its key, its comments and its position among the others, and `value` keeps the comments of the value it
+   * replaces where it has none of its own.
+   */
+  fn updated(key: String, value: YamlNode): YamlNode {
+    const style = match content {
+      .Mapping(_, style) => style
+      _ => CollectionStyle.Block
+    }
+    var entries = entries()
+    for index in 0..entries.length() {
+      if entries[index].key.text() == Some(key) {
+        const old = entries[index].value
+        const kept = if value.comments.isEmpty() { value.copy comments: old.comments } else { value }
+        entries[index] = YamlEntry entries[index].key, kept
+        return copy content: YamlContent.Mapping(entries, style)
+      }
+    }
+    entries.append YamlEntry(YamlNode.scalar(key), value)
+    copy content: YamlContent.Mapping(entries, style)
+  }
+}
+
+/** A `%TAG` directive: the handle `!e!` stands for the prefix `tag:example.com,2000:`. */
+public type YamlTagDirective {
+  handle: String
+  prefix: String
+}
+
+/**
+ * One document of a YAML stream: its root node, its directives, whether it was opened with `---` and closed with `...`,
+ * and the comments that stand before and after the root.
+ */
+public type YamlDocument {
+  root: YamlNode
+  /** `"1.1"` or `"1.2"` from a `%YAML` directive, and `None` for a document without one. */
+  version: String? = None
+  tagDirectives: List<YamlTagDirective> = []
+  /** Whether the document starts with `---`. */
+  explicitStart: Bool = false
+  /** Whether the document ends with `...`. */
+  explicitEnd: Bool = false
+  /** The comment lines before the document's first line of content. */
+  leadingComments: List<String> = []
+  /** The comment lines after the root node. */
+  endComments: List<String> = []
+
+  /** Whether YAML 1.1's rules read this document: it says `%YAML 1.1`. */
+  fn isVersion11(): Bool {
+    version == Some("1.1")
+  }
+}
