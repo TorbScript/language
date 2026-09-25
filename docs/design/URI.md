@@ -62,9 +62,10 @@ from `std/ip` rather than from `std/network` for the same reason (section 8a).
 
 ## 1. What the probes proved
 
-`examples/uri-probe` is a package in the workspace: `Uri`, `Authority`, `UriError`, `Urn`, the `Path` bridge and the
-driver layer of section 11, with a hand-written RFC 3986 parser. It is type checked by the self-hosted compiler and
-**built and run as a native binary**; every table in this document is copied from that run. `examples/uri-scratch` and
+`examples/uri-probe` was a package in the workspace: `Uri`, `Authority`, `UriError`, `Urn`, the `Path` bridge and the
+driver layer of section 11, with a hand-written RFC 3986 parser. It was type checked by the self-hosted compiler and
+**built and run as a native binary**; every table in this document is copied from that run. `std/uri` superseded it
+and it is deleted; the repository history keeps it, and the driver layer of section 11 is rebuilt from the code below. `examples/uri-scratch` and
 `examples/uri-shared-scratch` held the probes that do not check or do not build, and are deleted.
 
 ```console
