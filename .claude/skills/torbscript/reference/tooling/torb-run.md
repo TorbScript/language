@@ -1,6 +1,6 @@
 ---
 title: torb run
-summary: torb run builds a file or a project into a cache and executes it, passing the rest of the command line, the three streams and the exit code through.
+summary: torb run runs a file or a project in the bytecode VM, or builds and runs it natively with --native, passing the rest of the command line, the three streams and the exit code through.
 kind: tooling
 status: stable
 order: 40
@@ -19,29 +19,31 @@ source:
   - runtime/memory.c
 ---
 
-`run` is [`build`](torb-build.md) plus starting what came out. There is no second implementation of the language behind
-it: what runs is the binary `torb build` would have written, so a program cannot behave one way under `run` and another
+`run` runs a program at once, in the bytecode VM inside `torb`, which needs no C compiler. `--native` is
+[`build`](torb-build.md) plus starting what came out. The two are one language: the conformance suite holds every
+program to the same output, exit code and panics in both, so a program cannot behave one way under `run` and another
 way when it is shipped.
 
 ## Synopsis
 
 ```text
-torb run [--profile dev|release] <path> [arguments]   Build a file, or a project's build { input }, and run it
-    --profile dev|release   In front of the path: how hard the C compiler optimizes (default: dev)
+torb run [--native] [--profile dev|release] <path> [arguments]   Run a file, or a project's build { input }
+    --native                In front of the path: build it natively and run the binary
+    --profile dev|release   In front of the path: build it natively, this hard does the C compiler optimize
     --release               The same as --profile release
-    --vm                    In front of the path: run it in the bytecode VM instead of building it
+    --vm                    The default, accepted: run it in the bytecode VM
 ```
 
 ## What it does
 
 ### The entry point
 
-Given a file, `run` builds that file. Given a directory, it builds the `build { input }` of that directory's
+Given a file, `run` runs that file. Given a directory, it runs the `build { input }` of that directory's
 [`project.trb`](project-trb.md) - so `torb run my-project` and `torb run my-project/src/main.trb` reach the same file
 when the manifest says `input "src/main.trb"`. A file that nothing imports may hold top-level code and needs no
 `fn main`, which is what makes a single script runnable at all.
 
-### The cache
+### The cache of `--native`
 
 The binary goes into `build/run/<profile>/<key>/` under the workspace root, and `<key>` is a hash of **every file the
 front end read**, with its path and its text, plus the entry that was named and **the toolchain that builds it**: the
@@ -74,12 +76,13 @@ user is typing into, and a gate that compares what a program wrote compares the 
 A build that **fails** says so, on standard error, in the form [`check`](torb-check.md) uses, and `run` leaves with
 `1` without starting anything.
 
-### `--vm`: the bytecode VM
+### The VM, the default
 
-`torb run --vm <path>` builds nothing: the program is checked and lowered to the same typed IR `build` compiles, encoded
+`torb run <path>` builds nothing: the program is checked and lowered to the same typed IR `build` compiles, encoded
 as bytecode, and run by the VM inside `torb` itself, on the same runtime a native binary links. Its output, its exit
-code and its panics are the native binary's, which the conformance suite checks for every program it lists
-(`tools/conformance.sh --vm`). Its tasks run on the workers of `torb`'s own pool - as many as `TORB_WORKERS` says, the
+code and its panics are the native binary's, which the conformance suite checks for every program
+(`tools/conformance.sh --vm`). A program that runs long wants `--native`: the VM interprets, and a loop of arithmetic is
+a few dozen times slower than the binary. Its tasks run on the workers of `torb`'s own pool - as many as `TORB_WORKERS` says, the
 core count by default - under the rules of a native binary's. A program that uses what the VM does not run yet is
 refused before anything runs, with a message that names what is missing. Two things answer differently because the
 program runs inside `torb`: `Process.executablePath()` is the path of the entry file, which is what executes, and a
@@ -87,18 +90,19 @@ recursion reaches the `stack overflow` panic at a depth of its own.
 
 ### The memory limit
 
-A program built for `run` - the `dev` profile - **stops at a memory limit**: the smaller of 8 GiB and half the physical
-memory, which the runtime hands to the operating system before the program starts (a job object on Windows,
-`RLIMIT_DATA` on Linux, its own count of what it allocates where the system has nothing that fits). A program that
+A program `run` runs - in the VM, or built with the `dev` profile - **stops at a memory limit**: the smaller of 8 GiB
+and half the physical memory. A native binary hands it to the operating system before the program starts (a job object
+on Windows, `RLIMIT_DATA` on Linux, its own count of what it allocates where the system has nothing that fits); in the
+VM the kernel counts what the program allocates. A program that
 allocates without end ends with `panic: out of memory: the limit of 8 GiB was reached (...)` and exit code `102`
 instead of paging the machine to a standstill. A child process the program starts is not held to its limit.
 
 `TORB_MEMORY_LIMIT` sets another one - a number of bytes, or one with `K`, `M`, `G` or `T` (`512M`, `16G`) - and `0` or
 `none` sets none; a value that is neither makes the program refuse to start, with exit code `2`. With `--release` there
-is no limit unless the variable asks for one. Under `--vm` the program runs inside `torb`, and the limit - the same
+is no limit unless the variable asks for one. In the VM the program runs inside `torb`, and the limit - the same
 default, or the variable - is the program's alone: the VM's kernel counts what the program allocates and ends it with
-the same message and exit code, and `torb` compiles it unlimited by the variable. `TORB_MEMORY_LIMIT=64M torb run --vm
-big.trb` gives the program 64 MiB.
+the same message and exit code, and `torb` checks and lowers it unlimited by the variable. `TORB_MEMORY_LIMIT=64M
+torb run big.trb` gives the program 64 MiB.
 
 ### Exit codes
 
@@ -115,10 +119,11 @@ $ torb run tools/report.trb --since 2026-09-01
 14 commits, 3 authors
 ```
 
-The second run of an unchanged program starts immediately, because the key of its sources did not change:
+Built natively, the second run of an unchanged program starts immediately, because the key of its sources did not
+change:
 
 ```console
-$ torb run examples/tour/src/01-bindings-and-values.trb
+$ torb run --native examples/tour/src/01-bindings-and-values.trb
 1
 Hello, World! 1 + 1 is 2
 list: [1, 2, 3], first: 1, a: 1

@@ -57,14 +57,14 @@ fn printUsage() {
   printError "                         --emit-c: write the C and stop, which needs no C compiler"
   printError "                         --output <file>: where the binary goes (the C is written next to it)"
   printError "                         --target <os>-<arch>: what OperatingSystem.current answers (default: this machine)"
-  printError "  torb run <path> [...]  Build a file or a project into build/run/ and execute it"
+  printError "  torb run <path> [...]  Run a file or a project in the bytecode VM, which needs no C compiler"
   printError "                         everything behind the path is the program's own Process.arguments()"
-  printError "                         --profile dev|release, --release: in front of the path (default: dev)"
-  printError "                         --vm: run it in the bytecode VM instead of building it"
-  printError "  torb test [path]...    Build every *.test.trb below the paths into one binary and run it"
-  printError "                         --profile dev|release, --release (default: dev)"
-  printError "                         --jobs N: accepted and ignored - one binary is one process"
-  printError "                         --vm: run them in the bytecode VM instead of building a binary"
+  printError "                         --native: in front of the path, build it into build/run/ and run the binary"
+  printError "                         --profile dev|release, --release: build it natively with that profile"
+  printError "  torb test [path]...    Run every *.test.trb below the paths as one program in the bytecode VM"
+  printError "                         --native: build them into one binary and run it instead"
+  printError "                         --profile dev|release, --release: build them natively with that profile"
+  printError "                         --jobs N: accepted and ignored - one program is one process"
   printError "  torb new <name>        Scaffold a package: project.trb, src/main.trb, tests/main.test.trb"
   printError "                         refuses if <name> already exists"
   printError "  torb repl              Read entries from standard input and run each in the VM, keeping their bindings"
@@ -435,14 +435,15 @@ fn buildOptionsOf(arguments: List<String>): BuildOptions? {
 }
 
 /**
- * `torb test [path]... [--profile dev|release] [--jobs N]`, `dev` unless told otherwise. `--jobs` means nothing here:
- * one binary holds every test file, so there is one process whatever the number says. It is accepted and ignored.
+ * `torb test [path]... [--native] [--profile dev|release] [--jobs N]`: in the VM unless told otherwise, and a profile
+ * says to build natively, because only a binary has one. `--jobs` means nothing here: one program holds every test
+ * file, so there is one process whatever the number says. It is accepted and ignored.
  */
 fn testOptionsOf(arguments: List<String>): TestOptions? {
   const choice = profileChoiceOf(arguments, Profile.Dev)?
   var paths: List<String> = []
   var wantsJobs = false
-  var usesMachine = false
+  var usesMachine = choice.rest.length() == arguments.length()
   for argument in choice.rest {
     if wantsJobs {
       wantsJobs = false
@@ -450,6 +451,10 @@ fn testOptionsOf(arguments: List<String>): TestOptions? {
     }
     if argument == "--vm" {
       usesMachine = true
+      continue
+    }
+    if argument == "--native" {
+      usesMachine = false
       continue
     }
     if argument == "--jobs" {
@@ -466,12 +471,13 @@ fn testOptionsOf(arguments: List<String>): TestOptions? {
 }
 
 /**
- * `torb run [--profile dev|release] <path> [argument]...`, `dev` unless told otherwise. The flags of `run` come in front
- * of the path, because everything behind it is the program's. `None` without a path or with a name that is no profile.
+ * `torb run [--native] [--profile dev|release] <path> [argument]...`: in the VM unless told otherwise; `--native` or a
+ * profile builds the program, `dev` unless the profile says `release`. The flags of `run` come in front of the path,
+ * because everything behind it is the program's. `None` without a path or with a name that is no profile.
  */
 fn runOptionsOf(arguments: List<String>): RunOptions? {
   var profile = Profile.Dev
-  var usesMachine = false
+  var usesMachine = true
   var index = 0
   while index < arguments.length() {
     const argument = arguments[index]
@@ -480,8 +486,14 @@ fn runOptionsOf(arguments: List<String>): RunOptions? {
       index = index + 1
       continue
     }
+    if argument == "--native" {
+      usesMachine = false
+      index = index + 1
+      continue
+    }
     if argument == "--release" {
       profile = Profile.Release
+      usesMachine = false
       index = index + 1
       continue
     }
@@ -491,6 +503,7 @@ fn runOptionsOf(arguments: List<String>): RunOptions? {
     const name = arguments.get(index + 1) ?? ""
     const choice = profileChoiceOf(["--profile", name], profile)?
     profile = choice.profile
+    usesMachine = false
     index = index + 2
   }
   const path = arguments.get(index)?

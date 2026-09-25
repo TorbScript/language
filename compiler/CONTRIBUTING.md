@@ -14,8 +14,9 @@ These are the rules of the code base and its traps.
 ```text
 sh tools/bootstrap.sh                                   # Build it: seed -> torb -> torb, and compare the two program.c
 sh tools/gates.sh a                                     # Tier A (below); tier B is `sh tools/gates.sh b`
-torb test compiler/tests                                # The TorbScript tests of the compiler (profile dev)
-torb test compiler/tests/calls.test.trb                 # ...one file
+torb test --native compiler/tests                       # The TorbScript tests of the compiler (profile dev)
+torb test --native compiler/tests/calls.test.trb        # ...one file
+torb test std/path/tests                                # A test package, in the VM (the default of torb test)
 torb check .                                            # The compiler checks the whole repository: "no problems"
 torb check tests/conformance tests/language             # ...and the two test workspaces, which stand outside it
 torb check --every-target std/os                        # Lowered once per target: no native reached on a wrong system
@@ -23,7 +24,8 @@ torb manifest --check .                                 # Every project.trb eval
 torb check scratch.trb                                  # One file, wherever it is: it gets the toolchain's std/
 torb check --statistics .                               # Every expression has a type: "0 deferred"
 torb check --timings .                                  # The wall time of every pass, in the order they ran
-torb run scratch.trb                                    # Build it into build/run/dev/ and run it (profile dev)
+torb run scratch.trb                                    # Run it in the VM, which needs no C compiler
+torb run --native scratch.trb                           # Build it into build/run/dev/ and run it (profile dev)
 torb build --profile dev path/to/main.trb               # A binary with -O1 instead of -O2 (default: release)
 sh runtime/build.sh                                     # The C runtime and its tests ($TORB_CC, clang, gcc, cc)
 torb canon --check --rule calls --rule strings --rule imported-case-patterns --rule unused-bindings --rule loops .
@@ -38,8 +40,10 @@ sh tools/refresh-seed.sh                                # build/release -> seed/
 ```
 
 **Profiles.** `dev` compiles the one C file with `-O1`, `release` with `-O2`; the C is the same under both, so the
-fixpoint does not depend on the profile. `torb test` and `torb run` build `dev` unless told otherwise (`--profile
-release`, or `--release`), `torb build` builds `release`, and so do `tools/bootstrap.sh` and the seed. Measured on the
+fixpoint does not depend on the profile. `torb test` and `torb run` run in the VM; with `--native` they build `dev`
+unless told otherwise (`--profile release`, or `--release`, which build natively too), `torb build` builds `release`,
+and so do `tools/bootstrap.sh` and the seed. The compiler's own suite stays native: each of its tests checks and lowers
+whole programs, which the VM interprets many times slower than the one C compile of the suite takes. Measured on the
 compiler's own test suite (86 MB of C, gcc 13, a machine with other builds running): `-O2` is 134 s of gcc and 65 s of
 tests, `-O1` 92 s and 77 s, `-O0` 70 s and 171 s - `-O1` is the fastest `torb test compiler/tests` from end to end
 (197 s against 225 s for `--release`). On the compiler's own C (65 MB) gcc takes 101 s at `-O2`, 68 s at `-O1` and 51 s
@@ -67,11 +71,11 @@ under a `build/` directory), then `check .` ("no problems"), `check --statistics
 `check tests/conformance tests/language`, `check --every-target std/os` (every program and test of the package lowered
 once per target, docs/design/OS.md section 2), `manifest --check` over every `project.trb` of the repository (evaluated in
 the sandboxed VM, it has to read as the static reader reads the file, docs/design/SCRIPTS.md section 7),
-`test compiler/tests` (which pins the recovery of the lexer and the parser
-over `tests/lexer-cases/` and `tests/parser-cases/` as well), `test` of every std/example test package (all of them
-build natively; one that waits for a back-end gap is named in [docs/RUST-EXIT.md](../docs/RUST-EXIT.md) section 2.4 and
-in the `broken` list of `gates.sh`, which skips it), every program of `tests/language/` run with
-`torb run` against its `.expected` (all of them build natively), the three docs gates
+`test --native compiler/tests` (which pins the recovery of the lexer and the parser
+over `tests/lexer-cases/` and `tests/parser-cases/` as well), `test` of every std/example test package in both back
+ends (all of them build natively; one that waits for a back-end gap is named in
+[docs/RUST-EXIT.md](../docs/RUST-EXIT.md) section 2.4 and in the `broken` list of `gates.sh`, which skips it), every
+program of `tests/language/` run with `torb run --native` and with `torb run` against its `.expected`, the three docs gates
 (`docs check`, `docs index --check`, `docs skill --check`), and `canon --check` with the five rules. Everything it
 builds only to run it once is built with the `dev` profile.
 
@@ -164,12 +168,12 @@ temporarily unavailable`); a run that waits says so in one line. The conformance
 time and waits while the machine has less than 2 GiB of memory free.
 
 **The memory limit.** Every binary of the `dev` profile - the compiler's test suite, the std packages' tests, `torb
-run` - stops at the smaller of 8 GiB and half the physical memory, with `panic: out of memory: the limit of ... was
+run --native` - and every program the VM runs stops at the smaller of 8 GiB and half the physical memory, with `panic: out of memory: the limit of ... was
 reached` and exit code 102; the operating system enforces it (a job object on Windows, `RLIMIT_DATA` on Linux,
 `runtime/README.md`). A test binary that ran away once committed 88 GB and took the machine down. `TORB_MEMORY_LIMIT`
-sets another limit for every TorbScript process that sees it (`16G`, `512M`, `0` or `none` for none) - `torb`
-included, so set it on a binary rather than around `torb run`. The compiler is a release binary and has no limit
-of its own. Measured on 2026-09-24 (Windows, peak commit): `torb build ./compiler` about 0.7 GB, building the test
+sets another limit for every TorbScript process that sees it (`16G`, `512M`, `0` or `none` for none); in a binary
+that hosts the VM (`torb`, the compiler's tests) it limits the programs the VM interprets, counted by the kernel, and
+the host keeps its own profile's default. The compiler is a release binary and has no limit of its own. Measured on 2026-09-24 (Windows, peak commit): `torb build ./compiler` about 0.7 GB, building the test
 suite 0.75 GB, the compiler's test suite itself 0.36 GB - the default leaves ten times that. A C compiler `torb` starts
 is never held to a limit (`cc1` over the compiler's C needs several GB).
 

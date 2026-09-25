@@ -61,7 +61,7 @@ and nothing is copied out of the VM.
   giving it one is a rewrite of the front end's order. Checking a module again costs what its *new* text costs instead:
   every other file is parsed once when the session starts (`SourceTree.parsedEverything`), and `check` limits the bodies
   it checks for a lowering to the program's packages (`programPackagesOf`, which the lowering already closed its world
-  over) - which makes `torb run --vm` and `torb build` of a scratch file at the root of a large workspace cheaper too.
+  over) - which makes `torb run` and `torb build` of a scratch file at the root of a large workspace cheaper too.
 - **A binding is typed by text.** The next entry's module declares an earlier binding as a parameter with its type
   written out - `var names: List<String>` - as the checker describes it. What an entry sees of the session is exactly
   what a module can declare, and the checker needs no second way into a scope.

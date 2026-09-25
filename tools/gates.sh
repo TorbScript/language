@@ -9,14 +9,14 @@
 # Tier A: bootstrap if `build/release/torb` is missing or older than a file it is built from (the compiler's sources,
 # `std/`, the runtime), `check .`, `check --statistics .`, `check tests/conformance tests/language`,
 # `check --every-target std/os`,
-# `manifest --check` over every `project.trb`, `test compiler/tests`, `test` of the std/example packages (one that waits for a back-end gap is named in
-# docs/RUST-EXIT.md section 2.4 and skipped here), the programs of `tests/language/` against their
-# `.expected`, the sessions of `tests/repl/` piped into `torb repl` (`tools/repl.sh`), the three docs gates, and
-# `canon --check` with the five rules. Every binary that is only built to be run
-# once is built with `--profile dev`, which `torb test` and `torb run` do by default.
+# `manifest --check` over every `project.trb`, `test --native compiler/tests`, `test` of the std/example packages in
+# both back ends (one that waits for a back-end gap is named in docs/RUST-EXIT.md section 2.4 and skipped here), the
+# programs of `tests/language/` against their `.expected` in both back ends, the sessions of `tests/repl/` piped into
+# `torb repl` (`tools/repl.sh`), the three docs gates, and `canon --check` with the five rules. Every binary that is
+# only built to be run once is built with `--profile dev`, which `torb test --native` and `torb run --native` do.
 #
 # Tier B: `tools/conformance.sh` (the conformance suite, and with `--vm` the same suite and `vm-only/` in the bytecode
-# VM), `torb test --vm` of the std/example packages, `tools/bootstrap.sh` (the fixpoint: seed -> torb -> torb, byte-identical C), and the C runtime's own tests.
+# VM), `tools/bootstrap.sh` (the fixpoint: seed -> torb -> torb, byte-identical C), and the C runtime's own tests.
 #
 # A run holds one of the machine-wide gate slots (`tools/gate-slot.sh`, `$TORB_GATE_SLOTS`, default 2) from its first
 # gate to its last, and says so while it waits for one: several checkouts running their gates at once once ran the
@@ -84,6 +84,8 @@ is_stale() {
 # `$language_broken` do not build natively yet and are skipped, with the reason printed below the gate.
 language_programs() {
   torb=$1
+  # `--native`, or nothing for the VM
+  mode=${2-}
   failures=0
   for program in tests/language/*.trb; do
     case "$program" in
@@ -93,7 +95,7 @@ language_programs() {
       *" $program "*) continue ;;
     esac
     expected="${program%.trb}.expected"
-    if actual=$("$torb" run "$program" 2>&1); then
+    if actual=$("$torb" run $mode "$program" 2>&1); then
       if ! printf '%s\n' "$actual" | cmp -s - "$expected"; then
         printf '%s\n' "$program: the output is not $expected:"
         printf '%s\n' "$actual" | diff "$expected" - || true
@@ -142,7 +144,8 @@ if [ "$tier" = "a" ]; then
   # as the file itself does to the static reader the other commands use
   gate "manifest --check (every project.trb, evaluated)" "$torb" manifest --check . tests/conformance tests/language \
     tests/project.trb
-  gate "test compiler/tests" "$torb" test compiler/tests
+  # Natively: the compiler's own suite checks whole programs in every test, which the VM runs too slowly for a gate
+  gate "test compiler/tests (native)" "$torb" test --native compiler/tests
 
   # docs/RUST-EXIT.md section 2.4: every candidate package builds natively, and they are combined into one binary. A
   # package named here is skipped, which is for one that waits for a back-end gap RUST-EXIT 2.4 names.
@@ -156,11 +159,14 @@ if [ "$tier" = "a" ]; then
     buildable="$buildable $candidate"
   done
   # shellcheck disable=SC2086
-  gate "test (std/example packages, native)" "$torb" test $buildable
+  gate "test (std/example packages, native)" "$torb" test --native $buildable
+  # shellcheck disable=SC2086
+  gate "test (std/example packages, VM)" "$torb" test $buildable
 
   # A program that waits for a back-end gap is named here and skipped; none does.
   language_broken=""
-  gate "tests/language against .expected (native)" language_programs "$torb"
+  gate "tests/language against .expected (native)" language_programs "$torb" --native
+  gate "tests/language against .expected (VM)" language_programs "$torb"
 
   # docs/design/REPL.md: whole sessions of `torb repl`, each against its exact standard output, standard error and exit code
   gate "tests/repl against .expected (torb repl)" sh tools/repl.sh
@@ -183,15 +189,6 @@ torb=$(binary_of "$torb_path")
 
 gate "conformance suite" sh tools/conformance.sh
 gate "conformance suite in the VM" sh tools/conformance.sh --vm
-# The same test packages as tier A, as one program in the VM: `torb test --vm` prints the report the native binary does
-packages=""
-for candidate in std/*/tests examples/*/tests; do
-  if [ -d "$candidate" ]; then
-    packages="$packages $candidate"
-  fi
-done
-# shellcheck disable=SC2086
-gate "test (std/example packages, VM)" "$torb" test --vm $packages
 gate "fixpoint (seed -> torb -> torb)" sh tools/bootstrap.sh
 gate "runtime tests" sh runtime/build.sh
 

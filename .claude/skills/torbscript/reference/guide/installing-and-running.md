@@ -17,9 +17,9 @@ source:
   - compiler/src/cli/new.trb
 ---
 
-The toolchain is one binary called `torb`. `torb run` compiles a file to a native executable and starts it in one
-step, and `torb build` writes the executable instead. There is no interpreter yet, so the first run of a program costs a
-C compile.
+The toolchain is one binary called `torb`. `torb run` checks a file and runs it at once in the VM inside `torb`, which
+needs no C compiler, and `torb build` compiles it to a native executable instead - `torb run --native` does both in one
+step. The two run the same program with the same output.
 
 ## Goal
 

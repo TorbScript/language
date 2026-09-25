@@ -143,8 +143,7 @@ other block. One run costs seconds; one run per block would cost minutes.
 
 ### What the native back end says
 
-`torb run` builds natively - there is no interpreter - so a block that the back end refuses is a block a reader cannot
-run. Two blocks are asked, each lowered on its own so that a refusal belongs to it:
+A block that the back end refuses is a block a reader cannot run, in the VM of `torb run` or natively. Two blocks are asked, each lowered on its own so that a refusal belongs to it:
 
 - **Every `trb run` block.** A refusal is an error. The blocks that are not refused become the entries of **one**
   program, compiled once with the C compiler at `-O0` into `build/docs/` beside the documentation root and run; a

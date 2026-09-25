@@ -14,8 +14,8 @@ source:
   - docs/ARCHITECTURE.md
 ---
 
-> **Draft.** It runs in the VM: a program run with `torb run --vm` loads and applies a script, and so does the toolchain for
-> a `project.trb`; the native back end refuses `Script.apply` until a binary can embed the VM
+> **Draft.** It runs in the VM: a program `torb run` runs loads and applies a script, and so does the toolchain for a
+> `project.trb`; the native back end refuses `Script.apply` until a binary can embed the VM
 > ([Receiver Scripts and the Sandbox](../../design/SCRIPTS.md)).
 
 A [receiver closure](receiver-closures.md) is a value passed at a call site. A

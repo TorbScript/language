@@ -1,11 +1,11 @@
 /**
- * `torb run`: a program compiled into a cache and executed, with the rest of the command line, its three streams and
- * its exit code passed through.
+ * `torb run`: a program run, with the rest of the command line, its three streams and its exit code passed through.
  *
- * There is no interpreter behind this command. `run` is `build` into a directory named after the program's sources
- * plus starting what came out, so the first run of a program costs a build and every run after it costs a process
- * start - and what runs is the same binary `torb build` would have written, which is what keeps `run` from being a
- * second implementation of the language.
+ * By default the bytecode VM inside this process runs it (`vm/run.trb`, docs/design/VM.md), which needs no C compiler
+ * and starts at once. `--native` or a profile is `build` into a directory named after the program's sources plus
+ * starting what came out, so its first run costs a build and every run after it costs a process start - and what runs
+ * is the binary `torb build` would have written. The two are one language: the conformance suite holds every program
+ * to the same output in both.
  *
  * **Nothing of this command is on the program's output.** A build that succeeds says nothing, the binary is started
  * with the console this process holds rather than a pipe, and the exit code is the binary's. What a user sees is
@@ -36,10 +36,10 @@ public type RunOptions {
    */
   profile: Profile = Profile.Dev
   /**
-   * `--vm`: the program is not built at all but run by the bytecode VM inside this process (docs/design/VM.md), which
-   * is the second back end of the conformance suite.
+   * Whether the program runs in the bytecode VM inside this process (docs/design/VM.md), which is the default; `--native`
+   * or a profile builds it instead.
    */
-  usesMachine: Bool = false
+  usesMachine: Bool = true
 }
 
 /** The exit code of the whole command: the program's own, or what went wrong before it started. */

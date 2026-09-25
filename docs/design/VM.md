@@ -7,12 +7,15 @@ the kernel of `std/machine` with `runtime/machine.c` and the generated table of 
 programs of `vm-only/`, and compares them byte for byte with their native run - a program with a `.workers` file on
 that many workers and on one. `test`/`group`, keys compared by a program's own `equals` and tasks run through the
 call back of section 10, tasks run on every worker of the pool (section 4), `Array<Item, Size>` is inline words, the
-leak gate holds the VM to "live blocks at exit: 0" as it holds a native binary, `torb test --vm` runs a test suite
-with the native binary's report, and `fibonacci(30)` interprets in about 0.2 s (section 8).
+leak gate holds the VM to "live blocks at exit: 0" as it holds a native binary, `torb test` runs a test suite with
+the native binary's report, and `fibonacci(30)` interprets in about 0.2 s (section 8). **`torb run` and `torb test`
+run in the VM by default** and `--native` builds a binary instead; `torb build` is always native. The compiler's own
+test suite runs natively in the gates (`torb test --native compiler/tests`): it checks and lowers whole programs
+thousands of times, which the VM interprets many times slower than the binary does, and everything else runs in both.
 
 TorbScript has two back ends that read one IR. The C back end turns it into a native binary; the VM turns it into
-bytecode and runs that inside `torb`, for `torb run --vm`, the sandbox (7.4), `project.trb` as a script (7.5) and the
-REPL (7.6). Design principle 5 is the whole requirement: **nothing observable may differ between the two**. Output,
+bytecode and runs that inside `torb`, for `torb run` and `torb test`, the sandbox (7.4), `project.trb` as a script
+(7.5) and the REPL (7.6). Design principle 5 is the whole requirement: **nothing observable may differ between the two**. Output,
 exit codes, panic messages and sites, the order in which `close()` runs and whether a block leaks are observable, so
 all of them are decided once, in the IR, and executed by both back ends as they were decided.
 
@@ -403,7 +406,7 @@ suite run twice, and the list of what the VM runs that grew with every slice is 
 | 6 | `test` and `group`: the runtime's recovery point around a closure of the interpreter | **Done**: `Machine.install` and the substitutes `torb_machine_test_case`/`_group`; `tests`, `test-failure`, `assert-values` |
 | 7 | Tasks: `TaskNew`, `Suspend`, `Stop`, channels, the FIFO order of `runtime/task.c` (docs/BACKEND.md 7.3's VM half) | **Done**, on every worker of the pool: section 4; the entry cells of a top-level `const` too; every program with tasks |
 | 8 | The gate of 7.2: every conformance program in both back ends; `vm.list` deleted | **Done**: every program, `binary-only/` and `vm-only/` too (section 8); `vm.list` is deleted |
-| 11 | `torb test --vm`: every test file an entry of one program, the report of `runtime/test.c` | **Done**: `TestFile`, `TestFinish`; tier B runs the test packages of `std/` and `examples/` with it |
+| 11 | `torb test` in the VM: every test file an entry of one program, the report of `runtime/test.c` | **Done**: `TestFile`, `TestFinish`; the default of `torb test`, and tier A runs the test packages of `std/` and `examples/` both ways |
 | 9 | `Array<Item, Size>`, added to the language after the interpreter: inline items, a checked item step | **Done**: `ArrayNew`, the static `Items`, `PlaceStep.Item`, the counted words of every item; the eleven programs with an array |
 | 10 | Speed: register reads without `Indexed.at`, return records in the word stack (section 10) | **Done**: the image, addresses and inline `load`/`store` (section 4); six times faster (section 8) |
 

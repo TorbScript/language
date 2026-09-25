@@ -27,7 +27,7 @@ the language server are all in it. That keeps a project's setup to one installat
 ## Synopsis
 
 ```text
-torb run <path> [...]  Build a file or a project into a cache and run it
+torb run <path> [...]  Run a file or a project in the VM; --native builds and runs it
 torb repl              Read entries from standard input, run each in the VM, keep their bindings
 torb check [path]...   Check projects, workspaces or single files
 torb build [path]      Compile an entry file to a native binary through C
@@ -40,7 +40,7 @@ torb natives --header  Write torb_natives.h and machine_natives.c from the manif
 torb manifest [path]...  Evaluate every project.trb the paths reach in the sandboxed VM
 torb docs <command>    Check, index, and derive the documentation
 torb canon [path]...   Write the formatter canon over the syntax tree
-torb test [path]...    Run the *.test.trb files below the paths
+torb test [path]...    Run the *.test.trb files below the paths in the VM; --native builds them
 ```
 
 `torb` is `build/release/torb`, what `sh tools/bootstrap.sh` writes, and every command below is
@@ -48,7 +48,7 @@ run from the repository root:
 
 ```console
 torb check .
-torb test compiler/tests
+torb test --native compiler/tests
 torb canon --check .
 ```
 
@@ -56,13 +56,13 @@ torb canon --check .
 
 ### `run`
 
-Builds a file, or the `build { input }` of a project directory, into `build/run/<key>/` and runs it, passing the rest
-of the command line to the program as `Process.arguments()`. The key is a hash of every source file that was read, so
-an unchanged program is not rebuilt. A script may hold top-level code because nothing imports it.
+Runs a file, or the `build { input }` of a project directory, in the bytecode VM inside `torb`, passing the rest of
+the command line to the program as `Process.arguments()` and the program's three streams and its exit code through. A
+script may hold top-level code because nothing imports it.
 
-What it starts is the binary [`build`](torb-build.md) would have written, with the program's three streams and its
-exit code passed through. `torb run --vm` runs the same program in the bytecode VM instead, over the same typed IR and
-the same runtime, without building anything ([torb run](torb-run.md)).
+`torb run --native` builds it into `build/run/<key>/` instead and starts the binary [`build`](torb-build.md) would have
+written; the key is a hash of every source file that was read, so an unchanged program is not rebuilt. Both run the same
+typed IR on the same runtime ([torb run](torb-run.md)).
 
 ### `repl`
 

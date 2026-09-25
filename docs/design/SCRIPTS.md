@@ -167,7 +167,7 @@ runtime - and every limit is exact about what it counts.**
 **Decision: inside one VM the value is passed by reference; across the boundary between a host that is native code and
 the VM, only text crosses, and the text is the receiver's own vocabulary.**
 
-- **A program run by the VM** (`torb run --vm`, slice 4) and the script it loads are one bytecode program: the receiver
+- **A program run by the VM** (`torb run`, slices 4 and 7) and the script it loads are one bytecode program: the receiver
   has one layout, and `Script.apply(var value)` hands the script the reference the `var` parameter already is. Nothing
   is copied or converted, and the script configures the caller's value in place, as CONCEPT.md says.
 - **`torb` is native code, and its `Manifest` is not the VM's `Project`.** A record of the VM has the VM's own inline

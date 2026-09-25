@@ -1,8 +1,9 @@
 # TorbScript repository
 
-Self-hosted: `compiler/` is TorbScript, emits C and links `runtime/` (C11). No Rust, no cargo. `torb run` builds
-natively; `torb run --vm` interprets bytecode of the same IR (milestone 7, `docs/design/VM.md`; tier B runs
-the whole conformance suite in it). Load the `torbscript` skill before writing any `.trb`.
+Self-hosted: `compiler/` is TorbScript, emits C and links `runtime/` (C11). No Rust, no cargo. `torb run` and
+`torb test` interpret bytecode of the same IR in the VM (milestone 7, `docs/design/VM.md`); `--native` builds and runs a
+binary, and `torb build` is always native. Tier B runs the whole conformance suite in both. Load the `torbscript` skill
+before writing any `.trb`.
 Code rules, gates and repository operations: `compiler/CONTRIBUTING.md`.
 
 ## Build and gates (repository root, Git Bash on Windows)
@@ -11,7 +12,8 @@ Code rules, gates and repository operations: `compiler/CONTRIBUTING.md`.
   `build/release/torb(.exe)`. A worktree has no `seed/`: `TORB_SEED=<main checkout>/seed/torb.exe sh tools/bootstrap.sh`.
 - `sh tools/gates.sh a` - every round; it bootstraps only when `compiler/src`, `std/` or `runtime/` changed.
   `sh tools/gates.sh b` - additionally when the round touches `compiler/src/ir`, `compiler/src/backend`, or `runtime/`.
-- `torb test` and `torb run` build the `dev` profile (`-O1`), `torb build` builds `release` (`-O2`); `--profile` or
+- `torb test --native compiler/tests` runs the compiler's suite (the VM is too slow for it). `torb test --native` and
+  `torb run --native` build the `dev` profile (`-O1`), `torb build` builds `release` (`-O2`); `--profile` or
   `--release` says otherwise.
 - A false positive of the checker is a checker bug. `torb check` of a path that reaches no file is an error.
 
@@ -47,7 +49,8 @@ Code rules, gates and repository operations: `compiler/CONTRIBUTING.md`.
 - `tools/gates.sh` and `tools/bootstrap.sh` each hold one of `TORB_GATE_SLOTS` (default 2) machine-wide gate slots
   (`tools/gate-slot.sh`; a bootstrap inside a gate run takes none). A run that waits says so - it is not hung. Six
   parallel gate runs once exhausted the machine's processes.
-- Every `dev` binary (`torb test`, `torb run`) stops at min(8 GiB, half the RAM): `panic: out of memory: the limit of
+- Every `dev` binary (`torb test --native`, `torb run --native`) and every program the VM runs stops at min(8 GiB, half
+  the RAM): `panic: out of memory: the limit of
   ... was reached`, exit code 102, enforced by the OS (job object / `RLIMIT_DATA`). `TORB_MEMORY_LIMIT` (`16G`, `512M`,
   `0`/`none`) overrides it for every TorbScript process that sees it - except a binary that hosts the VM (`torb`, the
   compiler's tests): there it limits the programs the VM interprets, counted by the kernel, and the host keeps its own

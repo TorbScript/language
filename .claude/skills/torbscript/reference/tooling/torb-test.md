@@ -23,10 +23,11 @@ panics - there are no matchers to learn beyond [`assert`](../standard-library/ex
 ## Synopsis
 
 ```text
-torb test [path]... [--jobs N]   Run every *.test.trb below the paths (default: tests)
-    --profile dev|release           How hard the C compiler optimizes (default: dev)
+torb test [path]... [--jobs N]   Run every *.test.trb below the paths (default: tests) in the bytecode VM
+    --native                        Build them into one binary and run it instead
+    --profile dev|release           Build natively, this hard does the C compiler optimize (default: dev)
     --release                       The same as --profile release
-    --vm                            Run them in the bytecode VM instead of building a binary
+    --vm                            The default, accepted
 ```
 
 ## What it does
@@ -60,9 +61,16 @@ $ torb test compiler/tests/calls.test.trb
 `test` exits with `0` when nothing failed and `1` otherwise, so it composes with a shell's `&&` and with continuous
 integration the same way [`check`](torb-check.md) does.
 
-### One binary for every file
+### One program for every file
 
-`test` builds **one binary for every file it found** and runs it: one C translation unit that holds
+`test` runs **one program for every file it found**, in the bytecode VM inside `torb` unless `--native` or a profile
+says to build it: the same program - every test file an entry, its name printed in front of its tests - is lowered to
+the typed IR a binary is compiled from and run by the VM on the same runtime, and the report is the one the binary
+writes, line for line, and so is the exit code. The gates of the repository hold the test packages of `std/` and
+`examples/` to that in both back ends. The compiler's own suite runs natively (`torb test --native compiler/tests`):
+each of its tests checks a whole program, and interpreted that takes many times as long as the one C compile.
+
+With `--native`, `test` builds **one binary for every file it found** and runs it: one C translation unit that holds
 every test file plus a generated `main` that calls each file's own top-level code with the file's name printed in
 front of it. One binary per file is not an option, because every test file imports its harness and through it whatever
 it tests - that would be one C compile of a translation unit that size per file, and the C compiler is where the time
@@ -94,13 +102,6 @@ panic: out of memory: the limit of 8 GiB was reached (the default of a dev build
 `16G`) - and `0` or `none` sets none. A `--release` binary has no limit unless the variable asks for one. The variable
 reaches every TorbScript program that runs with it, `torb` itself included, so a limit meant for the suite alone is
 set on the binary: `TORB_MEMORY_LIMIT=2G tests/build/dev/tests`.
-
-### `--vm`: the bytecode VM
-
-`torb test --vm` builds nothing: the same program - every test file an entry, its name printed in front of its tests -
-is lowered to the typed IR a binary is compiled from, encoded as bytecode and run by the VM inside `torb`, on the same
-runtime. The report is the one the binary writes, line for line, and so is the exit code; tier B of the repository's
-gates holds the test packages of `std/` and `examples/` to that ([torb run](torb-run.md) says what the VM is).
 
 ### `--jobs`
 

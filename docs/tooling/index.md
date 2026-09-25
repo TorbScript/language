@@ -28,7 +28,7 @@ design, which is in [internals](../internals/index.md). A page here is about wha
 - **[Verify your work](verifying-your-work.md)** - The commands that decide whether TorbScript you wrote is correct and in the formatter canon, in the order to run them.
 - **[torb new](torb-new.md)** - torb new scaffolds a package - project.trb, a src/main.trb that prints a greeting, and a tests/main.test.trb with one passing test - refusing where the name already exists.
 - **[torb check](torb-check.md)** - torb check resolves every module, import and name in a type position, types every expression, and reports one block per diagnostic - the gate every other command trusts.
-- **[torb run](torb-run.md)** - torb run builds a file or a project into a cache and executes it, passing the rest of the command line, the three streams and the exit code through.
+- **[torb run](torb-run.md)** - torb run runs a file or a project in the bytecode VM, or builds and runs it natively with --native, passing the rest of the command line, the three streams and the exit code through.
 - **[torb repl](torb-repl.md)** - torb repl reads entries from standard input, checks each against the session, runs it in the bytecode VM and keeps what it binds and declares for the next entry - a typed session and a piped file behave the same.
 - **[torb build](torb-build.md)** - torb build type checks a program, lowers it to C, and hands the C to whatever compiler it finds - one file in, one native binary out, nothing to configure.
 - **[torb test](torb-test.md)** - torb test runs every *.test.trb file below the paths it is given - one binary for all of them - and prints ok or FAILED for every test call it sees.

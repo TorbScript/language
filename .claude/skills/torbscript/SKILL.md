@@ -195,7 +195,7 @@ torb check --statistics <path>      Every expression has a type: "0 deferred"
 torb parse <path>                   Syntax only, recursively
 torb canon --check <path>           Is it in the formatter canon?
 torb canon <path>                   ...write it
-torb test compiler/tests            The TorbScript tests
+torb test --native compiler/tests   The TorbScript tests of the compiler
 torb docs check docs                The documentation gate
 ```
 
@@ -253,7 +253,7 @@ $ torb check scratch.trb
 $ torb run scratch.trb
 ```
 
-`run` builds the file natively and starts it - there is no interpreter - so its first run costs a C compile.
+`run` runs it in the VM at once; `run --native` builds it natively first, so its first run costs a C compile.
 
 ### Examples
 
@@ -265,7 +265,7 @@ $ torb check .
 $ torb check --statistics .
 149982 of 149982 expressions typed (100%), 0 deferred
 $ torb canon --check .
-$ torb test compiler/tests
+$ torb test --native compiler/tests
 ```
 
 A run that found something:
