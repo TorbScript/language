@@ -6,7 +6,8 @@
 #
 # Every session runs in a directory of its own below a temporary one, so it sees the standard library and nothing of
 # this repository; a directory `tests/repl/<name>/` next to `<name>.repl` is copied into it first, which is how a
-# session gets a file to `:load` or a package to `use`.
+# session gets a file to `:load` or a package to `use`. A file `tests/repl/<name>.flags` holds `torb repl`'s own
+# arguments for that one session - `--sandbox`, say - space-separated, one line; a session without one gets none.
 #
 # `$REPL_TORB` names another `torb` to drive. POSIX sh. Runs in Git Bash on Windows and on Linux/macOS.
 #
@@ -82,8 +83,13 @@ for session in tests/repl/*.repl; do
   if [ -d "tests/repl/$name" ]; then
     cp -R "tests/repl/$name/." "$directory/"
   fi
+  flags=""
+  if [ -f "tests/repl/$name.flags" ]; then
+    flags=$(cat "tests/repl/$name.flags")
+  fi
   status=0
-  (cd "$directory" && "$torb" repl < "$root/$session" > "$scratch/$name.out" 2> "$scratch/$name.err") || status=$?
+  # shellcheck disable=SC2086
+  (cd "$directory" && "$torb" repl $flags < "$root/$session" > "$scratch/$name.out" 2> "$scratch/$name.err") || status=$?
   base="tests/repl/$name"
   if [ "$update" -eq 1 ]; then
     if [ -s "$scratch/$name.out" ]; then cp "$scratch/$name.out" "$base.expected"; else rm -f "$base.expected"; fi

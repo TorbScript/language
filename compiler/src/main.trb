@@ -68,6 +68,7 @@ fn printUsage() {
   printError "  torb new <name>        Scaffold a package: project.trb, src/main.trb, tests/main.test.trb"
   printError "                         refuses if <name> already exists"
   printError "  torb repl              Read entries from standard input and run each in the VM, keeping their bindings"
+  printError "                         --sandbox: every entry under SCRIPTS.md's grant of the working directory"
   printError "  torb manifest [path]...  Evaluate every project.trb the paths reach in the sandboxed VM, print its settings"
   printError "                         --check: compare them with the static reader instead, fail where they differ"
   printError "  torb ir <path>...      Print the typed IR of what the back end lowers, and what it does not yet"
@@ -604,8 +605,8 @@ match Process.arguments() {
       Process.exit code
     }
   }
-  ["repl"] => {
-    const code = runRepl()?
+  ["repl", ...more] => {
+    const code = runRepl(more.contains("--sandbox"))?
     if code != 0 {
       Process.exit code
     }

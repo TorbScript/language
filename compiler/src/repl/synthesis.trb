@@ -59,15 +59,19 @@ public type Piece {
   holdsStatements: Bool
 }
 
-/** What the last statement's value turns into. */
+/**
+ * What a shown value turns into: the last expression of an entry, or the name of its last statement where that is a
+ * `const`/`var` binding instead (docs/design/REPL.md section 8). Scala/Kotlin style, value first: `3: Int64`,
+ * `total: Int64 = 42`.
+ */
 public type Shown {
   /** Bound to `replShown` and not printed: the probe, which asks for the value's type and would otherwise be told it is unused. */
   case Bound
   /** Left the statement it is: a value of `Void` or `Never`, which there is nothing to show of. */
   case Nothing
-  /** `= ` and the value through `Show`. */
-  case Printed
-  /** `= <Type>`, for a value of a type that has no `Show`. */
+  /** The value through `Show`, then `: ` and the type. */
+  case Printed(typeText: String)
+  /** `<Type>`, for a value of a type that has no `Show`. */
   case Described(typeText: String)
 }
 
@@ -81,6 +85,10 @@ public type Form {
   /** The new bindings handed to the session, as `(name, type)`; empty for a probe, which only asks for the types. */
   outputs: List<(String, String)> = []
   shown: Shown = Shown.Bound
+  /** The last statement's names where it is a binding instead of an expression, each with what it shows. */
+  shownBindings: List<(String, Shown)> = []
+  /** Whether standard output is a terminal: a shown type is dimmed (ANSI faint) only then. */
+  colored: Bool = false
   /**
    * `(name, path)` of every type the written types name that the session never imported itself - the `IoError` of a
    * binding `File.readText` answered - each written as `use <name> from "<path>"` in front of everything else.
@@ -210,6 +218,16 @@ public fn synthesize(
     None => writer.copy current, statements, 0, statements.byteLength(), true
   }
   writer.write "\n"
+  // Shown before the assignment that hands it to the session: that assignment is the last use the ownership pass
+  // sees of a `var`'s value, and moves it - a `print` after it would read what the move already emptied.
+  for (name, shown) in form.shownBindings {
+    match shown {
+      .Bound => {}
+      .Nothing => {}
+      .Printed(typeText) => writer.write "print \"{name}: {dimmed(typeText, form.colored)} = \{{name}}\"\n"
+      .Described(typeText) => writer.write "print \"{name}: {dimmed(typeText, form.colored)}\"\n"
+    }
+  }
   for index in 0..form.outputs.length() {
     const (name, _) = form.outputs[index]
     writer.write "replOut{index} = {name}\n"
@@ -217,8 +235,8 @@ public fn synthesize(
   match form.shown {
     .Bound => {}
     .Nothing => {}
-    .Printed => writer.write "print \"= \{replShown}\"\n"
-    .Described(typeText) => writer.write "print \"= <{escaped(typeText)}>\"\n"
+    .Printed(typeText) => writer.write "print \"\{replShown}: {dimmed(typeText, form.colored)}\"\n"
+    .Described(typeText) => writer.write "print \"<{dimmed(typeText, form.colored)}>\"\n"
   }
   writer.write "}\n"
   if form.failure.isSome() {
@@ -260,6 +278,19 @@ fn writeParameters(
 /** A text inside a string literal of the module: its braces and quotes escaped. */
 fn escaped(text: String): String {
   text.replace("\\", "\\\\").replace("\"", "\\\"").replace("\{", "\\\{")
+}
+
+/**
+ * A type, escaped and wrapped in ANSI faint (`\u{1b}[2m`...`\u{1b}[0m`) where the session is a terminal - plain text
+ * otherwise, which is what every session piped for `tests/repl/` compares (docs/design/REPL.md section 8).
+ */
+fn dimmed(typeText: String, colored: Bool): String {
+  const safe = escaped typeText
+  if colored {
+    "\u{1b}[2m{safe}\u{1b}[0m"
+  } else {
+    safe
+  }
 }
 
 /** The module being written: its parts, and which of them are pieces of a source. */

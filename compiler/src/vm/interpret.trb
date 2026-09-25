@@ -40,6 +40,7 @@ use Machine from "std/machine"
 use Environment from "std/os"
 use Clock from "std/time"
 use Workers from "std/task"
+use interrupted from "std/console"
 use Opcode, KernelOperation, kernelNumberOf, opcodeOf, tailLengthOf, stoppedWord from "../backend/bytecode/format"
 use BytecodeProgram, Chunk, Place, PlaceStep, WitnessEntry, WitnessRootEntry from "../backend/bytecode/format"
 use ConstantPart, Shape, CountedWord from "../backend/bytecode/format"
@@ -2027,6 +2028,13 @@ fn enter(calleeFrame: Int, pc: Int, base: Int, chunk: Int, target: Int) {
  * out. Answers false, with the reason, where a limit is reached.
  */
 fn refill(var budget: Budget): Bool {
+  // Ctrl+C of `torb repl` (docs/design/REPL.md section 2): nothing sets this flag unless `installInterruptHandler`
+  // ran, which only `torb repl` calls, so every other command pays one native call per `checkInterval` steps for
+  // an answer that is always false.
+  if interrupted() {
+    budget.reason = "Interrupted"
+    return false
+  }
   if budget.remaining <= 0 {
     budget.reason = "The script ran more than {budget.steps} steps"
     return false

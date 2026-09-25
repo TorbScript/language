@@ -3036,6 +3036,15 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
   cannot break an invariant, it is what `rendered(value)` and a failing `assert` show, and the generated `Show` of
   the same type already prints private fields - so without a pair it stays the field-wise one. The price of the rule
   is that a capsule reaches a format without a type name, so a mapping keyed by one cannot pick it out.
+- **A type `torb repl` declares again is kept, and a value of the old type keeps working, shown as `Point#1`**
+  (2026-09-24, docs/design/REPL.md section 6). Every input is already a nested scope of the one before it, so
+  redeclaring a name is ordinary shadowing everywhere else; a type is the one declaration whose old value can outlive
+  it, because a binding of it has the old layout. The session keeps the old declaration once more under a generation
+  of its own - a mangled name nothing a person writes can collide with - so the binding's parameter is still a real,
+  checkable type in every later entry's module; a person reads the generation as `Point#1`, then `#2`, and the
+  session rewrites what the type's own derived `Show` would otherwise print with the mangled name before it is shown.
+  This is the checker holding two types of one name without actually having to: each generation is its own type of
+  the module, under its own name, and nothing about the value is reinterpreted.
 
 ## Open Questions
 
@@ -3087,6 +3096,3 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
   spelling of one conversion, with two lookups and a capsule rule that counts both forms. The recommendation is not to
   build it: the package that declares `Celsius` already writes `extend Float64 with From<Celsius>`, because a type named as a trait
   argument counts for coherence, and a hand-written `Into` gets a message that says so.
-- REPL: every input is a nested scope of the previous one (so redefining a name is ordinary shadowing). A type that
-  is defined again shadows the old one, values of the old type keep it and show up as `Point#1`. docs/design/REPL.md
-  builds the first half; until the second is decided, a binding of a type that is declared again is dropped.

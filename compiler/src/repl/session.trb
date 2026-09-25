@@ -31,13 +31,16 @@ use joinPath from "../project/path"
 use Checker from "../semantics/checker/context"
 use implementsBound from "../semantics/checker/implementation"
 use lowerScripts, pathsOfModules from "../ir/lower/lower"
+use generationDisplayName from "../ir/lower/derive"
 use insertOwnership from "../ir/ownership"
 use verifyOwnedProgram from "../ir/ownership-verify"
 use emitBytecode from "../backend/bytecode/emit"
 use BytecodeProgram from "../backend/bytecode/format"
 use LoadedProgram, Stop, loadedProgram, appendProgram, reserveWords, releaseSandboxed from "../vm/interpret"
-use callSandboxed, unlimitedBudget, wordAt, registerReferenceOf from "../vm/interpret"
+use callSandboxed, unlimitedBudget, limitedBudget, wordAt, registerReferenceOf from "../vm/interpret"
+use Grant, grantText from "../vm/sandbox"
 use renderDiagnostic, renderProblem from "../cli/render"
+use isTerminal from "std/console"
 use EntryPlan, planEntry from "./entry"
 use EntrySource, KeptDeclaration, ParameterText, Form, Shown, Synthesis, synthesize, entryFunctionName from "./synthesis"
 
@@ -75,6 +78,9 @@ public type Session {
   tree: SourceTree
   /** The grant of the sandbox every entry runs in: everything, relative paths against the working directory. */
   grant: String
+  /** `unlimitedBudget()` for the ordinary, unrestricted session; `limitedBudget(steps, milliseconds)`'s two numbers
+   *  under `--sandbox` (section 7), a fresh one per entry as `runScript` gives a fresh one per script. */
+  budgetLimit: (Int, Int)? = None
   var sources: List<EntrySource> = []
   var declarations: List<KeptDeclaration> = []
   var bindings: List<SessionBinding> = []
@@ -82,6 +88,13 @@ public type Session {
   var locations: List<EntryLocations> = []
   /** How many entries were read: what names the next one in a message, `<entry 3>`. */
   var entryCount: Int = 0
+  /**
+   * The generation a type name already displaced is at, so redeclaring `Point` a second time keeps the first
+   * generation as `Point#1` and turns the current one into `Point#2` rather than reusing `#1` (section 6).
+   */
+  var typeGenerations: List<(String, Int)> = []
+  /** Whether standard output is a terminal: a shown value's type is dimmed only then (section 8). */
+  colored: Bool = false
 }
 
 /** How an entry ended. */
@@ -99,15 +112,38 @@ public type Outcome {
 /** The name the session's module has in messages about code the session wrote itself. */
 const sessionLabel = "<session>"
 
-/** A fresh session over the files around `directory`, which it reads relative paths against. */
-public fn newSession(tree: SourceTree, directory: String): Session {
+/**
+ * A fresh session over the files around `directory`, which it reads relative paths against. `sandboxed` is
+ * `torb repl --sandbox` (section 7): the grant `runtime/sandbox.c` reads becomes SCRIPTS.md's own, over `directory`
+ * alone, instead of `unrestricted`.
+ */
+public fn newSession(tree: SourceTree, directory: String, sandboxed: Bool = false): Session {
   const path = "{directory}/repl-session.trb"
+  var grantLine = "unrestricted\t1\nbase\t{directory}"
+  var limit: (Int, Int)? = None
+  if sandboxed {
+    const grant = replGrantOf directory
+    grantLine = grantText grant
+    limit = Some((grant.steps, grant.milliseconds))
+  }
   Session(
     modulePath: path,
     tree: tree.parsedEverything(),
-    grant: "unrestricted\t1\nbase\t{directory}",
+    grant: grantLine,
+    budgetLimit: limit,
     machine: loadedProgram(BytecodeProgram()),
+    colored: isTerminal(),
   )
+}
+
+/**
+ * `torb repl --sandbox`'s grant (section 7): `directory` to read and write, nothing of the environment, and
+ * `Grant`'s own default limits - SCRIPTS.md's general table (1,000,000 steps, 64 MB, 2000 ms), because that is the
+ * line this repository draws once and a session needs no line of its own. Not yet configurable: a later slice.
+ */
+fn replGrantOf(directory: String): Grant {
+  // A root to write is one to read as well (`runtime/sandbox.c`), so `readWrite` alone is the whole directory
+  Grant base: directory, readWrite: [directory]
 }
 
 // --- One entry --------------------------------------------------------------------------------------------------------
@@ -123,6 +159,13 @@ type Compiled {
   outputs: List<(String, Bool, String, List<(String, String)>)>
   /** Bindings the entry's declarations take the meaning of, with why: released once the declarations are kept. */
   displaced: List<(SessionBinding, String)>
+  /**
+   * A `type` this entry redeclares, kept once more under a generation of its own (`Point__1`, shown as `Point#1`):
+   * what a binding of the old type is now written as (section 6). Persisted alongside the entry's own declarations.
+   */
+  generationDeclarations: List<KeptDeclaration> = []
+  /** A binding of a redeclared type, by name, with the generation it is written as from now on (section 6). */
+  renamedBindings: List<(String, String)> = []
 }
 
 /**
@@ -192,9 +235,20 @@ public fn evaluate(var session: Session, text: String, named: String? = None): O
     registers.append register
     arguments.append registerReferenceOf(session.machine, register)
   }
-  const answered = callSandboxed session.machine, session.grant, unlimitedBudget(), chunk, arguments
+  var budget = match session.budgetLimit {
+    Some((steps, milliseconds)) => limitedBudget steps, milliseconds
+    None => unlimitedBudget()
+  }
+  const answered = callSandboxed session.machine, session.grant, budget, chunk, arguments
   // The declarations checked, so they are the session's from here on, whatever the statements did
-  keepDeclarations session, current, plan, compiled.displaced
+  keepDeclarations(
+    session,
+    current,
+    plan,
+    compiled.displaced,
+    compiled.generationDeclarations,
+    compiled.renamedBindings,
+  )
   var outputs: List<SessionBinding> = []
   for index in 0..compiled.outputs.length() {
     const (name, isVar, typeText, imports) = compiled.outputs[index]
@@ -241,27 +295,58 @@ public fn evaluate(var session: Session, text: String, named: String? = None): O
 fn compileEntry(var session: Session, current: Int, plan: EntryPlan): Compiled? {
   const source = session.sources[current]
   var declared: List<String> = []
+  var declaredTypes: List<String> = []
   for declaration in plan.declarations {
     declared.appendAll declaration.names
+    if declaration.isType {
+      declaredTypes.appendAll declaration.names
+    }
   }
-  // A declaration of a name takes it from a binding of that name, and from a binding whose type names it
+  // A declaration of a name takes it from a binding of that name. One of a `type` keeps a binding of the old type
+  // instead - its value untouched, the type itself kept once more under a generation of its own (section 6);
+  // anything else that names a redeclared symbol is gone, with a note.
   var parameters: List<SessionBinding> = []
   var displaced: List<(SessionBinding, String)> = []
+  var generations: List<(String, String)> = []
+  var renamedBindings: List<(String, String)> = []
   for binding in session.bindings {
     if declared.contains(binding.name) {
       displaced.append((binding, "`{binding.name}` is declared again"))
-    } else if const Some(name) = namedIn(binding.typeText, declared) {
+      continue
+    }
+    if const Some(name) = namedIn(binding.typeText, declaredTypes) {
+      const mangled = match generations.find({ _.0 == name }) {
+        Some((_, found)) => found
+        None => {
+          const made = generationOf session, name
+          generations.append((name, made))
+          made
+        }
+      }
+      const renamedType = renamedWord binding.typeText, name, mangled
+      parameters.append binding.copy(typeText: renamedType)
+      renamedBindings.append((binding.name, renamedType))
+      continue
+    }
+    if const Some(name) = namedIn(binding.typeText, declared) {
       const why = if binding.typeText == name {
         "its type `{name}` is declared again"
       } else {
         "its type `{binding.typeText}` names `{name}`, which is declared again"
       }
       displaced.append((binding, why))
-    } else {
-      parameters.append binding
+      continue
+    }
+    parameters.append binding
+  }
+  var declarations = keptWithout session.declarations, declared
+  var generationDeclarations: List<KeptDeclaration> = []
+  for (name, mangled) in generations {
+    if const Some(found) = declarationOf(session.declarations, name) {
+      generationDeclarations.append renamedDeclaration(session, found, name, mangled)
     }
   }
-  const declarations = keptWithout session.declarations, declared
+  declarations.appendAll generationDeclarations
   const texts = parameterTexts parameters
   const (named, bindingImports) = importsOfBindings declarations, declared, parameters
   const probed = probe session, declarations, texts, current, plan, bindingImports, named
@@ -279,6 +364,7 @@ fn compileEntry(var session: Session, current: Int, plan: EntryPlan): Compiled? 
   var checker = checked.checker
   var outputs: List<(String, Bool, String, List<(String, String)>)> = []
   var unwritable: List<String> = []
+  var shownBindings: List<(String, Shown)> = []
   for binding in plan.bindings {
     const found = match synthesis.statementOffset(current, binding.span.start) {
       Some(start) => checker.patternType module, Span(start, start + binding.span.end - binding.span.start)
@@ -290,6 +376,9 @@ fn compileEntry(var session: Session, current: Int, plan: EntryPlan): Compiled? 
         Some(needed) => {
           outputs.append((binding.name, binding.isVar, typeText, needed))
           addImports imports, needed, named
+          if plan.shownBindings.contains(binding.name) {
+            shownBindings.append((binding.name, shownOf(checker, annotation)))
+          }
         }
         None => {
           printError "note: `{binding.name}` is not kept: its type `{typeText}` cannot be written in this session"
@@ -307,7 +396,12 @@ fn compileEntry(var session: Session, current: Int, plan: EntryPlan): Compiled? 
     }
   }
   // The module that runs: the same statements, handing the new bindings out
-  var final = form.copy outputs: outputTexts(outputs), shown: shown, imports: imports
+  var final = form.copy(
+    outputs: outputTexts(outputs),
+    shown: shown,
+    shownBindings: shownBindings,
+    imports: imports,
+  )
   synthesis = synthesize session.sources, declarations, texts, current, plan, final
   checked = checkSession session, synthesis.text, true
   problems = problemsOf session, checked, synthesis
@@ -335,7 +429,7 @@ fn compileEntry(var session: Session, current: Int, plan: EntryPlan): Compiled? 
   if !reportProblems(session, checked, synthesis, current, problems) {
     return None
   }
-  Some Compiled(synthesis, checked, final, parameters, outputs, displaced)
+  Some Compiled(synthesis, checked, final, parameters, outputs, displaced, generationDeclarations, renamedBindings)
 }
 
 /** What the probe of an entry found: how it is written, and what the check said about it. */
@@ -359,7 +453,7 @@ fn probe(
   imports: List<(String, String)>,
   named: List<String>,
 ): Probed {
-  const plain = Form imports: imports
+  const plain = Form imports: imports, colored: session.colored
   const synthesis = synthesize session.sources, declarations, texts, current, plan, plain
   const checked = checkSession session, synthesis.text, false
   const problems = problemsOf session, checked, synthesis
@@ -374,7 +468,7 @@ fn probe(
   }
   var withFailure = imports
   addImports withFailure, needed, named
-  const failing = Form failure: Some(failure), imports: withFailure
+  const failing = Form failure: Some(failure), imports: withFailure, colored: session.colored
   const again = synthesize session.sources, declarations, texts, current, plan, failing
   const checkedAgain = checkSession session, again.text, false
   Probed failing, again, checkedAgain, problemsOf(session, checkedAgain, again)
@@ -514,21 +608,22 @@ fn shownOf(var checker: Checker, annotation: TypeId): Shown {
   if typeText == "Void" || typeText == "Never" || checker.isBroken(annotation) {
     return Shown.Nothing
   }
+  const displayed = displayedType typeText
   // A function is shown by its type: neither back end has a `show` for one
   if const .Function(_) = checker.types.form(annotation) {
-    return Shown.Described typeText
+    return Shown.Described displayed
   }
   const show = match checker.wellKnown.show {
     Some(found) => found
     None => {
-      return Shown.Described typeText
+      return Shown.Described displayed
     }
   }
   const bound = checker.nominal show, []
   if implementsBound(checker, annotation, bound) {
-    return Shown.Printed
+    return Shown.Printed displayed
   }
-  Shown.Described typeText
+  Shown.Described displayed
 }
 
 fn outputTexts(outputs: List<(String, Bool, String, List<(String, String)>)>): List<(String, String)> {
@@ -634,6 +729,99 @@ fn namedIn(typeText: String, names: List<String>): String? {
   None
 }
 
+/**
+ * `text` with every whole-word occurrence of `from` replaced by `to`: what turns a redeclared type's own kept
+ * declaration into the generation a binding of the old type keeps, `Point` into `Point__1` wherever the declaration's
+ * own text names itself - a recursive field included (section 6).
+ */
+fn renamedWord(text: String, from: String, to: String): String {
+  var result: List<Char> = []
+  var word: List<Char> = []
+  for character in text.chars() {
+    if character.isLetter() || character.isDigit() || character == '_' {
+      word.append character
+      continue
+    }
+    appendRenamedWord result, word, from, to
+    word = []
+    result.append character
+  }
+  appendRenamedWord result, word, from, to
+  String.from result
+}
+
+fn appendRenamedWord(var result: List<Char>, word: List<Char>, from: String, to: String) {
+  if word.isEmpty() {
+    return
+  }
+  if String.from(word) == from {
+    result.appendAll to.chars().toList()
+  } else {
+    result.appendAll word
+  }
+}
+
+/**
+ * The mangled name the session keeps a redeclared type `name` under this time: `Point__1` the first time, `Point__2`
+ * the second - a generation of its own, never reused, so a binding typed by an earlier one stays exactly what it was
+ * (section 6). `session.typeGenerations` remembers how many there have been.
+ */
+fn generationOf(var session: Session, name: String): String {
+  var updated: List<(String, Int)> = []
+  var next = 1
+  var found = false
+  for (existing, count) in session.typeGenerations {
+    if existing == name {
+      next = count + 1
+      found = true
+      updated.append((existing, next))
+    } else {
+      updated.append((existing, count))
+    }
+  }
+  if !found {
+    updated.append((name, next))
+  }
+  session.typeGenerations = updated
+  "{name}__{next}"
+}
+
+/** The kept declaration that declares `name`, which is about to be displaced by a new one of the same name. */
+fn declarationOf(declarations: List<KeptDeclaration>, name: String): KeptDeclaration? {
+  declarations.find({ _.names.contains name })
+}
+
+/** `found`'s own text, copied under `mangled` instead of `name`, as a declaration the session keeps from now on. */
+fn renamedDeclaration(var session: Session, found: KeptDeclaration, name: String, mangled: String): KeptDeclaration {
+  const original = session.sources[found.source]
+  const text = original.text[found.span.start..found.span.end]
+  const renamed = renamedWord text, name, mangled
+  session.sources.append EntrySource(original.label, renamed)
+  const source = session.sources.length() - 1
+  KeptDeclaration([mangled], source, Span(0, renamed.byteLength()), false)
+}
+
+/**
+ * A type text with every mangled generation (`Point__1`) written the way the session shows it (`Point#1`,
+ * docs/design/REPL.md section 6): what a diagnostic, `:type` and a shown value all go through before a person reads
+ * them. The parameter list a module writes never goes through this - it needs the mangled, valid identifier.
+ */
+public fn displayedType(text: String): String {
+  var result: List<Char> = []
+  var word: List<Char> = []
+  for character in "{text} ".chars() {
+    if character.isLetter() || character.isDigit() || character == '_' {
+      word.append character
+      continue
+    }
+    result.appendAll generationDisplayName(String.from(word)).chars().toList()
+    word = []
+    result.append character
+  }
+  const built = String.from result
+  built[0..(built.byteLength() - 1)]
+}
+
 /** The kept declarations without the ones that declare one of `names`. */
 fn keptWithout(declarations: List<KeptDeclaration>, names: List<String>): List<KeptDeclaration> {
   declarations.filter({ !_.names.any({ names.contains _ }) }).toList()
@@ -645,6 +833,8 @@ fn keepDeclarations(
   current: Int,
   plan: EntryPlan,
   displaced: List<(SessionBinding, String)>,
+  generationDeclarations: List<KeptDeclaration>,
+  renamedBindings: List<(String, String)>,
 ) {
   var names: List<String> = []
   for declaration in plan.declarations {
@@ -661,6 +851,7 @@ fn keepDeclarations(
     }
   }
   var declarations = keptWithout session.declarations, declared
+  declarations.appendAll generationDeclarations
   const label = session.sources[current].label
   for declaration in plan.declarations {
     if declaration.imports.length() < 2 {
@@ -675,13 +866,17 @@ fn keepDeclarations(
     }
   }
   session.declarations = declarations
-  if displaced.isEmpty() {
+  if displaced.isEmpty() && renamedBindings.isEmpty() {
     return
   }
   var remaining: List<SessionBinding> = []
   for binding in session.bindings {
-    if !displaced.any({ _.0.name == binding.name }) {
-      remaining.append binding
+    if displaced.any({ _.0.name == binding.name }) {
+      continue
+    }
+    match renamedBindings.find({ _.0 == binding.name }) {
+      Some((_, typeText)) => remaining.append binding.copy(typeText: typeText)
+      None => remaining.append binding
     }
   }
   session.bindings = remaining
@@ -892,7 +1087,7 @@ public fn typeOf(var session: Session, text: String): String? {
   const module = checked.requested.first()?
   const start = synthesis.statementOffset(current, value.start)?
   const annotation = checked.checker.expressionType(module, Span(start, start + value.end - value.start))?
-  Some checked.checker.describe(annotation)
+  Some displayedType(checked.checker.describe(annotation))
 }
 
 /** The end of a session: every binding released, the newest first, so that a destructor runs as it would in a program. */

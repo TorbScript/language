@@ -66,10 +66,11 @@ the same runtime, without building anything ([torb run](torb-run.md)).
 
 ### `repl`
 
-Reads entries from standard input - a line, or as many as it takes to close what the line opened - checks each against
-the declarations and bindings of the entries before it, runs it in the VM and keeps what it declares and binds. The value
-of an entry that ends in an expression is shown behind `= `; messages name the entry (`<entry 3>`) and its own lines.
-A piped file is the same session as a typed one ([torb repl](torb-repl.md)).
+Reads entries from standard input - a line, or as many as it takes to close what the line opened, `> ` and `. `
+prompting each on standard error - checks each against the declarations and bindings of the entries before it, runs
+it in the VM and keeps what it declares and binds. The value of an entry that ends in an expression is shown value
+first, `3: Int64`; messages name the entry (`<entry 3>`) and its own lines. A piped file is the same session as a
+typed one ([torb repl](torb-repl.md)).
 
 ### `check`
 

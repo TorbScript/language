@@ -10,6 +10,9 @@ use test, group from "std/test"
 use Span from "../src/syntax/source"
 use isComplete, planEntry from "../src/repl/entry"
 use EntrySource, KeptDeclaration, ParameterText, Form, Shown, synthesize, blanked from "../src/repl/synthesis"
+use displayedType from "../src/repl/session"
+use ReadEvent, ReaderAction, actionFor from "../src/cli/repl"
+use generationDisplayName from "../src/ir/lower/derive"
 
 group "A whole entry" {
   test "a line that parses is an entry" {
@@ -59,6 +62,19 @@ group "An entry taken apart" {
     assert planEntry("if true \{ 1 } else \{ 2 }").shown.isSome()
   }
 
+  test "the last statement's names are shown where it binds instead of evaluating" {
+    assert(planEntry("const total = 3").shownBindings == ["total"])
+    assert(planEntry("var (low, high) = (1, 2)").shownBindings == ["low", "high"])
+    assert planEntry("const total = 3\ntotal + 1").shownBindings.isEmpty()
+    assert planEntry("using file = open()").shownBindings.isEmpty()
+  }
+
+  test "a `type` declaration is marked, unlike a `fn` or a `use`" {
+    assert planEntry("type Point \{\n  x: Int\n}").declarations[0].isType
+    assert(!planEntry("fn double(value: Int): Int \{\n  value * 2\n}").declarations[0].isType)
+    assert(!planEntry("use File from \"std/fs\"").declarations[0].isType)
+  }
+
   test "a `using` binding ends with its entry and is not kept" {
     assert planEntry("using file = open()").bindings.isEmpty()
   }
@@ -87,11 +103,14 @@ group "The module of an entry" {
     const plan = planEntry entry
     const sources = [EntrySource("<repl>", entry)]
     const parameters = [ParameterText("total", false, "Int")]
-    const form = Form outputs: [], shown: Shown.Printed
+    const form = Form outputs: [], shown: Shown.Printed("Int")
     const synthesis = synthesize sources, [], parameters, 0, plan, form
     assert synthesis.text.contains("fn replEntry(total: Int): Void \{")
     assert synthesis.text.contains("const replShown =\ndouble total")
-    assert synthesis.text.contains("print \"= \{replShown}\"")
+    // The value is shown through a nested interpolation (`"\{replShown}"`), not `replShown.show()` - a structural
+    // type such as a tuple has no callable member of that name - so only its two pieces are pinned here.
+    assert synthesis.text.contains("\{replShown}")
+    assert synthesis.text.contains(": Int\"")
     assert synthesis.text.startsWith("fn double(value: Int): Int \{\n  value * 2\n}\n            \n")
   }
 
@@ -130,5 +149,73 @@ group "The module of an entry" {
     assert synthesis.text.contains("fn replEntry(var replOut0: String): Bool \{\n  match replBody(replOut0) \{")
     assert synthesis.text.contains("fn replBody(var replOut0: String): Result<Void, IoError> \{")
     assert synthesis.text.contains("replOut0 = text\n}\nOk void\n}")
+  }
+
+  test "a `let`/`const`/`var` entry shows its name, before the value is handed to the session" {
+    const entry = "const total = 3"
+    const form = Form outputs: [("total", "Int")], shownBindings: [("total", Shown.Printed("Int"))]
+    const synthesis = synthesize([EntrySource("<repl>", entry)], [], [], 0, planEntry(entry), form)
+    assert synthesis.text.contains("print \"total: Int = ")
+    assert synthesis.text.contains("\{total}")
+    assert synthesis.text.contains("\nreplOut0 = total\n")
+  }
+
+  test "a bound value with no `Show` is shown by its type alone, without `= value`" {
+    const entry = "const scaled = \{ value: Int => value * 2 }"
+    const form = Form shownBindings: [("scaled", Shown.Described("(value: Int64) => Int64"))]
+    const synthesis = synthesize([EntrySource("<repl>", entry)], [], [], 0, planEntry(entry), form)
+    assert synthesis.text.contains("print \"scaled: (value: Int64) => Int64\"")
+  }
+
+  test "a shown type is dimmed only where the session is a terminal" {
+    const entry = "1 + 2"
+    const plain = synthesize([EntrySource("<repl>", entry)], [], [], 0, planEntry(entry), Form(shown: Shown.Printed("Int64")))
+    assert plain.text.contains("\{replShown}")
+    assert plain.text.contains(": Int64\"")
+    assert(!plain.text.contains("\u{1b}"))
+    const colored = Form shown: Shown.Printed("Int64"), colored: true
+    const dimmed = synthesize([EntrySource("<repl>", entry)], [], [], 0, planEntry(entry), colored)
+    assert dimmed.text.contains("\{replShown}")
+    assert dimmed.text.contains(": \u{1b}[2mInt64\u{1b}[0m\"")
+  }
+}
+
+group "The type of a redeclared binding" {
+  test "a generation the session mangled internally is shown with `#`" {
+    assert(displayedType("Int64") == "Int64")
+    assert(displayedType("Point__1") == "Point#1")
+    assert(displayedType("List<Point__2>") == "List<Point#2>")
+    assert(displayedType("Map<Point__1, Circle__3>") == "Map<Point#1, Circle#3>")
+  }
+
+  test "a generation's own name is what the derived `Show` of its kept declaration opens with" {
+    // generationDisplayName is the one place the mangled name a generation's own declaration carries
+    // (`type Point__1`) turns into what a person reads: the derived `show()` of the type builds its own literal
+    // text with this, so a value never needs a later pass over the finished string - which could not tell a
+    // generation's own name from the same text held as somebody's data.
+    assert(generationDisplayName("Point") == "Point")
+    assert(generationDisplayName("Point__1") == "Point#1")
+    assert(generationDisplayName("Point__12") == "Point#12")
+    assert(generationDisplayName("Point__") == "Point__")
+    assert(generationDisplayName("Point__x") == "Point__x")
+    assert(generationDisplayName("__1") == "__1")
+  }
+}
+
+group "Ctrl+C" {
+  test "idle, it gives a fresh prompt once and leaves the second time in a row" {
+    assert(actionFor(ReadEvent.Interrupted, true, 0) == ReaderAction.Continue(resetIdle: false, discardPending: false))
+    assert(actionFor(ReadEvent.Interrupted, true, 1) == ReaderAction.Leave)
+  }
+
+  test "while an entry is open, it discards it and does not count toward leaving" {
+    assert(actionFor(ReadEvent.Interrupted, false, 0) == ReaderAction.Continue(resetIdle: true, discardPending: true))
+    assert(actionFor(ReadEvent.Interrupted, false, 5) == ReaderAction.Continue(resetIdle: true, discardPending: true))
+  }
+
+  test "a line goes to the entry reader; the end of the input always leaves" {
+    assert(actionFor(ReadEvent.Line("1 + 2"), true, 0) == ReaderAction.Read("1 + 2"))
+    assert(actionFor(ReadEvent.EndOfInput, true, 0) == ReaderAction.Leave)
+    assert(actionFor(ReadEvent.EndOfInput, false, 3) == ReaderAction.Leave)
   }
 }

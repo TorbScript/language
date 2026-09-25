@@ -1443,12 +1443,46 @@ fn fieldShown(
   target
 }
 
-/** The name a shape opens with: the type's, and nothing at all for a tuple, which shows as `(a, b)`. */
+/**
+ * The name a shape opens with: the type's, and nothing at all for a tuple, which shows as `(a, b)`.
+ *
+ * A type `torb repl` kept as a generation of a redeclared one (`Point__1`, docs/design/REPL.md section 6) opens with
+ * the name a person reads instead - `Point#1` - because the generated `show` builds its own literal text and has no
+ * later pass to correct: a value's own field could legitimately hold the mangled text as data (a `String` of
+ * `"Point__1"`), and rewriting the finished string could not tell the two apart. `generationDisplayName` is the one
+ * place this happens - a case never opens with its type's name at all (`showVariantBody`), so a redeclared `type`
+ * with cases needs nothing here.
+ */
 fn shownNameOf(var lowering: Lowering, shape: Layout): String {
   match shape.origin {
-    Some(symbol) => lowering.checker.symbolAt(symbol).name
+    Some(symbol) => generationDisplayName lowering.checker.symbolAt(symbol).name
     None => ""
   }
+}
+
+/**
+ * `Point#1` for `Point__1`, `name` itself otherwise. The mangled form is two underscores and only digits after the
+ * last one - not a name a person writes (`docs/design/REPL.md` section 6, "Naming: full words" rules out the double
+ * underscore on its own), so treating it as a generation everywhere `show` is generated, REPL session or not, is
+ * safe. `compiler/src/repl/session.trb`'s `displayedType` (a diagnostic, `:type`, a shown type) calls this same
+ * function for the other half of the convention - a type's own text, not a value going through `show` - so the two
+ * never drift apart on what counts as a generation.
+ */
+public fn generationDisplayName(name: String): String {
+  const at = name.lastIndexOf("__")?? -1
+  if at <= 0 {
+    return name
+  }
+  const digits = name[(at + 2)..]
+  if digits.isEmpty() {
+    return name
+  }
+  for character in digits.chars() {
+    if !character.isDigit() {
+      return name
+    }
+  }
+  "{name[0..at]}#{digits}"
 }
 
 fn textSlot(var lowering: Lowering, var builder: FunctionBuilder, value: String): Slot {

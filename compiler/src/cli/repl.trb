@@ -11,10 +11,57 @@
 
 use File, IoError from "std/fs"
 use readLine from "std/io"
+use printErrorRaw, installInterruptHandler, interrupted from "std/console"
 use readSourceTree from "../project/read"
 use normalizePath from "../project/path"
 use Session, Outcome, newSession, evaluate, typeOf, closeSession from "../repl/session"
 use isComplete from "../repl/entry"
+
+/** What one read of the input answered: a whole line, Ctrl+C, or the end of the input (docs/design/REPL.md section 2). */
+public type ReadEvent {
+  case Line(text: String)
+  case Interrupted
+  case EndOfInput
+}
+
+/** `readLine()`, told apart from a Ctrl+C that interrupted it - both answer `None` - by [interrupted]. */
+public fn readEvent(): ReadEvent {
+  match readLine() {
+    Some(line) => ReadEvent.Line line
+    None => if interrupted() { ReadEvent.Interrupted } else { ReadEvent.EndOfInput }
+  }
+}
+
+/**
+ * What the reader does next for one [ReadEvent] (docs/design/REPL.md section 2, Ctrl+C): pure, so the decision is
+ * tested without driving a real interrupt (`compiler/tests/repl.test.trb`). `pending` is whether an entry is still
+ * open, `idleInterrupts` how many Ctrl+C the reader has already seen in a row with nothing open.
+ */
+public type ReaderAction {
+  /** Keep reading; `resetIdle` says whether this event ends a run of idle Ctrl+C's, and `discardPending` whether an
+   *  open entry is thrown away. */
+  case Continue(resetIdle: Bool, discardPending: Bool)
+  /** Hand `line` to the entry reader. */
+  case Read(line: String)
+  /** The end of the session: the end of the input, or a second Ctrl+C with nothing open. */
+  case Leave
+}
+
+public fn actionFor(event: ReadEvent, pendingIsEmpty: Bool, idleInterrupts: Int): ReaderAction {
+  match event {
+    .Line(line) => ReaderAction.Read line
+    .EndOfInput => ReaderAction.Leave
+    .Interrupted => {
+      if pendingIsEmpty {
+        if idleInterrupts >= 1 {
+          return ReaderAction.Leave
+        }
+        return ReaderAction.Continue resetIdle: false, discardPending: false
+      }
+      ReaderAction.Continue resetIdle: true, discardPending: true
+    }
+  }
+}
 
 /** The commands of a session, as `:help` lists them. */
 const commandLines = [
@@ -25,16 +72,45 @@ const commandLines = [
   ":quit               the end of the session, as the end of the input is",
 ]
 
-/** Runs a session to its end. Answers the exit code: `0`, or the code an entry handed to `Process.exit`. */
-public fn runRepl(): Result<Int, IoError> {
+/** `> ` before a whole new entry, `. ` while one is still open (docs/design/REPL.md section 2), on standard error. */
+fn promptFor(pendingIsEmpty: Bool): String {
+  if pendingIsEmpty { "> " } else { ". " }
+}
+
+/**
+ * Runs a session to its end. Answers the exit code: `0`, or the code an entry handed to `Process.exit`.
+ * `sandboxed` is `torb repl --sandbox` (docs/design/REPL.md section 7): every entry runs under SCRIPTS.md's grant of
+ * the working directory instead of `unrestricted`, and `:reset` keeps it.
+ */
+public fn runRepl(sandboxed: Bool = false): Result<Int, IoError> {
   const directory = normalizePath(File.absolutePath(".")?)
-  var session = newSession(readSourceTree([directory])?, directory)
+  var session = newSession(readSourceTree([directory])?, directory, sandboxed)
   printError "torb repl: one entry at a time, :help lists the commands"
+  installInterruptHandler()
   var pending: List<String> = []
   var blanks = 0
-  while const Some(line) = readLine() {
+  var idleInterrupts = 0
+  loop {
+    printErrorRaw promptFor(pending.isEmpty())
+    const line = match actionFor(readEvent(), pending.isEmpty(), idleInterrupts) {
+      .Leave => {
+        printError ""
+        break
+      }
+      .Continue(resetIdle, discardPending) => {
+        printError ""
+        if discardPending {
+          pending = []
+          blanks = 0
+        }
+        idleInterrupts = if resetIdle { 0 } else { idleInterrupts + 1 }
+        continue
+      }
+      .Read(found) => found
+    }
+    idleInterrupts = 0
     if pending.isEmpty() && line.trim().startsWith(":") {
-      match command(session, directory, line.trim())? {
+      match command(session, directory, sandboxed, line.trim())? {
         Some(code) => {
           return Ok code
         }
@@ -87,7 +163,7 @@ fn exitCodeOf(outcome: Outcome): Int? {
 }
 
 /** One command. Answers the exit code where the command ends the session. */
-fn command(var session: Session, directory: String, line: String): Result<Int?, IoError> {
+fn command(var session: Session, directory: String, sandboxed: Bool, line: String): Result<Int?, IoError> {
   const name = line.substringBefore(" ") ?? line
   const rest = (line.substringAfter(" ") ?? "").trim()
   match name {
@@ -102,7 +178,7 @@ fn command(var session: Session, directory: String, line: String): Result<Int?, 
     }
     ":reset" => {
       closeSession session
-      session = newSession(readSourceTree([directory])?, directory)
+      session = newSession(readSourceTree([directory])?, directory, sandboxed)
     }
     ":type" => {
       if rest.isEmpty() {

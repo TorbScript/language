@@ -1,11 +1,15 @@
 # The REPL
 
-**Status: partly implemented** - decided on 2026-09-23 as milestone 7.6 (`docs/BACKEND.md` section 5 and row 7.6).
-Slice 1 is in (section 12): `torb repl` reads entries from standard input, checks each against the session, runs it in
-the VM and keeps what it binds and declares (`compiler/src/repl/`, `compiler/src/cli/repl.trb`).
-`compiler/tests/repl.test.trb` pins how an entry is read and written into a module, and `tests/repl/` pins whole
-sessions against their exact output (`tools/repl.sh`, a gate of tier A). A prompt, values of a type declared again kept
-as `Point#1`, and an entry that can be interrupted are not built (sections 12 and 13).
+**Status: implemented** - decided on 2026-09-23 as milestone 7.6 (`docs/BACKEND.md` section 5 and row 7.6), the owner's
+taste questions of section 13 decided 2026-09-24. Every slice is in (section 12): `torb repl` reads entries from
+standard input, checks each against the session, runs it in the VM and keeps what it binds and declares
+(`compiler/src/repl/`, `compiler/src/cli/repl.trb`); `> ` and `. ` prompt every line on standard error; a value a type
+declared again keeps working under a generation of its own, shown as `Point#1` - the derived `show()` of the
+generation's own kept declaration opens with that name directly, so nothing already shown is ever rewritten; Ctrl+C
+stops a running entry or gives a fresh prompt, without ending the session; and `--sandbox` runs every entry under
+SCRIPTS.md's grant of the working directory instead of `unrestricted`. `compiler/tests/repl.test.trb` pins how an
+entry is read and written into a module, and `tests/repl/` pins whole sessions against their exact output
+(`tools/repl.sh`, a gate of tier A).
 
 `torb repl` is the user's own shell for TorbScript: an entry is typed, checked against everything the session holds,
 compiled and run once, and what it binds and declares stays for the entries after it.
@@ -75,6 +79,17 @@ has nothing to say about at its very end** (`isComplete`, `compiler/src/repl/ent
 - A line that starts with `:` while no entry is open is a command (section 9).
 - **Plain standard input, no line editor.** A piped file is a session exactly like a typed one, which is what makes
   `tests/repl/` possible and `torb repl < setup.trb` useful.
+- **`> ` before a whole new entry, `. ` while one is still open**, written to standard error without a line break
+  right before every line is read (`printErrorRaw`, a native that writes without one - `runtime/console.c`,
+  `compiler/src/cli/repl.trb`). Standard error, not standard output, so that what the entries printed and showed stays
+  exactly that; a piped session carries the same prompts a typed one would, interleaved with the rest of standard
+  error exactly as they were written - which is what `tests/repl/*.stderr` pins.
+- **Ctrl+C**: on an empty prompt or while an entry is still being typed, it drops what is pending (there is nothing to
+  drop on an empty one) and gives a fresh prompt; a second one right on an empty prompt, or Ctrl+D, ends the session
+  like the end of the input. While an entry runs, the same Ctrl+C stops it instead - section 7 - and returns to the
+  prompt with the session intact. `installInterruptHandler`/`interrupted` (`std/console`) are the native pair behind
+  it: the first is called once, when the session starts, and the second is asked after a blocked read answers nothing
+  and by the VM's budget (`refill`, `compiler/src/vm/interpret.trb`) on every check.
 
 ## 3. What an entry is made of
 
@@ -87,6 +102,7 @@ The entry is parsed alone (`planEntry`):
 | A name the top level binds with `const` or `var` | a binding of the session once the entry ran to its end |
 | A `using` binding | closed at the end of its entry, as at the end of any block, and not kept |
 | The last statement, where it is an expression with a value | shown (section 8) |
+| The last statement, where it is a `const`/`var` binding instead (not `using`) | shown by name (section 8) |
 | A `return` at the top level | refused: an entry is not a function |
 
 An `if` without `else` has no value and shows nothing. A statement that produces a value and is not the last one is the
@@ -108,7 +124,7 @@ if true {
 const replShown =
 <the last statement>
 replOut0 = total
-print "= {replShown}"
+print "{replShown}: Int64"
 }
 }
 ```
@@ -174,16 +190,29 @@ frame that no continuation moves.**
 | `const count = count + 1` where `count` is a binding | the new `count`; the old value is released once the entry ran to its end |
 | `var tally = 0`, later `tally = tally + 1` | one binding, changed in place |
 | `fn describe(...)` again | the new declaration, for every later entry and every kept declaration |
-| `type Point { ... }` again | the new type; a binding whose type names `Point` is gone, with a note, and its value released |
+| `type Point { ... }` again | the new type; a binding whose type names `Point` keeps working, shown with the old type as `Point#1` (then `#2`, ...) |
 | `use IoError from "std/fs"` where an earlier `use File, IoError from "std/fs"` imported it | the new `use` of `IoError`; `File` stays, because a kept `use` is one per name |
 | a `fn` or `type` with the name of a binding | the binding is gone, with a note |
 
 - **Declarations are kept once the entry checks; bindings once it ran to its end.** A declaration does not run, so an
   entry whose statements stop keeps its declarations and loses its new bindings; what it changed in a `var` binding
   before the stop stays changed, as in a program.
-- **Why a binding of a type declared again goes.** Its value has the old layout, and the next entry would write its
-  type as the new `Point`. CONCEPT.md keeps such values as `Point#1`; that needs the checker to hold two types of one
-  name in one module and the derived `Show` to print the generation, and is section 13's first question.
+- **Why a binding of a type declared again keeps working.** Its value has the old layout, and the next entry would
+  otherwise write its type as the new `Point`, which does not describe it. The session keeps the old type's own
+  declaration once more, under a generation of its own - internally `Point__1`, a name nothing a person writes can
+  collide with - so the binding's parameter is still written as a real, checkable type in every later entry's module,
+  with the old layout, and nothing about the value is reinterpreted. A second redeclaration of `Point` bumps whichever
+  generation is still bare (`Point` itself, not an already-numbered one) to the next number; a binding already at
+  `Point#1` stays there. Functions and other kept declarations that name `Point` by its bare name are unaffected and
+  keep meaning whichever declaration is current - only a *binding*'s own type is rewritten this way.
+- **`Point__1` is read as `Point#1` at both places it is shown, and neither one rewrites a finished string.** A type
+  annotation - the `: Type` of section 8, `:type`, a diagnostic - goes through `displayedType`
+  (`compiler/src/repl/session.trb`), which rewrites the *text the checker itself produced* from the type's structure.
+  A value's own `show()` opens with `Point#1` directly, because the generated `show` of a generation's kept
+  declaration builds its display name into its own literal text (`generationDisplayName`,
+  `compiler/src/ir/lower/derive.trb`) rather than opening with `Point__1` and leaving a later pass to fix it - a
+  field could legitimately hold the mangled text as data (a `String` of `"Point__1"`), and a pass over the finished
+  string could not tell that apart from the type's own name.
 - **A kept declaration is checked again with every entry**, because it is part of the module. An entry that breaks
   one - `twice` declared again with another parameter type that `quad` of an earlier entry calls - is refused, with the
   message rendered against the earlier entry and a note that says so, and the old `twice` stays.
@@ -195,21 +224,42 @@ runs in a sandbox all the same, because the sandbox is also the recovery point.*
 
 - A REPL is the user's own shell, and a grant would be a question the user answers by typing what the grant says. The
   limits of a receiver script are a defense against a file somebody else wrote.
-- The grant is `unrestricted` (`runtime/sandbox.c`): no path is refused, every variable is readable, nothing is counted
-  against a memory or a step limit. What stays is the kernel's recovery point: **a panic stops the entry and not the
-  session**, and so does a destructor that panics while a binding is released.
+- The grant is `unrestricted` (`runtime/sandbox.c`) by default: no path is refused, every variable is readable,
+  nothing is counted against a memory or a step limit. What stays is the kernel's recovery point: **a panic stops the
+  entry and not the session**, and so does a destructor that panics while a binding is released.
+- **Ctrl+C stops a running entry the same way.** The VM's budget - unlimited for an entry otherwise, `unlimitedBudget`
+  - still checks the interrupt flag at its usual interval (`refill`, `compiler/src/vm/interpret.trb`), and stops with
+  the reason `Interrupted` exactly as a step limit would, reported as `error: Interrupted` and back to the prompt with
+  the session intact: whatever the entry changed in a `var` binding before the stop stays changed, and it keeps none
+  of the bindings it would have made, exactly as any other stop of an entry does (section 6).
 - **`Process.exit(code)` ends the session with that code**, as it ends a program; nothing is released on the way out,
-  as nothing is on a program's exit.
-- A `torb repl --sandbox` with SCRIPTS.md's grants needs nothing new below the command line and is a later slice.
+  as nothing is on a program's exit - `--sandbox` does not change this either, because it is a decision about what an
+  entry *is*, not about what it may reach.
+- **`torb repl --sandbox` (slice 5, built): the grant becomes SCRIPTS.md's own, not `unrestricted`.** The working
+  directory read and write (`Grant.readWrite`, `compiler/src/vm/sandbox.trb` - a root to write is one to read as
+  well), no variable of the environment, and `Grant`'s own default limits - SCRIPTS.md's general table, 1,000,000
+  steps, 64 MB, 2000 ms - so the line this repository draws once needs no line of its own here, a fresh budget per
+  entry the same way `runScript` gives a fresh one per script: a runaway entry stops itself exactly as a limited
+  script does, without waiting for Ctrl+C. Neither the limits nor the environment pattern are configurable yet (a
+  later slice); `:reset` keeps `--sandbox` for the new session it makes.
+  What `--sandbox` does *not* narrow: which packages of `std` an entry may `use` (section 10) - that lock is for a
+  script a *program* loads at a call site it cannot see ahead of time (SCRIPTS.md section 2), and a person typing at
+  their own prompt already sees every line before it runs, so there is nothing here for that lock to check.
 
 ## 8. What the session prints
 
 - **What an entry prints goes where a program's would**: `print` to standard output, `printError` to standard error,
   as it happens.
-- **The value an entry shows is `= ` and the value through `Show`**, on standard output: `1 + 2` shows `= 3`, `"hello"`
-  shows `= hello` - a line the program printed and a value the session shows are told apart at a glance, and
-  `print "hello"` shows nothing of its own because it answers `Void`. A value without a `show` - a function - shows its
-  type instead: `= <(value: Int64) => Int64>`.
+- **The value an entry shows is Scala/Kotlin style, value first: `1 + 2` shows `3: Int64`**, on standard output,
+  through `Show` - a line the program printed and a value the session shows are told apart by the trailing `: Type`,
+  and `print "hello"` shows nothing of its own because it answers `Void`. The type is dimmed (ANSI faint,
+  `\u{1b}[2m`...`\u{1b}[0m`) when standard output is a terminal (`isTerminal`, decided once when the session starts)
+  and plain otherwise, which is what every piped session of `tests/repl/` compares. A value without a `show` - a
+  function - shows its type alone, in angle brackets: `<(value: Int64) => Int64>`.
+- **A `let`/`const`/`var` entry shows the same way, with its name in front**: `const total = 6 * 7` shows
+  `total: Int64 = 42`; a tuple pattern shows every name it binds, one line each, in the order they are written. A
+  binding of a type with no `Show` shows its name and type alone, without `= value`. An assignment - `total = 43` - is
+  not a binding and shows nothing, as it did before.
 - **Messages go to standard error**, each a diagnostic exactly as `torb check` renders it, with the entry as the file:
   `<entry 3>` is the third entry of the session, a `:load`ed file is named by its path, `:type` is `<type>`, and the
   line and the column are the entry's. A declaration of an earlier entry that an entry broke is rendered against that
@@ -232,8 +282,9 @@ runs in a sandbox all the same, because the sandbox is also the recovery point.*
 | `:quit` | the end of the session; so is the end of the input |
 
 - **History is the terminal's.** The Windows console keeps a line history for every program that reads standard input
-  in its cooked mode, and on a POSIX terminal `rlwrap torb repl` adds one. A history file of the REPL's own needs a line
-  editor to be worth anything, which belongs with the prompt (slice 2).
+  in its cooked mode, and on a POSIX terminal `rlwrap torb repl` adds one. A history file of the REPL's own needs a
+  line editor to be worth anything - the prompt of slice 2 is plain, printed ahead of an ordinary line read, and no
+  line editor came with it - so a history file is still a later slice, past 5.
 
 ## 10. `use`: the standard library and the workspace
 
@@ -247,25 +298,30 @@ edit to a package reaches the session.
 ## 11. What an entry cannot do yet
 
 What the VM does not run is refused before anything of the entry runs, with the reason: a task (`Task`, `await`,
-channels - VM.md slice 7), `test` and `group` (slice 6), a map key compared by its own `equals` (slice 4). An entry that
-never ends is ended by ending `torb` (slice 4 below).
+channels - VM.md slice 7), `test` and `group` (slice 6), a map key compared by its own `equals` (slice 4). An entry
+that never ends is stopped with Ctrl+C (section 7), or by ending `torb`.
 
 ## 12. Slices
 
 | # | Scope | State |
 |---|---|---|
 | 1 | Reading, planning and writing an entry; the continuation of the bytecode (`emitBytecode` with `after`, `appendProgram`, gaps); hosted functions; the session's bindings, rebinding and declaring again; `?` at the top level; the imports a type needs; the `unrestricted` grant; `:type`, `:load`, `:reset`, `:help`, `:quit`; `tests/repl/` and `tools/repl.sh` | **Done** |
-| 2 | A prompt: `> ` and `. ` on standard error before a line is read. It needs a native that writes without a line break, so two commits and a refreshed seed | Open |
-| 3 | Values of a type declared again kept as `Point#1` (section 6) | Open, section 13 |
-| 4 | An entry that can be interrupted: Ctrl+C stops the entry through the budget of the interpreter instead of ending `torb` | Open |
-| 5 | `torb repl --sandbox`: SCRIPTS.md's grants for a session | Open |
+| 2 | A prompt: `> ` and `. ` on standard error before a line is read (`printErrorRaw`, a native that writes without a line break) | **Done** |
+| 3 | Values of a type declared again kept as `Point#1` (section 6) | **Done** |
+| 4 | An entry that can be interrupted: Ctrl+C stops the entry through the budget of the interpreter instead of ending `torb` | **Done** |
+| 5 | `torb repl --sandbox`: SCRIPTS.md's grants for a session | **Done** |
 
 ## 13. Open
 
-Questions of taste for the owner; everything technical above is decided.
-
-- **Values of a type declared again.** Kept and shown as `Point#1` (CONCEPT.md), or gone with a note as slice 1 does.
-- **The shown value.** `= 3` tells a value from a printed line; the alternatives are the bare value (`3`, what `print`
-  writes) or the value with its type (`3: Int64`).
-- **The prompt**, once it exists: `> ` and `. ` for a continued entry, on standard error so that standard output stays
-  exactly what the entries printed and showed.
+Everything of taste the owner had a question about (2026-09-24) is decided and built: a value of a type declared
+again is kept and shown as `Point#1` (section 6); the shown value is Scala/Kotlin style, `3: Int64` (section 8); the
+prompt is `> ` and `. ` on standard error (section 2); `--sandbox` is SCRIPTS.md's grant, unconfigured (section 7). No
+slice is open. What is not verified by anything but reasoning is one implementation gap: Ctrl+C's native handler
+(`installInterruptHandler`, `runtime/console.c`) was written and reasoned through for both platforms - `sigaction`
+without `SA_RESTART` on POSIX, `SetConsoleCtrlHandler` on Windows - but interrupting a *live, interactive* session was
+not something this environment could drive to verify; the reader's own decision of what to do once an interrupt is
+noticed (`actionFor`, `compiler/src/cli/repl.trb`) is unit tested instead (`compiler/tests/repl.test.trb`), and the VM
+stopping a running entry is exercised by `refill` unconditionally asking `interrupted()`
+(`compiler/src/vm/interpret.trb`) - both without needing a real signal. Worth a person trying it by hand once. Also
+left for later, by design and not by gap: `--sandbox`'s limits and environment pattern are `Grant`'s own defaults and
+not yet configurable (section 7), and it does not narrow which packages of `std` an entry may `use` (section 7).
