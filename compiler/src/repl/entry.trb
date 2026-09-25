@@ -70,7 +70,7 @@ public fn isComplete(text: String): Bool {
   if end == 0 {
     return true
   }
-  const trimmed = text[0..end]
+  const trimmed = text.sliceBytes 0, end
   const parsed = parse SourceText.of(trimmed)
   for diagnostic in parsed.diagnostics {
     if diagnostic.span.start >= end {
@@ -80,7 +80,7 @@ public fn isComplete(text: String): Bool {
       return false
     }
     if diagnostic.message.startsWith("This string is never closed") {
-      if trimmed[diagnostic.span.start..].startsWith("\"\"\"") {
+      if trimmed.sliceBytes(diagnostic.span.start, trimmed.byteLength()).startsWith("\"\"\"") {
         return false
       }
     }

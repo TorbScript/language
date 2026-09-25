@@ -689,7 +689,9 @@ group "Real code" {
     // 150 since 2026-09-23 (173 before): `extend Task<Result<Value, Failure>> { fn outcome() }` was an implementation
     // whose target is `Task`, so every member of `Task` - `all` among them - counted as an override, and `Iterate.all`
     // and `Iterate.any` sat in every table of the program. `outcome()` is gone, and with it the twenty-three instances.
-    assert(found.lowered + found.stubbed == 150)
+    // 145 since `TextIndex`: the two files slice their source through `sliceBytes`, and the instances of `String.slice`
+    // and the `Bounds<Int>` it read its ends through are gone.
+    assert(found.lowered + found.stubbed == 145)
     // **The instance-count tripwire.** Monomorphization with `List<Item>` everywhere can multiply, and what
     // multiplies it is the **element type**: a container literal builds the witness table of `List<Item>`, and that
     // table carries only the default members of `Iterate`, `List`, `MutableIndexed`, `Length` and
@@ -699,8 +701,8 @@ group "Real code" {
     // Eleven of these are the copies the devirtualization makes of a frozen member a direct call names
     // (`specializeFrozenCallees`): the table keeps the original, the call site gets a body whose result and whose
     // parameters may become concrete
-    assert(found.program.functions.length() == 222)
-    assert(found.program.witnessTables.length() == 39)
+    assert(found.program.functions.length() == 216)
+    assert(found.program.witnessTables.length() == 38)
     assert(found.program.elements.length() == 3)
     var blocked: List<String> = []
     for entry in found.unsupported {

@@ -110,7 +110,7 @@ Set.of(1, 2, 3)                          from arguments, needs Item: Hash
    ```trb check
    var groups: Map<String, List<String>> = [:]
    for name in ["Ada", "Alan", "Grace"] {
-     groups.update name[0..1], [] { names => names.append name }
+     groups.update name.prefix(characters: 1), [] { names => names.append name }
    }
    print groups
    ```

@@ -869,9 +869,39 @@ fn coerceToBounds(var checker: Checker, key: TypeId, position: TypeId, at: Span)
       return
     }
   }
+  if isNumberRangeForText(checker, key, position) {
+    checker.reportHere(
+      Diagnostic.error("A text is sliced at a `TextIndex`, not at an `Int`: a number can point inside of a character", at)
+        .withNote(
+          "`text.dropping(characters: 3)` counts characters; `text.indexOf(part)`, `start()` and `end()` answer positions;"
+            + " `text.indexAt(byteOffset: 3)` checks an offset; `text.sliceBytes(from, to)` is the form for a format that"
+            + " counts bytes"
+        )
+    )
+    return
+  }
   const applied = checker.nominal bounds, [position]
   const wanted = checker.types.intern TypeForm.Traits([applied])
   const _ = checkValue checker, key, wanted, at
+}
+
+/**
+ * `text[3..]`: a range of numbers in the brackets of a value that is sliced at a `TextIndex` - the one mistake the type
+ * exists to make unwritable (docs/design/PANICS.md section 4), which gets a message of its own instead of the one about
+ * a missing `Bounds<TextIndex>`.
+ */
+fn isNumberRangeForText(var checker: Checker, key: TypeId, position: TypeId): Bool {
+  const isTextIndex = match checker.types.form(position) {
+    .Nominal(symbol, arguments) => arguments.isEmpty() && checker.symbolAt(symbol).name == "TextIndex"
+    _ => false
+  }
+  if !isTextIndex {
+    return false
+  }
+  match checker.types.form(key) {
+    .Nominal(_, arguments) => arguments.length() == 1 && sameType(checker.types, arguments[0], checker.integerType())
+    _ => false
+  }
 }
 
 /** Whether the value in the brackets is one of the three ranges, which is what makes `a[...]` a slice. */

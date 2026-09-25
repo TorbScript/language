@@ -71,22 +71,22 @@ group "`bool` plus an out parameter" {
   test "an `Option` result becomes a branch over the two cases" {
     const source = raw"""
       fn found(text: String, part: String): Int {
-        match text.indexOf(part) {
+        match text.byteOffsetOf(part) {
           Some(index) => index
           None => 0 - 1
         }
       }
       """
     assert(
-      irOf(source, "n_std_x2f_prelude_types_String_indexOf") == raw"""
-        fn n_std_x2f_prelude_types_String_indexOf(self: String borrowed, part: String borrowed) -> Variant(T_std_x2f_prelude_types_Option__Int64) {
+      irOf(source, "n_std_x2f_prelude_types_String_byteOffsetOf") == raw"""
+        fn n_std_x2f_prelude_types_String_byteOffsetOf(self: String borrowed, part: String borrowed) -> Variant(T_std_x2f_prelude_types_Option__Int64) {
           slot %0 parameter self: String
           slot %1 parameter part: String
           slot %2 temporary: Int64
           slot %3 temporary: Bool
           slot %4 temporary: Variant(T_std_x2f_prelude_types_Option__Int64)
         b0: # std/prelude/src/types.trb:139 native wrapper
-          %3 = call t_std_x2f_prelude_types_String_indexOf(%0 borrowed, %1 borrowed, &%2 borrowed) at std/prelude/src/types.trb:139:13
+          %3 = call t_std_x2f_prelude_types_String_byteOffsetOf(%0 borrowed, %1 borrowed, &%2 borrowed) at std/prelude/src/types.trb:139:13
           branch %3 then b1 else b2
         b1: # std/prelude/src/types.trb:139 then
           %4 = construct T_std_x2f_prelude_types_Option__Int64.Some (%2 borrowed)
@@ -103,7 +103,7 @@ group "`bool` plus an out parameter" {
   test "the out parameter of the runtime function is written out as `out`" {
     const source = raw"""
       fn found(text: String, part: String): Int {
-        match text.indexOf(part) {
+        match text.byteOffsetOf(part) {
           Some(index) => index
           None => 0 - 1
         }
@@ -112,7 +112,7 @@ group "`bool` plus an out parameter" {
     const shown = textOf source
     assert(
       shown.contains(
-        "runtime fn t_std_x2f_prelude_types_String_indexOf(self: String borrowed, part: String borrowed, out out: Int64 borrowed) -> Bool = torb_text_index_of"
+        "runtime fn t_std_x2f_prelude_types_String_byteOffsetOf(self: String borrowed, part: String borrowed, out out: Int64 borrowed) -> Bool = torb_text_index_of"
       )
     )
   }
@@ -120,14 +120,14 @@ group "`bool` plus an out parameter" {
   test "the out parameter owns what the runtime wrote, and the extended verifier agrees" {
     const source = raw"""
       fn found(text: String, part: String): Int {
-        match text.indexOf(part) {
+        match text.byteOffsetOf(part) {
           Some(index) => index
           None => 0 - 1
         }
       }
       """
-    const shown = ownedIrOf source, "n_std_x2f_prelude_types_String_indexOf"
-    assert shown.contains("  %3 = call t_std_x2f_prelude_types_String_indexOf(%0 borrowed, %1 borrowed, &%2 borrowed) at")
+    const shown = ownedIrOf source, "n_std_x2f_prelude_types_String_byteOffsetOf"
+    assert shown.contains("  %3 = call t_std_x2f_prelude_types_String_byteOffsetOf(%0 borrowed, %1 borrowed, &%2 borrowed) at")
     assert shown.contains("  %4 = construct T_std_x2f_prelude_types_Option__Int64.Some (%2 borrowed)")
   }
 }
@@ -233,13 +233,13 @@ group "the C of a wrapper" {
   test "an out parameter is the address of a slot of the wrapper's own frame" {
     const source = raw"""
       fn found(text: String, part: String): Int {
-        match text.indexOf(part) {
+        match text.byteOffsetOf(part) {
           Some(index) => index
           None => 0 - 1
         }
       }
       """
-    const shown = functionOf source, "n_std_x2f_prelude_types_String_indexOf"
+    const shown = functionOf source, "n_std_x2f_prelude_types_String_byteOffsetOf"
     assert shown.contains("  s3 = torb_text_index_of(s0_self, s1_part, &s2);")
     assert shown.contains("  s4 = (T_std_x2f_prelude_types_Option__Int64)\{ .tag = 0, .payload = \{ .v0 = \{ s2 \} \} \};")
   }

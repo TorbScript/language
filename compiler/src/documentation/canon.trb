@@ -87,12 +87,12 @@ fn linesWithOffsets(text: String): Lines {
   for character in text.chars() {
     offset = offset + character.byteLength()
     if character == '\n' {
-      texts.append text.slice(lineStart..(offset - 1))
+      texts.append text.sliceBytes(lineStart, offset - 1)
       starts.append offset
       lineStart = offset
     }
   }
-  texts.append text.slice(lineStart..text.byteLength())
+  texts.append text.sliceBytes(lineStart, text.byteLength())
   Lines starts, texts
 }
 
@@ -122,7 +122,7 @@ fn indentationOf(line: String): String {
     }
     length = length + character.byteLength()
   }
-  line.slice(0..length)
+  line.sliceBytes 0, length
 }
 
 // --- The walk -----------------------------------------------------------------------------------------------------
@@ -462,7 +462,7 @@ fn shouldBeACommand(
   if closeSpan.start != last.value.span.end {
     return None
   }
-  if text.slice(callee.span.end..closeSpan.end).contains("\n") {
+  if text.sliceBytes(callee.span.end, closeSpan.end).contains("\n") {
     return None
   }
   // A command swallows what follows a comma as a further argument
@@ -471,7 +471,7 @@ fn shouldBeACommand(
       return None
     }
   }
-  const written = text.slice(callee.span.start..callee.span.end)
+  const written = text.sliceBytes callee.span.start, callee.span.end
   const line = lineAt lines, site.call.span.start
   Some CanonProblem(line, "A call is a command wherever the grammar allows it. Write `{written} ...` without parentheses")
 }
@@ -498,7 +498,7 @@ fn shouldHaveParentheses(
     return None
   }
   const last = arguments[plain - 1]
-  const overSeveralLines = text.slice(callee.span.end..last.value.span.end).contains("\n")
+  const overSeveralLines = text.sliceBytes(callee.span.end, last.value.span.end).contains("\n")
   const hasOperator = arguments.slice(0..plain).any(hasTopLevelOperator)
   if !site.isCommandPosition {
     // The parser only reads a command in command position, so this cannot happen from a parsed file
@@ -507,7 +507,7 @@ fn shouldHaveParentheses(
   if !hasOperator && !overSeveralLines {
     return None
   }
-  const written = text.slice(callee.span.start..callee.span.end)
+  const written = text.sliceBytes callee.span.start, callee.span.end
   const line = lineAt lines, site.call.span.start
   const reason = if hasOperator {
     "an operator at the top level of an argument"
@@ -523,7 +523,7 @@ fn isCommandPath(text: String, callee: Expression): Bool {
     return false
   }
   // `(a).b` is the same tree as `a.b`, but the parser does not read a command there
-  const written = text.slice(callee.span.start..callee.span.end)
+  const written = text.sliceBytes callee.span.start, callee.span.end
   isPathText written
 }
 
@@ -645,7 +645,7 @@ fn startsCommandArgument(text: String, tokens: List<Token>, offset: Int): Bool {
   const span = tokens[index].span
   match tokens[index].kind {
     .Identifier => {
-      const written = text.slice(span.start..span.end)
+      const written = text.sliceBytes span.start, span.end
       const isContextual = written == "as" || written == "by" || written == "from"
       !isContextual || nextIsColon
     }
@@ -756,7 +756,7 @@ fn stringProblems(text: String, tokens: List<Token>, lines: Lines): List<CanonPr
     if !isTextLiteral(token.kind) {
       continue
     }
-    const literal = text.slice(token.span.start..token.span.end)
+    const literal = text.sliceBytes token.span.start, token.span.end
     const quotes = if literal.startsWith("\"\"\"") {
       3
     } else if literal.startsWith("r\"\"\"") {
@@ -791,7 +791,7 @@ fn stringProblem(lines: Lines, span: Span, quotes: Int): CanonProblem? {
   // Rule 1 of multi-line strings: behind the opening quotes there is nothing but the line break
   const behindQuotes = span.start - lines.starts[openLine] + quotes
   const openText = lines.texts[openLine]
-  const afterQuotes = openText.slice(behindQuotes.min(openText.byteLength())..openText.byteLength())
+  const afterQuotes = openText.sliceBytes behindQuotes.min(openText.byteLength()), openText.byteLength()
   if !afterQuotes.trim().isEmpty() {
     const note = "A multi-line string starts with a line break behind its opening quotes"
     return Some CanonProblem(openLine + 1, note)
@@ -811,7 +811,7 @@ fn stringProblem(lines: Lines, span: Span, quotes: Int): CanonProblem? {
   }
   const closeText = lines.texts[closeLine]
   const closeColumn = span.end - 3 - lines.starts[closeLine]
-  const beforeQuotes = closeText.slice(0..closeColumn.min(closeText.byteLength()))
+  const beforeQuotes = closeText.sliceBytes 0, closeColumn.min(closeText.byteLength())
   if beforeQuotes.trim().isEmpty() {
     if beforeQuotes != target {
       return Some CanonProblem(closeLine + 1, "The closing `\"\"\"` is aligned with the content of the string")

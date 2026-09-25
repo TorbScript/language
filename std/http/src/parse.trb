@@ -81,7 +81,7 @@ public fn requestLineOf(line: String): Result<RequestLine, HttpError> {
 
 /** `HTTP/1.1 200 OK`: a version, a status of three digits, and a phrase that may be empty. */
 public fn statusLineOf(line: String): Result<StatusLine, HttpError> {
-  const firstSpace = line.indexOf(" ") ?? -1
+  const firstSpace = line.byteOffsetOf(" ") ?? -1
   if firstSpace < 0 {
     return Fail HttpError.malformed("a status line is a version, a status and a phrase")
   }
@@ -120,7 +120,7 @@ public fn fieldsOf(lines: List<String>, limit: Int): Result<Headers, HttpError> 
     if line.startsWith(" ") || line.startsWith("\t") {
       return Fail HttpError.malformed("a field continues the line before it (obsolete line folding)")
     }
-    const colon = line.indexOf(":") ?? -1
+    const colon = line.byteOffsetOf(":") ?? -1
     if colon < 0 {
       return Fail HttpError.malformed("a field is a name, a colon and a value")
     }

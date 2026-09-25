@@ -353,29 +353,29 @@ fn withoutSpansAndStyles(dump: String): String {
   var result = ""
   var rest = dump
   loop {
-    const spanAt = rest.indexOf spanMarker
-    const commandAt = rest.indexOf commandMarker
-    const parenthesesAt = rest.indexOf parenthesesMarker
+    const spanAt = rest.byteOffsetOf spanMarker
+    const commandAt = rest.byteOffsetOf commandMarker
+    const parenthesesAt = rest.byteOffsetOf parenthesesMarker
     match earliest([spanAt, commandAt, parenthesesAt]) {
       None => {
         return result + rest
       }
       Some(index) => {
-        result = result + rest[0..index]
+        result = result + rest.sliceBytes(0, index)
         if spanAt == Some(index) {
           const afterPrefix = index + spanMarker.byteLength()
-          const end = match rest[afterPrefix..rest.byteLength()].indexOf(")") {
+          const end = match rest.sliceBytes(afterPrefix, rest.byteLength()).byteOffsetOf(")") {
             Some(length) => afterPrefix + length + 1
             None => rest.byteLength()
           }
           result = result + "Span"
-          rest = rest[end..rest.byteLength()]
+          rest = rest.sliceBytes end, rest.byteLength()
         } else if commandAt == Some(index) {
           result = result + "style: *"
-          rest = rest[(index + commandMarker.byteLength())..rest.byteLength()]
+          rest = rest.sliceBytes(index + commandMarker.byteLength(), rest.byteLength())
         } else {
           result = result + "style: *"
-          rest = rest[(index + parenthesesMarker.byteLength())..rest.byteLength()]
+          rest = rest.sliceBytes(index + parenthesesMarker.byteLength(), rest.byteLength())
         }
       }
     }

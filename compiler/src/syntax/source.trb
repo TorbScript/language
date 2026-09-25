@@ -53,7 +53,7 @@ public type SourceText {
 
   /** The text between two character indices. */
   fn slice(from: Int, to: Int): String {
-    text[offsets[from]..offsets[to]]
+    text.sliceBytes offsets[from], offsets[to]
   }
 }
 
@@ -87,7 +87,7 @@ public type LineIndex {
         high = middle
       }
     }
-    const column = text[lineStarts[low]..target].chars().count()
+    const column = text.sliceBytes(lineStarts[low], target).chars().count()
     (line: low + 1, column: column + 1)
   }
 
@@ -95,7 +95,7 @@ public type LineIndex {
   fn lineText(line: Int): String {
     const start = lineStarts[line - 1]
     const end = lineStarts.get(line) ?? text.byteLength()
-    var result = text[start..end]
+    var result = text.sliceBytes start, end
     while result.endsWith("\n") || result.endsWith("\r") {
       result = result.droppingLast characters: 1
     }

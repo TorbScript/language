@@ -401,16 +401,20 @@ text.chars().count()               // 7  - `chars()` is an Iterate<Char> (Unicod
 text.byteLength()                  // 12 - O(1): G, r, e and the space are one byte, ü and ß two, 👋 four
 text.isEmpty()
 
-const at = text.indexOf("ß")       // Some(4): positions come from searching and are byte offsets
-const tail = text[4..]             // "ße 👋" - slicing at an offset a search answered is O(1)
-text.substringAfter("ü")           // Some("ße 👋") - most code never sees an offset
+const at = text.indexOf("ß")       // Some(4): a TextIndex, which only the text hands out
+const tail = text[(at ?? text.end())..] // "ße 👋" - slicing at a position is O(1), sharing the storage
+text.substringAfter("ü")           // Some("ße 👋") - most code never sees a position
+text.dropping(characters: 3)       // "ße 👋" - counted in characters, and it cannot panic
 ```
 
-- **Every offset is checked.** An offset greater than `byteLength()`, a start greater than the end, and an offset on a
-  UTF-8 continuation byte each panic, with the offset and the length in the message. `text[3..]` on the text above
-  is the third of them: byte 3 is the second byte of `ü`. Nobody counts UTF-8 bytes by eye, which is why an offset
-  should come from the text and not from the program (see [Error Handling](#error-handling), and
-  [docs/design/PANICS.md](docs/design/PANICS.md) section 4).
+- **A position is a `TextIndex`, not an `Int`.** `text[3..]` is a compile error: byte 3 is the second byte of `ü`,
+  and nobody counts UTF-8 bytes by eye (see [Error Handling](#error-handling), and
+  [docs/design/PANICS.md](docs/design/PANICS.md) section 4). Positions come from `indexOf`, `start()`, `end()` and
+  `indexAfter`; one holds a byte offset and has no arithmetic. A number from outside becomes one through
+  `indexAt(byteOffset:)`, which answers `None` inside of a character, and a format that counts bytes has
+  `sliceBytes`, `byteAt` and `byteOffsetOf`, whose names say what they count. What can still panic is a position of
+  *another* text, with the offset and the length in the message - a broken promise of the program, like an index of
+  another list.
 - **A `String` is therefore always valid UTF-8.** The only ways in are literals, slices at character boundaries,
   `String.from(Iterate<Char>)` and runtime functions that validate - so reading a file whose bytes are not UTF-8 is an
   `IoError`, never a replacement character, and neither `chars()` nor a back end needs a rule for broken text.

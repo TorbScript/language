@@ -156,7 +156,7 @@ public const preludeSource = raw"""
     native fn byteLength(): Int64
     native fn isEmpty(): Bool
     /** The one native of the harness whose result is an `Option`: `bool` plus an out parameter in the runtime. */
-    native fn indexOf(part: String): Int?
+    native fn byteOffsetOf(part: String): Int?
   }
 
   public type Int = Int64
@@ -634,7 +634,7 @@ public type Probed {
    * parsing the file a second time.
    */
   fn spanOf(written: String): Span {
-    const start = source.indexOf(written).expect("`{written}` in the source")
+    const start = source.byteOffsetOf(written).expect("`{written}` in the source")
     Span(start, start + written.byteLength())
   }
 
@@ -647,8 +647,8 @@ public type Probed {
     var start = -1
     var from = 0
     while from < length {
-      const rest = source.slice(from..length)
-      const found = match rest.indexOf(written) {
+      const rest = source.sliceBytes(from, length)
+      const found = match rest.byteOffsetOf(written) {
         Some(index) => index
         None => {
           from = length
@@ -794,7 +794,7 @@ public type Probed {
 
   /** The text of one span of the source, which is how a test recognizes a node of a quotation. */
   fn textAt(at: Span): String {
-    source.slice(at.start..at.end)
+    source.sliceBytes at.start, at.end
   }
 
   /** The receiver of the receiver closure at `written`. `Span(0, 0)` is the body of a receiver script. */

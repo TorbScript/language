@@ -4,7 +4,7 @@
  * about text.
  */
 
-use Equals, Compare, Hash, Show, From, TryFrom, Add from "std/core"
+use Equals, Compare, Ordering, Hash, Show, From, TryFrom, Add from "std/core"
 use Int64, NumberRangeError from "std/number"
 use Iterate, Length, concatenated from "std/iteration"
 
@@ -51,8 +51,51 @@ public native type Char with Equals, Compare, Hash, Show {
 }
 
 /**
+ * A position in one text: before one of its characters, or at its end. Only a text hands one out - its searches, its
+ * [String.start] and [String.end], [String.indexAfter] - so a position inside of a character cannot be written, and
+ * `text[at..]` with an `at` that `text.indexOf` answered cannot panic (docs/design/PANICS.md section 4). `text[3..]` is
+ * a compile error: a number counted by eye is exactly what lands inside of a character.
+ *
+ * It holds a byte offset, which is what makes slicing at one O(1) and lets the slice share the storage. There is no
+ * arithmetic on it - `at + 1` is the mistake the type exists to prevent, and [String.indexAfter] is what it means. A
+ * number from outside - a file format, an editor - becomes one through [String.indexAt], which checks it, and one goes
+ * back to a number through [String.byteOffset].
+ *
+ * A position of one text used on another is a broken promise of the program, as an index of one list used on another
+ * is: slicing there panics where it is past the end or inside of a character of the text it is used on.
+ *
+ * # Examples
+ *
+ *     const text = "Grüße 👋"
+ *     match text.indexOf("ß") {
+ *       Some(at) => print text[at..]
+ *       None => print "no ß"
+ *     }
+ *
+ * # Related
+ *
+ * - [String.indexOf] - where most of them come from.
+ * - [String.dropping] - a number of characters instead of a position.
+ */
+public type TextIndex with Equals, Compare, Hash, Show {
+  private offset: Int
+
+  /** The order of two positions in one text: the earlier one first. */
+  fn compare(other: TextIndex): Ordering {
+    offset.compare other.offset
+  }
+
+  /** The byte offset, which is what a position is and what a message about one names. */
+  fn show(): String {
+    "{offset}"
+  }
+}
+
+/**
  * UTF-8 text. There is no `length()` and no `text[i]` on purpose: say what you count (`chars()`, `bytes()`).
- * Positions come from searching and are byte offsets. Slicing with them is O(1) and shares the storage.
+ * Positions come from searching and are a [TextIndex]: only the text hands them out, so slicing at one is O(1), shares
+ * the storage and cannot land inside of a character. The byte-level members - `byteLength`, `byteAt`, `sliceBytes`,
+ * `byteOffsetOf` - are for a format that counts bytes.
  *
  * **A `String` is always valid UTF-8.** The only ways in are literals, slices at character boundaries,
  * `String.from(Iterate<Char>)` and runtime functions that validate - so reading a file whose bytes are not UTF-8 is
@@ -70,7 +113,7 @@ public native type Char with Equals, Compare, Hash, Show {
  * - [Show] - `show()` is the text unquoted, `showNested()` is quoted with escapes.
  */
 public native type String
-  with Equals, Compare, Hash, Show, Add, Slice, From<Iterate<Char>>
+  with Equals, Compare, Hash, Show, Add, Slice<TextIndex>, From<Iterate<Char>>
 {
   /**
    * `String.from(characters)`, `characters.to<String>()`.
@@ -98,11 +141,65 @@ public native type String
     TextBytes self
   }
 
+  /** The character that begins at `at`, or `None` at the end. A position is never inside of a character. */
+  fn charAt(at: TextIndex): Char? {
+    charAtByte at.offset
+  }
+
   /**
-   * The character that begins at this byte offset, or `None` at and past the end. Offsets come from searching
-   * (`indexOf`) and from `Char.byteLength()`, and an offset *inside* a character panics like every other bad offset.
+   * The character that begins at this byte offset, or `None` at and past the end: the byte-level form of [String.charAt]
+   * for a format that counts bytes. An offset *inside* a character panics like every other bad offset.
    */
-  native fn charAt(offset: Int): Char?
+  native fn charAtByte(offset: Int): Char?
+
+  /** The position before the first character. */
+  fn start(): TextIndex {
+    TextIndex 0
+  }
+
+  /** The position after the last character. */
+  fn end(): TextIndex {
+    TextIndex byteLength()
+  }
+
+  /** The position after the character that begins at `at`, or `None` at the end. O(1). */
+  fn indexAfter(at: TextIndex): TextIndex? {
+    const found = charAtByte(at.offset)?
+    Some TextIndex(at.offset + found.byteLength())
+  }
+
+  /** The position before the character that ends at `at`, or `None` at the start. O(1): at most four bytes back. */
+  fn indexBefore(at: TextIndex): TextIndex? {
+    if at.offset <= 0 || at.offset > byteLength() {
+      return None
+    }
+    var offset = at.offset - 1
+    while offset > 0 && isContinuation(byteAt(offset) ?? 0) {
+      offset = offset - 1
+    }
+    Some TextIndex(offset)
+  }
+
+  /**
+   * The position at a byte offset, or `None` where the offset is past the end or inside of a character: how a number
+   * from outside - a file format, an editor, a span of a lexer - becomes a position, checked.
+   */
+  fn indexAt(byteOffset: Int): TextIndex? {
+    if byteOffset < 0 || !isBoundary(self, byteOffset) {
+      return None
+    }
+    Some TextIndex(byteOffset)
+  }
+
+  /** The byte offset of a position: for arithmetic on lines and columns, and for a format that counts bytes. */
+  fn byteOffset(of: TextIndex): Int {
+    of.offset
+  }
+
+  /** Every character with the position it begins at: what a scanner walks. */
+  fn indexedChars(): Iterate<(index: TextIndex, character: Char)> {
+    IndexedCharacters self
+  }
 
   /** The byte at this offset, or `None` at and past the end. A byte is never inside anything, so this never panics. */
   native fn byteAt(offset: Int): UInt8?
@@ -116,38 +213,40 @@ public native type String
   native fn showNested(): String
 
   /**
-   * `text[from..to]` with byte offsets. An offset on a UTF-8 continuation byte, an offset greater than
-   * `byteLength()` and a start greater than the end each panic, with the offset and the length in the message.
+   * `text[from..to]` between two positions of this text. A position of another text that is past the end of this one
+   * or inside one of its characters panics, and so does a start after the end.
    *
-   * What an **open end** means is the receiver's decision (`std/core`'s `Bounds` says so), and for a text it is the
-   * start and the end of the text - so that decision is here, in TorbScript, and the native below takes the two offsets
-   * it arrived at. An inclusive range (`0..=3`) takes the byte *after* its end, which is the same arithmetic every
-   * other slice does.
+   * What an **open end** means is the receiver's decision (`std/core`'s `Bounds` says so), and for a text it is its
+   * start and its end. An inclusive range (`from..=to`) takes the character that begins at `to` as well.
    */
-  fn slice(range: Bounds<Int>): String {
-    const from = range.lowest() ?? 0
-    const written = range.highest() ?? byteLength()
-    const to = if range.includesHighest() { written + 1 } else { written }
+  fn slice(range: Bounds<TextIndex>): String {
+    const from = range.lowest()?.offset ?? 0
+    const written = range.highest()?.offset ?? byteLength()
+    const to = if range.includesHighest() { endOfCharacter self, written } else { written }
     sliceBytes(from, to)
   }
 
   /**
-   * The text the range covers, or `None` where an offset is past the end, the start is after the end or an offset is
-   * inside of a character: the total twin of `text[from..to]`, which panics there instead.
+   * The text the range covers, or `None` where it would panic - a position past the end or inside of a character,
+   * which only a position of another text can be, or a start after the end: the total twin of `text[from..to]`.
    *
    * # Examples
    *
-   *     print "Grüße".part(0..3)
-   *     print "Grüße".part(0..4)
+   *     const text = "Grüße"
+   *     const at = text.indexOf("ß") ?? text.end()
+   *     print text.part(text.start()..at)
    */
-  fn part(range: Bounds<Int>): String? {
-    const from = range.lowest() ?? 0
-    const written = range.highest() ?? byteLength()
+  fn part(range: Bounds<TextIndex>): String? {
+    const from = range.lowest()?.offset ?? 0
+    const written = range.highest()?.offset ?? byteLength()
     if range.includesHighest() && written >= byteLength() {
       return None
     }
-    const to = if range.includesHighest() { written + 1 } else { written }
-    if from < 0 || to > byteLength() || from > to || !isBoundary(self, from) || !isBoundary(self, to) {
+    if !isBoundary(self, from) || !isBoundary(self, written) {
+      return None
+    }
+    const to = if range.includesHighest() { endOfCharacter self, written } else { written }
+    if from > to {
       return None
     }
     Some sliceBytes(from, to)
@@ -163,36 +262,45 @@ public native type String
   /** Whether the text ends with `suffix`. */
   native fn endsWith(suffix: String): Bool
   /**
-   * The byte offset of the first occurrence of `part`, or `None` if it does not occur. An empty part is at offset `0`.
+   * Where the first occurrence of `part` begins, or `None` if it does not occur. An empty part is at the start.
    *
    * # Examples
    *
-   *     print "a/b/c".indexOf("/")
+   *     const path = "a/b/c"
+   *     if const Some(at) = path.indexOf("/") {
+   *       print path[..at]
+   *     }
    */
-  native fn indexOf(part: String): Int?
+  fn indexOf(part: String): TextIndex? {
+    byteOffsetOf(part).map { TextIndex _ }
+  }
 
   /**
-   * The byte offset of the **last** occurrence of `part`, or `None` if it does not occur. An empty part is at the end
-   * of the text, which is where a search backwards finds it first.
-   *
-   * # Examples
-   *
-   *     print "a/b/c".lastIndexOf("/")
+   * Where the **last** occurrence of `part` begins, or `None` if it does not occur. An empty part is at the end of the
+   * text, which is where a search backwards finds it first.
    *
    * # Related
    *
    * - [String.indexOf] - the same search from the front.
    */
-  native fn lastIndexOf(part: String): Int?
+  fn lastIndexOf(part: String): TextIndex? {
+    lastByteOffsetOf(part).map { TextIndex _ }
+  }
+
+  /** The byte offset of the first occurrence of `part`: [String.indexOf] for a format that counts bytes. */
+  native fn byteOffsetOf(part: String): Int?
+
+  /** The byte offset of the last occurrence of `part`: [String.lastIndexOf] for a format that counts bytes. */
+  native fn lastByteOffsetOf(part: String): Int?
 
   /** Everything before the first occurrence of `part`, or `None` if it does not occur. */
   fn substringBefore(part: String): String? {
-    indexOf(part).map { sliceBytes 0, _ }
+    byteOffsetOf(part).map { sliceBytes 0, _ }
   }
 
   /** Everything after the first occurrence of `part`, or `None` if it does not occur. */
   fn substringAfter(part: String): String? {
-    indexOf(part).map { sliceBytes(_ + part.byteLength(), byteLength()) }
+    byteOffsetOf(part).map { sliceBytes(_ + part.byteLength(), byteLength()) }
   }
 
   /**
@@ -246,7 +354,7 @@ public native type String
    * - [String.substringBefore], [String.substringAfter] - one of the two halves.
    */
   fn splitOnce(separator: String): (before: String, after: String)? {
-    const at = indexOf(separator)?
+    const at = byteOffsetOf(separator)?
     const before = sliceBytes 0, at
     const after = sliceBytes(at + separator.byteLength(), byteLength())
     Some((before, after))
@@ -353,7 +461,7 @@ fn offsetAfter(text: String, count: Int): Int {
   var offset = 0
   var remaining = count
   while remaining > 0 {
-    const found = text.charAt offset
+    const found = text.charAtByte offset
     if const Some(character) = found {
       offset = offset + character.byteLength()
     } else {
@@ -381,6 +489,14 @@ fn offsetBefore(text: String, count: Int): Int {
   offset
 }
 
+/** The offset after the character that begins at `offset`: where an inclusive range of positions ends. */
+fn endOfCharacter(text: String, offset: Int): Int {
+  match text.charAtByte(offset) {
+    Some(character) => offset + character.byteLength()
+    None => offset + 1
+  }
+}
+
 /** Whether a character begins at `offset`, or it is the end of the text: where a text may be cut. */
 fn isBoundary(text: String, offset: Int): Bool {
   match text.byteAt(offset) {
@@ -399,7 +515,7 @@ fn isContinuation(byte: UInt8): Bool {
  *
  * Neither is exported, exactly as the stages of a pipeline are not: `chars()` answers an `Iterate<Char>` and which type
  * carries it is nobody's business. The cursor holds the text **by value** and a byte offset, so a copy of it forks it and
- * nothing can move it from outside; `charAt` decodes the character at the offset and `Char.byteLength()` says how far to
+ * nothing can move it from outside; `charAtByte` decodes the character at the offset and `Char.byteLength()` says how far to
  * move, so walking a text is O(1) per character and never a re-scan.
  */
 type Characters with Iterate<Char> {
@@ -415,10 +531,34 @@ type CharacterIterator with Iterator<Char> {
   var offset: Int = 0
 
   var fn next(): Char? {
-    const found = text.charAt offset
+    const found = text.charAtByte offset
     if const Some(character) = found {
       offset = offset + character.byteLength()
       return Some character
+    }
+    None
+  }
+}
+
+/** The characters of a text with the position each begins at: [String.indexedChars]. */
+type IndexedCharacters with Iterate<(index: TextIndex, character: Char)> {
+  text: String
+
+  fn iterate(): Iterator<(index: TextIndex, character: Char)> {
+    IndexedCharacterIterator text
+  }
+}
+
+type IndexedCharacterIterator with Iterator<(index: TextIndex, character: Char)> {
+  text: String
+  var offset: Int = 0
+
+  var fn next(): (index: TextIndex, character: Char)? {
+    const found = text.charAtByte offset
+    if const Some(character) = found {
+      const at = TextIndex offset
+      offset = offset + character.byteLength()
+      return Some((at, character))
     }
     None
   }

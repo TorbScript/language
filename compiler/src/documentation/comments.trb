@@ -112,7 +112,7 @@ public type DocumentationBlock {
 public fn documentationBlocks(source: SourceText, lines: LineIndex, docs: List<DocComment>): List<DocumentationBlock> {
   var blocks: List<DocumentationBlock> = []
   for doc in docs {
-    const raw = source.text[doc.span.start..doc.span.end]
+    const raw = source.text.sliceBytes doc.span.start, doc.span.end
     const inner = raw.dropping(characters: 3).droppingLast(characters: 2)
     const start = lineAt lines, doc.span.start
     var content: List<CommentLine> = []
@@ -137,7 +137,7 @@ fn stripMargin(line: String): String {
 
 /** Is there nothing but whitespace in front of this offset? Then a doc comment there is the module comment. */
 public fn startsFile(source: SourceText, offset: Int): Bool {
-  source.text[0..offset].isBlank()
+  source.text.sliceBytes(0, offset).isBlank()
 }
 
 /**
@@ -225,7 +225,7 @@ public fn firstSentence(sections: Sections): String {
     }
   }
   match sentenceEnd(words) {
-    Some(stop) => words[0..stop]
+    Some(stop) => words.sliceBytes 0, stop
     None => words.withoutSuffix(".") ?? words
   }
 }

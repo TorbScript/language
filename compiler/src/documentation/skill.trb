@@ -257,7 +257,7 @@ fn withRewrittenLinks(line: String, folder: String, carried: List<String>, prefi
   var rest = line
   var isInsideCode = false
   while !rest.isEmpty() {
-    const opening = match rest.indexOf("](") {
+    const opening = match rest.byteOffsetOf("](") {
       Some(found) => found
       None => {
         rewritten = rewritten + rest
@@ -265,8 +265,8 @@ fn withRewrittenLinks(line: String, folder: String, carried: List<String>, prefi
         continue
       }
     }
-    const tail = rest.slice(opening..rest.byteLength())
-    const end = match tail.indexOf(")") {
+    const tail = rest.sliceBytes opening, rest.byteLength()
+    const end = match tail.byteOffsetOf(")") {
       Some(found) => opening + found
       None => {
         rewritten = rewritten + rest
@@ -274,10 +274,10 @@ fn withRewrittenLinks(line: String, folder: String, carried: List<String>, prefi
         continue
       }
     }
-    const head = rest.slice(0..opening)
+    const head = rest.sliceBytes 0, opening
     const wasInsideCode = isInsideCode
     isInsideCode = hasOddBackticks head, isInsideCode
-    const target = rest.slice((opening + 2)..end)
+    const target = rest.sliceBytes(opening + 2, end)
     const labelStart = labelStartOf head
     const kept = keptTarget target, folder, carried, prefix
     if wasInsideCode || isInsideCode || labelStart.isNone() {
@@ -290,11 +290,11 @@ fn withRewrittenLinks(line: String, folder: String, carried: List<String>, prefi
         None => {
           // A target the skill does not carry: the text of the link stays, the brackets and the target go
           const start = labelStart.expect "checked above"
-          rewritten = rewritten + head.slice(0..start) + head.slice((start + 1)..head.byteLength())
+          rewritten = rewritten + head.sliceBytes(0, start) + head.sliceBytes(start + 1, head.byteLength())
         }
       }
     }
-    rest = rest.slice((end + 1)..rest.byteLength())
+    rest = rest.sliceBytes(end + 1, rest.byteLength())
   }
   rewritten
 }
@@ -449,25 +449,25 @@ fn linkTargetsOf(line: String): List<String> {
   var rest = line
   var isInsideCode = false
   loop {
-    const opening = match rest.indexOf("](") {
+    const opening = match rest.byteOffsetOf("](") {
       Some(found) => found
       None => {
         break
       }
     }
-    const head = rest.slice(0..opening)
+    const head = rest.sliceBytes 0, opening
     isInsideCode = hasOddBackticks head, isInsideCode
-    const tail = rest.slice((opening + 2)..rest.byteLength())
-    const end = match tail.indexOf(")") {
+    const tail = rest.sliceBytes(opening + 2, rest.byteLength())
+    const end = match tail.byteOffsetOf(")") {
       Some(found) => found
       None => {
         break
       }
     }
     if !isInsideCode && labelStartOf(head).isSome() {
-      targets.append tail.slice(0..end)
+      targets.append tail.sliceBytes(0, end)
     }
-    rest = tail.slice((end + 1)..tail.byteLength())
+    rest = tail.sliceBytes(end + 1, tail.byteLength())
   }
   targets
 }

@@ -85,7 +85,8 @@ range.inclusive                           a Bool on Range and RangeTo; an adject
    print items[1..=3]
    print items[..2]
    print items[3..]
-   print "hello"[1..3]
+   const text = "hello"
+   print text[(text.indexOf("e") ?? text.start())..]
    ```
 
 4. **A range of something other than an integer is bounds and nothing more.** `'a'..'z'` says what is inside of it,

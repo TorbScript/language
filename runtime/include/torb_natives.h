@@ -361,7 +361,7 @@ void torb_test_case(torb_text name, torb_closure body);
 void torb_test_group(torb_text name, torb_closure body);
 /* String.byteAt */
 bool torb_text_byte_at(torb_text text, int64_t offset, uint8_t *out);
-/* String.charAt, String.charAtByte */
+/* String.charAtByte */
 bool torb_text_char_at(torb_text text, int64_t offset, torb_char *out);
 /* String.contains */
 bool torb_text_contains(torb_text text, torb_text part);
@@ -369,11 +369,11 @@ bool torb_text_contains(torb_text text, torb_text part);
 bool torb_text_ends_with(torb_text text, torb_text suffix);
 /* String.hash */
 uint64_t torb_text_hash(torb_text text);
-/* String.byteOffsetOf, String.indexOf */
+/* String.byteOffsetOf */
 bool torb_text_index_of(torb_text text, torb_text part, int64_t *out);
 /* String.isEmpty */
 bool torb_text_is_empty(torb_text text);
-/* String.lastByteOffsetOf, String.lastIndexOf */
+/* String.lastByteOffsetOf */
 bool torb_text_last_index_of(torb_text text, torb_text part, int64_t *out);
 /* String.repeat */
 torb_text torb_text_repeat(torb_text text, int64_t times, torb_location at);

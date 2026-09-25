@@ -271,7 +271,7 @@ public type UriTemplate with Show, Equals, Hash {
         .Literal(text) => {
           if inQuery {
             queryLiteral = queryLiteral + text
-          } else if const Some(mark) = text.indexOf("?") {
+          } else if const Some(mark) = text.byteOffsetOf("?") {
             pathPieces.append Piece.Literal(normalizedLiteral(text.sliceBytes(0, mark)))
             queryLiteral = text.sliceBytes(mark + 1, text.byteLength())
             inQuery = true
@@ -294,7 +294,7 @@ public type UriTemplate with Show, Equals, Hash {
     const full = reference.text()
     var cut = full.byteLength()
     for mark in ["?", "#"] {
-      if const Some(at) = full.indexOf(mark) {
+      if const Some(at) = full.byteOffsetOf(mark) {
         if at < cut {
           cut = at
         }
@@ -365,7 +365,7 @@ fn piecesOf(text: String): Result<List<Piece>, UriError> {
         pieces.append Piece.Literal(literal)
         literal = ""
       }
-      const closing = match text.sliceBytes(index + 1, length).indexOf("}") {
+      const closing = match text.sliceBytes(index + 1, length).byteOffsetOf("}") {
         Some(at) => index + 1 + at
         None => {
           return Fail UriError.InvalidTemplate(text, "a `\{` is not closed")
@@ -471,7 +471,7 @@ fn variableOf(template: String, specification: String): Result<Variable, UriErro
   if specification.endsWith("*") {
     explode = true
     name = specification.sliceBytes(0, specification.byteLength() - 1)
-  } else if const Some(colon) = specification.indexOf(":") {
+  } else if const Some(colon) = specification.byteOffsetOf(":") {
     name = specification.sliceBytes 0, colon
     const digits = specification.sliceBytes(colon + 1, specification.byteLength())
     prefix = Some(prefixOf(template, digits)?)

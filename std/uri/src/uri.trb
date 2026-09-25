@@ -419,19 +419,19 @@ fn componentsOf(text: String): Result<Components, UriError> {
     return Fail UriError.InvalidScheme(text.substringBefore(":") ?? text)
   }
   var fragment: String? = None
-  if const Some(mark) = rest.indexOf("#") {
+  if const Some(mark) = rest.byteOffsetOf("#") {
     fragment = Some(normalizedComponent(rest.sliceBytes(mark + 1, rest.byteLength()), Component.Fragment, text)?)
     rest = rest.sliceBytes 0, mark
   }
   var query: String? = None
-  if const Some(mark) = rest.indexOf("?") {
+  if const Some(mark) = rest.byteOffsetOf("?") {
     query = Some(normalizedComponent(rest.sliceBytes(mark + 1, rest.byteLength()), Component.Query, text)?)
     rest = rest.sliceBytes 0, mark
   }
   var authority: Authority? = None
   if rest.startsWith("//") {
     const body = rest.sliceBytes 2, rest.byteLength()
-    const cut = body.indexOf("/") ?? body.byteLength()
+    const cut = body.byteOffsetOf("/") ?? body.byteLength()
     authority = Some(authorityOf(body.sliceBytes(0, cut), text)?)
     rest = body.sliceBytes cut, body.byteLength()
   }
@@ -504,7 +504,7 @@ fn withoutDotSegments(path: String): String {
       input = ""
     } else {
       const start = if input.startsWith("/") { 1 } else { 0 }
-      const next = input.sliceBytes(start, input.byteLength()).indexOf("/")
+      const next = input.sliceBytes(start, input.byteLength()).byteOffsetOf("/")
       const end = match next {
         Some(at) => at + start
         None => input.byteLength()
@@ -518,7 +518,7 @@ fn withoutDotSegments(path: String): String {
 
 /** The output buffer of `remove_dot_segments` with its last segment and the `/` before it removed. */
 fn withoutLastSegment(output: String): String {
-  match output.lastIndexOf("/") {
+  match output.lastByteOffsetOf("/") {
     Some(at) => output.sliceBytes 0, at
     None => ""
   }
@@ -621,7 +621,7 @@ fn mergedPath(base: Components, reference: String): String {
   if base.authority.isSome() && base.path.isEmpty() {
     return "/{reference}"
   }
-  match base.path.lastIndexOf("/") {
+  match base.path.lastByteOffsetOf("/") {
     Some(at) => base.path.sliceBytes(0, at + 1) + reference
     None => reference
   }

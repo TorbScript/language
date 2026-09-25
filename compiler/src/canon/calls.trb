@@ -90,7 +90,7 @@ fn toCommand(source: String, tokens: List<Token>, site: CallSite, callee: Expres
     return None
   }
   // Nothing between the last argument and the `)` (a trailing comma, a space, a comment), and all on one line
-  if close.start != last.value.span.end || source[callee.span.end..close.end].contains("\n") {
+  if close.start != last.value.span.end || source.sliceBytes(callee.span.end, close.end).contains("\n") {
     return None
   }
   // A command call swallows what follows a comma as another argument: the arms of a `match` on one line, a field of
@@ -113,13 +113,13 @@ fn toParentheses(source: String, tokens: List<Token>, site: CallSite, callee: Ex
   const first = plain.first()?
   const last = plain.last()?
   const argumentsEnd = last.value.span.end
-  const overSeveralLines = source[callee.span.end..argumentsEnd].contains("\n")
+  const overSeveralLines = source.sliceBytes(callee.span.end, argumentsEnd).contains("\n")
   const hasOperator = plain.any({ hasTopLevelOperator _ })
   if site.isCommandPosition && !hasOperator && !overSeveralLines {
     return None
   }
   // Only whitespace stands between the callee and its first argument; a comment there would be lost
-  const between = source[callee.span.end..argumentStart(first)]
+  const between = source.sliceBytes callee.span.end, argumentStart(first)
   const isOnlySpaces = between.chars().all({ _ == ' ' || _ == '\t' })
   if between.isEmpty() || !isOnlySpaces {
     return None
@@ -243,7 +243,7 @@ fn startsCommandArgument(source: String, tokens: List<Token>, offset: Int): Bool
       }
       match tokens[index].kind {
         .Identifier => {
-          const text = source[tokens[index].span.start..tokens[index].span.end]
+          const text = source.sliceBytes tokens[index].span.start, tokens[index].span.end
           !(text == "as" || text == "by" || text == "from") || nextIsColon
         }
         .IntegerLiteral | .FloatLiteral | .CharLiteral(_) | .TextLiteral(_) => true

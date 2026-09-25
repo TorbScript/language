@@ -50,7 +50,7 @@ type EditOutcome {
 
 fn editForString(source: String, token: Token): EditOutcome {
   const start = token.span.start
-  const literal = source[start..token.span.end]
+  const literal = source.sliceBytes start, token.span.end
   const quoteLength = match quotePrefixLength(literal) {
     Some(length) => length
     None => {
@@ -69,12 +69,12 @@ fn editForString(source: String, token: Token): EditOutcome {
   const body = leading ?? bodyStart
   const missingLineBreak = leading.isNone()
   const target = indentationOfTheLineAt(source, start) + step
-  const usesCrLf = source[body..close].contains("\r\n")
+  const usesCrLf = source.sliceBytes(body, close).contains("\r\n")
   const opening = (if usesCrLf { "\r\n" } else { "\n" }) + target
   const lines = linesOf source, body, close
   // The indentation of the first line that has content is what the lexer subtracts from every line
   const reference = match lines.find({ _.hasContent }) {
-    Some(line) => source[line.start..line.content]
+    Some(line) => source.sliceBytes line.start, line.content
     None => {
       return EditOutcome.Nothing
     }
@@ -117,7 +117,7 @@ fn replacementsFor(source: String, lines: List<Line>, missingLineBreak: Bool, re
       addIfChanged replacements, source, line.start, line.content, ""
       continue
     }
-    if !source[line.start..line.end].startsWith(reference) {
+    if !source.sliceBytes(line.start, line.end).startsWith(reference) {
       return None
     }
     const end = line.start + reference.byteLength()
@@ -128,7 +128,7 @@ fn replacementsFor(source: String, lines: List<Line>, missingLineBreak: Bool, re
 }
 
 fn addIfChanged(var replacements: List<Replacement>, source: String, start: Int, end: Int, replacement: String) {
-  if source[start..end] != replacement {
+  if source.sliceBytes(start, end) != replacement {
     replacements.append Replacement(start, end, replacement)
   }
 }
@@ -154,14 +154,14 @@ fn linesOf(source: String, body: Int, close: Int): List<Line> {
   var lines: List<Line> = []
   var start = body
   loop {
-    const lineBreak = source[start..close].indexOf("\n")
+    const lineBreak = source.sliceBytes(start, close).byteOffsetOf("\n")
     const end = match lineBreak {
       Some(length) => start + length + 1
       None => close
     }
-    const text = source[start..end]
+    const text = source.sliceBytes start, end
     const content = start + (indexOfFirstNonSpaceOrTab(text) ?? text.byteLength())
-    const rest = source[content..source.byteLength()]
+    const rest = source.sliceBytes content, source.byteLength()
     const hasContent = !(rest.startsWith("\n") || rest.startsWith("\r") || content == close)
     lines.append Line(start, content, end, hasContent, isTheClosingQuotes: content == close)
     if lineBreak.isNone() {
@@ -184,9 +184,9 @@ fn indexOfFirstNonSpaceOrTab(text: String): Int? {
 
 /** Rule 1 of multi-line strings: a line break directly behind the opening quotes (after trailing spaces) is not part of the string. `None` if the content starts on that line instead. */
 fn afterTheLeadingLineBreak(source: String, behindTheQuotes: Int): Int? {
-  const rest = source[behindTheQuotes..source.byteLength()]
+  const rest = source.sliceBytes behindTheQuotes, source.byteLength()
   const length = indexOfFirstNonSpaceOrTab(rest)?
-  const after = rest[length..rest.byteLength()]
+  const after = rest.sliceBytes length, rest.byteLength()
   if after.startsWith("\r\n") {
     return Some(behindTheQuotes + length + 2)
   }
@@ -198,12 +198,12 @@ fn afterTheLeadingLineBreak(source: String, behindTheQuotes: Int): Int? {
 
 /** The whitespace at the start of the line that `offset` is on: the line the statement with the string starts on. */
 fn indentationOfTheLineAt(source: String, offset: Int): String {
-  const before = source[0..offset]
-  const start = match before.lastIndexOf("\n") {
+  const before = source.sliceBytes 0, offset
+  const start = match before.lastByteOffsetOf("\n") {
     Some(index) => index + 1
     None => 0
   }
-  const lineStart = source[start..offset]
+  const lineStart = source.sliceBytes start, offset
   const length = indexOfFirstNonSpaceOrTab(lineStart) ?? (offset - start)
-  source[start..(start + length)]
+  source.sliceBytes(start, start + length)
 }

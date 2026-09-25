@@ -438,7 +438,7 @@ public type SocketAddress with Show, Equals, Hash, TryFrom<String, AddressError>
   /** `host:port` with an IPv4 address, `[host]:port` with an IPv6 one. */
   static fn tryFrom(text: String): Result<SocketAddress, AddressError> {
     if text.startsWith("[") {
-      const closing = text.indexOf("]:") ?? -1
+      const closing = text.byteOffsetOf("]:") ?? -1
       if closing < 0 {
         return Fail AddressError(text, "an IPv6 socket address is `[address]:port`")
       }
@@ -446,7 +446,7 @@ public type SocketAddress with Show, Equals, Hash, TryFrom<String, AddressError>
       const port = portOf(text, text.sliceBytes(closing + 2, text.byteLength()))?
       return Ok SocketAddress(IpAddress.Version6(inside), port)
     }
-    const colon = text.lastIndexOf(":") ?? -1
+    const colon = text.lastByteOffsetOf(":") ?? -1
     if colon < 0 {
       return Fail AddressError(text, "a socket address is `address:port`")
     }

@@ -1467,11 +1467,11 @@ fn shownNameOf(var lowering: Lowering, shape: Layout): String {
  * never drift apart on what counts as a generation.
  */
 public fn generationDisplayName(name: String): String {
-  const at = name.lastIndexOf("__")?? -1
+  const at = name.lastByteOffsetOf("__") ?? -1
   if at <= 0 {
     return name
   }
-  const digits = name[(at + 2)..]
+  const digits = name.sliceBytes(at + 2, name.byteLength())
   if digits.isEmpty() {
     return name
   }
@@ -1480,7 +1480,7 @@ public fn generationDisplayName(name: String): String {
       return name
     }
   }
-  "{name[0..at]}#{digits}"
+  "{name.sliceBytes(0, at)}#{digits}"
 }
 
 fn textSlot(var lowering: Lowering, var builder: FunctionBuilder, value: String): Slot {

@@ -794,7 +794,7 @@ fn declarationOf(declarations: List<KeptDeclaration>, name: String): KeptDeclara
 /** `found`'s own text, copied under `mangled` instead of `name`, as a declaration the session keeps from now on. */
 fn renamedDeclaration(var session: Session, found: KeptDeclaration, name: String, mangled: String): KeptDeclaration {
   const original = session.sources[found.source]
-  const text = original.text[found.span.start..found.span.end]
+  const text = original.text.sliceBytes found.span.start, found.span.end
   const renamed = renamedWord text, name, mangled
   session.sources.append EntrySource(original.label, renamed)
   const source = session.sources.length() - 1
@@ -819,7 +819,7 @@ public fn displayedType(text: String): String {
     result.append character
   }
   const built = String.from result
-  built[0..(built.byteLength() - 1)]
+  built.droppingLast characters: 1
 }
 
 /** The kept declarations without the ones that declare one of `names`. */

@@ -27,15 +27,18 @@ print text.chars().count()      // prints 7
 print text.byteLength()         // prints 12
 print text.isEmpty()            // prints false
 print text.indexOf("ß")         // prints Some(4)
-print text[4..]                 // prints ße 👋
+const at = text.indexOf("ß") ?? text.end()
+print text[at..]                // prints ße 👋
 print text.substringAfter("ü")  // prints Some("ße 👋")
 print text.dropping(characters: 3)      // prints ße 👋
 print(text.withoutPrefix("Gr") ?? text) // prints üße 👋
 ```
 
-`ü` takes two bytes, so `ß` starts at byte 4, and `text[3..]` would cut `ü` in half - which is a panic, not a
-shorter string. Nobody counts UTF-8 bytes by eye, so the common cuts have forms that take no offset at all and cannot
-panic: `dropping(characters: 3)` counts characters, and `withoutPrefix` cuts off a text.
+`ü` takes two bytes, so `ß` starts at byte 4, and a slice at byte 3 would cut `ü` in half. That is why a text is
+sliced at a `TextIndex` and never at an `Int`: a position comes out of the text - `indexOf`, `start()`, `end()`,
+`indexAfter` - and cannot be inside of a character, and `text[3..]` is a compile error. Nobody counts UTF-8 bytes by
+eye, so the common cuts take no position at all: `dropping(characters: 3)` counts characters, and `withoutPrefix` cuts
+off a text.
 
 ## Syntax
 
@@ -43,9 +46,15 @@ panic: `dropping(characters: 3)` counts characters, and `withoutPrefix` cuts off
 text.chars()                             an Iterate<Char>: Unicode scalar values
 text.bytes()                             an Iterate<UInt8>: the raw UTF-8 bytes
 text.byteLength()                        the byte count, O(1)
-text.indexOf(part)                       Some(byteOffset) or None; a byte offset, from searching
+text.indexOf(part)                       Some(position) or None: a TextIndex, from searching
 text.lastIndexOf(part)                   the same for the last occurrence
-text[from..to]                           a slice by byte offset, O(1), shares storage
+text.start(), text.end()                 the positions before the first and after the last character
+text.indexAfter(at), text.indexBefore(at) the next and the previous position, or None
+text.indexAt(byteOffset: n)              the position at a byte offset, checked: None inside of a character
+text.byteOffset(of: at)                  a position as a byte offset, for lines, columns and formats
+text[from..to]                           a slice between two positions, O(1), shares storage
+text.part(from..to)                      the same, or None where the slice would panic
+text.sliceBytes(from, to)                a slice between two byte offsets, for a format that counts bytes
 text.withoutPrefix(part)                 Some(the rest) where the text starts with part, else None
 text.withoutSuffix(part)                 the same at the end
 text.splitOnce(separator)                Some((before:, after:)) around the first occurrence, else None
@@ -57,8 +66,11 @@ text.suffix(characters: n)               the last n characters; total
 
 ## Rules
 
-1. **Every position that comes out of `String` is a byte offset, produced by searching.** `indexOf`, `startsWith`,
-   `substringBefore` and `substringAfter` all work this way; nothing counts characters to find a position.
+1. **A position in a text is a `TextIndex`, and only the text hands one out.** `indexOf`, `lastIndexOf`,
+   `start()`, `end()`, `indexAfter` and `indexBefore` answer one; it holds a byte offset, so it is O(1) to slice at,
+   and it has no arithmetic - `at + 1` is what `indexAfter(at)` means. A number from outside becomes one only through
+   `indexAt(byteOffset:)`, which answers `None` inside of a character. The byte-level members - `byteLength`,
+   `byteAt`, `sliceBytes`, `byteOffsetOf`, `charAtByte` - are for a format that counts bytes.
 
 2. **`chars()` is an `Iterate<Char>` of Unicode scalar values, and counting it is O(n).** `text.chars().count()` is
    how a caller asks for "how many characters", explicitly paying for the answer it wants.
@@ -66,9 +78,17 @@ text.suffix(characters: n)               the last n characters; total
 3. **`byteLength()` is O(1) and `isEmpty()` follows from it.** These are the only two size questions a `String`
    answers without a caller choosing what to count.
 
-4. **`text[from..to]` slices by byte offset in O(1) and shares the string's storage.** An offset greater than
-   `byteLength()`, a start greater than the end, or an offset that lands on a UTF-8 continuation byte each panic,
-   naming the offset and the length. See [Ranges](ranges.md) for the four range forms a slice can take.
+4. **`text[from..to]` slices between two positions in O(1) and shares the string's storage.** It cannot land inside
+   of a character, because a position of this text never is one; what can still panic is a position of *another*
+   text - past this one's end or inside one of its characters - and a start after the end, with the offset and the
+   length in the message. `part(from..to)` answers `None` there instead. See [Ranges](ranges.md) for the range forms
+   a slice can take.
+
+   ```trb error
+   const text = "Grüße"
+   print text[3..]
+   // error: A text is sliced at a `TextIndex`, not at an `Int`: a number can point inside of a character
+   ```
 
 5. **A `String` is always valid UTF-8.** The only ways to produce one are a literal, a slice at a character
    boundary, `String.from(Iterate<Char>)`, and a runtime function that validates as it reads - so a file whose bytes

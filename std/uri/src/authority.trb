@@ -102,7 +102,7 @@ public type Authority with Show, Equals, Hash {
 
 /** `user:secret` becomes `user:***`, and a user information without a `:` is a name and stays. */
 fn redacted(userInfo: String): String {
-  match userInfo.indexOf(":") {
+  match userInfo.byteOffsetOf(":") {
     Some(at) => "{userInfo.sliceBytes(0, at)}:***"
     None => userInfo
   }
@@ -115,14 +115,14 @@ fn redacted(userInfo: String): String {
 public fn authorityOf(text: String, whole: String): Result<Authority, UriError> {
   var rest = text
   var userInfo: String? = None
-  if const Some(at) = rest.lastIndexOf("@") {
+  if const Some(at) = rest.lastByteOffsetOf("@") {
     userInfo = Some(normalizedComponent(rest.sliceBytes(0, at), Component.UserInformation, whole)?)
     rest = rest.sliceBytes(at + 1, rest.byteLength())
   }
   var hostText = rest
   var portText = ""
   if rest.startsWith("[") {
-    const closing = rest.indexOf("]") ?? -1
+    const closing = rest.byteOffsetOf("]") ?? -1
     if closing < 0 {
       return Fail UriError.InvalidHost(rest, "a `[` that is not closed")
     }
@@ -134,7 +134,7 @@ public fn authorityOf(text: String, whole: String): Result<Authority, UriError> 
       }
       portText = after.sliceBytes 1, after.byteLength()
     }
-  } else if const Some(colon) = rest.lastIndexOf(":") {
+  } else if const Some(colon) = rest.lastByteOffsetOf(":") {
     hostText = rest.sliceBytes 0, colon
     portText = rest.sliceBytes(colon + 1, rest.byteLength())
   }
@@ -211,7 +211,7 @@ fn literalOf(text: String): Result<Host, UriError> {
 
 /** `"v" 1*HEXDIG "." 1*( unreserved / sub-delims / ":" )`, lower case. */
 fn futureOf(text: String, inside: String): Result<Host, UriError> {
-  const dot = inside.indexOf(".") ?? -1
+  const dot = inside.byteOffsetOf(".") ?? -1
   if dot < 2 || dot == inside.byteLength() - 1 {
     return Fail UriError.InvalidHost(text, "an `IPvFuture` literal is `v`, a hexadecimal version, `.` and an address")
   }
