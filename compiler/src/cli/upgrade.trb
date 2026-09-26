@@ -1,0 +1,582 @@
+/**
+ * `torb upgrade`: installs another version of the toolchain beside the running one, side by side
+ * (docs/design/RELEASE.md section 5, "torb upgrade"). Only for a script install: `<home>/install.trb` (written by
+ * `tools/install.sh` or `tools/install.ps1`) says how this toolchain got here, and an install by Homebrew, winget or
+ * Scoop refuses here and names that package manager's command instead - `torb upgrade` never runs implicitly and never
+ * fights a package manager for the same files.
+ *
+ * The layout `tools/install.sh` and `tools/install.ps1` write, and this file manages afterwards:
+ *
+ *     <home>/toolchains/<version>/   one full toolchain per installed version, never removed by this command
+ *     <home>/bin/torb                POSIX: a symlink to the active toolchain's `bin/torb`
+ *     <home>/active                  the version the symlink (or, on Windows, the copy) points to
+ *     <home>/install.trb             `channel = "..."` and `method = "..."`, `=` and nothing else in the repository
+ *
+ * `<home>` is `~/.torb` on Linux, macOS and FreeBSD, and `%LOCALAPPDATA%\torb` on Windows, where a running
+ * `torb.exe` cannot be replaced in place - `%LOCALAPPDATA%\Programs\torb` is a copy instead of a symlink, and
+ * upgrading it renames the running executable out of the way first.
+ *
+ * Downloading and unpacking shell out to `curl` (or `wget`) and `tar`, on every target including Windows (both have
+ * shipped with it since 1803) - the same tools `tools/fetch-seed.sh` already assumes - because `std/fs` has no raw
+ * byte read or write yet (only `readText`/`writeText`) and no rename, copy or delete of its own. Hashing is
+ * `sha256sum`/`shasum -a 256` on POSIX and PowerShell's `Get-FileHash` on Windows, never `certutil`: its extra lines
+ * are in the console's own code page, which is not always UTF-8, and `Process.run` insists on UTF-8 output.
+ */
+
+use File from "std/fs"
+use Process from "std/process"
+use Environment, Directories, OsError from "std/os"
+use OperatingSystem from "std/core"
+use Uri from "std/uri"
+use get as httpGet from "std/http"
+use hostTarget from "../project/target"
+
+/** What `torb upgrade` was called with (parsed in `main.trb`, next to the other `*OptionsOf` functions). */
+public type UpgradeOptions {
+  /** `torb upgrade 0.5.2`: an exact version, instead of the newest of the channel. */
+  version: String?
+  /** `--channel nightly`: upgrades within that channel instead of the one `install.trb` names, and records it. */
+  channel: String?
+  /** `--list`: what is installed and what is available, without installing anything. */
+  list: Bool
+}
+
+/** `<home>/install.trb`: how this toolchain was installed, and the channel it follows. */
+public type InstallInfo {
+  channel: String
+  method: String
+}
+
+/** One line of `<base url>/versions.txt`: a version and the channel it belongs to. */
+public type ReleaseEntry {
+  version: String
+  channel: String
+}
+
+// --------------------------------------------------------------------------------------------------- pure parsing
+
+/**
+ * `key = "value"` lines, one per line - the format of `install.trb` and of nothing else in the repository, not a
+ * `project.trb`. An unknown key is ignored, and a missing one keeps the default (`"stable"`, `"script"`), so a file
+ * from a future version of this format still reads.
+ */
+public fn parseInstallInfo(text: String): InstallInfo {
+  var channel = "stable"
+  var method = "script"
+  for line in text.lines() {
+    const parts = line.split "="
+    if parts.length() != 2 {
+      continue
+    }
+    const key = parts[0].trim()
+    const value = unquoted parts[1].trim()
+    if key == "channel" {
+      channel = value
+    } else if key == "method" {
+      method = value
+    }
+  }
+  InstallInfo channel, method
+}
+
+/** The text `install.sh`, `install.ps1` and this file write for `parseInstallInfo` to read back. */
+public fn renderInstallInfo(info: InstallInfo): String {
+  "channel = \"{info.channel}\"\nmethod = \"{info.method}\"\n"
+}
+
+/** Strips one pair of double quotes around `text`, where there is one; `text` itself otherwise. */
+fn unquoted(text: String): String {
+  if text.startsWith("\"") && text.endsWith("\"") && text.byteLength() >= 2 {
+    text.sliceBytes(1, text.byteLength() - 1)
+  } else {
+    text
+  }
+}
+
+/**
+ * `<base url>/versions.txt`: one release per line, `<version> <channel>`, blank lines and `#` comments ignored. The
+ * newest of a channel is not assumed to be any particular line - [newestOf] sorts.
+ */
+public fn parseVersionsManifest(text: String): List<ReleaseEntry> {
+  var entries: List<ReleaseEntry> = []
+  for line in text.lines() {
+    const trimmed = line.trim()
+    if trimmed.isEmpty() || trimmed.startsWith("#") {
+      continue
+    }
+    const words = trimmed.split(" ").filter({ !_.isEmpty() }).toList()
+    if words.length() < 2 {
+      continue
+    }
+    entries.append ReleaseEntry(words[0], words[1])
+  }
+  entries
+}
+
+/** `version` split on `.` and parsed as integers, or `None` where a segment is not a number (`nightly-20260925`). */
+fn numericSegments(version: String): List<Int>? {
+  var segments: List<Int> = []
+  for part in version.split(".") {
+    match Int.tryFrom(part) {
+      Ok(n) => segments.append n
+      Fail(_) => { return None }
+    }
+  }
+  Some segments
+}
+
+/**
+ * `-1`, `0` or `1` as `a` is older than, the same as, or newer than `b`. Dotted numeric versions (`0.10.0`) compare
+ * segment by segment as numbers, so `0.10.0` is newer than `0.9.0`; anything else, such as `nightly-20260925`,
+ * compares as text, which already sorts a fixed-width date correctly.
+ */
+public fn compareVersions(a: String, b: String): Int {
+  match (numericSegments(a), numericSegments(b)) {
+    (Some(left), Some(right)) => compareSegments left, right
+    _ => if a == b { 0 } else if a < b { -1 } else { 1 }
+  }
+}
+
+fn compareSegments(left: List<Int>, right: List<Int>): Int {
+  const longer = if left.length() > right.length() { left.length() } else { right.length() }
+  var index = 0
+  while index < longer {
+    const l = left.get(index) ?? 0
+    const r = right.get(index) ?? 0
+    if l != r {
+      return if l < r { -1 } else { 1 }
+    }
+    index = index + 1
+  }
+  0
+}
+
+/** A key that sorts by [compareVersions] through `String`'s own `Compare` - every numeric segment padded alike. */
+fn sortKey(version: String): String {
+  match numericSegments(version) {
+    Some(segments) => segments.map({ paddedSegment _ }).toList().joined(separator: ".")
+    None => version
+  }
+}
+
+fn paddedSegment(value: Int): String {
+  const text = "{value}"
+  const width = 8
+  if text.byteLength() >= width {
+    text
+  } else {
+    "0".repeat(width - text.byteLength()) + text
+  }
+}
+
+/** Every release of `channel`, newest first. */
+public fn releasesOf(entries: List<ReleaseEntry>, channel: String): List<ReleaseEntry> {
+  entries.filter({ _.channel == channel }).toList().sorted(by: { sortKey _.version }).reversed()
+}
+
+/** The newest release of `channel`, or `None` where the manifest names none. */
+public fn newestOf(entries: List<ReleaseEntry>, channel: String): ReleaseEntry? {
+  releasesOf(entries, channel).first()
+}
+
+/** What to tell somebody whose toolchain `install.trb` says came from another method than this script. */
+public fn packageManagerCommand(method: String): String {
+  match method {
+    "homebrew" => "brew upgrade torb"
+    "winget" => "winget upgrade TorbScript.Torb"
+    "scoop" => "scoop update torb"
+    other => "the {other} that installed it"
+  }
+}
+
+// -------------------------------------------------------------------------------------------------------- the home
+
+/** `~/.torb` on Linux, macOS and FreeBSD; `%LOCALAPPDATA%\torb` on Windows. */
+public fn torbHome(): Result<String, OsError> {
+  match OperatingSystem.current {
+    .Windows => {
+      const local = Directories.state()?
+      Ok "{local.show()}/torb"
+    }
+    .Linux | .MacOs | .FreeBsd => {
+      const home = Directories.home()?
+      Ok "{home.show()}/.torb"
+    }
+  }
+}
+
+/** Where the toolchain in use lives: `<home>/bin` on POSIX, `%LOCALAPPDATA%\Programs\torb\bin` on Windows. */
+fn activeBinDirectory(home: String): Result<String, OsError> {
+  match OperatingSystem.current {
+    .Windows => {
+      const local = Directories.state()?
+      Ok "{local.show()}/Programs/torb/bin"
+    }
+    .Linux | .MacOs | .FreeBsd => Ok "{home}/bin"
+  }
+}
+
+/** `<home>/install.trb`, or `None` where there is none - a toolchain nothing here installed. */
+public fn readInstallInfo(home: String): InstallInfo? {
+  match File.readText("{home}/install.trb") {
+    Ok(text) => Some parseInstallInfo(text)
+    Fail(_) => None
+  }
+}
+
+/** The versions under `<home>/toolchains`, sorted by name (`File.list`'s own order). */
+public fn installedVersions(home: String): List<String> {
+  match File.list("{home}/toolchains") {
+    Ok(names) => names
+    Fail(_) => []
+  }
+}
+
+/** `<home>/active`: the version `<home>/bin/torb` (or the Windows copy) is at, where one was ever installed. */
+fn activeVersion(home: String): String? {
+  File.readText("{home}/active").ok().map({ _.trim() })
+}
+
+// --------------------------------------------------------------------------------------------- shelling out (I/O)
+
+/** Runs `program` to its end and answers its standard output, trimmed - or the one line that says why it failed. */
+fn captured(program: String, arguments: List<String>): Task<Result<String, String>> {
+  match Process.run(program, arguments).await() {
+    Ok(output) => {
+      if output.isSuccess() {
+        Ok output.standardOutput.trim()
+      } else {
+        Fail "{program} {arguments.joined(separator: " ")} failed: {output.standardError.trim()}"
+      }
+    }
+    Fail(error) => Fail "{program} could not be started: {error.show()}"
+  }
+}
+
+/** `curl`, falling back to `wget` - the same choice `tools/install.sh` makes. */
+fn download(url: String, destination: String): Task<Result<Void, String>> {
+  match captured("curl", ["-fsSL", url, "-o", destination]).await() {
+    Ok(_) => Ok(void)
+    Fail(curlFailure) => {
+      match captured("wget", ["-q", url, "-O", destination]).await() {
+        Ok(_) => Ok(void)
+        Fail(_) => Fail curlFailure
+      }
+    }
+  }
+}
+
+/** `sha256sum`/`shasum -a 256` on POSIX, PowerShell's `Get-FileHash` on Windows - lower case, without the file name. */
+fn sha256Of(path: String): Task<Result<String, String>> {
+  if OperatingSystem.current == .Windows {
+    // Not `certutil`: its extra lines are in the console's own code page, and a German or Japanese Windows prints
+    // them outside ASCII, which `Process.run` cannot read back as text (it insists on UTF-8, correctly). One
+    // PowerShell expression whose only output is the hex itself sidesteps the question of which code page it is in.
+    const script = "(Get-FileHash -LiteralPath '{path}' -Algorithm SHA256).Hash"
+    match captured("powershell", ["-NoProfile", "-NonInteractive", "-Command", script]).await() {
+      Fail(message) => Fail message
+      Ok(hex) => Ok hex.trim().toLowerCase()
+    }
+  } else {
+    match captured("sha256sum", [path]).await() {
+      Ok(text) => Ok firstWord(text)
+      Fail(sha256sumFailure) => {
+        match captured("shasum", ["-a", "256", path]).await() {
+          Ok(text) => Ok firstWord(text)
+          Fail(_) => Fail sha256sumFailure
+        }
+      }
+    }
+  }
+}
+
+fn firstWord(text: String): String {
+  text.split(" ").filter({ !_.isEmpty() }).toList().first() ?? text
+}
+
+/** `<archive>` (already downloaded to `path`) unpacked to `destination`, its one top-level directory stripped. */
+fn extract(path: String, destination: String): Task<Result<Void, String>> {
+  match File.createDirectory(destination) {
+    Fail(error) => Fail error.show()
+    Ok(_) => {
+      match captured("tar", ["-xzf", path, "--strip-components=1", "-C", destination]).await() {
+        Ok(_) => Ok(void)
+        Fail(message) => Fail message
+      }
+    }
+  }
+}
+
+/** The SHA-256 of `file` inside `sums` (the text of `SHA256SUMS`), a leading `*` (binary mode) stripped. */
+public fn expectedHash(sums: String, file: String): String? {
+  for line in sums.lines() {
+    const words = line.trim().split(" ").filter({ !_.isEmpty() }).toList()
+    if words.length() < 2 {
+      continue
+    }
+    var name = words[1]
+    if name.startsWith("*") {
+      name = name.sliceBytes 1, name.byteLength()
+    }
+    if name == file {
+      return Some words[0]
+    }
+  }
+  None
+}
+
+/** Makes `version` the one `<home>/bin/torb` (POSIX) or `%LOCALAPPDATA%\Programs\torb` (Windows) resolves to. */
+fn activate(home: String, version: String): Task<Result<Void, String>> {
+  const toolchain = "{home}/toolchains/{version}"
+  if OperatingSystem.current == .Windows {
+    const active = match activeBinDirectory(home) {
+      Ok(path) => "{path}/.."
+      Fail(error) => { return Fail error.show() }
+    }
+    // A running torb.exe cannot be overwritten, only renamed; the rename is best effort, since the process that
+    // matters is the one holding the file open, which may not be this one
+    const running = Process.executablePath() ?? ""
+    if running.startsWith(active) {
+      const _ = Process.run("cmd", ["/c", "move", "/y", running, "{running}.replaced"]).await()
+    }
+    // robocopy answers 0-7 for success (1 alone means "files copied"), so a `Fail` from `Process.run`'s plain
+    // exitCode == 0 check is not trusted here - the result is not inspected, only that the command was tried
+    const _ = Process.run("robocopy", [toolchain, active, "/MIR"]).await()
+  } else {
+    const bin = "{home}/bin"
+    match File.createDirectory(bin) {
+      Fail(error) => { return Fail error.show() }
+      Ok(_) => void
+    }
+    match captured("ln", ["-sfn", "../toolchains/{version}/bin/torb", "{bin}/torb"]).await() {
+      Fail(message) => { return Fail message }
+      Ok(_) => void
+    }
+  }
+  match File.writeText("{home}/active", version) {
+    Fail(error) => Fail error.show()
+    Ok(_) => Ok(void)
+  }
+}
+
+// -------------------------------------------------------------------------------------------------- the manifest
+
+/** `file:///C:/some/dir` names `C:/some/dir`, not `/C:/some/dir`: the one slash before a drive letter is the URI's. */
+fn withoutDriveSlash(path: String): String {
+  if path.startsWith("/") && path.byteLength() >= 3 && path.sliceBytes(2, 3) == ":" {
+    path.sliceBytes 1, path.byteLength()
+  } else {
+    path
+  }
+}
+
+fn fetchText(baseUrl: String, path: String): Task<Result<String, String>> {
+  if baseUrl.startsWith("file://") {
+    const root = withoutDriveSlash baseUrl.sliceBytes(7, baseUrl.byteLength())
+    match File.readText("{root}/{path}") {
+      Ok(text) => Ok text
+      Fail(error) => Fail error.show()
+    }
+  } else {
+    const url = "{baseUrl}/{path}"
+    match Uri.tryFrom(url) {
+      Fail(error) => Fail error.show()
+      Ok(uri) => {
+        match httpGet(uri).await() {
+          Fail(error) => Fail error.show()
+          Ok(response) => {
+            if !response.status.isSuccess() {
+              Fail "{url}: {response.status.show()}"
+            } else {
+              match response.body.text().await() {
+                Ok(text) => Ok text
+                Fail(error) => Fail error.show()
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+// -------------------------------------------------------------------------------------------------------- the CLI
+
+const defaultBaseUrl = "https://torb.dev/download"
+
+fn baseUrl(): String {
+  Environment.get("TORB_UPGRADE_BASE_URL") ?? defaultBaseUrl
+}
+
+/** `torb upgrade --list`: what is installed, and what the channel offers. */
+fn printAvailable(home: String, channel: String): Task<Int> {
+  const installed = installedVersions home
+  const active = activeVersion home
+  match fetchText(baseUrl(), "versions.txt").await() {
+    Fail(message) => {
+      printError "error: {message}"
+      1
+    }
+    Ok(text) => {
+      print "installed:"
+      if installed.isEmpty() {
+        print "  (none)"
+      }
+      for version in installed {
+        const mark = if active == Some(version) { " (active)" } else { "" }
+        print "  {version}{mark}"
+      }
+      print "available ({channel}):"
+      const releases = releasesOf parseVersionsManifest(text), channel
+      if releases.isEmpty() {
+        print "  (none listed)"
+      }
+      for entry in releases {
+        const mark = if installed.contains(entry.version) { " (installed)" } else { "" }
+        print "  {entry.version}{mark}"
+      }
+      0
+    }
+  }
+}
+
+/** `torb upgrade [<version>] [--channel <name>]`: installs it, and makes it the one in use. */
+fn performUpgrade(home: String, info: InstallInfo, options: UpgradeOptions): Task<Int> {
+  const channel = options.channel ?? info.channel
+  const version = match options.version {
+    Some(named) => named
+    None => {
+      match fetchText(baseUrl(), "versions.txt").await() {
+        Fail(message) => {
+          printError "error: {message}"
+          return 1
+        }
+        Ok(text) => {
+          match newestOf(parseVersionsManifest(text), channel) {
+            None => {
+              printError "error: no version of the \"{channel}\" channel is listed at {baseUrl()}/versions.txt"
+              return 1
+            }
+            Some(entry) => entry.version
+          }
+        }
+      }
+    }
+  }
+  if options.channel.isSome() && options.channel != Some(info.channel) {
+    const updated = InstallInfo channel, info.method
+    match File.writeText("{home}/install.trb", renderInstallInfo(updated)) {
+      Fail(error) => {
+        printError "error: {error.show()}"
+        return 1
+      }
+      Ok(_) => print "channel switched to \"{channel}\""
+    }
+  }
+  const toolchain = "{home}/toolchains/{version}"
+  if File.exists(toolchain) {
+    print "{version} is already installed; making it the one in use"
+    return match activate(home, version).await() {
+      Fail(message) => {
+        printError "error: {message}"
+        1
+      }
+      Ok(_) => 0
+    }
+  }
+  print "installing TorbScript {version} ({hostTarget().name()})"
+  const scratch = "{home}/tmp-{version}"
+  match File.createDirectory(scratch) {
+    Fail(error) => {
+      printError "error: {error.show()}"
+      return 1
+    }
+    Ok(_) => void
+  }
+  const archive = "torb-{version}-{hostTarget().name()}.tar.gz"
+  const archivePath = "{scratch}/{archive}"
+  const sumsPath = "{scratch}/SHA256SUMS"
+  match download("{baseUrl()}/{version}/{archive}", archivePath).await() {
+    Fail(message) => {
+      printError "error: {message}"
+      return 1
+    }
+    Ok(_) => void
+  }
+  match download("{baseUrl()}/{version}/SHA256SUMS", sumsPath).await() {
+    Fail(message) => {
+      printError "error: {message}"
+      return 1
+    }
+    Ok(_) => void
+  }
+  const sums = match File.readText(sumsPath) {
+    Ok(text) => text
+    Fail(error) => {
+      printError "error: {error.show()}"
+      return 1
+    }
+  }
+  const expected = match expectedHash(sums, archive) {
+    Some(hash) => hash
+    None => {
+      printError "error: {archive} is not listed in SHA256SUMS"
+      return 1
+    }
+  }
+  const actual = match sha256Of(archivePath).await() {
+    Ok(hash) => hash
+    Fail(message) => {
+      printError "error: {message}"
+      return 1
+    }
+  }
+  if actual.toLowerCase() != expected.toLowerCase() {
+    printError "error: {archive}: expected sha256 {expected}, got {actual}"
+    return 1
+  }
+  print "sha256 verified"
+  match extract(archivePath, toolchain).await() {
+    Fail(message) => {
+      printError "error: {message}"
+      return 1
+    }
+    Ok(_) => void
+  }
+  match activate(home, version).await() {
+    Fail(message) => {
+      printError "error: {message}"
+      return 1
+    }
+    Ok(_) => void
+  }
+  print "TorbScript {version} is installed and in use"
+  0
+}
+
+/** `torb upgrade`, in every form section 5 of RELEASE.md gives it. */
+public fn runUpgrade(options: UpgradeOptions): Task<Int> {
+  const home = match torbHome() {
+    Ok(path) => path
+    Fail(error) => {
+      printError "error: {error.show()}"
+      return 1
+    }
+  }
+  if options.list {
+    return printAvailable(home, options.channel ?? readInstallInfo(home)?.channel ?? "stable").await()
+  }
+  const info = match readInstallInfo(home) {
+    Some(found) => found
+    None => {
+      printError "error: no {home}/install.trb; torb upgrade only manages a toolchain tools/install.sh or"
+      printError "tools/install.ps1 installed (docs/design/RELEASE.md section 5)"
+      return 1
+    }
+  }
+  if info.method != "script" {
+    printError "error: this toolchain was installed with {info.method}; run {packageManagerCommand(info.method)}"
+    return 1
+  }
+  performUpgrade(home, info, options).await()
+}

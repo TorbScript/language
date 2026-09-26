@@ -42,6 +42,7 @@ use documentationOptionsOf, printDocumentationUsage from "./documentation/comman
 use runCheck, runIndex, runSkill, runBundle from "./documentation/command"
 use sourceOptionsOf, runSource from "./documentation/source"
 use canonUsage, canonOptionsOf, runCanon from "./canon/command"
+use UpgradeOptions, runUpgrade from "./cli/upgrade"
 
 /** What `torb` prints when it is called with no subcommand, or one it does not recognize. */
 fn printUsage() {
@@ -69,6 +70,10 @@ fn printUsage() {
   printError "                         --jobs N: accepted and ignored - one program is one process"
   printError "  torb new <name>        Scaffold a package: project.trb, src/main.trb, tests/main.test.trb"
   printError "                         refuses if <name> already exists"
+  printError "  torb upgrade [version]  Installs another version beside this one, and makes it the one in use"
+  printError "                         --channel stable|nightly: switches the channel, then upgrades within it"
+  printError "                         --list: what is installed and what is available, installs nothing"
+  printError "                         only for a toolchain tools/install.sh or tools/install.ps1 installed"
   printError "  torb repl              Read entries from standard input and run each in the VM, keeping their bindings"
   printError "                         --sandbox: every entry under SCRIPTS.md's grant of the working directory"
   printError "  torb manifest [path]...  Evaluate every project.trb the paths reach in the sandboxed VM, print its settings"
@@ -530,6 +535,37 @@ fn newOptionsOf(arguments: List<String>): NewOptions? {
 }
 
 /**
+ * `torb upgrade [<version>] [--channel <name>] [--list]`: everything is optional, so `None` only where `--channel`
+ * is the last argument and names nothing.
+ */
+fn upgradeOptionsOf(arguments: List<String>): UpgradeOptions? {
+  var version: String? = None
+  var channel: String? = None
+  var list = false
+  var wantsChannel = false
+  for argument in arguments {
+    if wantsChannel {
+      channel = Some argument
+      wantsChannel = false
+      continue
+    }
+    if argument == "--channel" {
+      wantsChannel = true
+      continue
+    }
+    if argument == "--list" {
+      list = true
+      continue
+    }
+    version = Some argument
+  }
+  if wantsChannel {
+    return None
+  }
+  Some UpgradeOptions(version, channel, list)
+}
+
+/**
  * `torb natives --header [directory]`: the generated half of the contract between the lowering and the runtime
  * (BACKEND 3.7). The header is a pure function of the manifest, so writing it is reading one table and one `writeText` -
  * and `compiler/tests/natives.test.trb` asserts that the file on disk is what this writes, which is what keeps the two
@@ -621,6 +657,19 @@ match Process.arguments() {
       }
     }
     const code = runNew(options)?
+    if code != 0 {
+      Process.exit code
+    }
+  }
+  ["upgrade", ...more] => {
+    const options = match upgradeOptionsOf(more) {
+      Some(found) => found
+      None => {
+        printUsage()
+        Process.exit 2
+      }
+    }
+    const code = runUpgrade(options).await()
     if code != 0 {
       Process.exit code
     }

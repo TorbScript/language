@@ -1,0 +1,118 @@
+/**
+ * Tests for the pure parts of `torb upgrade` (compiler/src/cli/upgrade.trb): the `install.trb` format, the
+ * `versions.txt` manifest, version comparison and sorting, and picking a hash out of `SHA256SUMS` - everything that
+ * does not shell out or reach the network, and so can run as an ordinary test.
+ */
+
+use test, group from "std/test"
+use InstallInfo, ReleaseEntry from "../src/cli/upgrade"
+use parseInstallInfo, renderInstallInfo from "../src/cli/upgrade"
+use parseVersionsManifest, compareVersions, releasesOf, newestOf from "../src/cli/upgrade"
+use packageManagerCommand, expectedHash from "../src/cli/upgrade"
+
+group "install.trb" {
+  test "parses channel and method written with =" {
+    const info = parseInstallInfo "channel = \"nightly\"\nmethod = \"script\"\n"
+    assert(info.channel == "nightly")
+    assert(info.method == "script")
+  }
+
+  test "defaults to stable and script where a field is missing" {
+    const info = parseInstallInfo ""
+    assert(info.channel == "stable")
+    assert(info.method == "script")
+  }
+
+  test "ignores a line that is not key = value" {
+    const info = parseInstallInfo "channel = \"nightly\"\nsomething odd\n"
+    assert(info.channel == "nightly")
+  }
+
+  test "renders what it parses back" {
+    const rendered = renderInstallInfo InstallInfo("nightly", "homebrew")
+    const parsed = parseInstallInfo rendered
+    assert(parsed.channel == "nightly")
+    assert(parsed.method == "homebrew")
+  }
+}
+
+group "versions.txt" {
+  test "one release per line, version then channel" {
+    const entries = parseVersionsManifest "0.4.0 stable\n0.3.2 stable\nnightly-20260925 nightly\n"
+    assert(entries.length() == 3)
+    assert(entries[0].version == "0.4.0")
+    assert(entries[0].channel == "stable")
+  }
+
+  test "skips blank lines and # comments" {
+    const entries = parseVersionsManifest "# the channels\n\n0.4.0 stable\n"
+    assert(entries.length() == 1)
+  }
+
+  test "skips a line with no channel" {
+    const entries = parseVersionsManifest "0.4.0\n"
+    assert entries.isEmpty()
+  }
+}
+
+group "comparing versions" {
+  test "a longer minor number is still newer: 0.10.0 > 0.9.0" {
+    assert(compareVersions("0.10.0", "0.9.0") > 0)
+    assert(compareVersions("0.9.0", "0.10.0") < 0)
+  }
+
+  test "equal versions compare equal" {
+    assert(compareVersions("0.4.0", "0.4.0") == 0)
+  }
+
+  test "a nightly compares as text, which sorts a fixed-width date correctly" {
+    assert(compareVersions("nightly-20260925", "nightly-20260101") > 0)
+  }
+}
+
+group "releasesOf and newestOf" {
+  const manifest = "0.3.2 stable\n0.4.0 stable\n0.10.0 stable\nnightly-20260925 nightly\nnightly-20260101 nightly\n"
+
+  test "releasesOf sorts a channel newest first" {
+    const releases = releasesOf parseVersionsManifest(manifest), "stable"
+    assert(releases.map({ _.version }).toList() == ["0.10.0", "0.4.0", "0.3.2"])
+  }
+
+  test "newestOf answers the first of releasesOf" {
+    assert(newestOf(parseVersionsManifest(manifest), "stable") == Some(ReleaseEntry("0.10.0", "stable")))
+    assert(newestOf(parseVersionsManifest(manifest), "nightly") == Some(ReleaseEntry("nightly-20260925", "nightly")))
+  }
+
+  test "a channel with nothing listed answers None" {
+    assert(newestOf(parseVersionsManifest(manifest), "beta") == None)
+  }
+}
+
+group "the package manager to name" {
+  test "names the known managers' own upgrade command" {
+    assert(packageManagerCommand("homebrew") == "brew upgrade torb")
+    assert(packageManagerCommand("winget") == "winget upgrade TorbScript.Torb")
+    assert(packageManagerCommand("scoop") == "scoop update torb")
+  }
+
+  test "falls back to naming the method itself" {
+    assert(packageManagerCommand("apt") == "the apt that installed it")
+  }
+}
+
+group "reading SHA256SUMS" {
+  const sums = "92bcb60a...ff  torb-0.4.0-linux-x64.tar.gz\nabc123  torb-0.4.0-linux-arm64.tar.gz\n"
+
+  test "finds the hash of the named file" {
+    assert(expectedHash(sums, "torb-0.4.0-linux-x64.tar.gz") == Some("92bcb60a...ff"))
+  }
+
+  test "strips a leading * (a hash taken in binary mode)" {
+    const starred = "92bcb60a...ff *torb-0.4.0-linux-x64.tar.gz\n"
+    assert(expectedHash(starred, "torb-0.4.0-linux-x64.tar.gz") == Some("92bcb60a...ff"))
+  }
+
+  test "answers None for a file the sums do not list" {
+    assert(expectedHash(sums, "torb-0.4.0-macos-arm64.tar.gz") == None)
+  }
+}
