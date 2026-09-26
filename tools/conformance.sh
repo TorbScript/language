@@ -434,7 +434,9 @@ fi
 
 # ----------------------------------------------------------------------------- the driver ---------------------------
 
-jobs=2
+# Four at a time: the machine this suite runs on has sixteen threads, and `wait_for_room` holds a program back while
+# memory is short. `TORB_CONFORMANCE_JOBS` or `--jobs` says otherwise.
+jobs=${TORB_CONFORMANCE_JOBS:-4}
 filter=""
 update=0
 machine=0

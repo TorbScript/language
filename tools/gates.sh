@@ -248,7 +248,14 @@ torb=$(binary_of "$torb_path")
 gate "conformance suite" sh tools/conformance.sh
 gate "conformance suite in the VM" sh tools/conformance.sh --vm
 gate "tests/language and examples/config-dsl in native binaries (torb build --embed-vm)" embedded_programs "$torb"
-gate "fixpoint (seed -> torb -> torb)" sh tools/bootstrap.sh
+# The bootstrap of tier A proves the fixpoint of the sources it built, and marks it with `build/release/fixpoint`. The
+# same comparison of the same sources again is twenty minutes of nothing; a source changed since, or a binary built by
+# hand over the bootstrap's, runs it.
+if [ -f build/release/fixpoint ] && ! is_stale build/release/fixpoint && ! [ "$torb" -nt build/release/fixpoint ]; then
+  say "fixpoint (seed -> torb -> torb): held at the bootstrap of these sources, not repeated"
+else
+  gate "fixpoint (seed -> torb -> torb)" sh tools/bootstrap.sh
+fi
 gate "runtime tests" sh runtime/build.sh
 
 say "tier B: green"

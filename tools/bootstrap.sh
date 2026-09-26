@@ -199,7 +199,9 @@ install() {
   else
     rm -f build/release/program.hash
   fi
-  rm -f "build/release/$name.old-$$" 2>/dev/null || true
+  rm -f "build/release/$name.old-$" 2>/dev/null || true
+  # Written last, so it is newer than the binary: tier B's fixpoint gate skips a second bootstrap of the same sources
+  : >build/release/fixpoint
   succeeded=1
 }
 
