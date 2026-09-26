@@ -536,6 +536,40 @@ Built in the order the decisions above gave, each its own commit:
   and that is what the compiler's spans and the formats of `std/` (URI, YAML, Markdown, HTTP) were moved to: their
   offsets come from a lexer, which is recommendation 9's "converted where the source is sliced". `Span` keeps `Int`.
 
-Not built: recommendation 6 (the range analysis dropping a list's bounds check), 10 (the documentation gate for
-`# Panics`) and 11 (`torb check --partial`); the messages of `charAt` inside a character, `repeat` and `absolute()`
-of recommendation 3.
+Then the rest of the roadmap item, each its own commit again:
+
+- **The last messages of recommendation 3**: `charAtByte` at an offset inside a character says
+  `the offset 3 is inside of a character of a text of 7 bytes` at the caller's line, a negative `repeat` says
+  `a text cannot be repeated -1 times`, and `Int8.minimum.absolute()` says
+  ``arithmetic overflow in `absolute`: -128 has no positive counterpart`` in both back ends.
+- **The bounds check a loop proves** (recommendation 6): `compiler/src/ir/bounds.trb`. A read `list[index]` of the `at`
+  of a list of `std/collections`, whose index a guard `index < list.length()` of the same, unchanged list and a start at
+  zero or above bound, becomes an `Element` step without a check - `torb_list_item` in C, `ListItemAddress` in the
+  kernel of the VM. `for index in 0..values.length()` is that shape.
+- **`torb check --partial`** (recommendation 11): `compiler/src/cli/partial.trb` lists every operation of the checked
+  files that can panic and that the compiler did not prove - an index, a slice, a division, an overflow - with the line
+  it is written on; the reads of recommendation 6 and the arithmetic the range analysis proves are not among them.
+- **The documentation gate for `# Panics`** (recommendation 10): `compiler/src/documentation/panics.trb`. `torb docs
+  source` reports a public function of `std/` whose body calls `panic`, calls `expect`, or calls a function of the
+  same file that documents a panic, and whose comment has no `# Panics` section; a section that begins with `Never`
+  says the `panic` guards a state the function rules out itself (`Task.await`). Tier A runs
+  `torb docs source --panics std`. The call graph is one file's, read off the syntax tree: a member of another type,
+  another file and an operator are not followed, which is what keeps the gate from crying wolf.
+- **The frames of the `dev` profile** (the later slice of recommendation 4): a native binary of the `dev` profile
+  prints the frames of the running task below the site, innermost first, each with the line it is in the middle of
+  (`runtime/include/torb.h`, `torb_frame`). Every emitted function starts with `TORB_ENTER_FRAME("name")`, every call
+  of program code is preceded by `TORB_FRAME_SITE(location)`, and both compile to nothing outside of `dev`, so the C
+  is the same under every profile. A `CallClosure` carries the site it is written at for this.
+
+Not built, and why:
+
+- **A call through a closure still names the line of `std/`**, where the closure's body is a function of `std/`:
+  `values.sum()` overflows inside the closure `{ a, b => a + b }` that `sum` hands to `fold`. Handing the site on
+  would make the closure capture its creator's site: in C that site is the address of a compound literal of a caller's
+  frame, which a closure that outlives the call - every lazy adapter of an iterator - cannot hold. It would take a
+  location that is a value (a new kind of capture in the IR, a field of the environment in both back ends) or static
+  locations for every call in the C, for the one case the frames of the `dev` profile already answer: their last line
+  is the program's (`in the top level, at src/main.trb:2:7`).
+- **The VM prints the site and no frames.** It is held to the release binary's standard error byte for byte by the
+  conformance suite, and a frame's line needs a location on every call word of the bytecode. `torb run --native` and
+  `torb test --native` are where the frames are.
