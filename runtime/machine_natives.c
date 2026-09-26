@@ -2113,7 +2113,7 @@ static void torb_machine_native_172(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_text_char_at_located */
-static void torb_machine_native_175(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_173(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
