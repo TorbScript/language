@@ -16,6 +16,7 @@ use parse from "./syntax/parser/parser"
 use dumpTokens from "./syntax/dump"
 use collectSourceFiles from "./cli/files"
 use renderDiagnostic, renderProblem, counted from "./cli/render"
+use printPartialOperations from "./cli/partial"
 use readSourceTree, absolutePaths from "./project/read"
 use SourceTree from "./project/source-tree"
 use check, Checked from "./semantics/check"
@@ -53,6 +54,7 @@ fn printUsage() {
   printError "                         --statistics: how many expressions of every file have a type"
   printError "                         --timings: the wall time of every pass, in the order they ran"
   printError "                         --every-target: lower every program and test once per target, without C"
+  printError "                         --partial: every operation that can panic and that the compiler did not prove"
   printError "  torb build [path]      Compile an entry file to a native binary through C"
   printError "                         --profile dev|release: how hard the C compiler optimizes (default: release)"
   printError "                         --release: the same as --profile release"
@@ -150,10 +152,11 @@ fn checkProjects(
   withStatistics: Bool,
   withTimings: Bool,
   withEveryTarget: Bool,
+  withPartial: Bool = false,
 ): Result<Int, IoError> {
   const tree = readSourceTree(paths)?
   // Every body is checked where it is lowered afterwards, the imported ones as well
-  const checked = check(tree, absolutePaths(paths)?, withTimings, withEveryTarget)
+  const checked = check(tree, absolutePaths(paths)?, withTimings, withEveryTarget || withPartial)
   if withTimings {
     printTimings checked
   }
@@ -195,6 +198,10 @@ fn checkProjects(
   }
   if withEveryTarget && problems == 0 {
     return Ok checkEveryTarget(checked, tree)
+  }
+  // An audit and no error: the partial operations are listed, and the answer is still the problems of the check
+  if withPartial && problems == 0 {
+    const _ = printPartialOperations checked
   }
   Ok problems
 }
@@ -613,10 +620,11 @@ match Process.arguments() {
     const withStatistics = more.contains "--statistics"
     const withTimings = more.contains "--timings"
     const withEveryTarget = more.contains "--every-target"
-    const flags = ["--statistics", "--timings", "--every-target"]
+    const withPartial = more.contains "--partial"
+    const flags = ["--statistics", "--timings", "--every-target", "--partial"]
     const given = more.filter({ !flags.contains(_) }).toList()
     const paths = if given.isEmpty() { ["."] } else { given }
-    if checkProjects(paths, withStatistics, withTimings, withEveryTarget)? > 0 {
+    if checkProjects(paths, withStatistics, withTimings, withEveryTarget, withPartial)? > 0 {
       Process.exit 1
     }
   }

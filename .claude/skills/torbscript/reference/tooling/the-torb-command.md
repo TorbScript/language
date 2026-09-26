@@ -82,6 +82,8 @@ a caret under the span.
 |------|--------------|
 | `--statistics` | How many expressions of every module have a type, and how many are deferred to a later milestone |
 | `--timings` | The wall time of every pass, in the order they ran |
+| `--every-target` | Every program and test lowered once per target of the toolchain, without C: a native reached on a system it does not exist on |
+| `--partial` | Every operation of the checked files that can panic and that the compiler did not prove: a call of `std/` that can panic (an index, a slice, `expect`, a key of a map), integer arithmetic that still carries its check, an index step that still compares. An audit for code that must not stop, one line per site; it changes no answer of `check` |
 
 `check` is the gate: a false positive of it is a bug in the checker, not a reason to change the program.
 

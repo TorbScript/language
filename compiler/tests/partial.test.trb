@@ -1,0 +1,59 @@
+/**
+ * `torb check --partial` (`cli/partial.trb`, docs/design/PANICS.md recommendation 11): every operation that can panic
+ * and that the compiler did not prove, where the program wrote it - and the reads a loop proves (`ir/bounds.trb`) and
+ * the arithmetic the range analysis proves are not among them.
+ */
+
+use test, group from "std/test"
+use workspaceWith from "./harness"
+use check from "../src/semantics/check"
+use partialOperationLines from "../src/cli/partial"
+
+fn partialOf(source: String): List<String> {
+  const checked = check workspaceWith(["app/src/main.trb": source]), ["app"], false, true
+  partialOperationLines checked
+}
+
+group "What is partial" {
+  test "an index from outside, a division and an addition are partial, where they are written" {
+    const source = raw"""
+      fn pick(values: ArrayList<Int>, index: Int): Int {
+        values[index]
+      }
+
+      fn half(value: Int, by: Int): Int {
+        value / by
+      }
+
+      fn sum(first: Int, second: Int): Int {
+        first + second
+      }
+      """
+    const found = partialOf source
+    assert(found.length() == 3)
+    assert found[0].startsWith("acme/app/src/main.trb:2:3: `ArrayList<Item>.at` can panic here")
+    assert(found[1] == "acme/app/src/main.trb:6:3: `/` can divide by zero or overflow")
+    assert(found[2] == "acme/app/src/main.trb:10:3: `+` can overflow")
+  }
+
+  test "a read a loop proves inside the list and an addition that cannot leave its type are not" {
+    const source = raw"""
+      fn last(values: ArrayList<Int>): Int {
+        var found = 0
+        for index in 0..values.length() {
+          found = values[index]
+        }
+        found
+      }
+
+      fn small(value: Int8): Int8 {
+        if value < 10 {
+          return value + 1
+        }
+        0
+      }
+      """
+    const found = partialOf source
+    assert found.isEmpty()
+  }
+}

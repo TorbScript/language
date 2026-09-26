@@ -1,0 +1,244 @@
+/**
+ * `torb check --partial`: every partial operation of what was checked that the compiler did not prove, per file
+ * (docs/design/PANICS.md, recommendation 11) - an audit for code that must not stop, never a default.
+ *
+ * What was checked is lowered as `torb ir` lowers it, every declaration of it, and the passes that prove a check
+ * unnecessary have run by then: the range analysis (`ir/ranges.trb`) and the proven reads of a list (`ir/bounds.trb`).
+ * What is left and can panic is one of three things, each reported where the program wrote it:
+ *
+ * - a call of a function of `std/` that can panic - an index, a slice, `expect`, a key of a map - which is exactly a
+ *   call `ir/sites.trb` hands the caller's line to;
+ * - integer arithmetic that still carries its check: an overflow of `+`, `-`, `*`, a division or a remainder by zero, a
+ *   shift past the width;
+ * - an index step into an array or a list that still compares.
+ *
+ * A `panic`, an `assert` and a `match` the checker proved total are not partial operations: the first two are what the
+ * program asserted itself. A call through a trait-typed value or a closure is not followed: which function it reaches is
+ * decided while the program runs.
+ */
+
+use ModuleId from "../semantics/module"
+use Checked from "../semantics/check"
+use lowerWorkspace, pathsOfModules from "../ir/lower/lower"
+use IrProgram, IrFunction, Instruction, LocationId, Location, NumericKind, IntrinsicOperation from "../ir/ir"
+use WitnessSource, FunctionId from "../ir/ir"
+use referencesOf from "../ir/elements"
+use hostTarget from "../project/target"
+use counted from "./render"
+use signatureOf from "../semantics/checker/signature"
+
+/** One partial operation: where it is written, and what can go wrong there. */
+type PartialOperation {
+  location: Location
+  what: String
+}
+
+/** Prints every partial operation of what was checked, sorted by file and line, and answers how many there were. */
+public fn printPartialOperations(checked: Checked): Int {
+  const lines = partialOperationLines checked
+  var files: Set<String> = Set.of()
+  for line in lines {
+    print line
+    files.insert(line.substringBefore(":") ?? "")
+  }
+  if lines.isEmpty() {
+    print "no partial operations"
+  } else {
+    print "{counted(lines.length(), "partial operation")} the compiler did not prove, in {counted(files.length(), "file")}"
+  }
+  lines.length()
+}
+
+/** `path:line:column: what` for every partial operation of what was checked, sorted by file, line and column. */
+public fn partialOperationLines(checked: Checked): List<String> {
+  const modules = requestedModulesOf checked
+  if modules.isEmpty() {
+    return []
+  }
+  const paths = pathsOfModules checked
+  const lowering = lowerWorkspace checked.checker, paths, modules, true, hostTarget()
+  // What was asked for is judged by where an operation is written, which covers the top level of a file and the
+  // bodies of its closures as well as its declarations
+  var isRequested: Set<String> = Set.of()
+  for module in modules {
+    isRequested.insert(paths.get(module.value) ?? "")
+  }
+  var seen: Set<String> = Set.of()
+  var found: List<(String, String)> = []
+  for function in lowering.program.functions {
+    // A copy that tracks its caller says what its original says
+    if function.tracksCaller {
+      continue
+    }
+    for operation in partialOperationsOf(checked, lowering.program, function) {
+      if !isRequested.contains(operation.location.path) {
+        continue
+      }
+      const site = "{operation.location.path}:{operation.location.line}:{operation.location.column}"
+      const line = "{site}: {operation.what}"
+      if seen.contains(line) {
+        continue
+      }
+      seen.insert line
+      found.append((sortKeyOf(operation.location), line))
+    }
+  }
+  found.sort { _.0 }
+  var lines: List<String> = []
+  for (_, line) in found {
+    lines.append line
+  }
+  lines
+}
+
+/** The modules that were asked for and hold code: every one but a manifest. */
+fn requestedModulesOf(checked: Checked): List<ModuleId> {
+  var found: List<ModuleId> = []
+  for module in checked.requested {
+    if checked.checker.program.graph.at(module).receiver.isSome() {
+      continue
+    }
+    found.append module
+  }
+  found
+}
+
+/** A key that sorts by path, then by line and column as numbers. */
+fn sortKeyOf(location: Location): String {
+  "{location.path}\u{0}{padded(location.line)}\u{0}{padded(location.column)}"
+}
+
+fn padded(value: Int): String {
+  const digits = "{value}"
+  "0".repeat(10 - digits.byteLength()) + digits
+}
+
+/** Every partial operation of one function that the passes before left in place. */
+fn partialOperationsOf(checked: Checked, program: IrProgram, function: IrFunction): List<PartialOperation> {
+  var found: List<PartialOperation> = []
+  for block in function.blocks {
+    for instruction in block.instructions {
+      match instruction {
+        .Call(_, callee, _, _, Some(at)) => {
+          if program.hasFunction(callee) && program.functionAt(callee).tracksCaller {
+            const name = calleeNameOf checked, program.functionAt(callee)
+            appendAt program, found, at, "`{name}` can panic here"
+          }
+        }
+        .CallWitness(_, witness, member, _, Some(at)) => {
+          if const Some(callee) = panickingMember(program, function, witness, member) {
+            const name = calleeNameOf checked, program.functionAt(callee)
+            appendAt program, found, at, "`{name}` can panic here, through a trait-typed value"
+          }
+        }
+        .Intrinsic(_, intrinsic, _, at) => {
+          if intrinsic.isChecked && isInteger(intrinsic.kind) {
+            if const Some(what) = arithmeticRisk(intrinsic.operation) {
+              appendAt program, found, at, what
+            }
+          }
+        }
+        _ => {}
+      }
+      for reference in referencesOf(instruction) {
+        for step in reference.steps {
+          if const .Element(_, _, at, checked) = step {
+            if checked {
+              appendAt program, found, at, "an index can be out of bounds"
+            }
+          }
+        }
+      }
+    }
+  }
+  found
+}
+
+/**
+ * A member a call through a trait-typed value may reach that can panic: the tables of the value's bound, followed down
+ * the supertraits the source names, and the first of their members at that index that has a copy tracking its caller.
+ */
+fn panickingMember(program: IrProgram, function: IrFunction, witness: WitnessSource, member: Int): FunctionId? {
+  const (place, bound) = match witness.root {
+    .Value(found, index) => (found, index)
+    _ => {
+      return None
+    }
+  }
+  if !place.steps.isEmpty() || !function.hasSlot(place.base) {
+    return None
+  }
+  const traits = match program.typeAt(function.typeOfSlot(place.base)) {
+    .Object(found) => found
+    _ => {
+      return None
+    }
+  }
+  const root = traits.get(bound)?
+  var tables: List<Int> = []
+  for index in 0..program.witnessTables.length() {
+    if program.witnessTables[index].applied == root {
+      tables.append index
+    }
+  }
+  for step in witness.steps {
+    var next: List<Int> = []
+    for table in tables {
+      if const Some(Some(inner)) = program.witnessTables[table].nested.get(step) {
+        next.append inner.value
+      }
+    }
+    tables = next
+  }
+  for table in tables {
+    if const Some(callee) = program.witnessTables[table].members.get(member) {
+      if program.siteCopies.containsKey(callee.value) {
+        return Some callee
+      }
+    }
+  }
+  None
+}
+
+fn appendAt(program: IrProgram, var found: List<PartialOperation>, at: LocationId, what: String) {
+  if program.hasLocation(at) {
+    found.append PartialOperation(program.locationAt(at), what)
+  }
+}
+
+/** The declared name of a function: `ArrayList<Int64>.at`, `Option<Int64>.expect`, or the bare name of a top-level one. */
+fn calleeNameOf(checked: Checked, function: IrFunction): String {
+  var checker = checked.checker
+  const symbol = match function.origin {
+    Some(found) => found
+    None => {
+      return function.name
+    }
+  }
+  const name = checker.symbolAt(symbol).name
+  const signature = checker.signature signatureOf(checker, symbol)
+  match signature.owner {
+    Some(owner) => "{checker.describe(owner)}.{name}"
+    None => name
+  }
+}
+
+fn isInteger(kind: NumericKind?): Bool {
+  match kind {
+    Some(.Signed(_)) | Some(.Unsigned(_)) => true
+    _ => false
+  }
+}
+
+fn arithmeticRisk(operation: IntrinsicOperation): String? {
+  match operation {
+    .Add => Some "`+` can overflow"
+    .Subtract => Some "`-` can overflow"
+    .Multiply => Some "`*` can overflow"
+    .Divide => Some "`/` can divide by zero or overflow"
+    .Remainder => Some "`%` can divide by zero or overflow"
+    .Negate => Some "`-` can overflow"
+    .ShiftedLeft | .ShiftedRight => Some "a shift can go past the width of the type"
+    _ => None
+  }
+}
