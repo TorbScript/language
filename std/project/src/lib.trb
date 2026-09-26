@@ -1,5 +1,5 @@
 /**
- * The vocabulary of `project.trb`: [Project], [Dependencies], [Build], [Test], [Workspace] and [Registry]. A project
+ * The vocabulary of `project.trb`: [Project], [Dependencies], [Build], [Test], [Tasks], [Workspace] and [Registry]. A project
  * file is a receiver script against [Project], so everything a project can say about itself is a `var` field or a
  * method of the types here - and nothing else is needed to write one, because a setting is written `name = "acme/shop"`
  * and a section `build { ... }`.
@@ -57,6 +57,17 @@ public type Test {
 }
 
 /**
+ * How the program's tasks run (docs/design/CONCURRENCY.md section 3): `workers` threads run tasks, the core count where
+ * the line is left out, and `blocking` threads run what blocks (`offload`), 4 where it is left out. `TORB_WORKERS` and
+ * `TORB_BLOCKING` override both where the program runs. `0` is "not said"; a number the toolchain reads has to be 1 to
+ * 1024.
+ */
+public type Tasks {
+  var workers: Int = 0
+  var blocking: Int = 0
+}
+
+/**
  * A project that consists of several projects. Every member is an ordinary project with a `project.trb` of its own;
  * a pattern is a directory or `directory/*` for every project directly below it.
  */
@@ -90,6 +101,8 @@ public type Project {
   var build: Build = Build()
   /** What `torb test` runs. */
   var test: Test = Test()
+  /** How the program's tasks run: the workers of its pool and the threads of its blocking pool. */
+  var tasks: Tasks = Tasks()
   /** The other projects this one is a workspace of, if any. */
   var workspace: Workspace = Workspace()
   /** The names [Project.authors] added. */
@@ -154,6 +167,14 @@ public type Project {
       tests.append "  coverageThreshold = {test.coverageThreshold}"
     }
     appendSection lines, "test", tests
+    var pool: List<String> = []
+    if tasks.workers != 0 {
+      pool.append "  workers = {tasks.workers}"
+    }
+    if tasks.blocking != 0 {
+      pool.append "  blocking = {tasks.blocking}"
+    }
+    appendSection lines, "tasks", pool
     if !workspace.memberPatterns.isEmpty() {
       appendSection lines, "workspace", ["  members {quotedList(workspace.memberPatterns)}"]
     }

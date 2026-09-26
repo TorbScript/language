@@ -1,6 +1,6 @@
 ---
 title: std/project
-summary: The receiver type of project.trb - Project, Dependencies, Build, Test and Workspace.
+summary: The receiver type of project.trb - Project, Dependencies, Build, Test, Tasks and Workspace.
 kind: package
 status: stable
 order: 200
@@ -24,7 +24,7 @@ a project file is deterministic and has no IO, so evaluating it is nothing but r
 tool that reads a manifest programmatically imports them like anything else.
 
 ```trb fragment
-use Project, Dependencies, Build, Test, Workspace, Registry from "std/project"
+use Project, Dependencies, Build, Test, Tasks, Workspace, Registry from "std/project"
 ```
 
 ```trb check
@@ -47,6 +47,7 @@ public type Project {
   var dependencies: Dependencies = Dependencies()
   var build: Build = Build()
   var test: Test = Test()
+  var tasks: Tasks = Tasks()
   var workspace: Workspace = Workspace()
 
   var fn authors(...names: String)
@@ -90,6 +91,27 @@ public type Test {
 
 `Build` is what `torb build` produces; `output` is interpolated eagerly, so it reads `target` and the script's own
 bindings. `Test.coverageThreshold` is the share of lines a test run has to cover, in percent, and `0` asks for nothing.
+
+### Tasks
+
+```trb fragment
+public type Tasks {
+  var workers: Int = 0
+  var blocking: Int = 0
+}
+```
+
+How the program's tasks run: `workers` threads run its tasks, the core count where the line is left out, and
+`blocking` threads run what blocks (`offload`), 4 where it is left out. `TORB_WORKERS` and `TORB_BLOCKING` override both
+where the program runs, so a machine can be told without a rebuild. `0` is "not said"; a number the toolchain reads
+has to be 1 to 1024, and `workers = 0` is refused rather than read as "decide for me".
+
+```trb fragment
+tasks {
+  workers = 4
+  blocking = 8
+}
+```
 
 ### Workspace
 

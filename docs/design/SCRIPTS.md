@@ -169,6 +169,7 @@ runtime - and every limit is exact about what it counts.**
 |---|---|---|
 | `steps` | 1 000 000 | bytecode instructions the VM dispatches while the script runs, including the receiver's members and `std` code it calls |
 | `time` | 2 s | wall-clock time, read from the monotonic clock every 4096 steps, so a script overruns by at most that much work |
+| `workers` | 1 | the workers the script's tasks may run on at once; the VM runs them on the thread of the sandbox, so a script uses one whatever it is granted (docs/design/CONCURRENCY.md section 3) |
 | `memory` | 64 MB | bytes the script **allocates** while it runs, counted by `torb_allocate` and `torb_raw_allocate` |
 
 - **Memory is allocation, not residency, for now.** The runtime's `free` does not know a block's size, so what a script

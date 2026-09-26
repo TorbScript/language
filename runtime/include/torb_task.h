@@ -628,6 +628,14 @@ torb_task *torb_blocking_turn(void);
 /** Whether the calling thread is a thread of the blocking pool. For the tests. */
 bool torb_worker_is_blocking(void);
 
+/**
+ * `tasks { workers, blocking }` of the `project.trb` of a program the VM runs, set by `torb` before the program's
+ * pool starts: what `torb_workers_count` and `torb_workers_blocking` answer where `TORB_WORKERS` and `TORB_BLOCKING`
+ * are not set. A number outside 1 to 1024 - 0, "not said" - changes nothing. A native binary gets the same numbers as
+ * the macros `TORB_MANIFEST_WORKERS` and `TORB_MANIFEST_BLOCKING`.
+ */
+void torb_workers_prefer(uint32_t workers, uint32_t blocking);
+
 /** For the runtime's tests: the size of the blocking pool the next time it starts; 0 goes back to `torb_workers_blocking`. */
 void torb_pool_set_blocking(uint32_t count);
 

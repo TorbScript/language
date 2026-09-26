@@ -52,6 +52,7 @@ public type SandboxCapabilities {
   private(var) memoryLimit: Int = 64_000_000
   /** Milliseconds: a `Duration` is no constant a default could be. */
   private(var) timeLimit: Int = 2000
+  private(var) workerLimit: Int = 1
 
   /** Additional parts of the standard library the script may `use`, e.g. `"std/text"`. */
   var fn modules(...names: String) {
@@ -73,11 +74,22 @@ public type SandboxCapabilities {
     variablePatterns.appendAll patterns
   }
 
-  /** Guards against runaway scripts (`loop {}`). */
-  var fn limits(steps: Int = 1_000_000, memory: Int = 64.megabytes(), time: Duration = 2.seconds()) {
+  /**
+   * Guards against runaway scripts (`loop {}`). `workers` is the most workers the script's tasks may run on at once
+   * (docs/design/CONCURRENCY.md section 3): a script that could fan out over the host's cores would be a denial of
+   * service its grant does not show. The VM runs the tasks of a script on the thread of its sandbox, so a script never
+   * uses more than one whatever the number says.
+   */
+  var fn limits(
+    steps: Int = 1_000_000,
+    memory: Int = 64.megabytes(),
+    time: Duration = 2.seconds(),
+    workers: Int = 1,
+  ) {
     stepLimit = steps
     memoryLimit = memory
     timeLimit = time.nanoseconds() / 1_000_000
+    workerLimit = workers
   }
 
   /**
@@ -85,7 +97,13 @@ public type SandboxCapabilities {
    * word and the value. A relative root is read against the working directory, which is where the program runs.
    */
   private fn grantText(): String {
-    var lines = ["base\t.", "memory\t{memoryLimit}", "steps\t{stepLimit}", "milliseconds\t{timeLimit}"]
+    var lines = [
+      "base\t.",
+      "memory\t{memoryLimit}",
+      "steps\t{stepLimit}",
+      "milliseconds\t{timeLimit}",
+      "workers\t{workerLimit}",
+    ]
     for root in readOnlyRoots {
       lines.append "read\t{root}"
     }

@@ -158,6 +158,13 @@ public fn buildTree(tree: SourceTree, requested: List<String>, options: BuildOpt
       return Ok buildFailedCode
     }
   }
+  const pool = match poolOf(checked, modules[0]) {
+    Ok(found) => found
+    Fail(problem) => {
+      printError "error: {problem}"
+      return Ok buildFailedCode
+    }
+  }
   const host = hostTarget()
   const target = options.target ?? host
   if target != host && !options.onlyC {
@@ -202,7 +209,20 @@ public fn buildTree(tree: SourceTree, requested: List<String>, options: BuildOpt
   // A program that runs the VM runs whatever its programs call, TLS included, and limits their memory
   const hostsMachine = text.contains machineKernelSymbol
   const usesTls = text.contains(tlsSymbolPrefix) || hostsMachine
-  compile source, text.byteLength(), binary, options, usesTls, hostsMachine
+  compile source, text.byteLength(), binary, options, usesTls, hostsMachine, pool
+}
+
+/**
+ * `tasks { workers, blocking }` of the `project.trb` of the package the entry belongs to (docs/design/CONCURRENCY.md
+ * section 3), 0 for a number it does not name - or why it cannot be used.
+ */
+public fn poolOf(checked: Checked, entry: ModuleId): Result<(workers: Int, blocking: Int), String> {
+  const package = checked.program.workspace.packages[checked.program.graph.at(entry).package]
+  if const Some(problem) = package.manifest.poolProblem() {
+    const manifestPath = if package.directory.isEmpty() { "project.trb" } else { joinPath package.directory, "project.trb" }
+    return Fail "{manifestPath}: {problem}"
+  }
+  Ok package.manifest.pool()
 }
 
 // --- What was wrong with the program --------------------------------------------------------------------------------
@@ -553,6 +573,7 @@ fn compile(
   options: BuildOptions,
   usesTls: Bool,
   hostsMachine: Bool,
+  pool: (workers: Int, blocking: Int),
 ): Result<Int, IoError> {
   const compiler = match findCompiler() {
     Some(found) => found
@@ -579,6 +600,14 @@ fn compile(
   // `TORB_MEMORY_LIMIT` of a binary that runs programs in the VM is the limit of those programs (runtime/memory.c)
   if hostsMachine {
     sources.append(if compiler.isMicrosoft { "/D{hostsMachineMacro}" } else { "-D{hostsMachineMacro}" })
+  }
+  // `tasks { workers, blocking }`: the defaults of the program's pool, which `TORB_WORKERS` and `TORB_BLOCKING` override
+  const define = if compiler.isMicrosoft { "/D" } else { "-D" }
+  if pool.workers != 0 {
+    sources.append "{define}TORB_MANIFEST_WORKERS={pool.workers}u"
+  }
+  if pool.blocking != 0 {
+    sources.append "{define}TORB_MANIFEST_BLOCKING={pool.blocking}u"
   }
   const arguments = compilerArguments compiler, source, binary, runtime, sources, options.profile
   const output = match runCompiler(compiler, arguments, source, size, runtime) {

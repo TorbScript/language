@@ -28,6 +28,13 @@ public type Manifest {
    * says `test { input }`: its tests belong to its members, and a `tests/` beside it is theirs or another workspace's.
    */
   testInput: String = "tests"
+  /**
+   * `tasks { workers = 4 }`: how many workers the program's pool runs, where `TORB_WORKERS` does not say
+   * (docs/design/CONCURRENCY.md section 3). `None` for the core count.
+   */
+  workers: Int? = None
+  /** `tasks { blocking = 8 }`: how many threads the blocking pool has, where `TORB_BLOCKING` does not say. `None` for 4. */
+  blocking: Int? = None
 
   fn isWorkspace(): Bool {
     !workspaceMembers.isEmpty()
@@ -35,6 +42,26 @@ public type Manifest {
 
   fn dependsOn(package: String): Bool {
     runtimeDependencies.contains(package) || developmentDependencies.contains(package)
+  }
+
+  /**
+   * What is wrong with `tasks { ... }`: a number outside 1 to 1024. `workers = 0` is refused rather than read as "decide
+   * for me", because a zero nobody can read back is what leaving the line out already says.
+   */
+  fn poolProblem(): String? {
+    for (word, number) in [("workers", workers), ("blocking", blocking)] {
+      if const Some(given) = number {
+        if given < 1 || given > 1024 {
+          return Some "`tasks \{ {word} = {given} \}` is outside 1 to 1024: leave the line out for the default"
+        }
+      }
+    }
+    None
+  }
+
+  /** The two numbers of `tasks { ... }` for the runtime, 0 for one the manifest does not name. */
+  fn pool(): (workers: Int, blocking: Int) {
+    (workers: workers ?? 0, blocking: blocking ?? 0)
   }
 }
 
@@ -119,6 +146,14 @@ public fn readManifest(file: SourceFile): Manifest {
           namesTestInput = true
         }
       }
+      "tasks" => {
+        if const Some(text) = firstTextOf(setting, "workers") {
+          manifest = manifest.copy workers: Some(numberOf(text))
+        }
+        if const Some(text) = firstTextOf(setting, "blocking") {
+          manifest = manifest.copy blocking: Some(numberOf(text))
+        }
+      }
       _ => {}
     }
   }
@@ -132,6 +167,11 @@ public fn readManifest(file: SourceFile): Manifest {
 fn firstTextOf(setting: Setting, word: String): String? {
   const found = setting.find(word)?
   found.first()
+}
+
+/** An integer literal as it was written, `1_024` included; one that is no integer reads as 0, which is refused. */
+fn numberOf(text: String): Int {
+  Int.tryFrom(text.replace("_", "")).ok() ?? 0
 }
 
 /** `"acme/http:^1.2.3"` is the package `acme/http`. */
@@ -181,6 +221,8 @@ fn settingOfCall(expression: Expression): Setting? {
           texts.append text
         }
       }
+      // `workers 4`: an integer is read as it is written, and whoever reads the setting makes it a number
+      .IntegerLiteral(text) => texts.append text
       .Closure(closure) => {
         block = readSettings closure.body.statements
       }
@@ -200,6 +242,7 @@ fn settingOfAssign(target: Expression, value: Expression): Setting? {
   }
   const text = match value.kind {
     .TextLiteral(segments) => plainText(segments)?
+    .IntegerLiteral(written) => written
     _ => {
       return None
     }

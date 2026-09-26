@@ -292,7 +292,7 @@ that answers the question. A page marked (planned) describes a feature that does
 - `standard-library/path.md` - **std/path** (package): Path, a root and a list of components, never a string, plus Root and PathError - the type behind Path.resolved.
 - `standard-library/prelude.md` - **std/prelude** (package): The package of re-exports that is in scope in every file of a project, unless project.trb names another one.
 - `standard-library/process.md` - **std/process** (package): Process for arguments, exiting and running a program to its end as a task, Child for a running program's pipes, and ProcessOutput for what it left behind.
-- `standard-library/project.md` - **std/project** (package): The receiver type of project.trb - Project, Dependencies, Build, Test and Workspace.
+- `standard-library/project.md` - **std/project** (package): The receiver type of project.trb - Project, Dependencies, Build, Test, Tasks and Workspace.
 - `standard-library/regex.md` - **std/regex** (package): Regex, a compiled pattern with the syntax and the linear-time semantics of RE2, with whole and partial matches, named groups that decode into a type, replace and split.
 - `standard-library/sandbox.md` - **std/sandbox** (package): Sandbox and Script, which load a .trb file as a type-checked, capability-limited receiver closure.
 - `standard-library/stream.md` - **std/stream** (package): Source and Sink, the asynchronous ends of a stream, plus Bytes, Utf8Error and the stages between bytes and text.

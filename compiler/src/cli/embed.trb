@@ -15,7 +15,7 @@ use findCompilerSources from "../project/toolchain"
 use check from "../semantics/check"
 use programText from "../vm/embed"
 use bytecodeOf, reportChecked from "../vm/run"
-use BuildOptions, buildTree, buildFailedCode, entryModulesOf, outputPathOf from "./build"
+use BuildOptions, buildTree, buildFailedCode, entryModulesOf, outputPathOf, poolOf from "./build"
 
 /** The exit code of `torb build --embed-vm`: `build`'s own for the binary of the VM, or why nothing was built. */
 public fn buildEmbedded(options: BuildOptions): Result<Int, IoError> {
@@ -35,6 +35,13 @@ public fn buildEmbedded(options: BuildOptions): Result<Int, IoError> {
       return Ok buildFailedCode
     }
   }
+  const pool = match poolOf(checked, modules[0]) {
+    Ok(found) => found
+    Fail(problem) => {
+      printError "error: {problem}"
+      return Ok buildFailedCode
+    }
+  }
   const program = match bytecodeOf(checked, tree, modules) {
     Some(found) => found
     None => {
@@ -49,7 +56,8 @@ public fn buildEmbedded(options: BuildOptions): Result<Int, IoError> {
     }
   }
   const entry = joinPath compiler, "src/vm/embedded-program.trb"
-  const source = "use runEmbedded from \"./embed\"\n\nrunEmbedded \"{literalOf(programText(program))}\"\n"
+  const text = literalOf programText(program)
+  const source = "use runEmbedded from \"./embed\"\n\nrunEmbedded \"{text}\", {pool.workers}, {pool.blocking}\n"
   const sources = readSourceTree([compiler])?
   const around = sources.withFile entry, source
   const output = outputPathOf checked, modules[0], options

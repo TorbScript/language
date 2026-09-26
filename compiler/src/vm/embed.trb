@@ -19,10 +19,11 @@ use runProgram from "./interpret"
 const version = "torb-bytecode-1"
 
 /**
- * The entry of an embedded binary: the program decoded and run with the binary's own arguments; the process ends with
- * the program's exit code, as the `main` of a native build does.
+ * The entry of an embedded binary: the program decoded and run with the binary's own arguments, on a pool of the numbers
+ * of its manifest's `tasks { workers, blocking }` (0 for one it does not name); the process ends with the program's
+ * exit code, as the `main` of a native build does.
  */
-public fn runEmbedded(text: String) {
+public fn runEmbedded(text: String, workers: Int = 0, blocking: Int = 0) {
   const program = match programOf(text) {
     Some(found) => found
     None => {
@@ -30,7 +31,7 @@ public fn runEmbedded(text: String) {
       Process.exit 70
     }
   }
-  const code = runProgram program, Process.arguments()
+  const code = runProgram program, Process.arguments(), "", None, (workers: workers, blocking: blocking)
   if code != 0 {
     Process.exit code
   }

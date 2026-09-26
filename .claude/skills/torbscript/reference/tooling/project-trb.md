@@ -52,7 +52,7 @@ test {
 tree, rather than by evaluating it against `Project` the way a receiver script normally runs. The evaluation exists -
 `torb manifest` runs the file in the sandboxed VM and prints the settings it configured - but no command reads its
 result yet (see [The sandbox](../language/configuration/the-sandbox.md)). Only the following settings are consulted,
-each as a literal string argument:
+each as a literal argument - a string, or an integer for the two of `tasks`:
 
 | Setting | What it decides |
 |---------|------------------|
@@ -64,6 +64,8 @@ each as a literal string argument:
 | `workspace { members "..." }` | Which directories are the projects of a workspace |
 | `build { input = "..." }` | The entry file [`torb build`](torb-build.md) compiles when a directory is given |
 | `test { input = "..." }` | The directory [`torb test`](torb-test.md) defaults to (`test` itself still has to be told the path) |
+| `tasks { workers = 4 }` | How many workers the program's tasks run on, where `TORB_WORKERS` does not say (default: the core count) - an integer from 1 to 1024 |
+| `tasks { blocking = 8 }` | How many threads its blocking pool has, where `TORB_BLOCKING` does not say (default: 4) - an integer from 1 to 1024 |
 
 `authors`, `registry`, `build { target, output }` and `test { coverageThreshold }` are part of `Project`'s vocabulary
 and type check, because the whole file is also checked as an ordinary program against `Project` - but no command

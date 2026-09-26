@@ -2216,6 +2216,29 @@ bool torb_test_tasks_end(bool abandon, torb_recovery *failure) {
 
 /* ------------------------------------------------------------------------------------------ the worker pool --- */
 
+/*
+ * The numbers of `tasks { workers, blocking }` in the program's `project.trb` (docs/design/CONCURRENCY.md section 3):
+ * compiled in by the driver as macros, or set by the host of the VM before the pool starts (`torb_workers_prefer`).
+ * `TORB_WORKERS` and `TORB_BLOCKING` override them; 0 is "the manifest does not say".
+ */
+#if !defined(TORB_MANIFEST_WORKERS)
+#  define TORB_MANIFEST_WORKERS 0u
+#endif
+#if !defined(TORB_MANIFEST_BLOCKING)
+#  define TORB_MANIFEST_BLOCKING 0u
+#endif
+static uint32_t torb_preferred_workers = TORB_MANIFEST_WORKERS;
+static uint32_t torb_preferred_blocking = TORB_MANIFEST_BLOCKING;
+
+void torb_workers_prefer(uint32_t workers, uint32_t blocking) {
+  if (workers >= 1u && workers <= TORB_MAXIMUM_WORKERS) {
+    torb_preferred_workers = workers;
+  }
+  if (blocking >= 1u && blocking <= TORB_MAXIMUM_WORKERS) {
+    torb_preferred_blocking = blocking;
+  }
+}
+
 int64_t torb_workers_count(void) {
   if (torb_pool.configured == 0u) {
     const char *given = getenv("TORB_WORKERS");
@@ -2236,6 +2259,8 @@ int64_t torb_workers_count(void) {
         fflush(stderr);
         exit(2);
       }
+    } else if (torb_preferred_workers != 0u) {
+      count = torb_preferred_workers;
     } else {
       count = torb_platform_processor_count();
       if (count > TORB_MAXIMUM_WORKERS) {
@@ -2250,7 +2275,7 @@ int64_t torb_workers_count(void) {
 int64_t torb_workers_blocking(void) {
   if (torb_blocking.configured == 0u) {
     const char *given = getenv("TORB_BLOCKING");
-    uint32_t count = TORB_BLOCKING_DEFAULT;
+    uint32_t count = torb_preferred_blocking != 0u ? torb_preferred_blocking : TORB_BLOCKING_DEFAULT;
     if (given != NULL) {
       const char *digit = given;
       bool valid = *digit != '\0';

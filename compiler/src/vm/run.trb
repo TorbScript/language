@@ -32,7 +32,7 @@ use scriptReceiverOf, moduleOfImport from "../semantics/checker/receiver"
 use runProgram, ScriptLoader, LoadedScript, ScriptStop from "./interpret"
 use SourceTree from "../project/source-tree"
 use ModuleId from "../semantics/module"
-use BuildOptions, entryModulesOf from "../cli/build"
+use BuildOptions, entryModulesOf, poolOf from "../cli/build"
 
 /** The exit code of a program that could not be run at all: the one `torb build` answers for a refused program. */
 const refusedCode = 1
@@ -134,6 +134,13 @@ fn runModules(
   requested: List<String>,
   clock: RunClock,
 ): Result<Int, IoError> {
+  const pool = match poolOf(checked, modules[0]) {
+    Ok(found) => found
+    Fail(problem) => {
+      printError "error: {problem}"
+      return Ok refusedCode
+    }
+  }
   const program = match bytecodeOf(checked, tree, modules, isTestRun, clock, true) {
     Some(found) => found
     None => {
@@ -143,7 +150,7 @@ fn runModules(
   const loader = scriptLoaderOf tree, requested
   clock.lap "the loader of scripts"
   clock.finish()
-  Ok runProgram(program, arguments, executable, Some(loader))
+  Ok runProgram(program, arguments, executable, Some(loader), pool)
 }
 
 /**

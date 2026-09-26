@@ -135,16 +135,20 @@ language "0.3.0"
 name "acme/mill"
 
 tasks {
-  workers 4
-  blocking 8
+  workers = 4
+  blocking = 8
 }
 ```
 
-**type checks today** — it parses and is in the canon; `tasks` is a setting the project model does not have yet
-(gap 10). `workers` defaults to the core count, `blocking` to 4 (section 7). Neither is **static** in PROJECT.md's
+**Built** (gap 10): `Tasks` of `std/project`, read by the toolchain's static reader of the manifest, and handed to the
+program by the driver - a native build compiles the numbers into the runtime (`TORB_MANIFEST_WORKERS`,
+`TORB_MANIFEST_BLOCKING`), and `torb run` and `torb test` in the VM set them on the pool of `torb` before the
+program's first task (the kernel operation `pool.defaults`). `workers` defaults to the core count, `blocking` to 4
+(section 7). The numbers of the package the entry belongs to count; a number outside the range refuses the build or
+the run with the path of the manifest. Neither is **static** in PROJECT.md's
 sense: nothing an editor, a registry or `torb add` reads needs them, and they are about *this* build rather than about
 the package, so they sit beside `profile` and `test` and stay out of the lock's `settings`. The accepted range is
-`1..=1024`; `workers 0` is an error that says to leave the line out instead, because a zero that silently means
+`1..=1024`; `workers = 0` is an error that says to leave the line out instead, because a zero that silently means
 "decide for me" is the kind of setting nobody can read back.
 
 **2. The environment**, so that a machine can be told without a rebuild:
@@ -164,7 +168,9 @@ native var fn limits(steps: Int = 1_000_000, memory: Int = 64.megabytes(), time:
 ```
 
 **The default is 1.** A sandboxed script that could fan out over the host's cores is a denial of service with a
-capability list that says it has none, and the sandbox's own execution is a VM on one worker anyway.
+capability list that says it has none, and the sandbox's own execution is a VM on one worker anyway. As built, the
+number is in the grant (`workers`) and is an upper bound: the VM runs a script's tasks on the thread of its sandbox, so
+a script uses one worker whatever it is granted.
 
 **4. The operation**, where work is actually spread:
 
@@ -1200,9 +1206,11 @@ real timer rather than only its type - driven by hand-written state machines in 
   `parallel` an extension of `List` in the prelude.*
 - **Slice D — gaps 10 and 12.** The manifest setting, the environment variables, the sandbox limit, `Workers.count()`
   answering 1. Gate: every `project.trb` of the repository still reads, and `TORB_WORKERS=1` is a no-op.
-  *Half built: `TORB_WORKERS` and `TORB_BLOCKING` (each refused with exit code 2 where it is not a whole number from 1
-  to 1024), `Workers.count()` and `Workers.blocking()`, answering the real counts, and the copy counter of gap 12
-  (`torb_pool_statistics.copied`, which nothing prints yet). The manifest setting and the sandbox limit are not.*
+  *Built: `TORB_WORKERS` and `TORB_BLOCKING` (each refused with exit code 2 where it is not a whole number from 1
+  to 1024), `Workers.count()` and `Workers.blocking()`, answering the real counts, the copy counter of gap 12
+  (`torb_pool_statistics.copied`, which nothing prints yet), the manifest setting `tasks { workers, blocking }`
+  (section 3) and `workers:` of the sandbox's `limits`, which the VM honours by running a script's tasks on one
+  thread.*
 
 **With 7.7 (threads, per-worker heaps).**
 
@@ -1697,8 +1705,6 @@ this pool (`runtime/stream.c`), and a read of theirs that runs is not interrupte
   processes wait on the blocking pool (STREAMS.md section 14), which every platform allows; a pipe of a POSIX child is
   the one of them epoll and kqueue could take, and the second code path waits until it is measured. The whole-file
   calls of `std/fs` stay synchronous, and `offload` is what a program wraps one in, as `Process.run` does.
-- **The manifest setting `tasks { workers, blocking }`** and the sandbox limit (slice D): the project model has no
-  `tasks`, and there is no sandbox yet.
 - **`Merge`, `collect` and `minBy`** on `Parallel` (slice B), and **`Plain`, `Window`, `windows`** (slice F).
 - **The copy of a closure's environment and of a variant with a counted case** ("The copy at the crossing" says why
   each waits: an erased environment would need a copy function in every environment, a variant a switch per layout),

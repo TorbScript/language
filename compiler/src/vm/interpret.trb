@@ -254,9 +254,14 @@ public fn runProgram(
   arguments: List<String>,
   executable: String = "",
   loader: ScriptLoader? = None,
+  pool: (workers: Int, blocking: Int) = (workers: 0, blocking: 0),
 ): Int {
   const registers = registersFor program
   registers.loader = loader
+  // `tasks { workers, blocking }` of the program's manifest, before a worker of the pool is asked for
+  if pool.workers != 0 || pool.blocking != 0 {
+    const _ = kernelCall registers.words, kernelScratch(), 0, KernelOperation.PoolDefaults, [pool.workers, pool.blocking]
+  }
   const workers = workersFor registers, program
   const ended = run registers.words, kernelScratch(), registers, registers.image, program, arguments, executable
   releaseWorkers registers, workers

@@ -86,13 +86,14 @@ public type SandboxCapabilities {
   var fn modules(...names: String)
   var fn files(readOnly: String = "", readWrite: String = "")
   var fn environment(...patterns: String)
-  var fn limits(steps: Int = 1_000_000, memory: Int = 64.megabytes(), time: Duration = 2.seconds())
+  var fn limits(steps: Int = 1_000_000, memory: Int = 64.megabytes(), time: Duration = 2.seconds(), workers: Int = 1)
 }
 ```
 
 `modules` names additional parts of the standard library the script may `use`. `files` names the file system roots the
 script may reach; a side left out stays closed. `environment` names the environment variable patterns the script may
-read. `limits` guards against a runaway script (`loop {}`), and `Int64.megabytes()` (`64.megabytes()`, after
+read. `limits` guards against a runaway script (`loop {}`) - `workers` is the most workers its tasks may run on at once,
+and the VM runs a script's tasks on the thread of its sandbox, so it never uses more than one - and `Int64.megabytes()` (`64.megabytes()`, after
 `use Int64.megabytes from "std/sandbox"`) is the
 byte unit these limits are written in.
 

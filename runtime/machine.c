@@ -1547,7 +1547,8 @@ enum {
   TORB_OPERATION_NARROW_STORE = 58,
   TORB_OPERATION_WIDEN = 59,
   TORB_OPERATION_SHARE = 60,
-  TORB_OPERATION_SET_EXECUTABLE = 61
+  TORB_OPERATION_SET_EXECUTABLE = 61,
+  TORB_OPERATION_POOL_DEFAULTS = 62
 };
 
 /* A module constant's flag set with a release, so a thread that reads it set also sees the value it guards. */
@@ -1929,6 +1930,10 @@ static int64_t torb_machine_dispatch(torb_list *list, int64_t base, torb_list co
       torb_machine_has_executable = true;
       return 0;
     }
+    case TORB_OPERATION_POOL_DEFAULTS:
+      /* workers, blocking: `tasks { ... }` of the program's `project.trb`, before the first task of the program */
+      torb_workers_prefer((uint32_t)o[0], (uint32_t)o[1]);
+      return 0;
     case TORB_OPERATION_BEGIN_IMMORTAL:
       torb_begin_immortal();
       return 0;
