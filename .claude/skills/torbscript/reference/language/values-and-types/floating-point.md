@@ -105,6 +105,14 @@ value.isNaN()  value.isInfinite()  value.isFinite()        what the three consta
    const broken: Float64 = 0.0 / 0.0
    ```
 
+8. **`Show` spells the three values that have no digits as words: `nan`, `inf` and `-inf`.** `nan` is written in
+   lower case, the way the runtime and C write it and the way the constant is named (`Float64.nan`) - a name like any
+   other, not the abbreviation `NaN`. Both back ends print the same three words.
+
+   ```trb check
+   print "{Float64.nan} {Float64.infinity} {Float64.negativeInfinity}"
+   ```
+
 ## What this is not
 
 **`Float32`/`Float64` not being `Hash` is enforced wherever a bound is written on a type, not only on a function.** A
