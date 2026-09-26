@@ -225,6 +225,14 @@ group "Coherence" {
     assert problems(source).isEmpty()
   }
 
+  /** The trait is generic, which lets its members through with their own parameters counted - but never this. */
+  test "a method does not stand in for the `static fn from` of a generic trait" {
+    const source = "type Celsius \{\n  degrees: Float\n\}\n\n"
+      + "extend Float64 with From<Celsius> \{\n  fn from(value: Celsius): Float64 \{\n    value.degrees\n  \}\n\}"
+    assert(problems(source) == ["`Float64.from` does not match `From<Celsius>`"])
+    assert(notes(source) == ["`From<Celsius>` requires `static fn from(value: Celsius): Float64`"])
+  }
+
   test "an argument that only *contains* a type of this package is not enough" {
     const source = "type Celsius \{\n  degrees: Float\n\}\n\n"
       + "extend Float64 with From<List<Celsius>> \{\n"

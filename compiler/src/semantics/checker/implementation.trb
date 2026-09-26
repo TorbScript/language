@@ -2802,6 +2802,14 @@ fn compareSignatures(
     reportMismatch checker, index, bound, name, member, provider, mapping
     return
   }
+  // `static fn from(value: Source): Self` is called as `Float64.from(value)` and `fn from(value: Celsius)` as
+  // `reading.from(value)`: a method never stands in for a `static fn`, nor the other way round. This is asked before
+  // the generic trait is let through below (# Open), or `extend Float64 with From<Celsius> { fn from(...) }` would
+  // check clean and every `Float64.from` would reach the conversion of the runtime instead of the member
+  if required.takesSelf != given.takesSelf {
+    reportMismatch checker, index, bound, name, member, provider, mapping
+    return
+  }
   const requiredOwn = ownGenericsOf checker, required
   const givenOwn = ownGenericsOf checker, given
   var renamed = mapping

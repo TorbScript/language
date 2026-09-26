@@ -47,7 +47,7 @@ print "{boiling.degrees} {freezing.degrees}"
 
 ```text
 extend <Target> with From<Source> {
-  fn from(value: Source): Target { ... }
+  static fn from(value: Source): Target { ... }
 }
 
 value.into()                          // Free, once From is implemented
