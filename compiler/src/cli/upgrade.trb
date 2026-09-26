@@ -27,8 +27,6 @@ use File from "std/fs"
 use Process from "std/process"
 use Environment, Directories, OsError from "std/os"
 use OperatingSystem from "std/core"
-use Uri from "std/uri"
-use get as httpGet from "std/http"
 use hostTarget from "../project/target"
 
 /** What `torb upgrade` was called with (parsed in `main.trb`, next to the other `*OptionsOf` functions). */
@@ -240,8 +238,8 @@ fn activeVersion(home: String): String? {
 // --------------------------------------------------------------------------------------------- shelling out (I/O)
 
 /** Runs `program` to its end and answers its standard output, trimmed - or the one line that says why it failed. */
-fn captured(program: String, arguments: List<String>): Task<Result<String, String>> {
-  match Process.run(program, arguments).await() {
+fn captured(program: String, arguments: List<String>): Result<String, String> {
+  match Process.runBlocking(program, arguments) {
     Ok(output) => {
       if output.isSuccess() {
         Ok output.standardOutput.trim()
@@ -254,11 +252,11 @@ fn captured(program: String, arguments: List<String>): Task<Result<String, Strin
 }
 
 /** `curl`, falling back to `wget` - the same choice `tools/install.sh` makes. */
-fn download(url: String, destination: String): Task<Result<Void, String>> {
-  match captured("curl", ["-fsSL", url, "-o", destination]).await() {
+fn download(url: String, destination: String): Result<Void, String> {
+  match captured("curl", ["-fsSL", url, "-o", destination]) {
     Ok(_) => Ok(void)
     Fail(curlFailure) => {
-      match captured("wget", ["-q", url, "-O", destination]).await() {
+      match captured("wget", ["-q", url, "-O", destination]) {
         Ok(_) => Ok(void)
         Fail(_) => Fail curlFailure
       }
@@ -267,21 +265,21 @@ fn download(url: String, destination: String): Task<Result<Void, String>> {
 }
 
 /** `sha256sum`/`shasum -a 256` on POSIX, PowerShell's `Get-FileHash` on Windows - lower case, without the file name. */
-fn sha256Of(path: String): Task<Result<String, String>> {
+fn sha256Of(path: String): Result<String, String> {
   if OperatingSystem.current == .Windows {
     // Not `certutil`: its extra lines are in the console's own code page, and a German or Japanese Windows prints
     // them outside ASCII, which `Process.run` cannot read back as text (it insists on UTF-8, correctly). One
     // PowerShell expression whose only output is the hex itself sidesteps the question of which code page it is in.
     const script = "(Get-FileHash -LiteralPath '{path}' -Algorithm SHA256).Hash"
-    match captured("powershell", ["-NoProfile", "-NonInteractive", "-Command", script]).await() {
+    match captured("powershell", ["-NoProfile", "-NonInteractive", "-Command", script]) {
       Fail(message) => Fail message
       Ok(hex) => Ok hex.trim().toLowerCase()
     }
   } else {
-    match captured("sha256sum", [path]).await() {
+    match captured("sha256sum", [path]) {
       Ok(text) => Ok firstWord(text)
       Fail(sha256sumFailure) => {
-        match captured("shasum", ["-a", "256", path]).await() {
+        match captured("shasum", ["-a", "256", path]) {
           Ok(text) => Ok firstWord(text)
           Fail(_) => Fail sha256sumFailure
         }
@@ -295,11 +293,11 @@ fn firstWord(text: String): String {
 }
 
 /** `<archive>` (already downloaded to `path`) unpacked to `destination`, its one top-level directory stripped. */
-fn extract(path: String, destination: String): Task<Result<Void, String>> {
+fn extract(path: String, destination: String): Result<Void, String> {
   match File.createDirectory(destination) {
     Fail(error) => Fail error.show()
     Ok(_) => {
-      match captured("tar", ["-xzf", path, "--strip-components=1", "-C", destination]).await() {
+      match captured("tar", ["-xzf", path, "--strip-components=1", "-C", destination]) {
         Ok(_) => Ok(void)
         Fail(message) => Fail message
       }
@@ -326,7 +324,7 @@ public fn expectedHash(sums: String, file: String): String? {
 }
 
 /** Makes `version` the one `<home>/bin/torb` (POSIX) or `%LOCALAPPDATA%\Programs\torb` (Windows) resolves to. */
-fn activate(home: String, version: String): Task<Result<Void, String>> {
+fn activate(home: String, version: String): Result<Void, String> {
   const toolchain = "{home}/toolchains/{version}"
   if OperatingSystem.current == .Windows {
     const active = match activeBinDirectory(home) {
@@ -337,18 +335,18 @@ fn activate(home: String, version: String): Task<Result<Void, String>> {
     // matters is the one holding the file open, which may not be this one
     const running = Process.executablePath() ?? ""
     if running.startsWith(active) {
-      const _ = Process.run("cmd", ["/c", "move", "/y", running, "{running}.replaced"]).await()
+      const _ = Process.run "cmd", ["/c", "move", "/y", running, "{running}.replaced"]
     }
     // robocopy answers 0-7 for success (1 alone means "files copied"), so a `Fail` from `Process.run`'s plain
     // exitCode == 0 check is not trusted here - the result is not inspected, only that the command was tried
-    const _ = Process.run("robocopy", [toolchain, active, "/MIR"]).await()
+    const _ = Process.run "robocopy", [toolchain, active, "/MIR"]
   } else {
     const bin = "{home}/bin"
     match File.createDirectory(bin) {
       Fail(error) => { return Fail error.show() }
       Ok(_) => void
     }
-    match captured("ln", ["-sfn", "../toolchains/{version}/bin/torb", "{bin}/torb"]).await() {
+    match captured("ln", ["-sfn", "../toolchains/{version}/bin/torb", "{bin}/torb"]) {
       Fail(message) => { return Fail message }
       Ok(_) => void
     }
@@ -370,7 +368,7 @@ fn withoutDriveSlash(path: String): String {
   }
 }
 
-fn fetchText(baseUrl: String, path: String): Task<Result<String, String>> {
+fn fetchText(baseUrl: String, path: String): Result<String, String> {
   if baseUrl.startsWith("file://") {
     const root = withoutDriveSlash baseUrl.sliceBytes(7, baseUrl.byteLength())
     match File.readText("{root}/{path}") {
@@ -378,22 +376,14 @@ fn fetchText(baseUrl: String, path: String): Task<Result<String, String>> {
       Fail(error) => Fail error.show()
     }
   } else {
+    // The same tools the download uses: the compiler stays free of the network, TLS and tasks
     const url = "{baseUrl}/{path}"
-    match Uri.tryFrom(url) {
-      Fail(error) => Fail error.show()
-      Ok(uri) => {
-        match httpGet(uri).await() {
-          Fail(error) => Fail error.show()
-          Ok(response) => {
-            if !response.status.isSuccess() {
-              Fail "{url}: {response.status.show()}"
-            } else {
-              match response.body.text().await() {
-                Ok(text) => Ok text
-                Fail(error) => Fail error.show()
-              }
-            }
-          }
+    match captured("curl", ["-fsSL", url]) {
+      Ok(text) => Ok text
+      Fail(curlFailure) => {
+        match captured("wget", ["-qO-", url]) {
+          Ok(text) => Ok text
+          Fail(_) => Fail curlFailure
         }
       }
     }
@@ -409,10 +399,10 @@ fn baseUrl(): String {
 }
 
 /** `torb upgrade --list`: what is installed, and what the channel offers. */
-fn printAvailable(home: String, channel: String): Task<Int> {
+fn printAvailable(home: String, channel: String): Int {
   const installed = installedVersions home
   const active = activeVersion home
-  match fetchText(baseUrl(), "versions.txt").await() {
+  match fetchText(baseUrl(), "versions.txt") {
     Fail(message) => {
       printError "error: {message}"
       1
@@ -441,12 +431,12 @@ fn printAvailable(home: String, channel: String): Task<Int> {
 }
 
 /** `torb upgrade [<version>] [--channel <name>]`: installs it, and makes it the one in use. */
-fn performUpgrade(home: String, info: InstallInfo, options: UpgradeOptions): Task<Int> {
+fn performUpgrade(home: String, info: InstallInfo, options: UpgradeOptions): Int {
   const channel = options.channel ?? info.channel
   const version = match options.version {
     Some(named) => named
     None => {
-      match fetchText(baseUrl(), "versions.txt").await() {
+      match fetchText(baseUrl(), "versions.txt") {
         Fail(message) => {
           printError "error: {message}"
           return 1
@@ -476,7 +466,7 @@ fn performUpgrade(home: String, info: InstallInfo, options: UpgradeOptions): Tas
   const toolchain = "{home}/toolchains/{version}"
   if File.exists(toolchain) {
     print "{version} is already installed; making it the one in use"
-    return match activate(home, version).await() {
+    return match activate(home, version) {
       Fail(message) => {
         printError "error: {message}"
         1
@@ -496,14 +486,14 @@ fn performUpgrade(home: String, info: InstallInfo, options: UpgradeOptions): Tas
   const archive = "torb-{version}-{hostTarget().name()}.tar.gz"
   const archivePath = "{scratch}/{archive}"
   const sumsPath = "{scratch}/SHA256SUMS"
-  match download("{baseUrl()}/{version}/{archive}", archivePath).await() {
+  match download("{baseUrl()}/{version}/{archive}", archivePath) {
     Fail(message) => {
       printError "error: {message}"
       return 1
     }
     Ok(_) => void
   }
-  match download("{baseUrl()}/{version}/SHA256SUMS", sumsPath).await() {
+  match download("{baseUrl()}/{version}/SHA256SUMS", sumsPath) {
     Fail(message) => {
       printError "error: {message}"
       return 1
@@ -524,7 +514,7 @@ fn performUpgrade(home: String, info: InstallInfo, options: UpgradeOptions): Tas
       return 1
     }
   }
-  const actual = match sha256Of(archivePath).await() {
+  const actual = match sha256Of(archivePath) {
     Ok(hash) => hash
     Fail(message) => {
       printError "error: {message}"
@@ -536,14 +526,14 @@ fn performUpgrade(home: String, info: InstallInfo, options: UpgradeOptions): Tas
     return 1
   }
   print "sha256 verified"
-  match extract(archivePath, toolchain).await() {
+  match extract(archivePath, toolchain) {
     Fail(message) => {
       printError "error: {message}"
       return 1
     }
     Ok(_) => void
   }
-  match activate(home, version).await() {
+  match activate(home, version) {
     Fail(message) => {
       printError "error: {message}"
       return 1
@@ -555,7 +545,7 @@ fn performUpgrade(home: String, info: InstallInfo, options: UpgradeOptions): Tas
 }
 
 /** `torb upgrade`, in every form section 5 of RELEASE.md gives it. */
-public fn runUpgrade(options: UpgradeOptions): Task<Int> {
+public fn runUpgrade(options: UpgradeOptions): Int {
   const home = match torbHome() {
     Ok(path) => path
     Fail(error) => {
@@ -564,7 +554,7 @@ public fn runUpgrade(options: UpgradeOptions): Task<Int> {
     }
   }
   if options.list {
-    return printAvailable(home, options.channel ?? readInstallInfo(home)?.channel ?? "stable").await()
+    return printAvailable(home, options.channel ?? readInstallInfo(home)?.channel ?? "stable")
   }
   const info = match readInstallInfo(home) {
     Some(found) => found
@@ -578,5 +568,5 @@ public fn runUpgrade(options: UpgradeOptions): Task<Int> {
     printError "error: this toolchain was installed with {info.method}; run {packageManagerCommand(info.method)}"
     return 1
   }
-  performUpgrade(home, info, options).await()
+  performUpgrade home, info, options
 }
