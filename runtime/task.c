@@ -2527,6 +2527,28 @@ bool torb_closure_may_move(torb_environment *environment) {
   return environment == NULL || (environment->header.count & TORB_SHARED_COUNT) != 0u;
 }
 
+bool torb_closure_privatize(torb_environment **environment) {
+  torb_environment *held = *environment;
+  torb_environment *made;
+  if (torb_closure_may_move(held)) {
+    return true;
+  }
+  /* A frame environment never leaves its frame, and one of a closure whose captures cannot be copied has no copy */
+  if (held->header.kind == (uint16_t)TORB_BLOCK_FRAME_ENVIRONMENT || held->privatize == NULL) {
+    return false;
+  }
+  made = held->privatize(held);
+  if (made == NULL) {
+    return false;
+  }
+  if (made != held) {
+    torb_environment_release(held);
+    *environment = made;
+    torb_pool_count_copy();
+  }
+  return true;
+}
+
 /* Nobody else can change a count this reads: an immortal one never changes, and a count of 1 is this value's alone. */
 static bool torb_block_may_move(const void *block, bool transfer) {
   const torb_header *header = (const torb_header *)block;

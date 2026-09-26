@@ -282,6 +282,7 @@ checks of the C do not. There is no list of what the VM runs: it runs everything
 | `channel-closed.trb` | Letting go of the reading end closes it: every later `add` fails with `ChannelClosed`, and what was buffered is released |
 | `destructor-cancelled-task.trb` | A cancelled task closes what its frame held, the last declared first, before its observer hears that it was cancelled |
 | `task-exit.trb` | `Process.exit` inside a task ends the program with that code and takes every task down on the way out: a sleeping one closes what it held, and nothing is left behind |
+| `parallel-copies.trb` | The frame of a task that holds a variant whose case holds a `String` somebody else holds, or a closure over such a `String`, is copied at the crossing - by the case the variant is, and by the copy of the closure's environment - with four workers the same results as with one, and every block freed |
 
 **Destructors** - `close()` runs at the last release, and a binding that holds an object with one is released where its block ends.
 

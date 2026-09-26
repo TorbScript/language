@@ -33,6 +33,7 @@ use CExpression, CDesignatedField, CStatement, CSwitchCase, declarationOf from "
 use readPrototype, matchPrototype from "./prototype"
 use TaskMachine, taskMachineOf from "../../ir/suspension"
 use Crossing, frameCrossingOf, framePrivateOf, environmentCrossingOf from "./crossing"
+use environmentCopyOf, environmentCopyNameOf from "./crossing"
 use Closing from "../../ir/closing"
 
 /** One function, with which slots are read and which labels are jumped to precomputed once for the whole body. */
@@ -1828,6 +1829,8 @@ fn closureStatements(
   inner.append CStatement.Declaration(spelling, "environment", Some(CExpression.Cast(spelling, allocated)))
   const drop = CExpression.PointerMember CExpression.Name("environment"), "drop"
   inner.append CStatement.Assignment(drop, dropFunctionOf(program, found))
+  const copy = CExpression.PointerMember CExpression.Name("environment"), "privatize"
+  inner.append CStatement.Assignment(copy, environmentCopyExpressionOf(program, found))
   var members: List<CExpression> = []
   var types: List<IrTypeId> = []
   for index in 0..captures.length() {
@@ -1848,6 +1851,17 @@ fn closureStatements(
   const erased = CExpression.Cast "torb_environment *", CExpression.Name("environment")
   inner.append CStatement.Assignment(CExpression.Member(place, environmentMemberName), erased)
   [CStatement.Block(inner)]
+}
+
+/**
+ * What an environment of this layout is copied with at the crossing of a worker: its `PE_<layout>` where every
+ * capture may be copied (`environmentCopyOf`), `NULL` otherwise.
+ */
+public fn environmentCopyExpressionOf(program: IrProgram, layout: LayoutId): CExpression {
+  if const .Never = environmentCopyOf(program, layout) {
+    return nullPointer
+  }
+  CExpression.Name environmentCopyNameOf(program, layout)
 }
 
 /**
@@ -1877,6 +1891,7 @@ fn framedClosureStatements(
     dropFunctionOf(program, layout),
   ])
   statements.append CStatement.Evaluate(prepared)
+  // A frame environment never crosses a worker: its `privatize` stays the NULL of the local's zero initializer
   for index in 0..captures.length() {
     const member = CExpression.Member name, memberNameOf(shape.fields[index])
     const value = captureExpression emission, program, body, captures[index]

@@ -32,8 +32,8 @@ use closingOf, Closing from "../../ir/closing"
 use taskMachineOf, TaskMachine from "../../ir/suspension"
 use payloadLayoutName from "../../ir/mangle"
 use emittedFunctionsOf, runtimePrototypes, usesTasks from "../c/emit"
-use environmentLayoutOfFunction from "../c/body"
-use Crossing, privateOf from "../c/crossing"
+use environmentLayoutOfFunction, countedFormOf from "../c/body"
+use Crossing, privateOf, crossingOf from "../c/crossing"
 use CExpression from "../c/writer"
 use readPrototype, matchPrototype, PrototypeMatch from "../c/prototype"
 use Opcode, KernelOperation, kernelNumberOf, kernelNativeBase, headWord, largestOperand from "./format"
@@ -953,12 +953,12 @@ fn emitTaskNew(
  * The tests the runtime makes before a value of this type in the registers from `register` on may move into another
  * worker with the frame of a task, appended as pairs of a kind and a register: what the C back end's
  * `frameCrossingOf` writes beside a task's start (docs/design/CONCURRENCY.md section 16, "What crosses a worker").
- * False where the type never crosses - a boxed or shared object, a variant with a counted case, a task or a channel of
- * counted values - and the task stays on its worker. Nothing is copied at the crossing: a frame that would need a
+ * False where the type never crosses - a boxed or shared object, a task or a channel of counted values - and the task
+ * stays on its worker; a variant with a counted case is tested by the words of the case it is. Nothing is copied at the crossing: a frame that would need a
  * copy stays where it is, as it does in the C back end with one worker.
  */
 fn crossingTestsOf(
-  emitter: Emitter,
+  var emitter: Emitter,
   program: IrProgram,
   id: IrTypeId,
   register: Int,
@@ -966,6 +966,11 @@ fn crossingTestsOf(
 ): Bool {
   if !containsCountedType(program, id) {
     return true
+  }
+  // A niche variant is its payload's words
+  const inner = countedFormOf program, id
+  if inner != id {
+    return crossingTestsOf emitter, program, inner, register, tests
   }
   match program.typeAt(id) {
     .Text => {
@@ -1003,6 +1008,16 @@ fn crossingTestsOf(
     }
     .Record(layout) => crossingLayoutTestsOf emitter, program, layout, register, tests
     .Tuple(layout) => crossingLayoutTestsOf emitter, program, layout, register, tests
+    // A variant with a counted case: the kernel walks the words of the case the value is, by its shape
+    // (`TORB_CROSSING_VALUE`, the kind 4 with the shape's index times 8 on top), as the C back end switches on its tag
+    .Variant(_) => {
+      if const .Never = crossingOf(program, id, CExpression.Name("value"), true) {
+        return false
+      }
+      tests.append(4 + 8 * valueShapeIndex(emitter, program, id))
+      tests.append register
+      true
+    }
     .FixedArray(item, size) => {
       const width = emitter.tables.widthOf item
       for index in 0..size {
@@ -1018,7 +1033,7 @@ fn crossingTestsOf(
 
 /** The tests of an inline record or tuple, field by field; a boxed or variant layout never crosses. */
 fn crossingLayoutTestsOf(
-  emitter: Emitter,
+  var emitter: Emitter,
   program: IrProgram,
   layout: LayoutId,
   register: Int,

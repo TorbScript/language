@@ -1,0 +1,70 @@
+/**
+ * **A variant with a counted case and a closure over a `String` cross a worker by a copy.** The frame of a task that
+ * holds a `Shape` - a variant whose `Named` case holds a `String` somebody else holds too - or a closure whose
+ * environment holds such a `String` is made private on the thread that starts the task, while the pool has more than one
+ * worker: the variant by the case it is, the environment by the copy its closure put into it (docs/design/CONCURRENCY.md
+ * section 16, "The copy at the crossing"). The results are the same with four workers and with one, read back in the
+ * order the tasks were started, and every block is freed.
+ */
+use Task from "std/task"
+
+type Shape {
+  case Named(name: String)
+  case Sized(width: Int, height: Int)
+  case Empty
+}
+
+/** What a task makes of a shape: the case and what it holds. */
+fn describe(shape: Shape): String {
+  match shape {
+    .Named(name) => "named {name} ({name.byteLength()} bytes)"
+    .Sized(width, height) => "sized {width * height}"
+    .Empty => "empty"
+  }
+}
+
+/** A task whose frame holds the shape it is handed. */
+fn describedOf(shape: Shape): Task<String> {
+  describe shape
+}
+
+/** A task whose frame holds the closure it is handed. */
+fn labelOf(label: (Int) => String, value: Int): Task<String> {
+  label value
+}
+
+// Names made while the program runs, held by the list and by the shapes alike
+var names: List<String> = []
+for index in 0..6 {
+  names.append "shape-{index}-{"x".repeat(index)}"
+}
+var shapes: List<Shape> = []
+for index in 0..6 {
+  if index % 3 == 0 {
+    shapes.append Shape.Named(names[index])
+  } else if index % 3 == 1 {
+    shapes.append Shape.Sized(index, index + 1)
+  } else {
+    shapes.append Shape.Empty
+  }
+}
+
+var described: List<Task<String>> = []
+for shape in shapes {
+  described.append describedOf(shape)
+}
+for task in described {
+  print task.await()
+}
+
+// A closure over a `String` that the list holds too, in the frame of a task: its environment is copied where the task
+// may move
+const prefix = names[1]
+var labelled: List<Task<String>> = []
+for index in 0..4 {
+  labelled.append labelOf({ "{prefix}:{_}" }, index)
+}
+for task in labelled {
+  print task.await()
+}
+print "{names.length()} names, the first {names[0]}"

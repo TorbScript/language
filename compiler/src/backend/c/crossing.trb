@@ -25,8 +25,8 @@
  */
 
 use IrProgram, IrTypeId, LayoutId, RuntimeKind from "../../ir/ir"
-use containsCountedType from "../../ir/layout"
-use memberNameOf from "./type"
+use Layout, containsCountedType from "../../ir/layout"
+use memberNameOf, variantMemberNameOf from "./type"
 use CExpression from "./writer"
 use countedFormOf, inlineCountedLayoutOf, environmentMemberName from "./body"
 
@@ -51,17 +51,9 @@ public fn crossingOf(program: IrProgram, id: IrTypeId, place: CExpression, isTra
     return crossingOf program, inner, place, isTransfer
   }
   if const Some(layout) = inlineCountedLayoutOf(program, inner) {
+    // A variant crosses where the fields of the case it is say so: the test switches on its tag
     const shape = program.layoutAt layout
-    // A variant crosses where its case says so, which a test would have to switch on: it stays where it is instead
-    if !shape.variants.isEmpty() {
-      return Crossing.Never
-    }
-    var combined = Crossing.Always
-    for field in shape.fields {
-      const member = CExpression.Member place, memberNameOf(field)
-      combined = bothOf combined, crossingOf(program, field.annotation, member, isTransfer)
-    }
-    return combined
+    return layoutCrossingOf shape, { CExpression.Member place, _ }, { annotation, reached => crossingOf program, annotation, reached, isTransfer }
   }
   const transfer = CExpression.Literal(if isTransfer { "true" } else { "false" })
   match program.typeAt(inner) {
@@ -157,24 +149,19 @@ public fn privateOf(program: IrProgram, id: IrTypeId, place: CExpression): Cross
     return privateOf program, inner, place
   }
   if const Some(layout) = inlineCountedLayoutOf(program, inner) {
-    const shape = program.layoutAt layout
-    // A variant would need a switch on its case, and a type with `close()` is a resource a copy would close twice
-    if !shape.variants.isEmpty() || program.closeFunctions.containsKey(layout.value) {
+    // A type with `close()` is a resource a copy would close twice; a variant is copied by the case it is
+    if program.closeFunctions.containsKey(layout.value) {
       return Crossing.Never
     }
-    var combined = Crossing.Always
-    for field in shape.fields {
-      const member = CExpression.Member place, memberNameOf(field)
-      combined = bothOf combined, privateOf(program, field.annotation, member)
-    }
-    return combined
+    const shape = program.layoutAt layout
+    return layoutCrossingOf shape, { CExpression.Member place, _ }, { annotation, reached => privateOf program, annotation, reached }
   }
   match program.typeAt(inner) {
     .Text => Crossing.When CExpression.Call(CExpression.Name("torb_text_privatize"), [CExpression.AddressOf(place)])
-    // An environment is not copied: the closure crosses where it is shared, exactly as without the copy
+    // An environment somebody else holds too is copied by the copy its closure put into it (`environmentCopyOf`)
     .Closure(_) => {
-      const environment = CExpression.Member place, environmentMemberName
-      Crossing.When CExpression.Call(CExpression.Name("torb_closure_may_move"), [environment])
+      const environment = CExpression.AddressOf CExpression.Member(place, environmentMemberName)
+      Crossing.When CExpression.Call(CExpression.Name("torb_closure_privatize"), [environment])
     }
     .Runtime(kind, arguments) => runtimePrivateOf program, kind, arguments, place
     _ => Crossing.Never
@@ -258,7 +245,7 @@ fn isCopyableLayout(program: IrProgram, layout: LayoutId, var visiting: List<Int
     return true
   }
   const shape = program.layoutAt layout
-  if !shape.variants.isEmpty() || program.closeFunctions.containsKey(layout.value) {
+  if program.closeFunctions.containsKey(layout.value) {
     return false
   }
   visiting.append layout.value
@@ -315,6 +302,30 @@ fn isCopyableElement(program: IrProgram, arguments: List<IrTypeId>, index: Int, 
   false
 }
 
+/** The name of the copy of an environment at the crossing of a worker (`torb_environment.privatize`). */
+public fn environmentCopyNameOf(program: IrProgram, layout: LayoutId): String {
+  "PE_{program.layoutAt(layout).name}"
+}
+
+/**
+ * What the copy of an environment makes private once it has an environment of its own: every capture of `*value`, in
+ * place. `Never` where one cannot be copied soundly - a captured `var` is a box with an identity, a shared object has
+ * one - and then the closure gets no copy and crosses only where its environment is shared, as before. `Never` as
+ * well where no capture holds a count: such an environment is shared from its birth and never needs a copy.
+ */
+public fn environmentCopyOf(program: IrProgram, layout: LayoutId): Crossing {
+  const shape = program.layoutAt layout
+  if !shape.fields.any({ containsCountedType program, _.annotation }) {
+    return Crossing.Never
+  }
+  const value = CExpression.Name "value"
+  var combined = Crossing.Always
+  for field in shape.fields {
+    combined = bothOf combined, privateOf(program, field.annotation, CExpression.PointerMember(value, memberNameOf(field)))
+  }
+  combined
+}
+
 /** The name of the function that makes one value of an inline layout private through a `void *`. */
 public fn privateHelperNameOf(program: IrProgram, layout: LayoutId): String {
   "P_{program.layoutAt(layout).name}"
@@ -325,17 +336,61 @@ public fn privateHelperNameOf(program: IrProgram, layout: LayoutId): String {
  * function was handed, cast to the layout.
  */
 public fn privateHelperOf(program: IrProgram, layout: LayoutId): Crossing {
-  const shape = program.layoutAt layout
-  if !shape.variants.isEmpty() || program.closeFunctions.containsKey(layout.value) {
+  if program.closeFunctions.containsKey(layout.value) {
     return Crossing.Never
   }
+  const shape = program.layoutAt layout
   const value = CExpression.Name "value"
-  var combined = Crossing.Always
-  for field in shape.fields {
-    const member = CExpression.PointerMember value, memberNameOf(field)
-    combined = bothOf combined, privateOf(program, field.annotation, member)
+  layoutCrossingOf shape, { CExpression.PointerMember value, _ }, { annotation, reached => privateOf program, annotation, reached }
+}
+
+/**
+ * The test or the copy of an inline layout, `field` of every field that holds a count: of a record or a tuple all of
+ * them, of a variant the common fields and the fields of the case the value is, chosen by its tag -
+ * `tag == 0 ? <case 0> : tag == 2 ? <case 2> : true`, where a case whose fields hold nothing counted needs no arm and
+ * one that never crosses is `false`. `member` reaches a member of the value, `value.x` or `value->x`.
+ */
+fn layoutCrossingOf(
+  shape: Layout,
+  member: (String) => CExpression,
+  field: (IrTypeId, CExpression) => Crossing,
+): Crossing {
+  if shape.variants.isEmpty() {
+    var combined = Crossing.Always
+    for each in shape.fields {
+      combined = bothOf combined, field(each.annotation, member(memberNameOf(each)))
+    }
+    return combined
   }
-  combined
+  var combined = Crossing.Always
+  for each in shape.commonFields() {
+    combined = bothOf combined, field(each.annotation, member(memberNameOf(each)))
+  }
+  var arms: List<(Int, CExpression)> = []
+  for variant in 0..shape.variants.length() {
+    const group = CExpression.Member member("payload"), variantMemberNameOf(variant)
+    var chosen = Crossing.Always
+    for each in shape.fieldsOfVariant(variant) {
+      chosen = bothOf chosen, field(each.annotation, CExpression.Member(group, memberNameOf(each)))
+    }
+    match chosen {
+      .Always => {}
+      .Never => arms.append((variant, CExpression.Literal("false")))
+      .When(test) => arms.append((variant, test))
+    }
+  }
+  if arms.isEmpty() {
+    return combined
+  }
+  var switched = CExpression.Literal "true"
+  var index = arms.length() - 1
+  while index >= 0 {
+    const (variant, test) = arms[index]
+    const isCase = CExpression.Binary member("tag"), "==", CExpression.Literal("{variant}u")
+    switched = CExpression.Conditional isCase, test, switched
+    index = index - 1
+  }
+  bothOf combined, Crossing.When(switched)
 }
 
 /**

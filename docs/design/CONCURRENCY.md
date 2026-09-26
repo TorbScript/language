@@ -1611,12 +1611,20 @@ private instead - section 6's "copied into the worker's heap", decided on 2026-0
   or a tuple); an inline record or tuple field by field. Nothing is copied that is already private - a block with a
   count of 1 on a path only this value owns, an immortal block, a shared one - so a frame the test would have let
   through costs a walk and no allocation.
+- **A variant** with a counted case is tested and copied by the case it is: the C back end writes a switch on its tag
+  as an expression - `tag == 0 ? <the fields of case 0> : tag == 2 ? ... : true`, one arm per case that holds a count -
+  both in the test and in the copy, and the VM walks the words of the case the tag names (`TORB_CROSSING_VALUE`, and the
+  groups of the shape in `torb_machine_privatize_value`).
+- **A closure** crosses where its environment is shared, and otherwise its environment is copied by the copy its
+  closure put into it: every environment carries, beside its drop function, a `privatize` function (`PE_<layout>`) the
+  emitter writes for a layout whose captures may all be copied - the block itself where only this closure holds it,
+  else a block of its own with every capture retained, and then every capture made private in place
+  (`torb_closure_privatize`). The VM copies its environment blocks by the shape of their contents
+  (`torb_machine_privatize_environment`).
 - **What never.** Whatever has an identity or cannot be walked: a `shared type` object, a task or a channel of counted
-  items, a captured `var`, a `lazy` cell, a trait-typed value (its payload is erased), a variant with a counted case (a
-  copy would switch on the case; it stays with the test, as before), and a value whose type implements `Close`, which a
-  copy would close twice. A closure is not copied either - its environment is erased and may be running on several
-  workers at once - so it crosses exactly where it did, where its environment is shared; a closure that captures a
-  `String` still pins its task. Where a value answers no, the task stays on its worker, correct and sequential, exactly
+  items, a captured `var` (so a closure over one gets no copy and crosses only where its environment is shared), a
+  `lazy` cell, a trait-typed value (its payload is erased), a boxed record, and a value whose type implements `Close`,
+  which a copy would close twice. Where a value answers no, the task stays on its worker, correct and sequential, exactly
   as before the copy existed.
 
 The emitter decides it per type (`compiler/src/backend/c/crossing.trb`, `privateOf`); the runtime copies
@@ -1706,9 +1714,8 @@ this pool (`runtime/stream.c`), and a read of theirs that runs is not interrupte
   the one of them epoll and kqueue could take, and the second code path waits until it is measured. The whole-file
   calls of `std/fs` stay synchronous, and `offload` is what a program wraps one in, as `Process.run` does.
 - **`Merge`, `collect` and `minBy`** on `Parallel` (slice B), and **`Plain`, `Window`, `windows`** (slice F).
-- **The copy of a closure's environment and of a variant with a counted case** ("The copy at the crossing" says why
-  each waits: an erased environment would need a copy function in every environment, a variant a switch per layout),
-  and the fusing of the stages of a pipeline.
+- **The fusing of the stages of a pipeline.** (The copy of a closure's environment and of a variant with a counted case
+  is built, "The copy at the crossing".)
 - **The measurements of section 9** and the skewed-cost benchmark; the pool counts resumes and thefts
   (`torb_pool_statistics_now`), nothing prints a histogram.
 - **A race detector**: there is no `-fsanitize=thread` for Windows targets, so the pool was verified by its tests run

@@ -40,6 +40,7 @@ use retainChildrenFunctionOf from "./body"
 use variantInitializerParts, boxedLayoutOf, countedFormOf, inlineCountedLayoutOf from "./body"
 use retainStatement, releaseStatement, describeCounted from "./body"
 use frameCrossingOf, framePrivateOf, privateHelperOf, privateHelperNameOf, privateHelpersNamedIn from "./crossing"
+use environmentCopyOf, environmentCopyNameOf from "./crossing"
 
 /**
  * One entry function the generated `main` calls, and what it is called for.
@@ -1306,6 +1307,12 @@ fn emitPrivateHelpers(var emission: Emission, program: IrProgram, functions: Lis
       }
     }
   }
+  const copies = environmentCopiesOf program, functions
+  for layout in copies {
+    if const .When(copy) = environmentCopyOf(program, layout) {
+      privateHelpersNamedIn copy, names
+    }
+  }
   var layouts: List<LayoutId> = []
   var index = 0
   while index < names.length() {
@@ -1323,6 +1330,7 @@ fn emitPrivateHelpers(var emission: Emission, program: IrProgram, functions: Lis
     }
   }
   if layouts.isEmpty() {
+    emitEnvironmentCopies emission, program, copies
     return
   }
   write emission, CDeclaration.Comment("Making one element private at the crossing of a worker (CONCURRENCY.md 16).")
@@ -1341,6 +1349,91 @@ fn emitPrivateHelpers(var emission: Emission, program: IrProgram, functions: Lis
     body.append CStatement.Return(Some(answer))
     write emission, CDeclaration.Definition("", privateHeadOf(program, layout), body)
   }
+  emitEnvironmentCopies emission, program, copies
+}
+
+/**
+ * The layouts of the environments the closures of the program are made with whose captures may all be copied
+ * ([environmentCopyOf]): each gets a `PE_<layout>`, which its closures put into the environment.
+ */
+fn environmentCopiesOf(program: IrProgram, functions: List<IrFunction>): List<LayoutId> {
+  var found: List<LayoutId> = []
+  for function in functions {
+    for block in function.blocks {
+      for instruction in block.instructions {
+        if const .Closure(_, callee, _, _) = instruction {
+          if !program.hasFunction(callee) {
+            continue
+          }
+          if const Some(layout) = environmentLayoutOfFunction(program, program.functionAt(callee)) {
+            if found.contains(layout) {
+              continue
+            }
+            if const .Never = environmentCopyOf(program, layout) {
+              continue
+            }
+            found.append layout
+          }
+        }
+      }
+    }
+  }
+  found
+}
+
+/**
+ * The copies of environments at the crossing of a worker (`torb_environment.privatize`, docs/design/CONCURRENCY.md
+ * section 16, "The copy at the crossing"): the environment itself where only its closure holds it, else a block of its
+ * own with every capture retained - then every capture made private in place, and `NULL` where one could not be.
+ * They are not `static`: a layout whose closures all keep their environment in a frame names its copy nowhere.
+ */
+fn emitEnvironmentCopies(var emission: Emission, program: IrProgram, layouts: List<LayoutId>) {
+  if layouts.isEmpty() {
+    return
+  }
+  write emission, CDeclaration.Comment("Copying an environment at the crossing of a worker (CONCURRENCY.md 16).")
+  for layout in layouts {
+    write emission, CDeclaration.Prototype(environmentCopyHeadOf(program, layout))
+  }
+  for layout in layouts {
+    const shape = program.layoutAt layout
+    const name = shape.name
+    const environment = CExpression.Name "environment"
+    const value = CExpression.Name "value"
+    const copy = CExpression.Name "copy"
+    var body = [CStatement.Declaration("{name} *", "value", Some(CExpression.Cast("{name} *", environment)))]
+    var copying = [
+      CStatement.Declaration("{name} *", "copy", Some(CExpression.Cast("{name} *", CExpression.Call(
+        CExpression.Name("torb_allocate"),
+        [CExpression.Name("sizeof({name})"), CExpression.Name("TORB_BLOCK_ENVIRONMENT")],
+      )))),
+      CStatement.Declaration("torb_header", "header", Some(CExpression.PointerMember(copy, "header"))),
+      CStatement.Assignment(CExpression.Dereference(copy), CExpression.Dereference(value)),
+      CStatement.Assignment(CExpression.PointerMember(copy, "header"), CExpression.Name("header")),
+    ]
+    if shape.containsCounted {
+      copying.append CStatement.Evaluate(CExpression.Call(CExpression.Name("R_{name}"), [copy]))
+    }
+    copying.append CStatement.Assignment(value, copy)
+    const header = CExpression.PointerMember environment, "header"
+    const isShared = CExpression.Binary CExpression.Member(header, "count"), "!=", CExpression.Literal("1u")
+    body.append CStatement.If(isShared, copying)
+    if const .When(test) = environmentCopyOf(program, layout) {
+      const made = CExpression.Cast "torb_environment *", value
+      const isCopy = CExpression.Binary made, "!=", environment
+      const released = CStatement.Evaluate CExpression.Call(CExpression.Name("torb_environment_release"), [made])
+      body.append(CStatement.If(CExpression.Unary("!", test), [
+        CStatement.If(isCopy, [released]),
+        CStatement.Return(Some(CExpression.Name("NULL"))),
+      ]))
+    }
+    body.append CStatement.Return(Some(CExpression.Cast("torb_environment *", value)))
+    write emission, CDeclaration.Definition("", environmentCopyHeadOf(program, layout), body)
+  }
+}
+
+fn environmentCopyHeadOf(program: IrProgram, layout: LayoutId): String {
+  "torb_environment *{environmentCopyNameOf(program, layout)}(torb_environment *environment)"
 }
 
 fn privateHeadOf(program: IrProgram, layout: LayoutId): String {
@@ -1576,6 +1669,9 @@ fn demandFlagsOf(program: IrProgram, functions: List<IrFunction>): DemandFlags {
       markLayoutFlag program, retains, found
     }
     markThunkRetains program, retains, table
+  }
+  for layout in environmentCopiesOf(program, functions) {
+    markLayoutFlag program, retains, layout
   }
   closeHelperDemand program, retains, drops
   DemandFlags retains, drops

@@ -1354,6 +1354,45 @@ static const torb_element *torb_machine_narrow_element(int64_t narrow) {
  */
 static bool torb_machine_privatize_value(int64_t *value, const torb_machine_shape *shape);
 
+/*
+ * A closure's environment at the crossing (the C back end's `torb_closure_privatize`): nothing where it is shared;
+ * otherwise the block itself where only this closure holds it, else a block of its own with every word retained, and
+ * then every capture made private in place by the shape of the contents. False where a capture cannot be copied - a
+ * captured `var` is a box, which the emitter never asks to copy - and the block made for it is given back.
+ */
+static bool torb_machine_privatize_environment(int64_t *place) {
+  void *block = (void *)(intptr_t)place[0];
+  torb_header *header = (torb_header *)block;
+  const torb_machine_shape *shape;
+  int64_t *contents;
+  void *made;
+  if (torb_closure_may_move((torb_environment *)block)) {
+    return true;
+  }
+  if (header->kind == (uint16_t)TORB_BLOCK_FRAME_ENVIRONMENT) {
+    return false;
+  }
+  contents = torb_machine_contents(block);
+  shape = torb_machine_shape_at(contents[0]);
+  if (shape->closer >= 0) {
+    return false;
+  }
+  if (header->count == 1u) {
+    return torb_machine_privatize_value(contents + 1, shape);
+  }
+  made = torb_allocate_zeroed(sizeof(torb_header) + 8u + 8u * (size_t)shape->width, (torb_block_kind)header->kind);
+  memcpy(torb_machine_contents(made), contents, 8u + 8u * (size_t)shape->width);
+  torb_machine_retain_value(torb_machine_contents(made) + 1, shape);
+  if (!torb_machine_privatize_value(torb_machine_contents(made) + 1, shape)) {
+    torb_machine_release_block(made);
+    return false;
+  }
+  torb_machine_release_block(block);
+  place[0] = (int64_t)(intptr_t)made;
+  torb_pool_count_copy();
+  return true;
+}
+
 static bool torb_machine_privatize_element(const void *context, void *element) {
   const torb_machine_descriptor *self = (const torb_machine_descriptor *)context;
   return torb_machine_privatize_value((int64_t *)element, torb_machine_shape_at(self->shape));
@@ -1416,8 +1455,7 @@ static bool torb_machine_privatize_word(int64_t *value, const torb_machine_word 
       /* Shared blocks that hand out plain values alone, or the emitter would not have asked */
       return true;
     case TORB_COUNTED_ENVIRONMENT:
-      /* An environment is never copied: the closure crosses where it is shared */
-      return torb_closure_may_move((torb_environment *)(intptr_t)place[0]);
+      return torb_machine_privatize_environment(place);
     case TORB_COUNTED_NESTED:
       return torb_machine_privatize_value(place, torb_machine_shape_at(word->shape));
     default:
@@ -1426,13 +1464,21 @@ static bool torb_machine_privatize_word(int64_t *value, const torb_machine_word 
 }
 
 static bool torb_machine_privatize_value(int64_t *value, const torb_machine_shape *shape) {
-  /* A variant would need its case to be copied: it stays where it is, as in the C back end */
-  if (shape->tag >= 0) {
-    return false;
-  }
   for (size_t index = 0; index < shape->common.count; index++) {
     if (!torb_machine_privatize_word(value, &shape->common.words[index])) {
       return false;
+    }
+  }
+  /* A variant: the words of the case it is, as the C back end switches on its tag */
+  if (shape->tag >= 0) {
+    int64_t variant = value[shape->tag];
+    if (variant >= 0 && (size_t)variant < shape->group_count) {
+      const torb_machine_group *group = &shape->groups[variant];
+      for (size_t index = 0; index < group->count; index++) {
+        if (!torb_machine_privatize_word(value, &group->words[index])) {
+          return false;
+        }
+      }
     }
   }
   return true;
@@ -1565,8 +1611,66 @@ enum {
   TORB_CROSSING_TEXT = 0,
   TORB_CROSSING_LIST = 1,
   TORB_CROSSING_MAP = 2,
-  TORB_CROSSING_CLOSURE = 3
+  TORB_CROSSING_CLOSURE = 3,
+  /* A variant with a counted case, walked by its shape: the kind is this plus the shape's index times 8 */
+  TORB_CROSSING_VALUE = 4
 };
+
+static bool torb_machine_value_may_move(const int64_t *value, const torb_machine_shape *shape, bool transfer);
+
+/* One counted word of a value the emitter lets cross where its tests pass: `crossingTestsOf` of bytecode/emit.trb. */
+static bool torb_machine_word_may_move(const int64_t *value, const torb_machine_word *word, bool transfer) {
+  const int64_t *place = value + word->offset;
+  switch (word->kind) {
+    case TORB_COUNTED_TEXT: {
+      torb_text text;
+      memcpy(&text, place, sizeof text);
+      return torb_text_may_move(text, transfer);
+    }
+    case TORB_COUNTED_LIST: {
+      torb_list list;
+      memcpy(&list, place, sizeof list);
+      return torb_list_may_move(list, transfer);
+    }
+    case TORB_COUNTED_MAP:
+    case TORB_COUNTED_SET: {
+      torb_map map;
+      memcpy(&map, place, sizeof map);
+      return torb_map_may_move(map, transfer);
+    }
+    case TORB_COUNTED_TASK:
+    case TORB_COUNTED_CHANNEL:
+      /* Shared blocks that hand out plain values alone, or the emitter would not have asked */
+      return true;
+    case TORB_COUNTED_ENVIRONMENT:
+      return torb_closure_may_move((torb_environment *)(intptr_t)place[0]);
+    case TORB_COUNTED_NESTED:
+      return torb_machine_value_may_move(place, torb_machine_shape_at(word->shape), transfer);
+    default:
+      return false;
+  }
+}
+
+/* A value by its shape: the common words, and for a variant the words of the case it is. */
+static bool torb_machine_value_may_move(const int64_t *value, const torb_machine_shape *shape, bool transfer) {
+  for (size_t index = 0; index < shape->common.count; index++) {
+    if (!torb_machine_word_may_move(value, &shape->common.words[index], transfer)) {
+      return false;
+    }
+  }
+  if (shape->tag >= 0) {
+    int64_t variant = value[shape->tag];
+    if (variant >= 0 && (size_t)variant < shape->group_count) {
+      const torb_machine_group *group = &shape->groups[variant];
+      for (size_t index = 0; index < group->count; index++) {
+        if (!torb_machine_word_may_move(value, &group->words[index], transfer)) {
+          return false;
+        }
+      }
+    }
+  }
+  return true;
+}
 
 /*
  * Whether values may cross to another worker (docs/design/CONCURRENCY.md section 16, "What crosses a worker"): `tests`
@@ -1612,7 +1716,11 @@ static bool torb_machine_tests_pass(const int64_t *words, int64_t base, const in
         }
         break;
       default:
-        return false;
+        if (test[0] % 8 != TORB_CROSSING_VALUE ||
+            !torb_machine_value_may_move(value, torb_machine_shape_at(test[0] / 8), transfer)) {
+          return false;
+        }
+        break;
     }
   }
   return true;

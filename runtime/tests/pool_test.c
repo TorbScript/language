@@ -864,6 +864,81 @@ TORB_TEST(a_map_held_twice_is_copied_down_to_every_key) {
   torb_map_release(second);
 }
 
+/* The environment of a closure over one text, and the drop and the copy the emitter would write for it (`PE_<layout>`). */
+typedef struct text_environment {
+  torb_header header;
+  torb_drop_function drop;
+  torb_environment_copy privatize;
+  torb_text text;
+} text_environment;
+
+static void text_environment_drop(void *block) {
+  torb_text_release(((text_environment *)block)->text);
+}
+
+static torb_environment *text_environment_copy(torb_environment *environment) {
+  text_environment *value = (text_environment *)environment;
+  if (environment->header.count != 1u) {
+    text_environment *copy = (text_environment *)torb_allocate(sizeof(text_environment), TORB_BLOCK_ENVIRONMENT);
+    torb_header header = copy->header;
+    *copy = *value;
+    copy->header = header;
+    copy->text = torb_text_retained(copy->text);
+    value = copy;
+  }
+  if (!torb_text_privatize(&value->text)) {
+    return NULL;
+  }
+  return (torb_environment *)value;
+}
+
+static text_environment *text_environment_new(torb_text text, torb_environment_copy copy) {
+  text_environment *made = (text_environment *)torb_allocate(sizeof(text_environment), TORB_BLOCK_ENVIRONMENT);
+  made->drop = text_environment_drop;
+  made->privatize = copy;
+  made->text = text;
+  return made;
+}
+
+/**
+ * An environment only its closure holds is kept and its capture made private in place; one held twice is copied, and
+ * the original keeps what it held. One without a copy - a closure over a captured `var` - is never copied.
+ */
+TORB_TEST(an_environment_is_copied_only_where_somebody_else_holds_it) {
+  torb_text text = torb_text_from_cstring("a capture of some length");
+  torb_text held = torb_text_retained(text);
+  text_environment *alone = text_environment_new(text, text_environment_copy);
+  torb_environment *place = (torb_environment *)alone;
+  text_environment *shared;
+  torb_environment *other;
+  uint64_t copied = torb_pool_statistics_now().copied;
+  /* The environment is the closure's alone, its text is not: the text is copied, the block kept */
+  TORB_CHECK(torb_closure_privatize(&place));
+  TORB_CHECK(place == (torb_environment *)alone);
+  TORB_CHECK(alone->text.storage != held.storage);
+  TORB_CHECK_INTEGER(count_of(held.storage), 1);
+  /* Held twice: a block of its own, and the first one still holds its text */
+  torb_retain(alone);
+  other = (torb_environment *)alone;
+  TORB_CHECK(torb_closure_privatize(&other));
+  TORB_CHECK(other != (torb_environment *)alone);
+  TORB_CHECK_INTEGER(count_of(alone), 1);
+  TORB_CHECK_INTEGER(count_of(other), 1);
+  TORB_CHECK(torb_text_equal(((text_environment *)other)->text, held));
+  TORB_CHECK(torb_pool_statistics_now().copied > copied);
+  /* Without a copy the closure stays where it is */
+  shared = text_environment_new(torb_text_retained(held), NULL);
+  torb_retain(shared);
+  place = (torb_environment *)shared;
+  TORB_CHECK(!torb_closure_privatize(&place));
+  TORB_CHECK(place == (torb_environment *)shared);
+  torb_environment_release((torb_environment *)shared);
+  torb_environment_release((torb_environment *)shared);
+  torb_environment_release((torb_environment *)alone);
+  torb_environment_release(other);
+  torb_text_release(held);
+}
+
 /* A task that adds up the lengths of the texts of its list. */
 typedef struct lengths_frame {
   torb_list texts;
@@ -1089,6 +1164,7 @@ void torb_register_pool_tests(void) {
   TORB_ADD(a_text_is_copied_only_where_somebody_else_holds_it);
   TORB_ADD(a_list_of_texts_held_twice_is_copied_down_to_every_text);
   TORB_ADD(a_map_held_twice_is_copied_down_to_every_key);
+  TORB_ADD(an_environment_is_copied_only_where_somebody_else_holds_it);
   TORB_ADD(frames_of_texts_somebody_else_holds_cross_after_the_copy);
   TORB_ADD(a_body_on_the_blocking_pool_does_not_stall_its_worker);
   TORB_ADD(only_a_task_whose_frame_may_move_turns_to_the_blocking_pool);

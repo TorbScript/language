@@ -694,6 +694,13 @@ typedef bool (*torb_privatize_function)(void *place);
 
 /** Whether the pool has more than one worker, so a copy at a crossing can pay off. */
 bool torb_task_copies(void);
+/**
+ * A closure: nothing where its environment is shared or there is none; otherwise the environment's own copy
+ * (`torb_environment.privatize`) - the block itself where only this closure holds it, else a copy of it, with every
+ * capture private. False where the environment has no copy, which a captured `var` or a shared object rules out.
+ * `environment` in and out.
+ */
+bool torb_closure_privatize(torb_environment **environment);
 /** A `String`: its own storage where somebody else holds it too. Always true. `text` in and out. */
 bool torb_text_privatize(torb_text *text);
 /** The same through a `void *`: the element function of a list, a map or a set of `String`s. */

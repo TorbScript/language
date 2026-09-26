@@ -662,17 +662,28 @@ typedef struct torb_map {
 /** `HashSet<Item>` and `TrieSet<Item>`: the table with `torb_element_unit` on the value side. */
 typedef torb_map torb_set;
 
+struct torb_environment;
+
 /**
- * A closure environment. The captures follow the header and the drop function; the emitter generates the typed struct
- * per closure and only these two fields are ABI.
+ * What makes the captures of an environment private at the crossing of a worker (`torb_closure_privatize`): the same
+ * environment where only this closure holds it, or a copy of it, each capture made private in place - or `NULL` where
+ * one cannot be. The emitter writes one per layout of an environment whose captures may all be copied (`PE_<layout>`).
+ */
+typedef struct torb_environment *(*torb_environment_copy)(struct torb_environment *environment);
+
+/**
+ * A closure environment. The captures follow the header, the drop function and the copy; the emitter generates the
+ * typed struct per closure and only these fields are ABI.
  *
  * The `drop` pointer is here and not at the release site, because a closure **value** has the type of every closure of
  * its shape: which captures are inside one, and therefore which of them a release has to release, is only known to the
- * closure that built it.
+ * closure that built it - and the same goes for `privatize`, which the runtime reads only where the compiler asked
+ * for a copy (`torb_closure_privatize`), so an environment of a compiler that wrote none is never read past `drop`.
  */
 typedef struct torb_environment {
   torb_header header;
   torb_drop_function drop;
+  torb_environment_copy privatize;
 } torb_environment;
 
 /**
