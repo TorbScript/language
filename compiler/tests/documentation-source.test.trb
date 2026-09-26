@@ -481,3 +481,98 @@ group "the first sentence" {
     assert found[0].contains("only repeats its name")
   }
 }
+
+group "the section of a function that can panic" {
+  test "a public function that calls panic and has no section is a finding" {
+    const source = raw"""
+      /** What this module is for. */
+
+      /** The first of the values. */
+      public fn first(values: Int): Int {
+        if values < 0 {
+          panic "no values"
+        }
+        values
+      }
+      """
+    const found = standard source
+    assert(found.length() == 1)
+    assert found[0].contains("`fn first` can panic - it calls `panic` -")
+  }
+
+  test "the section says when, and a function that is not public is asked nothing" {
+    const source = raw"""
+      /** What this module is for. */
+
+      /**
+       * The first of the values.
+       *
+       * # Panics
+       *
+       * When there are none.
+       */
+      public fn first(values: Int): Int {
+        checked values
+      }
+
+      fn checked(values: Int): Int {
+        Some(values).expect("a value")
+      }
+      """
+    assert standard(source).isEmpty()
+  }
+
+  test "a call of a function of the file whose comment documents a panic can panic too" {
+    const source = raw"""
+      /** What this module is for. */
+
+      /**
+       * The first of the values.
+       *
+       * # Panics
+       *
+       * When there are none.
+       */
+      public fn first(values: Int): Int {
+        if values < 0 {
+          panic "no values"
+        }
+        values
+      }
+
+      /** The first of the values, twice. */
+      public fn doubled(values: Int): Int {
+        first(values) * 2
+      }
+      """
+    const found = standard source
+    assert(found.length() == 1)
+    assert found[0].contains("`fn doubled` can panic - it calls `first`, which documents a panic -")
+  }
+
+  test "a section that begins with Never satisfies the rule and asks nothing of a caller" {
+    const source = raw"""
+      /** What this module is for. */
+
+      /**
+       * The value, which is never negative.
+       *
+       * # Panics
+       *
+       * Never: the guard below answers a state the constructor rules out.
+       */
+      public fn value(number: Int): Int {
+        if number < 0 {
+          panic "a negative value"
+        }
+        number
+      }
+
+      /** The value, twice. */
+      public fn doubled(number: Int): Int {
+        value(number) * 2
+      }
+      """
+    assert standard(source).isEmpty()
+  }
+}

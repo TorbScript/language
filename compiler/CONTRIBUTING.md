@@ -31,6 +31,7 @@ sh runtime/build.sh                                     # The C runtime and its 
 torb canon --check --rule calls --rule strings --rule imported-case-patterns --rule unused-bindings --rule loops .
 torb canon std compiler examples tests                  # ...write it (a minute)
 torb docs source std compiler examples                  # The doc comments (not a gate yet)
+torb docs source --panics std                           # ...except its `# Panics` rule, which is one
 torb docs check docs                                    # The documentation: schema, links, every snippet
 torb docs index --check docs                            # Is the generated part of every index.md current?
 torb docs index docs                                    # ...write it
@@ -329,7 +330,9 @@ by nothing and counted in the report.
 
 **`torb docs source` is not in the list above yet.** The repository does not pass it while the writing waves are
 running; `torb docs source std compiler examples --statistics` is what measures how far they have come. It becomes a
-mandatory gate when they are done, and from then on it is run like every other gate.
+mandatory gate when they are done, and from then on it is run like every other gate. One rule of it already is, in
+tier A: `torb docs source --panics std`, a public function of `std/` that can panic says when
+([docs/tooling/torb-docs-source.md](../docs/tooling/torb-docs-source.md)).
 
 ## Traps of the Code Base
 

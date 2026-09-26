@@ -36,6 +36,7 @@ use commentLines, documentationBlocks, startsFile, sectionsOf, sectionHeadings f
 use examplesOf, firstSentence, historyHits, linksOf, wordsOf from "./comments"
 use NameIndex, Scope, buildNameIndex, scopeOf, typeNameOf, importedNames, publicNames, bindingNames from "./source-scope"
 use SourceExample, exampleSyntaxProblems, exampleTypeProblems from "./source-examples"
+use panicSectionProblems from "./panics"
 
 /**
  * Which set of rules a file is judged by. The trees of this repository ask for different things, because they are read
@@ -70,7 +71,8 @@ public const trees: List<Tree> = [Tree.Standard, Tree.Compiler, Tree.Examples, T
  * lies in none of them is judged like the compiler: a doc comment on every `public` declaration and on every file.
  */
 public fn treeOf(path: String): Tree {
-  const normalized = normalizePath path
+  // The leading slash lets a relative path such as `std/text/src/lib.trb` name its tree as an absolute one does
+  const normalized = "/" + normalizePath(path)
   if normalized.endsWith(".test.trb") || normalized.contains("/tests/") {
     return Tree.Tests
   }
@@ -203,6 +205,7 @@ public fn sourceProblems(read: ReadSource, index: NameIndex): CheckedSource {
     problems.appendAll linkProblems(read, block, scope, index)
     collectExamples read, block, examples
   }
+  problems.appendAll panicSectionProblems(read.path, read.lines, read.file, read.tree == Tree.Standard)
   const hits = historyHits read.comments
   for hit in hits {
     const note = "`{hit.word}`: a comment says what the code does now, not what it did before"
@@ -567,6 +570,8 @@ public type SourceOptions {
   withStatistics: Bool
   /** `--tree <name>`: judge every file by the rules of this tree instead of deriving them from the path */
   tree: Tree?
+  /** `--panics`: the `# Panics` rule alone (`documentation/panics.trb`), which is what tier A asks of `std/` */
+  onlyPanics: Bool = false
 }
 
 /** The command line behind `torb docs source`. Everything that is not a flag is a path. */
@@ -576,7 +581,12 @@ public fn sourceOptionsOf(arguments: List<String>): SourceOptions {
   var withStatistics = false
   var tree: Tree? = None
   var wantsTree = false
+  var onlyPanics = false
   for argument in arguments {
+    if argument == "--panics" {
+      onlyPanics = true
+      continue
+    }
     if wantsTree {
       tree = treeNamed argument
       wantsTree = false
@@ -596,7 +606,7 @@ public fn sourceOptionsOf(arguments: List<String>): SourceOptions {
     }
     paths.append argument
   }
-  SourceOptions paths, withoutExamples, withStatistics, tree
+  SourceOptions paths, withoutExamples, withStatistics, tree, onlyPanics
 }
 
 /** `torb docs source <path>...`. Returns the number of problems. */
@@ -618,13 +628,23 @@ public fn runSource(options: SourceOptions): Result<Int, IoError> {
     const text = File.readText(path)?
     const module = normalizePath(File.absolutePath(path)?)
     const read = readSource path, module, treeFor(options, path), text
+    if options.onlyPanics {
+      if !read.isBroken {
+        problems.appendAll panicSectionProblems(read.path, read.lines, read.file, read.tree == Tree.Standard)
+      }
+      continue
+    }
     const checked = sourceProblems read, index
     declarations = declarations + checked.required
     problems.appendAll checked.problems
     examples.appendAll checked.examples
     record statistics, read.tree.name(), checked
   }
-  if !options.withoutExamples {
+  if options.onlyPanics && problems.isEmpty() {
+    print "{counted(count, "file")}, every public function that can panic says when"
+    return Ok 0
+  }
+  if !options.withoutExamples && !options.onlyPanics {
     problems.appendAll exampleSyntaxProblems(examples)
     const roots = absolutePaths(paths)?
     problems.appendAll exampleTypeProblems(tree, roots, examples)

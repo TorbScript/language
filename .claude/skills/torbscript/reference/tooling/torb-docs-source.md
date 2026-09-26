@@ -24,6 +24,7 @@ torb docs source <path>...                 The doc comments of every .trb file b
     --statistics                           How much of every tree is documented
     --no-examples                          Do not type check the examples, which is the slow part
     --tree <std|compiler|examples|tests>    Judge every file by these rules instead of deriving them from the path
+    --panics                               Only the `# Panics` rule, which tier A runs over std/
 ```
 
 It exits with 1 when it reports a finding and with 0 when it does not. From the repository root:
@@ -61,6 +62,12 @@ module, so it is skipped too.
   (`no longer needed`, `no longer valid`, `no longer be scheduled`). A change written in any other shape is missed on
   purpose: a gate that cries wolf is a gate that gets skipped.
 - **A first sentence that only repeats the name** ("The parser." on `type Parser`) is a finding.
+- **A function of `std/` that can panic says when.** A public function whose body calls `panic`, calls `expect`, or
+  calls a function of the same file whose comment has a `# Panics` section needs that section itself. The rule reads
+  one file's calls off the syntax tree and nothing else: a member of another type, a function of another file, an
+  index and an operator are not followed, because a gate that flagged every `+` would be skipped. A section that
+  begins with `Never` says the `panic` guards a state the function rules out itself (`Task.await`): it satisfies
+  the rule, and a caller of that function is not asked for a section. `--panics` runs this rule alone.
 
 The rules themselves are in `compiler/CONTRIBUTING.md`, and
 `std/core/src/option.trb` is the reference every other file is written after.

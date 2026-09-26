@@ -1,0 +1,148 @@
+/**
+ * The `# Panics` rule of `torb docs source` (docs/design/PANICS.md, recommendation 10): a public function of `std/`
+ * that can panic says so in its doc comment.
+ *
+ * A function can panic where its body calls `panic`, calls `expect` on an `Option` or a `Result`, or calls a function
+ * of the same file whose own doc comment has the section - the call graph of one file, read off the syntax tree. The
+ * rule is deliberately that narrow: a call it cannot see (a member of another type, a function of another file, an
+ * index or an arithmetic operator) is the caller's business, and a gate that cried wolf on every `+` would teach
+ * everyone to ignore it. What it finds is a promise the documentation is missing, never a bug of the code. A section
+ * that begins with `Never` says the `panic` in the body guards a state the function rules out ([documentsPanic]).
+ *
+ * `torb docs source --panics` asks this rule alone, which is what tier A runs over `std/`.
+ */
+
+use Span, LineIndex from "../syntax/source"
+use SourceFile, Declaration, Member, Visibility from "../syntax/ast"
+use walk, CallSite from "../canon/walk"
+use DocumentationProblem from "./markdown"
+
+/** One function of a file: its name, where it is, whether the standard asks it for a comment, and its comment. */
+type PanicCandidate {
+  name: String
+  span: Span
+  isAsked: Bool
+  doc: String
+  hasBody: Bool
+}
+
+/**
+ * Every public function of a file of `std/` that can panic and whose doc comment has no `# Panics` section. A file
+ * outside `std/` asks nothing, because only the public library documents its members.
+ */
+public fn panicSectionProblems(
+  path: String,
+  lines: LineIndex,
+  file: SourceFile,
+  isStandard: Bool,
+): List<DocumentationProblem> {
+  if !isStandard {
+    return []
+  }
+  const candidates = candidatesOf file
+  var documented: Set<String> = Set.of()
+  for candidate in candidates {
+    if documentsPanic(candidate.doc) {
+      documented.insert candidate.name
+    }
+  }
+  const calls = walk(file).calls
+  var problems: List<DocumentationProblem> = []
+  for candidate in candidates {
+    if !candidate.isAsked || !candidate.hasBody || hasPanicsSection(candidate.doc) {
+      continue
+    }
+    const reason = panicReason candidate, calls, documented
+    if const Some(found) = reason {
+      const (line, _) = lines.lineAndColumn candidate.span.start
+      const note = "`fn {candidate.name}` can panic - it calls {found} - and its doc comment has no `# Panics` section"
+        + " that says when"
+      problems.append DocumentationProblem(path, line, note)
+    }
+  }
+  problems
+}
+
+fn hasPanicsSection(doc: String): Bool {
+  doc.contains "# Panics"
+}
+
+/**
+ * Whether the comment promises a panic to its callers: it has the section, and the section does not begin with
+ * `Never` - the answer of a function whose `panic` guards a state it rules out itself, as `Task.await` does. Such a
+ * section satisfies the rule for the function, and a caller of it is not asked for one.
+ */
+fn documentsPanic(doc: String): Bool {
+  match doc.substringAfter("# Panics") {
+    Some(section) => !section.replace("*", " ").trim().startsWith("Never")
+    None => false
+  }
+}
+
+/** Why the function can panic: the first call in its body that can, or `None`. */
+fn panicReason(candidate: PanicCandidate, calls: List<CallSite>, documented: Set<String>): String? {
+  for site in calls {
+    const call = site.call
+    if call.span.start < candidate.span.start || call.span.end > candidate.span.end {
+      continue
+    }
+    if const .Call(callee, _, _) = call.kind {
+      match callee.kind {
+        .Name(text) => {
+          if text == "panic" {
+            return Some "`panic`"
+          }
+          if text != candidate.name && documented.contains(text) {
+            return Some "`{text}`, which documents a panic"
+          }
+        }
+        .Member(_, name, _) => {
+          if name.text == "expect" {
+            return Some "`expect`"
+          }
+        }
+        _ => {}
+      }
+    }
+  }
+  None
+}
+
+/** Every function of the file, top-level and member alike, with what the rule needs of it. */
+fn candidatesOf(file: SourceFile): List<PanicCandidate> {
+  var found: List<PanicCandidate> = []
+  for statement in file.statements {
+    if const .Declare(declaration) = statement.kind {
+      addCandidates declaration, found
+    }
+  }
+  found
+}
+
+fn addCandidates(declaration: Declaration, var found: List<PanicCandidate>) {
+  const isPublic = declaration.modifiers.visibility == Visibility.Public
+  match declaration.kind {
+    .Function(function) => {
+      const doc = declaration.doc ?? ""
+      found.append PanicCandidate(function.name.text, declaration.span, isPublic, doc, function.body.isSome())
+    }
+    .Type(declared) => addMembers declared.members, isPublic, found
+    .Trait(declared) => addMembers declared.members, isPublic, found
+    // The members of an `extend ... with Trait` implement the trait, and the trait is where they are documented
+    .Extend(extension) => {
+      if extension.traits.isEmpty() {
+        addMembers extension.members, true, found
+      }
+    }
+    _ => {}
+  }
+}
+
+fn addMembers(members: List<Member>, isOwnerPublic: Bool, var found: List<PanicCandidate>) {
+  for member in members {
+    if const .Function(function) = member.kind {
+      const isAsked = isOwnerPublic && member.modifiers.visibility != Visibility.Private
+      found.append PanicCandidate(function.name.text, member.span, isAsked, member.doc ?? "", function.body.isSome())
+    }
+  }
+}
