@@ -1,5 +1,7 @@
 # TorbScript
 
+**One language, every layer.** A single-language ecosystem.
+
 A functional-first, multi-paradigm scripting language with value semantics. It runs interpreted and compiles to
 native executables, and it is its own configuration format.
 

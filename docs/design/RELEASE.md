@@ -347,6 +347,10 @@ neither a packaged release nor a second machine exists yet to run them against f
 
 ## 6. The website
 
+**Decided (2026-09-26): the slogan is "One language, every layer.", and the category the site, the README and
+the repository description name is "a single-language ecosystem".** The front page leads with the slogan; the category
+is the line under it and the text of the meta description.
+
 ### The structure
 
 | Path | Content | Comes from |
