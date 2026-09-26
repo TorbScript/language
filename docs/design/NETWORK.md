@@ -7,8 +7,9 @@ it, an HTTP/1.1 server and client in TorbScript in `std/http`, and TLS 1.2 and 1
 `https` in the client and the server. The Windows half is built and tested on every commit; the POSIX halves were
 written against their manuals, checked for syntax and types against stub headers, and are built for the first time by
 the Linux and macOS jobs of CI. UDP (slice 5) was built on Windows and its runtime tests run on Linux in a container as
-well; kqueue has not run it. The client's connection pool (slice 7) and serving on every worker (slice 8) are in. The
-sandbox's network grant, HTTP/2 and HTTP/3 are later slices, each with its reason below.
+well; kqueue has not run it. The client's connection pool (slice 7) and serving on every worker (slice 8) are in, and
+so is the cancellation of a handler whose client went away (slice 13). The sandbox's network grant, HTTP/2 and HTTP/3
+are later slices, each with its reason below.
 
 This is the record of how a TorbScript program talks to another machine: which packages there are and what each one
 owns, how a socket meets the task scheduler of `docs/design/CONCURRENCY.md`, which TLS implementation the language
@@ -602,6 +603,17 @@ public shared type Server with Close {
 - **`serve()` accepts until the server is shut down or closed; each connection is a task**, started by a task function
   with the stream as its argument, so it is pinned to the worker that accepted it (section 4). `serveOne()` accepts and
   serves exactly one connection, which is what a test wants.
+- **A client that goes away cancels its handler** (slice 13). While the handler of a request without a body runs, the
+  connection task reads the connection beside it (`watchPeer`): the end of the stream or a failed read means the client
+  is gone, and the handler's task is cancelled - with every task it started, and every `using` of it closed - and the
+  connection ends without an answer. Bytes that arrive instead are the client's next request (pipelining), kept in the
+  buffer for their turn, and the watch ends there. Once the handler answered, the watch is cancelled and waited for; a
+  receive that is cancelled loses nothing (section 3), so the next request reads what arrived. **A request with a body
+  is not watched**: the handler reads the body from the same connection, and two readers of one stream cannot share it;
+  a client that goes away while its body is read makes that read fail, which is the handler's to see. Watching after the
+  body was read to its end is the refinement. **A client that half-closes** after its request - ends its writing half
+  and waits for the answer, which a raw HTTP/1.0 tool may do - reads as gone too, as it does in Go's server; HTTP/1.1
+  clients do not.
 - **A connection serves requests one after another** (HTTP/1.1 persistent connections): the next request is read only
   after the response was written, which also serves a pipelining client correctly, in order. The connection ends after
   a response to `Connection: close`, after an HTTP/1.0 request without `keep-alive`, after an error the parser found,
@@ -709,7 +721,7 @@ not have is flagged by the registry. It is slice 11, with the registry.
 | 10 | The sandbox's network grant, with the VM's tasks | Open |
 | 11 | A package's capability summary, with the registry | Open |
 | 12 | HTTP/2, then HTTP/3 (section 12) | Open |
-| 13 | A disconnected client cancels its handler (section 13, WEB.md's fourth request) | Open |
+| 13 | A disconnected client cancels its handler (section 13, WEB.md's fourth request) | **Done** for requests without a body |
 | 14 | `101 Switching Protocols` and the duplex connection of the live UI (section 13, fifth request) | Open |
 
 ## 12. HTTP/2, HTTP/3 and compression
@@ -735,7 +747,7 @@ task of a `Response` - and asks six more in its section 9. The answers, each wit
 | 1 | `Request` a value except its body, the method a type with cases | **The method: accepted.** `Method` is a type with a case per registered method and `Other(name)` for the rest; `Method.of(name)` is the one way in from text and never answers `Other` for a registered name, so `match request.method { .Get => ... }` works and two spellings of one method cannot exist. **The request: kept a `shared type`**, because it owns its body, a stream read once, and a copy would promise a second read. Everything else in it is a value (`Method`, the target, `Headers`, the peer's `SocketAddress`), so a middleware builds a new `Request` from the old one's parts and hands the same body on, which is all a `copy` would have done |
 | 2 | The body a `Source<Bytes, _>` read with a limit | **Accepted, as built**: `Body` is a `Source<Bytes, HttpError>`, and every reader that holds a whole body takes a limit. Forms, JSON and queries are decoded in `std/web` |
 | 3 | A response body may be a stream | **Accepted, as built**: a body without a known length is sent in chunks while it is produced |
-| 4 | A disconnected client cancels the handler's task | **Accepted, slice 13.** It needs a read of the connection beside the running handler - the end of the stream or a reset cancels the handler's task, and bytes that arrive are kept for the next request - which slice 4 does not have: the server reads only between requests |
+| 4 | A disconnected client cancels the handler's task | **Accepted, slice 13, built** (section 8, "A client that goes away"): a read of the connection beside the running handler - the end of the stream or a reset cancels the handler's task, and bytes that arrive are kept for the next request. For a request without a body; one with a body is watched by its own body reads |
 | 5 | A duplex connection for the live UI | **Accepted, slice 14**: a handler answers `101 Switching Protocols` with an upgrade closure, and the server hands it the connection's `source()` and `sink()` once the head is written; WebSocket framing is a `Stage` of `std/web`, as WEB.md proposes |
 | 6 | One program as several processes | **Decided: a listening socket handed to a child**, not `SO_REUSEPORT`. Only Linux balances `SO_REUSEPORT` across processes (FreeBSD needs `SO_REUSEPORT_LB`, Windows has neither), so it is not one behaviour on every platform; inheriting a socket (`WSADuplicateSocketW`, a descriptor without `FD_CLOEXEC`) is. It rides with the supervisor WEB.md section 3.8 wants, after slice 8 |
 

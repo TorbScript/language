@@ -186,7 +186,9 @@ of routes. `serve()` accepts until the server is shut down or closed - with an a
 them on the one listening socket, so connections spread over the cores - and each connection is a task of its own, on
 the worker whose loop accepted it, that serves its requests one after another (a persistent connection, and pipelined
 requests in order). A handler that holds an object keeps every loop on the serving task's worker, and a server with
-`tls` runs one loop. `shutdown(grace)`
+`tls` runs one loop. A client that goes away while the handler of a request without a body runs - the connection ends
+or breaks - cancels the handler's task, with every task it started and every `using` of it closed; bytes that arrive
+instead are the next request and wait for their turn. `shutdown(grace)`
 stops accepting, closes the connections that wait for their next request, lets the requests in progress finish - each
 answered with `Connection: close` - and cancels what still runs after `grace`; then `serve()` answers `Ok`. `close()`,
 which the release of the server runs, stops at once and cancels every connection. With `tls`, every connection is

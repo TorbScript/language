@@ -358,9 +358,27 @@ fn serveConnection(
       }
     }
     const keepAlive = keepsAlive request.headers, request.version
-    const response = match handler(request).await() {
-      Ok(answer) => answer
-      Fail(problem) => failureResponse problem
+    // A request without a body leaves the connection idle while its handler runs: it is read beside the handler, so a
+    // client that goes away cancels its handler (WEB.md's fourth request)
+    const watched = request.body.length() == Some(0) && !connection.hasBuffered()
+    var running = handler request
+    var watching: Task<Void>? = None
+    if watched {
+      watching = Some watchPeer(connection, running)
+    }
+    const outcome = running.result()
+    if const Some(watcher) = watching {
+      var stopping = watcher
+      stopping.cancel()
+      const _ = watcher.result()
+    }
+    const response = match outcome {
+      Ok(Ok(answer)) => answer
+      Ok(Fail(problem)) => failureResponse problem
+      Fail(_) => {
+        // The client went away while its handler ran, which was cancelled for it: there is nobody left to answer
+        return Ok void
+      }
     }
     // What the handler did not read of the body is read here, up to a limit; more than that closes the connection
     const drained = request.body.bytes(limit: limits.drainBytes).await().isOk()
@@ -369,6 +387,23 @@ fn serveConnection(
     if !keepOpen {
       closeGently(connection).await()?
       return Ok void
+    }
+  }
+}
+
+/**
+ * Reads the connection while the handler of a request runs: the end of the stream or a broken connection means the
+ * client went away, and cancels the handler with every task it started. Bytes that arrive instead are the client's next
+ * request, kept in the connection's buffer for its turn, and the watch ends there. The connection task cancels the watch
+ * once the handler answered, and a receive that is cancelled loses nothing.
+ */
+fn watchPeer(connection: Connection, handler: Task<Result<Response, HttpError>>): Task<Void> {
+  var reading = connection
+  match reading.fill().await() {
+    Ok(true) => {}
+    _ => {
+      var stopping = handler
+      stopping.cancel()
     }
   }
 }

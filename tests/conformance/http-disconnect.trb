@@ -1,0 +1,74 @@
+use * as http from "std/http"
+use Server, Request, Response, HttpError from "std/http"
+use SocketAddress, IpAddress, TcpStream, NetworkError from "std/network"
+use sleep from "std/time"
+
+/**
+ * A client that goes away cancels its handler (docs/design/NETWORK.md slice 13): a handler that would wait a minute is
+ * cancelled the moment its client closes the connection - its `using` binding is closed on the way out, which marks a
+ * shared flag the program watches - and the server goes on serving the next client.
+ */
+
+/** What the program sees of the slow handler: whether it started, and whether it ended. */
+shared type Seen {
+  var started: Bool = false
+  var ended: Bool = false
+}
+
+/** Marks the handler it belongs to as ended when it is released, however the handler ended. */
+shared type Farewell with Close {
+  seen: Seen
+
+  var fn close() {
+    seen.ended = true
+  }
+}
+
+/** The routes: `/slow` waits a minute, which only a cancellation cuts short; everything else answers at once. */
+fn handle(request: Request, seen: Seen): Task<Result<Response, HttpError>> {
+  if request.path() == "/slow" {
+    using farewell = Farewell seen
+    seen.started = true
+    sleep(60.0).await()
+    return Ok Response.text("too late")
+  }
+  Ok Response.text("fast answer to {request.path()}")
+}
+
+/** Sends a request for `/slow`, waits until its handler runs, and closes the connection without waiting for the answer. */
+fn askAndLeave(address: SocketAddress, seen: Seen): Task<Result<Void, NetworkError>> {
+  const stream = TcpStream.connect(address).await()?
+  stream.send("GET /slow HTTP/1.1\r\nHost: test\r\n\r\n".bytes().toList()).await()?
+  var waited = 0
+  while !seen.started && waited < 1000 {
+    sleep(0.01).await()
+    waited = waited + 1
+  }
+  Ok void
+}
+
+/** Waits until the handler ended, for ten seconds at most - it would have taken a minute had it not been cancelled. */
+fn waitForTheEnd(seen: Seen): Task<Bool> {
+  var waited = 0
+  while !seen.ended && waited < 1000 {
+    sleep(0.01).await()
+    waited = waited + 1
+  }
+  seen.ended
+}
+
+const seen = Seen()
+match Server.listen(SocketAddress(IpAddress.loopback, 0), { request: Request => handle(request, seen).await() }) {
+  Ok(server) => {
+    var serving = server.serve()
+    print askAndLeave(server.localAddress(), seen).await()
+    print "the handler started: {seen.started}"
+    print "the handler was cancelled when its client left: {waitForTheEnd(seen).await()}"
+    const base = Uri.tryFrom("http://{server.localAddress()}/after").ok() ?? panic("no URI")
+    var response = http.get(base).await()
+    print response.map({ _.status })
+    serving.cancel()
+    print "server: {serving.result()}"
+  }
+  Fail(problem) => print "could not listen: {problem}"
+}
